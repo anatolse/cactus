@@ -418,7 +418,7 @@ Hierarchy syntax creates parent-child **relations only**. It does not by itself 
 
 ### 3.8 Rules
 
-Rules contain gameplay logic over filtered entities. A regular rule has exactly one execution domain: **selectionless** (no `filter:`/`exclude:`/`pairs:`), **unary** (`filter:`/`exclude:`), or **binary pair** (`pairs:`). `pairs:` is mutually exclusive with `filter:` and `exclude:`. `order by:` and `limit:` belong to no single domain — each may accompany either a unary `filter:` domain or a binary `pairs:` domain, and each requires one of them.
+Rules contain gameplay logic over filtered entities. A regular rule has exactly one execution domain: **selectionless** (no `filter:`/`exclude:`/`pairs:`), **unary** (`filter:`/`exclude:`), or **binary pair** (`pairs:`). `pairs:` is mutually exclusive with `filter:` and `exclude:`. `order by:`, `limit:` and `reduce:` belong to no single domain — each may accompany either a unary `filter:` domain or a binary `pairs:` domain, and each requires one of them.
 
 ```ebnf
 rule_decl       = "rule" IDENTIFIER ":" NEWLINE INDENT
@@ -428,6 +428,7 @@ rule_decl       = "rule" IDENTIFIER ":" NEWLINE INDENT
                   [ after_clause ]
                   [ before_clause ]
                   [ where_clause ]
+                  [ reduce_clause [ order_by_clause ] ]
                   [ limit_clause ]
                   [ when_clause ]
                   { event_handler }
@@ -552,7 +553,7 @@ Binding names and their aliases must be unambiguous within every handler scope o
 
 **Passes snapshot membership, not values.** Before executing any tuple body, the runtime records both bindings' live membership in stable, creation-order-sorted snapshots (a monotonic per-entity creation ordinal, assigned at load time and at spawn commit, defines this order independently of backend storage layout) and lazily iterates their product left-binding-major: for `left = [a, b]` and `right = [x, y]`, tuple order is `(a,x)`, `(a,y)`, `(b,x)`, `(b,y)`. Membership is fixed for the whole pass; component values are read live from storage when each tuple executes. Projected traits and buffered structural commands issued mid-pass cannot add or remove tuples from the pass already in progress — they become visible only in a later pass or at the next activation commit.
 
-**Pair-bound durable trait access is read-only.** A pair handler may read any trait it selected (`body.Collider.mask`, `wall.transform.position`), but direct or indirect mutation — assignment, compound assignment, or a data-bearing trait-match alias obtained from a binding — is rejected during semantic analysis. Selecting a trait does not itself count as a read. The single exception is a binding named by a provably-one `limit: ... per` (§3.8.3), which admits ordinary dotted-path assignment; a trait-match alias stays rejected even there.
+**Pair-bound durable trait access is read-only.** A pair handler may read any trait it selected (`body.Collider.mask`, `wall.transform.position`), but direct or indirect mutation — assignment, compound assignment, or a data-bearing trait-match alias obtained from a binding — is rejected during semantic analysis. Selecting a trait does not itself count as a read. The exceptions are a binding named by a provably-one `limit: ... per` (§3.8.3) and the retained binding of `reduce: per:` (§3.8.5), which admit ordinary dotted-path assignment; a trait-match alias stays rejected even there.
 
 **There is no implicit current entity.** `self` and any statement form that defaults to `self` (bare `destroy`, bare `remove`, `add`/`project` with no `to`) are rejected in pair handlers. Every entity-targeting operation must name a binding explicitly:
 
@@ -644,7 +645,7 @@ rule GroundActor:
         actor.KinematicActor.ground_surface = surface.Solid.top
 ```
 
-**The global form bounds total count; the `per` form bounds each partition.** `limit: N` with no `per` admits at most `N` rows (unary) or `N` tuples in total (pair), and guarantees nothing about how often any single entity occurs among them. `limit: N per <binding>` is accepted only on a `pairs:` rule and only when `<binding>` names one of that rule's two bindings; it admits at most `N` tuples for each distinct value of that binding. A binding value with no surviving tuples produces no activation at all.
+**The global form bounds total count; the `per` form bounds each partition.** `limit: N` with no `per` admits at most `N` rows (unary) or `N` tuples in total (pair), and guarantees nothing about how often any single entity occurs among them. `limit: N per <binding>` is accepted only on a `pairs:` rule without `reduce:` (each group is already one row) and only when `<binding>` names one of that rule's two bindings; it admits at most `N` tuples for each distinct value of that binding. A binding value with no surviving tuples produces no activation at all.
 
 **The count expression is pure, `int`-typed, and narrowly scoped.** It has the same purity class as a `where:` predicate (§3.8.2) and must type-check as `int`. A global `limit:`'s count may reference only constants. A `limit ... per <binding>`'s count may additionally read `<binding>`'s own trait fields — evaluated once per distinct binding value — but must not reference the rule's other binding, whose value varies across the very tuples the count bounds.
 
@@ -680,6 +681,61 @@ rule SeekPlayer:
 **`when:` evaluates once per pass.** A pass is one phase activation of a handler, or one delivered event occurrence. The runtime evaluates `when:` after the implicit named-entity requirement holds (§4.2) and before the first entity or tuple. It sees immediate writes made earlier in the same activation by handlers scheduled before it, and it is not re-evaluated during the pass: a write that closes the gate mid-pass affects only later passes.
 
 **Its reads count as named field access.** Every named field read in `when:` adds the same requirement and the same contract read as a read in the handler body, for every handler of the rule.
+
+#### 3.8.5 Reduce Clause
+
+`reduce:` turns the rows of an existing unary (`filter:`) or pair (`pairs:`) domain into aggregate rows. `reduce` is a keyword at the rule-clause position. `reduce:` is rejected on rules that declare neither `filter:` nor `pairs:`, and on `extern rule` declarations. With `reduce:`, `order by:` is written after it, because it ranks aggregate rows.
+
+```ebnf
+reduce_clause   = "reduce" ":" NEWLINE INDENT
+                  [ "per" ":" IDENTIFIER NEWLINE ]
+                  reducer_decl { reducer_decl }
+                  DEDENT ;
+
+reducer_decl    = IDENTIFIER "=" reducer NEWLINE ;
+
+reducer         = "count" "(" [ IDENTIFIER ] ")"
+                | "sum" "(" expression ")"
+                | "min" "(" expression "," "default" "=" expression ")"
+                | "max" "(" expression "," "default" "=" expression ")"
+                | "any" "(" expression ")" ;
+```
+
+```cactus
+rule TeamTotals:
+    pairs:
+        team:
+            Team
+        player:
+            Player
+    where:
+        team.Team.active
+        player.Player.team == team
+    reduce:
+        per: team
+        players = count(player)
+        total = sum(player.Player.points)
+        best = max(player.Player.speed, default = -1.0)
+        has_star = any(player.Player.star)
+    order by:
+        total desc
+    limit: 2
+
+    on tick:
+        team.Team.total = total
+```
+
+**Reducers are typed and pure.** `count()` counts rows; `count(binding)` also counts rows (not distinct entities) and requires a pair binding. `sum`, `min` and `max` take `int` or `float` and keep that type; `min` and `max` require a `default` of exactly that type. `any` takes `bool` and yields `bool`. Reducer inputs have the purity class of a `where:` predicate (§3.8.2) and read the domain's bindings, constants and named entity fields. Reducer names are unique and must not reuse a pair binding name.
+
+**Groups are outer.** Without `per:`, the whole domain is one group, so the handler runs exactly once, even for empty input. `per: binding` names a pair binding and creates one group for every entity in that binding's membership snapshot that passes the group filters, whether or not any row survives for it. An empty group gets identity values: `count` and `sum` are `0`, `min`/`max` their default, `any` is `false`. Defaults apply only to empty input.
+
+**`where:` splits into group and row filters.** With `per: b`, a `where:` predicate whose pair-binding reads all root at `b` filters groups: an entity that fails it gets no group and no activation. Every other predicate filters rows. Without `per:`, every predicate filters rows. The split is syntactic.
+
+**Pipeline.** The logical order is domain → `where:` → `reduce:` → `order by:` → `limit:` → handler. All aggregates are computed from one snapshot of the input before any handler of the pass runs, so a handler's write can't change an aggregate of the same pass. Rows fold in stable order (pair rows left-binding-major, unary rows by creation order); groups follow the `per` binding's creation order, and sort ties keep it. A global `limit:` bounds aggregate rows.
+
+**Scope after reduction.** Handlers and sort keys see the aggregates as immutable values and, with `per: b`, the binding `b`. Every other binding, filter alias and implicit filter field is eliminated and can't be named; there is no `self`. The retained binding `b` is writable: the handler runs exactly once per `b` entity, so dotted-path assignment through `b` is accepted and recorded as a contract write, as for a provably-one `limit: … per` (§3.8.3). A targeted event keeps only the recipient's group; a global reduction ignores the target. Lifecycle triggers are rejected on reduced rules.
+
+**Numbers.** Integer `count` and `sum` saturate at the signed 32-bit bounds at each fold step; this applies only to reducers. Floating `sum` keeps the fold order and is never reassociated. Floating `min`/`max` yield NaN when any input is NaN.
 
 ### 3.9 Event Handlers
 

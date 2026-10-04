@@ -3,8 +3,11 @@
 #include <raylib.h>
 #include <raymath.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <numbers>
 #include <optional>
 #include <string>
@@ -193,6 +196,33 @@ struct GeneratedProjectInfo {
                                                                std::string_view project_name) noexcept {
     return GeneratedProjectInfo{.backend = backend, .project_name = project_name};
 }
+
+// `reduce:` fold steps. Integer count/sum saturate at each step; float
+// min/max return NaN once any input is NaN.
+namespace reduce {
+
+[[nodiscard]] constexpr int add(int acc, int value) noexcept {
+    const auto wide = static_cast<std::int64_t>(acc) + static_cast<std::int64_t>(value);
+    return static_cast<int>(std::clamp<std::int64_t>(
+        wide, std::numeric_limits<int>::min(), std::numeric_limits<int>::max()));
+}
+[[nodiscard]] constexpr float add(float acc, float value) noexcept {
+    return acc + value;
+}
+[[nodiscard]] constexpr int min(int acc, int value) noexcept {
+    return std::min(acc, value);
+}
+[[nodiscard]] constexpr int max(int acc, int value) noexcept {
+    return std::max(acc, value);
+}
+[[nodiscard]] inline float min(float acc, float value) noexcept {
+    return std::isnan(acc) || std::isnan(value) ? std::numeric_limits<float>::quiet_NaN() : std::min(acc, value);
+}
+[[nodiscard]] inline float max(float acc, float value) noexcept {
+    return std::isnan(acc) || std::isnan(value) ? std::numeric_limits<float>::quiet_NaN() : std::max(acc, value);
+}
+
+}  // namespace reduce
 
 namespace stdlib::math {
 

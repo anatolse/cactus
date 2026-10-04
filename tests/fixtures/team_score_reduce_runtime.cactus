@@ -1,0 +1,147 @@
+module team_score_reduce_runtime
+
+use std.core
+
+# Outer groups and the input snapshot of `reduce:`. A team keeps its activation
+# after its last member is gone, and every aggregate of a pass is computed
+# before any of that pass's handlers write.
+
+trait Team:
+    var id: int = 0
+    var bonus: int = 0
+    var members: int = -1
+    var score: int = -1
+    var rival_bonus: int = -1
+    var activations: int = 0
+    var recounts: int = 0
+    var recount_members: int = -1
+
+trait Sample:
+    var whole: int = 0
+    var part: float = 0.0
+
+trait Totals:
+    var whole: int = 0
+    var part: float = -1.0
+    var recounts: int = 0
+    var recount_members: int = -1
+
+trait Member:
+    var team: entity_id
+    var points: int = 0
+
+rule TeamScore:
+    pairs:
+        team:
+            Team
+        member:
+            Member
+    where:
+        member.Member.team == team
+    reduce:
+        per: team
+        members = count()
+        score = sum(member.Member.points)
+
+    on tick:
+        team.Team.members = members
+        team.Team.score = score
+        team.Team.activations += 1
+
+event Recount
+
+rule SendRecount:
+    on tick:
+        emit Recount to Red
+
+# A targeted event keeps only the recipient's group.
+rule RecountTeam:
+    pairs:
+        team:
+            Team
+        member:
+            Member
+    where:
+        member.Member.team == team
+    reduce:
+        per: team
+        members = count()
+
+    on Recount:
+        team.Team.recounts += 1
+        team.Team.recount_members = members
+
+# A global reduction ignores the target: Red has no Member, yet every
+# member row is counted.
+rule RecountAll:
+    filter:
+        Member as member
+    reduce:
+        members = count()
+
+    on Recount:
+        Results.Totals.recounts += 1
+        Results.Totals.recount_members = members
+
+# Each handler raises its own team's bonus, which is another team's input.
+rule RivalBonus:
+    pairs:
+        team:
+            Team
+        rival:
+            Team
+    where:
+        team != rival
+    reduce:
+        per: team
+        rival_bonus = sum(rival.Team.bonus)
+
+    on tick:
+        team.Team.rival_bonus = rival_bonus
+        team.Team.bonus += 10
+
+# Folds run in creation order, one step at a time: the int sum clamps at
+# each step and the float sum is never reassociated.
+rule SumSamples:
+    filter:
+        Sample as sample
+    reduce:
+        whole = sum(sample.whole)
+        part = sum(sample.part)
+
+    on tick:
+        Results.Totals.whole = whole
+        Results.Totals.part = part
+
+entity Results:
+    Totals
+
+entity SampleA:
+    Sample:
+        whole = 2147483647
+        part = 100000000.0
+
+entity SampleB:
+    Sample:
+        whole = 1
+        part = 1.0
+
+entity SampleC:
+    Sample:
+        whole = -1
+        part = -100000000.0
+
+entity Red:
+    Team:
+        id = 1
+        bonus = 1
+
+entity Blue:
+    Team:
+        id = 2
+        bonus = 2
+
+entity Solo:
+    Member:
+        team = Red
+        points = 5

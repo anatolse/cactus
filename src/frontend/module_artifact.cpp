@@ -505,6 +505,17 @@ void ModuleArtifact::write_contract(std::ostream& out, const HandlerContract& co
         write_shape(plan.right);
         write_u64(out, static_cast<uint64_t>(plan.matched_predicate_index));
     }
+
+    write_bool(out, contract.reduction.has_value());
+    if (contract.reduction.has_value()) {
+        const auto& plan = *contract.reduction;
+        write_bool(out, plan.group_binding.has_value());
+        write_u64(out, static_cast<uint64_t>(plan.group_binding.value_or(0)));
+        write_u32(out, static_cast<uint32_t>(plan.reducers.size()));
+        for (const auto kind : plan.reducers) {
+            write_u8(out, static_cast<uint8_t>(kind));
+        }
+    }
 }
 
 void ModuleArtifact::write_handler_contracts(std::ostream& out, const std::vector<InferredHandlerContract>& contracts) {
@@ -1115,6 +1126,18 @@ HandlerContract ModuleArtifact::read_contract(std::istream& in) {
         plan.right                   = read_shape();
         plan.matched_predicate_index = static_cast<std::size_t>(read_u64(in));
         contract.spatial_join        = std::move(plan);
+    }
+
+    if (read_bool(in)) {
+        ReductionPlan plan;
+        const bool grouped  = read_bool(in);
+        const auto binding  = static_cast<std::size_t>(read_u64(in));
+        plan.group_binding  = grouped ? std::optional<std::size_t>{binding} : std::nullopt;
+        plan.reducers.resize(read_u32(in));
+        for (auto& kind : plan.reducers) {
+            kind = static_cast<ReducerKind>(read_u8(in));
+        }
+        contract.reduction = std::move(plan);
     }
 
     return contract;

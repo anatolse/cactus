@@ -4075,6 +4075,301 @@ static void emit_when_gate(std::ostringstream& out, const RuleNode& sys, const D
     out << "    }\n";
 }
 
+// ── Rule reductions ─────────────────────────────────────────────────────────
+
+static std::string reducer_cpp_type(const ReducerDecl& reducer) {
+    return EnttCodegenUtils::type_to_cpp(make_type_info(reducer.result_type, ""));
+}
+
+// One accumulator per group, and the finished aggregate row the handler and
+// sort keys read. `<name>_seen` marks a min/max that has folded a value, so
+// its default applies only to empty input.
+static void emit_reduce_types(std::ostringstream& out, const ReduceClause& reduce) {
+    out << "    struct cactus_reduce_acc {\n";
+    for (const auto& reducer : reduce.reducers) {
+        out << "        " << reducer_cpp_type(reducer) << " " << reducer.name << "{};\n";
+        if (reducer_has_default(reducer.kind)) {
+            out << "        bool " << reducer.name << "_seen = false;\n";
+        }
+    }
+    out << "    };\n";
+    out << "    struct cactus_reduce_row {\n";
+    out << "        entt::entity cactus_group{entt::null};\n";
+    for (const auto& reducer : reduce.reducers) {
+        out << "        " << reducer_cpp_type(reducer) << " " << reducer.name << "{};\n";
+    }
+    out << "    };\n";
+}
+
+// Folds one accepted row into `cactus_acc`.
+static void emit_reducer_folds(std::ostringstream& out,
+                               const ReduceClause& reduce,
+                               const std::function<std::string(const ExprNode&)>& rewrite,
+                               const std::string& ind) {
+    const std::string ns = "cactus::runtime::reduce::";
+    for (const auto& reducer : reduce.reducers) {
+        const auto field = "cactus_acc." + reducer.name;
+        switch (reducer.kind) {
+            case ReducerKind::Count:
+                out << ind << field << " = " << ns << "add(" << field << ", 1);\n";
+                break;
+            case ReducerKind::Sum:
+                out << ind << field << " = " << ns << "add(" << field << ", " << rewrite(*reducer.input) << ");\n";
+                break;
+            case ReducerKind::Min:
+            case ReducerKind::Max: {
+                const char* step = reducer.kind == ReducerKind::Min ? "min" : "max";
+                out << ind << "{\n";
+                out << ind << "    const " << reducer_cpp_type(reducer) << " cactus_value = " << rewrite(*reducer.input) << ";\n";
+                out << ind << "    " << field << " = " << field << "_seen ? " << ns << step << "(" << field
+                    << ", cactus_value) : cactus_value;\n";
+                out << ind << "    " << field << "_seen = true;\n";
+                out << ind << "}\n";
+                break;
+            }
+            case ReducerKind::Any:
+                out << ind << "if (!" << field << ") { " << field << " = " << rewrite(*reducer.input) << "; }\n";
+                break;
+        }
+    }
+}
+
+// Turns `cactus_acc` into a row appended to `cactus_rows`.
+static void emit_reduce_row(std::ostringstream& out,
+                            const ReduceClause& reduce,
+                            const std::string& group,
+                            const DecoratedProgram& program,
+                            const std::string& ind) {
+    out << ind << "cactus_reduce_row cactus_row;\n";
+    out << ind << "cactus_row.cactus_group = " << group << ";\n";
+    for (const auto& reducer : reduce.reducers) {
+        out << ind << "cactus_row." << reducer.name << " = ";
+        if (reducer_has_default(reducer.kind)) {
+            out << "cactus_acc." << reducer.name << "_seen ? cactus_acc." << reducer.name << " : "
+                << rewrite_expr(*reducer.default_value, {}, program) << ";\n";
+        } else {
+            out << "cactus_acc." << reducer.name << ";\n";
+        }
+    }
+    out << ind << "cactus_rows.push_back(cactus_row);\n";
+}
+
+// Declares `cactus_rows` holding the single row of a global reduction.
+static void emit_total_reduce_rows(std::ostringstream& out, const ReduceClause& reduce, const DecoratedProgram& program) {
+    out << "    std::vector<cactus_reduce_row> cactus_rows;\n";
+    out << "    {\n";
+    out << "        const auto& cactus_acc = cactus_total;\n";
+    emit_reduce_row(out, reduce, "entt::null", program, "        ");
+    out << "    }\n";
+}
+
+// The names a reduced handler or sort key reads off `cactus_row`.
+static void emit_reduce_row_bindings(std::ostringstream& out,
+                                     const ReduceClause& reduce,
+                                     const std::string& ind) {
+    if (reduce.per_binding.has_value()) {
+        out << ind << "[[maybe_unused]] const auto " << *reduce.per_binding << " = cactus_row.cactus_group;\n";
+    }
+    for (const auto& reducer : reduce.reducers) {
+        out << ind << "[[maybe_unused]] const auto " << reducer.name << " = cactus_row." << reducer.name << ";\n";
+    }
+}
+
+// order by → limit over the aggregate rows, then one handler call per row.
+static void emit_reduced_dispatch(std::ostringstream& out,
+                                  const RuleNode& sys,
+                                  const EventHandlerNode& handler,
+                                  const PairCodegenScope* group_scope,
+                                  const DecoratedProgram& program) {
+    const auto& reduce = *sys.reduce;
+    if (!sys.order_by.empty()) {
+        std::vector<std::string> key_names;
+        for (const auto& key : sys.order_by) {
+            auto name = gen_temp_name("reduce_sort_key", key.location);
+            out << "    auto " << name << " = [&](const cactus_reduce_row& cactus_row) {\n";
+            emit_reduce_row_bindings(out, reduce, "        ");
+            out << "        return " << rewrite_expr(*key.expression, {}, program, {}, {}, group_scope) << ";\n";
+            out << "    };\n";
+            key_names.push_back(std::move(name));
+        }
+        out << "    std::ranges::stable_sort(cactus_rows, [&](const auto& cactus_lhs, const auto& cactus_rhs) {\n";
+        emit_sort_comparator_body(out, sys, key_names, "cactus_lhs", "cactus_rhs", 2);
+        out << "    });\n";
+    }
+    if (sys.limit.has_value()) {
+        out << "    {\n";
+        out << "        const int cactus_limit = " << rewrite_expr(*sys.limit->count, {}, program) << ";\n";
+        out << "        const auto cactus_keep = static_cast<std::size_t>(std::max(cactus_limit, 0));\n";
+        out << "        if (cactus_rows.size() > cactus_keep) {\n";
+        out << "            cactus_rows.resize(cactus_keep);\n";
+        out << "        }\n";
+        out << "    }\n";
+    }
+
+    auto lexical_locals = handler_lexical_locals(handler);
+    LocalNumericKinds local_kinds;
+    for (const auto& reducer : reduce.reducers) {
+        lexical_locals.insert(reducer.name);
+        if (reducer.result_type == TypeKind::Int || reducer.result_type == TypeKind::Float) {
+            local_kinds[reducer.name] = reducer.result_type == TypeKind::Int ? NumericKind::Int : NumericKind::Float;
+        }
+    }
+    if (reduce.per_binding.has_value()) {
+        lexical_locals.insert(*reduce.per_binding);
+    }
+    // A lambda, so a `return` in the body ends only this group's activation.
+    const auto body = rewrite_stmt_block(
+        handler.body, 2, {}, program, {}, false, {}, group_scope, lexical_locals, local_kinds);
+    out << "    auto cactus_reduced_body = [&](const cactus_reduce_row& cactus_row) {\n";
+    emit_reduce_row_bindings(out, reduce, "        ");
+    out << body;
+    out << "    };\n";
+    out << "    for (const auto& cactus_row : cactus_rows) {\n";
+    out << "        cactus_reduced_body(cactus_row);\n";
+    out << "    }\n";
+}
+
+// A reduced pair rule: snapshot both bindings, build one group per `per`
+// entity that passes the group filters, fold every accepted row (from the
+// broad phase when one applies) in snapshot order, then dispatch per group.
+// A targeted event keeps only the recipient's group.
+static void emit_reduced_pair_handler_body(std::ostringstream& out,
+                                           const RuleNode& sys,
+                                           const EventHandlerNode& handler,
+                                           const std::vector<PairBindingCodegen>& pair_binding_codegens,
+                                           const PairCodegenScope& pair_codegen_scope,
+                                           const DecoratedProgram& program,
+                                           const HandlerContract* contract) {
+    const auto& reduce = *sys.reduce;
+    for (const auto& binding : pair_binding_codegens) {
+        emit_pair_binding_snapshot(out, binding, 1);
+    }
+    emit_reduce_types(out, reduce);
+    const auto rewrite = [&](const ExprNode& expr) {
+        return rewrite_expr(expr, {}, program, {}, {}, &pair_codegen_scope);
+    };
+    const auto& left  = pair_binding_codegens[0].scope.binding_name;
+    const auto& right = pair_binding_codegens[1].scope.binding_name;
+    static const std::vector<std::unique_ptr<ExprNode>> no_predicates;
+    const auto& predicates = sys.where_clause.has_value() ? sys.where_clause->predicates : no_predicates;
+    const auto is_group_predicate = [&](std::size_t index) {
+        return std::ranges::find(reduce.group_predicates, index) != reduce.group_predicates.end();
+    };
+
+    std::optional<PairCodegenScope> group_scope;
+    if (reduce.per_binding.has_value()) {
+        const auto& group = *reduce.per_binding;
+        group_scope.emplace();
+        group_scope->bindings.push_back(*pair_codegen_scope.find(group));
+        group_scope->bindings.front().writable = true;
+
+        out << "    constexpr std::uint32_t cactus_no_group = std::numeric_limits<std::uint32_t>::max();\n";
+        out << "    std::vector<cactus_reduce_acc> cactus_groups(" << group << "_snapshot.size());\n";
+        out << "    std::vector<char> cactus_group_live(" << group << "_snapshot.size(), 0);\n";
+        out << "    std::vector<std::uint32_t> cactus_group_slot;\n";
+        out << "    for (std::size_t cactus_i = 0; cactus_i < " << group << "_snapshot.size(); ++cactus_i) {\n";
+        out << "        const auto " << group << " = " << group << "_snapshot[cactus_i];\n";
+        out << "        const auto cactus_index = static_cast<std::size_t>(entt::to_entity(" << group << "));\n";
+        out << "        if (cactus_group_slot.size() <= cactus_index) {\n";
+        out << "            cactus_group_slot.resize(cactus_index + 1, cactus_no_group);\n";
+        out << "        }\n";
+        out << "        cactus_group_slot[cactus_index] = static_cast<std::uint32_t>(cactus_i);\n";
+        out << "        if (cactus_recipient.has_value() && *cactus_recipient != " << group << ") { continue; }\n";
+        for (const auto index : reduce.group_predicates) {
+            out << "        if (!(" << rewrite(*predicates[index]) << ")) { continue; }\n";
+        }
+        out << "        cactus_group_live[cactus_i] = 1;\n";
+        out << "    }\n";
+    } else {
+        out << "    cactus_reduce_acc cactus_total{};\n";
+    }
+
+    out << "    auto cactus_fold = [&](entt::entity " << left << ", entt::entity " << right << ") {\n";
+    if (reduce.per_binding.has_value()) {
+        const auto& group = *reduce.per_binding;
+        out << "        const auto cactus_index = static_cast<std::size_t>(entt::to_entity(" << group << "));\n";
+        out << "        if (cactus_index >= cactus_group_slot.size()) { return; }\n";
+        out << "        const auto cactus_slot = cactus_group_slot[cactus_index];\n";
+        out << "        if (cactus_slot == cactus_no_group || cactus_group_live[cactus_slot] == 0) { return; }\n";
+        out << "        auto& cactus_acc = cactus_groups[cactus_slot];\n";
+    } else {
+        out << "        auto& cactus_acc = cactus_total;\n";
+    }
+    for (std::size_t index = 0; index < predicates.size(); ++index) {
+        if (!is_group_predicate(index)) {
+            out << "        if (!(" << rewrite(*predicates[index]) << ")) { return; }\n";
+        }
+    }
+    emit_reducer_folds(out, reduce, rewrite, "        ");
+    out << "    };\n";
+
+    if (contract != nullptr && contract->spatial_join.has_value() && sys.where_clause.has_value()) {
+        const auto& plan = *contract->spatial_join;
+        emit_sap_pair_activation(out,
+                                 plan,
+                                 *predicates[plan.matched_predicate_index],
+                                 pair_binding_codegens,
+                                 pair_codegen_scope,
+                                 program,
+                                 "cactus_fold");
+    } else {
+        out << "    for (auto " << left << " : " << left << "_snapshot) {\n";
+        out << "        for (auto " << right << " : " << right << "_snapshot) {\n";
+        out << "            cactus_fold(" << left << ", " << right << ");\n";
+        out << "        }\n";
+        out << "    }\n";
+    }
+
+    if (reduce.per_binding.has_value()) {
+        out << "    std::vector<cactus_reduce_row> cactus_rows;\n";
+        out << "    for (std::size_t cactus_i = 0; cactus_i < cactus_groups.size(); ++cactus_i) {\n";
+        out << "        if (cactus_group_live[cactus_i] == 0) { continue; }\n";
+        out << "        const auto& cactus_acc = cactus_groups[cactus_i];\n";
+        emit_reduce_row(out, reduce, *reduce.per_binding + "_snapshot[cactus_i]", program, "        ");
+        out << "    }\n";
+    } else {
+        emit_total_reduce_rows(out, reduce, program);
+    }
+    emit_reduced_dispatch(out, sys, handler, group_scope.has_value() ? &*group_scope : nullptr, program);
+}
+
+// A reduced unary rule is always global: fold the filter domain in creation
+// order into one row, then run the handler once.
+static void emit_reduced_unary_handler_body(std::ostringstream& out,
+                                            const RuleNode& sys,
+                                            const EventHandlerNode& handler,
+                                            const HandlerDomainCodegen& domain,
+                                            const DecoratedProgram& program) {
+    const auto& reduce = *sys.reduce;
+    emit_reduce_types(out, reduce);
+    out << "    cactus_reduce_acc cactus_total{};\n";
+    out << "    {\n";
+    emit_view_declaration(out, domain.filter_cpp_types, domain.exclude_cpp_types, 2);
+    out << "        std::vector<std::pair<std::uint64_t, entt::entity>> cactus_ordered;\n";
+    out << "        for (auto entity : view) {\n";
+    out << "            cactus_ordered.emplace_back("
+           "registry.get<cactus::runtime::entt_backend::CreationOrdinal>(entity).value, entity);\n";
+    out << "        }\n";
+    out << "        std::ranges::sort(cactus_ordered);\n";
+    out << "        for (const auto& [cactus_ordinal, entity] : cactus_ordered) {\n";
+    emit_component_bindings_from_entity(out, domain.filter_bindings_list, "entity", 3, program);
+    emit_filter_alias_bindings(out, domain.filter, program, 3);
+    out << "            auto& cactus_acc = cactus_total;\n";
+    const auto rewrite = [&](const ExprNode& expr) {
+        return rewrite_expr(expr, domain.filter_traits, program, {}, domain.filter_cpp_overrides);
+    };
+    if (sys.where_clause.has_value()) {
+        for (const auto& predicate : sys.where_clause->predicates) {
+            out << "            if (!(" << rewrite(*predicate) << ")) { continue; }\n";
+        }
+    }
+    emit_reducer_folds(out, reduce, rewrite, "            ");
+    out << "        }\n";
+    out << "    }\n";
+    emit_total_reduce_rows(out, reduce, program);
+    emit_reduced_dispatch(out, sys, handler, nullptr, program);
+}
+
 std::string EnttSystemEmitter::emit_system(const RuleNode& sys, const DecoratedProgram& program) {
     std::ostringstream out;
     const auto domain                = build_handler_domain(sys.filter, sys.exclude, program);
@@ -4132,7 +4427,12 @@ std::string EnttSystemEmitter::emit_system(const RuleNode& sys, const DecoratedP
         emit_named_requirements(out, contract, program);
         emit_when_gate(out, sys, program);
 
-        if (lifecycle) {
+        if (sys.reduce.has_value() && is_pair_system) {
+            emit_reduced_pair_handler_body(
+                out, sys, handler, pair_binding_codegens, pair_codegen_scope, program, contract);
+        } else if (sys.reduce.has_value()) {
+            emit_reduced_unary_handler_body(out, sys, handler, domain, program);
+        } else if (lifecycle) {
             emit_lifecycle_handler_body(out, sys, handler, trigger_binding, program);
         } else if (is_pair) {
             emit_pair_handler_body(out, sys, handler, pair_binding_codegens, pair_codegen_scope, program, contract);

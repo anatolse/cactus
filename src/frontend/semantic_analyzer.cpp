@@ -900,6 +900,17 @@ std::optional<std::unordered_set<std::string>> known_stdlib_effect_summary(const
     return std::nullopt;
 }
 
+template <typename Clause, typename Fn>
+void for_each_reducer_expr(Clause& reduce, const Fn& fn) {
+    for (auto& reducer : reduce.reducers) {
+        for (auto* expr : {reducer.input.get(), reducer.default_value.get()}) {
+            if (expr != nullptr) {
+                fn(*expr);
+            }
+        }
+    }
+}
+
 }  // namespace
 
 // ── ModuleImports::add ──────────────────────────────────────────────────────
@@ -1335,6 +1346,11 @@ void SemanticAnalyzer::collect_types(ProgramNode& program) {
 
 // ── dsl-where-clause: guard desugaring ──────────────────────────────────────
 
+// Codegen evaluates such a rule's where: itself, so it never becomes a body guard.
+static bool rule_keeps_where_unlowered(const RuleNode& rule) {
+    return rule.limit.has_value() || rule.reduce.has_value();
+}
+
 void SemanticAnalyzer::desugar_where_clauses(ProgramNode& program) {
     for (auto& decl : program.declarations) {
         auto* rule = std::get_if<RuleNode>(&decl);
@@ -1344,9 +1360,9 @@ void SemanticAnalyzer::desugar_where_clauses(ProgramNode& program) {
         // dsl-rule-limit: truncation assigns slots by position, so a
         // where:-rejected candidate must never reach one — which a lazy body
         // guard cannot prevent, since its early `return` is indistinguishable
-        // from any other. A limited rule keeps its predicates unlowered for
-        // codegen to evaluate as a pre-slot filter instead.
-        if (rule->limit.has_value()) {
+        // from any other. A limited or reduced rule keeps its predicates
+        // unlowered for codegen to evaluate as a pre-slot filter instead.
+        if (rule_keeps_where_unlowered(*rule)) {
             continue;
         }
         const auto& predicates = rule->where_clause->predicates;
@@ -1787,6 +1803,9 @@ void SemanticAnalyzer::resolve_trait_references(ProgramNode& program) {
                     }
                     for (auto& key : node.order_by) {
                         resolve_expr(*key.expression);
+                    }
+                    if (node.reduce.has_value()) {
+                        for_each_reducer_expr(*node.reduce, resolve_expr);
                     }
                     for (auto& handler : node.handlers) {
                         handler.resolved_trigger = handler.trigger_form == HandlerTriggerForm::Event
@@ -2948,6 +2967,12 @@ bool SemanticAnalyzer::resolve_filter_entry(const FilterEntry& entry, std::strin
 
 PairScope SemanticAnalyzer::build_pair_scope(const RuleNode& rule) {
     auto scope = build_pair_scope(*rule.pairs);
+    if (rule.reduce.has_value() && rule.reduce->per_binding.has_value()) {
+        if (const auto binding = scope.find(*rule.reduce->per_binding); binding != scope.end()) {
+            binding->second.writability = PairBindingWritability::Writable;
+        }
+        return scope;
+    }
     if (!rule.limit.has_value() || !rule.limit->per_binding.has_value()) {
         return scope;
     }
@@ -2958,6 +2983,45 @@ PairScope SemanticAnalyzer::build_pair_scope(const RuleNode& rule) {
     binding->second.writability =
         rule.limit->provably_one ? PairBindingWritability::Writable : PairBindingWritability::UnprovenPerLimit;
     return scope;
+}
+
+PairScope SemanticAnalyzer::build_reduced_handler_scope(const RuleNode& rule) {
+    PairScope scope;
+    if (!rule.pairs.has_value() || !rule.reduce.has_value() || !rule.reduce->per_binding.has_value()) {
+        return scope;
+    }
+    auto full = build_pair_scope(rule);
+    if (auto binding = full.find(*rule.reduce->per_binding); binding != full.end()) {
+        scope.insert(std::move(*binding));
+    }
+    return scope;
+}
+
+std::unordered_map<std::string, TypeInfo> SemanticAnalyzer::reducer_locals(const RuleNode& rule) {
+    std::unordered_map<std::string, TypeInfo> locals;
+    if (!rule.reduce.has_value()) {
+        return locals;
+    }
+    for (const auto& reducer : rule.reduce->reducers) {
+        TypeInfo type;
+        switch (reducer.result_type) {
+            case TypeKind::Int:
+                type = make_int_type();
+                break;
+            case TypeKind::Float:
+                type = make_float_type();
+                break;
+            case TypeKind::Bool:
+                type = make_bool_type();
+                break;
+            default:
+                type = make_unknown_type();
+                break;
+        }
+        type.is_let          = true;
+        locals[reducer.name] = std::move(type);
+    }
+    return locals;
 }
 
 PairScope SemanticAnalyzer::build_pair_scope(const PairClause& pairs) {
@@ -3151,7 +3215,8 @@ void SemanticAnalyzer::validate_order_by_key(
     const SortKey& key,
     const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
     const PairScope* pair_scope,
-    const std::string& rule_name) {
+    const std::string& rule_name,
+    const std::unordered_map<std::string, TypeInfo>& locals) {
     // Computed once and threaded through below so scope-checking and the
     // eventual diagnostics don't each re-walk the same small chain.
     const auto spelling = member_chain_spelling(*key.expression);
@@ -3159,7 +3224,8 @@ void SemanticAnalyzer::validate_order_by_key(
     // Scope first: a key naming an undeclared binding gets that specific
     // dsl-rule-order-by diagnostic rather than a vaguer "not orderable" one
     // once type inference gives up on it.
-    if (report_unbound_sort_key_root(key, spelling, filter_bindings, pair_scope, rule_name)) {
+    if (!locals.contains(member_chain_root(spelling)) &&
+        report_unbound_sort_key_root(key, spelling, filter_bindings, pair_scope, rule_name)) {
         return;
     }
 
@@ -3172,7 +3238,7 @@ void SemanticAnalyzer::validate_order_by_key(
         return;
     }
 
-    const auto type = infer_expr_type(*key.expression, filter_bindings, {}, nullptr, pair_scope);
+    const auto type = infer_expr_type(*key.expression, filter_bindings, locals, nullptr, pair_scope);
     if (type.kind == TypeKind::Int || type.kind == TypeKind::Float || type.kind == TypeKind::Bool) {
         return;
     }
@@ -3217,6 +3283,17 @@ void SemanticAnalyzer::validate_unary_order_by(const FilterClause& filter,
 
 void SemanticAnalyzer::validateOrderByClause(const RuleNode& rule) {
     if (rule.order_by.empty()) {
+        return;
+    }
+
+    // After `reduce:`, keys rank aggregate rows: they see the aggregates and
+    // the retained `per` binding only.
+    if (rule.reduce.has_value()) {
+        const auto scope  = build_reduced_handler_scope(rule);
+        const auto locals = reducer_locals(rule);
+        for (const auto& key : rule.order_by) {
+            validate_order_by_key(key, {}, &scope, rule.name, locals);
+        }
         return;
     }
 
@@ -3267,6 +3344,19 @@ bool expr_references_ident(const ExprNode& expr, const std::string& name) {
                                     [&](const auto& arg) { return expr_references_ident(*arg, name); });
     }
     return false;
+}
+
+// The pair bindings `expr` reads, one bit per binding index.
+unsigned pair_bindings_read(const ExprNode& expr, const PairScope& pair_scope) {
+    unsigned read = 0;
+    visit_expression(expr, [&](const ExprNode& node) {
+        const auto* ident = std::get_if<IdentExpr>(&node.expr);
+        const auto scope  = ident == nullptr ? pair_scope.end() : pair_scope.find(ident->name);
+        if (scope != pair_scope.end()) {
+            read |= 1U << scope->second.index;
+        }
+    });
+    return read;
 }
 
 // Every name a unary global limit count must not read: its filter aliases and
@@ -3364,14 +3454,24 @@ std::optional<PairScope> SemanticAnalyzer::resolve_limit_count_scope(const RuleN
     return std::nullopt;
 }
 
+static bool rule_has_domain(const RuleNode& rule) {
+    return !rule.filter.entries.empty() || !rule.filter.trait_names.empty() || rule.pairs.has_value();
+}
+
 void SemanticAnalyzer::validateLimitClause(RuleNode& rule) {
     if (!rule.limit.has_value()) {
         return;
     }
     auto& limit          = *rule.limit;
     const bool has_pairs = rule.pairs.has_value();
-    if (rule.filter.entries.empty() && rule.filter.trait_names.empty() && !has_pairs) {
+    if (!rule_has_domain(rule)) {
         errors_.error(limit.location, "rule '" + rule.name + "': `limit:` requires a `filter:` or `pairs:` clause");
+        return;
+    }
+    if (limit.per_binding.has_value() && rule.reduce.has_value()) {
+        errors_.error(limit.per_location,
+                      "rule '" + rule.name +
+                          "': `limit: ... per` cannot be combined with `reduce:`; each group is already one row");
         return;
     }
     if (limit.per_binding.has_value() && !has_pairs) {
@@ -3403,6 +3503,196 @@ void SemanticAnalyzer::validateLimitClause(RuleNode& rule) {
     }
 
     limit.provably_one = limit.per_binding.has_value() && limit_count_is_provably_one(*limit.count);
+}
+
+// ── Reduce clause ───────────────────────────────────────────────────────────
+
+static std::unordered_set<std::string> reducer_names(const RuleNode& rule) {
+    std::unordered_set<std::string> names;
+    if (rule.reduce.has_value()) {
+        for (const auto& reducer : rule.reduce->reducers) {
+            names.insert(reducer.name);
+        }
+    }
+    return names;
+}
+
+void SemanticAnalyzer::validateReduceClause(RuleNode& rule) {
+    if (!rule.reduce.has_value()) {
+        return;
+    }
+    auto& reduce         = *rule.reduce;
+    const bool has_pairs = rule.pairs.has_value();
+    if (!rule_has_domain(rule)) {
+        errors_.error(reduce.location, "rule '" + rule.name + "': `reduce:` requires a `filter:` or `pairs:` clause");
+        return;
+    }
+    if (reduce.per_binding.has_value() && !has_pairs) {
+        errors_.error(reduce.per_location,
+                      "rule '" + rule.name +
+                          "': `per` requires a `pairs:` clause; a unary domain has no binding to group by");
+        return;
+    }
+
+    const auto row_scope = has_pairs ? build_pair_scope(*rule.pairs) : PairScope{};
+    std::optional<std::size_t> per_index;
+    if (reduce.per_binding.has_value()) {
+        const auto binding = row_scope.find(*reduce.per_binding);
+        if (binding == row_scope.end()) {
+            errors_.error(reduce.per_location,
+                          "'" + *reduce.per_binding + "' is not a declared pair binding in rule '" + rule.name + "'");
+            return;
+        }
+        per_index = binding->second.index;
+    }
+
+    for (const auto& handler : rule.handlers) {
+        if (handler.has_lifecycle_trigger()) {
+            errors_.error(handler.trigger_location, "lifecycle triggers are not allowed in reduced rules");
+        }
+    }
+
+    reject_eliminated_bindings(rule, reduce);
+
+    std::unordered_set<std::string> taken;
+    for (const auto& entry : row_scope) {
+        taken.insert(entry.first);
+    }
+    for (const auto& handler : rule.handlers) {
+        taken.insert(handler.alias.value_or(handler.event_name));
+    }
+    const auto filter_bindings        = build_filter_bindings(rule.filter);
+    const PairScope* row_scope_ptr    = has_pairs ? &row_scope : nullptr;
+    std::unordered_set<std::string> declared;
+    for (auto& reducer : reduce.reducers) {
+        if (!declared.insert(reducer.name).second) {
+            errors_.error(reducer.location, "duplicate reducer name '" + reducer.name + "'");
+        } else if (taken.contains(reducer.name)) {
+            errors_.error(reducer.location,
+                          "reducer '" + reducer.name + "' conflicts with a binding of rule '" + rule.name + "'");
+        }
+        validate_reducer(reducer, rule, filter_bindings, row_scope_ptr);
+    }
+
+    reduce.group_predicates.clear();
+    if (!per_index.has_value() || !rule.where_clause.has_value()) {
+        return;
+    }
+    const auto& predicates = rule.where_clause->predicates;
+    for (std::size_t index = 0; index < predicates.size(); ++index) {
+        if (pair_bindings_read(*predicates[index], row_scope) == 1U << *per_index) {
+            reduce.group_predicates.push_back(index);
+        }
+    }
+}
+
+// Names the domain bound before `reduce:` but no handler or sort key may use
+// after it: every unary alias and field, and each pair binding but `per`.
+void SemanticAnalyzer::reject_eliminated_bindings(const RuleNode& rule, const ReduceClause& reduce) {
+    std::unordered_set<std::string> eliminated = unary_domain_scope_names(build_filter_bindings(rule.filter));
+    if (rule.pairs.has_value()) {
+        for (const auto& binding : rule.pairs->bindings) {
+            if (binding.name == reduce.per_binding) {
+                continue;
+            }
+            eliminated.insert(binding.name);
+            for (const auto& entry : binding.traits) {
+                if (entry.alias.has_value()) {
+                    eliminated.insert(*entry.alias);
+                }
+            }
+        }
+    }
+    const auto report = [&](const std::string& name, const SourceLocation& location) {
+        errors_.error(location,
+                      "'" + name + "' is not available after `reduce:` in rule '" + rule.name +
+                          "'; use an aggregate" +
+                          (reduce.per_binding.has_value() ? " or '" + *reduce.per_binding + "'" : ""));
+    };
+    const auto check_read = [&](const ExprNode& expr, const LocalNames& locals) {
+        const auto* ident = std::get_if<IdentExpr>(&expr.expr);
+        if (ident != nullptr && !ident->resolved_entity_id.has_value() && eliminated.contains(ident->name) &&
+            !locals.contains(ident->name)) {
+            report(ident->name, expr.location);
+        }
+        return false;
+    };
+    const auto check_assign = [&](const VarAssign& node, const LocalNames& locals) {
+        if (!node.named_target.has_value() && eliminated.contains(node.name) && !locals.contains(node.name)) {
+            report(node.name, node.location);
+        }
+    };
+    InferredHandlerContract scratch;
+    const auto aggregates = reducer_names(rule);
+    for (const auto& key : rule.order_by) {
+        walk_expression_reads(*key.expression, aggregates, scratch, check_read);
+    }
+    for (const auto& handler : rule.handlers) {
+        walk_handler_body(handler.body, aggregates, scratch, check_read, check_assign, [](const SymbolId&) {});
+    }
+}
+
+void SemanticAnalyzer::validate_reducer(ReducerDecl& reducer,
+                                        const RuleNode& rule,
+                                        const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                                        const PairScope* row_scope) {
+    if (reducer.kind == ReducerKind::Count) {
+        reducer.result_type = TypeKind::Int;
+        if (reducer.input == nullptr) {
+            return;
+        }
+        const auto* ident = std::get_if<IdentExpr>(&reducer.input->expr);
+        if (ident == nullptr || row_scope == nullptr || !row_scope->contains(ident->name)) {
+            errors_.error(reducer.input->location,
+                          "count(...) takes a pair binding of rule '" + rule.name + "'; use count() to count rows");
+        }
+        return;
+    }
+
+    const std::string kind_name = reducer_kind_name(reducer.kind);
+    const auto error_count_before = errors_.error_count();
+    check_clause_purity_expr(*reducer.input, "reduce: reducer inputs must be pure");
+    if (errors_.error_count() > error_count_before) {
+        return;
+    }
+    const auto input = infer_expr_type(*reducer.input, filter_bindings, {}, nullptr, row_scope);
+    if (input.kind == TypeKind::Unknown) {
+        return;
+    }
+
+    if (reducer.kind == ReducerKind::Any) {
+        if (input.kind != TypeKind::Bool) {
+            errors_.error(reducer.input->location, "any(...) input must be of type 'bool', got '" + input.name + "'");
+            return;
+        }
+        reducer.result_type = TypeKind::Bool;
+        return;
+    }
+
+    if (input.kind != TypeKind::Int && input.kind != TypeKind::Float) {
+        errors_.error(reducer.input->location,
+                      kind_name + "(...) input must be of type 'int' or 'float', got '" + input.name + "'");
+        return;
+    }
+    reducer.result_type = input.kind;
+    if (reducer.kind == ReducerKind::Sum) {
+        return;
+    }
+
+    if (reducer.default_value == nullptr) {
+        errors_.error(reducer.location, kind_name + "(...) needs `default = <value>` for groups with no rows");
+        return;
+    }
+    const auto default_errors = errors_.error_count();
+    check_clause_purity_expr(*reducer.default_value, "reduce: reducer defaults must be pure");
+    if (errors_.error_count() > default_errors) {
+        return;
+    }
+    const auto fallback = infer_expr_type(*reducer.default_value, {}, {}, nullptr, nullptr);
+    if (fallback.kind != TypeKind::Unknown && fallback.kind != input.kind) {
+        errors_.error(reducer.default_value->location,
+                      kind_name + "(...) default must be of type '" + input.name + "', got '" + fallback.name + "'");
+    }
 }
 
 SemanticAnalyzer::PhaseCollection SemanticAnalyzer::collect_phase_declarations(ProgramNode& program) {
@@ -4182,6 +4472,7 @@ void SemanticAnalyzer::validate_rule_filters(ProgramNode& program) {
             }
 
             validate_pair_bindings(*rule);
+            validateReduceClause(*rule);
             validateOrderByClause(*rule);
             validateLimitClause(*rule);
         }
@@ -4357,26 +4648,37 @@ void SemanticAnalyzer::collect_named_entities(const ProgramNode& program) {
     }
 }
 
+void SemanticAnalyzer::resolve_named_rule_access(RuleNode& rule) {
+    const auto bindings = rule_binding_names(rule);
+    const auto clause   = [&](ExprNode& expr) {
+        resolve_named_access_expr(expr, bindings, NamedAccessContext::Rule);
+    };
+    if (rule.where_clause.has_value()) {
+        std::ranges::for_each(rule.where_clause->predicates, [&](auto& predicate) { clause(*predicate); });
+    }
+    if (rule.when_clause.has_value()) {
+        std::ranges::for_each(rule.when_clause->predicates, [&](auto& predicate) { clause(*predicate); });
+    }
+    if (rule.limit.has_value() && rule.limit->count != nullptr) {
+        clause(*rule.limit->count);
+    }
+    auto scope = bindings;
+    if (rule.reduce.has_value()) {
+        for_each_reducer_expr(*rule.reduce, clause);
+        scope.merge(reducer_names(rule));
+    }
+    for (auto& key : rule.order_by) {
+        resolve_named_access_expr(*key.expression, scope, NamedAccessContext::Rule);
+    }
+    for (auto& handler : rule.handlers) {
+        resolve_named_access_stmts(handler.body, scope, NamedAccessContext::Rule);
+    }
+}
+
 void SemanticAnalyzer::resolve_named_entity_access(ProgramNode& program) {
     for (auto& decl : program.declarations) {
         if (auto* rule = std::get_if<RuleNode>(&decl)) {
-            const auto bindings = rule_binding_names(*rule);
-            const auto clause   = [&](ExprNode& expr) {
-                resolve_named_access_expr(expr, bindings, NamedAccessContext::Rule);
-            };
-            if (rule->where_clause.has_value()) {
-                std::ranges::for_each(rule->where_clause->predicates, [&](auto& predicate) { clause(*predicate); });
-            }
-            if (rule->when_clause.has_value()) {
-                std::ranges::for_each(rule->when_clause->predicates, [&](auto& predicate) { clause(*predicate); });
-            }
-            std::ranges::for_each(rule->order_by, [&](SortKey& key) { clause(*key.expression); });
-            if (rule->limit.has_value() && rule->limit->count != nullptr) {
-                clause(*rule->limit->count);
-            }
-            for (auto& handler : rule->handlers) {
-                resolve_named_access_stmts(handler.body, bindings, NamedAccessContext::Rule);
-            }
+            resolve_named_rule_access(*rule);
         } else if (auto* func = std::get_if<FuncNode>(&decl)) {
             std::unordered_set<std::string> parameters;
             for (const auto& parameter : func->params) {
@@ -4944,9 +5246,18 @@ void SemanticAnalyzer::validate_event_usage(  // NOLINT(readability-function-cog
                 }
             }
             const PairScope* pair_scope_ptr = rule->pairs.has_value() ? &pair_scope : nullptr;
+            // A reduced handler runs once per group (or once in total), so it
+            // has no implicit entity, only the retained binding and aggregates.
+            const bool reduced = rule->reduce.has_value();
+            if (reduced) {
+                pair_scope     = build_reduced_handler_scope(*rule);
+                pair_scope_ptr = &pair_scope;
+            }
+            const auto aggregates = reducer_locals(*rule);
 
             for (auto& handler : rule->handlers) {
-                auto filter_bindings = build_filter_bindings(rule->filter);
+                auto filter_bindings =
+                    reduced ? std::unordered_map<std::string, const ResolvedTrait*>{} : build_filter_bindings(rule->filter);
 
                 const bool event_trigger =
                     handler.resolved_trigger.has_value() && handler.resolved_trigger->kind == HandlerTriggerKind::Event;
@@ -5013,6 +5324,7 @@ void SemanticAnalyzer::validate_event_usage(  // NOLINT(readability-function-cog
                         make_resolved_user_type(TypeKind::Struct, symbol, handler_event->name);
                 }
                 bind_lifecycle_trigger_alias(handler, filter_bindings, local_bindings);
+                local_bindings.insert(aggregates.begin(), aggregates.end());
 
                 validate_event_stmts(
                     handler.body, filter_bindings, local_bindings, handler_event, rule->name, pair_scope_ptr);
@@ -5325,7 +5637,8 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
             const bool named_write = assign_stmt->named_target.has_value();
             target_rejected        = !named_write && reject_entity_id_trait_write(
                                                   *assign_stmt, filter_bindings, locals, handler_event, pair_scope);
-            if (!target_rejected && !named_write && pair_scope != nullptr && !writable_target) {
+            const bool local_target = locals.contains(assign_stmt->name);
+            if (!target_rejected && !named_write && !local_target && pair_scope != nullptr && !writable_target) {
                 if (bound != nullptr && bound->writability == PairBindingWritability::Writable) {
                     errors_.error(assign_stmt->location,
                                   "pair-bound durable traits are read-only; assign a dotted trait path through '" +
@@ -5634,6 +5947,22 @@ void SemanticAnalyzer::collect_phase_plan(const PhaseNode& phase, std::size_t de
     }
 }
 
+static std::optional<ReductionPlan> reduction_plan(const RuleNode& rule, const PairScope& pair_scope) {
+    if (!rule.reduce.has_value()) {
+        return std::nullopt;
+    }
+    ReductionPlan plan;
+    if (rule.reduce->per_binding.has_value()) {
+        if (const auto binding = pair_scope.find(*rule.reduce->per_binding); binding != pair_scope.end()) {
+            plan.group_binding = binding->second.index;
+        }
+    }
+    for (const auto& reducer : rule.reduce->reducers) {
+        plan.reducers.push_back(reducer.kind);
+    }
+    return plan;
+}
+
 void SemanticAnalyzer::collect_rule_dependency(const RuleNode& rule, std::size_t declaration_index) {
     RuleDependency dep;
     dep.rule_name = rule.name;  // simple name (task 5.4 will migrate to canonical)
@@ -5660,6 +5989,7 @@ void SemanticAnalyzer::collect_rule_dependency(const RuleNode& rule, std::size_t
             auto inferred = rule.pairs.has_value() ? infer_pair_handler_contract(rule, handler, pair_scope)
                                                    : infer_regular_handler_contract(rule, handler);
             inferred.spatial_join = spatial_join;
+            inferred.reduction    = reduction_plan(rule, pair_scope);
             fold_when_clause_named_reads(rule, inferred);
             result_.handler_contracts.push_back(inferred);
 
@@ -6128,19 +6458,20 @@ void SemanticAnalyzer::walk_handler_body(  // NOLINT(readability-function-cognit
 }
 
 // Clause expressions the handler body walk never sees but whose binding reads
-// still belong in the contract. A limited rule keeps where: out of the body.
+// still belong in the contract. A limited or reduced rule keeps where: out of
+// the body.
 static std::vector<const ExprNode*> rule_clause_read_roots(const RuleNode& rule) {
     std::vector<const ExprNode*> roots;
     for (const auto& key : rule.order_by) {
         roots.push_back(key.expression.get());
     }
-    if (!rule.limit.has_value()) {
-        return roots;
+    if (rule.reduce.has_value()) {
+        for_each_reducer_expr(*rule.reduce, [&roots](const ExprNode& expr) { roots.push_back(&expr); });
     }
-    if (rule.limit->count != nullptr) {
+    if (rule.limit.has_value() && rule.limit->count != nullptr) {
         roots.push_back(rule.limit->count.get());
     }
-    if (rule.where_clause.has_value()) {
+    if (rule_keeps_where_unlowered(rule) && rule.where_clause.has_value()) {
         for (const auto& predicate : rule.where_clause->predicates) {
             roots.push_back(predicate.get());
         }
@@ -6275,10 +6606,11 @@ SemanticAnalyzer::infer_regular_handler_contract(  // NOLINT(readability-functio
         contract.projects.insert(symbol);
     };
 
+    const auto aggregates = reducer_names(rule);
     for (const auto* root : rule_clause_read_roots(rule)) {
-        walk_expression_reads(*root, LocalNames{}, contract, resolve_read);
+        walk_expression_reads(*root, aggregates, contract, resolve_read);
     }
-    LocalNames handler_locals;
+    LocalNames handler_locals = aggregates;
     if (!trigger.is_lifecycle()) {
         handler_locals.insert(handler.event_name);
     }
@@ -6391,11 +6723,12 @@ InferredHandlerContract SemanticAnalyzer::infer_pair_handler_contract(const Rule
     };
     auto on_project_trait  = [&contract](const SymbolId& trait) { contract.projects.insert(trait); };
 
+    const auto aggregates = reducer_names(rule);
     for (const auto* root : rule_clause_read_roots(rule)) {
-        walk_expression_reads(*root, LocalNames{}, contract, resolve_read);
+        walk_expression_reads(*root, aggregates, contract, resolve_read);
     }
 
-    LocalNames handler_locals;
+    LocalNames handler_locals = aggregates;
     handler_locals.insert(handler.event_name);
     if (handler.alias.has_value()) {
         handler_locals.insert(*handler.alias);
@@ -6461,19 +6794,6 @@ const std::array<OverlapPredicateSpec, 3>& recognized_overlap_predicates() {
                         {.kind = SpatialShapeKind::Box, .args = {2, 3, 4}}}}},
     }};
     return specs;
-}
-
-// The pair bindings `expr` reads, one bit per binding index.
-unsigned pair_bindings_read(const ExprNode& expr, const PairScope& pair_scope) {
-    unsigned read = 0;
-    visit_expression(expr, [&](const ExprNode& node) {
-        const auto* ident = std::get_if<IdentExpr>(&node.expr);
-        const auto scope  = ident == nullptr ? pair_scope.end() : pair_scope.find(ident->name);
-        if (scope != pair_scope.end()) {
-            read |= 1U << scope->second.index;
-        }
-    });
-    return read;
 }
 
 }  // namespace

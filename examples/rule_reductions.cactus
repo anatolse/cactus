@@ -1,0 +1,151 @@
+module rule_reductions
+
+# `reduce:` turns the rows of a rule's domain into aggregate values. Without
+# `per:` the whole domain becomes one row; with `per: team` every team gets
+# exactly one row, even a team with no players.
+
+use std.core
+
+trait Team:
+    var id: int = 0
+    var active: bool = true
+    var players: int = -1
+    var total: int = -1
+    var best: float = 0.0
+    var has_star: bool = false
+    var activations: int = 0
+
+trait Player:
+    var team: entity_id
+    var points: int = 0
+    var speed: float = 0.0
+    var star: bool = false
+
+trait Enemy:
+    var threat: int = 0
+
+trait Board:
+    var enemies: int = -1
+    var threat: int = -1
+    var weakest: int = -1
+    var enemy_passes: int = 0
+    var players: int = -1
+    var points: int = -1
+    var ranked: int = 0
+
+template Squad(id: int):
+    Team:
+        id = id
+
+# No entity has Enemy, so this runs once with the identity values.
+rule CountEnemies:
+    filter:
+        Enemy as enemy
+    reduce:
+        enemies = count()
+        threat = sum(enemy.threat)
+        weakest = min(enemy.threat, default = 7)
+
+    on tick:
+        Scoreboard.Board.enemies = enemies
+        Scoreboard.Board.threat = threat
+        Scoreboard.Board.weakest = weakest
+        Scoreboard.Board.enemy_passes += 1
+
+rule CountPlayers:
+    filter:
+        Player as player
+    reduce:
+        players = count()
+        points = sum(player.points)
+
+    on tick:
+        Scoreboard.Board.players = players
+        Scoreboard.Board.points = points
+
+# `team.Team.active` reads only the group binding, so it filters teams;
+# the membership test reads both bindings, so it filters rows. Green has no
+# players and still gets one activation; Gray is inactive and gets none.
+rule TeamTotals:
+    pairs:
+        team:
+            Team
+        player:
+            Player
+    where:
+        team.Team.active
+        player.Player.team == team
+    reduce:
+        per: team
+        players = count(player)
+        total = sum(player.Player.points)
+        best = max(player.Player.speed, default = -1.0)
+        has_star = any(player.Player.star)
+
+    on tick:
+        team.Team.players = players
+        team.Team.total = total
+        team.Team.best = best
+        team.Team.has_star = has_star
+        team.Team.activations += 1
+
+# Aggregate rows are ranked like any other rows: the two best teams, with
+# ties kept in creation order.
+rule RankTeams:
+    pairs:
+        team:
+            Team
+        player:
+            Player
+    where:
+        player.Player.team == team
+    reduce:
+        per: team
+        total = sum(player.Player.points)
+    order by:
+        total desc
+    limit: 2
+
+    on tick:
+        Scoreboard.Board.ranked = (Scoreboard.Board.ranked * 10) + team.Team.id
+
+entity Scoreboard:
+    Board
+
+entity Red from Squad(id = 1)
+entity Blue from Squad(id = 2)
+entity Green from Squad(id = 3)
+entity Gold from Squad(id = 4)
+
+entity Gray from Squad(id = 5):
+    Team:
+        active = false
+
+entity RedStriker:
+    Player:
+        team = Red
+        points = 3
+        speed = 1.5
+        star = true
+
+entity RedKeeper:
+    Player:
+        team = Red
+        points = 5
+        speed = 2.5
+
+entity BlueWinger:
+    Player:
+        team = Blue
+        points = 4
+        speed = 3.0
+
+entity GoldAce:
+    Player:
+        team = Gold
+        points = 8
+
+entity GrayRookie:
+    Player:
+        team = Gray
+        points = 1

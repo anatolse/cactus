@@ -147,6 +147,10 @@ target_compile_definitions(test_semantic_const PRIVATE
 )
 add_test(NAME SemanticConstTests COMMAND test_semantic_const)
 
+add_executable(test_semantic_reduce test_semantic_reduce.cpp)
+target_link_libraries(test_semantic_reduce PRIVATE cactus_frontend Catch2::Catch2WithMain)
+add_test(NAME SemanticReduceTests COMMAND test_semantic_reduce)
+
 # Unified name resolution tests (unified-name-resolution change)
 add_executable(test_name_resolution test_name_resolution.cpp)
 target_link_libraries(test_name_resolution PRIVATE cactus_frontend Catch2::Catch2WithMain)
@@ -474,6 +478,18 @@ cactus_add_headless_behavior_test(test_pairs_limit_headless_behavior
     CACTUS_SOURCE tests/fixtures/pairs_limit_runtime.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_pairs_limit_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_rule_reductions_headless_behavior
+    CACTUS_SOURCE examples/rule_reductions.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_rule_reductions_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_team_score_reduce_headless_behavior
+    CACTUS_SOURCE tests/fixtures/team_score_reduce_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_team_score_reduce_headless_behavior.cpp
 )
 
 cactus_add_headless_behavior_test(test_deterministic_target_selection_headless_behavior

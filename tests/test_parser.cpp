@@ -2590,6 +2590,155 @@ TEST_CASE("Parser: limit on a selectionless rule still parses", "[parser][rule-l
     CHECK_FALSE(sys.pairs.has_value());
 }
 
+// ── Reduce clause (dsl-rule-reduce) ─────────────────────────────────────────
+
+TEST_CASE("Parser: grouped reduce parses every reducer kind", "[parser][rule-reduce]") {
+    auto prog = parse(
+        "rule TeamScore:\n"
+        "    pairs:\n"
+        "        team:\n"
+        "            Team\n"
+        "        player:\n"
+        "            Score\n"
+        "    where:\n"
+        "        player.Score.team == team\n"
+        "    reduce:\n"
+        "        per: team\n"
+        "        rows = count()\n"
+        "        players = count(player)\n"
+        "        total = sum(player.Score.value)\n"
+        "        low = min(player.Score.value, default = 0)\n"
+        "        high = max(player.Score.value, default = 0)\n"
+        "        any_high = any(player.Score.value > 10)\n"
+        "    on tick:\n"
+        "        x = 1\n");
+
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
+    REQUIRE(sys.reduce.has_value());
+    REQUIRE(sys.reduce->per_binding.has_value());
+    CHECK(*sys.reduce->per_binding == "team");
+    const auto& reducers = sys.reduce->reducers;
+    REQUIRE(reducers.size() == 6);
+    CHECK(reducers[0].name == "rows");
+    CHECK(reducers[0].kind == ReducerKind::Count);
+    CHECK(reducers[0].input == nullptr);
+    CHECK(reducers[1].kind == ReducerKind::Count);
+    REQUIRE(reducers[1].input != nullptr);
+    CHECK(std::holds_alternative<IdentExpr>(reducers[1].input->expr));
+    CHECK(reducers[2].kind == ReducerKind::Sum);
+    CHECK(reducers[3].kind == ReducerKind::Min);
+    CHECK(reducers[3].default_value != nullptr);
+    CHECK(reducers[4].kind == ReducerKind::Max);
+    CHECK(reducers[4].default_value != nullptr);
+    CHECK(reducers[5].kind == ReducerKind::Any);
+    CHECK(reducers[5].default_value == nullptr);
+}
+
+TEST_CASE("Parser: global reduce on a filter rule has no per binding", "[parser][rule-reduce]") {
+    auto prog = parse(
+        "rule CountEnemies:\n"
+        "    filter:\n"
+        "        Enemy as e\n"
+        "    reduce:\n"
+        "        n = count()\n"
+        "    on tick:\n"
+        "        x = 1\n");
+
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
+    REQUIRE(sys.reduce.has_value());
+    CHECK_FALSE(sys.reduce->per_binding.has_value());
+    REQUIRE(sys.reduce->reducers.size() == 1);
+}
+
+TEST_CASE("Parser: order by and limit after reduce rank aggregate rows", "[parser][rule-reduce]") {
+    auto prog = parse(
+        "rule RankTeams:\n"
+        "    pairs:\n"
+        "        team:\n"
+        "            Team\n"
+        "        player:\n"
+        "            Score\n"
+        "    reduce:\n"
+        "        per: team\n"
+        "        total = sum(player.Score.value)\n"
+        "    order by:\n"
+        "        total desc\n"
+        "    limit: 2\n"
+        "    on tick:\n"
+        "        x = 1\n");
+
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
+    REQUIRE(sys.reduce.has_value());
+    REQUIRE(sys.order_by.size() == 1);
+    CHECK(sys.order_by[0].descending);
+    CHECK(sys.limit.has_value());
+}
+
+TEST_CASE("Parser: order by before reduce is rejected", "[parser][rule-reduce]") {
+    auto errors = parse_expect_errors(
+        "rule RankTeams:\n"
+        "    pairs:\n"
+        "        team:\n"
+        "            Team\n"
+        "        player:\n"
+        "            Score\n"
+        "    order by:\n"
+        "        team.Team.id\n"
+        "    reduce:\n"
+        "        per: team\n"
+        "        total = sum(player.Score.value)\n"
+        "    on tick:\n"
+        "        x = 1\n");
+    REQUIRE(errors.has_errors());
+    CHECK(std::ranges::any_of(errors.diagnostics(), [](const Diagnostic& diagnostic) {
+        return diagnostic.message.find("after 'reduce:'") != std::string::npos;
+    }));
+}
+
+TEST_CASE("Parser: unknown reducers are rejected", "[parser][rule-reduce]") {
+    for (const std::string reducer : {"collect(player.Score.value)", "avg(player.Score.value)"}) {
+        auto errors = parse_expect_errors(
+            "rule Bad:\n"
+            "    pairs:\n"
+            "        team:\n"
+            "            Team\n"
+            "        player:\n"
+            "            Score\n"
+            "    reduce:\n"
+            "        all = " +
+            reducer +
+            "\n"
+            "    on tick:\n"
+            "        x = 1\n");
+        REQUIRE(errors.has_errors());
+        CHECK(std::ranges::any_of(errors.diagnostics(), [](const Diagnostic& diagnostic) {
+            return diagnostic.message.find("unknown reducer") != std::string::npos;
+        }));
+    }
+}
+
+TEST_CASE("Parser: reduce needs at least one reducer", "[parser][rule-reduce]") {
+    auto errors = parse_expect_errors(
+        "rule Bad:\n"
+        "    filter:\n"
+        "        Enemy\n"
+        "    reduce:\n"
+        "        per: e\n"
+        "    on tick:\n"
+        "        x = 1\n");
+    REQUIRE(errors.has_errors());
+}
+
+TEST_CASE("Parser: reduce clause on extern rule is rejected", "[parser][rule-reduce]") {
+    auto errors = parse_expect_errors(
+        "extern rule Bad:\n"
+        "    filter:\n"
+        "        Position\n"
+        "    reduce:\n"
+        "        n = count()\n");
+    REQUIRE(errors.has_errors());
+}
+
 TEST_CASE("Parser: limit clause on extern rule is rejected", "[parser][rule-limit]") {
     auto errors = parse_expect_errors(
         "extern rule Bad:\n"

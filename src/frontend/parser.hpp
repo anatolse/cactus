@@ -141,6 +141,10 @@ private:
     std::vector<std::unique_ptr<ExprNode>> parse_predicate_block(const SourceLocation& loc, const char* clause_name);
     LimitClause parse_limit_clause();
     [[nodiscard]] bool at_limit_clause() const;
+    ReduceClause parse_reduce_clause();
+    void parse_reduce_and_order_by(RuleNode& node);
+    std::optional<ReducerDecl> parse_reducer_decl();
+    [[nodiscard]] bool at_order_by_clause() const;
     std::vector<LocatedName> parse_name_block(TokenType keyword, const char* clause_name);
     std::vector<HandlerReferenceNode> parse_handler_order_block();
     std::vector<HandlerCommandNode> parse_command_block();

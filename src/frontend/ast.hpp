@@ -827,6 +827,53 @@ struct LimitClause {
     SourceLocation location;
 };
 
+// ── Reduce Clause ───────────────────────────────────────────────────────────
+
+enum class ReducerKind : std::uint8_t { Count, Sum, Min, Max, Any };
+
+[[nodiscard]] constexpr const char* reducer_kind_name(ReducerKind kind) {
+    switch (kind) {
+        case ReducerKind::Count:
+            return "count";
+        case ReducerKind::Sum:
+            return "sum";
+        case ReducerKind::Min:
+            return "min";
+        case ReducerKind::Max:
+            return "max";
+        case ReducerKind::Any:
+            return "any";
+    }
+    return "";
+}
+
+[[nodiscard]] constexpr bool reducer_has_default(ReducerKind kind) {
+    return kind == ReducerKind::Min || kind == ReducerKind::Max;
+}
+
+// `name = count()`, `count(binding)`, `sum(e)`, `min(e, default = v)`,
+// `max(e, default = v)` or `any(e)`.
+struct ReducerDecl {
+    std::string name;
+    ReducerKind kind = ReducerKind::Count;
+    std::unique_ptr<ExprNode> input;          // null for `count()`
+    std::unique_ptr<ExprNode> default_value;  // `min`/`max` only
+    TypeKind result_type = TypeKind::Unknown;  // set by semantic analysis
+    SourceLocation location;
+};
+
+// `reduce:` block on a regular rule: an optional `per: <binding>` line, then
+// one or more reducer declarations.
+struct ReduceClause {
+    std::optional<std::string> per_binding;
+    SourceLocation per_location;
+    std::vector<ReducerDecl> reducers;
+    // Set by semantic analysis: `where:` predicate indices that read only the
+    // `per` binding and so filter groups instead of rows.
+    std::vector<std::size_t> group_predicates;
+    SourceLocation location;
+};
+
 // Set by semantic analysis from a rule's group:/after:/before: clauses.
 struct ResolvedRuleOrdering {
     std::optional<SymbolId> group;
@@ -845,6 +892,7 @@ struct RuleNode {
     std::optional<PairClause> pairs;                // set when this rule uses a binary pair domain
     std::optional<WhereClause> where_clause;         // set when this rule declares a where: clause
     std::optional<LimitClause> limit;                // set when this rule declares a limit: clause
+    std::optional<ReduceClause> reduce;              // set when this rule declares a reduce: clause
     std::optional<WhenClause> when_clause;           // set when this rule declares a when: clause
     std::vector<SortKey> order_by;
     std::optional<std::string> group_ref;   // group this rule joins

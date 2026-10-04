@@ -81,6 +81,9 @@ const:
     # jumping actually work" probe checks — an obstacle that still blocks at
     # this height is treated as too tall to vault (route around it instead).
     ENEMY_VAULT_CLEARANCE_HEIGHT = 1.3
+    # Encloses every steering probe sphere, so SeekPlayer's broad phase can
+    # skip walls that no probe could touch.
+    ENEMY_SENSE_RADIUS = ENEMY_STEER_PROBE_DISTANCE + ENEMY_VAULT_CLEARANCE_HEIGHT + ENEMY_RADIUS
 
 asset BoxMesh: mesh = "models/box.mesh"
 asset WhiteMaterial: material = "materials/white.mat"
@@ -877,22 +880,48 @@ rule SpawnKnights:
                         speed = KNIGHT.speed / KNIGHT.run_reference_speed
         spawn_point.countdown = SPAWN_INTERVAL
 
-# Whether a sphere of ENEMY_RADIUS centered at probe overlaps this wall's
-# box — the same box-geometry-aware predicate DetectActorSolidContact relies
-# on for real wall collision, reused here for the AI's obstacle probing since
-# std.physics.volume.query's raycast can't see box extent (see SeekPlayer).
-func is_probe_blocked(probe: vec3, wall_position: vec3, wall_size: vec3, wall_rotation: quat) bool:
+# The ground-plane heading from position toward target, turned by angle.
+func steer_heading(position: vec3, goal: vec3, angle: float) vec3:
+    let delta = vec3(goal.x - position.x, 0.0, goal.z - position.z)
+    let distance = v3.length(delta)
+    if distance <= 0.0:
+        return vec3(0.0, 0.0, 0.0)
+    return v3.rotate(delta / distance, vec3(0.0, 1.0, 0.0), angle)
+
+# Whether a sphere of ENEMY_RADIUS at a steering probe overlaps this wall's
+# box. The probe sits ENEMY_STEER_PROBE_DISTANCE along the heading, raised by
+# height. This is the box-aware test DetectActorSolidContact relies on for
+# real wall collision.
+func is_probe_blocked(position: vec3, goal: vec3, angle: float, height: float, wall_position: vec3, wall_size: vec3, wall_rotation: quat) bool:
+    let probe = position + steer_heading(position, goal, angle) * ENEMY_STEER_PROBE_DISTANCE + vec3(0.0, height, 0.0)
     return v3.length(collision.sphere_box_separation(probe, ENEMY_RADIUS, wall_position, wall_size, wall_rotation)) > 0.0
 
+# One pass over enemy × wall: the broad phase finds the walls near each
+# enemy, `reduce:` asks whether any of them blocks each probe, and the
+# handler then runs once per enemy, also when no wall is near.
 rule SeekPlayer:
-    filter:
-        Enemy as enemy
-        Threat
-        KinematicActor as actor
-        tv.WorldTransform as transform
-    exclude:
-        Dying
+    pairs:
+        enemy:
+            Enemy
+            Threat
+            KinematicActor as actor
+            tv.WorldTransform as transform
+        wall:
+            Solid
+            physics.BoxCollider as box
+            tv.WorldTransform as place
     group: locomotion
+    where:
+        collision.sphere_box_overlap(enemy.transform.position, ENEMY_SENSE_RADIUS, wall.place.position, wall.box.size, wall.place.rotation)
+    reduce:
+        per: enemy
+        direct_blocked = any(is_probe_blocked(enemy.transform.position, PlayerBody.tv.WorldTransform.position, 0.0, 0.0, wall.place.position, wall.box.size, wall.place.rotation))
+        # An obstacle that still blocks at jump-clearance height is too tall to vault.
+        direct_high_blocked = any(is_probe_blocked(enemy.transform.position, PlayerBody.tv.WorldTransform.position, 0.0, ENEMY_VAULT_CLEARANCE_HEIGHT, wall.place.position, wall.box.size, wall.place.rotation))
+        left_small_blocked = any(is_probe_blocked(enemy.transform.position, PlayerBody.tv.WorldTransform.position, ENEMY_STEER_ANGLE_SMALL, 0.0, wall.place.position, wall.box.size, wall.place.rotation))
+        right_small_blocked = any(is_probe_blocked(enemy.transform.position, PlayerBody.tv.WorldTransform.position, ENEMY_STEER_ANGLE_SMALL * -1.0, 0.0, wall.place.position, wall.box.size, wall.place.rotation))
+        left_large_blocked = any(is_probe_blocked(enemy.transform.position, PlayerBody.tv.WorldTransform.position, ENEMY_STEER_ANGLE_LARGE, 0.0, wall.place.position, wall.box.size, wall.place.rotation))
+        right_large_blocked = any(is_probe_blocked(enemy.transform.position, PlayerBody.tv.WorldTransform.position, ENEMY_STEER_ANGLE_LARGE * -1.0, 0.0, wall.place.position, wall.box.size, wall.place.rotation))
     when:
         not Game.Match.over
 
@@ -903,119 +932,52 @@ rule SeekPlayer:
         # same as ApplyJump's grounded check, that sidesteps needing this
         # fixed_tick rule to depend on another fixed_tick rule's downstream
         # GroundCandidate-event cascade within the same tick.
-        if enemy.is_vaulting and actor.grounded:
-            enemy.is_vaulting = false
-            for visual in query.children[EnemyVisual](of = self):
+        if enemy.Enemy.is_vaulting and enemy.actor.grounded:
+            enemy.Enemy.is_vaulting = false
+            for visual in query.children[EnemyVisual](of = enemy):
                 set models.ModelAnimator on visual:
-                    clip = enemy.kind.run_clip
+                    clip = enemy.Enemy.kind.run_clip
                     time = 0.0
 
-        let target_position = tv.world_position(PlayerBody)
-        let delta = vec3(target_position.x - transform.position.x, 0.0, target_position.z - transform.position.z)
-        let distance = v3.length(delta)
-        if distance <= 0.0:
+        let position = enemy.transform.position
+        let target_position = PlayerBody.tv.WorldTransform.position
+        var direction = steer_heading(position, target_position, 0.0)
+        if v3.length(direction) <= 0.0:
             return
-        let direct_direction = delta / distance
-        let up = vec3(0.0, 1.0, 0.0)
-        let probe_direct = transform.position + direct_direction * ENEMY_STEER_PROBE_DISTANCE
-        let solid_walls = query.all[Solid]()
 
-        # Checked in two passes: the direct heading alone first, since that's
-        # the common case and the only one steering/vaulting ever needs — the
-        # deflected candidates and vault-clearance probe below are wasted
-        # work on a tick where the direct path is already clear.
-        var direct_blocked = false
-        for wall in solid_walls:
-            var wall_position = vec3(0.0, 0.0, 0.0)
-            var wall_rotation = quat.identity()
-            match wall:
-                tv.WorldTransform as wall_transform =>
-                    wall_position = wall_transform.position
-                    wall_rotation = wall_transform.rotation
-            var wall_size = vec3(1.0, 1.0, 1.0)
-            match wall:
-                physics.BoxCollider as wall_box =>
-                    wall_size = wall_box.size
-            if not direct_blocked and is_probe_blocked(probe_direct, wall_position, wall_size, wall_rotation):
-                direct_blocked = true
-
-        var direction = direct_direction
         if direct_blocked:
-            let candidate_left_small = v3.rotate(direct_direction, up, ENEMY_STEER_ANGLE_SMALL)
-            let candidate_right_small = v3.rotate(direct_direction, up, ENEMY_STEER_ANGLE_SMALL * -1.0)
-            let candidate_left_large = v3.rotate(direct_direction, up, ENEMY_STEER_ANGLE_LARGE)
-            let candidate_right_large = v3.rotate(direct_direction, up, ENEMY_STEER_ANGLE_LARGE * -1.0)
-            let probe_left_small = transform.position + candidate_left_small * ENEMY_STEER_PROBE_DISTANCE
-            let probe_right_small = transform.position + candidate_right_small * ENEMY_STEER_PROBE_DISTANCE
-            let probe_left_large = transform.position + candidate_left_large * ENEMY_STEER_PROBE_DISTANCE
-            let probe_right_large = transform.position + candidate_right_large * ENEMY_STEER_PROBE_DISTANCE
-            # Same x/z as probe_direct, raised to jump-clearance height: an
-            # obstacle that blocks here too is too tall to vault.
-            let probe_direct_high = vec3(probe_direct.x, transform.position.y + ENEMY_VAULT_CLEARANCE_HEIGHT, probe_direct.z)
-
-            var direct_high_blocked = false
-            var left_small_blocked = false
-            var right_small_blocked = false
-            var left_large_blocked = false
-            var right_large_blocked = false
-            for wall in solid_walls:
-                var wall_position = vec3(0.0, 0.0, 0.0)
-                var wall_rotation = quat.identity()
-                match wall:
-                    tv.WorldTransform as wall_transform =>
-                        wall_position = wall_transform.position
-                        wall_rotation = wall_transform.rotation
-                var wall_size = vec3(1.0, 1.0, 1.0)
-                match wall:
-                    physics.BoxCollider as wall_box =>
-                        wall_size = wall_box.size
-                if not direct_high_blocked and is_probe_blocked(probe_direct_high, wall_position, wall_size, wall_rotation):
-                    direct_high_blocked = true
-                if not left_small_blocked and is_probe_blocked(probe_left_small, wall_position, wall_size, wall_rotation):
-                    left_small_blocked = true
-                if not right_small_blocked and is_probe_blocked(probe_right_small, wall_position, wall_size, wall_rotation):
-                    right_small_blocked = true
-                if not left_large_blocked and is_probe_blocked(probe_left_large, wall_position, wall_size, wall_rotation):
-                    left_large_blocked = true
-                if not right_large_blocked and is_probe_blocked(probe_right_large, wall_position, wall_size, wall_rotation):
-                    right_large_blocked = true
-
             # Vaultable beats steering: a short obstacle dead ahead is jumped
             # over on the direct heading rather than detoured around. Only
             # trigger while grounded, read from last tick's resolution (same
             # lag as the landing check above and ApplyJump's grounded check).
-            # `enemy.is_vaulting` is already false by the time we'd reach here
-            # in the same tick a landing clears it, so it adds nothing beyond
-            # actor.grounded and isn't repeated as a guard here.
             let can_vault = not direct_high_blocked
-            if can_vault and actor.grounded:
-                actor.vertical_velocity = JUMP_VELOCITY
-                actor.grounded = false
-                enemy.is_vaulting = true
-                for visual in query.children[EnemyVisual](of = self):
+            if can_vault and enemy.actor.grounded:
+                enemy.actor.vertical_velocity = JUMP_VELOCITY
+                enemy.actor.grounded = false
+                enemy.Enemy.is_vaulting = true
+                for visual in query.children[EnemyVisual](of = enemy):
                     set models.ModelAnimator on visual:
-                        clip = enemy.kind.jump_clip
+                        clip = enemy.Enemy.kind.jump_clip
                         time = 0.0
 
             # Priority order (small deflection, then large deflection,
             # alternating sides): flat guards instead of nested ifs so each
             # line stands alone — falls back to the direct heading when every
-            # candidate is blocked and vaulting doesn't apply, same as before
-            # steering existed (the existing wall-separation rules still
-            # prevent tunneling in that case).
+            # candidate is blocked and vaulting doesn't apply (the
+            # wall-separation rules still prevent tunneling in that case).
             let steering_needed = not can_vault
             if steering_needed and not left_small_blocked:
-                direction = candidate_left_small
+                direction = steer_heading(position, target_position, ENEMY_STEER_ANGLE_SMALL)
             if steering_needed and left_small_blocked and not right_small_blocked:
-                direction = candidate_right_small
+                direction = steer_heading(position, target_position, ENEMY_STEER_ANGLE_SMALL * -1.0)
             if steering_needed and left_small_blocked and right_small_blocked and not left_large_blocked:
-                direction = candidate_left_large
+                direction = steer_heading(position, target_position, ENEMY_STEER_ANGLE_LARGE)
             if steering_needed and left_small_blocked and right_small_blocked and left_large_blocked and not right_large_blocked:
-                direction = candidate_right_large
+                direction = steer_heading(position, target_position, ENEMY_STEER_ANGLE_LARGE * -1.0)
 
-        enemy.facing_yaw = math.atan2(direction.x * -1.0, direction.z * -1.0)
-        transform.rotation = quat.from_euler(0.0, enemy.facing_yaw, 0.0)
-        transform.position += direction * enemy.kind.speed * fixed_tick.dt
+        enemy.Enemy.facing_yaw = math.atan2(direction.x * -1.0, direction.z * -1.0)
+        enemy.transform.rotation = quat.from_euler(0.0, enemy.Enemy.facing_yaw, 0.0)
+        enemy.transform.position += direction * enemy.Enemy.kind.speed * fixed_tick.dt
 
 rule CooldownShooter:
     filter:

@@ -1,6 +1,7 @@
 #include "frontend/parser.hpp"
 
 #include <stdexcept>
+#include <unordered_map>
 
 namespace cactus {
 
@@ -1387,6 +1388,11 @@ RuleNode Parser::parse_rule() {
     }
 
     skip_newlines();
+    if (check(TokenType::REDUCE)) {
+        parse_reduce_and_order_by(node);
+    }
+
+    skip_newlines();
     if (at_limit_clause()) {
         auto error_count_before = errors_.error_count();
         node.limit              = parse_limit_clause();
@@ -1458,8 +1464,7 @@ Parser::parse_common_rule_clauses(  // NOLINT(readability-function-cognitive-com
     }
 
     skip_newlines();
-    if (check(TokenType::IDENTIFIER) && peek().value == "order" && peek_next().type == TokenType::IDENTIFIER &&
-        peek_next().value == "by") {
+    if (at_order_by_clause()) {
         auto order_loc          = peek().location;
         auto error_count_before = errors_.error_count();
         result.order_by         = parse_order_by_clause();
@@ -1725,6 +1730,120 @@ LimitClause Parser::parse_limit_clause() {
     }
     expect_newline();
     return clause;
+}
+
+bool Parser::at_order_by_clause() const {
+    return check(TokenType::IDENTIFIER) && peek().value == "order" && peek_next().type == TokenType::IDENTIFIER &&
+           peek_next().value == "by";
+}
+
+// After `reduce:`, `order by:` ranks aggregate rows, so it is written there.
+void Parser::parse_reduce_and_order_by(RuleNode& node) {
+    auto error_count_before = errors_.error_count();
+    node.reduce             = parse_reduce_clause();
+    if (errors_.error_count() > error_count_before) {
+        synchronize();
+    }
+    if (!node.order_by.empty()) {
+        errors_.error(node.order_by.front().location, "with 'reduce:', 'order by:' goes after 'reduce:'");
+    }
+    skip_newlines();
+    if (!at_order_by_clause()) {
+        return;
+    }
+    error_count_before = errors_.error_count();
+    node.order_by      = parse_order_by_clause();
+    if (errors_.error_count() > error_count_before) {
+        synchronize();
+    }
+}
+
+ReduceClause Parser::parse_reduce_clause() {
+    ReduceClause clause;
+    clause.location = peek().location;
+    advance();  // consume 'reduce'
+    consume(TokenType::COLON, "expected ':'");
+    expect_newline();
+    if (!check(TokenType::INDENT)) {
+        errors_.error(clause.location, "reduce: block must declare at least one reducer");
+        return clause;
+    }
+    expect_indent();
+    skip_newlines();
+    if (check(TokenType::IDENTIFIER) && peek().value == "per" && peek_next().type == TokenType::COLON) {
+        clause.per_location = peek().location;
+        advance();
+        advance();
+        clause.per_binding = consume(TokenType::IDENTIFIER, "expected binding name after 'per:'").value;
+        expect_newline();
+    }
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+            break;
+        }
+        auto error_count_before = errors_.error_count();
+        auto reducer            = parse_reducer_decl();
+        if (reducer.has_value()) {
+            clause.reducers.push_back(std::move(*reducer));
+        }
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+        }
+    }
+    expect_dedent();
+    if (clause.reducers.empty()) {
+        errors_.error(clause.location, "reduce: block must declare at least one reducer");
+    }
+    return clause;
+}
+
+// `name = kind(args)`: parsed as an ordinary call, then taken apart, so the
+// argument grammar (including `default = v`) is the call grammar.
+std::optional<ReducerDecl> Parser::parse_reducer_decl() {
+    ReducerDecl reducer;
+    reducer.location = peek().location;
+    reducer.name     = consume(TokenType::IDENTIFIER, "expected reducer name").value;
+    consume(TokenType::ASSIGN, "expected '=' after reducer name");
+    auto value = parse_expression();
+    expect_newline();
+
+    auto* call         = std::get_if<CallExpr>(&value->expr);
+    const auto* callee = call == nullptr ? nullptr : std::get_if<IdentExpr>(&call->callee->expr);
+    if (callee == nullptr) {
+        errors_.error(value->location, "expected a reducer call: count, sum, min, max or any");
+        return std::nullopt;
+    }
+    static const std::unordered_map<std::string, ReducerKind> kinds{{"count", ReducerKind::Count},
+                                                                    {"sum", ReducerKind::Sum},
+                                                                    {"min", ReducerKind::Min},
+                                                                    {"max", ReducerKind::Max},
+                                                                    {"any", ReducerKind::Any}};
+    const auto kind = kinds.find(callee->name);
+    if (kind == kinds.end()) {
+        errors_.error(call->location,
+                      "unknown reducer '" + callee->name + "'; expected count, sum, min, max or any");
+        return std::nullopt;
+    }
+    reducer.kind = kind->second;
+
+    const bool bounded = reducer_has_default(reducer.kind);
+    for (std::size_t i = 0; i < call->args.size(); ++i) {
+        const auto& name = i < call->arg_names.size() ? call->arg_names[i] : std::string{};
+        if (name.empty() && reducer.input == nullptr) {
+            reducer.input = std::move(call->args[i]);
+        } else if (name == "default" && bounded && reducer.default_value == nullptr) {
+            reducer.default_value = std::move(call->args[i]);
+        } else {
+            errors_.error(call->args[i]->location, "unexpected argument to reducer '" + callee->name + "'");
+            return std::nullopt;
+        }
+    }
+    if (reducer.input == nullptr && reducer.kind != ReducerKind::Count) {
+        errors_.error(call->location, "reducer '" + callee->name + "' needs an input expression");
+        return std::nullopt;
+    }
+    return reducer;
 }
 
 std::vector<SortKey> Parser::parse_order_by_clause() {
@@ -3140,6 +3259,14 @@ ExternRuleNode Parser::parse_extern_rule() {
         if (errors_.error_count() > error_count_before) {
             synchronize();
         }
+    }
+
+    skip_newlines();
+    if (check(TokenType::REDUCE)) {
+        auto reduce_loc = peek().location;
+        parse_reduce_clause();  // parsed and discarded; reduce: is regular-rule-only
+        errors_.error(reduce_loc, "'reduce:' is not valid on external rules");
+        synchronize();
     }
 
     skip_newlines();

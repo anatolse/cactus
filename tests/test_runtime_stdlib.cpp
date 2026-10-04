@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <limits>
 #include <numbers>
 #include <optional>
 #include <sstream>
@@ -2091,5 +2092,32 @@ TEST_CASE("Runtime stdlib: animation cue cache validates, sorts, and only rebuil
 
     asset_registry.clear();
     entt_backend::reset_render_debug_state();
+}
+TEST_CASE("reduce: integer sums saturate at each fold step", "[runtime][rule-reduce]") {
+    constexpr int top    = std::numeric_limits<int>::max();
+    constexpr int bottom = std::numeric_limits<int>::min();
+    STATIC_CHECK(reduce::add(top, 1) == top);
+    STATIC_CHECK(reduce::add(bottom, -1) == bottom);
+    STATIC_CHECK(reduce::add(reduce::add(top, 1), -1) == top - 1);
+    STATIC_CHECK(reduce::add(reduce::add(bottom, -1), 1) == bottom + 1);
+    STATIC_CHECK(reduce::add(2, 3) == 5);
+}
+
+TEST_CASE("reduce: float sums keep fold order", "[runtime][rule-reduce]") {
+    // (1e8 + 1) + -1e8 rounds the 1 away; 1 + (1e8 + -1e8) keeps it.
+    CHECK(reduce::add(reduce::add(1.0e8F, 1.0F), -1.0e8F) == 0.0F);
+    CHECK(reduce::add(reduce::add(1.0F, 1.0e8F), -1.0e8F) == 0.0F);
+    CHECK(reduce::add(1.0F, reduce::add(1.0e8F, -1.0e8F)) == 1.0F);
+}
+
+TEST_CASE("reduce: float min and max propagate NaN", "[runtime][rule-reduce]") {
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    CHECK(std::isnan(reduce::min(nan, 1.0F)));
+    CHECK(std::isnan(reduce::min(1.0F, nan)));
+    CHECK(std::isnan(reduce::max(reduce::max(2.0F, nan), 5.0F)));
+    CHECK(reduce::min(2.0F, -1.0F) == -1.0F);
+    CHECK(reduce::max(2.0F, -1.0F) == 2.0F);
+    STATIC_CHECK(reduce::min(3, -4) == -4);
+    STATIC_CHECK(reduce::max(3, -4) == 3);
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

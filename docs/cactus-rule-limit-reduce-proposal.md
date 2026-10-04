@@ -1,13 +1,17 @@
 # Proposal: `limit` and `reduce` Clauses for Cactus Rules
 
-Status: mixed. `limit` (both the global and `per`-binding forms below) is
-implemented and normatively specified in
-`openspec/specs/dsl-rule-limit/spec.md`, with runtime coverage in
-`tests/test_pairs_limit_headless_behavior.cpp` and a complete authoring recipe
-in `docs/deterministic-target-selection-guide.md` /
-`examples/deterministic_target_selection.cactus`. `reduce` remains proposed —
-the `## reduce` section, "Using `reduce` and `limit` Together", and the CIR
-`Group`/`Aggregate` operations below describe a design, not shipped behavior.
+Status: implemented. `limit` (both the global and `per`-binding forms below) is
+normatively specified in `openspec/specs/dsl-rule-limit/spec.md`, with runtime
+coverage in `tests/test_pairs_limit_headless_behavior.cpp` and a complete
+authoring recipe in `docs/deterministic-target-selection-guide.md` /
+`examples/deterministic_target_selection.cactus`. `reduce` is implemented by
+`add-rule-reductions` (normative text in `spec/cactus_dsl_spec.md` §3.8.5 and
+`openspec/specs/dsl-rule-reduce/spec.md`; example `examples/rule_reductions.cactus`).
+The shipped `reduce` differs from this first draft: groups are outer (see
+"Outer Groups" below), `any` is a reducer, `collect` is not, `where:` splits into
+group and row filters, and the retained `per` binding is writable. The CIR
+operations at the end remain a design: the cpp-entt backend lowers every clause
+directly.
 
 ## Summary
 
@@ -128,8 +132,6 @@ This allows rules such as `SeekPlayer` to select one player and update the enemy
 
 ## `reduce`
 
-Proposed, not implemented — no `reduce` clause exists in the compiler today.
-
 `reduce` replaces multiple existing domain rows with aggregate rows.
 
 ```cactus
@@ -161,21 +163,21 @@ After reduction:
 - the `team` binding remains available;
 - the individual `player` binding is no longer available in the handler;
 - aggregate results are immutable values available to every `on` handler;
-- the handler runs once for every group that actually exists.
+- the handler runs once for every entity of the `per` binding (see below).
 
-The `per` binding may become writable because reduction produces at most one activation for each such binding.
+The `per` binding is writable because reduction produces exactly one activation for each such binding.
 
-## No Implicit Outer-Group Semantics
+## Outer Groups
 
-Grouped reduction operates only on rows that exist after `where`.
+Shipped behavior, which reverses this draft's first version. `per: team` creates one group
+for every entity in the `team` membership snapshot, before any row is folded. A team
+with no surviving `(team, player)` row still gets one activation, with identity values:
+`count` and `sum` are `0`, `min`/`max` use their default, `any` is `false`.
 
-If no `(team, player)` pair survives, no group is created for that team and no handler is executed.
+An author who wants the old inner behavior returns early when `count() == 0`.
 
-Therefore, grouped reduction does not implicitly behave as a left join and does not create empty candidate groups.
-
-This keeps its semantics consistent with the current `pairs` domain.
-
-Queries based on the absence of a match require a separate, explicit anti-join feature. They are outside this proposal.
+`where:` predicates that read only the `per` binding (`team.Team.active`) filter groups:
+a team that fails one gets no activation. Every other predicate filters rows.
 
 ## Global Reduction
 
@@ -202,30 +204,26 @@ A global reduction produces one activation even when its input domain is empty:
 
 - `count()` returns `0`;
 - `sum(...)` returns the numeric identity;
-- `collect(...)` returns an empty list;
-- `min` and `max` use their declared default values.
+- `min` and `max` use their declared default values;
+- `any(...)` returns `false`.
 
 ## Core Reducers
 
 The initial reducer set should contain only true aggregations:
 
 ```cactus
+count()
 count(binding)
 sum(expression)
 min(expression, default = value)
 max(expression, default = value)
-collect(expression)
+any(expression)
 ```
 
-For a unary global domain, `count()` may omit the binding.
-
-`exists` is not required for grouped reduction: every existing group already contains at least one input row. For global reduction, the equivalent condition is:
-
-```cactus
-count() > 0
-```
-
-The compiler may optimize this comparison as a short-circuit existence check.
+`count()` counts rows; `count(binding)` also counts rows and documents which binding
+they come from. `any` answers "does some row match?", and `not any(...)` answers "does
+no row match?", which outer groups make meaningful. `collect` was dropped: it needs an
+allocation per group.
 
 ## Operations Excluded from `reduce`
 

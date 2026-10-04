@@ -243,6 +243,15 @@ struct SpatialJoinPlan {
     friend bool operator==(const SpatialJoinPlan&, const SpatialJoinPlan&) = default;
 };
 
+// Set when a rule declares `reduce:`: the handler runs once per group of the
+// pair binding at `group_binding`, or once in total when that is unset.
+struct ReductionPlan {
+    std::optional<std::size_t> group_binding;
+    std::vector<ReducerKind> reducers;
+
+    friend bool operator==(const ReductionPlan&, const ReductionPlan&) = default;
+};
+
 // Which fields of one trait a contract touches.
 struct FieldAccess {
     bool all = false;
@@ -270,6 +279,7 @@ struct HandlerContract {
     // Pair domain only: set when a recognized, SAP-eligible spatial predicate
     // was found in the rule's `where:` clause (spatial-broadphase-runtime).
     std::optional<SpatialJoinPlan> spatial_join;
+    std::optional<ReductionPlan> reduction;
 
     [[nodiscard]] bool is_selectionless() const {
         return domain_kind == HandlerDomainKind::Selectionless;
@@ -742,6 +752,11 @@ private:
     // every site that validates or infers against a whole rule rather than a
     // bare `pairs:` clause.
     [[nodiscard]] static PairScope build_pair_scope(const RuleNode& rule);
+    // A reduced handler sees only the retained `per` binding
+    // (writable), or no binding at all for a global reduction.
+    [[nodiscard]] static PairScope build_reduced_handler_scope(const RuleNode& rule);
+    // The aggregates of a reduced rule as immutable handler locals.
+    [[nodiscard]] static std::unordered_map<std::string, TypeInfo> reducer_locals(const RuleNode& rule);
     // dsl-where-clause: requires an existing filter:/pairs: domain, type-checks
     // every predicate as bool, and enforces purity via check_clause_purity_expr.
     void validate_where_clauses(ProgramNode& program);
@@ -757,6 +772,7 @@ private:
     void resolve_archetype_entity_values(ProgramNode& program);
     void collect_named_entities(const ProgramNode& program);
     void resolve_named_entity_access(ProgramNode& program);
+    void resolve_named_rule_access(RuleNode& rule);
     void resolve_named_access_expr(ExprNode& expr,
                                    const std::unordered_set<std::string>& shadowed,
                                    NamedAccessContext context);
@@ -801,6 +817,14 @@ private:
     // (constants only without one). Also records the provably-one proof on
     // the clause, which is what unlocks the pair-binding write carve-out.
     void validateLimitClause(RuleNode& rule);
+    // Domain and `per` placement, reducer names, input typing
+    // and purity, and the `where:` split into group and row predicates.
+    void validateReduceClause(RuleNode& rule);
+    void reject_eliminated_bindings(const RuleNode& rule, const ReduceClause& reduce);
+    void validate_reducer(ReducerDecl& reducer,
+                          const RuleNode& rule,
+                          const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                          const PairScope* row_scope);
     [[nodiscard]] std::optional<PairScope> resolve_limit_count_scope(const RuleNode& rule);
     // The deliberately narrow two-shape proof (design.md): the literal `1`, or
     // a name whose `const:` initializer is literally `1`. Nothing else — an
@@ -958,7 +982,8 @@ private:
     void validate_order_by_key(const SortKey& key,
                                const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
                                const PairScope* pair_scope,
-                               const std::string& rule_name);
+                               const std::string& rule_name,
+                               const std::unordered_map<std::string, TypeInfo>& locals = {});
     // The unary-filter-domain body shared by both validateOrderByClause
     // overloads (RuleNode's pairs: branch has no ExternRuleNode equivalent, so
     // it stays out of this helper). Assumes order_by is already known non-empty.

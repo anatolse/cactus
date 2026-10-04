@@ -7599,6 +7599,78 @@ TEST_CASE("Codegen EnTT: a pair sort key that reads one binding marks both param
           std::string::npos);
 }
 
+TEST_CASE("Codegen EnTT: a grouped reduction folds broad-phase rows and writes its retained binding",
+          "[codegen-entt][rule-reduce][spatial-join]") {
+    const auto code = emit_named_rule("module std.collision.volume\n" + VOLUME_JOIN_TRAITS +
+                                          "rule Sense:\n"
+                                          "    pairs:\n"
+                                          "        actor:\n"
+                                          "            Body\n"
+                                          "        wall:\n"
+                                          "            Solid\n"
+                                          "    where:\n"
+                                          "        actor.Body.radius > 0.0\n"
+                                          "        sphere_box_overlap(actor.Body.position, actor.Body.radius + PROBE, "
+                                          "wall.Solid.position, wall.Solid.size, wall.Solid.rotation)\n"
+                                          "    reduce:\n"
+                                          "        per: actor\n"
+                                          "        near = any(wall.Solid.size.x > 1.0)\n"
+                                          "        walls = count()\n"
+                                          "        low = min(wall.Solid.position.y, default = 9.0)\n"
+                                          "    on tick:\n"
+                                          "        if near:\n"
+                                          "            actor.Body.radius = low + walls\n",
+                                      "Sense");
+    // Groups and their filter come first, then the broad phase feeds the fold.
+    const auto groups = code.find("cactus_group_live[cactus_i] = 1;");
+    const auto fold   = code.find("auto cactus_fold = [&](entt::entity actor, entt::entity wall)");
+    const auto sap    = code.find("cactus::runtime::entt_backend::sphere_proxy(");
+    const auto rows   = code.find("std::vector<cactus_reduce_row> cactus_rows;");
+    REQUIRE(groups != std::string::npos);
+    REQUIRE(fold != std::string::npos);
+    REQUIRE(sap != std::string::npos);
+    REQUIRE(rows != std::string::npos);
+    CHECK(groups < fold);
+    CHECK(fold < sap);
+    CHECK(sap < rows);
+    CHECK(code.find("cactus_fold(__sap_proxies[__sap_pair.left].entity", sap) != std::string::npos);
+    // The group filter runs once per actor, not per row.
+    const auto group_filter = code.find("registry.get<const Body>(actor).radius > 0.0");
+    CHECK(group_filter < fold);
+    CHECK(code.find("registry.get<const Body>(actor).radius > 0.0", fold) == std::string::npos);
+    // Folds use the runtime helpers; min's default applies only to empty input.
+    CHECK(code.find("cactus_acc.walls = cactus::runtime::reduce::add(cactus_acc.walls, 1);") != std::string::npos);
+    CHECK(code.find("cactus::runtime::reduce::min(cactus_acc.low, cactus_value)") != std::string::npos);
+    CHECK(code.find("cactus_acc.low_seen ? cactus_acc.low : 9.0F;") != std::string::npos);
+    CHECK(code.find("if (!cactus_acc.near) {") != std::string::npos);
+    // The handler writes the retained binding through a mutable reference.
+    CHECK(code.find("registry.get<Body>(actor).radius =", rows) != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: a global unary reduction folds in creation order and runs once",
+          "[codegen-entt][rule-reduce]") {
+    const auto code = emit_named_rule(LIMIT_TRAITS +
+                                          "rule Total:\n"
+                                          "    filter:\n"
+                                          "        Surface as surface\n"
+                                          "    where:\n"
+                                          "        surface.code > 0\n"
+                                          "    reduce:\n"
+                                          "        total = sum(surface.code)\n"
+                                          "    limit: 1\n"
+                                          "    on tick:\n"
+                                          "        let x = total\n",
+                                      "Total");
+    const auto sort = code.find("std::ranges::sort(cactus_ordered);");
+    const auto fold = code.find("cactus_acc.total = cactus::runtime::reduce::add(cactus_acc.total, ");
+    REQUIRE(sort != std::string::npos);
+    REQUIRE(fold != std::string::npos);
+    CHECK(sort < fold);
+    CHECK(code.find("CreationOrdinal") < sort);
+    CHECK(code.find("cactus_rows.resize(") != std::string::npos);
+    CHECK(code.find("cactus_reduced_body(cactus_row);") != std::string::npos);
+}
+
 TEST_CASE("Codegen EnTT: a provably-one per-binding limit emits a mutable write through its binding",
           "[codegen-entt][rule-limit][pair-relations]") {
     const auto code = emit_named_rule(LIMIT_TRAITS +

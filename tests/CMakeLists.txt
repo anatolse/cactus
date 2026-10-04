@@ -440,6 +440,12 @@ cactus_add_headless_behavior_test(test_spatial_join_tuples_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_spatial_join_tuples_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_cross_domain_spatial_join_headless_behavior
+    CACTUS_SOURCE tests/fixtures/cross_domain_spatial_join_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_cross_domain_spatial_join_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_pairs_order_by_headless_behavior
     CACTUS_SOURCE tests/fixtures/pairs_order_by_runtime.cactus
     BACKEND cpp-entt

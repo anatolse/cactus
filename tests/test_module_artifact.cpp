@@ -871,6 +871,69 @@ TEST_CASE("ModuleArtifact: runtime declarations and handler graph round-trip", "
     fs::remove_all(build_dir, ec);
 }
 
+TEST_CASE("ModuleArtifact: artifact from before shape-generic spatial plans is rejected", "[artifact][spatial-join]") {
+    CHECK(ModuleArtifact::CURRENT_VERSION == 23);
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+    fs::create_directories(build_dir);
+
+    auto path = build_dir / "sphere-plan.cmod";
+    {
+        std::ofstream out(path, std::ios::binary);
+        out.write("CMOD", 4);
+        const char previous_version = 22;
+        out.write(&previous_version, 1);
+    }
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    std::string name;
+    CHECK_FALSE(artifact.load(path, name).has_value());
+    REQUIRE(errors.has_errors());
+    CHECK(errors.diagnostics()[0].message.find("incompatible module artifact version") != std::string::npos);
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("ModuleArtifact: a shape-generic spatial join plan round-trips", "[artifact][spatial-join]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    const auto tick = test_symbol(SymbolKind::Event, "tick");
+    const auto rule = test_symbol(SymbolKind::Rule, "Detect");
+    const ResolvedHandlerTrigger trigger{.kind = HandlerTriggerKind::Event, .symbol = tick};
+
+    const SpatialJoinPlan plan{
+        .dimension = SpatialJoinDimension::Volume3D,
+        .left      = SpatialShape{.binding_index = 1, .kind = SpatialShapeKind::Sphere, .slots = {{0}, {1}}},
+        .right     = SpatialShape{.binding_index = 0, .kind = SpatialShapeKind::Box, .slots = {{2}, {3, 0, 1}, {4}}},
+        .matched_predicate_index = 2};
+    InferredHandlerContract inferred;
+    inferred.rule         = rule;
+    inferred.trigger      = trigger;
+    inferred.domain_kind  = HandlerDomainKind::Pair;
+    inferred.spatial_join = plan;
+
+    DecoratedProgram program;
+    program.handler_contracts.push_back(inferred);
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    REQUIRE(artifact.save(program, "runtime.lib", build_dir));
+    std::string module_name;
+    const auto loaded = artifact.load(build_dir / "runtime.lib.cmod", module_name);
+
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->handler_contracts.size() == 1);
+    REQUIRE(loaded->handler_contracts.front().spatial_join.has_value());
+    CHECK(*loaded->handler_contracts.front().spatial_join == plan);
+
+    fs::remove_all(build_dir, ec);
+}
+
 TEST_CASE("ModuleArtifact: contracts that omit project capabilities round-trip as empty",
           "[artifact][extern-rule][projects]") {
     auto build_dir = test_build_dir();
@@ -940,7 +1003,7 @@ TEST_CASE("ModuleArtifact: set command capabilities round-trip", "[artifact][def
     CHECK(loaded->handler_contracts.front().commands == commands);
     REQUIRE(loaded->execution_graph.handlers.size() == 1);
     CHECK(loaded->execution_graph.handlers.front().contract.commands == commands);
-    CHECK(ModuleArtifact::CURRENT_VERSION == 22);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 23);
 
     fs::remove_all(build_dir, ec);
 }
@@ -1283,7 +1346,7 @@ TEST_CASE("ModuleArtifact: field-level access serializes deterministically", "[a
 }
 
 TEST_CASE("ModuleArtifact: artifact from before field-level contracts is rejected", "[artifact][handler-contracts]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 22);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 23);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1557,7 +1620,7 @@ TEST_CASE("ModuleArtifact: unknown trigger kind is rejected", "[artifact][trait-
 }
 
 TEST_CASE("ModuleArtifact: artifact from before lifecycle triggers is rejected", "[artifact][trait-lifecycle]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 22);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 23);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1677,7 +1740,7 @@ TEST_CASE("ModuleArtifact: unknown group ordering direction is malformed", "[art
 }
 
 TEST_CASE("ModuleArtifact: artifact from before rule groups is rejected", "[artifact][rule-groups]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 22);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 23);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1702,7 +1765,7 @@ TEST_CASE("ModuleArtifact: artifact from before rule groups is rejected", "[arti
 }
 
 TEST_CASE("ModuleArtifact: artifact from before named-entity access is rejected", "[artifact][named-entity]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 22);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 23);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);

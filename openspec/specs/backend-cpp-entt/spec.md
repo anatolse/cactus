@@ -1445,3 +1445,33 @@ The backend SHALL lower a struct construction expression to a value of the C++ s
 #### Scenario: Construction in an add block compiles
 - **WHEN** a handler writes `add Roster to self:` with `squad = Squad(lead = other, size = 3)`
 - **THEN** the generated C++ constructs the generated `Squad` struct type with `lead` and `size` set, and compiles
+
+### Requirement: cpp-entt accelerates broad-phase-eligible pair passes across two binding snapshots
+For a pair handler whose `where:` has a broad-phase-eligible predicate (`dsl-where-clause`), the cpp-entt backend SHALL find candidate tuples with a runtime broad phase built from both binding membership snapshots, whether or not the bindings require the same traits. Each entity's broad-phase bounds SHALL be computed once per pass from that entity's own shape arguments: a sphere or circle from its center and radius, a box from the axis-aligned bounds that enclose the oriented box. Bounds SHALL be conservative, so no tuple the predicate accepts is ever missed. Every candidate SHALL still be checked against the full `where:` clause, including the recognized predicate itself.
+
+The accelerated pass SHALL execute exactly the tuples the unaccelerated directed-product pass would execute, in the same left-binding-major creation order. This includes a self-tuple `(e, e)` when an entity belongs to both memberships and the predicate accepts it, targeted delivery restricted to tuples incident to the recipient, and any `order by:` and `limit:` applied after `where:`. The broad-phase algorithm and its small-domain fallback are internal and not observable.
+
+#### Scenario: Cross-domain pass matches the unaccelerated pass
+- **WHEN** a pair rule joins 300 `Actor` spheres against 300 `Solid` boxes with `sphere_box_overlap` in `where:`
+- **THEN** the generated program executes the same tuples, in the same order, as the same rule compiled without acceleration
+
+#### Scenario: Entity in both memberships keeps its self-tuple
+- **WHEN** an entity satisfies both binding requirements and `spheres_overlap` accepts it against itself
+- **THEN** the accelerated pass executes the `(e, e)` tuple at the same position as the unaccelerated pass
+
+#### Scenario: Rotated box candidate is not missed
+- **WHEN** a sphere overlaps only the rotated corner of a box whose rotation is 45° about Y
+- **THEN** the accelerated pass executes that tuple
+
+#### Scenario: Expression radius is evaluated per entity
+- **WHEN** the sphere radius argument is `a.Actor.radius + PROBE_DISTANCE`
+- **THEN** each left entity's bounds use its own radius plus the constant, and tuples within that inflated radius execute
+
+#### Scenario: Targeted delivery stays incident to the recipient
+- **WHEN** an accelerated pair handler consumes an event targeted at entity `r`
+- **THEN** only accepted tuples with `r` as the left or right binding execute, in the same order as without acceleration
+
+#### Scenario: Order by and limit see the same tuples
+- **WHEN** an accelerated pair rule also declares `order by:` and `limit: 1 per a`
+- **THEN** the selected tuples are the same as without acceleration
+

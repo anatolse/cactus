@@ -44,6 +44,29 @@ pub func sphere_sphere_separation(a_position: vec3, a_radius: float, b_position:
 
     return push_out_along_delta(delta, distance_squared, radius_sum)
 
+func box_half_size(box_size: vec3) vec3:
+    return vec3(math.abs(box_size.x) / 2.0, math.abs(box_size.y) / 2.0, math.abs(box_size.z) / 2.0)
+
+func box_local_position(point: vec3, box_position: vec3, box_rotation: quat) vec3:
+    return quat.rotate(quat.inverse(box_rotation), point - box_position)
+
+# Agrees with sphere_box_separation: true exactly when that returns a non-zero
+# vector, including the radius-0 center-on-face case.
+pub func sphere_box_overlap(sphere_position: vec3, sphere_radius: float, box_position: vec3, box_size: vec3, box_rotation: quat) bool:
+    let safe_radius = math.max(sphere_radius, 0.0)
+    let half_size = box_half_size(box_size)
+    let local_position = box_local_position(sphere_position, box_position, box_rotation)
+    let local_delta = local_position - v3m.clamp(local_position, half_size * -1.0, half_size)
+    let distance_squared = v3m.dot(local_delta, local_delta)
+
+    if distance_squared > 0.0:
+        return distance_squared < safe_radius * safe_radius
+
+    let x_distance = half_size.x - math.abs(local_position.x)
+    let y_distance = half_size.y - math.abs(local_position.y)
+    let z_distance = half_size.z - math.abs(local_position.z)
+    return safe_radius > 0.0 or math.min(x_distance, math.min(y_distance, z_distance)) > 0.0
+
 # Minimum-translation vector to push a sphere out of an oriented box: work in
 # the box's local (unrotated) space, clamp to the closest point on the box,
 # then rotate the result back to world space. When the sphere center is
@@ -52,8 +75,8 @@ pub func sphere_sphere_separation(a_position: vec3, a_radius: float, b_position:
 # penetration depth.
 pub func sphere_box_separation(sphere_position: vec3, sphere_radius: float, box_position: vec3, box_size: vec3, box_rotation: quat) vec3:
     let safe_radius = math.max(sphere_radius, 0.0)
-    let half_size = vec3(math.abs(box_size.x) / 2.0, math.abs(box_size.y) / 2.0, math.abs(box_size.z) / 2.0)
-    let local_position = quat.rotate(quat.inverse(box_rotation), sphere_position - box_position)
+    let half_size = box_half_size(box_size)
+    let local_position = box_local_position(sphere_position, box_position, box_rotation)
     let closest_position = v3m.clamp(local_position, half_size * -1.0, half_size)
     let local_delta = local_position - closest_position
     let distance_squared = v3m.dot(local_delta, local_delta)

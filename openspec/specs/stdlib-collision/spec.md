@@ -2,9 +2,7 @@
 
 ## Purpose
 Provide backend-independent, pure geometric overlap predicates that gameplay code — including `where:` clauses — can call directly, without depending on any particular collider trait or physics subsystem.
-
 ## Requirements
-
 ### Requirement: std.collision.flat provides a pure circle-overlap predicate
 `std.collision.flat` SHALL export `pub func circles_overlap(a_position: vec2, a_radius: float, b_position: vec2, b_radius: float) bool`, implemented as an ordinary (non-`extern`) Cactus function whose body is the portable reference implementation: two circles overlap when the squared distance between their centers is strictly less than the square of their summed radii.
 
@@ -94,3 +92,35 @@ std.collision.volume SHALL export pub func sphere_sphere_separation(a_position: 
 #### Scenario: Separation is usable in a where clause
 - **WHEN** a pure where predicate compares the returned separation with the zero vector or reads its length
 - **THEN** semantic analysis accepts the call as pure
+
+### Requirement: std.collision.volume provides a pure sphere-box overlap predicate
+`std.collision.volume` SHALL export `pub func sphere_box_overlap(sphere_position: vec3, sphere_radius: float, box_position: vec3, box_size: vec3, box_rotation: quat) bool`, implemented as an ordinary (non-`extern`) pure Cactus function. A sphere and an oriented box overlap when the closest point of the box to the sphere center is strictly closer than `sphere_radius`, evaluated in box-local space; a sphere center inside the box always overlaps. Touching SHALL NOT count as overlap. For every input, the result SHALL equal whether `sphere_box_separation` with the same arguments returns a non-zero vector. The function SHALL NOT reference std.physics collider traits.
+
+#### Scenario: Overlapping sphere returns true
+- **WHEN** the sphere's surface reaches into an axis-aligned box
+- **THEN** sphere_box_overlap returns true
+
+#### Scenario: Touching sphere returns false
+- **WHEN** the sphere's surface exactly touches a box face
+- **THEN** sphere_box_overlap returns false
+
+#### Scenario: Separated sphere returns false
+- **WHEN** the sphere lies outside the box with positive clearance
+- **THEN** sphere_box_overlap returns false
+
+#### Scenario: Center inside box returns true
+- **WHEN** the sphere center lies inside the box
+- **THEN** sphere_box_overlap returns true
+
+#### Scenario: Rotated box is tested in box-local space
+- **WHEN** the box has a 45° rotation about Y and the sphere overlaps one of its rotated corners but not the box's unrotated outline
+- **THEN** sphere_box_overlap returns true
+
+#### Scenario: Agrees with sphere_box_separation
+- **WHEN** sphere_box_overlap and sphere_box_separation are called with the same arguments
+- **THEN** sphere_box_overlap returns true exactly when the separation is not vec3(0.0, 0.0, 0.0)
+
+#### Scenario: Usable as a where: predicate
+- **WHEN** a pair rule's `where:` clause calls `collision.sphere_box_overlap(...)`
+- **THEN** the call is accepted as a pure `where:` predicate
+

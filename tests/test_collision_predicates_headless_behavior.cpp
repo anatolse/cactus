@@ -10,6 +10,9 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <cmath>
+#include <random>
+
 namespace {
 
 void drive_frame(entt::registry& registry) {
@@ -149,4 +152,58 @@ TEST_CASE("stdlib-collision: sphere_sphere_separation remains usable in a pure w
     REQUIRE(view.size() == 1);
     CHECK(registry.get<collision_predicates_runtime__SphereSphereCandidate>(*view.begin()).accepted);
 }
+TEST_CASE("stdlib-collision: sphere_box_overlap distinguishes overlap, touch, separation, inside and rotation",
+          "[runtime][codegen-entt][stdlib-collision]") {
+    entt::registry registry;
+    cactus::runtime::entt_backend::generated_init_project(registry);
+    cactus::runtime::entt_backend::generated_load_project(registry);
+
+    drive_frame(registry);
+
+    const auto view = registry.view<collision_predicates_runtime__Probe>();
+    REQUIRE(view.size() == 1);
+    const auto& probe = registry.get<collision_predicates_runtime__Probe>(*view.begin());
+
+    CHECK(probe.box_overlap_overlap);
+    CHECK_FALSE(probe.box_overlap_touch);
+    CHECK_FALSE(probe.box_overlap_separate);
+    CHECK(probe.box_overlap_inside);
+    CHECK(probe.box_overlap_rotated_corner);
+    CHECK_FALSE(probe.box_overlap_unrotated_corner);
+}
+
+TEST_CASE("stdlib-collision: sphere_box_overlap agrees with sphere_box_separation", "[runtime][codegen-entt][stdlib-collision]") {
+    std::mt19937 rng(20261003U);
+    std::uniform_real_distribution<float> coord(-3.0F, 3.0F);
+    std::uniform_real_distribution<float> extent(0.1F, 3.0F);
+    std::uniform_real_distribution<float> radius(0.0F, 1.5F);
+    std::uniform_real_distribution<float> angle(-3.2F, 3.2F);
+    int overlaps = 0;
+    for (int i = 0; i < 4000; ++i) {
+        const Vector3 sphere{coord(rng), coord(rng), coord(rng)};
+        const float r = radius(rng);
+        const Vector3 box{coord(rng), coord(rng), coord(rng)};
+        const Vector3 size{extent(rng), extent(rng), extent(rng)};
+        const Quat rotation = cactus::runtime::stdlib::math::quat::from_axis_angle(Vector3{coord(rng), coord(rng), coord(rng)}, angle(rng));
+        const Vector3 separation = std_collision_volume__sphere_box_separation(sphere, r, box, size, rotation);
+        const bool separated = separation.x != 0.0F || separation.y != 0.0F || separation.z != 0.0F;
+        const bool overlap = std_collision_volume__sphere_box_overlap(sphere, r, box, size, rotation);
+        CHECK(overlap == separated);
+        overlaps += overlap ? 1 : 0;
+    }
+    CHECK(overlaps > 100);
+}
+
+TEST_CASE("stdlib-collision: sphere_box_overlap is usable as a where: predicate", "[runtime][codegen-entt][where-clause][stdlib-collision]") {
+    entt::registry registry;
+    cactus::runtime::entt_backend::generated_init_project(registry);
+    cactus::runtime::entt_backend::generated_load_project(registry);
+
+    drive_frame(registry);
+
+    const auto view = registry.view<collision_predicates_runtime__SphereBoxCandidate>();
+    REQUIRE(view.size() == 1);
+    CHECK(registry.get<collision_predicates_runtime__SphereBoxCandidate>(*view.begin()).overlap_accepted);
+}
+
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

@@ -489,21 +489,20 @@ void ModuleArtifact::write_contract(std::ostream& out, const HandlerContract& co
     write_bool(out, contract.spatial_join.has_value());
     if (contract.spatial_join.has_value()) {
         const auto& plan = *contract.spatial_join;
-        const auto write_access = [&out](const SpatialJoinAccess& access) {
-            write_symbol_id(out, access.trait);
-            write_u32(out, static_cast<uint32_t>(access.field_path.size()));
-            for (const auto& segment : access.field_path) {
-                write_str(out, segment);
+        const auto write_shape = [&out](const SpatialShape& shape) {
+            write_u64(out, static_cast<uint64_t>(shape.binding_index));
+            write_u8(out, static_cast<uint8_t>(shape.kind));
+            write_u32(out, static_cast<uint32_t>(shape.slots.size()));
+            for (const auto& slot : shape.slots) {
+                write_u32(out, static_cast<uint32_t>(slot.size()));
+                for (const auto step : slot) {
+                    write_u8(out, step);
+                }
             }
         };
-        const auto write_binding = [&out, &write_access](const SpatialJoinBinding& binding) {
-            write_u64(out, static_cast<uint64_t>(binding.binding_index));
-            write_access(binding.position);
-            write_access(binding.radius);
-        };
         write_u8(out, static_cast<uint8_t>(plan.dimension));
-        write_binding(plan.left);
-        write_binding(plan.right);
+        write_shape(plan.left);
+        write_shape(plan.right);
         write_u64(out, static_cast<uint64_t>(plan.matched_predicate_index));
     }
 }
@@ -1096,27 +1095,24 @@ HandlerContract ModuleArtifact::read_contract(std::istream& in) {
     contract.effects = read_string_set(in);
 
     if (read_bool(in)) {
-        const auto read_access = [&in]() {
-            SpatialJoinAccess access;
-            access.trait                    = read_symbol_id(in);
-            const auto field_path_count = read_u32(in);
-            access.field_path.reserve(field_path_count);
-            for (uint32_t i = 0; i < field_path_count; ++i) {
-                access.field_path.push_back(read_str(in));
+        const auto read_shape = [&in]() {
+            SpatialShape shape;
+            shape.binding_index    = static_cast<std::size_t>(read_u64(in));
+            shape.kind             = static_cast<SpatialShapeKind>(read_u8(in));
+            const auto slot_count = read_u32(in);
+            shape.slots.resize(slot_count);
+            for (auto& slot : shape.slots) {
+                slot.resize(read_u32(in));
+                for (auto& step : slot) {
+                    step = read_u8(in);
+                }
             }
-            return access;
-        };
-        const auto read_binding = [&in, &read_access]() {
-            SpatialJoinBinding binding;
-            binding.binding_index = static_cast<std::size_t>(read_u64(in));
-            binding.position       = read_access();
-            binding.radius         = read_access();
-            return binding;
+            return shape;
         };
         SpatialJoinPlan plan;
         plan.dimension               = static_cast<SpatialJoinDimension>(read_u8(in));
-        plan.left                    = read_binding();
-        plan.right                   = read_binding();
+        plan.left                    = read_shape();
+        plan.right                   = read_shape();
         plan.matched_predicate_index = static_cast<std::size_t>(read_u64(in));
         contract.spatial_join        = std::move(plan);
     }

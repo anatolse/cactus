@@ -37,6 +37,12 @@ static std::pair<DecoratedProgram, std::vector<Diagnostic>> analyze_source(const
     return {std::move(result), errors.diagnostics()};
 }
 
+// Pair rules without a recognized overlap predicate warn; these tests care only about errors.
+static std::string first_error(const std::vector<Diagnostic>& diagnostics) {
+    const auto error = std::ranges::find(diagnostics, DiagnosticLevel::Error, &Diagnostic::level);
+    return error == diagnostics.end() ? "" : error->message;
+}
+
 static ExprNode make_int_literal_expr(const std::string& value = "1") {
     return ExprNode{ExprNode::Variant{LiteralExpr{.kind = LiteralExpr::Kind::Int, .value = value, .location = {}}}, {}};
 }
@@ -2390,8 +2396,7 @@ TEST_CASE("handler graph gives a pair handler exactly one node with its bindings
         "        if body != wall:\n"
         "            let x = 1\n");
 
-    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
-    REQUIRE(diagnostics.empty());
+    REQUIRE(first_error(diagnostics).empty());
     REQUIRE(decorated.execution_graph.handlers.size() == 1);
 
     const auto& node = decorated.execution_graph.handlers[0];
@@ -2432,8 +2437,7 @@ TEST_CASE("handler graph orders a pair reader after a unary writer of the same t
         "        if body.Transform.x > 0.0:\n"
         "            let y = 1\n");
 
-    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
-    REQUIRE(diagnostics.empty());
+    REQUIRE(first_error(diagnostics).empty());
 
     const auto writer = HandlerIdentity{
         .rule    = make_symbol_id(SymbolKind::Rule, "game.pairs", "WriteTransform"),
@@ -2477,8 +2481,7 @@ TEST_CASE("handler graph orders a pair projection producer before a reader witho
         "        reads:\n"
         "            GroundContact\n");
 
-    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
-    REQUIRE(diagnostics.empty());
+    REQUIRE(first_error(diagnostics).empty());
 
     const auto ground_contact = make_symbol_id(SymbolKind::Trait, "game.pairs", "GroundContact");
     const auto detector       = HandlerIdentity{
@@ -2528,8 +2531,7 @@ TEST_CASE("handler graph connects a pair event producer to its consumer regardle
         "    on Contact:\n"
         "        let x = 1\n");
 
-    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
-    REQUIRE(diagnostics.empty());
+    REQUIRE(first_error(diagnostics).empty());
     REQUIRE(decorated.execution_graph.event_flows.size() == 1);
 
     const auto& flow = decorated.execution_graph.event_flows[0];
@@ -2560,8 +2562,7 @@ TEST_CASE("handler graph honors explicit after: ordering on a pair rule", "[sema
         "    on tick:\n"
         "        let b = 1\n");
 
-    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
-    REQUIRE(diagnostics.empty());
+    REQUIRE(first_error(diagnostics).empty());
 
     const auto first = HandlerIdentity{
         .rule    = make_symbol_id(SymbolKind::Rule, "game.pairs", "First"),
@@ -3316,8 +3317,7 @@ TEST_CASE("handler graph adds no conflict between a unary field writer and a pai
                                                          "    on tick:\n"
                                                          "        if body.Collider.radius > 0.0:\n"
                                                          "            let y = 1\n");
-    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
-    REQUIRE(diagnostics.empty());
+    REQUIRE(first_error(diagnostics).empty());
     CHECK(data_edges(decorated).empty());
 }
 
@@ -3374,8 +3374,7 @@ TEST_CASE("handler graph treats a projection as covering every field of its trai
                                                          "    on tick:\n"
                                                          "        if game.Match.score > 0:\n"
                                                          "            let y = 1\n");
-    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
-    REQUIRE(diagnostics.empty());
+    REQUIRE(first_error(diagnostics).empty());
 
     const auto match = make_symbol_id(SymbolKind::Trait, "game.fields", "Match");
     const auto edges = data_edges(decorated);

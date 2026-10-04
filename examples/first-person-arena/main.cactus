@@ -716,6 +716,8 @@ rule DetectActorSolidContact:
     after:
         locomotion
         DetectEnemySeparation
+    where:
+        collision.sphere_box_overlap(actor.tv.WorldTransform.position, actor.KinematicActor.radius, box.tv.WorldTransform.position, box.physics.BoxCollider.size, box.tv.WorldTransform.rotation)
 
     on fixed_tick:
         let separation = collision.sphere_box_separation(actor.tv.WorldTransform.position, actor.KinematicActor.radius, box.tv.WorldTransform.position, box.physics.BoxCollider.size, box.tv.WorldTransform.rotation)
@@ -742,6 +744,10 @@ rule DetectGroundCandidate:
             tv.WorldTransform
     after:
         IntegrateVerticalMotion
+    # A loose bound: every point the handler accepts lies within radius +
+    # half height + step height + tolerance of the surface box on each axis.
+    where:
+        collision.spheres_overlap(actor.tv.WorldTransform.position, (actor.KinematicActor.radius + actor.KinematicActor.half_height + actor.KinematicActor.step_height + GROUND_CONTACT_TOLERANCE) * 2.0, surface.tv.WorldTransform.position, v3.length(surface.physics.BoxCollider.size) / 2.0)
 
     on fixed_tick:
         let actor_position = actor.tv.WorldTransform.position
@@ -778,21 +784,15 @@ rule ApplyGroundCandidate:
             actor.grounded = true
 
 rule ComposeCameraPose:
-    pairs:
-        rig:
-            CameraRig
-            tv.WorldTransform
-        body:
-            Player
-            tv.WorldTransform
-            camera.FirstPersonCamera
+    filter:
+        CameraRig
+        tv.WorldTransform as transform
 
     on late_tick:
-        let yaw = body.camera.FirstPersonCamera.yaw
-        let pitch = body.camera.FirstPersonCamera.pitch
-        set tv.WorldTransform on rig:
-            position = body.tv.WorldTransform.position + vec3(0.0, CAMERA_EYE_HEIGHT, 0.0)
-            rotation = quat.compose(quat.from_euler(0.0, yaw, 0.0), quat.from_euler(pitch, 0.0, 0.0))
+        let yaw = PlayerBody.camera.FirstPersonCamera.yaw
+        let pitch = PlayerBody.camera.FirstPersonCamera.pitch
+        transform.position = PlayerBody.tv.WorldTransform.position + vec3(0.0, CAMERA_EYE_HEIGHT, 0.0)
+        transform.rotation = quat.compose(quat.from_euler(0.0, yaw, 0.0), quat.from_euler(pitch, 0.0, 0.0))
 
 # Mirrors ComposeCameraPose above: the EnemyVisual child's WorldTransform
 # isn't auto-composed by std.transform.volume's TransformPropagation (that
@@ -1069,6 +1069,8 @@ rule DetectBulletSolidContact:
             Solid
             physics.BoxCollider
             tv.WorldTransform
+    where:
+        collision.sphere_box_overlap(bullet.tv.WorldTransform.position, BULLET_RADIUS, box.tv.WorldTransform.position, box.physics.BoxCollider.size, box.tv.WorldTransform.rotation)
 
     on fixed_tick:
         if not bullet.Bullet.consumed:
@@ -1090,6 +1092,9 @@ rule DetectBulletEnemyContact:
             tv.WorldTransform
     after:
         DetectBulletSolidContact
+    # A loose bound: the handler's cylinder test fits inside this sphere sum.
+    where:
+        collision.spheres_overlap(bullet.tv.WorldTransform.position, BULLET_RADIUS, enemy.tv.WorldTransform.position, enemy.KinematicActor.radius + enemy.KinematicActor.half_height + BULLET_RADIUS)
 
     on fixed_tick:
         if not bullet.Bullet.consumed:
@@ -1172,6 +1177,8 @@ rule DetectPlayerContact:
             Player
             KinematicActor
             tv.WorldTransform
+    where:
+        collision.spheres_overlap(enemy.tv.WorldTransform.position, enemy.KinematicActor.radius, player.tv.WorldTransform.position, player.KinematicActor.radius)
     when:
         not Game.Match.over
 

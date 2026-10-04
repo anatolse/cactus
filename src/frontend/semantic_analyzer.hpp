@@ -12,6 +12,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -210,42 +211,33 @@ struct BoundTraitAccess {
 
 enum class SpatialJoinDimension : std::uint8_t { Flat2D, Volume3D };
 
-// Where a pair binding's position/radius value lives: the trait it was read
-// through, plus any remaining field segments after that trait access (e.g.
-// `a.transform.position` -> trait `WorldTransform`, field path ["position"]).
-struct SpatialJoinAccess {
-    SymbolId trait;
-    std::vector<std::string> field_path;
+enum class SpatialShapeKind : std::uint8_t { Sphere, Box };
 
-    friend bool operator==(const SpatialJoinAccess&, const SpatialJoinAccess&) = default;
-};
+// Child steps from a predicate root to one of its sub-expressions: a call
+// step picks an argument, a binary step picks left (0) or right (1).
+using ExprPath = std::vector<std::uint8_t>;
 
-// One pair binding's role in a recognized spatial predicate.
-struct SpatialJoinBinding {
+[[nodiscard]] const ExprNode* resolve_expr_path(const ExprNode& root, const ExprPath& path);
+
+// One pair binding's shape in a recognized overlap predicate. `slots` locate
+// its arguments in the matched predicate: a sphere has center and radius, a
+// box has center, size and rotation. Each slot reads only this binding.
+struct SpatialShape {
     std::size_t binding_index = 0;
-    SpatialJoinAccess position;
-    SpatialJoinAccess radius;
+    SpatialShapeKind kind     = SpatialShapeKind::Sphere;
+    std::vector<ExprPath> slots;
 
-    friend bool operator==(const SpatialJoinBinding&, const SpatialJoinBinding&) = default;
+    friend bool operator==(const SpatialShape&, const SpatialShape&) = default;
 };
 
-// Populated only when semantic analysis recognizes a pair rule's `where:`
-// predicate list as containing a direct, unwrapped call to
-// std.collision.flat.circles_overlap / std.collision.volume.spheres_overlap
-// with binding-rooted position/radius arguments, and both pair bindings
-// require identical trait sets (spatial-broadphase-runtime, dsl-where-clause).
-// `left` supplies the call's first two arguments, `right` its last two —
-// codegen resolves which of `HandlerContract::pair_bindings` each refers to
-// via `binding_index`, independent of the bindings' declaration order.
+// Set when a pair rule's `where:` has a broad-phase-eligible overlap
+// predicate. `left` and `right` are the predicate's two
+// shapes in argument order; `binding_index` says which pair binding each reads.
 struct SpatialJoinPlan {
     SpatialJoinDimension dimension = SpatialJoinDimension::Flat2D;
-    SpatialJoinBinding left;
-    SpatialJoinBinding right;
-    // Index into the owning rule's `where_clause->predicates` naming the
-    // recognized call, so codegen can exclude it from the generic residual
-    // guard it synthesizes for every other predicate (it is instead
-    // re-verified directly against SAP's candidates, since broad-phase
-    // overlap is conservative and not itself proof of exact overlap).
+    SpatialShape left;
+    SpatialShape right;
+    // The recognized predicate's index in `where_clause->predicates`.
     std::size_t matched_predicate_index = 0;
 
     friend bool operator==(const SpatialJoinPlan&, const SpatialJoinPlan&) = default;
@@ -841,6 +833,17 @@ private:
     bool reject_local_assignment(const VarAssign& stmt,
                                  const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
                                  const std::unordered_map<std::string, TypeInfo>& locals);
+    // Returns true when the target writes a trait through an entity_id value.
+    bool reject_entity_id_trait_write(const VarAssign& stmt,
+                                      const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                                      const std::unordered_map<std::string, TypeInfo>& locals,
+                                      const ResolvedStruct* handler_event,
+                                      const PairScope* pair_scope);
+    std::string entity_id_trait_label(const std::string& first, const std::string* second) const;
+    void report_entity_id_trait_read(const ExprNode& object,
+                                     const std::string& member,
+                                     const std::string* next_segment,
+                                     const SourceLocation& location) const;
     void validate_trait_match_stmt(const TraitMatchStmt& stmt,
                                    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
                                    const std::unordered_map<std::string, TypeInfo>& local_bindings,
@@ -980,12 +983,15 @@ private:
                                    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
                                    const std::unordered_map<std::string, TypeInfo>& local_bindings,
                                    const PairScope* pair_scope) const;
+    // `next_segment` is the enclosing member's name, so an entity_id access
+    // diagnostic can name a two-segment trait (`tv.WorldTransform`).
     TypeInfo infer_member_expr_type(const MemberExpr& member,
                                     const SourceLocation& location,
                                     const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
                                     const std::unordered_map<std::string, TypeInfo>& local_bindings,
                                     const ResolvedStruct* handler_event,
-                                    const PairScope* pair_scope) const;
+                                    const PairScope* pair_scope,
+                                    const std::string* next_segment = nullptr) const;
     // Walks trailing dotted segments (starting at `from_index`) from an
     // already-resolved starting type, applying vec2/vec3 x/y/z and color
     // r/g/b/a component access. Shared by infer_member_expr_type's pair-scope
@@ -1088,27 +1094,21 @@ private:
     void record_pair_binding_write(const VarAssign& node,
                                    const PairScope& pair_scope,
                                    InferredHandlerContract& contract) const;
-    // dsl-where-clause / spatial-broadphase-runtime: read-only pattern-match
-    // over an already-validated `where:` predicate list for a direct,
-    // unwrapped circles_overlap/spheres_overlap call, or an equivalent manual
-    // squared-distance-via-dot expression, with binding-rooted position/radius
-    // arguments, eligible only when both pair bindings require identical
-    // trait sets. Reports a warning (via `errors`) for a predicate that
-    // neither shape recognizes but that calls the unaccelerated linear-
-    // distance function between binding-rooted positions instead — every
-    // other non-matching shape simply yields nullopt with no diagnostic (the
-    // predicate remains an ordinary residual predicate).
+    // Read-only pattern-match over an already-validated
+    // `where:` predicate list for a direct, unwrapped recognized overlap call
+    // whose two shapes each read one distinct pair binding, or the equivalent
+    // manual squared-distance-via-dot expression. Without one, reports one
+    // warning (via `errors`): the linear-distance warning when a predicate
+    // compares that distance between binding-rooted positions, otherwise the
+    // unaccelerated pair rule warning at the `pairs:` clause.
     [[nodiscard]] static std::optional<SpatialJoinPlan> recognize_spatial_join(const RuleNode& rule,
                                                                                const PairScope& pair_scope,
                                                                                ErrorReporter& errors);
 
-    // A resolved spatial-predicate argument: the pair binding it's rooted at
-    // (for the same-binding/distinct-bindings checks in
-    // try_recognize_spatial_predicate below), plus where within that
-    // binding's trait namespace the value lives.
+    // A pair-binding-rooted member chain: its binding plus the segments after it.
     struct SpatialJoinResolvedArg {
         std::string binding_name;
-        SpatialJoinAccess access;
+        std::vector<std::string> segments;
         std::size_t binding_index = 0;
     };
     [[nodiscard]] static std::optional<SpatialJoinResolvedArg> resolve_spatial_join_arg(const ExprNode& arg,
@@ -1119,8 +1119,8 @@ private:
     // matched_predicate_index once a match is found).
     struct SpatialJoinMatch {
         SpatialJoinDimension dimension = SpatialJoinDimension::Flat2D;
-        SpatialJoinBinding left;
-        SpatialJoinBinding right;
+        SpatialShape left;
+        SpatialShape right;
     };
     [[nodiscard]] static std::optional<SpatialJoinMatch> try_recognize_spatial_predicate(const CallExpr& call,
                                                                                          const PairScope& pair_scope);
@@ -1156,8 +1156,8 @@ private:
     // pair-binding-rooted positions, compared against a binding-rooted radius
     // sum -- the exact unrecognized shape that motivated this diagnostic.
     // Meaningful only for a predicate that neither try_recognize_spatial_predicate
-    // nor try_recognize_manual_distance_predicate matched.
-    static void check_unaccelerated_distance_predicate(const ExprNode& predicate,
+    // nor try_recognize_manual_distance_predicate matched. Returns whether it warned.
+    [[nodiscard]] static bool check_unaccelerated_distance_predicate(const ExprNode& predicate,
                                                        const PairScope& pair_scope,
                                                        ErrorReporter& errors);
     void validate_spawn_stmts(const std::vector<std::unique_ptr<StmtNode>>& stmts, const std::string& context_name);
@@ -1197,7 +1197,8 @@ private:
                                      const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
                                      const std::unordered_map<std::string, TypeInfo>& local_bindings,
                                      const ResolvedStruct* handler_event,
-                                     const PairScope* pair_scope) const;
+                                     const PairScope* pair_scope,
+                                     const std::string* next_segment) const;
 
     // Phase 4: Build dependency graph
     void build_dependency_graph(ProgramNode& program);
@@ -1456,6 +1457,9 @@ private:
 
     // Loop variables in scope, innermost last; they keep their own read-only diagnostic.
     std::vector<std::string> foreach_variables_;
+
+    // Expressions are typed more than once; report each entity_id read once.
+    mutable std::set<std::tuple<std::string, int, int>> reported_entity_id_reads_;
 };
 
 }  // namespace cactus

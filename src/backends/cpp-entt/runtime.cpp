@@ -2226,24 +2226,92 @@ void reset_pending_destruction_state() noexcept { destroying_entities_storage().
 
 namespace {
 
-// Dimension-agnostic proxy shape shared by the 2D and 3D sweeps below, so the
-// axis-selection/overlap/candidate-generation logic is written once.
+// Slack for float rounding differences between these bounds and the narrow test.
+[[nodiscard]] float bounds_slack(float center, float extent) noexcept {
+    return 1e-5F * (std::abs(center) + extent);
+}
+
+[[nodiscard]] std::pair<Vector3, Vector3> bounds_around(Vector3 center, Vector3 extent) noexcept {
+    const Vector3 padded{.x = extent.x + bounds_slack(center.x, extent.x),
+                         .y = extent.y + bounds_slack(center.y, extent.y),
+                         .z = extent.z + bounds_slack(center.z, extent.z)};
+    return {Vector3Subtract(center, padded), Vector3Add(center, padded)};
+}
+
+[[nodiscard]] std::pair<Vector2, Vector2> bounds_around(Vector2 center, float extent) noexcept {
+    const Vector2 padded{.x = extent + bounds_slack(center.x, extent), .y = extent + bounds_slack(center.y, extent)};
+    return {Vector2Subtract(center, padded), Vector2Add(center, padded)};
+}
+
+}  // namespace
+
+ProxyAabb2D
+circle_proxy(entt::entity entity, std::uint64_t ordinal, SapSide side, Vector2 center, float radius) noexcept {
+    const auto [min, max] = bounds_around(center, std::abs(radius));
+    return ProxyAabb2D{.entity = entity, .ordinal = ordinal, .side = side, .min = min, .max = max};
+}
+
+ProxyAabb3D
+sphere_proxy(entt::entity entity, std::uint64_t ordinal, SapSide side, Vector3 center, float radius) noexcept {
+    const float extent    = std::abs(radius);
+    const auto [min, max] = bounds_around(center, Vector3{.x = extent, .y = extent, .z = extent});
+    return ProxyAabb3D{.entity = entity, .ordinal = ordinal, .side = side, .min = min, .max = max};
+}
+
+ProxyAabb3D box_proxy(
+    entt::entity entity, std::uint64_t ordinal, SapSide side, Vector3 center, Vector3 size, Quat rotation) noexcept {
+    namespace quat       = stdlib::math::quat;
+    const Vector3 x_axis = Vector3Scale(quat::rotate(rotation, Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F}), size.x / 2);
+    const Vector3 y_axis = Vector3Scale(quat::rotate(rotation, Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F}), size.y / 2);
+    const Vector3 z_axis = Vector3Scale(quat::rotate(rotation, Vector3{.x = 0.0F, .y = 0.0F, .z = 1.0F}), size.z / 2);
+    const Vector3 extent{.x = std::abs(x_axis.x) + std::abs(y_axis.x) + std::abs(z_axis.x),
+                         .y = std::abs(x_axis.y) + std::abs(y_axis.y) + std::abs(z_axis.y),
+                         .z = std::abs(x_axis.z) + std::abs(y_axis.z) + std::abs(z_axis.z)};
+    const auto [min, max] = bounds_around(center, extent);
+    return ProxyAabb3D{.entity = entity, .ordinal = ordinal, .side = side, .min = min, .max = max};
+}
+
+namespace {
+
+// Dimension-agnostic bounds shared by the 2D and 3D sweeps below.
 template <std::size_t N>
-struct SapInternalProxy {
-    std::array<float, N> center{};
-    float radius{0.0F};
+struct SapBounds {
+    std::uint64_t ordinal{0};
+    SapSide side{SapSide::Left};
+    std::array<float, N> min{};
+    std::array<float, N> max{};
 };
 
+[[nodiscard]] std::array<float, 2> components(Vector2 v) noexcept {
+    return {v.x, v.y};
+}
+
+[[nodiscard]] std::array<float, 3> components(Vector3 v) noexcept {
+    return {v.x, v.y, v.z};
+}
+
+template <std::size_t N, typename Proxy>
+[[nodiscard]] std::vector<SapBounds<N>> sap_bounds(std::span<const Proxy> proxies) {
+    std::vector<SapBounds<N>> bounds;
+    bounds.reserve(proxies.size());
+    for (const auto& proxy : proxies) {
+        bounds.push_back(SapBounds<N>{
+            .ordinal = proxy.ordinal, .side = proxy.side, .min = components(proxy.min), .max = components(proxy.max)});
+    }
+    return bounds;
+}
+
 template <std::size_t N>
-[[nodiscard]] int sap_select_primary_axis(const std::vector<SapInternalProxy<N>>& proxies) noexcept {
+[[nodiscard]] int sap_select_primary_axis(const std::vector<SapBounds<N>>& bounds) noexcept {
     std::array<float, N> lo{};
     std::array<float, N> hi{};
     lo.fill(std::numeric_limits<float>::max());
     hi.fill(std::numeric_limits<float>::lowest());
-    for (const auto& proxy : proxies) {
+    for (const auto& proxy : bounds) {
         for (std::size_t axis = 0; axis < N; ++axis) {
-            lo[axis] = std::min(lo[axis], proxy.center[axis]);
-            hi[axis] = std::max(hi[axis], proxy.center[axis]);
+            const float center = (proxy.min[axis] + proxy.max[axis]) / 2;
+            lo[axis]           = std::min(lo[axis], center);
+            hi[axis]           = std::max(hi[axis], center);
         }
     }
     int best_axis     = 0;
@@ -2259,31 +2327,27 @@ template <std::size_t N>
 }
 
 template <std::size_t N>
-[[nodiscard]] bool sap_aabb_overlap(const SapInternalProxy<N>& lhs, const SapInternalProxy<N>& rhs) noexcept {
+[[nodiscard]] bool sap_bounds_overlap(const SapBounds<N>& lhs, const SapBounds<N>& rhs) noexcept {
     for (std::size_t axis = 0; axis < N; ++axis) {
-        const float lhs_lo = lhs.center[axis] - lhs.radius;
-        const float lhs_hi = lhs.center[axis] + lhs.radius;
-        const float rhs_lo = rhs.center[axis] - rhs.radius;
-        const float rhs_hi = rhs.center[axis] + rhs.radius;
-        if (lhs_hi < rhs_lo || rhs_hi < lhs_lo) {
+        if (lhs.max[axis] < rhs.min[axis] || rhs.max[axis] < lhs.min[axis]) {
             return false;
         }
     }
     return true;
 }
 
-// Every candidate pair below is verified with the same sap_aabb_overlap
-// predicate regardless of which strategy found it, so brute force and the
-// swept sweep necessarily agree on the candidate set for the same proxies.
+// Both strategies verify with sap_bounds_overlap, so they agree on the candidate set.
 
 template <std::size_t N>
-[[nodiscard]] std::vector<SapCandidatePair> sap_candidates_brute_force(
-    const std::vector<SapInternalProxy<N>>& proxies) {
+[[nodiscard]] std::vector<SapCandidatePair> sap_candidates_brute_force(const std::vector<SapBounds<N>>& bounds) {
     std::vector<SapCandidatePair> result;
-    for (std::size_t i = 0; i < proxies.size(); ++i) {
-        for (std::size_t j = i + 1; j < proxies.size(); ++j) {
-            if (sap_aabb_overlap(proxies[i], proxies[j])) {
-                result.push_back(SapCandidatePair{.first = i, .second = j});
+    for (std::size_t left = 0; left < bounds.size(); ++left) {
+        if (bounds[left].side != SapSide::Left) {
+            continue;
+        }
+        for (std::size_t right = 0; right < bounds.size(); ++right) {
+            if (bounds[right].side == SapSide::Right && sap_bounds_overlap(bounds[left], bounds[right])) {
+                result.push_back(SapCandidatePair{.left = left, .right = right});
             }
         }
     }
@@ -2291,34 +2355,32 @@ template <std::size_t N>
 }
 
 template <std::size_t N>
-[[nodiscard]] std::vector<SapCandidatePair> sap_candidates_swept(const std::vector<SapInternalProxy<N>>& proxies,
-                                                                 int axis) {
+[[nodiscard]] std::vector<SapCandidatePair> sap_candidates_swept(const std::vector<SapBounds<N>>& bounds, int axis) {
     const auto axis_index = static_cast<std::size_t>(axis);
-    std::vector<std::size_t> order(proxies.size());
+    std::vector<std::size_t> order(bounds.size());
     std::ranges::iota(order, std::size_t{0});
     std::ranges::sort(order, [&](std::size_t lhs, std::size_t rhs) {
-        const float lhs_min = proxies[lhs].center[axis_index] - proxies[lhs].radius;
-        const float rhs_min = proxies[rhs].center[axis_index] - proxies[rhs].radius;
-        if (lhs_min != rhs_min) {
-            return lhs_min < rhs_min;
+        if (bounds[lhs].min[axis_index] != bounds[rhs].min[axis_index]) {
+            return bounds[lhs].min[axis_index] < bounds[rhs].min[axis_index];
         }
         return lhs < rhs;
     });
 
     std::vector<SapCandidatePair> result;
-    std::vector<std::size_t> active;
+    std::array<std::vector<std::size_t>, 2> active;
     for (const auto current : order) {
-        const float current_min = proxies[current].center[axis_index] - proxies[current].radius;
-        std::erase_if(active, [&](std::size_t idx) {
-            return (proxies[idx].center[axis_index] + proxies[idx].radius) < current_min;
-        });
-        for (const auto other : active) {
-            if (sap_aabb_overlap(proxies[current], proxies[other])) {
-                result.push_back(
-                    SapCandidatePair{.first = std::min(current, other), .second = std::max(current, other)});
+        const float current_min = bounds[current].min[axis_index];
+        for (auto& side_active : active) {
+            std::erase_if(side_active, [&](std::size_t idx) { return bounds[idx].max[axis_index] < current_min; });
+        }
+        const bool current_is_left = bounds[current].side == SapSide::Left;
+        for (const auto other : active[current_is_left ? 1 : 0]) {
+            if (sap_bounds_overlap(bounds[current], bounds[other])) {
+                result.push_back(current_is_left ? SapCandidatePair{.left = current, .right = other}
+                                                 : SapCandidatePair{.left = other, .right = current});
             }
         }
-        active.push_back(current);
+        active[current_is_left ? 0 : 1].push_back(current);
     }
     return result;
 }
@@ -2329,14 +2391,20 @@ std::optional<std::size_t>& sap_small_domain_threshold_override() noexcept {
 }
 
 template <std::size_t N>
-void sap_sync(const std::vector<SapInternalProxy<N>>& proxies,
+void sap_sync(const std::vector<SapBounds<N>>& bounds,
               std::size_t small_domain_threshold,
               int& primary_axis,
               std::vector<SapCandidatePair>& candidates) {
     const auto effective_threshold = sap_small_domain_threshold_override().value_or(small_domain_threshold);
-    primary_axis                   = sap_select_primary_axis(proxies);
-    candidates                     = proxies.size() < effective_threshold ? sap_candidates_brute_force(proxies)
-                                                                          : sap_candidates_swept(proxies, primary_axis);
+    const auto left_count   = static_cast<std::size_t>(std::ranges::count(bounds, SapSide::Left, &SapBounds<N>::side));
+    const auto product_size = left_count * (bounds.size() - left_count);
+    primary_axis            = sap_select_primary_axis(bounds);
+    candidates              = product_size < effective_threshold ? sap_candidates_brute_force(bounds)
+                                                                 : sap_candidates_swept(bounds, primary_axis);
+    std::ranges::sort(candidates, [&](const SapCandidatePair& lhs, const SapCandidatePair& rhs) {
+        return std::tuple(bounds[lhs.left].ordinal, bounds[lhs.right].ordinal, lhs.left, lhs.right) <
+               std::tuple(bounds[rhs.left].ordinal, bounds[rhs.right].ordinal, rhs.left, rhs.right);
+    });
 }
 
 }  // namespace
@@ -2349,13 +2417,8 @@ void set_sap_small_domain_threshold_override_for_testing(std::optional<std::size
     sap_small_domain_threshold_override() = threshold;
 }
 
-void SapBroadPhase2D::sync(std::span<const Proxy2D> proxies) {
-    std::vector<SapInternalProxy<2>> internal;
-    internal.reserve(proxies.size());
-    for (const auto& proxy : proxies) {
-        internal.push_back(SapInternalProxy<2>{.center = {proxy.center.x, proxy.center.y}, .radius = proxy.radius});
-    }
-    sap_sync(internal, small_domain_threshold_, primary_axis_, candidates_);
+void SapBroadPhase2D::sync(std::span<const ProxyAabb2D> proxies) {
+    sap_sync(sap_bounds<2>(proxies), small_domain_threshold_, primary_axis_, candidates_);
 }
 
 std::span<const SapCandidatePair> SapBroadPhase2D::candidate_pairs() const noexcept {
@@ -2370,14 +2433,8 @@ void SapBroadPhase2D::set_small_domain_threshold_for_testing(std::size_t thresho
     small_domain_threshold_ = threshold;
 }
 
-void SapBroadPhase3D::sync(std::span<const Proxy3D> proxies) {
-    std::vector<SapInternalProxy<3>> internal;
-    internal.reserve(proxies.size());
-    for (const auto& proxy : proxies) {
-        internal.push_back(
-            SapInternalProxy<3>{.center = {proxy.center.x, proxy.center.y, proxy.center.z}, .radius = proxy.radius});
-    }
-    sap_sync(internal, small_domain_threshold_, primary_axis_, candidates_);
+void SapBroadPhase3D::sync(std::span<const ProxyAabb3D> proxies) {
+    sap_sync(sap_bounds<3>(proxies), small_domain_threshold_, primary_axis_, candidates_);
 }
 
 std::span<const SapCandidatePair> SapBroadPhase3D::candidate_pairs() const noexcept {
@@ -2390,68 +2447,6 @@ int SapBroadPhase3D::primary_axis_for_testing() const noexcept {
 
 void SapBroadPhase3D::set_small_domain_threshold_for_testing(std::size_t threshold) noexcept {
     small_domain_threshold_ = threshold;
-}
-
-namespace {
-
-struct SapDirectedTuple {
-    std::uint64_t left_ordinal;
-    std::uint64_t right_ordinal;
-    std::size_t left_index;
-    std::size_t right_index;
-};
-
-template <typename Proxy>
-void sap_execute_pair_tuples_impl(std::span<const Proxy> proxies,
-                                  std::span<const SapCandidatePair> candidates,
-                                  const std::function<void(entt::entity, entt::entity)>& on_tuple) {
-    std::vector<SapDirectedTuple> tuples;
-    tuples.reserve((candidates.size() * 2) + proxies.size());
-    for (const auto& candidate : candidates) {
-        tuples.push_back(SapDirectedTuple{.left_ordinal  = proxies[candidate.first].ordinal,
-                                          .right_ordinal = proxies[candidate.second].ordinal,
-                                          .left_index    = candidate.first,
-                                          .right_index   = candidate.second});
-        tuples.push_back(SapDirectedTuple{.left_ordinal  = proxies[candidate.second].ordinal,
-                                          .right_ordinal = proxies[candidate.first].ordinal,
-                                          .left_index    = candidate.second,
-                                          .right_index   = candidate.first});
-    }
-    // Self-tuples: SAP structurally cannot report a proxy paired with itself,
-    // so every live proxy's self-tuple is synthesized unconditionally here,
-    // exactly as the Cartesian pair-handler loop already includes (a, a)
-    // among its N×N tuples (spatial-broadphase-runtime, dsl-pair-relations).
-    for (std::size_t i = 0; i < proxies.size(); ++i) {
-        tuples.push_back(SapDirectedTuple{.left_ordinal  = proxies[i].ordinal,
-                                          .right_ordinal = proxies[i].ordinal,
-                                          .left_index    = i,
-                                          .right_index   = i});
-    }
-
-    std::ranges::sort(tuples, [](const SapDirectedTuple& lhs, const SapDirectedTuple& rhs) {
-        if (lhs.left_ordinal != rhs.left_ordinal) {
-            return lhs.left_ordinal < rhs.left_ordinal;
-        }
-        return lhs.right_ordinal < rhs.right_ordinal;
-    });
-
-    for (const auto& tuple : tuples) {
-        on_tuple(proxies[tuple.left_index].entity, proxies[tuple.right_index].entity);
-    }
-}
-
-}  // namespace
-
-void sap_execute_pair_tuples(std::span<const Proxy2D> proxies,
-                             std::span<const SapCandidatePair> candidates,
-                             const std::function<void(entt::entity, entt::entity)>& on_tuple) {
-    sap_execute_pair_tuples_impl(proxies, candidates, on_tuple);
-}
-
-void sap_execute_pair_tuples(std::span<const Proxy3D> proxies,
-                             std::span<const SapCandidatePair> candidates,
-                             const std::function<void(entt::entity, entt::entity)>& on_tuple) {
-    sap_execute_pair_tuples_impl(proxies, candidates, on_tuple);
 }
 
 // ── Frame-local consumed input (editor input override) ────────────────────────

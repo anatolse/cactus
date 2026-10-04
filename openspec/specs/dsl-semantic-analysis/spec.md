@@ -234,41 +234,6 @@ The semantic analyzer SHALL accept trait field access within rule handler bodies
 - **WHEN** a rule filters on `Position` (no alias, no other filtered trait declares a field named `x`) and the handler body contains bare `x += 1.0`
 - **THEN** the analyzer accepts the access and resolves `x` to `Position.x`
 
-### Requirement: Local variable scope in rule handlers
-The semantic analyzer SHALL maintain a per-handler and per-`func` local variable scope. `let` declarations introduce immutable bindings; `var` declarations introduce mutable bindings. Re-declaration of an existing local in the same scope SHALL produce an error. Assigning to a name that is not a declared local, trait alias, or other writable binding in scope SHALL produce an error; assignment SHALL NOT implicitly declare a local. For a `let` binding, any assignment whose target is the binding itself or a member path into its value (`v.x = ...`) SHALL be rejected. A trait-field write through an `entity_id`-typed `let` binding (`e.Trait.field = ...`) is a write to that entity, not a rebinding, and is governed by the ordinary trait-write rules.
-
-#### Scenario: Let binding immutable after declaration
-- **WHEN** a handler declares `let speed = 5.0` and then assigns `speed = 6.0`
-- **THEN** the analyzer reports an error: "cannot reassign immutable binding 'speed'"
-
-#### Scenario: Compound assignment to let rejected
-- **WHEN** a handler declares `let total = 0` and then executes `total += 1`
-- **THEN** the analyzer reports an error: "cannot reassign immutable binding 'total'"
-
-#### Scenario: Member write into let value rejected
-- **WHEN** a handler declares `let v = vec2(0.0, 0.0)` and then assigns `v.x = 1.0`
-- **THEN** the analyzer reports an error: "cannot reassign immutable binding 'v'"
-
-#### Scenario: Trait write through let entity binding allowed
-- **WHEN** a handler declares `let e = query.first[Player]()` and, where the ordinary trait-write rules permit it, assigns `e.Health.hp = 3`
-- **THEN** the analyzer does not report an immutable-binding error
-
-#### Scenario: Var binding reassignable
-- **WHEN** a handler declares `var count = 0` and then assigns `count = count + 1`
-- **THEN** the analyzer accepts both statements
-
-#### Scenario: Let rules apply in func bodies
-- **WHEN** a `func` body declares `let x = 1` and then assigns `x = 2`
-- **THEN** the analyzer reports an error: "cannot reassign immutable binding 'x'"
-
-#### Scenario: Re-declaration in same scope rejected
-- **WHEN** a handler declares `let speed = 5.0` and later declares `let speed = 6.0` in the same block
-- **THEN** the analyzer reports an error: "redeclaration of local 'speed' in the same scope"
-
-#### Scenario: Assignment to undeclared name rejected
-- **WHEN** a handler assigns `score = 3` and no local, alias, or writable binding named `score` is in scope
-- **THEN** the analyzer reports an error: "assignment to undeclared local 'score'; declare it with `var`"
-
 ### Requirement: Implicit event variable binding in event handlers
 The semantic analyzer SHALL introduce one implicit read-only local variable in every event handler body:
 - If the handler has an `as alias` clause, the variable name is the alias; otherwise it is the event name.
@@ -999,4 +964,104 @@ Projecting a trait with `persist` fields SHALL be rejected in v1 because that mo
 #### Scenario: Persist projected trait rejected
 - **WHEN** a trait has a `persist` field and authored code attempts to `project` that trait
 - **THEN** the semantic analyzer reports that persistent traits cannot be projected
+
+### Requirement: Trait access through entity_id values is rejected
+The semantic analyzer SHALL reject any member access whose object expression has type `entity_id`. This applies to every source of an `entity_id` value: `let`/`var` locals, `for` loop variables, `func` parameters, event fields, `self`, and call results. It applies in handler bodies, `func` bodies, and rule clauses (`where:`, `order by:`, `when:`, `limit:`). An `entity_id` carries no fields, and another entity's traits SHALL be read through a rule domain (`pairs:`) and written through `set T on e:`.
+
+When the access is read, the analyzer SHALL report: `can't read trait '<trait>' through entity_id '<object>'; read another entity's traits in a pairs: rule`. When the access is the target of an assignment or compound assignment, the analyzer SHALL report: `can't write trait '<trait>' through entity_id '<object>'; use 'set <trait> on <object>:'`. For a write, this error SHALL replace the immutable-binding and read-only loop variable errors, so only one error is reported for the statement.
+
+`<trait>` SHALL be the trait as written in source (`Health`, `tv.WorldTransform`) when the member path resolves to a trait; otherwise it SHALL be the first member name after the object. `<object>` SHALL be the object's source spelling when it is an identifier or a dotted chain (`e`, `self`, `contact.other`); otherwise it SHALL be `value`.
+
+These forms SHALL remain legal and unchanged: named entity field access (`Game.Match.over`), pair binding access in a `pairs:` handler (`body.Health.hp`), filter-alias access, and `match e: T as t =>`.
+
+#### Scenario: Read through a query result local rejected
+- **WHEN** a handler declares `let e = query.first[Player]()` and reads `e.Health.hp`
+- **THEN** the analyzer reports an error: "can't read trait 'Health' through entity_id 'e'; read another entity's traits in a pairs: rule"
+
+#### Scenario: Read through a loop variable with a module-qualified trait rejected
+- **WHEN** a handler loops `for wall in query.all[Solid]():` and reads `wall.tv.WorldTransform.position`, where `tv` is a `use ... as` alias of the module declaring `WorldTransform`
+- **THEN** the analyzer reports an error: "can't read trait 'tv.WorldTransform' through entity_id 'wall'; read another entity's traits in a pairs: rule"
+
+#### Scenario: Read of a missing field still rejected as entity_id access
+- **WHEN** a handler reads `e.Health.nonexistent` where `e` is an `entity_id` local
+- **THEN** the analyzer reports the "can't read trait 'Health' through entity_id 'e'" error
+- **AND** the program does not reach code generation
+
+#### Scenario: Read through an event field rejected
+- **WHEN** a handler `on Contact as contact:` reads `contact.other.Health.hp`, where `other` is an `entity_id` event field
+- **THEN** the analyzer reports an error: "can't read trait 'Health' through entity_id 'contact.other'; read another entity's traits in a pairs: rule"
+
+#### Scenario: Read through self rejected
+- **WHEN** a handler reads `self.Health.hp`
+- **THEN** the analyzer reports an error: "can't read trait 'Health' through entity_id 'self'; read another entity's traits in a pairs: rule"
+
+#### Scenario: Read in a where clause rejected
+- **WHEN** a rule's `where:` predicate reads `self.Health.hp > 0`
+- **THEN** the analyzer reports the "can't read trait 'Health' through entity_id 'self'" error
+
+#### Scenario: Read through a func parameter rejected
+- **WHEN** a `func f(e: entity_id) int` body returns `e.Health.hp`
+- **THEN** the analyzer reports the "can't read trait 'Health' through entity_id 'e'" error
+
+#### Scenario: Write through a let entity_id rejected
+- **WHEN** a handler declares `let e = query.first[Player]()` and assigns `e.Health.hp = 3`
+- **THEN** the analyzer reports an error: "can't write trait 'Health' through entity_id 'e'; use 'set Health on e:'"
+- **AND** the analyzer does not report an immutable-binding error for that statement
+
+#### Scenario: Compound write through a loop variable rejected
+- **WHEN** a handler loops `for e in query.all[Health]():` and executes `e.Health.hp += 1`
+- **THEN** the analyzer reports an error: "can't write trait 'Health' through entity_id 'e'; use 'set Health on e:'"
+- **AND** the analyzer does not report a read-only loop variable error for that statement
+
+#### Scenario: Write to an undeclared trait rejected
+- **WHEN** a handler assigns `e.Bogus.x = 1` where `e` is an `entity_id` local and no trait `Bogus` exists
+- **THEN** the analyzer reports an error: "can't write trait 'Bogus' through entity_id 'e'; use 'set Bogus on e:'"
+
+#### Scenario: Named entity field access still allowed
+- **WHEN** a rule reads `Game.Match.over` and `Game` is a declared entity whose archetype declares `Match`
+- **THEN** the analyzer reports no entity_id access error
+
+#### Scenario: Pair binding access still allowed
+- **WHEN** a `pairs:` handler reads `body.Health.hp` where `body` is a pair binding that selects `Health`
+- **THEN** the analyzer reports no entity_id access error
+
+#### Scenario: Trait match on an entity_id still allowed
+- **WHEN** a handler loops `for e in query.all[Solid]():` and writes `match e:` with arm `Health as h =>` reading `h.hp`
+- **THEN** the analyzer reports no entity_id access error
+
+### Requirement: Local variable scope in rule and func bodies
+The semantic analyzer SHALL maintain a per-handler and per-`func` local variable scope. `let` declarations introduce immutable bindings; `var` declarations introduce mutable bindings. Re-declaration of an existing local in the same scope SHALL produce an error. Assigning to a name that is not a declared local, trait alias, or other writable binding in scope SHALL produce an error; assignment SHALL NOT implicitly declare a local. For a `let` binding, any assignment whose target is the binding itself or a member path into its value (`v.x = ...`) SHALL be rejected. A member path into an `entity_id`-typed binding (`e.Trait.field = ...`) is not a rebinding; it is rejected as trait access through an `entity_id` value.
+
+#### Scenario: Let binding immutable after declaration
+- **WHEN** a handler declares `let speed = 5.0` and then assigns `speed = 6.0`
+- **THEN** the analyzer reports an error: "cannot reassign immutable binding 'speed'"
+
+#### Scenario: Compound assignment to let rejected
+- **WHEN** a handler declares `let total = 0` and then executes `total += 1`
+- **THEN** the analyzer reports an error: "cannot reassign immutable binding 'total'"
+
+#### Scenario: Member write into let value rejected
+- **WHEN** a handler declares `let v = vec2(0.0, 0.0)` and then assigns `v.x = 1.0`
+- **THEN** the analyzer reports an error: "cannot reassign immutable binding 'v'"
+
+#### Scenario: Trait write through let entity binding is an entity_id access error
+- **WHEN** a handler declares `let e = query.first[Player]()` and assigns `e.Health.hp = 3`
+- **THEN** the analyzer reports an error: "can't write trait 'Health' through entity_id 'e'; use 'set Health on e:'"
+- **AND** the analyzer does not report an immutable-binding error
+
+#### Scenario: Var binding reassignable
+- **WHEN** a handler declares `var count = 0` and then assigns `count = count + 1`
+- **THEN** the analyzer accepts both statements
+
+#### Scenario: Let rules apply in func bodies
+- **WHEN** a `func` body declares `let x = 1` and then assigns `x = 2`
+- **THEN** the analyzer reports an error: "cannot reassign immutable binding 'x'"
+
+#### Scenario: Re-declaration in same scope rejected
+- **WHEN** a handler declares `let speed = 5.0` and later declares `let speed = 6.0` in the same block
+- **THEN** the analyzer reports an error: "redeclaration of local 'speed' in the same scope"
+
+#### Scenario: Assignment to undeclared name rejected
+- **WHEN** a handler assigns `score = 3` and no local, alias, or writable binding named `score` is in scope
+- **THEN** the analyzer reports an error: "assignment to undeclared local 'score'; declare it with `var`"
 

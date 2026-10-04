@@ -9,6 +9,8 @@
 #include "frontend/symbol_identity.hpp"
 
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -2785,13 +2787,108 @@ bool SemanticAnalyzer::validate_const_member(const MemberExpr& member,
     return reject_const(location, context, "'" + spelled + "' is not a constant");
 }
 
+namespace {
+
+std::string entity_id_object_spelling(const ExprNode& object) {
+    if (const auto* ident = std::get_if<IdentExpr>(&object.expr)) {
+        return ident->name;
+    }
+    if (std::holds_alternative<SelfExpr>(object.expr)) {
+        return "self";
+    }
+    if (const auto* member = std::get_if<MemberExpr>(&object.expr)) {
+        if (const auto chain = member_chain_segments(*member); chain.has_value()) {
+            return join_segments(*chain, 0, chain->size());
+        }
+    }
+    return "value";
+}
+
+std::string entity_id_write_message(const std::string& trait, const std::string& object) {
+    return "can't write trait '" + trait + "' through entity_id '" + object + "'; use 'set " + trait + " on " +
+           object + ":'";
+}
+
+}  // namespace
+
+std::string SemanticAnalyzer::entity_id_trait_label(const std::string& first, const std::string* second) const {
+    if (second == nullptr || try_resolve_trait_ref_to_symbol(first).has_value()) {
+        return first;
+    }
+    const auto qualified = first + "." + *second;
+    return try_resolve_trait_ref_to_symbol(qualified).has_value() ? qualified : first;
+}
+
+void SemanticAnalyzer::report_entity_id_trait_read(const ExprNode& object,
+                                                   const std::string& member,
+                                                   const std::string* next_segment,
+                                                   const SourceLocation& location) const {
+    if (!reported_entity_id_reads_.emplace(object.location.filename, object.location.line, object.location.column)
+             .second) {
+        return;
+    }
+    errors_.error(location,
+                  "can't read trait '" + entity_id_trait_label(member, next_segment) + "' through entity_id '" +
+                      entity_id_object_spelling(object) + "'; read another entity's traits in a pairs: rule");
+}
+
+bool SemanticAnalyzer::reject_entity_id_trait_write(
+    const VarAssign& stmt,
+    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+    const std::unordered_map<std::string, TypeInfo>& locals,
+    const ResolvedStruct* handler_event,
+    const PairScope* pair_scope) {
+    if (stmt.path.empty() || (pair_scope != nullptr && pair_scope->contains(stmt.name))) {
+        return false;
+    }
+    const auto local_it    = locals.find(stmt.name);
+    const bool event_root = handler_event != nullptr && stmt.name == handler_event->name;
+    if (local_it == locals.end() && !event_root) {
+        return false;
+    }
+    ExprNode prefix(ExprNode::Variant{IdentExpr{.name = stmt.name, .location = stmt.location}}, stmt.location);
+    auto prefix_type = local_it != locals.end() ? local_it->second : make_unknown_type();
+    for (std::size_t index = 0; index < stmt.path.size(); ++index) {
+        if (prefix_type.kind == TypeKind::EntityId) {
+            std::vector<std::string> chain{stmt.name};
+            chain.insert(chain.end(), stmt.path.begin(), stmt.path.begin() + static_cast<std::ptrdiff_t>(index));
+            const auto* second = index + 1 < stmt.path.size() ? &stmt.path[index + 1] : nullptr;
+            errors_.error(stmt.location,
+                          entity_id_write_message(entity_id_trait_label(stmt.path[index], second),
+                                                  join_segments(chain, 0, chain.size())));
+            return true;
+        }
+        prefix = ExprNode(ExprNode::Variant{MemberExpr{.object = std::make_unique<ExprNode>(std::move(prefix)),
+                                                       .member = stmt.path[index],
+                                                       .resolved_enum_member = std::nullopt,
+                                                       .location             = stmt.location}},
+                          stmt.location);
+        prefix_type = infer_expr_type(prefix, filter_bindings, locals, handler_event, pair_scope);
+    }
+    return false;
+}
+
 TypeInfo SemanticAnalyzer::infer_value_member_type(
     const MemberExpr& member,
     const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
     const std::unordered_map<std::string, TypeInfo>& local_bindings,
     const ResolvedStruct* handler_event,
-    const PairScope* pair_scope) const {
-    const auto object = infer_expr_type(*member.object, filter_bindings, local_bindings, handler_event, pair_scope);
+    const PairScope* pair_scope,
+    const std::string* next_segment) const {
+    const auto* inner = std::get_if<MemberExpr>(&member.object->expr);
+    const auto object = inner != nullptr ? infer_member_expr_type(*inner,
+                                                                  member.object->location,
+                                                                  filter_bindings,
+                                                                  local_bindings,
+                                                                  handler_event,
+                                                                  pair_scope,
+                                                                  &member.member)
+                                         : infer_expr_type(*member.object, filter_bindings, local_bindings,
+                                                           handler_event, pair_scope);
+    if (object.kind == TypeKind::EntityId) {
+        report_entity_id_trait_read(*member.object, member.member, next_segment, member.location);
+        return make_unknown_type();
+    }
     if (object.kind == TypeKind::Struct && object.symbol_id.has_value()) {
         const auto* structure = find_resolved_struct(*object.symbol_id);
         return structure == nullptr ? make_unknown_type() : find_field_type_in(structure->fields, member.member);
@@ -5226,7 +5323,9 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
                                          !assign_stmt->path.empty();
             // A named write targets its entity, never the handler's domain.
             const bool named_write = assign_stmt->named_target.has_value();
-            if (!named_write && pair_scope != nullptr && !writable_target) {
+            target_rejected        = !named_write && reject_entity_id_trait_write(
+                                                  *assign_stmt, filter_bindings, locals, handler_event, pair_scope);
+            if (!target_rejected && !named_write && pair_scope != nullptr && !writable_target) {
                 if (bound != nullptr && bound->writability == PairBindingWritability::Writable) {
                     errors_.error(assign_stmt->location,
                                   "pair-bound durable traits are read-only; assign a dotted trait path through '" +
@@ -5245,7 +5344,7 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
                                   "binding");
                 }
                 target_rejected = true;
-            } else if (!named_write) {
+            } else if (!target_rejected && !named_write) {
                 target_rejected = reject_local_assignment(*assign_stmt, filter_bindings, locals);
             }
 
@@ -5306,6 +5405,12 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
                 validate_spawn_expr(*spawn, expr_stmt->location);
             }
             (void)infer_expr_type(*expr_stmt->expr, filter_bindings, locals, handler_event, pair_scope);
+            continue;
+        }
+        if (const auto* return_stmt = std::get_if<ReturnStmt>(&stmt->stmt)) {
+            if (return_stmt->value.has_value()) {
+                (void)infer_expr_type(**return_stmt->value, filter_bindings, locals, handler_event, pair_scope);
+            }
             continue;
         }
         if (const auto* emit_stmt = std::get_if<EmitStmt>(&stmt->stmt)) {
@@ -5417,10 +5522,6 @@ bool SemanticAnalyzer::reject_local_assignment(
         if (std::ranges::contains(foreach_variables_, stmt.name)) {
             errors_.error(stmt.location, "foreach loop variable '" + stmt.name + "' is read-only");
             return true;
-        }
-        // `e.Trait.field = ...` writes the entity, not the binding.
-        if (local_it->second.kind == TypeKind::EntityId && !stmt.path.empty()) {
-            return false;
         }
         errors_.error(stmt.location, "cannot reassign immutable binding '" + stmt.name + "'");
         return true;
@@ -6323,57 +6424,109 @@ std::optional<SemanticAnalyzer::SpatialJoinResolvedArg> SemanticAnalyzer::resolv
     if (!resolved.has_value()) {
         return std::nullopt;
     }
-    std::vector<std::string> field_path(
-        segments.begin() + static_cast<std::ptrdiff_t>(resolved->consumed_segments), segments.end());
     return SpatialJoinResolvedArg{
-        .binding_name  = root_name,
-        .access        = SpatialJoinAccess{.trait = resolved->trait_id, .field_path = std::move(field_path)},
-        .binding_index = resolved->binding_index};
+        .binding_name = root_name, .segments = std::move(segments), .binding_index = resolved->binding_index};
+}
+
+namespace {
+
+struct OverlapShapeSpec {
+    SpatialShapeKind kind;
+    std::vector<std::uint8_t> args;
+};
+
+struct OverlapPredicateSpec {
+    std::string_view canonical;
+    SpatialJoinDimension dimension;
+    std::size_t arity;
+    std::array<OverlapShapeSpec, 2> shapes;
+};
+
+const std::array<OverlapPredicateSpec, 3>& recognized_overlap_predicates() {
+    static const std::array<OverlapPredicateSpec, 3> specs{{
+        {.canonical = "std.collision.flat.circles_overlap",
+         .dimension = SpatialJoinDimension::Flat2D,
+         .arity     = 4,
+         .shapes    = {{{.kind = SpatialShapeKind::Sphere, .args = {0, 1}},
+                        {.kind = SpatialShapeKind::Sphere, .args = {2, 3}}}}},
+        {.canonical = "std.collision.volume.spheres_overlap",
+         .dimension = SpatialJoinDimension::Volume3D,
+         .arity     = 4,
+         .shapes    = {{{.kind = SpatialShapeKind::Sphere, .args = {0, 1}},
+                        {.kind = SpatialShapeKind::Sphere, .args = {2, 3}}}}},
+        {.canonical = "std.collision.volume.sphere_box_overlap",
+         .dimension = SpatialJoinDimension::Volume3D,
+         .arity     = 5,
+         .shapes    = {{{.kind = SpatialShapeKind::Sphere, .args = {0, 1}},
+                        {.kind = SpatialShapeKind::Box, .args = {2, 3, 4}}}}},
+    }};
+    return specs;
+}
+
+// The pair bindings `expr` reads, one bit per binding index.
+unsigned pair_bindings_read(const ExprNode& expr, const PairScope& pair_scope) {
+    unsigned read = 0;
+    visit_expression(expr, [&](const ExprNode& node) {
+        const auto* ident = std::get_if<IdentExpr>(&node.expr);
+        const auto scope  = ident == nullptr ? pair_scope.end() : pair_scope.find(ident->name);
+        if (scope != pair_scope.end()) {
+            read |= 1U << scope->second.index;
+        }
+    });
+    return read;
+}
+
+}  // namespace
+
+const ExprNode* resolve_expr_path(const ExprNode& root, const ExprPath& path) {
+    const ExprNode* node = &root;
+    for (const auto step : path) {
+        if (const auto* call = std::get_if<CallExpr>(&node->expr); call != nullptr && step < call->args.size()) {
+            node = call->args[step].get();
+        } else if (const auto* binary = std::get_if<BinaryExpr>(&node->expr); binary != nullptr && step <= 1) {
+            node = (step == 0 ? binary->left : binary->right).get();
+        } else {
+            return nullptr;
+        }
+    }
+    return node;
 }
 
 std::optional<SemanticAnalyzer::SpatialJoinMatch> SemanticAnalyzer::try_recognize_spatial_predicate(
     const CallExpr& call, const PairScope& pair_scope) {
-    if (!call.resolved_callee_id.has_value() || call.args.size() != 4) {
+    if (!call.resolved_callee_id.has_value()) {
         return std::nullopt;
     }
     const auto canonical = make_canonical_id(*call.resolved_callee_id);
-    SpatialJoinDimension dimension{};
-    if (canonical == "std.collision.flat.circles_overlap") {
-        dimension = SpatialJoinDimension::Flat2D;
-    } else if (canonical == "std.collision.volume.spheres_overlap") {
-        dimension = SpatialJoinDimension::Volume3D;
-    } else {
+    const auto& specs    = recognized_overlap_predicates();
+    const auto spec      = std::ranges::find(specs, std::string_view(canonical), &OverlapPredicateSpec::canonical);
+    if (spec == specs.end() || call.args.size() != spec->arity) {
         return std::nullopt;
     }
 
-    const auto left_position  = resolve_spatial_join_arg(*call.args[0], pair_scope);
-    const auto left_radius    = resolve_spatial_join_arg(*call.args[1], pair_scope);
-    const auto right_position = resolve_spatial_join_arg(*call.args[2], pair_scope);
-    const auto right_radius   = resolve_spatial_join_arg(*call.args[3], pair_scope);
-    if (!left_position.has_value() || !left_radius.has_value() || !right_position.has_value() ||
-        !right_radius.has_value()) {
+    std::array<SpatialShape, 2> shapes;
+    for (std::size_t side = 0; side < shapes.size(); ++side) {
+        unsigned read = 0;
+        for (const auto arg : spec->shapes[side].args) {
+            read |= pair_bindings_read(*call.args[arg], pair_scope);
+            shapes[side].slots.push_back(ExprPath{arg});
+        }
+        if (std::popcount(read) != 1) {
+            return std::nullopt;
+        }
+        shapes[side].binding_index = static_cast<std::size_t>(std::countr_zero(read));
+        shapes[side].kind          = spec->shapes[side].kind;
+    }
+    if (shapes[0].binding_index == shapes[1].binding_index) {
         return std::nullopt;
     }
-    if (left_position->binding_name != left_radius->binding_name ||
-        right_position->binding_name != right_radius->binding_name ||
-        left_position->binding_name == right_position->binding_name) {
-        return std::nullopt;
-    }
-
-    return SpatialJoinMatch{
-        .dimension = dimension,
-        .left      = SpatialJoinBinding{.binding_index = left_position->binding_index,
-                                        .position      = left_position->access,
-                                        .radius        = left_radius->access},
-        .right     = SpatialJoinBinding{.binding_index = right_position->binding_index,
-                                        .position      = right_position->access,
-                                        .radius        = right_radius->access},
-    };
+    return SpatialJoinMatch{.dimension = spec->dimension, .left = std::move(shapes[0]), .right = std::move(shapes[1])};
 }
 
 bool SemanticAnalyzer::spatial_join_resolved_args_equal(const SpatialJoinResolvedArg& lhs,
                                                         const SpatialJoinResolvedArg& rhs) {
-    return lhs.binding_name == rhs.binding_name && lhs.binding_index == rhs.binding_index && lhs.access == rhs.access;
+    return lhs.binding_name == rhs.binding_name && lhs.binding_index == rhs.binding_index &&
+           lhs.segments == rhs.segments;
 }
 
 bool SemanticAnalyzer::spatial_join_operand_pairs_equal(const SpatialJoinOperandPair& lhs,
@@ -6440,49 +6593,46 @@ std::optional<SemanticAnalyzer::SpatialJoinMatch> SemanticAnalyzer::try_recogniz
         return std::nullopt;
     }
 
-    // Positions and radii are matched by binding name, not by argument
-    // order -- the canonical shape's delta ("b - a") and radius sum
-    // ("a + b") don't share an operand order.
-    const auto& radius_first  = sum_left->first;
-    const auto& radius_second = sum_left->second;
-    const SpatialJoinResolvedArg* radius_for_first  = nullptr;
-    const SpatialJoinResolvedArg* radius_for_second = nullptr;
-    if (position_first.binding_name == radius_first.binding_name) {
-        radius_for_first = &radius_first;
-    } else if (position_first.binding_name == radius_second.binding_name) {
-        radius_for_first = &radius_second;
-    }
-    if (position_second.binding_name == radius_first.binding_name) {
-        radius_for_second = &radius_first;
-    } else if (position_second.binding_name == radius_second.binding_name) {
-        radius_for_second = &radius_second;
-    }
-    if (radius_for_first == nullptr || radius_for_second == nullptr) {
+    // Positions and radii are matched by binding name, not by operand order:
+    // the canonical delta ("b - a") and radius sum ("a + b") differ in order.
+    // Paths: delta operands sit at {0, 0, i}, radius-sum operands at {1, 0, i}.
+    const auto radius_operand = [&sum_left](const SpatialJoinResolvedArg& position) -> std::optional<std::uint8_t> {
+        if (position.binding_name == sum_left->first.binding_name) {
+            return 0;
+        }
+        if (position.binding_name == sum_left->second.binding_name) {
+            return 1;
+        }
+        return std::nullopt;
+    };
+    const auto radius_for_first  = radius_operand(position_first);
+    const auto radius_for_second = radius_operand(position_second);
+    if (!radius_for_first.has_value() || !radius_for_second.has_value()) {
         return std::nullopt;
     }
-
+    const auto sphere = [](const SpatialJoinResolvedArg& position, std::uint8_t delta_operand, std::uint8_t radius) {
+        return SpatialShape{.binding_index = position.binding_index,
+                            .kind          = SpatialShapeKind::Sphere,
+                            .slots         = {ExprPath{0, 0, delta_operand}, ExprPath{1, 0, radius}}};
+    };
     return SpatialJoinMatch{
         .dimension = dimension,
-        .left      = SpatialJoinBinding{.binding_index = position_first.binding_index,
-                                        .position      = position_first.access,
-                                        .radius        = radius_for_first->access},
-        .right     = SpatialJoinBinding{.binding_index = position_second.binding_index,
-                                        .position      = position_second.access,
-                                        .radius        = radius_for_second->access},
+        .left      = sphere(position_first, 0, *radius_for_first),
+        .right     = sphere(position_second, 1, *radius_for_second),
     };
 }
 
-void SemanticAnalyzer::check_unaccelerated_distance_predicate(const ExprNode& predicate,
+bool SemanticAnalyzer::check_unaccelerated_distance_predicate(const ExprNode& predicate,
                                                                const PairScope& pair_scope,
                                                                ErrorReporter& errors) {
     static const std::unordered_set<std::string> COMPARISON_OPS = {"<", "<=", ">", ">="};
     const auto* comparison = std::get_if<BinaryExpr>(&predicate.expr);
     if (comparison == nullptr || !COMPARISON_OPS.contains(comparison->op)) {
-        return;
+        return false;
     }
     const auto* distance_call = std::get_if<CallExpr>(&comparison->left->expr);
     if (distance_call == nullptr || !distance_call->resolved_callee_id.has_value() || distance_call->args.size() != 2) {
-        return;
+        return false;
     }
     const char* recognized_alternative = nullptr;
     const auto canonical = make_canonical_id(*distance_call->resolved_callee_id);
@@ -6491,57 +6641,44 @@ void SemanticAnalyzer::check_unaccelerated_distance_predicate(const ExprNode& pr
     } else if (canonical == "std.math.vec3.distance") {
         recognized_alternative = "spheres_overlap";
     } else {
-        return;
+        return false;
     }
 
     const auto position_a = resolve_spatial_join_arg(*distance_call->args[0], pair_scope);
     const auto position_b = resolve_spatial_join_arg(*distance_call->args[1], pair_scope);
     if (!position_a.has_value() || !position_b.has_value() || position_a->binding_name == position_b->binding_name) {
-        return;
+        return false;
     }
 
     const auto radius_sum = resolve_spatial_join_operand_pair(*comparison->right, "+", pair_scope);
     if (!radius_sum.has_value()) {
-        return;
+        return false;
     }
     const bool bindings_match = (radius_sum->first.binding_name == position_a->binding_name &&
                                  radius_sum->second.binding_name == position_b->binding_name) ||
                                 (radius_sum->first.binding_name == position_b->binding_name &&
                                  radius_sum->second.binding_name == position_a->binding_name);
     if (!bindings_match) {
-        return;
+        return false;
     }
 
     errors.warning(predicate.location,
                    std::string("where: predicate compares an unaccelerated linear distance (") + canonical +
                        ") against a binding-rooted radius sum; use " + recognized_alternative +
                        "(...) or an equivalent squared-distance expression for broad-phase acceleration");
+    return true;
 }
 
 std::optional<SpatialJoinPlan> SemanticAnalyzer::recognize_spatial_join(const RuleNode& rule,
                                                                         const PairScope& pair_scope,
                                                                         ErrorReporter& errors) {
-    if (!rule.pairs.has_value() || rule.pairs->bindings.size() != 2 || !rule.where_clause.has_value()) {
+    if (!rule.pairs.has_value() || rule.pairs->bindings.size() != 2) {
         return std::nullopt;
     }
 
-    // Broad-phase eligibility requires matching pair-binding domains
-    // (dsl-where-clause), independent of predicate shape, so this never
-    // varies per-predicate below -- check it once up front.
-    const auto required_traits = [](const PairBindingNode& binding) {
-        std::unordered_set<SymbolId, SymbolIdHash> traits;
-        for (const auto& entry : binding.traits) {
-            if (entry.resolved_trait_id.has_value()) {
-                traits.insert(*entry.resolved_trait_id);
-            }
-        }
-        return traits;
-    };
-    if (required_traits(rule.pairs->bindings[0]) != required_traits(rule.pairs->bindings[1])) {
-        return std::nullopt;
-    }
-
-    const auto& predicates = rule.where_clause->predicates;
+    static const std::vector<std::unique_ptr<ExprNode>> NO_PREDICATES;
+    const auto& predicates   = rule.where_clause.has_value() ? rule.where_clause->predicates : NO_PREDICATES;
+    bool linear_distance_warned = false;
     for (std::size_t predicate_index = 0; predicate_index < predicates.size(); ++predicate_index) {
         const ExprNode& predicate = *predicates[predicate_index];
         std::optional<SpatialJoinMatch> match;
@@ -6554,13 +6691,20 @@ std::optional<SpatialJoinPlan> SemanticAnalyzer::recognize_spatial_join(const Ru
             }
         }
         if (!match.has_value()) {
-            check_unaccelerated_distance_predicate(predicate, pair_scope, errors);
+            linear_distance_warned |= check_unaccelerated_distance_predicate(predicate, pair_scope, errors);
             continue;
         }
         return SpatialJoinPlan{.dimension               = match->dimension,
-                               .left                     = match->left,
-                               .right                    = match->right,
+                               .left                     = std::move(match->left),
+                               .right                    = std::move(match->right),
                                .matched_predicate_index = predicate_index};
+    }
+    if (!linear_distance_warned) {
+        const auto& bindings = rule.pairs->bindings;
+        errors.warning(rule.pairs->location,
+                       "pair rule '" + rule.name +
+                           "' is not accelerated: no recognized overlap predicate in where:, so every (" +
+                           bindings[0].name + ", " + bindings[1].name + ") tuple is checked");
     }
     return std::nullopt;
 }
@@ -8039,7 +8183,8 @@ TypeInfo SemanticAnalyzer::infer_member_expr_type(
     const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
     const std::unordered_map<std::string, TypeInfo>& local_bindings,
     const ResolvedStruct* handler_event,
-    const PairScope* pair_scope) const {
+    const PairScope* pair_scope,
+    const std::string* next_segment) const {
     // Resolved enum member access (`inp.Key.A`) types as its enum (D3/2.2).
     if (member.resolved_enum_member.has_value()) {
         return make_resolved_user_type(TypeKind::Enum, member.resolved_enum_member->enum_id);
@@ -8093,7 +8238,12 @@ TypeInfo SemanticAnalyzer::infer_member_expr_type(
     }
     const auto* owner = std::get_if<IdentExpr>(&member.object->expr);
     if (owner == nullptr || owner->resolved_const_id.has_value()) {
-        return infer_value_member_type(member, filter_bindings, local_bindings, handler_event, pair_scope);
+        return infer_value_member_type(member, filter_bindings, local_bindings, handler_event, pair_scope, next_segment);
+    }
+    if (auto local_it = local_bindings.find(owner->name);
+        local_it != local_bindings.end() && local_it->second.kind == TypeKind::EntityId) {
+        report_entity_id_trait_read(*member.object, member.member, next_segment, location);
+        return make_unknown_type();
     }
     if (handler_event != nullptr && owner->name == handler_event->name) {
         const auto* field = find_field_in(handler_event->fields, member.member);

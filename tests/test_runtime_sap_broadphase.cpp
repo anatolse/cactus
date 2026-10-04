@@ -3,691 +3,384 @@
 #include "backends/cpp-entt/runtime.hpp"
 
 #include <catch2/benchmark/catch_benchmark.hpp>
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
+#include <limits>
+#include <numbers>
+#include <optional>
 #include <random>
 #include <span>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
 using namespace cactus::runtime::entt_backend;
+using cactus::runtime::Quat;
+namespace quat = cactus::runtime::stdlib::math::quat;
 
 namespace {
 
-std::vector<std::pair<std::size_t, std::size_t>> sorted_pairs(std::span<const SapCandidatePair> pairs) {
-    std::vector<std::pair<std::size_t, std::size_t>> result;
+using EntityPair = std::pair<entt::entity, entt::entity>;
+
+// Bounds carry a tiny rounding slack, so compare them with a margin.
+Catch::Approx near(float value) {
+    return Catch::Approx(value).margin(1e-3);
+}
+
+template <typename Proxy>
+std::vector<EntityPair> candidate_entities(std::span<const Proxy> proxies, std::span<const SapCandidatePair> pairs) {
+    std::vector<EntityPair> result;
     result.reserve(pairs.size());
     for (const auto& pair : pairs) {
-        result.emplace_back(pair.first, pair.second);
+        result.emplace_back(proxies[pair.left].entity, proxies[pair.right].entity);
     }
-    std::ranges::sort(result);
     return result;
 }
 
-// Candidate pairs are indices into whichever proxy span was most recently
-// synced; across a spawn/destroy/move/resize, indices are meaningless on
-// their own, so tests identify pairs by the stable entity behind each index.
+ProxyAabb2D circle(std::uint32_t id, SapSide side, Vector2 center, float radius) {
+    return circle_proxy(entt::entity{id}, id, side, center, radius);
+}
+
+ProxyAabb3D sphere(std::uint32_t id, SapSide side, Vector3 center, float radius) {
+    return sphere_proxy(entt::entity{id}, id, side, center, radius);
+}
+
+ProxyAabb3D box(std::uint32_t id, SapSide side, Vector3 center, Vector3 size, Quat rotation) {
+    return box_proxy(entt::entity{id}, id, side, center, size, rotation);
+}
+
+bool aabbs_overlap(const ProxyAabb2D& lhs, const ProxyAabb2D& rhs) {
+    return lhs.max.x >= rhs.min.x && rhs.max.x >= lhs.min.x && lhs.max.y >= rhs.min.y && rhs.max.y >= lhs.min.y;
+}
+
+bool aabbs_overlap(const ProxyAabb3D& lhs, const ProxyAabb3D& rhs) {
+    return lhs.max.x >= rhs.min.x && rhs.max.x >= lhs.min.x && lhs.max.y >= rhs.min.y && rhs.max.y >= lhs.min.y &&
+           lhs.max.z >= rhs.min.z && rhs.max.z >= lhs.min.z;
+}
+
+// The exact AABB product the broad phase must reproduce, in (left ordinal, right ordinal) order.
 template <typename Proxy>
-std::vector<std::pair<entt::entity, entt::entity>> entity_pairs(std::span<const Proxy> proxies,
-                                                                 std::span<const SapCandidatePair> candidates) {
-    std::vector<std::pair<entt::entity, entt::entity>> result;
-    result.reserve(candidates.size());
-    for (const auto& pair : candidates) {
-        const auto lhs = proxies[pair.first].entity;
-        const auto rhs = proxies[pair.second].entity;
-        result.emplace_back(std::min(lhs, rhs), std::max(lhs, rhs));
+std::vector<EntityPair> reference_aabb_product(std::span<const Proxy> proxies) {
+    std::vector<const Proxy*> left;
+    std::vector<const Proxy*> right;
+    for (const auto& proxy : proxies) {
+        (proxy.side == SapSide::Left ? left : right).push_back(&proxy);
     }
-    std::ranges::sort(result);
-    return result;
-}
-
-// Reference ground truth (tasks.md 3.1): the exact, non-conservative overlap
-// test used by std.collision.flat.circles_overlap / std.collision.volume.spheres_overlap
-// (stdlib/std/collision/flat.cactus, stdlib/std/collision/volume.cactus) — squared
-// distance strictly less than squared summed radii. Deliberately independent of
-// the broad phase's own AABB overlap test, following the all-pairs scan pattern
-// of cactus_dispatch_stdlib_flat_collisions (cpp_entt_codegen.cpp:2228-2247).
-
-[[nodiscard]] bool circles_truly_overlap(const Proxy2D& a, const Proxy2D& b) noexcept {
-    const float dx          = b.center.x - a.center.x;
-    const float dy          = b.center.y - a.center.y;
-    const float radius_sum  = a.radius + b.radius;
-    return ((dx * dx) + (dy * dy)) < (radius_sum * radius_sum);
-}
-
-[[nodiscard]] bool spheres_truly_overlap(const Proxy3D& a, const Proxy3D& b) noexcept {
-    const float dx         = b.center.x - a.center.x;
-    const float dy         = b.center.y - a.center.y;
-    const float dz         = b.center.z - a.center.z;
-    const float radius_sum = a.radius + b.radius;
-    return ((dx * dx) + (dy * dy) + (dz * dz)) < (radius_sum * radius_sum);
-}
-
-std::vector<std::pair<entt::entity, entt::entity>> brute_force_true_overlaps_2d(std::span<const Proxy2D> proxies) {
-    std::vector<std::pair<entt::entity, entt::entity>> result;
-    for (std::size_t i = 0; i < proxies.size(); ++i) {
-        for (std::size_t j = i + 1; j < proxies.size(); ++j) {
-            if (circles_truly_overlap(proxies[i], proxies[j])) {
-                result.emplace_back(std::min(proxies[i].entity, proxies[j].entity),
-                                    std::max(proxies[i].entity, proxies[j].entity));
+    std::ranges::sort(left, {}, &Proxy::ordinal);
+    std::ranges::sort(right, {}, &Proxy::ordinal);
+    std::vector<EntityPair> result;
+    for (const auto* lhs : left) {
+        for (const auto* rhs : right) {
+            if (aabbs_overlap(*lhs, *rhs)) {
+                result.emplace_back(lhs->entity, rhs->entity);
             }
         }
     }
-    std::ranges::sort(result);
     return result;
 }
 
-std::vector<std::pair<entt::entity, entt::entity>> brute_force_true_overlaps_3d(std::span<const Proxy3D> proxies) {
-    std::vector<std::pair<entt::entity, entt::entity>> result;
-    for (std::size_t i = 0; i < proxies.size(); ++i) {
-        for (std::size_t j = i + 1; j < proxies.size(); ++j) {
-            if (spheres_truly_overlap(proxies[i], proxies[j])) {
-                result.emplace_back(std::min(proxies[i].entity, proxies[j].entity),
-                                    std::max(proxies[i].entity, proxies[j].entity));
-            }
-        }
-    }
-    std::ranges::sort(result);
-    return result;
-}
-
-Proxy2D make_proxy_2d(std::uint32_t id, Vector2 center, float radius) {
-    return Proxy2D{.entity = entt::entity{id}, .ordinal = id, .center = center, .radius = radius};
-}
-
-Proxy3D make_proxy_3d(std::uint32_t id, Vector3 center, float radius) {
-    return Proxy3D{.entity = entt::entity{id}, .ordinal = id, .center = center, .radius = radius};
-}
-
-// Random proxy configurations (tasks.md 3.2): `extent` controls how tightly
-// packed proxies are relative to their radius range — a small extent with a
-// large radius range yields a clustered, overlap-heavy configuration; a large
-// extent with a small radius range yields a widely separated, mostly
-// non-overlapping one. Fixed seed -> fixed configuration, every run.
-
-std::vector<Proxy2D> random_proxies_2d(std::uint32_t seed, std::size_t count, float extent, float min_radius,
-                                       float max_radius) {
+std::vector<ProxyAabb3D> random_spheres(std::uint32_t seed, std::size_t count, float extent, float max_radius) {
     std::mt19937 rng(seed);
-    std::uniform_real_distribution<float> pos_dist(-extent, extent);
-    std::uniform_real_distribution<float> radius_dist(min_radius, max_radius);
-    std::vector<Proxy2D> proxies;
-    proxies.reserve(count);
-    for (std::size_t i = 0; i < count; ++i) {
-        proxies.push_back(make_proxy_2d(static_cast<std::uint32_t>(i + 1),
-                                        Vector2{.x = pos_dist(rng), .y = pos_dist(rng)}, radius_dist(rng)));
+    std::uniform_real_distribution<float> position(-extent, extent);
+    std::uniform_real_distribution<float> radius(0.05F, max_radius);
+    std::bernoulli_distribution left_side(0.5);
+    std::vector<ProxyAabb3D> proxies;
+    for (std::uint32_t id = 1; id <= count; ++id) {
+        proxies.push_back(sphere(id,
+                                 left_side(rng) ? SapSide::Left : SapSide::Right,
+                                 Vector3{.x = position(rng), .y = position(rng), .z = position(rng)},
+                                 radius(rng)));
     }
     return proxies;
 }
 
-std::vector<Proxy3D> random_proxies_3d(std::uint32_t seed, std::size_t count, float extent, float min_radius,
-                                       float max_radius) {
-    std::mt19937 rng(seed);
-    std::uniform_real_distribution<float> pos_dist(-extent, extent);
-    std::uniform_real_distribution<float> radius_dist(min_radius, max_radius);
-    std::vector<Proxy3D> proxies;
-    proxies.reserve(count);
-    for (std::size_t i = 0; i < count; ++i) {
-        proxies.push_back(make_proxy_3d(static_cast<std::uint32_t>(i + 1),
-                                        Vector3{.x = pos_dist(rng), .y = pos_dist(rng), .z = pos_dist(rng)},
-                                        radius_dist(rng)));
+// Mirrors std.collision.volume.sphere_box_overlap.
+bool sphere_box_overlap(Vector3 center, float radius, Vector3 box_center, Vector3 size, Quat rotation) {
+    const float safe_radius = std::max(radius, 0.0F);
+    const Vector3 half{std::abs(size.x) / 2.0F, std::abs(size.y) / 2.0F, std::abs(size.z) / 2.0F};
+    const Vector3 local = quat::rotate(quat::inverse(rotation), Vector3Subtract(center, box_center));
+    const Vector3 clamped{std::clamp(local.x, -half.x, half.x),
+                          std::clamp(local.y, -half.y, half.y),
+                          std::clamp(local.z, -half.z, half.z)};
+    const Vector3 delta    = Vector3Subtract(local, clamped);
+    const float distance_squared = Vector3DotProduct(delta, delta);
+    if (distance_squared > 0.0F) {
+        return distance_squared < safe_radius * safe_radius;
     }
-    return proxies;
+    const float inside = std::min({half.x - std::abs(local.x), half.y - std::abs(local.y), half.z - std::abs(local.z)});
+    return safe_radius > 0.0F || inside > 0.0F;
 }
 
 }  // namespace
 
-TEST_CASE("SAP broad phase 2D: empty and single-proxy domains produce no candidates", "[runtime][sap][2d]") {
-    SapBroadPhase2D broad_phase;
+// ── Proxy bounds ─────────────────────────────────────────────────────────────
 
-    broad_phase.sync({});
+TEST_CASE("SAP proxies: a circle's bounds are its center plus and minus its radius", "[runtime][sap][bounds]") {
+    const auto proxy = circle(7, SapSide::Right, Vector2{.x = 1.0F, .y = -2.0F}, 0.5F);
+    CHECK(proxy.entity == entt::entity{7});
+    CHECK(proxy.ordinal == 7);
+    CHECK(proxy.side == SapSide::Right);
+    CHECK(proxy.min.x == near(0.5F));
+    CHECK(proxy.min.y == near(-2.5F));
+    CHECK(proxy.max.x == near(1.5F));
+    CHECK(proxy.max.y == near(-1.5F));
+}
+
+TEST_CASE("SAP proxies: a negative radius bounds by its magnitude", "[runtime][sap][bounds]") {
+    // spheres_overlap squares the radius sum, so two negative radii still overlap.
+    const auto proxy = sphere(1, SapSide::Left, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, -2.0F);
+    CHECK(proxy.min.x == near(-2.0F));
+    CHECK(proxy.max.z == near(2.0F));
+}
+
+TEST_CASE("SAP proxies: an unrotated box bounds by half its size", "[runtime][sap][bounds]") {
+    const auto proxy = box(1, SapSide::Right, Vector3{.x = 1.0F, .y = 2.0F, .z = 3.0F},
+                           Vector3{.x = 2.0F, .y = -4.0F, .z = 6.0F}, quat::identity());
+    CHECK(proxy.min.x == near(0.0F));
+    CHECK(proxy.min.y == near(0.0F));
+    CHECK(proxy.min.z == near(0.0F));
+    CHECK(proxy.max.x == near(2.0F));
+    CHECK(proxy.max.y == near(4.0F));
+    CHECK(proxy.max.z == near(6.0F));
+}
+
+TEST_CASE("SAP proxies: a rotated box bounds its rotated corners", "[runtime][sap][bounds]") {
+    const auto rotation = quat::from_axis_angle(Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F}, std::numbers::pi_v<float> / 4);
+    const auto proxy    = box(1, SapSide::Right, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
+                              Vector3{.x = 2.0F, .y = 2.0F, .z = 2.0F}, rotation);
+    CHECK(proxy.max.x >= std::numbers::sqrt2_v<float> - 1e-4F);
+    CHECK(proxy.max.x == near(std::numbers::sqrt2_v<float>));
+    CHECK(proxy.max.y == near(1.0F));
+    CHECK(proxy.min.z <= -std::numbers::sqrt2_v<float> + 1e-4F);
+}
+
+TEST_CASE("SAP proxies: a zero rotation bounds like the identity", "[runtime][sap][bounds]") {
+    const auto proxy = box(1, SapSide::Right, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
+                           Vector3{.x = 2.0F, .y = 4.0F, .z = 6.0F}, Quat{.x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 0.0F});
+    CHECK(proxy.max.x == near(1.0F));
+    CHECK(proxy.max.y == near(2.0F));
+    CHECK(proxy.max.z == near(3.0F));
+}
+
+// ── Candidate generation ─────────────────────────────────────────────────────
+
+TEST_CASE("SAP broad phase: an empty side produces no candidates", "[runtime][sap]") {
+    const std::vector<ProxyAabb2D> proxies{
+        circle(1, SapSide::Left, Vector2{.x = 0.0F, .y = 0.0F}, 1.0F),
+        circle(2, SapSide::Left, Vector2{.x = 0.5F, .y = 0.0F}, 1.0F),
+    };
+    SapBroadPhase2D broad_phase;
+    broad_phase.sync(proxies);
     CHECK(broad_phase.candidate_pairs().empty());
-
-    const std::vector<Proxy2D> one_proxy{make_proxy_2d(1, Vector2{.x = 0.0F, .y = 0.0F}, 1.0F)};
-    broad_phase.sync(one_proxy);
-    CHECK(broad_phase.candidate_pairs().empty());
 }
 
-TEST_CASE("SAP broad phase 2D: two overlapping proxies produce a candidate", "[runtime][sap][2d]") {
-    SapBroadPhase2D broad_phase;
-    const std::vector<Proxy2D> proxies{
-        make_proxy_2d(1, Vector2{.x = 0.0F, .y = 0.0F}, 1.0F),
-        make_proxy_2d(2, Vector2{.x = 1.0F, .y = 0.0F}, 1.0F),
+TEST_CASE("SAP broad phase: only left-right overlaps are candidates", "[runtime][sap]") {
+    const std::vector<ProxyAabb2D> proxies{
+        circle(1, SapSide::Left, Vector2{.x = 0.0F, .y = 0.0F}, 1.0F),
+        circle(2, SapSide::Left, Vector2{.x = 0.5F, .y = 0.0F}, 1.0F),
+        circle(3, SapSide::Right, Vector2{.x = 1.5F, .y = 0.0F}, 0.2F),
+        circle(4, SapSide::Right, Vector2{.x = 1.6F, .y = 0.0F}, 0.2F),
+        circle(5, SapSide::Right, Vector2{.x = 50.0F, .y = 0.0F}, 0.2F),
     };
-    broad_phase.sync(proxies);
-    CHECK(sorted_pairs(broad_phase.candidate_pairs()) == std::vector<std::pair<std::size_t, std::size_t>>{{0, 1}});
-}
-
-TEST_CASE("SAP broad phase 2D: two widely separated proxies produce no candidate", "[runtime][sap][2d]") {
-    SapBroadPhase2D broad_phase;
-    const std::vector<Proxy2D> proxies{
-        make_proxy_2d(1, Vector2{.x = 0.0F, .y = 0.0F}, 1.0F),
-        make_proxy_2d(2, Vector2{.x = 5.0F, .y = 0.0F}, 1.0F),
-    };
-    broad_phase.sync(proxies);
-    CHECK(broad_phase.candidate_pairs().empty());
-}
-
-TEST_CASE("SAP broad phase 2D: touching bounds produce a candidate", "[runtime][sap][2d]") {
-    SapBroadPhase2D broad_phase;
-    const std::vector<Proxy2D> proxies{
-        make_proxy_2d(1, Vector2{.x = 0.0F, .y = 0.0F}, 1.0F),
-        make_proxy_2d(2, Vector2{.x = 2.0F, .y = 0.0F}, 1.0F),
-    };
-    broad_phase.sync(proxies);
-    CHECK(sorted_pairs(broad_phase.candidate_pairs()) == std::vector<std::pair<std::size_t, std::size_t>>{{0, 1}});
-}
-
-TEST_CASE("SAP broad phase 2D: mutually-overlapping cluster produces duplicate-free candidates",
-         "[runtime][sap][2d]") {
-    SapBroadPhase2D broad_phase;
-    const std::vector<Proxy2D> proxies{
-        make_proxy_2d(1, Vector2{.x = 0.0F, .y = 0.0F}, 1.0F),
-        make_proxy_2d(2, Vector2{.x = 0.1F, .y = 0.0F}, 1.0F),
-        make_proxy_2d(3, Vector2{.x = 0.2F, .y = 0.0F}, 1.0F),
-    };
-    broad_phase.sync(proxies);
-    CHECK(sorted_pairs(broad_phase.candidate_pairs()) ==
-         std::vector<std::pair<std::size_t, std::size_t>>{{0, 1}, {0, 2}, {1, 2}});
-}
-
-TEST_CASE("SAP broad phase 2D: no self-candidates regardless of radius", "[runtime][sap][2d]") {
-    SapBroadPhase2D broad_phase;
-    const std::vector<Proxy2D> proxies{
-        make_proxy_2d(1, Vector2{.x = 0.0F, .y = 0.0F}, 500.0F),
-        make_proxy_2d(2, Vector2{.x = 100.0F, .y = 0.0F}, 1.0F),
-        make_proxy_2d(3, Vector2{.x = 200.0F, .y = 0.0F}, 1.0F),
-        make_proxy_2d(4, Vector2{.x = 300.0F, .y = 0.0F}, 1.0F),
-    };
-    broad_phase.sync(proxies);
-    const auto candidates = broad_phase.candidate_pairs();
-    for (const auto& pair : candidates) {
-        CHECK(pair.first != pair.second);
+    for (const std::size_t threshold : {std::size_t{0}, std::size_t{1'000'000}}) {
+        SapBroadPhase2D broad_phase;
+        broad_phase.set_small_domain_threshold_for_testing(threshold);
+        broad_phase.sync(proxies);
+        CHECK(candidate_entities<ProxyAabb2D>(proxies, broad_phase.candidate_pairs()) ==
+              std::vector<EntityPair>{{entt::entity{2}, entt::entity{3}}, {entt::entity{2}, entt::entity{4}}});
     }
-    // The giant radius on proxy 0 overlaps every other proxy; 2/3 are too far apart to overlap each other.
-    CHECK(candidates.size() == 3);
 }
 
-TEST_CASE("SAP broad phase 2D: repeated sync on the same input produces identical candidates",
-         "[runtime][sap][2d]") {
-    SapBroadPhase2D first;
-    SapBroadPhase2D second;
-    const std::vector<Proxy2D> proxies{
-        make_proxy_2d(1, Vector2{.x = 0.0F, .y = 0.0F}, 1.0F),
-        make_proxy_2d(2, Vector2{.x = 0.5F, .y = 0.0F}, 1.0F),
-        make_proxy_2d(3, Vector2{.x = 5.0F, .y = 5.0F}, 1.0F),
+TEST_CASE("SAP broad phase: touching bounds produce a candidate", "[runtime][sap]") {
+    const std::vector<ProxyAabb3D> proxies{
+        sphere(1, SapSide::Left, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, 1.0F),
+        sphere(2, SapSide::Right, Vector3{.x = 2.0F, .y = 0.0F, .z = 0.0F}, 1.0F),
     };
-    first.sync(proxies);
-    second.sync(proxies);
-    CHECK(sorted_pairs(first.candidate_pairs()) == sorted_pairs(second.candidate_pairs()));
-}
-
-TEST_CASE("SAP broad phase 3D: empty and single-proxy domains produce no candidates", "[runtime][sap][3d]") {
     SapBroadPhase3D broad_phase;
-
-    broad_phase.sync({});
-    CHECK(broad_phase.candidate_pairs().empty());
-
-    const std::vector<Proxy3D> one_proxy{make_proxy_3d(1, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, 1.0F)};
-    broad_phase.sync(one_proxy);
-    CHECK(broad_phase.candidate_pairs().empty());
-}
-
-TEST_CASE("SAP broad phase 3D: two overlapping proxies produce a candidate", "[runtime][sap][3d]") {
-    SapBroadPhase3D broad_phase;
-    const std::vector<Proxy3D> proxies{
-        make_proxy_3d(1, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, 1.0F),
-        make_proxy_3d(2, Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F}, 1.0F),
-    };
     broad_phase.sync(proxies);
-    CHECK(sorted_pairs(broad_phase.candidate_pairs()) == std::vector<std::pair<std::size_t, std::size_t>>{{0, 1}});
+    CHECK(broad_phase.candidate_pairs().size() == 1);
 }
 
-TEST_CASE("SAP broad phase 3D: two widely separated proxies produce no candidate", "[runtime][sap][3d]") {
-    SapBroadPhase3D broad_phase;
-    const std::vector<Proxy3D> proxies{
-        make_proxy_3d(1, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, 1.0F),
-        make_proxy_3d(2, Vector3{.x = 0.0F, .y = 0.0F, .z = 5.0F}, 1.0F),
-    };
-    broad_phase.sync(proxies);
-    CHECK(broad_phase.candidate_pairs().empty());
-}
-
-TEST_CASE("SAP broad phase 3D: touching bounds produce a candidate", "[runtime][sap][3d]") {
-    SapBroadPhase3D broad_phase;
-    const std::vector<Proxy3D> proxies{
-        make_proxy_3d(1, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, 1.0F),
-        make_proxy_3d(2, Vector3{.x = 0.0F, .y = 0.0F, .z = 2.0F}, 1.0F),
-    };
-    broad_phase.sync(proxies);
-    CHECK(sorted_pairs(broad_phase.candidate_pairs()) == std::vector<std::pair<std::size_t, std::size_t>>{{0, 1}});
-}
-
-TEST_CASE("SAP broad phase 3D: mutually-overlapping cluster produces duplicate-free candidates",
-         "[runtime][sap][3d]") {
-    SapBroadPhase3D broad_phase;
-    const std::vector<Proxy3D> proxies{
-        make_proxy_3d(1, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, 1.0F),
-        make_proxy_3d(2, Vector3{.x = 0.1F, .y = 0.0F, .z = 0.0F}, 1.0F),
-        make_proxy_3d(3, Vector3{.x = 0.2F, .y = 0.0F, .z = 0.0F}, 1.0F),
-    };
-    broad_phase.sync(proxies);
-    CHECK(sorted_pairs(broad_phase.candidate_pairs()) ==
-         std::vector<std::pair<std::size_t, std::size_t>>{{0, 1}, {0, 2}, {1, 2}});
-}
-
-TEST_CASE("SAP broad phase 3D: no self-candidates regardless of radius", "[runtime][sap][3d]") {
-    SapBroadPhase3D broad_phase;
-    const std::vector<Proxy3D> proxies{
-        make_proxy_3d(1, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, 500.0F),
-        make_proxy_3d(2, Vector3{.x = 100.0F, .y = 0.0F, .z = 0.0F}, 1.0F),
-        make_proxy_3d(3, Vector3{.x = 200.0F, .y = 0.0F, .z = 0.0F}, 1.0F),
-        make_proxy_3d(4, Vector3{.x = 300.0F, .y = 0.0F, .z = 0.0F}, 1.0F),
-    };
-    broad_phase.sync(proxies);
-    const auto candidates = broad_phase.candidate_pairs();
-    for (const auto& pair : candidates) {
-        CHECK(pair.first != pair.second);
+TEST_CASE("SAP broad phase: an entity on both sides yields its self pair", "[runtime][sap]") {
+    for (const std::size_t threshold : {std::size_t{0}, std::size_t{1'000'000}}) {
+        const std::vector<ProxyAabb3D> proxies{
+            sphere(1, SapSide::Left, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, 1.0F),
+            box(1, SapSide::Right, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, Vector3{.x = 1.0F, .y = 1.0F, .z = 1.0F},
+                quat::identity()),
+        };
+        SapBroadPhase3D broad_phase;
+        broad_phase.set_small_domain_threshold_for_testing(threshold);
+        broad_phase.sync(proxies);
+        CHECK(candidate_entities<ProxyAabb3D>(proxies, broad_phase.candidate_pairs()) ==
+              std::vector<EntityPair>{{entt::entity{1}, entt::entity{1}}});
     }
-    // The giant radius on proxy 0 overlaps every other proxy; 2/3 are too far apart to overlap each other.
-    CHECK(candidates.size() == 3);
 }
 
-TEST_CASE("SAP broad phase 3D: repeated sync on the same input produces identical candidates",
-         "[runtime][sap][3d]") {
-    SapBroadPhase3D first;
-    SapBroadPhase3D second;
-    const std::vector<Proxy3D> proxies{
-        make_proxy_3d(1, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, 1.0F),
-        make_proxy_3d(2, Vector3{.x = 0.5F, .y = 0.0F, .z = 0.0F}, 1.0F),
-        make_proxy_3d(3, Vector3{.x = 5.0F, .y = 5.0F, .z = 5.0F}, 1.0F),
+TEST_CASE("SAP broad phase: candidates come in left-ordinal, right-ordinal order", "[runtime][sap]") {
+    // Input order deliberately disagrees with ordinal order on both sides.
+    const std::vector<ProxyAabb2D> proxies{
+        circle(9, SapSide::Right, Vector2{.x = 0.0F, .y = 0.0F}, 1.0F),
+        circle(5, SapSide::Left, Vector2{.x = 0.1F, .y = 0.0F}, 1.0F),
+        circle(4, SapSide::Right, Vector2{.x = 0.2F, .y = 0.0F}, 1.0F),
+        circle(2, SapSide::Left, Vector2{.x = 0.3F, .y = 0.0F}, 1.0F),
     };
-    first.sync(proxies);
-    second.sync(proxies);
-    CHECK(sorted_pairs(first.candidate_pairs()) == sorted_pairs(second.candidate_pairs()));
+    for (const std::size_t threshold : {std::size_t{0}, std::size_t{1'000'000}}) {
+        SapBroadPhase2D broad_phase;
+        broad_phase.set_small_domain_threshold_for_testing(threshold);
+        broad_phase.sync(proxies);
+        CHECK(candidate_entities<ProxyAabb2D>(proxies, broad_phase.candidate_pairs()) ==
+              std::vector<EntityPair>{{entt::entity{2}, entt::entity{4}},
+                                      {entt::entity{2}, entt::entity{9}},
+                                      {entt::entity{5}, entt::entity{4}},
+                                      {entt::entity{5}, entt::entity{9}}});
+    }
 }
 
-TEST_CASE("SAP broad phase 2D: primary axis is the largest-spread axis, ties resolve to a fixed axis",
-         "[runtime][sap][2d]") {
-    SapBroadPhase2D broad_phase;
-
-    const std::vector<Proxy2D> y_spread{
-        make_proxy_2d(1, Vector2{.x = 0.0F, .y = 0.0F}, 0.1F),
-        make_proxy_2d(2, Vector2{.x = 1.0F, .y = 5.0F}, 0.1F),
-        make_proxy_2d(3, Vector2{.x = 2.0F, .y = 10.0F}, 0.1F),
-    };
-    broad_phase.sync(y_spread);
-    CHECK(broad_phase.primary_axis_for_testing() == 1);
-
-    const std::vector<Proxy2D> x_spread{
-        make_proxy_2d(1, Vector2{.x = 0.0F, .y = 0.0F}, 0.1F),
-        make_proxy_2d(2, Vector2{.x = 5.0F, .y = 1.0F}, 0.1F),
-        make_proxy_2d(3, Vector2{.x = 10.0F, .y = 2.0F}, 0.1F),
-    };
-    broad_phase.sync(x_spread);
-    CHECK(broad_phase.primary_axis_for_testing() == 0);
-
-    const std::vector<Proxy2D> tied_spread{
-        make_proxy_2d(1, Vector2{.x = 0.0F, .y = 0.0F}, 0.1F),
-        make_proxy_2d(2, Vector2{.x = 5.0F, .y = 5.0F}, 0.1F),
-    };
-    broad_phase.sync(tied_spread);
-    CHECK(broad_phase.primary_axis_for_testing() == 0);
-    broad_phase.sync(tied_spread);
-    CHECK(broad_phase.primary_axis_for_testing() == 0);
-}
-
-TEST_CASE("SAP broad phase 3D: primary axis is the largest-spread axis, ties resolve to a fixed axis",
-         "[runtime][sap][3d]") {
+TEST_CASE("SAP broad phase: a resync reflects moved and removed proxies", "[runtime][sap]") {
     SapBroadPhase3D broad_phase;
-
-    const std::vector<Proxy3D> z_spread{
-        make_proxy_3d(1, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, 0.1F),
-        make_proxy_3d(2, Vector3{.x = 1.0F, .y = 2.0F, .z = 10.0F}, 0.1F),
+    std::vector<ProxyAabb3D> proxies{
+        sphere(1, SapSide::Left, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, 1.0F),
+        sphere(2, SapSide::Right, Vector3{.x = 10.0F, .y = 0.0F, .z = 0.0F}, 1.0F),
+        sphere(3, SapSide::Right, Vector3{.x = 0.5F, .y = 0.0F, .z = 0.0F}, 1.0F),
     };
-    broad_phase.sync(z_spread);
+    broad_phase.sync(proxies);
+    CHECK(candidate_entities<ProxyAabb3D>(proxies, broad_phase.candidate_pairs()) ==
+          std::vector<EntityPair>{{entt::entity{1}, entt::entity{3}}});
+
+    proxies[1] = sphere(2, SapSide::Right, Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F}, 1.0F);
+    proxies.pop_back();
+    broad_phase.sync(proxies);
+    CHECK(candidate_entities<ProxyAabb3D>(proxies, broad_phase.candidate_pairs()) ==
+          std::vector<EntityPair>{{entt::entity{1}, entt::entity{2}}});
+}
+
+TEST_CASE("SAP broad phase: primary axis is the largest-spread axis", "[runtime][sap]") {
+    const std::vector<ProxyAabb3D> proxies{
+        sphere(1, SapSide::Left, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, 0.1F),
+        sphere(2, SapSide::Right, Vector3{.x = 1.0F, .y = 2.0F, .z = 9.0F}, 0.1F),
+    };
+    SapBroadPhase3D broad_phase;
+    broad_phase.sync(proxies);
     CHECK(broad_phase.primary_axis_for_testing() == 2);
 
-    const std::vector<Proxy3D> tied_spread{
-        make_proxy_3d(1, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, 0.1F),
-        make_proxy_3d(2, Vector3{.x = 5.0F, .y = 5.0F, .z = 5.0F}, 0.1F),
+    const std::vector<ProxyAabb2D> tied{
+        circle(1, SapSide::Left, Vector2{.x = 0.0F, .y = 0.0F}, 0.1F),
+        circle(2, SapSide::Right, Vector2{.x = 3.0F, .y = 3.0F}, 0.1F),
     };
-    broad_phase.sync(tied_spread);
-    CHECK(broad_phase.primary_axis_for_testing() == 0);
-    broad_phase.sync(tied_spread);
-    CHECK(broad_phase.primary_axis_for_testing() == 0);
+    SapBroadPhase2D tied_phase;
+    tied_phase.sync(tied);
+    CHECK(tied_phase.primary_axis_for_testing() == 0);
 }
 
-TEST_CASE("SAP broad phase 2D: small-domain brute-force fallback agrees with the swept path",
-         "[runtime][sap][2d]") {
-    const std::vector<Proxy2D> proxies{
-        make_proxy_2d(1, Vector2{.x = 0.0F, .y = 0.0F}, 1.0F),
-        make_proxy_2d(2, Vector2{.x = 0.5F, .y = 0.3F}, 1.0F),
-        make_proxy_2d(3, Vector2{.x = 3.0F, .y = 0.0F}, 1.0F),
-        make_proxy_2d(4, Vector2{.x = 3.4F, .y = 0.1F}, 1.0F),
-        make_proxy_2d(5, Vector2{.x = 10.0F, .y = 10.0F}, 1.0F),
-        make_proxy_2d(6, Vector2{.x = -5.0F, .y = 2.0F}, 2.0F),
-    };
-
-    SapBroadPhase2D forced_swept;
-    forced_swept.set_small_domain_threshold_for_testing(0);
-    forced_swept.sync(proxies);
-
-    SapBroadPhase2D forced_brute_force;
-    forced_brute_force.set_small_domain_threshold_for_testing(1'000'000);
-    forced_brute_force.sync(proxies);
-
-    CHECK(sorted_pairs(forced_swept.candidate_pairs()) == sorted_pairs(forced_brute_force.candidate_pairs()));
-}
-
-TEST_CASE("SAP broad phase 3D: small-domain brute-force fallback agrees with the swept path",
-         "[runtime][sap][3d]") {
-    const std::vector<Proxy3D> proxies{
-        make_proxy_3d(1, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, 1.0F),
-        make_proxy_3d(2, Vector3{.x = 0.5F, .y = 0.3F, .z = 0.2F}, 1.0F),
-        make_proxy_3d(3, Vector3{.x = 3.0F, .y = 0.0F, .z = 0.0F}, 1.0F),
-        make_proxy_3d(4, Vector3{.x = 3.4F, .y = 0.1F, .z = 0.0F}, 1.0F),
-        make_proxy_3d(5, Vector3{.x = 10.0F, .y = 10.0F, .z = 10.0F}, 1.0F),
-        make_proxy_3d(6, Vector3{.x = -5.0F, .y = 2.0F, .z = 1.0F}, 2.0F),
-    };
-
-    SapBroadPhase3D forced_swept;
-    forced_swept.set_small_domain_threshold_for_testing(0);
-    forced_swept.sync(proxies);
-
-    SapBroadPhase3D forced_brute_force;
-    forced_brute_force.set_small_domain_threshold_for_testing(1'000'000);
-    forced_brute_force.sync(proxies);
-
-    CHECK(sorted_pairs(forced_swept.candidate_pairs()) == sorted_pairs(forced_brute_force.candidate_pairs()));
-}
-
-TEST_CASE("SAP broad phase 2D: a proxy inserted after spawn participates on its first sync", "[runtime][sap][2d]") {
-    SapBroadPhase2D broad_phase;
-    const std::vector<Proxy2D> before{
-        make_proxy_2d(1, Vector2{.x = 0.0F, .y = 0.0F}, 0.5F),
-        make_proxy_2d(2, Vector2{.x = 5.0F, .y = 0.0F}, 0.5F),
-    };
-    broad_phase.sync(before);
-    CHECK(broad_phase.candidate_pairs().empty());
-
-    const std::vector<Proxy2D> after{
-        make_proxy_2d(1, Vector2{.x = 0.0F, .y = 0.0F}, 0.5F),
-        make_proxy_2d(2, Vector2{.x = 5.0F, .y = 0.0F}, 0.5F),
-        make_proxy_2d(3, Vector2{.x = 0.3F, .y = 0.0F}, 0.5F),
-    };
-    broad_phase.sync(after);
-    CHECK(entity_pairs<Proxy2D>(after, broad_phase.candidate_pairs()) ==
-         std::vector<std::pair<entt::entity, entt::entity>>{{entt::entity{1}, entt::entity{3}}});
-}
-
-TEST_CASE("SAP broad phase 2D: a destroyed proxy stops appearing in any candidate once removal is synced",
-         "[runtime][sap][2d]") {
-    SapBroadPhase2D broad_phase;
-    const std::vector<Proxy2D> before{
-        make_proxy_2d(1, Vector2{.x = 0.0F, .y = 0.0F}, 1.0F),
-        make_proxy_2d(2, Vector2{.x = 0.5F, .y = 0.0F}, 1.0F),
-        make_proxy_2d(3, Vector2{.x = 20.0F, .y = 0.0F}, 1.0F),
-    };
-    broad_phase.sync(before);
-    CHECK(entity_pairs<Proxy2D>(before, broad_phase.candidate_pairs()) ==
-         std::vector<std::pair<entt::entity, entt::entity>>{{entt::entity{1}, entt::entity{2}}});
-
-    // Entity 2 destroyed; the next sync's span no longer includes it.
-    const std::vector<Proxy2D> after{
-        make_proxy_2d(1, Vector2{.x = 0.0F, .y = 0.0F}, 1.0F),
-        make_proxy_2d(3, Vector2{.x = 20.0F, .y = 0.0F}, 1.0F),
-    };
-    broad_phase.sync(after);
-    CHECK(broad_phase.candidate_pairs().empty());
-}
-
-TEST_CASE(
-    "SAP broad phase 2D: a moved proxy's candidates reflect its new neighbors after a large primary-axis reorder",
-    "[runtime][sap][2d]") {
-    SapBroadPhase2D broad_phase;
-    const std::vector<Proxy2D> before{
-        make_proxy_2d(1, Vector2{.x = 0.0F, .y = 0.0F}, 0.4F),
-        make_proxy_2d(2, Vector2{.x = 10.0F, .y = 0.0F}, 0.4F),
-        make_proxy_2d(3, Vector2{.x = 20.0F, .y = 0.0F}, 0.4F),
-        make_proxy_2d(4, Vector2{.x = 30.0F, .y = 0.0F}, 0.4F),
-        make_proxy_2d(5, Vector2{.x = 40.0F, .y = 0.0F}, 0.4F),
-    };
-    broad_phase.sync(before);
-    CHECK(broad_phase.candidate_pairs().empty());
-
-    // Entity 5 moves from the far end of the sweep to right next to entity 2,
-    // reordering most of the primary-axis (X) sort.
-    const std::vector<Proxy2D> after{
-        make_proxy_2d(1, Vector2{.x = 0.0F, .y = 0.0F}, 0.4F),
-        make_proxy_2d(2, Vector2{.x = 10.0F, .y = 0.0F}, 0.4F),
-        make_proxy_2d(3, Vector2{.x = 20.0F, .y = 0.0F}, 0.4F),
-        make_proxy_2d(4, Vector2{.x = 30.0F, .y = 0.0F}, 0.4F),
-        make_proxy_2d(5, Vector2{.x = 10.5F, .y = 0.0F}, 0.4F),
-    };
-    broad_phase.sync(after);
-    CHECK(entity_pairs<Proxy2D>(after, broad_phase.candidate_pairs()) ==
-         std::vector<std::pair<entt::entity, entt::entity>>{{entt::entity{2}, entt::entity{5}}});
-}
-
-TEST_CASE("SAP broad phase 2D: a resized proxy's candidates reflect its new radius", "[runtime][sap][2d]") {
-    SapBroadPhase2D broad_phase;
-    const std::vector<Proxy2D> before{
-        make_proxy_2d(1, Vector2{.x = 0.0F, .y = 0.0F}, 0.5F),
-        make_proxy_2d(2, Vector2{.x = 3.0F, .y = 0.0F}, 0.5F),
-    };
-    broad_phase.sync(before);
-    CHECK(broad_phase.candidate_pairs().empty());
-
-    const std::vector<Proxy2D> after{
-        make_proxy_2d(1, Vector2{.x = 0.0F, .y = 0.0F}, 3.0F),
-        make_proxy_2d(2, Vector2{.x = 3.0F, .y = 0.0F}, 0.5F),
-    };
-    broad_phase.sync(after);
-    CHECK(entity_pairs<Proxy2D>(after, broad_phase.candidate_pairs()) ==
-         std::vector<std::pair<entt::entity, entt::entity>>{{entt::entity{1}, entt::entity{2}}});
-}
-
-TEST_CASE("SAP broad phase 3D: proxy-set changes across syncs (spawn/destroy/move/resize) are all reflected",
-         "[runtime][sap][3d]") {
+TEST_CASE("SAP broad phase: the global threshold override forces a strategy", "[runtime][sap]") {
+    const auto proxies = random_spheres(42, 60, 3.0F, 0.8F);
     SapBroadPhase3D broad_phase;
-    const entt::entity a{1};
-    const entt::entity c{3};
-
-    // Spawn: a and b start far apart with no candidates; c then appears next to a.
-    broad_phase.sync(std::vector<Proxy3D>{
-        make_proxy_3d(1, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, 0.5F),
-        make_proxy_3d(2, Vector3{.x = 5.0F, .y = 0.0F, .z = 0.0F}, 0.5F),
-    });
-    CHECK(broad_phase.candidate_pairs().empty());
-
-    {
-        const std::vector<Proxy3D> proxies{
-            make_proxy_3d(1, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, 0.5F),
-            make_proxy_3d(2, Vector3{.x = 5.0F, .y = 0.0F, .z = 0.0F}, 0.5F),
-            make_proxy_3d(3, Vector3{.x = 0.5F, .y = 0.0F, .z = 0.0F}, 0.5F),
-        };
-        broad_phase.sync(proxies);
-        CHECK(entity_pairs<Proxy3D>(proxies, broad_phase.candidate_pairs()) ==
-             std::vector<std::pair<entt::entity, entt::entity>>{{a, c}});
-    }
-
-    // Destroy: b leaves the synced set; a/c remain candidates.
-    {
-        const std::vector<Proxy3D> proxies{
-            make_proxy_3d(1, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, 0.5F),
-            make_proxy_3d(3, Vector3{.x = 0.5F, .y = 0.0F, .z = 0.0F}, 0.5F),
-        };
-        broad_phase.sync(proxies);
-        CHECK(entity_pairs<Proxy3D>(proxies, broad_phase.candidate_pairs()) ==
-             std::vector<std::pair<entt::entity, entt::entity>>{{a, c}});
-    }
-
-    // Move: c moves far away from a; no candidates remain.
-    {
-        const std::vector<Proxy3D> proxies{
-            make_proxy_3d(1, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, 0.5F),
-            make_proxy_3d(3, Vector3{.x = 5.0F, .y = 5.0F, .z = 5.0F}, 0.5F),
-        };
-        broad_phase.sync(proxies);
-        CHECK(broad_phase.candidate_pairs().empty());
-    }
-
-    // Resize: a grows large enough to reach c again.
-    {
-        const std::vector<Proxy3D> proxies{
-            make_proxy_3d(1, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, 6.0F),
-            make_proxy_3d(3, Vector3{.x = 5.0F, .y = 5.0F, .z = 5.0F}, 0.5F),
-        };
-        broad_phase.sync(proxies);
-        CHECK(entity_pairs<Proxy3D>(proxies, broad_phase.candidate_pairs()) ==
-             std::vector<std::pair<entt::entity, entt::entity>>{{a, c}});
-    }
+    set_sap_small_domain_threshold_override_for_testing(0);
+    CHECK(sap_small_domain_threshold_override_for_testing() == 0);
+    broad_phase.sync(proxies);
+    const auto swept = candidate_entities<ProxyAabb3D>(proxies, broad_phase.candidate_pairs());
+    set_sap_small_domain_threshold_override_for_testing(std::nullopt);
+    broad_phase.set_small_domain_threshold_for_testing(1'000'000);
+    broad_phase.sync(proxies);
+    CHECK(candidate_entities<ProxyAabb3D>(proxies, broad_phase.candidate_pairs()) == swept);
 }
 
-TEST_CASE("SAP broad phase 2D: every truly overlapping pair is present in the candidate set (randomized, clustered)",
-         "[runtime][sap][2d][randomized]") {
-    std::size_t reference_pairs_found = 0;
-    for (const std::uint32_t seed : {101U, 202U, 303U, 404U, 505U, 606U, 707U, 808U}) {
-        const auto proxies = random_proxies_2d(seed, 40, /*extent=*/3.0F, /*min_radius=*/0.1F, /*max_radius=*/1.2F);
-        SapBroadPhase2D broad_phase;
-        broad_phase.sync(proxies);
-        const auto candidates = entity_pairs<Proxy2D>(proxies, broad_phase.candidate_pairs());
-        const auto reference  = brute_force_true_overlaps_2d(proxies);
-        reference_pairs_found += reference.size();
-        for (const auto& pair : reference) {
-            CHECK(std::ranges::binary_search(candidates, pair));
+TEST_CASE("SAP broad phase: swept and brute-force candidates equal the exact AABB product (randomized)",
+          "[runtime][sap][randomized]") {
+    std::size_t total = 0;
+    for (const std::uint32_t seed : {11U, 22U, 33U, 44U, 55U, 66U, 77U, 88U}) {
+        for (const float extent : {3.0F, 40.0F}) {
+            const auto proxies   = random_spheres(seed, 80, extent, 1.0F);
+            const auto reference = reference_aabb_product<ProxyAabb3D>(proxies);
+            total += reference.size();
+            for (const std::size_t threshold : {std::size_t{0}, std::size_t{1'000'000}}) {
+                SapBroadPhase3D broad_phase;
+                broad_phase.set_small_domain_threshold_for_testing(threshold);
+                broad_phase.sync(proxies);
+                CHECK(candidate_entities<ProxyAabb3D>(proxies, broad_phase.candidate_pairs()) == reference);
+            }
         }
     }
-    CHECK(reference_pairs_found > 0);
-}
+    CHECK(total > 0);
 
-TEST_CASE(
-    "SAP broad phase 2D: every truly overlapping pair is present in the candidate set (randomized, widely separated)",
-    "[runtime][sap][2d][randomized]") {
-    for (const std::uint32_t seed : {101U, 202U, 303U, 404U, 505U, 606U, 707U, 808U}) {
-        const auto proxies = random_proxies_2d(seed, 40, /*extent=*/60.0F, /*min_radius=*/0.05F, /*max_radius=*/0.3F);
-        SapBroadPhase2D broad_phase;
-        broad_phase.sync(proxies);
-        const auto candidates = entity_pairs<Proxy2D>(proxies, broad_phase.candidate_pairs());
-        for (const auto& pair : brute_force_true_overlaps_2d(proxies)) {
-            CHECK(std::ranges::binary_search(candidates, pair));
-        }
+    std::mt19937 rng(7);
+    std::uniform_real_distribution<float> position(-4.0F, 4.0F);
+    std::vector<ProxyAabb2D> flat;
+    for (std::uint32_t id = 1; id <= 60; ++id) {
+        flat.push_back(circle(id, id % 3 == 0 ? SapSide::Left : SapSide::Right,
+                              Vector2{.x = position(rng), .y = position(rng)}, 0.6F));
     }
+    SapBroadPhase2D flat_phase;
+    flat_phase.set_small_domain_threshold_for_testing(0);
+    flat_phase.sync(flat);
+    CHECK(candidate_entities<ProxyAabb2D>(flat, flat_phase.candidate_pairs()) == reference_aabb_product<ProxyAabb2D>(flat));
 }
 
-TEST_CASE("SAP broad phase 3D: every truly overlapping pair is present in the candidate set (randomized, clustered)",
-         "[runtime][sap][3d][randomized]") {
-    std::size_t reference_pairs_found = 0;
-    for (const std::uint32_t seed : {111U, 222U, 333U, 444U, 555U, 666U, 777U, 888U}) {
-        const auto proxies = random_proxies_3d(seed, 40, /*extent=*/3.0F, /*min_radius=*/0.1F, /*max_radius=*/1.2F);
+TEST_CASE("SAP broad phase: every sphere-box overlap is a candidate (randomized rotated boxes)",
+          "[runtime][sap][randomized]") {
+    std::mt19937 rng(20261003);
+    std::uniform_real_distribution<float> position(-3.0F, 3.0F);
+    std::uniform_real_distribution<float> extent(-1.5F, 1.5F);
+    std::uniform_real_distribution<float> component(-1.0F, 1.0F);
+    std::uniform_real_distribution<float> radius(-0.3F, 0.8F);
+    std::size_t overlaps = 0;
+    for (int round = 0; round < 20; ++round) {
+        std::vector<ProxyAabb3D> proxies;
+        std::vector<std::pair<Vector3, float>> spheres;
+        std::vector<std::tuple<Vector3, Vector3, Quat>> boxes;
+        for (std::uint32_t id = 0; id < 30; ++id) {
+            const Vector3 center{position(rng), position(rng), position(rng)};
+            const float r = radius(rng);
+            spheres.emplace_back(center, r);
+            proxies.push_back(sphere(id, SapSide::Left, center, r));
+        }
+        for (std::uint32_t id = 0; id < 30; ++id) {
+            const Vector3 center{position(rng), position(rng), position(rng)};
+            const Vector3 size{extent(rng), extent(rng), extent(rng)};
+            const Quat rotation{component(rng), component(rng), component(rng), component(rng)};
+            boxes.emplace_back(center, size, rotation);
+            proxies.push_back(box(100 + id, SapSide::Right, center, size, rotation));
+        }
         SapBroadPhase3D broad_phase;
+        broad_phase.set_small_domain_threshold_for_testing(0);
         broad_phase.sync(proxies);
-        const auto candidates = entity_pairs<Proxy3D>(proxies, broad_phase.candidate_pairs());
-        const auto reference  = brute_force_true_overlaps_3d(proxies);
-        reference_pairs_found += reference.size();
-        for (const auto& pair : reference) {
-            CHECK(std::ranges::binary_search(candidates, pair));
+        const auto candidates = candidate_entities<ProxyAabb3D>(proxies, broad_phase.candidate_pairs());
+        for (std::uint32_t s = 0; s < spheres.size(); ++s) {
+            for (std::uint32_t b = 0; b < boxes.size(); ++b) {
+                const auto& [box_center, size, rotation] = boxes[b];
+                if (!sphere_box_overlap(spheres[s].first, spheres[s].second, box_center, size, rotation)) {
+                    continue;
+                }
+                ++overlaps;
+                CHECK(std::ranges::find(candidates, EntityPair{entt::entity{s}, entt::entity{100 + b}}) !=
+                      candidates.end());
+            }
         }
     }
-    CHECK(reference_pairs_found > 0);
+    CHECK(overlaps > 0);
 }
 
-TEST_CASE(
-    "SAP broad phase 3D: every truly overlapping pair is present in the candidate set (randomized, widely separated)",
-    "[runtime][sap][3d][randomized]") {
-    for (const std::uint32_t seed : {111U, 222U, 333U, 444U, 555U, 666U, 777U, 888U}) {
-        const auto proxies = random_proxies_3d(seed, 40, /*extent=*/60.0F, /*min_radius=*/0.05F, /*max_radius=*/0.3F);
-        SapBroadPhase3D broad_phase;
-        broad_phase.sync(proxies);
-        const auto candidates = entity_pairs<Proxy3D>(proxies, broad_phase.candidate_pairs());
-        for (const auto& pair : brute_force_true_overlaps_3d(proxies)) {
-            CHECK(std::ranges::binary_search(candidates, pair));
-        }
-    }
-}
-
-// ── sap_execute_pair_tuples: self-tuple merge, directed expansion, resort ───
-
-TEST_CASE("sap_execute_pair_tuples 2D: self-tuples are always included, even with no candidates",
-         "[runtime][sap][tuples]") {
-    const std::vector<Proxy2D> proxies{
-        make_proxy_2d(10, Vector2{.x = 0.0F, .y = 0.0F}, 1.0F),
-        make_proxy_2d(20, Vector2{.x = 100.0F, .y = 0.0F}, 1.0F),
-    };
-    std::vector<std::pair<entt::entity, entt::entity>> observed;
-    sap_execute_pair_tuples(
-        proxies, {}, [&](entt::entity left, entt::entity right) { observed.emplace_back(left, right); });
-
-    CHECK(observed == std::vector<std::pair<entt::entity, entt::entity>>{
-                          {entt::entity{10}, entt::entity{10}},
-                          {entt::entity{20}, entt::entity{20}},
-                      });
-}
-
-TEST_CASE("sap_execute_pair_tuples 2D: a candidate pair expands into both directed tuples, sorted by ordinal",
-         "[runtime][sap][tuples]") {
-    // Index 0 deliberately carries the *higher* creation ordinal, so a test
-    // failure here would reveal a sort keyed on array index instead of
-    // ordinal.
-    const auto high_ordinal = make_proxy_2d(5, Vector2{.x = 0.0F, .y = 0.0F}, 1.0F);
-    const auto low_ordinal  = make_proxy_2d(2, Vector2{.x = 1.0F, .y = 0.0F}, 1.0F);
-    const std::vector<Proxy2D> proxies{high_ordinal, low_ordinal};
-    const std::vector<SapCandidatePair> candidates{SapCandidatePair{.first = 0, .second = 1}};
-
-    std::vector<std::pair<entt::entity, entt::entity>> observed;
-    sap_execute_pair_tuples(
-        proxies, candidates, [&](entt::entity left, entt::entity right) { observed.emplace_back(left, right); });
-
-    CHECK(observed == std::vector<std::pair<entt::entity, entt::entity>>{
-                          {low_ordinal.entity, low_ordinal.entity},
-                          {low_ordinal.entity, high_ordinal.entity},
-                          {high_ordinal.entity, low_ordinal.entity},
-                          {high_ordinal.entity, high_ordinal.entity},
-                      });
-}
-
-TEST_CASE("sap_execute_pair_tuples 3D: self-tuples and directed expansion both hold", "[runtime][sap][tuples]") {
-    const auto p1 = make_proxy_3d(1, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, 1.0F);
-    const auto p2 = make_proxy_3d(2, Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F}, 1.0F);
-    const auto p3 = make_proxy_3d(3, Vector3{.x = 50.0F, .y = 50.0F, .z = 50.0F}, 1.0F);
-    const std::vector<Proxy3D> proxies{p1, p2, p3};
-    const std::vector<SapCandidatePair> candidates{SapCandidatePair{.first = 0, .second = 1}};
-
-    std::vector<std::pair<entt::entity, entt::entity>> observed;
-    sap_execute_pair_tuples(
-        proxies, candidates, [&](entt::entity left, entt::entity right) { observed.emplace_back(left, right); });
-
-    CHECK(observed == std::vector<std::pair<entt::entity, entt::entity>>{
-                          {p1.entity, p1.entity},
-                          {p1.entity, p2.entity},
-                          {p2.entity, p1.entity},
-                          {p2.entity, p2.entity},
-                          {p3.entity, p3.entity},
-                      });
-}
-
-// ── Candidate-generation benchmark (tasks.md 6.4) ────────────────────────────
+// ── Candidate-generation benchmark ───────────────────────────────────────────
 // Hidden ([.]) so ctest's default run stays fast; run explicitly with
-// `test_runtime_sap_broadphase.exe "[benchmark]"`. Compares the brute-force
-// fallback against the swept path across representative ball counts, using a
-// bouncy-balls-3d-shaped proxy distribution (box extent, radius range), to
-// pick 1.5's small-domain threshold from real crossover data rather than a
-// guess. 2D shares the identical templated sweep/brute-force implementation
-// (runtime.cpp), so the 3D crossover found here is representative for both.
+// `test_runtime_sap_broadphase.exe "[benchmark]"`. Each count is split evenly
+// between the two sides, so the product size is (N/2)^2.
 
-TEST_CASE("SAP broad phase 3D: candidate-generation benchmark, brute-force vs swept across representative ball counts",
-         "[.][benchmark][runtime][sap][3d]") {
+TEST_CASE("SAP broad phase 3D: candidate-generation benchmark, brute-force vs swept across representative counts",
+          "[.][benchmark][runtime][sap][3d]") {
     for (const std::size_t count :
-        {std::size_t{8}, std::size_t{32}, std::size_t{64}, std::size_t{128}, std::size_t{256}, std::size_t{512},
-         std::size_t{1024}}) {
-        const auto proxies =
-            random_proxies_3d(/*seed=*/12345, count, /*extent=*/3.0F, /*min_radius=*/0.15F, /*max_radius=*/0.42F);
+         {std::size_t{16}, std::size_t{64}, std::size_t{128}, std::size_t{256}, std::size_t{512}, std::size_t{1024}}) {
+        auto proxies = random_spheres(12345, count, 3.0F, 0.42F);
+        for (std::size_t i = 0; i < proxies.size(); ++i) {
+            proxies[i].side = i % 2 == 0 ? SapSide::Left : SapSide::Right;
+        }
 
         SapBroadPhase3D brute_force;
-        brute_force.set_small_domain_threshold_for_testing(1'000'000);
+        brute_force.set_small_domain_threshold_for_testing(std::numeric_limits<std::size_t>::max());
         BENCHMARK("brute-force candidate generation, N=" + std::to_string(count)) {
             brute_force.sync(proxies);
             return brute_force.candidate_pairs().size();

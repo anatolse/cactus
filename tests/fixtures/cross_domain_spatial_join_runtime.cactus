@@ -1,0 +1,122 @@
+module cross_domain_spatial_join_runtime
+
+use std.core
+use std.collision.volume as vol
+
+# Each accelerated rule has a twin whose where: wraps the same test in
+# `== true`, which is not a recognized overlap predicate, so the twin runs the
+# plain product. The test fills the world with spheres and rotated boxes and
+# compares the twins' tuple logs.
+
+const:
+    PROBE = 0.25
+
+trait Actor:
+    var pos: vec3
+    var radius: float
+    var tag: int
+
+trait Solid:
+    var pos: vec3
+    var size: vec3
+    var rotation: quat
+    var tag: int
+
+trait Recorder:
+    var accelerated_hash: int = 0
+    var accelerated_count: int = 0
+    var plain_hash: int = 0
+    var plain_count: int = 0
+    var nearest_accelerated_hash: int = 0
+    var nearest_accelerated_count: int = 0
+    var nearest_plain_hash: int = 0
+    var nearest_plain_count: int = 0
+
+event AcceleratedHit:
+    code: int
+
+event PlainHit:
+    code: int
+
+event NearestAcceleratedHit:
+    code: int
+
+event NearestPlainHit:
+    code: int
+
+rule DetectAccelerated:
+    pairs:
+        actor:
+            Actor
+        wall:
+            Solid
+    where:
+        vol.sphere_box_overlap(actor.Actor.pos, actor.Actor.radius + PROBE, wall.Solid.pos, wall.Solid.size, wall.Solid.rotation)
+    on tick:
+        emit AcceleratedHit:
+            code = (actor.Actor.tag * 1000) + wall.Solid.tag
+
+rule DetectPlain:
+    pairs:
+        actor:
+            Actor
+        wall:
+            Solid
+    where:
+        vol.sphere_box_overlap(actor.Actor.pos, actor.Actor.radius + PROBE, wall.Solid.pos, wall.Solid.size, wall.Solid.rotation) == true
+    on tick:
+        emit PlainHit:
+            code = (actor.Actor.tag * 1000) + wall.Solid.tag
+
+rule NearestAccelerated:
+    pairs:
+        actor:
+            Actor
+        wall:
+            Solid
+    order by:
+        wall.Solid.tag desc
+    where:
+        vol.sphere_box_overlap(actor.Actor.pos, actor.Actor.radius, wall.Solid.pos, wall.Solid.size, wall.Solid.rotation)
+    limit: 1 per actor
+    on tick:
+        emit NearestAcceleratedHit:
+            code = (actor.Actor.tag * 1000) + wall.Solid.tag
+
+rule NearestPlain:
+    pairs:
+        actor:
+            Actor
+        wall:
+            Solid
+    order by:
+        wall.Solid.tag desc
+    where:
+        vol.sphere_box_overlap(actor.Actor.pos, actor.Actor.radius, wall.Solid.pos, wall.Solid.size, wall.Solid.rotation) == true
+    limit: 1 per actor
+    on tick:
+        emit NearestPlainHit:
+            code = (actor.Actor.tag * 1000) + wall.Solid.tag
+
+rule RecordTuples:
+    filter:
+        Recorder
+
+    on AcceleratedHit as hit:
+        accelerated_hash = ((accelerated_hash * 31) + hit.code) % 1000003
+        accelerated_count += 1
+
+    on PlainHit as hit:
+        plain_hash = ((plain_hash * 31) + hit.code) % 1000003
+        plain_count += 1
+
+    on NearestAcceleratedHit as hit:
+        nearest_accelerated_hash = ((nearest_accelerated_hash * 31) + hit.code) % 1000003
+        nearest_accelerated_count += 1
+
+    on NearestPlainHit as hit:
+        nearest_plain_hash = ((nearest_plain_hash * 31) + hit.code) % 1000003
+        nearest_plain_count += 1
+
+entity Recorder1:
+    Recorder

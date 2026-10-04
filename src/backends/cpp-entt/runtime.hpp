@@ -1858,61 +1858,63 @@ void destroy_entity_recursive(
 void reset_pending_destruction_state() noexcept;
 
 // ── Sweep-and-prune broad phase (spatial-broadphase-runtime capability) ────────
-// Runtime-owned, program-independent 2D/3D broad phase: proxies are plain
-// (entity, creation ordinal, center, radius) values with no dependency on
-// generated component types, following the propagate_hierarchy/
-// destroy_entity_recursive runtime-owns-the-algorithm precedent above.
-// Candidate pairs are conservative (no false negatives), duplicate-free,
-// self-pair-free, and deterministic for a fixed proxy set.
+// Runtime-owned, program-independent bipartite 2D/3D broad phase over
+// axis-aligned bounds. Each proxy belongs to the left or right binding of a
+// pair rule; an entity in both memberships has one proxy per side. Candidates
+// are conservative (no false negatives), left-right only, and deterministic.
 
-struct Proxy2D {
+enum class SapSide : std::uint8_t { Left, Right };
+
+struct ProxyAabb2D {
     entt::entity entity{entt::null};
     std::uint64_t ordinal{0};
-    Vector2 center{};
-    float radius{0.0F};
+    SapSide side{SapSide::Left};
+    Vector2 min{};
+    Vector2 max{};
 };
 
-struct Proxy3D {
+struct ProxyAabb3D {
     entt::entity entity{entt::null};
     std::uint64_t ordinal{0};
-    Vector3 center{};
-    float radius{0.0F};
+    SapSide side{SapSide::Left};
+    Vector3 min{};
+    Vector3 max{};
 };
 
-// Indices into the proxy span passed to the most recent sync(); first < second
-// always (unordered, duplicate-free, self-pair-free).
+// Bounds for the recognized overlap predicates' shapes. A radius bounds by its
+// magnitude; a box by the axis-aligned bounds of its rotated half extents.
+[[nodiscard]] ProxyAabb2D
+circle_proxy(entt::entity entity, std::uint64_t ordinal, SapSide side, Vector2 center, float radius) noexcept;
+[[nodiscard]] ProxyAabb3D
+sphere_proxy(entt::entity entity, std::uint64_t ordinal, SapSide side, Vector3 center, float radius) noexcept;
+[[nodiscard]] ProxyAabb3D box_proxy(
+    entt::entity entity, std::uint64_t ordinal, SapSide side, Vector3 center, Vector3 size, Quat rotation) noexcept;
+
+// Indices into the proxy span passed to the most recent sync(): `left` is a
+// left-side proxy and `right` a right-side one. Sorted by (left ordinal,
+// right ordinal), the order of the unaccelerated left-major product.
 struct SapCandidatePair {
-    std::size_t first;
-    std::size_t second;
+    std::size_t left;
+    std::size_t right;
 };
 
-// Benchmark-derived default small-domain threshold (tasks.md 6.4): the
-// brute-force fallback wins up to N=128 (499us vs 522us) and the swept path
-// pulls ahead from N=256 on (1473us vs 2075us), scaling to a 2.8x win by
-// N=1024 — see test_runtime_sap_broadphase.cpp's hidden "[benchmark]" case
-// for the full brute-force-vs-swept sweep this was measured from. An
-// internal, revisable constant, not a spec-guaranteed value; correctness
-// never depends on it (spatial-broadphase-runtime design.md).
-inline constexpr std::size_t kSapDefaultSmallDomainThreshold = 256;
+// Benchmark-derived default small-domain threshold on the left x right
+// product size, below which bounds are tested pairwise: the two strategies
+// tie at 64 x 64 and the sweep is 1.4x faster at 128 x 128 (hidden
+// "[benchmark]" case). Internal and revisable; correctness never depends on it.
+inline constexpr std::size_t kSapDefaultSmallDomainThreshold = 4096;
 
 // Global test-only override for every SapBroadPhase2D/3D instance's
-// small-domain threshold (spatial-broadphase-runtime, design.md): generated
-// code constructs its broad-phase instance locally with no handle a test
-// could reach, so per-instance set_small_domain_threshold_for_testing (below)
-// cannot force a strategy through generated code. nullopt (the default)
-// leaves every instance's own threshold untouched; production code never
-// calls the setter. Not exposed to Cactus source or codegen.
+// small-domain threshold: generated code builds its broad phase locally,
+// out of a test's reach. nullopt leaves each instance's own threshold.
 [[nodiscard]] std::optional<std::size_t> sap_small_domain_threshold_override_for_testing() noexcept;
 void set_sap_small_domain_threshold_override_for_testing(std::optional<std::size_t> threshold) noexcept;
 
 class SapBroadPhase2D {
 public:
-    void sync(std::span<const Proxy2D> proxies);
+    void sync(std::span<const ProxyAabb2D> proxies);
     [[nodiscard]] std::span<const SapCandidatePair> candidate_pairs() const noexcept;
 
-    // Test-only hooks: axis selection and the small-domain threshold are
-    // internal, benchmark-tuned implementation details, never exposed to
-    // Cactus source or codegen (spatial-broadphase-runtime design.md).
     [[nodiscard]] int primary_axis_for_testing() const noexcept;
     void set_small_domain_threshold_for_testing(std::size_t threshold) noexcept;
 
@@ -1924,7 +1926,7 @@ private:
 
 class SapBroadPhase3D {
 public:
-    void sync(std::span<const Proxy3D> proxies);
+    void sync(std::span<const ProxyAabb3D> proxies);
     [[nodiscard]] std::span<const SapCandidatePair> candidate_pairs() const noexcept;
 
     [[nodiscard]] int primary_axis_for_testing() const noexcept;
@@ -1935,25 +1937,6 @@ private:
     int primary_axis_{0};
     std::size_t small_domain_threshold_{kSapDefaultSmallDomainThreshold};
 };
-
-// Given a synced broad phase's candidate pairs and the same proxy span,
-// synthesizes the self-tuple every live proxy is always paired with
-// (SapBroadPhase itself structurally cannot produce one), expands every
-// unordered candidate/self-pair into both directed tuples, sorts the result
-// into left-binding-major, creation-ordinal order — the same order the
-// Cartesian pair-handler loop already produces — and invokes on_tuple once
-// per tuple in that order. The recognized spatial predicate itself is not
-// re-checked here: SAP's candidates are a conservative (over-inclusive)
-// superset, and on_tuple is expected to be the same per-tuple residual
-// predicate evaluation and handler body invocation codegen already emits for
-// the Cartesian path, which still re-verifies it exactly
-// (spatial-broadphase-runtime, dsl-pair-relations).
-void sap_execute_pair_tuples(std::span<const Proxy2D> proxies,
-                             std::span<const SapCandidatePair> candidates,
-                             const std::function<void(entt::entity, entt::entity)>& on_tuple);
-void sap_execute_pair_tuples(std::span<const Proxy3D> proxies,
-                             std::span<const SapCandidatePair> candidates,
-                             const std::function<void(entt::entity, entt::entity)>& on_tuple);
 
 // Consume a declared button for the rest of the frame. Inline (like the query
 // adapters below) because it resolves through the generated

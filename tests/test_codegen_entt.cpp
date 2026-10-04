@@ -7069,6 +7069,19 @@ TEST_CASE("Codegen EnTT: binary arithmetic mixing a range loop variable with a c
 // recognition only ever inspects resolved_callee_id's canonical identity,
 // never the declaring module's actual provenance.
 
+static std::string emit_named_rule(const std::string& source, const std::string& rule_name) {
+    ProgramNode program;
+    auto decorated = full_pipeline(source, program);
+    for (auto& decl : program.declarations) {
+        auto* sys = std::get_if<RuleNode>(&decl);
+        if (sys != nullptr && sys->name == rule_name) {
+            return EnttSystemEmitter::emit_system(*sys, decorated);
+        }
+    }
+    FAIL("rule '" + rule_name + "' not found in the analyzed program");
+    return {};
+}
+
 static const std::string SPATIAL_JOIN_TRAITS =
     "trait Transform:\n"
     "    var position: vec2\n"
@@ -7109,10 +7122,9 @@ TEST_CASE("Codegen EnTT: SAP-eligible pair rule calls the runtime broad phase in
         auto code = EnttSystemEmitter::emit_system(*sys, decorated);
         // Runtime-owned SAP API called with the same ordinal-sorted snapshot
         // machinery every pair rule already builds.
-        CHECK(code.find("cactus::runtime::entt_backend::Proxy2D") != std::string::npos);
+        CHECK(code.find("cactus::runtime::entt_backend::circle_proxy(") != std::string::npos);
         CHECK(code.find("cactus::runtime::entt_backend::SapBroadPhase2D") != std::string::npos);
         CHECK(code.find(".sync(__sap_proxies)") != std::string::npos);
-        CHECK(code.find("cactus::runtime::entt_backend::sap_execute_pair_tuples(") != std::string::npos);
         CHECK(code.find("__sap.candidate_pairs()") != std::string::npos);
         // The recognized predicate is still re-verified per tuple (SAP's
         // candidates are a conservative superset), via the exact same
@@ -7173,10 +7185,9 @@ TEST_CASE("Codegen EnTT: manual dot-product where: shape calls the runtime broad
             continue;
         }
         auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-        CHECK(code.find("cactus::runtime::entt_backend::Proxy2D") != std::string::npos);
+        CHECK(code.find("cactus::runtime::entt_backend::circle_proxy(") != std::string::npos);
         CHECK(code.find("cactus::runtime::entt_backend::SapBroadPhase2D") != std::string::npos);
         CHECK(code.find(".sync(__sap_proxies)") != std::string::npos);
-        CHECK(code.find("cactus::runtime::entt_backend::sap_execute_pair_tuples(") != std::string::npos);
         CHECK(code.find("__sap.candidate_pairs()") != std::string::npos);
     }
 }
@@ -7260,13 +7271,12 @@ TEST_CASE("Codegen EnTT: bouncy-bubbles' migrated DetectBubbleContact where: sha
             continue;
         }
         auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-        CHECK(code.find("cactus::runtime::entt_backend::Proxy2D") != std::string::npos);
+        CHECK(code.find("cactus::runtime::entt_backend::circle_proxy(") != std::string::npos);
         CHECK(code.find("cactus::runtime::entt_backend::SapBroadPhase2D") != std::string::npos);
-        CHECK(code.find("cactus::runtime::entt_backend::sap_execute_pair_tuples(") != std::string::npos);
     }
 }
 
-TEST_CASE("Codegen EnTT: cross-domain pair rule with a recognized-shape call keeps the Cartesian loop unchanged",
+TEST_CASE("Codegen EnTT: cross-domain pair rule with a recognized-shape call builds proxies from both snapshots",
           "[codegen-entt][spatial-join]") {
     ProgramNode program;
     auto decorated = full_pipeline("module std.collision.flat\n" + SPATIAL_JOIN_TRAITS +
@@ -7295,16 +7305,83 @@ TEST_CASE("Codegen EnTT: cross-domain pair rule with a recognized-shape call kee
             continue;
         }
         auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-        CHECK(code.find("SapBroadPhase") == std::string::npos);
-        CHECK(code.find("sap_execute_pair_tuples") == std::string::npos);
         const auto broadcast_branch = code.find("} else {");
         REQUIRE(broadcast_branch != std::string::npos);
-        const auto a_loop = code.find("for (auto a : a_snapshot)", broadcast_branch);
-        const auto b_loop = code.find("for (auto b : b_snapshot)", broadcast_branch);
-        REQUIRE(a_loop != std::string::npos);
-        REQUIRE(b_loop != std::string::npos);
-        CHECK(a_loop < b_loop);
+        CHECK(code.find("for (auto a : a_snapshot)", broadcast_branch) == std::string::npos);
+        const auto a_proxies = code.find("< a_snapshot.size(); ++__sap_i)", broadcast_branch);
+        const auto b_proxies = code.find("< b_snapshot.size(); ++__sap_i)", broadcast_branch);
+        REQUIRE(a_proxies != std::string::npos);
+        REQUIRE(b_proxies != std::string::npos);
+        CHECK(code.find("cactus::runtime::entt_backend::SapSide::Left", a_proxies) < b_proxies);
+        CHECK(code.find("cactus::runtime::entt_backend::SapSide::Right", b_proxies) != std::string::npos);
+        CHECK(code.find("cactus::runtime::entt_backend::SapBroadPhase2D", b_proxies) != std::string::npos);
     }
+}
+
+static const std::string VOLUME_JOIN_TRAITS =
+    "const:\n"
+    "    PROBE = 0.5\n"
+    "trait Body:\n"
+    "    var position: vec3\n"
+    "    var radius: float\n"
+    "trait Solid:\n"
+    "    var position: vec3\n"
+    "    var size: vec3\n"
+    "    var rotation: quat\n"
+    "pub func sphere_box_overlap(sphere_position: vec3, sphere_radius: float, box_position: vec3, box_size: vec3, "
+    "box_rotation: quat) bool:\n"
+    "    return sphere_radius >= 0.0\n"
+    "event tick:\n"
+    "    dt: float\n";
+
+static std::string emit_sphere_box_rule(const std::string& bindings, const std::string& predicate) {
+    return emit_named_rule("module std.collision.volume\n" + VOLUME_JOIN_TRAITS + "rule Detect:\n    pairs:\n" +
+                               bindings + "    where:\n        " + predicate + "\n    on tick:\n        let x = 1\n",
+                           "Detect");
+}
+
+TEST_CASE("Codegen EnTT: sphere-box pair rule builds sphere and box proxies from both snapshots",
+          "[codegen-entt][spatial-join]") {
+    const auto code = emit_sphere_box_rule("        actor:\n            Body\n        wall:\n            Solid\n",
+                                           "sphere_box_overlap(actor.Body.position, actor.Body.radius + PROBE, "
+                                           "wall.Solid.position, wall.Solid.size, wall.Solid.rotation)");
+    const auto actor_loop = code.find("< actor_snapshot.size(); ++__sap_i)");
+    const auto wall_loop  = code.find("< wall_snapshot.size(); ++__sap_i)");
+    REQUIRE(actor_loop != std::string::npos);
+    REQUIRE(wall_loop != std::string::npos);
+    // Targeted delivery keeps its incident-tuple loops ahead of the broad phase.
+    const auto targeted = code.find("if (cactus_recipient.has_value())");
+    REQUIRE(targeted != std::string::npos);
+    CHECK(code.find("for (auto wall : wall_snapshot)", targeted) < actor_loop);
+    CHECK(code.find("for (auto actor : actor_snapshot)", targeted) < actor_loop);
+    const auto sphere = code.find("cactus::runtime::entt_backend::sphere_proxy(actor, __sap_i, ", actor_loop);
+    const auto box    = code.find("cactus::runtime::entt_backend::box_proxy(wall, __sap_i, ", wall_loop);
+    REQUIRE(sphere != std::string::npos);
+    REQUIRE(box != std::string::npos);
+    CHECK(code.find("SapSide::Left", sphere) < wall_loop);
+    CHECK(code.find("SapSide::Right", box) != std::string::npos);
+    // Each slot is rewritten for its own binding, constants included.
+    const auto sphere_line = code.substr(sphere, code.find('\n', sphere) - sphere);
+    CHECK(sphere_line.find("PROBE") != std::string::npos);
+    CHECK(sphere_line.find("wall") == std::string::npos);
+    const auto box_line = code.substr(box, code.find('\n', box) - box);
+    CHECK(box_line.find(".size") != std::string::npos);
+    CHECK(box_line.find(".rotation") != std::string::npos);
+    CHECK(box_line.find("actor") == std::string::npos);
+    CHECK(code.find("cactus::runtime::entt_backend::SapBroadPhase3D") != std::string::npos);
+    CHECK(code.find("for (const auto& __sap_pair : __sap.candidate_pairs())") != std::string::npos);
+    CHECK(code.find("__sap_proxies[__sap_pair.left].entity, __sap_proxies[__sap_pair.right].entity") !=
+          std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: a shape on the right binding builds right-side proxies",
+          "[codegen-entt][spatial-join]") {
+    const auto code = emit_sphere_box_rule("        wall:\n            Solid\n        actor:\n            Body\n",
+                                           "sphere_box_overlap(actor.Body.position, actor.Body.radius, "
+                                           "wall.Solid.position, wall.Solid.size, wall.Solid.rotation)");
+    CHECK(code.find("sphere_proxy(actor, __sap_i, cactus::runtime::entt_backend::SapSide::Right, ") !=
+          std::string::npos);
+    CHECK(code.find("box_proxy(wall, __sap_i, cactus::runtime::entt_backend::SapSide::Left, ") != std::string::npos);
 }
 
 // dsl-render-passes: a stage handler's `let`-bound local is an ordinary
@@ -7504,22 +7581,27 @@ static const std::string LIMIT_TRAITS =
     "trait Surface:\n"
     "    var code: int = 0\n";
 
-static std::string emit_limit_rule(const std::string& source, const std::string& rule_name) {
-    ProgramNode program;
-    auto decorated = full_pipeline(source, program);
-    for (auto& decl : program.declarations) {
-        auto* sys = std::get_if<RuleNode>(&decl);
-        if (sys != nullptr && sys->name == rule_name) {
-            return EnttSystemEmitter::emit_system(*sys, decorated);
-        }
-    }
-    FAIL("rule '" + rule_name + "' not found in the analyzed program");
-    return {};
+TEST_CASE("Codegen EnTT: a pair sort key that reads one binding marks both parameters maybe-unused",
+          "[codegen-entt][rule-order-by][pair-relations]") {
+    const auto code = emit_named_rule(LIMIT_TRAITS +
+                                          "rule Rank:\n"
+                                          "    pairs:\n"
+                                          "        actor:\n"
+                                          "            Actor\n"
+                                          "        surface:\n"
+                                          "            Surface\n"
+                                          "    order by:\n"
+                                          "        surface.Surface.code desc\n"
+                                          "    on tick:\n"
+                                          "        let x = 1\n",
+                                      "Rank");
+    CHECK(code.find("[&]([[maybe_unused]] entt::entity actor, [[maybe_unused]] entt::entity surface)") !=
+          std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: a provably-one per-binding limit emits a mutable write through its binding",
           "[codegen-entt][rule-limit][pair-relations]") {
-    const auto code = emit_limit_rule(LIMIT_TRAITS +
+    const auto code = emit_named_rule(LIMIT_TRAITS +
                                           "rule Ground:\n"
                                           "    pairs:\n"
                                           "        actor:\n"
@@ -7540,7 +7622,7 @@ TEST_CASE("Codegen EnTT: a provably-one per-binding limit emits a mutable write 
 
 TEST_CASE("Codegen EnTT: a pair binding under a non-provable limit keeps read-only access",
           "[codegen-entt][rule-limit][pair-relations]") {
-    const auto code = emit_limit_rule(LIMIT_TRAITS +
+    const auto code = emit_named_rule(LIMIT_TRAITS +
                                           "rule Ground:\n"
                                           "    pairs:\n"
                                           "        actor:\n"
@@ -7561,7 +7643,7 @@ TEST_CASE("Codegen EnTT: a pair binding under a non-provable limit keeps read-on
 // so no separate predicate lambda appears and the body carries the guard.
 TEST_CASE("Codegen EnTT: a where: rule without a limit keeps the desugared body guard",
           "[codegen-entt][rule-limit][where-clause]") {
-    const auto code = emit_limit_rule(LIMIT_TRAITS +
+    const auto code = emit_named_rule(LIMIT_TRAITS +
                                           "rule Ground:\n"
                                           "    pairs:\n"
                                           "        actor:\n"
@@ -7584,7 +7666,7 @@ TEST_CASE("Codegen EnTT: a where: rule without a limit keeps the desugared body 
 // would still deliver to a directly targeted entity).
 TEST_CASE("Codegen EnTT: a global limit also gates recipient-targeted delivery",
           "[codegen-entt][rule-limit]") {
-    const auto code = emit_limit_rule(LIMIT_TRAITS +
+    const auto code = emit_named_rule(LIMIT_TRAITS +
                                           "rule TakeOne:\n"
                                           "    filter:\n"
                                           "        Actor as a\n"

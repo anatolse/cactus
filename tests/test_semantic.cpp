@@ -1743,7 +1743,7 @@ TEST_CASE("Semantic: let locals are immutable", "[semantic][locals]") {
                       "cannot reassign immutable binding 'x'"));
 }
 
-TEST_CASE("Semantic: trait write through a let entity binding is not a rebinding", "[semantic][locals]") {
+TEST_CASE("Semantic: trait write through a let entity binding is an entity_id access error", "[semantic][locals]") {
     const auto messages = analyze_messages("trait Health:\n"
                                            "    var hp: int = 10\n"
                                            "trait Player\n"
@@ -1751,7 +1751,148 @@ TEST_CASE("Semantic: trait write through a let entity binding is not a rebinding
                                            "    on tick:\n"
                                            "        let e = query.first[Player]()\n"
                                            "        e.Health.hp = 3\n");
+    CHECK(has_message(messages, "can't write trait 'Health' through entity_id 'e'; use 'set Health on e:'"));
     CHECK_FALSE(has_message(messages, "immutable binding"));
+    CHECK(messages.size() == 1);
+}
+
+static const std::string ENTITY_ID_TRAITS = "trait Health:\n"
+                                            "    var hp: int = 10\n"
+                                            "trait Player\n"
+                                            "trait Solid\n";
+
+static std::string entity_id_read_error(const std::string& trait, const std::string& object) {
+    return "can't read trait '" + trait + "' through entity_id '" + object +
+           "'; read another entity's traits in a pairs: rule";
+}
+
+static std::size_t count_message(const std::vector<std::string>& messages, const std::string& text) {
+    return static_cast<std::size_t>(
+        std::ranges::count_if(messages, [&](const std::string& m) { return m.find(text) != std::string::npos; }));
+}
+
+TEST_CASE("Semantic: trait read through an entity_id local is rejected", "[semantic][entity-id-access]") {
+    const auto messages = analyze_messages(ENTITY_ID_TRAITS + "rule R:\n"
+                                                              "    on tick:\n"
+                                                              "        let e = query.first[Player]()\n"
+                                                              "        let hp = e.Health.hp\n");
+    CHECK(count_message(messages, entity_id_read_error("Health", "e")) == 1);
+}
+
+TEST_CASE("Semantic: trait read through a loop variable names a module-qualified trait",
+          "[semantic][entity-id-access]") {
+    const auto messages = analyze_messages(ENTITY_ID_TRAITS + "rule R:\n"
+                                                              "    on tick:\n"
+                                                              "        for wall in query.all[Solid]():\n"
+                                                              "            let hp = wall.test.Health.hp\n");
+    CHECK(count_message(messages, entity_id_read_error("test.Health", "wall")) == 1);
+}
+
+TEST_CASE("Semantic: read of a missing field through entity_id is still an entity_id access error",
+          "[semantic][entity-id-access]") {
+    const auto messages = analyze_messages(ENTITY_ID_TRAITS + "rule R:\n"
+                                                              "    on tick:\n"
+                                                              "        let e = query.first[Player]()\n"
+                                                              "        let hp = e.Health.nonexistent\n");
+    CHECK(has_message(messages, entity_id_read_error("Health", "e")));
+}
+
+TEST_CASE("Semantic: unknown trait read through entity_id names the first member", "[semantic][entity-id-access]") {
+    const auto messages = analyze_messages(ENTITY_ID_TRAITS + "rule R:\n"
+                                                              "    on tick:\n"
+                                                              "        let e = query.first[Player]()\n"
+                                                              "        let x = e.Bogus.x\n");
+    CHECK(has_message(messages, entity_id_read_error("Bogus", "e")));
+}
+
+TEST_CASE("Semantic: trait read through an event field is rejected", "[semantic][entity-id-access]") {
+    const auto messages = analyze_messages(ENTITY_ID_TRAITS + "event Contact:\n"
+                                                              "    other: entity_id\n"
+                                                              "rule R:\n"
+                                                              "    on Contact as contact:\n"
+                                                              "        let hp = contact.other.Health.hp\n");
+    CHECK(count_message(messages, entity_id_read_error("Health", "contact.other")) == 1);
+}
+
+TEST_CASE("Semantic: trait read through self is rejected", "[semantic][entity-id-access]") {
+    const auto messages = analyze_messages(ENTITY_ID_TRAITS + "rule R:\n"
+                                                              "    on tick:\n"
+                                                              "        let hp = self.Health.hp\n");
+    CHECK(count_message(messages, entity_id_read_error("Health", "self")) == 1);
+}
+
+TEST_CASE("Semantic: trait read through self in a where clause is rejected", "[semantic][entity-id-access]") {
+    const auto messages = analyze_messages(ENTITY_ID_TRAITS + "rule R:\n"
+                                                              "    filter:\n"
+                                                              "        Player\n"
+                                                              "    where:\n"
+                                                              "        self.Health.hp > 0\n"
+                                                              "    on tick:\n"
+                                                              "        let x = 1\n");
+    CHECK(has_message(messages, entity_id_read_error("Health", "self")));
+}
+
+TEST_CASE("Semantic: trait read through a func parameter is rejected", "[semantic][entity-id-access]") {
+    const auto messages = analyze_messages(ENTITY_ID_TRAITS + "func f(e: entity_id) int:\n"
+                                                              "    return e.Health.hp\n");
+    CHECK(has_message(messages, entity_id_read_error("Health", "e")));
+}
+
+TEST_CASE("Semantic: compound trait write through a loop variable is rejected", "[semantic][entity-id-access]") {
+    const auto messages = analyze_messages(ENTITY_ID_TRAITS + "rule R:\n"
+                                                              "    on tick:\n"
+                                                              "        for e in query.all[Health]():\n"
+                                                              "            e.Health.hp += 1\n");
+    CHECK(has_message(messages, "can't write trait 'Health' through entity_id 'e'; use 'set Health on e:'"));
+    CHECK_FALSE(has_message(messages, "is read-only"));
+    CHECK(messages.size() == 1);
+}
+
+TEST_CASE("Semantic: write to an undeclared trait through entity_id is rejected", "[semantic][entity-id-access]") {
+    const auto messages = analyze_messages(ENTITY_ID_TRAITS + "rule R:\n"
+                                                              "    on tick:\n"
+                                                              "        var e = query.first[Player]()\n"
+                                                              "        e.Bogus.x = 1\n");
+    CHECK(has_message(messages, "can't write trait 'Bogus' through entity_id 'e'; use 'set Bogus on e:'"));
+    CHECK(messages.size() == 1);
+}
+
+TEST_CASE("Semantic: trait write through an event field is rejected", "[semantic][entity-id-access]") {
+    const auto messages = analyze_messages(ENTITY_ID_TRAITS + "event Contact:\n"
+                                                              "    other: entity_id\n"
+                                                              "rule R:\n"
+                                                              "    on Contact as contact:\n"
+                                                              "        contact.other.Health.hp = 1\n");
+    CHECK(has_message(
+        messages, "can't write trait 'Health' through entity_id 'contact.other'; use 'set Health on contact.other:'"));
+}
+
+TEST_CASE("Semantic: pair binding, filter alias and trait match access stay legal", "[semantic][entity-id-access]") {
+    const auto messages = analyze_messages(ENTITY_ID_TRAITS + "rule P:\n"
+                                                              "    pairs:\n"
+                                                              "        body:\n"
+                                                              "            Health\n"
+                                                              "        other:\n"
+                                                              "            Health\n"
+                                                              "    where:\n"
+                                                              "        body.Health.hp > other.Health.hp\n"
+                                                              "    on tick:\n"
+                                                              "        let hp = body.Health.hp\n"
+                                                              "rule F:\n"
+                                                              "    filter:\n"
+                                                              "        Health as h\n"
+                                                              "    on tick:\n"
+                                                              "        h.hp += 1\n"
+                                                              "rule M:\n"
+                                                              "    on tick:\n"
+                                                              "        for e in query.all[Solid]():\n"
+                                                              "            match e:\n"
+                                                              "                Health as h =>\n"
+                                                              "                    let hp = h.hp\n");
+    for (const auto& m : messages) {
+        INFO(m);
+    }
+    CHECK_FALSE(has_message(messages, "through entity_id"));
 }
 
 TEST_CASE("Semantic: var locals are reassignable", "[semantic][locals]") {
@@ -3041,16 +3182,12 @@ TEST_CASE("Semantic: direct spatial call with same-domain bindings is recognized
     const auto& plan = *contract.spatial_join;
     CHECK(plan.dimension == SpatialJoinDimension::Flat2D);
 
-    const auto transform_id = make_symbol_id(SymbolKind::Trait, "std.collision.flat", "Transform");
-    const auto collider_id  = make_symbol_id(SymbolKind::Trait, "std.collision.flat", "Collider");
     CHECK(plan.left.binding_index == 0);
-    CHECK(plan.left.position.trait == transform_id);
-    CHECK(plan.left.position.field_path == std::vector<std::string>{"position"});
-    CHECK(plan.left.radius.trait == collider_id);
-    CHECK(plan.left.radius.field_path == std::vector<std::string>{"radius"});
+    CHECK(plan.left.kind == SpatialShapeKind::Sphere);
+    CHECK(plan.left.slots == std::vector<ExprPath>{{0}, {1}});
     CHECK(plan.right.binding_index == 1);
-    CHECK(plan.right.position.trait == transform_id);
-    CHECK(plan.right.radius.trait == collider_id);
+    CHECK(plan.right.kind == SpatialShapeKind::Sphere);
+    CHECK(plan.right.slots == std::vector<ExprPath>{{2}, {3}});
     CHECK(plan.matched_predicate_index == 0);
 }
 
@@ -3144,7 +3281,7 @@ TEST_CASE("Semantic: negated spatial call remains an ordinary residual predicate
     CHECK_FALSE(result.handler_contracts[0].spatial_join.has_value());
 }
 
-TEST_CASE("Semantic: computed radius argument remains an ordinary residual predicate",
+TEST_CASE("Semantic: computed single-binding radius argument is eligible",
           "[semantic][where-clause][spatial-join]") {
     auto result = analyze("module std.collision.flat\n" + STDLIB_EVENTS +
                           "trait Transform:\n"
@@ -3169,10 +3306,10 @@ TEST_CASE("Semantic: computed radius argument remains an ordinary residual predi
                           "        let x = 1\n");
 
     REQUIRE(result.handler_contracts.size() == 1);
-    CHECK_FALSE(result.handler_contracts[0].spatial_join.has_value());
+    CHECK(result.handler_contracts[0].spatial_join.has_value());
 }
 
-TEST_CASE("Semantic: cross-domain pair rule is never eligible even with a recognized-shape call",
+TEST_CASE("Semantic: cross-domain pair rule with a recognized call is eligible",
           "[semantic][where-clause][spatial-join]") {
     auto result = analyze("module std.collision.flat\n" + STDLIB_EVENTS +
                           "trait Transform:\n"
@@ -3200,7 +3337,162 @@ TEST_CASE("Semantic: cross-domain pair rule is never eligible even with a recogn
                           "        let x = 1\n");
 
     REQUIRE(result.handler_contracts.size() == 1);
-    CHECK_FALSE(result.handler_contracts[0].spatial_join.has_value());
+    CHECK(result.handler_contracts[0].spatial_join.has_value());
+}
+
+// ── Shape-generic recognition (accelerate-cross-domain-pair-joins) ─────────
+
+static const std::string VOLUME_OVERLAP_HEADER =
+    "module std.collision.volume\n" + STDLIB_EVENTS +
+    "const:\n"
+    "    PROBE = 0.5\n"
+    "trait Body:\n"
+    "    var position: vec3\n"
+    "    var radius: float\n"
+    "trait Solid:\n"
+    "    var position: vec3\n"
+    "    var size: vec3\n"
+    "    var rotation: quat\n"
+    "trait Tuning:\n"
+    "    var margin: float = 0.1\n"
+    "entity Game:\n"
+    "    Tuning\n"
+    "func inflate(r: float) float:\n"
+    "    return r * 2.0\n"
+    "pub func spheres_overlap(a_position: vec3, a_radius: float, b_position: vec3, b_radius: float) bool:\n"
+    "    return a_radius + b_radius >= 0.0\n"
+    "pub func sphere_box_overlap(sphere_position: vec3, sphere_radius: float, box_position: vec3, box_size: vec3, "
+    "box_rotation: quat) bool:\n"
+    "    return sphere_radius >= 0.0\n";
+
+static std::optional<SpatialJoinPlan> volume_overlap_plan(const std::string& where_predicate) {
+    auto result = analyze(VOLUME_OVERLAP_HEADER + "rule Detect:\n"
+                                                  "    pairs:\n"
+                                                  "        actor:\n"
+                                                  "            Body\n"
+                                                  "        wall:\n"
+                                                  "            Solid\n"
+                                                  "    where:\n"
+                                                  "        " +
+                          where_predicate +
+                          "\n"
+                          "    on tick:\n"
+                          "        let x = 1\n");
+    REQUIRE(result.handler_contracts.size() == 1);
+    return result.handler_contracts[0].spatial_join;
+}
+
+TEST_CASE("Semantic: sphere_box_overlap with the sphere on the left binding is eligible",
+          "[semantic][where-clause][spatial-join]") {
+    const auto plan = volume_overlap_plan(
+        "sphere_box_overlap(actor.Body.position, actor.Body.radius, wall.Solid.position, wall.Solid.size, "
+        "wall.Solid.rotation)");
+    REQUIRE(plan.has_value());
+    CHECK(plan->dimension == SpatialJoinDimension::Volume3D);
+    CHECK(plan->left.binding_index == 0);
+    CHECK(plan->left.kind == SpatialShapeKind::Sphere);
+    CHECK(plan->left.slots == std::vector<ExprPath>{{0}, {1}});
+    CHECK(plan->right.binding_index == 1);
+    CHECK(plan->right.kind == SpatialShapeKind::Box);
+    CHECK(plan->right.slots == std::vector<ExprPath>{{2}, {3}, {4}});
+}
+
+TEST_CASE("Semantic: sphere_box_overlap with the box on the left binding is eligible",
+          "[semantic][where-clause][spatial-join]") {
+    auto result = analyze(VOLUME_OVERLAP_HEADER + "rule Detect:\n"
+                                                  "    pairs:\n"
+                                                  "        wall:\n"
+                                                  "            Solid\n"
+                                                  "        actor:\n"
+                                                  "            Body\n"
+                                                  "    where:\n"
+                                                  "        sphere_box_overlap(actor.Body.position, actor.Body.radius, "
+                                                  "wall.Solid.position, wall.Solid.size, wall.Solid.rotation)\n"
+                                                  "    on tick:\n"
+                                                  "        let x = 1\n");
+    REQUIRE(result.handler_contracts.size() == 1);
+    const auto& plan = result.handler_contracts[0].spatial_join;
+    REQUIRE(plan.has_value());
+    CHECK(plan->left.binding_index == 1);
+    CHECK(plan->left.kind == SpatialShapeKind::Sphere);
+    CHECK(plan->right.binding_index == 0);
+    CHECK(plan->right.kind == SpatialShapeKind::Box);
+}
+
+TEST_CASE("Semantic: spheres_overlap across different trait sets is eligible", "[semantic][where-clause][spatial-join]") {
+    const auto plan =
+        volume_overlap_plan("spheres_overlap(actor.Body.position, actor.Body.radius, wall.Solid.position, 1.0 + "
+                            "wall.Solid.size.x)");
+    REQUIRE(plan.has_value());
+    CHECK(plan->left.kind == SpatialShapeKind::Sphere);
+    CHECK(plan->right.kind == SpatialShapeKind::Sphere);
+}
+
+TEST_CASE("Semantic: single-binding expression slots are eligible", "[semantic][where-clause][spatial-join]") {
+    CHECK(volume_overlap_plan("sphere_box_overlap(actor.Body.position, actor.Body.radius + PROBE, wall.Solid.position, "
+                              "wall.Solid.size, wall.Solid.rotation)")
+              .has_value());
+    CHECK(volume_overlap_plan("sphere_box_overlap(actor.Body.position, actor.Body.radius + Game.Tuning.margin, "
+                              "wall.Solid.position, wall.Solid.size, wall.Solid.rotation)")
+              .has_value());
+    CHECK(volume_overlap_plan("sphere_box_overlap(actor.Body.position, inflate(actor.Body.radius), "
+                              "wall.Solid.position, wall.Solid.size * 1.5, wall.Solid.rotation)")
+              .has_value());
+}
+
+TEST_CASE("Semantic: an argument mixing both bindings is not eligible", "[semantic][where-clause][spatial-join]") {
+    CHECK_FALSE(volume_overlap_plan("spheres_overlap(actor.Body.position, actor.Body.radius + wall.Solid.size.x, "
+                                    "wall.Solid.position, wall.Solid.size.x)")
+                    .has_value());
+}
+
+TEST_CASE("Semantic: a binding-free argument joins its shape's binding", "[semantic][where-clause][spatial-join]") {
+    const auto plan = volume_overlap_plan(
+        "sphere_box_overlap(actor.Body.position, PROBE, wall.Solid.position, wall.Solid.size, wall.Solid.rotation)");
+    REQUIRE(plan.has_value());
+    CHECK(plan->left.binding_index == 0);
+    CHECK(plan->left.slots == std::vector<ExprPath>{{0}, {1}});
+}
+
+TEST_CASE("Semantic: a shape that reads no pair binding is not eligible", "[semantic][where-clause][spatial-join]") {
+    CHECK_FALSE(volume_overlap_plan("sphere_box_overlap(vec3(0.0, 0.0, 0.0), PROBE, wall.Solid.position, "
+                                    "wall.Solid.size, wall.Solid.rotation)")
+                    .has_value());
+}
+
+TEST_CASE("Semantic: both shapes from one binding are not eligible", "[semantic][where-clause][spatial-join]") {
+    CHECK_FALSE(volume_overlap_plan("spheres_overlap(actor.Body.position, actor.Body.radius, actor.Body.position, "
+                                    "actor.Body.radius)")
+                    .has_value());
+}
+
+TEST_CASE("Semantic: or-combined overlap predicate is not eligible", "[semantic][where-clause][spatial-join]") {
+    CHECK_FALSE(volume_overlap_plan("spheres_overlap(actor.Body.position, actor.Body.radius, wall.Solid.position, "
+                                    "wall.Solid.size.x) or actor.Body.radius > 1.0")
+                    .has_value());
+}
+
+TEST_CASE("Semantic: resolve_expr_path walks call arguments and binary operands", "[semantic][spatial-join]") {
+    auto leaf = [](std::string name) {
+        return std::make_unique<ExprNode>(ExprNode::Variant{IdentExpr{.name = std::move(name)}}, SourceLocation{});
+    };
+    std::vector<std::unique_ptr<ExprNode>> args;
+    args.push_back(leaf("x"));
+    args.push_back(std::make_unique<ExprNode>(
+        ExprNode::Variant{BinaryExpr{.op = "+", .left = leaf("y"), .right = leaf("z")}}, SourceLocation{}));
+    const ExprNode call(ExprNode::Variant{CallExpr{.callee = leaf("f"), .args = std::move(args)}}, SourceLocation{});
+
+    const auto name_at = [&call](const ExprPath& path) {
+        const auto* node = resolve_expr_path(call, path);
+        const auto* ident = node == nullptr ? nullptr : std::get_if<IdentExpr>(&node->expr);
+        return ident == nullptr ? std::string("<none>") : ident->name;
+    };
+    CHECK(name_at({0}) == "x");
+    CHECK(name_at({1, 0}) == "y");
+    CHECK(name_at({1, 1}) == "z");
+    CHECK(name_at({2}) == "<none>");
+    CHECK(name_at({0, 0}) == "<none>");
+    CHECK(resolve_expr_path(call, {}) == &call);
 }
 
 // ── Manual squared-distance expression recognition (add-sap-broadphase) ─────
@@ -3269,21 +3561,16 @@ TEST_CASE("Semantic: manual squared-distance-via-dot where: expression is recogn
     CHECK(plan.dimension == SpatialJoinDimension::Flat2D);
     CHECK(plan.matched_predicate_index == 0);
 
-    const auto transform_id = make_symbol_id(SymbolKind::Trait, "std.math.vec2", "Transform");
-    const auto collider_id  = make_symbol_id(SymbolKind::Trait, "std.math.vec2", "Collider");
-    // The manual matcher pairs positions with radii by binding name, not by
-    // left/right call-argument order (unlike the direct-call matcher), so
-    // don't assume which of plan.left/plan.right is binding "a" vs "b".
+    // The manual matcher pairs positions with radii by binding name, so don't
+    // assume which of plan.left/plan.right is binding "a" vs "b".
     const auto& a_side = plan.left.binding_index == 0 ? plan.left : plan.right;
     const auto& b_side = plan.left.binding_index == 0 ? plan.right : plan.left;
     CHECK(a_side.binding_index == 0);
-    CHECK(a_side.position.trait == transform_id);
-    CHECK(a_side.position.field_path == std::vector<std::string>{"position"});
-    CHECK(a_side.radius.trait == collider_id);
-    CHECK(a_side.radius.field_path == std::vector<std::string>{"radius"});
+    CHECK(a_side.kind == SpatialShapeKind::Sphere);
+    // dot(b.p - a.p, ...) < (a.r + b.r) * (...): a.p is the delta's right operand.
+    CHECK(a_side.slots == std::vector<ExprPath>{{0, 0, 1}, {1, 0, 0}});
     CHECK(b_side.binding_index == 1);
-    CHECK(b_side.position.trait == transform_id);
-    CHECK(b_side.radius.trait == collider_id);
+    CHECK(b_side.slots == std::vector<ExprPath>{{0, 0, 0}, {1, 0, 1}});
 }
 
 TEST_CASE("Semantic: manual squared-distance-via-dot where: expression is recognized as broad-phase eligible (3D)",
@@ -3374,7 +3661,7 @@ TEST_CASE("Semantic: manual dot-product recognition succeeds through a renamed i
     CHECK(result.handler_contracts[0].spatial_join->dimension == SpatialJoinDimension::Flat2D);
 }
 
-TEST_CASE("Semantic: cross-domain pair rule with manual dot-product shape is never eligible",
+TEST_CASE("Semantic: cross-domain pair rule with manual dot-product shape is eligible",
           "[semantic][where-clause][spatial-join]") {
     auto result = analyze("module std.math.vec2\n" + STDLIB_EVENTS +
                           "trait Transform:\n"
@@ -3402,7 +3689,7 @@ TEST_CASE("Semantic: cross-domain pair rule with manual dot-product shape is nev
                           "        let x = 1\n");
 
     REQUIRE(result.handler_contracts.size() == 1);
-    CHECK_FALSE(result.handler_contracts[0].spatial_join.has_value());
+    CHECK(result.handler_contracts[0].spatial_join.has_value());
 }
 
 TEST_CASE("Semantic: component-wise squared-distance arithmetic remains an ordinary residual predicate",
@@ -3499,6 +3786,21 @@ static bool has_warning_containing(const std::vector<Diagnostic>& diagnostics, c
     });
 }
 
+static std::size_t count_warnings(const std::vector<Diagnostic>& diagnostics) {
+    return static_cast<std::size_t>(std::ranges::count(diagnostics, DiagnosticLevel::Warning, &Diagnostic::level));
+}
+
+static std::string unaccelerated_pair_warning(const std::string& rule, const std::string& left, const std::string& right) {
+    return "pair rule '" + rule + "' is not accelerated: no recognized overlap predicate in where:, so every (" + left +
+           ", " + right + ") tuple is checked";
+}
+
+static int line_of(const std::string& source, const std::string& text) {
+    const auto offset = source.find(text);
+    REQUIRE(offset != std::string::npos);
+    return static_cast<int>(std::count(source.begin(), source.begin() + static_cast<std::ptrdiff_t>(offset), '\n')) + 1;
+}
+
 TEST_CASE("Semantic: linear 2D distance-vs-radius-sum where: predicate is flagged with a warning",
           "[semantic][where-clause][spatial-join][diagnostics]") {
     auto [result, diagnostics] = analyze_with_diagnostics(
@@ -3525,6 +3827,7 @@ TEST_CASE("Semantic: linear 2D distance-vs-radius-sum where: predicate is flagge
     REQUIRE(result.handler_contracts.size() == 1);
     CHECK_FALSE(result.handler_contracts[0].spatial_join.has_value());
     CHECK(has_warning_containing(diagnostics, "circles_overlap"));
+    CHECK(count_warnings(diagnostics) == 1);
 }
 
 TEST_CASE("Semantic: linear 3D distance-vs-radius-sum where: predicate is flagged with a warning",
@@ -3553,6 +3856,7 @@ TEST_CASE("Semantic: linear 3D distance-vs-radius-sum where: predicate is flagge
     REQUIRE(result.handler_contracts.size() == 1);
     CHECK_FALSE(result.handler_contracts[0].spatial_join.has_value());
     CHECK(has_warning_containing(diagnostics, "spheres_overlap"));
+    CHECK(count_warnings(diagnostics) == 1);
 }
 
 TEST_CASE("Semantic: linear-distance where: predicate is flagged with > as well as >=/</<=",
@@ -3580,9 +3884,10 @@ TEST_CASE("Semantic: linear-distance where: predicate is flagged with > as well 
 
     REQUIRE(result.handler_contracts.size() == 1);
     CHECK(has_warning_containing(diagnostics, "circles_overlap"));
+    CHECK(count_warnings(diagnostics) == 1);
 }
 
-TEST_CASE("Semantic: unrelated where: predicate produces no unaccelerated-distance warning",
+TEST_CASE("Semantic: pair rule with only unrecognized predicates is flagged as unaccelerated",
           "[semantic][where-clause][spatial-join][diagnostics]") {
     auto [result, diagnostics] = analyze_with_diagnostics(STDLIB_EVENTS +
                                                           "trait Transform:\n"
@@ -3603,7 +3908,9 @@ TEST_CASE("Semantic: unrelated where: predicate produces no unaccelerated-distan
                                                           "        let x = 1\n");
 
     REQUIRE(result.handler_contracts.size() == 1);
-    CHECK(diagnostics.empty());
+    REQUIRE(diagnostics.size() == 1);
+    CHECK(diagnostics[0].level == DiagnosticLevel::Warning);
+    CHECK(diagnostics[0].message == unaccelerated_pair_warning("DetectContact", "a", "b"));
 }
 
 TEST_CASE("Semantic: direct-call recognized predicate produces no unaccelerated-distance warning",
@@ -3663,6 +3970,76 @@ TEST_CASE("Semantic: manual dot-product recognized predicate produces no unaccel
     REQUIRE(result.handler_contracts[0].spatial_join.has_value());
     CHECK(diagnostics.empty());
 }
+TEST_CASE("Semantic: pair rule without where: is flagged at its pairs: clause",
+          "[semantic][where-clause][spatial-join][diagnostics]") {
+    const std::string source = "module test\n" + STDLIB_EVENTS +
+                               "trait Rig:\n"
+                               "    var height: float\n"
+                               "trait Body:\n"
+                               "    var radius: float\n"
+                               "rule ComposePose:\n"
+                               "    pairs:\n"
+                               "        rig:\n"
+                               "            Rig\n"
+                               "        body:\n"
+                               "            Body\n"
+                               "    on tick:\n"
+                               "        let x = 1\n";
+    auto [result, diagnostics] = analyze_with_diagnostics(source);
+
+    REQUIRE(diagnostics.size() == 1);
+    CHECK(diagnostics[0].level == DiagnosticLevel::Warning);
+    CHECK(diagnostics[0].message == unaccelerated_pair_warning("ComposePose", "rig", "body"));
+    CHECK(diagnostics[0].location.line == line_of(source, "    pairs:"));
+}
+
+TEST_CASE("Semantic: recognized predicate next to a residual one is not flagged",
+          "[semantic][where-clause][spatial-join][diagnostics]") {
+    auto [result, diagnostics] = analyze_with_diagnostics(
+        "module std.collision.flat\n" + STDLIB_EVENTS +
+        "trait Transform:\n"
+        "    var position: vec2\n"
+        "trait Collider:\n"
+        "    var radius: float\n"
+        "pub func circles_overlap(a_position: vec2, a_radius: float, b_position: vec2, b_radius: float) bool:\n"
+        "    return a_radius + b_radius >= 0.0\n"
+        "rule DetectContact:\n"
+        "    pairs:\n"
+        "        a:\n"
+        "            Transform\n"
+        "            Collider\n"
+        "        b:\n"
+        "            Transform\n"
+        "            Collider\n"
+        "    where:\n"
+        "        a != b\n"
+        "        circles_overlap(a.Transform.position, a.Collider.radius, b.Transform.position, "
+        "b.Collider.radius)\n"
+        "    on tick:\n"
+        "        let x = 1\n");
+
+    REQUIRE(result.handler_contracts.size() == 1);
+    REQUIRE(result.handler_contracts[0].spatial_join.has_value());
+    CHECK(diagnostics.empty());
+}
+
+TEST_CASE("Semantic: unary rule with where: is never flagged as unaccelerated",
+          "[semantic][where-clause][spatial-join][diagnostics]") {
+    auto [result, diagnostics] = analyze_with_diagnostics(STDLIB_EVENTS +
+                                                          "trait Collider:\n"
+                                                          "    var radius: float\n"
+                                                          "rule Shrink:\n"
+                                                          "    filter:\n"
+                                                          "        Collider\n"
+                                                          "    where:\n"
+                                                          "        Collider.radius > 1.0\n"
+                                                          "    on tick:\n"
+                                                          "        let x = 1\n");
+
+    REQUIRE(result.handler_contracts.size() == 1);
+    CHECK(diagnostics.empty());
+}
+
 // ── Limit clause (dsl-rule-limit) ───────────────────────────────────────────
 
 static const std::string LIMIT_TRAITS =
@@ -4679,8 +5056,8 @@ TEST_CASE("Semantic: named writes and compound writes are accepted in unary and 
                                          "            Enemy\n"
                                          "    on tick:\n"
                                          "        Game.Match.score += 1\n");
-    INFO((messages.empty() ? "" : messages.front()));
-    CHECK(messages.empty());
+    REQUIRE(messages.size() == 1);
+    CHECK(messages[0].starts_with("pair rule 'P' is not accelerated"));
 }
 
 TEST_CASE("Semantic: named access to a trait the archetype does not declare is rejected",

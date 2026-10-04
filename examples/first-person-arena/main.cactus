@@ -166,17 +166,12 @@ pub trait Shooter:
 pub trait Bullet:
     var velocity: vec3 = vec3(0.0, 0.0, 0.0)
     var lifetime: float = 2.0
-    var consumed: bool = false
 
 event SeparateActor:
     amount: vec3
 
 event GroundCandidate:
     surface: float
-
-event BulletContact:
-    other: entity_id
-    hit_enemy: bool
 
 event EnemyHit
 event GameOver
@@ -489,8 +484,9 @@ entity PlayerBody:
         position = vec3(0.0, PLAYER_HALF_HEIGHT, 10.0)
         rotation = quat.identity()
         scale = vec3(1.0, 1.0, 1.0)
+    # Its own layer, so bullets (mask 3) fly through the player.
     physics.Collider:
-        layer = 2
+        layer = 8
         mask = 3
     physics.CapsuleCollider:
         radius = PLAYER_RADIUS
@@ -1008,79 +1004,29 @@ rule FireBullet:
                 velocity = direction * BULLET_SPEED
         shooter.cooldown = FIRE_COOLDOWN
 
+# Each tick a bullet sweeps its motion against every collider its mask
+# selects, so it can't pass through anything between ticks. Walls have no
+# EnemyHit handler, so a hit on a wall only destroys the bullet.
 rule MoveBullets:
-    filter:
-        Bullet as bullet
-        tv.WorldTransform as transform
-
-    on fixed_tick:
-        if bullet.consumed:
-            return
-        transform.position += bullet.velocity * fixed_tick.dt
-        bullet.lifetime -= fixed_tick.dt
-        if bullet.lifetime <= 0.0:
-            bullet.consumed = true
-            destroy
-
-rule DetectBulletSolidContact:
     pairs:
         bullet:
             Bullet
             tv.WorldTransform
-        box:
-            Solid
-            physics.BoxCollider
-            tv.WorldTransform
-    where:
-        collision.sphere_box_overlap(bullet.tv.WorldTransform.position, BULLET_RADIUS, box.tv.WorldTransform.position, box.physics.BoxCollider.size, box.tv.WorldTransform.rotation)
+        target:
+            physics.Collider
+    reduce:
+        per: bullet
+        first = first_hit(physics.sweep(bullet, bullet.Bullet.velocity * fixed_tick.dt, target))
 
     on fixed_tick:
-        if not bullet.Bullet.consumed:
-            let separation = collision.sphere_box_separation(bullet.tv.WorldTransform.position, BULLET_RADIUS, box.tv.WorldTransform.position, box.physics.BoxCollider.size, box.tv.WorldTransform.rotation)
-            if v3.length(separation) > 0.0:
-                emit BulletContact to bullet:
-                    other = box
-                    hit_enemy = false
-
-rule DetectBulletEnemyContact:
-    pairs:
-        bullet:
-            Bullet
-            tv.WorldTransform
-        enemy:
-            Enemy
-            Threat
-            KinematicActor
-            tv.WorldTransform
-    after:
-        DetectBulletSolidContact
-    # A loose bound: the handler's cylinder test fits inside this sphere sum.
-    where:
-        collision.spheres_overlap(bullet.tv.WorldTransform.position, BULLET_RADIUS, enemy.tv.WorldTransform.position, enemy.KinematicActor.radius + enemy.KinematicActor.half_height + BULLET_RADIUS)
-
-    on fixed_tick:
-        if not bullet.Bullet.consumed:
-            let bullet_position = bullet.tv.WorldTransform.position
-            let enemy_position = enemy.tv.WorldTransform.position
-            let horizontal = vec3(bullet_position.x - enemy_position.x, 0.0, bullet_position.z - enemy_position.z)
-            let close_horizontal = v3.length(horizontal) <= BULLET_RADIUS + enemy.KinematicActor.radius
-            let close_vertical = math.abs(bullet_position.y - enemy_position.y) <= enemy.KinematicActor.half_height + BULLET_RADIUS
-            if close_horizontal and close_vertical:
-                emit BulletContact to bullet:
-                    other = enemy
-                    hit_enemy = true
-
-rule ConsumeBulletContact:
-    filter:
-        Bullet as bullet
-
-    on BulletContact as contact:
-        if bullet.consumed:
+        if first.hit:
+            emit EnemyHit to first.other
+            destroy bullet
             return
-        bullet.consumed = true
-        if contact.hit_enemy:
-            emit EnemyHit to contact.other
-        destroy
+        bullet.tv.WorldTransform.position += bullet.Bullet.velocity * fixed_tick.dt
+        bullet.Bullet.lifetime -= fixed_tick.dt
+        if bullet.Bullet.lifetime <= 0.0:
+            destroy bullet
 
 rule BeginDeath:
     filter:
@@ -1096,13 +1042,16 @@ rule BeginDeath:
                 time = 0.0
 
 # A dying enemy stops being a Threat, so the pair rules that need one (enemy
-# separation, bullet hits, player contact) skip it.
+# separation, player contact) skip it, and leaves every collider layer, so
+# bullets fly through it.
 rule StartDying:
     filter:
         Enemy as enemy
+        physics.Collider as collider
 
     on added Dying:
         enemy.death_elapsed = 0.0
+        collider.layer = 0
         remove Threat
 
 # Enemy is the collision/logic root (grounded at torso height, see

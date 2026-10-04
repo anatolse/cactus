@@ -73,6 +73,13 @@ TEST_CASE("Lexer: sync and map are identifiers", "[lexer]") {
     CHECK(types[1] == TokenType::IDENTIFIER);
 }
 
+TEST_CASE("Lexer: target is an identifier", "[lexer]") {
+    auto tokens = lex("target");
+    auto types  = token_types(tokens);
+    REQUIRE(types.size() == 1);
+    CHECK(types[0] == TokenType::IDENTIFIER);
+}
+
 TEST_CASE("Lexer: keyword vs identifier", "[lexer]") {
     auto tokens = lex("rule rule_name");
     auto types  = token_types(tokens);

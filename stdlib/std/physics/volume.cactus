@@ -16,15 +16,18 @@ pub trait CharacterBody:
     var ground_normal: vec3 = vec3(0.0, 1.0, 0.0)
     var step_height: float = 0.3
 
-# Shared 3D collision participation/filtering data.
+# Shared 3D collision participation/filtering data. An entity with Collider
+# also needs exactly one shape trait: BoxCollider, SphereCollider or
+# CapsuleCollider. Shapes are centered on WorldTransform.position, and
+# WorldTransform.scale doesn't change them.
 # layer: collision layer bitmask this entity belongs to
 # mask:  collision layer bitmask this entity collides with
 pub trait Collider:
     var layer: int = 1
     var mask: int = 1
 
-# Axis-aligned box/cube collider for 3D entities.
-# size: collider width/height/depth in world units
+# Box collider, oriented by WorldTransform.rotation.
+# size: full collider width/height/depth in world units
 pub trait BoxCollider:
     var size: vec3 = vec3(1.0, 1.0, 1.0)
 
@@ -33,12 +36,35 @@ pub trait BoxCollider:
 pub trait SphereCollider:
     var radius: float = 0.5
 
-# Vertical capsule collider for 3D entities.
+# Capsule collider, always vertical along world Y.
 # radius: capsule radius in world units
-# height: total capsule height in world units along Y
+# height: total capsule height in world units, caps included
 pub trait CapsuleCollider:
     var radius: float = 0.5
     var height: float = 1.0
+
+# ── Collider queries ──────────────────────────────────────────────────────────
+# Both take bindings of the calling rule, work for any mix of shapes, and honor
+# Collider.layer/mask. An entity never hits itself.
+
+# Where a sweep first touched its target. A miss has hit = false and t = 1.0,
+# so `position += delta * hit.t` moves the full delta either way.
+# other:  the target that was hit
+# t:      fraction of delta travelled before contact
+# point:  contact point on the target's surface
+# normal: unit normal pointing from the target toward the subject
+pub struct SweepHit:
+    hit: bool
+    other: entity_id
+    t: float
+    point: vec3
+    normal: vec3
+
+# Where subject's collider first touches target's when subject moves by delta.
+pub extern func sweep(subject: entity_id, delta: vec3, target: entity_id) SweepHit
+
+# Whether a's and b's colliders overlap now. a's mask filters b's layer.
+pub extern func touching(a: entity_id, b: entity_id) bool
 
 # Fired when this entity's collider first contacts another entity's collider.
 # other:  entity_id of the entity that was hit

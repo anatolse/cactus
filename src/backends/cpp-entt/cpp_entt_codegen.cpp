@@ -12,6 +12,7 @@
 #include "backends/cpp-entt/type_utils.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdint>
 #include <filesystem>
@@ -21,6 +22,7 @@
 #include <ranges>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -1350,6 +1352,12 @@ std::string emit_module_constants(const DecoratedProgram& program) {
         return {};
     }
     std::ostringstream out;
+    for (const auto& phase : program.execution_graph.phases) {
+        if (phase.every_seconds.has_value()) {
+            out << "inline constexpr float " << EnttCodegenUtils::phase_dt_cpp_name(phase.phase)
+                << " = static_cast<float>(" << cpp_double_literal(*phase.every_seconds) << ");\n";
+        }
+    }
     std::unordered_map<SymbolId, const ExprNode*> values;
     for (const auto& decl : program.ast->declarations) {
         if (const auto* func = std::get_if<FuncNode>(&decl)) {
@@ -1373,6 +1381,84 @@ std::string emit_module_constants(const DecoratedProgram& program) {
             << ";\n";
     }
     out << "\n";
+    return out.str();
+}
+
+// std.physics.volume collider queries: the only generated code that names the
+// program's component types. Runtime kernels do the geometry.
+std::string emit_collider_query_helpers(const DecoratedProgram& program) {
+    const auto physics_trait = [](std::string_view name) {
+        return make_symbol_id(SymbolKind::Trait, std::string(kPhysicsVolumeModule), std::string(name));
+    };
+    const auto sweep_hit_id = make_symbol_id(SymbolKind::Struct, std::string(kPhysicsVolumeModule), "SweepHit");
+    if (EnttCodegenUtils::find_struct(program, sweep_hit_id) == nullptr) {
+        return {};
+    }
+    const std::string ns     = "cactus::runtime::physics::";
+    const std::string shape  = "std::optional<" + ns + "ColliderShape>";
+    const auto hit_cpp       = EnttCodegenUtils::struct_cpp_name(sweep_hit_id);
+    const auto transform_id  = make_symbol_id(SymbolKind::Trait, std::string(kTransformVolumeModule), "WorldTransform");
+    const bool has_transform = EnttCodegenUtils::find_trait(program, make_canonical_id(transform_id)) != nullptr;
+    const auto transform_cpp = EnttCodegenUtils::trait_cpp_name(transform_id);
+    const auto collider_cpp  = EnttCodegenUtils::trait_cpp_name(physics_trait("Collider"));
+    struct ShapeBuilder {
+        std::string_view trait;
+        std::string_view call;
+    };
+    // Dispatch order when a runtime add leaves an entity with two shapes.
+    static constexpr std::array<ShapeBuilder, 3> kBuilders{{
+        {.trait = "BoxCollider", .call = "box_shape(transform->position, transform->rotation, shape->size"},
+        {.trait = "CapsuleCollider", .call = "capsule_shape(transform->position, shape->radius, shape->height"},
+        {.trait = "SphereCollider", .call = "sphere_shape(transform->position, shape->radius"},
+    }};
+    std::ostringstream out;
+    out << "// ── Collider queries ────────────────────────────────────────────────\n\n";
+    for (const auto& builder : kBuilders) {
+        out << "[[maybe_unused]] inline " << shape << " " << EnttCodegenUtils::collider_shape_builder(builder.trait)
+            << "([[maybe_unused]] entt::registry& registry, [[maybe_unused]] entt::entity entity) {\n";
+        if (!has_transform) {
+            out << "    return std::nullopt;\n}\n\n";
+            continue;
+        }
+        out << "    const auto* transform = registry.try_get<" << transform_cpp << ">(entity);\n";
+        out << "    const auto* collider  = registry.try_get<" << collider_cpp << ">(entity);\n";
+        out << "    const auto* shape     = registry.try_get<"
+            << EnttCodegenUtils::trait_cpp_name(physics_trait(builder.trait)) << ">(entity);\n";
+        out << "    if (transform == nullptr || collider == nullptr || shape == nullptr) {\n";
+        out << "        return std::nullopt;\n";
+        out << "    }\n";
+        out << "    return " << ns << builder.call << ", collider->layer, collider->mask);\n";
+        out << "}\n\n";
+    }
+    out << "[[maybe_unused]] inline " << shape << " " << EnttCodegenUtils::collider_shape_builder()
+        << "(entt::registry& registry, entt::entity entity) {\n";
+    for (const auto& builder : kBuilders) {
+        out << "    if (registry.all_of<" << EnttCodegenUtils::trait_cpp_name(physics_trait(builder.trait))
+            << ">(entity)) {\n";
+        out << "        return " << EnttCodegenUtils::collider_shape_builder(builder.trait) << "(registry, entity);\n";
+        out << "    }\n";
+    }
+    out << "    return std::nullopt;\n";
+    out << "}\n\n";
+    out << "[[maybe_unused]] inline " << hit_cpp << " cactus_collider_sweep_hit(const " << ns
+        << "SweepResult& result, entt::entity other) {\n";
+    out << "    return " << hit_cpp
+        << "{.hit = result.hit, .other = result.hit ? other : entt::entity{entt::null}, .t = result.t, "
+           ".point = result.point, .normal = result.normal};\n";
+    out << "}\n\n";
+    out << "[[maybe_unused]] inline " << hit_cpp << " cactus_collider_sweep_miss() {\n";
+    out << "    return cactus_collider_sweep_hit(" << ns << "sweep_miss(), entt::null);\n";
+    out << "}\n\n";
+    out << "[[maybe_unused]] inline " << hit_cpp << " cactus_collider_sweep(const " << shape
+        << "& subject_shape, Vector3 delta, const " << shape
+        << "& target_shape, entt::entity subject, entt::entity target) {\n";
+    out << "    return cactus_collider_sweep_hit(" << ns
+        << "sweep(subject_shape, delta, target_shape, subject == target), target);\n";
+    out << "}\n\n";
+    out << "[[maybe_unused]] inline bool cactus_collider_touching(const " << shape << "& a_shape, const " << shape
+        << "& b_shape, entt::entity a, entt::entity b) {\n";
+    out << "    return " << ns << "touching(a_shape, b_shape, a == b);\n";
+    out << "}\n\n";
     return out.str();
 }
 
@@ -3154,6 +3240,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << EnttComponentEmitter::emit_component(t, program) << "\n";
     }
 
+    out << emit_collider_query_helpers(program);
     out << emit_named_slots(program);
     out << EnttPersistenceEmitter::emit_schema_descriptor(program);
     out << EnttPersistenceEmitter::emit_archetype_node_table(program);

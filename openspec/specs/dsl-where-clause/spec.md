@@ -174,10 +174,10 @@ acceleration.
 - **THEN** the predicate is evaluated as an ordinary (non-accelerated) predicate, with no compile error
 
 ### Requirement: Unaccelerated pair rules produce a warning diagnostic
-When a pair rule's `where:` clause has no broad-phase-eligible predicate, including a pair rule with no `where:` clause, the compiler SHALL emit one warning diagnostic located at the rule's `pairs:` clause: `pair rule '<Rule>' is not accelerated: no recognized overlap predicate in where:, so every (<left>, <right>) tuple is checked`, where `<left>` and `<right>` are the binding names. When the existing linear-distance warning fires for one of the rule's predicates, it SHALL replace this warning, so the rule gets one warning. These warnings SHALL NOT be errors and SHALL NOT change compilation output.
+When a pair rule has no broad-phase-eligible predicate in its `where:` clause and no broad-phase-eligible `first_hit` aggregate in its `reduce:` clause, including a pair rule with neither clause, the compiler SHALL emit one warning diagnostic located at the rule's `pairs:` clause: `pair rule '<Rule>' is not accelerated: no recognized overlap predicate in where:, so every (<left>, <right>) tuple is checked`, where `<left>` and `<right>` are the binding names. When the existing linear-distance warning fires for one of the rule's predicates, it SHALL replace this warning, so the rule gets one warning. These warnings SHALL NOT be errors and SHALL NOT change compilation output.
 
 #### Scenario: Pair rule without where: is flagged
-- **WHEN** a pair rule `ComposePose` with bindings `rig` and `body` has no `where:` clause
+- **WHEN** a pair rule `ComposePose` with bindings `rig` and `body` has no `where:` clause and no `reduce:` clause
 - **THEN** compilation succeeds and emits the warning "pair rule 'ComposePose' is not accelerated: no recognized overlap predicate in where:, so every (rig, body) tuple is checked"
 
 #### Scenario: Pair rule with only unrecognized predicates is flagged
@@ -186,6 +186,10 @@ When a pair rule's `where:` clause has no broad-phase-eligible predicate, includ
 
 #### Scenario: Accelerated pair rule is not flagged
 - **WHEN** a pair rule's `where:` clause contains `a != b` and a broad-phase-eligible `spheres_overlap` call
+- **THEN** no unaccelerated pair rule warning is emitted for that rule
+
+#### Scenario: Swept first-hit rule is not flagged
+- **WHEN** a pair rule has no `where:` clause and a broad-phase-eligible `first_hit(physics.sweep(...))` aggregate
 - **THEN** no unaccelerated pair rule warning is emitted for that rule
 
 #### Scenario: Linear-distance warning replaces the generic warning
@@ -197,3 +201,30 @@ When a pair rule's `where:` clause has no broad-phase-eligible predicate, includ
 - **WHEN** a rule uses `filter:` rather than `pairs:`
 - **THEN** no unaccelerated pair rule warning is emitted for it
 
+### Requirement: Collider queries are broad-phase eligible without author-written bounds
+A pair rule SHALL be eligible for broad-phase acceleration by a conforming backend when it uses either collider query form below, with its two arguments being the rule's two different pair bindings:
+
+- a direct, unwrapped `where:` predicate `std.physics.volume.touching(a, b)`; or
+- a `reduce:` aggregate `first_hit(std.physics.volume.sweep(subject, delta, target))`, where `delta` is a pure expression that reads no pair binding other than `subject`, and every other aggregate in the same `reduce:` clause is also a `first_hit` over a sweep with the same `subject`, `delta`, and `target`. Other reducers count or sum rows, so pruning would change them.
+
+Recognition SHALL resolve functions by canonical identity. The acceleration bound SHALL come from the colliders themselves: each entity's shape and, for a sweep, the subject's motion over `delta`. The author SHALL NOT need any other predicate for acceleration. Recognition is purely an optimization: it SHALL NOT change which rows satisfy the rule, the aggregate values, or the order in which handlers run.
+
+#### Scenario: touching is eligible on its own
+- **WHEN** a pair rule's only `where:` predicate is `physics.touching(player, enemy)`
+- **THEN** the rule is broad-phase eligible and no unaccelerated pair rule warning is emitted
+
+#### Scenario: Swept first hit is eligible on its own
+- **WHEN** a pair rule has no `where:` clause and reduces `first = first_hit(physics.sweep(bullet, bullet.Bullet.velocity * fixed_tick.dt, target))` per bullet
+- **THEN** the rule is broad-phase eligible and no unaccelerated pair rule warning is emitted
+
+#### Scenario: Pruning does not change the result
+- **WHEN** the same swept rule runs with and without acceleration over the same world
+- **THEN** every group receives the same `first_hit` value
+
+#### Scenario: Mixed reducers are not eligible
+- **WHEN** a rule reduces both `first = first_hit(physics.sweep(bullet, step, target))` and `near = count()`
+- **THEN** the sweep is evaluated as an ordinary aggregate and the unaccelerated pair rule warning is emitted
+
+#### Scenario: Wrapped touching is not eligible
+- **WHEN** `physics.touching(a, b)` is wrapped in `not` or combined with `or`
+- **THEN** the predicate is evaluated as an ordinary predicate, with no compile error

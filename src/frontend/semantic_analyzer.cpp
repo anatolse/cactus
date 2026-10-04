@@ -891,6 +891,10 @@ std::optional<std::unordered_set<std::string>> known_stdlib_effect_summary(const
     if (module == "std.editor") {
         return std::unordered_set<std::string>{"editor"};
     }
+    // Collider queries read only their bindings, which the contract records.
+    if (module == kPhysicsVolumeModule && (symbol.local_name == "sweep" || symbol.local_name == "touching")) {
+        return std::unordered_set<std::string>{};
+    }
     if (module == "std.physics" || module.starts_with("std.physics.")) {
         return std::unordered_set<std::string>{"physics"};
     }
@@ -1108,11 +1112,13 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     validate_template_applications(program);
     validate_template_use_cycles(program);
     flatten_template_compositions(program);
+    validate_collider_shapes(program);
     collect_named_entities(program);
     resolve_named_entity_access(program);
     validate_rule_filters(program);
     validate_where_clauses(program);
     validate_when_clauses(program);
+    validate_collider_queries(program);
     validate_phase_declarations(program);
     validate_group_declarations(program);
     // dsl-render-passes: descriptor-field *value* validation needs
@@ -2440,6 +2446,46 @@ bool SemanticAnalyzer::resolve_const_member(MemberExpr& member, const std::unord
     return true;
 }
 
+bool SemanticAnalyzer::phase_is_periodic(const SymbolId& phase) const {
+    if (const auto* local = find_local_phase(phase); local != nullptr) {
+        return local->has_every;
+    }
+    const auto* imported = find_imported_phase(phase);
+    return imported != nullptr && imported->every_seconds.has_value();
+}
+
+// `<phase>.dt` outside that phase's handlers: a periodic phase's interval is a
+// constant; any other phase's dt only exists while its handlers run.
+bool SemanticAnalyzer::resolve_phase_dt(MemberExpr& member, const std::unordered_set<std::string>& shadowed) const {
+    if (member.resolved_phase_dt.has_value()) {
+        return true;
+    }
+    if (member.member != "dt") {
+        return false;
+    }
+    const auto chain = member_chain_segments(member);
+    if (!chain.has_value() || chain->size() < 2) {
+        return false;
+    }
+    for (std::size_t length = 1; length < chain->size(); ++length) {
+        if (shadowed.contains(join_segments(*chain, 0, length))) {
+            return false;
+        }
+    }
+    const auto resolved = resolve_name(*chain);
+    if (!resolved.has_value() || resolved->symbol.kind != SymbolKind::Phase || resolved->member_segments.size() != 1) {
+        return false;
+    }
+    member.resolved_phase_dt = resolved->symbol;
+    if (!phase_is_periodic(resolved->symbol)) {
+        const auto phase = join_segments(*chain, 0, chain->size() - 1);
+        errors_.error(member.location,
+                      "'" + phase + ".dt' is only available inside '" + phase +
+                          "' handlers; only a phase with `every:` has a constant dt");
+    }
+    return true;
+}
+
 // Declaration-level expressions have no locals, so every name that matches a
 // constant is one. Handler and func bodies resolve through the named-access walk,
 // which knows their lexical scopes.
@@ -2480,7 +2526,9 @@ void SemanticAnalyzer::resolve_const_refs(ExprNode& expr) const {
         if (auto* ident = std::get_if<IdentExpr>(&node.expr)) {
             resolve_const_ident(*ident);
         } else if (auto* member = std::get_if<MemberExpr>(&node.expr)) {
-            resolve_const_member(*member, no_locals);
+            if (!resolve_const_member(*member, no_locals)) {
+                resolve_phase_dt(*member, no_locals);
+            }
         }
     });
 }
@@ -2782,7 +2830,8 @@ bool SemanticAnalyzer::validate_const_call(const CallExpr& call,
 bool SemanticAnalyzer::validate_const_member(const MemberExpr& member,
                                              const SourceLocation& location,
                                              const std::string& context) {
-    if (member.resolved_const_id.has_value() || member.resolved_enum_member.has_value()) {
+    if (member.resolved_const_id.has_value() || member.resolved_enum_member.has_value() ||
+        member.resolved_phase_dt.has_value()) {
         return true;
     }
     const auto* owner = std::get_if<IdentExpr>(&member.object->expr);
@@ -3003,21 +3052,7 @@ std::unordered_map<std::string, TypeInfo> SemanticAnalyzer::reducer_locals(const
         return locals;
     }
     for (const auto& reducer : rule.reduce->reducers) {
-        TypeInfo type;
-        switch (reducer.result_type) {
-            case TypeKind::Int:
-                type = make_int_type();
-                break;
-            case TypeKind::Float:
-                type = make_float_type();
-                break;
-            case TypeKind::Bool:
-                type = make_bool_type();
-                break;
-            default:
-                type = make_unknown_type();
-                break;
-        }
+        TypeInfo type        = reducer.result_type;
         type.is_let          = true;
         locals[reducer.name] = std::move(type);
     }
@@ -3637,7 +3672,7 @@ void SemanticAnalyzer::validate_reducer(ReducerDecl& reducer,
                                         const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
                                         const PairScope* row_scope) {
     if (reducer.kind == ReducerKind::Count) {
-        reducer.result_type = TypeKind::Int;
+        reducer.result_type = make_int_type();
         if (reducer.input == nullptr) {
             return;
         }
@@ -3665,7 +3700,18 @@ void SemanticAnalyzer::validate_reducer(ReducerDecl& reducer,
             errors_.error(reducer.input->location, "any(...) input must be of type 'bool', got '" + input.name + "'");
             return;
         }
-        reducer.result_type = TypeKind::Bool;
+        reducer.result_type = make_bool_type();
+        return;
+    }
+
+    if (reducer.kind == ReducerKind::FirstHit) {
+        if (!is_sweep_hit_type(input)) {
+            errors_.error(reducer.input->location,
+                          "first_hit(...) input must be of type '" + std::string(kSweepHitCanonical) + "', got '" +
+                              type_display_name(input) + "'");
+            return;
+        }
+        reducer.result_type = input;
         return;
     }
 
@@ -3674,7 +3720,7 @@ void SemanticAnalyzer::validate_reducer(ReducerDecl& reducer,
                       kind_name + "(...) input must be of type 'int' or 'float', got '" + input.name + "'");
         return;
     }
-    reducer.result_type = input.kind;
+    reducer.result_type = input.kind == TypeKind::Int ? make_int_type() : make_float_type();
     if (reducer.kind == ReducerKind::Sum) {
         return;
     }
@@ -4582,7 +4628,28 @@ void SemanticAnalyzer::validate_when_clauses(ProgramNode& program) {
     }
 }
 
+namespace {
+
+void insert_trigger_names(std::unordered_set<std::string>& names, const EventHandlerNode& handler) {
+    if (handler.trigger_form == HandlerTriggerForm::Event) {
+        names.insert(handler.event_name);
+    }
+    if (handler.alias.has_value()) {
+        names.insert(*handler.alias);
+    }
+}
+
+}  // namespace
+
 std::unordered_set<std::string> SemanticAnalyzer::rule_binding_names(const RuleNode& rule) const {
+    auto names = rule_domain_names(rule);
+    for (const auto& handler : rule.handlers) {
+        insert_trigger_names(names, handler);
+    }
+    return names;
+}
+
+std::unordered_set<std::string> SemanticAnalyzer::rule_domain_names(const RuleNode& rule) const {
     auto names = unary_domain_scope_names(build_filter_bindings(rule.filter));
     if (rule.pairs.has_value()) {
         for (const auto& binding : rule.pairs->bindings) {
@@ -4592,14 +4659,6 @@ std::unordered_set<std::string> SemanticAnalyzer::rule_binding_names(const RuleN
                     names.insert(*entry.alias);
                 }
             }
-        }
-    }
-    for (const auto& handler : rule.handlers) {
-        if (handler.trigger_form == HandlerTriggerForm::Event) {
-            names.insert(handler.event_name);
-        }
-        if (handler.alias.has_value()) {
-            names.insert(*handler.alias);
         }
     }
     return names;
@@ -4648,8 +4707,10 @@ void SemanticAnalyzer::collect_named_entities(const ProgramNode& program) {
     }
 }
 
+// Clauses run outside handlers, so only the domain shadows names there; each
+// handler body also sees its own trigger names.
 void SemanticAnalyzer::resolve_named_rule_access(RuleNode& rule) {
-    const auto bindings = rule_binding_names(rule);
+    const auto bindings = rule_domain_names(rule);
     const auto clause   = [&](ExprNode& expr) {
         resolve_named_access_expr(expr, bindings, NamedAccessContext::Rule);
     };
@@ -4671,7 +4732,9 @@ void SemanticAnalyzer::resolve_named_rule_access(RuleNode& rule) {
         resolve_named_access_expr(*key.expression, scope, NamedAccessContext::Rule);
     }
     for (auto& handler : rule.handlers) {
-        resolve_named_access_stmts(handler.body, scope, NamedAccessContext::Rule);
+        auto handler_scope = scope;
+        insert_trigger_names(handler_scope, handler);
+        resolve_named_access_stmts(handler.body, handler_scope, NamedAccessContext::Rule);
     }
 }
 
@@ -4843,7 +4906,7 @@ void SemanticAnalyzer::resolve_named_access_expr(ExprNode& expr,
                     errors_.error(e.location, "template '" + e.name + "' is not an entity_id value; spawn it instead");
                 }
             } else if constexpr (std::is_same_v<E, MemberExpr>) {
-                if (resolve_const_member(e, shadowed)) {
+                if (resolve_const_member(e, shadowed) || resolve_phase_dt(e, shadowed)) {
                     return;
                 }
                 if (!resolve_named_access_chain(e, shadowed, context)) {
@@ -6633,6 +6696,27 @@ void SemanticAnalyzer::fold_when_clause_named_reads(const RuleNode& rule, Handle
     }
 }
 
+namespace {
+
+void add_bound_read(HandlerContract& contract, std::size_t binding_index, const SymbolId& trait) {
+    BoundTraitAccess access{.binding_index = binding_index, .trait = trait};
+    if (!std::ranges::contains(contract.bound_reads, access)) {
+        contract.bound_reads.push_back(std::move(access));
+    }
+}
+
+// The pair binding an argument names directly, as in `physics.touching(a, b)`.
+std::optional<std::size_t> direct_binding(const ExprNode& arg, const PairScope& pair_scope) {
+    const auto* ident = std::get_if<IdentExpr>(&arg.expr);
+    if (ident == nullptr || ident->resolved_entity_id.has_value()) {
+        return std::nullopt;
+    }
+    const auto found = pair_scope.find(ident->name);
+    return found == pair_scope.end() ? std::nullopt : std::optional<std::size_t>{found->second.index};
+}
+
+}  // namespace
+
 void SemanticAnalyzer::record_pair_binding_write(const VarAssign& node,
                                                  const PairScope& pair_scope,
                                                  InferredHandlerContract& contract) const {
@@ -6647,10 +6731,7 @@ void SemanticAnalyzer::record_pair_binding_write(const VarAssign& node,
     if (!resolved.has_value()) {
         return;
     }
-    const BoundTraitAccess access{.binding_index = resolved->binding_index, .trait = resolved->trait_id};
-    if (std::ranges::find(contract.bound_reads, access) == contract.bound_reads.end()) {
-        contract.bound_reads.push_back(access);
-    }
+    add_bound_read(contract, resolved->binding_index, resolved->trait_id);
     record_write(contract,
                  resolved->trait_id,
                  segment_at(node.path, resolved->consumed_segments),
@@ -6692,10 +6773,7 @@ InferredHandlerContract SemanticAnalyzer::infer_pair_handler_contract(const Rule
             return false;
         }
         if (auto resolved = resolve_pair_member_chain(root_name, segments, pair_scope); resolved.has_value()) {
-            BoundTraitAccess access{.binding_index = resolved->binding_index, .trait = resolved->trait_id};
-            if (std::ranges::find(contract.bound_reads, access) == contract.bound_reads.end()) {
-                contract.bound_reads.push_back(access);
-            }
+            add_bound_read(contract, resolved->binding_index, resolved->trait_id);
             record_read(contract,
                         resolved->trait_id,
                         segment_at(segments, resolved->consumed_segments),
@@ -6705,6 +6783,9 @@ InferredHandlerContract SemanticAnalyzer::infer_pair_handler_contract(const Rule
     };
 
     auto resolve_read = [&](const ExprNode& expr, const LocalNames&) -> bool {
+        if (const auto* call = std::get_if<CallExpr>(&expr.expr)) {
+            record_collider_query_reads(*call, pair_scope, contract);
+        }
         // Bare pair-binding references and locals carry no read on their own.
         return std::holds_alternative<MemberExpr>(expr.expr) && try_record_pair_read(expr);
     };
@@ -6798,6 +6879,177 @@ const std::array<OverlapPredicateSpec, 3>& recognized_overlap_predicates() {
 
 }  // namespace
 
+std::optional<ColliderQueryKind> collider_query_kind(const CallExpr& call) {
+    const auto& callee = call.resolved_callee_id;
+    if (!callee.has_value() || callee->kind != SymbolKind::Func || callee->module.name != kPhysicsVolumeModule) {
+        return std::nullopt;
+    }
+    if (callee->local_name == "sweep") {
+        return ColliderQueryKind::Sweep;
+    }
+    if (callee->local_name == "touching") {
+        return ColliderQueryKind::Touching;
+    }
+    return std::nullopt;
+}
+
+std::array<std::size_t, 2> collider_query_entity_args(ColliderQueryKind kind) {
+    return kind == ColliderQueryKind::Sweep ? std::array<std::size_t, 2>{0, 2} : std::array<std::size_t, 2>{0, 1};
+}
+
+bool is_sweep_hit_type(const TypeInfo& type) {
+    return type.kind == TypeKind::Struct && type.symbol_id.has_value() &&
+           make_canonical_id(*type.symbol_id) == kSweepHitCanonical;
+}
+
+std::optional<std::string_view> collider_shape_trait(const std::optional<SymbolId>& trait) {
+    if (!trait.has_value() || trait->module.name != kPhysicsVolumeModule) {
+        return std::nullopt;
+    }
+    const auto found = std::ranges::find(kColliderShapeTraits, std::string_view(trait->local_name));
+    return found == kColliderShapeTraits.end() ? std::nullopt : std::optional{*found};
+}
+
+void SemanticAnalyzer::check_collider_shape_count(const std::vector<ArchetypeTraitEntry>& traits,
+                                                  const std::string& owner,
+                                                  const SourceLocation& location) {
+    bool collider = false;
+    std::vector<std::string_view> shapes;
+    for (const auto& entry : traits) {
+        const auto& trait = entry.resolved_trait_id;
+        if (const auto shape = collider_shape_trait(trait); shape.has_value()) {
+            shapes.push_back(*shape);
+        }
+        collider = collider || (trait.has_value() && trait->module.name == kPhysicsVolumeModule &&
+                                trait->local_name == "Collider");
+    }
+    if (!collider || shapes.size() == 1) {
+        return;
+    }
+    if (shapes.empty()) {
+        errors_.error(location,
+                      owner + " applies physics.Collider without a shape trait; add one of BoxCollider, "
+                              "SphereCollider or CapsuleCollider");
+        return;
+    }
+    std::string listed;
+    for (const auto shape : shapes) {
+        listed += listed.empty() ? "" : ", ";
+        listed += shape;
+    }
+    errors_.error(location,
+                  owner + " applies physics.Collider with more than one shape trait (" + listed + "); keep exactly one");
+}
+
+void SemanticAnalyzer::validate_collider_shapes(const ProgramNode& program) {
+    std::function<void(const std::vector<ChildArchetypeNode>&, const std::string&)> check_children;
+    check_children = [&](const std::vector<ChildArchetypeNode>& children, const std::string& parent) {
+        for (const auto& child : children) {
+            const auto owner = "child '" + child.role + "' of " + parent;
+            check_collider_shape_count(child.traits, owner, child.location);
+            check_children(child.children, owner);
+        }
+    };
+    for (const auto& decl : program.declarations) {
+        if (const auto* tmpl = std::get_if<TemplateNode>(&decl)) {
+            const auto owner = "template '" + tmpl->name + "'";
+            check_collider_shape_count(tmpl->traits, owner, tmpl->location);
+            check_children(tmpl->children, owner);
+        } else if (const auto* entity = std::get_if<EntityNode>(&decl)) {
+            const auto owner = "entity '" + entity->name + "'";
+            check_collider_shape_count(entity->traits, owner, entity->location);
+            check_children(entity->children, owner);
+        }
+    }
+}
+
+void SemanticAnalyzer::check_collider_query_args(const CallExpr& call, const RuleNode* rule) {
+    const auto kind = collider_query_kind(call);
+    if (!kind.has_value()) {
+        return;
+    }
+    const std::string usage = std::string("physics.") + (*kind == ColliderQueryKind::Sweep ? "sweep" : "touching") +
+                              " takes bindings of the calling rule";
+    for (const auto index : collider_query_entity_args(*kind)) {
+        if (index >= call.args.size()) {
+            continue;
+        }
+        const auto& arg    = *call.args[index];
+        const auto* ident  = std::get_if<IdentExpr>(&arg.expr);
+        const bool binding = rule != nullptr && rule->pairs.has_value() && ident != nullptr &&
+                             !ident->resolved_entity_id.has_value() &&
+                             std::ranges::contains(rule->pairs->bindings, ident->name, &PairBindingNode::name);
+        if (binding) {
+            continue;
+        }
+        if (ident != nullptr && rule != nullptr) {
+            errors_.error(arg.location, "'" + ident->name + "' is not a binding of rule '" + rule->name + "'; " + usage);
+        } else {
+            errors_.error(arg.location, usage);
+        }
+    }
+}
+
+void SemanticAnalyzer::validate_collider_queries(const ProgramNode& program) {
+    InferredHandlerContract scratch;
+    for (const auto& decl : program.declarations) {
+        const auto* rule = std::get_if<RuleNode>(&decl);
+        const auto* func = std::get_if<FuncNode>(&decl);
+        const auto check = [&](const ExprNode& expr, const LocalNames&) {
+            if (const auto* call = std::get_if<CallExpr>(&expr.expr)) {
+                check_collider_query_args(*call, rule);
+            }
+            return false;
+        };
+        const auto ignore_assign = [](const VarAssign&, const LocalNames&) {};
+        const auto ignore_project = [](const SymbolId&) {};
+        if (func != nullptr) {
+            walk_handler_body(func->body, {}, scratch, check, ignore_assign, ignore_project);
+            continue;
+        }
+        if (rule == nullptr) {
+            continue;
+        }
+        for (const auto* root : rule_clause_read_roots(*rule)) {
+            walk_expression_reads(*root, {}, scratch, check);
+        }
+        for (const auto& handler : rule->handlers) {
+            walk_handler_body(handler.body, {}, scratch, check, ignore_assign, ignore_project);
+        }
+    }
+}
+
+// Each collider argument reads its binding's transform, filter and shape;
+// shape traits are read when present, so they don't join the selection.
+void SemanticAnalyzer::record_collider_query_reads(const CallExpr& call,
+                                                   const PairScope& pair_scope,
+                                                   HandlerContract& contract) const {
+    const auto kind = collider_query_kind(call);
+    if (!kind.has_value()) {
+        return;
+    }
+    const auto physics   = ModuleId{.name = std::string(kPhysicsVolumeModule)};
+    const auto transform = make_symbol_id(SymbolKind::Trait, ModuleId{.name = std::string(kTransformVolumeModule)}, "WorldTransform");
+    const auto collider  = make_symbol_id(SymbolKind::Trait, physics, "Collider");
+    for (const auto index : collider_query_entity_args(*kind)) {
+        const auto binding = index < call.args.size() ? direct_binding(*call.args[index], pair_scope) : std::nullopt;
+        if (!binding.has_value()) {
+            continue;
+        }
+        const auto read = [&](const SymbolId& trait, const std::optional<std::string>& field) {
+            add_bound_read(contract, *binding, trait);
+            record_read(contract, trait, field, find_resolved_trait(trait));
+        };
+        read(transform, "position");
+        read(transform, "rotation");
+        read(collider, "layer");
+        read(collider, "mask");
+        for (const auto shape : kColliderShapeTraits) {
+            read(make_symbol_id(SymbolKind::Trait, physics, std::string(shape)), std::nullopt);
+        }
+    }
+}
+
 const ExprNode* resolve_expr_path(const ExprNode& root, const ExprPath& path) {
     const ExprNode* node = &root;
     for (const auto step : path) {
@@ -6841,6 +7093,93 @@ std::optional<SemanticAnalyzer::SpatialJoinMatch> SemanticAnalyzer::try_recogniz
         return std::nullopt;
     }
     return SpatialJoinMatch{.dimension = spec->dimension, .left = std::move(shapes[0]), .right = std::move(shapes[1])};
+}
+
+namespace {
+
+// Structural equality over the forms a sweep delta takes; any other form
+// compares unequal, which only gives up acceleration.
+bool same_expression(const ExprNode& lhs, const ExprNode& rhs) {
+    if (lhs.expr.index() != rhs.expr.index()) {
+        return false;
+    }
+    const auto same = [](const std::unique_ptr<ExprNode>& a, const std::unique_ptr<ExprNode>& b) {
+        return a != nullptr && b != nullptr && same_expression(*a, *b);
+    };
+    return std::visit(
+        [&](const auto& left) -> bool {
+            using E           = std::decay_t<decltype(left)>;
+            const auto& right = std::get<E>(rhs.expr);
+            if constexpr (std::is_same_v<E, LiteralExpr>) {
+                return left.kind == right.kind && left.value == right.value;
+            } else if constexpr (std::is_same_v<E, IdentExpr>) {
+                return left.name == right.name;
+            } else if constexpr (std::is_same_v<E, SelfExpr>) {
+                return true;
+            } else if constexpr (std::is_same_v<E, MemberExpr>) {
+                return left.member == right.member && same(left.object, right.object);
+            } else if constexpr (std::is_same_v<E, UnaryExpr>) {
+                return left.op == right.op && same(left.operand, right.operand);
+            } else if constexpr (std::is_same_v<E, BinaryExpr>) {
+                return left.op == right.op && same(left.left, right.left) && same(left.right, right.right);
+            } else if constexpr (std::is_same_v<E, CallExpr>) {
+                return left.arg_names == right.arg_names && same(left.callee, right.callee) &&
+                       std::ranges::equal(left.args, right.args, same);
+            } else {
+                return false;
+            }
+        },
+        lhs.expr);
+}
+
+}  // namespace
+
+std::optional<SemanticAnalyzer::SpatialJoinMatch> SemanticAnalyzer::try_recognize_touching(const CallExpr& call,
+                                                                                         const PairScope& pair_scope) {
+    if (collider_query_kind(call) != ColliderQueryKind::Touching || call.args.size() != 2) {
+        return std::nullopt;
+    }
+    const auto first  = direct_binding(*call.args[0], pair_scope);
+    const auto second = direct_binding(*call.args[1], pair_scope);
+    if (!first.has_value() || !second.has_value() || *first == *second) {
+        return std::nullopt;
+    }
+    return SpatialJoinMatch{.dimension = SpatialJoinDimension::Volume3D,
+                            .left      = {.binding_index = *first, .kind = SpatialShapeKind::Collider},
+                            .right     = {.binding_index = *second, .kind = SpatialShapeKind::Collider}};
+}
+
+// Pruning a row can only drop a miss, which is first_hit's identity, so every
+// aggregate must be a first_hit over the same sweep: any other reducer counts
+// or sums rows. The delta may read only the subject.
+std::optional<SpatialJoinPlan> SemanticAnalyzer::recognize_first_hit_sweep(const RuleNode& rule,
+                                                                           const PairScope& pair_scope) {
+    if (!rule.reduce.has_value() || rule.reduce->reducers.empty()) {
+        return std::nullopt;
+    }
+    const auto& reducers = rule.reduce->reducers;
+    const auto is_sweep  = [&](const ReducerDecl& reducer) {
+        const auto* call = reducer.input == nullptr ? nullptr : std::get_if<CallExpr>(&reducer.input->expr);
+        return reducer.kind == ReducerKind::FirstHit && call != nullptr &&
+               collider_query_kind(*call) == ColliderQueryKind::Sweep && call->args.size() == 3 &&
+               same_expression(*reducer.input, *reducers.front().input);
+    };
+    if (!std::ranges::all_of(reducers, is_sweep)) {
+        return std::nullopt;
+    }
+    const auto& sweep   = std::get<CallExpr>(reducers.front().input->expr);
+    const auto subject  = direct_binding(*sweep.args[0], pair_scope);
+    const auto target   = direct_binding(*sweep.args[2], pair_scope);
+    if (!subject.has_value() || !target.has_value() || *subject == *target ||
+        (pair_bindings_read(*sweep.args[1], pair_scope) & ~(1U << *subject)) != 0) {
+        return std::nullopt;
+    }
+    return SpatialJoinPlan{
+        .dimension = SpatialJoinDimension::Volume3D,
+        .left      = {.binding_index = *subject, .kind = SpatialShapeKind::SweptCollider, .slots = {ExprPath{1}}},
+        .right     = {.binding_index = *target, .kind = SpatialShapeKind::Collider},
+        .matched_predicate_index = 0,
+        .source                  = SpatialJoinSource::Reduce};
 }
 
 bool SemanticAnalyzer::spatial_join_resolved_args_equal(const SpatialJoinResolvedArg& lhs,
@@ -7004,6 +7343,9 @@ std::optional<SpatialJoinPlan> SemanticAnalyzer::recognize_spatial_join(const Ru
         std::optional<SpatialJoinMatch> match;
         if (const auto* call = std::get_if<CallExpr>(&predicate.expr); call != nullptr) {
             match = try_recognize_spatial_predicate(*call, pair_scope);
+            if (!match.has_value()) {
+                match = try_recognize_touching(*call, pair_scope);
+            }
         }
         if (!match.has_value()) {
             if (const auto* comparison = std::get_if<BinaryExpr>(&predicate.expr); comparison != nullptr) {
@@ -7018,6 +7360,9 @@ std::optional<SpatialJoinPlan> SemanticAnalyzer::recognize_spatial_join(const Ru
                                .left                     = std::move(match->left),
                                .right                    = std::move(match->right),
                                .matched_predicate_index = predicate_index};
+    }
+    if (auto swept = recognize_first_hit_sweep(rule, pair_scope); swept.has_value()) {
+        return swept;
     }
     if (!linear_distance_warned) {
         const auto& bindings = rule.pairs->bindings;
@@ -8514,6 +8859,9 @@ TypeInfo SemanticAnalyzer::infer_member_expr_type(
     }
     if (member.resolved_const_id.has_value()) {
         return find_const_type(*member.resolved_const_id);
+    }
+    if (member.resolved_phase_dt.has_value()) {
+        return make_float_type();
     }
     if (const auto named = named_field_path(member); named.has_value()) {
         return named_field_type(*named->first, named->second);

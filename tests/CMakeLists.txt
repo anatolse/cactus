@@ -147,6 +147,14 @@ target_compile_definitions(test_semantic_const PRIVATE
 )
 add_test(NAME SemanticConstTests COMMAND test_semantic_const)
 
+add_executable(test_semantic_collider_queries test_semantic_collider_queries.cpp)
+target_link_libraries(test_semantic_collider_queries PRIVATE cactus_frontend Catch2::Catch2WithMain)
+target_compile_definitions(test_semantic_collider_queries PRIVATE
+    CACTUS_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
+    CACTUS_TEST_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+)
+add_test(NAME SemanticColliderQueryTests COMMAND test_semantic_collider_queries)
+
 add_executable(test_semantic_reduce test_semantic_reduce.cpp)
 target_link_libraries(test_semantic_reduce PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticReduceTests COMMAND test_semantic_reduce)
@@ -236,6 +244,10 @@ add_test(NAME RuntimeStdlibTests COMMAND test_runtime_stdlib)
 add_executable(test_runtime_sap_broadphase test_runtime_sap_broadphase.cpp)
 target_link_libraries(test_runtime_sap_broadphase PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
 add_test(NAME RuntimeSapBroadphaseTests COMMAND test_runtime_sap_broadphase)
+
+add_executable(test_runtime_collider_physics test_runtime_collider_physics.cpp)
+target_link_libraries(test_runtime_collider_physics PRIVATE cactus_runtime_common Catch2::Catch2WithMain)
+add_test(NAME RuntimeColliderPhysicsTests COMMAND test_runtime_collider_physics)
 
 # Activation/event-scheduler runtime tests (extract-codegen-runtime-scaffolding change)
 add_executable(test_runtime_activation_scheduler test_runtime_activation_scheduler.cpp)
@@ -484,6 +496,12 @@ cactus_add_headless_behavior_test(test_rule_reductions_headless_behavior
     CACTUS_SOURCE examples/rule_reductions.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_rule_reductions_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_collider_sweep_queries_headless_behavior
+    CACTUS_SOURCE examples/collider_sweep_queries.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_collider_sweep_queries_headless_behavior.cpp
 )
 
 cactus_add_headless_behavior_test(test_team_score_reduce_headless_behavior

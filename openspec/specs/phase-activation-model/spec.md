@@ -73,3 +73,18 @@ Every phase activation, including every repetition of a periodic phase, SHALL ex
 #### Scenario: Tick observes completed fixed simulation
 - **WHEN** fixed_tick repeats and issues trait and structural changes
 - **THEN** tick begins only after every repetition and commit has completed
+
+### Requirement: A periodic phase's dt is a constant expression
+Because a periodic phase's synthesized `dt` always equals its compile-time `every:` interval, `<phase>.dt` for a phase with `every:` SHALL be a constant expression. It SHALL be usable wherever a constant is accepted, including `where:`, `reduce:`, `order by:`, and `const` declarations, with the value of the interval. Outside handlers, the name SHALL resolve to the phase declaration. Reading `dt` of a phase without `every:` outside a handler for that phase SHALL be a compile error.
+
+#### Scenario: Fixed step in a reducer
+- **WHEN** a rule reduces `first = first_hit(physics.sweep(bullet, bullet.Bullet.velocity * fixed_tick.dt, target))` and `fixed_tick` declares `every: 1.0 / 60.0`
+- **THEN** compilation accepts it and the sweep uses `delta = velocity * (1.0 / 60.0)`
+
+#### Scenario: Fixed step in a constant
+- **WHEN** a `const` block declares `STEP_DISTANCE = BULLET_SPEED * fixed_tick.dt`
+- **THEN** compilation accepts it as a compile-time constant
+
+#### Scenario: Variable-rate dt is not a constant
+- **WHEN** a `reduce:` expression reads `tick.dt` and `tick` declares no `every:`
+- **THEN** compilation reports a source-located error saying that `tick.dt` is only available inside `tick` handlers

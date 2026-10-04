@@ -1811,18 +1811,19 @@ std::optional<ReducerDecl> Parser::parse_reducer_decl() {
     auto* call         = std::get_if<CallExpr>(&value->expr);
     const auto* callee = call == nullptr ? nullptr : std::get_if<IdentExpr>(&call->callee->expr);
     if (callee == nullptr) {
-        errors_.error(value->location, "expected a reducer call: count, sum, min, max or any");
+        errors_.error(value->location, "expected a reducer call: count, sum, min, max, any or first_hit");
         return std::nullopt;
     }
     static const std::unordered_map<std::string, ReducerKind> kinds{{"count", ReducerKind::Count},
                                                                     {"sum", ReducerKind::Sum},
                                                                     {"min", ReducerKind::Min},
                                                                     {"max", ReducerKind::Max},
-                                                                    {"any", ReducerKind::Any}};
+                                                                    {"any", ReducerKind::Any},
+                                                                    {"first_hit", ReducerKind::FirstHit}};
     const auto kind = kinds.find(callee->name);
     if (kind == kinds.end()) {
         errors_.error(call->location,
-                      "unknown reducer '" + callee->name + "'; expected count, sum, min, max or any");
+                      "unknown reducer '" + callee->name + "'; expected count, sum, min, max, any or first_hit");
         return std::nullopt;
     }
     reducer.kind = kind->second;

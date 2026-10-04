@@ -7,11 +7,13 @@
 #include "frontend/ast.hpp"
 #include "frontend/symbol_identity.hpp"
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
@@ -207,11 +209,33 @@ struct BoundTraitAccess {
     friend bool operator==(const BoundTraitAccess&, const BoundTraitAccess&) = default;
 };
 
+// ── Collider queries (std.physics.volume) ───────────────────────────────────
+
+inline constexpr std::string_view kPhysicsVolumeModule   = "std.physics.volume";
+inline constexpr std::string_view kTransformVolumeModule = "std.transform.volume";
+inline constexpr std::string_view kSweepHitCanonical     = "std.physics.volume.SweepHit";
+inline constexpr std::array<std::string_view, 3> kColliderShapeTraits{"BoxCollider", "SphereCollider", "CapsuleCollider"};
+
+enum class ColliderQueryKind : std::uint8_t { Sweep, Touching };
+
+// `std.physics.volume.sweep` or `touching`, by canonical identity.
+[[nodiscard]] std::optional<ColliderQueryKind> collider_query_kind(const CallExpr& call);
+// The argument positions naming the two colliders, subject first.
+[[nodiscard]] std::array<std::size_t, 2> collider_query_entity_args(ColliderQueryKind kind);
+[[nodiscard]] bool is_sweep_hit_type(const TypeInfo& type);
+// The collider shape trait `trait` names, if it names one.
+[[nodiscard]] std::optional<std::string_view> collider_shape_trait(const std::optional<SymbolId>& trait);
+
 // ── Spatial join recognition (spatial-broadphase-runtime, dsl-where-clause) ──
 
 enum class SpatialJoinDimension : std::uint8_t { Flat2D, Volume3D };
 
-enum class SpatialShapeKind : std::uint8_t { Sphere, Box };
+// Collider shapes come from the entity's own collider; a SweptCollider also
+// covers its motion over the sweep's delta.
+enum class SpatialShapeKind : std::uint8_t { Sphere, Box, Collider, SweptCollider };
+
+// Where the recognized query sits: a `where:` predicate or a `reduce:` aggregate.
+enum class SpatialJoinSource : std::uint8_t { Where, Reduce };
 
 // Child steps from a predicate root to one of its sub-expressions: a call
 // step picks an argument, a binary step picks left (0) or right (1).
@@ -221,7 +245,8 @@ using ExprPath = std::vector<std::uint8_t>;
 
 // One pair binding's shape in a recognized overlap predicate. `slots` locate
 // its arguments in the matched predicate: a sphere has center and radius, a
-// box has center, size and rotation. Each slot reads only this binding.
+// box has center, size and rotation, a swept collider has its delta, and a
+// collider has none. Each slot reads only this binding.
 struct SpatialShape {
     std::size_t binding_index = 0;
     SpatialShapeKind kind     = SpatialShapeKind::Sphere;
@@ -230,15 +255,18 @@ struct SpatialShape {
     friend bool operator==(const SpatialShape&, const SpatialShape&) = default;
 };
 
-// Set when a pair rule's `where:` has a broad-phase-eligible overlap
-// predicate. `left` and `right` are the predicate's two
-// shapes in argument order; `binding_index` says which pair binding each reads.
+// Set when a pair rule has a broad-phase-eligible overlap predicate in
+// `where:` or a sole `first_hit` sweep in `reduce:`. `left` and `right` are
+// the query's two shapes in argument order; `binding_index` says which pair
+// binding each reads.
 struct SpatialJoinPlan {
     SpatialJoinDimension dimension = SpatialJoinDimension::Flat2D;
     SpatialShape left;
     SpatialShape right;
-    // The recognized predicate's index in `where_clause->predicates`.
+    // Index in `where_clause->predicates`, or in `reduce->reducers` whose
+    // input is the matched sweep call.
     std::size_t matched_predicate_index = 0;
+    SpatialJoinSource source             = SpatialJoinSource::Where;
 
     friend bool operator==(const SpatialJoinPlan&, const SpatialJoinPlan&) = default;
 };
@@ -765,6 +793,15 @@ private:
     void check_clause_purity_expr(const ExprNode& expr, const char* message);
     // `when:` predicates are pure, `bool`, and read no binding, `self`, or event payload.
     void validate_when_clauses(ProgramNode& program);
+    // An archetype with physics.Collider has exactly one shape trait.
+    void validate_collider_shapes(const ProgramNode& program);
+    void check_collider_shape_count(const std::vector<ArchetypeTraitEntry>& traits,
+                                    const std::string& owner,
+                                    const SourceLocation& location);
+    // physics.sweep/touching take the calling rule's own pair bindings.
+    void validate_collider_queries(const ProgramNode& program);
+    void check_collider_query_args(const CallExpr& call, const RuleNode* rule);
+    void record_collider_query_reads(const CallExpr& call, const PairScope& pair_scope, HandlerContract& contract) const;
 
     // Archetype bodies resolve before template flattening so the clones carry the
     // annotations; rule bodies after it, so each entity's composed trait set is known.
@@ -811,6 +848,7 @@ private:
     [[nodiscard]] TypeInfo named_field_type(const NamedTraitRef& ref, const std::vector<std::string>& fields) const;
     // Names a rule's handlers bind: filter aliases and fields, pair bindings, triggers and their aliases.
     [[nodiscard]] std::unordered_set<std::string> rule_binding_names(const RuleNode& rule) const;
+    [[nodiscard]] std::unordered_set<std::string> rule_domain_names(const RuleNode& rule) const;
     // dsl-rule-limit: `limit:` needs a filter:/pairs: domain, `per <binding>`
     // needs a pairs: domain naming one of its bindings, and the count
     // expression is pure, `int`-typed, and scoped to the `per` binding alone
@@ -1119,11 +1157,14 @@ private:
     void record_pair_binding_write(const VarAssign& node,
                                    const PairScope& pair_scope,
                                    InferredHandlerContract& contract) const;
+    // A `reduce:` whose every aggregate is `first_hit` over one binding-to-binding sweep.
+    [[nodiscard]] static std::optional<SpatialJoinPlan> recognize_first_hit_sweep(const RuleNode& rule,
+                                                                                const PairScope& pair_scope);
     // Read-only pattern-match over an already-validated
     // `where:` predicate list for a direct, unwrapped recognized overlap call
     // whose two shapes each read one distinct pair binding, or the equivalent
-    // manual squared-distance-via-dot expression. Without one, reports one
-    // warning (via `errors`): the linear-distance warning when a predicate
+    // manual squared-distance-via-dot expression, else a first_hit sweep.
+    // Without one, reports one warning (via `errors`): the linear-distance warning when a predicate
     // compares that distance between binding-rooted positions, otherwise the
     // unaccelerated pair rule warning at the `pairs:` clause.
     [[nodiscard]] static std::optional<SpatialJoinPlan> recognize_spatial_join(const RuleNode& rule,
@@ -1149,6 +1190,8 @@ private:
     };
     [[nodiscard]] static std::optional<SpatialJoinMatch> try_recognize_spatial_predicate(const CallExpr& call,
                                                                                          const PairScope& pair_scope);
+    [[nodiscard]] static std::optional<SpatialJoinMatch> try_recognize_touching(const CallExpr& call,
+                                                                               const PairScope& pair_scope);
 
     // A resolved pair of a BinaryExpr's two operands (subtraction for a
     // position delta, addition for a radius sum), each resolved the same way
@@ -1194,6 +1237,8 @@ private:
     void validate_trait_default_values(ProgramNode& program);
     bool resolve_const_ident(IdentExpr& ident) const;
     bool resolve_const_member(MemberExpr& member, const std::unordered_set<std::string>& shadowed) const;
+    bool resolve_phase_dt(MemberExpr& member, const std::unordered_set<std::string>& shadowed) const;
+    [[nodiscard]] bool phase_is_periodic(const SymbolId& phase) const;
     void resolve_declaration_const_refs(ProgramNode& program);
     void resolve_const_refs(ExprNode& expr) const;
     void resolve_const_refs(std::vector<FieldAssignment>& fields) const;

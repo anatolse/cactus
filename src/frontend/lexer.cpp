@@ -39,7 +39,6 @@ const std::unordered_map<std::string, TokenType>& keyword_map() {
         {"filter", TokenType::FILTER},
         {"exclude", TokenType::EXCLUDE},
         {"after", TokenType::AFTER},
-        {"target", TokenType::TARGET},
         {"template", TokenType::TEMPLATE},
         {"spawn", TokenType::SPAWN},
         {"destroy", TokenType::DESTROY},

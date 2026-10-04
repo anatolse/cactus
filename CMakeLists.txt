@@ -117,6 +117,7 @@ target_include_directories(cactus_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 # ── Reusable C++ Runtime Libraries ─────────────────────────────────────────────
 add_library(cactus_runtime_common STATIC
     src/common/cactus_runtime.cpp
+    src/common/collider_physics.cpp
     src/common/persistence_document.cpp
     src/common/persistence_validation.cpp
 )

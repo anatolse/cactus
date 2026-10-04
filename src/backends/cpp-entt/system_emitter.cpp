@@ -519,6 +519,11 @@ struct PairCodegenBinding {
     // the frontend's PairBindingScope::writable.
     bool writable = false;
     std::unordered_map<std::string, PairCodegenTraitAccess> traits;  // access key -> resolved trait
+    // Builds this binding's collider descriptor: a specialized builder when the
+    // selection names exactly one shape trait, the generic lookup otherwise.
+    std::string collider_shape_builder = EnttCodegenUtils::collider_shape_builder();
+    // Set inside a reduction fold, where descriptors come from the pass cache.
+    bool collider_shapes_cached = false;
 };
 
 struct PairCodegenScope {
@@ -648,6 +653,16 @@ struct PairBindingCodegen {
                                          // is also this binding's source-level name
 };
 
+std::string collider_shape_builder(const PairBindingNode& binding) {
+    std::vector<std::string_view> shapes;
+    for (const auto& entry : binding.traits) {
+        if (const auto shape = collider_shape_trait(entry.resolved_trait_id); shape.has_value()) {
+            shapes.push_back(*shape);
+        }
+    }
+    return EnttCodegenUtils::collider_shape_builder(shapes.size() == 1 ? std::optional{shapes.front()} : std::nullopt);
+}
+
 // Mirrors the frontend's build_pair_scope (semantic_analyzer.cpp): consumes
 // each already-resolved trait entry (resolved_trait_id) into an access-key ->
 // cpp-type map, keyed by qualified spelling and binding-local alias, exactly
@@ -672,6 +687,7 @@ PairBindingCodegen build_pair_binding_codegen(const PairBindingNode& binding, co
             result.scope.traits[*entry.alias] = access;
         }
     }
+    result.scope.collider_shape_builder = collider_shape_builder(binding);
     return result;
 }
 
@@ -1179,7 +1195,7 @@ static NumericKind infer_numeric_kind(const ExprNode& expr,
                 // vec2/vec3 components are always float in this type system —
                 // covers the overwhelmingly common operand shape (`.x`/`.y`/`.z`)
                 // without needing to resolve the object's own declared type.
-                if (e.member == "x" || e.member == "y" || e.member == "z") {
+                if (e.member == "x" || e.member == "y" || e.member == "z" || e.resolved_phase_dt.has_value()) {
                     return NumericKind::Float;
                 }
                 if (e.resolved_const_id.has_value()) {
@@ -1233,6 +1249,39 @@ static std::string rewrite_expr(const ExprNode& expr,
                                 const std::unordered_map<std::string, std::string>& cpp_overrides = {},
                                 const PairCodegenScope* pair_scope                                = nullptr,
                                 const LocalNumericKinds* local_kinds                              = nullptr);
+
+// One collider argument's descriptor: from the pass cache inside a reduction
+// fold, otherwise built fresh from the registry.
+static std::string collider_shape_cpp(const PairCodegenBinding& binding, const std::string& entity) {
+    if (binding.collider_shapes_cached) {
+        return "cactus_shape_of_" + binding.binding_name + "(" + entity + ")";
+    }
+    return binding.collider_shape_builder + "(registry, " + entity + ")";
+}
+
+// physics.sweep / physics.touching over two rule bindings, which semantic
+// analysis guarantees.
+static std::string lower_collider_query(ColliderQueryKind kind,
+                                        const CallExpr& call,
+                                        const PairCodegenScope* pair_scope,
+                                        const std::function<std::string(const ExprNode&)>& rewrite) {
+    const auto [subject_arg, target_arg] = collider_query_entity_args(kind);
+    const auto entity_shape              = [&](std::size_t index) {
+        const auto entity   = rewrite(*call.args[index]);
+        const auto* ident   = std::get_if<IdentExpr>(&call.args[index]->expr);
+        const auto* binding = pair_scope == nullptr || ident == nullptr ? nullptr : pair_scope->find(ident->name);
+        return std::pair{entity,
+                         binding == nullptr ? EnttCodegenUtils::collider_shape_builder() + "(registry, " + entity + ")"
+                                            : collider_shape_cpp(*binding, entity)};
+    };
+    const auto [subject, subject_shape] = entity_shape(subject_arg);
+    const auto [target, target_shape]   = entity_shape(target_arg);
+    if (kind == ColliderQueryKind::Touching) {
+        return "cactus_collider_touching(" + subject_shape + ", " + target_shape + ", " + subject + ", " + target + ")";
+    }
+    return "cactus_collider_sweep(" + subject_shape + ", " + rewrite(*call.args[1]) + ", " + target_shape + ", " +
+           subject + ", " + target + ")";
+}
 
 // Which component pool `registry.sort<T>()` physically permutes, and which
 // element the sorted view is then pinned to drive iteration from. Any
@@ -2307,6 +2356,12 @@ static std::string rewrite_expr(  // NOLINT(readability-function-cognitive-compl
                             argument, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds);
                     });
                 }
+                if (const auto kind = collider_query_kind(e); kind.has_value()) {
+                    return lower_collider_query(*kind, e, pair_scope, [&](const ExprNode& arg) {
+                        return rewrite_expr(
+                            arg, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds);
+                    });
+                }
                 if (auto* ident = std::get_if<IdentExpr>(&e.callee->expr);
                     ident != nullptr && ident->name == "exists" && e.args.size() == 1) {
                     return "registry.valid(" +
@@ -2468,6 +2523,9 @@ static std::string rewrite_expr(  // NOLINT(readability-function-cognitive-compl
                            e.args, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds) +
                        ")";
             } else if constexpr (std::is_same_v<E, MemberExpr>) {
+                if (e.resolved_phase_dt.has_value()) {
+                    return EnttCodegenUtils::phase_dt_cpp_name(*e.resolved_phase_dt);
+                }
                 if (auto lowered = lowered_trigger_reference(expr)) {
                     return *std::move(lowered);
                 }
@@ -3523,9 +3581,29 @@ static std::string emit_pair_where_filter(std::ostringstream& out,
     return name;
 }
 
+// The expression a spatial plan's slots are paths into: the matched `where:`
+// predicate, or the input of the matched `reduce:` aggregate.
+static const ExprNode* spatial_join_root(const RuleNode& sys, const HandlerContract* contract) {
+    if (contract == nullptr || !contract->spatial_join.has_value()) {
+        return nullptr;
+    }
+    const auto& plan = *contract->spatial_join;
+    if (plan.source == SpatialJoinSource::Reduce) {
+        return sys.reduce.has_value() ? sys.reduce->reducers[plan.matched_predicate_index].input.get() : nullptr;
+    }
+    return sys.where_clause.has_value() ? sys.where_clause->predicates[plan.matched_predicate_index].get() : nullptr;
+}
+
+static bool is_collider_shape(SpatialShapeKind kind) {
+    return kind == SpatialShapeKind::Collider || kind == SpatialShapeKind::SweptCollider;
+}
+
 static const char* sap_proxy_function(SpatialShapeKind kind, SpatialJoinDimension dimension) {
     if (kind == SpatialShapeKind::Box) {
         return "box_proxy";
+    }
+    if (is_collider_shape(kind)) {
+        return "collider_proxy";
     }
     return dimension == SpatialJoinDimension::Flat2D ? "circle_proxy" : "sphere_proxy";
 }
@@ -3556,13 +3634,24 @@ static void emit_sap_pair_activation(std::ostringstream& out,
         out << "            for (std::size_t __sap_i = 0; __sap_i < " << binding_name
             << "_snapshot.size(); ++__sap_i) {\n";
         out << "                const auto " << binding_name << " = " << binding_name << "_snapshot[__sap_i];\n";
-        out << "                __sap_proxies.push_back(" << ns << sap_proxy_function(shape->kind, plan.dimension)
-            << "(" << binding_name << ", __sap_i, " << ns << "SapSide::"
-            << (shape->binding_index == 0 ? "Left" : "Right");
-        for (const auto& slot : shape->slots) {
-            out << ", " << rewrite_expr(*resolve_expr_path(predicate, slot), {}, program, {}, {}, &pair_codegen_scope);
+        const bool collider = is_collider_shape(shape->kind);
+        std::ostringstream proxy;
+        proxy << ns << sap_proxy_function(shape->kind, plan.dimension) << "(" << binding_name << ", __sap_i, " << ns
+              << "SapSide::" << (shape->binding_index == 0 ? "Left" : "Right");
+        if (collider) {
+            proxy << ", " << collider_shape_cpp(*pair_codegen_scope.find(binding_name), binding_name);
         }
-        out << "));\n";
+        for (const auto& slot : shape->slots) {
+            proxy << ", " << rewrite_expr(*resolve_expr_path(predicate, slot), {}, program, {}, {}, &pair_codegen_scope);
+        }
+        proxy << ")";
+        if (collider) {
+            out << "                if (const auto __sap_proxy = " << proxy.str() << ") {\n";
+            out << "                    __sap_proxies.push_back(*__sap_proxy);\n";
+            out << "                }\n";
+        } else {
+            out << "                __sap_proxies.push_back(" << proxy.str() << ");\n";
+        }
         out << "            }\n";
     }
     out << "            " << ns << (flat ? "SapBroadPhase2D" : "SapBroadPhase3D") << " __sap;\n";
@@ -3733,11 +3822,11 @@ static void emit_pair_handler_body(std::ostringstream& out,
     out << "            }\n";
     out << "        }\n";
     out << "    } else {\n";
-    if (contract != nullptr && contract->spatial_join.has_value() && sys.where_clause.has_value()) {
-        const auto& plan = *contract->spatial_join;
+    const auto* spatial_root = spatial_join_root(sys, contract);
+    if (spatial_root != nullptr) {
         emit_sap_pair_activation(out,
-                                 plan,
-                                 *sys.where_clause->predicates[plan.matched_predicate_index],
+                                 *contract->spatial_join,
+                                 *spatial_root,
                                  pair_binding_codegens,
                                  pair_codegen_scope,
                                  program,
@@ -4078,7 +4167,7 @@ static void emit_when_gate(std::ostringstream& out, const RuleNode& sys, const D
 // ── Rule reductions ─────────────────────────────────────────────────────────
 
 static std::string reducer_cpp_type(const ReducerDecl& reducer) {
-    return EnttCodegenUtils::type_to_cpp(make_type_info(reducer.result_type, ""));
+    return EnttCodegenUtils::value_type_to_cpp(reducer.result_type);
 }
 
 // One accumulator per group, and the finished aggregate row the handler and
@@ -4087,7 +4176,8 @@ static std::string reducer_cpp_type(const ReducerDecl& reducer) {
 static void emit_reduce_types(std::ostringstream& out, const ReduceClause& reduce) {
     out << "    struct cactus_reduce_acc {\n";
     for (const auto& reducer : reduce.reducers) {
-        out << "        " << reducer_cpp_type(reducer) << " " << reducer.name << "{};\n";
+        out << "        " << reducer_cpp_type(reducer) << " " << reducer.name
+            << (reducer.kind == ReducerKind::FirstHit ? " = cactus_collider_sweep_miss();\n" : "{};\n");
         if (reducer_has_default(reducer.kind)) {
             out << "        bool " << reducer.name << "_seen = false;\n";
         }
@@ -4129,6 +4219,14 @@ static void emit_reducer_folds(std::ostringstream& out,
             }
             case ReducerKind::Any:
                 out << ind << "if (!" << field << ") { " << field << " = " << rewrite(*reducer.input) << "; }\n";
+                break;
+            case ReducerKind::FirstHit:
+                // Strict `<`: on equal t the earlier row in fold order wins.
+                out << ind << "{\n";
+                out << ind << "    const auto cactus_value = " << rewrite(*reducer.input) << ";\n";
+                out << ind << "    if (cactus_value.hit && (!" << field << ".hit || cactus_value.t < " << field
+                    << ".t)) { " << field << " = cactus_value; }\n";
+                out << ind << "}\n";
                 break;
         }
     }
@@ -4210,8 +4308,9 @@ static void emit_reduced_dispatch(std::ostringstream& out,
     LocalNumericKinds local_kinds;
     for (const auto& reducer : reduce.reducers) {
         lexical_locals.insert(reducer.name);
-        if (reducer.result_type == TypeKind::Int || reducer.result_type == TypeKind::Float) {
-            local_kinds[reducer.name] = reducer.result_type == TypeKind::Int ? NumericKind::Int : NumericKind::Float;
+        const auto kind = reducer.result_type.kind;
+        if (kind == TypeKind::Int || kind == TypeKind::Float) {
+            local_kinds[reducer.name] = kind == TypeKind::Int ? NumericKind::Int : NumericKind::Float;
         }
     }
     if (reduce.per_binding.has_value()) {
@@ -4227,6 +4326,48 @@ static void emit_reduced_dispatch(std::ostringstream& out,
     out << "    for (const auto& cactus_row : cactus_rows) {\n";
     out << "        cactus_reduced_body(cactus_row);\n";
     out << "    }\n";
+}
+
+static bool rule_uses_collider_queries(const RuleNode& sys) {
+    bool found = false;
+    const auto check = [&](const ExprNode& root) {
+        visit_expression(root, [&](const ExprNode& node) {
+            const auto* call = std::get_if<CallExpr>(&node.expr);
+            found            = found || (call != nullptr && collider_query_kind(*call).has_value());
+        });
+    };
+    if (sys.where_clause.has_value()) {
+        for (const auto& predicate : sys.where_clause->predicates) {
+            check(*predicate);
+        }
+    }
+    if (sys.reduce.has_value()) {
+        for (const auto& reducer : sys.reduce->reducers) {
+            if (reducer.input != nullptr) {
+                check(*reducer.input);
+            }
+        }
+    }
+    return found;
+}
+
+// Descriptors for every entity of one binding's snapshot, indexed by entity
+// slot, and the `cactus_shape_of_<binding>` accessor the fold reads them by.
+static void emit_collider_shape_cache(std::ostringstream& out, const PairCodegenBinding& binding) {
+    const auto& name = binding.binding_name;
+    out << "    std::vector<std::optional<cactus::runtime::physics::ColliderShape>> cactus_shapes_" << name << ";\n";
+    out << "    for (const auto " << name << " : " << name << "_snapshot) {\n";
+    out << "        const auto cactus_index = static_cast<std::size_t>(entt::to_entity(" << name << "));\n";
+    out << "        if (cactus_shapes_" << name << ".size() <= cactus_index) {\n";
+    out << "            cactus_shapes_" << name << ".resize(cactus_index + 1);\n";
+    out << "        }\n";
+    out << "        cactus_shapes_" << name << "[cactus_index] = " << binding.collider_shape_builder << "(registry, "
+        << name << ");\n";
+    out << "    }\n";
+    out << "    [[maybe_unused]] const auto cactus_shape_of_" << name
+        << " = [&](entt::entity cactus_entity) -> const std::optional<cactus::runtime::physics::ColliderShape>& {\n";
+    out << "        return cactus_shapes_" << name << "[static_cast<std::size_t>(entt::to_entity(cactus_entity))];\n";
+    out << "    };\n";
 }
 
 // A reduced pair rule: snapshot both bindings, build one group per `per`
@@ -4245,8 +4386,17 @@ static void emit_reduced_pair_handler_body(std::ostringstream& out,
         emit_pair_binding_snapshot(out, binding, 1);
     }
     emit_reduce_types(out, reduce);
+    // The fold reads one input snapshot, so each binding's collider
+    // descriptors are built once per pass.
+    auto fold_scope = pair_codegen_scope;
+    if (rule_uses_collider_queries(sys)) {
+        for (auto& binding : fold_scope.bindings) {
+            emit_collider_shape_cache(out, binding);
+            binding.collider_shapes_cached = true;
+        }
+    }
     const auto rewrite = [&](const ExprNode& expr) {
-        return rewrite_expr(expr, {}, program, {}, {}, &pair_codegen_scope);
+        return rewrite_expr(expr, {}, program, {}, {}, &fold_scope);
     };
     const auto& left  = pair_binding_codegens[0].scope.binding_name;
     const auto& right = pair_binding_codegens[1].scope.binding_name;
@@ -4284,7 +4434,8 @@ static void emit_reduced_pair_handler_body(std::ostringstream& out,
         out << "    cactus_reduce_acc cactus_total{};\n";
     }
 
-    out << "    auto cactus_fold = [&](entt::entity " << left << ", entt::entity " << right << ") {\n";
+    out << "    auto cactus_fold = [&]([[maybe_unused]] entt::entity " << left << ", [[maybe_unused]] entt::entity "
+        << right << ") {\n";
     if (reduce.per_binding.has_value()) {
         const auto& group = *reduce.per_binding;
         out << "        const auto cactus_index = static_cast<std::size_t>(entt::to_entity(" << group << "));\n";
@@ -4303,15 +4454,10 @@ static void emit_reduced_pair_handler_body(std::ostringstream& out,
     emit_reducer_folds(out, reduce, rewrite, "        ");
     out << "    };\n";
 
-    if (contract != nullptr && contract->spatial_join.has_value() && sys.where_clause.has_value()) {
-        const auto& plan = *contract->spatial_join;
-        emit_sap_pair_activation(out,
-                                 plan,
-                                 *predicates[plan.matched_predicate_index],
-                                 pair_binding_codegens,
-                                 pair_codegen_scope,
-                                 program,
-                                 "cactus_fold");
+    const auto* spatial_root = spatial_join_root(sys, contract);
+    if (spatial_root != nullptr) {
+        emit_sap_pair_activation(
+            out, *contract->spatial_join, *spatial_root, pair_binding_codegens, fold_scope, program, "cactus_fold");
     } else {
         out << "    for (auto " << left << " : " << left << "_snapshot) {\n";
         out << "        for (auto " << right << " : " << right << "_snapshot) {\n";

@@ -166,7 +166,7 @@ While multiple live (non-dying) enemies are simultaneously present, authored sep
 - **THEN** authored separation does not move either enemy for that pair
 
 ### Requirement: Player fires small cubic projectiles
-Primary mouse input SHALL spawn a small cube-rendered bullet from the first-person camera along its current forward direction, subject to a short authored cooldown. Each bullet SHALL carry velocity, finite lifetime, and a volume box collider. It SHALL be destroyed when its lifetime expires, when it hits solid map geometry, or when it hits a live enemy.
+Primary mouse input SHALL spawn a small cube-rendered bullet from the first-person camera along its current forward direction, subject to a short authored cooldown. Each bullet SHALL carry velocity, finite lifetime, and a volume collider. Each tick it SHALL sweep its collider along that tick's motion against every collider its mask selects, in one rule that does not name target shape kinds, so it cannot pass through geometry or enemies between ticks. It SHALL be destroyed when its lifetime expires or when its sweep hits anything, and a hit enemy SHALL receive one targeted hit occurrence.
 
 #### Scenario: Shot follows camera aim
 - **WHEN** primary fire is pressed while the cooldown permits a shot
@@ -174,9 +174,22 @@ Primary mouse input SHALL spawn a small cube-rendered bullet from the first-pers
 - **AND** its velocity is parallel to the camera's current forward direction
 
 #### Scenario: Bullet hitting a live enemy is consumed
-- **WHEN** a bullet overlaps a live robot or knight collider
+- **WHEN** a bullet's per-tick sweep reaches a live robot or knight collider
 - **THEN** the enemy receives one targeted hit occurrence
 - **AND** the bullet is destroyed
+
+#### Scenario: Bullet does not tunnel through thin geometry
+- **WHEN** a bullet's motion in one tick fully crosses a solid box thinner than that motion
+- **THEN** the bullet is destroyed at that box
+- **AND** no enemy behind the box receives a hit
+
+#### Scenario: Nearest target along the path wins
+- **WHEN** a wall and a live enemy both lie along one tick's sweep and the wall is nearer
+- **THEN** the bullet is destroyed and the enemy receives no hit
+
+#### Scenario: Bullets ignore the player and dying enemies
+- **WHEN** a bullet's sweep crosses the player's collider or an enemy that is already dying
+- **THEN** neither receives a hit and the bullet keeps flying
 
 #### Scenario: Unused bullet expires
 - **WHEN** a bullet reaches the end of its authored lifetime without a hit

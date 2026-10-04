@@ -33,6 +33,11 @@ public:
     // Canonical generated names. These overloads are the codegen-facing path:
     // resolved SymbolIds are lowered directly without alias/module lookup.
     static std::string symbol_cpp_name(const SymbolId& symbol);
+    // The generated constant holding a periodic phase's fixed `dt`.
+    static std::string phase_dt_cpp_name(const SymbolId& phase);
+    // The generated function building a collider descriptor from `shape_trait`,
+    // or from whichever shape trait the entity has when none is given.
+    static std::string collider_shape_builder(std::optional<std::string_view> shape_trait = std::nullopt);
     // Named entities: the global handle slot, and the per-pass reference a
     // handler hoists for one of its traits.
     static std::string named_slot_name(const SymbolId& entity);

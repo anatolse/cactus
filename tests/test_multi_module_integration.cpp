@@ -1019,3 +1019,87 @@ TEST_CASE("integration: proposal frame graph and contracted handlers lower end t
 }
 
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)
+
+// ── Collider queries (add-volume-shape-queries) ─────────────────────────────
+
+TEST_CASE("integration: collider queries lower to runtime kernels over program-built shapes",
+          "[integration][codegen-entt][stdlib-physics]") {
+    auto build_dir = integration_build_dir() / "collider_queries";
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    const std::string source =
+        "module collider_codegen\n"
+        "use std.core\n"
+        "use std.transform.volume as tv\n"
+        "use std.physics.volume as physics\n"
+        "trait Bullet:\n"
+        "    var velocity: vec3 = vec3(0.0, 0.0, 0.0)\n"
+        "    var hits: int = 0\n"
+        "trait Wall\n"
+        "rule MoveBullets:\n"
+        "    pairs:\n"
+        "        bullet:\n"
+        "            Bullet\n"
+        "            tv.WorldTransform\n"
+        "        target:\n"
+        "            physics.Collider\n"
+        "    reduce:\n"
+        "        per: bullet\n"
+        "        first = first_hit(physics.sweep(bullet, bullet.Bullet.velocity * fixed_tick.dt, target))\n"
+        "    on fixed_tick:\n"
+        "        if first.hit:\n"
+        "            bullet.Bullet.hits += 1\n"
+        "rule TouchWalls:\n"
+        "    pairs:\n"
+        "        bullet:\n"
+        "            Bullet\n"
+        "        wall:\n"
+        "            Wall\n"
+        "            physics.Collider\n"
+        "            physics.BoxCollider\n"
+        "    where:\n"
+        "        physics.touching(bullet, wall)\n"
+        "    on fixed_tick:\n"
+        "        emit physics.CollisionEnter to bullet:\n"
+        "            other = wall\n"
+        "            point = vec3(0.0, 0.0, 0.0)\n"
+        "            normal = vec3(0.0, 1.0, 0.0)\n";
+
+    ProgramNode merged_ast;
+    auto merged = link_with_stdlib(source, "collider_codegen", build_dir, merged_ast);
+    REQUIRE(merged.has_value());
+    const auto code = CppEnttCodegen::generate(*merged);
+
+    SECTION("the shape lookup names the program's component types") {
+        const auto lookup = code.find("cactus_collider_shape_of(entt::registry& registry, entt::entity entity)");
+        REQUIRE(lookup != std::string::npos);
+        CHECK(code.find("registry.try_get<std_transform_volume__WorldTransform>(entity)") != std::string::npos);
+        CHECK(code.find("registry.try_get<std_physics_volume__Collider>(entity)") != std::string::npos);
+        // Box, then Capsule, then Sphere when a runtime add leaves two shapes.
+        const auto box     = code.find("registry.all_of<std_physics_volume__BoxCollider>(entity)", lookup);
+        const auto capsule = code.find("registry.all_of<std_physics_volume__CapsuleCollider>(entity)", lookup);
+        REQUIRE(box != std::string::npos);
+        REQUIRE(capsule != std::string::npos);
+        CHECK(box < capsule);
+        CHECK(code.find("cactus::runtime::physics::sphere_shape(") != std::string::npos);
+        CHECK(code.find("cactus::runtime::physics::capsule_shape(") != std::string::npos);
+    }
+    SECTION("a binding naming one shape trait builds that kind directly") {
+        CHECK(code.find("cactus_collider_touching(cactus_collider_shape_of(registry, bullet), "
+                        "cactus_collider_shape_of_BoxCollider(registry, wall), bullet, wall)") != std::string::npos);
+        CHECK(code.find("cactus::runtime::entt_backend::collider_proxy(wall, __sap_i, ") != std::string::npos);
+    }
+    SECTION("sweep lowers to the runtime kernel over cached shapes") {
+        CHECK(code.find("cactus_collider_sweep(cactus_shape_of_bullet(bullet), ") != std::string::npos);
+        CHECK(code.find("cactus_shape_of_target(target), bullet, target)") != std::string::npos);
+        CHECK(code.find("cactus::runtime::entt_backend::collider_proxy(bullet, __sap_i, ") != std::string::npos);
+    }
+    SECTION("first_hit folds with strict < from the miss identity") {
+        CHECK(code.find("std_physics_volume__SweepHit first = cactus_collider_sweep_miss();") != std::string::npos);
+        CHECK(code.find("if (cactus_value.hit && (!cactus_acc.first.hit || cactus_value.t < cactus_acc.first.t))") !=
+              std::string::npos);
+    }
+
+    fs::remove_all(build_dir, ec);
+}

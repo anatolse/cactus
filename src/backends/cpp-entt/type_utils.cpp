@@ -328,6 +328,9 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const ProgramNode*
                 if (e.resolved_const_id.has_value()) {
                     return symbol_cpp_name(*e.resolved_const_id);
                 }
+                if (e.resolved_phase_dt.has_value()) {
+                    return phase_dt_cpp_name(*e.resolved_phase_dt);
+                }
                 if (auto* ident = std::get_if<IdentExpr>(&e.object->expr); ident != nullptr && !ident->resolved_const_id) {
                     if (!ident->name.empty() && std::isupper(static_cast<unsigned char>(ident->name[0])) != 0) {
                         return ident->name + "::" + e.member;
@@ -452,6 +455,9 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const DecoratedPro
                 if (e.resolved_const_id.has_value()) {
                     return symbol_cpp_name(*e.resolved_const_id);
                 }
+                if (e.resolved_phase_dt.has_value()) {
+                    return phase_dt_cpp_name(*e.resolved_phase_dt);
+                }
                 // Three-level: alias.EnumType.Variant → canonical_EnumType::Variant
                 if (const auto* inner_member = std::get_if<MemberExpr>(&e.object->expr)) {
                     if (EnttCodegenUtils::find_enum(program, inner_member->member) != nullptr) {
@@ -479,6 +485,19 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const DecoratedPro
 
 std::string EnttCodegenUtils::symbol_cpp_name(const SymbolId& symbol) {
     return canonical_to_cpp_name(symbol);
+}
+
+std::string EnttCodegenUtils::phase_dt_cpp_name(const SymbolId& phase) {
+    return symbol_cpp_name(phase) + "_phase_dt";
+}
+
+std::string EnttCodegenUtils::collider_shape_builder(std::optional<std::string_view> shape_trait) {
+    std::string name = "cactus_collider_shape_of";
+    if (shape_trait.has_value()) {
+        name += "_";
+        name += *shape_trait;
+    }
+    return name;
 }
 
 std::string EnttCodegenUtils::named_slot_name(const SymbolId& entity) {
@@ -756,8 +775,7 @@ std::string EnttCodegenUtils::emit_struct_construction(
 
 namespace {
 
-constexpr std::string_view kFlatTransformModule   = "std.transform.flat";
-constexpr std::string_view kVolumeTransformModule = "std.transform.volume";
+constexpr std::string_view kFlatTransformModule = "std.transform.flat";
 
 void note_world_transform_ref(const SymbolId& id, WorldTransformUsage& usage) {
     if (id.local_name != "WorldTransform") {
@@ -765,7 +783,7 @@ void note_world_transform_ref(const SymbolId& id, WorldTransformUsage& usage) {
     }
     if (id.module.name == kFlatTransformModule) {
         usage.flat = true;
-    } else if (id.module.name == kVolumeTransformModule) {
+    } else if (id.module.name == kTransformVolumeModule) {
         usage.volume = true;
     }
 }

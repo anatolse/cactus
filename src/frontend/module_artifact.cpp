@@ -504,6 +504,7 @@ void ModuleArtifact::write_contract(std::ostream& out, const HandlerContract& co
         write_shape(plan.left);
         write_shape(plan.right);
         write_u64(out, static_cast<uint64_t>(plan.matched_predicate_index));
+        write_u8(out, static_cast<uint8_t>(plan.source));
     }
 
     write_bool(out, contract.reduction.has_value());
@@ -1125,6 +1126,7 @@ HandlerContract ModuleArtifact::read_contract(std::istream& in) {
         plan.left                    = read_shape();
         plan.right                   = read_shape();
         plan.matched_predicate_index = static_cast<std::size_t>(read_u64(in));
+        plan.source                  = static_cast<SpatialJoinSource>(read_u8(in));
         contract.spatial_join        = std::move(plan);
     }
 
@@ -1649,6 +1651,7 @@ void ModuleArtifact::write_expression(std::ostream& out, const ExprNode& express
             write_optional_symbol_id(out, node.resolved_entity_id);
             write_optional_named_trait(out, node.resolved_named_trait);
             write_optional_symbol_id(out, node.resolved_const_id);
+            write_optional_symbol_id(out, node.resolved_phase_dt);
         } else if constexpr (std::is_same_v<Node, IfExpr>) {
             write_expression(out, *node.condition);
             write_expression(out, *node.then_expr);
@@ -1742,6 +1745,7 @@ std::unique_ptr<ExprNode> ModuleArtifact::read_expression(std::istream& in) {
             node.resolved_entity_id = read_optional_symbol_id(in);
             node.resolved_named_trait = read_optional_named_trait(in);
             node.resolved_const_id = read_optional_symbol_id(in);
+            node.resolved_phase_dt = read_optional_symbol_id(in);
             return wrap(std::move(node));
         }
         case 7: {

@@ -235,6 +235,8 @@ struct MemberExpr {
     std::optional<NamedTraitRef> resolved_named_trait;
     // Set by semantic analysis on a module-qualified constant (`math.PI`).
     std::optional<SymbolId> resolved_const_id;
+    // Set by semantic analysis on `<phase>.dt` read outside that phase's handlers.
+    std::optional<SymbolId> resolved_phase_dt;
 };
 
 struct MatchArm {
@@ -829,7 +831,7 @@ struct LimitClause {
 
 // ── Reduce Clause ───────────────────────────────────────────────────────────
 
-enum class ReducerKind : std::uint8_t { Count, Sum, Min, Max, Any };
+enum class ReducerKind : std::uint8_t { Count, Sum, Min, Max, Any, FirstHit };
 
 [[nodiscard]] constexpr const char* reducer_kind_name(ReducerKind kind) {
     switch (kind) {
@@ -843,6 +845,8 @@ enum class ReducerKind : std::uint8_t { Count, Sum, Min, Max, Any };
             return "max";
         case ReducerKind::Any:
             return "any";
+        case ReducerKind::FirstHit:
+            return "first_hit";
     }
     return "";
 }
@@ -852,13 +856,13 @@ enum class ReducerKind : std::uint8_t { Count, Sum, Min, Max, Any };
 }
 
 // `name = count()`, `count(binding)`, `sum(e)`, `min(e, default = v)`,
-// `max(e, default = v)` or `any(e)`.
+// `max(e, default = v)`, `any(e)` or `first_hit(e)`.
 struct ReducerDecl {
     std::string name;
     ReducerKind kind = ReducerKind::Count;
     std::unique_ptr<ExprNode> input;          // null for `count()`
     std::unique_ptr<ExprNode> default_value;  // `min`/`max` only
-    TypeKind result_type = TypeKind::Unknown;  // set by semantic analysis
+    TypeInfo result_type;  // set by semantic analysis
     SourceLocation location;
 };
 

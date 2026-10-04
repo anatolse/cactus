@@ -7623,7 +7623,7 @@ TEST_CASE("Codegen EnTT: a grouped reduction folds broad-phase rows and writes i
                                       "Sense");
     // Groups and their filter come first, then the broad phase feeds the fold.
     const auto groups = code.find("cactus_group_live[cactus_i] = 1;");
-    const auto fold   = code.find("auto cactus_fold = [&](entt::entity actor, entt::entity wall)");
+    const auto fold   = code.find("auto cactus_fold = [&]([[maybe_unused]] entt::entity actor, [[maybe_unused]] entt::entity wall)");
     const auto sap    = code.find("cactus::runtime::entt_backend::sphere_proxy(");
     const auto rows   = code.find("std::vector<cactus_reduce_row> cactus_rows;");
     REQUIRE(groups != std::string::npos);

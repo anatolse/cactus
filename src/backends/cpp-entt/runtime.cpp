@@ -2271,6 +2271,23 @@ ProxyAabb3D box_proxy(
     return ProxyAabb3D{.entity = entity, .ordinal = ordinal, .side = side, .min = min, .max = max};
 }
 
+std::optional<ProxyAabb3D> collider_proxy(entt::entity entity,
+                                          std::uint64_t ordinal,
+                                          SapSide side,
+                                          const std::optional<physics::ColliderShape>& shape,
+                                          Vector3 delta) noexcept {
+    if (!shape.has_value()) {
+        return std::nullopt;
+    }
+    const physics::Bounds bounds = physics::swept_bounds(*shape, delta);
+    const Vector3 skin{.x = physics::kSkin, .y = physics::kSkin, .z = physics::kSkin};
+    return ProxyAabb3D{.entity = entity,
+                       .ordinal = ordinal,
+                       .side    = side,
+                       .min     = Vector3Subtract(bounds.min, skin),
+                       .max     = Vector3Add(bounds.max, skin)};
+}
+
 namespace {
 
 // Dimension-agnostic bounds shared by the 2D and 3D sweeps below.

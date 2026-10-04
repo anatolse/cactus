@@ -1,0 +1,209 @@
+module collider_sweep_queries
+
+use std.core
+use std.transform.volume as tv
+use std.physics.volume as physics
+
+const:
+    HALF_STEP = 30.0 * fixed_tick.dt
+
+# A later rule in the same fixed_tick activation sees an earlier rule's
+# WorldTransform write, in a unary rule and in a pair rule.
+trait Probe:
+    var seen_x: float = -1.0
+    var pair_seen_x: float = -1.0
+    var step_seen: float = 0.0
+
+trait Anchor
+
+entity MovingProbe:
+    tv.WorldTransform:
+        position = vec3(0.0, 0.0, 0.0)
+    Probe
+
+entity ProbeAnchor:
+    Anchor
+
+rule MoveProbe:
+    filter:
+        Probe
+        tv.WorldTransform as transform
+
+    on fixed_tick:
+        transform.position.x += 1.0
+
+rule ReadProbe:
+    filter:
+        Probe as probe
+        tv.WorldTransform as transform
+    after:
+        MoveProbe
+
+    on fixed_tick:
+        probe.seen_x = transform.position.x
+
+rule ReadProbeInPair:
+    pairs:
+        probe:
+            Probe
+            tv.WorldTransform
+        anchor:
+            Anchor
+    after:
+        MoveProbe
+    reduce:
+        per: probe
+        anchors = count()
+        steps = sum(fixed_tick.dt * 60.0)
+
+    on fixed_tick:
+        probe.Probe.pair_seen_x = probe.tv.WorldTransform.position.x
+        probe.Probe.step_seen = steps + HALF_STEP
+
+# ── Collider queries ──────────────────────────────────────────────────────────
+# Shots sweep their per-tick motion against every collider their mask selects
+# and keep the first hit, whatever the target's shape.
+
+
+trait Shot:
+    var velocity: vec3 = vec3(600.0, 0.0, 0.0)
+    var hit: bool = false
+    var t: float = -1.0
+    var point: vec3 = vec3(0.0, 0.0, 0.0)
+    var normal: vec3 = vec3(0.0, 0.0, 0.0)
+    var plain_hit: bool = false
+    var plain_t: float = -1.0
+
+# Counts the shots whose first hit this collider was.
+trait Struck:
+    var by_shot: int = 0
+    var by_plain: int = 0
+
+event ShotHit
+event PlainShotHit
+
+trait Toucher:
+    var touching: int = -1
+
+template ShotAt(position: vec3, layer: int = 2, mask: int = 1):
+    tv.WorldTransform:
+        position = position
+    physics.Collider:
+        layer = layer
+        mask = mask
+    physics.SphereCollider:
+        radius = 0.1
+    Shot
+
+template BoxAt(position: vec3, layer: int = 1):
+    tv.WorldTransform:
+        position = position
+    physics.Collider:
+        layer = layer
+    physics.BoxCollider
+    Struck
+
+entity ShotBox from ShotAt(position = vec3(0.0, 0.0, 0.0))
+entity ShotSphere from ShotAt(position = vec3(0.0, 3.0, 0.0))
+entity ShotCapsule from ShotAt(position = vec3(0.0, 6.0, 0.0))
+entity ShotMiss from ShotAt(position = vec3(0.0, 10.0, 0.0))
+entity ShotMasked from ShotAt(position = vec3(0.0, 0.0, 0.0), mask = 4)
+entity ShotSelf from ShotAt(position = vec3(0.0, -3.0, 0.0), layer = 1)
+entity ShotTie from ShotAt(position = vec3(0.0, -6.0, 0.0))
+
+entity BoxTarget from BoxAt(position = vec3(5.0, 0.0, 0.0))
+entity FarBox from BoxAt(position = vec3(8.0, 0.0, 0.0))
+entity TieFirst from BoxAt(position = vec3(5.0, -6.0, 0.0))
+entity TieSecond from BoxAt(position = vec3(5.0, -6.0, 0.0))
+
+entity SphereTarget:
+    tv.WorldTransform:
+        position = vec3(5.0, 3.0, 0.0)
+    physics.Collider
+    physics.SphereCollider
+    Struck
+
+entity CapsuleTarget:
+    tv.WorldTransform:
+        position = vec3(5.0, 6.0, 0.0)
+    physics.Collider
+    physics.CapsuleCollider:
+        height = 2.0
+    Struck
+
+entity Probe3D:
+    tv.WorldTransform:
+        position = vec3(20.0, 0.0, 0.0)
+    physics.Collider:
+        layer = 8
+    physics.SphereCollider:
+        radius = 1.0
+    Toucher
+
+entity TouchBox from BoxAt(position = vec3(21.2, 0.0, 0.0))
+entity TouchFar from BoxAt(position = vec3(25.0, 0.0, 0.0))
+entity TouchMasked from BoxAt(position = vec3(18.8, 0.0, 0.0), layer = 4)
+
+rule SweepShots:
+    pairs:
+        shot:
+            Shot
+            tv.WorldTransform
+        target:
+            physics.Collider
+    reduce:
+        per: shot
+        first = first_hit(physics.sweep(shot, shot.Shot.velocity * fixed_tick.dt, target))
+
+    on fixed_tick:
+        shot.Shot.hit = first.hit
+        shot.Shot.t = first.t
+        shot.Shot.point = first.point
+        shot.Shot.normal = first.normal
+        if first.hit:
+            emit ShotHit to first.other
+
+# A second aggregate makes this the same query without acceleration, so it
+# checks every pair. Its results must match SweepShots.
+rule SweepShotsUnaccelerated:
+    pairs:
+        shot:
+            Shot
+            tv.WorldTransform
+        target:
+            physics.Collider
+    reduce:
+        per: shot
+        first = first_hit(physics.sweep(shot, shot.Shot.velocity * fixed_tick.dt, target))
+        rows = count()
+
+    on fixed_tick:
+        shot.Shot.plain_hit = first.hit
+        shot.Shot.plain_t = first.t
+        if first.hit:
+            emit PlainShotHit to first.other
+
+rule CountStrikes:
+    filter:
+        Struck as struck
+
+    on ShotHit:
+        struck.by_shot += 1
+
+    on PlainShotHit:
+        struck.by_plain += 1
+
+rule CountTouching:
+    pairs:
+        toucher:
+            Toucher
+        other:
+            physics.Collider
+    where:
+        physics.touching(toucher, other)
+    reduce:
+        per: toucher
+        touching = count()
+
+    on fixed_tick:
+        toucher.Toucher.touching = touching

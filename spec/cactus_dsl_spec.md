@@ -616,9 +616,16 @@ rule DetectBallContact:
 - a direct, unwrapped call to a recognized overlap function: `std.collision.flat.circles_overlap(a_position, a_radius, b_position, b_radius)`, `std.collision.volume.spheres_overlap(a_position, a_radius, b_position, b_radius)`, or `std.collision.volume.sphere_box_overlap(sphere_position, sphere_radius, box_position, box_size, box_rotation)`. The arguments of one shape (the `a_*`, `b_*`, `sphere_*` or `box_*` arguments) must read exactly one pair binding between them, and the two shapes must read different bindings; either binding may supply either shape. Each argument is a pure expression: it may use that shape's binding, literals, constants, named entity reads and pure calls (`a.Actor.radius + PROBE`, `inflate(a.Actor.radius)`, or just `BULLET_RADIUS`), but not the other binding; or
 - an equivalent manual expression built from the same primitives those functions use internally: a `<` or `<=` comparison whose left side is a dot product of a position delta with itself (`dot(b.position - a.position, b.position - a.position)`) and whose right side is the square of the two bindings' summed radii (`(a.radius + b.radius) * (a.radius + b.radius)`), with every position/radius operand a member-chain rooted at one of the rule's two pair bindings.
 
+**Collider queries are eligible without any bound.** A pair rule is also broad-phase eligible when its two collider arguments are its two different pair bindings and it uses either form:
+
+- a direct, unwrapped `where:` predicate `std.physics.volume.touching(a, b)`; or
+- a `reduce:` aggregate `first_hit(std.physics.volume.sweep(subject, delta, target))`, where `delta` reads no pair binding but `subject`, and every other aggregate of the clause is a `first_hit` over the same sweep. Any other reducer counts or sums rows, so pruning would change it.
+
+The bound comes from the colliders themselves: each entity's shape and, for a sweep, the subject's motion over `delta`. A pruned row can only have been a miss, which is `first_hit`'s identity, so the aggregates don't change.
+
 This is purely an optimization: it never changes which entities or tuples satisfy the rule, or the order in which they run, including a self-tuple `(e, e)` when an entity belongs to both bindings, `order by:`, and `limit:`. Every other shape — wrapped in `not`, combined with `or`, an argument reading both bindings, component-wise arithmetic (`dx*dx + dy*dy`) in place of the dot-product form, a check split across intermediate `let` bindings, or a call to any other function — remains fully supported as an ordinary predicate, evaluated exactly as written. No backend is required to implement this acceleration, and its absence is never a compile error or a behavior difference. Write the exact test in `where:`: when it is a recognized shape, the backend derives the broad phase from it, so authors write no separate looser bound. A looser recognized predicate paired with an exact test in the handler (for example an inflated radius) is still valid, but it is a stopgap for exact tests that are not yet recognized, not the intended form (see `language-philosophy`: acceleration bounds are derived, not written).
 
-**An unaccelerated pair rule produces a warning.** When a pair rule has no recognized predicate in `where:`, including a pair rule with no `where:` at all, the compiler warns at its `pairs:` clause: `pair rule '<Rule>' is not accelerated: no recognized overlap predicate in where:, so every (<left>, <right>) tuple is checked`. Unary rules never get this warning.
+**An unaccelerated pair rule produces a warning.** When a pair rule has no recognized predicate in `where:` and no eligible `first_hit` sweep in `reduce:`, including a pair rule with neither clause, the compiler warns at its `pairs:` clause: `pair rule '<Rule>' is not accelerated: no recognized overlap predicate in where:, so every (<left>, <right>) tuple is checked`. Unary rules never get this warning.
 
 **An unaccelerated linear-distance predicate produces a more specific warning.** When a pair rule's `where:` predicate calls the unaccelerated linear-distance function (`std.math.vec2.distance`, `std.math.vec3.distance`) with two pair-binding-rooted position arguments and compares the result with `<`, `<=`, `>`, or `>=` against a sum of two pair-binding-rooted radius-like reads — the same computation as the recognized shapes above, but using linear rather than squared distance — the compiler emits a warning naming the dimension-appropriate recognized alternative (`circles_overlap`/`spheres_overlap`, or the equivalent squared dot-product expression). It replaces the unaccelerated pair rule warning, so the rule gets one warning. Neither warning is an error or changes compilation output.
 
@@ -698,7 +705,8 @@ reducer         = "count" "(" [ IDENTIFIER ] ")"
                 | "sum" "(" expression ")"
                 | "min" "(" expression "," "default" "=" expression ")"
                 | "max" "(" expression "," "default" "=" expression ")"
-                | "any" "(" expression ")" ;
+                | "any" "(" expression ")"
+                | "first_hit" "(" expression ")" ;
 ```
 
 ```cactus
@@ -725,9 +733,9 @@ rule TeamTotals:
         team.Team.total = total
 ```
 
-**Reducers are typed and pure.** `count()` counts rows; `count(binding)` also counts rows (not distinct entities) and requires a pair binding. `sum`, `min` and `max` take `int` or `float` and keep that type; `min` and `max` require a `default` of exactly that type. `any` takes `bool` and yields `bool`. Reducer inputs have the purity class of a `where:` predicate (§3.8.2) and read the domain's bindings, constants and named entity fields. Reducer names are unique and must not reuse a pair binding name.
+**Reducers are typed and pure.** `count()` counts rows; `count(binding)` also counts rows (not distinct entities) and requires a pair binding. `sum`, `min` and `max` take `int` or `float` and keep that type; `min` and `max` require a `default` of exactly that type. `any` takes `bool` and yields `bool`. `first_hit` takes and yields `std.physics.volume.SweepHit` (§7.7): it ignores misses and keeps the hit with the smallest `t`, and on equal `t` the row that comes first in fold order. Reducer inputs have the purity class of a `where:` predicate (§3.8.2) and read the domain's bindings, constants and named entity fields. Reducer names are unique and must not reuse a pair binding name.
 
-**Groups are outer.** Without `per:`, the whole domain is one group, so the handler runs exactly once, even for empty input. `per: binding` names a pair binding and creates one group for every entity in that binding's membership snapshot that passes the group filters, whether or not any row survives for it. An empty group gets identity values: `count` and `sum` are `0`, `min`/`max` their default, `any` is `false`. Defaults apply only to empty input.
+**Groups are outer.** Without `per:`, the whole domain is one group, so the handler runs exactly once, even for empty input. `per: binding` names a pair binding and creates one group for every entity in that binding's membership snapshot that passes the group filters, whether or not any row survives for it. An empty group gets identity values: `count` and `sum` are `0`, `min`/`max` their default, `any` is `false`, and `first_hit` is the miss value `sweep` itself returns (`hit = false`, `t = 1.0`). Defaults apply only to empty input.
 
 **`where:` splits into group and row filters.** With `per: b`, a `where:` predicate whose pair-binding reads all root at `b` filters groups: an entity that fails it gets no group and no activation. Every other predicate filters rows. Without `per:`, every predicate filters rows. The split is syntactic.
 
@@ -1363,6 +1371,13 @@ alpha = accumulator / every
 
 Subtracting `due` deliberately drops capped whole steps while preserving the fractional remainder, so `0 <= alpha < 1` and backlog cannot grow permanently. Each repetition is a separate activation and commit boundary.
 
+**A periodic phase's `dt` is a constant.** Every activation of a phase with `every:` has `dt = every`, so `<phase>.dt` is a constant expression wherever a constant is accepted: `const` blocks, `where:`, `reduce:`, `order by:`. Inside that phase's handlers the name still means the trigger binding, with the same value. A phase without `every:` has no fixed `dt`: reading its `dt` outside its own handlers is a compile error.
+
+```cactus
+const:
+    STEP_DISTANCE = BULLET_SPEED * fixed_tick.dt
+```
+
 ### 5.2 Scene Loading and Lifecycle Events
 
 `load module.name` transitions to another module-as-scene. Conceptually:
@@ -1748,6 +1763,41 @@ int main() {
 ```
 
 Both functions return their result explicitly; neither may let an exception escape, since the runtime never wraps an adapter call in its own handler. The registered adapter takes effect immediately and stays registered until the process replaces or clears it — there is no per-save adapter selection from Cactus.
+
+### 7.7 Volume Colliders (`std.physics.volume`)
+
+**Shapes.** An entity with `Collider` (`layer`, `mask`) has exactly one shape trait: `BoxCollider` (`size`), `SphereCollider` (`radius`) or `CapsuleCollider` (`radius`, `height`). Every shape is centered on `WorldTransform.position`. A box is oriented by `WorldTransform.rotation` and `size` is its full size; a capsule is vertical along world Y and `height` includes the caps. `WorldTransform.scale` changes no shape. A `template` or `entity` that applies `Collider` with no shape trait, or with more than one, counting traits gained through `use` and `from`, is a compile error. A runtime `add`/`remove` is not checked: an entity with no shape is never hit, and one with two uses the box, then the capsule, then the sphere.
+
+**Queries.** Two pure functions test the authored shapes of two rule bindings, for any mix of shape kinds:
+
+- `sweep(subject, delta: vec3, target) SweepHit` — where `subject` first touches `target` when it moves by `delta`.
+- `touching(a, b) bool` — whether the two colliders overlap now.
+
+`SweepHit` has `hit`, `other` (the target), `t` (the fraction of `delta` travelled, in `[0, 1]`), `point` (on the target's surface) and `normal` (unit, from the target toward the subject). A miss has `hit = false`, `t = 1.0`, a stale `other`, and zero `point` and `normal`, so `position += delta * hit.t` moves the full `delta` either way. A sweep that starts in contact is a hit at `t = 0` with a `normal` that pushes the subject out.
+
+Both arguments that name colliders must be bindings of the calling pair rule; a named entity, an `entity_id` field or a local is a compile error, and so is a call outside a rule. Each binding argument adds that binding's `WorldTransform` (`position`, `rotation`), `Collider` (`layer`, `mask`) and every shape trait to the handler's reads; the shape traits are read when present and don't narrow the selection. A pair never collides when the subject's `mask` shares no bit with the target's `layer` (for `touching`, `a` is the subject), when both are the same entity, or when either lacks a transform, `Collider` or shape.
+
+```cactus
+rule MoveBullets:
+    pairs:
+        bullet:
+            Bullet
+            tv.WorldTransform
+        target:
+            physics.Collider
+    reduce:
+        per: bullet
+        first = first_hit(physics.sweep(bullet, bullet.Bullet.velocity * fixed_tick.dt, target))
+
+    on fixed_tick:
+        if first.hit:
+            emit EnemyHit to first.other
+            destroy bullet
+            return
+        bullet.tv.WorldTransform.position += bullet.Bullet.velocity * fixed_tick.dt
+```
+
+The 3D `CollisionEnter` event still uses its older axis-aligned box model.
 
 ## 8. Deferred and Migration Notes
 

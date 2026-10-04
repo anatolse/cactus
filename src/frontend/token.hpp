@@ -56,7 +56,6 @@ enum class TokenType : std::uint8_t {
     FILTER,
     EXCLUDE,
     AFTER,
-    TARGET,
     EVERY,
     MAX,
     READS,
@@ -233,8 +232,6 @@ inline const char* token_type_to_string(TokenType t) {
             return "EXCLUDE";
         case TokenType::AFTER:
             return "AFTER";
-        case TokenType::TARGET:
-            return "TARGET";
         case TokenType::EVERY:
             return "EVERY";
         case TokenType::MAX:

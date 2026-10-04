@@ -8,7 +8,7 @@ Define deterministic, typed global and outer-grouped aggregation over rule domai
 
 ### Requirement: Typed reduction clauses
 
-A regular unary or pair rule SHALL accept one `reduce:` clause. It SHALL declare immutable, uniquely named aggregate values using `count()`, `count(binding)`, `sum(expression)`, `min(expression, default = value)`, `max(expression, default = value)` or `any(expression)`. `count(binding)` SHALL count rows, not distinct entities, and SHALL require a declared pair binding; `count()` SHALL count rows in either domain form. `sum`/`min`/`max` inputs SHALL be `int` or `float` and preserve their type, and `min`/`max` SHALL require a default of exactly that type. `any` input SHALL be `bool` and its result SHALL be `bool`. Reducer expressions SHALL be pure; they MAY read the rule's bindings, constants and named entity fields. Selectionless and extern rules SHALL reject `reduce:`.
+A regular unary or pair rule SHALL accept one `reduce:` clause. It SHALL declare immutable, uniquely named aggregate values using `count()`, `count(binding)`, `sum(expression)`, `min(expression, default = value)`, `max(expression, default = value)`, `any(expression)` or `first_hit(expression)`. `count(binding)` SHALL count rows, not distinct entities, and SHALL require a declared pair binding; `count()` SHALL count rows in either domain form. `sum`/`min`/`max` inputs SHALL be `int` or `float` and preserve their type, and `min`/`max` SHALL require a default of exactly that type. `any` input SHALL be `bool` and its result SHALL be `bool`. `first_hit` input SHALL be `std.physics.volume.SweepHit` and its result SHALL be `SweepHit`. Reducer expressions SHALL be pure; they MAY read the rule's bindings, constants and named entity fields. Selectionless and extern rules SHALL reject `reduce:`.
 
 #### Scenario: Count and sum
 - **WHEN** three input rows have integer scores 2, 3 and 5
@@ -18,8 +18,12 @@ A regular unary or pair rule SHALL accept one `reduce:` clause. It SHALL declare
 - **WHEN** a group has three rows and the `any` input is true for only the second
 - **THEN** `any` yields true
 
+#### Scenario: First hit over rows
+- **WHEN** a group has three rows whose sweeps miss, hit at `t = 0.6`, and hit at `t = 0.2`
+- **THEN** `first_hit` yields the hit at `t = 0.2`
+
 #### Scenario: Bad reducer
-- **WHEN** `collect`, an unknown reducer, a mismatched default, a non-bool `any` input or an impure expression is used
+- **WHEN** `collect`, an unknown reducer, a mismatched default, a non-bool `any` input, a non-`SweepHit` `first_hit` input or an impure expression is used
 - **THEN** the compiler reports a source-located error
 
 #### Scenario: Invalid domain
@@ -28,7 +32,7 @@ A regular unary or pair rule SHALL accept one `reduce:` clause. It SHALL declare
 
 ### Requirement: Global and outer-grouped empty-input behavior
 
-Omitting `per:` SHALL produce exactly one global aggregate row, even for empty input. `per: binding` SHALL be allowed only for a declared pair binding and SHALL produce exactly one group for every entity in that binding's membership snapshot that passes the group filter (see "`where:` splits into group and row filters"), whether or not any row survives for it. Identity values SHALL apply to empty input: `count` and `sum` zero, `min`/`max` their default, `any` false.
+Omitting `per:` SHALL produce exactly one global aggregate row, even for empty input. `per: binding` SHALL be allowed only for a declared pair binding and SHALL produce exactly one group for every entity in that binding's membership snapshot that passes the group filter (see "`where:` splits into group and row filters"), whether or not any row survives for it. Identity values SHALL apply to empty input: `count` and `sum` zero, `min`/`max` their default, `any` false, `first_hit` the miss value that `sweep` itself returns (`hit = false`, `t = 1.0`, stale `other`, zero `point` and `normal`).
 
 #### Scenario: Global empty input
 - **WHEN** no enemies survive the filter
@@ -45,6 +49,10 @@ Omitting `per:` SHALL produce exactly one global aggregate row, even for empty i
 #### Scenario: Enemy with no wall nearby
 - **WHEN** a rule over `pairs: enemy, wall` reduces `blocked = any(...)` per enemy and no wall row survives `where:` for one enemy
 - **THEN** that enemy's handler runs once with `blocked` false
+
+#### Scenario: Bullet with nothing in its path
+- **WHEN** a rule over `pairs: bullet, target` reduces `first = first_hit(physics.sweep(bullet, step, target))` per bullet and no target lies in one bullet's path
+- **THEN** that bullet's handler runs once with `first.hit` false
 
 #### Scenario: Group multiplicity
 - **WHEN** three member rows share a team binding
@@ -121,3 +129,15 @@ With `reduce:`, `order by:` SHALL be written after the `reduce:` clause; an `ord
 #### Scenario: Targeted event
 - **WHEN** an event targeted at team A reaches a rule reduced `per: team`
 - **THEN** only team A's group runs, with aggregates over all of team A's rows
+
+### Requirement: first_hit keeps the earliest hit deterministically
+
+`first_hit` SHALL ignore rows whose input has `hit = false`, and SHALL keep the row with the smallest `t` among the rest. Among hits with equal `t`, it SHALL keep the one that comes first in stable fold order. A row's miss SHALL never replace a kept hit.
+
+#### Scenario: Misses are ignored
+- **WHEN** a group's rows are a hit at `t = 0.9` followed by two misses
+- **THEN** `first_hit` yields the hit at `t = 0.9`
+
+#### Scenario: Equal t resolves by fold order
+- **WHEN** two rows hit at the same `t`
+- **THEN** `first_hit` yields the row that comes first in stable domain order

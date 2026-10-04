@@ -193,3 +193,97 @@ The `std.physics.volume` stdlib surface SHALL expose a `query` namespace contain
 #### Scenario: Volume raycast query is available
 - **WHEN** authored code uses `query.raycast[Wall](origin = p3, dir = d3, max_dist = 100.0)`
 - **THEN** the query performs a 3D raycast filtered by the listed traits
+
+### Requirement: std.physics.volume provides a shape-agnostic sweep between rule bindings
+The `std.physics.volume` module SHALL provide `SweepHit` with fields `hit: bool`, `other: entity_id`, `t: float`, `point: vec3`, and `normal: vec3`, and a pure function `sweep(subject, delta: vec3, target) SweepHit`. `sweep` SHALL report where the subject's collider first touches the target's collider when the subject moves by `delta` from its current position, whatever shape kinds the two colliders have. `subject` and `target` SHALL each be a binding of the enclosing rule; any other `entity_id` expression in those positions SHALL be a compile error.
+
+#### Scenario: Sweep hits any shape kind
+- **WHEN** a sphere-collider subject is swept toward a box target, a sphere target, and a capsule target in turn
+- **THEN** each sweep reports `hit = true` with `other` set to that target
+
+#### Scenario: Sweep miss
+- **WHEN** the target lies outside the path of the subject's collider over `delta`
+- **THEN** the result has `hit = false`
+
+#### Scenario: Sweep does not pass through thin geometry
+- **WHEN** a subject is swept along a `delta` longer than its own size across a box thinner than that `delta`
+- **THEN** the result has `hit = true` on that box
+
+#### Scenario: Sweep starting in contact
+- **WHEN** the subject already overlaps the target before moving
+- **THEN** the result has `hit = true`, `t = 0.0`, and `normal` pointing in the direction that pushes the subject out
+
+#### Scenario: Zero delta tests overlap only
+- **WHEN** `delta` is `vec3(0.0, 0.0, 0.0)`
+- **THEN** the result is a hit at `t = 0.0` if the colliders overlap, and a miss otherwise
+
+#### Scenario: Non-binding argument rejected
+- **WHEN** a rule calls `physics.sweep(self, step, Game)` where `Game` is a named entity, not a binding of the rule
+- **THEN** compilation reports a source-located error
+
+### Requirement: std.physics.volume provides a shape-agnostic overlap predicate between rule bindings
+The `std.physics.volume` module SHALL provide a pure function `touching(a, b) bool` that is true when the two bindings' colliders overlap at their current positions, whatever shape kinds they have. `a` and `b` SHALL each be a binding of the enclosing rule.
+
+#### Scenario: Touching across shape kinds
+- **WHEN** a capsule collider and a rotated box collider overlap
+- **THEN** `touching` returns true
+
+#### Scenario: Not touching
+- **WHEN** a sphere lies in the corner region of a box's axis-aligned bounds but outside the box itself
+- **THEN** `touching` returns false
+
+### Requirement: Sweep hits define stable contact semantics
+`sweep` SHALL fill `SweepHit` with stable semantics suitable for movement and hit logic.
+
+#### Scenario: Hit fields
+- **WHEN** a sweep reports a hit
+- **THEN** `t` is the fraction of `delta` travelled before contact, in `[0.0, 1.0]`
+- **AND** `point` is the contact location on the target's surface
+- **AND** `normal` is unit length and points from the target toward the subject
+
+#### Scenario: Miss fields
+- **WHEN** a sweep reports a miss
+- **THEN** `hit` is false, `other` is a stale `entity_id`, `t` is `1.0`, and `point` and `normal` are zero vectors
+- **AND** moving the subject by `delta * t` moves it the full `delta`
+
+#### Scenario: Centered box geometry
+- **WHEN** a box target with `size = vec3(2.0, 2.0, 2.0)` sits at the origin and a sphere subject of radius `0.5` at `vec3(-5.0, 0.0, 0.0)` is swept by `vec3(10.0, 0.0, 0.0)`
+- **THEN** the hit has `t = 0.35`, `point = vec3(-1.0, 0.0, 0.0)`, and `normal = vec3(-1.0, 0.0, 0.0)`
+
+### Requirement: Collider queries honor filtering and identity
+`sweep` and `touching` SHALL treat a pair as non-colliding when the subject's `Collider.mask` shares no bit with the target's `Collider.layer`, when subject and target are the same entity, or when either entity lacks `std.transform.volume.WorldTransform`, `Collider`, or a shape collider trait at evaluation time. For `touching`, the first argument is the subject.
+
+#### Scenario: Mask excludes a layer
+- **WHEN** the subject's mask is `3` and the target's layer is `4`
+- **THEN** `sweep` reports a miss and `touching` returns false, whatever the geometry
+
+#### Scenario: An entity never hits itself
+- **WHEN** a rule's two bindings refer to the same entity
+- **THEN** `sweep` reports a miss and `touching` returns false
+
+#### Scenario: Missing collider data is a miss
+- **WHEN** the target has lost its shape collider trait
+- **THEN** `sweep` reports a miss without error
+
+### Requirement: 3D collider queries use the authored shapes
+`sweep` and `touching` SHALL test the authored shapes, not bounding boxes. A box SHALL be centered on `WorldTransform.position` and oriented by `WorldTransform.rotation`, with `BoxCollider.size` as its full world size. A sphere SHALL be centered on `WorldTransform.position`. A capsule SHALL be vertical along world Y, centered on `WorldTransform.position`, with `CapsuleCollider.height` as its total height including the caps. `WorldTransform.scale` SHALL NOT change any shape.
+
+#### Scenario: Rotated box uses its oriented shape
+- **WHEN** a box with `size = vec3(4.0, 1.0, 0.2)` is rotated 45 degrees around Y
+- **AND** a small sphere sits inside the box's axis-aligned bounds but outside the rotated box
+- **THEN** `touching` between them returns false
+
+#### Scenario: Capsule is not its bounding box
+- **WHEN** a sphere sits next to a capsule's cap, inside the capsule's bounding box but outside the capsule
+- **THEN** `touching` returns false
+
+### Requirement: Colliders declare exactly one shape
+A template or entity declaration that applies `std.physics.volume.Collider` SHALL also apply exactly one of `BoxCollider`, `SphereCollider`, or `CapsuleCollider`, counting traits gained through `use` and `from`. Declaring none or more than one SHALL be a compile error.
+
+#### Scenario: Collider without a shape
+- **WHEN** a template applies `physics.Collider` and no shape collider trait
+- **THEN** compilation reports a source-located error naming the template
+
+#### Scenario: Two shapes on one collider
+- **WHEN** a template applies `physics.Collider`, `physics.BoxCollider`, and `physics.SphereCollider`
+- **THEN** compilation reports a source-located error naming both shape traits

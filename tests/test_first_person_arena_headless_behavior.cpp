@@ -784,3 +784,137 @@ TEST_CASE("first-person arena headless: a dying enemy does not participate in se
     CHECK(dying_transform.position.z == Catch::Approx(0.0F).margin(0.001F));
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)
+
+// ── Swept bullets ───────────────────────────────────────────────────────────
+
+namespace {
+
+// Stages bullet scenarios high above the arena, clear of its geometry.
+constexpr float kSkyY = 20.0F;
+
+using WorldTransform = std_transform_volume__WorldTransform;
+
+entt::entity fire_one_bullet(entt::registry& registry) {
+    cactus_raylib_fake::set_mouse_button_pressed_this_frame(MOUSE_BUTTON_LEFT, true);
+    cactus_headless_test::drive_frame(registry, kFrameDt);
+    cactus_raylib_fake::set_mouse_button_pressed_this_frame(MOUSE_BUTTON_LEFT, false);
+    const auto bullets = registry.view<main__Bullet>();
+    REQUIRE(bullets.size() == 1);
+    return *bullets.begin();
+}
+
+void aim(entt::registry& registry, entt::entity bullet, Vector3 position, Vector3 velocity) {
+    registry.get<WorldTransform>(bullet).position = position;
+    registry.get<main__Bullet>(bullet).velocity   = velocity;
+}
+
+// Reuses one perimeter wall as a free-standing box.
+entt::entity place_wall(entt::registry& registry, Vector3 position, Vector3 size) {
+    const auto wall = *registry.view<main__PerimeterWall>().begin();
+    registry.get<WorldTransform>(wall).position              = position;
+    registry.get<std_physics_volume__BoxCollider>(wall).size = size;
+    return wall;
+}
+
+bool is_dying(entt::registry& registry, entt::entity enemy) {
+    return registry.all_of<main__Dying>(enemy);
+}
+
+}  // namespace
+
+TEST_CASE("first-person arena headless: a fast bullet does not tunnel through a thin wall",
+          "[runtime][codegen-entt][first-person-arena][projectile]") {
+    cactus_raylib_fake::reset();
+    entt::registry registry;
+    cactus_headless_test::drive_one_frame(registry, kFrameDt);
+    const auto enemy = isolate_single_enemy(registry);
+    const auto bullet = fire_one_bullet(registry);
+
+    place_wall(registry, Vector3{.x = 0.0F, .y = kSkyY, .z = 3.0F}, Vector3{.x = 2.0F, .y = 2.0F, .z = 0.05F});
+    registry.get<WorldTransform>(enemy).position = Vector3{.x = 0.0F, .y = kSkyY, .z = 4.5F};
+    // One tick moves the bullet 1.5 m, from in front of the wall to past it.
+    aim(registry, bullet, Vector3{.x = 0.0F, .y = kSkyY, .z = 2.5F}, Vector3{.x = 0.0F, .y = 0.0F, .z = 90.0F});
+    cactus_headless_test::drive_frame(registry, kFrameDt);
+
+    CHECK_FALSE(registry.valid(bullet));
+    drive_frames(registry, 2);
+    CHECK_FALSE(is_dying(registry, enemy));
+}
+
+TEST_CASE("first-person arena headless: the nearer wall stops a bullet before a farther enemy",
+          "[runtime][codegen-entt][first-person-arena][projectile]") {
+    cactus_raylib_fake::reset();
+    entt::registry registry;
+    cactus_headless_test::drive_one_frame(registry, kFrameDt);
+    const auto enemy = isolate_single_enemy(registry);
+    const auto bullet = fire_one_bullet(registry);
+
+    place_wall(registry, Vector3{.x = 0.0F, .y = kSkyY, .z = 3.0F}, Vector3{.x = 2.0F, .y = 2.0F, .z = 0.2F});
+    registry.get<WorldTransform>(enemy).position = Vector3{.x = 0.0F, .y = kSkyY, .z = 3.7F};
+    // Both lie inside this tick's 1.5 m of motion; the wall comes first.
+    aim(registry, bullet, Vector3{.x = 0.0F, .y = kSkyY, .z = 2.5F}, Vector3{.x = 0.0F, .y = 0.0F, .z = 90.0F});
+    cactus_headless_test::drive_frame(registry, kFrameDt);
+
+    CHECK_FALSE(registry.valid(bullet));
+    drive_frames(registry, 2);
+    CHECK_FALSE(is_dying(registry, enemy));
+}
+
+TEST_CASE("first-person arena headless: a bullet sweeping through an enemy hits it",
+          "[runtime][codegen-entt][first-person-arena][projectile]") {
+    cactus_raylib_fake::reset();
+    entt::registry registry;
+    cactus_headless_test::drive_one_frame(registry, kFrameDt);
+    const auto enemy = isolate_single_enemy(registry);
+    const auto bullet = fire_one_bullet(registry);
+
+    registry.get<WorldTransform>(enemy).position = Vector3{.x = 0.0F, .y = kSkyY, .z = 3.0F};
+    // The whole enemy lies between two tick positions of the bullet.
+    aim(registry, bullet, Vector3{.x = 0.0F, .y = kSkyY, .z = 2.0F}, Vector3{.x = 0.0F, .y = 0.0F, .z = 120.0F});
+    cactus_headless_test::drive_frame(registry, kFrameDt);
+
+    CHECK_FALSE(registry.valid(bullet));
+    CHECK(is_dying(registry, enemy));
+}
+
+TEST_CASE("first-person arena headless: bullets fly through the player and dying enemies",
+          "[runtime][codegen-entt][first-person-arena][projectile]") {
+    cactus_raylib_fake::reset();
+    entt::registry registry;
+    cactus_headless_test::drive_one_frame(registry, kFrameDt);
+    const auto enemy = isolate_single_enemy(registry);
+    const auto player = only_entity<main__Player>(registry);
+
+    // Kill the enemy with a first bullet.
+    const auto first = fire_one_bullet(registry);
+    registry.get<WorldTransform>(enemy).position = Vector3{.x = 0.0F, .y = kSkyY, .z = 3.0F};
+    aim(registry, first, Vector3{.x = 0.0F, .y = kSkyY, .z = 2.0F}, Vector3{.x = 0.0F, .y = 0.0F, .z = 60.0F});
+    cactus_headless_test::drive_frame(registry, kFrameDt);
+    REQUIRE(is_dying(registry, enemy));
+
+    drive_frames(registry, 12);
+    const auto second = fire_one_bullet(registry);
+    registry.get<WorldTransform>(enemy).position  = Vector3{.x = 0.0F, .y = kSkyY, .z = 3.0F};
+    registry.get<WorldTransform>(player).position = Vector3{.x = 0.0F, .y = kSkyY, .z = 5.0F};
+    aim(registry, second, Vector3{.x = 0.0F, .y = kSkyY, .z = 2.0F}, Vector3{.x = 0.0F, .y = 0.0F, .z = 240.0F});
+    cactus_headless_test::drive_frame(registry, kFrameDt);
+
+    // 4 m of motion crossed both the dying enemy and the player.
+    REQUIRE(registry.valid(second));
+    CHECK(registry.get<WorldTransform>(second).position.z == Catch::Approx(6.0F).margin(0.01F));
+}
+
+TEST_CASE("first-person arena headless: a bullet that hits nothing expires after its lifetime",
+          "[runtime][codegen-entt][first-person-arena][projectile]") {
+    cactus_raylib_fake::reset();
+    entt::registry registry;
+    cactus_headless_test::drive_one_frame(registry, kFrameDt);
+    const auto bullet = fire_one_bullet(registry);
+    aim(registry, bullet, Vector3{.x = 0.0F, .y = kSkyY, .z = 0.0F}, Vector3{.x = 0.0F, .y = 20.0F, .z = 0.0F});
+
+    drive_frames(registry, 100);
+    REQUIRE(registry.valid(bullet));
+    CHECK(registry.get<WorldTransform>(bullet).position.y > kSkyY + 30.0F);
+    drive_frames(registry, 30);
+    CHECK_FALSE(registry.valid(bullet));
+}

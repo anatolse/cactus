@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/cactus_runtime.hpp"
+#include "common/collider_physics.hpp"
 #include "common/persistence_document.hpp"
 #include "common/persistence_validation.hpp"
 
@@ -1889,6 +1890,14 @@ circle_proxy(entt::entity entity, std::uint64_t ordinal, SapSide side, Vector2 c
 sphere_proxy(entt::entity entity, std::uint64_t ordinal, SapSide side, Vector3 center, float radius) noexcept;
 [[nodiscard]] ProxyAabb3D box_proxy(
     entt::entity entity, std::uint64_t ordinal, SapSide side, Vector3 center, Vector3 size, Quat rotation) noexcept;
+
+// Bounds of a collider descriptor, inflated by the contact skin and covering
+// its motion over `delta`. No descriptor, no proxy: such an entity can only miss.
+[[nodiscard]] std::optional<ProxyAabb3D> collider_proxy(entt::entity entity,
+                                                        std::uint64_t ordinal,
+                                                        SapSide side,
+                                                        const std::optional<physics::ColliderShape>& shape,
+                                                        Vector3 delta = {}) noexcept;
 
 // Indices into the proxy span passed to the most recent sync(): `left` is a
 // left-side proxy and `right` a right-side one. Sorted by (left ordinal,

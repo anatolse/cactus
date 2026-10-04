@@ -129,13 +129,13 @@ TEST_CASE("Reduce: reducers have exact result types", "[semantic][rule-reduce]")
     REQUIRE(analysis.clean());
     const auto& reducers = analysis.rule("TeamScore").reduce->reducers;
     REQUIRE(reducers.size() == 7);
-    CHECK(reducers[0].result_type == TypeKind::Int);
-    CHECK(reducers[1].result_type == TypeKind::Int);
-    CHECK(reducers[2].result_type == TypeKind::Int);
-    CHECK(reducers[3].result_type == TypeKind::Float);
-    CHECK(reducers[4].result_type == TypeKind::Int);
-    CHECK(reducers[5].result_type == TypeKind::Float);
-    CHECK(reducers[6].result_type == TypeKind::Bool);
+    CHECK(reducers[0].result_type.kind == TypeKind::Int);
+    CHECK(reducers[1].result_type.kind == TypeKind::Int);
+    CHECK(reducers[2].result_type.kind == TypeKind::Int);
+    CHECK(reducers[3].result_type.kind == TypeKind::Float);
+    CHECK(reducers[4].result_type.kind == TypeKind::Int);
+    CHECK(reducers[5].result_type.kind == TypeKind::Float);
+    CHECK(reducers[6].result_type.kind == TypeKind::Bool);
 }
 
 TEST_CASE("Reduce: aggregate types are checked in the handler", "[semantic][rule-reduce]") {

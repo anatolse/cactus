@@ -14,6 +14,96 @@ Status as of 2026-10-03. Arena: 41 → 29 rules, 1374 → 1229 lines since this 
 | C6 | done — add-rule-groups (`group` + `before:`; handler-level group references not planned) |
 | C4, C7, C8, S1–S3, R1–R6, B1–B3 | open |
 
+## Follow-up review (2026-10-04)
+
+The language gaps this review blamed for most of the plumbing are closed. What's left in
+the arena is mostly engine work written in game code:
+
+```
+first-person-arena — 29 rules
+
+ █████████   9  hand-written character controller
+               MovePlayer, ApplyJump, BeginGrounding (-1000.0 sentinel),
+               IntegrateVerticalMotion, DetectEnemySeparation,
+               DetectActorSolidContact, ResolveActorSolidContact,
+               DetectGroundCandidate, ApplyGroundCandidate
+ ██           2  SpawnRobots / SpawnKnights — 32 lines each, differ only by asset + kind
+ █            1  SeekPlayer — now one enemy × wall pair rule with `reduce:` (was two loops over every wall)
+ █████████████████  17  gameplay, camera, restart
+```
+
+### F1. CharacterBody says it is simulated, but nothing simulates it
+
+`stdlib/std/physics/volume.cactus` and `flat.cactus` say "the backend simulates these
+automatically. No user physics rule is needed." Nothing in `src/`, the stdlib, or the
+examples reads `CharacterBody`, in 2D or 3D. The platformer and the arena both write their
+own physics. This is worse than S2: it's a false promise in the stdlib. It also undercuts
+`add-buffered-character-jumping`, which builds on "existing 2D CharacterBody entities".
+
+Until a real controller lands, the stdlib comment should stop claiming automatic
+simulation.
+
+### F2. add-rule-reductions is applied, and it enables S2
+
+Its prerequisite, accelerate-cross-domain-pair-joins, has landed (task 0.1). Reductions
+plus a writable retained binding are what let the stdlib write a character controller in
+Cactus. That matches how `std.ui` keeps its layout policy in Cactus.
+
+The change adopted reductions only in SeekPlayer. Ground snapping fits just as well:
+
+```
+TODAY (4 parts)                          WITH reduce: (1 rule)
+BeginGrounding: surface = -1000.0        rule GroundActor:
+DetectGroundCandidate (pair)               pairs: actor × surface
+  └─ emit GroundCandidate ──┐              where: <the same loose bound>
+ApplyGroundCandidate        ◀┘             reduce: per: actor
+  if candidate > surface: snap               found = any(<exact test>)
+                                             top   = max(<top>, default = 0.0)
+                                           on fixed_tick:
+                                             actor.grounded = found
+                                             if found: snap to top
+```
+
+Outer groups make "no ground under me" a real row with `found = false`, so the sentinel
+goes away. This removes 2 rules, 1 event, and the sentinel. Solid-contact resolution
+(`sum(separation)` per actor) would fit too, but it needs a `vec3` sum. The design only
+types `count`/`sum` as numeric, so that stays an open question.
+
+### F3. Stale backlog
+
+| Change | State | Take |
+|---|---|---|
+| add-rule-reductions | implemented 2026-10-04; verify and archive pending | ground snapping is the next adoption (F2) |
+| complete-physics-contact-lifecycle | 0/11, untouched since 2026-09-06 | important for bullets; first check whether `CollisionEnter` codegen (`cpp_entt_codegen.cpp`) delivers by broadcast |
+| add-buffered-character-jumping | 0/11, untouched since 2026-09-06 | its base doesn't exist (F1); fold it into a character-controller change |
+| add-rule-execution-explanations | 0/13, untouched since 2026-09-06 | useful tool, not urgent; park |
+| flatten-ui-layout-handlers | no tasks | recheck options now that rule groups and lifecycle triggers exist |
+| evolve-cactus-notation | 35/47 | waiting on approval to spend model tokens (8.1); most of the residue it targets has since been fixed by hand |
+| add-cir-output | code only on `cir_attempt` | still unresolved |
+
+### F4. Remaining language items, re-ranked
+
+- **C4 `template_ref`** is now the clearest duplication. `Enemy.kind` already points into
+  a const table (`ROBOT.run_clip`, …). If that table could also hold the template and
+  model asset, SpawnRobots and SpawnKnights become one rule.
+- **S3 named clips.** `run_clip = 6  # Robot_Running` breaks silently when an artist
+  re-exports a model.
+- **C7 numeric `for` / `continue`** drops in priority. Its main evidence was SeekPlayer's
+  flags, which reductions remove. Procedural generation still wants it.
+
+### Proposed order
+
+1. Apply add-rule-reductions, and extend its arena adoption to ground snapping (F2).
+2. New change `simulate-character-body`: make the stdlib CharacterBody claim true
+   (volume first, then flat) with stdlib rules written in Cactus using reductions. It
+   absorbs add-buffered-character-jumping. The arena and platformer drop their
+   hand-written controllers.
+3. complete-physics-contact-lifecycle, starting with the broadcast-delivery check.
+4. C4 `template_ref` + S3 named clips.
+
+Open question: should the controller live as stdlib Cactus rules (recommended) or as
+shared C++ runtime code?
+
 Original review text follows unchanged except for per-item status markers.
 
   ...limit/reduce), the in-flight changes, and the two largest games: first-person-arena (1374 lines) and
@@ -218,6 +308,9 @@ Original review text follows unchanged except for per-item status markers.
   - Hitscan weapons, line-of-sight AI.
   - Ground probing would replace the arena's DetectGroundCandidate pair rule.
   - Obstacle probing would replace SeekPlayer's five hand-written probe loops over every wall.
+  - Done 2026-10-04 in shape-agnostic form (`add-volume-shape-queries`): `physics.sweep(a, delta, b)` and
+    `physics.touching(a, b)` between rule bindings, with `first_hit` in `reduce:`. A probe is a sweep of a small
+    collider; there is no separate raycast. Arena bullets use it.
 
   S2. A 3D character controller that actually works (move_and_slide). The stdlib says it simulates this, but the
   flagship 3D game rewrote it in 7 rules with a sentinel value. That gap is the strongest signal in the repo. Build it
@@ -336,3 +429,39 @@ Original review text follows unchanged except for per-item status markers.
   - The notation-evolution harness could score these. You have 12 katas and an imperative-residue metric. C1–C3 target
     exactly the residue categories it counts (emit/apply splits, sentinels, rule-name ordering). Running the ancestor
     against a hand-written "C1+C2+C3" variant would test this review with numbers instead of opinion.
+## Recap (2026-10-04, re-evaluation)
+
+- **F2 corrected.** Reductions alone only make "overlap, then push out" shorter, and
+  that approach double-pushes in corners, can't slide, and tunnels. The missing piece is
+  a first-hit sweep. 2D has one (`query_cast_nearest`); 3D doesn't. That is why the
+  arena needs 9 controller rules.
+- **Stay inside the rule algebra.** Extern world queries hide reads from the scheduler
+  and planner. Instead: shape-agnostic `physics.sweep(a, delta, b)` /
+  `physics.touching(a, b)` over rule bindings, plus a `first_hit` reducer. The author
+  names roles, not shapes. The compiler derives broad-phase bounds and picks kernels and
+  acceleration from whole-program knowledge.
+- **Philosophy made explicit** (`state-error-prevention-and-whole-program-performance`):
+  the language rules out common errors by construction; the backend uses whole-program
+  knowledge for performance; authors never restate derivable facts.
+- **Don't adopt reductions for arena ground snapping.** The controller change will
+  delete that code.
+- **Controller split:** geometry kernels in the C++ runtime; the controller itself
+  (slide stages, gravity, jump buffer, coyote time) as stdlib Cactus rules on top of
+  `sweep` + `first_hit`.
+- **New order:**
+  1. `state-error-prevention-and-whole-program-performance` (proposed): philosophy
+     update + `CLAUDE.md` line.
+  2. `add-volume-shape-queries` (done 2026-10-04): `sweep`/`touching`/`first_hit`, collider
+     proxies in the planner, GJK kernels in the runtime, `fixed_tick.dt` as a
+     constant, one-shape rule; arena bullets become one pair rule. Checked for step 3:
+     a later `fixed_tick` rule sees an earlier rule's `WorldTransform` write in the same
+     activation, in unary and reduced pair rules. 3D `CollisionEnter` still uses the old
+     min-corner box model; step 4 fixes it.
+  3. `simulate-character-body`: `move_and_slide` as stdlib rules; absorbs
+     add-buffered-character-jumping; the arena and platformer drop their controllers.
+  4. complete-physics-contact-lifecycle, which should also move 3D `CollisionEnter`
+     onto the collider descriptors (it still uses min-corner AABBs).
+  5. C4 `template_ref` + S3 named clips.
+- **Cleanup:** fix the "simulates automatically" comment in `std.physics.*`; archive
+  harden-notation-evolution-harness; close or park evolve-cactus-notation,
+  flatten-ui-layout-handlers, optimize-ui-layout-caching, add-rule-execution-explanations.

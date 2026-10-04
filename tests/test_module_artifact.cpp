@@ -872,7 +872,7 @@ TEST_CASE("ModuleArtifact: runtime declarations and handler graph round-trip", "
 }
 
 TEST_CASE("ModuleArtifact: artifact from before shape-generic spatial plans is rejected", "[artifact][spatial-join]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 24);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 25);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -934,6 +934,99 @@ TEST_CASE("ModuleArtifact: a shape-generic spatial join plan round-trips", "[art
     fs::remove_all(build_dir, ec);
 }
 
+TEST_CASE("ModuleArtifact: a collider sweep plan round-trips", "[artifact][spatial-join][stdlib-physics]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    const ResolvedHandlerTrigger trigger{.kind = HandlerTriggerKind::Event, .symbol = test_symbol(SymbolKind::Event, "tick")};
+    const SpatialJoinPlan plan{
+        .dimension = SpatialJoinDimension::Volume3D,
+        .left      = SpatialShape{.binding_index = 0, .kind = SpatialShapeKind::SweptCollider, .slots = {{1}}},
+        .right     = SpatialShape{.binding_index = 1, .kind = SpatialShapeKind::Collider},
+        .matched_predicate_index = 0,
+        .source                  = SpatialJoinSource::Reduce};
+    InferredHandlerContract inferred;
+    inferred.rule         = test_symbol(SymbolKind::Rule, "MoveBullets");
+    inferred.trigger      = trigger;
+    inferred.domain_kind  = HandlerDomainKind::Pair;
+    inferred.spatial_join = plan;
+    DecoratedProgram program;
+    program.handler_contracts.push_back(inferred);
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    REQUIRE(artifact.save(program, "runtime.lib", build_dir));
+    std::string module_name;
+    const auto loaded = artifact.load(build_dir / "runtime.lib.cmod", module_name);
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->handler_contracts.front().spatial_join.has_value());
+    CHECK(*loaded->handler_contracts.front().spatial_join == plan);
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("ModuleArtifact: a periodic phase dt reference round-trips", "[artifact][phase-activation]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    const auto fixed_tick = make_symbol_id(SymbolKind::Phase, "std.core", "fixed_tick");
+    auto blueprint        = std::make_shared<TemplateNode>();
+    blueprint->name       = "Probe";
+    ArchetypeTraitEntry entry{.trait_name = "Step"};
+    entry.assignments.push_back(FieldAssignment{
+        .name  = "dt",
+        .value = std::make_unique<ExprNode>(
+            ExprNode::Variant{MemberExpr{
+                .object = std::make_unique<ExprNode>(ExprNode::Variant{IdentExpr{.name = "fixed_tick"}}, SourceLocation{}),
+                .member            = "dt",
+                .resolved_phase_dt = fixed_tick}},
+            SourceLocation{})});
+    blueprint->traits.push_back(std::move(entry));
+    DecoratedProgram program;
+    program.pub_templates.insert("Probe");
+    program.template_parameters["Probe"] = {};
+    program.template_blueprints["Probe"] = blueprint;
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    REQUIRE(artifact.save(program, "library", build_dir));
+    auto symbols = artifact.extract_pub_symbols(build_dir / "library.cmod");
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(symbols.has_value());
+    const auto& loaded = symbols->templates.at("Probe").blueprint;
+    REQUIRE(loaded != nullptr);
+    CHECK(std::get<MemberExpr>(loaded->traits.at(0).assignments.at(0).value->expr).resolved_phase_dt == fixed_tick);
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("ModuleArtifact: artifact from before collider sweep plans is rejected", "[artifact][spatial-join]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+    fs::create_directories(build_dir);
+
+    auto path = build_dir / "collider.cmod";
+    {
+        std::ofstream out(path, std::ios::binary);
+        out.write("CMOD", 4);
+        const char previous_version = 24;
+        out.write(&previous_version, 1);
+    }
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    std::string name;
+    CHECK_FALSE(artifact.load(path, name).has_value());
+    REQUIRE(errors.has_errors());
+    CHECK(errors.diagnostics()[0].message.find("incompatible module artifact version") != std::string::npos);
+
+    fs::remove_all(build_dir, ec);
+}
+
 TEST_CASE("ModuleArtifact: artifact from before rule reductions is rejected", "[artifact][rule-reduce]") {
     auto build_dir = test_build_dir();
     std::error_code ec;
@@ -968,7 +1061,7 @@ TEST_CASE("ModuleArtifact: a reduction plan round-trips", "[artifact][rule-reduc
 
     const ReductionPlan grouped{.group_binding = 1,
                                 .reducers      = {ReducerKind::Count, ReducerKind::Sum, ReducerKind::Min,
-                                                  ReducerKind::Max, ReducerKind::Any}};
+                                                  ReducerKind::Max, ReducerKind::Any, ReducerKind::FirstHit}};
     const ReductionPlan global{.group_binding = std::nullopt, .reducers = {ReducerKind::Count}};
     DecoratedProgram program;
     for (const auto& [name, plan] : {std::pair{"Grouped", grouped}, std::pair{"Global", global}}) {
@@ -1069,7 +1162,7 @@ TEST_CASE("ModuleArtifact: set command capabilities round-trip", "[artifact][def
     CHECK(loaded->handler_contracts.front().commands == commands);
     REQUIRE(loaded->execution_graph.handlers.size() == 1);
     CHECK(loaded->execution_graph.handlers.front().contract.commands == commands);
-    CHECK(ModuleArtifact::CURRENT_VERSION == 24);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 25);
 
     fs::remove_all(build_dir, ec);
 }
@@ -1412,7 +1505,7 @@ TEST_CASE("ModuleArtifact: field-level access serializes deterministically", "[a
 }
 
 TEST_CASE("ModuleArtifact: artifact from before field-level contracts is rejected", "[artifact][handler-contracts]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 24);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 25);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1686,7 +1779,7 @@ TEST_CASE("ModuleArtifact: unknown trigger kind is rejected", "[artifact][trait-
 }
 
 TEST_CASE("ModuleArtifact: artifact from before lifecycle triggers is rejected", "[artifact][trait-lifecycle]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 24);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 25);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1806,7 +1899,7 @@ TEST_CASE("ModuleArtifact: unknown group ordering direction is malformed", "[art
 }
 
 TEST_CASE("ModuleArtifact: artifact from before rule groups is rejected", "[artifact][rule-groups]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 24);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 25);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1831,7 +1924,7 @@ TEST_CASE("ModuleArtifact: artifact from before rule groups is rejected", "[arti
 }
 
 TEST_CASE("ModuleArtifact: artifact from before named-entity access is rejected", "[artifact][named-entity]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 24);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 25);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);

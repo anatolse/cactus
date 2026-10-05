@@ -1,0 +1,72 @@
+module transform_hierarchy
+
+# Each root below is a pose root: it has a WorldTransform and no
+# LocalTransform. Rules write its world pose, and propagation composes its
+# LocalTransform children onto that pose without writing the root.
+
+use std.core
+use std.math.quat as quat
+use std.transform.volume as tv
+
+trait Feet
+trait Badge
+trait Arm
+trait Finger
+trait Rider
+
+trait Drift:
+    var speed: float = 1.0
+
+entity StillRoot:
+    tv.WorldTransform:
+        position = vec3(5.0, 0.0, 0.0)
+    children:
+        entity FeetNode:
+            Feet
+            tv.LocalTransform:
+                position = vec3(0.0, -1.0, 0.0)
+            tv.WorldTransform
+        # No LocalTransform, so propagation never writes it.
+        entity BadgeNode:
+            Badge
+            tv.WorldTransform:
+                position = vec3(9.0, 9.0, 9.0)
+
+entity TurnedRoot:
+    tv.WorldTransform:
+        position = vec3(0.0, 2.0, 0.0)
+        rotation = quat.from_euler(0.0, 0.7, 0.0)
+    children:
+        entity ArmNode:
+            Arm
+            tv.LocalTransform:
+                position = vec3(1.0, 0.0, 0.0)
+                rotation = quat.from_euler(0.9, 0.0, 0.0)
+            tv.WorldTransform
+            children:
+                entity FingerNode:
+                    Finger
+                    tv.LocalTransform:
+                        position = vec3(0.0, 1.0, 0.0)
+                        rotation = quat.from_euler(0.0, 0.0, 1.1)
+                    tv.WorldTransform
+
+entity MovingRoot:
+    Drift
+    tv.WorldTransform:
+        position = vec3(-10.0, 0.0, 0.0)
+    children:
+        entity RiderNode:
+            Rider
+            tv.LocalTransform:
+                position = vec3(0.0, 3.0, 0.0)
+            tv.WorldTransform
+
+# Moves a pose root in the same phase that propagates it.
+rule DriftRoot:
+    filter:
+        Drift as drift
+        tv.WorldTransform as world
+
+    on late_tick:
+        world.position.x += drift.speed

@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstdint>
 #include <functional>
 #include <optional>
 #include <ranges>
@@ -746,6 +747,64 @@ bool is_volume_transform_propagation(const ExternRuleNode& sys, const DecoratedP
         return false;
     }
     return false;
+}
+
+enum class TransformDimension : std::uint8_t { Flat, Volume };
+
+// Emits `PROPAGATION`, the runtime callbacks over the program's transform traits.
+void emit_hierarchy_propagation(std::ostringstream& out,
+                                const DecoratedProgram& program,
+                                TransformDimension dimension) {
+    const bool volume        = dimension == TransformDimension::Volume;
+    const std::string module = volume ? "std.transform.volume" : "std.transform.flat";
+    const std::string lt     = EnttCodegenUtils::trait_cpp_name(module + ".LocalTransform", program);
+    const std::string wt     = EnttCodegenUtils::trait_cpp_name(module + ".WorldTransform", program);
+    const std::string parent = EnttCodegenUtils::trait_cpp_name("Parent", program);
+    const std::string vec    = volume ? "Vector3" : "Vector2";
+    const auto per_axis      = [&](std::string_view op, std::string_view field) {
+        std::ostringstream axes;
+        for (const char axis : volume ? std::string_view{"xyz"} : std::string_view{"xy"}) {
+            axes << "            ." << axis << " = parent_world." << field << "." << axis << " " << op << " local."
+                 << field << "." << axis << ",\n";
+        }
+        return axes.str();
+    };
+    out << "    const cactus::runtime::entt_backend::HierarchyPropagation PROPAGATION{\n";
+    out << "        .has_local_world = [&](entt::entity entity) {\n";
+    out << "            return registry.all_of<" << lt << ", " << wt << ">(entity);\n";
+    out << "        },\n";
+    out << "        .has_world = [&](entt::entity entity) { return registry.all_of<" << wt << ">(entity); },\n";
+    out << "        .get_parent = [&](entt::entity entity) {\n";
+    out << "            if (auto* parent = registry.try_get<" << parent << ">(entity); parent != nullptr) {\n";
+    out << "                return parent->parent;\n";
+    out << "            }\n";
+    out << "            return entt::entity{entt::null};\n";
+    out << "        },\n";
+    out << "        .copy_local = [&](entt::entity entity) {\n";
+    out << "            auto& local = registry.get<" << lt << ">(entity);\n";
+    out << "            auto& world = registry.get<" << wt << ">(entity);\n";
+    out << "            world.position = local.position;\n";
+    out << "            world.rotation = local.rotation;\n";
+    out << "            world.scale = local.scale;\n";
+    out << "        },\n";
+    out << "        .accumulate_from_parent = [&](entt::entity parent_entity, entt::entity entity) {\n";
+    out << "            auto& local = registry.get<" << lt << ">(entity);\n";
+    out << "            auto& world = registry.get<" << wt << ">(entity);\n";
+    out << "            const auto& parent_world = registry.get<" << wt << ">(parent_entity);\n";
+    out << "            world.position = " << vec << "{\n" << per_axis("+", "position") << "            };\n";
+    if (volume) {
+        out << "            world.rotation = cactus::runtime::stdlib::math::quat::compose(parent_world.rotation, "
+               "local.rotation);\n";
+    } else {
+        out << "            world.rotation = parent_world.rotation + local.rotation;\n";
+    }
+    out << "            world.scale = " << vec << "{\n" << per_axis("*", "scale") << "            };\n";
+    out << "        },\n";
+    out << "    };\n";
+}
+
+bool is_follow_bodies(const ExternRuleNode& sys) {
+    return symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.physics.volume", "FollowBodies");
 }
 
 bool is_shape_renderer(const ExternRuleNode& sys) {
@@ -4703,90 +4762,31 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
         }
     }
 
-    if (is_flat_transform_propagation(sys, program)) {
-        const std::string lt     = EnttCodegenUtils::trait_cpp_name("std.transform.flat.LocalTransform", program);
-        const std::string wt     = EnttCodegenUtils::trait_cpp_name("std.transform.flat.WorldTransform", program);
-        const std::string parent = EnttCodegenUtils::trait_cpp_name("Parent", program);
+    const bool flat_propagation = is_flat_transform_propagation(sys, program);
+    if (flat_propagation || is_volume_transform_propagation(sys, program)) {
         out << "void " << system_function_name(program.module_name, sys.name, "tick")
             << "(entt::registry& registry) {\n";
-        out << "    const auto HAS_LOCAL_WORLD = [&](entt::entity entity) {\n";
-        out << "        return registry.all_of<" << lt << ", " << wt << ">(entity);\n";
-        out << "    };\n";
-        out << "    const auto GET_PARENT = [&](entt::entity entity) {\n";
-        out << "        if (auto* parent = registry.try_get<" << parent << ">(entity); parent != nullptr) {\n";
-        out << "            return parent->parent;\n";
-        out << "        }\n";
-        out << "        return entt::entity{entt::null};\n";
-        out << "    };\n";
-        out << "    const auto COPY_LOCAL = [&](entt::entity entity) {\n";
-        out << "        auto& local = registry.get<" << lt << ">(entity);\n";
-        out << "        auto& world = registry.get<" << wt << ">(entity);\n";
-        out << "        world.position = local.position;\n";
-        out << "        world.rotation = local.rotation;\n";
-        out << "        world.scale = local.scale;\n";
-        out << "    };\n";
-        out << "    const auto ACCUMULATE_FROM_PARENT = [&](entt::entity parent_entity, entt::entity entity) {\n";
-        out << "        auto& local = registry.get<" << lt << ">(entity);\n";
-        out << "        auto& world = registry.get<" << wt << ">(entity);\n";
-        out << "        const auto& parent_world = registry.get<" << wt << ">(parent_entity);\n";
-        out << "        world.position = Vector2{\n";
-        out << "            .x = parent_world.position.x + local.position.x,\n";
-        out << "            .y = parent_world.position.y + local.position.y,\n";
-        out << "        };\n";
-        out << "        world.rotation = parent_world.rotation + local.rotation;\n";
-        out << "        world.scale = Vector2{\n";
-        out << "            .x = parent_world.scale.x * local.scale.x,\n";
-        out << "            .y = parent_world.scale.y * local.scale.y,\n";
-        out << "        };\n";
-        out << "    };\n";
-        out << "    cactus::runtime::entt_backend::propagate_hierarchy(\n";
-        out << "        registry, HAS_LOCAL_WORLD, GET_PARENT, COPY_LOCAL, ACCUMULATE_FROM_PARENT);\n";
+        emit_hierarchy_propagation(
+            out, program, flat_propagation ? TransformDimension::Flat : TransformDimension::Volume);
+        out << "    cactus::runtime::entt_backend::propagate_hierarchy(registry, PROPAGATION);\n";
         out << "}\n\n";
 
         return out.str();
     }
 
-    if (is_volume_transform_propagation(sys, program)) {
+    if (is_follow_bodies(sys)) {
         const std::string lt     = EnttCodegenUtils::trait_cpp_name("std.transform.volume.LocalTransform", program);
         const std::string wt     = EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program);
         const std::string parent = EnttCodegenUtils::trait_cpp_name("Parent", program);
+        const std::string body   = EnttCodegenUtils::trait_cpp_name("std.physics.volume.CharacterBody", program);
         out << "void " << system_function_name(program.module_name, sys.name, "tick")
             << "(entt::registry& registry) {\n";
-        out << "    const auto HAS_LOCAL_WORLD = [&](entt::entity entity) {\n";
-        out << "        return registry.all_of<" << lt << ", " << wt << ">(entity);\n";
-        out << "    };\n";
-        out << "    const auto GET_PARENT = [&](entt::entity entity) {\n";
-        out << "        if (auto* parent = registry.try_get<" << parent << ">(entity); parent != nullptr) {\n";
-        out << "            return parent->parent;\n";
-        out << "        }\n";
-        out << "        return entt::entity{entt::null};\n";
-        out << "    };\n";
-        out << "    const auto COPY_LOCAL = [&](entt::entity entity) {\n";
-        out << "        auto& local = registry.get<" << lt << ">(entity);\n";
-        out << "        auto& world = registry.get<" << wt << ">(entity);\n";
-        out << "        world.position = local.position;\n";
-        out << "        world.rotation = local.rotation;\n";
-        out << "        world.scale = local.scale;\n";
-        out << "    };\n";
-        out << "    const auto ACCUMULATE_FROM_PARENT = [&](entt::entity parent_entity, entt::entity entity) {\n";
-        out << "        auto& local = registry.get<" << lt << ">(entity);\n";
-        out << "        auto& world = registry.get<" << wt << ">(entity);\n";
-        out << "        const auto& parent_world = registry.get<" << wt << ">(parent_entity);\n";
-        out << "        world.position = Vector3{\n";
-        out << "            .x = parent_world.position.x + local.position.x,\n";
-        out << "            .y = parent_world.position.y + local.position.y,\n";
-        out << "            .z = parent_world.position.z + local.position.z,\n";
-        out << "        };\n";
-        out << "        world.rotation = cactus::runtime::stdlib::math::quat::compose(parent_world.rotation, "
-               "local.rotation);\n";
-        out << "        world.scale = Vector3{\n";
-        out << "            .x = parent_world.scale.x * local.scale.x,\n";
-        out << "            .y = parent_world.scale.y * local.scale.y,\n";
-        out << "            .z = parent_world.scale.z * local.scale.z,\n";
-        out << "        };\n";
-        out << "    };\n";
-        out << "    cactus::runtime::entt_backend::propagate_hierarchy(\n";
-        out << "        registry, HAS_LOCAL_WORLD, GET_PARENT, COPY_LOCAL, ACCUMULATE_FROM_PARENT);\n";
+        emit_hierarchy_propagation(out, program, TransformDimension::Volume);
+        out << "    auto children = registry.view<" << parent << ", " << lt << ", " << wt << ">();\n";
+        out << "    const std::vector<entt::entity> candidates(children.begin(), children.end());\n";
+        out << "    cactus::runtime::entt_backend::propagate_hierarchy_below(\n";
+        out << "        registry, PROPAGATION, candidates, [&](entt::entity entity) { return registry.all_of<" << body
+            << ">(entity); });\n";
         out << "}\n\n";
 
         return out.str();

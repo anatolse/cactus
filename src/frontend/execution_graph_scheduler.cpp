@@ -104,6 +104,23 @@ bool writes_any(const HandlerNode& producer, const HandlerNode& consumer, const 
         produced, [&](const SymbolId& trait) { return produced_overlap(producer, consumer, trait).has_value(); });
 }
 
+// The trait a transform propagation rule derives, which every other writer of
+// that trait in the same trigger must precede.
+std::optional<SymbolId> derived_trait(const HandlerNode& handler) {
+    const auto& rule       = handler.identity.rule;
+    const bool propagation = rule.local_name == "TransformPropagation" &&
+                             (rule.module.name == "std.transform.flat" || rule.module.name == "std.transform.volume");
+    if (!propagation) {
+        return std::nullopt;
+    }
+    return make_symbol_id(SymbolKind::Trait, rule.module.name, "WorldTransform");
+}
+
+bool feeds_derivation(const std::unordered_set<SymbolId>& produced, const HandlerNode& derivation) {
+    const auto trait = derived_trait(derivation);
+    return trait.has_value() && produced.contains(*trait);
+}
+
 // Orients conflicts between a handler and the members of a `pub group` from a
 // module it imports. The whole group decides, so every member edge points the
 // same way and the group's own chain can't form a cycle with the handler.
@@ -318,7 +335,15 @@ bool compute_handler_schedule(ExecutionGraph& graph, ErrorReporter& errors) {
             const HandlerNode* before           = nullptr;
             const HandlerNode* after            = nullptr;
             ScheduleEdgeOrientation orientation = ScheduleEdgeOrientation::DeclarationOrder;
-            if (explicitly_precedes(left.identity, right.identity)) {
+            if (feeds_derivation(produced_by_handler[left_index], right)) {
+                before      = &left;
+                after       = &right;
+                orientation = ScheduleEdgeOrientation::DerivationAfterWriters;
+            } else if (feeds_derivation(produced_by_handler[right_index], left)) {
+                before      = &right;
+                after       = &left;
+                orientation = ScheduleEdgeOrientation::DerivationAfterWriters;
+            } else if (explicitly_precedes(left.identity, right.identity)) {
                 before      = &left;
                 after       = &right;
                 orientation = ScheduleEdgeOrientation::Explicit;

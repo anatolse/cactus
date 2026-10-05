@@ -268,3 +268,14 @@ entities by name instead of with marker-trait world queries.
 #### Scenario: Gated rules do not run during game over
 - **WHEN** the game is over
 - **THEN** the rules gated with `when:` on `Game`'s over flag do not run, and enemy spawning, movement, player look, movement, and firing stay stopped
+
+### Requirement: Enemy models follow their bodies by propagation
+Each enemy's rendered model SHALL live on a child entity whose `LocalTransform` offsets it from the body's collision center to the feet, and whose world pose SHALL come from hierarchy propagation. The arena SHALL NOT author a rule that copies the body's pose onto the model child. Facing and the death fall SHALL remain visible on the model.
+
+#### Scenario: Model stays on a moving enemy
+- **WHEN** a live enemy moves across the arena
+- **THEN** its model child's world position equals the body position plus the feet offset after each frame
+
+#### Scenario: Death fall stays visible
+- **WHEN** an enemy is in its death transition
+- **THEN** its model tips over and fades as before

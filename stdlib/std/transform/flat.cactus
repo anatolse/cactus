@@ -11,7 +11,9 @@ pub trait LocalTransform:
     var rotation: float = 0.0
     var scale: vec2 = vec2(1.0, 1.0)
 
-# Derived 2D world transform after hierarchy propagation.
+# 2D world transform. Propagation derives it for entities with LocalTransform.
+# An entity with WorldTransform and no LocalTransform is a pose root: rules
+# write its pose, and propagation never overwrites it.
 # position: world-space 2D position
 # rotation: world-space angle in radians
 # scale:    world-space per-axis scale
@@ -20,6 +22,8 @@ pub trait WorldTransform:
     var rotation: float = 0.0
     var scale: vec2 = vec2(1.0, 1.0)
 
+# Composes each LocalTransform child onto its parent's WorldTransform, after
+# every other late_tick rule that writes WorldTransform.
 extern rule TransformPropagation:
     filter:
         LocalTransform
@@ -29,6 +33,7 @@ extern rule TransformPropagation:
         reads:
             LocalTransform
             Parent
+            WorldTransform
         writes:
             WorldTransform
 

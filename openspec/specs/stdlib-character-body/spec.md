@@ -128,3 +128,18 @@ A body that overlaps a collider SHALL be moved out of it by the end of the tick.
 #### Scenario: Bodies walking into each other
 - **WHEN** two bodies walk straight into each other
 - **THEN** they stop facing each other, and they overlap by no more than one tick's motion at any time
+
+### Requirement: Subtrees under bodies follow them in the same tick
+After the `solve` group in each `fixed_tick`, `std.physics.volume` SHALL re-derive `WorldTransform` for every descendant of a character body that has `Parent`, `LocalTransform` and `WorldTransform`, using the hierarchy propagation rules. A `fixed_tick` rule that declares `after: physics.solve` SHALL see those descendants at this tick's body pose. Descendants of entities that are not character bodies SHALL NOT be propagated in `fixed_tick` by this rule.
+
+#### Scenario: Child collider follows its body this tick
+- **WHEN** a body moves `0.5` along X during `solve` and has a child with `LocalTransform` position `(0, 1, 0)`
+- **THEN** a rule after `physics.solve` in the same `fixed_tick` reads the child's `WorldTransform.position` as the body's new position plus `(0, 1, 0)`
+
+#### Scenario: Nested descendants follow
+- **WHEN** a body's child has its own child, both with `LocalTransform`
+- **THEN** both descendants reflect the body's pose after `solve`
+
+#### Scenario: Non-body subtrees wait for late_tick
+- **WHEN** a pose root without `CharacterBody` has a child with `LocalTransform`
+- **THEN** the child is not re-derived during `fixed_tick`, and `late_tick` propagation updates it

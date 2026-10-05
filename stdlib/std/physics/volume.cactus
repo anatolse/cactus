@@ -293,3 +293,20 @@ rule Depenetrate:
 
     on core.fixed_tick:
         body.tv.WorldTransform.position += push
+
+# Re-derives the WorldTransform of each LocalTransform descendant of a body,
+# so a rule after `solve` sees a body's children at this tick's pose. Other
+# subtrees wait for std.transform.volume's late_tick propagation.
+extern rule FollowBodies:
+    group: solve
+    after:
+        Depenetrate
+
+    on core.fixed_tick:
+        reads:
+            CharacterBody
+            core.Parent
+            tv.LocalTransform
+            tv.WorldTransform
+        writes:
+            tv.WorldTransform

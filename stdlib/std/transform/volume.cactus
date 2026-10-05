@@ -11,7 +11,9 @@ pub trait LocalTransform:
     var rotation: quat = quat(0.0, 0.0, 0.0, 1.0)
     var scale: vec3 = vec3(1.0, 1.0, 1.0)
 
-# Derived 3D world transform after hierarchy propagation.
+# 3D world transform. Propagation derives it for entities with LocalTransform.
+# An entity with WorldTransform and no LocalTransform is a pose root: rules
+# write its pose, and propagation never overwrites it.
 # position: world-space 3D position
 # rotation: world-space orientation as a quaternion
 # scale:    world-space per-axis scale
@@ -20,6 +22,8 @@ pub trait WorldTransform:
     var rotation: quat = quat(0.0, 0.0, 0.0, 1.0)
     var scale: vec3 = vec3(1.0, 1.0, 1.0)
 
+# Composes each LocalTransform child onto its parent's WorldTransform, after
+# every other late_tick rule that writes WorldTransform.
 extern rule TransformPropagation:
     filter:
         LocalTransform
@@ -29,6 +33,7 @@ extern rule TransformPropagation:
         reads:
             LocalTransform
             Parent
+            WorldTransform
         writes:
             WorldTransform
 

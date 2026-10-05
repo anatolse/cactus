@@ -2154,37 +2154,67 @@ std::uint64_t generated_next_creation_ordinal() noexcept {
     return next++;
 }
 
-void propagate_hierarchy(entt::registry& registry,
-                         const std::function<bool(entt::entity)>& has_local_world,
-                         const std::function<entt::entity(entt::entity)>& get_parent,
-                         const std::function<void(entt::entity)>& copy_local,
-                         const std::function<void(entt::entity, entt::entity)>& accumulate_from_parent) {
-    std::pmr::monotonic_buffer_resource scratch_resource;
-    std::pmr::unordered_set<entt::entity> active_entities{&scratch_resource};
+namespace {
 
-    std::function<void(entt::entity)> resolve;
-    resolve = [&](entt::entity entity) -> void {
-        if (!registry.valid(entity) || active_entities.contains(entity) || !has_local_world(entity)) {
-            return;
+// Without `is_scope_root` every entity is in scope.
+class HierarchyResolver {
+public:
+    HierarchyResolver(entt::registry& registry,
+                      const HierarchyPropagation& propagation,
+                      const std::function<bool(entt::entity)>* is_scope_root)
+        : registry_{registry}, propagation_{propagation}, is_scope_root_{is_scope_root} {}
+
+    // Returns whether `entity` lies at or below a scope root.
+    bool resolve(entt::entity entity) {
+        if (!registry_.valid(entity)) {
+            return false;
+        }
+        if (is_scope_root_ != nullptr && (*is_scope_root_)(entity)) {
+            return true;
+        }
+        if (active_entities_.contains(entity) || !propagation_.has_local_world(entity)) {
+            return false;
         }
 
-        active_entities.insert(entity);
-        bool copied_local         = false;
-        const entt::entity parent = get_parent(entity);
-        if (parent != entt::null && registry.valid(parent) && has_local_world(parent)) {
-            resolve(parent);
-            accumulate_from_parent(parent, entity);
-            copied_local = true;
+        active_entities_.insert(entity);
+        bool in_scope             = false;
+        const entt::entity parent = propagation_.get_parent(entity);
+        if (parent != entt::null && registry_.valid(parent) && propagation_.has_world(parent)) {
+            in_scope = resolve(parent);
+            if (is_scope_root_ == nullptr || in_scope) {
+                propagation_.accumulate_from_parent(parent, entity);
+            }
+        } else if (is_scope_root_ == nullptr) {
+            propagation_.copy_local(entity);
         }
-        if (!copied_local) {
-            copy_local(entity);
-        }
-        active_entities.erase(entity);
-    };
+        active_entities_.erase(entity);
+        return in_scope;
+    }
 
-    auto& storage = registry.storage<entt::entity>();
-    for (const auto entry : storage.each()) {
-        resolve(std::get<0>(entry));
+private:
+    entt::registry& registry_;
+    const HierarchyPropagation& propagation_;
+    const std::function<bool(entt::entity)>* is_scope_root_;
+    std::pmr::monotonic_buffer_resource scratch_resource_;
+    std::pmr::unordered_set<entt::entity> active_entities_{&scratch_resource_};
+};
+
+}  // namespace
+
+void propagate_hierarchy(entt::registry& registry, const HierarchyPropagation& propagation) {
+    HierarchyResolver resolver{registry, propagation, nullptr};
+    for (const auto [entity] : registry.storage<entt::entity>().each()) {
+        resolver.resolve(entity);
+    }
+}
+
+void propagate_hierarchy_below(entt::registry& registry,
+                               const HierarchyPropagation& propagation,
+                               std::span<const entt::entity> candidates,
+                               const std::function<bool(entt::entity)>& is_scope_root) {
+    HierarchyResolver resolver{registry, propagation, &is_scope_root};
+    for (const auto entity : candidates) {
+        resolver.resolve(entity);
     }
 }
 

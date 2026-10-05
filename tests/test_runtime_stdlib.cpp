@@ -16,6 +16,7 @@
 #include <limits>
 #include <numbers>
 #include <optional>
+#include <span>
 #include <sstream>
 #include <vector>
 
@@ -1648,10 +1649,8 @@ TEST_CASE("Runtime stdlib: query_raycast (3D) hits an entity within the perpendi
 }
 
 // ── Hierarchy propagation (quaternion-rotation-semantics) ──────────────────────
-// The generated ACCUMULATE_FROM_PARENT lambda for std.transform.volume calls
-// quat::compose directly (system_emitter.cpp); mirror that exact lambda body
-// here against the real propagate_hierarchy runtime helper and a real
-// registry, so a drift/normalization regression fails here rather than only
+// HierarchyFixture's callbacks mirror the volume bindings system_emitter.cpp
+// generates, so a drift/normalization regression fails here rather than only
 // showing up as a generated-code text mismatch.
 
 namespace {
@@ -1660,90 +1659,121 @@ struct HierarchyParent {
 };
 struct HierarchyLocalTransform {
     Vector3 position{};
-    Quat rotation{};
-    Vector3 scale{};
+    Quat rotation{.x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F};
+    Vector3 scale{.x = 1.0F, .y = 1.0F, .z = 1.0F};
 };
 struct HierarchyWorldTransform {
     Vector3 position{};
-    Quat rotation{};
-    Vector3 scale{};
+    Quat rotation{.x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F};
+    Vector3 scale{.x = 1.0F, .y = 1.0F, .z = 1.0F};
 };
+struct HierarchyScopeRoot {};
+
+struct HierarchyFixture {
+    entt::registry registry;
+
+    entt::entity pose_root(Vector3 position) {
+        const auto entity = registry.create();
+        registry.emplace<HierarchyWorldTransform>(entity, HierarchyWorldTransform{.position = position});
+        return entity;
+    }
+
+    entt::entity child(entt::entity parent, HierarchyLocalTransform local) {
+        const auto entity = registry.create();
+        registry.emplace<HierarchyParent>(entity, HierarchyParent{.parent = parent});
+        registry.emplace<HierarchyLocalTransform>(entity, local);
+        registry.emplace<HierarchyWorldTransform>(entity, HierarchyWorldTransform{});
+        return entity;
+    }
+
+    Vector3 world_position(entt::entity entity) {
+        return registry.get<HierarchyWorldTransform>(entity).position;
+    }
+
+    [[nodiscard]] entt_backend::HierarchyPropagation propagation() {
+        return {
+            .has_local_world =
+                [this](entt::entity e) { return registry.all_of<HierarchyLocalTransform, HierarchyWorldTransform>(e); },
+            .has_world = [this](entt::entity e) { return registry.all_of<HierarchyWorldTransform>(e); },
+            .get_parent =
+                [this](entt::entity e) {
+                    if (const auto* parent = registry.try_get<HierarchyParent>(e); parent != nullptr) {
+                        return parent->parent;
+                    }
+                    return entt::entity{entt::null};
+                },
+            .copy_local =
+                [this](entt::entity e) {
+                    const auto& local = registry.get<HierarchyLocalTransform>(e);
+                    auto& world       = registry.get<HierarchyWorldTransform>(e);
+                    world.position    = local.position;
+                    world.rotation    = local.rotation;
+                    world.scale       = local.scale;
+                },
+            .accumulate_from_parent =
+                [this](entt::entity parent_entity, entt::entity e) {
+                    const auto& local        = registry.get<HierarchyLocalTransform>(e);
+                    auto& world              = registry.get<HierarchyWorldTransform>(e);
+                    const auto& parent_world = registry.get<HierarchyWorldTransform>(parent_entity);
+                    world.position           = Vector3{
+                        .x = parent_world.position.x + local.position.x,
+                        .y = parent_world.position.y + local.position.y,
+                        .z = parent_world.position.z + local.position.z,
+                    };
+                    world.rotation = stdlib::math::quat::compose(parent_world.rotation, local.rotation);
+                    world.scale    = Vector3{
+                        .x = parent_world.scale.x * local.scale.x,
+                        .y = parent_world.scale.y * local.scale.y,
+                        .z = parent_world.scale.z * local.scale.z,
+                    };
+                },
+        };
+    }
+
+    void propagate() {
+        entt_backend::propagate_hierarchy(registry, propagation());
+    }
+
+    void propagate_below_scope_roots(std::span<const entt::entity> candidates) {
+        entt_backend::propagate_hierarchy_below(registry, propagation(), candidates, [this](entt::entity e) {
+            return registry.all_of<HierarchyScopeRoot>(e);
+        });
+    }
+};
+
+void check_position(Vector3 actual, Vector3 expected) {
+    CHECK(actual.x == Catch::Approx(expected.x));
+    CHECK(actual.y == Catch::Approx(expected.y));
+    CHECK(actual.z == Catch::Approx(expected.z));
+}
 }  // namespace
 
 TEST_CASE("Runtime stdlib: propagate_hierarchy composes quaternion rotation through a multi-level volume parent chain",
           "[runtime][backend][hierarchy][quat]") {
-    entt::registry registry;
+    HierarchyFixture fixture;
+    auto& registry = fixture.registry;
 
-    const auto root       = registry.create();
-    const auto child      = registry.create();
-    const auto grandchild = registry.create();
-
+    const auto root = registry.create();
     registry.emplace<HierarchyLocalTransform>(
         root,
         HierarchyLocalTransform{
-            .position = Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
             .rotation = stdlib::math::quat::from_axis_angle(Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F}, 0.7F),
-            .scale    = Vector3{.x = 1.0F, .y = 1.0F, .z = 1.0F},
         });
     registry.emplace<HierarchyWorldTransform>(root, HierarchyWorldTransform{});
-
-    registry.emplace<HierarchyParent>(child, HierarchyParent{.parent = root});
-    registry.emplace<HierarchyLocalTransform>(
-        child,
+    const auto child = fixture.child(
+        root,
         HierarchyLocalTransform{
             .position = Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F},
             .rotation = stdlib::math::quat::from_axis_angle(Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F}, 0.9F),
-            .scale    = Vector3{.x = 1.0F, .y = 1.0F, .z = 1.0F},
         });
-    registry.emplace<HierarchyWorldTransform>(child, HierarchyWorldTransform{});
-
-    registry.emplace<HierarchyParent>(grandchild, HierarchyParent{.parent = child});
-    registry.emplace<HierarchyLocalTransform>(
-        grandchild,
+    const auto grandchild = fixture.child(
+        child,
         HierarchyLocalTransform{
             .position = Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F},
             .rotation = stdlib::math::quat::from_axis_angle(Vector3{.x = 0.0F, .y = 0.0F, .z = 1.0F}, 1.1F),
-            .scale    = Vector3{.x = 1.0F, .y = 1.0F, .z = 1.0F},
         });
-    registry.emplace<HierarchyWorldTransform>(grandchild, HierarchyWorldTransform{});
 
-    const std::function<bool(entt::entity)> has_local_world = [&](entt::entity e) {
-        return registry.all_of<HierarchyLocalTransform, HierarchyWorldTransform>(e);
-    };
-    const std::function<entt::entity(entt::entity)> get_parent = [&](entt::entity e) {
-        if (const auto* parent = registry.try_get<HierarchyParent>(e); parent != nullptr) {
-            return parent->parent;
-        }
-        return entt::entity{entt::null};
-    };
-    const std::function<void(entt::entity)> copy_local = [&](entt::entity e) {
-        const auto& local = registry.get<HierarchyLocalTransform>(e);
-        auto& world       = registry.get<HierarchyWorldTransform>(e);
-        world.position    = local.position;
-        world.rotation    = local.rotation;
-        world.scale       = local.scale;
-    };
-    // Mirrors system_emitter.cpp's volume ACCUMULATE_FROM_PARENT lambda exactly, including the
-    // quat::compose call this change migrated off raw quat::multiply.
-    const std::function<void(entt::entity, entt::entity)> accumulate_from_parent = [&](entt::entity parent_entity,
-                                                                                       entt::entity entity) {
-        const auto& local        = registry.get<HierarchyLocalTransform>(entity);
-        auto& world              = registry.get<HierarchyWorldTransform>(entity);
-        const auto& parent_world = registry.get<HierarchyWorldTransform>(parent_entity);
-        world.position           = Vector3{
-            .x = parent_world.position.x + local.position.x,
-            .y = parent_world.position.y + local.position.y,
-            .z = parent_world.position.z + local.position.z,
-        };
-        world.rotation = stdlib::math::quat::compose(parent_world.rotation, local.rotation);
-        world.scale    = Vector3{
-            .x = parent_world.scale.x * local.scale.x,
-            .y = parent_world.scale.y * local.scale.y,
-            .z = parent_world.scale.z * local.scale.z,
-        };
-    };
-
-    entt_backend::propagate_hierarchy(registry, has_local_world, get_parent, copy_local, accumulate_from_parent);
+    fixture.propagate();
 
     auto length_squared_of = [](Quat q) { return (q.x * q.x) + (q.y * q.y) + (q.z * q.z) + (q.w * q.w); };
     CHECK(length_squared_of(registry.get<HierarchyWorldTransform>(root).rotation) == Catch::Approx(1.0F));
@@ -1759,6 +1789,48 @@ TEST_CASE("Runtime stdlib: propagate_hierarchy composes quaternion rotation thro
     CHECK(actual_grandchild_world.y == Catch::Approx(expected_grandchild_world.y));
     CHECK(actual_grandchild_world.z == Catch::Approx(expected_grandchild_world.z));
     CHECK(actual_grandchild_world.w == Catch::Approx(expected_grandchild_world.w));
+}
+
+TEST_CASE("Runtime stdlib: propagate_hierarchy composes children onto a pose root and never writes it",
+          "[runtime][backend][hierarchy]") {
+    HierarchyFixture fixture;
+    const auto root = fixture.pose_root(Vector3{.x = 5.0F, .y = 0.0F, .z = 0.0F});
+    const auto child =
+        fixture.child(root, HierarchyLocalTransform{.position = Vector3{.x = 0.0F, .y = -1.0F, .z = 0.0F}});
+
+    fixture.propagate();
+
+    check_position(fixture.world_position(child), Vector3{.x = 5.0F, .y = -1.0F, .z = 0.0F});
+    check_position(fixture.world_position(root), Vector3{.x = 5.0F, .y = 0.0F, .z = 0.0F});
+}
+
+TEST_CASE("Runtime stdlib: propagate_hierarchy_below derives only subtrees under scope roots",
+          "[runtime][backend][hierarchy]") {
+    HierarchyFixture fixture;
+    auto& registry = fixture.registry;
+
+    // A scope root with its own LocalTransform keeps the world pose rules wrote.
+    const auto body = fixture.pose_root(Vector3{.x = 1.0F, .y = 2.0F, .z = 3.0F});
+    registry.emplace<HierarchyScopeRoot>(body);
+    registry.emplace<HierarchyLocalTransform>(body);
+    const auto hurtbox =
+        fixture.child(body, HierarchyLocalTransform{.position = Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F}});
+    const auto crest =
+        fixture.child(hurtbox, HierarchyLocalTransform{.position = Vector3{.x = 0.0F, .y = 0.5F, .z = 0.0F}});
+
+    const auto cart = fixture.pose_root(Vector3{.x = 9.0F, .y = 0.0F, .z = 0.0F});
+    const auto load =
+        fixture.child(cart, HierarchyLocalTransform{.position = Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F}});
+    const auto orphan = fixture.child(entt::null, HierarchyLocalTransform{.position = Vector3{.x = 7.0F}});
+
+    const std::array candidates{crest, load, hurtbox, orphan};
+    fixture.propagate_below_scope_roots(candidates);
+
+    check_position(fixture.world_position(body), Vector3{.x = 1.0F, .y = 2.0F, .z = 3.0F});
+    check_position(fixture.world_position(hurtbox), Vector3{.x = 1.0F, .y = 3.0F, .z = 3.0F});
+    check_position(fixture.world_position(crest), Vector3{.x = 1.0F, .y = 3.5F, .z = 3.0F});
+    check_position(fixture.world_position(load), Vector3{});
+    check_position(fixture.world_position(orphan), Vector3{});
 }
 
 TEST_CASE("Runtime stdlib: sequence reproducibility", "[runtime][stdlib][random]") {

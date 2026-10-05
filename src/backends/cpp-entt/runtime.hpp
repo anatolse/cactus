@@ -1842,11 +1842,24 @@ private:
         previous_;
 };
 
-void propagate_hierarchy(entt::registry& registry,
-                         const std::function<bool(entt::entity)>& has_local_world,
-                         const std::function<entt::entity(entt::entity)>& get_parent,
-                         const std::function<void(entt::entity)>& copy_local,
-                         const std::function<void(entt::entity, entt::entity)>& accumulate_from_parent);
+// An entity with WorldTransform but no LocalTransform is a pose root: it is
+// never written, and its children compose onto its current WorldTransform.
+struct HierarchyPropagation {
+    std::function<bool(entt::entity)> has_local_world;
+    std::function<bool(entt::entity)> has_world;
+    std::function<entt::entity(entt::entity)> get_parent;
+    std::function<void(entt::entity)> copy_local;
+    std::function<void(entt::entity, entt::entity)> accumulate_from_parent;
+};
+
+void propagate_hierarchy(entt::registry& registry, const HierarchyPropagation& propagation);
+
+// Derives only the candidates whose parent chain reaches a scope root; scope
+// roots themselves are never written.
+void propagate_hierarchy_below(entt::registry& registry,
+                               const HierarchyPropagation& propagation,
+                               std::span<const entt::entity> candidates,
+                               const std::function<bool(entt::entity)>& is_scope_root);
 
 void destroy_entity_recursive(
     entt::registry& registry,

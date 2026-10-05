@@ -2960,6 +2960,8 @@ TEST_CASE("Codegen EnTT: hierarchy propagation handles stale parents and cycles 
     CHECK(code.find("cactus::runtime::entt_backend::propagate_hierarchy(") != std::string::npos);
     CHECK(code.find("return entt::entity{entt::null};") != std::string::npos);
     CHECK(code.find("registry.all_of<LocalTransform, WorldTransform>(entity)") != std::string::npos);
+    CHECK(code.find(".has_world = [&](entt::entity entity) { return registry.all_of<WorldTransform>(entity); }") !=
+          std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: volume transform propagation extern rule is recognized", "[codegen-entt][hierarchy]") {

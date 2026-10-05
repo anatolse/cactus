@@ -49,6 +49,18 @@ struct World {
     int ticks() {
         return registry.get<character_body__Ticks>(slots().character_body__Clock).count;
     }
+    entt::entity child_of(entt::entity parent) {
+        for (const auto [entity, link] : registry.view<std_core__Parent>().each()) {
+            if (link.parent == parent) {
+                return entity;
+            }
+        }
+        FAIL("no child");
+        return entt::null;
+    }
+    const Vector3& seen(entt::entity entity) {
+        return registry.get<character_body__SeenAt>(entity).position;
+    }
     Body& body(entt::entity entity) {
         return registry.get<Body>(entity);
     }
@@ -327,4 +339,34 @@ TEST_CASE("bodies walking into each other stop face to face", "[runtime][codegen
     CHECK(world.position(right).x == near(right_x, 1e-4));
     CHECK(world.position(left).x < world.position(right).x);
 }
+// ── Children follow bodies ──────────────────────────────────────────────────
+
+TEST_CASE("a rule after physics.solve sees a body's subtree at this tick's pose",
+          "[runtime][codegen-entt][stdlib-character-body]") {
+    World world;
+    const auto carrier = slots().character_body__Carrier;
+    const auto hurtbox = world.child_of(carrier);
+    const auto crest   = world.child_of(hurtbox);
+    for (int i = 1; i <= 3; ++i) {
+        world.tick();
+        const Vector3 body = world.position(carrier);
+        CHECK(body.x == near(420.0F + (0.5F * static_cast<float>(i)), 1e-4));
+        CHECK(world.seen(hurtbox).x == near(body.x, 1e-5));
+        CHECK(world.seen(hurtbox).y == near(body.y + 1.0F, 1e-5));
+        CHECK(world.seen(crest).x == near(body.x, 1e-5));
+        CHECK(world.seen(crest).y == near(body.y + 1.5F, 1e-5));
+    }
+}
+
+TEST_CASE("a non-body pose root's subtree waits for late_tick", "[runtime][codegen-entt][stdlib-character-body]") {
+    World world;
+    const auto cart = slots().character_body__Cart;
+    const auto load = world.child_of(cart);
+    world.tick(2);
+    CHECK(world.position(cart).x == near(442.0F, 1e-5));
+    CHECK(world.seen(load).x == near(441.0F, 1e-5));
+    CHECK(world.position(load).x == near(442.0F, 1e-5));
+    CHECK(world.position(load).y == near(21.0F, 1e-5));
+}
+
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

@@ -209,22 +209,14 @@ template EnemyBase:
     Enemy
     Threat
 
-    # The GLB character models are feet-anchored (origin at the feet, not the
-    # vertical center), but the character controller places WorldTransform.
-    # position at the collision capsule's *center* (floor + half_height) so
-    # wall separation, player-contact, and bullet-hit checks keep working
-    # against a torso-height reference. Rendering the model directly from the
-    # root's WorldTransform would float it half_height above the floor, so
-    # the visible mesh lives on a child entity instead, with its own
-    # WorldTransform authored each late_tick from the root's (mirroring
-    # PlayerBody/CameraRig's ComposeCameraPose below — not
-    # std.transform.volume's TransformPropagation, which only composes a
-    # child against a parent that itself carries LocalTransform).
+    # The GLB character models are feet-anchored, but the body's
+    # WorldTransform is the capsule's center. The model lives on a child
+    # offset down to the feet, and follows the body by transform propagation.
     children:
         entity EnemyVisual:
-            tv.WorldTransform:
-                rotation = quat.identity()
-                scale = vec3(1.0, 1.0, 1.0)
+            tv.LocalTransform:
+                position = vec3(0.0, ENEMY_HALF_HEIGHT * -1.0, 0.0)
+            tv.WorldTransform
             EnemyVisual
             models.ModelRenderer:
                 color = #FFFFFFFF
@@ -646,25 +638,6 @@ rule ComposeCameraPose:
         transform.position = PlayerBody.tv.WorldTransform.position + vec3(0.0, CAMERA_EYE_HEIGHT, 0.0)
         transform.rotation = quat.compose(quat.from_euler(0.0, yaw, 0.0), quat.from_euler(pitch, 0.0, 0.0))
 
-# Mirrors ComposeCameraPose above: the EnemyVisual child's WorldTransform
-# isn't auto-composed by std.transform.volume's TransformPropagation (that
-# only applies when the parent itself carries LocalTransform, which the Enemy
-# root deliberately doesn't — see EnemyBase), so it's authored here instead,
-# offset down by half_height from the collision root's torso-height position.
-rule ComposeEnemyVisualPose:
-    filter:
-        Enemy as enemy
-        tv.WorldTransform as transform
-
-    on late_tick:
-        for visual in query.children[EnemyVisual](of = self):
-            # Single from_euler call (not a two-step compose like
-            # ComposeCameraPose) to exactly match how the root's own rotation
-            # is built in SeekPlayer/AnimateEnemyDeath.
-            set tv.WorldTransform on visual:
-                position = transform.position - vec3(0.0, ENEMY_HALF_HEIGHT, 0.0)
-                rotation = quat.from_euler(enemy.death_pitch, enemy.facing_yaw + enemy.kind.visual_yaw_offset, 0.0)
-
 rule SpawnRobots:
     filter:
         RobotSpawnPoint as spawn_point
@@ -688,7 +661,8 @@ rule SpawnRobots:
                 kind = ROBOT
             children:
                 EnemyVisual:
-                    tv.WorldTransform:
+                    tv.LocalTransform:
+                        rotation = quat.from_euler(0.0, ROBOT.visual_yaw_offset, 0.0)
                         scale = vec3(model_scale, model_scale, model_scale)
                     models.ModelRenderer:
                         model = Robot
@@ -720,7 +694,8 @@ rule SpawnKnights:
                 kind = KNIGHT
             children:
                 EnemyVisual:
-                    tv.WorldTransform:
+                    tv.LocalTransform:
+                        rotation = quat.from_euler(0.0, KNIGHT.visual_yaw_offset, 0.0)
                         scale = vec3(model_scale, model_scale, model_scale)
                     models.ModelRenderer:
                         model = Knight
@@ -907,14 +882,11 @@ rule StartDying:
         body.velocity = vec3(0.0, 0.0, 0.0)
         remove Threat
 
-# Enemy is the collision/logic root (grounded at torso height, see
-# EnemyBase); the rendered model lives on a child EnemyVisual entity, so the
-# alpha fade computed here is patched onto it.
+# The model child tips over and fades; the collision root keeps its yaw.
 rule AnimateEnemyDeath:
     filter:
         Enemy as enemy
         Dying
-        tv.WorldTransform as transform
 
     on tick:
         enemy.death_elapsed += tick.dt
@@ -925,8 +897,9 @@ rule AnimateEnemyDeath:
             return
         let progress = math.clamp(enemy.death_elapsed / DEATH_DURATION, 0.0, 1.0)
         enemy.death_pitch = progress * HALF_PI
-        transform.rotation = quat.from_euler(enemy.death_pitch, enemy.facing_yaw, 0.0)
         for visual in query.children[EnemyVisual](of = self):
+            set tv.LocalTransform on visual:
+                rotation = quat.from_euler(enemy.death_pitch, enemy.kind.visual_yaw_offset, 0.0)
             set models.ModelRenderer on visual:
                 color = color(1.0, 1.0, 1.0, 1.0 - progress)
 

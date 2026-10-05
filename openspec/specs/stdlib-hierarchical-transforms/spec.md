@@ -38,7 +38,7 @@ The `std.transform.volume` module SHALL provide `LocalTransform` and `WorldTrans
 - **THEN** rules and backends may read world-space `position`, `rotation`, and `scale` from it
 
 ### Requirement: stdlib extern rules propagate transforms through parent chains
-The stdlib SHALL provide external rules that derive `WorldTransform` from `LocalTransform` and optional `Parent` relationships. For root entities, `WorldTransform` SHALL be derived directly from `LocalTransform`. For `std.transform.volume.WorldTransform`, the parent and local rotations SHALL be composed using normalized quaternion composition, so `WorldTransform.rotation` remains unit-length across repeated propagation rather than accumulating floating-point drift.
+The stdlib SHALL provide external rules that derive `WorldTransform` from `LocalTransform` and optional `Parent` relationships. For root entities, `WorldTransform` SHALL be derived directly from `LocalTransform`. A child with `Parent` and `LocalTransform` whose parent has a live `WorldTransform` SHALL derive its `WorldTransform` from the parent's `WorldTransform` composed with its own `LocalTransform`, whether or not the parent carries `LocalTransform`. An entity with `WorldTransform` but no `LocalTransform` is a pose root: propagation SHALL NOT write its `WorldTransform`, and its descendants SHALL compose onto the value rules last wrote. Within the phase that runs propagation, rules that write a pose root's `WorldTransform` SHALL run before propagation. For `std.transform.volume.WorldTransform`, the parent and local rotations SHALL be composed using normalized quaternion composition, so `WorldTransform.rotation` remains unit-length across repeated propagation rather than accumulating floating-point drift.
 
 #### Scenario: root entity copies local to world
 - **WHEN** an entity has `LocalTransform` and `WorldTransform` but no live parent
@@ -47,6 +47,19 @@ The stdlib SHALL provide external rules that derive `WorldTransform` from `Local
 #### Scenario: child entity derives world from parent and local
 - **WHEN** an entity has `Parent`, `LocalTransform`, and `WorldTransform`, and the parent has a live `WorldTransform`
 - **THEN** propagation derives the child `WorldTransform` from the parent world transform composed with the child local transform
+
+#### Scenario: child of a pose root follows it
+- **WHEN** a parent has `WorldTransform` at position `(5, 0, 0)` and no `LocalTransform`, and its child has `LocalTransform` position `(0, -1, 0)`
+- **THEN** after propagation the child's `WorldTransform.position` is `(5, -1, 0)`
+- **AND** the parent's `WorldTransform` is unchanged
+
+#### Scenario: pose root written earlier in the same phase
+- **WHEN** a `late_tick` rule moves a pose root's `WorldTransform` and the root has a child with `LocalTransform`
+- **THEN** the child's `WorldTransform` after that `late_tick` reflects the moved pose
+
+#### Scenario: child without LocalTransform is not propagated
+- **WHEN** a child has `Parent` and `WorldTransform` but no `LocalTransform`
+- **THEN** propagation does not write its `WorldTransform`
 
 #### Scenario: volume rotation propagation stays normalized
 - **WHEN** an entity has `Parent`, `std.transform.volume.LocalTransform`, and `std.transform.volume.WorldTransform`, and the parent has a live `std.transform.volume.WorldTransform`

@@ -2138,6 +2138,70 @@ TEST_CASE("handler graph diagnoses cycles formed by explicit and contract edges"
     CHECK(decorated.execution_graph.dependency_levels.empty());
 }
 
+namespace {
+const char* const kTransformPrelude =
+    "module std.transform.volume\n"
+    "event tick\n"
+    "trait Parent\n"
+    "trait LocalTransform\n"
+    "trait WorldTransform\n"
+    "extern rule TransformPropagation:\n"
+    "    on tick:\n"
+    "        reads:\n"
+    "            LocalTransform\n"
+    "            Parent\n"
+    "            WorldTransform\n"
+    "        writes:\n"
+    "            WorldTransform\n";
+
+HandlerIdentity transform_handler(const std::string& rule) {
+    return HandlerIdentity{
+        .rule    = make_symbol_id(SymbolKind::Rule, "std.transform.volume", rule),
+        .trigger = ResolvedHandlerTrigger{.kind   = HandlerTriggerKind::Event,
+                                          .symbol = make_symbol_id(SymbolKind::Event, "std.transform.volume", "tick")}};
+}
+}  // namespace
+
+TEST_CASE("handler graph runs transform propagation after every same-trigger WorldTransform writer",
+          "[semantic][handler-graph][hierarchy]") {
+    const auto [decorated, diagnostics] = analyze_source(std::string(kTransformPrelude) +
+                                                         "extern rule Mover:\n"
+                                                         "    on tick:\n"
+                                                         "        reads:\n"
+                                                         "            WorldTransform\n"
+                                                         "        writes:\n"
+                                                         "            WorldTransform\n");
+
+    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
+    REQUIRE(diagnostics.empty());
+    const auto& graph = decorated.execution_graph;
+    const auto edge   = std::ranges::find_if(graph.schedule_edges, [](const ScheduleEdge& candidate) {
+        return candidate.kind == ScheduleEdgeKind::DataConflict;
+    });
+    REQUIRE(edge != graph.schedule_edges.end());
+    CHECK(edge->before == transform_handler("Mover"));
+    CHECK(edge->after == transform_handler("TransformPropagation"));
+    CHECK(edge->orientation == ScheduleEdgeOrientation::DerivationAfterWriters);
+    CHECK(graph.stable_topological_order ==
+          std::vector{transform_handler("Mover"), transform_handler("TransformPropagation")});
+}
+
+TEST_CASE("handler graph reports a cycle when a WorldTransform writer is ordered after propagation",
+          "[semantic][handler-graph][hierarchy][errors]") {
+    const auto [decorated, diagnostics] = analyze_source(std::string(kTransformPrelude) +
+                                                         "extern rule LateMover:\n"
+                                                         "    on tick:\n"
+                                                         "        after:\n"
+                                                         "            TransformPropagation/on tick\n"
+                                                         "        writes:\n"
+                                                         "            WorldTransform\n");
+
+    CHECK(has_diagnostic(diagnostics,
+                         "handler cycle: std.transform.volume.TransformPropagation/on std.transform.volume.tick -> "
+                         "std.transform.volume.LateMover/on std.transform.volume.tick -> "
+                         "std.transform.volume.TransformPropagation/on std.transform.volume.tick"));
+}
+
 TEST_CASE("handler graph orients data and effect conflicts with deterministic provenance",
           "[semantic][handler-graph][3.3]") {
     const auto [decorated, diagnostics] = analyze_source(

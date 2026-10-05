@@ -34,6 +34,13 @@ trait GroundWatch:
 trait Ticks:
     var count: int = 0
 
+# Records WorldTransform.position from a rule that runs after physics.solve.
+trait SeenAt:
+    var position: vec3 = vec3(0.0, 0.0, 0.0)
+
+# A game rule moves this pose root in fixed_tick; it is not a body.
+trait Pushed
+
 template Body(position: vec3, velocity: vec3 = vec3(0.0, 0.0, 0.0), layer: int = 1, mask: int = 1):
     tv.WorldTransform:
         position = position
@@ -156,6 +163,36 @@ entity Watched:
     use Body(position = vec3(380.0, 3.0, 0.0))
     GroundWatch
 
+# ── Children follow bodies ───────────────────────────────────────────────────
+# Floats 0.5 along X per tick.
+entity Carrier:
+    use Body(position = vec3(420.0, 10.0, 0.0), velocity = vec3(30.0, 0.0, 0.0))
+    physics.CharacterBody:
+        gravity = 0.0
+    children:
+        entity Hurtbox:
+            SeenAt
+            tv.LocalTransform:
+                position = vec3(0.0, 1.0, 0.0)
+            tv.WorldTransform
+            children:
+                entity Crest:
+                    SeenAt
+                    tv.LocalTransform:
+                        position = vec3(0.0, 0.5, 0.0)
+                    tv.WorldTransform
+
+entity Cart:
+    Pushed
+    tv.WorldTransform:
+        position = vec3(440.0, 20.0, 0.0)
+    children:
+        entity Load:
+            SeenAt
+            tv.LocalTransform:
+                position = vec3(0.0, 1.0, 0.0)
+            tv.WorldTransform
+
 rule CountTicks:
     filter:
         Ticks as ticks
@@ -190,3 +227,21 @@ rule WatchGround:
 
     on fixed_tick:
         watch.seen = body.grounded
+
+rule Push:
+    filter:
+        Pushed
+        tv.WorldTransform as world
+
+    on fixed_tick:
+        world.position.x += 1.0
+
+rule WatchPose:
+    filter:
+        SeenAt as seen
+        tv.WorldTransform as world
+    after:
+        physics.solve
+
+    on fixed_tick:
+        seen.position = world.position

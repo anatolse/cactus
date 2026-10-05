@@ -82,9 +82,9 @@ bool same_color(const Color left, const Color right) {
 
 // Enemies are grounded at torso height on their own entity (collision
 // capsule center); the rendered model (ModelRenderer/ModelAnimator) lives on
-// a child EnemyVisual entity offset down by half_height instead, so the
-// visible mesh's feet-anchored origin lands on the floor. Tests that assert
-// on rendering state look it up through the Parent relation.
+// a child EnemyVisual entity whose LocalTransform offsets it down by
+// half_height, so the visible mesh's feet-anchored origin lands on the floor.
+// Tests that assert on rendering state look it up through the Parent relation.
 entt::entity enemy_visual_of(entt::registry& registry, const entt::entity enemy) {
     for (const auto visual : registry.view<main__EnemyVisual, std_core__Parent>()) {
         if (registry.get<std_core__Parent>(visual).parent == enemy) {
@@ -92,6 +92,13 @@ entt::entity enemy_visual_of(entt::registry& registry, const entt::entity enemy)
         }
     }
     return entt::null;
+}
+
+void check_quat(const Quat actual, const Quat expected) {
+    CHECK(actual.x == Catch::Approx(expected.x).margin(1e-4F));
+    CHECK(actual.y == Catch::Approx(expected.y).margin(1e-4F));
+    CHECK(actual.z == Catch::Approx(expected.z).margin(1e-4F));
+    CHECK(actual.w == Catch::Approx(expected.w).margin(1e-4F));
 }
 
 }  // namespace
@@ -182,6 +189,30 @@ TEST_CASE("first-person arena headless: enemy visuals are grounded at floor leve
             CHECK(animator.clip == 4);
             CHECK(animator.speed == Catch::Approx(3.3F / 3.5F).margin(0.001F));
         }
+    }
+}
+
+TEST_CASE("first-person arena headless: enemy models follow their moving bodies by propagation",
+          "[runtime][codegen-entt][first-person-arena][grounding]") {
+    namespace quat = cactus::runtime::stdlib::math::quat;
+    cactus_raylib_fake::reset();
+    entt::registry registry;
+    cactus_headless_test::drive_one_frame(registry, kFrameDt);
+    drive_frames(registry, 20);
+
+    for (const auto enemy : registry.view<main__Enemy, std_transform_volume__WorldTransform>()) {
+        const auto& root  = registry.get<std_transform_volume__WorldTransform>(enemy);
+        const auto visual = enemy_visual_of(registry, enemy);
+        REQUIRE(registry.valid(visual));
+        const auto& local  = registry.get<std_transform_volume__LocalTransform>(visual);
+        const auto& model  = registry.get<std_transform_volume__WorldTransform>(visual);
+        const auto& facing = registry.get<main__Enemy>(enemy);
+        CHECK(local.position.y == Catch::Approx(-0.9F));
+        CHECK(model.position.x == Catch::Approx(root.position.x).margin(1e-4F));
+        CHECK(model.position.y == Catch::Approx(root.position.y - 0.9F).margin(1e-4F));
+        CHECK(model.position.z == Catch::Approx(root.position.z).margin(1e-4F));
+        check_quat(root.rotation, quat::from_euler(0.0F, facing.facing_yaw, 0.0F));
+        check_quat(model.rotation, quat::from_euler(0.0F, facing.facing_yaw + facing.kind.visual_yaw_offset, 0.0F));
     }
 }
 
@@ -474,7 +505,8 @@ TEST_CASE("first-person arena headless: bullets follow aim, serialize contacts, 
         REQUIRE(registry.all_of<main__KnightEnemy>(dying_enemy));
         CHECK(dying_animator.clip == 6);
     }
-    const auto death_start_rotation = registry.get<std_transform_volume__WorldTransform>(dying_enemy).rotation;
+    const auto root_rotation        = registry.get<std_transform_volume__WorldTransform>(dying_enemy).rotation;
+    const auto death_start_rotation = registry.get<std_transform_volume__WorldTransform>(dying_visual).rotation;
     drive_frames(registry, 28);
     REQUIRE(registry.valid(dying_enemy));
     const auto& halfway = registry.get<main__Enemy>(dying_enemy);
@@ -482,7 +514,12 @@ TEST_CASE("first-person arena headless: bullets follow aim, serialize contacts, 
     const auto alpha = registry.get<std_render_models__ModelRenderer>(dying_visual).color.a;
     CHECK(alpha >= 100);
     CHECK(alpha <= 155);
-    const auto halfway_rotation = registry.get<std_transform_volume__WorldTransform>(dying_enemy).rotation;
+    // The model tips over; the collision root keeps its yaw.
+    check_quat(registry.get<std_transform_volume__WorldTransform>(dying_enemy).rotation, root_rotation);
+    check_quat(registry.get<std_transform_volume__WorldTransform>(dying_visual).rotation,
+               cactus::runtime::stdlib::math::quat::from_euler(
+                   halfway.death_pitch, halfway.facing_yaw + halfway.kind.visual_yaw_offset, 0.0F));
+    const auto halfway_rotation = registry.get<std_transform_volume__WorldTransform>(dying_visual).rotation;
     const float rotation_change =
         std::abs(halfway_rotation.x - death_start_rotation.x) + std::abs(halfway_rotation.y - death_start_rotation.y) +
         std::abs(halfway_rotation.z - death_start_rotation.z) + std::abs(halfway_rotation.w - death_start_rotation.w);

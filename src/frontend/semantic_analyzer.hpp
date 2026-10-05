@@ -422,7 +422,8 @@ enum class ScheduleEdgeOrientation : std::uint8_t {
     Explicit,
     WriterBeforeReader,
     DeclarationOrder,
-    ImporterBeforePublicGroup
+    ImporterBeforePublicGroup,
+    DerivationAfterWriters
 };
 
 // The fields of one trait that made a data conflict.

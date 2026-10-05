@@ -1,6 +1,6 @@
 # Proposal 003: First-Class `else if` Chains
 
-Status: draft  
+Status: implemented (`b5412d3`); normative grammar in `dsl-parser` and spec §3.16  
 Kind: parser sugar  
 Semantic change: none
 

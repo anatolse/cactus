@@ -1088,6 +1088,8 @@ primary_expr    = literal | IDENTIFIER | "self" | "(" expression ")"
                 | match_expr | if_expr | list_literal | spawn_expr ;
 ```
 
+`if_expr` (`if condition: a else: b`) and `match_expr` (a value `match` whose arms are `pattern => expression`) parse and type-check, but the cpp-entt backend does not lower them yet, and a `match_expr` followed by another statement does not parse. Use an `if` statement until they are completed.
+
 A call's argument list may span lines and end with a comma. Arguments are positional for function calls and named for struct construction (§3.4); using the other form is a compile error.
 
 `spawn` is both an expression and a statement surface:
@@ -1181,6 +1183,13 @@ foreach_stmt    = "for" IDENTIFIER "in" expression ":" NEWLINE INDENT
                   { statement }
                   DEDENT ;
 
+if_stmt         = "if" expression ":" NEWLINE suite
+                  { "else" "if" expression ":" NEWLINE suite }
+                  [ "else" ":" NEWLINE suite ]
+                | "if" expression ":" statement ;
+
+suite           = INDENT statement { statement } DEDENT ;
+
 return_stmt     = "return" [ expression ] NEWLINE ;
 expr_stmt       = expression NEWLINE ;
 ```
@@ -1213,7 +1222,18 @@ set Health on target:
 remove Frozen
 destroy bullet
 load levels.level2
+
+if hp.health <= 0:
+    add Dying
+else if hp.health < 25:
+    ai.mode = Mode.Fleeing
+else:
+    ai.mode = Mode.Attacking
+
+if shooter.cooldown > 0.0: return
 ```
+
+An `if` chain evaluates its conditions top to bottom and runs only the first branch whose condition is true; the terminal `else` runs when none is. `else if` and `else` align with their `if`. An `else if` after the terminal `else`, a second `else`, or an empty branch is a compile error. The one-line form `if condition: statement` takes no `else`. Detailed rules live in the `dsl-parser` capability spec.
 
 `let` declares an immutable local and `var` declares a mutable one, in handler and `func` bodies alike. Reassigning a `let` local, including a compound assignment or a member write such as `v.x = 1.0`, is an error. An `entity_id` local has no trait namespace: `e.Health.hp` is an error whether read or written (§4.2). Assignment never declares a local: assigning to an undeclared name is an error, and declaring the same name twice in one block is an error. An optional type annotation must match the initializer's type.
 

@@ -741,6 +741,21 @@ func steer_heading(position: vec3, goal: vec3, angle: float) vec3:
         return vec3(0.0, 0.0, 0.0)
     return v3.rotate(delta / distance, vec3(0.0, 1.0, 0.0), angle)
 
+# The first free steering angle: small before large, left before right. When
+# every candidate is blocked the enemy keeps the direct heading, and the
+# character controller stops it at the wall.
+func steer_angle(left_small_blocked: bool, right_small_blocked: bool, left_large_blocked: bool, right_large_blocked: bool) float:
+    var angle = 0.0
+    if not left_small_blocked:
+        angle = ENEMY_STEER_ANGLE_SMALL
+    else if not right_small_blocked:
+        angle = ENEMY_STEER_ANGLE_SMALL * -1.0
+    else if not left_large_blocked:
+        angle = ENEMY_STEER_ANGLE_LARGE
+    else if not right_large_blocked:
+        angle = ENEMY_STEER_ANGLE_LARGE * -1.0
+    return angle
+
 # Whether a sphere of ENEMY_RADIUS at a steering probe overlaps this wall's
 # box. The probe sits ENEMY_STEER_PROBE_DISTANCE along the heading, raised by
 # height. The character controller does the real collision; this only picks a
@@ -809,20 +824,8 @@ rule SeekPlayer:
                         clip = enemy.Enemy.kind.jump_clip
                         time = 0.0
 
-            # Priority order (small deflection, then large deflection,
-            # alternating sides): flat guards instead of nested ifs so each
-            # line stands alone — falls back to the direct heading when every
-            # candidate is blocked and vaulting doesn't apply (the character
-            # controller still stops the enemy at the wall in that case).
-            let steering_needed = not can_vault
-            if steering_needed and not left_small_blocked:
-                direction = steer_heading(position, target_position, ENEMY_STEER_ANGLE_SMALL)
-            if steering_needed and left_small_blocked and not right_small_blocked:
-                direction = steer_heading(position, target_position, ENEMY_STEER_ANGLE_SMALL * -1.0)
-            if steering_needed and left_small_blocked and right_small_blocked and not left_large_blocked:
-                direction = steer_heading(position, target_position, ENEMY_STEER_ANGLE_LARGE)
-            if steering_needed and left_small_blocked and right_small_blocked and left_large_blocked and not right_large_blocked:
-                direction = steer_heading(position, target_position, ENEMY_STEER_ANGLE_LARGE * -1.0)
+            if not can_vault:
+                direction = steer_heading(position, target_position, steer_angle(left_small_blocked, right_small_blocked, left_large_blocked, right_large_blocked))
 
         enemy.Enemy.facing_yaw = math.atan2(direction.x * -1.0, direction.z * -1.0)
         enemy.transform.rotation = quat.from_euler(0.0, enemy.Enemy.facing_yaw, 0.0)

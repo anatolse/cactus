@@ -485,3 +485,14 @@ counts as a language gap. Known gaps:
 | Every UI field spelled out | `examples/standard-ui` repeats `visible`/`enabled`/`z_index` per node | check that declared trait defaults apply |
 | Strings and collections underspecified | §4.6 limits string literals to `const`; `list` trait fields have no stated semantics | value-type strings, lists, maps |
 | Undo and play-in-editor | no transaction or world-fork model | command-log transactions, world capture/restore |
+
+## Conditional gaps (2026-10-05)
+
+`else if` already shipped (`b5412d3`); the review above missed it because no example
+used it. The arena's `SeekPlayer` now uses it through `steer_angle`. Real gaps found
+while checking:
+
+- `if c: a else: b` and value `match` (`pattern => expr`) parse and type-check, but
+  cpp-entt emits `/* unsupported expr */` and the CLI still reports success. A
+  `match` expression followed by another statement fails with "expected newline".
+- An `if` condition is not required to be `bool`: `if t.hp:` with an `int` compiles.

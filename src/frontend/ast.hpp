@@ -831,7 +831,7 @@ struct LimitClause {
 
 // ── Reduce Clause ───────────────────────────────────────────────────────────
 
-enum class ReducerKind : std::uint8_t { Count, Sum, Min, Max, Any, FirstHit };
+enum class ReducerKind : std::uint8_t { Count, Sum, Min, Max, Any, FirstHit, Best };
 
 [[nodiscard]] constexpr const char* reducer_kind_name(ReducerKind kind) {
     switch (kind) {
@@ -847,6 +847,8 @@ enum class ReducerKind : std::uint8_t { Count, Sum, Min, Max, Any, FirstHit };
             return "any";
         case ReducerKind::FirstHit:
             return "first_hit";
+        case ReducerKind::Best:
+            return "best";
     }
     return "";
 }
@@ -856,13 +858,15 @@ enum class ReducerKind : std::uint8_t { Count, Sum, Min, Max, Any, FirstHit };
 }
 
 // `name = count()`, `count(binding)`, `sum(e)`, `min(e, default = v)`,
-// `max(e, default = v)`, `any(e)` or `first_hit(e)`.
+// `max(e, default = v)`, `any(e)`, `first_hit(e)` or `best(binding, by = key)`.
 struct ReducerDecl {
     std::string name;
     ReducerKind kind = ReducerKind::Count;
     std::unique_ptr<ExprNode> input;          // null for `count()`
     std::unique_ptr<ExprNode> default_value;  // `min`/`max` only
+    std::unique_ptr<ExprNode> key;            // `best` only
     TypeInfo result_type;  // set by semantic analysis
+    TypeInfo key_type;     // `best` only; set by semantic analysis
     SourceLocation location;
 };
 
@@ -875,6 +879,16 @@ struct ReduceClause {
     // Set by semantic analysis: `where:` predicate indices that read only the
     // `per` binding and so filter groups instead of rows.
     std::vector<std::size_t> group_predicates;
+    SourceLocation location;
+};
+
+// `keep T on b:` on a pair rule reduced `per: b`: `T` is present on each
+// group entity exactly while its group has rows.
+struct KeepClause {
+    std::string trait_name;
+    std::optional<SymbolId> resolved_trait_id;
+    std::string binding;
+    std::vector<FieldAssignment> fields;
     SourceLocation location;
 };
 
@@ -897,6 +911,7 @@ struct RuleNode {
     std::optional<WhereClause> where_clause;         // set when this rule declares a where: clause
     std::optional<LimitClause> limit;                // set when this rule declares a limit: clause
     std::optional<ReduceClause> reduce;              // set when this rule declares a reduce: clause
+    std::optional<KeepClause> keep;                  // set when this rule declares a keep clause
     std::optional<WhenClause> when_clause;           // set when this rule declares a when: clause
     std::vector<SortKey> order_by;
     std::optional<std::string> group_ref;   // group this rule joins
@@ -973,6 +988,7 @@ struct GroupNode {
     std::string name;
     bool is_pub = false;
     std::optional<LocatedName> phase;  // empty only after a reported parse error
+    std::vector<std::string> after_groups;
     std::optional<SymbolId> resolved_group_id;
     SourceLocation location;
 };

@@ -3,12 +3,10 @@
 ## Purpose
 
 Define deterministic, typed global and outer-grouped aggregation over rule domains, so a rule can answer "per entity, over many others" questions (totals, minimums, whether any match exists) without reset rules, emit/apply plumbing or query loops.
-
 ## Requirements
-
 ### Requirement: Typed reduction clauses
 
-A regular unary or pair rule SHALL accept one `reduce:` clause. It SHALL declare immutable, uniquely named aggregate values using `count()`, `count(binding)`, `sum(expression)`, `min(expression, default = value)`, `max(expression, default = value)`, `any(expression)` or `first_hit(expression)`. `count(binding)` SHALL count rows, not distinct entities, and SHALL require a declared pair binding; `count()` SHALL count rows in either domain form. `sum` input SHALL be `int`, `float`, `vec2` or `vec3` and SHALL preserve its type; a vector `sum` SHALL add per component as floats in stable fold order. `min`/`max` inputs SHALL be `int` or `float` and preserve their type, and `min`/`max` SHALL require a default of exactly that type. `any` input SHALL be `bool` and its result SHALL be `bool`. `first_hit` input SHALL be `std.physics.volume.SweepHit` and its result SHALL be `SweepHit`. Reducer expressions SHALL be pure; they MAY read the rule's bindings, constants and named entity fields. Selectionless and extern rules SHALL reject `reduce:`.
+A regular unary or pair rule SHALL accept one `reduce:` clause. It SHALL declare immutable, uniquely named aggregate values using `count()`, `count(binding)`, `sum(expression)`, `min(expression, default = value)`, `max(expression, default = value)`, `any(expression)`, `first_hit(expression)` or `best(binding, by = expression)`. `count(binding)` SHALL count rows, not distinct entities, and SHALL require a declared pair binding; `count()` SHALL count rows in either domain form. `sum` input SHALL be `int`, `float`, `vec2` or `vec3` and SHALL preserve its type; a vector `sum` SHALL add per component as floats in stable fold order. `min`/`max` inputs SHALL be `int` or `float` and preserve their type, and `min`/`max` SHALL require a default of exactly that type. `any` input SHALL be `bool` and its result SHALL be `bool`. `first_hit` input SHALL be `std.physics.volume.SweepHit` and its result SHALL be `SweepHit`. `best` SHALL require a declared pair binding other than the `per` binding, its `by` key SHALL be `int` or `float`, and its result SHALL be `entity_id`: the binding's entity in the row with the highest key; among equal keys, the row first in stable fold order; rows whose key is NaN SHALL be ignored; with no eligible row, a stale `entity_id`. Reducer expressions SHALL be pure; they MAY read the rule's bindings, constants and named entity fields. Selectionless and extern rules SHALL reject `reduce:`.
 
 #### Scenario: Count and sum
 - **WHEN** three input rows have integer scores 2, 3 and 5
@@ -26,8 +24,16 @@ A regular unary or pair rule SHALL accept one `reduce:` clause. It SHALL declare
 - **WHEN** a group has three rows whose sweeps miss, hit at `t = 0.6`, and hit at `t = 0.2`
 - **THEN** `first_hit` yields the hit at `t = 0.2`
 
+#### Scenario: Best picks the highest key
+- **WHEN** a body's group has zone rows with priorities 1, 5 and 3
+- **THEN** `best(zone, by = zone.CameraZone.priority)` yields the zone with priority 5
+
+#### Scenario: Best tie and empty input
+- **WHEN** two rows share the highest key, or a group has no row
+- **THEN** `best` yields the earlier row's entity in stable fold order, or a stale `entity_id` for the empty group
+
 #### Scenario: Bad reducer
-- **WHEN** `collect`, an unknown reducer, a mismatched default, a vector `min`/`max` input, a non-bool `any` input, a non-`SweepHit` `first_hit` input or an impure expression is used
+- **WHEN** `collect`, an unknown reducer, a mismatched default, a vector `min`/`max` input, a non-bool `any` input, a non-`SweepHit` `first_hit` input, a `best` over the `per` binding or with a non-numeric key, or an impure expression is used
 - **THEN** the compiler reports a source-located error
 
 #### Scenario: Invalid domain
@@ -149,3 +155,4 @@ With `reduce:`, `order by:` SHALL be written after the `reduce:` clause; an `ord
 #### Scenario: Equal t resolves by fold order
 - **WHEN** two rows hit at the same `t`
 - **THEN** `first_hit` yields the row that comes first in stable domain order
+

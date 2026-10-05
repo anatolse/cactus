@@ -608,14 +608,13 @@ TEST_CASE("Codegen EnTT: event struct", "[codegen-entt]") {
     }
 }
 
-TEST_CASE("Codegen EnTT: CollisionEnter event supports entity and vector payload fields",
-          "[codegen-entt][stdlib][physics]") {
+TEST_CASE("Codegen EnTT: an event supports entity and vector payload fields", "[codegen-entt][events]") {
     ResolvedEvent event;
-    event.name = "CollisionEnter";
+    event.name = "Contact";
     event.fields.push_back({.name = "other", .type = {.kind = TypeKind::EntityId, .name = "entity_id"}});
     event.fields.push_back({.name = "overlap", .type = {.kind = TypeKind::Vec2, .name = "vec2"}});
 
-    const auto code = EnttEventEmitter::emit_event(event, "CollisionEnterEvent");
+    const auto code = EnttEventEmitter::emit_event(event, "ContactEvent");
     CHECK(code.find("entt::entity other{};") != std::string::npos);
     CHECK(code.find("Vector2 overlap{};") != std::string::npos);
 }
@@ -3000,7 +2999,8 @@ TEST_CASE("Codegen EnTT: volume transform propagation extern rule is recognized"
     CHECK(code.find("parent_world.scale.z * local.scale.z") != std::string::npos);
 }
 
-TEST_CASE("Codegen EnTT: stdlib flat box colliders emit overlap runtime pass", "[codegen-entt][stdlib][physics]") {
+TEST_CASE("Codegen EnTT: stdlib flat colliders emit query helpers and no collision pass",
+          "[codegen-entt][stdlib][physics]") {
     ProgramNode ast;
     DecoratedProgram program;
     program.ast = &ast;
@@ -3043,10 +3043,9 @@ TEST_CASE("Codegen EnTT: stdlib flat box colliders emit overlap runtime pass", "
     program.traits[capsule.name] = capsule;
 
     const auto code = CppEnttCodegen::generate(program);
-    CHECK(code.find("cactus_dispatch_stdlib_flat_collisions") != std::string::npos);
     CHECK(code.find("registry.view<WorldTransform, Collider, BoxCollider>()") != std::string::npos);
-    CHECK(code.find("cactus_collision_masks_allow") != std::string::npos);
-    CHECK(code.find("dispatcher.trigger(CollisionEnterEvent") != std::string::npos);
+    CHECK(code.find("cactus_dispatch_stdlib_flat_collisions") == std::string::npos);
+    CHECK(code.find("CollisionEnterEvent") == std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: stdlib flat collider queries emit cast and overlap helpers",

@@ -75,6 +75,7 @@ struct ResolvedTrait : CanonicalIdentity {
     std::vector<ResolvedField> fields;
     bool is_pub    = false;
     bool is_stdlib = false;
+    std::optional<std::string> kept_by;  // the rule whose keep clause owns this trait
 };
 
 struct ResolvedStruct : CanonicalIdentity {
@@ -490,6 +491,7 @@ struct GroupDeclaration {
     SymbolId phase;
     bool is_pub = false;
     SourceLocation location;
+    std::vector<SymbolId> after_groups;  // every member runs after every member of these
 };
 
 enum class GroupOrderingDirection : std::uint8_t { Before, After };
@@ -1368,6 +1370,25 @@ private:
     // Phase 5: after: validation
     void validate_after_clauses(ProgramNode& program);
     void validate_group_declarations(ProgramNode& program);
+    void resolve_group_after(const GroupNode& group);
+    void synthesize_keep_handlers(ProgramNode& program);
+    void validate_keep_clause(const RuleNode& rule);
+    void validate_count_reducer(ReducerDecl& reducer, const RuleNode& rule, const PairScope* row_scope);
+    void validate_best_reducer(ReducerDecl& reducer, const RuleNode& rule, const PairScope* row_scope);
+    void add_keep_effects(const RuleNode& rule, const EventHandlerNode& handler, InferredHandlerContract& contract);
+    // Local keep clauses: trait -> keeping rule's name, and every (rule, trait) pair.
+    struct KeepClauses {
+        std::unordered_map<SymbolId, std::string> keepers;
+        std::vector<std::pair<SymbolId, SymbolId>> rule_traits;
+    };
+    void validate_kept_traits(ProgramNode& program);
+    KeepClauses collect_keep_clauses(const ProgramNode& program);
+    [[nodiscard]] std::optional<std::string> keeper_of(const KeepClauses& clauses, const SymbolId& trait) const;
+    void check_kept_trait_handlers(const KeepClauses& clauses);
+    void check_kept_trait_archetype(const KeepClauses& clauses,
+                                    const std::vector<ArchetypeTraitEntry>& traits,
+                                    const std::vector<ChildArchetypeNode>& children,
+                                    const std::string& owner);
     void record_module_imports();
     void push_explicit_edge(const HandlerIdentity& before, const HandlerIdentity& after, ScheduleEdgeKind kind);
     void add_rule_level_edges(const SymbolId& rule,

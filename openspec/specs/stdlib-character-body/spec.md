@@ -1,19 +1,25 @@
 ## Purpose
 
 Define the 3D character controller that `std.physics.volume` runs for every `CharacterBody`: what games write, what the controller writes back, and how bodies move, slide, climb, land, and separate.
-
 ## Requirements
-
 ### Requirement: The stdlib moves every 3D CharacterBody
-`std.physics.volume` SHALL provide stdlib rules, members of a public group `solve` bound to `fixed_tick`, that move every entity with `CharacterBody`, `Collider`, a shape collider, and `std.transform.volume.WorldTransform` once per `fixed_tick`. A game SHALL NOT need any rule of its own for a body to fall, collide, slide, land, or climb steps. The body SHALL collide with every entity whose `Collider.layer` shares a bit with the body's `Collider.mask`, whatever its shape, including other character bodies.
+`std.physics.volume` SHALL provide stdlib rules, members of a public group `solve` bound to `fixed_tick`, that move every entity with `CharacterBody`, `Collider`, a shape collider, and `std.transform.volume.WorldTransform` once per `fixed_tick`. A game SHALL NOT need any rule of its own for a body to fall, collide, slide, land, or climb steps. The body SHALL collide with every solid entity (one with `Solid`) whose `Collider.layer` shares a bit with the body's `Collider.mask`, whatever its shape, including other character bodies that have `Solid`. Colliders without `Solid` SHALL NOT affect the body's motion.
 
 #### Scenario: A body moves with no game rule
 - **WHEN** a body has `velocity = vec3(3.0, 0.0, 0.0)` above an open floor and no game rule touches it
 - **THEN** after one `fixed_tick` its horizontal position has advanced by `3.0 * fixed_tick.dt`
 
 #### Scenario: The body ignores masked layers
-- **WHEN** a body's mask is `1` and a box on layer `4` lies in its path
+- **WHEN** a body's mask is `1` and a solid box on layer `4` lies in its path
 - **THEN** the body passes through the box
+
+#### Scenario: The body ignores triggers
+- **WHEN** a box collider without `Solid` on a layer the body's mask selects lies in its path
+- **THEN** the body passes through the box
+
+#### Scenario: A body without Solid blocks nothing
+- **WHEN** body A has no `Solid` and body B walks into it
+- **THEN** B passes through A
 
 #### Scenario: No body, no effect
 - **WHEN** a program imports `std.physics.volume` and no entity has `CharacterBody`
@@ -42,10 +48,10 @@ On each tick, a body that was not grounded at the start of the tick, or that has
 - **THEN** its position does not change over 60 ticks
 
 ### Requirement: Bodies never pass through colliders
-A body SHALL NOT end a tick overlapping a collider it did not overlap at the start of the tick, except another moving character body. Fast motion SHALL NOT tunnel through thin geometry.
+A body SHALL NOT end a tick overlapping a solid collider it did not overlap at the start of the tick, except another moving character body. Fast motion SHALL NOT tunnel through thin solid geometry.
 
 #### Scenario: Fast body against a thin wall
-- **WHEN** a body moves at a speed that covers four wall thicknesses per tick toward a thin box wall
+- **WHEN** a body moves at a speed that covers four wall thicknesses per tick toward a thin solid box wall
 - **THEN** the body stops on the near side of the wall
 
 ### Requirement: Blocked motion slides along surfaces
@@ -115,19 +121,23 @@ A grounded body moving horizontally SHALL climb onto a walkable surface whose co
 - **THEN** it falls over several ticks and lands below
 
 ### Requirement: Overlapping bodies separate
-A body that overlaps a collider SHALL be moved out of it by the end of the tick. When two character bodies that collide with each other overlap, each SHALL take half of the correction. Overlap SHALL NOT trap a body: a body overlapping a collider SHALL still be able to move away from it.
+A body that overlaps a solid collider SHALL be moved out of it by the end of the tick. When two solid character bodies that collide with each other overlap, each SHALL take half of the correction. Overlap SHALL NOT trap a body: a body overlapping a solid collider SHALL still be able to move away from it. Overlap with a trigger SHALL cause no correction.
 
 #### Scenario: Spawned inside a wall
-- **WHEN** a body spawns overlapping a box wall
+- **WHEN** a body spawns overlapping a solid box wall
 - **THEN** after one tick it no longer overlaps the wall
 
 #### Scenario: Two bodies split the correction
-- **WHEN** two character bodies on the same layer overlap by `0.2` along X and neither moves
+- **WHEN** two solid character bodies on the same layer overlap by `0.2` along X and neither moves
 - **THEN** after one tick each has moved `0.1` apart and they no longer overlap
 
 #### Scenario: Bodies walking into each other
-- **WHEN** two bodies walk straight into each other
+- **WHEN** two solid bodies walk straight into each other
 - **THEN** they stop facing each other, and they overlap by no more than one tick's motion at any time
+
+#### Scenario: Standing inside a trigger
+- **WHEN** a body overlaps a trigger collider and does not move
+- **THEN** after one tick its position is unchanged
 
 ### Requirement: Subtrees under bodies follow them in the same tick
 After the `solve` group in each `fixed_tick`, `std.physics.volume` SHALL re-derive `WorldTransform` for every descendant of a character body that has `Parent`, `LocalTransform` and `WorldTransform`, using the hierarchy propagation rules. A `fixed_tick` rule that declares `after: physics.solve` SHALL see those descendants at this tick's body pose. Descendants of entities that are not character bodies SHALL NOT be propagated in `fixed_tick` by this rule.
@@ -143,3 +153,4 @@ After the `solve` group in each `fixed_tick`, `std.physics.volume` SHALL re-deri
 #### Scenario: Non-body subtrees wait for late_tick
 - **WHEN** a pose root without `CharacterBody` has a child with `LocalTransform`
 - **THEN** the child is not re-derived during `fixed_tick`, and `late_tick` propagation updates it
+

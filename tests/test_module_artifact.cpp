@@ -872,7 +872,7 @@ TEST_CASE("ModuleArtifact: runtime declarations and handler graph round-trip", "
 }
 
 TEST_CASE("ModuleArtifact: artifact from before shape-generic spatial plans is rejected", "[artifact][spatial-join]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 26);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 27);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1186,7 +1186,7 @@ TEST_CASE("ModuleArtifact: set command capabilities round-trip", "[artifact][def
     CHECK(loaded->handler_contracts.front().commands == commands);
     REQUIRE(loaded->execution_graph.handlers.size() == 1);
     CHECK(loaded->execution_graph.handlers.front().contract.commands == commands);
-    CHECK(ModuleArtifact::CURRENT_VERSION == 26);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 27);
 
     fs::remove_all(build_dir, ec);
 }
@@ -1529,7 +1529,7 @@ TEST_CASE("ModuleArtifact: field-level access serializes deterministically", "[a
 }
 
 TEST_CASE("ModuleArtifact: artifact from before field-level contracts is rejected", "[artifact][handler-contracts]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 26);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 27);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1803,7 +1803,7 @@ TEST_CASE("ModuleArtifact: unknown trigger kind is rejected", "[artifact][trait-
 }
 
 TEST_CASE("ModuleArtifact: artifact from before lifecycle triggers is rejected", "[artifact][trait-lifecycle]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 26);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 27);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1843,7 +1843,10 @@ TEST_CASE("ModuleArtifact: rule group facts and group edges round-trip", "[artif
     program.execution_graph.group_declarations.push_back(GroupDeclaration{
         .group = solve, .phase = tick, .is_pub = true, .location = SourceLocation{"lib.cactus", 3, 1}});
     program.execution_graph.group_declarations.push_back(
-        GroupDeclaration{.group = test_symbol(SymbolKind::Group, "hidden"), .phase = tick, .is_pub = false});
+        GroupDeclaration{.group        = test_symbol(SymbolKind::Group, "hidden"),
+                         .phase        = tick,
+                         .is_pub       = false,
+                         .after_groups = {solve}});
     program.execution_graph.handlers.push_back(HandlerNode{.identity = member, .group = solve});
     program.execution_graph.handlers.push_back(HandlerNode{.identity = referrer});
     program.execution_graph.group_orderings.push_back(GroupOrdering{.handler   = referrer,
@@ -1876,6 +1879,8 @@ TEST_CASE("ModuleArtifact: rule group facts and group edges round-trip", "[artif
     CHECK(graph.group_declarations[0].is_pub);
     CHECK(graph.group_declarations[0].location.line == 3);
     CHECK_FALSE(graph.group_declarations[1].is_pub);
+    CHECK(graph.group_declarations[0].after_groups.empty());
+    CHECK(graph.group_declarations[1].after_groups == std::vector<SymbolId>{solve});
     REQUIRE(graph.handlers.size() == 2);
     CHECK(graph.handlers[0].group == solve);
     CHECK_FALSE(graph.handlers[1].group.has_value());
@@ -1927,7 +1932,7 @@ TEST_CASE("ModuleArtifact: unknown group ordering direction is malformed", "[art
 }
 
 TEST_CASE("ModuleArtifact: artifact from before rule groups is rejected", "[artifact][rule-groups]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 26);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 27);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1952,7 +1957,7 @@ TEST_CASE("ModuleArtifact: artifact from before rule groups is rejected", "[arti
 }
 
 TEST_CASE("ModuleArtifact: artifact from before named-entity access is rejected", "[artifact][named-entity]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 26);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 27);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);

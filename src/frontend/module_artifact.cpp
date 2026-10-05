@@ -159,6 +159,10 @@ void ModuleArtifact::write_traits(std::ostream& out,
         write_optional_symbol_id(out, trait.symbol_id);
         write_bool(out, trait.is_pub);
         write_bool(out, trait.is_stdlib);
+        write_bool(out, trait.kept_by.has_value());
+        if (trait.kept_by.has_value()) {
+            write_str(out, *trait.kept_by);
+        }
         write_u32(out, static_cast<uint32_t>(trait.fields.size()));
         for (const auto& field : trait.fields) {
             write_field(out, field);
@@ -629,6 +633,10 @@ void ModuleArtifact::write_group_facts(std::ostream& out, const ExecutionGraph& 
         write_symbol_id(out, group.phase);
         write_bool(out, group.is_pub);
         write_location(out, group.location);
+        write_u32(out, static_cast<uint32_t>(group.after_groups.size()));
+        for (const auto& after : group.after_groups) {
+            write_symbol_id(out, after);
+        }
     }
 
     write_u32(out, static_cast<uint32_t>(graph.group_orderings.size()));
@@ -787,6 +795,9 @@ std::unordered_map<std::string, ResolvedTrait> ModuleArtifact::read_traits(std::
         trait.symbol_id      = read_optional_symbol_id(in);
         trait.is_pub         = read_bool(in);
         trait.is_stdlib      = read_bool(in);
+        if (read_bool(in)) {
+            trait.kept_by = read_str(in);
+        }
         uint32_t field_count = read_u32(in);
         trait.fields.reserve(field_count);
         for (uint32_t j = 0; j < field_count; ++j) {
@@ -1292,6 +1303,11 @@ void ModuleArtifact::read_group_facts(std::istream& in, ExecutionGraph& graph) {
         group.phase    = read_symbol_id(in);
         group.is_pub   = read_bool(in);
         group.location = read_location(in);
+        const auto after_count = read_u32(in);
+        group.after_groups.reserve(after_count);
+        for (uint32_t j = 0; j < after_count; ++j) {
+            group.after_groups.push_back(read_symbol_id(in));
+        }
         graph.group_declarations.push_back(std::move(group));
     }
 

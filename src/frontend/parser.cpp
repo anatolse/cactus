@@ -1393,6 +1393,15 @@ RuleNode Parser::parse_rule() {
     }
 
     skip_newlines();
+    if (at_keep_clause()) {
+        auto error_count_before = errors_.error_count();
+        node.keep               = parse_keep_clause();
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+        }
+    }
+
+    skip_newlines();
     if (at_limit_clause()) {
         auto error_count_before = errors_.error_count();
         node.limit              = parse_limit_clause();
@@ -1798,6 +1807,25 @@ ReduceClause Parser::parse_reduce_clause() {
     return clause;
 }
 
+bool Parser::at_keep_clause() const {
+    return check(TokenType::IDENTIFIER) && peek().value == "keep" && peek_next().type == TokenType::IDENTIFIER;
+}
+
+// `keep T on b:` with a field block, or `keep T on b` for no fields.
+KeepClause Parser::parse_keep_clause() {
+    KeepClause clause;
+    clause.location   = advance().location;  // consume 'keep'
+    clause.trait_name = parse_dotted_name();
+    consume(TokenType::ON, "expected 'on' after the kept trait");
+    clause.binding = consume(TokenType::IDENTIFIER, "expected a binding name after 'on'").value;
+    if (match(TokenType::COLON)) {
+        clause.fields = parse_field_assignment_block();
+    } else {
+        expect_newline();
+    }
+    return clause;
+}
+
 // `name = kind(args)`: parsed as an ordinary call, then taken apart, so the
 // argument grammar (including `default = v`) is the call grammar.
 std::optional<ReducerDecl> Parser::parse_reducer_decl() {
@@ -1811,7 +1839,7 @@ std::optional<ReducerDecl> Parser::parse_reducer_decl() {
     auto* call         = std::get_if<CallExpr>(&value->expr);
     const auto* callee = call == nullptr ? nullptr : std::get_if<IdentExpr>(&call->callee->expr);
     if (callee == nullptr) {
-        errors_.error(value->location, "expected a reducer call: count, sum, min, max, any or first_hit");
+        errors_.error(value->location, "expected a reducer call: count, sum, min, max, any, first_hit or best");
         return std::nullopt;
     }
     static const std::unordered_map<std::string, ReducerKind> kinds{{"count", ReducerKind::Count},
@@ -1819,11 +1847,12 @@ std::optional<ReducerDecl> Parser::parse_reducer_decl() {
                                                                     {"min", ReducerKind::Min},
                                                                     {"max", ReducerKind::Max},
                                                                     {"any", ReducerKind::Any},
-                                                                    {"first_hit", ReducerKind::FirstHit}};
+                                                                    {"first_hit", ReducerKind::FirstHit},
+                                                                    {"best", ReducerKind::Best}};
     const auto kind = kinds.find(callee->name);
     if (kind == kinds.end()) {
         errors_.error(call->location,
-                      "unknown reducer '" + callee->name + "'; expected count, sum, min, max, any or first_hit");
+                      "unknown reducer '" + callee->name + "'; expected count, sum, min, max, any, first_hit or best");
         return std::nullopt;
     }
     reducer.kind = kind->second;
@@ -1835,6 +1864,8 @@ std::optional<ReducerDecl> Parser::parse_reducer_decl() {
             reducer.input = std::move(call->args[i]);
         } else if (name == "default" && bounded && reducer.default_value == nullptr) {
             reducer.default_value = std::move(call->args[i]);
+        } else if (name == "by" && reducer.kind == ReducerKind::Best && reducer.key == nullptr) {
+            reducer.key = std::move(call->args[i]);
         } else {
             errors_.error(call->args[i]->location, "unexpected argument to reducer '" + callee->name + "'");
             return std::nullopt;
@@ -2157,8 +2188,12 @@ GroupNode Parser::parse_group(bool is_pub) {
         if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
             break;
         }
+        if (check(TokenType::AFTER)) {
+            node.after_groups = parse_rule_order_block("after: block must contain at least one group name");
+            continue;
+        }
         if (!check(TokenType::PHASE)) {
-            errors_.error(peek().location, "group body only accepts a 'phase:' entry");
+            errors_.error(peek().location, "group body only accepts 'phase:' and 'after:' entries");
             advance();
             synchronize();
             continue;
@@ -3267,6 +3302,14 @@ ExternRuleNode Parser::parse_extern_rule() {
         auto reduce_loc = peek().location;
         parse_reduce_clause();  // parsed and discarded; reduce: is regular-rule-only
         errors_.error(reduce_loc, "'reduce:' is not valid on external rules");
+        synchronize();
+    }
+
+    skip_newlines();
+    if (at_keep_clause()) {
+        auto keep_loc = peek().location;
+        parse_keep_clause();  // parsed and discarded; keep is regular-rule-only
+        errors_.error(keep_loc, "'keep' is not valid on external rules");
         synchronize();
     }
 

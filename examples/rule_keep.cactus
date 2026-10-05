@@ -1,0 +1,141 @@
+module rule_keep
+
+# `keep` puts a trait on each group entity while its group has rows, so
+# entering and leaving a relation are ordinary `on added` / `on removed`
+# triggers. Walkers stand on a line; a walker is in a lava pool while it is
+# within the pool's radius. Tests move walkers and pools between ticks.
+
+use std.core
+
+trait Walker:
+    var x: float = 0.0
+    var enters: int = 0
+    var exits: int = 0
+    var last_zones: int = -1
+
+trait Ranked:
+    var top: entity_id
+    var hot: entity_id
+
+trait Lava:
+    var x: float = 0.0
+    var radius: float = 1.0
+    var priority: int = 0
+    var heat: float = 0.0
+
+trait InLava:
+    var zones: int = 0
+    var heat: float = 0.0
+    var hottest: entity_id
+
+trait Control:
+    var frozen: bool = false
+
+trait Tally:
+    var ticks: int = 0
+    var exits: int = 0
+
+group contacts:
+    phase: fixed_tick
+
+rule TouchLava:
+    pairs:
+        walker:
+            Walker
+        lava:
+            Lava
+    group: contacts
+    where:
+        (walker.Walker.x - lava.Lava.x) * (walker.Walker.x - lava.Lava.x) <= lava.Lava.radius * lava.Lava.radius
+    reduce:
+        per: walker
+        n = count()
+        total = sum(lava.Lava.heat)
+        top = best(lava, by = lava.Lava.priority)
+    keep InLava on walker:
+        zones = n
+        heat = total
+        hottest = top
+    when:
+        not Settings.Control.frozen
+
+# best() on its own, recorded on the walker so empty groups are visible too.
+rule RankPools:
+    pairs:
+        walker:
+            Walker
+        lava:
+            Lava
+    where:
+        (walker.Walker.x - lava.Lava.x) * (walker.Walker.x - lava.Lava.x) <= lava.Lava.radius * lava.Lava.radius
+    reduce:
+        per: walker
+        top = best(lava, by = lava.Lava.priority)
+        hot = best(lava, by = lava.Lava.heat)
+
+    on fixed_tick:
+        add Ranked to walker:
+            top = top
+            hot = hot
+
+rule Enter:
+    filter:
+        Walker as w
+
+    on added InLava:
+        w.enters += 1
+
+rule Exit:
+    filter:
+        Walker as w
+
+    on removed InLava as old:
+        w.exits += 1
+        w.last_zones = old.zones
+        Clock.Tally.exits += 1
+
+rule Count:
+    on fixed_tick:
+        Clock.Tally.ticks += 1
+
+entity Settings:
+    Control
+
+entity Clock:
+    Tally
+
+template Spot(x: float = 0.0):
+    Walker:
+        x = x
+
+template Pool(x: float = 0.0, priority: int, heat: float):
+    Lava:
+        x = x
+        priority = priority
+        heat = heat
+
+# In pool A only.
+entity Hiker from Spot()
+
+# In pool C only; C is destroyed by a test.
+entity Camper from Spot(x = 20.0)
+
+# In pool A; loses Walker in a test.
+entity Deserter from Spot(x = -0.25)
+
+# In pool A; destroyed by a test.
+entity Doomed from Spot(x = -0.5)
+
+# Far from every pool.
+entity Loner from Spot(x = 100.0)
+
+# In pools D and E, which tie on priority.
+entity Judge from Spot(x = 40.25)
+
+entity PoolA from Pool(priority = 1, heat = 2.0)
+entity PoolB from Pool(x = 1.5, priority = 5, heat = 3.0)
+entity PoolC from Pool(x = 20.0, priority = 2, heat = 1.0)
+
+# Ties PoolE's priority and is created first, so it wins the tie.
+entity PoolD from Pool(x = 40.0, priority = 5, heat = 4.0)
+entity PoolE from Pool(x = 40.5, priority = 5, heat = 0.5)

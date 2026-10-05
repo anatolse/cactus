@@ -5,10 +5,11 @@ use std.math as math
 use std.math.vec3 as v3
 use std.transform.volume as tv
 
-# ── 3D Kinematic Physics Traits & Events ─────────────────────────────────────
+# ── 3D Kinematic Physics Traits ──────────────────────────────────────────────
 # The `solve` rules below move every CharacterBody that has a Collider, a shape
 # and a WorldTransform once per fixed_tick. Games write `velocity` and read the
 # results; no game rule is needed for a body to fall, collide, slide or climb.
+# Bodies stop only at solid colliders (with `Solid`); the rest are triggers.
 
 # Kinematic character controller for 3D entities.
 # velocity:            movement velocity in world units per second; games write it
@@ -45,6 +46,11 @@ pub trait Collider:
     var layer: int = 1
     var mask: int = 1
 
+# Makes a Collider solid: character bodies stop at it, slide along it and are
+# pushed out of it. A Collider without Solid is a trigger: bodies pass through
+# it, and rules see the contact through the queries below.
+pub trait Solid
+
 # Box collider, oriented by WorldTransform.rotation.
 # size: full collider width/height/depth in world units
 pub trait BoxCollider:
@@ -63,8 +69,8 @@ pub trait CapsuleCollider:
     var height: float = 1.0
 
 # ── Collider queries ──────────────────────────────────────────────────────────
-# These take bindings of the calling rule, work for any mix of shapes, and honor
-# Collider.layer/mask. An entity never hits itself.
+# These take bindings of the calling rule, work for any mix of shapes, solid or
+# trigger, and honor Collider.layer/mask. An entity never hits itself.
 
 # Where a sweep first touched its target. A miss has hit = false and t = 1.0,
 # so `position += delta * hit.t` moves the full delta either way.
@@ -93,23 +99,23 @@ pub extern func touching(a: entity_id, b: entity_id) bool
 # get half.
 pub extern func push_out(a: entity_id, b: entity_id) vec3
 
-# Fired when this entity's collider first contacts another entity's collider.
-# other:  entity_id of the entity that was hit
-# point:  world-space contact point
-# normal: surface normal at the contact point (pointing away from other)
-pub event CollisionEnter:
-    other: entity_id
-    point: vec3
-    normal: vec3
-
 # ── Character controller ──────────────────────────────────────────────────────
-# Each stage runs once per body, in declaration order. A body that was grounded
-# lifts by step_height, slides at that height, then snaps back down, which
-# climbs steps and follows descents. Game rules that write velocity run before
-# the group; `after: solve` reads this tick's results.
+# Each stage runs once per body, in declaration order, against solid colliders
+# only. A body that was grounded lifts by step_height, slides at that height,
+# then snaps back down, which climbs steps and follows descents. Game rules
+# that write velocity run before the group; `after: solve` reads this tick's
+# results.
 
 pub group solve:
     phase: core.fixed_tick
+
+# Contact rules join this group: it runs after `solve`, so they see this
+# tick's poses of bodies and their children. A `keep` rule here turns a
+# contact into a trait, so entering and leaving are `on added` and `on removed`.
+pub group contacts:
+    phase: core.fixed_tick
+    after:
+        solve
 
 func walkable(normal: vec3, max_slope: float) bool:
     return normal.y >= math.cos(math.radians(max_slope))
@@ -153,6 +159,7 @@ rule Lift:
             tv.WorldTransform
         other:
             Collider
+            Solid
     group: solve
     after:
         Integrate
@@ -173,6 +180,7 @@ rule Slide1:
             tv.WorldTransform
         other:
             Collider
+            Solid
     group: solve
     after:
         Lift
@@ -198,6 +206,7 @@ rule Slide2:
             tv.WorldTransform
         other:
             Collider
+            Solid
     group: solve
     after:
         Slide1
@@ -223,6 +232,7 @@ rule Slide3:
             tv.WorldTransform
         other:
             Collider
+            Solid
     group: solve
     after:
         Slide2
@@ -251,6 +261,7 @@ rule Snap:
             tv.WorldTransform
         other:
             Collider
+            Solid
     group: solve
     after:
         Slide3
@@ -284,6 +295,7 @@ rule Depenetrate:
             tv.WorldTransform
         other:
             Collider
+            Solid
     group: solve
     after:
         Snap

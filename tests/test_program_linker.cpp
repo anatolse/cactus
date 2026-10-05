@@ -1177,4 +1177,33 @@ TEST_CASE("program_linker: group edges from artifacts are regenerated, not dupli
     CHECK(merged.execution_graph.stable_topological_order ==
           std::vector<HandlerIdentity>{early.identity, member.identity});
 }
+
+TEST_CASE("program_linker: a group's after: orders members from every module", "[linker][rule-groups]") {
+    const auto tick = linked_symbol(SymbolKind::Phase, "runtime", "tick");
+    const ResolvedHandlerTrigger trigger{.kind = HandlerTriggerKind::Phase, .symbol = tick};
+    const auto solve    = linked_symbol(SymbolKind::Group, "lib", "solve");
+    const auto contacts = linked_symbol(SymbolKind::Group, "lib", "contacts");
+    auto mover          = linked_handler(linked_symbol(SymbolKind::Rule, "lib", "Mover"), trigger, 0);
+    mover.group         = solve;
+    auto toucher        = linked_handler(linked_symbol(SymbolKind::Rule, "app", "Toucher"), trigger, 0);
+    toucher.group       = contacts;
+
+    DecoratedProgram lib;
+    lib.execution_graph.handlers.push_back(mover);
+    lib.execution_graph.group_declarations.push_back(
+        GroupDeclaration{.group = solve, .phase = tick, .is_pub = true, .location = {}});
+    lib.execution_graph.group_declarations.push_back(GroupDeclaration{
+        .group = contacts, .phase = tick, .is_pub = true, .location = {}, .after_groups = {solve}});
+    DecoratedProgram app;
+    app.execution_graph.handlers.push_back(toucher);
+
+    ErrorReporter errors;
+    ProgramLinker linker(errors);
+    DecoratedProgram merged;
+    REQUIRE(linker.merge_into(merged, app, "app"));
+    REQUIRE(linker.merge_into(merged, lib, "lib"));
+    REQUIRE_FALSE(errors.has_errors());
+    CHECK(merged.execution_graph.stable_topological_order ==
+          std::vector<HandlerIdentity>{mover.identity, toucher.identity});
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

@@ -1,9 +1,7 @@
 ## Purpose
 
 Define the `after:` clause on rule declarations for expressing execution ordering, including rule-name resolution, cycle detection, and representation in the `DecoratedProgram` dependency graph.
-
 ## Requirements
-
 ### Requirement: `after:` clause on rule declarations
 A rule-level `after:` clause SHALL be shorthand over handler nodes and is a supported, non-deprecated form. For each named predecessor rule, it SHALL order only pairs of handlers with the same resolved phase or event trigger. A handler MAY additionally declare a leading `after:` block for exact canonical handler dependencies.
 
@@ -81,7 +79,7 @@ The semantic analyzer SHALL store validated `after:` ordering constraints in the
 - **THEN** the `DecoratedProgram` contains `UIRenderRule.after_rules = ["SceneRenderRule"]`
 
 ### Requirement: Rule group declarations
-A module SHALL be able to declare a rule group with a top-level `group Name:` declaration, optionally prefixed with `pub`. The body SHALL contain exactly one `phase:` entry naming a declared phase. A group SHALL have no runtime behavior; it only names an ordering anchor inside that phase. `group` SHALL be recognized contextually at the top-level declaration position and SHALL remain usable as an identifier elsewhere. A group name SHALL share the module's declaration namespace.
+A module SHALL be able to declare a rule group with a top-level `group Name:` declaration, optionally prefixed with `pub`. The body SHALL contain exactly one `phase:` entry naming a declared phase, then an optional `after:` block listing groups. A group SHALL have no runtime behavior; it only names an ordering anchor inside that phase. `group` SHALL be recognized contextually at the top-level declaration position and SHALL remain usable as an identifier elsewhere. A group name SHALL share the module's declaration namespace.
 
 #### Scenario: Group declaration is accepted
 - **WHEN** a module declares `pub group solve:` with body `phase: fixed_tick`
@@ -104,7 +102,7 @@ A module SHALL be able to declare a rule group with a top-level `group Name:` de
 - **THEN** the program compiles
 
 ### Requirement: Rule group membership
-A rule or extern rule SHALL join a group with a `group:` clause naming one group. Only rules declared in the same module as the group SHALL be able to join it. The member rule's handler whose resolved trigger is the group's phase SHALL become the group's member handler. The rule's handlers for other triggers SHALL NOT be affected. A rule SHALL join at most one group.
+A rule or extern rule SHALL join a group with a `group:` clause naming one group. Rules declared in the same module as the group SHALL be able to join it; rules in other modules SHALL be able to join it only when the group is `pub`. The member rule's handler whose resolved trigger is the group's phase SHALL become the group's member handler. A keep rule with no handler runs in the group's phase (`dsl-rule-keep`), and that run is the member. The rule's handlers for other triggers SHALL NOT be affected. A rule SHALL join at most one group.
 
 #### Scenario: Member handler joins the group
 - **WHEN** rule `MoveAndSlide` declares `group: solve`, `solve` is bound to `fixed_tick`, and the rule handles `fixed_tick`
@@ -115,12 +113,16 @@ A rule or extern rule SHALL join a group with a `group:` clause naming one group
 - **THEN** its `input` handler is not a member of the group and gets no edge from group ordering
 
 #### Scenario: Member without a handler for the group's phase is rejected
-- **WHEN** a rule declares `group: solve`, `solve` is bound to `fixed_tick`, and the rule has no `fixed_tick` handler
+- **WHEN** a rule that is not a keep rule declares `group: solve`, `solve` is bound to `fixed_tick`, and the rule has no `fixed_tick` handler
 - **THEN** compilation fails with an error naming the rule, the group, and the phase
 
+#### Scenario: Joining another module's pub group
+- **WHEN** a game module rule declares `group: physics.contacts`, `contacts` is a `pub` group of `std.physics.volume`, and the rule handles `fixed_tick`
+- **THEN** compilation succeeds and the rule's `fixed_tick` handler is a member of `contacts`
+
 #### Scenario: Joining another module's group is rejected
-- **WHEN** a game module rule declares `group: phys.solve` and `solve` is declared in `std.physics.volume`
-- **THEN** compilation fails with an error that only rules in the declaring module may join the group
+- **WHEN** a game module rule declares `group: lib.inner` and `inner` is a group of `lib` without `pub`
+- **THEN** compilation fails with an error that the group is not public
 
 #### Scenario: Joining more than one group is rejected
 - **WHEN** a rule's `group:` clause names two groups
@@ -190,3 +192,19 @@ Group declarations, group membership, and group references SHALL be preserved in
 #### Scenario: Headless behavior follows group order
 - **WHEN** a game rule declared `before:` a group writes a value that the group member copies into another field in the same `fixed_tick`
 - **THEN** after one fixed step, the copied field holds the value written in that same step
+
+### Requirement: Group-level after:
+A group's `after:` block SHALL list groups, local or module-qualified, that obey `pub` visibility and are bound to the same phase. Every member handler of the declaring group SHALL run after every member handler of each listed group, over the whole linked program. A group SHALL NOT list itself. Group-level edges SHALL take part in handler cycle detection like any explicit edge.
+
+#### Scenario: Members follow the listed group
+- **WHEN** `std.physics.volume` declares `pub group contacts:` with `phase: fixed_tick` and `after: solve`, and a game rule joins `physics.contacts`
+- **THEN** the game rule's `fixed_tick` handler runs after every member of `solve`
+
+#### Scenario: Phase mismatch is rejected
+- **WHEN** a group bound to `fixed_tick` lists a group bound to `tick` in `after:`
+- **THEN** compilation fails with an error naming both groups and phases
+
+#### Scenario: Unknown or self group is rejected
+- **WHEN** a group lists itself, or a name that is not a visible group, in `after:`
+- **THEN** compilation fails with a source-located error
+

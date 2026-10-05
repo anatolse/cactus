@@ -2194,6 +2194,18 @@ TEST_CASE("reduce: float sums keep fold order", "[runtime][rule-reduce]") {
     CHECK(reduce::add(1.0F, reduce::add(1.0e8F, -1.0e8F)) == 1.0F);
 }
 
+TEST_CASE("reduce: best takes a strictly higher key and skips NaN", "[runtime][rule-reduce]") {
+    STATIC_CHECK(reduce::improves(1, 9, false));
+    STATIC_CHECK(reduce::improves(5, 3, true));
+    STATIC_CHECK_FALSE(reduce::improves(3, 3, true));
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    CHECK(reduce::improves(-1.0F, 0.0F, false));
+    CHECK(reduce::improves(2.5F, 2.0F, true));
+    CHECK_FALSE(reduce::improves(2.0F, 2.0F, true));
+    CHECK_FALSE(reduce::improves(nan, 0.0F, false));
+    CHECK_FALSE(reduce::improves(nan, 0.0F, true));
+}
+
 TEST_CASE("reduce: float min and max propagate NaN", "[runtime][rule-reduce]") {
     const float nan = std::numeric_limits<float>::quiet_NaN();
     CHECK(std::isnan(reduce::min(nan, 1.0F)));

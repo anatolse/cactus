@@ -101,6 +101,7 @@ template BoxAt(position: vec3, layer: int = 1):
     physics.Collider:
         layer = layer
     physics.BoxCollider
+    physics.Solid
     Struck
 
 entity ShotBox from ShotAt(position = vec3(0.0, 0.0, 0.0))
@@ -231,6 +232,7 @@ template PusherAt(position: vec3, layer: int, mask: int):
         radius = 0.5
         height = 2.0
     physics.CharacterBody
+    physics.Solid
     Pusher
 
 # A sphere overlapping a static box by 0.2 takes the whole push.
@@ -243,6 +245,7 @@ entity PushSphere:
     physics.SphereCollider:
         radius = 0.5
     physics.CharacterBody
+    physics.Solid
     Pusher
 
 entity PushWall from BoxAt(position = vec3(0.0, 30.0, 0.0), layer = 16):

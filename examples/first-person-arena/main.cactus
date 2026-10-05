@@ -53,6 +53,18 @@ const:
     BULLET_SPEED = 20.0
     BULLET_RADIUS = 0.12
     BULLET_LIFETIME = 2.0
+    # Collider layers. Map boxes keep the default layer 1. Bodies collide
+    # with the map and each other; bullets with the map and enemies; a
+    # hurtbox only touches the player.
+    MAP_LAYER = 1
+    ENEMY_LAYER = 2
+    BULLET_LAYER = 4
+    PLAYER_LAYER = 8
+    HURTBOX_LAYER = 16
+    BODY_MASK = MAP_LAYER + ENEMY_LAYER + PLAYER_LAYER
+    BULLET_MASK = MAP_LAYER + ENEMY_LAYER
+    # How far an enemy's hurtbox reaches past its body.
+    HURTBOX_REACH = 0.1
     FIRE_COOLDOWN = 0.2
     DEATH_DURATION = 1.0
     HALF_PI = math.PI * 0.5
@@ -114,7 +126,6 @@ pub trait PerimeterWall
 pub trait BuildingWall
 pub trait BuildingRoof
 pub trait Stair
-pub trait Solid
 pub trait CameraRig
 pub trait Threat
 pub trait RobotEnemy
@@ -140,6 +151,12 @@ pub trait Enemy:
 # Marks an enemy whose death animation is playing.
 pub trait Dying
 
+# A live enemy's trigger volume; touching the player catches them.
+pub trait Hurtbox
+
+# Kept on the player while a hurtbox touches them.
+pub trait Caught
+
 pub trait RobotSpawnPoint:
     var countdown: float = 0.0
 
@@ -154,7 +171,6 @@ pub trait Bullet:
     var lifetime: float = 2.0
 
 event EnemyHit
-event GameOver
 
 template BoxVisual:
     tv.WorldTransform:
@@ -169,7 +185,7 @@ template BoxVisual:
 # controller decides which ones are low enough to step onto.
 template SolidBox:
     use BoxVisual
-    Solid
+    physics.Solid
     physics.Collider
     physics.BoxCollider
 
@@ -198,14 +214,15 @@ template EnemyBase:
         rotation = quat.identity()
         scale = vec3(1.0, 1.0, 1.0)
     physics.Collider:
-        layer = 2
-        mask = 3
+        layer = ENEMY_LAYER
+        mask = BODY_MASK
     physics.CapsuleCollider:
         radius = ENEMY_RADIUS
         height = CHARACTER_HEIGHT
     physics.CharacterBody:
         gravity = GRAVITY
         step_height = PLAYER_STEP_HEIGHT
+    physics.Solid
     Enemy
     Threat
 
@@ -213,6 +230,17 @@ template EnemyBase:
     # WorldTransform is the capsule's center. The model lives on a child
     # offset down to the feet, and follows the body by transform propagation.
     children:
+        # Follows the body in solve, so CatchPlayer sees this tick's pose.
+        entity HurtVolume:
+            tv.LocalTransform
+            tv.WorldTransform
+            physics.Collider:
+                layer = HURTBOX_LAYER
+                mask = PLAYER_LAYER
+            physics.CapsuleCollider:
+                radius = ENEMY_RADIUS + HURTBOX_REACH
+                height = CHARACTER_HEIGHT + HURTBOX_REACH * 2.0
+            Hurtbox
         entity EnemyVisual:
             tv.LocalTransform:
                 position = vec3(0.0, ENEMY_HALF_HEIGHT * -1.0, 0.0)
@@ -245,8 +273,8 @@ template BulletTemplate:
         visible = true
         cast_shadow = false
     physics.Collider:
-        layer = 4
-        mask = 3
+        layer = BULLET_LAYER
+        mask = BULLET_MASK
     physics.BoxCollider:
         size = vec3(BULLET_RADIUS * 2.0, BULLET_RADIUS * 2.0, BULLET_RADIUS * 2.0)
     Bullet
@@ -450,10 +478,10 @@ entity PlayerBody:
         position = vec3(0.0, PLAYER_HALF_HEIGHT, 10.0)
         rotation = quat.identity()
         scale = vec3(1.0, 1.0, 1.0)
-    # Its own layer, so bullets (mask 3) fly through the player.
+    # Its own layer, so bullets fly through the player.
     physics.Collider:
-        layer = 8
-        mask = 3
+        layer = PLAYER_LAYER
+        mask = BODY_MASK
     physics.CapsuleCollider:
         radius = PLAYER_RADIUS
         height = PLAYER_HALF_HEIGHT * 2.0
@@ -464,6 +492,7 @@ entity PlayerBody:
     physics.CharacterBody:
         gravity = GRAVITY
         step_height = PLAYER_STEP_HEIGHT
+    physics.Solid
     Player
     children:
         entity PlayerCamera:
@@ -731,7 +760,7 @@ rule SeekPlayer:
             physics.CharacterBody as body
             tv.WorldTransform as transform
         wall:
-            Solid
+            physics.Solid
             physics.BoxCollider as box
             tv.WorldTransform as place
     where:
@@ -829,9 +858,10 @@ rule FireBullet:
                 velocity = direction * BULLET_SPEED
         shooter.cooldown = FIRE_COOLDOWN
 
-# Each tick a bullet sweeps its motion against every collider its mask
-# selects, so it can't pass through anything between ticks. Walls have no
-# EnemyHit handler, so a hit on a wall only destroys the bullet.
+# Each tick a bullet sweeps its motion against every solid its mask selects,
+# so it can't pass through anything between ticks, and hurtboxes don't stop
+# it. Walls have no EnemyHit handler, so a hit on a wall only destroys the
+# bullet.
 rule MoveBullets:
     pairs:
         bullet:
@@ -839,6 +869,7 @@ rule MoveBullets:
             tv.WorldTransform
         target:
             physics.Collider
+            physics.Solid
     reduce:
         per: bullet
         first = first_hit(physics.sweep(bullet, bullet.Bullet.velocity * fixed_tick.dt, target))
@@ -859,16 +890,19 @@ rule BeginDeath:
     exclude:
         Dying
 
+    # The hurtbox goes with the hit, so a dying enemy can't catch the player.
     on EnemyHit:
         add Dying
+        for hurtbox in query.children[Hurtbox](of = self):
+            destroy hurtbox
         for visual in query.children[EnemyVisual](of = self):
             set models.ModelAnimator on visual:
                 clip = enemy.kind.death_clip
                 time = 0.0
 
-# A dying enemy stops being a Threat, so SeekPlayer and player contact skip
-# it, and stops moving. It leaves every collider layer, so bullets and live
-# enemies pass through it, and collides only with the map.
+# A dying enemy stops being a Threat, so SeekPlayer skips it, and stops
+# moving. It leaves every collider layer, so bullets and live bodies pass
+# through it, and collides only with the map.
 rule StartDying:
     filter:
         Enemy as enemy
@@ -878,7 +912,7 @@ rule StartDying:
     on added Dying:
         enemy.death_elapsed = 0.0
         collider.layer = 0
-        collider.mask = 1
+        collider.mask = MAP_LAYER
         body.velocity = vec3(0.0, 0.0, 0.0)
         remove Threat
 
@@ -903,22 +937,21 @@ rule AnimateEnemyDeath:
             set models.ModelRenderer on visual:
                 color = color(1.0, 1.0, 1.0, 1.0 - progress)
 
-# The player's mask selects enemies but not the reverse, so the player is the
-# subject of the touch test.
-rule DetectPlayerContact:
+# Solid bodies never overlap, so a live enemy catches the player through its
+# slightly larger hurtbox.
+rule CatchPlayer:
     pairs:
-        enemy:
-            Enemy
-            Threat
         player:
             Player
+        hurtbox:
+            Hurtbox
+    group: physics.contacts
     where:
-        physics.touching(player, enemy)
-    when:
-        not Game.Match.over
-
-    on fixed_tick:
-        emit GameOver to player
+        physics.touching(hurtbox, player)
+    reduce:
+        per: player
+        hurtboxes = count()
+    keep Caught on player
 
 rule EndGame:
     filter:
@@ -926,7 +959,7 @@ rule EndGame:
     when:
         not Game.Match.over
 
-    on GameOver:
+    on added Caught:
         Game.Match.over = true
         Game.Match.over_count += 1
         cursor_captured = false

@@ -159,6 +159,10 @@ add_executable(test_semantic_reduce test_semantic_reduce.cpp)
 target_link_libraries(test_semantic_reduce PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticReduceTests COMMAND test_semantic_reduce)
 
+add_executable(test_semantic_keep test_semantic_keep.cpp)
+target_link_libraries(test_semantic_keep PRIVATE cactus_frontend Catch2::Catch2WithMain)
+add_test(NAME SemanticKeepTests COMMAND test_semantic_keep)
+
 # Unified name resolution tests (unified-name-resolution change)
 add_executable(test_name_resolution test_name_resolution.cpp)
 target_link_libraries(test_name_resolution PRIVATE cactus_frontend Catch2::Catch2WithMain)
@@ -496,6 +500,12 @@ cactus_add_headless_behavior_test(test_rule_reductions_headless_behavior
     CACTUS_SOURCE examples/rule_reductions.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_rule_reductions_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_rule_keep_headless_behavior
+    CACTUS_SOURCE examples/rule_keep.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_rule_keep_headless_behavior.cpp
 )
 
 cactus_add_headless_behavior_test(test_collider_sweep_queries_headless_behavior

@@ -3,9 +3,7 @@
 ## Purpose
 
 Define a compact first-person arena shooter example that demonstrates how Cactus gameplay constructs and existing 3D stdlib surfaces compose into a complete playable loop.
-
 ## Requirements
-
 ### Requirement: First-person arena example source and assets exist
 The repository SHALL provide examples/first-person-arena/main.cactus as a standalone cpp-entt example. The example SHALL reuse the robot and knight GLB files under examples/model-renderer/art/ and SHALL add no new binary assets.
 
@@ -113,7 +111,7 @@ The arena SHALL contain four authored corner spawn-point entities: two assigned 
 - **THEN** later spawn intervals create no additional enemies
 
 ### Requirement: Live enemies seek the player and end the game on contact
-Robot and knight enemies SHALL render their reused models with animation, carry volume Collider, CapsuleCollider, and CharacterBody traits, face and move toward the live player by writing their CharacterBody velocity, and rely on the stdlib character controller to remain inside the arena and respond to the building. Each enemy's model-animator playback speed SHALL be derived from its current movement speed so its running clip's stride visually matches its translation. When a wall directly blocks an enemy's straight-line path to the player, the enemy SHALL steer toward an alternate unobstructed heading rather than remaining stuck against the wall. When an enemy's chosen heading is blocked by an obstacle short enough to clear, the enemy SHALL jump over it using the same gravity-driven vertical motion available to the player, switching to a jump animation clip where its model has one. A live enemy reaching the player's collider SHALL trigger game over.
+Robot and knight enemies SHALL render their reused models with animation, carry volume Collider, CapsuleCollider, and CharacterBody traits, face and move toward the live player by writing their CharacterBody velocity, and rely on the stdlib character controller to remain inside the arena and respond to the building. Each enemy's model-animator playback speed SHALL be derived from its current movement speed so its running clip's stride visually matches its translation. When a wall directly blocks an enemy's straight-line path to the player, the enemy SHALL steer toward an alternate unobstructed heading rather than remaining stuck against the wall. When an enemy's chosen heading is blocked by an obstacle short enough to clear, the enemy SHALL jump over it using the same gravity-driven vertical motion available to the player, switching to a jump animation clip where its model has one. A live enemy reaching the player SHALL trigger game over: each live enemy carries a trigger hurtbox child slightly larger than its body, and the player is caught when a hurtbox touches the player's collider.
 
 #### Scenario: Enemy advances toward player
 - **WHEN** a live enemy and player are separated with no solid box between them
@@ -124,7 +122,7 @@ Robot and knight enemies SHALL render their reused models with animation, carry 
 - **THEN** the controller prevents penetration while preserving any unblocked tangential movement
 
 #### Scenario: Enemy contact triggers game over
-- **WHEN** a live enemy overlaps the player's collider
+- **WHEN** a live enemy's hurtbox touches the player's collider
 - **THEN** the player enters game over exactly once
 
 #### Scenario: Enemy animation speed matches movement speed
@@ -279,3 +277,19 @@ Each enemy's rendered model SHALL live on a child entity whose `LocalTransform` 
 #### Scenario: Death fall stays visible
 - **WHEN** an enemy is in its death transition
 - **THEN** its model tips over and fades as before
+
+### Requirement: Arena contacts use kept traits and stdlib Solid
+Map boxes, the player and enemies SHALL block through `std.physics.volume.Solid`; the arena SHALL NOT declare its own `Solid` trait. Player contact SHALL be a trait the arena keeps on the player from a pair rule in `physics.contacts` over the player and enemy hurtboxes, and game over SHALL start from `on added` of that trait. No collider SHALL rely on an asymmetric layer/mask setup to let two solids overlap. A dying enemy's hurtbox SHALL stop catching the player. Bullets SHALL hit solids only.
+
+#### Scenario: Caught by a hurtbox
+- **WHEN** a live enemy walks up to the player and is stopped by the player's solid body
+- **THEN** the enemy's hurtbox touches the player, the kept trait is added, and game over starts
+
+#### Scenario: Dying enemy is harmless
+- **WHEN** a dying enemy's model falls onto the player
+- **THEN** the player is not caught
+
+#### Scenario: Bullets ignore hurtboxes
+- **WHEN** a bullet flies toward an enemy
+- **THEN** it hits the enemy's solid body, not its hurtbox, and the enemy starts dying
+

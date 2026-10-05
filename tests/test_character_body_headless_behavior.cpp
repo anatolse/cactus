@@ -95,6 +95,41 @@ TEST_CASE("a body ignores layers its mask filters out", "[runtime][codegen-entt]
     CHECK(world.position(slots().character_body__MaskedMover).x == near(21.5F, 1e-3));
 }
 
+// ── Solids and triggers ─────────────────────────────────────────────────────
+
+TEST_CASE("a body walks through a trigger, and a contact rule sees it the same tick",
+          "[runtime][codegen-entt][stdlib-character-body][rule-keep]") {
+    World world;
+    const auto wader = slots().character_body__Wader;
+    const auto pool  = slots().character_body__WadePool;
+    bool entered     = false;
+    for (int i = 0; i < 200; ++i) {
+        world.tick();
+        const bool overlapping = world.gap(wader, pool) < 0.0F;
+        CHECK(world.registry.all_of<character_body__Wading>(wader) == overlapping);
+        entered = entered || overlapping;
+        CHECK(world.position(wader).x == near(458.0F + (2.0F * kDt * static_cast<float>(i + 1)), 1e-3));
+    }
+    CHECK(entered);
+    CHECK(world.position(wader).x > 461.0F);
+    CHECK_FALSE(world.registry.all_of<character_body__Wading>(wader));
+}
+
+TEST_CASE("standing inside a trigger causes no correction", "[runtime][codegen-entt][stdlib-character-body]") {
+    World world;
+    const auto soaker = slots().character_body__Soaker;
+    world.tick(3);
+    CHECK(world.position(soaker).x == near(470.0F, 1e-6));
+    CHECK(world.position(soaker).y == near(10.0F, 1e-6));
+}
+
+TEST_CASE("a body without Solid blocks nothing", "[runtime][codegen-entt][stdlib-character-body]") {
+    World world;
+    const auto runner = slots().character_body__GhostRunner;
+    world.tick(60);
+    CHECK(world.position(runner).x == near(479.0F, 1e-3));
+}
+
 // ── Game rules around solve ─────────────────────────────────────────────────
 
 TEST_CASE("velocity written this tick moves the body this tick", "[runtime][codegen-entt][stdlib-character-body]") {

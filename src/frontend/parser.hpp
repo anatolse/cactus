@@ -144,6 +144,8 @@ private:
     ReduceClause parse_reduce_clause();
     void parse_reduce_and_order_by(RuleNode& node);
     std::optional<ReducerDecl> parse_reducer_decl();
+    [[nodiscard]] bool at_keep_clause() const;
+    KeepClause parse_keep_clause();
     [[nodiscard]] bool at_order_by_clause() const;
     std::vector<LocatedName> parse_name_block(TokenType keyword, const char* clause_name);
     std::vector<HandlerReferenceNode> parse_handler_order_block();

@@ -129,6 +129,7 @@ template FloatingPlatformBase:
     phys.Collider:
         mask = PLAYER_LAYER
     phys.BoxCollider
+    phys.Solid
 
 template WalkerEnemyBase:
     tf.WorldTransform
@@ -220,6 +221,7 @@ pub entity GroundPlatform:
         mask = PLAYER_LAYER
     phys.BoxCollider:
         size = vec2(GROUND_WIDTH, GROUND_HEIGHT)
+    phys.Solid
 
 pub entity FloatingPlatform1 from FloatingPlatformBase:
     tf.WorldTransform:

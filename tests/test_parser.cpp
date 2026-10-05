@@ -3910,7 +3910,20 @@ TEST_CASE("Parser: group declaration with unknown entry is rejected", "[parser][
         "group solve:\n"
         "    phase: tick\n"
         "    every: 1.0\n");
-    CHECK(has_diagnostic_containing(errors, "group body only accepts a 'phase:' entry"));
+    CHECK(has_diagnostic_containing(errors, "group body only accepts 'phase:' and 'after:' entries"));
+}
+
+TEST_CASE("Parser: group declaration with an after: block", "[parser][rule-groups]") {
+    auto prog = parse(
+        "pub group contacts:\n"
+        "    phase: fixed_tick\n"
+        "    after:\n"
+        "        solve\n"
+        "        phys.move\n");
+    const auto& group = std::get<GroupNode>(prog.declarations[0]);
+    REQUIRE(group.phase.has_value());
+    CHECK(group.phase->spelling == "fixed_tick");
+    CHECK(group.after_groups == std::vector<std::string>{"solve", "phys.move"});
 }
 
 TEST_CASE("Parser: rule group: and before: clauses", "[parser][rule-groups]") {

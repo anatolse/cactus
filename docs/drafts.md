@@ -77,8 +77,6 @@ types `count`/`sum` as numeric, so that stays an open question.
 
 | Change | State | Take |
 |---|---|---|
-| add-rule-reductions | implemented 2026-10-04; verify and archive pending | ground snapping is the next adoption (F2) |
-| complete-physics-contact-lifecycle | 0/11, untouched since 2026-09-06 | important for bullets; first check whether `CollisionEnter` codegen (`cpp_entt_codegen.cpp`) delivers by broadcast |
 | add-buffered-character-jumping | 0/11, untouched since 2026-09-06 | its base doesn't exist (F1); fold it into a character-controller change |
 | add-rule-execution-explanations | 0/13, untouched since 2026-09-06 | useful tool, not urgent; park |
 | flatten-ui-layout-handlers | no tasks | recheck options now that rule groups and lifecycle triggers exist |
@@ -102,7 +100,8 @@ types `count`/`sum` as numeric, so that stays an open question.
    (volume first, then flat) with stdlib rules written in Cactus using reductions. It
    absorbs add-buffered-character-jumping. The arena and platformer drop their
    hand-written controllers.
-3. complete-physics-contact-lifecycle, starting with the broadcast-delivery check.
+3. complete-physics-contact-lifecycle (done 2026-10-05): `keep` clauses, `best`, `Solid`
+   triggers and `physics.contacts`; `CollisionEnter` is gone.
 4. C4 `template_ref` + S3 named clips.
 
 Open question: should the controller live as stdlib Cactus rules (recommended) or as
@@ -329,8 +328,8 @@ Original review text follows unchanged except for per-item status markers.
   explaining where it comes from. Resolve clips by name at load time: models.clip(Robot, "Robot_Running"). Later, add
   a small AnimState trait with crossfade.
 
-  (Contact Enter/Stay/Exit is already in flight as complete-physics-contact-lifecycle. For bullets it replaces pair
-  rules with on CollisionEnter.)
+  (Contact enter/exit is done by complete-physics-contact-lifecycle: a `keep` rule in `physics.contacts` keeps a
+  trait while a contact lasts, and `on added` / `on removed` are enter and exit. `CollisionEnter` is removed.)
 
   RTS
 
@@ -462,12 +461,11 @@ Original review text follows unchanged except for per-item status markers.
      proxies in the planner, GJK kernels in the runtime, `fixed_tick.dt` as a
      constant, one-shape rule; arena bullets become one pair rule. Checked for step 3:
      a later `fixed_tick` rule sees an earlier rule's `WorldTransform` write in the same
-     activation, in unary and reduced pair rules. 3D `CollisionEnter` still uses the old
-     min-corner box model; step 4 fixes it.
+     activation, in unary and reduced pair rules.
   3. `simulate-character-body`: `move_and_slide` as stdlib rules; absorbs
      add-buffered-character-jumping; the arena and platformer drop their controllers.
-  4. complete-physics-contact-lifecycle, which should also move 3D `CollisionEnter`
-     onto the collider descriptors (it still uses min-corner AABBs).
+  4. complete-physics-contact-lifecycle (done 2026-10-05): kept contact traits, `best`,
+     `Solid` and `physics.contacts`; `CollisionEnter` and its min-corner AABB pass are removed.
   5. C4 `template_ref` + S3 named clips.
 - **Cleanup:** fix the "simulates automatically" comment in `std.physics.*`; archive
   harden-notation-evolution-harness; close or park evolve-cactus-notation,

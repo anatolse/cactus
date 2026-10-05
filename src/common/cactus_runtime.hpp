@@ -227,6 +227,13 @@ namespace reduce {
 [[nodiscard]] inline float max(float acc, float value) noexcept {
     return std::isnan(acc) || std::isnan(value) ? std::numeric_limits<float>::quiet_NaN() : std::max(acc, value);
 }
+// `best`: a strictly higher key wins, so ties keep the earlier row; a NaN key never wins.
+[[nodiscard]] constexpr bool improves(int key, int best, bool seen) noexcept {
+    return !seen || key > best;
+}
+[[nodiscard]] inline bool improves(float key, float best, bool seen) noexcept {
+    return !std::isnan(key) && (!seen || key > best);
+}
 
 }  // namespace reduce
 

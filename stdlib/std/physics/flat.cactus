@@ -1,8 +1,8 @@
 module std.physics.flat
 
-# ── 2D Kinematic Physics Traits & Events ─────────────────────────────────────
+# ── 2D Kinematic Physics Traits ──────────────────────────────────────────────
 # Plain data: nothing moves a 2D CharacterBody yet, so a game moves it with its
-# own rules. The cpp-entt backend still reports CollisionEnter overlaps.
+# own rules.
 
 # Kinematic character state for 2D entities.
 # velocity: movement velocity in world units per second
@@ -19,6 +19,9 @@ pub trait CharacterBody:
 pub trait Collider:
     var layer: int = 1
     var mask: int = 1
+
+# Marks a Collider as solid. A Collider without Solid is a trigger.
+pub trait Solid
 
 # Axis-aligned rectangle/square collider for 2D entities.
 # size: collider width/height in world units
@@ -66,10 +69,3 @@ pub extern func query_overlap_deepest(subject: entity_id, mask: int, exclude: en
 
 # Return all current overlaps for the subject collider.
 pub extern func query_overlap_all(subject: entity_id, mask: int, exclude: entity_id) list[QueryContact2D]
-
-# Fired when this entity's collider first overlaps another entity's collider.
-# other:   entity_id of the entity that was hit
-# overlap: overlap vector (direction and depth of penetration)
-pub event CollisionEnter:
-    other: entity_id
-    overlap: vec2

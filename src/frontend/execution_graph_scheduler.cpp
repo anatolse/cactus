@@ -5,9 +5,11 @@
 #include <functional>
 #include <iterator>
 #include <optional>
+#include <ranges>
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace cactus {
@@ -506,24 +508,59 @@ bool compute_handler_schedule(ExecutionGraph& graph, ErrorReporter& errors) {
     return !errors.has_errors();
 }
 
-void expand_group_orderings(ExecutionGraph& graph) {
-    std::vector<ScheduleEdge> expanded;
+namespace {
+
+using HandlerOrder = std::pair<HandlerIdentity, HandlerIdentity>;  // (before, after)
+
+// A rule-level group reference orders one handler against every member.
+std::vector<HandlerOrder> group_reference_orders(const ExecutionGraph& graph) {
+    std::vector<HandlerOrder> orders;
     for (const auto& ordering : graph.group_orderings) {
+        const bool before = ordering.direction == GroupOrderingDirection::Before;
         for (const auto& member : graph.handlers) {
             if (member.group != ordering.group || member.identity == ordering.handler) {
                 continue;
             }
-            const bool before = ordering.direction == GroupOrderingDirection::Before;
-            ScheduleEdge edge{.before      = before ? ordering.handler : member.identity,
-                              .after       = before ? member.identity : ordering.handler,
-                              .kind        = ScheduleEdgeKind::ExplicitGroup,
-                              .orientation = ScheduleEdgeOrientation::Explicit};
-            const auto duplicate = std::ranges::any_of(expanded, [&](const ScheduleEdge& existing) {
-                return existing.before == edge.before && existing.after == edge.after;
-            });
-            if (!duplicate) {
-                expanded.push_back(std::move(edge));
+            orders.emplace_back(before ? ordering.handler : member.identity,
+                                before ? member.identity : ordering.handler);
+        }
+    }
+    return orders;
+}
+
+// A group's after: orders every member after every member of each listed group.
+std::vector<HandlerOrder> group_after_orders(const ExecutionGraph& graph) {
+    const auto members_of = [&](const SymbolId& group) {
+        return graph.handlers | std::views::filter([&group](const HandlerNode& node) { return node.group == group; });
+    };
+    std::vector<HandlerOrder> orders;
+    for (const auto& declaration : graph.group_declarations) {
+        for (const auto& earlier : declaration.after_groups) {
+            for (const auto& later : members_of(declaration.group)) {
+                for (const auto& first : members_of(earlier)) {
+                    orders.emplace_back(first.identity, later.identity);
+                }
             }
+        }
+    }
+    return orders;
+}
+
+}  // namespace
+
+void expand_group_orderings(ExecutionGraph& graph) {
+    auto orders = group_reference_orders(graph);
+    std::ranges::move(group_after_orders(graph), std::back_inserter(orders));
+    std::vector<ScheduleEdge> expanded;
+    for (const auto& [before, after] : orders) {
+        const auto duplicate = std::ranges::any_of(expanded, [&](const ScheduleEdge& existing) {
+            return existing.before == before && existing.after == after;
+        });
+        if (!duplicate) {
+            expanded.push_back(ScheduleEdge{.before      = before,
+                                            .after       = after,
+                                            .kind        = ScheduleEdgeKind::ExplicitGroup,
+                                            .orientation = ScheduleEdgeOrientation::Explicit});
         }
     }
     graph.schedule_edges.insert(graph.schedule_edges.end(), expanded.begin(), expanded.end());

@@ -1037,6 +1037,7 @@ TEST_CASE("integration: collider queries lower to runtime kernels over program-b
         "    var velocity: vec3 = vec3(0.0, 0.0, 0.0)\n"
         "    var hits: int = 0\n"
         "trait Wall\n"
+        "event Scraped\n"
         "rule MoveBullets:\n"
         "    pairs:\n"
         "        bullet:\n"
@@ -1061,10 +1062,7 @@ TEST_CASE("integration: collider queries lower to runtime kernels over program-b
         "    where:\n"
         "        physics.touching(bullet, wall)\n"
         "    on fixed_tick:\n"
-        "        emit physics.CollisionEnter to bullet:\n"
-        "            other = wall\n"
-        "            point = vec3(0.0, 0.0, 0.0)\n"
-        "            normal = vec3(0.0, 1.0, 0.0)\n";
+        "        emit Scraped to bullet\n";
 
     ProgramNode merged_ast;
     auto merged = link_with_stdlib(source, "collider_codegen", build_dir, merged_ast);

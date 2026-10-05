@@ -3717,7 +3717,7 @@ TEST_CASE("rule groups: ordering against an imported pub group is accepted", "[s
     CHECK(diagnostics.empty());
 }
 
-TEST_CASE("rule groups: only the declaring module may join a group", "[semantic][rule-groups][modules]") {
+TEST_CASE("rule groups: a rule may join another module's pub group", "[semantic][rule-groups][modules]") {
     const auto [decorated, diagnostics] = analyze_source(
         "module game.player\n"
         "rule MovePlayer:\n"
@@ -3725,15 +3725,18 @@ TEST_CASE("rule groups: only the declaring module may join a group", "[semantic]
         "    on fixed_tick:\n"
         "        let value = 1\n",
         imports_with_physics_group(true));
-    CHECK(has_diagnostic(diagnostics, "only rules in module 'std.physics.volume' may join group 'phys.solve'"));
+    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
+    REQUIRE(diagnostics.empty());
+    const auto& handlers = decorated.execution_graph.handlers;
+    REQUIRE(handlers.size() == 1);
+    CHECK(handlers.front().group == make_symbol_id(SymbolKind::Group, "std.physics.volume", "solve"));
 }
 
-TEST_CASE("rule groups: a private group is not visible to other modules", "[semantic][rule-groups][modules]") {
+TEST_CASE("rule groups: joining another module's private group is rejected", "[semantic][rule-groups][modules]") {
     const auto [decorated, diagnostics] = analyze_source(
         "module game.player\n"
         "rule MovePlayer:\n"
-        "    before:\n"
-        "        phys.solve\n"
+        "    group: phys.solve\n"
         "    on fixed_tick:\n"
         "        let value = 1\n",
         imports_with_physics_group(false));
@@ -3766,6 +3769,69 @@ static bool has_schedule_edge(const ExecutionGraph& graph,
     return std::ranges::any_of(graph.schedule_edges, [&](const auto& edge) {
         return edge.before == before && edge.after == after && edge.kind == kind;
     });
+}
+
+TEST_CASE("rule groups: a group's after: orders its members after the listed group",
+          "[semantic][rule-groups][handler-graph]") {
+    const auto [decorated, diagnostics] =
+        analyze_source(rule_group_source("group solve:\n"
+                                         "    phase: fixed_tick\n"
+                                         "group contacts:\n"
+                                         "    phase: fixed_tick\n"
+                                         "    after:\n"
+                                         "        solve\n"
+                                         "rule Touch:\n"
+                                         "    group: contacts\n"
+                                         "    on fixed_tick:\n"
+                                         "        let value = 1\n"
+                                         "rule Move:\n"
+                                         "    group: solve\n"
+                                         "    on fixed_tick:\n"
+                                         "        let value = 2\n"));
+    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
+    REQUIRE(diagnostics.empty());
+    const auto& graph = decorated.execution_graph;
+    const auto contacts = std::ranges::find(graph.group_declarations,
+                                            make_symbol_id(SymbolKind::Group, "game.groups", "contacts"),
+                                            &GroupDeclaration::group);
+    REQUIRE(contacts != graph.group_declarations.end());
+    CHECK(contacts->after_groups ==
+          std::vector<SymbolId>{make_symbol_id(SymbolKind::Group, "game.groups", "solve")});
+    CHECK(has_schedule_edge(graph,
+                            group_test_handler("Move", "fixed_tick"),
+                            group_test_handler("Touch", "fixed_tick"),
+                            ScheduleEdgeKind::ExplicitGroup));
+    CHECK(graph.stable_topological_order.front() == group_test_handler("Move", "fixed_tick"));
+}
+
+TEST_CASE("rule groups: a group's after: rejects self, unknown and cross-phase groups", "[semantic][rule-groups]") {
+    const auto [decorated, diagnostics] =
+        analyze_source(rule_group_source("group solve:\n"
+                                         "    phase: fixed_tick\n"
+                                         "group late:\n"
+                                         "    phase: tick\n"
+                                         "    after:\n"
+                                         "        solve\n"
+                                         "group loop:\n"
+                                         "    phase: fixed_tick\n"
+                                         "    after:\n"
+                                         "        loop\n"
+                                         "        missing\n"));
+    CHECK(has_diagnostic(diagnostics, "group 'late' in phase 'tick' cannot follow group 'solve' in phase 'fixed_tick'"));
+    CHECK(has_diagnostic(diagnostics, "group 'loop' cannot list itself in after:"));
+    CHECK(has_diagnostic(diagnostics, "unknown group 'missing'"));
+}
+
+TEST_CASE("rule groups: a private group is not visible to other modules", "[semantic][rule-groups][modules]") {
+    const auto [decorated, diagnostics] = analyze_source(
+        "module game.player\n"
+        "rule MovePlayer:\n"
+        "    before:\n"
+        "        phys.solve\n"
+        "    on fixed_tick:\n"
+        "        let value = 1\n",
+        imports_with_physics_group(false));
+    CHECK(has_diagnostic(diagnostics, "group 'solve' is not public in module 'phys'"));
 }
 
 TEST_CASE("rule groups: before: mirrors after: within one trigger", "[semantic][rule-groups][handler-graph]") {
@@ -3978,5 +4044,51 @@ TEST_CASE("rule groups: programs without groups or before: keep their schedule",
                                                                          group_test_handler("Reader", "fixed_tick"),
                                                                          group_test_handler("Ordered", "fixed_tick"),
                                                                          group_test_handler("Ordered", "tick")});
+}
+TEST_CASE("keep: a rule can't keep another module's trait", "[semantic][rule-keep][modules]") {
+    auto lib                       = make_module_with_trait("game.zones", "InZone");
+    lib.traits["InZone"].symbol_id = make_symbol_id(SymbolKind::Trait, "game.zones", "InZone");
+    ModuleImports imports;
+    imports.add("std.core", make_core_with_phases());
+    imports.add("zones", std::move(lib));
+    const auto [decorated, diagnostics] = analyze_source(
+        "module game.player\n"
+        "trait Body\n"
+        "trait Pool\n"
+        "rule Touch:\n"
+        "    pairs:\n"
+        "        body:\n"
+        "            Body\n"
+        "        pool:\n"
+        "            Pool\n"
+        "    reduce:\n"
+        "        per: body\n"
+        "        n = count()\n"
+        "    keep zones.InZone on body\n"
+        "    on fixed_tick:\n"
+        "        let value = n\n",
+        imports);
+    CHECK(has_diagnostic(diagnostics, "a kept trait must be declared in the rule's own module"));
+}
+
+TEST_CASE("keep: another module can't change an imported kept trait", "[semantic][rule-keep][modules]") {
+    auto lib                         = make_module_with_trait("game.zones", "InZone");
+    lib.traits["InZone"].kept_by     = "Touch";
+    lib.traits["InZone"].symbol_id   = make_symbol_id(SymbolKind::Trait, "game.zones", "InZone");
+    ModuleImports imports;
+    imports.add("std.core", make_core_with_phases());
+    imports.add("zones", std::move(lib));
+    const auto [decorated, diagnostics] = analyze_source(
+        "module game.player\n"
+        "rule Cheat:\n"
+        "    filter:\n"
+        "        zones.InZone\n"
+        "    on fixed_tick:\n"
+        "        remove zones.InZone\n"
+        "entity Camper:\n"
+        "    zones.InZone\n",
+        imports);
+    CHECK(has_diagnostic(diagnostics, "'InZone' is kept by rule 'Touch'; rule 'Cheat' can't change it"));
+    CHECK(has_diagnostic(diagnostics, "'InZone' is kept by rule 'Touch'; entity 'Camper' can't change it"));
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

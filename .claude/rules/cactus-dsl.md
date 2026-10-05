@@ -54,3 +54,17 @@ can't be explained to a beginner in a sentence, it likely belongs in a different
 layer. Prefer existing stdlib primitives (math/physics/transform/camera/render/ui)
 over hand-rolled logic in game code and showcase examples (teaching examples are the
 exception — see `examples/CLAUDE.md`).
+
+### Contacts, zones and solids
+
+- A collider that must block character bodies needs `physics.Solid`; a collider
+  without it is a trigger. Bodies, walls and floors get `Solid`; zones, pickups and
+  hurtboxes don't.
+- To react when something enters or leaves an area (lava, water, a checkpoint, an enemy
+  reaching the player), write a pair rule in `group: physics.contacts` that tests
+  `physics.touching`, reduces `per:` the entity that needs the transitions, and
+  `keep`s a marker trait on it. React with `on added` / `on removed` of that trait.
+  Don't re-emit an event every tick from a `where:` match. See the lava and checkpoint
+  examples in `spec/cactus_dsl_spec.md` §3.8.6.
+- Use `best(binding, by = key)` to name the winning entity (the highest-priority zone)
+  instead of hand-rolled max tracking.

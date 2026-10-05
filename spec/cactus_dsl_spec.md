@@ -429,6 +429,7 @@ rule_decl       = "rule" IDENTIFIER ":" NEWLINE INDENT
                   [ before_clause ]
                   [ where_clause ]
                   [ reduce_clause [ order_by_clause ] ]
+                  [ keep_clause ]
                   [ limit_clause ]
                   [ when_clause ]
                   { event_handler }
@@ -464,6 +465,7 @@ before_clause   = "before" ":" NEWLINE INDENT
 
 group_decl      = [ "pub" ] "group" IDENTIFIER ":" NEWLINE INDENT
                   "phase" ":" dotted_name NEWLINE
+                  [ after_clause ]
                   DEDENT ;
 
 limit_clause    = "limit" ":" expression [ "per" IDENTIFIER ] NEWLINE ;
@@ -707,7 +709,8 @@ reducer         = "count" "(" [ IDENTIFIER ] ")"
                 | "min" "(" expression "," "default" "=" expression ")"
                 | "max" "(" expression "," "default" "=" expression ")"
                 | "any" "(" expression ")"
-                | "first_hit" "(" expression ")" ;
+                | "first_hit" "(" expression ")"
+                | "best" "(" IDENTIFIER "," "by" "=" expression ")" ;
 ```
 
 ```cactus
@@ -734,9 +737,9 @@ rule TeamTotals:
         team.Team.total = total
 ```
 
-**Reducers are typed and pure.** `count()` counts rows; `count(binding)` also counts rows (not distinct entities) and requires a pair binding. `sum` takes `int`, `float`, `vec2` or `vec3` and keeps that type; a vector sum adds per component in fold order. `min` and `max` take `int` or `float`, keep that type, and require a `default` of exactly that type. `any` takes `bool` and yields `bool`. `first_hit` takes and yields `std.physics.volume.SweepHit` (§7.7): it ignores misses and keeps the hit with the smallest `t`, and on equal `t` the row that comes first in fold order. Reducer inputs have the purity class of a `where:` predicate (§3.8.2) and read the domain's bindings, constants and named entity fields. Reducer names are unique and must not reuse a pair binding name.
+**Reducers are typed and pure.** `count()` counts rows; `count(binding)` also counts rows (not distinct entities) and requires a pair binding. `sum` takes `int`, `float`, `vec2` or `vec3` and keeps that type; a vector sum adds per component in fold order. `min` and `max` take `int` or `float`, keep that type, and require a `default` of exactly that type. `any` takes `bool` and yields `bool`. `first_hit` takes and yields `std.physics.volume.SweepHit` (§7.7): it ignores misses and keeps the hit with the smallest `t`, and on equal `t` the row that comes first in fold order. `best(binding, by = key)` names a pair binding other than the `per` binding and an `int` or `float` key, and yields `entity_id`: that binding's entity in the row with the highest key, the earlier row in fold order on a tie; rows whose key is NaN are skipped. Reducer inputs have the purity class of a `where:` predicate (§3.8.2) and read the domain's bindings, constants and named entity fields. Reducer names are unique and must not reuse a pair binding name.
 
-**Groups are outer.** Without `per:`, the whole domain is one group, so the handler runs exactly once, even for empty input. `per: binding` names a pair binding and creates one group for every entity in that binding's membership snapshot that passes the group filters, whether or not any row survives for it. An empty group gets identity values: `count` and `sum` are `0` (the zero vector for a vector `sum`), `min`/`max` their default, `any` is `false`, and `first_hit` is the miss value `sweep` itself returns (`hit = false`, `t = 1.0`). Defaults apply only to empty input.
+**Groups are outer.** Without `per:`, the whole domain is one group, so the handler runs exactly once, even for empty input. `per: binding` names a pair binding and creates one group for every entity in that binding's membership snapshot that passes the group filters, whether or not any row survives for it. An empty group gets identity values: `count` and `sum` are `0` (the zero vector for a vector `sum`), `min`/`max` their default, `any` is `false`, `first_hit` is the miss value `sweep` itself returns (`hit = false`, `t = 1.0`), and `best` is a stale `entity_id`. Defaults apply only to empty input.
 
 **`where:` splits into group and row filters.** With `per: b`, a `where:` predicate whose pair-binding reads all root at `b` filters groups: an entity that fails it gets no group and no activation. Every other predicate filters rows. Without `per:`, every predicate filters rows. The split is syntactic.
 
@@ -745,6 +748,75 @@ rule TeamTotals:
 **Scope after reduction.** Handlers and sort keys see the aggregates as immutable values and, with `per: b`, the binding `b`. Every other binding, filter alias and implicit filter field is eliminated and can't be named; there is no `self`. The retained binding `b` is writable: the handler runs exactly once per `b` entity, so dotted-path assignment through `b` is accepted and recorded as a contract write, as for a provably-one `limit: … per` (§3.8.3). A targeted event keeps only the recipient's group; a global reduction ignores the target. Lifecycle triggers are rejected on reduced rules.
 
 **Numbers.** Integer `count` and `sum` saturate at the signed 32-bit bounds at each fold step; this applies only to reducers. Floating `sum` keeps the fold order and is never reassociated. Floating `min`/`max` yield NaN when any input is NaN.
+
+#### 3.8.6 Keep Clause
+
+`keep T on b` names a trait that the compiler keeps on each group entity of a pair rule reduced `per: b`: present exactly while the group has at least one row after `where:`. Entering and leaving the relation are then ordinary lifecycle triggers, `on added T` and `on removed T as old`. `keep` is a contextual word at the rule-clause position, written after `reduce:`.
+
+```ebnf
+keep_clause     = "keep" dotted_name "on" IDENTIFIER
+                  ( ":" NEWLINE INDENT { IDENTIFIER "=" expression NEWLINE } DEDENT | NEWLINE ) ;
+```
+
+```cactus
+trait InLava:
+    var zones: int = 0
+    var dps: float = 0.0
+
+rule TouchLava:
+    pairs:
+        body:
+            Health
+            physics.Collider
+        lava:
+            Lava
+            physics.Collider
+    group: physics.contacts
+    where:
+        physics.touching(body, lava)
+    reduce:
+        per: body
+        n = count()
+        damage = sum(lava.Lava.damage_per_second)
+    keep InLava on body:
+        zones = n
+        dps = damage
+
+rule Burn:
+    filter:
+        Health
+    on added InLava:
+        emit StartBurning to self
+    on removed InLava as old:
+        emit StopBurning to self
+```
+
+**Shape.** `b` is the `per` binding. `T` is a trait of the rule's own module with no `persist` field. The block assigns fields of `T` from pure expressions over the aggregates, `b`, constants and named entity fields; a field it leaves out takes its declared default, so a field without a default must be assigned. `keep` is rejected on unary, selectionless, unreduced, globally reduced and extern rules.
+
+**Presence follows rows.** At each run, a group with rows gets `T` with this run's field values: added at the activation's commit, which fires `on added T`, or patched in place, which fires nothing. Every other carrier of `T`, including an entity that has left `b`'s membership, loses it at the commit, which fires `on removed T` with the last kept value. Changes apply in group creation order. A destroyed carrier fires nothing (§4.4). The set of carriers is the previous run's result, so a restored world reconciles at the next run.
+
+**Phase.** A keep rule runs once per activation of its phase. Its phase handlers give the phase; a keep rule with no handler runs in its `group:`'s phase, and one with neither is rejected. Event and lifecycle handlers are rejected on a keep rule. While `when:` is false the rule doesn't run, and kept traits keep their presence and values; a frame with no activation of the phase changes nothing.
+
+**One writer.** At most one `keep` clause names a trait. Every other change to a kept trait is a compile error in any module: field assignment, `set`, `add`, `remove`, `project`, and declaring an entity or template with it. Reading it, filtering on it and reacting to it with `on added` / `on removed` are allowed. `best` names the winning entity of a relation, for example the checkpoint a player last stands in:
+
+```cactus
+rule StandOnCheckpoint:
+    pairs:
+        player:
+            Player
+            physics.Collider
+        point:
+            Checkpoint
+            physics.Collider
+    group: physics.contacts
+    where:
+        physics.touching(player, point)
+    reduce:
+        per: player
+        top = best(point, by = point.Checkpoint.order)
+    keep AtCheckpoint on player:
+        checkpoint = top
+```
 
 ### 3.9 Event Handlers
 
@@ -1304,7 +1376,7 @@ String literals are only allowed in:
 - a leading handler `after:` names canonical handler identities and constrains order for that trigger
 - rule-level `after:` is shorthand for ordering the rule's handlers after the named rule's handlers with the same canonical trigger; it never creates cross-trigger edges
 - rule-level `before:` is the mirror of `after:`: the rule's handlers run before the named rule's handlers with the same canonical trigger
-- a `group` declaration names an ordering point inside exactly one phase and has no runtime behavior. A rule joins it with `group:`; the rule's handler for the group's phase becomes a member, and its other handlers are unaffected. Only rules in the group's own module may join it, and a rule joins at most one group
+- a `group` declaration names an ordering point inside exactly one phase and has no runtime behavior. A rule joins it with `group:`; the rule's handler for the group's phase becomes a member, and its other handlers are unaffected. Rules in the group's own module may join any of its groups; rules in other modules may join only a `pub` group. A rule joins at most one group. A group's `after:` lists groups in the same phase, and every member runs after every member of each listed group, across the linked program
 - a group name in `after:` or `before:` orders the rule's handler for the group's phase after or before every member handler of the group. The rule must have a handler for that phase, and a member cannot list its own group. A group with no members gives no edges. Group names resolve like other declarations, by local name or through a module qualifier, and obey `pub`
 - `order by:` constrains iteration order for a rule pass
 - `filter:` and `exclude:` select entities but do not imply component reads
@@ -1787,6 +1859,7 @@ rule MoveBullets:
             tv.WorldTransform
         target:
             physics.Collider
+            physics.Solid
     reduce:
         per: bullet
         first = first_hit(physics.sweep(bullet, bullet.Bullet.velocity * fixed_tick.dt, target))
@@ -1799,9 +1872,11 @@ rule MoveBullets:
         bullet.tv.WorldTransform.position += bullet.Bullet.velocity * fixed_tick.dt
 ```
 
-**Character controller.** `std.physics.volume` declares `pub group solve` in `fixed_tick`. Its rules move every entity with `CharacterBody`, `Collider`, a shape and `WorldTransform`: gravity, a step-up lift, up to three slides along the surfaces the body hits, a snap back down onto walkable ground, and a final push out of any overlap. A game writes `CharacterBody.velocity` (a positive `velocity.y` jumps) and reads `grounded`, `ground_normal` and `time_since_grounded`. A surface is walkable when its `surface` normal is within `max_slope` degrees of world up. A rule that writes `velocity` runs before `solve` with no annotation (§4.7); `after: physics.solve` reads this tick's results. The last stage of `solve` re-derives each `LocalTransform` descendant of a body, so such a rule also sees a body's children (a hurtbox, a model) at this tick's pose. `motion`, `lift`, `drop` and `ground_offset` belong to the controller. A 2D `CharacterBody` is plain data that nothing moves.
+**Solids and triggers.** `Solid` is a fieldless trait. A `Collider` with `Solid` is solid; one without it is a trigger. The character controller treats only solids as obstacles; `sweep`, `touching` and `push_out` see every collider, so a rule picks solids or triggers in its pair binding's filter. `std.physics.flat` has the same `Solid` trait, but nothing moves a 2D body. Neither module has a collision event: a contact is a rule over `touching`, usually with a `keep` clause (§3.8.6).
 
-The 3D `CollisionEnter` event still uses its older axis-aligned box model.
+**Contacts.** `std.physics.volume` declares `pub group contacts` in `fixed_tick`, after `solve`. A rule that joins it with `group: physics.contacts` sees this tick's body poses and their children's.
+
+**Character controller.** `std.physics.volume` declares `pub group solve` in `fixed_tick`. Its rules move every entity with `CharacterBody`, `Collider`, a shape and `WorldTransform` against solid colliders: gravity, a step-up lift, up to three slides along the surfaces the body hits, a snap back down onto walkable ground, and a final push out of any overlap. A game writes `CharacterBody.velocity` (a positive `velocity.y` jumps) and reads `grounded`, `ground_normal` and `time_since_grounded`. A surface is walkable when its `surface` normal is within `max_slope` degrees of world up. A rule that writes `velocity` runs before `solve` with no annotation (§4.7); `after: physics.solve` reads this tick's results. The last stage of `solve` re-derives each `LocalTransform` descendant of a body, so such a rule also sees a body's children (a hurtbox, a model) at this tick's pose. `motion`, `lift`, `drop` and `ground_offset` belong to the controller. A 2D `CharacterBody` is plain data that nothing moves.
 
 ## 8. Deferred and Migration Notes
 

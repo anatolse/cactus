@@ -1,52 +1,7 @@
 ## Purpose
 
 Define the `std.physics` stdlib module, including 2D (`flat`) and 3D (`volume`) kinematic physics traits, collider-backed cast/overlap world queries with stable contact semantics, and the trait-filtered query namespace — all driven passively without user-authored rules.
-
 ## Requirements
-
-### Requirement: std.physics.flat provides 2D kinematic physics traits
-The `std.physics.flat` module SHALL provide traits and events for 2D kinematic (non-rigidbody) physics. `CharacterBody` holds velocity and ground state as plain data; no stdlib or backend code moves a 2D `CharacterBody`, and the module SHALL NOT claim that it does. `Collider` defines shared collision filtering data. Shape-specific collider traits define common 2D primitive bounds: `BoxCollider`, `CircleCollider`, and `CapsuleCollider`. The cpp-entt backend resolves supported 2D collider overlaps and emits `CollisionEnter` events when detected.
-
-#### Scenario: CharacterBody fields for 2D
-- **WHEN** `use std.physics.flat as phys` is imported and an entity has `phys.CharacterBody`
-- **THEN** the entity has fields: `velocity: vec2`, `grounded: bool`, `gravity: float` with defaults `(0,0)`, `false`, `30.0`
-
-#### Scenario: Backend applies gravity when not grounded
-- **WHEN** a 2D entity has `CharacterBody` with `grounded = false`, a non-zero `velocity`, and no game rule moves it
-- **THEN** no backend or stdlib code applies gravity: its position and `CharacterBody` fields do not change
-
-#### Scenario: Collider defines shared filtering data
-- **WHEN** `use std.physics.flat as phys` is imported and an entity has `phys.Collider`
-- **THEN** the entity has fields: `layer: int` and `mask: int` with defaults `1` and `1`
-
-#### Scenario: BoxCollider defines rectangle bounds
-- **WHEN** an entity has `phys.BoxCollider` with `size = vec2(32.0, 48.0)`
-- **THEN** the cpp-entt backend uses a 32×48 axis-aligned box for collision detection at the entity's `std.transform.flat.WorldTransform.position`
-
-#### Scenario: Square uses BoxCollider with equal dimensions
-- **WHEN** an entity needs a square collider in 2D
-- **THEN** it uses `phys.BoxCollider` with equal `size.x` and `size.y` values
-
-#### Scenario: CircleCollider defines circular bounds
-- **WHEN** an entity has `phys.CircleCollider` with `radius = 16.0`
-- **THEN** the cpp-entt backend uses a circle with radius 16.0 for supported 2D collision detection
-
-#### Scenario: CapsuleCollider defines 2D capsule bounds
-- **WHEN** an entity has `phys.CapsuleCollider` with `radius = 8.0` and `height = 32.0`
-- **THEN** the cpp-entt backend uses a vertical 2D capsule with the authored radius and height for supported collision detection
-
-#### Scenario: Collider includes layer and mask filtering
-- **WHEN** two 2D entities have `phys.Collider` traits
-- **THEN** the cpp-entt backend treats them as collision candidates only when their `layer` and `mask` bitmasks allow the interaction
-
-#### Scenario: CollisionEnter event fires on overlap
-- **WHEN** two entities with compatible `Collider` traits overlap in a cpp-entt program
-- **THEN** the backend emits `CollisionEnter` to both entities with `other: entity_id` and `overlap: vec2`
-
-#### Scenario: Other backends are not required to simulate stdlib colliders
-- **WHEN** a program imports `std.physics.flat` and applies `Collider` while targeting a backend other than cpp-entt
-- **THEN** this change does not require that backend to perform runtime collision simulation
-
 ### Requirement: std.physics.flat provides collider-backed 2D world query result types
 The `std.physics.flat` module SHALL provide public query result types that represent collider-backed 2D query outcomes as an algebraic neutral-or-hit value, without using invalid `entity_id` values as miss sentinels.
 
@@ -111,42 +66,6 @@ Collider-backed 2D world queries SHALL populate `QueryContact2D` fields with sta
 - **THEN** `contact.overlap` describes the minimum translation/separation vector for the overlap contact using the same direction convention as `contact.normal`
 
 ---
-
-### Requirement: std.physics.volume provides 3D kinematic physics traits
-The `std.physics.volume` module SHALL provide traits and events for 3D kinematic physics. The surface mirrors the flat module where practical but uses `vec3` for velocity, normals, and 3D shape dimensions. `CharacterBody` holds the intent a game writes, the results the stdlib controller writes (`stdlib-character-body`), and scratch fields that only the controller writes. `Collider` defines shared collision filtering data. Shape-specific collider traits define common 3D primitive bounds: `BoxCollider`, `SphereCollider`, and `CapsuleCollider`.
-
-#### Scenario: CharacterBody fields for 3D
-- **WHEN** `use std.physics.volume as phys` is imported and an entity has `phys.CharacterBody`
-- **THEN** the entity has game-facing fields `velocity: vec3 = (0,0,0)`, `gravity: float = 9.81`, `step_height: float = 0.3`, `max_slope: float = 45.0`, `grounded: bool = false`, `ground_normal: vec3 = (0,1,0)`, and `time_since_grounded: float = 0.0`
-- **AND** the controller-owned scratch fields `motion: vec3`, `lift: float`, `drop: float`, and `ground_offset: float`
-
-#### Scenario: Step height enables climbing small obstacles
-- **WHEN** a grounded 3D `CharacterBody` walks into a walkable step whose top is at most `step_height` above its feet
-- **THEN** the stdlib controller moves the entity up onto the step rather than blocking movement
-
-#### Scenario: Collider defines shared 3D filtering data
-- **WHEN** `use std.physics.volume as phys` is imported and an entity has `phys.Collider`
-- **THEN** the entity has fields: `layer: int` and `mask: int` with defaults `1` and `1`
-
-#### Scenario: BoxCollider defines 3D box bounds
-- **WHEN** an entity has `phys.BoxCollider` with `size = vec3(1.0, 2.0, 3.0)`
-- **THEN** the cpp-entt backend uses a 1×2×3 axis-aligned box for supported 3D collision detection at the entity's `std.transform.volume.WorldTransform.position`
-
-#### Scenario: Cube uses BoxCollider with equal dimensions
-- **WHEN** an entity needs a cube collider in 3D
-- **THEN** it uses `phys.BoxCollider` with equal `size.x`, `size.y`, and `size.z` values
-
-#### Scenario: SphereCollider defines spherical bounds
-- **WHEN** an entity has `phys.SphereCollider` with `radius = 1.5`
-- **THEN** the cpp-entt backend uses a sphere with radius 1.5 for supported 3D collision detection
-
-#### Scenario: CapsuleCollider defines 3D capsule bounds
-- **WHEN** an entity has `phys.CapsuleCollider` with `radius = 0.5` and `height = 2.0`
-- **THEN** the cpp-entt backend uses a vertical 3D capsule with the authored radius and height for supported collision detection
-
-#### Scenario: CollisionEnter 3D event includes contact point and normal
-- **WHEN** two 3D entities with compatible `Collider` and shape collider traits collide in a cpp-entt program
-- **THEN** the backend emits `CollisionEnter` with `other: entity_id`, `point: vec3`, `normal: vec3`
 
 ### Requirement: Physics traits are passive — no user rules required for simulation
 For 3D, the `std.physics.volume` stdlib controller (`stdlib-character-body`) SHALL move every `CharacterBody` during `fixed_tick` without requiring user-written rules. User rules MAY write `CharacterBody.velocity` to apply movement intent and impulses. 2D `CharacterBody` is not simulated.
@@ -325,3 +244,105 @@ The `std.physics.volume` module SHALL provide a pure function `push_out(a, b) ve
 #### Scenario: Non-binding argument rejected
 - **WHEN** a rule calls `physics.push_out(self, Game)` where `Game` is a named entity, not a binding of the rule
 - **THEN** compilation reports a source-located error
+
+### Requirement: std.physics.flat provides 2D kinematic physics and trigger traits
+The `std.physics.flat` module SHALL provide traits and events for 2D kinematic (non-rigidbody) physics. `CharacterBody` holds velocity and ground state as plain data; no stdlib or backend code moves a 2D `CharacterBody`, and the module SHALL NOT claim that it does. `Collider` defines shared collision filtering data, and `Solid` marks a collider as solid; a collider without `Solid` is a trigger. Shape-specific collider traits define common 2D primitive bounds: `BoxCollider`, `CircleCollider`, and `CapsuleCollider`. The module SHALL NOT declare collision events.
+
+#### Scenario: CharacterBody fields for 2D
+- **WHEN** `use std.physics.flat as phys` is imported and an entity has `phys.CharacterBody`
+- **THEN** the entity has fields: `velocity: vec2`, `grounded: bool`, `gravity: float` with defaults `(0,0)`, `false`, `30.0`
+
+#### Scenario: Backend applies gravity when not grounded
+- **WHEN** a 2D entity has `CharacterBody` with `grounded = false`, a non-zero `velocity`, and no game rule moves it
+- **THEN** no backend or stdlib code applies gravity: its position and `CharacterBody` fields do not change
+
+#### Scenario: Collider defines shared filtering data
+- **WHEN** `use std.physics.flat as phys` is imported and an entity has `phys.Collider`
+- **THEN** the entity has fields: `layer: int` and `mask: int` with defaults `1` and `1`
+
+#### Scenario: BoxCollider defines rectangle bounds
+- **WHEN** an entity has `phys.BoxCollider` with `size = vec2(32.0, 48.0)`
+- **THEN** the cpp-entt backend uses a 32×48 axis-aligned box for collision detection at the entity's `std.transform.flat.WorldTransform.position`
+
+#### Scenario: Square uses BoxCollider with equal dimensions
+- **WHEN** an entity needs a square collider in 2D
+- **THEN** it uses `phys.BoxCollider` with equal `size.x` and `size.y` values
+
+#### Scenario: CircleCollider defines circular bounds
+- **WHEN** an entity has `phys.CircleCollider` with `radius = 16.0`
+- **THEN** the cpp-entt backend uses a circle with radius 16.0 for supported 2D collision detection
+
+#### Scenario: CapsuleCollider defines 2D capsule bounds
+- **WHEN** an entity has `phys.CapsuleCollider` with `radius = 8.0` and `height = 32.0`
+- **THEN** the cpp-entt backend uses a vertical 2D capsule with the authored radius and height for supported collision detection
+
+#### Scenario: Collider includes layer and mask filtering
+- **WHEN** two 2D entities have `phys.Collider` traits
+- **THEN** the cpp-entt backend treats them as collision candidates only when their `layer` and `mask` bitmasks allow the interaction
+
+#### Scenario: Solid marker for 2D
+- **WHEN** `use std.physics.flat as phys` is imported
+- **THEN** the module declares a fieldless trait `phys.Solid`, and declares no `CollisionEnter` event
+
+#### Scenario: Other backends are not required to simulate stdlib colliders
+- **WHEN** a program imports `std.physics.flat` and applies `Collider` while targeting a backend other than cpp-entt
+- **THEN** this change does not require that backend to perform runtime collision simulation
+
+### Requirement: std.physics.volume provides 3D kinematic physics and trigger traits
+The `std.physics.volume` module SHALL provide traits and events for 3D kinematic physics. The surface mirrors the flat module where practical but uses `vec3` for velocity, normals, and 3D shape dimensions. `CharacterBody` holds the intent a game writes, the results the stdlib controller writes (`stdlib-character-body`), and scratch fields that only the controller writes. `Collider` defines shared collision filtering data, and `Solid` marks a collider as solid; a collider without `Solid` is a trigger (see "Colliders without Solid are triggers"). The module SHALL NOT declare collision events. Shape-specific collider traits define common 3D primitive bounds: `BoxCollider`, `SphereCollider`, and `CapsuleCollider`.
+
+#### Scenario: CharacterBody fields for 3D
+- **WHEN** `use std.physics.volume as phys` is imported and an entity has `phys.CharacterBody`
+- **THEN** the entity has game-facing fields `velocity: vec3 = (0,0,0)`, `gravity: float = 9.81`, `step_height: float = 0.3`, `max_slope: float = 45.0`, `grounded: bool = false`, `ground_normal: vec3 = (0,1,0)`, and `time_since_grounded: float = 0.0`
+- **AND** the controller-owned scratch fields `motion: vec3`, `lift: float`, `drop: float`, and `ground_offset: float`
+
+#### Scenario: Step height enables climbing small obstacles
+- **WHEN** a grounded 3D `CharacterBody` walks into a walkable step whose top is at most `step_height` above its feet
+- **THEN** the stdlib controller moves the entity up onto the step rather than blocking movement
+
+#### Scenario: Collider defines shared 3D filtering data
+- **WHEN** `use std.physics.volume as phys` is imported and an entity has `phys.Collider`
+- **THEN** the entity has fields: `layer: int` and `mask: int` with defaults `1` and `1`
+
+#### Scenario: BoxCollider defines 3D box bounds
+- **WHEN** an entity has `phys.BoxCollider` with `size = vec3(1.0, 2.0, 3.0)`
+- **THEN** the cpp-entt backend uses a 1×2×3 axis-aligned box for supported 3D collision detection at the entity's `std.transform.volume.WorldTransform.position`
+
+#### Scenario: Cube uses BoxCollider with equal dimensions
+- **WHEN** an entity needs a cube collider in 3D
+- **THEN** it uses `phys.BoxCollider` with equal `size.x`, `size.y`, and `size.z` values
+
+#### Scenario: SphereCollider defines spherical bounds
+- **WHEN** an entity has `phys.SphereCollider` with `radius = 1.5`
+- **THEN** the cpp-entt backend uses a sphere with radius 1.5 for supported 3D collision detection
+
+#### Scenario: CapsuleCollider defines 3D capsule bounds
+- **WHEN** an entity has `phys.CapsuleCollider` with `radius = 0.5` and `height = 2.0`
+- **THEN** the cpp-entt backend uses a vertical 3D capsule with the authored radius and height for supported collision detection
+
+#### Scenario: Solid marker for 3D
+- **WHEN** `use std.physics.volume as phys` is imported
+- **THEN** the module declares a fieldless trait `phys.Solid`, and declares no `CollisionEnter` event
+
+### Requirement: Colliders without Solid are triggers
+An entity with `Collider` and a shape collider SHALL be solid when it also has `Solid`, and a trigger otherwise. The stdlib character controller SHALL treat only solids as obstacles. `touching`, `sweep` and `push_out` SHALL accept any collider, solid or trigger, and SHALL keep honoring `Collider.layer` and `mask`. Adding or removing `Solid` SHALL take effect at the next `fixed_tick` after its commit.
+
+#### Scenario: Body walks into a trigger
+- **WHEN** a character body walks into a box collider without `Solid`
+- **THEN** the body moves into the box unblocked, and `physics.touching(body, box)` is true
+
+#### Scenario: Body is blocked by a solid
+- **WHEN** the same box has `Solid`
+- **THEN** the controller stops the body at the box's surface
+
+#### Scenario: Queries see triggers
+- **WHEN** a bullet sweeps toward a trigger collider whose layer its mask selects
+- **THEN** `sweep` reports a hit on the trigger
+
+### Requirement: std.physics.volume publishes a contacts group
+`std.physics.volume` SHALL declare a public group `contacts` bound to `fixed_tick` and ordered after `solve`, including the step that moves body descendants. A rule in `physics.contacts` SHALL see this tick's body poses and their descendants' poses.
+
+#### Scenario: Contact rule sees this tick's pose
+- **WHEN** a body moves into a trigger during `solve` and a keep rule in `group: physics.contacts` tests `physics.touching` against it
+- **THEN** the kept trait is added at the same `fixed_tick`'s commit
+

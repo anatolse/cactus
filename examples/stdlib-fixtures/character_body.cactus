@@ -41,7 +41,13 @@ trait SeenAt:
 # A game rule moves this pose root in fixed_tick; it is not a body.
 trait Pushed
 
-template Body(position: vec3, velocity: vec3 = vec3(0.0, 0.0, 0.0), layer: int = 1, mask: int = 1):
+# Marks a trigger volume; a body touching one is kept Wading.
+trait Pool
+
+trait Wading
+
+# Moves, but blocks nothing.
+template Ghost(position: vec3, velocity: vec3 = vec3(0.0, 0.0, 0.0), layer: int = 1, mask: int = 1):
     tv.WorldTransform:
         position = position
     physics.Collider:
@@ -54,10 +60,23 @@ template Body(position: vec3, velocity: vec3 = vec3(0.0, 0.0, 0.0), layer: int =
         velocity = velocity
         step_height = 0.55
 
+template Body(position: vec3, velocity: vec3 = vec3(0.0, 0.0, 0.0), layer: int = 1, mask: int = 1):
+    use Ghost(position = position, velocity = velocity, layer = layer, mask = mask)
+    physics.Solid
+
 template GroundedBody(position: vec3, velocity: vec3 = vec3(0.0, 0.0, 0.0)):
     use Body(position = position, velocity = velocity)
     physics.CharacterBody:
         grounded = true
+
+# A box without Solid: bodies pass through it.
+template Trigger(position: vec3, size: vec3):
+    Pool
+    tv.WorldTransform:
+        position = position
+    physics.Collider
+    physics.BoxCollider:
+        size = size
 
 template Block(position: vec3, size: vec3, layer: int = 1):
     tv.WorldTransform:
@@ -66,6 +85,7 @@ template Block(position: vec3, size: vec3, layer: int = 1):
         layer = layer
     physics.BoxCollider:
         size = size
+    physics.Solid
 
 # A box tilted about Z; its top face rises toward +X.
 template Slope(position: vec3, size: vec3, angle: float):
@@ -154,6 +174,21 @@ entity SplitRight from Body(position = vec3(320.3, 10.0, 0.0)):
 entity WalkerLeft from GroundedBody(position = vec3(338.0, 1.0, 0.0), velocity = vec3(2.0, 0.0, 0.0))
 entity WalkerRight from GroundedBody(position = vec3(342.0, 1.0, 0.0), velocity = vec3(-2.0, 0.0, 0.0))
 
+# ── Solids and triggers ──────────────────────────────────────────────────────
+entity Wader from GroundedBody(position = vec3(458.0, 1.0, 0.0), velocity = vec3(2.0, 0.0, 0.0))
+entity WadePool from Trigger(position = vec3(460.0, 1.5, 0.0), size = vec3(1.0, 3.0, 4.0))
+
+# Floats inside a trigger.
+entity Soaker from Body(position = vec3(470.0, 10.0, 0.0)):
+    physics.CharacterBody:
+        gravity = 0.0
+entity SoakPool from Trigger(position = vec3(470.0, 10.0, 0.0), size = vec3(2.0, 2.0, 2.0))
+
+entity Phantom from Ghost(position = vec3(478.0, 1.0, 0.0)):
+    physics.CharacterBody:
+        grounded = true
+entity GhostRunner from GroundedBody(position = vec3(476.0, 1.0, 0.0), velocity = vec3(3.0, 0.0, 0.0))
+
 # ── Game rules around solve ──────────────────────────────────────────────────
 entity DrivenBody:
     use GroundedBody(position = vec3(360.0, 1.0, 0.0))
@@ -235,6 +270,23 @@ rule Push:
 
     on fixed_tick:
         world.position.x += 1.0
+
+# Sees this tick's body pose, so Wading arrives the tick the body enters.
+rule Wade:
+    pairs:
+        body:
+            physics.CharacterBody
+            physics.Collider
+        pool:
+            Pool
+            physics.Collider
+    group: physics.contacts
+    where:
+        physics.touching(body, pool)
+    reduce:
+        per: body
+        pools = count()
+    keep Wading on body
 
 rule WatchPose:
     filter:

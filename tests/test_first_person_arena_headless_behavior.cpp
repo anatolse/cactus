@@ -565,6 +565,99 @@ TEST_CASE("first-person arena headless: game over is exactly once, terminal, and
     CHECK(match_state(registry).over_count == 1);
 }
 
+namespace {
+
+constexpr float kBodyContact = 0.7F;    // ENEMY_RADIUS + PLAYER_RADIUS
+constexpr float kHurtboxReach = 0.1F;  // HURTBOX_REACH
+
+// Fires one bullet from the player and returns it.
+entt::entity fire_bullet(entt::registry& registry) {
+    cactus_raylib_fake::set_mouse_button_pressed_this_frame(MOUSE_BUTTON_LEFT, true);
+    cactus_headless_test::drive_frame(registry, kFrameDt);
+    cactus_raylib_fake::set_mouse_button_pressed_this_frame(MOUSE_BUTTON_LEFT, false);
+    const auto bullets = registry.view<main__Bullet>();
+    REQUIRE(bullets.size() == 1);
+    return *bullets.begin();
+}
+
+// An enemy without Threat doesn't seek, so it stays where a test puts it.
+entt::entity still_enemy(entt::registry& registry) {
+    const auto enemy = isolate_single_enemy(registry);
+    registry.remove<main__Threat>(enemy);
+    return enemy;
+}
+
+}  // namespace
+
+TEST_CASE("first-person arena headless: an enemy catches the player at contact, not before",
+          "[runtime][codegen-entt][first-person-arena][game-over][rule-keep]") {
+    cactus_raylib_fake::reset();
+    entt::registry registry;
+    cactus_headless_test::drive_one_frame(registry, kFrameDt);
+
+    const auto player      = only_entity<main__Player>(registry);
+    auto& player_transform = registry.get<std_transform_volume__WorldTransform>(player);
+    const auto seeker      = isolate_single_enemy(registry);
+    auto& seeker_transform = registry.get<std_transform_volume__WorldTransform>(seeker);
+    player_transform.position = Vector3{.x = 5.0F, .y = 0.9F, .z = 8.0F};
+    seeker_transform.position = Vector3{.x = 5.0F, .y = 0.9F, .z = 4.0F};
+
+    for (int frame = 0; frame < 300 && !match_state(registry).over; ++frame) {
+        cactus_headless_test::drive_frame(registry, kFrameDt);
+        const float distance = horizontal_distance(player_transform.position, seeker_transform.position);
+        // Both bodies are solid, so the enemy stops at the player.
+        CHECK(distance >= kBodyContact - 0.02F);
+        CHECK(registry.all_of<main__Caught>(player) == match_state(registry).over);
+        if (!match_state(registry).over) {
+            continue;
+        }
+        CHECK(distance <= kBodyContact + kHurtboxReach + 0.01F);
+    }
+    CHECK(match_state(registry).over);
+    CHECK(match_state(registry).over_count == 1);
+}
+
+TEST_CASE("first-person arena headless: a dying enemy can't catch the player",
+          "[runtime][codegen-entt][first-person-arena][game-over][rule-keep]") {
+    cactus_raylib_fake::reset();
+    entt::registry registry;
+    cactus_headless_test::drive_one_frame(registry, kFrameDt);
+
+    const auto player      = only_entity<main__Player>(registry);
+    const auto enemy       = still_enemy(registry);
+    auto& enemy_transform  = registry.get<std_transform_volume__WorldTransform>(enemy);
+    const auto bullet      = fire_bullet(registry);
+    const auto bullet_from = registry.get<std_transform_volume__WorldTransform>(bullet).position;
+    enemy_transform.position = Vector3{.x = bullet_from.x, .y = 0.9F, .z = bullet_from.z - 3.0F};
+    for (int frame = 0; frame < 20 && !registry.all_of<main__Dying>(enemy); ++frame) {
+        cactus_headless_test::drive_frame(registry, kFrameDt);
+    }
+    REQUIRE(registry.all_of<main__Dying>(enemy));
+
+    enemy_transform.position = registry.get<std_transform_volume__WorldTransform>(player).position;
+    drive_frames(registry, 20);
+    CHECK_FALSE(registry.all_of<main__Caught>(player));
+    CHECK_FALSE(match_state(registry).over);
+}
+
+TEST_CASE("first-person arena headless: bullets hit an enemy's body, not its hurtbox",
+          "[runtime][codegen-entt][first-person-arena][projectile]") {
+    cactus_raylib_fake::reset();
+    entt::registry registry;
+    cactus_headless_test::drive_one_frame(registry, kFrameDt);
+
+    const auto enemy       = still_enemy(registry);
+    auto& enemy_transform  = registry.get<std_transform_volume__WorldTransform>(enemy);
+    const auto bullet      = fire_bullet(registry);
+    const auto bullet_from = registry.get<std_transform_volume__WorldTransform>(bullet).position;
+    // Past the body's reach but inside the hurtbox's.
+    enemy_transform.position = Vector3{.x = bullet_from.x + 0.52F, .y = 0.9F, .z = bullet_from.z - 2.0F};
+    drive_frames(registry, 12);
+    CHECK_FALSE(registry.all_of<main__Dying>(enemy));
+    REQUIRE(registry.valid(bullet));
+    CHECK(registry.get<std_transform_volume__WorldTransform>(bullet).position.z < enemy_transform.position.z);
+}
+
 TEST_CASE("first-person arena headless: camera world pose follows the player's position, yaw, and pitch",
           "[runtime][codegen-entt][first-person-arena][camera]") {
     cactus_raylib_fake::reset();

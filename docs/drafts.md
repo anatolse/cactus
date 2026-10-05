@@ -496,3 +496,157 @@ while checking:
   cpp-entt emits `/* unsupported expr */` and the CLI still reports success. A
   `match` expression followed by another statement fails with "expected newline".
 - An `if` condition is not required to be `bool`: `if t.hp:` with an `int` compiles.
+
+## Language review (2026-10-05)
+
+Role: language designer. The notation comes first and the backend second. Goal:
+simple, declarative-first definitions with imperative handlers and pure functions,
+for any genre and scale, including UI apps such as an editor. Memory, lifetime and
+data-race errors must be impossible by construction.
+
+### What to keep
+
+| Mechanism | What it buys |
+|---|---|
+| Inferred handler contracts | Data-race freedom with no access annotations |
+| Rule algebra (filter, pairs, where, reduce, order, limit) | A relational query language; the planner sees every join |
+| Total `entity_id` + deferred structural commits | No dangling handles, no iterator invalidation, deterministic order |
+| `keep` (single-writer derived trait) | The first truly declarative derived state; the direction to grow |
+
+### Diagnosis
+
+The language grows by accretion. Each arena gap got a new clause with its own
+special rules. A rule has 12 optional clauses in a fixed order, and the spec is about
+1,900 lines. There are also seven ways to change state, with three different timings:
+
+```
+x.f = v           immediate      self / binding
+Game.T.f = v      immediate      named entity
+set T on e:       deferred       last writer wins (silent)
+add / remove      deferred       net change per round
+project T         frame overlay  coalesced
+keep T on b       derived        exactly one writer
+emit E to e       queued         —
+```
+
+Most game and UI state is a function of other state: grounded, in contact, layout
+size, effective visibility, health-bar position, outliner rows. Authors maintain it
+by hand with flags, countdowns, apply rules and reconcile loops, and every
+hand-maintained copy can drift. Generalizing derived state is the biggest lever.
+
+### Error classes
+
+| Class | Today | Gap → fix |
+|---|---|---|
+| Dangling handle | ✅ total `entity_id`, deferred destroy | silent no-op hides bugs → `on lost` for weak refs |
+| Leaks / orphans | ◐ `Parent` cascade, `SceneCleanup` | non-Parent refs don't own → `owned` refs; UI mirrors → derived entities |
+| Data races | ✅ inferred contracts, conflict serialization | `set` last-writer-wins is silent → diagnose or declare a merge |
+| Iterator invalidation | ✅ membership snapshots | — |
+| State desync (flags) | ◐ `keep`, `on added` / `on removed` | exclusive states, derived state |
+| Time bugs | ◐ constant fixed `dt`, phases | `timer` field type |
+| Nondeterminism | ✅ creation order, fixed fold order | manual RNG advance (C8) |
+| Stringly-typed links | ❌ `spawn_template("name")`, `clip = 6` | `template_ref`, named clips, reflection |
+
+### Corrections, checked against the compiler
+
+- `else if` already shipped (`b5412d3`). It is now documented in spec §3.16 and used in
+  the arena (`07e7c0a`).
+- `if c: a else: b` and value `match` parse and type-check, but cpp-entt does not
+  lower them. See "Conditional gaps" above.
+- Declared trait defaults are applied. `examples/standard-ui` is verbose only because
+  it follows an outdated comment; that is example cleanup, not a language gap.
+- Before calling a feature missing or working, grep `src/` and `tests/`, read the
+  capability specs, and compile a probe.
+
+### Open items, ranked
+
+Done: identity rewrite (`broaden-language-identity`, `ea2b35f`).
+
+| # | Item | Solves | Size |
+|---|---|---|---|
+| 1 | Finish conditional expressions: lower `if`/`match` expressions, fix the parse after `match`, require `bool` conditions | silently invalid output; an error-prevention hole | S |
+| 2 | Exclusive states | contradictory marker traits; state machines in AI, UI and game flow | M |
+| 3 | `timer` field type + `on elapsed` | hand-written countdowns; gives the backend every deadline | M |
+| 4 | Derived entities + `keep` on unary rules | UI lists, outliners, health bars, palettes; leaks and duplicates | L |
+| 5 | Tree folds over `Parent` | `std.ui` layout as one imperative loop; hierarchy totals | L |
+| 6 | Typed refs and relations (`owned` / `weak`, join through a ref) | silent stale handles, ownership, one-Timer-per-entity, reverse lookup | L |
+| 7 | Write semantics: defer every cross-entity write; diagnose `set` conflicts | two timings for one action; silent lost writes | M |
+| 8 | Values and reflection: strings, collections, `template_ref`, `std.reflect` | editor logic in extern C++ (see "Tools-profile gaps") | L |
+| 9 | Removals: `limit … per` writability, authored `project`, gameplay `query.*` in handlers, cross-module rule-name ordering, bare field access | fewer special-case rules, smaller spec | S–M each |
+
+Items 2–9 are not yet checked against `src/` and `tests/`; check each one before
+proposing it.
+
+### Sketches (syntax not decided)
+
+```cactus
+# 2. Exclusive states: adding one removes the others in the same commit
+state EnemyMode: Idle, Chasing, Attacking, Dying
+
+# 3. Time as a type: the runtime counts it down
+trait Shooter:
+    var cooldown: timer
+rule Spawn:
+    on elapsed SpawnPoint.countdown: ...
+
+# 4. Derived entities: one child per source row, keyed by the source entity
+rule HealthBars:
+    filter:
+        Enemy
+        Health as hp
+    keep entity Bar under HudLayer:
+        ui.Progress:
+            value = hp.health / hp.max_health
+
+# 5. Tree fold: bottom-up over children, order derived from tree depth
+rule MeasureStack:
+    filter:
+        ui.Stack as s
+    reduce:
+        over: children
+        total = sum(child.ui.DesiredSize.size.y)
+        n = count()
+    keep ui.DesiredSize:
+        size = vec2(0.0, total + s.gap * (n - 1))
+
+# 6. Typed refs with lifetime policy, and joins through them
+trait Bomb:
+    owner: ref Player owned       # destroy the owner → destroy the bomb
+trait Seeker:
+    target: ref Health weak       # target dies → field cleared, `on lost` fires
+rule Home:
+    filter:
+        Seeker as s
+        s.target -> tv.WorldTransform as goal    # no row when the target is stale
+```
+
+### Genre coverage
+
+```
+                  Platf  Shooter  RTS   Sandbox  Turn/Card  UI app/Editor
+Today              ●●●    ●●●      ●     ●        ●          ●
++ derive (4, 5)    ●●●    ●●●      ●●    ●●       ●●         ●●●
++ states (2)       ●●●    ●●●      ●●●   ●●       ●●●        ●●●
++ timers (3)       ●●●    ●●●      ●●●   ●●       ●●         ●●
++ relations (6)     —     ●●       ●●●   ●●●      ●●●        ●●●
++ values (8)        —     ●        ●●    ●●●      ●●●        ●●●
+Still needed for scale: R1 radius domains, R2 navigation, B1 grid storage
+```
+
+A card game and an editor are good stress tests that no example covers yet: they
+have no frame-driven simulation, and they need ordered collections, shuffling and
+undo.
+
+### Open questions
+
+- Is a derived row entity owned by its source row, so it can't be destroyed by hand?
+  Likely yes, under the same single-writer rule as `keep`.
+- Does a declared `merge sum` on a field restate a derivable fact? It records game
+  intent, not a backend fact, but it needs a decision against "derive, don't restate".
+- Copy-on-write collections in traits are safe but can hide O(n) copies. Can the
+  backend prove uniqueness and mutate in place?
+- Can a game drop the `frame` root and drive phases from events only (turns)? The
+  phase model seems to allow it; no example proves it.
+- Undo and play-in-editor: command-log transactions need every cross-entity write to
+  go through the command buffer (item 7). The world fork can build on persistence
+  capture/restore.

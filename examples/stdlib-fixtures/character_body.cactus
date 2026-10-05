@@ -1,0 +1,192 @@
+module character_body
+
+# Every CharacterBody below is moved by std.physics.volume's `solve` rules.
+# Each scenario sits 20 units from the next on one shared floor whose top is
+# at y = 0. A body is a 2.0-high capsule, so it rests with its center at y = 1.
+
+use std.core
+use std.math as math
+use std.math.quat as quat
+use std.transform.volume as tv
+use std.physics.volume as physics
+
+const:
+    BODY_RADIUS = 0.4
+    BODY_HALF_SEGMENT = 0.6
+    SLOPE_30 = math.radians(30.0)
+    SLOPE_60 = math.radians(60.0)
+    # Resting on the 30-degree slope: the cap's center sits radius away from its face.
+    SLOPE_SIT_Y = 1.0 + (0.5 + BODY_RADIUS) / math.cos(SLOPE_30) + BODY_HALF_SEGMENT + 0.00001
+    STEEP_DROP_Y = 6.0 + (0.5 + BODY_RADIUS) / math.cos(SLOPE_60) + BODY_HALF_SEGMENT + 0.05
+
+# A game rule writes this body's velocity every tick, with no order against solve.
+trait Driven:
+    var speed: float = 2.0
+
+trait Jumper:
+    var pending: bool = true
+    var speed: float = 6.0
+
+# Records `grounded` from a rule that runs after physics.solve.
+trait GroundWatch:
+    var seen: bool = false
+
+trait Ticks:
+    var count: int = 0
+
+template Body(position: vec3, velocity: vec3 = vec3(0.0, 0.0, 0.0), layer: int = 1, mask: int = 1):
+    tv.WorldTransform:
+        position = position
+    physics.Collider:
+        layer = layer
+        mask = mask
+    physics.CapsuleCollider:
+        radius = BODY_RADIUS
+        height = 2.0
+    physics.CharacterBody:
+        velocity = velocity
+        step_height = 0.55
+
+template GroundedBody(position: vec3, velocity: vec3 = vec3(0.0, 0.0, 0.0)):
+    use Body(position = position, velocity = velocity)
+    physics.CharacterBody:
+        grounded = true
+
+template Block(position: vec3, size: vec3, layer: int = 1):
+    tv.WorldTransform:
+        position = position
+    physics.Collider:
+        layer = layer
+    physics.BoxCollider:
+        size = size
+
+# A box tilted about Z; its top face rises toward +X.
+template Slope(position: vec3, size: vec3, angle: float):
+    use Block(position = position, size = size)
+    tv.WorldTransform:
+        rotation = quat.from_euler(0.0, 0.0, angle)
+
+entity Floor from Block(position = vec3(200.0, -0.5, 0.0), size = vec3(500.0, 1.0, 40.0))
+
+entity Clock:
+    Ticks
+
+# ── Free motion ──────────────────────────────────────────────────────────────
+entity FreeMover from Body(position = vec3(0.0, 1.0, 0.0), velocity = vec3(3.0, 0.0, 0.0))
+
+entity MaskedMover from Body(position = vec3(20.0, 1.0, 0.0), velocity = vec3(3.0, 0.0, 0.0))
+entity MaskedBox from Block(position = vec3(21.0, 1.0, 0.0), size = vec3(0.2, 2.0, 2.0), layer = 4)
+
+entity Faller from Body(position = vec3(40.0, 5.0, 0.0)):
+    physics.CharacterBody:
+        gravity = 10.0
+
+# ── Slopes ───────────────────────────────────────────────────────────────────
+entity GentleSlope from Slope(position = vec3(60.0, 1.0, 0.0), size = vec3(8.0, 1.0, 6.0), angle = SLOPE_30)
+entity SlopeSitter from GroundedBody(position = vec3(60.0, SLOPE_SIT_Y, 0.0))
+
+entity SteepSlope from Slope(position = vec3(160.0, 6.0, 0.0), size = vec3(10.0, 1.0, 6.0), angle = SLOPE_60)
+entity SteepSlider from Body(position = vec3(160.0, STEEP_DROP_Y, 0.0))
+
+# A grounded body walking into a ramp too steep to stand on doesn't climb it.
+entity SteepRamp from Slope(position = vec3(402.0, 0.0, 0.0), size = vec3(6.0, 1.0, 6.0), angle = SLOPE_60)
+entity RampWalker from GroundedBody(position = vec3(398.0, 1.0, 0.0), velocity = vec3(2.0, 0.0, 0.0))
+
+# ── Walls ────────────────────────────────────────────────────────────────────
+# Covers four wall thicknesses per tick.
+entity ThinWaller from Body(position = vec3(80.0, 1.0, 0.0), velocity = vec3(12.0, 0.0, 0.0))
+entity ThinWall from Block(position = vec3(82.0, 1.5, 0.0), size = vec3(0.05, 3.0, 4.0))
+
+entity WallSlider from GroundedBody(position = vec3(95.0, 1.0, -0.4), velocity = vec3(2.0, 0.0, -2.0))
+entity LongWall from Block(position = vec3(100.0, 1.5, -1.0), size = vec3(20.0, 3.0, 0.2))
+
+entity CornerRunner from GroundedBody(position = vec3(120.0, 1.0, 0.0), velocity = vec3(2.0, 0.0, -2.0))
+entity CornerEast from Block(position = vec3(121.5, 1.5, 0.0), size = vec3(0.2, 3.0, 6.0))
+entity CornerNorth from Block(position = vec3(120.0, 1.5, -1.0), size = vec3(6.0, 3.0, 0.2))
+
+# ── Landing, ledges and jumps ────────────────────────────────────────────────
+entity Lander from Body(position = vec3(140.0, 3.0, 0.0))
+
+entity Ledge from Block(position = vec3(178.0, 1.0, 0.0), size = vec3(4.0, 2.0, 4.0))
+entity LedgeWalker from GroundedBody(position = vec3(179.0, 3.0, 0.0), velocity = vec3(2.0, 0.0, 0.0))
+
+entity Hopper:
+    use GroundedBody(position = vec3(200.0, 1.0, 0.0))
+    Jumper
+
+entity CeilingHopper:
+    use GroundedBody(position = vec3(220.0, 1.0, 0.0))
+    Jumper
+entity Ceiling from Block(position = vec3(220.0, 2.5, 0.0), size = vec3(4.0, 0.2, 4.0))
+
+# ── Steps ────────────────────────────────────────────────────────────────────
+entity StepClimber from GroundedBody(position = vec3(239.5, 1.0, 0.0), velocity = vec3(3.0, 0.0, 0.0))
+entity LowStep from Block(position = vec3(244.0, 0.25, 0.0), size = vec3(6.0, 0.5, 4.0))
+
+entity TallStepper from GroundedBody(position = vec3(259.5, 1.0, 0.0), velocity = vec3(3.0, 0.0, 0.0))
+entity TallStep from Block(position = vec3(264.0, 0.4, 0.0), size = vec3(6.0, 0.8, 4.0))
+
+entity StairWalker from GroundedBody(position = vec3(281.0, 3.0, 0.0), velocity = vec3(2.0, 0.0, 0.0))
+entity StairTop from Block(position = vec3(281.0, 1.0, 0.0), size = vec3(2.0, 2.0, 4.0))
+entity StairSecond from Block(position = vec3(282.5, 0.75, 0.0), size = vec3(1.0, 1.5, 4.0))
+entity StairThird from Block(position = vec3(283.5, 0.5, 0.0), size = vec3(1.0, 1.0, 4.0))
+entity StairLast from Block(position = vec3(284.5, 0.25, 0.0), size = vec3(1.0, 0.5, 4.0))
+
+# ── Overlap ──────────────────────────────────────────────────────────────────
+entity WallSpawn from Body(position = vec3(299.3, 1.0, 0.0))
+entity SpawnWall from Block(position = vec3(300.0, 1.5, 0.0), size = vec3(1.0, 3.0, 4.0))
+
+# Overlap by 0.2 along X and float, so only the split moves them.
+entity SplitLeft from Body(position = vec3(319.7, 10.0, 0.0)):
+    physics.CharacterBody:
+        gravity = 0.0
+entity SplitRight from Body(position = vec3(320.3, 10.0, 0.0)):
+    physics.CharacterBody:
+        gravity = 0.0
+
+entity WalkerLeft from GroundedBody(position = vec3(338.0, 1.0, 0.0), velocity = vec3(2.0, 0.0, 0.0))
+entity WalkerRight from GroundedBody(position = vec3(342.0, 1.0, 0.0), velocity = vec3(-2.0, 0.0, 0.0))
+
+# ── Game rules around solve ──────────────────────────────────────────────────
+entity DrivenBody:
+    use GroundedBody(position = vec3(360.0, 1.0, 0.0))
+    Driven
+
+entity Watched:
+    use Body(position = vec3(380.0, 3.0, 0.0))
+    GroundWatch
+
+rule CountTicks:
+    filter:
+        Ticks as ticks
+
+    on fixed_tick:
+        ticks.count += 1
+
+rule Drive:
+    filter:
+        Driven as driven
+        physics.CharacterBody as body
+
+    on fixed_tick:
+        body.velocity.x = driven.speed
+
+rule Jump:
+    filter:
+        Jumper as jumper
+        physics.CharacterBody as body
+
+    on fixed_tick:
+        if jumper.pending and body.grounded:
+            body.velocity.y = jumper.speed
+            jumper.pending = false
+
+rule WatchGround:
+    filter:
+        GroundWatch as watch
+        physics.CharacterBody as body
+    after:
+        physics.solve
+
+    on fixed_tick:
+        watch.seen = body.grounded

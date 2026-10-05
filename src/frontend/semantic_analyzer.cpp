@@ -892,7 +892,8 @@ std::optional<std::unordered_set<std::string>> known_stdlib_effect_summary(const
         return std::unordered_set<std::string>{"editor"};
     }
     // Collider queries read only their bindings, which the contract records.
-    if (module == kPhysicsVolumeModule && (symbol.local_name == "sweep" || symbol.local_name == "touching")) {
+    if (module == kPhysicsVolumeModule &&
+        (symbol.local_name == "sweep" || symbol.local_name == "touching" || symbol.local_name == "push_out")) {
         return std::unordered_set<std::string>{};
     }
     if (module == "std.physics" || module.starts_with("std.physics.")) {
@@ -1036,6 +1037,17 @@ void ModuleImports::add(const std::string& qualifier,
 SemanticAnalyzer::SemanticAnalyzer(ErrorReporter& errors)
     : errors_(errors) {}
 
+void SemanticAnalyzer::record_module_imports() {
+    auto& recorded = result_.execution_graph.module_imports;
+    for (const auto& [qualifier, symbols] : imports_.modules) {
+        ModuleImport entry{.module = current_module_id_.name, .imported = symbols.module_name};
+        if (entry.imported != entry.module && !std::ranges::contains(recorded, entry)) {
+            recorded.push_back(std::move(entry));
+        }
+    }
+    std::ranges::sort(recorded, {}, &ModuleImport::imported);
+}
+
 DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImports& imports) {
     imports_ = imports;
 
@@ -1076,6 +1088,7 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     current_module_is_stdlib_ = module_name_is_stdlib(current_module_id_.name);
     result_.module_name       = current_module_id_.name;
     result_.source_modules.push_back(ResolvedSourceModule{.module_name = current_module_id_.name, .ast = &program});
+    record_module_imports();
 
     // Phase 1: Collect all type declarations
     collect_types(program);
@@ -3715,15 +3728,23 @@ void SemanticAnalyzer::validate_reducer(ReducerDecl& reducer,
         return;
     }
 
+    if (reducer.kind == ReducerKind::Sum) {
+        if (input.kind != TypeKind::Int && input.kind != TypeKind::Float && input.kind != TypeKind::Vec2 &&
+            input.kind != TypeKind::Vec3) {
+            errors_.error(reducer.input->location,
+                          "sum(...) input must be of type 'int', 'float', 'vec2' or 'vec3', got '" + input.name + "'");
+            return;
+        }
+        reducer.result_type = input;
+        return;
+    }
+
     if (input.kind != TypeKind::Int && input.kind != TypeKind::Float) {
         errors_.error(reducer.input->location,
                       kind_name + "(...) input must be of type 'int' or 'float', got '" + input.name + "'");
         return;
     }
     reducer.result_type = input.kind == TypeKind::Int ? make_int_type() : make_float_type();
-    if (reducer.kind == ReducerKind::Sum) {
-        return;
-    }
 
     if (reducer.default_value == nullptr) {
         errors_.error(reducer.location, kind_name + "(...) needs `default = <value>` for groups with no rows");
@@ -6890,7 +6911,22 @@ std::optional<ColliderQueryKind> collider_query_kind(const CallExpr& call) {
     if (callee->local_name == "touching") {
         return ColliderQueryKind::Touching;
     }
+    if (callee->local_name == "push_out") {
+        return ColliderQueryKind::PushOut;
+    }
     return std::nullopt;
+}
+
+std::string_view collider_query_name(ColliderQueryKind kind) {
+    switch (kind) {
+        case ColliderQueryKind::Sweep:
+            return "sweep";
+        case ColliderQueryKind::Touching:
+            return "touching";
+        case ColliderQueryKind::PushOut:
+            return "push_out";
+    }
+    std::unreachable();
 }
 
 std::array<std::size_t, 2> collider_query_entity_args(ColliderQueryKind kind) {
@@ -6968,8 +7004,8 @@ void SemanticAnalyzer::check_collider_query_args(const CallExpr& call, const Rul
     if (!kind.has_value()) {
         return;
     }
-    const std::string usage = std::string("physics.") + (*kind == ColliderQueryKind::Sweep ? "sweep" : "touching") +
-                              " takes bindings of the calling rule";
+    const std::string usage =
+        "physics." + std::string(collider_query_name(*kind)) + " takes bindings of the calling rule";
     for (const auto index : collider_query_entity_args(*kind)) {
         if (index >= call.args.size()) {
             continue;
@@ -7046,6 +7082,9 @@ void SemanticAnalyzer::record_collider_query_reads(const CallExpr& call,
         read(collider, "mask");
         for (const auto shape : kColliderShapeTraits) {
             read(make_symbol_id(SymbolKind::Trait, physics, std::string(shape)), std::nullopt);
+        }
+        if (*kind == ColliderQueryKind::PushOut) {
+            read(make_symbol_id(SymbolKind::Trait, physics, "CharacterBody"), std::nullopt);
         }
     }
 }
@@ -7149,37 +7188,45 @@ std::optional<SemanticAnalyzer::SpatialJoinMatch> SemanticAnalyzer::try_recogniz
                             .right     = {.binding_index = *second, .kind = SpatialShapeKind::Collider}};
 }
 
-// Pruning a row can only drop a miss, which is first_hit's identity, so every
-// aggregate must be a first_hit over the same sweep: any other reducer counts
-// or sums rows. The delta may read only the subject.
-std::optional<SpatialJoinPlan> SemanticAnalyzer::recognize_first_hit_sweep(const RuleNode& rule,
+// Pruning a row can only drop a miss or a zero push, the identities of
+// first_hit and sum, so every aggregate must fold the same collider query:
+// any other reducer counts or sums rows. A sweep delta may read only the subject.
+std::optional<SpatialJoinPlan> SemanticAnalyzer::recognize_collider_reduce(const RuleNode& rule,
                                                                            const PairScope& pair_scope) {
     if (!rule.reduce.has_value() || rule.reduce->reducers.empty()) {
         return std::nullopt;
     }
     const auto& reducers = rule.reduce->reducers;
-    const auto is_sweep  = [&](const ReducerDecl& reducer) {
-        const auto* call = reducer.input == nullptr ? nullptr : std::get_if<CallExpr>(&reducer.input->expr);
-        return reducer.kind == ReducerKind::FirstHit && call != nullptr &&
-               collider_query_kind(*call) == ColliderQueryKind::Sweep && call->args.size() == 3 &&
-               same_expression(*reducer.input, *reducers.front().input);
+    const auto& front    = reducers.front();
+    const auto* call     = front.input == nullptr ? nullptr : std::get_if<CallExpr>(&front.input->expr);
+    const auto kind      = call == nullptr ? std::nullopt : collider_query_kind(*call);
+    const bool sweep     = kind == ColliderQueryKind::Sweep && front.kind == ReducerKind::FirstHit && call->args.size() == 3;
+    const bool push      = kind == ColliderQueryKind::PushOut && front.kind == ReducerKind::Sum && call->args.size() == 2;
+    const auto same_fold = [&](const ReducerDecl& reducer) {
+        return reducer.kind == front.kind && reducer.input != nullptr && same_expression(*reducer.input, *front.input);
     };
-    if (!std::ranges::all_of(reducers, is_sweep)) {
+    if ((!sweep && !push) || !std::ranges::all_of(reducers, same_fold)) {
         return std::nullopt;
     }
-    const auto& sweep   = std::get<CallExpr>(reducers.front().input->expr);
-    const auto subject  = direct_binding(*sweep.args[0], pair_scope);
-    const auto target   = direct_binding(*sweep.args[2], pair_scope);
-    if (!subject.has_value() || !target.has_value() || *subject == *target ||
-        (pair_bindings_read(*sweep.args[1], pair_scope) & ~(1U << *subject)) != 0) {
+    const auto [subject_arg, target_arg] = collider_query_entity_args(*kind);
+    const auto subject = direct_binding(*call->args[subject_arg], pair_scope);
+    const auto target  = direct_binding(*call->args[target_arg], pair_scope);
+    if (!subject.has_value() || !target.has_value() || *subject == *target) {
         return std::nullopt;
     }
-    return SpatialJoinPlan{
-        .dimension = SpatialJoinDimension::Volume3D,
-        .left      = {.binding_index = *subject, .kind = SpatialShapeKind::SweptCollider, .slots = {ExprPath{1}}},
-        .right     = {.binding_index = *target, .kind = SpatialShapeKind::Collider},
-        .matched_predicate_index = 0,
-        .source                  = SpatialJoinSource::Reduce};
+    SpatialShape left{.binding_index = *subject, .kind = SpatialShapeKind::Collider};
+    if (sweep) {
+        if ((pair_bindings_read(*call->args[1], pair_scope) & ~(1U << *subject)) != 0) {
+            return std::nullopt;
+        }
+        left.kind  = SpatialShapeKind::SweptCollider;
+        left.slots = {ExprPath{1}};
+    }
+    return SpatialJoinPlan{.dimension               = SpatialJoinDimension::Volume3D,
+                           .left                    = std::move(left),
+                           .right                   = {.binding_index = *target, .kind = SpatialShapeKind::Collider},
+                           .matched_predicate_index = 0,
+                           .source                  = SpatialJoinSource::Reduce};
 }
 
 bool SemanticAnalyzer::spatial_join_resolved_args_equal(const SpatialJoinResolvedArg& lhs,
@@ -7361,7 +7408,7 @@ std::optional<SpatialJoinPlan> SemanticAnalyzer::recognize_spatial_join(const Ru
                                .right                    = std::move(match->right),
                                .matched_predicate_index = predicate_index};
     }
-    if (auto swept = recognize_first_hit_sweep(rule, pair_scope); swept.has_value()) {
+    if (auto swept = recognize_collider_reduce(rule, pair_scope); swept.has_value()) {
         return swept;
     }
     if (!linear_distance_warned) {

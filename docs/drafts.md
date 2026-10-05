@@ -43,6 +43,10 @@ own physics. This is worse than S2: it's a false promise in the stdlib. It also 
 Until a real controller lands, the stdlib comment should stop claiming automatic
 simulation.
 
+- Done 2026-10-05 for 3D (`simulate-character-body`): `std.physics.volume`'s `solve` rules
+  move every 3D `CharacterBody`, and the arena uses them. `std.physics.flat` no longer
+  claims simulation; a 2D controller still needs 2D shape queries first.
+
 ### F2. add-rule-reductions is applied, and it enables S2
 
 Its prerequisite, accelerate-cross-domain-pair-joins, has landed (task 0.1). Reductions
@@ -317,6 +321,9 @@ Original review text follows unchanged except for per-item status markers.
   in the stdlib: step height, slopes, jump buffering (add-buffered-character-jumping is in flight), and separation
   between actors.
   - FPS, TPS, 3D platformers, and any sandbox with a walking player.
+  - Done 2026-10-05 for 3D (`simulate-character-body`): gravity, sliding, step-up and snap-down, slope limit,
+    `time_since_grounded`, and body separation, as stdlib rules on `sweep`, `first_hit` and `push_out`. Still open:
+    a 2D controller and 2D shape queries, and a jump-buffer policy (add-buffered-character-jumping is kept).
 
   S3. Named animation clips and simple animation state. ROBOT_RUN_CLIP = 6 is a magic index with a 10-line comment
   explaining where it comes from. Resolve clips by name at load time: models.clip(Robot, "Robot_Running"). Later, add

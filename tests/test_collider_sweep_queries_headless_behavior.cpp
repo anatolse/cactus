@@ -128,6 +128,12 @@ TEST_CASE("equal hits resolve by creation order", "[runtime][codegen-entt][stdli
     CHECK(world.struck(slots().collider_sweep_queries__TieSecond).by_shot == 0);
 }
 
+TEST_CASE("a sweep starting inside a box and moving out misses", "[runtime][codegen-entt][stdlib-physics]") {
+    ShotWorld world;
+    CHECK_FALSE(world.shot(slots().collider_sweep_queries__ShotEscape).hit);
+    CHECK(world.struck(slots().collider_sweep_queries__EscapeBox).by_shot == 0);
+}
+
 TEST_CASE("touching counts only overlapping colliders the mask selects", "[runtime][codegen-entt][stdlib-physics]") {
     ShotWorld world;
     const auto toucher = only_entity<collider_sweep_queries__Toucher>(world.registry);
@@ -143,6 +149,47 @@ TEST_CASE("accelerated and unaccelerated sweeps agree", "[runtime][codegen-entt]
         }
         for (const auto [entity, struck] : world.registry.view<Struck>().each()) {
             CHECK(struck.by_shot == struck.by_plain);
+        }
+    }
+}
+
+namespace {
+
+using Pusher = collider_sweep_queries__Pusher;
+
+void check_push(const Vector3& actual, Vector3 expected) {
+    CHECK(actual.x == Catch::Approx(expected.x).margin(1e-3));
+    CHECK(actual.y == Catch::Approx(expected.y).margin(1e-3));
+    CHECK(actual.z == Catch::Approx(expected.z).margin(1e-3));
+}
+
+}  // namespace
+
+TEST_CASE("push_out moves a sphere out of a box", "[runtime][codegen-entt][stdlib-physics][rule-reduce]") {
+    ShotWorld world;
+    check_push(world.registry.get<Pusher>(slots().collider_sweep_queries__PushSphere).push, {-0.2F, 0.0F, 0.0F});
+}
+
+TEST_CASE("two character bodies that collide with each other split the push",
+          "[runtime][codegen-entt][stdlib-physics][rule-reduce]") {
+    ShotWorld world;
+    check_push(world.registry.get<Pusher>(slots().collider_sweep_queries__PushLeft).push, {-0.1F, 0.0F, 0.0F});
+    check_push(world.registry.get<Pusher>(slots().collider_sweep_queries__PushRight).push, {0.1F, 0.0F, 0.0F});
+}
+
+TEST_CASE("a one-sided character body takes the whole push", "[runtime][codegen-entt][stdlib-physics][rule-reduce]") {
+    ShotWorld world;
+    check_push(world.registry.get<Pusher>(slots().collider_sweep_queries__PushSeer).push, {-0.2F, 0.0F, 0.0F});
+    check_push(world.registry.get<Pusher>(slots().collider_sweep_queries__PushBlind).push, {0.0F, 0.0F, 0.0F});
+}
+
+TEST_CASE("accelerated and unaccelerated push-outs agree", "[runtime][codegen-entt][stdlib-physics][spatial-join]") {
+    for (const auto threshold : {std::optional<std::size_t>{}, std::optional<std::size_t>{0}}) {
+        ShotWorld world(threshold);
+        for (const auto [entity, pusher] : world.registry.view<Pusher>().each()) {
+            CHECK(pusher.push.x == pusher.plain_push.x);
+            CHECK(pusher.push.y == pusher.plain_push.y);
+            CHECK(pusher.push.z == pusher.plain_push.z);
         }
     }
 }

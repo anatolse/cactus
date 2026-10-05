@@ -5,6 +5,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <array>
 #include <cmath>
 #include <numbers>
 #include <optional>
@@ -334,7 +335,7 @@ TEST_CASE("a sweep starting in contact hits at t = 0 and pushes out", "[runtime]
     const auto box = box_at({0.0F, 0.0F, 0.0F}, {2.0F, 2.0F, 2.0F});
 
     SECTION("sphere overlapping a face, cores apart") {
-        const auto hit = sweep(sphere_at({1.3F, 0.0F, 0.0F}, 0.5F), {1.0F, 0.0F, 0.0F}, box, false);
+        const auto hit = sweep(sphere_at({1.3F, 0.0F, 0.0F}, 0.5F), {-1.0F, 0.0F, 0.0F}, box, false);
         REQUIRE(hit.hit);
         CHECK(hit.t == 0.0F);
         check_vec(hit.normal, {1.0F, 0.0F, 0.0F});
@@ -368,7 +369,7 @@ TEST_CASE("a sweep starting in contact hits at t = 0 and pushes out", "[runtime]
         check_vec(hit.normal, {0.0F, -1.0F, 0.0F});
     }
     SECTION("coincident round cores push along +Y") {
-        const auto hit = sweep(sphere_at({0.0F, 0.0F, 0.0F}, 0.5F), {1.0F, 0.0F, 0.0F}, sphere_at({0.0F, 0.0F, 0.0F}, 0.5F), false);
+        const auto hit = sweep(sphere_at({0.0F, 0.0F, 0.0F}, 0.5F), {0.0F, -1.0F, 0.0F}, sphere_at({0.0F, 0.0F, 0.0F}, 0.5F), false);
         REQUIRE(hit.hit);
         check_vec(hit.normal, {0.0F, 1.0F, 0.0F});
     }
@@ -377,6 +378,147 @@ TEST_CASE("a sweep starting in contact hits at t = 0 and pushes out", "[runtime]
             sweep(capsule_at({0.0F, 0.5F, 0.0F}, 0.5F, 2.0F), {0.0F, 0.0F, 0.0F}, capsule_at({0.0F, 0.0F, 0.0F}, 0.5F, 2.0F), false);
         REQUIRE(hit.hit);
         check_vec(hit.normal, {0.0F, 1.0F, 0.0F});
+    }
+}
+
+TEST_CASE("a sweep starting in contact is blocked only by closing motion", "[runtime][physics][penetration]") {
+    const auto box = box_at({0.0F, 0.0F, 0.0F}, {2.0F, 2.0F, 2.0F});
+
+    SECTION("overlap moving out misses") {
+        CHECK_FALSE(sweep(sphere_at({1.3F, 0.0F, 0.0F}, 0.5F), {1.0F, 0.0F, 0.0F}, box, false).hit);
+    }
+    SECTION("overlap moving along the contact misses") {
+        CHECK_FALSE(sweep(sphere_at({1.3F, 0.0F, 0.0F}, 0.5F), {0.0F, 0.0F, 1.0F}, box, false).hit);
+    }
+    SECTION("overlap moving in hits at t = 0") {
+        const auto hit = sweep(sphere_at({1.3F, 0.0F, 0.0F}, 0.5F), {-0.5F, 0.0F, 0.5F}, box, false);
+        REQUIRE(hit.hit);
+        CHECK(hit.t == 0.0F);
+        check_vec(hit.normal, {1.0F, 0.0F, 0.0F});
+    }
+    SECTION("resting on a face slides along it") {
+        const auto resting = sphere_at({0.0F, 1.5F + (kSkin / 2.0F), 0.0F}, 0.5F);
+        CHECK_FALSE(sweep(resting, {3.0F, 0.0F, 0.0F}, box, false).hit);
+        CHECK_FALSE(sweep(resting, {0.0F, 1.0F, 0.0F}, box, false).hit);
+        const auto pressed = sweep(resting, {1.0F, -1.0F, 0.0F}, box, false);
+        REQUIRE(pressed.hit);
+        CHECK(pressed.t == 0.0F);
+        check_vec(pressed.normal, {0.0F, 1.0F, 0.0F});
+    }
+    SECTION("resting capsule walks off the edge of a box") {
+        const auto resting = capsule_at({0.0F, 2.0F + (kSkin / 2.0F), 0.0F}, 0.5F, 2.0F);
+        CHECK_FALSE(sweep(resting, {4.0F, 0.0F, 0.0F}, box, false).hit);
+    }
+    SECTION("motion along a wall far from the origin is never blocked by it") {
+        const auto wall = box_at({0.0F, 1.5F, -15.0F}, {30.5F, 3.0F, 0.5F});
+        for (int i = 0; i < 60; ++i) {
+            const float x = -2.0F - (0.047F * static_cast<float>(i));
+            CAPTURE(x);
+            const auto body = capsule_at({x, 1.45F, -14.4F}, 0.35F, 1.8F);
+            CHECK_FALSE(sweep(body, {0.0F, -1.1F, 0.0F}, wall, false).hit);
+            CHECK_FALSE(sweep(body, {-0.047F, 0.0F, 0.0F}, wall, false).hit);
+        }
+    }
+    SECTION("zero delta still tests overlap") {
+        CHECK(sweep(sphere_at({1.3F, 0.0F, 0.0F}, 0.5F), {0.0F, 0.0F, 0.0F}, box, false).hit);
+        CHECK(sweep(sphere_at({0.0F, 1.5F + (kSkin / 2.0F), 0.0F}, 0.5F), {0.0F, 0.0F, 0.0F}, box, false).hit);
+    }
+}
+
+TEST_CASE("a sweep reports the surface it meets", "[runtime][physics][sweep]") {
+    const auto step = box_at({0.0F, 0.25F, 0.0F}, {2.0F, 0.5F, 2.0F});
+
+    SECTION("a face contact reports that face") {
+        const auto hit = sweep(sphere_at({0.0F, 2.0F, 0.0F}, 0.4F), {0.0F, -3.0F, 0.0F}, step, false);
+        REQUIRE(hit.hit);
+        check_vec(hit.surface, {0.0F, 1.0F, 0.0F});
+        check_vec(hit.normal, hit.surface);
+    }
+    SECTION("landing on an edge reports the top face") {
+        const auto hit = sweep(capsule_at({1.3F, 2.0F, 0.0F}, 0.4F, 2.0F), {0.0F, -2.0F, 0.0F}, step, false);
+        REQUIRE(hit.hit);
+        CHECK(hit.normal.y < 0.8F);
+        CHECK(hit.normal.x > 0.5F);
+        check_vec(hit.surface, {0.0F, 1.0F, 0.0F});
+    }
+    SECTION("running into an edge reports the side face") {
+        const auto hit = sweep(capsule_at({-2.0F, 1.45F, 0.0F}, 0.4F, 2.0F), {2.0F, 0.0F, 0.0F}, step, false);
+        REQUIRE(hit.hit);
+        CHECK(hit.normal.y > 0.0F);
+        check_vec(hit.surface, {-1.0F, 0.0F, 0.0F});
+    }
+    SECTION("a rotated box reports its rotated face") {
+        const auto ramp = box_at({0.0F, 0.0F, 0.0F}, {4.0F, 1.0F, 4.0F}, Quaternion{0.0F, 0.0F, std::sin(0.25F), std::cos(0.25F)});
+        const auto hit  = sweep(sphere_at({0.0F, 3.0F, 0.0F}, 0.4F), {0.0F, -4.0F, 0.0F}, ramp, false);
+        REQUIRE(hit.hit);
+        check_vec(hit.surface, {-std::sin(0.5F), std::cos(0.5F), 0.0F});
+    }
+    SECTION("a round target reports the contact normal") {
+        const auto hit = sweep(sphere_at({0.3F, 3.0F, 0.0F}, 0.4F), {0.0F, -4.0F, 0.0F}, sphere_at({}, 1.0F), false);
+        REQUIRE(hit.hit);
+        check_vec(hit.surface, hit.normal);
+    }
+    SECTION("a miss has no surface") {
+        check_vec(sweep(sphere_at({0.0F, 5.0F, 0.0F}, 0.4F), {1.0F, 0.0F, 0.0F}, step, false).surface, {0.0F, 0.0F, 0.0F});
+    }
+}
+
+// ── push_out ────────────────────────────────────────────────────────────────
+
+TEST_CASE("push_out moves a sphere out of a box", "[runtime][physics][push_out]") {
+    const auto box = box_at({0.0F, 0.0F, 0.0F}, {2.0F, 2.0F, 2.0F});
+    check_vec(push_out(sphere_at({-1.3F, 0.0F, 0.0F}, 0.5F), box, false, false), {-0.2F, 0.0F, 0.0F});
+    check_vec(push_out(sphere_at({-1.3F, 0.0F, 0.0F}, 0.5F), box, false, true), {-0.1F, 0.0F, 0.0F});
+}
+
+TEST_CASE("push_out is zero when the shapes are apart", "[runtime][physics][push_out]") {
+    const auto box = box_at({0.0F, 0.0F, 0.0F}, {2.0F, 2.0F, 2.0F});
+    check_vec(push_out(sphere_at({-3.0F, 0.0F, 0.0F}, 0.5F), box, false, false), {0.0F, 0.0F, 0.0F});
+    check_vec(push_out(sphere_at({-1.5F, 0.0F, 0.0F}, 0.5F), box, false, false), {0.0F, 0.0F, 0.0F});
+}
+
+TEST_CASE("push_out honors mask, identity and missing data", "[runtime][physics][push_out]") {
+    auto subject = sphere_shape({-1.3F, 0.0F, 0.0F}, 0.5F, 1, 3);
+    auto target  = box_shape({0.0F, 0.0F, 0.0F}, kIdentity, {2.0F, 2.0F, 2.0F}, 4, 1);
+    check_vec(push_out(subject, target, false, false), {0.0F, 0.0F, 0.0F});
+    target.layer = 1;
+    auto one_way = target;
+    one_way.mask = 4;
+    check_vec(push_out(subject, one_way, false, true), {-0.2F, 0.0F, 0.0F});
+    check_vec(push_out(subject, target, true, false), {0.0F, 0.0F, 0.0F});
+    check_vec(push_out(std::nullopt, target, false, false), {0.0F, 0.0F, 0.0F});
+    check_vec(push_out(subject, std::nullopt, false, false), {0.0F, 0.0F, 0.0F});
+}
+
+TEST_CASE("push_out leaves every shape pair touching but not overlapping", "[runtime][physics][push_out]") {
+    const std::array<ColliderShape, 3> subjects{
+        box_at({0.0F, 0.0F, 0.0F}, {1.0F, 1.0F, 1.0F}),
+        sphere_at({0.0F, 0.0F, 0.0F}, 0.5F),
+        capsule_at({0.0F, 0.0F, 0.0F}, 0.4F, 1.6F),
+    };
+    const std::array<ColliderShape, 3> targets{
+        box_at({0.0F, 0.0F, 0.0F}, {2.0F, 1.0F, 2.0F}, yaw(0.3F)),
+        sphere_at({0.0F, 0.0F, 0.0F}, 0.7F),
+        capsule_at({0.0F, 0.0F, 0.0F}, 0.5F, 2.0F),
+    };
+    const std::array<Vector3, 4> offsets{
+        Vector3{0.8F, 0.1F, 0.2F},
+        Vector3{-0.3F, 0.95F, 0.1F},
+        Vector3{0.2F, -0.4F, -0.8F},
+        Vector3{0.0F, 0.3F, 0.0F},
+    };
+    for (const auto& subject_shape : subjects) {
+        for (const auto& target : targets) {
+            for (const auto& offset : offsets) {
+                auto subject   = subject_shape;
+                subject.center = offset;
+                CAPTURE(static_cast<int>(subject.kind), static_cast<int>(target.kind), offset.x, offset.y, offset.z);
+                REQUIRE(separation(subject, target).distance < 0.0F);
+                const Vector3 push = push_out(subject, target, false, false);
+                subject.center     = Vector3{offset.x + push.x, offset.y + push.y, offset.z + push.z};
+                CHECK(separation(subject, target).distance == Catch::Approx(0.0F).margin(2e-3));
+            }
+        }
     }
 }
 

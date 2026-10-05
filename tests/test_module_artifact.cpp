@@ -872,7 +872,7 @@ TEST_CASE("ModuleArtifact: runtime declarations and handler graph round-trip", "
 }
 
 TEST_CASE("ModuleArtifact: artifact from before shape-generic spatial plans is rejected", "[artifact][spatial-join]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 25);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 26);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1027,6 +1027,30 @@ TEST_CASE("ModuleArtifact: artifact from before collider sweep plans is rejected
     fs::remove_all(build_dir, ec);
 }
 
+TEST_CASE("ModuleArtifact: artifact from before module imports is rejected", "[artifact][rule-groups]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+    fs::create_directories(build_dir);
+
+    auto path = build_dir / "imports.cmod";
+    {
+        std::ofstream out(path, std::ios::binary);
+        out.write("CMOD", 4);
+        const char previous_version = 25;
+        out.write(&previous_version, 1);
+    }
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    std::string name;
+    CHECK_FALSE(artifact.load(path, name).has_value());
+    REQUIRE(errors.has_errors());
+    CHECK(errors.diagnostics()[0].message.find("incompatible module artifact version") != std::string::npos);
+
+    fs::remove_all(build_dir, ec);
+}
+
 TEST_CASE("ModuleArtifact: artifact from before rule reductions is rejected", "[artifact][rule-reduce]") {
     auto build_dir = test_build_dir();
     std::error_code ec;
@@ -1162,7 +1186,7 @@ TEST_CASE("ModuleArtifact: set command capabilities round-trip", "[artifact][def
     CHECK(loaded->handler_contracts.front().commands == commands);
     REQUIRE(loaded->execution_graph.handlers.size() == 1);
     CHECK(loaded->execution_graph.handlers.front().contract.commands == commands);
-    CHECK(ModuleArtifact::CURRENT_VERSION == 25);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 26);
 
     fs::remove_all(build_dir, ec);
 }
@@ -1505,7 +1529,7 @@ TEST_CASE("ModuleArtifact: field-level access serializes deterministically", "[a
 }
 
 TEST_CASE("ModuleArtifact: artifact from before field-level contracts is rejected", "[artifact][handler-contracts]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 25);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 26);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1779,7 +1803,7 @@ TEST_CASE("ModuleArtifact: unknown trigger kind is rejected", "[artifact][trait-
 }
 
 TEST_CASE("ModuleArtifact: artifact from before lifecycle triggers is rejected", "[artifact][trait-lifecycle]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 25);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 26);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1834,6 +1858,8 @@ TEST_CASE("ModuleArtifact: rule group facts and group edges round-trip", "[artif
                                                                   .after       = imported,
                                                                   .kind        = ScheduleEdgeKind::ExplicitRule,
                                                                   .orientation = ScheduleEdgeOrientation::Explicit});
+    program.execution_graph.module_imports.push_back(ModuleImport{.module = "runtime.lib", .imported = "std.core"});
+    program.execution_graph.module_imports.push_back(ModuleImport{.module = "runtime.lib", .imported = "other.lib"});
 
     ErrorReporter errors;
     ModuleArtifact artifact(errors);
@@ -1863,6 +1889,8 @@ TEST_CASE("ModuleArtifact: rule group facts and group edges round-trip", "[artif
     CHECK(graph.schedule_edges[1].kind == ScheduleEdgeKind::ExplicitRule);
     CHECK(graph.schedule_edges[1].before == referrer);
     CHECK(graph.schedule_edges[1].after == imported);
+    CHECK(graph.module_imports == std::vector<ModuleImport>{{.module = "runtime.lib", .imported = "std.core"},
+                                                            {.module = "runtime.lib", .imported = "other.lib"}});
 
     const auto symbols = artifact.extract_pub_symbols(build_dir / "runtime.lib.cmod");
     REQUIRE(symbols.has_value());
@@ -1899,7 +1927,7 @@ TEST_CASE("ModuleArtifact: unknown group ordering direction is malformed", "[art
 }
 
 TEST_CASE("ModuleArtifact: artifact from before rule groups is rejected", "[artifact][rule-groups]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 25);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 26);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1924,7 +1952,7 @@ TEST_CASE("ModuleArtifact: artifact from before rule groups is rejected", "[arti
 }
 
 TEST_CASE("ModuleArtifact: artifact from before named-entity access is rejected", "[artifact][named-entity]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 25);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 26);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);

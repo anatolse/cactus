@@ -216,10 +216,11 @@ inline constexpr std::string_view kTransformVolumeModule = "std.transform.volume
 inline constexpr std::string_view kSweepHitCanonical     = "std.physics.volume.SweepHit";
 inline constexpr std::array<std::string_view, 3> kColliderShapeTraits{"BoxCollider", "SphereCollider", "CapsuleCollider"};
 
-enum class ColliderQueryKind : std::uint8_t { Sweep, Touching };
+enum class ColliderQueryKind : std::uint8_t { Sweep, Touching, PushOut };
 
-// `std.physics.volume.sweep` or `touching`, by canonical identity.
+// `std.physics.volume.sweep`, `touching` or `push_out`, by canonical identity.
 [[nodiscard]] std::optional<ColliderQueryKind> collider_query_kind(const CallExpr& call);
+[[nodiscard]] std::string_view collider_query_name(ColliderQueryKind kind);
 // The argument positions naming the two colliders, subject first.
 [[nodiscard]] std::array<std::size_t, 2> collider_query_entity_args(ColliderQueryKind kind);
 [[nodiscard]] bool is_sweep_hit_type(const TypeInfo& type);
@@ -417,7 +418,12 @@ enum class ScheduleEdgeKind : std::uint8_t {
     EffectConflict,
     ExplicitGroup
 };
-enum class ScheduleEdgeOrientation : std::uint8_t { Explicit, WriterBeforeReader, DeclarationOrder };
+enum class ScheduleEdgeOrientation : std::uint8_t {
+    Explicit,
+    WriterBeforeReader,
+    DeclarationOrder,
+    ImporterBeforePublicGroup
+};
 
 // The fields of one trait that made a data conflict.
 struct FieldProvenance {
@@ -469,6 +475,14 @@ struct RenderPassPlan {
     HandlerIdentity fragment_handler;
 };
 
+// `module` has a `use` of `imported`. The linker merges every module's list.
+struct ModuleImport {
+    std::string module;
+    std::string imported;
+
+    friend bool operator==(const ModuleImport&, const ModuleImport&) = default;
+};
+
 // A `group` declaration: a named ordering anchor inside one phase.
 struct GroupDeclaration {
     SymbolId group;
@@ -499,6 +513,7 @@ struct ExecutionGraph {
     std::vector<DependencyLevel> dependency_levels;
     std::vector<GroupDeclaration> group_declarations;
     std::vector<GroupOrdering> group_orderings;
+    std::vector<ModuleImport> module_imports;
 };
 
 struct ResolvedTemplateParameter {
@@ -1157,8 +1172,9 @@ private:
     void record_pair_binding_write(const VarAssign& node,
                                    const PairScope& pair_scope,
                                    InferredHandlerContract& contract) const;
-    // A `reduce:` whose every aggregate is `first_hit` over one binding-to-binding sweep.
-    [[nodiscard]] static std::optional<SpatialJoinPlan> recognize_first_hit_sweep(const RuleNode& rule,
+    // A `reduce:` whose every aggregate is `first_hit` over one binding-to-binding
+    // sweep, or `sum` over one binding-to-binding push-out.
+    [[nodiscard]] static std::optional<SpatialJoinPlan> recognize_collider_reduce(const RuleNode& rule,
                                                                                 const PairScope& pair_scope);
     // Read-only pattern-match over an already-validated
     // `where:` predicate list for a direct, unwrapped recognized overlap call
@@ -1351,6 +1367,7 @@ private:
     // Phase 5: after: validation
     void validate_after_clauses(ProgramNode& program);
     void validate_group_declarations(ProgramNode& program);
+    void record_module_imports();
     void push_explicit_edge(const HandlerIdentity& before, const HandlerIdentity& after, ScheduleEdgeKind kind);
     void add_rule_level_edges(const SymbolId& rule,
                               const std::vector<SymbolId>& after_rules,

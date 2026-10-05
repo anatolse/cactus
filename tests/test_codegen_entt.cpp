@@ -7645,6 +7645,17 @@ TEST_CASE("Codegen EnTT: a grouped reduction folds broad-phase rows and writes i
     CHECK(code.find("if (!cactus_acc.near) {") != std::string::npos);
     // The handler writes the retained binding through a mutable reference.
     CHECK(code.find("registry.get<Body>(actor).radius =", rows) != std::string::npos);
+    // With no group there is no handler run, so the pass skips the fold and
+    // never snapshots the other bindings.
+    const auto empty = code.find("if (actor_snapshot.empty()) {");
+    REQUIRE(empty != std::string::npos);
+    CHECK(empty < groups);
+    CHECK(code.find("actor_snapshot.reserve") < empty);
+    CHECK(empty < code.find("wall_snapshot.reserve"));
+    // Spawned entities have huge indices, so groups are found by snapshot position.
+    CHECK(code.find("SnapshotPositions cactus_positions_actor(actor_snapshot);") < groups);
+    CHECK(code.find("cactus_positions_actor.find(actor)", fold) != std::string::npos);
+    CHECK(code.find("entt::to_entity") == std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: a global unary reduction folds in creation order and runs once",

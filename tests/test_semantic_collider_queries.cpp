@@ -98,9 +98,15 @@ const ModuleImports& stdlib_imports() {
     static const ModuleImports imports = [] {
         ModuleImports core;
         core.add("std.core", stdlib_module("std.core", "std/core.cactus", {}));
+        auto transform = stdlib_module("std.transform.volume", "std/transform/volume.cactus", core);
+        ModuleImports physics_deps = core;
+        physics_deps.add("core", core.modules.at("std.core"));
+        physics_deps.add("math", stdlib_module("std.math", "std/math.cactus", {}));
+        physics_deps.add("v3", stdlib_module("std.math.vec3", "std/math/vec3.cactus", {}));
+        physics_deps.add("tv", transform);
         ModuleImports result = core;
-        result.add("physics", stdlib_module("std.physics.volume", "std/physics/volume.cactus", core));
-        result.add("tv", stdlib_module("std.transform.volume", "std/transform/volume.cactus", core));
+        result.add("physics", stdlib_module("std.physics.volume", "std/physics/volume.cactus", physics_deps));
+        result.add("tv", transform);
         return result;
     }();
     return imports;
@@ -326,6 +332,58 @@ TEST_CASE("Collider queries: both bindings' collider data join the contract", "[
     CHECK(contract.pair_bindings[1].required_traits.size() == 1);
 }
 
+const std::string kPushOut =
+    "    reduce:\n"
+    "        per: bullet\n"
+    "        push = sum(physics.push_out(bullet, target))\n";
+
+TEST_CASE("Collider queries: push_out takes the rule's bindings and returns vec3", "[semantic][stdlib-physics]") {
+    const auto analysis = analyze(bullet_rule(kPushOut, "        bullet.Bullet.velocity = push\n"));
+    INFO(describe(analysis));
+    CHECK(analysis.clean());
+}
+
+TEST_CASE("Collider queries: push_out rejects a named entity", "[semantic][stdlib-physics]") {
+    const auto analysis = analyze(
+        "entity Game:\n"
+        "    Solid\n" +
+        bullet_rule("    reduce:\n"
+                    "        per: bullet\n"
+                    "        push = sum(physics.push_out(bullet, Game))\n"));
+    const auto* error = analysis.error_with("'Game' is not a binding of rule 'MoveBullets'");
+    INFO(describe(analysis));
+    REQUIRE(error != nullptr);
+    CHECK(error->location.line > 0);
+    CHECK(analysis.has("physics.push_out takes bindings of the calling rule"));
+}
+
+TEST_CASE("Collider queries: push_out needs two pair bindings", "[semantic][stdlib-physics]") {
+    const auto analysis = analyze(bullet_rule("    reduce:\n"
+                                              "        per: bullet\n"
+                                              "        push = sum(physics.push_out(bullet, bullet.Bullet.owner))\n"));
+    INFO(describe(analysis));
+    CHECK(analysis.has("physics.push_out takes bindings of the calling rule"));
+}
+
+TEST_CASE("Collider queries: push_out reads collider data and CharacterBody on both bindings",
+          "[semantic][stdlib-physics][contracts]") {
+    const auto analysis = analyze(bullet_rule(kPushOut));
+    INFO(describe(analysis));
+    REQUIRE(analysis.clean());
+    const auto& contract = analysis.contract("MoveBullets");
+    for (const auto* trait_name : {"Collider", "BoxCollider", "SphereCollider", "CapsuleCollider", "CharacterBody"}) {
+        const auto trait = trait_id("std.physics.volume", trait_name);
+        CHECK(contract.reads.contains(trait));
+        CHECK(bound_read(contract, 0, trait));
+        CHECK(bound_read(contract, 1, trait));
+    }
+    const auto transform = trait_id("std.transform.volume", "WorldTransform");
+    CHECK(bound_read(contract, 1, transform));
+    CHECK(read_fields(contract, transform).fields == std::set<std::string>{"position", "rotation"});
+    CHECK(contract.pair_bindings[1].required_traits.size() == 1);
+    CHECK_FALSE(contract.writes.contains(trait_id("std.physics.volume", "CharacterBody")));
+}
+
 // ── first_hit ───────────────────────────────────────────────────────────────
 
 TEST_CASE("first_hit: the result is a SweepHit", "[semantic][rule-reduce][stdlib-physics]") {
@@ -510,6 +568,35 @@ TEST_CASE("Collider planner: a delta reading the target is not eligible", "[sema
     INFO(describe(analysis));
     CHECK_FALSE(analysis.contract("MoveBullets").spatial_join.has_value());
     CHECK(analysis.warns(kUnaccelerated));
+}
+
+TEST_CASE("Collider planner: a sole push_out sum in reduce: is eligible", "[semantic][rule-reduce][spatial-join]") {
+    const auto analysis = analyze(bullet_rule(kPushOut + "        again = sum(physics.push_out(bullet, target))\n"));
+    INFO(describe(analysis));
+    REQUIRE(analysis.clean());
+    CHECK_FALSE(analysis.warns(kUnaccelerated));
+    const auto& plan = analysis.contract("MoveBullets").spatial_join;
+    REQUIRE(plan.has_value());
+    CHECK(plan->source == SpatialJoinSource::Reduce);
+    CHECK(plan->matched_predicate_index == 0);
+    CHECK(plan->left.kind == SpatialShapeKind::Collider);
+    CHECK(plan->left.binding_index == 0);
+    CHECK(plan->right.kind == SpatialShapeKind::Collider);
+    CHECK(plan->right.binding_index == 1);
+}
+
+TEST_CASE("Collider planner: push_out mixed with count is not eligible", "[semantic][rule-reduce][spatial-join]") {
+    const auto analysis = analyze(bullet_rule(kPushOut + "        near = count()\n"));
+    INFO(describe(analysis));
+    REQUIRE(analysis.clean());
+    CHECK_FALSE(analysis.contract("MoveBullets").spatial_join.has_value());
+    CHECK(analysis.warns(kUnaccelerated));
+}
+
+TEST_CASE("Collider planner: push_out over different bindings is not eligible", "[semantic][rule-reduce][spatial-join]") {
+    const auto analysis = analyze(bullet_rule(kPushOut + "        back = sum(physics.push_out(target, bullet))\n"));
+    INFO(describe(analysis));
+    CHECK_FALSE(analysis.contract("MoveBullets").spatial_join.has_value());
 }
 
 TEST_CASE("Collider planner: a where: overlap predicate still wins over reduce:", "[semantic][rule-reduce][spatial-join]") {

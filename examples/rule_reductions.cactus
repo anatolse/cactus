@@ -13,6 +13,7 @@ trait Team:
     var total: int = -1
     var best: float = 0.0
     var has_star: bool = false
+    var push: vec3 = vec3(9.0, 9.0, 9.0)
     var activations: int = 0
 
 trait Player:
@@ -20,6 +21,7 @@ trait Player:
     var points: int = 0
     var speed: float = 0.0
     var star: bool = false
+    var push: vec3 = vec3(0.0, 0.0, 0.0)
 
 trait Enemy:
     var threat: int = 0
@@ -31,6 +33,7 @@ trait Board:
     var enemy_passes: int = 0
     var players: int = -1
     var points: int = -1
+    var push: vec3 = vec3(9.0, 9.0, 9.0)
     var ranked: int = 0
 
 template Squad(id: int):
@@ -58,10 +61,12 @@ rule CountPlayers:
     reduce:
         players = count()
         points = sum(player.points)
+        push = sum(player.push)
 
     on tick:
         Scoreboard.Board.players = players
         Scoreboard.Board.points = points
+        Scoreboard.Board.push = push
 
 # `team.Team.active` reads only the group binding, so it filters teams;
 # the membership test reads both bindings, so it filters rows. Green has no
@@ -81,12 +86,14 @@ rule TeamTotals:
         total = sum(player.Player.points)
         best = max(player.Player.speed, default = -1.0)
         has_star = any(player.Player.star)
+        push = sum(player.Player.push)
 
     on tick:
         team.Team.players = players
         team.Team.total = total
         team.Team.best = best
         team.Team.has_star = has_star
+        team.Team.push = push
         team.Team.activations += 1
 
 # Aggregate rows are ranked like any other rows: the two best teams, with
@@ -127,18 +134,21 @@ entity RedStriker:
         points = 3
         speed = 1.5
         star = true
+        push = vec3(1.0, 0.0, 0.0)
 
 entity RedKeeper:
     Player:
         team = Red
         points = 5
         speed = 2.5
+        push = vec3(0.0, 2.0, 0.0)
 
 entity BlueWinger:
     Player:
         team = Blue
         points = 4
         speed = 3.0
+        push = vec3(1.0, 0.0, -1.0)
 
 entity GoldAce:
     Player:

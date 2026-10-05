@@ -29,6 +29,33 @@ bool declaration_precedes(const HandlerNode& left, const HandlerNode& right) {
     return left.identity.canonical_id() < right.identity.canonical_id();
 }
 
+// For each module, every module it imports directly or transitively.
+std::unordered_map<std::string, std::unordered_set<std::string>> import_closure(const std::vector<ModuleImport>& imports) {
+    std::unordered_map<std::string, std::vector<std::string>> direct;
+    for (const auto& entry : imports) {
+        direct[entry.module].push_back(entry.imported);
+    }
+    std::unordered_map<std::string, std::unordered_set<std::string>> closure;
+    for (const auto& [module, unused] : direct) {
+        auto& reached = closure[module];
+        std::vector<std::string> pending{module};
+        while (!pending.empty()) {
+            const auto current = pending.back();
+            pending.pop_back();
+            const auto found = direct.find(current);
+            if (found == direct.end()) {
+                continue;
+            }
+            for (const auto& imported : found->second) {
+                if (reached.insert(imported).second) {
+                    pending.push_back(imported);
+                }
+            }
+        }
+    }
+    return closure;
+}
+
 const FieldAccess ALL_FIELDS{.all = true, .fields = {}};
 
 const FieldAccess& field_access(const std::unordered_map<SymbolId, FieldAccess>& table, const SymbolId& trait) {
@@ -71,6 +98,87 @@ void merge_field_access(FieldAccess& into, const FieldAccess& from) {
     }
     into.fields.insert(from.fields.begin(), from.fields.end());
 }
+
+bool writes_any(const HandlerNode& producer, const HandlerNode& consumer, const std::unordered_set<SymbolId>& produced) {
+    return std::ranges::any_of(
+        produced, [&](const SymbolId& trait) { return produced_overlap(producer, consumer, trait).has_value(); });
+}
+
+// Orients conflicts between a handler and the members of a `pub group` from a
+// module it imports. The whole group decides, so every member edge points the
+// same way and the group's own chain can't form a cycle with the handler.
+class PublicGroupOrder {
+public:
+    PublicGroupOrder(const ExecutionGraph& graph, const std::vector<std::unordered_set<SymbolId>>& produced)
+        : graph_(&graph),
+          produced_(&produced),
+          imports_(import_closure(graph.module_imports)) {
+        group_modules_.reserve(graph.handlers.size());
+        for (const auto& handler : graph.handlers) {
+            group_modules_.push_back(public_group_module(handler));
+        }
+    }
+
+    struct Decision {
+        bool left_first = false;
+        ScheduleEdgeOrientation orientation = ScheduleEdgeOrientation::ImporterBeforePublicGroup;
+    };
+
+    [[nodiscard]] std::optional<Decision> decide(std::size_t left, std::size_t right) const {
+        if (imports_group_of(left, right)) {
+            return decide_for_importer(left, right, true);
+        }
+        if (imports_group_of(right, left)) {
+            return decide_for_importer(right, left, false);
+        }
+        return std::nullopt;
+    }
+
+private:
+    [[nodiscard]] const std::string* public_group_module(const HandlerNode& handler) const {
+        if (!handler.group.has_value()) {
+            return nullptr;
+        }
+        const auto declared = std::ranges::find(graph_->group_declarations, *handler.group, &GroupDeclaration::group);
+        return declared != graph_->group_declarations.end() && declared->is_pub ? &handler.group->module.name : nullptr;
+    }
+
+    [[nodiscard]] bool imports_group_of(std::size_t importer, std::size_t member) const {
+        const auto* module = group_modules_[member];
+        if (module == nullptr || group_modules_[importer] != nullptr) {
+            return false;
+        }
+        const auto found = imports_.find(graph_->handlers[importer].identity.rule.module.name);
+        return found != imports_.end() && found->second.contains(*module);
+    }
+
+    // A two-way or effect-only conflict with the group runs the importer first;
+    // a one-way conflict runs the writer first.
+    [[nodiscard]] Decision decide_for_importer(std::size_t importer, std::size_t member, bool importer_is_left) const {
+        const auto& handler    = graph_->handlers[importer];
+        const auto& group      = graph_->handlers[member].group;
+        bool importer_writes   = false;
+        bool group_writes      = false;
+        for (std::size_t index = 0; index < graph_->handlers.size(); ++index) {
+            const auto& other = graph_->handlers[index];
+            if (other.group != group || other.identity.trigger != handler.identity.trigger) {
+                continue;
+            }
+            importer_writes = importer_writes || writes_any(handler, other, (*produced_)[importer]);
+            group_writes    = group_writes || writes_any(other, handler, (*produced_)[index]);
+        }
+        if (importer_writes == group_writes) {
+            return Decision{.left_first = importer_is_left};
+        }
+        return Decision{.left_first  = importer_writes == importer_is_left,
+                        .orientation = ScheduleEdgeOrientation::WriterBeforeReader};
+    }
+
+    const ExecutionGraph* graph_;
+    const std::vector<std::unordered_set<SymbolId>>* produced_;
+    std::unordered_map<std::string, std::unordered_set<std::string>> imports_;
+    std::vector<const std::string*> group_modules_;
+};
 
 }  // namespace
 
@@ -157,6 +265,8 @@ bool compute_handler_schedule(ExecutionGraph& graph, ErrorReporter& errors) {
 
     const auto produced_by_handler = precompute_produced_by_handler(graph.handlers);
 
+    const PublicGroupOrder public_group_order(graph, produced_by_handler);
+
     for (std::size_t left_index = 0; left_index < graph.handlers.size(); ++left_index) {
         const auto& left = graph.handlers[left_index];
         for (std::size_t right_index = left_index + 1; right_index < graph.handlers.size(); ++right_index) {
@@ -216,6 +326,10 @@ bool compute_handler_schedule(ExecutionGraph& graph, ErrorReporter& errors) {
                 before      = &right;
                 after       = &left;
                 orientation = ScheduleEdgeOrientation::Explicit;
+            } else if (const auto decision = public_group_order.decide(left_index, right_index)) {
+                before      = decision->left_first ? &left : &right;
+                after       = decision->left_first ? &right : &left;
+                orientation = decision->orientation;
             } else if (left_writes_right != right_writes_left) {
                 before      = left_writes_right ? &left : &right;
                 after       = left_writes_right ? &right : &left;

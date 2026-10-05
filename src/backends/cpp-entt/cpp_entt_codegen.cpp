@@ -1444,7 +1444,7 @@ std::string emit_collider_query_helpers(const DecoratedProgram& program) {
         << "SweepResult& result, entt::entity other) {\n";
     out << "    return " << hit_cpp
         << "{.hit = result.hit, .other = result.hit ? other : entt::entity{entt::null}, .t = result.t, "
-           ".point = result.point, .normal = result.normal};\n";
+           ".point = result.point, .normal = result.normal, .surface = result.surface};\n";
     out << "}\n\n";
     out << "[[maybe_unused]] inline " << hit_cpp << " cactus_collider_sweep_miss() {\n";
     out << "    return cactus_collider_sweep_hit(" << ns << "sweep_miss(), entt::null);\n";
@@ -1458,6 +1458,13 @@ std::string emit_collider_query_helpers(const DecoratedProgram& program) {
     out << "[[maybe_unused]] inline bool cactus_collider_touching(const " << shape << "& a_shape, const " << shape
         << "& b_shape, entt::entity a, entt::entity b) {\n";
     out << "    return " << ns << "touching(a_shape, b_shape, a == b);\n";
+    out << "}\n\n";
+    const auto body_cpp = EnttCodegenUtils::trait_cpp_name(physics_trait("CharacterBody"));
+    out << "[[maybe_unused]] inline Vector3 cactus_collider_push_out(entt::registry& registry, const " << shape
+        << "& a_shape, const " << shape << "& b_shape, entt::entity a, entt::entity b) {\n";
+    out << "    const bool both_bodies = registry.all_of<" << body_cpp << ">(a) && registry.all_of<" << body_cpp
+        << ">(b);\n";
+    out << "    return " << ns << "push_out(a_shape, b_shape, a == b, both_bodies);\n";
     out << "}\n\n";
     return out.str();
 }

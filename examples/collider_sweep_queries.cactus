@@ -140,6 +140,10 @@ entity Probe3D:
         radius = 1.0
     Toucher
 
+# Starts inside EscapeBox near its +X face and moves out through it.
+entity ShotEscape from ShotAt(position = vec3(5.4, 13.0, 0.0))
+entity EscapeBox from BoxAt(position = vec3(5.0, 13.0, 0.0))
+
 entity TouchBox from BoxAt(position = vec3(21.2, 0.0, 0.0))
 entity TouchFar from BoxAt(position = vec3(25.0, 0.0, 0.0))
 entity TouchMasked from BoxAt(position = vec3(18.8, 0.0, 0.0), layer = 4)
@@ -207,3 +211,80 @@ rule CountTouching:
 
     on fixed_tick:
         toucher.Toucher.touching = touching
+
+# ── Push-out ─────────────────────────────────────────────────────────────────
+# Each pusher sums how far it must move to leave every collider it overlaps.
+# Writing velocity orders these rules before physics.solve, so they see the
+# spawn positions.
+
+trait Pusher:
+    var push: vec3 = vec3(9.0, 9.0, 9.0)
+    var plain_push: vec3 = vec3(9.0, 9.0, 9.0)
+
+template PusherAt(position: vec3, layer: int, mask: int):
+    tv.WorldTransform:
+        position = position
+    physics.Collider:
+        layer = layer
+        mask = mask
+    physics.CapsuleCollider:
+        radius = 0.5
+        height = 2.0
+    physics.CharacterBody
+    Pusher
+
+# A sphere overlapping a static box by 0.2 takes the whole push.
+entity PushSphere:
+    tv.WorldTransform:
+        position = vec3(-1.3, 30.0, 0.0)
+    physics.Collider:
+        layer = 16
+        mask = 16
+    physics.SphereCollider:
+        radius = 0.5
+    physics.CharacterBody
+    Pusher
+
+entity PushWall from BoxAt(position = vec3(0.0, 30.0, 0.0), layer = 16):
+    physics.BoxCollider:
+        size = vec3(2.0, 2.0, 2.0)
+
+# Two bodies that collide with each other split a 0.2 overlap.
+entity PushLeft from PusherAt(position = vec3(39.6, 30.0, 0.0), layer = 32, mask = 32)
+entity PushRight from PusherAt(position = vec3(40.4, 30.0, 0.0), layer = 32, mask = 32)
+
+# Only PushSeer's mask selects the other, so it takes the whole push.
+entity PushSeer from PusherAt(position = vec3(59.6, 30.0, 0.0), layer = 64, mask = 192)
+entity PushBlind from PusherAt(position = vec3(60.4, 30.0, 0.0), layer = 128, mask = 128)
+
+rule PushOut:
+    pairs:
+        body:
+            Pusher
+            physics.CharacterBody
+        other:
+            physics.Collider
+    reduce:
+        per: body
+        push = sum(physics.push_out(body, other))
+
+    on fixed_tick:
+        body.Pusher.push = push
+        body.physics.CharacterBody.velocity = vec3(0.0, 0.0, 0.0)
+
+# The extra count() turns acceleration off; the push must not change.
+rule PushOutUnaccelerated:
+    pairs:
+        body:
+            Pusher
+            physics.CharacterBody
+        other:
+            physics.Collider
+    reduce:
+        per: body
+        push = sum(physics.push_out(body, other))
+        rows = count()
+
+    on fixed_tick:
+        body.Pusher.plain_push = push
+        body.physics.CharacterBody.velocity = vec3(0.0, 0.0, 0.0)

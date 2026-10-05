@@ -394,4 +394,14 @@ TEST_CASE("SAP broad phase 3D: candidate-generation benchmark, brute-force vs sw
         };
     }
 }
+TEST_CASE("Snapshot positions: entities map to their snapshot position, however large their index",
+          "[runtime][rule-reduce]") {
+    const std::vector<entt::entity> snapshot{entt::entity{1048574}, entt::entity{3}, entt::entity{1048571}};
+    const SnapshotPositions positions(snapshot);
+    CHECK(positions.find(entt::entity{1048574}) == 0U);
+    CHECK(positions.find(entt::entity{3}) == 1U);
+    CHECK(positions.find(entt::entity{1048571}) == 2U);
+    CHECK(positions.find(entt::entity{7}) == SnapshotPositions::kAbsent);
+    CHECK(positions.find(entt::null) == SnapshotPositions::kAbsent);
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity)

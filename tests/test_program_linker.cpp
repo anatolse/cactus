@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <map>
 #include <memory>
 
 using namespace cactus;
@@ -946,6 +947,197 @@ TEST_CASE("program_linker: separately compiled modules keep rule group order", "
     CHECK(position(move_player) < position(member));
     CHECK(position(early) < position(member));
     CHECK(position(member) < position(react));
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("program_linker: an importing module's handler runs before another module's public group",
+          "[linker][rule-groups][artifact]") {
+    auto build_dir = linker_build_dir() / "group_tie_break";
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    std::vector<std::unique_ptr<ProgramNode>> asts;
+    std::map<std::string, fs::path> artifacts;
+    const auto compile = [&](const std::string& module,
+                             const std::vector<std::pair<std::string, std::string>>& uses,
+                             const std::string& source) {
+        ModuleImports imports;
+        for (const auto& [qualifier, used] : uses) {
+            ErrorReporter errors;
+            ModuleArtifact artifact(errors);
+            auto symbols = artifact.extract_pub_symbols(artifacts.at(used));
+            REQUIRE(symbols.has_value());
+            imports.add(qualifier, std::move(*symbols));
+        }
+        ErrorReporter errors;
+        Lexer lexer(source, module + ".cactus", errors);
+        Parser parser(lexer.tokenize(), errors);
+        asts.push_back(std::make_unique<ProgramNode>(parser.parse_program()));
+        SemanticAnalyzer analyzer(errors);
+        const auto program = analyzer.analyze(*asts.back(), imports);
+        INFO((errors.diagnostics().empty() ? "" : errors.diagnostics().front().message));
+        REQUIRE_FALSE(errors.has_errors());
+        ModuleArtifact artifact(errors);
+        REQUIRE(artifact.save(program, module, build_dir));
+        artifacts[module] = build_dir / (module + ".cmod");
+    };
+
+    compile("std.core",
+            {},
+            "module std.core\n"
+            "extern event frame:\n"
+            "    dt: float\n"
+            "pub phase fixed_tick:\n"
+            "    from:\n"
+            "        frame\n"
+            "pub trait Clock:\n"
+            "    var t: float = 0.0\n"
+            "pub trait Score:\n"
+            "    var points: int = 0\n");
+    compile("lib",
+            {{"std.core", "std.core"}},
+            "module lib\n"
+            "use std.core\n"
+            "pub trait Body:\n"
+            "    var velocity: float = 0.0\n"
+            "    var grounded: bool = false\n"
+            "pub trait Spot:\n"
+            "    var x: float = 0.0\n"
+            "pub group solve:\n"
+            "    phase: fixed_tick\n"
+            "rule Helper:\n"
+            "    filter:\n"
+            "        Body as body\n"
+            "    on fixed_tick:\n"
+            "        body.velocity += 1.0\n"
+            "rule Step:\n"
+            "    filter:\n"
+            "        Body as body\n"
+            "        Clock as clock\n"
+            "        Score as score\n"
+            "    group: solve\n"
+            "    on fixed_tick:\n"
+            "        body.velocity = body.velocity * 0.5\n"
+            "        body.grounded = true\n"
+            "        clock.t += 1.0\n"
+            "        score.points += 1\n"
+            "rule Place:\n"
+            "    filter:\n"
+            "        Spot as spot\n"
+            "    group: solve\n"
+            "    after:\n"
+            "        Step\n"
+            "    on fixed_tick:\n"
+            "        spot.x += 1.0\n");
+    compile("loner",
+            {{"std.core", "std.core"}},
+            "module loner\n"
+            "use std.core\n"
+            "rule Tick:\n"
+            "    filter:\n"
+            "        Score as score\n"
+            "    on fixed_tick:\n"
+            "        score.points += 2\n");
+    compile("mid",
+            {{"std.core", "std.core"}, {"lib", "lib"}},
+            "module mid\n"
+            "use std.core\n"
+            "use lib\n"
+            "pub trait Marker\n");
+    compile("game",
+            {{"std.core", "std.core"}, {"lib", "lib"}, {"mid", "mid"}},
+            "module game\n"
+            "use std.core\n"
+            "use lib\n"
+            "use mid\n"
+            "rule Push:\n"
+            "    filter:\n"
+            "        lib.Body as body\n"
+            "    on fixed_tick:\n"
+            "        body.velocity = 3.0\n"
+            "rule Aim:\n"
+            "    filter:\n"
+            "        lib.Body as body\n"
+            "        lib.Spot as spot\n"
+            "    on fixed_tick:\n"
+            "        body.velocity = spot.x\n"
+            "rule Late:\n"
+            "    filter:\n"
+            "        lib.Body as body\n"
+            "    after:\n"
+            "        lib.solve\n"
+            "    on fixed_tick:\n"
+            "        body.velocity = 4.0\n"
+            "rule Look:\n"
+            "    filter:\n"
+            "        lib.Body as body\n"
+            "        mid.Marker\n"
+            "    on fixed_tick:\n"
+            "        let seen = body.grounded\n");
+    compile("far",
+            {{"std.core", "std.core"}, {"mid", "mid"}},
+            "module far\n"
+            "use std.core\n"
+            "use mid\n"
+            "rule Wind:\n"
+            "    filter:\n"
+            "        Clock as clock\n"
+            "        mid.Marker\n"
+            "    on fixed_tick:\n"
+            "        clock.t += 3.0\n");
+
+    ErrorReporter link_errors;
+    ProgramLinker linker(link_errors);
+    auto linked = linker.link({artifacts.at("std.core"),
+                               artifacts.at("lib"),
+                               artifacts.at("loner"),
+                               artifacts.at("mid"),
+                               artifacts.at("game"),
+                               artifacts.at("far")});
+    INFO((link_errors.diagnostics().empty() ? "" : link_errors.diagnostics().front().message));
+    REQUIRE_FALSE(link_errors.has_errors());
+    REQUIRE(linked.has_value());
+    const auto& graph = linked->execution_graph;
+
+    const ResolvedHandlerTrigger fixed_tick{.kind   = HandlerTriggerKind::Phase,
+                                            .symbol = linked_symbol(SymbolKind::Phase, "std.core", "fixed_tick")};
+    const auto handler = [&](const std::string& module, const std::string& rule) {
+        return HandlerIdentity{.rule = linked_symbol(SymbolKind::Rule, module, rule), .trigger = fixed_tick};
+    };
+    const auto position = [&](const HandlerIdentity& identity) {
+        const auto found = std::ranges::find(graph.stable_topological_order, identity);
+        REQUIRE(found != graph.stable_topological_order.end());
+        return found - graph.stable_topological_order.begin();
+    };
+    const auto oriented = [&](const HandlerIdentity& before, const HandlerIdentity& after) {
+        const auto found = std::ranges::find_if(graph.schedule_edges, [&](const ScheduleEdge& edge) {
+            return edge.before == before && edge.after == after && edge.kind == ScheduleEdgeKind::DataConflict;
+        });
+        REQUIRE(found != graph.schedule_edges.end());
+        return found->orientation;
+    };
+    const auto step = handler("lib", "Step");
+
+    // Reciprocal conflict with an imported module's public group: the importer runs first.
+    CHECK(position(handler("game", "Push")) < position(step));
+    CHECK(oriented(handler("game", "Push"), step) == ScheduleEdgeOrientation::ImporterBeforePublicGroup);
+    // The whole group decides: Aim only reads what Place writes, but it also writes what Step reads.
+    CHECK(position(handler("game", "Aim")) < position(step));
+    CHECK(position(handler("game", "Aim")) < position(handler("lib", "Place")));
+    CHECK(oriented(handler("game", "Aim"), handler("lib", "Place")) ==
+          ScheduleEdgeOrientation::ImporterBeforePublicGroup);
+    // A transitive import counts too.
+    CHECK(position(handler("far", "Wind")) < position(step));
+    // Explicit order wins over the tie-break.
+    CHECK(position(step) < position(handler("game", "Late")));
+    // A one-way reader still follows the writer.
+    CHECK(position(step) < position(handler("game", "Look")));
+    CHECK(oriented(step, handler("game", "Look")) == ScheduleEdgeOrientation::WriterBeforeReader);
+    // A module that doesn't import the group's module keeps declaration order.
+    CHECK(oriented(step, handler("loner", "Tick")) == ScheduleEdgeOrientation::DeclarationOrder);
+    // Rules of the group's own module keep declaration order.
+    CHECK(oriented(handler("lib", "Helper"), step) == ScheduleEdgeOrientation::DeclarationOrder);
 
     fs::remove_all(build_dir, ec);
 }

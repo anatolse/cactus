@@ -1,13 +1,12 @@
 module std.physics.flat
 
 # ── 2D Kinematic Physics Traits & Events ─────────────────────────────────────
-# Passive traits — the backend simulates these automatically.
-# No user physics rule is needed. CharacterBody + Collider entities are
-# simulated and their fields updated each tick by the generated runtime.
+# Plain data: nothing moves a 2D CharacterBody yet, so a game moves it with its
+# own rules. The cpp-entt backend still reports CollisionEnter overlaps.
 
-# Kinematic character controller for 2D entities.
-# velocity: current movement velocity in world units per second
-# grounded: true when the entity is resting on a surface (set by backend)
+# Kinematic character state for 2D entities.
+# velocity: movement velocity in world units per second
+# grounded: whether the entity rests on a surface
 # gravity:  downward acceleration in world units per second squared
 pub trait CharacterBody:
     var velocity: vec2 = vec2(0.0, 0.0)

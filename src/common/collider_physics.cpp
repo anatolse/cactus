@@ -22,6 +22,10 @@ constexpr float kTinySquared = 1e-12F;
 constexpr float kGjkRelativeTolerance = 1e-5F;
 // Edge-edge SAT axes must beat the best face axis by this much, so face contacts stay stable.
 constexpr float kSatFaceBias = 1e-4F;
+// A contact blocks motion only when it closes the gap by more than this fraction of its length.
+constexpr float kClosingTolerance = 1e-5F;
+// A contact point this close to a box face, relative to its half extent, lies on that face.
+constexpr float kFaceTolerance = 1e-4F;
 
 float dot(Vector3 a, Vector3 b) noexcept {
     return Vector3DotProduct(a, b);
@@ -298,8 +302,14 @@ struct Push {
     float depth;
 };
 
-// Pushes `point` out of `box` through the face it is least deep behind.
-Push box_push(const ColliderShape& box, Vector3 point) noexcept {
+// Outward normal of the box face on `axis` that `local` (box space) sits toward.
+Vector3 face_normal(const ColliderShape& box, Vector3 local, int axis) noexcept {
+    const float sign = component(local, axis) >= 0.0F ? 1.0F : -1.0F;
+    return rotate(box.rotation, scaled(unit_axis(axis), sign));
+}
+
+// Outward normal of the box face that `point` is least deep behind.
+Vector3 box_face_normal(const ColliderShape& box, Vector3 point) noexcept {
     const Vector3 local = unrotate(box.rotation, point - box.center);
     int axis            = 0;
     float depth         = std::numeric_limits<float>::max();
@@ -310,8 +320,7 @@ Push box_push(const ColliderShape& box, Vector3 point) noexcept {
             axis  = i;
         }
     }
-    const float sign = component(local, axis) >= 0.0F ? 1.0F : -1.0F;
-    return Push{.normal = rotate(box.rotation, scaled(unit_axis(axis), sign)), .depth = std::max(depth, 0.0F)};
+    return face_normal(box, local, axis);
 }
 
 float projected_radius(const ColliderShape& box, const std::array<Vector3, 3>& axes, Vector3 direction) noexcept {
@@ -351,10 +360,18 @@ Push box_box_push(const ColliderShape& a, const ColliderShape& b) noexcept {
     return best;
 }
 
+// Pushes `shape`'s whole core out through the box face chosen for its point nearest the box center.
+Push box_core_push(const ColliderShape& box, const ColliderShape& shape) noexcept {
+    const Vector3 normal = box_face_normal(box, nearest_core_point(shape, box.center));
+    const float face     = dot(box.center, normal) + projected_radius(box, box_axes(box), normal);
+    return Push{.normal = normal, .depth = std::max(0.0F, face - dot(core_support(shape, Vector3Negate(normal)), normal))};
+}
+
+// Round cores overlap only when they share a vertical axis, so they separate along Y.
 Push round_push(const ColliderShape& a, const ColliderShape& b) noexcept {
-    const Vector3 between = a.center - b.center;
-    const float length    = Vector3Length(between);
-    return Push{.normal = length > kCoreContact ? scaled(between, 1.0F / length) : kUp, .depth = 0.0F};
+    const float rise = a.center.y - b.center.y;
+    return Push{.normal = rise >= 0.0F ? kUp : Vector3Negate(kUp),
+                .depth  = std::max(0.0F, a.half_segment + b.half_segment - std::abs(rise))};
 }
 
 // Normal from `b` toward `a` for overlapping cores.
@@ -365,10 +382,10 @@ Push penetration_push(const ColliderShape& a, const ColliderShape& b) noexcept {
         return box_box_push(a, b);
     }
     if (b_box) {
-        return box_push(b, nearest_core_point(a, b.center));
+        return box_core_push(b, a);
     }
     if (a_box) {
-        const Push push = box_push(a, nearest_core_point(b, a.center));
+        const Push push = box_core_push(a, b);
         return Push{.normal = Vector3Negate(push.normal), .depth = push.depth};
     }
     return round_push(a, b);
@@ -395,6 +412,56 @@ Vector3 surface_point(const ColliderShape& shape, Vector3 reference, Vector3 nor
     return shape.center + rotate(shape.rotation, local);
 }
 
+// The outward normal of the box face that `local` (box space) lies on along
+// `axis`, if it lies on one.
+std::optional<Vector3> box_face(const ColliderShape& box, Vector3 local, int axis) noexcept {
+    const float half = component(box.half_extents, axis);
+    if (std::abs(component(local, axis)) < half - (kFaceTolerance * std::max(1.0F, half))) {
+        return std::nullopt;
+    }
+    return face_normal(box, local, axis);
+}
+
+// The normal of the one box face `point` lies on; none on an edge or corner.
+std::optional<Vector3> single_box_face(const ColliderShape& box, Vector3 point) noexcept {
+    const Vector3 local = unrotate(box.rotation, point - box.center);
+    std::optional<Vector3> found;
+    int faces = 0;
+    for (int axis = 0; axis < 3; ++axis) {
+        if (const auto face = box_face(box, local, axis)) {
+            found = face;
+            ++faces;
+        }
+    }
+    return faces == 1 ? found : std::nullopt;
+}
+
+// The box face containing `point` that `delta` meets head-on; with no motion,
+// the face closest to `normal`.
+Vector3 box_surface(const ColliderShape& box, Vector3 point, Vector3 normal, Vector3 delta) noexcept {
+    const Vector3 local = unrotate(box.rotation, point - box.center);
+    const bool moving   = Vector3LengthSqr(delta) > kTinySquared;
+    Vector3 best        = normal;
+    float best_score    = std::numeric_limits<float>::max();
+    for (int axis = 0; axis < 3; ++axis) {
+        const auto candidate = box_face(box, local, axis);
+        if (!candidate.has_value()) {
+            continue;
+        }
+        const Vector3 face = *candidate;
+        const float score  = moving ? dot(face, delta) : -dot(face, normal);
+        if (score < best_score) {
+            best_score = score;
+            best       = face;
+        }
+    }
+    return best;
+}
+
+Vector3 surface_normal(const ColliderShape& target, Vector3 point, Vector3 normal, Vector3 delta) noexcept {
+    return target.kind == ShapeKind::Box ? box_surface(target, point, normal, delta) : normal;
+}
+
 bool layers_collide(const ColliderShape& subject, const ColliderShape& target) noexcept {
     return (subject.mask & target.layer) != 0;
 }
@@ -403,13 +470,24 @@ SweepResult sweep_shapes(const ColliderShape& subject, Vector3 delta, const Coll
     ColliderShape moving = subject;
     float t              = 0.0F;
     Separation gap;
+    const auto hit_at = [&](int steps) {
+        return SweepResult{.hit     = true,
+                           .t       = t,
+                           .point   = gap.point,
+                           .normal  = gap.normal,
+                           .surface = surface_normal(target, gap.point, gap.normal, delta),
+                           .steps   = steps};
+    };
     for (int step = 1; step <= kMaxAdvanceSteps; ++step) {
         moving.center = subject.center + scaled(delta, t);
         gap           = separation(moving, target);
-        if (gap.distance <= kSkin) {
-            return SweepResult{.hit = true, .t = t, .point = gap.point, .normal = gap.normal, .steps = step};
-        }
         const float closing = -dot(delta, gap.normal);
+        if (gap.distance <= kSkin) {
+            if (closing > kClosingTolerance * Vector3Length(delta) || Vector3LengthSqr(delta) <= kTinySquared) {
+                return hit_at(step);
+            }
+            return SweepResult{.steps = step};
+        }
         if (closing <= 0.0F) {
             return SweepResult{.steps = step};
         }
@@ -418,7 +496,7 @@ SweepResult sweep_shapes(const ColliderShape& subject, Vector3 delta, const Coll
             return SweepResult{.steps = step};
         }
     }
-    return SweepResult{.hit = true, .t = t, .point = gap.point, .normal = gap.normal, .steps = kMaxAdvanceSteps};
+    return hit_at(kMaxAdvanceSteps);
 }
 
 Bounds bounds_around(Vector3 center, Vector3 extent) noexcept {
@@ -493,7 +571,13 @@ Separation separation(const ColliderShape& a, const ColliderShape& b) noexcept {
     const CoreDistance cores = core_distance(a, b);
     const float radii        = a.radius + b.radius;
     if (!cores.overlap && cores.distance > kCoreContact) {
-        const Vector3 normal = scaled(cores.on_a - cores.on_b, 1.0F / cores.distance);
+        // On a box face the face normal is exact; GJK's closest points carry small tilts.
+        Vector3 normal = scaled(cores.on_a - cores.on_b, 1.0F / cores.distance);
+        if (b.kind == ShapeKind::Box) {
+            normal = single_box_face(b, cores.on_b).value_or(normal);
+        } else if (a.kind == ShapeKind::Box) {
+            normal = Vector3Negate(single_box_face(a, cores.on_a).value_or(Vector3Negate(normal)));
+        }
         return Separation{
             .distance = cores.distance - radii, .normal = normal, .point = cores.on_b + scaled(normal, b.radius)};
     }
@@ -522,6 +606,21 @@ SweepResult sweep(const std::optional<ColliderShape>& subject,
         return sweep_miss();
     }
     return sweep_shapes(*subject, delta, *target);
+}
+
+Vector3 push_out(const std::optional<ColliderShape>& subject,
+                 const std::optional<ColliderShape>& target,
+                 bool same_entity,
+                 bool both_bodies) noexcept {
+    if (same_entity || !subject.has_value() || !target.has_value() || !layers_collide(*subject, *target)) {
+        return Vector3{};
+    }
+    const Separation gap = separation(*subject, *target);
+    if (gap.distance >= 0.0F) {
+        return Vector3{};
+    }
+    const bool shared = both_bodies && layers_collide(*target, *subject);
+    return scaled(gap.normal, -gap.distance * (shared ? 0.5F : 1.0F));
 }
 
 Bounds bounds(const ColliderShape& shape) noexcept {

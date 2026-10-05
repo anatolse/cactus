@@ -11,6 +11,7 @@
 #include <cctype>
 #include <functional>
 #include <optional>
+#include <ranges>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
@@ -1259,7 +1260,7 @@ static std::string collider_shape_cpp(const PairCodegenBinding& binding, const s
     return binding.collider_shape_builder + "(registry, " + entity + ")";
 }
 
-// physics.sweep / physics.touching over two rule bindings, which semantic
+// physics.sweep / touching / push_out over two rule bindings, which semantic
 // analysis guarantees.
 static std::string lower_collider_query(ColliderQueryKind kind,
                                         const CallExpr& call,
@@ -1278,6 +1279,10 @@ static std::string lower_collider_query(ColliderQueryKind kind,
     const auto [target, target_shape]   = entity_shape(target_arg);
     if (kind == ColliderQueryKind::Touching) {
         return "cactus_collider_touching(" + subject_shape + ", " + target_shape + ", " + subject + ", " + target + ")";
+    }
+    if (kind == ColliderQueryKind::PushOut) {
+        return "cactus_collider_push_out(registry, " + subject_shape + ", " + target_shape + ", " + subject + ", " +
+               target + ")";
     }
     return "cactus_collider_sweep(" + subject_shape + ", " + rewrite(*call.args[1]) + ", " + target_shape + ", " +
            subject + ", " + target + ")";
@@ -4351,22 +4356,25 @@ static bool rule_uses_collider_queries(const RuleNode& sys) {
     return found;
 }
 
-// Descriptors for every entity of one binding's snapshot, indexed by entity
-// slot, and the `cactus_shape_of_<binding>` accessor the fold reads them by.
+// The snapshot position of each entity of one binding, for per-pass tables.
+static void emit_snapshot_positions(std::ostringstream& out, const std::string& name) {
+    out << "    const cactus::runtime::entt_backend::SnapshotPositions cactus_positions_" << name << "(" << name
+        << "_snapshot);\n";
+}
+
+// Descriptors for every entity of one binding's snapshot, in snapshot order,
+// and the `cactus_shape_of_<binding>` accessor the fold reads them by.
 static void emit_collider_shape_cache(std::ostringstream& out, const PairCodegenBinding& binding) {
     const auto& name = binding.binding_name;
     out << "    std::vector<std::optional<cactus::runtime::physics::ColliderShape>> cactus_shapes_" << name << ";\n";
+    out << "    cactus_shapes_" << name << ".reserve(" << name << "_snapshot.size());\n";
     out << "    for (const auto " << name << " : " << name << "_snapshot) {\n";
-    out << "        const auto cactus_index = static_cast<std::size_t>(entt::to_entity(" << name << "));\n";
-    out << "        if (cactus_shapes_" << name << ".size() <= cactus_index) {\n";
-    out << "            cactus_shapes_" << name << ".resize(cactus_index + 1);\n";
-    out << "        }\n";
-    out << "        cactus_shapes_" << name << "[cactus_index] = " << binding.collider_shape_builder << "(registry, "
-        << name << ");\n";
+    out << "        cactus_shapes_" << name << ".push_back(" << binding.collider_shape_builder << "(registry, " << name
+        << "));\n";
     out << "    }\n";
     out << "    [[maybe_unused]] const auto cactus_shape_of_" << name
         << " = [&](entt::entity cactus_entity) -> const std::optional<cactus::runtime::physics::ColliderShape>& {\n";
-    out << "        return cactus_shapes_" << name << "[static_cast<std::size_t>(entt::to_entity(cactus_entity))];\n";
+    out << "        return cactus_shapes_" << name << "[cactus_positions_" << name << ".find(cactus_entity)];\n";
     out << "    };\n";
 }
 
@@ -4382,14 +4390,30 @@ static void emit_reduced_pair_handler_body(std::ostringstream& out,
                                            const DecoratedProgram& program,
                                            const HandlerContract* contract) {
     const auto& reduce = *sys.reduce;
-    for (const auto& binding : pair_binding_codegens) {
+    const auto is_group = [&](const PairBindingCodegen& binding) {
+        return reduce.per_binding == binding.scope.binding_name;
+    };
+    for (const auto& binding : pair_binding_codegens | std::views::filter(is_group)) {
+        emit_pair_binding_snapshot(out, binding, 1);
+        out << "    if (" << binding.scope.binding_name << "_snapshot.empty()) {\n";
+        out << "        return;\n";
+        out << "    }\n";
+    }
+    for (const auto& binding : pair_binding_codegens | std::views::filter(std::not_fn(is_group))) {
         emit_pair_binding_snapshot(out, binding, 1);
     }
     emit_reduce_types(out, reduce);
     // The fold reads one input snapshot, so each binding's collider
     // descriptors are built once per pass.
-    auto fold_scope = pair_codegen_scope;
-    if (rule_uses_collider_queries(sys)) {
+    auto fold_scope                 = pair_codegen_scope;
+    const bool uses_collider_queries = rule_uses_collider_queries(sys);
+    for (const auto& binding : pair_binding_codegens) {
+        const auto& name = binding.scope.binding_name;
+        if (uses_collider_queries || reduce.per_binding == name) {
+            emit_snapshot_positions(out, name);
+        }
+    }
+    if (uses_collider_queries) {
         for (auto& binding : fold_scope.bindings) {
             emit_collider_shape_cache(out, binding);
             binding.collider_shapes_cached = true;
@@ -4413,17 +4437,10 @@ static void emit_reduced_pair_handler_body(std::ostringstream& out,
         group_scope->bindings.push_back(*pair_codegen_scope.find(group));
         group_scope->bindings.front().writable = true;
 
-        out << "    constexpr std::uint32_t cactus_no_group = std::numeric_limits<std::uint32_t>::max();\n";
         out << "    std::vector<cactus_reduce_acc> cactus_groups(" << group << "_snapshot.size());\n";
         out << "    std::vector<char> cactus_group_live(" << group << "_snapshot.size(), 0);\n";
-        out << "    std::vector<std::uint32_t> cactus_group_slot;\n";
         out << "    for (std::size_t cactus_i = 0; cactus_i < " << group << "_snapshot.size(); ++cactus_i) {\n";
         out << "        const auto " << group << " = " << group << "_snapshot[cactus_i];\n";
-        out << "        const auto cactus_index = static_cast<std::size_t>(entt::to_entity(" << group << "));\n";
-        out << "        if (cactus_group_slot.size() <= cactus_index) {\n";
-        out << "            cactus_group_slot.resize(cactus_index + 1, cactus_no_group);\n";
-        out << "        }\n";
-        out << "        cactus_group_slot[cactus_index] = static_cast<std::uint32_t>(cactus_i);\n";
         out << "        if (cactus_recipient.has_value() && *cactus_recipient != " << group << ") { continue; }\n";
         for (const auto index : reduce.group_predicates) {
             out << "        if (!(" << rewrite(*predicates[index]) << ")) { continue; }\n";
@@ -4438,10 +4455,9 @@ static void emit_reduced_pair_handler_body(std::ostringstream& out,
         << right << ") {\n";
     if (reduce.per_binding.has_value()) {
         const auto& group = *reduce.per_binding;
-        out << "        const auto cactus_index = static_cast<std::size_t>(entt::to_entity(" << group << "));\n";
-        out << "        if (cactus_index >= cactus_group_slot.size()) { return; }\n";
-        out << "        const auto cactus_slot = cactus_group_slot[cactus_index];\n";
-        out << "        if (cactus_slot == cactus_no_group || cactus_group_live[cactus_slot] == 0) { return; }\n";
+        out << "        const auto cactus_slot = cactus_positions_" << group << ".find(" << group << ");\n";
+        out << "        if (cactus_slot == cactus::runtime::entt_backend::SnapshotPositions::kAbsent || "
+               "cactus_group_live[cactus_slot] == 0) { return; }\n";
         out << "        auto& cactus_acc = cactus_groups[cactus_slot];\n";
     } else {
         out << "        auto& cactus_acc = cactus_total;\n";

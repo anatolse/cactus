@@ -77,6 +77,14 @@ void merge_consts(DecoratedProgram& target, const DecoratedProgram& src) {
     }
 }
 
+void merge_module_imports(ExecutionGraph& target, const ExecutionGraph& src) {
+    for (const auto& entry : src.module_imports) {
+        if (!std::ranges::contains(target.module_imports, entry)) {
+            target.module_imports.push_back(entry);
+        }
+    }
+}
+
 }  // namespace
 
 ProgramLinker::ProgramLinker(ErrorReporter& errors)
@@ -218,6 +226,7 @@ bool ProgramLinker::merge_into(DecoratedProgram& target,
     target.execution_graph.group_orderings.insert(target.execution_graph.group_orderings.end(),
                                                   src.execution_graph.group_orderings.begin(),
                                                   src.execution_graph.group_orderings.end());
+    merge_module_imports(target.execution_graph, src.execution_graph);
     // ExplicitGroup edges are not kept: rebuild_execution_graph regenerates them
     // from group_orderings once every member handler is linked.
     for (const auto& edge : src.execution_graph.schedule_edges) {

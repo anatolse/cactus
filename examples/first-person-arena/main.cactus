@@ -40,11 +40,6 @@ const:
     CAMERA_EYE_HEIGHT = 0.65
     GRAVITY = 20.0
     JUMP_VELOCITY = 6.5
-    MAX_FALL_SPEED = 20.0
-    # Absorbs the single-tick sinking gravity always applies before grounding
-    # re-corrects it (see IntegrateVerticalMotion/DetectGroundCandidate) — not
-    # a general-purpose slop value.
-    GROUND_CONTACT_TOLERANCE = 0.05
     ENEMY_RADIUS = 0.35
     ENEMY_HALF_HEIGHT = 0.9
     # How far ahead an enemy probes for a blocking wall before committing to a
@@ -120,7 +115,6 @@ pub trait BuildingWall
 pub trait BuildingRoof
 pub trait Stair
 pub trait Solid
-pub trait Walkable
 pub trait CameraRig
 pub trait Threat
 pub trait RobotEnemy
@@ -135,14 +129,6 @@ pub trait Player:
 pub trait Match:
     var over: bool = false
     var over_count: int = 0
-
-pub trait KinematicActor:
-    var radius: float = 0.35
-    var half_height: float = 0.9
-    var step_height: float = 0.55
-    var ground_surface: float = 0.0
-    var vertical_velocity: float = 0.0
-    var grounded: bool = true
 
 pub trait Enemy:
     var kind: EnemyKind = ROBOT
@@ -167,12 +153,6 @@ pub trait Bullet:
     var velocity: vec3 = vec3(0.0, 0.0, 0.0)
     var lifetime: float = 2.0
 
-event SeparateActor:
-    amount: vec3
-
-event GroundCandidate:
-    surface: float
-
 event EnemyHit
 event GameOver
 
@@ -185,21 +165,16 @@ template BoxVisual:
         visible = true
         cast_shadow = true
 
+# Every map box blocks bodies and enemy steering probes; the character
+# controller decides which ones are low enough to step onto.
 template SolidBox:
     use BoxVisual
     Solid
-    physics.Collider:
-        layer = 1
-        mask = 1
-    physics.BoxCollider
-
-template WalkableBox:
-    use BoxVisual
-    Walkable
+    physics.Collider
     physics.BoxCollider
 
 template FloorBox:
-    use WalkableBox
+    use SolidBox
     Floor
 
 template PerimeterBox:
@@ -211,11 +186,11 @@ template BuildingBox:
     BuildingWall
 
 template RoofBox:
-    use WalkableBox
+    use SolidBox
     BuildingRoof
 
 template StairBox:
-    use WalkableBox
+    use SolidBox
     Stair
 
 template EnemyBase:
@@ -228,15 +203,14 @@ template EnemyBase:
     physics.CapsuleCollider:
         radius = ENEMY_RADIUS
         height = CHARACTER_HEIGHT
-    KinematicActor:
-        radius = ENEMY_RADIUS
-        half_height = ENEMY_HALF_HEIGHT
+    physics.CharacterBody:
+        gravity = GRAVITY
         step_height = PLAYER_STEP_HEIGHT
     Enemy
     Threat
 
     # The GLB character models are feet-anchored (origin at the feet, not the
-    # vertical center), but KinematicActor grounding places WorldTransform.
+    # vertical center), but the character controller places WorldTransform.
     # position at the collision capsule's *center* (floor + half_height) so
     # wall separation, player-contact, and bullet-hit checks keep working
     # against a torso-height reference. Rendering the model directly from the
@@ -495,9 +469,8 @@ entity PlayerBody:
         pitch = 0.0
         yaw = 0.0
         sensitivity = 0.002
-    KinematicActor:
-        radius = PLAYER_RADIUS
-        half_height = PLAYER_HALF_HEIGHT
+    physics.CharacterBody:
+        gravity = GRAVITY
         step_height = PLAYER_STEP_HEIGHT
     Player
     children:
@@ -608,15 +581,11 @@ rule CursorCaptureToggle:
             inp.set_cursor_captured(true)
             input.consume(Fire)
 
-# Horizontal movement for this tick. Vertical motion and collision run after it.
-group locomotion:
-    phase: fixed_tick
-
 rule MovePlayer:
     filter:
         Player
         tv.WorldTransform as transform
-    group: locomotion
+        physics.CharacterBody as body
 
     when:
         not Game.Match.over
@@ -634,9 +603,9 @@ rule MovePlayer:
         if input.down(MoveLeft):
             move -= vec3(right.x, 0.0, right.z)
         if v3.length(move) > 0.0:
-            let direction = v3.normalize(move)
-            transform.position.x += direction.x * PLAYER_SPEED * fixed_tick.dt
-            transform.position.z += direction.z * PLAYER_SPEED * fixed_tick.dt
+            move = v3.normalize(move) * PLAYER_SPEED
+        body.velocity.x = move.x
+        body.velocity.z = move.z
 
 # Reacts to the one-shot `pressed` edge during `on input` (fires exactly once
 # per frame) rather than `on fixed_tick`, which can repeat zero or more times
@@ -645,142 +614,26 @@ rule MovePlayer:
 rule ApplyJump:
     filter:
         Player
-        KinematicActor as actor
+        physics.CharacterBody as body
 
     when:
         not Game.Match.over
 
     on input:
-        if actor.grounded and input.pressed(Jump):
-            actor.vertical_velocity = JUMP_VELOCITY
-            actor.grounded = false
+        if body.grounded and input.pressed(Jump):
+            body.velocity.y = JUMP_VELOCITY
 
-rule BeginGrounding:
+# Bodies keep their velocity, so they stand still once the match is over.
+rule HaltWhenOver:
     filter:
-        KinematicActor as actor
+        physics.CharacterBody as body
+
+    when:
+        Game.Match.over
 
     on fixed_tick:
-        actor.ground_surface = -1000.0
-
-# Applies gravity every tick, including while resting: DetectGroundCandidate/
-# ApplyGroundCandidate below correct the resulting sub-frame sink back onto
-# the surface each tick (that's what GROUND_CONTACT_TOLERANCE absorbs), so
-# there is no separate "am I grounded" branch here. Marking `grounded = false`
-# unconditionally is a provisional default for this tick; ApplyGroundCandidate
-# flips it back to true if a surface is found within range.
-rule IntegrateVerticalMotion:
-    filter:
-        KinematicActor as actor
-        tv.WorldTransform as transform
-    after:
-        locomotion
-
-    on fixed_tick:
-        actor.vertical_velocity = math.max(actor.vertical_velocity - GRAVITY * fixed_tick.dt, MAX_FALL_SPEED * -1.0)
-        transform.position.y += actor.vertical_velocity * fixed_tick.dt
-        actor.grounded = false
-
-rule DetectEnemySeparation:
-    pairs:
-        a:
-            Enemy
-            Threat
-            KinematicActor
-            tv.WorldTransform
-        b:
-            Enemy
-            Threat
-            KinematicActor
-            tv.WorldTransform
-    after:
-        locomotion
-    where:
-        a != b
-        collision.spheres_overlap(a.tv.WorldTransform.position, a.KinematicActor.radius, b.tv.WorldTransform.position, b.KinematicActor.radius)
-
-    on fixed_tick:
-        let separation = collision.sphere_sphere_separation(a.tv.WorldTransform.position, a.KinematicActor.radius, b.tv.WorldTransform.position, b.KinematicActor.radius)
-        emit SeparateActor to a:
-            amount = separation * 0.5
-
-rule DetectActorSolidContact:
-    pairs:
-        actor:
-            KinematicActor
-            tv.WorldTransform
-        box:
-            Solid
-            physics.BoxCollider
-            tv.WorldTransform
-    after:
-        locomotion
-        DetectEnemySeparation
-    where:
-        collision.sphere_box_overlap(actor.tv.WorldTransform.position, actor.KinematicActor.radius, box.tv.WorldTransform.position, box.physics.BoxCollider.size, box.tv.WorldTransform.rotation)
-
-    on fixed_tick:
-        let separation = collision.sphere_box_separation(actor.tv.WorldTransform.position, actor.KinematicActor.radius, box.tv.WorldTransform.position, box.physics.BoxCollider.size, box.tv.WorldTransform.rotation)
-        if v3.length(separation) > 0.0:
-            emit SeparateActor to actor:
-                amount = separation
-
-rule ResolveActorSolidContact:
-    filter:
-        KinematicActor
-        tv.WorldTransform as transform
-
-    on SeparateActor as contact:
-        transform.position += contact.amount
-
-rule DetectGroundCandidate:
-    pairs:
-        actor:
-            KinematicActor
-            tv.WorldTransform
-        surface:
-            Walkable
-            physics.BoxCollider
-            tv.WorldTransform
-    after:
-        IntegrateVerticalMotion
-    # A loose bound: every point the handler accepts lies within radius +
-    # half height + step height + tolerance of the surface box on each axis.
-    where:
-        collision.spheres_overlap(actor.tv.WorldTransform.position, (actor.KinematicActor.radius + actor.KinematicActor.half_height + actor.KinematicActor.step_height + GROUND_CONTACT_TOLERANCE) * 2.0, surface.tv.WorldTransform.position, v3.length(surface.physics.BoxCollider.size) / 2.0)
-
-    on fixed_tick:
-        let actor_position = actor.tv.WorldTransform.position
-        let surface_position = surface.tv.WorldTransform.position
-        let half_size = surface.physics.BoxCollider.size / 2.0
-        let top = surface_position.y + half_size.y
-        let feet = actor_position.y - actor.KinematicActor.half_height
-        let overlaps_x = math.abs(actor_position.x - surface_position.x) <= half_size.x + actor.KinematicActor.radius
-        let overlaps_z = math.abs(actor_position.z - surface_position.z) <= half_size.z + actor.KinematicActor.radius
-        # Bounded on both sides: `top <= feet + step_height` lets an actor
-        # step up onto a nearby-height surface (stairs); `feet <= top +
-        # GROUND_CONTACT_TOLERANCE` keeps a surface far below current feet
-        # (e.g. the floor under a roof edge) from counting as reachable ground
-        # until an actual fall has brought feet down to meet it — without
-        # this bound, walking off a ledge would instantly snap down to
-        # whatever surface is below instead of falling. Excluding candidates
-        # while still rising (vertical_velocity > 0.0) keeps a jump's initial
-        # upward tick from being immediately re-snapped back onto the surface
-        # it just left.
-        if overlaps_x and overlaps_z and actor.KinematicActor.vertical_velocity <= 0.0 and top <= feet + actor.KinematicActor.step_height and feet <= top + GROUND_CONTACT_TOLERANCE:
-            emit GroundCandidate to actor:
-                surface = top
-
-rule ApplyGroundCandidate:
-    filter:
-        KinematicActor as actor
-        tv.WorldTransform as transform
-
-    on GroundCandidate as candidate:
-        if candidate.surface > actor.ground_surface:
-            actor.ground_surface = candidate.surface
-            transform.position.y = candidate.surface + actor.half_height
-            actor.vertical_velocity = 0.0
-            actor.grounded = true
+        body.velocity.x = 0.0
+        body.velocity.z = 0.0
 
 rule ComposeCameraPose:
     filter:
@@ -886,8 +739,8 @@ func steer_heading(position: vec3, goal: vec3, angle: float) vec3:
 
 # Whether a sphere of ENEMY_RADIUS at a steering probe overlaps this wall's
 # box. The probe sits ENEMY_STEER_PROBE_DISTANCE along the heading, raised by
-# height. This is the box-aware test DetectActorSolidContact relies on for
-# real wall collision.
+# height. The character controller does the real collision; this only picks a
+# heading.
 func is_probe_blocked(position: vec3, goal: vec3, angle: float, height: float, wall_position: vec3, wall_size: vec3, wall_rotation: quat) bool:
     let probe = position + steer_heading(position, goal, angle) * ENEMY_STEER_PROBE_DISTANCE + vec3(0.0, height, 0.0)
     return v3.length(collision.sphere_box_separation(probe, ENEMY_RADIUS, wall_position, wall_size, wall_rotation)) > 0.0
@@ -900,13 +753,12 @@ rule SeekPlayer:
         enemy:
             Enemy
             Threat
-            KinematicActor as actor
+            physics.CharacterBody as body
             tv.WorldTransform as transform
         wall:
             Solid
             physics.BoxCollider as box
             tv.WorldTransform as place
-    group: locomotion
     where:
         collision.sphere_box_overlap(enemy.transform.position, ENEMY_SENSE_RADIUS, wall.place.position, wall.box.size, wall.place.rotation)
     reduce:
@@ -922,13 +774,9 @@ rule SeekPlayer:
         not Game.Match.over
 
     on fixed_tick:
-        # actor.grounded reflects the end of the *previous* tick's grounding
-        # resolution (this tick's own IntegrateVerticalMotion/
-        # DetectGroundCandidate haven't run yet) — a deliberate one-tick lag,
-        # same as ApplyJump's grounded check, that sidesteps needing this
-        # fixed_tick rule to depend on another fixed_tick rule's downstream
-        # GroundCandidate-event cascade within the same tick.
-        if enemy.Enemy.is_vaulting and enemy.actor.grounded:
+        # Writing velocity orders this rule before physics.solve, so grounded
+        # is the previous tick's result, the same lag as ApplyJump's check.
+        if enemy.Enemy.is_vaulting and enemy.body.grounded:
             enemy.Enemy.is_vaulting = false
             for visual in query.children[EnemyVisual](of = enemy):
                 set models.ModelAnimator on visual:
@@ -939,17 +787,18 @@ rule SeekPlayer:
         let target_position = PlayerBody.tv.WorldTransform.position
         var direction = steer_heading(position, target_position, 0.0)
         if v3.length(direction) <= 0.0:
+            enemy.body.velocity.x = 0.0
+            enemy.body.velocity.z = 0.0
             return
 
         if direct_blocked:
             # Vaultable beats steering: a short obstacle dead ahead is jumped
             # over on the direct heading rather than detoured around. Only
-            # trigger while grounded, read from last tick's resolution (same
-            # lag as the landing check above and ApplyJump's grounded check).
+            # trigger while grounded, read from last tick's result (same lag
+            # as the landing check above and ApplyJump's grounded check).
             let can_vault = not direct_high_blocked
-            if can_vault and enemy.actor.grounded:
-                enemy.actor.vertical_velocity = JUMP_VELOCITY
-                enemy.actor.grounded = false
+            if can_vault and enemy.body.grounded:
+                enemy.body.velocity.y = JUMP_VELOCITY
                 enemy.Enemy.is_vaulting = true
                 for visual in query.children[EnemyVisual](of = enemy):
                     set models.ModelAnimator on visual:
@@ -959,8 +808,8 @@ rule SeekPlayer:
             # Priority order (small deflection, then large deflection,
             # alternating sides): flat guards instead of nested ifs so each
             # line stands alone — falls back to the direct heading when every
-            # candidate is blocked and vaulting doesn't apply (the
-            # wall-separation rules still prevent tunneling in that case).
+            # candidate is blocked and vaulting doesn't apply (the character
+            # controller still stops the enemy at the wall in that case).
             let steering_needed = not can_vault
             if steering_needed and not left_small_blocked:
                 direction = steer_heading(position, target_position, ENEMY_STEER_ANGLE_SMALL)
@@ -973,7 +822,8 @@ rule SeekPlayer:
 
         enemy.Enemy.facing_yaw = math.atan2(direction.x * -1.0, direction.z * -1.0)
         enemy.transform.rotation = quat.from_euler(0.0, enemy.Enemy.facing_yaw, 0.0)
-        enemy.transform.position += direction * enemy.Enemy.kind.speed * fixed_tick.dt
+        enemy.body.velocity.x = direction.x * enemy.Enemy.kind.speed
+        enemy.body.velocity.z = direction.z * enemy.Enemy.kind.speed
 
 rule CooldownShooter:
     filter:
@@ -1041,17 +891,20 @@ rule BeginDeath:
                 clip = enemy.kind.death_clip
                 time = 0.0
 
-# A dying enemy stops being a Threat, so the pair rules that need one (enemy
-# separation, player contact) skip it, and leaves every collider layer, so
-# bullets fly through it.
+# A dying enemy stops being a Threat, so SeekPlayer and player contact skip
+# it, and stops moving. It leaves every collider layer, so bullets and live
+# enemies pass through it, and collides only with the map.
 rule StartDying:
     filter:
         Enemy as enemy
         physics.Collider as collider
+        physics.CharacterBody as body
 
     on added Dying:
         enemy.death_elapsed = 0.0
         collider.layer = 0
+        collider.mask = 1
+        body.velocity = vec3(0.0, 0.0, 0.0)
         remove Threat
 
 # Enemy is the collision/logic root (grounded at torso height, see
@@ -1077,25 +930,22 @@ rule AnimateEnemyDeath:
             set models.ModelRenderer on visual:
                 color = color(1.0, 1.0, 1.0, 1.0 - progress)
 
+# The player's mask selects enemies but not the reverse, so the player is the
+# subject of the touch test.
 rule DetectPlayerContact:
     pairs:
         enemy:
             Enemy
             Threat
-            KinematicActor
-            tv.WorldTransform
         player:
             Player
-            KinematicActor
-            tv.WorldTransform
     where:
-        collision.spheres_overlap(enemy.tv.WorldTransform.position, enemy.KinematicActor.radius, player.tv.WorldTransform.position, player.KinematicActor.radius)
+        physics.touching(player, enemy)
     when:
         not Game.Match.over
 
     on fixed_tick:
-        if collision.spheres_overlap(enemy.tv.WorldTransform.position, enemy.KinematicActor.radius, player.tv.WorldTransform.position, player.KinematicActor.radius):
-            emit GameOver to player
+        emit GameOver to player
 
 rule EndGame:
     filter:
@@ -1118,6 +968,7 @@ rule RestartOnGameOver:
         Player
         tv.WorldTransform as transform
         camera.FirstPersonCamera as first_person
+        physics.CharacterBody as body
     when:
         Game.Match.over
 
@@ -1127,6 +978,7 @@ rule RestartOnGameOver:
         Game.Match.over = false
         transform.position = vec3(0.0, PLAYER_HALF_HEIGHT, 10.0)
         transform.rotation = quat.identity()
+        body.velocity = vec3(0.0, 0.0, 0.0)
         first_person.yaw = 0.0
         first_person.pitch = 0.0
         cursor_captured = true

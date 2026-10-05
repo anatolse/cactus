@@ -2103,6 +2103,18 @@ TEST_CASE("reduce: integer sums saturate at each fold step", "[runtime][rule-red
     STATIC_CHECK(reduce::add(2, 3) == 5);
 }
 
+TEST_CASE("reduce: vector sums add per component from the zero vector", "[runtime][rule-reduce]") {
+    constexpr Vector3 total =
+        reduce::add(reduce::add(reduce::add(Vector3{}, Vector3{1.0F, 0.0F, 0.0F}), Vector3{0.0F, 2.0F, 0.0F}),
+                    Vector3{1.0F, 0.0F, -1.0F});
+    STATIC_CHECK(total.x == 2.0F);
+    STATIC_CHECK(total.y == 2.0F);
+    STATIC_CHECK(total.z == -1.0F);
+    constexpr Vector2 flat = reduce::add(Vector2{0.5F, -1.0F}, Vector2{0.25F, 3.0F});
+    STATIC_CHECK(flat.x == 0.75F);
+    STATIC_CHECK(flat.y == 2.0F);
+}
+
 TEST_CASE("reduce: float sums keep fold order", "[runtime][rule-reduce]") {
     // (1e8 + 1) + -1e8 rounds the 1 away; 1 + (1e8 + -1e8) keeps it.
     CHECK(reduce::add(reduce::add(1.0e8F, 1.0F), -1.0e8F) == 0.0F);

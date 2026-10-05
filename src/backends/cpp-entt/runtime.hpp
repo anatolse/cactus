@@ -15,6 +15,7 @@
 #include <deque>
 #include <functional>
 #include <initializer_list>
+#include <limits>
 #include <map>
 #include <optional>
 #include <span>
@@ -1890,6 +1891,28 @@ circle_proxy(entt::entity entity, std::uint64_t ordinal, SapSide side, Vector2 c
 sphere_proxy(entt::entity entity, std::uint64_t ordinal, SapSide side, Vector3 center, float radius) noexcept;
 [[nodiscard]] ProxyAabb3D box_proxy(
     entt::entity entity, std::uint64_t ordinal, SapSide side, Vector3 center, Vector3 size, Quat rotation) noexcept;
+
+// Where each entity sits in a pass snapshot. Spawned entities take indices near
+// the top of the index space, so a table sized by entity index would be huge.
+class SnapshotPositions {
+public:
+    static constexpr std::uint32_t kAbsent = std::numeric_limits<std::uint32_t>::max();
+
+    explicit SnapshotPositions(const std::vector<entt::entity>& snapshot) {
+        positions_.reserve(snapshot.size());
+        for (std::size_t position = 0; position < snapshot.size(); ++position) {
+            positions_.emplace(snapshot[position], static_cast<std::uint32_t>(position));
+        }
+    }
+
+    [[nodiscard]] std::uint32_t find(entt::entity entity) const noexcept {
+        const auto found = positions_.find(entity);
+        return found == positions_.end() ? kAbsent : found->second;
+    }
+
+private:
+    std::unordered_map<entt::entity, std::uint32_t> positions_;
+};
 
 // Bounds of a collider descriptor, inflated by the contact skin and covering
 // its motion over `delta`. No descriptor, no proxy: such an entity can only miss.

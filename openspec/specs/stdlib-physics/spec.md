@@ -5,15 +5,15 @@ Define the `std.physics` stdlib module, including 2D (`flat`) and 3D (`volume`) 
 ## Requirements
 
 ### Requirement: std.physics.flat provides 2D kinematic physics traits
-The `std.physics.flat` module SHALL provide traits and events for 2D kinematic (non-rigidbody) physics. `CharacterBody` holds velocity and ground state. `Collider` defines shared collision filtering data. Shape-specific collider traits define common 2D primitive bounds: `BoxCollider`, `CircleCollider`, and `CapsuleCollider`. The cpp-entt backend resolves supported 2D collider overlaps and emits `CollisionEnter` events when detected.
+The `std.physics.flat` module SHALL provide traits and events for 2D kinematic (non-rigidbody) physics. `CharacterBody` holds velocity and ground state as plain data; no stdlib or backend code moves a 2D `CharacterBody`, and the module SHALL NOT claim that it does. `Collider` defines shared collision filtering data. Shape-specific collider traits define common 2D primitive bounds: `BoxCollider`, `CircleCollider`, and `CapsuleCollider`. The cpp-entt backend resolves supported 2D collider overlaps and emits `CollisionEnter` events when detected.
 
 #### Scenario: CharacterBody fields for 2D
 - **WHEN** `use std.physics.flat as phys` is imported and an entity has `phys.CharacterBody`
 - **THEN** the entity has fields: `velocity: vec2`, `grounded: bool`, `gravity: float` with defaults `(0,0)`, `false`, `30.0`
 
 #### Scenario: Backend applies gravity when not grounded
-- **WHEN** a 2D entity has `CharacterBody` with `grounded = false` and the program is generated for the cpp-entt backend
-- **THEN** the backend applies `gravity` per second to `velocity.y` on each `fixed_tick`
+- **WHEN** a 2D entity has `CharacterBody` with `grounded = false`, a non-zero `velocity`, and no game rule moves it
+- **THEN** no backend or stdlib code applies gravity: its position and `CharacterBody` fields do not change
 
 #### Scenario: Collider defines shared filtering data
 - **WHEN** `use std.physics.flat as phys` is imported and an entity has `phys.Collider`
@@ -113,15 +113,16 @@ Collider-backed 2D world queries SHALL populate `QueryContact2D` fields with sta
 ---
 
 ### Requirement: std.physics.volume provides 3D kinematic physics traits
-The `std.physics.volume` module SHALL provide traits and events for 3D kinematic physics. The surface mirrors the flat module where practical but uses `vec3` for velocity, normals, and 3D shape dimensions. `Collider` defines shared collision filtering data. Shape-specific collider traits define common 3D primitive bounds: `BoxCollider`, `SphereCollider`, and `CapsuleCollider`.
+The `std.physics.volume` module SHALL provide traits and events for 3D kinematic physics. The surface mirrors the flat module where practical but uses `vec3` for velocity, normals, and 3D shape dimensions. `CharacterBody` holds the intent a game writes, the results the stdlib controller writes (`stdlib-character-body`), and scratch fields that only the controller writes. `Collider` defines shared collision filtering data. Shape-specific collider traits define common 3D primitive bounds: `BoxCollider`, `SphereCollider`, and `CapsuleCollider`.
 
 #### Scenario: CharacterBody fields for 3D
 - **WHEN** `use std.physics.volume as phys` is imported and an entity has `phys.CharacterBody`
-- **THEN** the entity has fields: `velocity: vec3`, `grounded: bool`, `ground_normal: vec3`, `step_height: float`
+- **THEN** the entity has game-facing fields `velocity: vec3 = (0,0,0)`, `gravity: float = 9.81`, `step_height: float = 0.3`, `max_slope: float = 45.0`, `grounded: bool = false`, `ground_normal: vec3 = (0,1,0)`, and `time_since_grounded: float = 0.0`
+- **AND** the controller-owned scratch fields `motion: vec3`, `lift: float`, `drop: float`, and `ground_offset: float`
 
 #### Scenario: Step height enables climbing small obstacles
-- **WHEN** a 3D entity with `CharacterBody` hits a surface where step height ≤ `step_height`
-- **THEN** the backend moves the entity up over the step rather than blocking movement
+- **WHEN** a grounded 3D `CharacterBody` walks into a walkable step whose top is at most `step_height` above its feet
+- **THEN** the stdlib controller moves the entity up onto the step rather than blocking movement
 
 #### Scenario: Collider defines shared 3D filtering data
 - **WHEN** `use std.physics.volume as phys` is imported and an entity has `phys.Collider`
@@ -147,14 +148,12 @@ The `std.physics.volume` module SHALL provide traits and events for 3D kinematic
 - **WHEN** two 3D entities with compatible `Collider` and shape collider traits collide in a cpp-entt program
 - **THEN** the backend emits `CollisionEnter` with `other: entity_id`, `point: vec3`, `normal: vec3`
 
----
-
 ### Requirement: Physics traits are passive — no user rules required for simulation
-The physics backend SHALL run the physics simulation step automatically during `fixed_tick` without requiring user-written rules. User rules MAY read and write `CharacterBody.velocity` to apply forces and movement intent.
+For 3D, the `std.physics.volume` stdlib controller (`stdlib-character-body`) SHALL move every `CharacterBody` during `fixed_tick` without requiring user-written rules. User rules MAY write `CharacterBody.velocity` to apply movement intent and impulses. 2D `CharacterBody` is not simulated.
 
 #### Scenario: Setting velocity drives movement
-- **WHEN** a user rule writes `CharacterBody.velocity = vec3(5.0, 0.0, 0.0)` in `on fixed_tick`
-- **THEN** the physics backend moves the entity by that velocity × dt, resolving collisions
+- **WHEN** a user rule writes `CharacterBody.velocity = vec3(5.0, 0.0, 0.0)` in `on fixed_tick` for a 3D body
+- **THEN** the stdlib controller moves the entity by that velocity × dt in the same tick, resolving collisions
 
 ### Requirement: std.physics.flat exposes trait-filtered query namespace
 The `std.physics.flat` stdlib surface SHALL expose a `query` namespace containing 2D spatial query expressions. These queries SHALL support bracketed trait filters and named geometry arguments.
@@ -195,11 +194,19 @@ The `std.physics.volume` stdlib surface SHALL expose a `query` namespace contain
 - **THEN** the query performs a 3D raycast filtered by the listed traits
 
 ### Requirement: std.physics.volume provides a shape-agnostic sweep between rule bindings
-The `std.physics.volume` module SHALL provide `SweepHit` with fields `hit: bool`, `other: entity_id`, `t: float`, `point: vec3`, and `normal: vec3`, and a pure function `sweep(subject, delta: vec3, target) SweepHit`. `sweep` SHALL report where the subject's collider first touches the target's collider when the subject moves by `delta` from its current position, whatever shape kinds the two colliders have. `subject` and `target` SHALL each be a binding of the enclosing rule; any other `entity_id` expression in those positions SHALL be a compile error.
+The `std.physics.volume` module SHALL provide `SweepHit` with fields `hit: bool`, `other: entity_id`, `t: float`, `point: vec3`, `normal: vec3`, and `surface: vec3`, and a pure function `sweep(subject, delta: vec3, target) SweepHit`. `sweep` SHALL report where the subject's collider first touches the target's collider when the subject moves by `delta` from its current position, whatever shape kinds the two colliders have. `normal` SHALL point from the target toward the subject at the contact. `surface` SHALL be the target's surface normal at the contact: for a box contact on an edge or corner, the normal of the adjacent face that `delta` meets most directly (with zero `delta`, the face closest to `normal`); for a sphere or capsule target, equal to `normal`. A miss SHALL have zero `normal` and `surface`. A subject that already touches or overlaps the target SHALL be blocked at `t = 0.0` only when a non-zero `delta` moves it further into the target; motion out of or along the contact SHALL NOT be blocked by that contact. `subject` and `target` SHALL each be a binding of the enclosing rule; any other `entity_id` expression in those positions SHALL be a compile error.
 
 #### Scenario: Sweep hits any shape kind
 - **WHEN** a sphere-collider subject is swept toward a box target, a sphere target, and a capsule target in turn
 - **THEN** each sweep reports `hit = true` with `other` set to that target
+
+#### Scenario: Landing on a box edge reports the top face
+- **WHEN** a capsule whose axis is just outside a box's top edge is swept straight down onto that edge
+- **THEN** `normal` is tilted away from the box and `surface` is the box's top-face normal
+
+#### Scenario: Running into a box edge reports the side face
+- **WHEN** a capsule is swept horizontally into a box's top edge
+- **THEN** `surface` is the normal of the box face it moves toward
 
 #### Scenario: Sweep miss
 - **WHEN** the target lies outside the path of the subject's collider over `delta`
@@ -210,8 +217,16 @@ The `std.physics.volume` module SHALL provide `SweepHit` with fields `hit: bool`
 - **THEN** the result has `hit = true` on that box
 
 #### Scenario: Sweep starting in contact
-- **WHEN** the subject already overlaps the target before moving
+- **WHEN** the subject already overlaps the target and `delta` points further into it
 - **THEN** the result has `hit = true`, `t = 0.0`, and `normal` pointing in the direction that pushes the subject out
+
+#### Scenario: Sweep starting in contact moving outward
+- **WHEN** the subject already overlaps the target and `delta` points along the push-out normal
+- **THEN** the result has `hit = false`
+
+#### Scenario: Sliding along a resting contact
+- **WHEN** a sphere rests on top of a box with a gap of at most the contact skin and `delta` is horizontal
+- **THEN** the result has `hit = false`
 
 #### Scenario: Zero delta tests overlap only
 - **WHEN** `delta` is `vec3(0.0, 0.0, 0.0)`
@@ -251,19 +266,19 @@ The `std.physics.volume` module SHALL provide a pure function `touching(a, b) bo
 - **THEN** the hit has `t = 0.35`, `point = vec3(-1.0, 0.0, 0.0)`, and `normal = vec3(-1.0, 0.0, 0.0)`
 
 ### Requirement: Collider queries honor filtering and identity
-`sweep` and `touching` SHALL treat a pair as non-colliding when the subject's `Collider.mask` shares no bit with the target's `Collider.layer`, when subject and target are the same entity, or when either entity lacks `std.transform.volume.WorldTransform`, `Collider`, or a shape collider trait at evaluation time. For `touching`, the first argument is the subject.
+`sweep`, `touching`, and `push_out` SHALL treat a pair as non-colliding when the subject's `Collider.mask` shares no bit with the target's `Collider.layer`, when subject and target are the same entity, or when either entity lacks `std.transform.volume.WorldTransform`, `Collider`, or a shape collider trait at evaluation time. For `touching` and `push_out`, the first argument is the subject.
 
 #### Scenario: Mask excludes a layer
 - **WHEN** the subject's mask is `3` and the target's layer is `4`
-- **THEN** `sweep` reports a miss and `touching` returns false, whatever the geometry
+- **THEN** `sweep` reports a miss, `touching` returns false, and `push_out` returns the zero vector, whatever the geometry
 
 #### Scenario: An entity never hits itself
 - **WHEN** a rule's two bindings refer to the same entity
-- **THEN** `sweep` reports a miss and `touching` returns false
+- **THEN** `sweep` reports a miss, `touching` returns false, and `push_out` returns the zero vector
 
 #### Scenario: Missing collider data is a miss
 - **WHEN** the target has lost its shape collider trait
-- **THEN** `sweep` reports a miss without error
+- **THEN** `sweep` reports a miss and `push_out` returns the zero vector, without error
 
 ### Requirement: 3D collider queries use the authored shapes
 `sweep` and `touching` SHALL test the authored shapes, not bounding boxes. A box SHALL be centered on `WorldTransform.position` and oriented by `WorldTransform.rotation`, with `BoxCollider.size` as its full world size. A sphere SHALL be centered on `WorldTransform.position`. A capsule SHALL be vertical along world Y, centered on `WorldTransform.position`, with `CapsuleCollider.height` as its total height including the caps. `WorldTransform.scale` SHALL NOT change any shape.
@@ -287,3 +302,26 @@ A template or entity declaration that applies `std.physics.volume.Collider` SHAL
 #### Scenario: Two shapes on one collider
 - **WHEN** a template applies `physics.Collider`, `physics.BoxCollider`, and `physics.SphereCollider`
 - **THEN** compilation reports a source-located error naming both shape traits
+
+### Requirement: std.physics.volume provides a shape-agnostic push-out between rule bindings
+The `std.physics.volume` module SHALL provide a pure function `push_out(a, b) vec3` that returns the shortest translation that moves `a`'s collider out of overlap with `b`'s collider, whatever shape kinds they have, and the zero vector when they don't overlap. When both entities have `CharacterBody` and each one's `Collider.mask` shares a bit with the other's `Collider.layer`, the result SHALL be half of that translation. `a` and `b` SHALL each be a binding of the enclosing rule; any other `entity_id` expression in those positions SHALL be a compile error.
+
+#### Scenario: Sphere overlapping a box
+- **WHEN** a sphere of radius `0.5` at `vec3(-1.3, 0.0, 0.0)` overlaps a box of size `vec3(2.0, 2.0, 2.0)` at the origin
+- **THEN** `push_out(sphere, box)` is `vec3(-0.2, 0.0, 0.0)` within float tolerance
+
+#### Scenario: No overlap
+- **WHEN** the two colliders are separated
+- **THEN** `push_out` returns `vec3(0.0, 0.0, 0.0)`
+
+#### Scenario: Two mutual character bodies share the push
+- **WHEN** two capsule `CharacterBody` entities on layer `1` with mask `1` overlap by `0.2` along X
+- **THEN** `push_out(a, b)` has length `0.1` and points from `b` toward `a`
+
+#### Scenario: One-sided character body takes the full push
+- **WHEN** body `a`'s mask selects `b`'s layer but `b`'s mask does not select `a`'s layer
+- **THEN** `push_out(a, b)` is the full translation
+
+#### Scenario: Non-binding argument rejected
+- **WHEN** a rule calls `physics.push_out(self, Game)` where `Game` is a named entity, not a binding of the rule
+- **THEN** compilation reports a source-located error

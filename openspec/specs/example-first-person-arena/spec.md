@@ -52,7 +52,7 @@ The example SHALL author one enabled directional light representing sunlight, an
 - **THEN** floor, wall, and building surfaces facing toward the light render visibly brighter than they would with the light disabled
 
 ### Requirement: Player uses first-person controls and a collider
-The player SHALL move with W/A/S/D input relative to its horizontal facing direction and look with mouse delta using yaw and pitch. Pitch SHALL be clamped to avoid flipping. The first-person camera SHALL remain attached to the player body, and the player body SHALL carry volume Collider and CapsuleCollider traits used by authored arena collision and grounding rules. The mouse cursor SHALL be captured when play begins; pressing Escape SHALL release cursor capture without ending the game, and a subsequent primary click while released SHALL recapture it. Cursor capture SHALL also be released automatically on game over and recaptured automatically on restart. The player SHALL fall under gravity when unsupported and SHALL be able to jump with a dedicated input while grounded; falling and jumping SHALL be gradual (velocity-driven over time) rather than an instantaneous position change, while climbing a small step (such as the exterior staircase) SHALL remain an immediate snap as before.
+The player SHALL move with W/A/S/D input relative to its horizontal facing direction and look with mouse delta using yaw and pitch. Pitch SHALL be clamped to avoid flipping. The first-person camera SHALL remain attached to the player body, and the player body SHALL carry volume Collider, CapsuleCollider, and CharacterBody traits, and SHALL be moved, collided, and grounded by the stdlib character controller rather than by authored collision or grounding rules. Walkable map boxes (floor, stairs, roof) SHALL carry volume Collider traits so the controller stands on them. The mouse cursor SHALL be captured when play begins; pressing Escape SHALL release cursor capture without ending the game, and a subsequent primary click while released SHALL recapture it. Cursor capture SHALL also be released automatically on game over and recaptured automatically on restart. The player SHALL fall under gravity when unsupported and SHALL be able to jump with a dedicated input while grounded; falling and jumping SHALL be gradual (velocity-driven over time) rather than an instantaneous position change, while climbing a small step (such as the exterior staircase) SHALL happen within one tick, with no upward velocity.
 
 #### Scenario: Mouse movement rotates the view
 - **WHEN** the captured mouse reports horizontal and vertical delta while the game is active
@@ -65,11 +65,11 @@ The player SHALL move with W/A/S/D input relative to its horizontal facing direc
 
 #### Scenario: Player cannot cross solid map geometry
 - **WHEN** player movement would overlap a perimeter wall or solid building box
-- **THEN** authored collision response separates the player from that box
+- **THEN** the controller stops the player at that box and keeps any movement along it
 
 #### Scenario: Player can climb to the building roof
 - **WHEN** the player moves over the exterior steps in order
-- **THEN** authored grounding raises the player by each reachable step immediately
+- **THEN** the controller raises the player onto each reachable step within one tick
 - **AND** the player can stand and move on the building roof
 
 #### Scenario: Escape releases cursor capture without ending play
@@ -113,7 +113,7 @@ The arena SHALL contain four authored corner spawn-point entities: two assigned 
 - **THEN** later spawn intervals create no additional enemies
 
 ### Requirement: Live enemies seek the player and end the game on contact
-Robot and knight enemies SHALL render their reused models with animation, carry volume Collider and CapsuleCollider traits, face and move toward the live player, and use authored solid-box separation to remain inside the arena and respond to the building. Each enemy's model-animator playback speed SHALL be derived from its current movement speed so its running clip's stride visually matches its translation. When a wall directly blocks an enemy's straight-line path to the player, the enemy SHALL steer toward an alternate unobstructed heading rather than remaining stuck against the wall. When an enemy's chosen heading is blocked by an obstacle short enough to clear, the enemy SHALL jump over it using the same gravity-driven vertical motion available to the player, switching to a jump animation clip where its model has one. A live enemy reaching the player's collider SHALL trigger game over.
+Robot and knight enemies SHALL render their reused models with animation, carry volume Collider, CapsuleCollider, and CharacterBody traits, face and move toward the live player by writing their CharacterBody velocity, and rely on the stdlib character controller to remain inside the arena and respond to the building. Each enemy's model-animator playback speed SHALL be derived from its current movement speed so its running clip's stride visually matches its translation. When a wall directly blocks an enemy's straight-line path to the player, the enemy SHALL steer toward an alternate unobstructed heading rather than remaining stuck against the wall. When an enemy's chosen heading is blocked by an obstacle short enough to clear, the enemy SHALL jump over it using the same gravity-driven vertical motion available to the player, switching to a jump animation clip where its model has one. A live enemy reaching the player's collider SHALL trigger game over.
 
 #### Scenario: Enemy advances toward player
 - **WHEN** a live enemy and player are separated with no solid box between them
@@ -121,7 +121,7 @@ Robot and knight enemies SHALL render their reused models with animation, carry 
 
 #### Scenario: Enemy responds to a solid box
 - **WHEN** an enemy's attempted movement overlaps a wall or building box
-- **THEN** authored separation prevents penetration while preserving any unblocked tangential movement
+- **THEN** the controller prevents penetration while preserving any unblocked tangential movement
 
 #### Scenario: Enemy contact triggers game over
 - **WHEN** a live enemy overlaps the player's collider
@@ -144,26 +144,26 @@ Robot and knight enemies SHALL render their reused models with animation, carry 
 #### Scenario: Enemy does not attempt to vault a wall taller than it can clear
 - **WHEN** a live enemy's chosen heading is blocked by a perimeter wall or building wall
 - **THEN** the enemy does not jump
-- **AND** authored separation and steering handle the obstacle as before
+- **AND** the controller and steering handle the obstacle as before
 
 ### Requirement: Live enemies do not overlap each other
-While multiple live (non-dying) enemies are simultaneously present, authored separation SHALL keep their capsule colliders from penetrating one another, regardless of enemy kind. Enemies in their death transition SHALL NOT participate in this separation.
+While multiple live (non-dying) enemies are simultaneously present, the stdlib character controller SHALL keep their capsule colliders from penetrating one another, regardless of enemy kind; an overlap caused by simultaneous movement SHALL be resolved within the next tick. Enemies in their death transition SHALL NOT participate in this separation. The arena SHALL NOT author its own separation rules.
 
 #### Scenario: Two robots are pushed apart
 - **WHEN** two live robot enemies' colliders would overlap
-- **THEN** authored separation moves them apart so their colliders no longer overlap
+- **THEN** the controller moves them apart so their colliders no longer overlap
 
 #### Scenario: A robot and a knight are pushed apart
 - **WHEN** a live robot enemy's collider would overlap a live knight enemy's collider
-- **THEN** authored separation moves them apart so their colliders no longer overlap
+- **THEN** the controller moves them apart so their colliders no longer overlap
 
 #### Scenario: Two knights are pushed apart
 - **WHEN** two live knight enemies' colliders would overlap
-- **THEN** authored separation moves them apart so their colliders no longer overlap
+- **THEN** the controller moves them apart so their colliders no longer overlap
 
 #### Scenario: A dying enemy does not participate in separation
 - **WHEN** one of two overlapping enemies has begun its death transition
-- **THEN** authored separation does not move either enemy for that pair
+- **THEN** the controller does not move either enemy for that pair
 
 ### Requirement: Player fires small cubic projectiles
 Primary mouse input SHALL spawn a small cube-rendered bullet from the first-person camera along its current forward direction, subject to a short authored cooldown. Each bullet SHALL carry velocity, finite lifetime, and a volume collider. Each tick it SHALL sweep its collider along that tick's motion against every collider its mask selects, in one rule that does not name target shape kinds, so it cannot pass through geometry or enemies between ticks. It SHALL be destroyed when its lifetime expires or when its sweep hits anything, and a hit enemy SHALL receive one targeted hit occurrence.

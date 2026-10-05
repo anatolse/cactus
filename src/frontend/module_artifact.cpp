@@ -638,6 +638,12 @@ void ModuleArtifact::write_group_facts(std::ostream& out, const ExecutionGraph& 
         write_u8(out, static_cast<uint8_t>(ordering.direction));
         write_location(out, ordering.location);
     }
+
+    write_u32(out, static_cast<uint32_t>(graph.module_imports.size()));
+    for (const auto& entry : graph.module_imports) {
+        write_str(out, entry.module);
+        write_str(out, entry.imported);
+    }
 }
 
 void ModuleArtifact::write_string_pool(std::ostream& out, const StringPool& pool) {
@@ -1302,6 +1308,15 @@ void ModuleArtifact::read_group_facts(std::istream& in, ExecutionGraph& graph) {
         ordering.direction = static_cast<GroupOrderingDirection>(direction);
         ordering.location  = read_location(in);
         graph.group_orderings.push_back(std::move(ordering));
+    }
+
+    const auto import_count = read_u32(in);
+    graph.module_imports.reserve(import_count);
+    for (uint32_t i = 0; i < import_count; ++i) {
+        ModuleImport entry;
+        entry.module   = read_str(in);
+        entry.imported = read_str(in);
+        graph.module_imports.push_back(std::move(entry));
     }
 }
 

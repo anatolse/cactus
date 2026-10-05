@@ -504,6 +504,12 @@ cactus_add_headless_behavior_test(test_collider_sweep_queries_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_collider_sweep_queries_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_character_body_headless_behavior
+    CACTUS_SOURCE examples/stdlib-fixtures/character_body.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_character_body_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_team_score_reduce_headless_behavior
     CACTUS_SOURCE tests/fixtures/team_score_reduce_runtime.cactus
     BACKEND cpp-entt

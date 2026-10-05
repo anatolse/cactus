@@ -98,11 +98,31 @@ Event-producer records SHALL be additive graph data. Introducing or reading them
 ### Requirement: Contract conflict edges
 Handlers eligible in the same activation SHALL be serialized when one writes a trait field the other reads or writes, or when they share an observable effect domain. Two handlers conflict on a trait only when their field accesses to it overlap; an access that covers all fields of a trait overlaps every field of it. A projected output SHALL keep producing a conflict with a handler that selects the projected trait, as before. Filters alone SHALL NOT create conflict edges. A data conflict edge SHALL name each overlapping trait and, for each, the overlapping fields or that the overlap covers all fields.
 
-Pair direction SHALL be chosen by explicit handler ordering first; otherwise a one-way writer-to-reader dependency SHALL run writer first; reciprocal or write/write/effect conflicts SHALL use stable declaration order. The tie-break SHALL be deterministic across builds.
+Pair direction SHALL be chosen by explicit handler ordering first. Otherwise, when exactly one handler of the pair is a member of a `pub group` declared in module M and the other handler's module imports M directly or transitively, the direction SHALL be decided against the whole group, so every conflict between that handler and the group's members points the same way: when the handler and the group's members together conflict in both directions, or only through shared effects, the importing module's handler SHALL run first; when only one side writes what the other reads, the writer SHALL run first. Otherwise a one-way writer-to-reader dependency SHALL run writer first; remaining reciprocal or write/write/effect conflicts SHALL use stable declaration order. The tie-break SHALL be deterministic across builds.
 
 #### Scenario: Writer precedes reader
 - **WHEN** one fixed_tick handler writes Transform and another reads Transform with no reverse hazard or explicit order
 - **THEN** the graph orders the writer before the reader
+
+#### Scenario: Importing module runs before another module's public group
+- **WHEN** a game rule writes `CharacterBody.velocity` in `fixed_tick`, a member of `std.physics.volume`'s `pub group solve` reads and writes `CharacterBody.velocity`, and neither declares an order against the other
+- **THEN** the graph orders the game rule's handler before the group member
+
+#### Scenario: The whole group decides the direction
+- **WHEN** a game rule writes `CharacterBody.velocity` and reads `WorldTransform.position`, one `solve` member only writes `WorldTransform.position`, and another reads and writes `CharacterBody.velocity`
+- **THEN** the graph orders the game rule's handler before both members, with no cycle
+
+#### Scenario: Explicit order overrides the group tie-break
+- **WHEN** the same game rule declares `after: physics.solve`
+- **THEN** the graph orders every group member before the game rule's handler
+
+#### Scenario: One-way reader still follows the writer
+- **WHEN** a game rule only reads `CharacterBody.grounded` in `fixed_tick` and a member of `solve` writes it
+- **THEN** the graph orders the group member before the game rule's handler
+
+#### Scenario: Same-module group members use declaration order
+- **WHEN** two rules of one module conflict reciprocally and one is a member of that module's `pub group`
+- **THEN** their conflict is oriented by stable declaration order
 
 #### Scenario: Independent reads can share a graph level
 - **WHEN** two handlers only read disjoint or identical traits and have no shared effect

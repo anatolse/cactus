@@ -1,20 +1,39 @@
 module std.physics.volume
 
+use std.core as core
+use std.math as math
+use std.math.vec3 as v3
+use std.transform.volume as tv
+
 # ── 3D Kinematic Physics Traits & Events ─────────────────────────────────────
-# Passive traits — the backend simulates these automatically.
-# No user physics rule is needed. CharacterBody + Collider entities are
-# simulated and their fields updated each tick by the generated runtime.
+# The `solve` rules below move every CharacterBody that has a Collider, a shape
+# and a WorldTransform once per fixed_tick. Games write `velocity` and read the
+# results; no game rule is needed for a body to fall, collide, slide or climb.
 
 # Kinematic character controller for 3D entities.
-# velocity:     current movement velocity in world units per second
-# grounded:     true when the entity is resting on a surface (set by backend)
-# ground_normal: surface normal of the ground being stood on (set by backend)
-# step_height:  maximum step height the character can climb automatically
+# velocity:            movement velocity in world units per second; games write it
+# gravity:             downward acceleration while unsupported; 0.0 disables it
+# step_height:         highest step a grounded body climbs, and lowest drop it follows
+# max_slope:           steepest walkable surface, in degrees from world up
+# grounded:            whether the body rests on a walkable surface (set by solve)
+# ground_normal:       normal of that surface, or world up when airborne (set by solve)
+# time_since_grounded: seconds since the body was last grounded (set by solve)
+# motion:              stdlib-owned: motion left to move this tick
+# lift:                stdlib-owned: how far the step-up raised the body this tick
+# drop:                stdlib-owned: how far below the body the snap looks for ground
+# ground_offset:       stdlib-owned: height of the body's center above its last ground contact
 pub trait CharacterBody:
     var velocity: vec3 = vec3(0.0, 0.0, 0.0)
+    var gravity: float = 9.81
+    var step_height: float = 0.3
+    var max_slope: float = 45.0
     var grounded: bool = false
     var ground_normal: vec3 = vec3(0.0, 1.0, 0.0)
-    var step_height: float = 0.3
+    var time_since_grounded: float = 0.0
+    var motion: vec3 = vec3(0.0, 0.0, 0.0)
+    var lift: float = 0.0
+    var drop: float = 0.0
+    var ground_offset: float = 0.0
 
 # Shared 3D collision participation/filtering data. An entity with Collider
 # also needs exactly one shape trait: BoxCollider, SphereCollider or
@@ -44,27 +63,35 @@ pub trait CapsuleCollider:
     var height: float = 1.0
 
 # ── Collider queries ──────────────────────────────────────────────────────────
-# Both take bindings of the calling rule, work for any mix of shapes, and honor
+# These take bindings of the calling rule, work for any mix of shapes, and honor
 # Collider.layer/mask. An entity never hits itself.
 
 # Where a sweep first touched its target. A miss has hit = false and t = 1.0,
 # so `position += delta * hit.t` moves the full delta either way.
-# other:  the target that was hit
-# t:      fraction of delta travelled before contact
-# point:  contact point on the target's surface
-# normal: unit normal pointing from the target toward the subject
+# other:   the target that was hit
+# t:       fraction of delta travelled before contact
+# point:   contact point on the target's surface
+# normal:  unit normal pointing from the target toward the subject
+# surface: the target's surface normal at the contact; on a box edge or corner,
+#          the face the motion meets first
 pub struct SweepHit:
     hit: bool
     other: entity_id
     t: float
     point: vec3
     normal: vec3
+    surface: vec3
 
 # Where subject's collider first touches target's when subject moves by delta.
 pub extern func sweep(subject: entity_id, delta: vec3, target: entity_id) SweepHit
 
 # Whether a's and b's colliders overlap now. a's mask filters b's layer.
 pub extern func touching(a: entity_id, b: entity_id) bool
+
+# Shortest move that takes a's collider out of b's, zero when apart. a's mask
+# filters b's layer. Two character bodies that collide with each other each
+# get half.
+pub extern func push_out(a: entity_id, b: entity_id) vec3
 
 # Fired when this entity's collider first contacts another entity's collider.
 # other:  entity_id of the entity that was hit
@@ -74,3 +101,195 @@ pub event CollisionEnter:
     other: entity_id
     point: vec3
     normal: vec3
+
+# ── Character controller ──────────────────────────────────────────────────────
+# Each stage runs once per body, in declaration order. A body that was grounded
+# lifts by step_height, slides at that height, then snaps back down, which
+# climbs steps and follows descents. Game rules that write velocity run before
+# the group; `after: solve` reads this tick's results.
+
+pub group solve:
+    phase: core.fixed_tick
+
+func walkable(normal: vec3, max_slope: float) bool:
+    return normal.y >= math.cos(math.radians(max_slope))
+
+# Removes the part of `v` that moves into the surface `hit` touched. A surface
+# the body can't stand on never adds upward speed.
+func slide_along(v: vec3, hit: SweepHit, max_slope: float) vec3:
+    let clipped = v - hit.normal * math.min(0.0, v3.dot(v, hit.normal))
+    let rise = math.max(v.y, 0.0)
+    if walkable(hit.surface, max_slope) or clipped.y <= rise:
+        return clipped
+    return vec3(clipped.x, rise, clipped.z)
+
+rule Integrate:
+    filter:
+        CharacterBody as body
+        Collider
+        tv.WorldTransform
+    group: solve
+
+    on core.fixed_tick as step:
+        let supported = body.grounded and body.velocity.y <= 0.0
+        if not supported:
+            body.velocity.y -= body.gravity * step.dt
+        body.motion = body.velocity * step.dt
+        body.lift = 0.0
+        body.drop = 0.0
+        if supported:
+            body.motion.y = 0.0
+            body.drop = body.step_height
+        if supported and (body.motion.x != 0.0 or body.motion.z != 0.0):
+            body.lift = body.step_height
+        body.grounded = false
+        body.ground_normal = vec3(0.0, 1.0, 0.0)
+
+rule Lift:
+    pairs:
+        body:
+            CharacterBody
+            Collider
+            tv.WorldTransform
+        other:
+            Collider
+    group: solve
+    after:
+        Integrate
+    reduce:
+        per: body
+        hit = first_hit(sweep(body, vec3(0.0, body.CharacterBody.lift, 0.0), other))
+
+    on core.fixed_tick:
+        let rise = body.CharacterBody.lift * hit.t
+        body.tv.WorldTransform.position.y += rise
+        body.CharacterBody.lift = rise
+
+rule Slide1:
+    pairs:
+        body:
+            CharacterBody
+            Collider
+            tv.WorldTransform
+        other:
+            Collider
+    group: solve
+    after:
+        Lift
+    reduce:
+        per: body
+        hit = first_hit(sweep(body, body.CharacterBody.motion, other))
+
+    on core.fixed_tick:
+        let max_slope = body.CharacterBody.max_slope
+        body.tv.WorldTransform.position += body.CharacterBody.motion * hit.t
+        body.CharacterBody.motion = slide_along(body.CharacterBody.motion * (1.0 - hit.t), hit, max_slope)
+        body.CharacterBody.velocity = slide_along(body.CharacterBody.velocity, hit, max_slope)
+        if hit.hit and walkable(hit.surface, max_slope):
+            body.CharacterBody.grounded = true
+            body.CharacterBody.ground_normal = hit.surface
+            body.CharacterBody.ground_offset = body.tv.WorldTransform.position.y - hit.point.y
+
+rule Slide2:
+    pairs:
+        body:
+            CharacterBody
+            Collider
+            tv.WorldTransform
+        other:
+            Collider
+    group: solve
+    after:
+        Slide1
+    reduce:
+        per: body
+        hit = first_hit(sweep(body, body.CharacterBody.motion, other))
+
+    on core.fixed_tick:
+        let max_slope = body.CharacterBody.max_slope
+        body.tv.WorldTransform.position += body.CharacterBody.motion * hit.t
+        body.CharacterBody.motion = slide_along(body.CharacterBody.motion * (1.0 - hit.t), hit, max_slope)
+        body.CharacterBody.velocity = slide_along(body.CharacterBody.velocity, hit, max_slope)
+        if hit.hit and walkable(hit.surface, max_slope):
+            body.CharacterBody.grounded = true
+            body.CharacterBody.ground_normal = hit.surface
+            body.CharacterBody.ground_offset = body.tv.WorldTransform.position.y - hit.point.y
+
+rule Slide3:
+    pairs:
+        body:
+            CharacterBody
+            Collider
+            tv.WorldTransform
+        other:
+            Collider
+    group: solve
+    after:
+        Slide2
+    reduce:
+        per: body
+        hit = first_hit(sweep(body, body.CharacterBody.motion, other))
+
+    on core.fixed_tick:
+        let max_slope = body.CharacterBody.max_slope
+        body.tv.WorldTransform.position += body.CharacterBody.motion * hit.t
+        body.CharacterBody.motion = slide_along(body.CharacterBody.motion * (1.0 - hit.t), hit, max_slope)
+        body.CharacterBody.velocity = slide_along(body.CharacterBody.velocity, hit, max_slope)
+        if hit.hit and walkable(hit.surface, max_slope):
+            body.CharacterBody.grounded = true
+            body.CharacterBody.ground_normal = hit.surface
+            body.CharacterBody.ground_offset = body.tv.WorldTransform.position.y - hit.point.y
+
+# Lands a planned step on walkable ground at most step_height above the ground
+# it left. Otherwise the lift is undone, and Depenetrate clears any corner the
+# body now overlaps.
+rule Snap:
+    pairs:
+        body:
+            CharacterBody
+            Collider
+            tv.WorldTransform
+        other:
+            Collider
+    group: solve
+    after:
+        Slide3
+    reduce:
+        per: body
+        hit = first_hit(sweep(body, vec3(0.0, (body.CharacterBody.lift + body.CharacterBody.drop) * -1.0, 0.0), other))
+
+    on core.fixed_tick as step:
+        let lift = body.CharacterBody.lift
+        let planned = body.CharacterBody.drop > 0.0
+        let highest = body.tv.WorldTransform.position.y - lift - body.CharacterBody.ground_offset + body.CharacterBody.step_height
+        let landed = planned and hit.hit and walkable(hit.surface, body.CharacterBody.max_slope) and hit.point.y <= highest + 0.001
+        if landed:
+            body.tv.WorldTransform.position.y -= (lift + body.CharacterBody.drop) * hit.t
+            body.CharacterBody.velocity.y = 0.0
+            body.CharacterBody.grounded = true
+            body.CharacterBody.ground_normal = hit.surface
+            body.CharacterBody.ground_offset = body.tv.WorldTransform.position.y - hit.point.y
+        if planned and not landed:
+            body.tv.WorldTransform.position.y -= lift
+        if body.CharacterBody.grounded:
+            body.CharacterBody.time_since_grounded = 0.0
+        else:
+            body.CharacterBody.time_since_grounded += step.dt
+
+rule Depenetrate:
+    pairs:
+        body:
+            CharacterBody
+            Collider
+            tv.WorldTransform
+        other:
+            Collider
+    group: solve
+    after:
+        Snap
+    reduce:
+        per: body
+        push = sum(push_out(body, other))
+
+    on core.fixed_tick:
+        body.tv.WorldTransform.position += push

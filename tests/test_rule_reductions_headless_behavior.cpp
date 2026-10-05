@@ -62,6 +62,19 @@ TEST_CASE("a global reduction totals every row", "[runtime][codegen-entt][rule-r
     CHECK(board.points == 21);
 }
 
+TEST_CASE("a vector sum adds per component", "[runtime][codegen-entt][rule-reduce]") {
+    entt::registry registry;
+    run_one_frame(registry);
+    const auto& push = board_of(registry).push;
+    CHECK(push.x == 2.0F);
+    CHECK(push.y == 2.0F);
+    CHECK(push.z == -1.0F);
+    const auto& red = team_of(registry, RED_TEAM).push;
+    CHECK(red.x == 1.0F);
+    CHECK(red.y == 2.0F);
+    CHECK(red.z == 0.0F);
+}
+
 TEST_CASE("a grouped reduction totals each group's rows", "[runtime][codegen-entt][rule-reduce]") {
     entt::registry registry;
     run_one_frame(registry);
@@ -85,6 +98,9 @@ TEST_CASE("a group with no rows gets identity values", "[runtime][codegen-entt][
     CHECK(green.total == 0);
     CHECK(green.best == -1.0F);
     CHECK_FALSE(green.has_star);
+    CHECK(green.push.x == 0.0F);
+    CHECK(green.push.y == 0.0F);
+    CHECK(green.push.z == 0.0F);
 }
 
 TEST_CASE("any is true only when some row matches", "[runtime][codegen-entt][rule-reduce]") {

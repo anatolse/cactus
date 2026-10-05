@@ -24,11 +24,15 @@ const std::string kPrelude =
     "    var total: int = 0\n"
     "    var best: float = 0.0\n"
     "    var crowded: bool = false\n"
+    "    var push: vec3 = vec3(0.0, 0.0, 0.0)\n"
+    "    var drift: vec2 = vec2(0.0, 0.0)\n"
     "trait Member:\n"
     "    var team: entity_id\n"
     "    var points: int = 0\n"
     "    var speed: float = 0.0\n"
     "    var ready: bool = false\n"
+    "    var push: vec3 = vec3(0.0, 0.0, 0.0)\n"
+    "    var drift: vec2 = vec2(0.0, 0.0)\n"
     "trait Enemy:\n"
     "    var threat: int = 0\n"
     "trait Stats:\n"
@@ -160,11 +164,38 @@ TEST_CASE("Reduce: sum, min and max take int or float", "[semantic][rule-reduce]
     CHECK(analyze(team_rule("        per: team\n"
                             "        s = sum(player.Member.ready)\n",
                             "        let x = 1\n"))
-              .has("'int' or 'float'"));
+              .has("'int', 'float', 'vec2' or 'vec3'"));
     CHECK(analyze(team_rule("        per: team\n"
                             "        s = min(player.Member.team, default = team)\n",
                             "        let x = 1\n"))
               .has("'int' or 'float'"));
+}
+
+TEST_CASE("Reduce: sum takes vec2 and vec3 and keeps the type", "[semantic][rule-reduce]") {
+    const auto analysis = analyze(team_rule("        per: team\n"
+                                            "        push = sum(player.Member.push)\n"
+                                            "        drift = sum(player.Member.drift)\n",
+                                            "        team.Team.push = push\n"
+                                            "        team.Team.drift = drift\n"));
+    INFO(describe(analysis));
+    REQUIRE(analysis.clean());
+    const auto& reducers = analysis.rule("TeamScore").reduce->reducers;
+    REQUIRE(reducers.size() == 2);
+    CHECK(reducers[0].result_type.kind == TypeKind::Vec3);
+    CHECK(reducers[1].result_type.kind == TypeKind::Vec2);
+}
+
+TEST_CASE("Reduce: vector min and max are rejected with a location", "[semantic][rule-reduce]") {
+    for (const std::string reducer : {"min", "max"}) {
+        const auto analysis = analyze(team_rule("        per: team\n"
+                                                "        v = " + reducer + "(player.Member.push, default = vec3(0.0, 0.0, 0.0))\n",
+                                                "        let x = 1\n"));
+        CHECK(analysis.has("'int' or 'float'"));
+        const auto error = std::ranges::find_if(
+            analysis.diagnostics, [](const Diagnostic& d) { return d.level == DiagnosticLevel::Error; });
+        REQUIRE(error != analysis.diagnostics.end());
+        CHECK(error->location.line > 0);
+    }
 }
 
 TEST_CASE("Reduce: any takes a bool", "[semantic][rule-reduce]") {

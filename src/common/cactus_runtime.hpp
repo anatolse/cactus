@@ -209,6 +209,12 @@ namespace reduce {
 [[nodiscard]] constexpr float add(float acc, float value) noexcept {
     return acc + value;
 }
+[[nodiscard]] constexpr Vector2 add(Vector2 acc, Vector2 value) noexcept {
+    return Vector2{.x = acc.x + value.x, .y = acc.y + value.y};
+}
+[[nodiscard]] constexpr Vector3 add(Vector3 acc, Vector3 value) noexcept {
+    return Vector3{.x = acc.x + value.x, .y = acc.y + value.y, .z = acc.z + value.z};
+}
 [[nodiscard]] constexpr int min(int acc, int value) noexcept {
     return std::min(acc, value);
 }

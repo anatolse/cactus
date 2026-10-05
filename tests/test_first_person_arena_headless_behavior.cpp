@@ -241,16 +241,26 @@ TEST_CASE("first-person arena headless: facing-relative movement, seeking, wall 
     cactus_raylib_fake::set_key_down(KEY_W, false);
     CHECK(player_transform.position.z >= -14.41F);
 
+    // Heading diagonally into the same wall keeps the motion along it.
+    auto& camera_state = registry.get<std_camera_volume__FirstPersonCamera>(player);
+    player_transform.position = Vector3{.x = 0.0F, .y = 0.9F, .z = -14.35F};
+    player_transform.rotation = QuaternionFromEuler(0.0F, 0.78539816F, 0.0F);
+    camera_state.yaw          = 0.78539816F;
+    cactus_raylib_fake::set_key_down(KEY_W, true);
+    drive_frames(registry, 30);
+    cactus_raylib_fake::set_key_down(KEY_W, false);
+    CHECK(player_transform.position.z >= -14.41F);
+    CHECK(player_transform.position.x < -1.0F);
+
     player_transform.position = Vector3{.x = 8.4F, .y = 0.9F, .z = 0.0F};
     player_transform.rotation = QuaternionFromEuler(0.0F, 1.57079633F, 0.0F);
-    auto& camera_state        = registry.get<std_camera_volume__FirstPersonCamera>(player);
     camera_state.yaw          = 1.57079633F;
     cactus_raylib_fake::set_key_down(KEY_W, true);
     drive_frames(registry, 100);
     cactus_raylib_fake::set_key_down(KEY_W, false);
     CHECK(player_transform.position.x < 4.0F);
     CHECK(player_transform.position.y == Catch::Approx(4.9F).margin(0.05F));
-    CHECK(registry.get<main__KinematicActor>(player).ground_surface == Catch::Approx(4.0F).margin(0.01F));
+    CHECK(registry.get<std_physics_volume__CharacterBody>(player).grounded);
 
     player_transform.position = Vector3{.x = 0.0F, .y = 0.9F, .z = 8.0F};
     camera_state.yaw          = 0.0F;
@@ -284,7 +294,7 @@ TEST_CASE("first-person arena headless: player falls gradually off a ledge inste
 
     drive_frames(registry, 90);
     CHECK(player_transform.position.y == Catch::Approx(0.9F).margin(0.05F));
-    CHECK(registry.get<main__KinematicActor>(player).grounded);
+    CHECK(registry.get<std_physics_volume__CharacterBody>(player).grounded);
 }
 
 TEST_CASE("first-person arena headless: player jumps while grounded and cannot re-trigger mid-air",
@@ -296,25 +306,25 @@ TEST_CASE("first-person arena headless: player jumps while grounded and cannot r
     const auto player          = only_entity<main__Player>(registry);
     auto& player_transform     = registry.get<std_transform_volume__WorldTransform>(player);
     player_transform.position  = Vector3{.x = 0.0F, .y = 0.9F, .z = 8.0F};
-    auto& actor                = registry.get<main__KinematicActor>(player);
+    auto& body                 = registry.get<std_physics_volume__CharacterBody>(player);
 
     cactus_raylib_fake::set_key_pressed_this_frame(KEY_SPACE, true);
     cactus_headless_test::drive_frame(registry, kFrameDt);
     cactus_raylib_fake::set_key_pressed_this_frame(KEY_SPACE, false);
     CHECK(player_transform.position.y > 0.95F);
-    CHECK_FALSE(actor.grounded);
-    const float velocity_after_first_press = actor.vertical_velocity;
+    CHECK_FALSE(body.grounded);
+    const float velocity_after_first_press = body.velocity.y;
 
     // A second press while still airborne must not re-trigger the impulse:
     // velocity should keep decaying from gravity, not jump back up.
     cactus_raylib_fake::set_key_pressed_this_frame(KEY_SPACE, true);
     cactus_headless_test::drive_frame(registry, kFrameDt);
     cactus_raylib_fake::set_key_pressed_this_frame(KEY_SPACE, false);
-    CHECK(actor.vertical_velocity < velocity_after_first_press);
+    CHECK(body.velocity.y < velocity_after_first_press);
 
     drive_frames(registry, 90);
     CHECK(player_transform.position.y == Catch::Approx(0.9F).margin(0.05F));
-    CHECK(actor.grounded);
+    CHECK(body.grounded);
 }
 
 TEST_CASE("first-person arena headless: enemy steers around a wall directly blocking its path",
@@ -727,7 +737,7 @@ TEST_CASE("first-person arena headless: overlapping live enemies of any kind are
     entt::registry registry;
     cactus_headless_test::drive_one_frame(registry, kFrameDt);
 
-    // End the game so SeekPlayer no-ops and only DetectEnemySeparation
+    // End the game so SeekPlayer no-ops and only the controller's push-out
     // moves these two enemies below.
     match_state(registry).over = true;
 
@@ -743,8 +753,8 @@ TEST_CASE("first-person arena headless: overlapping live enemies of any kind are
     auto& knight_transform    = registry.get<std_transform_volume__WorldTransform>(knight);
     robot_transform.position  = Vector3{.x = 0.0F, .y = 0.9F, .z = 0.0F};
     knight_transform.position = Vector3{.x = 0.1F, .y = 0.9F, .z = 0.0F};
-    const float radius_sum =
-        registry.get<main__KinematicActor>(robot).radius + registry.get<main__KinematicActor>(knight).radius;
+    const float radius_sum = registry.get<std_physics_volume__CapsuleCollider>(robot).radius +
+                             registry.get<std_physics_volume__CapsuleCollider>(knight).radius;
 
     drive_frames(registry, 10);
     CHECK(horizontal_distance(robot_transform.position, knight_transform.position) >= radius_sum - 0.001F);
@@ -771,6 +781,8 @@ TEST_CASE("first-person arena headless: a dying enemy does not participate in se
     // Set outside a commit, so do what StartDying would.
     registry.emplace<main__Dying>(dying_enemy);
     registry.remove<main__Threat>(dying_enemy);
+    registry.get<std_physics_volume__Collider>(dying_enemy).layer = 0;
+    registry.get<std_physics_volume__Collider>(dying_enemy).mask  = 1;
 
     auto& live_transform      = registry.get<std_transform_volume__WorldTransform>(live);
     auto& dying_transform     = registry.get<std_transform_volume__WorldTransform>(dying_enemy);

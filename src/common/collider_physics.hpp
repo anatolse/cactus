@@ -49,11 +49,15 @@ struct Separation {
 
 [[nodiscard]] Separation separation(const ColliderShape& a, const ColliderShape& b) noexcept;
 
+// `normal` points from the target toward the subject at the contact. `surface`
+// is the target's surface normal there: on a box edge or corner, the face the
+// motion meets first.
 struct SweepResult {
     bool hit{false};
     float t{1.0F};
     Vector3 point{};
     Vector3 normal{};
+    Vector3 surface{};
     int steps{0};
 };
 
@@ -73,6 +77,13 @@ struct SweepResult {
                                 Vector3 delta,
                                 const std::optional<ColliderShape>& target,
                                 bool same_entity) noexcept;
+
+// Shortest translation that moves `subject` out of `target`, zero when they
+// don't overlap; two bodies whose masks select each other's layers split it.
+[[nodiscard]] Vector3 push_out(const std::optional<ColliderShape>& subject,
+                               const std::optional<ColliderShape>& target,
+                               bool same_entity,
+                               bool both_bodies) noexcept;
 
 struct Bounds {
     Vector3 min{};

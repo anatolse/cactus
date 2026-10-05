@@ -470,3 +470,18 @@ Original review text follows unchanged except for per-item status markers.
 - **Cleanup:** fix the "simulates automatically" comment in `std.physics.*`; archive
   harden-notation-evolution-harness; close or park evolve-cactus-notation,
   flatten-ui-layout-handlers, optimize-ui-layout-caching, add-rule-execution-explanations.
+
+## Tools-profile gaps (2026-10-05, broaden-language-identity)
+
+UI apps and editors are now in scope, and application logic forced into `extern` code
+counts as a language gap. Known gaps:
+
+| Gap | Evidence | Likely primitive |
+|---|---|---|
+| Templates by string name | `std.editor.spawn_template(template_name: string, …)` | `template_ref` (C4) |
+| Inspector in native code | `EditorPropertyPanel` is an extern stub | compile-time reflection of traits and fields |
+| Palette and list UI by index | `palette_label_slot(index)`, `palette_button_y(index)` | derived entities: one row per source entity |
+| Layout as one imperative loop | `std.ui` `MeasureUi` walks `hierarchy_postorder` with `match` chains | tree folds over `Parent` (derived values) |
+| Every UI field spelled out | `examples/standard-ui` repeats `visible`/`enabled`/`z_index` per node | check that declared trait defaults apply |
+| Strings and collections underspecified | §4.6 limits string literals to `const`; `list` trait fields have no stated semantics | value-type strings, lists, maps |
+| Undo and play-in-editor | no transaction or world-fork model | command-log transactions, world capture/restore |

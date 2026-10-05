@@ -246,7 +246,9 @@ loop body, rather than reflexively applying the early-return transform.
 New stdlib/example additions are evaluated against gameplay-core teachability: if it
 can't be explained to a beginner in a sentence, it likely belongs in a different
 layer. Prefer existing stdlib primitives (math/physics/transform/camera/render/ui)
-over hand-rolled logic in example or game code.
+over hand-rolled logic in example or game code. UI and tool code follows the same bar
+and the same primitives; if its logic can only be written as `extern` code, record
+that as a language gap instead of treating the extern as the design.
 
 ## Generated code performance
 

@@ -1,32 +1,36 @@
 ## Purpose
 
-Define the design philosophy and guiding principles behind the Cactus language, including its gameplay-core scope, predictability and total-semantics goals, ECS-centric model, declarative/imperative boundary, and the author/backend responsibility split.
-
+Define the design philosophy and guiding principles behind the Cactus language: a genre-neutral notation for games and tools, its gameplay-core teaching profile, the error classes it rules out by construction, predictability and total-semantics goals, its ECS-centric model, the declarative/imperative boundary, and the author/backend responsibility split.
 ## Requirements
-
 ### Requirement: Cactus language identity
-Cactus SHALL be defined as a declarative, data-oriented gameplay description language that compiles to an engine backend. This identity statement SHALL be the authoritative reference for evaluating proposed language features.
+Cactus SHALL be defined as a declarative, data-oriented notation for interactive simulations that compiles to an engine backend. Games come first. UI applications and tools, such as a game editor, SHALL be expressible with the same primitives. This identity statement SHALL be the authoritative reference for evaluating proposed language features.
 
 Cactus has two goals, and they divide the work:
-1. **The language** makes game definitions short and simple, and rules out common gameplay coding errors by construction.
-2. **The backend** turns those definitions into the most efficient code it can derive from the whole program.
+1. **The language** makes definitions short, simple to read, and declarative first, with imperative handlers and pure functions where behavior needs them. It rules out common coding errors by construction, above all memory management, lifetime management and data-race errors.
+2. **The backend** turns those definitions into the most efficient code it can derive from the whole program: its data, its dependency graph, and its timing relations.
 
-When the two pull against each other, the language stays simple and the backend does the extra work.
+When the two pull against each other, the language stays simple and the backend does the extra work. The notation is the primary product; a backend is one realization of it.
 
-The primary authoring audience is a game designer or gameplay programmer who wants to describe what exists, what reacts to what, how state changes, and how gameplay unfolds without writing engine plumbing, lifetime management, or null-guard boilerplate.
+The primary authoring audience is a game designer, gameplay programmer, or tool author who wants to describe what exists, what reacts to what, how state changes, and how it unfolds over time, without writing engine plumbing, lifetime management, or null-guard boilerplate.
 
 #### Scenario: Language identity governs feature evaluation
 - **WHEN** a new language feature is proposed
-- **THEN** the proposal MUST address whether the feature strengthens gameplay authoring or whether it belongs in the generated backend or stdlib instead
+- **THEN** the proposal MUST address whether the feature strengthens authoring as a genre-neutral primitive or whether it belongs in the generated backend or stdlib instead
 
 #### Scenario: Efficiency work goes to the backend, not the author
 - **WHEN** a feature could be made faster either by asking authors for extra declarations or by deeper backend analysis
 - **THEN** the proposal chooses backend analysis
 
+#### Scenario: A tool is in scope
+- **WHEN** a proposal is motivated by a UI application or editor rather than by a game
+- **THEN** it is evaluated as part of the language's mission, under the same criteria as a gameplay proposal
+
 ### Requirement: Simplicity is defined against a gameplay-core profile
 The project's simplicity claims SHALL apply to a curated gameplay-core profile rather than to the union of every current, experimental, or deferred language idea.
 
-The gameplay-core profile SHALL be small enough to teach as a coherent authoring model for action-game mechanics such as platformers and shooters.
+The gameplay-core profile SHALL be small enough to teach as a coherent authoring model for action-game mechanics such as platformers and shooters. It SHALL remain the teaching profile and the yardstick for simplicity.
+
+A tools profile SHALL cover UI applications and editors. It SHALL be built from the same primitives as the gameplay-core profile plus stdlib modules, and SHALL NOT introduce syntax that only tools may use.
 
 #### Scenario: Simplicity claim refers to the gameplay core
 - **WHEN** project documentation describes Cactus as simple or beginner-friendly
@@ -36,16 +40,9 @@ The gameplay-core profile SHALL be small enough to teach as a coherent authoring
 - **WHEN** a new feature is evaluated for the main language story
 - **THEN** it is assessed against whether it preserves a small, teachable gameplay-core model
 
-### Requirement: Cactus is gameplay-focused, not a general-purpose engine scripting surface
-The language SHALL be described as a gameplay-focused DSL optimized for expressing entity state, events, spawning, rule-driven updates, and action-game rules. It SHALL NOT be presented as a complete general-purpose solution for UI description, tool scripting, or arbitrary engine orchestration unless such features are explicitly designed and accepted.
-
-#### Scenario: Gameplay-oriented feature fits the language identity
-- **WHEN** a proposal strengthens player movement, projectiles, collision reactions, combat flow, or scene/gameplay state transitions
-- **THEN** it is evaluated as part of the language's core mission
-
-#### Scenario: Non-gameplay abstraction is treated cautiously
-- **WHEN** a proposal introduces a broad abstraction for UI, engine plumbing, or unrelated scripting concerns
-- **THEN** the project evaluates whether it belongs in stdlib/backend layers or a deferred capability instead of the gameplay core
+#### Scenario: Tools profile adds no private syntax
+- **WHEN** a feature is proposed so that a UI application or editor can be written in Cactus
+- **THEN** it is a primitive that gameplay code may also use, or it is a stdlib module, and never syntax that only tool code may use
 
 ### Requirement: Predictability is a first-class design goal
 The Cactus execution model SHALL be fully predictable. Authors SHALL be able to reason about when and how every statement executes without consulting backend implementation details.
@@ -72,17 +69,21 @@ The following timing guarantees SHALL be documented and honored by all backends:
 - **THEN** no handler in the same activation observes the structural result before commit
 
 ### Requirement: ECS is the primary gameplay model, with explicit boundaries
-Cactus SHALL remain ECS-first for gameplay modeling, but the language philosophy SHALL explicitly distinguish gameplay concerns from presentation and engine-plumbing concerns.
+Cactus SHALL remain ECS-first for gameplay and tool modeling: traits, rules, events, templates, hierarchy, spawning and filtering are the modeling tools for both.
 
-Gameplay-facing constructs such as traits, rules, events, templates, spawning, and filtering belong in the core language identity. Presentation, UI, and engine integration concerns SHALL default to stdlib/backend layers unless a dedicated language feature is intentionally added.
+Rendering submission, input devices, and other engine integration SHALL default to stdlib/backend layers. Application logic SHALL NOT. When a UI or tool can only be built by moving its application logic into `extern` code, such as spawning templates by string name, laying out widgets in native code, or inspecting traits in native code, that SHALL be treated as a language gap, not as an accepted boundary.
 
 #### Scenario: Gameplay mechanic uses ECS constructs
 - **WHEN** a platformer or shooter mechanic is authored in Cactus
 - **THEN** it is expected to use traits, rules, events, and spawned entities as the primary modeling tools
 
 #### Scenario: UI concern is not forced into the core language story
-- **WHEN** a maintained example needs HUD or menu behavior
-- **THEN** the documentation does not treat missing first-class UI syntax as a failure of the gameplay-core language identity
+- **WHEN** a maintained example needs HUD, menu or editor behavior
+- **THEN** it builds that behavior from traits, rules, hierarchy and stdlib modules, and adds no UI keywords to the language
+
+#### Scenario: Application logic forced into extern code is a gap
+- **WHEN** a UI or tool feature can only be written as an `extern func` or `extern rule` because the notation cannot express its logic
+- **THEN** the project records it as a language gap to close, rather than documenting the extern as the intended design
 
 ### Requirement: Total operation semantics
 All operations in Cactus that take an `entity_id` argument SHALL be total: they are defined for all possible inputs, including stale handles. Operations on stale handles produce safe no-ops or no-match results. Authors SHALL NOT be required to check entity validity before performing operations.
@@ -92,7 +93,13 @@ All operations in Cactus that take an `entity_id` argument SHALL be total: they 
 - **THEN** no compile error occurs and the backend generates any required validity guard automatically
 
 ### Requirement: Common gameplay errors are prevented by construction
-The language SHALL prefer forms in which common gameplay bugs cannot be written, or are compile errors, over forms that rely on author discipline. Facts the compiler can derive from declarations SHALL NOT be restated by authors, because each restatement can drift from the truth. Total semantics for `entity_id` is one instance of this rule; it applies to every construct.
+The language SHALL prefer forms in which common bugs cannot be written, or are compile errors, over forms that rely on author discipline. Facts the compiler can derive from declarations SHALL NOT be restated by authors, because each restatement can drift from the truth. Total semantics for `entity_id` is one instance of this rule; it applies to every construct.
+
+Three error classes SHALL be ruled out by construction in authored code, and no feature SHALL reopen any of them:
+
+1. **Memory management.** No authored construct allocates, frees, or aliases memory. Values are copied; storage belongs to entities, traits, constants and the runtime.
+2. **Lifetime management.** No authored operation can observe a destroyed entity's storage. Entity handles are total, structural changes commit at defined boundaries, and owned descendants are destroyed with their owner.
+3. **Data races.** No two handlers can access the same data in an undefined order. Handler contracts are derived from handler bodies, and conflicting handlers are ordered by the compiler; authors write no locks and no access annotations.
 
 #### Scenario: Collision code does not depend on shape kinds
 - **WHEN** an author asks whether, or where, two entities collide
@@ -111,6 +118,22 @@ The language SHALL prefer forms in which common gameplay bugs cannot be written,
 #### Scenario: Meaningless declarations are compile errors
 - **WHEN** a combination of declarations has no defined runtime meaning
 - **THEN** the compiler reports a source-located error instead of accepting it and doing nothing at runtime
+
+#### Scenario: No authored construct manages memory
+- **WHEN** an author stores a struct, list or string in a trait field, local or event
+- **THEN** no authored statement allocates or frees it, and changing the copy never changes another value
+
+#### Scenario: A destroyed entity cannot be observed
+- **WHEN** one handler destroys an entity that another handler still holds as an `entity_id`
+- **THEN** every later operation through that handle is a defined no-op or no-match, and no handler reads freed storage
+
+#### Scenario: Conflicting handlers are ordered without annotations
+- **WHEN** two handlers of one activation write, or write and read, the same trait
+- **THEN** the compiler orders them deterministically from their derived contracts, and the author writes no lock or access declaration
+
+#### Scenario: A feature that reopens an error class is rejected
+- **WHEN** a proposal would let authored code allocate memory, outlive an entity's storage, or access shared data in an undefined order
+- **THEN** it is revised until the error class stays closed, or it is rejected
 
 ### Requirement: The declarative/restricted-imperative boundary
 The Cactus authoring surface SHALL be divided into two tiers:
@@ -220,11 +243,11 @@ Because every rule domain, predicate, and write is declared, the backend sees th
 ### Requirement: Feature evaluation criteria
 All proposed changes to the language SHALL be evaluated against the following criteria, in order:
 1. Is this an author concern or a backend concern?
-2. Does it strengthen gameplay authoring or force engine plumbing into authored code?
-3. Does it remove a class of common gameplay errors, or introduce one?
+2. Is it a genre-neutral primitive, or does it force engine plumbing or genre-specific syntax into authored code?
+3. Does it remove a class of common errors, or introduce one? In particular, does it keep memory management, lifetime management and data-race errors impossible?
 4. Is its timing and behavior predictable without hidden backend knowledge?
 5. Are its operations total and are failure semantics defined?
-6. Does it preserve the declarative/restricted-imperative boundary?
+6. Does it preserve the declarative/restricted-imperative boundary, and does it prefer derived state over maintained state?
 7. Does it preserve a small, teachable gameplay-core profile?
 
 #### Scenario: Proposed feature is a backend concern
@@ -239,4 +262,31 @@ All proposed changes to the language SHALL be evaluated against the following cr
 - **WHEN** a proposal requires authors to restate something the compiler could derive, such as a shape kind or an acceleration bound
 - **THEN** it is revised so that the compiler derives it, or the proposal justifies why that is impossible
 
+#### Scenario: Proposed feature is genre-specific
+- **WHEN** a proposal adds a keyword or declaration that only makes sense for one genre or for UI, such as `widget`, `button` or `unit`
+- **THEN** it is redirected to a genre-neutral primitive or a stdlib module
+
 Projected traits and bounded foreach SHALL be evaluated as restricted gameplay constructs: `project` states current-frame facts for ECS filtering, while bounded foreach consumes finite query/list snapshots. Neither construct SHALL be treated as permission to add open-ended imperative scripting features by default.
+
+### Requirement: Cactus primitives are genre-neutral
+Language constructs SHALL describe data, relations, time and reactions, not genres or widgets. The same constructs SHALL serve action games, strategy, simulation, turn-based games and UI applications at small and large scale. Genre- and domain-specific vocabulary, such as characters, units, widgets or tiles, SHALL live in stdlib modules written in Cactus wherever the notation can express them.
+
+#### Scenario: Stdlib vocabulary is written in Cactus
+- **WHEN** a stdlib module provides genre or UI vocabulary, such as a character controller or a stack layout
+- **THEN** its policy is written as Cactus rules over traits, and only program-independent kernels are native runtime code
+
+#### Scenario: A genre need becomes a general primitive
+- **WHEN** a genre-specific need, such as RTS target acquisition, motivates a language change
+- **THEN** the change is stated as a general primitive, such as a relation or a derived trait, that other genres can use
+
+### Requirement: Derived state is preferred over maintained state
+When the language supports state that is a function of other state, it SHALL do so as derived state that the compiler keeps current, as `keep` does for pair relations. It SHALL NOT do so by documenting a pattern in which handlers maintain copies with flags, sentinels, or paired spawn and destroy code, because each such copy can drift from its source.
+
+#### Scenario: Derivable fact is declared, not maintained
+- **WHEN** a trait's presence or values follow from a declared relation, such as "touching lava"
+- **THEN** the language offers a derived form whose single writer is the compiler, and handlers that set or clear that trait by hand are not the recommended form
+
+#### Scenario: Derivation gives the backend more knowledge
+- **WHEN** state is declared as derived
+- **THEN** the backend knows its inputs and may choose when and how to recompute it, for example only when an input changed
+

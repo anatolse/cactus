@@ -5,14 +5,18 @@
 
 ## 1. Overview
 
-Cactus DSL is a declarative, data-oriented gameplay language that compiles to an engine backend. Its primary purpose is to express **gameplay**: entities, state, reactions, spawning, scene flow, and action-game logic.
+Cactus DSL is a declarative, data-oriented notation for interactive simulations that compiles to an engine backend. Games come first: entities, state, reactions, spawning, scene flow, and their timing. UI applications and tools, such as a game editor, are built from the same primitives. Language constructs describe data, relations, time and reactions, never genres or widgets; genre and UI vocabulary lives in stdlib modules.
 
-The language is intentionally centered on a **gameplay-core profile** that is sufficient for authoring things like:
+The language is taught through a **gameplay-core profile** that is sufficient for authoring things like:
 
 - platformers: movement, gravity, jumping, collectibles, enemies, camera follow
 - shooters: fire input, projectile spawning, hit/damage flow, cleanup, enemy defeat
 
-Cactus is **not** specified as a general-purpose engine scripting language. Rendering, audio playback plumbing, physics integration, UI rendering, and similar engine-facing concerns belong to stdlib/backend layers unless explicitly elevated into the language surface by a separate accepted change.
+A **tools profile** covers UI applications and editors with the same primitives plus stdlib modules, and adds no syntax of its own.
+
+Engine plumbing — rendering submission, audio playback, physics integration, input devices — belongs to stdlib/backend layers. Application logic does not: a UI or tool that can only be built by moving its logic into `extern` code marks a language gap.
+
+Authored code cannot make three classes of error: memory management (no authored construct allocates or frees memory), lifetime management (entity handles are total and structural changes commit at defined boundaries), and data races (handler contracts are derived and conflicting handlers are ordered by the compiler). See `openspec/specs/language-philosophy/spec.md`.
 
 ### 1.1 Layered Language Story
 

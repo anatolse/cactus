@@ -2,15 +2,16 @@
 
 Use simple English. A concise sentence or question is better than a long, vague one.
 
-A DSL for making games that compiles to native C++ (EnTT ECS + raylib) — see
+A DSL for making games, and tools such as editors, that compiles to native C++ (EnTT ECS + raylib) — see
 `README.md` for the project thesis. This file is layered: this preamble applies to
 every task in the repo; the named subsections below scope further guidance to their
 own area. Cactus DSL authoring rules live in `.claude/rules/cactus-dsl.md` (loaded
 for `stdlib/` and `examples/`); rendering diagnosis is the `debug-rendering` skill.
 
-Two goals decide most design questions: the language keeps game definitions simple and
-rules out common gameplay errors by construction; the backend derives the most efficient
-code from whole-program knowledge. See `openspec/specs/language-philosophy/spec.md`.
+Two goals decide most design questions: the language keeps definitions simple, uses
+genre-neutral primitives, and rules out memory, lifetime and data-race errors by
+construction; the backend derives the most efficient code from whole-program knowledge.
+See `openspec/specs/language-philosophy/spec.md`.
 
 ## Change lifecycle (mandatory for substantive changes)
 

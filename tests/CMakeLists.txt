@@ -135,6 +135,11 @@ add_executable(test_parser test_parser.cpp)
 target_link_libraries(test_parser PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME ParserTests COMMAND test_parser)
 
+# Error reporter tests
+add_executable(test_error_reporter test_error_reporter.cpp)
+target_link_libraries(test_error_reporter PRIVATE cactus_frontend Catch2::Catch2WithMain)
+add_test(NAME ErrorReporterTests COMMAND test_error_reporter)
+
 # Semantic analysis tests
 add_executable(test_semantic test_semantic.cpp)
 target_link_libraries(test_semantic PRIVATE cactus_frontend Catch2::Catch2WithMain)
@@ -723,6 +728,16 @@ target_compile_definitions(test_example_cpp_compilation PRIVATE
 )
 
 add_test(NAME ExampleCppCompilationTests COMMAND test_example_cpp_compilation)
+
+add_executable(test_cli_diagnostics test_cli_diagnostics.cpp)
+target_link_libraries(test_cli_diagnostics PRIVATE Catch2::Catch2WithMain)
+add_dependencies(test_cli_diagnostics cactus)
+target_compile_definitions(test_cli_diagnostics PRIVATE
+    CACTUS_TEST_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    CACTUS_TEST_BINARY_DIR="${CMAKE_BINARY_DIR}"
+    CACTUS_COMPILER_PATH="$<TARGET_FILE:cactus>"
+)
+add_test(NAME CliDiagnosticsTests COMMAND test_cli_diagnostics)
 
 # add_custom_command(
 #     TARGET test_example_cpp_compilation POST_BUILD

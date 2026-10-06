@@ -9863,6 +9863,10 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
     }
     if (const auto* unary = std::get_if<UnaryExpr>(&expr.expr)) {
         auto operand = infer_expr_type(*unary->operand, filter_bindings, local_bindings, handler_event, pair_scope);
+        if (unary->op == "-" && operand.kind == TypeKind::Bool) {
+            errors_.error(expr.location, "no operator '-' for operand type 'bool'");
+            return make_unknown_type();
+        }
         if (unary->op != "not") {
             return operand;
         }
@@ -9888,8 +9892,9 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
             binary->op == ">=" || binary->op == "and" || binary->op == "or") {
             return make_bool_type();
         }
-        if ((left.kind == TypeKind::Vec2 || left.kind == TypeKind::Vec3 || left.kind == TypeKind::Color ||
-             right.kind == TypeKind::Vec2 || right.kind == TypeKind::Vec3 || right.kind == TypeKind::Color) &&
+        if ((left.kind == TypeKind::Bool || left.kind == TypeKind::Vec2 || left.kind == TypeKind::Vec3 ||
+             left.kind == TypeKind::Color || right.kind == TypeKind::Bool || right.kind == TypeKind::Vec2 ||
+             right.kind == TypeKind::Vec3 || right.kind == TypeKind::Color) &&
             left.kind != TypeKind::Unknown && right.kind != TypeKind::Unknown) {
             if (auto result_kind = lookup_vector_binary_op_result(left.kind, binary->op, right.kind)) {
                 return vector_result_type_info(*result_kind);
@@ -11184,13 +11189,8 @@ void SemanticAnalyzer::validate_context_stmts(  // NOLINT(readability-function-c
                 if constexpr (std::is_same_v<S, SpawnStmt> || std::is_same_v<S, DestroyStmt> ||
                               std::is_same_v<S, LoadStmt> || std::is_same_v<S, AddTraitStmt> ||
                               std::is_same_v<S, RemoveTraitStmt> || std::is_same_v<S, ProjectTraitStmt> ||
-                              std::is_same_v<S, SetTraitStmt> || std::is_same_v<S, ForeachStmt> ||
-                              std::is_same_v<S, MatchStmt>) {
-                    bool handler_only = true;
-                    if constexpr (std::is_same_v<S, MatchStmt>) {
-                        handler_only = s.kind == MatchKind::Trait;
-                    }
-                    if (!in_rule_handler && handler_only) {
+                              std::is_same_v<S, SetTraitStmt> || std::is_same_v<S, ForeachStmt>) {
+                    if (!in_rule_handler) {
                         // Determine which keyword is used
                         std::string kw;
                         if constexpr (std::is_same_v<S, SpawnStmt>) {
@@ -11207,8 +11207,6 @@ void SemanticAnalyzer::validate_context_stmts(  // NOLINT(readability-function-c
                             kw = "set";
                         } else if constexpr (std::is_same_v<S, ForeachStmt>) {
                             kw = "for";
-                        } else if constexpr (std::is_same_v<S, MatchStmt>) {
-                            kw = "match";
                         } else {
                             kw = "remove";
                         }
@@ -11294,11 +11292,10 @@ void SemanticAnalyzer::validate_context_stmts(  // NOLINT(readability-function-c
                                                           self_context_locals,
                                                           nullptr);
                     }
-                    if constexpr (std::is_same_v<S, MatchStmt>) {
-                        validate_self_expr(*s.subject, s.location);
-                        for (const auto& arm : s.arms) {
-                            validate_context_stmts(arm.body, context_name, in_rule_handler);
-                        }
+                } else if constexpr (std::is_same_v<S, MatchStmt>) {
+                    validate_self_expr(*s.subject, s.location);
+                    for (const auto& arm : s.arms) {
+                        validate_context_stmts(arm.body, context_name, in_rule_handler);
                     }
                 } else if constexpr (std::is_same_v<S, IfStmt>) {
                     validate_context_stmts(s.then_body, context_name, in_rule_handler);

@@ -46,7 +46,7 @@ The CLI SHALL execute the complete compiler pipeline: module validation/resoluti
 - **THEN** the CLI prints the error with source location and exits without compiling further
 
 ### Requirement: Error reporting with source locations
-The CLI SHALL print all errors and warnings with source file path, line number, and column number in a standard format: `file:line:col: error: message`. For multi-module projects, errors SHALL include the originating module's filename.
+The CLI SHALL print all errors and warnings with source file path, line number, and column number in a standard format: `file:line:col: error: message`. For multi-module projects, errors SHALL include the originating module's filename. Each diagnostic SHALL be printed exactly once.
 
 #### Scenario: Cross-module error
 - **WHEN** `enemies.cactus` references undefined type `Foo` at line 10
@@ -55,6 +55,18 @@ The CLI SHALL print all errors and warnings with source file path, line number, 
 #### Scenario: Module resolution error
 - **WHEN** `main.cactus` has `use missing` at line 3
 - **THEN** the CLI prints `main.cactus:3:5: error: module 'missing' not found`
+
+#### Scenario: Each diagnostic is printed once
+- **WHEN** compiling a file with one semantic error
+- **THEN** the CLI prints that error's line exactly once and exits with code 1
+
+#### Scenario: Warnings on a successful compile are still printed
+- **WHEN** compiling a file that succeeds with one warning
+- **THEN** the CLI prints that warning exactly once and exits with code 0
+
+#### Scenario: Dependency module parse error is printed once
+- **WHEN** compiling a project whose imported module has one parse error
+- **THEN** the CLI prints that parse error's line exactly once and exits with code 1
 
 ### Requirement: Exit codes
 The CLI SHALL exit with code 0 on success and code 1 on any compilation error.

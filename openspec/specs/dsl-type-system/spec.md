@@ -184,3 +184,22 @@ An `if` or `match` expression is pure when its condition or subject, its pattern
 #### Scenario: Only the selected branch is evaluated
 - **WHEN** an `if` expression's condition is `false` and its then-expression calls an extern function
 - **THEN** that call does not happen
+
+### Requirement: Arithmetic operands are not bool
+The operands of `+`, `-`, `*`, `/` and `%`, and the operand of unary `-`, SHALL NOT have type `bool`. A `bool` operand SHALL be a compile error at the expression, naming the operator and the operand types. There is no implicit conversion from `bool` to a number. Comparisons with `==` and `!=` on `bool` are unaffected.
+
+#### Scenario: Int plus bool is rejected
+- **WHEN** a handler contains `let y = 1 + true`
+- **THEN** the semantic analyzer reports that there is no operator `+` for operand types `int` and `bool`
+
+#### Scenario: Bool times float is rejected
+- **WHEN** a handler contains `let s = alive * 2.0` and `alive` is `bool`
+- **THEN** the semantic analyzer reports that there is no operator `*` for operand types `bool` and `float`
+
+#### Scenario: Negating a bool is rejected
+- **WHEN** a handler contains `let n = -ready` and `ready` is `bool`
+- **THEN** the semantic analyzer reports that there is no operator `-` for operand type `bool`
+
+#### Scenario: Bool equality is accepted
+- **WHEN** a handler contains `if ready == true:`
+- **THEN** the condition type-checks as `bool`

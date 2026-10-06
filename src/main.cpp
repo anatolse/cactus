@@ -214,15 +214,16 @@ static bool compile_implicit_std_core(const fs::path& build_dir,
 
     cactus::SemanticAnalyzer analyzer(std_errors);
     auto dec = analyzer.analyze(*std_prog);
+    print_errors(std_errors);
     if (std_errors.has_errors()) {
-        print_errors(std_errors);
         return false;
     }
 
     cactus::ErrorReporter art_errors;
     cactus::ModuleArtifact artifact(art_errors);
-    if (!artifact.save(dec, "std.core", build_dir)) {
-        print_errors(art_errors);
+    const bool saved = artifact.save(dec, "std.core", build_dir);
+    print_errors(art_errors);
+    if (!saved) {
         return false;
     }
 
@@ -298,16 +299,17 @@ static bool compile_module(const cactus::ModuleInfo& mod,
     // Semantic analyze
     cactus::SemanticAnalyzer analyzer(mod_errors);
     auto dec = analyzer.analyze(*mod_prog, imports);
+    print_errors(mod_errors);
     if (mod_errors.has_errors()) {
-        print_errors(mod_errors);
         return false;
     }
 
     // Save artifact
     cactus::ErrorReporter art_errors;
     cactus::ModuleArtifact artifact(art_errors);
-    if (!artifact.save(dec, mod.qualified_name, build_dir)) {
-        print_errors(art_errors);
+    const bool saved = artifact.save(dec, mod.qualified_name, build_dir);
+    print_errors(art_errors);
+    if (!saved) {
         return false;
     }
     artifact_paths.push_back(build_dir / (mod.qualified_name + ".cmod"));
@@ -442,8 +444,8 @@ int main(int argc, char* argv[]) {  // NOLINT(readability-function-cognitive-com
         cactus::ErrorReporter resolve_errors;
         cactus::ModuleResolver resolver(resolve_errors);
         auto modules = resolver.resolve(input_file, all_search_paths);
+        print_errors(resolve_errors);
         if (resolve_errors.has_errors()) {
-            print_errors(resolve_errors);
             return 1;
         }
 
@@ -474,8 +476,8 @@ int main(int argc, char* argv[]) {  // NOLINT(readability-function-cognitive-com
         cactus::ErrorReporter link_errors;
         cactus::ProgramLinker linker(link_errors);
         auto merged = linker.link(artifact_paths);
+        print_errors(link_errors);
         if (!merged || link_errors.has_errors()) {
-            print_errors(link_errors);
             return 1;
         }
         decorated = std::move(*merged);
@@ -497,8 +499,8 @@ int main(int argc, char* argv[]) {  // NOLINT(readability-function-cognitive-com
         // ── Single-module explicit-module pipeline ─────────────────────────────
         cactus::SemanticAnalyzer analyzer(errors);
         decorated = analyzer.analyze(*root_prog);
+        print_errors(errors);
         if (errors.has_errors()) {
-            print_errors(errors);
             return 1;
         }
     }

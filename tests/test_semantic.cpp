@@ -5434,6 +5434,48 @@ TEST_CASE("Semantic: non-bool conditions are rejected", "[semantic][conditional-
               .empty());
 }
 
+TEST_CASE("Semantic: expression error in a handler let is reported once", "[semantic][diagnostics]") {
+    CHECK(conditional_handler_errors("        let z = if a.hp: 1 else: 2\n") ==
+          std::vector<std::string>{"`if` condition must be `bool`, got `int`"});
+}
+
+TEST_CASE("Semantic: expression error in a func let is reported once", "[semantic][diagnostics]") {
+    CHECK(analyze_error_messages(CONDITIONAL_PRELUDE + "func f() int:\n"
+                                                       "    let x: int = if true: 1 else: 2.5\n"
+                                                       "    return x\n") ==
+          std::vector<std::string>{"`if` expression branches have different types: `int` and `float`"});
+}
+
+TEST_CASE("Semantic: the same expression error on two lines is reported twice", "[semantic][diagnostics]") {
+    CHECK(conditional_handler_errors("        let z = if a.hp: 1 else: 2\n"
+                                     "        let w = if a.hp: 1 else: 2\n") ==
+          std::vector<std::string>{"`if` condition must be `bool`, got `int`",
+                                   "`if` condition must be `bool`, got `int`"});
+}
+
+TEST_CASE("Semantic: arithmetic with a bool operand is rejected", "[semantic][type-system]") {
+    CHECK(conditional_handler_errors("        let y = 1 + true\n") ==
+          std::vector<std::string>{"no operator '+' for operand types 'int' and 'bool'"});
+    CHECK(conditional_handler_errors("        let s = a.ready * 2.0\n") ==
+          std::vector<std::string>{"no operator '*' for operand types 'bool' and 'float'"});
+    CHECK(conditional_handler_errors("        let m = a.hp % a.ready\n") ==
+          std::vector<std::string>{"no operator '%' for operand types 'int' and 'bool'"});
+    CHECK(conditional_handler_errors("        let n = -a.ready\n") ==
+          std::vector<std::string>{"no operator '-' for operand type 'bool'"});
+}
+
+TEST_CASE("Semantic: bool equality is still accepted", "[semantic][type-system]") {
+    CHECK(conditional_handler_errors("        if a.ready == true:\n"
+                                     "            a.speed = 1.0\n")
+              .empty());
+}
+
+TEST_CASE("Semantic: an unknown arithmetic operand reports no operator error", "[semantic][type-system]") {
+    const auto errors = conditional_handler_errors("        let y = a.missing + true\n"
+                                                   "        let n = -a.missing\n");
+    CHECK(std::ranges::none_of(errors, [](const std::string& message) { return message.contains("no operator"); }));
+}
+
 TEST_CASE("Semantic: conditional expression branch types must match", "[semantic][conditional-expressions]") {
     CHECK(has_error(conditional_handler_errors("        let x = if a.ready: 1 else: 2.0\n"),
                     "`if` expression branches have different types: `int` and `float`"));
@@ -5513,13 +5555,26 @@ TEST_CASE("Semantic: value match in a func body is accepted", "[semantic][condit
               .empty());
 }
 
-TEST_CASE("Semantic: trait match in a func body is still rejected", "[semantic][conditional-expressions]") {
-    CHECK(has_error(analyze_error_messages(CONDITIONAL_PRELUDE + "func f(subject: entity_id) int:\n"
-                                                                 "    match subject:\n"
-                                                                 "        Actor as b =>\n"
-                                                                 "            return b.hp\n"
+TEST_CASE("Semantic: trait match in a func body is rejected with exactly one diagnostic",
+          "[semantic][conditional-expressions]") {
+    CHECK(analyze_error_messages(CONDITIONAL_PRELUDE + "func f(subject: entity_id) int:\n"
+                                                       "    match subject:\n"
+                                                       "        Actor as b =>\n"
+                                                       "            return b.hp\n"
+                                                       "    return 0\n") ==
+          std::vector<std::string>{"statement-level `match entity_id` only allowed inside rule event handlers"});
+}
+
+TEST_CASE("Semantic: destroy inside a value match arm in a func body is still rejected",
+          "[semantic][conditional-expressions]") {
+    CHECK(has_error(analyze_error_messages(CONDITIONAL_PRELUDE + "func f(mode: Mode, target: entity_id) int:\n"
+                                                                 "    match mode:\n"
+                                                                 "        Mode.Idle =>\n"
+                                                                 "            destroy target\n"
+                                                                 "        _ =>\n"
+                                                                 "            return 1\n"
                                                                  "    return 0\n"),
-                    "statement-level `match entity_id` only allowed inside rule event handlers"));
+                    "`destroy` only allowed inside rule event handlers"));
 }
 
 TEST_CASE("Semantic: float match subject is rejected with the subject-type message",

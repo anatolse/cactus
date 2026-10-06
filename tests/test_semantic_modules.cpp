@@ -3679,14 +3679,13 @@ TEST_CASE("rule groups: before: validation mirrors after:", "[semantic][rule-gro
                                          "    after:\n"
                                          "        Position\n"
                                          "    before:\n"
-                                         "        Position\n"
+                                         "        Damaged\n"
                                          "    on fixed_tick:\n"
                                          "        let value = 1\n"));
     CHECK(has_diagnostic(diagnostics, "rule 'A' cannot list itself in before:"));
     CHECK(has_diagnostic(diagnostics, "unknown rule 'NonExistentRule' in before clause"));
-    CHECK(std::ranges::count_if(diagnostics, [](const auto& diagnostic) {
-              return diagnostic.message.find("'Position' is not a rule or group") != std::string::npos;
-          }) == 2);
+    CHECK(has_diagnostic(diagnostics, "'Position' is not a rule or group"));
+    CHECK(has_diagnostic(diagnostics, "'Damaged' is not a rule or group"));
 }
 
 TEST_CASE("rule groups: unknown name in after: keeps its diagnostic", "[semantic][rule-groups]") {

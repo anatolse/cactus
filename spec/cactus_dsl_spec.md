@@ -1090,6 +1090,8 @@ primary_expr    = literal | IDENTIFIER | "self" | "(" expression ")"
 
 The operands of `and`, `or` and `not` must be `bool`. There is no implicit truthiness: `if t.hp:` is an error, write `if t.hp > 0:`.
 
+The operands of `+`, `-`, `*`, `/`, `%` and unary `-` must not be `bool`. There is no conversion from `bool` to a number: `1 + true` and `-ready` are errors. `==` and `!=` still compare `bool` values.
+
 Two expressions choose a value:
 
 ```ebnf

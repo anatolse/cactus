@@ -1065,3 +1065,17 @@ The semantic analyzer SHALL maintain a per-handler and per-`func` local variable
 - **WHEN** a handler assigns `score = 3` and no local, alias, or writable binding named `score` is in scope
 - **THEN** the analyzer reports an error: "assignment to undeclared local 'score'; declare it with `var`"
 
+### Requirement: One diagnostic per distinct problem
+The compiler SHALL record a diagnostic at most once for a given level, source location and message. A repeat of an already recorded diagnostic SHALL NOT be printed again and SHALL NOT increase the error or warning count. Diagnostics with the same message at different locations, or different messages at the same location, SHALL all be kept.
+
+#### Scenario: Expression error in a handler let is reported once
+- **WHEN** a rule handler contains `let z = if a.hp: 1 else: 2` and `a.hp` is an `int`
+- **THEN** the semantic analyzer reports exactly one error that the `if` condition must be `bool`
+
+#### Scenario: Expression error in a func let is reported once
+- **WHEN** a `func` body contains `let x: int = if true: 1 else: 2.5`
+- **THEN** the semantic analyzer reports exactly one error that the branches have types `int` and `float`
+
+#### Scenario: Same message at two locations is kept twice
+- **WHEN** two different lines each contain `let z = if a.hp: 1 else: 2`
+- **THEN** the semantic analyzer reports two errors, one per line

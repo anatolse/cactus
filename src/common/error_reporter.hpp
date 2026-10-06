@@ -13,6 +13,8 @@ struct Diagnostic {
     DiagnosticLevel level;
     SourceLocation location;
     std::string message;
+
+    friend bool operator==(const Diagnostic&, const Diagnostic&) = default;
 };
 
 class ErrorReporter {
@@ -36,6 +38,8 @@ public:
     void print_summary() const;
 
 private:
+    bool record(DiagnosticLevel level, const SourceLocation& loc, const std::string& msg);
+
     std::vector<Diagnostic> diagnostics_;
     int error_count_   = 0;
     int warning_count_ = 0;

@@ -1,0 +1,4 @@
+module broken
+
+trait Broken:
+    var x int = 0

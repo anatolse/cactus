@@ -68,7 +68,7 @@ The wildcard arm `_ =>` is optional. If present, it MUST be the final arm in the
 - **THEN** the semantic analyzer SHALL report: "wildcard arm `_ =>` must be the last arm in a trait match"
 
 ### Requirement: `match entity_id:` only valid inside rule event handlers
-Statement-level `match` on `entity_id` SHALL only appear inside rule event handler bodies. Using it inside a `func` body SHALL be a compile-time error. A value match has no such restriction: it is allowed in rule handler bodies and in `func` bodies.
+Statement-level `match` on `entity_id` SHALL only appear inside rule event handler bodies. Using it inside a `func` body SHALL be a compile-time error, reported as exactly one diagnostic. A value match has no such restriction: it is allowed in rule handler bodies and in `func` bodies.
 
 #### Scenario: trait match in event handler is valid
 - **WHEN** `match c.other:` appears inside `on collision as c:` in a rule
@@ -77,6 +77,7 @@ Statement-level `match` on `entity_id` SHALL only appear inside rule event handl
 #### Scenario: trait match outside event handler is invalid
 - **WHEN** `match some_id:` appears inside a `func` body
 - **THEN** the semantic analyzer SHALL report: "statement-level `match entity_id` only allowed inside rule event handlers"
+- **AND** it SHALL report no other diagnostic for that `match` statement
 
 #### Scenario: value match in a func body is valid
 - **WHEN** `match mode:` with enum value arms appears inside a `func` body and `mode` is an enum parameter

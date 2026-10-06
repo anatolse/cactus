@@ -1,0 +1,16 @@
+module one_warning
+
+event tick:
+    dt: float
+
+trait Enemy:
+    var hp: int = 1
+
+rule P:
+    pairs:
+        a:
+            Enemy
+        b:
+            Enemy
+    on tick:
+        let total = a.Enemy.hp + b.Enemy.hp

@@ -1,0 +1,4 @@
+module semantic_error
+
+trait Enemy:
+    var hp: Missing = 0

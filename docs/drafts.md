@@ -486,17 +486,6 @@ counts as a language gap. Known gaps:
 | Strings and collections underspecified | §4.6 limits string literals to `const`; `list` trait fields have no stated semantics | value-type strings, lists, maps |
 | Undo and play-in-editor | no transaction or world-fork model | command-log transactions, world capture/restore |
 
-## Conditional gaps (2026-10-05)
-
-`else if` already shipped (`b5412d3`); the review above missed it because no example
-used it. The arena's `SeekPlayer` now uses it through `steer_angle`. Real gaps found
-while checking:
-
-- `if c: a else: b` and value `match` (`pattern => expr`) parse and type-check, but
-  cpp-entt emits `/* unsupported expr */` and the CLI still reports success. A
-  `match` expression followed by another statement fails with "expected newline".
-- An `if` condition is not required to be `bool`: `if t.hp:` with an `int` compiles.
-
 ## Language review (2026-10-05)
 
 Role: language designer. The notation comes first and the backend second. Goal:
@@ -551,8 +540,8 @@ hand-maintained copy can drift. Generalizing derived state is the biggest lever.
 
 - `else if` already shipped (`b5412d3`). It is now documented in spec §3.16 and used in
   the arena (`07e7c0a`).
-- `if c: a else: b` and value `match` parse and type-check, but cpp-entt does not
-  lower them. See "Conditional gaps" above.
+- `if` and `match` expressions and the value `match` statement now lower to C++ and
+  GLSL, and conditions must be `bool` (`complete-conditional-expressions`).
 - Declared trait defaults are applied. `examples/standard-ui` is verbose only because
   it follows an outdated comment; that is example cleanup, not a language gap.
 - Before calling a feature missing or working, grep `src/` and `tests/`, read the
@@ -560,11 +549,11 @@ hand-maintained copy can drift. Generalizing derived state is the biggest lever.
 
 ### Open items, ranked
 
-Done: identity rewrite (`broaden-language-identity`, `ea2b35f`).
+Done: identity rewrite (`broaden-language-identity`, `ea2b35f`); conditional
+expressions (`complete-conditional-expressions`).
 
 | # | Item | Solves | Size |
 |---|---|---|---|
-| 1 | Finish conditional expressions: lower `if`/`match` expressions, fix the parse after `match`, require `bool` conditions | silently invalid output; an error-prevention hole | S |
 | 2 | Exclusive states | contradictory marker traits; state machines in AI, UI and game flow | M |
 | 3 | `timer` field type + `on elapsed` | hand-written countdowns; gives the backend every deadline | M |
 | 4 | Derived entities + `keep` on unary rules | UI lists, outliners, health bars, palettes; leaks and duplicates | L |

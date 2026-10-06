@@ -6,6 +6,8 @@ TBD - created by archiving change dsl-trait-pattern-match. Update Purpose after 
 ### Requirement: `match entity_id:` statement with trait pattern arms
 The DSL SHALL support a statement-level `match` construct. When the subject expression has type `entity_id`, the `match` performs **trait pattern matching**: each arm tests whether the referenced entity currently has the named trait attached. Arms execute in declaration order; the first matching arm fires and subsequent arms are skipped. If no arm matches and no wildcard is present, execution continues silently (no error, no-op).
 
+When the subject has type `enum`, `int` or `bool`, the statement is a **value match** instead (see "Statement-level value match"). Any other subject type is a compile error.
+
 When the subject handle is stale, no arm fires — see dsl-entity-id-total-semantics.
 
 ```ebnf
@@ -36,8 +38,8 @@ wildcard_arm     = "_" "=>" stmt+ ;
 - **THEN** the wildcard arm body executes
 
 #### Scenario: match on non-entity_id subject is a type error
-- **WHEN** `match some_int:` appears at statement level and `some_int` is type `int`
-- **THEN** the semantic analyzer SHALL report: "statement-level `match` subject must be of type `entity_id`; use expression-level match for value dispatch"
+- **WHEN** `match some_float:` appears at statement level and `some_float` has a type that is not `entity_id`, `enum`, `int` or `bool`
+- **THEN** the semantic analyzer SHALL report: "statement-level `match` subject must be `entity_id`, an enum, `int` or `bool`, got `<type>`"
 
 ### Requirement: Trait arm alias scope and naming
 The alias introduced by `TraitName as alias =>` SHALL be in scope for the duration of that arm's body. The alias provides read/write access to the matched trait's fields on the target entity. The alias name MUST NOT conflict with any in-scope name including filter aliases, event alias, and local variables. Marker trait arms (no fields) MUST NOT declare an alias.
@@ -66,7 +68,7 @@ The wildcard arm `_ =>` is optional. If present, it MUST be the final arm in the
 - **THEN** the semantic analyzer SHALL report: "wildcard arm `_ =>` must be the last arm in a trait match"
 
 ### Requirement: `match entity_id:` only valid inside rule event handlers
-Statement-level `match` on `entity_id` SHALL only appear inside rule event handler bodies. Using it inside a `func` body SHALL be a compile-time error.
+Statement-level `match` on `entity_id` SHALL only appear inside rule event handler bodies. Using it inside a `func` body SHALL be a compile-time error. A value match has no such restriction: it is allowed in rule handler bodies and in `func` bodies.
 
 #### Scenario: trait match in event handler is valid
 - **WHEN** `match c.other:` appears inside `on collision as c:` in a rule
@@ -76,3 +78,49 @@ Statement-level `match` on `entity_id` SHALL only appear inside rule event handl
 - **WHEN** `match some_id:` appears inside a `func` body
 - **THEN** the semantic analyzer SHALL report: "statement-level `match entity_id` only allowed inside rule event handlers"
 
+#### Scenario: value match in a func body is valid
+- **WHEN** `match mode:` with enum value arms appears inside a `func` body and `mode` is an enum parameter
+- **THEN** the semantic analyzer accepts it
+
+### Requirement: Statement-level value match
+A statement-level `match` whose subject has type `enum`, `int` or `bool` SHALL be a value match. The subject is evaluated exactly once. Arms are tested in declaration order, and the body of the first arm whose pattern equals the subject runs; the wildcard `_` matches any value. Exactly one arm body runs, because the arms are exhaustive (see "Value match patterns are typed and exhaustive").
+
+Value arms SHALL NOT declare an `as` alias.
+
+#### Scenario: Enum value match runs the matching arm
+- **WHEN** a handler runs `match ai.mode:` with arms `Mode.Idle =>`, `Mode.Chase =>` and `Mode.Flee =>`, and `ai.mode` is `Mode.Chase`
+- **THEN** only the `Mode.Chase` arm body runs
+
+#### Scenario: Wildcard arm catches remaining values
+- **WHEN** a value match on an `int` subject has arms `0 =>` and `_ =>`, and the subject is `7`
+- **THEN** the `_` arm body runs
+
+#### Scenario: Alias on a value arm is rejected
+- **WHEN** a value match arm is written `Mode.Idle as m =>`
+- **THEN** the semantic analyzer reports that value match arms cannot declare an alias
+
+### Requirement: Value match patterns are typed and exhaustive
+In a value match, statement or expression, every pattern SHALL have the subject's type. An enum pattern names a variant of the subject's enum. An `int` pattern is an `int` literal or an `int` constant. A `bool` pattern is `true`, `false` or a `bool` constant. The wildcard `_` SHALL be the last arm and appear at most once. Two arms with the same pattern value SHALL be a compile error.
+
+A value match SHALL be exhaustive:
+- on an enum subject, the arms name every variant, or the last arm is `_`;
+- on a `bool` subject, the arms name both `true` and `false`, or the last arm is `_`;
+- on an `int` subject, the last arm is `_`.
+
+A non-exhaustive value match SHALL be a compile error that names the missing enum variants or `bool` values. An enum value match that names every variant and also has `_` is accepted.
+
+#### Scenario: New enum variant breaks an incomplete match
+- **WHEN** enum `Mode` gains a variant `Stunned`, and a value match on a `Mode` subject names `Idle`, `Chase` and `Flee` with no `_`
+- **THEN** compilation fails with an error at that `match` naming the missing variant `Stunned`
+
+#### Scenario: Pattern of the wrong type is rejected
+- **WHEN** a value match on a `Mode` subject has an arm `3 =>`
+- **THEN** the semantic analyzer reports that pattern `3` is an `int` but the subject is `Mode`
+
+#### Scenario: Duplicate pattern is rejected
+- **WHEN** a value match has two arms with pattern `Mode.Idle`
+- **THEN** the semantic analyzer reports the duplicate pattern at the second arm
+
+#### Scenario: Int match without wildcard is rejected
+- **WHEN** a value match on an `int` subject has arms `0 =>` and `1 =>` and no `_`
+- **THEN** compilation fails with an error stating that a match on `int` needs a `_` arm

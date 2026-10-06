@@ -1088,7 +1088,34 @@ primary_expr    = literal | IDENTIFIER | "self" | "(" expression ")"
                 | match_expr | if_expr | list_literal | spawn_expr ;
 ```
 
-`if_expr` (`if condition: a else: b`) and `match_expr` (a value `match` whose arms are `pattern => expression`) parse and type-check, but the cpp-entt backend does not lower them yet, and a `match_expr` followed by another statement does not parse. Use an `if` statement until they are completed.
+The operands of `and`, `or` and `not` must be `bool`. There is no implicit truthiness: `if t.hp:` is an error, write `if t.hp > 0:`.
+
+Two expressions choose a value:
+
+```ebnf
+if_expr        = "if" expression ":" expression
+                 { "else" "if" expression ":" expression }
+                 "else" ":" expression ;
+match_expr     = "match" expression ":" NEWLINE INDENT
+                 match_expr_arm { match_expr_arm }
+                 DEDENT ;
+match_expr_arm = value_pattern "=>" expression NEWLINE ;
+value_pattern  = dotted_name | [ "-" ] INTEGER | "true" | "false" | "_" ;
+```
+
+```cactus
+let tier = if hp <= 0: 0 else if hp < 50: 1 else: 2
+
+let speed = match ai.mode:
+    Mode.Idle => 0.0
+    Mode.Chase => 4.0
+    _ => 1.5
+body.velocity = body.forward * speed
+```
+
+An `if` expression is written on one line. `else` is required, and every condition must be `bool`. A `match` expression's subject must be an enum, `int` or `bool`. Its arm block ends the expression, so the next line starts a new statement. Patterns follow the value match rules in §3.17.
+
+All branches of an `if` expression, and all arms of a `match` expression, must have the same type; that is the expression's type. There is no conversion between branches, so `if ready: 1 else: 2.0` is an error. The condition or subject is evaluated once, and only the chosen branch is evaluated. A conditional expression whose parts are all pure is pure, so it may appear in `const` values, clause predicates and template arguments.
 
 A call's argument list may span lines and end with a comma. Arguments are positional for function calls and named for struct construction (§3.4); using the other form is a compile error.
 
@@ -1149,7 +1176,7 @@ Every query call returns an immutable, finite snapshot taken once at the call si
 ```ebnf
 statement       = let_decl | var_decl | var_assign | emit_stmt | destroy_stmt
                 | load_stmt | add_stmt | remove_stmt | set_stmt | return_stmt
-                 | project_stmt | foreach_stmt | expr_stmt | if_stmt | trait_match_stmt ;
+                 | project_stmt | foreach_stmt | expr_stmt | if_stmt | match_stmt ;
 
 let_decl        = "let" IDENTIFIER [ ":" type_ref ] "=" expression NEWLINE ;
 var_decl        = "var" IDENTIFIER [ ":" type_ref ] "=" expression NEWLINE ;
@@ -1233,7 +1260,7 @@ else:
 if shooter.cooldown > 0.0: return
 ```
 
-An `if` chain evaluates its conditions top to bottom and runs only the first branch whose condition is true; the terminal `else` runs when none is. `else if` and `else` align with their `if`. An `else if` after the terminal `else`, a second `else`, or an empty branch is a compile error. The one-line form `if condition: statement` takes no `else`. Detailed rules live in the `dsl-parser` capability spec.
+An `if` chain evaluates its conditions top to bottom and runs only the first branch whose condition is true; the terminal `else` runs when none is. Every `if` and `else if` condition must be `bool`. `else if` and `else` align with their `if`. An `else if` after the terminal `else`, a second `else`, or an empty branch is a compile error. The one-line form `if condition: statement` takes no `else`. Detailed rules live in the `dsl-parser` capability spec.
 
 `let` declares an immutable local and `var` declares a mutable one, in handler and `func` bodies alike. Reassigning a `let` local, including a compound assignment or a member write such as `v.x = 1.0`, is an error. An `entity_id` local has no trait namespace: `e.Health.hp` is an error whether read or written (§4.2). Assignment never declares a local: assigning to an undeclared name is an error, and declaring the same name twice in one block is an error. An optional type annotation must match the initializer's type.
 
@@ -1256,9 +1283,40 @@ Bounded foreach is allowed only inside rule event handlers. The iterable express
 
 Traits with `persist` fields cannot be projected because that modifier describes durable storage behavior.
 
-### 3.17 Trait Match Statements
+### 3.17 Match Statements
 
-Trait-pattern matching is an advanced gameplay statement used on `entity_id` values.
+```ebnf
+match_stmt     = "match" expression ":" NEWLINE INDENT
+                 match_stmt_arm { match_stmt_arm }
+                 DEDENT ;
+match_stmt_arm = stmt_pattern "=>" NEWLINE suite ;
+stmt_pattern   = dotted_name [ "as" IDENTIFIER ] | [ "-" ] INTEGER | "true" | "false" | "_" ;
+```
+
+The subject's type decides what a `match` statement does. An enum, `int` or `bool` subject makes a **value match**. An `entity_id` subject makes a **trait match**. Any other subject type is an error.
+
+A value match runs the body of the first arm whose pattern equals the subject. It is allowed in rule handlers and in `func` bodies.
+
+```cactus
+match ai.mode:
+    Mode.Idle =>
+        body.velocity = vec2(0.0, 0.0)
+    Mode.Chase =>
+        steer_toward(target)
+    Mode.Flee =>
+        steer_away(target)
+```
+
+Value patterns, in both the statement and the expression form:
+
+- A pattern is an enum variant, an `int` or `bool` literal, a constant of the subject's type, or `_`. It must have the subject's type.
+- `_` matches anything. It must be the last arm.
+- Two arms with the same value are an error.
+- Value arms cannot declare an `as` alias.
+
+A value match must be exhaustive. On an enum it names every variant or ends with `_`. On a `bool` it names `true` and `false` or ends with `_`. On an `int` it ends with `_`. A missing variant is a compile error that names it, so adding a variant to an enum points at every `match` that must handle it.
+
+A trait match tests which traits the entity has. The first arm whose trait is attached runs; `as` binds that trait's data. If no arm matches and there is no `_` arm, nothing happens, and a stale handle matches no arm. A trait match is allowed only in rule event handlers.
 
 ```cactus
 match collision.other:

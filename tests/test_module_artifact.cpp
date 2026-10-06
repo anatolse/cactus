@@ -1003,6 +1003,56 @@ TEST_CASE("ModuleArtifact: a periodic phase dt reference round-trips", "[artifac
     fs::remove_all(build_dir, ec);
 }
 
+TEST_CASE("ModuleArtifact: conditional expressions round-trip with their patterns", "[artifact][conditional-expressions]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    const auto node = [](auto value) {
+        return std::make_unique<ExprNode>(ExprNode::Variant{std::move(value)}, SourceLocation{});
+    };
+    const auto int_literal = [&](const std::string& value) {
+        return node(LiteralExpr{.kind = LiteralExpr::Kind::Int, .value = value});
+    };
+    MatchExpr match{.subject = node(IdentExpr{.name = "level"})};
+    match.arms.push_back(MatchArm{.pattern = int_literal("-1"), .body = int_literal("10")});
+    match.arms.push_back(MatchArm{.pattern = node(IdentExpr{.name = "_"}), .body = int_literal("20")});
+    IfExpr else_if{.condition = node(IdentExpr{.name = "b"}), .then_expr = int_literal("2"), .else_expr = int_literal("3")};
+    IfExpr chain{.condition = node(IdentExpr{.name = "a"}), .then_expr = int_literal("1"), .else_expr = node(std::move(else_if))};
+
+    auto blueprint  = std::make_shared<TemplateNode>();
+    blueprint->name = "Probe";
+    ArchetypeTraitEntry entry{.trait_name = "Step"};
+    entry.assignments.push_back(FieldAssignment{.name = "picked", .value = node(std::move(match))});
+    entry.assignments.push_back(FieldAssignment{.name = "tier", .value = node(std::move(chain))});
+    blueprint->traits.push_back(std::move(entry));
+    DecoratedProgram program;
+    program.pub_templates.insert("Probe");
+    program.template_parameters["Probe"] = {};
+    program.template_blueprints["Probe"] = blueprint;
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    REQUIRE(artifact.save(program, "library", build_dir));
+    auto symbols = artifact.extract_pub_symbols(build_dir / "library.cmod");
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(symbols.has_value());
+    const auto& loaded = symbols->templates.at("Probe").blueprint;
+    REQUIRE(loaded != nullptr);
+    const auto& assignments = loaded->traits.at(0).assignments;
+
+    const auto& loaded_match = std::get<MatchExpr>(assignments.at(0).value->expr);
+    REQUIRE(loaded_match.arms.size() == 2);
+    CHECK(std::get<LiteralExpr>(loaded_match.arms[0].pattern->expr).value == "-1");
+    CHECK(is_wildcard_pattern(*loaded_match.arms[1].pattern));
+
+    const auto& loaded_chain = std::get<IfExpr>(assignments.at(1).value->expr);
+    const auto& loaded_else  = std::get<IfExpr>(loaded_chain.else_expr->expr);
+    CHECK(std::get<LiteralExpr>(loaded_else.else_expr->expr).value == "3");
+
+    fs::remove_all(build_dir, ec);
+}
+
 TEST_CASE("ModuleArtifact: artifact from before collider sweep plans is rejected", "[artifact][spatial-join]") {
     auto build_dir = test_build_dir();
     std::error_code ec;

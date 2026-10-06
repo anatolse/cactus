@@ -531,11 +531,27 @@ The parser SHALL parse `const:` blocks containing assignments of the form `NAME 
 - **THEN** the parser produces one ConstAssignment whose value is a single call expression
 
 ### Requirement: Match expression parsing
-The parser SHALL parse `match expr:` blocks with pattern arms.
+The parser SHALL parse a `match` expression: `match` subject `:`, then an indented block of arms `pattern => expression`, one per line. A pattern is an enum member path, an `int` or `bool` literal (a negative `int` literal included), a constant name, or the wildcard `_`. The arm block SHALL end the expression without consuming the line break that ends the enclosing statement, so a `match` expression may be followed by further statements in the same block.
+
+```ebnf
+match_expr    = "match" expression ":" NEWLINE INDENT
+                match_expr_arm { match_expr_arm }
+                DEDENT ;
+match_expr_arm = value_pattern "=>" expression NEWLINE ;
+value_pattern = dotted_name | [ "-" ] INTEGER | "true" | "false" | "_" ;
+```
 
 #### Scenario: Match on enum
 - **WHEN** the source contains `match state:` with arms for different enum variants
 - **THEN** the parser produces a MatchExpr with the matched expression and a list of arms
+
+#### Scenario: Match expression followed by another statement
+- **WHEN** a handler body contains `let s = match t.mode:` with two arms, followed by `t.speed = s` at the same indentation as the `let`
+- **THEN** the parser accepts both statements and the handler body holds two statements in source order
+
+#### Scenario: Match expression with literal and wildcard patterns
+- **WHEN** the source contains a `match` expression with arms `0 => 1.0`, `-1 => 2.0` and `_ => 0.0`
+- **THEN** the parser produces a MatchExpr with three arms whose patterns are the literal `0`, the literal `-1` and the wildcard
 
 ### Requirement: Module path support in `module` and `use` declarations
 The parser SHALL accept dotted identifiers in `module` and `use` declarations. The parser SHALL also support `as` aliases in `use` declarations.
@@ -676,32 +692,35 @@ The parser SHALL accept an optional `where:` block on a regular rule, positioned
 - **THEN** the parser reports that `where:` is not valid on external rules
 
 ### Requirement: Statement-level `match` parsing
-The parser SHALL recognize `match expr ":"` at statement position as a `TraitMatchStmt`. This is distinct from the existing `MatchExpr` (expression-level). The trait match arms use `IDENTIFIER ["as" IDENTIFIER] "=>"` syntax; the wildcard arm uses `"_" "=>"`.
+The parser SHALL recognize `match expr ":"` at statement position as a statement-level match. This is distinct from the `MatchExpr` (expression-level). Each arm is a pattern followed by `=>` and an indented statement body. A pattern is a dotted name, optionally followed by `as IDENTIFIER`; an `int` or `bool` literal (a negative `int` literal included); or the wildcard `_`. Whether the statement is a trait match or a value match is decided by semantic analysis from the subject's type, not by the parser.
 
 ```ebnf
-trait_match_stmt = "match" expr ":" INDENT trait_match_arm+ DEDENT ;
-trait_match_arm  = trait_arm | wildcard_arm ;
-trait_arm        = IDENTIFIER ["as" IDENTIFIER] "=>" INDENT stmt+ DEDENT ;
-wildcard_arm     = "_" "=>" INDENT stmt+ DEDENT ;
+match_stmt    = "match" expression ":" NEWLINE INDENT match_stmt_arm { match_stmt_arm } DEDENT ;
+match_stmt_arm = stmt_pattern "=>" NEWLINE INDENT statement { statement } DEDENT ;
+stmt_pattern  = dotted_name [ "as" IDENTIFIER ] | [ "-" ] INTEGER | "true" | "false" | "_" ;
 ```
 
-The `match` keyword is already in the lexer (used by `MatchExpr`). The parser distinguishes statement vs. expression context by position. At statement position, `match expr:` always produces a `TraitMatchStmt`; type validation (entity_id vs. other) is deferred to semantic analysis.
+The `match` keyword is already in the lexer (used by `MatchExpr`). The parser distinguishes statement vs. expression context by position.
 
 #### Scenario: Simple trait match with alias parsed
 - **WHEN** `match c.other:` followed by `Boss as b =>` and a body is parsed at statement position
-- **THEN** the parser produces a `TraitMatchStmt` with one `TraitMatchArm{trait="Boss", alias="b", body=[...]}`
+- **THEN** the parser produces a statement-level match with one arm whose pattern is `Boss`, alias `b`, and the parsed body
 
 #### Scenario: Trait match with no alias parsed
 - **WHEN** `Spike =>` arm appears with no `as` clause
-- **THEN** the parser produces `TraitMatchArm{trait="Spike", alias=nullopt, body=[...]}`
+- **THEN** the parser produces an arm whose pattern is `Spike` with no alias and the parsed body
 
 #### Scenario: Wildcard arm parsed
 - **WHEN** `_ =>` arm appears as last arm
-- **THEN** the parser produces a `WildcardArm{body=[...]}`
+- **THEN** the parser produces a wildcard arm with the parsed body
 
 #### Scenario: Multiple arms parsed in order
 - **WHEN** match has `Boss as b =>`, then `EnemyAI as e =>`, then `_ =>`
-- **THEN** the `TraitMatchStmt` contains arms in declaration order: `[TraitArm(Boss,b), TraitArm(EnemyAI,e), WildcardArm]`
+- **THEN** the statement contains arms in declaration order: `Boss` with alias `b`, `EnemyAI` with alias `e`, then the wildcard
+
+#### Scenario: Value arms with enum and literal patterns parsed
+- **WHEN** a statement-level match has arms `Mode.Idle =>`, `3 =>` and `true =>`, each followed by an indented body
+- **THEN** the parser accepts the statement and records the patterns `Mode.Idle`, `3` and `true` in declaration order
 
 ### Requirement: Parser recognizes bounded foreach statements
 The parser SHALL recognize `for IDENTIFIER in expression:` at statement position and parse the following indented block as the foreach body.
@@ -955,3 +974,24 @@ The parser SHALL accept named arguments, `IDENTIFIER = expression`, in a call's 
 #### Scenario: Positional arguments still parse
 - **WHEN** the source contains `math.clamp(x, 0.0, 1.0)`
 - **THEN** the parser produces a call expression with three positional arguments
+
+### Requirement: If expression parsing
+The parser SHALL parse an `if` expression at any expression position: `if` condition `:` expression, zero or more `else if` condition `:` expression parts, then a required `else` `:` expression. The whole expression is written on one line, or across lines inside enclosing parentheses or brackets.
+
+```ebnf
+if_expr = "if" expression ":" expression
+          { "else" "if" expression ":" expression }
+          "else" ":" expression ;
+```
+
+#### Scenario: Two-branch if expression parses
+- **WHEN** the source contains `t.hp = if t.speed > 1.0: 1 else: 2`
+- **THEN** the parser produces an assignment whose value is an if expression with one condition, a then-expression `1` and an else-expression `2`
+
+#### Scenario: If expression with else if parses
+- **WHEN** the source contains `let tier = if hp <= 0: 0 else if hp < 50: 1 else: 2`
+- **THEN** the parser produces an if expression with two conditions in source order and three result expressions
+
+#### Scenario: If expression without else is rejected
+- **WHEN** the source contains `let x = if ready: 1` with no `else`
+- **THEN** the parser reports that an `if` expression requires an `else`

@@ -228,6 +228,11 @@ std::vector<Token> Lexer::tokenize() {  // NOLINT(readability-function-cognitive
             continue;
         }
 
+        if (c == '\n' && bracket_depth_ > 0) {
+            advance_char();
+            continue;
+        }
+
         // Newline
         if (c == '\n') {
             // Only emit NEWLINE if last token is not already NEWLINE/INDENT/DEDENT
@@ -319,6 +324,11 @@ std::vector<Token> Lexer::tokenize() {  // NOLINT(readability-function-cognitive
         };
         advance_char();
         if (const auto single_char_op = kSingleCharTokens.find(c); single_char_op != kSingleCharTokens.end()) {
+            if (c == '(' || c == '[' || c == '{') {
+                ++bracket_depth_;
+            } else if ((c == ')' || c == ']' || c == '}') && bracket_depth_ > 0) {
+                --bracket_depth_;
+            }
             tokens.emplace_back(single_char_op->second, std::string(1, c), loc);
         } else {
             errors_.error(loc, std::string("unexpected character '") + c + "'");

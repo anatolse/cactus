@@ -40,6 +40,8 @@ private:
     int col_    = 1;
     std::vector<int> indent_stack_{0};
     bool at_line_start_ = true;
+    // Inside open brackets, line breaks and indentation are not layout.
+    int bracket_depth_ = 0;
 };
 
 }  // namespace cactus

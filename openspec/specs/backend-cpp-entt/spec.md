@@ -1475,3 +1475,32 @@ The cpp-entt backend SHALL support the `std.physics.flat` and `std.physics.volum
 - **WHEN** `examples/platformer/platformer.cactus` uses `std.physics.flat.Collider` and a supported 2D shape collider and is generated for cpp-entt
 - **THEN** the generated output compiles and links with the standard cpp-entt backend/runtime library without requiring user-provided collider callbacks
 
+### Requirement: Conditional expressions and value match lower to C++
+The EnTT backend SHALL lower the `if` expression, the `match` expression and the statement-level value match wherever they appear: rule handlers, `func` bodies, constants, rule clauses and template arguments. The generated code SHALL evaluate a match subject exactly once, evaluate only the selected result expression, and select the same branch the language semantics select for every input.
+
+#### Scenario: If expression compiles and selects the right value
+- **WHEN** a rule handler assigns `t.hp = if t.speed > 1.0: 1 else: 2`, and the program is compiled and run headless with `t.speed = 3.0`
+- **THEN** the generated C++ compiles and `t.hp` is `1` after the handler runs
+
+#### Scenario: Match expression compiles and selects the right arm
+- **WHEN** a rule handler contains `let s = match t.mode:` with arms `Mode.Idle => 0.0` and `Mode.Run => 2.0`, followed by `t.speed = s`, and it runs with `t.mode = Mode.Run`
+- **THEN** the generated C++ compiles and `t.speed` is `2.0`
+
+#### Scenario: Match subject is evaluated once
+- **WHEN** a value match subject is an extern function call and the match has three arms
+- **THEN** the generated code calls that function once per evaluation of the match
+
+#### Scenario: Value match statement runs one arm body
+- **WHEN** a rule handler contains a statement-level value match on an enum field with a body per variant
+- **THEN** the generated code runs exactly the body of the arm equal to the field's value
+
+### Requirement: Unsupported expression forms are compile errors
+When the backend meets an expression or statement form it cannot lower, compilation SHALL fail with a diagnostic at that form's source location. The backend SHALL NOT emit placeholder text such as a comment in place of code, and SHALL NOT report success for output that does not compile.
+
+#### Scenario: No placeholder text in generated code
+- **WHEN** any maintained example or stdlib module is compiled
+- **THEN** the generated C++ contains no `unsupported expr` placeholder
+
+#### Scenario: Unlowered form fails compilation
+- **WHEN** the backend meets an expression form it has no lowering for
+- **THEN** the compiler exits with an error naming the form and its source location, and writes no output file

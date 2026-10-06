@@ -1,5 +1,6 @@
 #include "backends/cpp-entt/type_utils.hpp"
 #include "common/ast_expressions.hpp"
+#include "common/codegen_error.hpp"
 
 #include "frontend/symbol_identity.hpp"
 
@@ -349,13 +350,59 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const ProgramNode*
                     result += emit_expr(*e.elements[i], ast);
                 }
                 return result + "}";
-            } else if constexpr (std::is_same_v<E, SpawnExpr>) {
-                return "/* spawn expr */";
+            } else if constexpr (std::is_same_v<E, IfExpr>) {
+                return emit_if_ternary(e, [ast](const ExprNode& child) { return emit_expr(child, ast); });
+            } else if constexpr (std::is_same_v<E, MatchExpr>) {
+                return emit_match_ternary(e, [ast](const ExprNode& child) { return emit_expr(child, ast); });
             } else {
-                return "/* unsupported expr */";
+                throw CodegenError(expr.location, "this expression form cannot be lowered to C++ here");
             }
         },
         expr.expr);
+}
+
+std::string EnttCodegenUtils::match_ternary_chain(const std::string& subject,
+                                                  const std::vector<std::pair<std::string, std::string>>& tested_arms,
+                                                  const std::string& last_value,
+                                                  bool wrap_nested) {
+    std::string chain = last_value;
+    for (auto arm = tested_arms.rbegin(); arm != tested_arms.rend(); ++arm) {
+        const bool nested = wrap_nested && arm != tested_arms.rbegin();
+        chain = "((" + subject + " == " + arm->first + ") ? " + arm->second + " : " +
+                (nested ? "cactus_chosen(" + chain + ")" : chain) + ")";
+    }
+    return chain;
+}
+
+namespace {
+
+std::string conditional_operand(const ExprNode& operand, const std::function<std::string(const ExprNode&)>& emit) {
+    auto text = emit(operand);
+    if (std::holds_alternative<IfExpr>(operand.expr) || std::holds_alternative<MatchExpr>(operand.expr)) {
+        return "cactus_chosen(" + text + ")";
+    }
+    return text;
+}
+
+}  // namespace
+
+std::string EnttCodegenUtils::emit_if_ternary(const IfExpr& if_expr,
+                                              const std::function<std::string(const ExprNode&)>& emit) {
+    return "(" + conditional_operand(*if_expr.condition, emit) + " ? " + conditional_operand(*if_expr.then_expr, emit) +
+           " : " + conditional_operand(*if_expr.else_expr, emit) + ")";
+}
+
+std::string EnttCodegenUtils::emit_match_ternary(const MatchExpr& match_expr,
+                                                 const std::function<std::string(const ExprNode&)>& emit) {
+    std::vector<std::pair<std::string, std::string>> tested_arms;
+    for (std::size_t index = 0; index + 1 < match_expr.arms.size(); ++index) {
+        const auto& arm = match_expr.arms[index];
+        tested_arms.emplace_back(emit(*arm.pattern), conditional_operand(*arm.body, emit));
+    }
+    return match_ternary_chain(conditional_operand(*match_expr.subject, emit),
+                               tested_arms,
+                               conditional_operand(*match_expr.arms.back().body, emit),
+                               true);
 }
 
 std::string EnttCodegenUtils::join_emitted_args(const std::vector<std::unique_ptr<ExprNode>>& args,
@@ -476,6 +523,10 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const DecoratedPro
                           ") / 255.0F)";
                 }
                 return EnttCodegenUtils::emit_expr(*e.object, program) + "." + e.member;
+            } else if constexpr (std::is_same_v<E, IfExpr>) {
+                return emit_if_ternary(e, emit);
+            } else if constexpr (std::is_same_v<E, MatchExpr>) {
+                return emit_match_ternary(e, emit);
             } else {
                 return emit_expr(expr, program.ast);
             }

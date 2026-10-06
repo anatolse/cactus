@@ -742,6 +742,7 @@ private:
 
     // Phase 3: Semantic checks
     void check_const_strings(ProgramNode& program);
+    void check_const_strings_stmts(const std::vector<std::unique_ptr<StmtNode>>& stmts);
     void check_const_strings_expr(const ExprNode& expr, bool in_const);
     void check_func_purity(ProgramNode& program);
     void check_func_purity_stmt(const StmtNode& stmt, const std::string& func_name);
@@ -924,13 +925,49 @@ private:
                                      const std::string& member,
                                      const std::string* next_segment,
                                      const SourceLocation& location) const;
-    void validate_trait_match_stmt(const TraitMatchStmt& stmt,
+    // Classifies the statement as a trait or value match by its subject's type, then checks its arms.
+    void validate_match_stmt(const MatchStmt& stmt,
+                             const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                             const std::unordered_map<std::string, TypeInfo>& local_bindings,
+                             const ResolvedStruct* handler_event,
+                             const std::string& rule_name,
+                             bool in_rule_handler,
+                             const PairScope* pair_scope = nullptr);
+    void validate_trait_match_arms(const MatchStmt& stmt,
                                    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
                                    const std::unordered_map<std::string, TypeInfo>& local_bindings,
                                    const ResolvedStruct* handler_event,
                                    const std::string& rule_name,
-                                   bool in_rule_handler,
-                                   const PairScope* pair_scope = nullptr);
+                                   const PairScope* pair_scope);
+
+    struct PatternValue {
+        TypeInfo type;
+        std::string key;  // equal keys mean equal values
+    };
+    [[nodiscard]] static bool is_value_match_subject(const TypeInfo& type);
+    [[nodiscard]] static std::string pattern_spelling(const ExprNode& pattern);
+    [[nodiscard]] std::optional<PatternValue> match_pattern_value(const ExprNode& pattern) const;
+    // Shared by the `match` statement and expression: pattern types, duplicates, `_` placement, exhaustiveness.
+    void check_value_patterns(const std::vector<const ExprNode*>& patterns,
+                              const TypeInfo& subject_type,
+                              const SourceLocation& match_location) const;
+    TypeInfo infer_if_expr_type(const IfExpr& if_expr,
+                                const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                                const std::unordered_map<std::string, TypeInfo>& local_bindings,
+                                const ResolvedStruct* handler_event,
+                                const PairScope* pair_scope) const;
+    TypeInfo infer_match_expr_type(const MatchExpr& match_expr,
+                                   const SourceLocation& location,
+                                   const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                                   const std::unordered_map<std::string, TypeInfo>& local_bindings,
+                                   const ResolvedStruct* handler_event,
+                                   const PairScope* pair_scope) const;
+    void require_bool(const TypeInfo& type, const SourceLocation& location, const std::string& what) const;
+    // Folds one branch type into `result`; reports and returns false on a mismatch.
+    bool unify_branch_type(TypeInfo& result,
+                           TypeInfo type,
+                           const SourceLocation& location,
+                           const std::string& branches) const;
 
     // Shared by the 6 trait-override-assignment validation sites (template/entity
     // trait blocks, child archetypes, child overrides, template-backed entity
@@ -1302,7 +1339,7 @@ private:
 
     // Shared AST-walking core for infer_regular_handler_contract and
     // infer_pair_handler_contract: walks a handler body accumulating
-    // commands/effects/emits/reads-via-TraitMatchStmt identically for both,
+    // commands/effects/emits/reads-via-MatchStmt identically for both,
     // delegating the two points where the callers genuinely differ — how a
     // read resolves off an identifier/member-chain expression, and what a
     // `VarAssign`/`project` statement does — to the supplied hooks.

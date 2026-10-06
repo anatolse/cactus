@@ -26,6 +26,17 @@ public:
     static std::string emit_enum(const ResolvedEnum& e);
     static std::string emit_expr(const ExprNode& expr, const ProgramNode* ast = nullptr);
     static std::string emit_expr(const ExprNode& expr, const DecoratedProgram& program);
+    // `((s == p1) ? v1 : last)` from emitted `{pattern, value}` arms. It repeats the subject, so only
+    // pure contexts (constants, defaults, shader stages) may use it. `wrap_nested` wraps each inner
+    // level in `cactus_chosen(...)` for C++.
+    static std::string match_ternary_chain(const std::string& subject,
+                                           const std::vector<std::pair<std::string, std::string>>& tested_arms,
+                                           const std::string& last_value,
+                                           bool wrap_nested);
+    // C++ ternaries for the conditional expressions, emitting operands through `emit`.
+    static std::string emit_if_ternary(const IfExpr& if_expr, const std::function<std::string(const ExprNode&)>& emit);
+    static std::string emit_match_ternary(const MatchExpr& match_expr,
+                                          const std::function<std::string(const ExprNode&)>& emit);
     // Comma-joined emit_expr(*args[i], program) for a call/query argument list.
     static std::string join_emitted_args(const std::vector<std::unique_ptr<ExprNode>>& args,
                                          const DecoratedProgram& program);

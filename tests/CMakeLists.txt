@@ -610,6 +610,12 @@ cactus_add_headless_behavior_test(test_particle_burst_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_particle_burst_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_conditional_expressions_headless_behavior
+    CACTUS_SOURCE examples/conditional_expressions.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_conditional_expressions_headless_behavior.cpp
+)
+
 # Real-GL visual test (example-behavior-tests capability's render-pass
 # extension): proves per-instance rendering actually holds on a real GPU,
 # which CACTUS_RAYLIB_FAKE structurally cannot exercise (see

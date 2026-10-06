@@ -1,5 +1,6 @@
 // NOLINTBEGIN(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)
 // -- Catch2 assertion macros intentionally expand through do-while and expression decomposition.
+#include "common/codegen_error.hpp"
 #include "common/error_reporter.hpp"
 #include "frontend/lexer.hpp"
 #include "frontend/parser.hpp"
@@ -7570,6 +7571,243 @@ TEST_CASE("Codegen EnTT: render-pass stage handler still rejects Vec2 + Color", 
     SemanticAnalyzer analyzer(errors);
     (void)analyzer.analyze(program, imports);
     CHECK(errors.has_errors());
+}
+
+// ── Conditional expressions and value match ────────────────────────────────
+
+static const std::string CONDITIONAL_CODEGEN_PRELUDE =
+    "event tick:\n"
+    "    dt: float\n"
+    "enum Mode:\n"
+    "    Idle\n"
+    "    Run\n"
+    "    Flee\n"
+    "const:\n"
+    "    FAST = true\n"
+    "    STEP = if FAST: 2.0 else: 1.0\n"
+    "    LEVEL = 2\n"
+    "    GAIN = match LEVEL:\n"
+    "        1 => 0.5\n"
+    "        2 => 1.0\n"
+    "        _ => 2.0\n"
+    "trait Actor:\n"
+    "    var mode: Mode = Mode.Idle\n"
+    "    var hp: int = 0\n"
+    "    var speed: float = 0.0\n"
+    "pub extern func pick() int\n";
+
+static std::string conditional_codegen(const std::string& declarations) {
+    ProgramNode program;
+    auto decorated = full_pipeline(CONDITIONAL_CODEGEN_PRELUDE + declarations, program);
+    return CppEnttCodegen::generate(decorated);
+}
+
+TEST_CASE("Codegen EnTT: conditional expressions and value match lower without placeholders",
+          "[codegen-entt][conditional-expressions]") {
+    const auto code = conditional_codegen(
+        "func cost(mode: Mode) int:\n"
+        "    var c = 0\n"
+        "    match mode:\n"
+        "        Mode.Idle =>\n"
+        "            c = 1\n"
+        "        _ =>\n"
+        "            c = 2\n"
+        "    return c\n"
+        "rule R:\n"
+        "    filter:\n"
+        "        Actor as a\n"
+        "    on tick:\n"
+        "        a.hp = if a.speed > 1.0: 1 else if a.speed > 0.5: 2 else: 3\n"
+        "        let s = match a.mode:\n"
+        "            Mode.Idle => 0.0\n"
+        "            _ => STEP\n"
+        "        a.speed = s\n"
+        "        match a.hp:\n"
+        "            0 =>\n"
+        "                a.speed = 1.0\n"
+        "            -1 =>\n"
+        "                a.speed = 2.0\n"
+        "            _ =>\n"
+        "                a.speed = 3.0\n");
+    CHECK(code.find("unsupported expr") == std::string::npos);
+    CHECK(code.find("? 1 : cactus_chosen(") != std::string::npos);
+    CHECK(code.find("== -1") != std::string::npos);
+    CHECK(code.find("LEVEL == 1) ? 0.5F : cactus_chosen(((") != std::string::npos);
+    CHECK(code.find("LEVEL == 2) ? 1.0F : 2.0F)))") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: a match subject is evaluated once", "[codegen-entt][conditional-expressions]") {
+    const auto code = conditional_codegen(
+        "rule R:\n"
+        "    filter:\n"
+        "        Actor as a\n"
+        "    on tick:\n"
+        "        a.speed = match pick():\n"
+        "            0 => 1.0\n"
+        "            1 => 2.0\n"
+        "            _ => 3.0\n"
+        "        match pick():\n"
+        "            0 =>\n"
+        "                a.hp = 1\n"
+        "            1 =>\n"
+        "                a.hp = 2\n"
+        "            _ =>\n"
+        "                a.hp = 3\n");
+    CHECK(count_occurrences(code, "pick()") == 2);
+}
+
+TEST_CASE("Codegen EnTT: an exhaustive match emits its last arm unconditionally",
+          "[codegen-entt][conditional-expressions]") {
+    const auto code = conditional_codegen(
+        "rule R:\n"
+        "    filter:\n"
+        "        Actor as a\n"
+        "    on tick:\n"
+        "        a.speed = match a.mode:\n"
+        "            Mode.Idle => 0.0\n"
+        "            Mode.Run => 1.0\n"
+        "            Mode.Flee => 2.0\n"
+        "        match a.mode:\n"
+        "            Mode.Idle =>\n"
+        "                a.hp = 1\n"
+        "            Mode.Run =>\n"
+        "                a.hp = 2\n"
+        "            Mode.Flee =>\n"
+        "                a.hp = 3\n");
+    CHECK(code.find("Mode::Run") != std::string::npos);
+    CHECK(code.find("Mode::Flee") == std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: conditional expressions are accepted in rule clauses",
+          "[codegen-entt][conditional-expressions]") {
+    const auto code = conditional_codegen(
+        "rule R:\n"
+        "    filter:\n"
+        "        Actor as a\n"
+        "    order by:\n"
+        "        if a.hp > 0: a.speed else: 0.0 desc\n"
+        "    where:\n"
+        "        if a.hp > 0: a.speed > 1.0 else: false\n"
+        "    when:\n"
+        "        if FAST: STEP > 1.0 else: false\n"
+        "    on tick:\n"
+        "        a.hp += 1\n");
+    CHECK(code.find("unsupported expr") == std::string::npos);
+    CHECK(count_occurrences(code, "? (a.speed > 1.0F) : false)") >= 1);
+}
+
+TEST_CASE("Codegen EnTT: only the selected branch evaluates its call", "[codegen-entt][conditional-expressions]") {
+    const auto code = conditional_codegen(
+        "rule R:\n"
+        "    filter:\n"
+        "        Actor as a\n"
+        "    on tick:\n"
+        "        a.hp = if a.speed > 1.0: pick() else: 0\n"
+        "        a.speed = match a.hp:\n"
+        "            0 => 1.0\n"
+        "            _ => STEP\n"
+        "        a.hp = match a.mode:\n"
+        "            Mode.Idle => pick()\n"
+        "            _ => 2\n");
+    // C++ evaluates only the chosen operand of `?:`, and a returned arm only when its test passed.
+    CHECK(code.find("((a.speed > 1.0F) ? pick() : 0)") != std::string::npos);
+    CHECK(code.find("== Mode::Idle) { return pick(); } return 2; }()") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: an expression form with no lowering is a located error, not placeholder text",
+          "[codegen-entt][conditional-expressions]") {
+    const SourceLocation location("game.cactus", 7, 12);
+    const ExprNode self_expr(ExprNode::Variant{SelfExpr{.location = location}}, location);
+    try {
+        (void)EnttCodegenUtils::emit_expr(self_expr);
+        FAIL("emit_expr accepted an expression form it cannot lower");
+    } catch (const CodegenError& error) {
+        CHECK(error.location() == location);
+        CHECK(std::string(error.what()).find("cannot be lowered") != std::string::npos);
+    }
+}
+
+static std::string conditional_render_pass_codegen(const std::string& fragment_body) {
+    ImportedSymbols passes_syms;
+    passes_syms.module_name = "std.render.passes";
+    ResolvedEnum pass_enum;
+    pass_enum.name            = "Pass";
+    pass_enum.variants        = {"Quads"};
+    passes_syms.enums["Pass"] = pass_enum;
+    ResolvedEnum target_enum;
+    target_enum.name            = "Target";
+    target_enum.variants        = {"Screen"};
+    passes_syms.enums["Target"] = target_enum;
+    ModuleImports imports;
+    imports.add("passes", std::move(passes_syms));
+
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "module render_pass_conditionals\n"
+        "\n"
+        "use std.render.passes as passes\n"
+        "\n"
+        "extern event Tick:\n"
+        "    dt: float\n"
+        "\n"
+        "const:\n"
+        "    LAYER = 2\n"
+        "\n"
+        "trait WorldTransform:\n"
+        "    var position: vec2\n"
+        "\n"
+        "pub phase my_pass:\n"
+        "    from:\n"
+        "        Tick\n"
+        "    pipeline: passes.Pass = passes.Pass.Quads\n"
+        "    output: passes.Target = passes.Target.Screen\n"
+        "\n"
+        "rule MyVertex:\n"
+        "    filter:\n"
+        "        WorldTransform as xf\n"
+        "\n"
+        "    on my_pass.vertex as v:\n"
+        "        v.screen_position = xf.position + v.corner\n"
+        "        v.uv_out = v.uv\n"
+        "        v.tint_out = #FFFFFFFF\n"
+        "\n"
+        "rule MyFragment:\n"
+        "    on my_pass.fragment as f:\n" +
+            fragment_body,
+        program,
+        imports);
+    return CppEnttCodegen::generate(decorated);
+}
+
+TEST_CASE("Codegen EnTT: render-pass fragment handler lowers an if expression to GLSL",
+          "[codegen-entt][render-passes][conditional-expressions]") {
+    const auto code = conditional_render_pass_codegen(
+        "        let k = if f.uv.x > 0.5: 1.0 else: 0.0\n"
+        "        f.frag_color = f.tint * k\n");
+    CHECK(code.find("float let_k = ((uv.x > 0.5) ? 1.0 : 0.0);") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: render-pass fragment handler lowers a match expression to GLSL",
+          "[codegen-entt][render-passes][conditional-expressions]") {
+    const auto code = conditional_render_pass_codegen(
+        "        let k = match LAYER:\n"
+        "            1 => 0.25\n"
+        "            _ => 0.5\n"
+        "        f.frag_color = f.tint * k\n");
+    CHECK(code.find("float let_k = ((2.0 == 1.0) ? 0.25 : 0.5);") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: render-pass fragment handler lowers a value match statement to GLSL",
+          "[codegen-entt][render-passes][conditional-expressions]") {
+    const auto code = conditional_render_pass_codegen(
+        "        match LAYER:\n"
+        "            2 =>\n"
+        "                f.frag_color = f.tint\n"
+        "            _ =>\n"
+        "                f.frag_color = #000000FF\n");
+    CHECK(code.find("if ((match_subject_") != std::string::npos);
+    CHECK(code.find("== 2.0)) {") != std::string::npos);
+    CHECK(code.find("else {") != std::string::npos);
 }
 
 // ── Limit clause (dsl-rule-limit) ───────────────────────────────────────────

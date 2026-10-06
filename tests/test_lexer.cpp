@@ -6,6 +6,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
+
 using namespace cactus;
 
 // Helper: tokenize and return tokens (excluding final EOF)
@@ -466,6 +468,19 @@ TEST_CASE("Lexer: extern keyword", "[lexer][extern-func]") {
     REQUIRE(types.size() == 1);
     CHECK(types[0] == TokenType::EXTERN);
     CHECK(tokens[0].value == "extern");
+}
+
+TEST_CASE("Lexer: line breaks inside brackets are not layout", "[lexer][conditional-expressions]") {
+    auto tokens = lex("let x = (\n"
+                      "        if a: 1\n"
+                      "        else: 2\n"
+                      ")\n"
+                      "let y = [1,\n"
+                      "    2]\n");
+    const auto types = token_types(tokens);
+    CHECK(std::ranges::count(types, TokenType::INDENT) == 0);
+    CHECK(std::ranges::count(types, TokenType::DEDENT) == 0);
+    CHECK(std::ranges::count_if(tokens, [](const Token& token) { return token.type == TokenType::NEWLINE; }) == 2);
 }
 
 TEST_CASE("Lexer: extern_value tokenizes as IDENTIFIER", "[lexer][extern-func]") {

@@ -5360,4 +5360,181 @@ TEST_CASE("Contract: named reads in a pair handler record a requirement", "[sema
     CHECK(contract.named_writes.at(test_entity("Game")).at(test_trait("Match")) == fields_of({"score"}));
     CHECK_FALSE(contract.splittable_per_entity());
 }
+
+// ── Conditional expressions and value match ────────────────────────────────
+
+static std::vector<std::string> analyze_error_messages(const std::string& source) {
+    const std::string src = starts_with_module_decl(source) ? source : "module test\n" + source;
+    ErrorReporter errors;
+    Lexer lexer(src, "test.cactus", errors);
+    Parser parser(lexer.tokenize(), errors);
+    auto program = parser.parse_program();
+    if (!errors.has_errors()) {
+        SemanticAnalyzer analyzer(errors);
+        analyzer.analyze(program);
+    }
+    std::vector<std::string> messages;
+    for (const auto& diagnostic : errors.diagnostics()) {
+        if (diagnostic.level == DiagnosticLevel::Error) {
+            messages.push_back(diagnostic.message);
+        }
+    }
+    return messages;
+}
+
+static bool has_error(const std::vector<std::string>& messages, const std::string& expected) {
+    return std::ranges::contains(messages, expected);
+}
+
+static const std::string CONDITIONAL_PRELUDE =
+    "enum Mode:\n"
+    "    Idle\n"
+    "    Chase\n"
+    "    Flee\n"
+    "trait Actor:\n"
+    "    var mode: Mode = Mode.Idle\n"
+    "    var hp: int = 10\n"
+    "    var speed: float = 0.0\n"
+    "    var ready: bool = false\n"
+    "event Ping\n";
+
+static std::vector<std::string> conditional_handler_errors(const std::string& body) {
+    return analyze_error_messages(CONDITIONAL_PRELUDE +
+                                  "rule R:\n"
+                                  "    filter:\n"
+                                  "        Actor as a\n"
+                                  "    on Ping:\n" +
+                                  body);
+}
+
+TEST_CASE("Semantic: non-bool conditions are rejected", "[semantic][conditional-expressions]") {
+    CHECK(has_error(conditional_handler_errors("        if a.hp:\n"
+                                               "            a.speed = 1.0\n"),
+                    "`if` condition must be `bool`, got `int`"));
+    CHECK(has_error(conditional_handler_errors("        if a.ready:\n"
+                                               "            a.speed = 1.0\n"
+                                               "        else if a.speed:\n"
+                                               "            a.speed = 2.0\n"),
+                    "`else if` condition must be `bool`, got `float`"));
+    CHECK(has_error(conditional_handler_errors("        a.speed = if a.hp: 1.0 else: 2.0\n"),
+                    "`if` condition must be `bool`, got `int`"));
+    CHECK(has_error(conditional_handler_errors("        a.speed = if a.ready: 1.0 else if a.hp: 2.0 else: 3.0\n"),
+                    "`else if` condition must be `bool`, got `int`"));
+    CHECK(has_error(conditional_handler_errors("        if a.ready and a.hp:\n"
+                                               "            a.speed = 1.0\n"),
+                    "right operand of `and` must be `bool`, got `int`"));
+    CHECK(has_error(conditional_handler_errors("        if a.hp or a.ready:\n"
+                                               "            a.speed = 1.0\n"),
+                    "left operand of `or` must be `bool`, got `int`"));
+    CHECK(has_error(conditional_handler_errors("        if not a.speed:\n"
+                                               "            a.speed = 1.0\n"),
+                    "operand of `not` must be `bool`, got `float`"));
+    CHECK(conditional_handler_errors("        if a.hp > 0 and not a.ready:\n"
+                                     "            a.speed = 1.0\n")
+              .empty());
+}
+
+TEST_CASE("Semantic: conditional expression branch types must match", "[semantic][conditional-expressions]") {
+    CHECK(has_error(conditional_handler_errors("        let x = if a.ready: 1 else: 2.0\n"),
+                    "`if` expression branches have different types: `int` and `float`"));
+    CHECK(has_error(conditional_handler_errors("        let x = match a.mode:\n"
+                                               "            Mode.Idle => 0.0\n"
+                                               "            _ => 1\n"),
+                    "`match` arms have different types: `float` and `int`"));
+    CHECK(conditional_handler_errors("        let x = if a.ready: 4.0 else: 1.5\n"
+                                     "        a.speed = x\n"
+                                     "        let s = match a.mode:\n"
+                                     "            Mode.Idle => 0.0\n"
+                                     "            Mode.Chase => 2.0\n"
+                                     "            Mode.Flee => 3.0\n"
+                                     "        a.speed = s\n")
+              .empty());
+}
+
+TEST_CASE("Semantic: value match patterns are typed and checked", "[semantic][conditional-expressions]") {
+    CHECK(has_error(conditional_handler_errors("        match a.mode:\n"
+                                               "            3 =>\n"
+                                               "                a.hp = 1\n"
+                                               "            _ =>\n"
+                                               "                a.hp = 2\n"),
+                    "pattern `3` is an `int` but the subject is `Mode`"));
+    CHECK(has_error(conditional_handler_errors("        match a.mode:\n"
+                                               "            Mode.Idle =>\n"
+                                               "                a.hp = 1\n"
+                                               "            Mode.Idle =>\n"
+                                               "                a.hp = 2\n"
+                                               "            _ =>\n"
+                                               "                a.hp = 3\n"),
+                    "duplicate pattern `Mode.Idle`"));
+    CHECK(has_error(conditional_handler_errors("        let x = match a.hp:\n"
+                                               "            _ => 0.0\n"
+                                               "            1 => 1.0\n"
+                                               "        a.speed = x\n"),
+                    "`_` must be the last arm of a `match`"));
+    CHECK(has_error(conditional_handler_errors("        match a.mode:\n"
+                                               "            Mode.Idle =>\n"
+                                               "                a.hp = 1\n"
+                                               "            Mode.Chase =>\n"
+                                               "                a.hp = 2\n"),
+                    "`match` on `Mode` is missing `Flee`"));
+    CHECK(has_error(conditional_handler_errors("        match a.hp:\n"
+                                               "            0 =>\n"
+                                               "                a.speed = 1.0\n"
+                                               "            1 =>\n"
+                                               "                a.speed = 2.0\n"),
+                    "a `match` on `int` needs a `_` arm"));
+    CHECK(has_error(conditional_handler_errors("        match a.ready:\n"
+                                               "            true =>\n"
+                                               "                a.hp = 1\n"),
+                    "`match` on `bool` is missing `false`"));
+    CHECK(conditional_handler_errors("        match a.ready:\n"
+                                     "            true =>\n"
+                                     "                a.hp = 1\n"
+                                     "            false =>\n"
+                                     "                a.hp = 2\n")
+              .empty());
+    CHECK(has_error(conditional_handler_errors("        match a.mode:\n"
+                                               "            Mode.Idle as m =>\n"
+                                               "                a.hp = 1\n"
+                                               "            _ =>\n"
+                                               "                a.hp = 2\n"),
+                    "value match arms cannot declare an alias"));
+}
+
+TEST_CASE("Semantic: value match in a func body is accepted", "[semantic][conditional-expressions]") {
+    CHECK(analyze_error_messages(CONDITIONAL_PRELUDE + "func cost(mode: Mode) int:\n"
+                                                       "    var c = 0\n"
+                                                       "    match mode:\n"
+                                                       "        Mode.Idle =>\n"
+                                                       "            c = 0\n"
+                                                       "        _ =>\n"
+                                                       "            c = 1\n"
+                                                       "    return c\n")
+              .empty());
+}
+
+TEST_CASE("Semantic: trait match in a func body is still rejected", "[semantic][conditional-expressions]") {
+    CHECK(has_error(analyze_error_messages(CONDITIONAL_PRELUDE + "func f(subject: entity_id) int:\n"
+                                                                 "    match subject:\n"
+                                                                 "        Actor as b =>\n"
+                                                                 "            return b.hp\n"
+                                                                 "    return 0\n"),
+                    "statement-level `match entity_id` only allowed inside rule event handlers"));
+}
+
+TEST_CASE("Semantic: float match subject is rejected with the subject-type message",
+          "[semantic][conditional-expressions]") {
+    CHECK(has_error(conditional_handler_errors("        match a.speed:\n"
+                                               "            _ =>\n"
+                                               "                a.hp = 1\n"),
+                    "statement-level `match` subject must be `entity_id`, an enum, `int` or `bool`, got `float`"));
+}
+
+TEST_CASE("Semantic: conditional expression in a constant is a const expression",
+          "[semantic][conditional-expressions]") {
+    CHECK(analyze_error_messages("const:\n"
+                                 "    FAST = true\n"
+                                 "    STEP = if FAST: 2.0 else: 1.0\n")
+              .empty());
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

@@ -1658,14 +1658,16 @@ void SemanticAnalyzer::resolve_trait_references(ProgramNode& program) {
                     } else if constexpr (std::is_same_v<S, ForeachStmt>) {
                         resolve_expr(*s.iterable);
                         resolve_stmts(s.body);
-                    } else if constexpr (std::is_same_v<S, TraitMatchStmt>) {
+                    } else if constexpr (std::is_same_v<S, MatchStmt>) {
                         resolve_expr(*s.subject);
                         for (auto& arm : s.arms) {
-                            arm.resolved_trait_id = try_resolve_trait_ref_to_symbol(arm.trait_name);
+                            if (!arm.is_wildcard()) {
+                                arm.resolved_trait_id = try_resolve_trait_ref_to_symbol(arm.trait_name());
+                            }
+                            if (!arm.resolved_trait_id.has_value()) {
+                                resolve_expr(*arm.pattern);
+                            }
                             resolve_stmts(arm.body);
-                        }
-                        if (s.wildcard.has_value()) {
-                            resolve_stmts(s.wildcard->body);
                         }
                     } else if constexpr (std::is_same_v<S, SpawnStmt>) {
                         s.resolved_template_id = try_resolve_template_ref_to_symbol(s.template_name);
@@ -1993,34 +1995,49 @@ void SemanticAnalyzer::check_const_strings(ProgramNode& program) {
                         check_const_strings_expr(*a.value, true);
                     }
                 } else if constexpr (std::is_same_v<T, FuncNode>) {
-                    for (auto& stmt : node.body) {
-                        // Only assign/return/emit arms can hold const-string violations.
-                        // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-                        std::visit(
-                            [this](auto& s) {
-                                using S = std::decay_t<decltype(s)>;
-                                if constexpr (std::is_same_v<S, VarAssign> || std::is_same_v<S, LetStmt>) {
-                                    check_const_strings_expr(*s.value, false);
-                                } else if constexpr (std::is_same_v<S, ExprStmt>) {
-                                    check_const_strings_expr(*s.expr, false);
-                                } else if constexpr (std::is_same_v<S, ReturnStmt>) {
-                                    if (s.value) {
-                                        check_const_strings_expr(**s.value, false);
-                                    }
-                                } else if constexpr (std::is_same_v<S, EmitStmt>) {
-                                    if (s.target.has_value()) {
-                                        check_const_strings_expr(**s.target, false);
-                                    }
-                                    for (auto& field : s.payload) {
-                                        check_const_strings_expr(*field.value, false);
-                                    }
-                                }
-                            },
-                            stmt->stmt);
-                    }
+                    check_const_strings_stmts(node.body);
                 }
             },
             decl);
+    }
+}
+
+void SemanticAnalyzer::check_const_strings_stmts(const std::vector<std::unique_ptr<StmtNode>>& stmts) {
+    for (const auto& stmt : stmts) {
+        std::visit(
+            [this](const auto& s) {
+                using S = std::decay_t<decltype(s)>;
+                if constexpr (std::is_same_v<S, VarAssign> || std::is_same_v<S, LetStmt>) {
+                    check_const_strings_expr(*s.value, false);
+                } else if constexpr (std::is_same_v<S, ExprStmt>) {
+                    check_const_strings_expr(*s.expr, false);
+                } else if constexpr (std::is_same_v<S, ReturnStmt>) {
+                    if (s.value) {
+                        check_const_strings_expr(**s.value, false);
+                    }
+                } else if constexpr (std::is_same_v<S, EmitStmt>) {
+                    if (s.target.has_value()) {
+                        check_const_strings_expr(**s.target, false);
+                    }
+                    for (const auto& field : s.payload) {
+                        check_const_strings_expr(*field.value, false);
+                    }
+                } else if constexpr (std::is_same_v<S, IfStmt>) {
+                    check_const_strings_expr(*s.condition, false);
+                    check_const_strings_stmts(s.then_body);
+                    for (const auto& branch : s.else_if_branches) {
+                        check_const_strings_expr(*branch.condition, false);
+                        check_const_strings_stmts(branch.body);
+                    }
+                    check_const_strings_stmts(s.else_body);
+                } else if constexpr (std::is_same_v<S, MatchStmt>) {
+                    check_const_strings_expr(*s.subject, false);
+                    for (const auto& arm : s.arms) {
+                        check_const_strings_stmts(arm.body);
+                    }
+                }
+            },
+            stmt->stmt);
     }
 }
 
@@ -2050,6 +2067,15 @@ void SemanticAnalyzer::check_const_strings_expr(const ExprNode& expr, bool in_co
                 }
             } else if constexpr (std::is_same_v<E, MemberExpr>) {
                 check_const_strings_expr(*e.object, in_const);
+            } else if constexpr (std::is_same_v<E, IfExpr>) {
+                check_const_strings_expr(*e.condition, in_const);
+                check_const_strings_expr(*e.then_expr, in_const);
+                check_const_strings_expr(*e.else_expr, in_const);
+            } else if constexpr (std::is_same_v<E, MatchExpr>) {
+                check_const_strings_expr(*e.subject, in_const);
+                for (auto& arm : e.arms) {
+                    check_const_strings_expr(*arm.body, in_const);
+                }
             } else if constexpr (std::is_same_v<E, ListExpr>) {
                 for (auto& el : e.elements) {
                     check_const_strings_expr(*el, in_const);
@@ -2112,6 +2138,13 @@ void SemanticAnalyzer::check_func_purity_stmt(const StmtNode& stmt, const std::s
                 }
                 for (auto& inner : s.else_body) {
                     check_func_purity_stmt(*inner, func_name);
+                }
+            } else if constexpr (std::is_same_v<S, MatchStmt>) {
+                check_func_purity_expr(*s.subject, func_name);
+                for (auto& arm : s.arms) {
+                    for (auto& inner : arm.body) {
+                        check_func_purity_stmt(*inner, func_name);
+                    }
                 }
             }
         },
@@ -2268,12 +2301,9 @@ void collect_add_trait_statements(const std::vector<std::unique_ptr<StmtNode>>& 
             collect_add_trait_statements(branch->else_body, out);
         } else if (const auto* loop = std::get_if<ForeachStmt>(&stmt->stmt)) {
             collect_add_trait_statements(loop->body, out);
-        } else if (const auto* match = std::get_if<TraitMatchStmt>(&stmt->stmt)) {
+        } else if (const auto* match = std::get_if<MatchStmt>(&stmt->stmt)) {
             for (const auto& arm : match->arms) {
                 collect_add_trait_statements(arm.body, out);
-            }
-            if (match->wildcard.has_value()) {
-                collect_add_trait_statements(match->wildcard->body, out);
             }
         }
     }
@@ -2631,7 +2661,8 @@ bool SemanticAnalyzer::const_is_glsl_portable(const ExprNode& value, const TypeI
                     portable = portable && (constant == nullptr || constant->glsl_portable);
                 } else if constexpr (std::is_same_v<E, CallExpr>) {
                     portable = portable && call_is_glsl_translatable(e);
-                } else if constexpr (!std::is_same_v<E, UnaryExpr> && !std::is_same_v<E, BinaryExpr>) {
+                } else if constexpr (!std::is_same_v<E, UnaryExpr> && !std::is_same_v<E, BinaryExpr> &&
+                                     !std::is_same_v<E, IfExpr> && !std::is_same_v<E, MatchExpr>) {
                     portable = false;
                 }
             },
@@ -2795,6 +2826,17 @@ bool SemanticAnalyzer::validate_const_expression(const ExprNode& expr, const std
                 return reject_const(expr.location, context, "a constant cannot spawn an entity");
             } else if constexpr (std::is_same_v<E, QueryCallExpr>) {
                 return reject_const(expr.location, context, "a constant cannot query the world");
+            } else if constexpr (std::is_same_v<E, IfExpr>) {
+                return validate_const_expression(*e.condition, context, false) &&
+                       validate_const_expression(*e.then_expr, context, whole_value) &&
+                       validate_const_expression(*e.else_expr, context, whole_value);
+            } else if constexpr (std::is_same_v<E, MatchExpr>) {
+                return validate_const_expression(*e.subject, context, false) &&
+                       std::ranges::all_of(e.arms, [&](const MatchArm& arm) {
+                           return (is_wildcard_pattern(*arm.pattern) ||
+                                   validate_const_expression(*arm.pattern, context, false)) &&
+                                  validate_const_expression(*arm.body, context, whole_value);
+                       });
             } else {
                 return reject_const(expr.location, context, "this expression is not a const expression");
             }
@@ -4613,8 +4655,16 @@ void SemanticAnalyzer::validate_render_pass_stage_handler_body(
                         forbid_statement(node.location, "return");
                     } else if constexpr (std::is_same_v<S, ForeachStmt>) {
                         forbid_statement(node.location, "for");
-                    } else if constexpr (std::is_same_v<S, TraitMatchStmt>) {
-                        forbid_statement(node.location, "match");
+                    } else if constexpr (std::is_same_v<S, MatchStmt>) {
+                        if (std::ranges::any_of(node.arms,
+                                                [](const MatchStmtArm& arm) { return arm.resolved_trait_id.has_value(); })) {
+                            forbid_statement(node.location, "trait match");
+                            return;
+                        }
+                        visit_expr(*node.subject);
+                        for (const auto& arm : node.arms) {
+                            visit_stmts(arm.body);
+                        }
                     }
                 },
                 stmt->stmt);
@@ -5319,13 +5369,13 @@ void SemanticAnalyzer::resolve_named_access_stmts(std::vector<std::unique_ptr<St
                 } else if constexpr (std::is_same_v<S, ForeachStmt>) {
                     walk(s.iterable);
                     walk_block(s.body, &s.var_name);
-                } else if constexpr (std::is_same_v<S, TraitMatchStmt>) {
+                } else if constexpr (std::is_same_v<S, MatchStmt>) {
                     walk(s.subject);
                     for (auto& arm : s.arms) {
+                        if (!arm.resolved_trait_id.has_value()) {
+                            walk(arm.pattern);
+                        }
                         walk_block(arm.body, arm.alias.has_value() ? &*arm.alias : nullptr);
-                    }
-                    if (s.wildcard.has_value()) {
-                        walk_block(s.wildcard->body, nullptr);
                     }
                 }
             },
@@ -6083,16 +6133,20 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
             validate_destroy(*destroy_stmt);
             continue;
         }
-        if (const auto* trait_match = std::get_if<TraitMatchStmt>(&stmt->stmt)) {
-            validate_trait_match_stmt(
-                *trait_match, filter_bindings, locals, handler_event, rule_name, in_rule_handler, pair_scope);
+        if (const auto* match_stmt = std::get_if<MatchStmt>(&stmt->stmt)) {
+            validate_match_stmt(
+                *match_stmt, filter_bindings, locals, handler_event, rule_name, in_rule_handler, pair_scope);
             continue;
         }
         if (const auto* if_stmt = std::get_if<IfStmt>(&stmt->stmt)) {
-            (void)infer_expr_type(*if_stmt->condition, filter_bindings, locals, handler_event, pair_scope);
+            require_bool(infer_expr_type(*if_stmt->condition, filter_bindings, locals, handler_event, pair_scope),
+                         if_stmt->condition->location,
+                         "`if` condition");
             validate_event_stmts(if_stmt->then_body, filter_bindings, locals, handler_event, rule_name, pair_scope);
             for (const auto& branch : if_stmt->else_if_branches) {
-                (void)infer_expr_type(*branch.condition, filter_bindings, locals, handler_event, pair_scope);
+                require_bool(infer_expr_type(*branch.condition, filter_bindings, locals, handler_event, pair_scope),
+                             branch.condition->location,
+                             "`else if` condition");
                 validate_event_stmts(branch.body, filter_bindings, locals, handler_event, rule_name, pair_scope);
             }
             validate_event_stmts(if_stmt->else_body, filter_bindings, locals, handler_event, rule_name, pair_scope);
@@ -6185,18 +6239,48 @@ bool SemanticAnalyzer::reject_local_assignment(
     return true;
 }
 
-void SemanticAnalyzer::validate_trait_match_stmt(
-    const TraitMatchStmt& stmt,
+namespace {
+
+template <typename Arm>
+std::vector<const ExprNode*> patterns_of(const std::vector<Arm>& arms) {
+    std::vector<const ExprNode*> patterns;
+    patterns.reserve(arms.size());
+    for (const auto& arm : arms) {
+        patterns.push_back(arm.pattern.get());
+    }
+    return patterns;
+}
+
+}  // namespace
+
+void SemanticAnalyzer::validate_match_stmt(
+    const MatchStmt& stmt,
     const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
     const std::unordered_map<std::string, TypeInfo>& local_bindings,
     const ResolvedStruct* handler_event,
     const std::string& rule_name,
     bool in_rule_handler,
     const PairScope* pair_scope) {
+    const auto subject_type =
+        infer_expr_type(*stmt.subject, filter_bindings, local_bindings, handler_event, pair_scope);
+    if (is_value_match_subject(subject_type)) {
+        stmt.kind = MatchKind::Value;
+        for (const auto& arm : stmt.arms) {
+            if (arm.alias.has_value()) {
+                errors_.error(arm.location, "value match arms cannot declare an alias");
+            }
+        }
+        check_value_patterns(patterns_of(stmt.arms), subject_type, stmt.location);
+        for (const auto& arm : stmt.arms) {
+            validate_event_stmts(arm.body, filter_bindings, local_bindings, handler_event, rule_name, pair_scope);
+        }
+        return;
+    }
+
+    stmt.kind = MatchKind::Trait;
     if (!in_rule_handler) {
         errors_.error(stmt.location, "statement-level `match entity_id` only allowed inside rule event handlers");
     }
-
     if (pair_scope != nullptr) {
         if (const auto* ident = std::get_if<IdentExpr>(&stmt.subject->expr);
             ident != nullptr && pair_scope->contains(ident->name)) {
@@ -6205,14 +6289,21 @@ void SemanticAnalyzer::validate_trait_match_stmt(
                               "'; a data-bearing match alias would grant mutable access to a read-only trait");
         }
     }
-
-    auto subject_type = infer_expr_type(*stmt.subject, filter_bindings, local_bindings, handler_event, pair_scope);
     if (subject_type.kind != TypeKind::EntityId && subject_type.kind != TypeKind::Unknown) {
         errors_.error(stmt.location,
-                      "statement-level `match` subject must be of type `entity_id`; use expression-level match for "
-                      "value dispatch");
+                      "statement-level `match` subject must be `entity_id`, an enum, `int` or `bool`, got `" +
+                          type_display_name(subject_type) + "`");
     }
+    validate_trait_match_arms(stmt, filter_bindings, local_bindings, handler_event, rule_name, pair_scope);
+}
 
+void SemanticAnalyzer::validate_trait_match_arms(
+    const MatchStmt& stmt,
+    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+    const std::unordered_map<std::string, TypeInfo>& local_bindings,
+    const ResolvedStruct* handler_event,
+    const std::string& rule_name,
+    const PairScope* pair_scope) {
     std::unordered_set<std::string> in_scope_names;
     for (const auto& [name, _] : filter_bindings) {
         in_scope_names.insert(name);
@@ -6221,22 +6312,31 @@ void SemanticAnalyzer::validate_trait_match_stmt(
         in_scope_names.insert(name);
     }
 
-    for (const auto& arm : stmt.arms) {
-        const auto* trait = find_resolved_trait(arm.resolved_trait_id, arm.trait_name);
+    for (std::size_t index = 0; index < stmt.arms.size(); ++index) {
+        const auto& arm = stmt.arms[index];
+        if (arm.is_wildcard()) {
+            if (index + 1 != stmt.arms.size()) {
+                errors_.error(arm.location, "`_` must be the last arm of a `match`");
+            }
+            validate_event_stmts(arm.body, filter_bindings, local_bindings, handler_event, rule_name, pair_scope);
+            continue;
+        }
+
+        const auto trait_name = arm.trait_name();
+        const auto* trait     = find_resolved_trait(arm.resolved_trait_id, trait_name);
         if (trait == nullptr) {
             const auto prev_errors = errors_.error_count();
-            (void)resolve_trait_ref_to_canonical(arm.trait_name, arm.location);
+            (void)resolve_trait_ref_to_canonical(trait_name, arm.location);
             if (errors_.error_count() == prev_errors) {
-                errors_.error(arm.location, "undeclared trait '" + arm.trait_name + "'");
+                errors_.error(arm.location, "undeclared trait '" + trait_name + "'");
             }
             continue;
         }
 
-        const bool IS_MARKER = trait->fields.empty();
-        if (IS_MARKER && arm.alias.has_value()) {
-            errors_.error(
-                arm.location,
-                "marker trait '" + arm.trait_name + "' has no fields; alias 'as " + *arm.alias + "' is not allowed");
+        if (trait->fields.empty() && arm.alias.has_value()) {
+            errors_.error(arm.location,
+                          "marker trait '" + trait_name + "' has no fields; alias 'as " + *arm.alias +
+                              "' is not allowed");
         }
 
         auto arm_locals = local_bindings;
@@ -6252,11 +6352,210 @@ void SemanticAnalyzer::validate_trait_match_stmt(
 
         validate_event_stmts(arm.body, filter_bindings, arm_locals, handler_event, rule_name, pair_scope);
     }
+}
 
-    if (stmt.wildcard.has_value()) {
-        validate_event_stmts(
-            stmt.wildcard->body, filter_bindings, local_bindings, handler_event, rule_name, pair_scope);
+bool SemanticAnalyzer::is_value_match_subject(const TypeInfo& type) {
+    return type.kind == TypeKind::Enum || type.kind == TypeKind::Int || type.kind == TypeKind::Bool;
+}
+
+std::optional<SemanticAnalyzer::PatternValue> SemanticAnalyzer::match_pattern_value(const ExprNode& pattern) const {
+    if (const auto* literal = std::get_if<LiteralExpr>(&pattern.expr)) {
+        if (literal->kind == LiteralExpr::Kind::Bool) {
+            return PatternValue{.type = make_bool_type(), .key = literal->value};
+        }
+        if (literal->kind == LiteralExpr::Kind::Int) {
+            return PatternValue{.type = make_int_type(), .key = literal->value};
+        }
+        return std::nullopt;
     }
+    if (const auto* member = std::get_if<MemberExpr>(&pattern.expr); member != nullptr && member->resolved_enum_member) {
+        return PatternValue{.type = make_resolved_user_type(TypeKind::Enum, member->resolved_enum_member->enum_id),
+                            .key  = member->resolved_enum_member->member};
+    }
+    const auto* ident  = std::get_if<IdentExpr>(&pattern.expr);
+    const auto* member = std::get_if<MemberExpr>(&pattern.expr);
+    const auto const_id = ident != nullptr    ? ident->resolved_const_id
+                          : member != nullptr ? member->resolved_const_id
+                                              : std::nullopt;
+    if (!const_id.has_value()) {
+        return std::nullopt;
+    }
+    PatternValue value{.type = find_const_type(*const_id), .key = make_canonical_id(*const_id)};
+    const auto initializer = const_initializers_.find(const_id->local_name);
+    if (const_id->module.name != current_module_name_ || initializer == const_initializers_.end() ||
+        initializer->second == nullptr) {
+        return value;
+    }
+    if (value.type.kind == TypeKind::Int) {
+        std::unordered_set<std::string> evaluating;
+        if (const auto folded = evaluate_numeric_constant(*initializer->second, const_initializers_, evaluating)) {
+            value.key = std::to_string(static_cast<long long>(folded->value));
+        }
+        return value;
+    }
+    if (const auto inner = match_pattern_value(*initializer->second); inner.has_value()) {
+        value.key = inner->key;
+    }
+    return value;
+}
+
+void SemanticAnalyzer::check_value_patterns(const std::vector<const ExprNode*>& patterns,
+                                            const TypeInfo& subject_type,
+                                            const SourceLocation& match_location) const {
+    bool has_wildcard = false;
+    std::unordered_set<std::string> seen;
+    for (std::size_t index = 0; index < patterns.size(); ++index) {
+        const auto& pattern = *patterns[index];
+        if (is_wildcard_pattern(pattern)) {
+            has_wildcard = true;
+            if (index + 1 != patterns.size()) {
+                errors_.error(pattern.location, "`_` must be the last arm of a `match`");
+            }
+            continue;
+        }
+        const auto spelling = pattern_spelling(pattern);
+        const auto value    = match_pattern_value(pattern);
+        if (!value.has_value()) {
+            errors_.error(pattern.location,
+                          "pattern `" + spelling + "` is not an enum variant, an `int` or `bool` literal, or a constant");
+            continue;
+        }
+        if (value->type.kind != TypeKind::Unknown && !same_type(value->type, subject_type)) {
+            errors_.error(pattern.location,
+                          "pattern `" + spelling + "` is " + (value->type.kind == TypeKind::Int ? "an" : "a") + " `" +
+                              type_display_name(value->type) + "` but the subject is `" +
+                              type_display_name(subject_type) + "`");
+            continue;
+        }
+        if (!seen.insert(value->key).second) {
+            errors_.error(pattern.location, "duplicate pattern `" + spelling + "`");
+        }
+    }
+    if (has_wildcard) {
+        return;
+    }
+
+    std::vector<std::string> missing;
+    if (subject_type.kind == TypeKind::Int) {
+        errors_.error(match_location, "a `match` on `int` needs a `_` arm");
+        return;
+    }
+    if (subject_type.kind == TypeKind::Bool) {
+        for (const char* name : {"true", "false"}) {
+            if (!seen.contains(name)) {
+                missing.emplace_back(name);
+            }
+        }
+    } else if (const auto* enum_decl =
+                   subject_type.symbol_id.has_value() ? find_resolved_enum(*subject_type.symbol_id) : nullptr) {
+        std::ranges::copy_if(enum_decl->variants, std::back_inserter(missing),
+                             [&seen](const std::string& variant) { return !seen.contains(variant); });
+    }
+    if (missing.empty()) {
+        return;
+    }
+    std::string listed;
+    for (const auto& name : missing) {
+        listed += listed.empty() ? "`" : ", `";
+        listed += name;
+        listed += '`';
+    }
+    errors_.error(match_location, "`match` on `" + type_display_name(subject_type) + "` is missing " + listed);
+}
+
+std::string SemanticAnalyzer::pattern_spelling(const ExprNode& pattern) {
+    if (const auto* literal = std::get_if<LiteralExpr>(&pattern.expr)) {
+        return literal->value;
+    }
+    return dotted_name_of(pattern);
+}
+
+TypeInfo SemanticAnalyzer::infer_if_expr_type(const IfExpr& if_expr,
+                                              const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                                              const std::unordered_map<std::string, TypeInfo>& local_bindings,
+                                              const ResolvedStruct* handler_event,
+                                              const PairScope* pair_scope) const {
+    const auto infer = [&](const ExprNode& expr) {
+        return infer_expr_type(expr, filter_bindings, local_bindings, handler_event, pair_scope);
+    };
+    TypeInfo result = make_unknown_type();
+    bool reported   = false;
+    const auto merge = [&](const ExprNode& branch) {
+        auto type = infer(branch);
+        if (!reported) {
+            reported = !unify_branch_type(result, std::move(type), branch.location, "`if` expression branches");
+        }
+    };
+
+    const IfExpr* part   = &if_expr;
+    const char* keyword = "`if` condition";
+    while (part != nullptr) {
+        require_bool(infer(*part->condition), part->condition->location, keyword);
+        merge(*part->then_expr);
+        const auto* next = std::get_if<IfExpr>(&part->else_expr->expr);
+        if (next == nullptr) {
+            merge(*part->else_expr);
+        }
+        part    = next;
+        keyword = "`else if` condition";
+    }
+    return result;
+}
+
+TypeInfo SemanticAnalyzer::infer_match_expr_type(
+    const MatchExpr& match_expr,
+    const SourceLocation& location,
+    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+    const std::unordered_map<std::string, TypeInfo>& local_bindings,
+    const ResolvedStruct* handler_event,
+    const PairScope* pair_scope) const {
+    const auto subject_type =
+        infer_expr_type(*match_expr.subject, filter_bindings, local_bindings, handler_event, pair_scope);
+    if (is_value_match_subject(subject_type)) {
+        check_value_patterns(patterns_of(match_expr.arms), subject_type, location);
+    } else if (subject_type.kind != TypeKind::Unknown) {
+        errors_.error(location,
+                      "`match` subject must be an enum, `int` or `bool`, got `" + type_display_name(subject_type) + "`");
+    }
+
+    TypeInfo result = make_unknown_type();
+    for (const auto& arm : match_expr.arms) {
+        if (!unify_branch_type(result,
+                               infer_expr_type(*arm.body, filter_bindings, local_bindings, handler_event, pair_scope),
+                               arm.body->location,
+                               "`match` arms")) {
+            break;
+        }
+    }
+    return result;
+}
+
+void SemanticAnalyzer::require_bool(const TypeInfo& type,
+                                    const SourceLocation& location,
+                                    const std::string& what) const {
+    if (type.kind != TypeKind::Bool && type.kind != TypeKind::Unknown) {
+        errors_.error(location, what + " must be `bool`, got `" + type_display_name(type) + "`");
+    }
+}
+
+bool SemanticAnalyzer::unify_branch_type(TypeInfo& result,
+                                         TypeInfo type,
+                                         const SourceLocation& location,
+                                         const std::string& branches) const {
+    if (type.kind == TypeKind::Unknown) {
+        return true;
+    }
+    if (result.kind == TypeKind::Unknown) {
+        result = std::move(type);
+        return true;
+    }
+    if (same_type(result, type)) {
+        return true;
+    }
+    errors_.error(location,
+                  branches + " have different types: `" + type_display_name(result) + "` and `" +
+                      type_display_name(type) + "`");
+    return false;
 }
 
 // ── Phase 4: Dependency Graph ───────────────────────────────────────────────
@@ -6784,20 +7083,20 @@ void SemanticAnalyzer::walk_handler_body(  // NOLINT(readability-function-cognit
                         auto loop_locals = locals;
                         loop_locals.insert(node.var_name);
                         visit_stmts(node.body, std::move(loop_locals));
-                    } else if constexpr (std::is_same_v<S, TraitMatchStmt>) {
+                    } else if constexpr (std::is_same_v<S, MatchStmt>) {
                         visit_expr(*node.subject, locals);
                         for (const auto& arm : node.arms) {
-                            if (arm.resolved_trait_id.has_value()) {
+                            if (node.kind == MatchKind::Trait && arm.resolved_trait_id.has_value()) {
                                 record_read(contract, *arm.resolved_trait_id, std::nullopt, nullptr);
+                            }
+                            if (node.kind == MatchKind::Value) {
+                                visit_expr(*arm.pattern, locals);
                             }
                             auto arm_locals = locals;
                             if (arm.alias.has_value()) {
                                 arm_locals.insert(*arm.alias);
                             }
                             visit_stmts(arm.body, std::move(arm_locals));
-                        }
-                        if (node.wildcard.has_value()) {
-                            visit_stmts(node.wildcard->body, locals);
                         }
                     }
                 },
@@ -7714,13 +8013,12 @@ void SemanticAnalyzer::collect_rule_deps(const std::vector<std::unique_ptr<StmtN
                         collect_rule_deps(branch.body, dep);
                     }
                     collect_rule_deps(s.else_body, dep);
-                } else if constexpr (std::is_same_v<S, TraitMatchStmt>) {
+                } else if constexpr (std::is_same_v<S, MatchStmt>) {
                     for (const auto& arm : s.arms) {
-                        dep.reads.insert(arm.trait_name);
+                        if (s.kind == MatchKind::Trait && !arm.is_wildcard()) {
+                            dep.reads.insert(arm.trait_name());
+                        }
                         collect_rule_deps(arm.body, dep);
-                    }
-                    if (s.wildcard.has_value()) {
-                        collect_rule_deps(s.wildcard->body, dep);
                     }
                 }
             },
@@ -8936,6 +9234,11 @@ void SemanticAnalyzer::validate_text_format_in_expr(
         validate_text_format_in_expr(*if_expr->condition, filter_bindings, local_bindings, handler_event);
         validate_text_format_in_expr(*if_expr->then_expr, filter_bindings, local_bindings, handler_event);
         validate_text_format_in_expr(*if_expr->else_expr, filter_bindings, local_bindings, handler_event);
+    } else if (const auto* match_expr = std::get_if<MatchExpr>(&expr.expr)) {
+        validate_text_format_in_expr(*match_expr->subject, filter_bindings, local_bindings, handler_event);
+        for (const auto& arm : match_expr->arms) {
+            validate_text_format_in_expr(*arm.body, filter_bindings, local_bindings, handler_event);
+        }
     } else if (const auto* list = std::get_if<ListExpr>(&expr.expr)) {
         for (const auto& elem : list->elements) {
             validate_text_format_in_expr(*elem, filter_bindings, local_bindings, handler_event);
@@ -8986,6 +9289,11 @@ void SemanticAnalyzer::validate_text_format_in_stmts(
                 } else if constexpr (std::is_same_v<S, ForeachStmt>) {
                     validate_text_format_in_expr(*s.iterable, filter_bindings, locals, handler_event);
                     validate_text_format_in_stmts(s.body, filter_bindings, locals, handler_event);
+                } else if constexpr (std::is_same_v<S, MatchStmt>) {
+                    validate_text_format_in_expr(*s.subject, filter_bindings, locals, handler_event);
+                    for (const auto& arm : s.arms) {
+                        validate_text_format_in_stmts(arm.body, filter_bindings, locals, handler_event);
+                    }
                 }
             },
             stmt->stmt);
@@ -9554,11 +9862,21 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
         return make_unknown_type();
     }
     if (const auto* unary = std::get_if<UnaryExpr>(&expr.expr)) {
-        return infer_expr_type(*unary->operand, filter_bindings, local_bindings, handler_event, pair_scope);
+        auto operand = infer_expr_type(*unary->operand, filter_bindings, local_bindings, handler_event, pair_scope);
+        if (unary->op != "not") {
+            return operand;
+        }
+        require_bool(operand, unary->operand->location, "operand of `not`");
+        return make_bool_type();
     }
     if (const auto* binary = std::get_if<BinaryExpr>(&expr.expr)) {
         auto left  = infer_expr_type(*binary->left, filter_bindings, local_bindings, handler_event, pair_scope);
         auto right = infer_expr_type(*binary->right, filter_bindings, local_bindings, handler_event, pair_scope);
+        if (binary->op == "and" || binary->op == "or") {
+            require_bool(left, binary->left->location, "left operand of `" + binary->op + "`");
+            require_bool(right, binary->right->location, "right operand of `" + binary->op + "`");
+            return make_bool_type();
+        }
         if ((binary->op == "==" || binary->op == "!=") &&
             ((left.kind == TypeKind::EntityId && right.kind == TypeKind::Int) ||
              (right.kind == TypeKind::EntityId && left.kind == TypeKind::Int))) {
@@ -9589,7 +9907,11 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
         return left;
     }
     if (const auto* if_expr = std::get_if<IfExpr>(&expr.expr)) {
-        return infer_expr_type(*if_expr->then_expr, filter_bindings, local_bindings, handler_event, pair_scope);
+        return infer_if_expr_type(*if_expr, filter_bindings, local_bindings, handler_event, pair_scope);
+    }
+    if (const auto* match_expr = std::get_if<MatchExpr>(&expr.expr)) {
+        return infer_match_expr_type(
+            *match_expr, expr.location, filter_bindings, local_bindings, handler_event, pair_scope);
     }
     if (const auto* list = std::get_if<ListExpr>(&expr.expr)) {
         if (list->elements.empty()) {
@@ -10731,6 +11053,10 @@ void SemanticAnalyzer::validate_spawn_stmts(  // NOLINT(readability-function-cog
                         validate_spawn_stmts(branch.body, context_name);
                     }
                     validate_spawn_stmts(s.else_body, context_name);
+                } else if constexpr (std::is_same_v<S, MatchStmt>) {
+                    for (const auto& arm : s.arms) {
+                        validate_spawn_stmts(arm.body, context_name);
+                    }
                 }
             },
             stmt->stmt);
@@ -10812,6 +11138,10 @@ void SemanticAnalyzer::validate_spawn_exprs(const std::vector<std::unique_ptr<St
                         validate_spawn_exprs(branch.body, context_name);
                     }
                     validate_spawn_exprs(s.else_body, context_name);
+                } else if constexpr (std::is_same_v<S, MatchStmt>) {
+                    for (const auto& arm : s.arms) {
+                        validate_spawn_exprs(arm.body, context_name);
+                    }
                 }
             },
             stmt->stmt);
@@ -10855,8 +11185,12 @@ void SemanticAnalyzer::validate_context_stmts(  // NOLINT(readability-function-c
                               std::is_same_v<S, LoadStmt> || std::is_same_v<S, AddTraitStmt> ||
                               std::is_same_v<S, RemoveTraitStmt> || std::is_same_v<S, ProjectTraitStmt> ||
                               std::is_same_v<S, SetTraitStmt> || std::is_same_v<S, ForeachStmt> ||
-                              std::is_same_v<S, TraitMatchStmt>) {
-                    if (!in_rule_handler) {
+                              std::is_same_v<S, MatchStmt>) {
+                    bool handler_only = true;
+                    if constexpr (std::is_same_v<S, MatchStmt>) {
+                        handler_only = s.kind == MatchKind::Trait;
+                    }
+                    if (!in_rule_handler && handler_only) {
                         // Determine which keyword is used
                         std::string kw;
                         if constexpr (std::is_same_v<S, SpawnStmt>) {
@@ -10873,7 +11207,7 @@ void SemanticAnalyzer::validate_context_stmts(  // NOLINT(readability-function-c
                             kw = "set";
                         } else if constexpr (std::is_same_v<S, ForeachStmt>) {
                             kw = "for";
-                        } else if constexpr (std::is_same_v<S, TraitMatchStmt>) {
+                        } else if constexpr (std::is_same_v<S, MatchStmt>) {
                             kw = "match";
                         } else {
                             kw = "remove";
@@ -10960,12 +11294,10 @@ void SemanticAnalyzer::validate_context_stmts(  // NOLINT(readability-function-c
                                                           self_context_locals,
                                                           nullptr);
                     }
-                    if constexpr (std::is_same_v<S, TraitMatchStmt>) {
+                    if constexpr (std::is_same_v<S, MatchStmt>) {
+                        validate_self_expr(*s.subject, s.location);
                         for (const auto& arm : s.arms) {
                             validate_context_stmts(arm.body, context_name, in_rule_handler);
-                        }
-                        if (s.wildcard.has_value()) {
-                            validate_context_stmts(s.wildcard->body, context_name, in_rule_handler);
                         }
                     }
                 } else if constexpr (std::is_same_v<S, IfStmt>) {

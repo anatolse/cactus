@@ -1,3 +1,4 @@
+#include "common/codegen_error.hpp"
 #include "common/error_reporter.hpp"
 #include "common/template_metadata.hpp"
 #include "frontend/lexer.hpp"
@@ -506,6 +507,9 @@ int main(int argc, char* argv[]) {  // NOLINT(readability-function-cognitive-com
     std::string generated;
     try {
         generated = cactus::CppEnttCodegen::generate(decorated);
+    } catch (const cactus::CodegenError& e) {
+        std::cerr << e.location() << ": error: " << e.what() << "\n";
+        return 1;
     } catch (const std::exception& e) {
         std::cerr << "error: " << e.what() << "\n";
         return 1;

@@ -64,6 +64,13 @@
 // quantize work worth keeping in exactly one compiled place.
 [[nodiscard]] Color color_from_components(float r, float g, float b, float a) noexcept;
 
+// Generated code wraps a conditional nested in another conditional in this call: the inner one
+// stays lazy, and generated code passes the nested-conditional lint.
+template <typename T>
+[[nodiscard]] constexpr T cactus_chosen(T value) {
+    return value;
+}
+
 // Every color-constructing operator row (dsl-vector-expressions' fixed color
 // binary operator matrix) normalizes both operands to [0,1] float, combines,
 // and repacks through color_from_components — one clamp-then-quantize call

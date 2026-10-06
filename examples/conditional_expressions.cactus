@@ -1,0 +1,61 @@
+module conditional_expressions
+
+use std.core
+
+# Conditional values and value dispatch: an `if` expression with `else if`,
+# a `match` expression, and statement-level `match` on an enum and on an int.
+
+enum Mode:
+    Idle
+    Walk
+    Run
+
+const:
+    FULL_HP = 100
+
+pub trait Actor:
+    var mode: Mode = Mode.Idle
+    var speed: float = 0.0
+    var hp: int = 100
+    var tier: int = 0
+    var label: int = 0
+    var bucket: int = 0
+    var stamina: int = 0
+
+func stamina_cost(mode: Mode) int:
+    var cost = 0
+    match mode:
+        Mode.Idle =>
+            cost = 0
+        Mode.Walk =>
+            cost = 1
+        Mode.Run =>
+            cost = 3
+    return cost
+
+rule Classify:
+    filter:
+        Actor as a
+
+    on tick:
+        a.tier = if a.hp <= 0: 0 else if a.hp < 50: 1 else: 2
+        let s = match a.mode:
+            Mode.Idle => 0.0
+            Mode.Walk => 1.5
+            Mode.Run => 4.0
+        a.speed = s
+        match a.mode:
+            Mode.Idle =>
+                a.label = 10
+            Mode.Walk =>
+                a.label = 20
+            Mode.Run =>
+                a.label = 30
+        match a.hp:
+            0 =>
+                a.bucket = -1
+            FULL_HP =>
+                a.bucket = 1
+            _ =>
+                a.bucket = 7
+        a.stamina = stamina_cost(a.mode)

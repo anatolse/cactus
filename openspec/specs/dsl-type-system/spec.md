@@ -144,3 +144,43 @@ The type system SHALL infer types for expressions, including binary operation re
 #### Scenario: Function call return type
 - **WHEN** the expression `math.abs(delta)` is evaluated where `delta` is `float`
 - **THEN** the type system infers the result type as `float`
+
+### Requirement: Conditions and logical operands are bool
+The condition of an `if` statement, of each `else if`, and of each branch of an `if` expression SHALL have type `bool`. The operands of `and`, `or` and `not` SHALL have type `bool`. Any other type SHALL be a compile error at the condition or operand, naming the type found. No implicit truthiness conversion exists for numbers, vectors, handles or strings.
+
+#### Scenario: Int condition is rejected
+- **WHEN** a handler contains `if t.hp:` and `t.hp` is an `int`
+- **THEN** the semantic analyzer reports that an `if` condition must be `bool` but is `int`
+
+#### Scenario: Non-bool logical operand is rejected
+- **WHEN** a handler contains `if ready and t.hp:` where `ready` is `bool` and `t.hp` is `int`
+- **THEN** the semantic analyzer reports that the right operand of `and` must be `bool` but is `int`
+
+#### Scenario: Comparison condition is accepted
+- **WHEN** a handler contains `if t.hp > 0:`
+- **THEN** the condition type-checks as `bool`
+
+### Requirement: Conditional expression result types
+An `if` expression SHALL have the type of its result expressions, and every result expression, the `else` one included, SHALL have the same type. A `match` expression SHALL have the type of its arm expressions, and every arm expression SHALL have the same type. Mixing types, `int` and `float` included, SHALL be a compile error naming both types; there is no implicit conversion between branches.
+
+An `if` or `match` expression is pure when its condition or subject, its patterns and all of its result expressions are pure. A pure conditional expression is accepted wherever a pure expression is: `const` values, `where:`, `when:`, `order by:`, `limit:` counts, `reduce:` inputs, `keep` field values and template arguments. Its subject and conditions are evaluated once, and only the selected result expression is evaluated.
+
+#### Scenario: If expression type
+- **WHEN** a handler contains `let speed = if running: 4.0 else: 1.5`
+- **THEN** `speed` has type `float`
+
+#### Scenario: Mismatched if branches are rejected
+- **WHEN** a handler contains `let x = if ready: 1 else: 2.0`
+- **THEN** the semantic analyzer reports that the branches have types `int` and `float`
+
+#### Scenario: Match expression type
+- **WHEN** a handler contains `let s = match t.mode:` with arms `Mode.Idle => 0.0` and `Mode.Run => 2.0`
+- **THEN** `s` has type `float`
+
+#### Scenario: Conditional expression in a constant
+- **WHEN** a `const:` block contains `STEP = if FAST: 2.0 else: 1.0` and `FAST` is a `bool` constant
+- **THEN** the constant is accepted as a const expression with value `2.0` when `FAST` is `true`
+
+#### Scenario: Only the selected branch is evaluated
+- **WHEN** an `if` expression's condition is `false` and its then-expression calls an extern function
+- **THEN** that call does not happen

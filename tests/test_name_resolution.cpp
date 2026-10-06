@@ -188,16 +188,13 @@ static void collect_unresolved_stmts(const std::vector<std::unique_ptr<StmtNode>
                     if (s.trait_name != "Parent" && !s.resolved_trait_id.has_value()) {
                         out.push_back("trait stmt '" + s.trait_name + "'");
                     }
-                } else if constexpr (std::is_same_v<S, TraitMatchStmt>) {
+                } else if constexpr (std::is_same_v<S, MatchStmt>) {
                     collect_unresolved_expr(*s.subject, out);
                     for (const auto& arm : s.arms) {
-                        if (!arm.resolved_trait_id.has_value()) {
-                            out.push_back("match arm trait '" + arm.trait_name + "'");
+                        if (s.kind == MatchKind::Trait && !arm.is_wildcard() && !arm.resolved_trait_id.has_value()) {
+                            out.push_back("match arm trait '" + arm.trait_name() + "'");
                         }
                         collect_unresolved_stmts(arm.body, out);
-                    }
-                    if (s.wildcard.has_value()) {
-                        collect_unresolved_stmts(s.wildcard->body, out);
                     }
                 }
             },

@@ -285,6 +285,31 @@ struct ExprNode {
         , location(std::move(loc)) {}
 };
 
+[[nodiscard]] inline bool is_wildcard_pattern(const ExprNode& pattern) {
+    const auto* ident = std::get_if<IdentExpr>(&pattern.expr);
+    return ident != nullptr && ident->name == "_";
+}
+
+// `a.b.C` for an identifier or member chain; empty for anything else.
+[[nodiscard]] inline std::string dotted_name_of(const ExprNode& expr) {
+    std::vector<const std::string*> members;
+    const ExprNode* cursor = &expr;
+    while (const auto* member = std::get_if<MemberExpr>(&cursor->expr)) {
+        members.push_back(&member->member);
+        cursor = member->object.get();
+    }
+    const auto* ident = std::get_if<IdentExpr>(&cursor->expr);
+    if (ident == nullptr) {
+        return {};
+    }
+    std::string name = ident->name;
+    for (auto it = members.rbegin(); it != members.rend(); ++it) {
+        name += '.';
+        name += **it;
+    }
+    return name;
+}
+
 // ── Statement Nodes ─────────────────────────────────────────────────────────
 
 struct VarAssign {
@@ -393,23 +418,31 @@ struct ForeachStmt {
     SourceLocation location;
 };
 
-struct TraitMatchArm {
-    std::string trait_name;
-    std::optional<SymbolId> resolved_trait_id;  // set by semantic analysis; source spelling is preserved
+// The subject's type decides the kind: `entity_id` tests trait presence; an enum, `int` or `bool` compares values.
+enum class MatchKind : std::uint8_t { Trait, Value };
+
+struct MatchStmtArm {
+    std::unique_ptr<ExprNode> pattern;  // dotted name, `int`/`bool` literal, or `_`
+    std::optional<SymbolId> resolved_trait_id;  // set by semantic analysis for a trait arm
     std::optional<std::string> alias;
     std::vector<std::unique_ptr<StmtNode>> body;
     SourceLocation location;
+
+    [[nodiscard]] bool is_wildcard() const {
+        return is_wildcard_pattern(*pattern);
+    }
+
+    // The pattern's dotted spelling (`ui.Text`); empty for a literal.
+    [[nodiscard]] std::string trait_name() const {
+        return dotted_name_of(*pattern);
+    }
 };
 
-struct WildcardMatchArm {
-    std::vector<std::unique_ptr<StmtNode>> body;
-    SourceLocation location;
-};
-
-struct TraitMatchStmt {
+struct MatchStmt {
     std::unique_ptr<ExprNode> subject;
-    std::vector<TraitMatchArm> arms;
-    std::optional<WildcardMatchArm> wildcard;
+    std::vector<MatchStmtArm> arms;
+    // Set by semantic analysis, which only sees the tree by const reference.
+    mutable MatchKind kind = MatchKind::Trait;
     SourceLocation location;
 };
 
@@ -485,7 +518,7 @@ struct StmtNode {
                                  ExprStmt,
                                  IfStmt,
                                  ForeachStmt,
-                                 TraitMatchStmt>;
+                                 MatchStmt>;
     Variant stmt;
     SourceLocation location;
 

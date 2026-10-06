@@ -1,6 +1,7 @@
 #include "backends/cpp-entt/render_pass_emitter.hpp"
 
 #include "backends/cpp-entt/type_utils.hpp"
+#include "common/codegen_error.hpp"
 #include "common/render_pass_builtin_fields.hpp"
 #include "common/render_pass_intrinsics.hpp"
 #include "common/vector_binary_ops.hpp"
@@ -418,7 +419,19 @@ TranslatedExpr translate_binary(const BinaryExpr& binary, GlslCtx& ctx) {
            .type = is_comparison ? GlslType::Bool : left.type};
 }
 
-TranslatedExpr translate_expr(const ExprNode& expr, GlslCtx& ctx) {
+// Stage bodies are pure, so the chain may repeat the subject.
+TranslatedExpr translate_match_expr(const MatchExpr& match_expr, GlslCtx& ctx) {
+    const auto subject = translate_expr(*match_expr.subject, ctx).text;
+    std::vector<std::pair<std::string, std::string>> tested_arms;
+    for (std::size_t index = 0; index + 1 < match_expr.arms.size(); ++index) {
+        const auto& arm = match_expr.arms[index];
+        tested_arms.emplace_back(translate_expr(*arm.pattern, ctx).text, translate_expr(*arm.body, ctx).text);
+    }
+    const auto last = translate_expr(*match_expr.arms.back().body, ctx);
+    return {.text = EnttCodegenUtils::match_ternary_chain(subject, tested_arms, last.text, false), .type = last.type};
+}
+
+TranslatedExpr translate_expr_node(const ExprNode& expr, GlslCtx& ctx) {
     return std::visit(
         [&](const auto& node) -> TranslatedExpr {
             using E = std::decay_t<decltype(node)>;
@@ -435,11 +448,31 @@ TranslatedExpr translate_expr(const ExprNode& expr, GlslCtx& ctx) {
                 return translate_member(node, ctx);
             } else if constexpr (std::is_same_v<E, CallExpr>) {
                 return translate_call(node, ctx);
+            } else if constexpr (std::is_same_v<E, IfExpr>) {
+                const auto condition = translate_expr(*node.condition, ctx);
+                const auto chosen    = translate_expr(*node.then_expr, ctx);
+                const auto otherwise = translate_expr(*node.else_expr, ctx);
+                return {.text = "(" + condition.text + " ? " + chosen.text + " : " + otherwise.text + ")",
+                        .type = chosen.type};
+            } else if constexpr (std::is_same_v<E, MatchExpr>) {
+                return translate_match_expr(node, ctx);
             } else {
-                throw std::runtime_error("render-pass GLSL codegen: unsupported expression form in stage handler body");
+                throw CodegenError(expr.location,
+                                   "render-pass GLSL codegen: unsupported expression form in stage handler body");
             }
         },
         expr.expr);
+}
+
+// The innermost expression that fails gives the diagnostic its location.
+TranslatedExpr translate_expr(const ExprNode& expr, GlslCtx& ctx) {
+    try {
+        return translate_expr_node(expr, ctx);
+    } catch (const CodegenError&) {
+        throw;
+    } catch (const std::runtime_error& error) {
+        throw CodegenError(expr.location, error.what());
+    }
 }
 
 std::string translate_stmts(const std::vector<std::unique_ptr<StmtNode>>& body, GlslCtx& ctx, int indent);
@@ -463,6 +496,32 @@ std::string translate_if(const IfStmt& if_stmt, GlslCtx& ctx, int indent) {
     return out.str();
 }
 
+// Semantic analysis guarantees exhaustiveness, so the last arm is a plain `else`.
+std::string translate_value_match(const MatchStmt& match_stmt, GlslCtx& ctx, int indent) {
+    const std::string pad(static_cast<std::size_t>(indent) * 4, ' ');
+    const auto subject = translate_expr(*match_stmt.subject, ctx);
+    const auto name    = "match_subject_" + std::to_string(match_stmt.location.line) + "_" +
+                      std::to_string(match_stmt.location.column);
+    std::ostringstream out;
+    out << pad << glsl_type_name(subject.type) << " " << name << " = " << subject.text << ";\n";
+    for (std::size_t index = 0; index < match_stmt.arms.size(); ++index) {
+        const auto& arm = match_stmt.arms[index];
+        const bool last = index + 1 == match_stmt.arms.size() || arm.is_wildcard();
+        out << pad;
+        if (!last) {
+            out << (index == 0 ? "if ((" : "else if ((") << name << " == " << translate_expr(*arm.pattern, ctx).text
+                << ")) ";
+        } else if (index > 0) {
+            out << "else ";
+        }
+        out << "{\n" << translate_stmts(arm.body, ctx, indent + 1) << pad << "}\n";
+        if (last) {
+            break;
+        }
+    }
+    return out.str();
+}
+
 std::string translate_stmts(const std::vector<std::unique_ptr<StmtNode>>& body, GlslCtx& ctx, int indent) {
     const std::string pad(static_cast<std::size_t>(indent) * 4, ' ');
     std::ostringstream out;
@@ -481,8 +540,11 @@ std::string translate_stmts(const std::vector<std::unique_ptr<StmtNode>>& body, 
             out << pad << target << " " << assign->op << " " << value.text << ";\n";
         } else if (const auto* if_stmt = std::get_if<IfStmt>(&stmt->stmt)) {
             out << translate_if(*if_stmt, ctx, indent);
+        } else if (const auto* match_stmt = std::get_if<MatchStmt>(&stmt->stmt);
+                   match_stmt != nullptr && match_stmt->kind == MatchKind::Value) {
+            out << translate_value_match(*match_stmt, ctx, indent);
         } else {
-            throw std::runtime_error("render-pass GLSL codegen: unsupported statement in stage handler body");
+            throw CodegenError(stmt->location, "render-pass GLSL codegen: unsupported statement in stage handler body");
         }
     }
     return out.str();

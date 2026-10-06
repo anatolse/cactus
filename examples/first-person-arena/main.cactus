@@ -679,10 +679,8 @@ rule SpawnRobots:
         spawn_point.countdown -= fixed_tick.dt
         if spawn_point.countdown > 0.0:
             return
-        var model_scale = 1.0
         let bounds = models.bounds_size(Robot)
-        if bounds.y > 0.0:
-            model_scale = CHARACTER_HEIGHT / bounds.y
+        let model_scale = if bounds.y > 0.0: CHARACTER_HEIGHT / bounds.y else: 1.0
         spawn RobotTemplate:
             tv.WorldTransform:
                 position = transform.position
@@ -712,10 +710,8 @@ rule SpawnKnights:
         spawn_point.countdown -= fixed_tick.dt
         if spawn_point.countdown > 0.0:
             return
-        var model_scale = 1.0
         let bounds = models.bounds_size(Knight)
-        if bounds.y > 0.0:
-            model_scale = CHARACTER_HEIGHT / bounds.y
+        let model_scale = if bounds.y > 0.0: CHARACTER_HEIGHT / bounds.y else: 1.0
         spawn KnightTemplate:
             tv.WorldTransform:
                 position = transform.position
@@ -745,16 +741,13 @@ func steer_heading(position: vec3, goal: vec3, angle: float) vec3:
 # every candidate is blocked the enemy keeps the direct heading, and the
 # character controller stops it at the wall.
 func steer_angle(left_small_blocked: bool, right_small_blocked: bool, left_large_blocked: bool, right_large_blocked: bool) float:
-    var angle = 0.0
-    if not left_small_blocked:
-        angle = ENEMY_STEER_ANGLE_SMALL
-    else if not right_small_blocked:
-        angle = ENEMY_STEER_ANGLE_SMALL * -1.0
-    else if not left_large_blocked:
-        angle = ENEMY_STEER_ANGLE_LARGE
-    else if not right_large_blocked:
-        angle = ENEMY_STEER_ANGLE_LARGE * -1.0
-    return angle
+    return (
+        if not left_small_blocked: ENEMY_STEER_ANGLE_SMALL
+        else if not right_small_blocked: -ENEMY_STEER_ANGLE_SMALL
+        else if not left_large_blocked: ENEMY_STEER_ANGLE_LARGE
+        else if not right_large_blocked: -ENEMY_STEER_ANGLE_LARGE
+        else: 0.0
+    )
 
 # Whether a sphere of ENEMY_RADIUS at a steering probe overlaps this wall's
 # box. The probe sits ENEMY_STEER_PROBE_DISTANCE along the heading, raised by

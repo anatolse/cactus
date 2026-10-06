@@ -160,7 +160,10 @@ private:
     SetTraitStmt parse_set_trait_stmt();
     [[nodiscard]] bool at_indented_block() const;
     ForeachStmt parse_foreach_stmt();
-    TraitMatchStmt parse_trait_match_stmt();
+    MatchStmt parse_match_stmt();
+    std::unique_ptr<ExprNode> parse_match_pattern();
+    // A `match` expression ends with its arm block, which already consumed the line break.
+    void expect_statement_end(const ExprNode& last_expr);
     LetStmt parse_let_stmt();
     EmitStmt parse_emit_stmt();
     ReturnStmt parse_return_stmt();

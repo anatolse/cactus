@@ -308,6 +308,129 @@ TEST_CASE("Parser: match expression arms still use =>", "[parser]") {
     CHECK(match->arms.size() == 2);
 }
 
+TEST_CASE("Parser: match expression may be followed by another statement", "[parser][conditional-expressions]") {
+    auto prog = parse(
+        "func f(c: int) float:\n"
+        "    let a = match c:\n"
+        "        0 => 1.0\n"
+        "        _ => 2.0\n"
+        "    var b = 0.0\n"
+        "    b = match c:\n"
+        "        1 => 3.0\n"
+        "        _ => 4.0\n"
+        "    return match c:\n"
+        "        2 => a\n"
+        "        _ => b\n");
+    auto& func = std::get<FuncNode>(prog.declarations[0]);
+    REQUIRE(func.body.size() == 4);
+    const auto* let = std::get_if<LetStmt>(&func.body[0]->stmt);
+    REQUIRE(let != nullptr);
+    CHECK(std::holds_alternative<MatchExpr>(let->value->expr));
+    CHECK(std::holds_alternative<LetStmt>(func.body[1]->stmt));
+    const auto* assign = std::get_if<VarAssign>(&func.body[2]->stmt);
+    REQUIRE(assign != nullptr);
+    CHECK(std::holds_alternative<MatchExpr>(assign->value->expr));
+    const auto* ret = std::get_if<ReturnStmt>(&func.body[3]->stmt);
+    REQUIRE(ret != nullptr);
+    REQUIRE(ret->value.has_value());
+    CHECK(std::holds_alternative<MatchExpr>((*ret->value)->expr));
+}
+
+TEST_CASE("Parser: match expression literal, negative literal and wildcard patterns",
+          "[parser][conditional-expressions]") {
+    auto prog = parse(
+        "func f(c: int) float:\n"
+        "    let v = match c:\n"
+        "        0 => 1.0\n"
+        "        -1 => 2.0\n"
+        "        _ => 0.0\n"
+        "    return v\n");
+    auto& func        = std::get<FuncNode>(prog.declarations[0]);
+    const auto* let   = std::get_if<LetStmt>(&func.body[0]->stmt);
+    const auto* match = std::get_if<MatchExpr>(&let->value->expr);
+    REQUIRE(match != nullptr);
+    REQUIRE(match->arms.size() == 3);
+    const auto* zero = std::get_if<LiteralExpr>(&match->arms[0].pattern->expr);
+    REQUIRE(zero != nullptr);
+    CHECK(zero->value == "0");
+    const auto* minus_one = std::get_if<LiteralExpr>(&match->arms[1].pattern->expr);
+    REQUIRE(minus_one != nullptr);
+    CHECK(minus_one->kind == LiteralExpr::Kind::Int);
+    CHECK(minus_one->value == "-1");
+    CHECK(is_wildcard_pattern(*match->arms[2].pattern));
+}
+
+TEST_CASE("Parser: if expression with else if parts nests in else_expr", "[parser][conditional-expressions]") {
+    auto prog = parse(
+        "func f(hp: int) int:\n"
+        "    let tier = if hp <= 0: 0 else if hp < 50: 1 else: 2\n"
+        "    return tier\n");
+    auto& func        = std::get<FuncNode>(prog.declarations[0]);
+    const auto* let   = std::get_if<LetStmt>(&func.body[0]->stmt);
+    const auto* outer = std::get_if<IfExpr>(&let->value->expr);
+    REQUIRE(outer != nullptr);
+    const auto* inner = std::get_if<IfExpr>(&outer->else_expr->expr);
+    REQUIRE(inner != nullptr);
+    const auto* last = std::get_if<LiteralExpr>(&inner->else_expr->expr);
+    REQUIRE(last != nullptr);
+    CHECK(last->value == "2");
+}
+
+TEST_CASE("Parser: if expression may span lines inside parentheses", "[parser][conditional-expressions]") {
+    auto prog = parse(
+        "func f(hp: int) int:\n"
+        "    return (\n"
+        "        if hp <= 0: 0\n"
+        "        else if hp < 50: 1\n"
+        "        else: 2\n"
+        "    )\n"
+        "func g() int:\n"
+        "    return 3\n");
+    REQUIRE(prog.declarations.size() == 2);
+    auto& func      = std::get<FuncNode>(prog.declarations[0]);
+    const auto* ret = std::get_if<ReturnStmt>(&func.body[0]->stmt);
+    REQUIRE(ret != nullptr);
+    REQUIRE(ret->value.has_value());
+    const auto* outer = std::get_if<IfExpr>(&(*ret->value)->expr);
+    REQUIRE(outer != nullptr);
+    CHECK(std::holds_alternative<IfExpr>(outer->else_expr->expr));
+}
+
+TEST_CASE("Parser: if expression without else is rejected", "[parser][conditional-expressions]") {
+    auto errors = parse_expect_errors(
+        "func f(ready: bool) int:\n"
+        "    let x = if ready: 1\n"
+        "    return x\n");
+    REQUIRE(errors.has_errors());
+    CHECK(errors.diagnostics().front().message == "an `if` expression requires an `else`");
+}
+
+TEST_CASE("Parser: statement-level match accepts value patterns", "[parser][conditional-expressions]") {
+    auto prog = parse(
+        "func f(c: int):\n"
+        "    match c:\n"
+        "        Mode.Idle =>\n"
+        "            pass\n"
+        "        3 =>\n"
+        "            pass\n"
+        "        true =>\n"
+        "            pass\n"
+        "        _ =>\n"
+        "            pass\n");
+    auto& func  = std::get<FuncNode>(prog.declarations[0]);
+    auto* match = std::get_if<MatchStmt>(&func.body[0]->stmt);
+    REQUIRE(match != nullptr);
+    REQUIRE(match->arms.size() == 4);
+    CHECK(match->arms[0].trait_name() == "Mode.Idle");
+    const auto* three = std::get_if<LiteralExpr>(&match->arms[1].pattern->expr);
+    REQUIRE(three != nullptr);
+    CHECK(three->value == "3");
+    const auto* yes = std::get_if<LiteralExpr>(&match->arms[2].pattern->expr);
+    REQUIRE(yes != nullptr);
+    CHECK(yes->kind == LiteralExpr::Kind::Bool);
+    CHECK(match->arms[3].is_wildcard());
+}
+
 TEST_CASE("Parser: event handler in trait body is rejected", "[parser]") {
     auto errors = parse_expect_errors(
         "trait Damageable:\n"
@@ -3056,10 +3179,10 @@ TEST_CASE("Parser: trait match statement single arm with alias", "[parser][trait
         "            Boss as b =>\n"
         "                let x = b.phase\n");
     auto& sys        = std::get<RuleNode>(prog.declarations[1]);
-    auto* match_stmt = std::get_if<TraitMatchStmt>(&sys.handlers[0].body[0]->stmt);
+    auto* match_stmt = std::get_if<MatchStmt>(&sys.handlers[0].body[0]->stmt);
     REQUIRE(match_stmt != nullptr);
     REQUIRE(match_stmt->arms.size() == 1);
-    CHECK(match_stmt->arms[0].trait_name == "Boss");
+    CHECK(match_stmt->arms[0].trait_name() == "Boss");
     REQUIRE(match_stmt->arms[0].alias.has_value());
     CHECK(*match_stmt->arms[0].alias == "b");
 }
@@ -3078,12 +3201,12 @@ TEST_CASE("Parser: trait match statement multiple arms and wildcard", "[parser][
         "            _ =>\n"
         "                pass\n");
     auto& sys        = std::get<RuleNode>(prog.declarations[1]);
-    auto* match_stmt = std::get_if<TraitMatchStmt>(&sys.handlers[0].body[0]->stmt);
+    auto* match_stmt = std::get_if<MatchStmt>(&sys.handlers[0].body[0]->stmt);
     REQUIRE(match_stmt != nullptr);
-    REQUIRE(match_stmt->arms.size() == 2);
-    CHECK(match_stmt->arms[0].trait_name == "Boss");
-    CHECK(match_stmt->arms[1].trait_name == "EnemyAI");
-    REQUIRE(match_stmt->wildcard.has_value());
+    REQUIRE(match_stmt->arms.size() == 3);
+    CHECK(match_stmt->arms[0].trait_name() == "Boss");
+    CHECK(match_stmt->arms[1].trait_name() == "EnemyAI");
+    CHECK(match_stmt->arms[2].is_wildcard());
 }
 
 TEST_CASE("Parser: add statement with block parsed", "[parser][dynamic-traits]") {
@@ -3811,13 +3934,13 @@ TEST_CASE("Parser: qualified trait match arm", "[parser][module-qualified]") {
         "            _ =>\n"
         "                add enemy.Idle\n");
     auto& sys   = std::get<RuleNode>(prog.declarations[0]);
-    auto* match = std::get_if<TraitMatchStmt>(&sys.handlers[0].body[0]->stmt);
+    auto* match = std::get_if<MatchStmt>(&sys.handlers[0].body[0]->stmt);
     REQUIRE(match != nullptr);
-    REQUIRE(match->arms.size() == 1);
-    CHECK(match->arms[0].trait_name == "enemy.Boss");
+    REQUIRE(match->arms.size() == 2);
+    CHECK(match->arms[0].trait_name() == "enemy.Boss");
     REQUIRE(match->arms[0].alias.has_value());
     CHECK(*match->arms[0].alias == "boss");
-    REQUIRE(match->wildcard.has_value());
+    CHECK(match->arms[1].is_wildcard());
 }
 
 TEST_CASE("Parser: qualified query filter predicate", "[parser][module-qualified]") {

@@ -446,6 +446,66 @@ TEST_CASE("integration: removed cpp-manual backend is rejected", "[integration][
     CHECK(result.output.find("unknown backend 'cpp-manual'") != std::string::npos);
 }
 
+TEST_CASE("integration: a form the backend cannot lower is a located error and writes no output",
+          "[integration][cli][conditional-expressions]") {
+    REQUIRE(fs::exists(compiler_path()));
+
+    const auto work_dir    = build_root() / "generated_examples" / "codegen-error";
+    const auto source_file = work_dir / "enum_uniform.cactus";
+    const auto output_file = work_dir / "enum_uniform.generated.cpp";
+    fs::create_directories(work_dir);
+    std::error_code ec;
+    fs::remove(output_file, ec);
+
+    {
+        std::ofstream out(source_file);
+        out << "module enum_uniform\n"
+            << "\n"
+            << "use std.core\n"
+            << "use std.render.passes as passes\n"
+            << "\n"
+            << "enum Shade:\n"
+            << "    Light\n"
+            << "    Dark\n"
+            << "\n"
+            << "trait Tile:\n"
+            << "    var position: vec2\n"
+            << "    var shade: Shade = Shade.Light\n"
+            << "\n"
+            << "pub phase tile_pass:\n"
+            << "    from:\n"
+            << "        frame\n"
+            << "    pipeline: passes.Pass = passes.Pass.Quads\n"
+            << "    output: passes.Target = passes.Target.Screen\n"
+            << "\n"
+            << "rule TileVertex:\n"
+            << "    filter:\n"
+            << "        Tile as tile\n"
+            << "\n"
+            << "    on tile_pass.vertex as v:\n"
+            << "        let k = match tile.shade:\n"
+            << "            Shade.Light => 1.0\n"
+            << "            _ => 0.5\n"
+            << "        v.screen_position = tile.position + v.corner * k\n"
+            << "        v.uv_out = v.uv\n"
+            << "        v.tint_out = #FFFFFFFF\n"
+            << "\n"
+            << "rule TileFragment:\n"
+            << "    on tile_pass.fragment as f:\n"
+            << "        f.frag_color = f.tint\n";
+    }
+
+    const auto result = run_command(repo_root(),
+                                    "codegen-error",
+                                    quote(compiler_path()) + " " + quote(source_file) + " --backend cpp-entt --output " +
+                                        quote(output_file));
+
+    CHECK(result.exit_code != 0);
+    CHECK(result.output.find("enum_uniform.cactus:25:27: error: render-pass GLSL codegen: unsupported field type "
+                             "'Shade'") != std::string::npos);
+    CHECK_FALSE(fs::exists(output_file));
+}
+
 TEST_CASE("integration: user library links canonical callbacks independently per external handler",
           "[integration][examples][external-handler-abi]") {
     REQUIRE(fs::exists(compiler_path()));

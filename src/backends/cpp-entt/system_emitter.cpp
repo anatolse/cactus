@@ -419,28 +419,13 @@ private:
     const HandlerTriggerSpelling* previous_;
 };
 
-// Reconstructs "a.b.c" from nested MemberExpr/IdentExpr chains.
-std::string expr_to_dotted_path(const ExprNode& expr) {
-    if (const auto* ident = std::get_if<IdentExpr>(&expr.expr)) {
-        return ident->name;
-    }
-    if (const auto* mem = std::get_if<MemberExpr>(&expr.expr)) {
-        const auto obj = expr_to_dotted_path(*mem->object);
-        if (obj.empty()) {
-            return "";
-        }
-        return obj + "." + mem->member;
-    }
-    return "";
-}
-
 // The payload parameter when `expr` spells the active handler's trigger name.
 std::optional<std::string> lowered_trigger_reference(const ExprNode& expr) {
     const auto* trigger = active_handler_trigger();
     if (trigger == nullptr || trigger->spelling.empty()) {
         return std::nullopt;
     }
-    if (expr_to_dotted_path(expr) != trigger->spelling) {
+    if (dotted_name_of(expr) != trigger->spelling) {
         return std::nullopt;
     }
     return trigger->binding;
@@ -1295,6 +1280,11 @@ static NumericKind infer_numeric_kind(const ExprNode& expr,
                     return NumericKind::Float;
                 }
                 return NumericKind::Unknown;
+            } else if constexpr (std::is_same_v<E, IfExpr>) {
+                return infer_numeric_kind(*e.then_expr, trait_names, program, local_kinds);
+            } else if constexpr (std::is_same_v<E, MatchExpr>) {
+                return e.arms.empty() ? NumericKind::Unknown
+                                      : infer_numeric_kind(*e.arms.front().body, trait_names, program, local_kinds);
             } else {
                 return NumericKind::Unknown;
             }
@@ -2289,7 +2279,7 @@ static std::string lower_query_call_expr(const QueryCallExpr& qcall,
                             matches = (ident->name == *use_node->alias);
                         }
                     } else {
-                        matches = (expr_to_dotted_path(*member->object) == use_node->module_name);
+                        matches = (dotted_name_of(*member->object) == use_node->module_name);
                     }
                     if (matches) {
                         const auto result = lower_by_module(use_node->module_name, func_name);
@@ -2309,6 +2299,24 @@ static std::string lower_query_call_expr(const QueryCallExpr& qcall,
         return result;
     }
     return "/* unrecognized query module: " + module + " */";
+}
+
+// An immediately invoked lambda evaluates the subject once and only the selected arm.
+// Semantic analysis guarantees exhaustiveness, so the last arm needs no test.
+static std::string lower_match_expr(const MatchExpr& match_expr,
+                                    const std::function<std::string(const ExprNode&)>& rewrite) {
+    const auto subject = gen_temp_name("match_subject", match_expr.location);
+    std::string lowered = "[&]() { const auto " + subject + " = " + rewrite(*match_expr.subject) + "; ";
+    for (std::size_t index = 0; index < match_expr.arms.size(); ++index) {
+        const auto& arm      = match_expr.arms[index];
+        const auto selected = "return " + rewrite(*arm.body) + "; ";
+        if (index + 1 == match_expr.arms.size() || is_wildcard_pattern(*arm.pattern)) {
+            lowered += selected;
+            break;
+        }
+        lowered += "if (" + subject + " == " + rewrite(*arm.pattern) + ") { " + selected + "} ";
+    }
+    return lowered + "}()";
 }
 
 static std::string rewrite_expr(  // NOLINT(readability-function-cognitive-complexity) -- still 250 after table-driving
@@ -2721,8 +2729,17 @@ static std::string rewrite_expr(  // NOLINT(readability-function-cognitive-compl
                 return lower_query_call_expr(e, program, [&](const ExprNode& arg) {
                     return rewrite_expr(arg, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
                 });
+            } else if constexpr (std::is_same_v<E, IfExpr>) {
+                return EnttCodegenUtils::emit_if_ternary(e, [&](const ExprNode& child) {
+                    return rewrite_expr(child, trait_names, program, pointer_aliases, cpp_overrides, pair_scope,
+                                        local_kinds);
+                });
             } else {
-                return "/* unsupported expr */";
+                static_assert(std::is_same_v<E, MatchExpr>, "every expression form needs a C++ lowering");
+                return lower_match_expr(e, [&](const ExprNode& child) {
+                    return rewrite_expr(child, trait_names, program, pointer_aliases, cpp_overrides, pair_scope,
+                                        local_kinds);
+                });
             }
         },
         expr.expr);
@@ -2730,7 +2747,7 @@ static std::string rewrite_expr(  // NOLINT(readability-function-cognitive-compl
 
 // ── Rewrite statement: replace field[i] = with comp.field = ─────────────────
 
-static std::string emit_trait_match_stmt(const TraitMatchStmt& match_stmt,
+static std::string emit_trait_match_stmt(const MatchStmt& match_stmt,
                                          int indent,
                                          const std::vector<std::string>& trait_names,
                                          const DecoratedProgram& program,
@@ -2757,10 +2774,28 @@ static std::string emit_trait_match_stmt(const TraitMatchStmt& match_stmt,
 
     bool first = true;
     for (const auto& arm : match_stmt.arms) {
-        const std::string cpp_arm = EnttCodegenUtils::trait_cpp_name(arm.resolved_trait_id, arm.trait_name, program);
-        const auto simple_name    = arm.trait_name.rfind('.') != std::string::npos
-                                        ? arm.trait_name.substr(arm.trait_name.rfind('.') + 1)
-                                        : arm.trait_name;
+        if (arm.is_wildcard()) {
+            out << ind << "        " << (first ? "if (true)" : "else") << " {\n";
+            auto wildcard_locals = lexical_locals;
+            auto wildcard_kinds  = local_kinds;
+            out << rewrite_stmt_block(arm.body,
+                                      indent + 3,
+                                      trait_names,
+                                      program,
+                                      pointer_aliases,
+                                      dispatcher_available,
+                                      cpp_overrides,
+                                      pair_scope,
+                                      wildcard_locals,
+                                      wildcard_kinds);
+            out << ind << "        }\n";
+            break;
+        }
+        const auto trait_name     = arm.trait_name();
+        const std::string cpp_arm = EnttCodegenUtils::trait_cpp_name(arm.resolved_trait_id, trait_name, program);
+        const auto simple_name    = trait_name.rfind('.') != std::string::npos
+                                        ? trait_name.substr(trait_name.rfind('.') + 1)
+                                        : trait_name;
         const auto* TRAIT_INFO    = EnttCodegenUtils::find_trait(
             program, arm.resolved_trait_id.has_value() ? make_canonical_id(*arm.resolved_trait_id) : simple_name);
         const bool IS_MARKER                        = TRAIT_INFO == nullptr || TRAIT_INFO->fields.empty();
@@ -2795,24 +2830,57 @@ static std::string emit_trait_match_stmt(const TraitMatchStmt& match_stmt,
         }
     }
 
-    if (match_stmt.wildcard.has_value()) {
-        out << ind << "        " << (first ? "if (true)" : "else") << " {\n";
-        auto wildcard_locals = lexical_locals;
-        auto wildcard_kinds  = local_kinds;
-        out << rewrite_stmt_block(match_stmt.wildcard->body,
-                                  indent + 3,
+    out << ind << "    }\n";
+    out << ind << "}\n";
+    return out.str();
+}
+
+// Semantic analysis guarantees exhaustiveness, so the last arm is a plain `else`.
+static std::string emit_value_match_stmt(const MatchStmt& match_stmt,
+                                         int indent,
+                                         const std::vector<std::string>& trait_names,
+                                         const DecoratedProgram& program,
+                                         const std::unordered_set<std::string>& pointer_aliases,
+                                         bool dispatcher_available,
+                                         const std::unordered_map<std::string, std::string>& cpp_overrides,
+                                         const PairCodegenScope* pair_scope,
+                                         const LexicalLocalBindings& lexical_locals,
+                                         const LocalNumericKinds& local_kinds) {
+    const std::string ind(static_cast<size_t>(indent) * 4, ' ');
+    const auto subject = gen_temp_name("match_subject", match_stmt.location);
+    const auto rewrite = [&](const ExprNode& expr) {
+        return rewrite_expr(expr, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, &local_kinds);
+    };
+    std::ostringstream out;
+    out << ind << "{\n";
+    out << ind << "    [[maybe_unused]] const auto " << subject << " = " << rewrite(*match_stmt.subject) << ";\n";
+    for (std::size_t index = 0; index < match_stmt.arms.size(); ++index) {
+        const auto& arm = match_stmt.arms[index];
+        const bool last = index + 1 == match_stmt.arms.size() || arm.is_wildcard();
+        out << ind << "    ";
+        if (!last) {
+            out << (index == 0 ? "if (" : "else if (") << subject << " == " << rewrite(*arm.pattern) << ") ";
+        } else if (index > 0) {
+            out << "else ";
+        }
+        out << "{\n";
+        auto arm_locals = lexical_locals;
+        auto arm_kinds  = local_kinds;
+        out << rewrite_stmt_block(arm.body,
+                                  indent + 2,
                                   trait_names,
                                   program,
                                   pointer_aliases,
                                   dispatcher_available,
                                   cpp_overrides,
                                   pair_scope,
-                                  wildcard_locals,
-                                  wildcard_kinds);
-        out << ind << "        }\n";
+                                  arm_locals,
+                                  arm_kinds);
+        out << ind << "    }\n";
+        if (last) {
+            break;
+        }
     }
-
-    out << ind << "    }\n";
     out << ind << "}\n";
     return out.str();
 }
@@ -3244,7 +3312,7 @@ static std::string rewrite_stmt(const StmtNode& stmt,
 
     return std::visit(
         // Still 57 after task 6.7's extraction; remaining branches (LetStmt/VarAssign/
-        // DestroyStmt/ReturnStmt/ExprStmt/IfStmt/TraitMatchStmt/ForeachStmt) are the
+        // DestroyStmt/ReturnStmt/ExprStmt/IfStmt/MatchStmt/ForeachStmt) are the
         // exhaustive AST-dispatch arms, an inherent shape.
         // NOLINTNEXTLINE(readability-function-cognitive-complexity)
         [&](auto& s) -> std::string {
@@ -3445,17 +3513,18 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                     result += ind + "}";
                 }
                 return result + "\n";
-            } else if constexpr (std::is_same_v<S, TraitMatchStmt>) {
-                return emit_trait_match_stmt(s,
-                                             indent,
-                                             trait_names,
-                                             program,
-                                             pointer_aliases,
-                                             dispatcher_available,
-                                             cpp_overrides,
-                                             pair_scope,
-                                             clone_or_empty(lexical_locals),
-                                             clone_or_empty(local_kinds));
+            } else if constexpr (std::is_same_v<S, MatchStmt>) {
+                const auto emit_match = s.kind == MatchKind::Value ? emit_value_match_stmt : emit_trait_match_stmt;
+                return emit_match(s,
+                                  indent,
+                                  trait_names,
+                                  program,
+                                  pointer_aliases,
+                                  dispatcher_available,
+                                  cpp_overrides,
+                                  pair_scope,
+                                  clone_or_empty(lexical_locals),
+                                  clone_or_empty(local_kinds));
             } else if constexpr (std::is_same_v<S, ForeachStmt>) {
                 if (const auto* range_call = std::get_if<CallExpr>(&s.iterable->expr)) {
                     const auto* range_ident = std::get_if<IdentExpr>(&range_call->callee->expr);

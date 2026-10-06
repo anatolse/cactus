@@ -104,7 +104,8 @@ trait.
 A stage handler body (vertex or fragment) MUST be limited to: `let`/`var` bindings that are
 invocation-local and never persisted; assignment or compound assignment to invocation-local
 variables and to the handler's own writable built-in stage-output fields
-(`std.render.passes`'s `Quads` field table); `if`/`else`; and calls to `func` or to an `extern
+(`std.render.passes`'s `Quads` field table); `if`/`else if`/`else`; statement-level value
+`match`; the `if` expression and the `match` expression; and calls to `func` or to an `extern
 func` registered as having a portable GLSL translation. `spawn`, `destroy`, `add`, `remove`,
 `project`, `emit`, world queries, bounded `for`, and reads of any durable ECS trait from a fragment
 handler MUST be rejected during semantic analysis with a diagnostic naming the offending statement
@@ -148,6 +149,13 @@ placement is a backend decision never surfaced to the author.
   half_size` where `xf.position` and `v.corner` are `vec2`-typed and `half_size` is `float`-typed
 - **THEN** the expression type-checks and lowers to GLSL, exactly as the equivalent
   `vec2 + vec2 * float` expression already type-checks in an ordinary (non-stage) handler body
+
+#### Scenario: Conditional expressions and value match lower to GLSL
+
+- **WHEN** a fragment-stage handler body contains `let k = if f.uv.x > 0.5: 1.0 else: 0.0`
+  and a value `match` on an `int` constant with a `_` arm
+- **THEN** the handler type-checks and lowers to GLSL that selects the same values as the
+  equivalent ordinary handler body
 
 ### Requirement: Instances drawn by a vertex-stage handler render independently
 

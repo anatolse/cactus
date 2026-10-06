@@ -397,7 +397,7 @@ ConstBlockNode Parser::parse_const_block() {
         }
         consume(TokenType::ASSIGN, "expected '='");
         auto value = parse_expression();
-        expect_newline();
+        expect_statement_end(*value);
         if (errors_.error_count() > error_count_before) {
             synchronize();
             continue;
@@ -922,7 +922,7 @@ FieldAssignment Parser::parse_field_assignment() {
     auto name = consume(TokenType::IDENTIFIER, "expected field name").value;
     consume(TokenType::ASSIGN, "expected '='");
     auto value = parse_expression();
-    expect_newline();
+    expect_statement_end(*value);
     FieldAssignment assign;
     assign.name     = name;
     assign.value    = std::move(value);
@@ -2414,11 +2414,11 @@ RemoveTraitStmt Parser::parse_remove_trait_stmt() {
     return stmt;
 }
 
-TraitMatchStmt Parser::parse_trait_match_stmt() {
+MatchStmt Parser::parse_match_stmt() {
     auto loc = peek().location;
     consume(TokenType::MATCH, "expected 'match'");
 
-    TraitMatchStmt stmt;
+    MatchStmt stmt;
     stmt.location = loc;
     stmt.subject  = parse_expression();
 
@@ -2432,30 +2432,13 @@ TraitMatchStmt Parser::parse_trait_match_stmt() {
             break;
         }
 
-        auto arm_loc = peek().location;
-        if (check(TokenType::IDENTIFIER) && peek().value == "_") {
-            advance();
-            consume(TokenType::FAT_ARROW, "expected '=>' after '_' in wildcard arm");
-            expect_newline();
-
-            WildcardMatchArm wildcard;
-            wildcard.location = arm_loc;
-            wildcard.body     = parse_block();
-            stmt.wildcard     = std::move(wildcard);
-            skip_newlines();
-            if (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
-                errors_.error(peek().location, "wildcard arm `_ =>` must be the last arm in a trait match");
-            }
-            continue;
-        }
-
-        TraitMatchArm arm;
-        arm.location   = arm_loc;
-        arm.trait_name = parse_dotted_name();
+        MatchStmtArm arm;
+        arm.location = peek().location;
+        arm.pattern  = parse_match_pattern();
         if (match(TokenType::AS)) {
             arm.alias = consume(TokenType::IDENTIFIER, "expected alias name after 'as'").value;
         }
-        consume(TokenType::FAT_ARROW, "expected '=>' after trait match arm");
+        consume(TokenType::FAT_ARROW, "expected '=>' after match arm pattern");
         expect_newline();
         arm.body = parse_block();
         stmt.arms.push_back(std::move(arm));
@@ -2463,6 +2446,48 @@ TraitMatchStmt Parser::parse_trait_match_stmt() {
 
     expect_dedent();
     return stmt;
+}
+
+std::unique_ptr<ExprNode> Parser::parse_match_pattern() {
+    auto loc = peek().location;
+    const auto literal = [&](LiteralExpr::Kind kind, std::string value) {
+        return std::make_unique<ExprNode>(
+            ExprNode::Variant{LiteralExpr{.kind = kind, .value = std::move(value), .location = loc}}, loc);
+    };
+    if (check(TokenType::MINUS) && peek_next().type == TokenType::INT_LITERAL) {
+        advance();
+        return literal(LiteralExpr::Kind::Int, "-" + advance().value);
+    }
+    if (check(TokenType::INT_LITERAL)) {
+        return literal(LiteralExpr::Kind::Int, advance().value);
+    }
+    if (check(TokenType::TRUE_LIT) || check(TokenType::FALSE_LIT)) {
+        return literal(LiteralExpr::Kind::Bool, advance().type == TokenType::TRUE_LIT ? "true" : "false");
+    }
+    if (!check(TokenType::IDENTIFIER)) {
+        errors_.error(loc, "expected a match pattern: a name, an `int` or `bool` literal, or `_`");
+        advance();
+        return std::make_unique<ExprNode>(ExprNode::Variant{IdentExpr{.name = "_", .location = loc}}, loc);
+    }
+    auto pattern = std::make_unique<ExprNode>(ExprNode::Variant{IdentExpr{.name = advance().value, .location = loc}},
+                                              loc);
+    while (check(TokenType::DOT) && peek_next().type == TokenType::IDENTIFIER) {
+        advance();
+        MemberExpr member{.object = std::move(pattern), .member = advance().value, .location = loc};
+        pattern = std::make_unique<ExprNode>(ExprNode::Variant{std::move(member)}, loc);
+    }
+    return pattern;
+}
+
+void Parser::expect_statement_end(const ExprNode& last_expr) {
+    const auto* spawn = std::get_if<SpawnExpr>(&last_expr.expr);
+    const bool ends_with_block =
+        std::holds_alternative<MatchExpr>(last_expr.expr) ||
+        (spawn != nullptr && (!spawn->arguments.has_parentheses || !spawn->overrides.empty() ||
+                              !spawn->child_overrides.empty()));
+    if (!ends_with_block) {
+        expect_newline();
+    }
 }
 
 LetStmt Parser::parse_let_stmt() {
@@ -2476,10 +2501,7 @@ LetStmt Parser::parse_let_stmt() {
     }
     consume(TokenType::ASSIGN, "expected '='");
     auto value = parse_expression();
-    // Block-structured spawn expressions consume their own newline/dedents.
-    if (!std::holds_alternative<SpawnExpr>(value->expr)) {
-        expect_newline();
-    }
+    expect_statement_end(*value);
     LetStmt let_stmt;
     let_stmt.name       = name;
     let_stmt.is_mutable = is_mutable;
@@ -2527,7 +2549,11 @@ ReturnStmt Parser::parse_return_stmt() {
     if (!check(TokenType::NEWLINE) && !check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
         value = parse_expression();
     }
-    expect_newline();
+    if (value.has_value()) {
+        expect_statement_end(**value);
+    } else {
+        expect_newline();
+    }
     ReturnStmt ret;
     ret.value    = std::move(value);
     ret.location = loc;
@@ -2646,7 +2672,7 @@ std::unique_ptr<StmtNode> Parser::parse_assign_or_expr_stmt() {
             check(TokenType::STAR_ASSIGN) || check(TokenType::SLASH_ASSIGN)) {
             auto op    = advance().value;
             auto value = parse_expression();
-            expect_newline();
+            expect_statement_end(*value);
             VarAssign assign;
             assign.name     = name;
             assign.path     = std::move(path);
@@ -2660,7 +2686,7 @@ std::unique_ptr<StmtNode> Parser::parse_assign_or_expr_stmt() {
 
     // Expression statement
     auto expr = parse_expression();
-    expect_newline();
+    expect_statement_end(*expr);
     ExprStmt expr_stmt;
     expr_stmt.expr     = std::move(expr);
     expr_stmt.location = loc;
@@ -2683,7 +2709,7 @@ std::unique_ptr<StmtNode> Parser::parse_statement() {
         return std::make_unique<StmtNode>(StmtNode::Variant{parse_if_stmt()}, loc);
     }
     if (check(TokenType::MATCH)) {
-        auto match_stmt = parse_trait_match_stmt();
+        auto match_stmt = parse_match_stmt();
         return std::make_unique<StmtNode>(StmtNode::Variant{std::move(match_stmt)}, loc);
     }
     if (check(TokenType::FOR)) {
@@ -3181,10 +3207,10 @@ MatchExpr Parser::parse_match_expr() {
         }
         auto error_count_before = errors_.error_count();
         auto arm_loc            = peek().location;
-        auto pattern            = parse_expression();
+        auto pattern            = parse_match_pattern();
         consume(TokenType::FAT_ARROW, "expected '=>'");
         auto body = parse_expression();
-        expect_newline();
+        expect_statement_end(*body);
         if (errors_.error_count() > error_count_before) {
             synchronize();
             continue;
@@ -3200,21 +3226,29 @@ MatchExpr Parser::parse_match_expr() {
     return match_expr;
 }
 
-// If expression (inline): if cond: expr else: expr
+// If expression (inline): if cond: expr { else if cond: expr } else: expr
 IfExpr Parser::parse_if_expr() {
     auto loc = peek().location;
     consume(TokenType::IF, "expected 'if'");
-    auto condition = parse_expression();
-    consume(TokenType::COLON, "expected ':'");
-    auto then_expr = parse_expression();
-    consume(TokenType::ELSE, "expected 'else'");
-    consume(TokenType::COLON, "expected ':'");
-    auto else_expr = parse_expression();
     IfExpr if_expr;
-    if_expr.condition = std::move(condition);
-    if_expr.then_expr = std::move(then_expr);
-    if_expr.else_expr = std::move(else_expr);
     if_expr.location  = loc;
+    if_expr.condition = parse_expression();
+    consume(TokenType::COLON, "expected ':'");
+    if_expr.then_expr = parse_expression();
+    if (!check(TokenType::ELSE)) {
+        errors_.error(peek().location, "an `if` expression requires an `else`");
+        if_expr.else_expr = std::make_unique<ExprNode>(
+            ExprNode::Variant{IdentExpr{.name = "<error>", .location = loc}}, loc);
+        return if_expr;
+    }
+    advance();
+    if (check(TokenType::IF)) {
+        auto else_loc     = peek().location;
+        if_expr.else_expr = std::make_unique<ExprNode>(ExprNode::Variant{parse_if_expr()}, else_loc);
+        return if_expr;
+    }
+    consume(TokenType::COLON, "expected ':'");
+    if_expr.else_expr = parse_expression();
     return if_expr;
 }
 

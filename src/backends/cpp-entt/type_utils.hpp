@@ -99,6 +99,20 @@ public:
     static const ResolvedStruct* find_struct(const DecoratedProgram& program, const SymbolId& symbol);
     static const ResolvedFunc*   find_func(const DecoratedProgram& program, const SymbolId& symbol);
     static const ResolvedConst*  find_const(const DecoratedProgram& program, const SymbolId& symbol);
+    static const ResolvedState* find_state(const DecoratedProgram& program, const SymbolId& state);
+
+    struct StateVariant {
+        std::string slot_cpp;
+        std::size_t index = 0;
+    };
+    static std::optional<StateVariant> state_variant(const DecoratedProgram& program,
+                                                     const std::optional<SymbolId>& trait);
+    // The C++ name of a state's slot component, named like its slot trait.
+    static std::string state_slot_cpp_name(const DecoratedProgram& program, const SymbolId& state);
+    // The statement that puts `entity_expr` in `variant` with `value`, keeping the slot in sync.
+    static std::string enter_state_call(const StateVariant& variant,
+                                        const std::string& entity_expr,
+                                        const std::string& value);
     // Whether evaluating `expr` may have effects: a call not proven pure, a query, or a spawn.
     static bool has_effects(const ExprNode& expr, const DecoratedProgram& program);
     // `Struct{.field = ...}` in the struct's field order; arguments written in another

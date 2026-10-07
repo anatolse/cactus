@@ -198,6 +198,9 @@ Declaration Parser::parse_declaration() {  // NOLINT(readability-function-cognit
     if (at_group_declaration()) {
         return parse_group(false);
     }
+    if (at_state_declaration()) {
+        return parse_state(false);
+    }
     if (tok.type == TokenType::TEMPLATE) {
         return parse_template(false);
     }
@@ -251,6 +254,9 @@ Declaration Parser::parse_declaration() {  // NOLINT(readability-function-cognit
         if (at_group_declaration()) {
             return parse_group(true);
         }
+        if (at_state_declaration()) {
+            return parse_state(true);
+        }
         // pub enum / pub struct — visibility currently not tracked, parsed as module-private
         if (check(TokenType::ENUM)) {
             return parse_enum();
@@ -260,7 +266,7 @@ Declaration Parser::parse_declaration() {  // NOLINT(readability-function-cognit
         }
         errors_.error(
             peek().location,
-            "expected trait, entity, template, func, extern func, asset, input, event, phase, group, enum, or struct "
+            "expected trait, state, entity, template, func, extern func, asset, input, event, phase, group, enum, or struct "
             "after 'pub'");
     }
 
@@ -282,7 +288,7 @@ Declaration Parser::parse_declaration() {  // NOLINT(readability-function-cognit
     }
 
     errors_.error(tok.location,
-                  "expected declaration (module, use, const, struct, enum, trait, entity, rule, view, event, phase, "
+                  "expected declaration (module, use, const, struct, enum, trait, state, entity, rule, view, event, phase, "
                   "group, func, extern, interface, asset, input)");
     advance();  // skip bad token
     return ModuleNode{.name = "<error>", .location = tok.location};
@@ -2209,6 +2215,72 @@ GroupNode Parser::parse_group(bool is_pub) {
     expect_dedent();
     report_missing_phase();
     return node;
+}
+
+// ── State ───────────────────────────────────────────────────────────────────
+
+bool Parser::at_state_declaration() const {
+    return check(TokenType::IDENTIFIER) && peek().value == "state" && peek_next().type == TokenType::IDENTIFIER;
+}
+
+StateNode Parser::parse_state(bool is_pub) {
+    StateNode node;
+    node.is_pub   = is_pub;
+    node.location = advance().location;  // consume 'state'
+    node.name     = consume(TokenType::IDENTIFIER, "expected state name").value;
+    consume(TokenType::COLON, "expected ':'");
+    expect_newline();
+    skip_newlines();
+    if (!match(TokenType::INDENT)) {
+        return node;
+    }
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+            break;
+        }
+        const auto error_count_before = errors_.error_count();
+        node.variants.push_back(parse_state_variant());
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+        }
+    }
+    expect_dedent();
+    return node;
+}
+
+StateVariantNode Parser::parse_state_variant() {
+    StateVariantNode variant;
+    variant.location = peek().location;
+    variant.name     = consume(TokenType::IDENTIFIER, "expected state variant name").value;
+    if (check(TokenType::IDENTIFIER) && peek().value == "final") {
+        advance();
+        variant.is_final = true;
+    }
+    if (!match(TokenType::COLON)) {
+        expect_newline();
+        return variant;
+    }
+    expect_newline();
+    expect_indent();
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+            break;
+        }
+        if (!is_event_field_modifier_token(peek().type)) {
+            errors_.error(peek().location, "a state variant body can contain only field declarations");
+            synchronize();
+            continue;
+        }
+        const auto error_count_before = errors_.error_count();
+        variant.fields.push_back(parse_field());
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+        }
+    }
+    expect_dedent();
+    return variant;
 }
 
 // ── Func ────────────────────────────────────────────────────────────────────

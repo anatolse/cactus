@@ -106,6 +106,7 @@ PersistenceValueType describe_persistence_value(const TypeInfo& type) {
         case TypeKind::Func:
         case TypeKind::Void:
         case TypeKind::Unknown:
+        case TypeKind::StateSlot:
             break;
     }
     return PersistenceValueType{};

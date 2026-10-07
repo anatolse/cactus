@@ -872,7 +872,7 @@ TEST_CASE("ModuleArtifact: runtime declarations and handler graph round-trip", "
 }
 
 TEST_CASE("ModuleArtifact: artifact from before shape-generic spatial plans is rejected", "[artifact][spatial-join]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 27);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 28);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1236,7 +1236,7 @@ TEST_CASE("ModuleArtifact: set command capabilities round-trip", "[artifact][def
     CHECK(loaded->handler_contracts.front().commands == commands);
     REQUIRE(loaded->execution_graph.handlers.size() == 1);
     CHECK(loaded->execution_graph.handlers.front().contract.commands == commands);
-    CHECK(ModuleArtifact::CURRENT_VERSION == 27);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 28);
 
     fs::remove_all(build_dir, ec);
 }
@@ -1579,7 +1579,7 @@ TEST_CASE("ModuleArtifact: field-level access serializes deterministically", "[a
 }
 
 TEST_CASE("ModuleArtifact: artifact from before field-level contracts is rejected", "[artifact][handler-contracts]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 27);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 28);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1853,7 +1853,7 @@ TEST_CASE("ModuleArtifact: unknown trigger kind is rejected", "[artifact][trait-
 }
 
 TEST_CASE("ModuleArtifact: artifact from before lifecycle triggers is rejected", "[artifact][trait-lifecycle]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 27);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 28);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1982,7 +1982,7 @@ TEST_CASE("ModuleArtifact: unknown group ordering direction is malformed", "[art
 }
 
 TEST_CASE("ModuleArtifact: artifact from before rule groups is rejected", "[artifact][rule-groups]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 27);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 28);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2007,7 +2007,7 @@ TEST_CASE("ModuleArtifact: artifact from before rule groups is rejected", "[arti
 }
 
 TEST_CASE("ModuleArtifact: artifact from before named-entity access is rejected", "[artifact][named-entity]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 27);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 28);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2026,6 +2026,94 @@ TEST_CASE("ModuleArtifact: artifact from before named-entity access is rejected"
     std::string name;
     CHECK_FALSE(artifact.load(path, name).has_value());
     CHECK(errors.has_errors());
+
+    fs::remove_all(build_dir, ec);
+}
+
+namespace {
+
+DecoratedProgram analyze_module_source(const std::string& source, ErrorReporter& errors, const ModuleImports& imports) {
+    Lexer lexer(source, "module.cactus", errors);
+    Parser parser(lexer.tokenize(), errors);
+    static std::vector<std::unique_ptr<ProgramNode>> programs;  // codegen-facing views point into the AST
+    programs.push_back(std::make_unique<ProgramNode>(parser.parse_program()));
+    SemanticAnalyzer analyzer(errors);
+    return analyzer.analyze(*programs.back(), imports);
+}
+
+}  // namespace
+
+TEST_CASE("ModuleArtifact: a pub state round-trips and resolves from another module", "[artifact][exclusive-states]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    ErrorReporter errors;
+    const auto library = analyze_module_source(
+        "module enemies\n"
+        "pub state Mode:\n"
+        "    Idle\n"
+        "    Chasing:\n"
+        "        var target: entity_id\n"
+        "    Dying final:\n"
+        "        var elapsed: float = 0.0\n",
+        errors,
+        {});
+    REQUIRE_FALSE(errors.has_errors());
+    ModuleArtifact artifact(errors);
+    REQUIRE(artifact.save(library, "enemies", build_dir));
+
+    std::string module_name;
+    const auto loaded = artifact.load(build_dir / "enemies.cmod", module_name);
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->states.contains("Mode"));
+    const auto& mode = loaded->states.at("Mode");
+    CHECK(mode.is_pub);
+    CHECK(mode.symbol_id == make_symbol_id(SymbolKind::State, "enemies", "Mode"));
+    REQUIRE(mode.variants.size() == 3);
+    CHECK(mode.variants[1].name == "Chasing");
+    CHECK_FALSE(mode.variants[1].is_final);
+    CHECK(mode.variants[2].is_final);
+    REQUIRE(loaded->traits.contains("Mode.Chasing"));
+    CHECK(loaded->traits.at("Mode.Chasing").fields.size() == 1);
+    CHECK(loaded->traits.at("Mode.Chasing").state == mode.symbol_id);
+    CHECK(loaded->traits.at("Mode").is_state_slot());
+
+    const auto symbols = artifact.extract_pub_symbols(build_dir / "enemies.cmod");
+    REQUIRE(symbols.has_value());
+    REQUIRE(symbols->states.contains("Mode"));
+    CHECK(symbols->traits.contains("Mode.Dying"));
+
+    ModuleImports imports;
+    imports.add("en", *symbols);
+    const auto game = analyze_module_source(
+        "module game\n"
+        "use enemies as en\n"
+        "extern event frame:\n"
+        "    dt: float\n"
+        "phase tick:\n"
+        "    from:\n"
+        "        frame\n"
+        "trait Log:\n"
+        "    var n: int = 0\n"
+        "rule Inspect:\n"
+        "    filter:\n"
+        "        en.Mode as m\n"
+        "        Log as log\n"
+        "    on tick:\n"
+        "        match m:\n"
+        "            en.Mode.Chasing as c =>\n"
+        "                log.n = 1\n"
+        "            _ =>\n"
+        "                add en.Mode.Dying\n",
+        errors,
+        imports);
+    INFO((errors.diagnostics().empty() ? std::string{} : errors.diagnostics().front().message));
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(game.handler_contracts.size() == 1);
+    const auto& contract = game.handler_contracts[0];
+    CHECK(std::ranges::contains(contract.selection, make_symbol_id(SymbolKind::Trait, "enemies", "Mode")));
+    CHECK(contract.writes.contains(make_symbol_id(SymbolKind::Trait, "enemies", "Mode.Dying")));
 
     fs::remove_all(build_dir, ec);
 }

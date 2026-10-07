@@ -198,6 +198,32 @@ TEST_CASE("program_linker: same simple pub trait name from different modules is 
     CHECK(merged.traits.count("Position") == 1);
 }
 
+TEST_CASE("program_linker: states of different modules are merged by canonical identity",
+          "[linker][exclusive-states]") {
+    const auto make_state_program = [](const std::string& module) {
+        DecoratedProgram prog;
+        ResolvedState state;
+        state.name         = "Mode";
+        state.module_name  = module;
+        state.canonical_id = make_canonical_id(module, "Mode");
+        state.symbol_id    = make_symbol_id(SymbolKind::State, module, "Mode");
+        state.variants     = {{.name = "Idle"}, {.name = "Gone", .is_final = true}};
+        prog.states["Mode"] = state;
+        return prog;
+    };
+
+    ErrorReporter errors;
+    ProgramLinker linker(errors);
+    DecoratedProgram merged;
+    REQUIRE(linker.merge_into(merged, make_state_program("modA"), "modA"));
+    REQUIRE(linker.merge_into(merged, make_state_program("modB"), "modB"));
+
+    CHECK_FALSE(errors.has_errors());
+    REQUIRE(merged.states.contains("modA.Mode"));
+    REQUIRE(merged.states.contains("modB.Mode"));
+    CHECK(merged.states.at("modB.Mode").variants[1].is_final);
+}
+
 TEST_CASE("program_linker: merging same module twice is idempotent", "[linker][std-core]") {
     auto std_core = make_program("KeepOnLoad", true);
 

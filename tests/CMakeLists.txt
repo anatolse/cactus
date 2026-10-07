@@ -168,6 +168,10 @@ add_executable(test_semantic_keep test_semantic_keep.cpp)
 target_link_libraries(test_semantic_keep PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticKeepTests COMMAND test_semantic_keep)
 
+add_executable(test_semantic_states test_semantic_states.cpp)
+target_link_libraries(test_semantic_states PRIVATE cactus_frontend Catch2::Catch2WithMain)
+add_test(NAME SemanticStatesTests COMMAND test_semantic_states)
+
 # Unified name resolution tests (unified-name-resolution change)
 add_executable(test_name_resolution test_name_resolution.cpp)
 target_link_libraries(test_name_resolution PRIVATE cactus_frontend Catch2::Catch2WithMain)
@@ -619,6 +623,12 @@ cactus_add_headless_behavior_test(test_conditional_expressions_headless_behavior
     CACTUS_SOURCE examples/conditional_expressions.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_conditional_expressions_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_exclusive_states_headless_behavior
+    CACTUS_SOURCE examples/exclusive_states.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_exclusive_states_headless_behavior.cpp
 )
 
 # Real-GL visual test (example-behavior-tests capability's render-pass

@@ -995,3 +995,26 @@ if_expr = "if" expression ":" expression
 #### Scenario: If expression without else is rejected
 - **WHEN** the source contains `let x = if ready: 1` with no `else`
 - **THEN** the parser reports that an `if` expression requires an `else`
+
+### Requirement: State declaration parsing
+The parser SHALL parse `state IDENTIFIER ":"`, optionally preceded by `pub`, at top-level declaration position as a state declaration. `state` SHALL be contextual: it starts a declaration only at top-level declaration position when an identifier follows, and stays an ordinary identifier elsewhere. The indented body SHALL hold one variant per line: an identifier, an optional contextual `final`, and an optional `:` followed by an indented block that SHALL contain only field declarations, as in a trait body.
+
+```ebnf
+state_decl    = [ "pub" ] "state" IDENTIFIER ":" NEWLINE INDENT
+                state_variant { state_variant }
+                DEDENT ;
+state_variant = IDENTIFIER [ "final" ]
+                ( ":" NEWLINE INDENT { field_decl } DEDENT | NEWLINE ) ;
+```
+
+#### Scenario: State with marker, data and final variants parses
+- **WHEN** the parser reads a `state EnemyMode:` block with `Idle`, `Chasing:` holding `let target: entity_id`, and `Dying final:` holding `var elapsed: float = 0.0`
+- **THEN** it produces one state declaration with three variants in source order, where only `Dying` is final and `Chasing` and `Dying` each have one field
+
+#### Scenario: Identifier named state is not a declaration
+- **WHEN** a trait body declares `var state: int` and a handler writes `ctrl.state = 1`
+- **THEN** both parse as before, with `state` as an identifier
+
+#### Scenario: Non-field line in a variant body is rejected
+- **WHEN** a variant body contains a statement such as `x = 1`
+- **THEN** the parser reports that a state variant body can contain only field declarations

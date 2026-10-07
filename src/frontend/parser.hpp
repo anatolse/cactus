@@ -75,6 +75,9 @@ private:
     [[nodiscard]] bool at_contextual_clause(const char* clause_name) const;
     [[nodiscard]] bool at_group_declaration() const;
     GroupNode parse_group(bool is_pub);
+    [[nodiscard]] bool at_state_declaration() const;
+    StateNode parse_state(bool is_pub);
+    StateVariantNode parse_state_variant();
     ViewNode parse_view();
     EventNode parse_event(bool is_pub = false, bool is_external = false);
     PhaseNode parse_phase(bool is_pub = false);

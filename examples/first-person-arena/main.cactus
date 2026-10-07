@@ -127,7 +127,6 @@ pub trait BuildingWall
 pub trait BuildingRoof
 pub trait Stair
 pub trait CameraRig
-pub trait Threat
 pub trait RobotEnemy
 pub trait KnightEnemy
 pub trait EnemyVisual
@@ -143,13 +142,16 @@ pub trait Match:
 
 pub trait Enemy:
     var kind: EnemyKind = ROBOT
-    var death_elapsed: float = 0.0
     var facing_yaw: float = 0.0
     var death_pitch: float = 0.0
     var is_vaulting: bool = false
 
-# Marks an enemy whose death animation is playing.
-pub trait Dying
+# A hunting enemy seeks the player. A hit puts it in Dying, which plays its
+# death animation and is never left.
+pub state EnemyLife:
+    Hunting
+    Dying final:
+        var elapsed: float = 0.0
 
 # A live enemy's trigger volume; touching the player catches them.
 pub trait Hurtbox
@@ -224,7 +226,7 @@ template EnemyBase:
         step_height = PLAYER_STEP_HEIGHT
     physics.Solid
     Enemy
-    Threat
+    EnemyLife
 
     # The GLB character models are feet-anchored, but the body's
     # WorldTransform is the capsule's center. The model lives on a child
@@ -764,7 +766,7 @@ rule SeekPlayer:
     pairs:
         enemy:
             Enemy
-            Threat
+            EnemyLife.Hunting
             physics.CharacterBody as body
             tv.WorldTransform as transform
         wall:
@@ -880,15 +882,15 @@ rule MoveBullets:
         if bullet.Bullet.lifetime <= 0.0:
             destroy bullet
 
+# Only a hunting enemy starts its death; Dying is final, so it is never left.
 rule BeginDeath:
     filter:
         Enemy as enemy
-    exclude:
-        Dying
+        EnemyLife.Hunting
 
     # The hurtbox goes with the hit, so a dying enemy can't catch the player.
     on EnemyHit:
-        add Dying
+        add EnemyLife.Dying
         for hurtbox in query.children[Hurtbox](of = self):
             destroy hurtbox
         for visual in query.children[EnemyVisual](of = self):
@@ -896,36 +898,33 @@ rule BeginDeath:
                 clip = enemy.kind.death_clip
                 time = 0.0
 
-# A dying enemy stops being a Threat, so SeekPlayer skips it, and stops
+# A dying enemy is no longer Hunting, so SeekPlayer skips it, and it stops
 # moving. It leaves every collider layer, so bullets and live bodies pass
 # through it, and collides only with the map.
 rule StartDying:
     filter:
-        Enemy as enemy
         physics.Collider as collider
         physics.CharacterBody as body
 
-    on added Dying:
-        enemy.death_elapsed = 0.0
+    on added EnemyLife.Dying:
         collider.layer = 0
         collider.mask = MAP_LAYER
         body.velocity = vec3(0.0, 0.0, 0.0)
-        remove Threat
 
 # The model child tips over and fades; the collision root keeps its yaw.
 rule AnimateEnemyDeath:
     filter:
         Enemy as enemy
-        Dying
+        EnemyLife.Dying as dying
 
     on tick:
-        enemy.death_elapsed += tick.dt
-        if enemy.death_elapsed >= DEATH_DURATION:
+        dying.elapsed += tick.dt
+        if dying.elapsed >= DEATH_DURATION:
             # Destroying self cascades to the EnemyVisual child (Parent-based
             # recursive destroy).
             destroy
             return
-        let progress = math.clamp(enemy.death_elapsed / DEATH_DURATION, 0.0, 1.0)
+        let progress = math.clamp(dying.elapsed / DEATH_DURATION, 0.0, 1.0)
         enemy.death_pitch = progress * HALF_PI
         for visual in query.children[EnemyVisual](of = self):
             set tv.LocalTransform on visual:

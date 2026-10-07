@@ -1,0 +1,327 @@
+module exclusive_states
+
+use std.core
+
+# An entity that carries a state is in exactly one of its variants. A test
+# writes orders on an entity, drives one frame, and reads the log.
+
+state EnemyMode:
+    Idle
+    Chasing:
+        var target: entity_id
+    Attacking:
+        var windup: float = 0.3
+    Dying final:
+        var elapsed: float = 0.0
+
+enum Order:
+    Stay
+    Idle
+    Chase
+    Attack
+    Die
+    Leave
+    Vanish
+
+trait Hero
+
+trait Orders:
+    var first: Order = Order.Stay
+    var second: Order = Order.Stay
+
+trait Log:
+    var seq: int = 0
+    var idle_added: int = 0
+    var idle_left: int = 0
+    var idle_left_at: int = 0
+    var chasing_added: int = 0
+    var chasing_added_at: int = 0
+    var chasing_left: int = 0
+    var attacking_added: int = 0
+    var dying_added: int = 0
+    var hunted_hero: bool = false
+    var chase_ticks: int = 0
+    var awake_ticks: int = 0
+    var stateless_ticks: int = 0
+    var arm: int = 0
+    var code: int = 0
+
+trait Watcher:
+    var subject: entity_id
+    var saw_dying: bool = false
+
+entity Player:
+    Hero
+
+# A bare state starts in its first variant.
+entity Grunt:
+    EnemyMode
+    Orders
+    Log
+
+template Enemy:
+    EnemyMode.Idle
+    Orders
+    Log
+
+# The entity's variant replaces the template's.
+entity Boss from Enemy:
+    EnemyMode.Chasing:
+        target = Player
+
+entity Drifter:
+    Orders
+    Log
+
+entity Lookout:
+    Watcher:
+        subject = Grunt
+
+# ── Orders ────────────────────────────────────────────────────────────────────
+
+# The second order runs after the first, so both land in one commit round in
+# command order.
+rule FirstOrder:
+    filter:
+        Orders as o
+
+    on tick:
+        let order = o.first
+        o.first = Order.Stay
+        match order:
+            Order.Idle =>
+                add EnemyMode.Idle
+            Order.Chase =>
+                add EnemyMode.Chasing:
+                    target = Player
+            Order.Attack =>
+                add EnemyMode.Attacking
+            Order.Die =>
+                add EnemyMode.Dying
+            Order.Leave =>
+                remove EnemyMode
+            Order.Vanish =>
+                destroy
+            Order.Stay =>
+                return
+
+rule SecondOrder:
+    filter:
+        Orders as o
+    after:
+        FirstOrder
+
+    on tick:
+        let order = o.second
+        o.second = Order.Stay
+        match order:
+            Order.Idle =>
+                add EnemyMode.Idle
+            Order.Chase =>
+                add EnemyMode.Chasing:
+                    target = Player
+            Order.Attack =>
+                add EnemyMode.Attacking
+            Order.Die =>
+                add EnemyMode.Dying
+            Order.Leave =>
+                remove EnemyMode
+            Order.Vanish =>
+                destroy
+            Order.Stay =>
+                return
+
+# ── Entry and exit ────────────────────────────────────────────────────────────
+
+rule EnterIdle:
+    filter:
+        Log as log
+
+    on added EnemyMode.Idle:
+        log.idle_added += 1
+
+rule LeaveIdle:
+    filter:
+        Log as log
+
+    on removed EnemyMode.Idle:
+        log.seq += 1
+        log.idle_left += 1
+        log.idle_left_at = log.seq
+
+rule EnterChasing:
+    filter:
+        Log as log
+
+    on added EnemyMode.Chasing as c:
+        log.seq += 1
+        log.chasing_added += 1
+        log.chasing_added_at = log.seq
+        log.hunted_hero = c.target == Player
+
+rule LeaveChasing:
+    filter:
+        Log as log
+
+    on removed EnemyMode.Chasing:
+        log.chasing_left += 1
+
+rule EnterAttacking:
+    filter:
+        Log as log
+
+    on added EnemyMode.Attacking:
+        log.attacking_added += 1
+
+rule EnterDying:
+    filter:
+        Log as log
+
+    on added EnemyMode.Dying:
+        log.dying_added += 1
+
+# ── Selection by state ────────────────────────────────────────────────────────
+
+rule Chase:
+    filter:
+        EnemyMode.Chasing
+        Log as log
+
+    on tick:
+        log.chase_ticks += 1
+
+rule Awake:
+    filter:
+        Log as log
+    exclude:
+        EnemyMode.Dying
+
+    on tick:
+        log.awake_ticks += 1
+
+rule Stateless:
+    filter:
+        Log as log
+    exclude:
+        EnemyMode
+
+    on tick:
+        log.stateless_ticks += 1
+
+rule Inspect:
+    filter:
+        EnemyMode as m
+        Log as log
+
+    on tick:
+        match m:
+            EnemyMode.Chasing as c =>
+                log.arm = if c.target == Player: 2 else: -2
+            EnemyMode.Attacking as a =>
+                log.arm = 3
+                a.windup -= 0.1
+            _ =>
+                log.arm = 1
+        log.code = match m:
+            EnemyMode.Idle => 10
+            EnemyMode.Chasing => 20
+            EnemyMode.Attacking => 30
+            EnemyMode.Dying => 40
+
+rule Watch:
+    filter:
+        Watcher as w
+
+    on tick:
+        match w.subject:
+            EnemyMode.Dying =>
+                w.saw_dying = true
+            _ =>
+                w.saw_dying = false
+
+state WideMode:
+    V0
+    V1
+    V2
+    V3
+    V4
+    V5
+    V6
+    V7
+    V8
+    V9
+    V10
+    V11
+    V12
+    V13
+    V14
+    V15
+    V16
+    V17
+    V18
+    V19
+    V20
+    V21
+    V22
+    V23
+    V24
+    V25
+    V26
+    V27
+    V28
+    V29
+    V30
+    V31
+    V32
+    V33
+    V34
+    V35
+    V36
+    V37
+    V38
+    V39
+    V40
+    V41
+    V42
+    V43
+    V44
+    V45
+    V46
+    V47
+    V48
+    V49
+    V50
+    V51
+    V52
+    V53
+    V54
+    V55
+    V56
+    V57
+    V58
+    V59
+    V60
+    V61
+    V62
+    V63
+    Done final:
+        var elapsed: float = 0.4
+
+entity WideCarrier:
+    WideMode.V63
+
+rule FinishWideState:
+    filter:
+        WideMode.V63
+    on tick:
+        add WideMode.Done
+        add WideMode.V0
+        remove WideMode
+
+rule KeepWideStateFinal:
+    filter:
+        WideMode.Done
+    on tick:
+        add WideMode.Done:
+            elapsed = 0.0
+        remove WideMode

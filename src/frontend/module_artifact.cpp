@@ -163,11 +163,46 @@ void ModuleArtifact::write_traits(std::ostream& out,
         if (trait.kept_by.has_value()) {
             write_str(out, *trait.kept_by);
         }
+        write_optional_symbol_id(out, trait.state);
         write_u32(out, static_cast<uint32_t>(trait.fields.size()));
         for (const auto& field : trait.fields) {
             write_field(out, field);
         }
     }
+}
+
+void ModuleArtifact::write_states(std::ostream& out, const std::unordered_map<std::string, ResolvedState>& states) {
+    write_u32(out, static_cast<uint32_t>(states.size()));
+    for (const auto& [name, state] : states) {
+        write_symbol_id(out, *state.symbol_id);
+        write_bool(out, state.is_pub);
+        write_u32(out, static_cast<uint32_t>(state.variants.size()));
+        for (const auto& variant : state.variants) {
+            write_str(out, variant.name);
+            write_bool(out, variant.is_final);
+        }
+    }
+}
+
+std::unordered_map<std::string, ResolvedState> ModuleArtifact::read_states(std::istream& in) {
+    std::unordered_map<std::string, ResolvedState> states;
+    const auto count = read_u32(in);
+    for (uint32_t i = 0; i < count && in.good(); ++i) {
+        ResolvedState state;
+        const auto symbol  = read_symbol_id(in);
+        state.name         = symbol.local_name;
+        state.module_name  = symbol.module.name;
+        state.canonical_id = make_canonical_id(symbol);
+        state.symbol_id    = symbol;
+        state.is_pub       = read_bool(in);
+        const auto variant_count = read_u32(in);
+        for (uint32_t j = 0; j < variant_count && in.good(); ++j) {
+            auto name = read_str(in);
+            state.variants.push_back({.name = std::move(name), .is_final = read_bool(in)});
+        }
+        states[state.name] = std::move(state);
+    }
+    return states;
 }
 
 // Constants go out in dependency order, so the order needs no separate section.
@@ -798,6 +833,7 @@ std::unordered_map<std::string, ResolvedTrait> ModuleArtifact::read_traits(std::
         if (read_bool(in)) {
             trait.kept_by = read_str(in);
         }
+        trait.state          = read_optional_symbol_id(in);
         uint32_t field_count = read_u32(in);
         trait.fields.reserve(field_count);
         for (uint32_t j = 0; j < field_count; ++j) {
@@ -1376,6 +1412,7 @@ bool ModuleArtifact::save(const DecoratedProgram& program,
 
     // Sections
     write_traits(out, program.traits, module_name);
+    write_states(out, program.states);
     write_structs(out, program.structs, module_name);
     write_enums(out, program.enums, module_name);
     write_funcs(out, program.funcs, module_name);
@@ -1426,6 +1463,7 @@ std::optional<DecoratedProgram> ModuleArtifact::load(const fs::path& path, std::
     DecoratedProgram program;
     program.module_name       = module_name_out;
     program.traits            = read_traits(in);
+    program.states            = read_states(in);
     program.structs           = read_structs(in);
     program.enums             = read_enums(in);
     program.funcs             = read_funcs(in);
@@ -1480,6 +1518,8 @@ std::optional<ImportedSymbols> ModuleArtifact::extract_pub_symbols(const fs::pat
             symbols.traits[name] = trait;
         }
     }
+    symbols.states = program->states;
+    std::erase_if(symbols.states, [](const auto& entry) { return !entry.second.is_pub; });
     for (auto& [name, strct] : program->structs) {
         if (strct.canonical_id.empty()) {
             strct.canonical_id = make_canonical_id(module_name, strct.name);

@@ -4200,4 +4200,80 @@ TEST_CASE("Parser: std.persistence restore request is ordinary, outcomes are ext
     CHECK(failed.fields[2].name == "code");
     CHECK(failed.fields[3].name == "message");
 }
+
+TEST_CASE("Parser: state with marker, data and final variants", "[parser][exclusive-states]") {
+    auto prog = parse(
+        "pub state EnemyMode:\n"
+        "    Idle\n"
+        "    Chasing:\n"
+        "        let target: entity_id\n"
+        "    Dying final:\n"
+        "        var elapsed: float = 0.0\n");
+    REQUIRE(prog.declarations.size() == 1);
+    const auto& state = std::get<StateNode>(prog.declarations[0]);
+    CHECK(state.name == "EnemyMode");
+    CHECK(state.is_pub);
+    REQUIRE(state.variants.size() == 3);
+    CHECK(state.variants[0].name == "Idle");
+    CHECK(state.variants[1].name == "Chasing");
+    CHECK(state.variants[2].name == "Dying");
+    CHECK_FALSE(state.variants[0].is_final);
+    CHECK_FALSE(state.variants[1].is_final);
+    CHECK(state.variants[2].is_final);
+    CHECK(state.variants[0].fields.empty());
+    REQUIRE(state.variants[1].fields.size() == 1);
+    CHECK(state.variants[1].fields[0].name == "target");
+    CHECK(state.variants[1].fields[0].modifiers.is_let);
+    REQUIRE(state.variants[2].fields.size() == 1);
+    CHECK(state.variants[2].fields[0].name == "elapsed");
+    CHECK(state.variants[2].fields[0].default_value.has_value());
+}
+
+TEST_CASE("Parser: a final marker variant needs no body", "[parser][exclusive-states]") {
+    auto prog = parse(
+        "state Phase:\n"
+        "    Grounded\n"
+        "    Gone final\n");
+    const auto& state = std::get<StateNode>(prog.declarations[0]);
+    CHECK_FALSE(state.is_pub);
+    REQUIRE(state.variants.size() == 2);
+    CHECK(state.variants[1].is_final);
+    CHECK(state.variants[1].fields.empty());
+}
+
+TEST_CASE("Parser: an identifier named state is not a declaration", "[parser][exclusive-states]") {
+    auto prog = parse(
+        "trait Ctrl:\n"
+        "    var state: int = 0\n"
+        "rule R:\n"
+        "    filter:\n"
+        "        Ctrl as ctrl\n"
+        "    on tick:\n"
+        "        ctrl.state = 1\n");
+    REQUIRE(prog.declarations.size() == 2);
+    const auto& trait = std::get<TraitNode>(prog.declarations[0]);
+    REQUIRE(trait.fields.size() == 1);
+    CHECK(trait.fields[0].name == "state");
+    const auto& rule   = std::get<RuleNode>(prog.declarations[1]);
+    const auto* assign = std::get_if<VarAssign>(&rule.handlers[0].body[0]->stmt);
+    REQUIRE(assign != nullptr);
+    CHECK(assign->name == "ctrl");
+    CHECK(assign->path == std::vector<std::string>{"state"});
+}
+
+TEST_CASE("Parser: a state variant body holds only fields", "[parser][exclusive-states]") {
+    auto errors = parse_expect_errors(
+        "state Mode:\n"
+        "    Idle:\n"
+        "        x = 1\n");
+    CHECK(has_diagnostic_containing(errors, "a state variant body can contain only field declarations"));
+}
+
+TEST_CASE("Parser: a state without a body parses with no variants", "[parser][exclusive-states]") {
+    auto prog = parse(
+        "state Mode:\n"
+        "trait T\n");
+    REQUIRE(prog.declarations.size() == 2);
+    CHECK(std::get<StateNode>(prog.declarations[0]).variants.empty());
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

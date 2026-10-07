@@ -1351,6 +1351,51 @@ struct StructuralCommand {
     std::function<void(entt::registry&)> apply;
 };
 
+// ── Exclusive states ──────────────────────────────────────────────────────────
+// A state's slot component holds `index`, the entity's current variant, and a
+// `final_mask` of the variants that are never left. Every variant write goes
+// through enter_state or leave_state, so the slot and the variant never drift.
+
+// Generated code specializes this once per state.
+template <typename Slot>
+void remove_state_variant(entt::registry& registry, entt::entity entity, std::size_t index);
+
+template <typename Slot>
+[[nodiscard]] bool state_is_final(const Slot& slot) {
+    if constexpr (std::is_integral_v<decltype(Slot::final_mask)>) {
+        return ((Slot::final_mask >> slot.index) & 1U) != 0U;
+    } else {
+        return ((Slot::final_mask[slot.index / 64] >> (slot.index % 64)) & 1U) != 0U;
+    }
+}
+
+template <typename Slot, std::size_t Index, typename Variant>
+void enter_state(entt::registry& registry, entt::entity entity, Variant value) {
+    const auto* slot = registry.try_get<Slot>(entity);
+    if (slot != nullptr && state_is_final(*slot)) {
+        return;
+    }
+    if (slot != nullptr && slot->index != Index) {
+        remove_state_variant<Slot>(registry, entity, slot->index);
+    }
+    if constexpr (std::is_empty_v<Variant>) {
+        registry.emplace_or_replace<Variant>(entity);
+    } else {
+        registry.emplace_or_replace<Variant>(entity, std::move(value));
+    }
+    registry.emplace_or_replace<Slot>(entity, Slot{.index = Index});
+}
+
+template <typename Slot>
+void leave_state(entt::registry& registry, entt::entity entity) {
+    const auto* slot = registry.try_get<Slot>(entity);
+    if (slot == nullptr || state_is_final(*slot)) {
+        return;
+    }
+    remove_state_variant<Slot>(registry, entity, slot->index);
+    registry.remove<Slot>(entity);
+}
+
 // Cascade-depth cap shared by emit_event/emit_targeted_event/drain_event_cascade
 // below; a queued event whose next depth would exceed this is deferred to the
 // next external-event drain instead of being processed within the current one.
@@ -1512,6 +1557,7 @@ struct LifecycleDelivery {
     std::uint64_t command{};
     std::uint64_t sequence{};
     std::size_t trait_index{};
+    bool added{};
     Occurrence occurrence;
     entt::entity target{entt::null};
 };
@@ -1540,6 +1586,7 @@ public:
                 out.push_back({.command     = change.command,
                                .sequence    = change.sequence,
                                .trait_index = trait_index,
+                               .added       = true,
                                .occurrence  = TraitAdded<T>{},
                                .target      = entity});
             } else if (change.present_before && !present_after && valid) {
@@ -1616,7 +1663,8 @@ public:
     // Emits this round's net changes at the activation's next cascade depth;
     // past the bound they defer like any occurrence. Order: the command that
     // first changed them, then the entity's first touch within that command,
-    // then tracker (canonical trait) order, so a spawn's traits fire canonically.
+    // then removals before additions (a state swap), then tracker (canonical
+    // trait) order, so a spawn's traits fire canonically.
     template <typename Occurrence>
     void deliver(ActivationRuntime<Occurrence>& activation, entt::registry& registry) {
         std::vector<LifecycleDelivery<Occurrence>> deliveries;
@@ -1632,6 +1680,7 @@ public:
         std::ranges::sort(deliveries, {}, [&](const LifecycleDelivery<Occurrence>& delivery) {
             return std::tuple{delivery.command,
                               entity_first_touch.at({delivery.command, delivery.target}),
+                              delivery.added,
                               delivery.trait_index};
         });
         for (auto& delivery : deliveries) {

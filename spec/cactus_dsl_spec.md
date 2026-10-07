@@ -104,6 +104,8 @@ fixed_tick late_tick
 
 `set` is a contextual keyword: it starts a `set_stmt` (§3.16) only at statement start when followed by a trait reference, and is an ordinary identifier everywhere else.
 
+`state` and `final` are contextual words too. `state` starts a state declaration (§3.6.1) only at top-level declaration position when an identifier follows. `final` marks a variant only right after a variant name. Both stay ordinary identifiers elsewhere, so a field named `state` keeps working.
+
 ### 2.5 Literals
 
 - integers: `0`, `42`
@@ -119,7 +121,7 @@ fixed_tick late_tick
 ```ebnf
 program         = { declaration } EOF ;
 declaration     = module_decl | use_decl | const_block | struct_decl
-                | enum_decl | trait_decl | entity_decl | template_decl
+                | enum_decl | trait_decl | state_decl | entity_decl | template_decl
                 | rule_decl | extern_rule_decl | event_decl | phase_decl
                 | group_decl | func_decl | extern_func_decl | asset_decl
                 | input_decl ;
@@ -203,7 +205,7 @@ enum_decl       = "enum" IDENTIFIER ":" NEWLINE INDENT
                   DEDENT ;
 ```
 
-Enums are used for named gameplay states.
+An enum names values that rules only read. When rules select entities by the value or react to it changing, use a state (§3.6.1) instead.
 
 ### 3.6 Traits
 
@@ -236,6 +238,38 @@ trait Health:
 ```
 
 `persist` marks a field as durable game-save state; it carries no format, storage, or scene-survival meaning of its own — see §7.6 for what it makes eligible and how a save is produced.
+
+#### 3.6.1 States
+
+A state is a set of variants. An entity that carries the state is in exactly one of them.
+
+```ebnf
+state_decl    = [ "pub" ] "state" IDENTIFIER ":" NEWLINE INDENT
+                state_variant { state_variant }
+                DEDENT ;
+state_variant = IDENTIFIER [ "final" ]
+                ( ":" NEWLINE INDENT { field_decl } DEDENT | NEWLINE ) ;
+```
+
+```cactus
+state EnemyMode:
+    Idle
+    Chasing:
+        let target: entity_id
+    Attacking:
+        var windup: float = 0.3
+    Dying final:
+        var elapsed: float = 0.0
+```
+
+- Each variant `V` of state `S` is a trait, written `S.V` (or `m.S.V` through a module alias). A bare `V` names nothing. `S.V` works wherever a trait does: `filter:`, `exclude:`, `on added`, `on removed`, `set S.V on e:`, field access through an alias, trait-match arms and query type arguments.
+- A variant body holds only field declarations, with the same rules as a trait body. Variant names in one state must be unique, and a state needs at least one variant. A trait and a state cannot share a name.
+- `filter: S as m` selects every entity that carries `S` and binds `m` to its slot. `exclude: S` excludes every carrier. The slot `m` is only a `match` subject (§3.17).
+- An entity or template body places an archetype in a variant by naming `S.V` (with an optional field block), or the bare `S`, which means the first declared variant with its field defaults. An archetype names at most one variant of each state. An entity's variant replaces its template's.
+- `add S.V` swaps the variant, `remove S` drops the whole state, and `remove S.V` is an error (§4.4). A `final` variant is never left.
+- Variants cannot declare `persist` fields, and cannot be targets of `project` or `keep`. A save does not record states.
+
+Use a state when rules select by it or react to entering and leaving it. Use an enum field when the value is only read.
 
 ### 3.7 Entities and Templates
 
@@ -1295,7 +1329,7 @@ match_stmt_arm = stmt_pattern "=>" NEWLINE suite ;
 stmt_pattern   = dotted_name [ "as" IDENTIFIER ] | [ "-" ] INTEGER | "true" | "false" | "_" ;
 ```
 
-The subject's type decides what a `match` statement does. An enum, `int` or `bool` subject makes a **value match**. An `entity_id` subject makes a **trait match**. Any other subject type is an error.
+The subject's type decides what a `match` statement does. An enum, `int` or `bool` subject makes a **value match**. An `entity_id` subject makes a **trait match**. A state slot (§3.6.1) makes a **state match**. Any other subject type is an error.
 
 A value match runs the body of the first arm whose pattern equals the subject. It is allowed in rule handlers and in `func` bodies.
 
@@ -1329,6 +1363,22 @@ match collision.other:
         let points = col.point_value
     _ =>
         let ignored = 0
+```
+
+A state match runs the arm of the entity's current variant. Each arm names a variant of the subject's state; `as` binds that variant's data like a filter alias, and a marker variant cannot declare an alias. A state match must be exhaustive like a value match: it names every variant or ends with `_`, and a missing variant is a compile error that names it. The `match` expression accepts a slot subject with the same patterns, without `as`. A state match is allowed only in rule handlers.
+
+```cactus
+rule Think:
+    filter:
+        EnemyMode as m
+    on tick:
+        match m:
+            EnemyMode.Chasing as c =>
+                steer_toward(c.target)
+            EnemyMode.Attacking as a =>
+                a.windup -= tick.dt
+            _ =>
+                pass_time()
 ```
 
 ## 4. Semantic Model
@@ -1410,6 +1460,13 @@ The canonical documented runtime trait mutation model is:
 - `set TraitName on e:` to patch fields of a trait `e` already carries
 
 This is the preferred model for temporary gameplay states such as freeze, stun, invincibility, targeting, and similar state transitions.
+
+For a state (§3.6.1):
+
+- `add S.V` swaps the variant in one command: an entity in another variant `S.W` loses `S.W` and gains `S.V`. An entity already in `S.V` gets its field values replaced like `add T` on a carried trait. An entity without `S` gains `S` in `S.V`.
+- `remove S` drops the whole state, with its current variant. `remove S.V` is a compile error that suggests `add` of another variant or `remove S`.
+- Once an entity is in a `final` variant, every later `add S.*` and `remove S` on it does nothing, including `add` of the same variant, within the round and after it. `set S.V on e:`, field writes and `destroy` still apply.
+- Conflicting transitions in one round resolve by command order (§5.3), except that a final variant is never left.
 
 Rules react to these changes with lifecycle triggers:
 
@@ -1562,7 +1619,7 @@ The cpp-entt backend does not lower the `load` statement yet, so today `load` fi
 
 Events emitted during an activation are delivered in deterministic queue order. Event handlers follow their own stable graph schedule and may emit further events. Feedback cycles are allowed, but cascade depth is bounded; overflow occurrences are deferred to a later activation. Commands produced by deferred delivery belong to that later activation.
 
-With lifecycle triggers (§4.4), commit runs in rounds: apply every queued command, deliver that round's `on added` / `on removed` triggers, and drain their cascade; commands those handlers queue form the next round of the same activation. Within a round, triggers are delivered in the order the round's commands first changed each (entity, trait) pair, and for one spawn in trait canonical order. Round *r* delivers at cascade depth *r*, so commit rounds count toward the same bound as event chains; deliveries past it are deferred like any other occurrence, together with the commands their handlers issue. Effect calls happen when their handler executes and are not rolled back; matching effect domains are serialized by graph order.
+With lifecycle triggers (§4.4), commit runs in rounds: apply every queued command, deliver that round's `on added` / `on removed` triggers, and drain their cascade; commands those handlers queue form the next round of the same activation. Within a round, triggers are delivered in the order the round's commands first changed each (entity, trait) pair, and for one spawn in trait canonical order. A state swap from `S.W` to `S.V` delivers `on removed S.W` before `on added S.V`. Several transitions of one entity in one round net out: only its variants before and after the round are compared, so a round trip fires nothing. Round *r* delivers at cascade depth *r*, so commit rounds count toward the same bound as event chains; deliveries past it are deferred like any other occurrence, together with the commands their handlers issue. Effect calls happen when their handler executes and are not rolled back; matching effect domains are serialized by graph order.
 
 ### 5.4 Targeted Event Delivery
 

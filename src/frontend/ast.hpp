@@ -243,12 +243,15 @@ struct MatchArm {
     std::unique_ptr<ExprNode> pattern;
     std::unique_ptr<ExprNode> body;
     SourceLocation location;
+    // Set by semantic analysis on a state match arm: the variant's declaration index.
+    mutable std::optional<std::size_t> state_variant;
 };
 
 struct MatchExpr {
     std::unique_ptr<ExprNode> subject;
     std::vector<MatchArm> arms;
     SourceLocation location;
+    mutable bool on_state_slot = false;  // set by semantic analysis
 };
 
 struct IfExpr {
@@ -418,12 +421,14 @@ struct ForeachStmt {
     SourceLocation location;
 };
 
-// The subject's type decides the kind: `entity_id` tests trait presence; an enum, `int` or `bool` compares values.
-enum class MatchKind : std::uint8_t { Trait, Value };
+// The subject's type decides the kind: `entity_id` tests trait presence; an enum, `int` or `bool` compares
+// values; a state slot selects the entity's current variant.
+enum class MatchKind : std::uint8_t { Trait, Value, State };
 
 struct MatchStmtArm {
     std::unique_ptr<ExprNode> pattern;  // dotted name, `int`/`bool` literal, or `_`
-    std::optional<SymbolId> resolved_trait_id;  // set by semantic analysis for a trait arm
+    std::optional<SymbolId> resolved_trait_id;  // set by semantic analysis for a trait or state arm
+    mutable std::optional<std::size_t> state_variant;  // set by semantic analysis for a state arm
     std::optional<std::string> alias;
     std::vector<std::unique_ptr<StmtNode>> body;
     SourceLocation location;
@@ -749,6 +754,23 @@ struct TraitNode {
     bool is_pub    = false;
     bool is_stdlib = false;
     std::vector<FieldNode> fields;
+    SourceLocation location;
+    // Set on the traits semantic analysis synthesizes for a state: its variants (`S.V`) and its slot (`S`).
+    std::optional<std::string> state;
+};
+
+struct StateVariantNode {
+    std::string name;
+    bool is_final = false;
+    std::vector<FieldNode> fields;
+    SourceLocation location;
+};
+
+// `[pub] state S:` — an entity carrying S is in exactly one of its variants.
+struct StateNode {
+    std::string name;
+    bool is_pub = false;
+    std::vector<StateVariantNode> variants;
     SourceLocation location;
 };
 
@@ -1090,6 +1112,7 @@ using Declaration = std::variant<ModuleNode,
                                  StructNode,
                                  EnumNode,
                                  TraitNode,
+                                 StateNode,
                                  EntityNode,
                                  TemplateNode,
                                  RuleNode,

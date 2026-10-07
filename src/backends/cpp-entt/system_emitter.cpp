@@ -2306,17 +2306,31 @@ static std::string lower_query_call_expr(const QueryCallExpr& qcall,
 static std::string lower_match_expr(const MatchExpr& match_expr,
                                     const std::function<std::string(const ExprNode&)>& rewrite) {
     const auto subject = gen_temp_name("match_subject", match_expr.location);
-    std::string lowered = "[&]() { const auto " + subject + " = " + rewrite(*match_expr.subject) + "; ";
+    const auto subject_value = rewrite(*match_expr.subject) + (match_expr.on_state_slot ? ".index" : "");
+    std::string lowered = "[&]() { const auto " + subject + " = " + subject_value + "; ";
+    if (match_expr.on_state_slot) {
+        lowered += "switch (" + subject + ") { ";
+    }
     for (std::size_t index = 0; index < match_expr.arms.size(); ++index) {
         const auto& arm      = match_expr.arms[index];
         const auto selected = "return " + rewrite(*arm.body) + "; ";
-        if (index + 1 == match_expr.arms.size() || is_wildcard_pattern(*arm.pattern)) {
+        const bool last     = index + 1 == match_expr.arms.size() || is_wildcard_pattern(*arm.pattern);
+        if (match_expr.on_state_slot) {
+            lowered += last ? "default: { " : "case " + std::to_string(*arm.state_variant) + ": { ";
             lowered += selected;
+            lowered += "} ";
+        } else if (last) {
+            lowered += selected;
+        } else {
+            lowered += "if (" + subject + " == " + rewrite(*arm.pattern) + ") { ";
+            lowered += selected;
+            lowered += "} ";
+        }
+        if (last) {
             break;
         }
-        lowered += "if (" + subject + " == " + rewrite(*arm.pattern) + ") { " + selected + "} ";
     }
-    return lowered + "}()";
+    return lowered + (match_expr.on_state_slot ? "} }()" : "}()");
 }
 
 static std::string rewrite_expr(  // NOLINT(readability-function-cognitive-complexity) -- still 250 after table-driving
@@ -2804,13 +2818,12 @@ static std::string emit_trait_match_stmt(const MatchStmt& match_stmt,
         auto arm_kinds                              = local_kinds;
 
         out << ind << "        " << (first ? "if" : "else if") << " (";
-        if (IS_MARKER) {
+        if (IS_MARKER || !arm.alias.has_value()) {
             out << "registry.all_of<" << cpp_arm << ">(" << match_entity << ")) {\n";
         } else {
-            const std::string ALIAS = arm.alias.value_or(gen_temp_name("match_" + cpp_arm, arm.location));
-            arm_aliases.insert(ALIAS);
-            arm_locals.insert(ALIAS);
-            out << "auto* " << ALIAS << " = registry.try_get<" << cpp_arm << ">(" << match_entity << ")) {\n";
+            arm_aliases.insert(*arm.alias);
+            arm_locals.insert(*arm.alias);
+            out << "auto* " << *arm.alias << " = registry.try_get<" << cpp_arm << ">(" << match_entity << ")) {\n";
         }
 
         out << rewrite_stmt_block(arm.body,
@@ -2831,6 +2844,51 @@ static std::string emit_trait_match_stmt(const MatchStmt& match_stmt,
     }
 
     out << ind << "    }\n";
+    out << ind << "}\n";
+    return out.str();
+}
+
+// A `switch` on the slot index; an arm alias binds the entity's own variant component.
+static std::string emit_state_match_stmt(const MatchStmt& match_stmt,
+                                         int indent,
+                                         const std::vector<std::string>& trait_names,
+                                         const DecoratedProgram& program,
+                                         const std::unordered_set<std::string>& pointer_aliases,
+                                         bool dispatcher_available,
+                                         const std::unordered_map<std::string, std::string>& cpp_overrides,
+                                         const PairCodegenScope* pair_scope,
+                                         const LexicalLocalBindings& lexical_locals,
+                                         const LocalNumericKinds& local_kinds) {
+    const std::string ind(static_cast<size_t>(indent) * 4, ' ');
+    std::ostringstream out;
+    out << ind << "switch ("
+        << rewrite_expr(
+               *match_stmt.subject, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, &local_kinds)
+        << ".index) {\n";
+    for (const auto& arm : match_stmt.arms) {
+        out << ind << "    "
+            << (arm.state_variant.has_value() ? "case " + std::to_string(*arm.state_variant) + ":" : "default:")
+            << " {\n";
+        auto arm_locals = lexical_locals;
+        auto arm_kinds  = local_kinds;
+        if (arm.alias.has_value()) {
+            out << ind << "        auto& " << *arm.alias << " = registry.get<"
+                << EnttCodegenUtils::trait_cpp_name(arm.resolved_trait_id, arm.trait_name(), program) << ">(entity);\n";
+            arm_locals.insert(*arm.alias);
+        }
+        out << rewrite_stmt_block(arm.body,
+                                  indent + 2,
+                                  trait_names,
+                                  program,
+                                  pointer_aliases,
+                                  dispatcher_available,
+                                  cpp_overrides,
+                                  pair_scope,
+                                  arm_locals,
+                                  arm_kinds);
+        out << ind << "        break;\n";
+        out << ind << "    }\n";
+    }
     out << ind << "}\n";
     return out.str();
 }
@@ -3012,6 +3070,22 @@ static std::string emit_spawn_stmt(const SpawnStmt& s,
     return result.str();
 }
 
+// Attaches or replaces a trait; a state variant goes through enter_state, which swaps out the
+// entity's current variant. An empty `value` writes the trait's defaults.
+static std::string emit_trait_write(const std::string& cpp,
+                                    const std::optional<EnttCodegenUtils::StateVariant>& variant,
+                                    const std::string& entity_expr,
+                                    const std::string& value) {
+    if (variant.has_value()) {
+        return EnttCodegenUtils::enter_state_call(*variant, entity_expr, value.empty() ? cpp + "{}" : value);
+    }
+    std::string write = "registry.emplace_or_replace<" + cpp + ">(" + entity_expr;
+    if (!value.empty()) {
+        write += ", " + value;
+    }
+    return write + ");\n";
+}
+
 static std::string emit_add_trait_stmt(const AddTraitStmt& s,
                                        int indent,
                                        const std::vector<std::string>& trait_names,
@@ -3039,6 +3113,10 @@ static std::string emit_add_trait_stmt(const AddTraitStmt& s,
     const auto retain_line = [&](const std::string& entity_expr, const std::string& indentation) {
         return retain ? EnttPersistenceEmitter::emit_retain_construction(cpp, entity_expr, indentation) : std::string{};
     };
+    const auto variant     = EnttCodegenUtils::state_variant(program, s.resolved_trait_id);
+    const auto write_trait = [&](const std::string& entity_expr, const std::string& value) {
+        return emit_trait_write(cpp, variant, entity_expr, value);
+    };
     if (!program.execution_graph.phases.empty()) {
         std::ostringstream result;
         result << ind << "{\n";
@@ -3051,7 +3129,7 @@ static std::string emit_add_trait_stmt(const AddTraitStmt& s,
         result << ind << "            if (!registry.valid(" << target_name << ")) { return; }\n";
         result << ind << "            cancel_projected_" << cpp << "(" << target_name << ");\n";
         if (s.args.empty()) {
-            result << ind << "            registry.emplace_or_replace<" << cpp << ">(" << target_name << ");\n";
+            result << ind << "            " << write_trait(target_name, "");
         } else {
             result << ind << "            auto " << existing_name << " = registry.try_get<" << cpp << ">("
                    << target_name << ");\n";
@@ -3061,8 +3139,7 @@ static std::string emit_add_trait_stmt(const AddTraitStmt& s,
                 result << ind << "            " << value_name << "." << arg.name << " = "
                        << deferred_field_value_name(arg) << ";\n";
             }
-            result << ind << "            registry.emplace_or_replace<" << cpp << ">(" << target_name << ", "
-                   << value_name << ");\n";
+            result << ind << "            " << write_trait(target_name, value_name);
         }
         result << retain_line(target_name, ind + "            ");
         result << ind << "        });\n";
@@ -3072,11 +3149,10 @@ static std::string emit_add_trait_stmt(const AddTraitStmt& s,
     if (s.args.empty()) {
         if (GUARDED) {
             return ind + "if (registry.valid(" + target + ")) {\n" + ind + "    cancel_projected_" + cpp + "(" +
-                   target + ");\n" + ind + "    registry.emplace_or_replace<" + cpp + ">(" + target + ");\n" +
+                   target + ");\n" + ind + "    " + write_trait(target, "") +
                    retain_line(target, ind + "    ") + ind + "}\n";
         }
-        return ind + "cancel_projected_" + cpp + "(" + target + ");\n" + ind + "registry.emplace_or_replace<" + cpp +
-               ">(" + target + ");\n" + retain_line(target, ind);
+        return ind + "cancel_projected_" + cpp + "(" + target + ");\n" + ind + write_trait(target, "") + retain_line(target, ind);
     }
 
     std::ostringstream result;
@@ -3093,14 +3169,33 @@ static std::string emit_add_trait_stmt(const AddTraitStmt& s,
         result << ind << (GUARDED ? "        " : "    ") << value_name << "." << arg.name << " = "
                << rewrite_expr(*arg.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) << ";\n";
     }
-    result << ind << (GUARDED ? "        " : "    ") << "registry.emplace_or_replace<" << cpp << ">(" << target << ", "
-           << value_name << ");\n";
+    result << ind << (GUARDED ? "        " : "    ") << write_trait(target, value_name);
     result << retain_line(target, ind + (GUARDED ? "        " : "    "));
     result << ind << (GUARDED ? "    " : "") << "}\n";
     if (GUARDED) {
         result << ind << "}\n";
     }
     return result.str();
+}
+
+// `remove S` leaves the state through leave_state, which also removes the current variant.
+static std::string emit_remove_state_stmt(const RemoveTraitStmt& s,
+                                          const std::string& slot_cpp,
+                                          const std::string& target,
+                                          const std::string& ind,
+                                          bool deferred) {
+    const auto leave = [&](const std::string& entity_expr) {
+        return "cactus::runtime::entt_backend::leave_state<" + slot_cpp + ">(registry, " + entity_expr + ");\n";
+    };
+    if (!deferred) {
+        return ind + "if (registry.valid(" + target + ")) {\n" + ind + "    " + leave(target) + ind + "}\n";
+    }
+    const std::string target_name = gen_temp_name("target", s.location);
+    return ind + "{\n" + ind + "    const auto " + target_name + " = " + target + ";\n" + ind +
+           "    cactus::runtime::entt_backend::generated_queue_structural_command(\n" + ind +
+           "        cactus::runtime::entt_backend::StructuralCommand::Kind::Remove,\n" + ind +
+           "        [=](entt::registry& registry) {\n" + ind + "            if (!registry.valid(" + target_name +
+           ")) { return; }\n" + ind + "            " + leave(target_name) + ind + "        });\n" + ind + "}\n";
 }
 
 static std::string emit_remove_trait_stmt(const RemoveTraitStmt& s,
@@ -3124,6 +3219,11 @@ static std::string emit_remove_trait_stmt(const RemoveTraitStmt& s,
         return discard ? EnttPersistenceEmitter::emit_discard_construction(cpp, entity_expr, indentation)
                        : std::string{};
     };
+    if (const auto* slot = EnttCodegenUtils::find_trait(
+            program, s.resolved_trait_id.has_value() ? make_canonical_id(*s.resolved_trait_id) : s.trait_name);
+        slot != nullptr && slot->is_state_slot()) {
+        return emit_remove_state_stmt(s, cpp, target, ind, !program.execution_graph.phases.empty());
+    }
     if (!program.execution_graph.phases.empty()) {
         const std::string target_name = gen_temp_name("target", s.location);
         return ind + "{\n" + ind + "    const auto " + target_name + " = " + target + ";\n" + ind +
@@ -3514,7 +3614,17 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                 }
                 return result + "\n";
             } else if constexpr (std::is_same_v<S, MatchStmt>) {
-                const auto emit_match = s.kind == MatchKind::Value ? emit_value_match_stmt : emit_trait_match_stmt;
+                const auto emit_match = [&] {
+                    switch (s.kind) {
+                        case MatchKind::Value:
+                            return emit_value_match_stmt;
+                        case MatchKind::State:
+                            return emit_state_match_stmt;
+                        case MatchKind::Trait:
+                            return emit_trait_match_stmt;
+                    }
+                    std::unreachable();
+                }();
                 return emit_match(s,
                                   indent,
                                   trait_names,

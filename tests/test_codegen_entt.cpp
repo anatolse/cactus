@@ -1940,12 +1940,14 @@ TEST_CASE("Codegen EnTT: on added tracks only the watched trait and dispatches t
     const auto commit_fn = generated_function(code, "void generated_commit_activation");
     CHECK(commit_fn.find("generated_lifecycle_trackers()") != std::string::npos);
 
-    const auto dispatch_fn = generated_function(
-        code, "void generated_dispatch_event(entt::registry& registry, const cactus::runtime::entt_backend::TraitAdded<Dying>& occurrence");
+    const auto dispatch_fn = generated_function(code,
+                                                "void generated_dispatch_event(entt::registry& registry, const "
+                                                "cactus::runtime::entt_backend::TraitAdded<Dying>& occurrence");
     CHECK(dispatch_fn.find("(registry, occurrence, target);") != std::string::npos);
 
-    const auto root_fn = generated_function(
-        code, "void generated_process_root_event(entt::registry& registry, const cactus::runtime::entt_backend::TraitAdded<Dying>& root_event");
+    const auto root_fn = generated_function(code,
+                                            "void generated_process_root_event(entt::registry& registry, const "
+                                            "cactus::runtime::entt_backend::TraitAdded<Dying>& root_event");
     CHECK(root_fn.find("generated_dispatch_event(registry, root_event, target);") != std::string::npos);
 
     // The handler runs only for its recipient, with the trait in its selection and the alias bound.
@@ -8100,10 +8102,13 @@ TEST_CASE("Codegen EnTT: a named handler guards the pass, checks when:, and hois
           "[codegen-entt][named-entity][when-clause]") {
     const auto code = named_rule_code("Move");
     INFO(code);
-    const auto guard =
-        code.find("if (!cactus::runtime::entt_backend::named_alive<Stats, Match>(registry, generated_named_slots().test__Game)) {");
-    const auto match_ref = code.find("auto& named_ref__test__Game__Match = registry.get<Match>(generated_named_slots().test__Game);");
-    const auto stats_ref = code.find("auto& named_ref__test__Game__Stats = registry.get<Stats>(generated_named_slots().test__Game);");
+    const auto guard = code.find(
+        "if (!cactus::runtime::entt_backend::named_alive<Stats, Match>(registry, generated_named_slots().test__Game)) "
+        "{");
+    const auto match_ref =
+        code.find("auto& named_ref__test__Game__Match = registry.get<Match>(generated_named_slots().test__Game);");
+    const auto stats_ref =
+        code.find("auto& named_ref__test__Game__Stats = registry.get<Stats>(generated_named_slots().test__Game);");
     const auto when      = code.find("if (!(!named_ref__test__Game__Match.over)) {");
     const auto loop      = code.find("steps");
     REQUIRE(guard != std::string::npos);
@@ -8151,6 +8156,132 @@ TEST_CASE("Codegen EnTT: an event handler writes by name and targets a name", "[
     CHECK(code.find("named_ref__test__Game__Match.score += 1;") != std::string::npos);
     CHECK(code.find("generated_named_slots().test__Boss") != std::string::npos);
     CHECK(code.find("named_alive<Rival>") == std::string::npos);
+}
+
+// ── Exclusive states ────────────────────────────────────────────────────────
+
+static const std::string STATE_PROGRAM_PREFIX =
+    "pub extern event frame:\n"
+    "    dt: float\n"
+    "phase tick:\n"
+    "    from:\n"
+    "        frame\n"
+    "trait Log:\n"
+    "    var n: int = 0\n"
+    "state EnemyMode:\n"
+    "    Idle\n"
+    "    Chasing:\n"
+    "        var speed: float = 2.0\n"
+    "    Dying final:\n"
+    "        var elapsed: float = 0.0\n";
+
+TEST_CASE("Codegen EnTT: a state emits variant components, a slot and its final mask",
+          "[codegen-entt][exclusive-states]") {
+    ProgramNode program;
+    auto decorated  = full_pipeline(STATE_PROGRAM_PREFIX, program);
+    const auto code = CppEnttCodegen::generate(decorated);
+
+    CHECK(code.find("struct EnemyMode__Idle {};") != std::string::npos);
+    CHECK(code.find("struct EnemyMode__Chasing {\n    float speed") != std::string::npos);
+    CHECK(code.find("struct EnemyMode {\n    std::uint8_t index = 0;\n"
+                    "    static constexpr std::uint64_t final_mask = 0x4;\n};") != std::string::npos);
+
+    const auto remove_fn = generated_function(code, "inline void remove_state_variant<EnemyMode>(");
+    CHECK(remove_fn.find("case 0:\n            registry.remove<EnemyMode__Idle>(entity);") != std::string::npos);
+    CHECK(remove_fn.find("case 2:\n            registry.remove<EnemyMode__Dying>(entity);") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: add of a variant swaps and remove of a state leaves it", "[codegen-entt][exclusive-states]") {
+    ProgramNode program;
+    auto decorated  = full_pipeline(STATE_PROGRAM_PREFIX +
+                                        "entity Grunt:\n"
+                                        "    EnemyMode\n"
+                                        "    Log\n"
+                                        "rule Hunt:\n"
+                                        "    filter:\n"
+                                        "        Log\n"
+                                        "    on tick:\n"
+                                        "        add EnemyMode.Chasing:\n"
+                                        "            speed = 3.0\n"
+                                        "        add EnemyMode.Dying\n"
+                                        "        remove EnemyMode\n",
+                                    program);
+    const auto code = CppEnttCodegen::generate(decorated);
+
+    const auto handler = generated_function(code, "void hunt_tick(entt::registry& registry");
+    CHECK(handler.find("cactus::runtime::entt_backend::enter_state<EnemyMode, 1>(registry, ") != std::string::npos);
+    CHECK(handler.find("cactus::runtime::entt_backend::enter_state<EnemyMode, 2>(registry, ") != std::string::npos);
+    CHECK(handler.find("cactus::runtime::entt_backend::leave_state<EnemyMode>(registry, ") != std::string::npos);
+    CHECK(handler.find("registry.emplace_or_replace<EnemyMode__Chasing>") == std::string::npos);
+    CHECK(handler.find("registry.remove<EnemyMode>") == std::string::npos);
+
+    CHECK(code.find("cactus::runtime::entt_backend::enter_state<EnemyMode, 0>(registry, entity, EnemyMode__Idle{});") !=
+          std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: a state match switches on the slot index", "[codegen-entt][exclusive-states]") {
+    ProgramNode program;
+    auto decorated  = full_pipeline(STATE_PROGRAM_PREFIX +
+                                        "rule Inspect:\n"
+                                        "    filter:\n"
+                                        "        EnemyMode as m\n"
+                                        "        Log as log\n"
+                                        "    on tick:\n"
+                                        "        match m:\n"
+                                        "            EnemyMode.Chasing as c =>\n"
+                                        "                c.speed = 1.0\n"
+                                        "            _ =>\n"
+                                        "                log.n = 1\n"
+                                        "        log.n = match m:\n"
+                                        "            EnemyMode.Idle => 10\n"
+                                        "            _ => 20\n",
+                                    program);
+    const auto code = CppEnttCodegen::generate(decorated);
+
+    const auto handler = generated_function(code, "void inspect_tick(entt::registry& registry");
+    CHECK(handler.find("switch (m.index) {") != std::string::npos);
+    CHECK(handler.find("case 1: {") != std::string::npos);
+    CHECK(handler.find("auto& c = registry.get<EnemyMode__Chasing>(entity);") != std::string::npos);
+    CHECK(handler.find("default: {") != std::string::npos);
+    const auto subject = extract_temp_name(handler, "cactus_gen_match_subject_");
+    REQUIRE_FALSE(subject.empty());
+    CHECK(handler.find("const auto " + subject + " = m.index; switch (" + subject +
+                       ") { case 0: { return 10; } default: { return 20; } }") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: a trait match arm without an alias only tests presence", "[codegen-entt][exclusive-states]") {
+    ProgramNode program;
+    auto decorated  = full_pipeline(STATE_PROGRAM_PREFIX +
+                                        "trait Watch:\n"
+                                        "    var subject: entity_id\n"
+                                        "rule Look:\n"
+                                        "    filter:\n"
+                                        "        Watch as w\n"
+                                        "        Log as log\n"
+                                        "    on tick:\n"
+                                        "        match w.subject:\n"
+                                        "            EnemyMode.Chasing =>\n"
+                                        "                log.n = 1\n"
+                                        "            _ =>\n"
+                                        "                log.n = 0\n",
+                                    program);
+    const auto code = CppEnttCodegen::generate(decorated);
+
+    const auto handler = generated_function(code, "void look_tick(entt::registry& registry");
+    CHECK(handler.find("if (registry.all_of<EnemyMode__Chasing>(") != std::string::npos);
+    CHECK(handler.find("registry.try_get<EnemyMode__Chasing>") == std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: large states widen the index and final mask", "[codegen-entt][exclusive-states]") {
+    std::string source = "module test\nstate Large:\n";
+    for (std::size_t index = 0; index < 257; ++index) {
+        source += "    V" + std::to_string(index) + (index == 64 || index == 256 ? " final\n" : "\n");
+    }
+    ProgramNode program;
+    const auto decorated = full_pipeline(source, program);
+    const auto code      = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("std::size_t index = 0;") != std::string::npos);
+    CHECK(code.find("std::array<std::uint64_t, 5> final_mask{0x0, 0x1, 0x0, 0x0, 0x1}") != std::string::npos);
 }
 
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

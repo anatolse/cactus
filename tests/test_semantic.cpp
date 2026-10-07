@@ -5582,7 +5582,7 @@ TEST_CASE("Semantic: float match subject is rejected with the subject-type messa
     CHECK(has_error(conditional_handler_errors("        match a.speed:\n"
                                                "            _ =>\n"
                                                "                a.hp = 1\n"),
-                    "statement-level `match` subject must be `entity_id`, an enum, `int` or `bool`, got `float`"));
+                    "statement-level `match` subject must be `entity_id`, an enum, `int`, `bool` or a state slot, got `float`"));
 }
 
 TEST_CASE("Semantic: conditional expression in a constant is a const expression",

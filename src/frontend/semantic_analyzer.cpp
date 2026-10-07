@@ -25,6 +25,8 @@ namespace cactus {
 
 namespace {
 
+constexpr const char* kStateSlotUseMessage = "a state slot can only be a `match` subject";
+
 bool module_name_is_stdlib(const std::string& module_name) {
     return module_name == "std" || module_name.starts_with("std.");
 }
@@ -288,8 +290,8 @@ bool same_type(const TypeInfo& lhs, const TypeInfo& rhs) {
     if (lhs.kind != rhs.kind) {
         return false;
     }
-    if ((lhs.kind == TypeKind::Struct || lhs.kind == TypeKind::Enum) && lhs.symbol_id.has_value() &&
-        rhs.symbol_id.has_value()) {
+    if ((lhs.kind == TypeKind::Struct || lhs.kind == TypeKind::Enum || lhs.kind == TypeKind::StateSlot) &&
+        lhs.symbol_id.has_value() && rhs.symbol_id.has_value()) {
         return *lhs.symbol_id == *rhs.symbol_id;
     }
     if (lhs.kind == TypeKind::List && lhs.element != nullptr && rhs.element != nullptr) {
@@ -672,11 +674,21 @@ bool same_trait_entry_identity(const ArchetypeTraitEntry& lhs, const ArchetypeTr
     return lhs.trait_name == rhs.trait_name;
 }
 
+std::optional<SymbolId> state_of_entry(const ArchetypeTraitEntry& entry) {
+    return entry.resolved_trait_id.and_then(state_of_variant_trait);
+}
+
 void merge_trait_entry_into(std::vector<ArchetypeTraitEntry>& merged, const ArchetypeTraitEntry& entry) {
-    auto existing = std::ranges::find_if(
-        merged, [&entry](const auto& candidate) { return same_trait_entry_identity(candidate, entry); });
+    const auto state = state_of_entry(entry);
+    auto existing    = std::ranges::find_if(merged, [&](const auto& candidate) {
+        return same_trait_entry_identity(candidate, entry) || (state.has_value() && state == state_of_entry(candidate));
+    });
     if (existing == merged.end()) {
         merged.push_back(clone_archetype_trait_entry(entry));
+        return;
+    }
+    if (!same_trait_entry_identity(*existing, entry)) {
+        *existing = clone_archetype_trait_entry(entry);
         return;
     }
 
@@ -1091,6 +1103,7 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     record_module_imports();
 
     // Phase 1: Collect all type declarations
+    synthesize_state_traits(program);
     collect_types(program);
 
     // dsl-render-passes: recognize render-pass phases by descriptor field
@@ -1124,6 +1137,7 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     validate_template_unit_declarations(program);
     validate_template_applications(program);
     validate_template_use_cycles(program);
+    validate_state_archetypes(program);
     flatten_template_compositions(program);
     validate_collider_shapes(program);
     collect_named_entities(program);
@@ -1186,6 +1200,63 @@ bool SemanticAnalyzer::declare_module_scope_symbol(SymbolKind kind,
     return false;
 }
 
+void SemanticAnalyzer::synthesize_state_traits(ProgramNode& program) {
+    const auto already_synthesized = std::ranges::any_of(program.declarations, [](const Declaration& decl) {
+        const auto* trait = std::get_if<TraitNode>(&decl);
+        return trait != nullptr && trait->state.has_value();
+    });
+    if (already_synthesized) {
+        return;
+    }
+    std::vector<Declaration> declarations;
+    declarations.reserve(program.declarations.size());
+    for (auto& decl : program.declarations) {
+        auto* state = std::get_if<StateNode>(&decl);
+        if (state == nullptr) {
+            declarations.push_back(std::move(decl));
+            continue;
+        }
+        if (state->variants.empty()) {
+            errors_.error(state->location, "state '" + state->name + "' has no variants");
+        }
+        std::vector<TraitNode> traits;
+        TraitNode slot{.name = state->name, .is_pub = state->is_pub, .location = state->location, .state = state->name};
+        slot.fields.push_back(FieldNode{.modifiers = {.is_var = true},
+                                        .name      = "index",
+                                        .type      = TypeRef{.name = "int", .location = state->location},
+                                        .location  = state->location});
+        traits.push_back(std::move(slot));
+        std::unordered_set<std::string> seen;
+        std::vector<StateVariantNode> variants;
+        for (auto& variant : state->variants) {
+            if (!seen.insert(variant.name).second) {
+                errors_.error(variant.location,
+                              "duplicate variant '" + variant.name + "' in state '" + state->name + "'");
+                continue;
+            }
+            const auto spelling = state->name + "." + variant.name;
+            for (const auto& field : variant.fields) {
+                if (field.modifiers.is_persist) {
+                    errors_.error(field.location, "state variant '" + spelling + "' cannot declare a `persist` field");
+                }
+            }
+            traits.push_back(TraitNode{.name     = spelling,
+                                       .is_pub   = state->is_pub,
+                                       .fields   = std::move(variant.fields),
+                                       .location = variant.location,
+                                       .state    = state->name});
+            variants.push_back(
+                StateVariantNode{.name = variant.name, .is_final = variant.is_final, .location = variant.location});
+        }
+        state->variants = std::move(variants);
+        declarations.push_back(std::move(decl));
+        for (auto& trait : traits) {
+            declarations.emplace_back(std::move(trait));
+        }
+    }
+    program.declarations = std::move(declarations);
+}
+
 // Two-pass namespace population: import seeding, then the per-declaration-kind
 // symbol-table registration below.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
@@ -1235,8 +1306,21 @@ void SemanticAnalyzer::collect_types(ProgramNode& program) {
                     enum_names_.insert(node.name);
                 } else if constexpr (std::is_same_v<T, TraitNode>) {
                     node.is_stdlib = current_module_is_stdlib_;
+                    if (!node.state.has_value()) {
                     declare_module_scope_symbol(SymbolKind::Trait, node.name, node.location);
+                    }
                     trait_names_.insert(node.name);
+                } else if constexpr (std::is_same_v<T, StateNode>) {
+                    declare_module_scope_symbol(SymbolKind::State, node.name, node.location);
+                    const auto state_id = make_symbol_id(SymbolKind::State, current_module_id_, node.name);
+                    ResolvedState state;
+                    state.name   = node.name;
+                    state.is_pub = node.is_pub;
+                    assign_canonical_identity(state, state_id);
+                    for (const auto& variant : node.variants) {
+                        state.variants.push_back({.name = variant.name, .is_final = variant.is_final});
+                    }
+                    result_.states[node.name] = std::move(state);
                 } else if constexpr (std::is_same_v<T, EventNode>) {
                     declare_module_scope_symbol(SymbolKind::Event, node.name, node.location);
                     event_names_.insert(node.name);
@@ -1438,6 +1522,9 @@ void SemanticAnalyzer::resolve_all_types(ProgramNode& program) {
                     assign_canonical_identity(rt, trait_id);
                     rt.is_pub    = node.is_pub;
                     rt.is_stdlib = node.is_stdlib;
+                    rt.state     = node.state.transform([this](const std::string& state) {
+                        return make_symbol_id(SymbolKind::State, current_module_id_, state);
+                    });
                     for (auto& f : node.fields) {
                         ResolvedField rf;
                         rf.name        = f.name;
@@ -1490,6 +1577,17 @@ void SemanticAnalyzer::resolve_all_types(ProgramNode& program) {
 void SemanticAnalyzer::resolve_trait_references(ProgramNode& program) {
     auto resolve_trait_entry = [this](ArchetypeTraitEntry& entry) {
         entry.resolved_trait_id = try_resolve_trait_ref_to_symbol(entry.trait_name);
+        if (entry.resolved_trait_id.has_value()) {
+            return;
+        }
+        // A bare state starts in its first variant.
+        const auto state_id = try_resolve_state_ref(entry.trait_name);
+        const auto* state   = state_id.has_value() ? find_resolved_state(*state_id) : nullptr;
+        if (state == nullptr || state->variants.empty()) {
+            return;
+        }
+        entry.trait_name += "." + state->variants.front().name;
+        entry.resolved_trait_id = state_variant_trait(*state_id, state->variants.front().name);
     };
 
     std::function<void(std::vector<ChildOverrideNode>&)> resolve_child_overrides;
@@ -1537,7 +1635,7 @@ void SemanticAnalyzer::resolve_trait_references(ProgramNode& program) {
         if (!clause.entries.empty()) {
             clause.resolved_trait_ids.reserve(clause.entries.size());
             for (auto& entry : clause.entries) {
-                entry.resolved_trait_id = try_resolve_trait_ref_to_symbol(entry.qualified_name);
+                entry.resolved_trait_id = try_resolve_trait_or_slot_ref(entry.qualified_name);
                 if (entry.resolved_trait_id.has_value()) {
                     clause.resolved_trait_ids.push_back(*entry.resolved_trait_id);
                 }
@@ -1547,7 +1645,7 @@ void SemanticAnalyzer::resolve_trait_references(ProgramNode& program) {
 
         clause.resolved_trait_ids.reserve(clause.trait_names.size());
         for (const auto& trait_name : clause.trait_names) {
-            auto resolved = try_resolve_trait_ref_to_symbol(trait_name);
+            auto resolved = try_resolve_trait_or_slot_ref(trait_name);
             if (resolved.has_value()) {
                 clause.resolved_trait_ids.push_back(*resolved);
             }
@@ -1694,7 +1792,7 @@ void SemanticAnalyzer::resolve_trait_references(ProgramNode& program) {
                             resolve_expr(**s.target_expr);
                         }
                     } else if constexpr (std::is_same_v<S, RemoveTraitStmt>) {
-                        s.resolved_trait_id = try_resolve_trait_ref_to_symbol(s.trait_name);
+                        s.resolved_trait_id = try_resolve_trait_or_slot_ref(s.trait_name);
                         if (s.target_expr.has_value()) {
                             resolve_expr(**s.target_expr);
                         }
@@ -1905,6 +2003,13 @@ TypeInfo SemanticAnalyzer::resolve_type_ref(const TypeRef& ref) {
     if (enum_names_.contains(ref.name)) {
         return make_resolved_user_type(
             TypeKind::Enum, make_symbol_id(SymbolKind::Enum, current_module_id_, ref.name), ref.name);
+    }
+
+    if (try_resolve_state_ref(ref.name).has_value()) {
+        errors_.error(ref.location,
+                      "state '" + ref.name + "' is not a value type; a rule reads it with `filter: " + ref.name +
+                          " as m` and `match m:`");
+        return make_unknown_type();
     }
 
     // ── Prelude/ordinary import diagnostics ─────────────────────────────────
@@ -3034,7 +3139,7 @@ bool SemanticAnalyzer::resolve_filter_entry(const FilterEntry& entry, std::strin
 
     // Unified lookup: alias-, canonical-, and current-module-qualified plus
     // bare local/prelude spellings all resolve the same way.
-    if (auto resolved = try_resolve_ref_of_kind(qname, {SymbolKind::Trait})) {
+    if (auto resolved = try_resolve_trait_or_slot_ref(qname)) {
         out_simple_name = resolved->local_name;
         return true;
     }
@@ -3044,6 +3149,10 @@ bool SemanticAnalyzer::resolve_filter_entry(const FilterEntry& entry, std::strin
         auto qualifier  = qname.substr(0, dot);
         auto trait_name = qname.substr(dot + 1);
 
+        if (try_resolve_state_ref(qualifier).has_value()) {
+            errors_.error(entry.location, "state '" + qualifier + "' has no variant '" + trait_name + "'");
+            return false;
+        }
         if (qualifier != current_module_name_ && find_imported_module(qualifier) == nullptr) {
             errors_.error(entry.location, "unknown module qualifier '" + qualifier + "' in filter");
             return false;
@@ -3915,6 +4024,10 @@ void SemanticAnalyzer::validate_keep_clause(const RuleNode& rule) {
     const auto* trait = find_resolved_trait(keep.resolved_trait_id, keep.trait_name);
     if (!keep.resolved_trait_id.has_value() || trait == nullptr) {
         errors_.error(keep.location, "unknown trait '" + keep.trait_name + "' in `keep`");
+        return;
+    }
+    if (trait->state.has_value()) {
+        errors_.error(keep.location, "state variant '" + keep.trait_name + "' cannot be kept");
         return;
     }
     if (keep.resolved_trait_id->module != current_module_id_) {
@@ -5862,6 +5975,14 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
 
     auto validate_add = [this, &find_trait_or_report, &filter_bindings, &locals, handler_event, pair_scope](
                             const AddTraitStmt& add) {
+        const auto state_id = add.resolved_trait_id.has_value() ? std::nullopt : try_resolve_state_ref(add.trait_name);
+        if (const auto* state = state_id.has_value() ? find_resolved_state(*state_id) : nullptr;
+            state != nullptr && !state->variants.empty()) {
+            errors_.error(add.location,
+                          "`add` needs a variant of state '" + add.trait_name + "', such as '" + add.trait_name + "." +
+                              state->variants.front().name + "'");
+            return;
+        }
         const auto* trait = find_trait_or_report(add.resolved_trait_id, add.trait_name, add.location);
         if (trait == nullptr) {
             return;
@@ -5893,6 +6014,10 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
             const ProjectTraitStmt& project) {
             const auto* trait = find_trait_or_report(project.resolved_trait_id, project.trait_name, project.location);
             if (trait == nullptr) {
+            return;
+        }
+        if (trait->state.has_value()) {
+            errors_.error(project.location, "state variant '" + project.trait_name + "' cannot be projected");
                 return;
             }
 
@@ -5928,7 +6053,12 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
 
     auto validate_remove = [this, &find_trait_or_report, &filter_bindings, &locals, handler_event, pair_scope](
                                const RemoveTraitStmt& remove) {
-        (void)find_trait_or_report(remove.resolved_trait_id, remove.trait_name, remove.location);
+        const auto* trait = find_trait_or_report(remove.resolved_trait_id, remove.trait_name, remove.location);
+        if (trait != nullptr && trait->state.has_value() && !trait->is_state_slot()) {
+            errors_.error(remove.location,
+                          "a state variant cannot be removed; use `add` of another variant or `remove " +
+                              remove.trait_name.substr(0, remove.trait_name.rfind('.')) + "`");
+        }
         if (pair_scope != nullptr && !remove.target_expr.has_value()) {
             errors_.error(
                 remove.location,
@@ -6262,7 +6392,13 @@ void SemanticAnalyzer::validate_match_stmt(
     bool in_rule_handler,
     const PairScope* pair_scope) {
     const auto subject_type =
-        infer_expr_type(*stmt.subject, filter_bindings, local_bindings, handler_event, pair_scope);
+        infer_match_subject_type(*stmt.subject, filter_bindings, local_bindings, handler_event, pair_scope);
+    if (subject_type.kind == TypeKind::StateSlot) {
+        stmt.kind = MatchKind::State;
+        check_value_patterns(patterns_of(stmt.arms), subject_type, stmt.location);
+        validate_state_match_arms(stmt, subject_type, filter_bindings, local_bindings, handler_event, rule_name);
+        return;
+    }
     if (is_value_match_subject(subject_type)) {
         stmt.kind = MatchKind::Value;
         for (const auto& arm : stmt.arms) {
@@ -6291,7 +6427,8 @@ void SemanticAnalyzer::validate_match_stmt(
     }
     if (subject_type.kind != TypeKind::EntityId && subject_type.kind != TypeKind::Unknown) {
         errors_.error(stmt.location,
-                      "statement-level `match` subject must be `entity_id`, an enum, `int` or `bool`, got `" +
+                      "statement-level `match` subject must be `entity_id`, an enum, `int`, `bool` or a state slot, "
+                      "got `" +
                           type_display_name(subject_type) + "`");
     }
     validate_trait_match_arms(stmt, filter_bindings, local_bindings, handler_event, rule_name, pair_scope);
@@ -6341,24 +6478,92 @@ void SemanticAnalyzer::validate_trait_match_arms(
 
         auto arm_locals = local_bindings;
         if (arm.alias.has_value()) {
-            if (in_scope_names.contains(*arm.alias)) {
-                errors_.error(arm.location,
-                              "match arm alias '" + *arm.alias + "' conflicts with filter alias '" + *arm.alias + "'");
-            } else {
-                const auto symbol = resolved_decl_symbol(*trait, SymbolKind::Trait, current_module_name_, trait->name);
-                arm_locals[*arm.alias] = make_resolved_user_type(TypeKind::Struct, symbol, trait->name);
-            }
+            bind_match_arm_alias(arm, *trait, in_scope_names.contains(*arm.alias), arm_locals);
         }
 
         validate_event_stmts(arm.body, filter_bindings, arm_locals, handler_event, rule_name, pair_scope);
     }
 }
 
+void SemanticAnalyzer::bind_match_arm_alias(const MatchStmtArm& arm,
+                                            const ResolvedTrait& trait,
+                                            bool alias_in_scope,
+                                            std::unordered_map<std::string, TypeInfo>& arm_locals) {
+    const auto& alias = *arm.alias;
+    if (alias_in_scope) {
+        errors_.error(arm.location, "match arm alias '" + alias + "' conflicts with filter alias '" + alias + "'");
+        return;
+    }
+    const auto symbol = resolved_decl_symbol(trait, SymbolKind::Trait, current_module_name_, trait.name);
+    arm_locals[alias] = make_resolved_user_type(TypeKind::Struct, symbol, trait.name);
+}
+
 bool SemanticAnalyzer::is_value_match_subject(const TypeInfo& type) {
     return type.kind == TypeKind::Enum || type.kind == TypeKind::Int || type.kind == TypeKind::Bool;
 }
 
+TypeInfo SemanticAnalyzer::infer_match_subject_type(
+    const ExprNode& subject,
+    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+    const std::unordered_map<std::string, TypeInfo>& local_bindings,
+    const ResolvedStruct* handler_event,
+    const PairScope* pair_scope) const {
+    if (const auto* ident = std::get_if<IdentExpr>(&subject.expr);
+        ident != nullptr && !local_bindings.contains(ident->name)) {
+        const auto bound = filter_bindings.find(ident->name);
+        if (bound != filter_bindings.end() && bound->second != nullptr && bound->second->is_state_slot()) {
+            return make_state_slot_type(*bound->second->state);
+        }
+    }
+    return infer_expr_type(subject, filter_bindings, local_bindings, handler_event, pair_scope);
+}
+
+std::optional<std::size_t> SemanticAnalyzer::state_variant_of_pattern(const ExprNode& pattern,
+                                                                      const SymbolId& state) const {
+    const auto variant = try_resolve_trait_ref_to_symbol(dotted_name_of(pattern));
+    if (!variant.has_value()) {
+        return std::nullopt;
+    }
+    const auto* declaration = find_resolved_trait(*variant);
+    const auto* owner       = find_resolved_state(state);
+    if (declaration == nullptr || declaration->state != state || declaration->is_state_slot() || owner == nullptr) {
+        return std::nullopt;
+    }
+    return owner->variant_index(variant_name_of_trait(*variant));
+}
+
+void SemanticAnalyzer::validate_state_match_arms(
+    const MatchStmt& stmt,
+    const TypeInfo& subject_type,
+    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+    const std::unordered_map<std::string, TypeInfo>& local_bindings,
+    const ResolvedStruct* handler_event,
+    const std::string& rule_name) {
+    for (const auto& arm : stmt.arms) {
+        auto arm_locals = local_bindings;
+        if (!arm.is_wildcard()) {
+            arm.state_variant = state_variant_of_pattern(*arm.pattern, *subject_type.symbol_id);
+        }
+        const auto* variant = arm.state_variant.has_value() ? find_resolved_trait(arm.resolved_trait_id, "") : nullptr;
+        if (arm.alias.has_value() && variant != nullptr) {
+            if (variant->fields.empty()) {
+                errors_.error(arm.location, "marker variant '" + arm.trait_name() + "' cannot declare an alias");
+            } else {
+                const bool in_scope = filter_bindings.contains(*arm.alias) || local_bindings.contains(*arm.alias);
+                bind_match_arm_alias(arm, *variant, in_scope, arm_locals);
+            }
+        }
+        validate_event_stmts(arm.body, filter_bindings, arm_locals, handler_event, rule_name);
+    }
+}
+
 std::optional<SemanticAnalyzer::PatternValue> SemanticAnalyzer::match_pattern_value(const ExprNode& pattern) const {
+    if (const auto variant = try_resolve_trait_ref_to_symbol(dotted_name_of(pattern)); variant.has_value()) {
+        const auto* declaration = find_resolved_trait(*variant);
+        if (declaration != nullptr && declaration->state.has_value() && !declaration->is_state_slot()) {
+            return PatternValue{.type = make_state_slot_type(*declaration->state), .key = variant->local_name};
+        }
+    }
     if (const auto* literal = std::get_if<LiteralExpr>(&pattern.expr)) {
         if (literal->kind == LiteralExpr::Kind::Bool) {
             return PatternValue{.type = make_bool_type(), .key = literal->value};
@@ -6399,6 +6604,30 @@ std::optional<SemanticAnalyzer::PatternValue> SemanticAnalyzer::match_pattern_va
     return value;
 }
 
+bool SemanticAnalyzer::check_match_pattern_type(const std::optional<PatternValue>& value,
+                                                const TypeInfo& subject_type,
+                                                const ExprNode& pattern) const {
+    const auto spelling = pattern_spelling(pattern);
+    if (subject_type.kind == TypeKind::StateSlot && (!value.has_value() || !same_type(value->type, subject_type))) {
+        errors_.error(pattern.location,
+                      "`" + spelling + "` is not a variant of `" + type_display_name(subject_type) + "`");
+        return false;
+    }
+    if (!value.has_value()) {
+        errors_.error(pattern.location,
+                      "pattern `" + spelling + "` is not an enum variant, an `int` or `bool` literal, or a constant");
+        return false;
+    }
+    if (value->type.kind != TypeKind::Unknown && !same_type(value->type, subject_type)) {
+        errors_.error(pattern.location,
+                      "pattern `" + spelling + "` is " + (value->type.kind == TypeKind::Int ? "an" : "a") + " `" +
+                          type_display_name(value->type) + "` but the subject is `" + type_display_name(subject_type) +
+                          "`");
+        return false;
+    }
+    return true;
+}
+
 void SemanticAnalyzer::check_value_patterns(const std::vector<const ExprNode*>& patterns,
                                             const TypeInfo& subject_type,
                                             const SourceLocation& match_location) const {
@@ -6413,20 +6642,11 @@ void SemanticAnalyzer::check_value_patterns(const std::vector<const ExprNode*>& 
             }
             continue;
         }
+        const auto value = match_pattern_value(pattern);
+        if (!check_match_pattern_type(value, subject_type, pattern)) {
+            continue;
+        }
         const auto spelling = pattern_spelling(pattern);
-        const auto value    = match_pattern_value(pattern);
-        if (!value.has_value()) {
-            errors_.error(pattern.location,
-                          "pattern `" + spelling + "` is not an enum variant, an `int` or `bool` literal, or a constant");
-            continue;
-        }
-        if (value->type.kind != TypeKind::Unknown && !same_type(value->type, subject_type)) {
-            errors_.error(pattern.location,
-                          "pattern `" + spelling + "` is " + (value->type.kind == TypeKind::Int ? "an" : "a") + " `" +
-                              type_display_name(value->type) + "` but the subject is `" +
-                              type_display_name(subject_type) + "`");
-            continue;
-        }
         if (!seen.insert(value->key).second) {
             errors_.error(pattern.location, "duplicate pattern `" + spelling + "`");
         }
@@ -6435,22 +6655,14 @@ void SemanticAnalyzer::check_value_patterns(const std::vector<const ExprNode*>& 
         return;
     }
 
-    std::vector<std::string> missing;
     if (subject_type.kind == TypeKind::Int) {
         errors_.error(match_location, "a `match` on `int` needs a `_` arm");
         return;
     }
-    if (subject_type.kind == TypeKind::Bool) {
-        for (const char* name : {"true", "false"}) {
-            if (!seen.contains(name)) {
-                missing.emplace_back(name);
-            }
-        }
-    } else if (const auto* enum_decl =
-                   subject_type.symbol_id.has_value() ? find_resolved_enum(*subject_type.symbol_id) : nullptr) {
-        std::ranges::copy_if(enum_decl->variants, std::back_inserter(missing),
-                             [&seen](const std::string& variant) { return !seen.contains(variant); });
-    }
+    std::vector<std::string> missing;
+    std::ranges::copy_if(match_domain(subject_type), std::back_inserter(missing), [&seen](const std::string& value) {
+        return !seen.contains(value);
+    });
     if (missing.empty()) {
         return;
     }
@@ -6461,6 +6673,25 @@ void SemanticAnalyzer::check_value_patterns(const std::vector<const ExprNode*>& 
         listed += '`';
     }
     errors_.error(match_location, "`match` on `" + type_display_name(subject_type) + "` is missing " + listed);
+}
+
+std::vector<std::string> SemanticAnalyzer::match_domain(const TypeInfo& subject_type) const {
+    if (subject_type.kind == TypeKind::Bool) {
+        return {"true", "false"};
+    }
+    if (!subject_type.symbol_id.has_value()) {
+        return {};
+    }
+    if (const auto* state = find_resolved_state(*subject_type.symbol_id)) {
+        std::vector<std::string> variants;
+        variants.reserve(state->variants.size());
+        for (const auto& variant : state->variants) {
+            variants.push_back(state->name + "." + variant.name);
+        }
+        return variants;
+    }
+    const auto* enum_decl = find_resolved_enum(*subject_type.symbol_id);
+    return enum_decl == nullptr ? std::vector<std::string>{} : enum_decl->variants;
 }
 
 std::string SemanticAnalyzer::pattern_spelling(const ExprNode& pattern) {
@@ -6510,12 +6741,21 @@ TypeInfo SemanticAnalyzer::infer_match_expr_type(
     const ResolvedStruct* handler_event,
     const PairScope* pair_scope) const {
     const auto subject_type =
-        infer_expr_type(*match_expr.subject, filter_bindings, local_bindings, handler_event, pair_scope);
-    if (is_value_match_subject(subject_type)) {
+        infer_match_subject_type(*match_expr.subject, filter_bindings, local_bindings, handler_event, pair_scope);
+    if (subject_type.kind == TypeKind::StateSlot) {
+        match_expr.on_state_slot = true;
+        for (const auto& arm : match_expr.arms) {
+            if (!is_wildcard_pattern(*arm.pattern)) {
+                arm.state_variant = state_variant_of_pattern(*arm.pattern, *subject_type.symbol_id);
+            }
+        }
+    }
+    if (is_value_match_subject(subject_type) || subject_type.kind == TypeKind::StateSlot) {
         check_value_patterns(patterns_of(match_expr.arms), subject_type, location);
     } else if (subject_type.kind != TypeKind::Unknown) {
         errors_.error(location,
-                      "`match` subject must be an enum, `int` or `bool`, got `" + type_display_name(subject_type) + "`");
+                      "`match` subject must be an enum, `int`, `bool` or a state slot, got `" +
+                          type_display_name(subject_type) + "`");
     }
 
     TypeInfo result = make_unknown_type();
@@ -7034,6 +7274,7 @@ void SemanticAnalyzer::walk_handler_body(  // NOLINT(readability-function-cognit
                         }
                     } else if constexpr (std::is_same_v<S, AddTraitStmt>) {
                         add_command(HandlerCommandKind::Add, node.resolved_trait_id);
+                        record_state_writes(contract, node.resolved_trait_id);
                         for (const auto& field : node.args) {
                             visit_expr(*field.value, locals);
                         }
@@ -7042,6 +7283,7 @@ void SemanticAnalyzer::walk_handler_body(  // NOLINT(readability-function-cognit
                         }
                     } else if constexpr (std::is_same_v<S, RemoveTraitStmt>) {
                         add_command(HandlerCommandKind::Remove, node.resolved_trait_id);
+                        record_state_writes(contract, node.resolved_trait_id);
                         if (node.target_expr.has_value()) {
                             visit_expr(**node.target_expr, locals);
                         }
@@ -7092,6 +7334,10 @@ void SemanticAnalyzer::walk_handler_body(  // NOLINT(readability-function-cognit
                             if (node.kind == MatchKind::Value) {
                                 visit_expr(*arm.pattern, locals);
                             }
+                            if (walk_state_arm(
+                                    node, arm, locals, contract, resolve_read, handle_var_assign, on_project_trait)) {
+                                continue;
+                            }
                             auto arm_locals = locals;
                             if (arm.alias.has_value()) {
                                 arm_locals.insert(*arm.alias);
@@ -7105,6 +7351,61 @@ void SemanticAnalyzer::walk_handler_body(  // NOLINT(readability-function-cognit
     };
 
     visit_stmts(body, std::move(handler_locals));
+}
+
+// A state arm's alias names the entity's own variant, so reads and writes through it touch that
+// trait. Returns false for any other arm, which the caller walks itself.
+bool SemanticAnalyzer::walk_state_arm(const MatchStmt& match,
+                                      const MatchStmtArm& arm,
+                                      const LocalNames& locals,
+                                      InferredHandlerContract& contract,
+                                      const std::function<bool(const ExprNode&, const LocalNames&)>& resolve_read,
+                                      const std::function<void(const VarAssign&, const LocalNames&)>& handle_var_assign,
+                                      const std::function<void(const SymbolId&)>& on_project_trait) const {
+    if (match.kind != MatchKind::State || !arm.alias.has_value() || !arm.resolved_trait_id.has_value()) {
+        return false;
+    }
+    const auto& alias       = *arm.alias;
+    const auto& variant     = *arm.resolved_trait_id;
+    const auto* declaration = find_resolved_trait(variant);
+    const auto arm_read     = [&](const ExprNode& expr, const LocalNames& names) {
+        if (names.contains(alias)) {
+            return resolve_read(expr, names);
+        }
+        if (const auto* ident = std::get_if<IdentExpr>(&expr.expr); ident != nullptr && ident->name == alias) {
+            record_read(contract, variant, std::nullopt, declaration);
+            return true;
+        }
+        const auto* member = std::get_if<MemberExpr>(&expr.expr);
+        const auto* owner  = member == nullptr ? nullptr : std::get_if<IdentExpr>(&member->object->expr);
+        if (owner != nullptr && owner->name == alias) {
+            record_read(contract, variant, member->member, declaration);
+            return true;
+        }
+        return resolve_read(expr, names);
+    };
+    const auto arm_assign = [&](const VarAssign& assign, const LocalNames& names) {
+        if (assign.name == alias && !names.contains(alias)) {
+            record_write(contract, variant, segment_at(assign.path, 0), declaration);
+            return;
+        }
+        handle_var_assign(assign, names);
+    };
+    walk_handler_body(arm.body, locals, contract, arm_read, arm_assign, on_project_trait);
+    return true;
+}
+
+void SemanticAnalyzer::record_state_writes(HandlerContract& contract, const std::optional<SymbolId>& trait) const {
+    const auto* state = state_of_trait(trait);
+    if (state == nullptr || !state->symbol_id.has_value()) {
+        return;
+    }
+    const auto slot = state_slot_trait(*state->symbol_id);
+    record_write(contract, slot, std::nullopt, find_resolved_trait(slot));
+    for (const auto& variant : state->variants) {
+        const auto variant_trait = state_variant_trait(*state->symbol_id, variant.name);
+        record_write(contract, variant_trait, std::nullopt, find_resolved_trait(variant_trait));
+    }
 }
 
 // Clause expressions the handler body walk never sees but whose binding reads
@@ -8383,6 +8684,10 @@ std::string SemanticAnalyzer::resolve_trait_ref_to_canonical(const std::string& 
         auto qualifier  = ref.substr(0, dot);
         auto local_name = ref.substr(dot + 1);
 
+        if (try_resolve_state_ref(qualifier).has_value()) {
+            errors_.error(loc, "state '" + qualifier + "' has no variant '" + local_name + "'");
+            return "";
+        }
         if (qualifier != current_module_name_ && find_imported_module(qualifier) == nullptr) {
             errors_.error(loc, "unknown module qualifier '" + qualifier + "' in trait reference");
             return "";
@@ -8412,6 +8717,50 @@ std::string SemanticAnalyzer::resolve_trait_ref_to_canonical(const std::string& 
 
 std::optional<SymbolId> SemanticAnalyzer::try_resolve_trait_ref_to_symbol(const std::string& ref) const {
     return try_resolve_ref_of_kind(ref, {SymbolKind::Trait});
+}
+
+std::optional<SymbolId> SemanticAnalyzer::try_resolve_state_ref(const std::string& ref) const {
+    return try_resolve_ref_of_kind(ref, {SymbolKind::State});
+}
+
+std::optional<SymbolId> SemanticAnalyzer::try_resolve_trait_or_slot_ref(const std::string& ref) const {
+    if (auto trait = try_resolve_trait_ref_to_symbol(ref)) {
+        return trait;
+    }
+    if (auto state = try_resolve_state_ref(ref)) {
+        return state_slot_trait(*state);
+    }
+    return std::nullopt;
+}
+
+const ResolvedState* SemanticAnalyzer::find_resolved_state(const SymbolId& state) const {
+    if (state.kind != SymbolKind::State) {
+        return nullptr;
+    }
+    if (state.module == current_module_id_) {
+        const auto found = result_.states.find(state.local_name);
+        return found == result_.states.end() ? nullptr : &found->second;
+    }
+    for (const auto& [_, imported] : imports_.modules) {
+        if (imported.module_name != state.module.name) {
+            continue;
+        }
+        if (const auto found = imported.states.find(state.local_name); found != imported.states.end()) {
+            return &found->second;
+        }
+    }
+    return nullptr;
+}
+
+const ResolvedState* SemanticAnalyzer::state_of_trait(const std::optional<SymbolId>& trait) const {
+    if (!trait.has_value()) {
+        return nullptr;
+    }
+    const auto* declaration = find_resolved_trait(*trait);
+    if (declaration == nullptr || !declaration->state.has_value()) {
+        return nullptr;
+    }
+    return find_resolved_state(*declaration->state);
 }
 
 // ── Task 3.3: Canonical event ID resolution ─────────────────────────────────────
@@ -8660,6 +9009,10 @@ const ImportedSymbols* SemanticAnalyzer::find_imported_module(const std::string&
 }
 
 std::optional<SymbolId> SemanticAnalyzer::lookup_imported_symbol(const ImportedSymbols& syms, const std::string& name) {
+    // A state's slot trait shares its name, so the state wins.
+    if (auto state_it = syms.states.find(name); state_it != syms.states.end()) {
+        return resolved_decl_symbol(state_it->second, SymbolKind::State, syms.module_name, name);
+    }
     // One namespace per module: at most one of these maps can hold the name.
     if (auto trait_it = syms.traits.find(name); trait_it != syms.traits.end()) {
         return resolved_decl_symbol(trait_it->second, SymbolKind::Trait, syms.module_name, name);
@@ -8806,7 +9159,18 @@ std::optional<ResolvedRef> SemanticAnalyzer::resolve_name_required(const std::ve
 std::optional<SymbolId> SemanticAnalyzer::try_resolve_ref_of_kind(const std::string& ref,
                                                                   std::initializer_list<SymbolKind> kinds) const {
     auto resolved = resolve_name(dotted_segments(ref));
-    if (!resolved.has_value() || !resolved->member_segments.empty()) {
+    if (!resolved.has_value()) {
+        return std::nullopt;
+    }
+    if (resolved->symbol.kind == SymbolKind::State && resolved->member_segments.size() == 1 &&
+        std::ranges::find(kinds, SymbolKind::Trait) != kinds.end()) {
+        const auto* state = find_resolved_state(resolved->symbol);
+        if (state == nullptr || !state->variant_index(resolved->member_segments[0]).has_value()) {
+            return std::nullopt;
+        }
+        return state_variant_trait(resolved->symbol, resolved->member_segments[0]);
+    }
+    if (!resolved->member_segments.empty()) {
         return std::nullopt;
     }
     if (std::ranges::find(kinds, resolved->symbol.kind) == kinds.end()) {
@@ -9374,10 +9738,15 @@ TypeInfo SemanticAnalyzer::infer_ident_expr_type(
     if (pair_scope != nullptr && pair_scope->contains(ident.name)) {
         return make_entity_id_type();
     }
+    if (const auto bound = filter_bindings.find(ident.name);
+        bound != filter_bindings.end() && bound->second != nullptr && bound->second->is_state_slot()) {
+        errors_.error(location, kStateSlotUseMessage);
+        return make_unknown_type();
+    }
     const ResolvedField* matching_filter_field = nullptr;
     std::unordered_set<const ResolvedTrait*> visited_traits;
     for (const auto& [_, trait] : filter_bindings) {
-        if (trait == nullptr || visited_traits.contains(trait)) {
+        if (trait == nullptr || trait->is_state_slot() || visited_traits.contains(trait)) {
             continue;
         }
         visited_traits.insert(trait);
@@ -9527,6 +9896,10 @@ TypeInfo SemanticAnalyzer::infer_member_expr_type(
     if (auto chain = member_chain_segments(member); chain.has_value() && chain->size() >= 2) {
         if (auto trait_it = filter_bindings.find(chain->front());
             trait_it != filter_bindings.end() && trait_it->second != nullptr) {
+            if (trait_it->second->is_state_slot()) {
+                errors_.error(location, kStateSlotUseMessage);
+                return make_unknown_type();
+            }
             const auto first = find_field_type_in(trait_it->second->fields, (*chain)[1]);
             return descend_vector_color_members(first, *chain, 2);
         }
@@ -10622,6 +10995,36 @@ void SemanticAnalyzer::validate_template_applications(ProgramNode& program) {
     }
 }
 
+void SemanticAnalyzer::check_one_variant_per_state(const std::vector<ArchetypeTraitEntry>& traits,
+                                                   const std::string& owner) {
+    std::unordered_set<SymbolId> states;
+    for (const auto& entry : traits) {
+        const auto state = state_of_entry(entry);
+        if (state.has_value() && !states.insert(*state).second) {
+            errors_.error(entry.location, owner + " names two variants of state '" + state->local_name + "'");
+        }
+    }
+}
+
+void SemanticAnalyzer::validate_state_archetypes(const ProgramNode& program) {
+    std::function<void(const std::vector<ChildArchetypeNode>&)> check_children =
+        [&](const std::vector<ChildArchetypeNode>& children) {
+            for (const auto& child : children) {
+                check_one_variant_per_state(child.traits, "child '" + child.role + "'");
+                check_children(child.children);
+            }
+        };
+    for (const auto& decl : program.declarations) {
+        if (const auto* entity = std::get_if<EntityNode>(&decl)) {
+            check_one_variant_per_state(entity->traits, "entity '" + entity->name + "'");
+            check_children(entity->children);
+        } else if (const auto* tmpl = std::get_if<TemplateNode>(&decl)) {
+            check_one_variant_per_state(tmpl->traits, "template '" + tmpl->name + "'");
+            check_children(tmpl->children);
+        }
+    }
+}
+
 void SemanticAnalyzer::flatten_template_compositions(ProgramNode& program) {
     std::unordered_map<std::string, TemplateNode*> local_templates;
     std::vector<TemplateNode*> template_order;
@@ -10925,14 +11328,19 @@ void SemanticAnalyzer::validate_template_backed_entity_overrides(  // NOLINT(rea
 
         // Build set of trait names on the referenced template
         std::unordered_set<std::string> tmpl_trait_names;
+        std::unordered_set<SymbolId> tmpl_states;
         for (const auto& te : *tmpl_traits_it->second) {
             tmpl_trait_names.insert(te.trait_name);
+            if (auto state = state_of_entry(te)) {
+                tmpl_states.insert(*state);
+            }
         }
 
-        // Validate each override entry
+        // Validate each override entry; another variant of a template's state replaces it.
         std::vector<const ArchetypeTraitEntry*> valid_entries;
         for (auto& entry : entity->traits) {
-            if (!tmpl_trait_names.contains(entry.trait_name)) {
+            const auto state = state_of_entry(entry);
+            if (!tmpl_trait_names.contains(entry.trait_name) && !(state.has_value() && tmpl_states.contains(*state))) {
                 errors_.error(entry.location,
                               "trait '" + entry.trait_name + "' is not part of template '" + tmpl_ref +
                                   "'; cannot override it in entity '" + entity->name + "'");
@@ -11232,7 +11640,7 @@ void SemanticAnalyzer::validate_context_stmts(  // NOLINT(readability-function-c
                     }
                     if constexpr (std::is_same_v<S, AddTraitStmt> || std::is_same_v<S, RemoveTraitStmt>) {
                         const std::string& tname = s.trait_name;
-                        if (!is_trait_declared(tname)) {
+                        if (!s.resolved_trait_id.has_value() && !try_resolve_state_ref(tname).has_value()) {
                             const auto prev_errors = errors_.error_count();
                             (void)resolve_trait_ref_to_canonical(tname, s.location);
                             if (errors_.error_count() == prev_errors) {
@@ -11392,7 +11800,7 @@ void SemanticAnalyzer::validate_trait_modifier_rules(ProgramNode& program) {
 void SemanticAnalyzer::validate_exclude_clause(const auto& node) {
     if (!node.exclude.entries.empty()) {
         for (auto& entry : node.exclude.entries) {
-            if (!is_trait_declared(entry.qualified_name)) {
+            if (!try_resolve_trait_or_slot_ref(entry.qualified_name).has_value()) {
                 const auto prev_errors = errors_.error_count();
                 (void)resolve_trait_ref_to_canonical(entry.qualified_name, entry.location);
                 if (errors_.error_count() == prev_errors) {
@@ -11402,7 +11810,7 @@ void SemanticAnalyzer::validate_exclude_clause(const auto& node) {
         }
     } else {
         for (auto& trait_name : node.exclude.trait_names) {
-            if (!is_trait_declared(trait_name)) {
+            if (!try_resolve_trait_or_slot_ref(trait_name).has_value()) {
                 const auto prev_errors = errors_.error_count();
                 (void)resolve_trait_ref_to_canonical(trait_name, node.exclude.location);
                 if (errors_.error_count() == prev_errors) {

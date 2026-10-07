@@ -85,6 +85,13 @@ void merge_module_imports(ExecutionGraph& target, const ExecutionGraph& src) {
     }
 }
 
+// A state's slot trait claims the state's canonical name, so states need no conflict check of their own.
+void merge_states(DecoratedProgram& target, const DecoratedProgram& src) {
+    for (const auto& [name, state] : src.states) {
+        target.states[state.canonical_id.empty() ? name : state.canonical_id] = state;
+    }
+}
+
 }  // namespace
 
 ProgramLinker::ProgramLinker(ErrorReporter& errors)
@@ -136,6 +143,7 @@ bool ProgramLinker::merge_into(DecoratedProgram& target,
         }
         target.traits[insert_key(trait, name)] = trait;
     }
+    merge_states(target, src);
 
     // ── Merge structs ────────────────────────────────────────────────────────
     for (const auto& [name, strct] : src.structs) {

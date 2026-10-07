@@ -119,7 +119,7 @@ TEST_CASE("first-person arena headless: authored arena, player camera, HUD, and 
     CHECK(count<main__KnightSpawnPoint>(registry) == 2);
     CHECK(count<main__RobotEnemy>(registry) == 2);
     CHECK(count<main__KnightEnemy>(registry) == 2);
-    CHECK(count<main__Threat>(registry) == 4);
+    CHECK(count<main__EnemyLife__Hunting>(registry) == 4);
 
     const auto player = only_entity<main__Player>(registry);
     CHECK(registry.all_of<std_physics_volume__Collider, std_physics_volume__CapsuleCollider>(player));
@@ -480,12 +480,12 @@ TEST_CASE("first-person arena headless: bullets follow aim, serialize contacts, 
     CHECK(count<main__Bullet>(registry) == 0);
     const auto dying = registry.view<main__Enemy>();
     const auto dying_count =
-        std::ranges::count_if(dying, [&](const auto enemy) { return registry.all_of<main__Dying>(enemy); });
+        std::ranges::count_if(dying, [&](const auto enemy) { return registry.all_of<main__EnemyLife__Dying>(enemy); });
     CHECK(dying_count == 1);
 
     entt::entity dying_enemy = entt::null;
     for (const auto enemy : dying) {
-        if (registry.all_of<main__Dying>(enemy)) {
+        if (registry.all_of<main__EnemyLife__Dying>(enemy)) {
             dying_enemy = enemy;
         } else {
             registry.get<std_transform_volume__WorldTransform>(enemy).position =
@@ -510,7 +510,7 @@ TEST_CASE("first-person arena headless: bullets follow aim, serialize contacts, 
     drive_frames(registry, 28);
     REQUIRE(registry.valid(dying_enemy));
     const auto& halfway = registry.get<main__Enemy>(dying_enemy);
-    CHECK(halfway.death_elapsed == Catch::Approx(0.5F).margin(0.08F));
+    CHECK(registry.get<main__EnemyLife__Dying>(dying_enemy).elapsed == Catch::Approx(0.5F).margin(0.08F));
     const auto alpha = registry.get<std_render_models__ModelRenderer>(dying_visual).color.a;
     CHECK(alpha >= 100);
     CHECK(alpha <= 155);
@@ -580,10 +580,10 @@ entt::entity fire_bullet(entt::registry& registry) {
     return *bullets.begin();
 }
 
-// An enemy without Threat doesn't seek, so it stays where a test puts it.
+// An enemy without a CharacterBody doesn't move, so it stays where a test puts it.
 entt::entity still_enemy(entt::registry& registry) {
     const auto enemy = isolate_single_enemy(registry);
-    registry.remove<main__Threat>(enemy);
+    registry.remove<std_physics_volume__CharacterBody>(enemy);
     return enemy;
 }
 
@@ -629,15 +629,51 @@ TEST_CASE("first-person arena headless: a dying enemy can't catch the player",
     const auto bullet      = fire_bullet(registry);
     const auto bullet_from = registry.get<std_transform_volume__WorldTransform>(bullet).position;
     enemy_transform.position = Vector3{.x = bullet_from.x, .y = 0.9F, .z = bullet_from.z - 3.0F};
-    for (int frame = 0; frame < 20 && !registry.all_of<main__Dying>(enemy); ++frame) {
+    for (int frame = 0; frame < 20 && !registry.all_of<main__EnemyLife__Dying>(enemy); ++frame) {
         cactus_headless_test::drive_frame(registry, kFrameDt);
     }
-    REQUIRE(registry.all_of<main__Dying>(enemy));
+    REQUIRE(registry.all_of<main__EnemyLife__Dying>(enemy));
 
     enemy_transform.position = registry.get<std_transform_volume__WorldTransform>(player).position;
     drive_frames(registry, 20);
     CHECK_FALSE(registry.all_of<main__Caught>(player));
     CHECK_FALSE(match_state(registry).over);
+}
+
+TEST_CASE("first-person arena headless: a dying enemy hit again keeps its death progress",
+          "[runtime][codegen-entt][first-person-arena][exclusive-states]") {
+    cactus_raylib_fake::reset();
+    entt::registry registry;
+    cactus_headless_test::drive_one_frame(registry, kFrameDt);
+
+    const auto enemy       = still_enemy(registry);
+    const auto bullet      = fire_bullet(registry);
+    const auto bullet_from = registry.get<std_transform_volume__WorldTransform>(bullet).position;
+    registry.get<std_transform_volume__WorldTransform>(enemy).position =
+        Vector3{.x = bullet_from.x, .y = 0.9F, .z = bullet_from.z - 3.0F};
+    for (int frame = 0; frame < 20 && !registry.all_of<main__EnemyLife__Dying>(enemy); ++frame) {
+        cactus_headless_test::drive_frame(registry, kFrameDt);
+    }
+    REQUIRE(registry.all_of<main__EnemyLife__Dying>(enemy));
+    drive_frames(registry, 10);
+    const float elapsed   = registry.get<main__EnemyLife__Dying>(enemy).elapsed;
+    const auto visual     = enemy_visual_of(registry, enemy);
+    const float clip_time = registry.get<std_render_models__ModelAnimator>(visual).time;
+    REQUIRE(elapsed > 0.1F);
+
+    // Delivered straight to the enemy, as a bullet's hit would be.
+    auto& activation  = cactus::runtime::entt_backend::generated_scheduler_state().activation;
+    activation.active = true;
+    cactus::runtime::entt_backend::generated_dispatch_event(registry, main__EnemyHitEvent{}, enemy);
+    cactus::runtime::entt_backend::generated_drain_event_cascade(registry);
+    cactus::runtime::entt_backend::generated_commit_activation(registry);
+    activation.active = false;
+
+    REQUIRE(registry.all_of<main__EnemyLife__Dying>(enemy));
+    CHECK(registry.get<main__EnemyLife__Dying>(enemy).elapsed == elapsed);
+    CHECK(registry.get<std_render_models__ModelAnimator>(visual).time >= clip_time);
+    cactus_headless_test::drive_frame(registry, kFrameDt);
+    CHECK(registry.get<main__EnemyLife__Dying>(enemy).elapsed > elapsed);
 }
 
 TEST_CASE("first-person arena headless: bullets hit an enemy's body, not its hurtbox",
@@ -653,7 +689,7 @@ TEST_CASE("first-person arena headless: bullets hit an enemy's body, not its hur
     // Past the body's reach but inside the hurtbox's.
     enemy_transform.position = Vector3{.x = bullet_from.x + 0.52F, .y = 0.9F, .z = bullet_from.z - 2.0F};
     drive_frames(registry, 12);
-    CHECK_FALSE(registry.all_of<main__Dying>(enemy));
+    CHECK_FALSE(registry.all_of<main__EnemyLife__Dying>(enemy));
     REQUIRE(registry.valid(bullet));
     CHECK(registry.get<std_transform_volume__WorldTransform>(bullet).position.z < enemy_transform.position.z);
 }
@@ -909,8 +945,7 @@ TEST_CASE("first-person arena headless: a dying enemy does not participate in se
         }
     }
     // Set outside a commit, so do what StartDying would.
-    registry.emplace<main__Dying>(dying_enemy);
-    registry.remove<main__Threat>(dying_enemy);
+    cactus::runtime::entt_backend::enter_state<main__EnemyLife, 1>(registry, dying_enemy, main__EnemyLife__Dying{});
     registry.get<std_physics_volume__Collider>(dying_enemy).layer = 0;
     registry.get<std_physics_volume__Collider>(dying_enemy).mask  = 1;
 
@@ -959,7 +994,7 @@ entt::entity place_wall(entt::registry& registry, Vector3 position, Vector3 size
 }
 
 bool is_dying(entt::registry& registry, entt::entity enemy) {
-    return registry.all_of<main__Dying>(enemy);
+    return registry.all_of<main__EnemyLife__Dying>(enemy);
 }
 
 }  // namespace

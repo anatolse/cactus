@@ -76,6 +76,31 @@ struct ResolvedTrait : CanonicalIdentity {
     bool is_pub    = false;
     bool is_stdlib = false;
     std::optional<std::string> kept_by;  // the rule whose keep clause owns this trait
+    std::optional<SymbolId> state;       // set on a state's variant traits and its slot
+
+    [[nodiscard]] bool is_state_slot() const {
+        return state.has_value() && state->local_name == name;
+    }
+};
+
+struct ResolvedStateVariant {
+    std::string name;
+    bool is_final = false;
+};
+
+struct ResolvedState : CanonicalIdentity {
+    std::string name;
+    bool is_pub = false;
+    std::vector<ResolvedStateVariant> variants;
+
+    [[nodiscard]] std::optional<std::size_t> variant_index(const std::string& variant) const {
+        for (std::size_t index = 0; index < variants.size(); ++index) {
+            if (variants[index].name == variant) {
+                return index;
+            }
+        }
+        return std::nullopt;
+    }
 };
 
 struct ResolvedStruct : CanonicalIdentity {
@@ -542,6 +567,7 @@ struct DecoratedProgram {
     // module_name and canonical_id; later linker/codegen migration tasks will move more
     // consumers to canonical keys while preserving local lookup during semantic analysis.
     std::unordered_map<std::string, ResolvedTrait> traits;
+    std::unordered_map<std::string, ResolvedState> states;
     std::unordered_map<std::string, ResolvedStruct> structs;
     std::unordered_map<std::string, ResolvedEnum> enums;
     std::unordered_map<std::string, ResolvedFunc> funcs;
@@ -623,6 +649,7 @@ struct ImportedSymbols {
     std::string module_name;  // qualified name of the source module
 
     std::unordered_map<std::string, ResolvedTrait> traits;               // pub traits
+    std::unordered_map<std::string, ResolvedState> states;               // pub states
     std::unordered_map<std::string, ResolvedStruct> structs;             // pub structs
     std::unordered_map<std::string, ResolvedEnum> enums;                 // pub enums
     std::unordered_map<std::string, ResolvedFunc> funcs;                 // pub extern funcs
@@ -717,6 +744,8 @@ public:
 
 private:
     // Phase 1: Collect type declarations
+    // Inserts, after each state, one trait per variant (`S.V`) and its slot trait (`S`).
+    void synthesize_state_traits(ProgramNode& program);
     void collect_types(ProgramNode& program);
     bool declare_module_scope_symbol(SymbolKind kind, const std::string& name, const SourceLocation& loc);
 
@@ -945,8 +974,32 @@ private:
         std::string key;  // equal keys mean equal values
     };
     [[nodiscard]] static bool is_value_match_subject(const TypeInfo& type);
+    // A bare state slot alias is typed only here; anywhere else a slot is rejected.
+    TypeInfo infer_match_subject_type(const ExprNode& subject,
+                                      const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                                      const std::unordered_map<std::string, TypeInfo>& local_bindings,
+                                      const ResolvedStruct* handler_event,
+                                      const PairScope* pair_scope) const;
+    [[nodiscard]] std::optional<std::size_t> state_variant_of_pattern(const ExprNode& pattern,
+                                                                      const SymbolId& state) const;
+    // Binds a trait or variant arm's `as` alias to the matched trait's data.
+    void bind_match_arm_alias(const MatchStmtArm& arm,
+                              const ResolvedTrait& trait,
+                              bool alias_in_scope,
+                              std::unordered_map<std::string, TypeInfo>& arm_locals);
+    void validate_state_match_arms(const MatchStmt& stmt,
+                                   const TypeInfo& subject_type,
+                                   const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                                   const std::unordered_map<std::string, TypeInfo>& local_bindings,
+                                   const ResolvedStruct* handler_event,
+                                   const std::string& rule_name);
     [[nodiscard]] static std::string pattern_spelling(const ExprNode& pattern);
+    // Every value an exhaustive match on this subject must cover; empty when none can be listed.
+    [[nodiscard]] std::vector<std::string> match_domain(const TypeInfo& subject_type) const;
     [[nodiscard]] std::optional<PatternValue> match_pattern_value(const ExprNode& pattern) const;
+    [[nodiscard]] bool check_match_pattern_type(const std::optional<PatternValue>& value,
+                                                const TypeInfo& subject_type,
+                                                const ExprNode& pattern) const;
     // Shared by the `match` statement and expression: pattern types, duplicates, `_` placement, exhaustiveness.
     void check_value_patterns(const std::vector<const ExprNode*>& patterns,
                               const TypeInfo& subject_type,
@@ -988,6 +1041,9 @@ private:
     void validate_template_unit_declarations(ProgramNode& program);
     void validate_template_use_cycles(ProgramNode& program);
     void flatten_template_compositions(ProgramNode& program);
+    // Runs before flattening, so each body is checked as written.
+    void validate_state_archetypes(const ProgramNode& program);
+    void check_one_variant_per_state(const std::vector<ArchetypeTraitEntry>& traits, const std::string& owner);
     void collect_template_parameters(ProgramNode& program);
     void validate_template_applications(ProgramNode& program);
     void validate_template_arguments(const std::string& name,
@@ -1357,6 +1413,16 @@ private:
                            const std::function<void(const VarAssign&, const LocalNames&)>& handle_var_assign,
                            const std::function<void(const SymbolId&)>& on_project_trait) const;
 
+    bool walk_state_arm(const MatchStmt& match,
+                        const MatchStmtArm& arm,
+                        const LocalNames& locals,
+                        InferredHandlerContract& contract,
+                        const std::function<bool(const ExprNode&, const LocalNames&)>& resolve_read,
+                        const std::function<void(const VarAssign&, const LocalNames&)>& handle_var_assign,
+                        const std::function<void(const SymbolId&)>& on_project_trait) const;
+    // `add S.V` and `remove S` may replace any variant, so they write the slot and every variant.
+    void record_state_writes(HandlerContract& contract, const std::optional<SymbolId>& trait) const;
+
     // walk_handler_body's per-expression half, callable on its own. An
     // `order by:` sort key is a bare expression with no enclosing statement,
     // so folding its reads into a contract means walking exactly this — the
@@ -1477,7 +1543,12 @@ private:
     /// Reports an error and returns "" on failure.
     std::string resolve_trait_ref_to_canonical(const std::string& ref, const SourceLocation& loc);
     std::optional<SymbolId> try_resolve_trait_ref_to_symbol(const std::string& ref) const;
-
+    // `S` names a state's slot where a filter, exclude or remove accepts it.
+    std::optional<SymbolId> try_resolve_trait_or_slot_ref(const std::string& ref) const;
+    std::optional<SymbolId> try_resolve_state_ref(const std::string& ref) const;
+    [[nodiscard]] const ResolvedState* find_resolved_state(const SymbolId& state) const;
+    // The state a variant or slot trait belongs to; null for any other trait.
+    [[nodiscard]] const ResolvedState* state_of_trait(const std::optional<SymbolId>& trait) const;
     /// Resolve an event reference (dotted or simple) to its canonical SymbolId.
     /// Returns nullopt if the event is not found.
     std::optional<SymbolId> try_resolve_event_ref_to_symbol(const std::string& ref) const;

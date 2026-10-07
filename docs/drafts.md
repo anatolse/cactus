@@ -550,11 +550,13 @@ hand-maintained copy can drift. Generalizing derived state is the biggest lever.
 ### Open items, ranked
 
 Done: identity rewrite (`broaden-language-identity`, `ea2b35f`); conditional
-expressions (`complete-conditional-expressions`).
+expressions (`complete-conditional-expressions`); item 2, exclusive states
+(`add-exclusive-states`: `state S:` with variant traits `S.V`, swap on `add`,
+`final`, state `match`; the arena uses `state EnemyLife: Hunting, Dying final`).
 
 | # | Item | Solves | Size |
 |---|---|---|---|
-| 2 | Exclusive states | contradictory marker traits; state machines in AI, UI and game flow | M |
+| 2 | Exclusive states — DONE (`add-exclusive-states`) | contradictory marker traits; state machines in AI, UI and game flow | M |
 | 3 | `timer` field type + `on elapsed` | hand-written countdowns; gives the backend every deadline | M |
 | 4 | Derived entities + `keep` on unary rules | UI lists, outliners, health bars, palettes; leaks and duplicates | L |
 | 5 | Tree folds over `Parent` | `std.ui` layout as one imperative loop; hierarchy totals | L |
@@ -563,15 +565,17 @@ expressions (`complete-conditional-expressions`).
 | 8 | Values and reflection: strings, collections, `template_ref`, `std.reflect` | editor logic in extern C++ (see "Tools-profile gaps") | L |
 | 9 | Removals: `limit … per` writability, authored `project`, gameplay `query.*` in handlers, cross-module rule-name ordering, bare field access | fewer special-case rules, smaller spec | S–M each |
 
-Items 2–9 are not yet checked against `src/` and `tests/`; check each one before
+Items 3–9 are not yet checked against `src/` and `tests/`; check each one before
 proposing it.
+
+Found while doing item 2: `self` and `query.*` are rejected in `on added` /
+`on removed` handlers, so an entry hook cannot reach the entity's children. The
+arena's `BeginDeath` therefore keeps its death effects and selects
+`EnemyLife.Hunting` instead of moving them to `on added EnemyLife.Dying`.
 
 ### Sketches (syntax not decided)
 
 ```cactus
-# 2. Exclusive states: adding one removes the others in the same commit
-state EnemyMode: Idle, Chasing, Attacking, Dying
-
 # 3. Time as a type: the runtime counts it down
 trait Shooter:
     var cooldown: timer

@@ -35,7 +35,9 @@ enum class TypeKind {
     List,
     Func,
     Void,
-    Unknown
+    Unknown,
+    // A `filter: S as m` binding; only a `match` subject.
+    StateSlot
 };
 
 struct TypeInfo {
@@ -121,6 +123,10 @@ inline TypeInfo make_void_type() {
 }
 inline TypeInfo make_unknown_type() {
     return make_type_info(TypeKind::Unknown, "unknown");
+}
+
+inline TypeInfo make_state_slot_type(const SymbolId& state) {
+    return {.kind = TypeKind::StateSlot, .name = state.local_name, .symbol_id = state};
 }
 
 inline TypeInfo make_list_type(TypeInfo element_type) {

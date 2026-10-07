@@ -6,7 +6,7 @@ TBD - created by archiving change dsl-trait-pattern-match. Update Purpose after 
 ### Requirement: `match entity_id:` statement with trait pattern arms
 The DSL SHALL support a statement-level `match` construct. When the subject expression has type `entity_id`, the `match` performs **trait pattern matching**: each arm tests whether the referenced entity currently has the named trait attached. Arms execute in declaration order; the first matching arm fires and subsequent arms are skipped. If no arm matches and no wildcard is present, execution continues silently (no error, no-op).
 
-When the subject has type `enum`, `int` or `bool`, the statement is a **value match** instead (see "Statement-level value match"). Any other subject type is a compile error.
+When the subject has type `enum`, `int` or `bool`, the statement is a **value match** instead (see "Statement-level value match"). When the subject is a state slot, the statement is a **state match** (see dsl-exclusive-states). Any other subject type is a compile error.
 
 When the subject handle is stale, no arm fires — see dsl-entity-id-total-semantics.
 
@@ -37,9 +37,13 @@ wildcard_arm     = "_" "=>" stmt+ ;
 - **WHEN** `_ =>` is the last arm and no trait arm matched the entity
 - **THEN** the wildcard arm body executes
 
+#### Scenario: Slot subject selects a state match
+- **WHEN** a handler with `filter: EnemyMode as m` runs `match m:` with variant arms
+- **THEN** the semantic analyzer treats it as a state match, not a trait or value match
+
 #### Scenario: match on non-entity_id subject is a type error
-- **WHEN** `match some_float:` appears at statement level and `some_float` has a type that is not `entity_id`, `enum`, `int` or `bool`
-- **THEN** the semantic analyzer SHALL report: "statement-level `match` subject must be `entity_id`, an enum, `int` or `bool`, got `<type>`"
+- **WHEN** `match some_float:` appears at statement level and `some_float` has a type that is not `entity_id`, `enum`, `int`, `bool` or a state slot
+- **THEN** the semantic analyzer SHALL report: "statement-level `match` subject must be `entity_id`, an enum, `int`, `bool` or a state slot, got `<type>`"
 
 ### Requirement: Trait arm alias scope and naming
 The alias introduced by `TraitName as alias =>` SHALL be in scope for the duration of that arm's body. The alias provides read/write access to the matched trait's fields on the target entity. The alias name MUST NOT conflict with any in-scope name including filter aliases, event alias, and local variables. Marker trait arms (no fields) MUST NOT declare an alias.

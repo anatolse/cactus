@@ -1954,8 +1954,12 @@ void emit_archetype_trait_initializers(std::ostringstream& out,
         if (resolved_trait == program.traits.end()) {
             resolved_trait = program.traits.find(trait.trait_name);
         }
+        // A state variant also sets its state's slot.
+        const auto variant = EnttCodegenUtils::state_variant(program, trait.resolved_trait_id);
         if (resolved_trait != program.traits.end() && resolved_trait->second.fields.empty()) {
-            out << ind << "registry.emplace<" << cpp_name << ">(" << entity_name << ");\n";
+            out << ind
+                << (variant.has_value() ? EnttCodegenUtils::enter_state_call(*variant, entity_name, cpp_name + "{}")
+                                        : "registry.emplace<" + cpp_name + ">(" + entity_name + ");\n");
             continue;
         }
 
@@ -1971,7 +1975,9 @@ void emit_archetype_trait_initializers(std::ostringstream& out,
             out << ind << "    " << pad_to_width("component." + assignment.name, widest) << " = "
                 << EnttCodegenUtils::emit_expr(*assignment.value, program) << ";\n";
         }
-        out << ind << "    registry.emplace<" << cpp_name << ">(" << entity_name << ", component);\n";
+        out << ind << "    "
+            << (variant.has_value() ? EnttCodegenUtils::enter_state_call(*variant, entity_name, "component")
+                                    : "registry.emplace<" + cpp_name + ">(" + entity_name + ", component);\n");
         if (retain) {
             out << EnttPersistenceEmitter::emit_retain_construction(cpp_name, entity_name, ind + "    ");
         }
@@ -3027,6 +3033,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         }
         out << EnttComponentEmitter::emit_component(t, program) << "\n";
     }
+    out << EnttComponentEmitter::emit_state_helpers(program);
 
     out << emit_collider_query_helpers(program);
     out << emit_named_slots(program);

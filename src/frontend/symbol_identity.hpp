@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -23,6 +24,7 @@ enum class SymbolKind : std::uint8_t {
     Input,
     Const,
     Group,
+    State,
 };
 
 struct ModuleId {
@@ -101,6 +103,8 @@ struct SymbolIdHash {
             return "const";
         case SymbolKind::Group:
             return "group";
+        case SymbolKind::State:
+            return "state";
     }
     return "unknown";
 }
@@ -114,6 +118,29 @@ struct SymbolIdHash {
                                              const std::string& module_name,
                                              const std::string& local_name) {
     return make_symbol_id(kind, ModuleId{.name = module_name}, local_name);
+}
+
+// A state's slot trait shares the state's name; variant `V` is the trait `S.V`.
+[[nodiscard]] inline SymbolId state_slot_trait(const SymbolId& state) {
+    return SymbolId{.kind = SymbolKind::Trait, .module = state.module, .local_name = state.local_name};
+}
+
+[[nodiscard]] inline SymbolId state_variant_trait(const SymbolId& state, const std::string& variant) {
+    return SymbolId{.kind = SymbolKind::Trait, .module = state.module, .local_name = state.local_name + "." + variant};
+}
+
+// Only variant traits have a dotted local name.
+[[nodiscard]] inline std::optional<SymbolId> state_of_variant_trait(const SymbolId& trait) {
+    const auto dot = trait.local_name.find('.');
+    if (trait.kind != SymbolKind::Trait || dot == std::string::npos) {
+        return std::nullopt;
+    }
+    return SymbolId{.kind = SymbolKind::State, .module = trait.module, .local_name = trait.local_name.substr(0, dot)};
+}
+
+// The `V` of a variant trait `S.V`.
+[[nodiscard]] inline std::string variant_name_of_trait(const SymbolId& trait) {
+    return trait.local_name.substr(trait.local_name.find('.') + 1);
 }
 
 // Canonical ID: "module.path.LocalName". Callers are expected to supply an explicit module identity.
@@ -145,18 +172,24 @@ struct SymbolIdHash {
 
 // Deterministic C++ identifier derived from a canonical module/local identity.
 // "std.transform.flat.WorldTransform" -> "std_transform_flat__WorldTransform"
-// Empty module_name: returns local_name unchanged (test/legacy unqualified scenario).
+// Empty module_name: just the local name (test/legacy unqualified scenario).
+// A state variant's dotted local name (`Mode.Idle`) becomes `Mode__Idle`.
 [[nodiscard]] inline std::string cpp_identifier(const std::string& module_name, const std::string& local_name) {
-    if (module_name.empty()) {
-        return local_name;
-    }
     std::string result;
     result.reserve(module_name.size() + 2 + local_name.size());
-    for (char c : module_name) {
-        result += (c == '.') ? '_' : c;
+    if (!module_name.empty()) {
+        for (char c : module_name) {
+            result += (c == '.') ? '_' : c;
+        }
+        result += "__";
     }
-    result += "__";
-    result += local_name;
+    for (char c : local_name) {
+        if (c == '.') {
+            result += "__";
+        } else {
+            result += c;
+        }
+    }
     return result;
 }
 

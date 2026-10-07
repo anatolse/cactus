@@ -701,6 +701,35 @@ const ResolvedTrait* EnttCodegenUtils::find_trait(const DecoratedProgram& progra
     return match;
 }
 
+const ResolvedState* EnttCodegenUtils::find_state(const DecoratedProgram& program, const SymbolId& state) {
+    return find_decl_by_symbol(program.states, state);
+}
+
+std::string EnttCodegenUtils::state_slot_cpp_name(const DecoratedProgram& program, const SymbolId& state) {
+    return symbol_cpp_name_from_map(state_slot_trait(state), program.traits);
+}
+
+std::optional<EnttCodegenUtils::StateVariant> EnttCodegenUtils::state_variant(const DecoratedProgram& program,
+                                                                              const std::optional<SymbolId>& trait) {
+    const auto state_id = trait.and_then(state_of_variant_trait);
+    const auto* state   = state_id.has_value() ? find_state(program, *state_id) : nullptr;
+    if (state == nullptr) {
+        return std::nullopt;
+    }
+    const auto index = state->variant_index(variant_name_of_trait(*trait));
+    if (!index.has_value()) {
+        return std::nullopt;
+    }
+    return StateVariant{.slot_cpp = state_slot_cpp_name(program, *state_id), .index = *index};
+}
+
+std::string EnttCodegenUtils::enter_state_call(const StateVariant& variant,
+                                               const std::string& entity_expr,
+                                               const std::string& value) {
+    return "cactus::runtime::entt_backend::enter_state<" + variant.slot_cpp + ", " + std::to_string(variant.index) +
+           ">(registry, " + entity_expr + ", " + value + ");\n";
+}
+
 bool EnttCodegenUtils::has_trait(const DecoratedProgram& program, const std::string& name) {
     return find_trait(program, name) != nullptr;
 }

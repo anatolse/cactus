@@ -49,7 +49,7 @@ GlslType glsl_type_from(const TypeInfo& type) {
 
 struct TranslatedExpr {
     std::string text;
-    GlslType type;
+    GlslType type{};
 };
 
 // A per-entity value the vertex shader needs that isn't a built-in input —
@@ -57,7 +57,7 @@ struct TranslatedExpr {
 // once per matching entity.
 struct NeededUniform {
     std::string glsl_name;  // "u_xf_position"
-    GlslType type;
+    GlslType type{};
     SymbolId trait;
     std::string field_name;
 };

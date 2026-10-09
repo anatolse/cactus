@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -70,8 +71,8 @@ static std::unique_ptr<cactus::ProgramNode> lex_and_parse(const std::string& pat
 
 /// Returns true if program has any `use` declarations.
 static bool has_use_declarations(const cactus::ProgramNode& prog) {
-    return std::ranges::any_of(
-        prog.declarations, [](const auto& decl) { return std::holds_alternative<cactus::UseNode>(decl); });
+    return std::ranges::any_of(prog.declarations,
+                               [](const auto& decl) { return std::holds_alternative<cactus::UseNode>(decl); });
 }
 
 /// Validate the root file's explicit module declaration on CLI paths that may
@@ -100,16 +101,17 @@ static cactus::ImportedSymbols extract_pub_symbols(const std::string& module_nam
     syms.module_name = module_name;
     syms.entities    = prog.pub_entities;
     for (const auto& [name, trait] : prog.traits) {
-        if (trait.is_pub) {
-            auto exported = trait;
-            if (!exported.symbol_id.has_value()) {
-                exported.symbol_id = cactus::make_symbol_id(cactus::SymbolKind::Trait, module_name, name);
-            }
-            exported.module_name  = exported.symbol_id->module.name;
-            exported.canonical_id = cactus::make_canonical_id(*exported.symbol_id);
-            exported.name         = exported.symbol_id->local_name;
-            syms.traits[name]     = std::move(exported);
+        if (!trait.is_pub) {
+            continue;
         }
+        auto exported = trait;
+        if (!exported.symbol_id.has_value()) {
+            exported.symbol_id = cactus::make_symbol_id(cactus::SymbolKind::Trait, module_name, name);
+        }
+        exported.module_name  = exported.symbol_id->module.name;
+        exported.canonical_id = cactus::make_canonical_id(*exported.symbol_id);
+        exported.name         = exported.symbol_id->local_name;
+        syms.traits[name]     = std::move(exported);
     }
     for (const auto& [name, strct] : prog.structs) {
         auto exported = strct;
@@ -132,16 +134,17 @@ static cactus::ImportedSymbols extract_pub_symbols(const std::string& module_nam
         syms.enums[name]      = std::move(exported);
     }
     for (const auto& [name, func] : prog.funcs) {
-        if (func.is_pub) {
-            auto exported = func;
-            if (!exported.symbol_id.has_value()) {
-                exported.symbol_id = cactus::make_symbol_id(cactus::SymbolKind::Func, module_name, name);
-            }
-            exported.module_name  = exported.symbol_id->module.name;
-            exported.canonical_id = cactus::make_canonical_id(*exported.symbol_id);
-            exported.name         = exported.symbol_id->local_name;
-            syms.funcs[name]      = std::move(exported);
+        if (!func.is_pub) {
+            continue;
         }
+        auto exported = func;
+        if (!exported.symbol_id.has_value()) {
+            exported.symbol_id = cactus::make_symbol_id(cactus::SymbolKind::Func, module_name, name);
+        }
+        exported.module_name  = exported.symbol_id->module.name;
+        exported.canonical_id = cactus::make_canonical_id(*exported.symbol_id);
+        exported.name         = exported.symbol_id->local_name;
+        syms.funcs[name]      = std::move(exported);
     }
     for (const auto& name : prog.pub_templates) {
         syms.templates[name] = cactus::exported_template(prog, module_name, name);
@@ -150,12 +153,12 @@ static cactus::ImportedSymbols extract_pub_symbols(const std::string& module_nam
     for (const auto& dep : prog.dependency_graph) {
         const auto symbol = cactus::make_symbol_id(cactus::SymbolKind::Rule, module_name, dep.rule_name);
         cactus::ImportedRule rule;
-        rule.name                   = symbol.local_name;
-        rule.module_name            = symbol.module.name;
-        rule.canonical_id           = cactus::make_canonical_id(symbol);
-        rule.symbol_id              = symbol;
-        rule.after_rules            = dep.after_rules;
-        syms.rules[dep.rule_name]   = rule;
+        rule.name                 = symbol.local_name;
+        rule.module_name          = symbol.module.name;
+        rule.canonical_id         = cactus::make_canonical_id(symbol);
+        rule.symbol_id            = symbol;
+        rule.after_rules          = dep.after_rules;
+        syms.rules[dep.rule_name] = rule;
     }
     // Export public runtime declarations with their typed canonical identity
     // and external-event provenance intact.
@@ -384,9 +387,138 @@ static std::optional<int> parse_cli_args(int argc, char** argv, CliArgs& out) {
     return std::nullopt;
 }
 
+static std::unique_ptr<cactus::ProgramNode> compile_multi_module_pipeline(const std::string& input_file,
+                                                                          const std::vector<fs::path>& module_paths,
+                                                                          const cactus::ProgramNode& root_prog,
+                                                                          cactus::DecoratedProgram& decorated) {
+    auto merged_codegen_prog      = std::make_unique<cactus::ProgramNode>();
+    merged_codegen_prog->location = root_prog.location;
+
+    // Build directory: sibling of input file, named "build"
+    fs::path build_dir = fs::path(input_file).parent_path() / "build";
+    {
+        std::error_code ec;
+        fs::create_directories(build_dir, ec);
+        if (ec) {
+            std::cerr << "error: cannot create build directory '" << build_dir.string() << "': " << ec.message()
+                      << "\n";
+            return {};
+        }
+    }
+
+    // Prepend stdlib to module search paths (task 9.2)
+    std::vector<fs::path> all_search_paths;
+#ifdef CACTUS_STDLIB_DIR
+    all_search_paths.emplace_back(CACTUS_STDLIB_DIR);
+#endif
+    all_search_paths.insert(all_search_paths.end(), module_paths.begin(), module_paths.end());
+
+    // Resolve modules in dependency order (leaves first)
+    cactus::ErrorReporter resolve_errors;
+    cactus::ModuleResolver resolver(resolve_errors);
+    auto modules = resolver.resolve(input_file, all_search_paths);
+    print_errors(resolve_errors);
+    if (resolve_errors.has_errors()) {
+        return {};
+    }
+
+    // Compile each module in topo order
+    std::unordered_map<std::string, cactus::DecoratedProgram> compiled;
+    std::vector<fs::path> artifact_paths;
+
+    // std.core lifecycle events are implicitly in scope for every module.
+    // Compile and link it up-front when available so semantic analysis and
+    // downstream codegen both see the authoritative declarations.
+    if (!compile_implicit_std_core(build_dir, all_search_paths, compiled, artifact_paths, *merged_codegen_prog)) {
+        return {};
+    }
+
+    for (auto& mod : modules) {
+        if (compiled.contains(mod.qualified_name)) {
+            // std.core may appear here from an explicit `use std.core` even
+            // though it was already precompiled for lifecycle events.
+            // Keep the preloaded artifact as the single source of symbols.
+            continue;
+        }
+        if (!compile_module(mod, build_dir, compiled, artifact_paths, *merged_codegen_prog)) {
+            return {};
+        }
+    }
+
+    // Link all compiled modules
+    cactus::ErrorReporter link_errors;
+    cactus::ProgramLinker linker(link_errors);
+    auto merged = linker.link(artifact_paths);
+    print_errors(link_errors);
+    if (!merged || link_errors.has_errors()) {
+        return {};
+    }
+    decorated = std::move(*merged);
+    // Preserve a merged AST for code generation so imported stdlib/app
+    // declarations (units, rules, extern rules, consts, etc.) are
+    // still emitted after multi-module linking. Artifacts intentionally do
+    // not serialize AST structure.
+    decorated.ast = merged_codegen_prog.get();
+    // The linker produces an empty module_name; restore it from the root
+    // module declaration so codegen can emit correctly-namespaced identifiers.
+    for (const auto& decl : root_prog.declarations) {
+        if (const auto* mod = std::get_if<cactus::ModuleNode>(&decl)) {
+            decorated.module_name = mod->name;
+            break;
+        }
+    }
+    return merged_codegen_prog;
+}
+
+static bool generate_cpp(const cactus::DecoratedProgram& decorated, std::string& generated) {
+    try {
+        generated = cactus::CppEnttCodegen::generate(decorated);
+    } catch (const cactus::CodegenError& e) {
+        std::cerr << e.location() << ": error: " << e.what() << "\n";
+        return false;
+    } catch (const std::exception& e) {
+        std::cerr << "error: " << e.what() << "\n";
+        return false;
+    }
+
+    return true;
+}
+
+static bool write_generated_output(const std::string& generated,
+                                   const std::string& output_file,
+                                   const std::string& backend) {
+    if (output_file.empty()) {
+        std::cout << generated;
+    } else {
+        std::ofstream ofs(output_file);
+        if (!ofs.is_open()) {
+            std::cerr << "error: cannot open output file '" << output_file << "'\n";
+            return false;
+        }
+        ofs << generated;
+        ofs.close();
+
+#ifdef CACTUS_CLANG_FORMAT_EXE_PATH
+        if (std::strlen(CACTUS_CLANG_FORMAT_EXE_PATH) > 0) {
+            std::string clang_format_path;
+            if (!clang_format_path.empty() && clang_format_path.front() == '"' && clang_format_path.back() == '"') {
+                clang_format_path = clang_format_path.substr(1, clang_format_path.size() - 2);
+            }
+
+            const std::string format_command = std::string{"\""} + clang_format_path + "\" -i \"" + output_file + "\"";
+            // NOLINTNEXTLINE(bugprone-command-processor)
+            (void)std::system(format_command.c_str());
+        }
+#endif
+
+        std::cerr << "Generated " << output_file << " (" << backend << " backend)\n";
+    }
+    return true;
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
-int main(int argc, char* argv[]) {  // NOLINT(readability-function-cognitive-complexity) -- still 43 after parse_cli_args/compile_module extraction; remaining branching is the multi-module vs single-module pipeline split plus codegen/output, not further in scope here
+int main(int argc, char* argv[]) try {
     if (argc < 2) {
         print_usage(argv[0]);
         return 1;
@@ -415,88 +547,12 @@ int main(int argc, char* argv[]) {  // NOLINT(readability-function-cognitive-com
 
     cactus::DecoratedProgram decorated;
     std::unique_ptr<cactus::ProgramNode> merged_codegen_prog;
-
-    // ── 6.2: Multi-module pipeline ───────────────────────────────────────────
     if (has_use_declarations(*root_prog)) {
-        merged_codegen_prog           = std::make_unique<cactus::ProgramNode>();
-        merged_codegen_prog->location = root_prog->location;
-
-        // Build directory: sibling of input file, named "build"
-        fs::path build_dir = fs::path(input_file).parent_path() / "build";
-        {
-            std::error_code ec;
-            fs::create_directories(build_dir, ec);
-            if (ec) {
-                std::cerr << "error: cannot create build directory '" << build_dir.string() << "': " << ec.message()
-                          << "\n";
-                return 1;
-            }
-        }
-
-        // Prepend stdlib to module search paths (task 9.2)
-        std::vector<fs::path> all_search_paths;
-#ifdef CACTUS_STDLIB_DIR
-        all_search_paths.emplace_back(CACTUS_STDLIB_DIR);
-#endif
-        all_search_paths.insert(all_search_paths.end(), module_paths.begin(), module_paths.end());
-
-        // Resolve modules in dependency order (leaves first)
-        cactus::ErrorReporter resolve_errors;
-        cactus::ModuleResolver resolver(resolve_errors);
-        auto modules = resolver.resolve(input_file, all_search_paths);
-        print_errors(resolve_errors);
-        if (resolve_errors.has_errors()) {
+        merged_codegen_prog = compile_multi_module_pipeline(input_file, module_paths, *root_prog, decorated);
+        if (!merged_codegen_prog) {
             return 1;
         }
-
-        // Compile each module in topo order
-        std::unordered_map<std::string, cactus::DecoratedProgram> compiled;
-        std::vector<fs::path> artifact_paths;
-
-        // std.core lifecycle events are implicitly in scope for every module.
-        // Compile and link it up-front when available so semantic analysis and
-        // downstream codegen both see the authoritative declarations.
-        if (!compile_implicit_std_core(build_dir, all_search_paths, compiled, artifact_paths, *merged_codegen_prog)) {
-            return 1;
-        }
-
-        for (auto& mod : modules) {
-            if (compiled.contains(mod.qualified_name)) {
-                // std.core may appear here from an explicit `use std.core` even
-                // though it was already precompiled for lifecycle events.
-                // Keep the preloaded artifact as the single source of symbols.
-                continue;
-            }
-            if (!compile_module(mod, build_dir, compiled, artifact_paths, *merged_codegen_prog)) {
-                return 1;
-            }
-        }
-
-        // Link all compiled modules
-        cactus::ErrorReporter link_errors;
-        cactus::ProgramLinker linker(link_errors);
-        auto merged = linker.link(artifact_paths);
-        print_errors(link_errors);
-        if (!merged || link_errors.has_errors()) {
-            return 1;
-        }
-        decorated = std::move(*merged);
-        // Preserve a merged AST for code generation so imported stdlib/app
-        // declarations (units, rules, extern rules, consts, etc.) are
-        // still emitted after multi-module linking. Artifacts intentionally do
-        // not serialize AST structure.
-        decorated.ast = merged_codegen_prog.get();
-        // The linker produces an empty module_name; restore it from the root
-        // module declaration so codegen can emit correctly-namespaced identifiers.
-        for (const auto& decl : root_prog->declarations) {
-            if (const auto* mod = std::get_if<cactus::ModuleNode>(&decl)) {
-                decorated.module_name = mod->name;
-                break;
-            }
-        }
-
     } else {
-        // ── Single-module explicit-module pipeline ─────────────────────────────
         cactus::SemanticAnalyzer analyzer(errors);
         decorated = analyzer.analyze(*root_prog);
         print_errors(errors);
@@ -504,46 +560,13 @@ int main(int argc, char* argv[]) {  // NOLINT(readability-function-cognitive-com
             return 1;
         }
     }
-
-    // ── Code generation ───────────────────────────────────────────────────────
+    decorated.ast = merged_codegen_prog ? merged_codegen_prog.get() : root_prog.get();
     std::string generated;
-    try {
-        generated = cactus::CppEnttCodegen::generate(decorated);
-    } catch (const cactus::CodegenError& e) {
-        std::cerr << e.location() << ": error: " << e.what() << "\n";
+    if (!generate_cpp(decorated, generated) || !write_generated_output(generated, output_file, backend)) {
         return 1;
-    } catch (const std::exception& e) {
-        std::cerr << "error: " << e.what() << "\n";
-        return 1;
-    }
-
-    // ── Output ────────────────────────────────────────────────────────────────
-    if (output_file.empty()) {
-        std::cout << generated;
-    } else {
-        std::ofstream ofs(output_file);
-        if (!ofs.is_open()) {
-            std::cerr << "error: cannot open output file '" << output_file << "'\n";
-            return 1;
-        }
-        ofs << generated;
-        ofs.close();
-
-#ifdef CACTUS_CLANG_FORMAT_EXE_PATH
-        if (std::strlen(CACTUS_CLANG_FORMAT_EXE_PATH) > 0) {
-            std::string clang_format_path;
-            if (!clang_format_path.empty() && clang_format_path.front() == '"' && clang_format_path.back() == '"') {
-                clang_format_path = clang_format_path.substr(1, clang_format_path.size() - 2);
-            }
-
-            const std::string format_command = std::string{"\""} + clang_format_path + "\" -i \"" + output_file + "\"";
-            // NOLINTNEXTLINE(bugprone-command-processor)
-            (void)std::system(format_command.c_str());
-        }
-#endif
-
-        std::cerr << "Generated " << output_file << " (" << backend << " backend)\n";
     }
 
     return 0;
+} catch (...) {
+    std::terminate();
 }

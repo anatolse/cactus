@@ -701,8 +701,9 @@ inline void rebind_named_slots(const entt::registry& registry, std::initializer_
         *entry.slot = entt::null;
     }
     for (const auto [entity, origin] : registry.view<const ArchetypeOrigin>().each()) {
-        const auto match = std::ranges::find_if(
-            slots, [&](const NamedSlotOrigin& entry) { return entry.node == origin.node && *entry.slot == entt::null; });
+        const auto* const match = std::ranges::find_if(slots, [&](const NamedSlotOrigin& entry) {
+            return entry.node == origin.node && *entry.slot == entt::null;
+        });
         if (match != slots.end()) {
             *match->slot = entity;
         }
@@ -1808,7 +1809,8 @@ public:
     // `entity` is a safe no-op; the data-bearing branch returns a scratch
     // instance in that case so the call-site field-assignment shape stays
     // uniform without ever touching the registry with an invalid handle.
-    decltype(auto) project(entt::registry& registry, entt::entity entity) {
+    std::conditional_t<std::is_empty_v<Component>, void, Component&> project(entt::registry& registry,
+                                                                             entt::entity entity) {
         if constexpr (std::is_empty_v<Component>) {
             if (!registry.valid(entity)) {
                 return;
@@ -1819,7 +1821,7 @@ public:
             if (!registry.valid(entity)) {
                 static Component discarded{};
                 discarded = Component{};
-                return (discarded);  // parenthesized: decltype(auto) must deduce Component&, not Component
+                return discarded;
             }
             remember(registry, entity);
             if (auto* current = registry.try_get<Component>(entity); current != nullptr) {

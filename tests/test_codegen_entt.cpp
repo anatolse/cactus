@@ -194,15 +194,15 @@ TEST_CASE("Codegen EnTT: component struct from trait", "[codegen-entt]") {
                             .is_pub     = false});
 
     auto code = EnttComponentEmitter::emit_component(trait);
-    CHECK(code.find("struct test_codegen__Position") != std::string::npos);
-    CHECK(code.find("float x{}") != std::string::npos);
-    CHECK(code.find("float y{}") != std::string::npos);
+    CHECK(code.contains("struct test_codegen__Position"));
+    CHECK(code.contains("float x{}"));
+    CHECK(code.contains("float y{}"));
     // Should NOT have std::vector (that's SoA)
-    CHECK(code.find("std::vector") == std::string::npos);
+    CHECK(!code.contains("std::vector"));
 }
 
-TEST_CASE("cpp-entt lowers external handlers to canonical contract-shaped callbacks") {
-    const auto source = R"(
+TEST_CASE("cpp-entt lowers external handlers to canonical contract-shaped callbacks", "[codegen][concise]") {
+    std::string source = R"(
 module game
 
 pub extern event frame:
@@ -253,31 +253,47 @@ extern rule Monitor:
         effects:
             host.observe
 )";
+    SECTION("legacy blocks") {}
+    SECTION("compact clauses") {
+        const std::vector<std::pair<std::string, std::string>> replacements{
+            {"    filter:\n        Position\n        Velocity", "    each: Position, Velocity"},
+            {"        reads:\n            Position", "        reads: Position"},
+            {"        projects:\n            Position", "        projects: Position"},
+            {"        writes:\n            Velocity", "        writes: Velocity"},
+            {"        emits:\n            Contact", "        emits: Contact"},
+            {"        commands:\n            spawn Particle\n            destroy\n            add Disabled\n           "
+             " remove Disabled",
+             "        commands: spawn Particle, destroy, add Disabled, remove Disabled"},
+            {"        effects:\n            physics", "        effects: physics"},
+            {"        effects:\n            host.observe", "        effects: host.observe"}};
+        for (const auto& [block, compact] : replacements) {
+            const auto position = source.find(block);
+            REQUIRE(position != std::string::npos);
+            source.replace(position, block.size(), compact);
+        }
+    }
     ProgramNode ast;
     auto program = full_pipeline(source, ast);
 
     const auto generated = CppEnttCodegen::generate(program);
 
-    CHECK(generated.find("struct Capabilities__game__Integrate__on__game__simulate") != std::string::npos);
-    CHECK(generated.find("void emit_game__Contact(ContactEvent occurrence) const") != std::string::npos);
-    CHECK(generated.find("[[nodiscard]] entt::entity command_spawn_game__Particle() const") != std::string::npos);
-    CHECK(generated.find("void command_destroy(entt::entity target) const") != std::string::npos);
-    CHECK(generated.find("void command_add_game__Disabled(entt::entity target, game__Disabled value = {}) const") !=
-          std::string::npos);
-    CHECK(generated.find("void command_remove_game__Disabled(entt::entity target) const") != std::string::npos);
-    CHECK(generated.find("EffectService effect_physics() const noexcept") != std::string::npos);
-    CHECK(generated.find("[[nodiscard]] game__Position* project_game__Position(entt::entity target) const") !=
-          std::string::npos);
-    CHECK(generated.find("if (!registry.valid(target)) { return nullptr; }") != std::string::npos);
-    CHECK(generated.find("return &::project_game__Position(registry, target);") != std::string::npos);
-    CHECK(generated.find("void cactus_external__game__Integrate__on__game__simulate(") != std::string::npos);
-    CHECK(generated.find("entt::entity entity") != std::string::npos);
-    CHECK(generated.find("const game__Position& read_game__Position") != std::string::npos);
-    CHECK(generated.find("game__Velocity& write_game__Velocity") != std::string::npos);
-    CHECK(generated.find("for (const auto entity : registry.view<game__Position, game__Velocity>())") !=
-          std::string::npos);
-    CHECK(generated.find("::cactus_external__game__Integrate__on__game__simulate(") != std::string::npos);
-    CHECK(generated.find("Capabilities__game__Integrate__on__game__simulate{registry}") != std::string::npos);
+    CHECK(generated.contains("struct Capabilities__game__Integrate__on__game__simulate"));
+    CHECK(generated.contains("void emit_game__Contact(ContactEvent occurrence) const"));
+    CHECK(generated.contains("[[nodiscard]] entt::entity command_spawn_game__Particle() const"));
+    CHECK(generated.contains("void command_destroy(entt::entity target) const"));
+    CHECK(generated.contains("void command_add_game__Disabled(entt::entity target, game__Disabled value = {}) const"));
+    CHECK(generated.contains("void command_remove_game__Disabled(entt::entity target) const"));
+    CHECK(generated.contains("EffectService effect_physics() const noexcept"));
+    CHECK(generated.contains("[[nodiscard]] game__Position* project_game__Position(entt::entity target) const"));
+    CHECK(generated.contains("if (!registry.valid(target)) { return nullptr; }"));
+    CHECK(generated.contains("return &::project_game__Position(registry, target);"));
+    CHECK(generated.contains("void cactus_external__game__Integrate__on__game__simulate("));
+    CHECK(generated.contains("entt::entity entity"));
+    CHECK(generated.contains("const game__Position& read_game__Position"));
+    CHECK(generated.contains("game__Velocity& write_game__Velocity"));
+    CHECK(generated.contains("for (const auto entity : registry.view<game__Position, game__Velocity>())"));
+    CHECK(generated.contains("::cactus_external__game__Integrate__on__game__simulate("));
+    CHECK(generated.contains("Capabilities__game__Integrate__on__game__simulate{registry}"));
 
     const auto integrate_capabilities = generated.find("struct Capabilities__game__Integrate__on__game__simulate");
     REQUIRE(integrate_capabilities != std::string::npos);
@@ -285,32 +301,32 @@ extern rule Monitor:
     REQUIRE(integrate_capabilities_end != std::string::npos);
     const auto integrate_surface =
         generated.substr(integrate_capabilities, integrate_capabilities_end - integrate_capabilities);
-    CHECK(integrate_surface.find("std::function") == std::string::npos);
-    CHECK(integrate_surface.find("project_game__Position") != std::string::npos);
-    CHECK(integrate_surface.find("emit_game__Contact") != std::string::npos);
-    CHECK(integrate_surface.find("effect_physics") != std::string::npos);
-    CHECK(integrate_surface.find("effect_host__observe") == std::string::npos);
+    CHECK(!integrate_surface.contains("std::function"));
+    CHECK(integrate_surface.contains("project_game__Position"));
+    CHECK(integrate_surface.contains("emit_game__Contact"));
+    CHECK(integrate_surface.contains("effect_physics"));
+    CHECK(!integrate_surface.contains("effect_host__observe"));
 
-    CHECK(generated.find("void cactus_external__game__Monitor__on__game__simulate(") != std::string::npos);
-    CHECK(generated.find("::cactus_external__game__Monitor__on__game__simulate(") != std::string::npos);
+    CHECK(generated.contains("void cactus_external__game__Monitor__on__game__simulate("));
+    CHECK(generated.contains("::cactus_external__game__Monitor__on__game__simulate("));
     const auto monitor_capabilities = generated.find("struct Capabilities__game__Monitor__on__game__simulate");
     REQUIRE(monitor_capabilities != std::string::npos);
     const auto monitor_capabilities_end = generated.find("\n};\n\n", monitor_capabilities);
     REQUIRE(monitor_capabilities_end != std::string::npos);
     const auto monitor_surface =
         generated.substr(monitor_capabilities, monitor_capabilities_end - monitor_capabilities);
-    CHECK(monitor_surface.find("emit_") == std::string::npos);
-    CHECK(monitor_surface.find("project_") == std::string::npos);
-    CHECK(monitor_surface.find("command_") == std::string::npos);
-    CHECK(monitor_surface.find("effect_host__observe") != std::string::npos);
-    CHECK(monitor_surface.find("effect_physics") == std::string::npos);
-    CHECK(generated.find("void game__Integrate__tick(entt::registry& registry)") == std::string::npos);
-    CHECK(generated.find("void game__Monitor__tick(entt::registry& registry)") == std::string::npos);
+    CHECK(!monitor_surface.contains("emit_"));
+    CHECK(!monitor_surface.contains("project_"));
+    CHECK(!monitor_surface.contains("command_"));
+    CHECK(monitor_surface.contains("effect_host__observe"));
+    CHECK(!monitor_surface.contains("effect_physics"));
+    CHECK(!generated.contains("void game__Integrate__tick(entt::registry& registry)"));
+    CHECK(!generated.contains("void game__Monitor__tick(entt::registry& registry)"));
 }
 
 TEST_CASE("cpp-entt lowers an external set command to a queue-only typed patch capability",
           "[codegen-entt][external-handler][deferred-set]") {
-    const auto source = R"(
+    const auto* const source = R"(
 module game
 
 pub extern event frame:
@@ -346,22 +362,21 @@ extern rule Heal:
     REQUIRE(capabilities_end != std::string::npos);
     const auto surface = generated.substr(capabilities, capabilities_end - capabilities);
 
-    CHECK(surface.find("struct game__Health_patch {") != std::string::npos);
-    CHECK(surface.find("std::optional<decltype(game__Health::current)> current;") != std::string::npos);
-    CHECK(surface.find("std::optional<decltype(game__Health::max)> max;") != std::string::npos);
-    CHECK(surface.find("void command_set_game__Health(entt::entity target, game__Health_patch patch) const") !=
-          std::string::npos);
-    CHECK(surface.find("StructuralCommand::Kind::Set") != std::string::npos);
-    CHECK(surface.find("::durable_game__Health(registry, target)") != std::string::npos);
-    CHECK(surface.find("cancel_projected_") == std::string::npos);
-    CHECK(surface.find("retain_construction") == std::string::npos);
-    CHECK(surface.find("game__Health&") == std::string::npos);
-    CHECK(surface.find("game__Health*") == std::string::npos);
+    CHECK(surface.contains("struct game__Health_patch {"));
+    CHECK(surface.contains("std::optional<decltype(game__Health::current)> current;"));
+    CHECK(surface.contains("std::optional<decltype(game__Health::max)> max;"));
+    CHECK(surface.contains("void command_set_game__Health(entt::entity target, game__Health_patch patch) const"));
+    CHECK(surface.contains("StructuralCommand::Kind::Set"));
+    CHECK(surface.contains("::durable_game__Health(registry, target)"));
+    CHECK(!surface.contains("cancel_projected_"));
+    CHECK(!surface.contains("retain_construction"));
+    CHECK(!surface.contains("game__Health&"));
+    CHECK(!surface.contains("game__Health*"));
 
     const auto callback = generated.find("void cactus_external__game__Heal__on__game__simulate(");
     REQUIRE(callback != std::string::npos);
     const auto callback_signature = generated.substr(callback, generated.find(')', callback) - callback);
-    CHECK(callback_signature.find("game__Health") == std::string::npos);
+    CHECK(!callback_signature.contains("game__Health"));
 }
 
 // A field's default member initializer must come from the trait's own `=
@@ -412,22 +427,22 @@ TEST_CASE("Codegen EnTT: component struct field defaults come from the trait's o
     defaults.fields.push_back({.name = "required", .type = {.kind = TypeKind::Float, .name = "float"}, .is_var = true});
 
     const auto code = EnttComponentEmitter::emit_component(defaults, decorated);
-    CHECK(code.find("float f = 1.5F;") != std::string::npos);
-    CHECK(code.find("Vector2 v2 = vec2(1.0F, 2.0F);") != std::string::npos);
-    CHECK(code.find("Vector3 v3 = vec3(1.0F, 2.0F, 3.0F);") != std::string::npos);
-    CHECK(code.find("Quat q = quat(0.0F, 0.0F, 0.0F, 1.0F);") != std::string::npos);
-    CHECK(code.find("bool flag = true;") != std::string::npos);
-    CHECK(code.find("int n = 7;") != std::string::npos);
-    CHECK(code.find("Color c = Color{.r = 255, .g = 0, .b = 0, .a = 255};") != std::string::npos);
-    CHECK(code.find("std::vector<int> items = {1, 2};") != std::string::npos);
-    CHECK(code.find("std::vector<int> empty_items = {};") != std::string::npos);
-    CHECK(code.find("std::string s = \"hi\";") != std::string::npos);
+    CHECK(code.contains("float f = 1.5F;"));
+    CHECK(code.contains("Vector2 v2 = vec2(1.0F, 2.0F);"));
+    CHECK(code.contains("Vector3 v3 = vec3(1.0F, 2.0F, 3.0F);"));
+    CHECK(code.contains("Quat q = quat(0.0F, 0.0F, 0.0F, 1.0F);"));
+    CHECK(code.contains("bool flag = true;"));
+    CHECK(code.contains("int n = 7;"));
+    CHECK(code.contains("Color c = Color{.r = 255, .g = 0, .b = 0, .a = 255};"));
+    CHECK(code.contains("std::vector<int> items = {1, 2};"));
+    CHECK(code.contains("std::vector<int> empty_items = {};"));
+    CHECK(code.contains("std::string s = \"hi\";"));
     // A declared `= ""` default is redundant with std::string's own default
     // construction, and spelling it out trips clang-tidy's
     // readability-redundant-string-init on generated output.
-    CHECK(code.find("std::string empty_s{};") != std::string::npos);
-    CHECK(code.find("empty_s = \"\"") == std::string::npos);
-    CHECK(code.find("float required{};") != std::string::npos);
+    CHECK(code.contains("std::string empty_s{};"));
+    CHECK(!code.contains("empty_s = \"\""));
+    CHECK(code.contains("float required{};"));
 }
 
 // Trait names can collide across modules (e.g. stdlib declares a trait named
@@ -462,10 +477,10 @@ TEST_CASE("Codegen EnTT: same-named traits in different modules resolve independ
     thing_b.fields.push_back({.name = "x", .type = {.kind = TypeKind::Float, .name = "float"}, .is_var = true});
 
     const auto code_a = EnttComponentEmitter::emit_component(thing_a, combined_program);
-    CHECK(code_a.find("float x = 1.0F;") != std::string::npos);
+    CHECK(code_a.contains("float x = 1.0F;"));
 
     const auto code_b = EnttComponentEmitter::emit_component(thing_b, combined_program);
-    CHECK(code_b.find("float x = 2.0F;") != std::string::npos);
+    CHECK(code_b.contains("float x = 2.0F;"));
 }
 
 // A default expression may call a module-aliased stdlib extern func (e.g.
@@ -504,7 +519,7 @@ TEST_CASE("Codegen EnTT: field default calling a module-aliased stdlib func reso
     tree_rng.fields.push_back({.name = "rng", .type = {.kind = TypeKind::Int, .name = "int"}, .is_var = true});
 
     const auto code = EnttComponentEmitter::emit_component(tree_rng, decorated);
-    CHECK(code.find("cactus::runtime::stdlib::random::seeded(0)") != std::string::npos);
+    CHECK(code.contains("cactus::runtime::stdlib::random::seeded(0)"));
 }
 
 TEST_CASE("Codegen EnTT: registry view rule", "[codegen-entt]") {
@@ -525,14 +540,14 @@ TEST_CASE("Codegen EnTT: registry view rule", "[codegen-entt]") {
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            CHECK(code.find("void move_step") != std::string::npos);
-            CHECK(code.find("entt::registry& registry") != std::string::npos);
-            CHECK(code.find("const stepEvent& step") != std::string::npos);
-            CHECK(code.find("Pos_comp.x = (Pos_comp.x + step.dt)") != std::string::npos);
-            CHECK(code.find("registry.view<Pos>()") != std::string::npos);
-            CHECK(code.find("view.each([&](entt::entity entity, [[maybe_unused]] Pos& Pos_comp)") != std::string::npos);
-            CHECK(code.find("registry.storage<entt::entity>()") == std::string::npos);
-            CHECK(code.find("cactus_try_get_projected_or_durable_Pos(registry, entity)") == std::string::npos);
+            CHECK(code.contains("void move_step"));
+            CHECK(code.contains("entt::registry& registry"));
+            CHECK(code.contains("const stepEvent& step"));
+            CHECK(code.contains("Pos_comp.x = (Pos_comp.x + step.dt)"));
+            CHECK(code.contains("registry.view<Pos>()"));
+            CHECK(code.contains("view.each([&](entt::entity entity, [[maybe_unused]] Pos& Pos_comp)"));
+            CHECK(!code.contains("registry.storage<entt::entity>()"));
+            CHECK(!code.contains("cactus_try_get_projected_or_durable_Pos(registry, entity)"));
         }
     }
 }
@@ -561,7 +576,7 @@ TEST_CASE("Codegen EnTT: filtered handler body is emitted once and both dispatch
 
             const auto handler_body_name = extract_temp_name(code, "cactus_gen_handler_body_");
             REQUIRE_FALSE(handler_body_name.empty());
-            CHECK(code.find("auto " + handler_body_name + " = [&](entt::entity entity") != std::string::npos);
+            CHECK(code.contains("auto " + handler_body_name + " = [&](entt::entity entity"));
 
             const auto recipient_branch = code.find("if (cactus_recipient.has_value()) {");
             REQUIRE(recipient_branch != std::string::npos);
@@ -604,7 +619,7 @@ TEST_CASE("Codegen EnTT: event struct", "[codegen-entt]") {
     for (auto& decl : program.declarations) {
         if (auto* node = std::get_if<EventNode>(&decl)) {
             auto sink = EnttEventEmitter::emit_sink_connection(*node, decorated);
-            CHECK(sink.find("dispatcher.sink<DamageEvent>") != std::string::npos);
+            CHECK(sink.contains("dispatcher.sink<DamageEvent>"));
         }
     }
 }
@@ -616,8 +631,8 @@ TEST_CASE("Codegen EnTT: an event supports entity and vector payload fields", "[
     event.fields.push_back({.name = "overlap", .type = {.kind = TypeKind::Vec2, .name = "vec2"}});
 
     const auto code = EnttEventEmitter::emit_event(event, "ContactEvent");
-    CHECK(code.find("entt::entity other{};") != std::string::npos);
-    CHECK(code.find("Vector2 overlap{};") != std::string::npos);
+    CHECK(code.contains("entt::entity other{};"));
+    CHECK(code.contains("Vector2 overlap{};"));
 }
 
 TEST_CASE("Codegen EnTT: enum-typed event field resolves to its generated enum class type",
@@ -632,8 +647,8 @@ TEST_CASE("Codegen EnTT: enum-typed event field resolves to its generated enum c
         {.name = "current_mode", .type = {.kind = TypeKind::Enum, .name = "GizmoMode", .symbol_id = gizmo_mode}});
 
     const auto code = EnttEventEmitter::emit_event(event, "std_editor__EditorModeChangedEvent");
-    CHECK(code.find("std_editor__GizmoMode previous_mode{};") != std::string::npos);
-    CHECK(code.find("std_editor__GizmoMode current_mode{};") != std::string::npos);
+    CHECK(code.contains("std_editor__GizmoMode previous_mode{};"));
+    CHECK(code.contains("std_editor__GizmoMode current_mode{};"));
 }
 
 TEST_CASE("Codegen EnTT: quat event field gets the backend quaternion type", "[codegen-entt][events]") {
@@ -726,41 +741,39 @@ TEST_CASE("Codegen EnTT: full pipeline", "[codegen-entt]") {
 
     auto code = CppEnttCodegen::generate(decorated);
 
-    CHECK(code.find("Generated by Cactus DSL Compiler (cpp-entt backend)") != std::string::npos);
-    CHECK(code.find("#include <entt/entt.hpp>") != std::string::npos);
-    CHECK(code.find("#include <raylib.h>") != std::string::npos);
-    CHECK(code.find("struct Pos") != std::string::npos);
-    CHECK(code.find("backends/cpp-entt/runtime.hpp") != std::string::npos);
-    CHECK(code.find("generated_project_config() noexcept") != std::string::npos);
-    CHECK(code.find("generated_init_project(entt::registry& registry)") != std::string::npos);
-    CHECK(code.find("generated_update_project(entt::registry& registry, entt::dispatcher& dispatcher, float dt)") !=
-          std::string::npos);
-    CHECK(code.find("move_tick(registry") == std::string::npos);
-    CHECK(code.find("struct TickEvent") == std::string::npos);
-    CHECK(code.find("int main()") != std::string::npos);
-    CHECK(code.find("InitWindow(config.window_width, config.window_height, config.window_title)") != std::string::npos);
+    CHECK(code.contains("Generated by Cactus DSL Compiler (cpp-entt backend)"));
+    CHECK(code.contains("#include <entt/entt.hpp>"));
+    CHECK(code.contains("#include <raylib.h>"));
+    CHECK(code.contains("struct Pos"));
+    CHECK(code.contains("backends/cpp-entt/runtime.hpp"));
+    CHECK(code.contains("generated_project_config() noexcept"));
+    CHECK(code.contains("generated_init_project(entt::registry& registry)"));
+    CHECK(code.contains("generated_update_project(entt::registry& registry, entt::dispatcher& dispatcher, float dt)"));
+    CHECK(!code.contains("move_tick(registry"));
+    CHECK(!code.contains("struct TickEvent"));
+    CHECK(code.contains("int main()"));
+    CHECK(code.contains("InitWindow(config.window_width, config.window_height, config.window_title)"));
     // Generated entrypoints disable raylib's default ESC-quits-window
     // behavior immediately after window creation (backend-cpp-entrypoints),
     // so authored gameplay can repurpose Escape without the window closing.
-    CHECK(code.find("InitWindow(config.window_width, config.window_height, config.window_title);\n"
-                    "    SetExitKey(KEY_NULL);\n") != std::string::npos);
-    CHECK(code.find("entt::registry registry;") != std::string::npos);
-    CHECK(code.find("entt::dispatcher dispatcher;") != std::string::npos);
-    CHECK(code.find("cactus::runtime::entt_backend::generated_setup_dispatcher(dispatcher);") != std::string::npos);
-    CHECK(code.find("cactus::runtime::entt_backend::generated_init_project(registry);") != std::string::npos);
-    CHECK(code.find("cactus::runtime::entt_backend::generated_update_project(registry, dispatcher, dt);") !=
-          std::string::npos);
-    CHECK(code.find("BeginDrawing();") != std::string::npos);
-    CHECK(code.find("ClearBackground(RAYWHITE);") != std::string::npos);
-    CHECK(code.find("cactus::runtime::entt_backend::generated_render_project(registry, dispatcher);") !=
-          std::string::npos);
-    CHECK(code.find("EndDrawing();") != std::string::npos);
+    CHECK(
+        code.contains("InitWindow(config.window_width, config.window_height, config.window_title);\n"
+                      "    SetExitKey(KEY_NULL);\n"));
+    CHECK(code.contains("entt::registry registry;"));
+    CHECK(code.contains("entt::dispatcher dispatcher;"));
+    CHECK(code.contains("cactus::runtime::entt_backend::generated_setup_dispatcher(dispatcher);"));
+    CHECK(code.contains("cactus::runtime::entt_backend::generated_init_project(registry);"));
+    CHECK(code.contains("cactus::runtime::entt_backend::generated_update_project(registry, dispatcher, dt);"));
+    CHECK(code.contains("BeginDrawing();"));
+    CHECK(code.contains("ClearBackground(RAYWHITE);"));
+    CHECK(code.contains("cactus::runtime::entt_backend::generated_render_project(registry, dispatcher);"));
+    CHECK(code.contains("EndDrawing();"));
 
     // Persist hooks
-    CHECK(code.find("save_Pos") != std::string::npos);
-    CHECK(code.find("load_Pos") != std::string::npos);
+    CHECK(code.contains("save_Pos"));
+    CHECK(code.contains("load_Pos"));
 
-    CHECK(code.find("replicate_") == std::string::npos);
+    CHECK(!code.contains("replicate_"));
 }
 
 TEST_CASE("Codegen EnTT: std.input mouse button actions and mouse_position lower to runtime helpers",
@@ -784,10 +797,10 @@ TEST_CASE("Codegen EnTT: std.input mouse button actions and mouse_position lower
 
     const auto code = CppEnttCodegen::generate(decorated);
 
-    CHECK(code.find("int cactus_input_button_mouse(std::uint8_t button) noexcept") != std::string::npos);
-    CHECK(code.find("return MOUSE_BUTTON_LEFT;") != std::string::npos);
-    CHECK(code.find("cactus::runtime::entt_backend::pressed(action)") != std::string::npos);
-    CHECK(code.find("cactus::runtime::entt_backend::mouse_position()") != std::string::npos);
+    CHECK(code.contains("int cactus_input_button_mouse(std::uint8_t button) noexcept"));
+    CHECK(code.contains("return MOUSE_BUTTON_LEFT;"));
+    CHECK(code.contains("cactus::runtime::entt_backend::pressed(action)"));
+    CHECK(code.contains("cactus::runtime::entt_backend::mouse_position()"));
 }
 
 // ── Golden input-binding tests (unified-name-resolution change, task 1.8) ──
@@ -810,12 +823,12 @@ TEST_CASE("Codegen EnTT: axis bindings emit raylib key constants, never dead zer
 
     const auto code = CppEnttCodegen::generate(decorated);
     const auto axis = generated_function(code, "float cactus_input_axis_value");
-    CHECK(axis.find("KEY_A") != std::string::npos);
-    CHECK(axis.find("KEY_D") != std::string::npos);
-    CHECK(axis.find("KEY_W") != std::string::npos);
-    CHECK(axis.find("KEY_S") != std::string::npos);
+    CHECK(axis.contains("KEY_A"));
+    CHECK(axis.contains("KEY_D"));
+    CHECK(axis.contains("KEY_W"));
+    CHECK(axis.contains("KEY_S"));
     // The dead-input fallback shape must never appear.
-    CHECK(axis.find("return 0 - 0;") == std::string::npos);
+    CHECK(!axis.contains("return 0 - 0;"));
 }
 
 TEST_CASE("Codegen EnTT: button key and mouse bindings emit raylib constants", "[codegen-entt][input][golden]") {
@@ -831,8 +844,8 @@ TEST_CASE("Codegen EnTT: button key and mouse bindings emit raylib constants", "
         std_input_imports());
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("return KEY_SPACE;") != std::string::npos);
-    CHECK(code.find("return MOUSE_BUTTON_LEFT;") != std::string::npos);
+    CHECK(code.contains("return KEY_SPACE;"));
+    CHECK(code.contains("return MOUSE_BUTTON_LEFT;"));
 }
 
 TEST_CASE("Codegen EnTT: alias and canonical binding spellings generate identical code",
@@ -858,7 +871,7 @@ TEST_CASE("Codegen EnTT: alias and canonical binding spellings generate identica
     const auto canonical_code = CppEnttCodegen::generate(canonical_decorated);
 
     CHECK(alias_code == canonical_code);
-    CHECK(alias_code.find("return KEY_SPACE;") != std::string::npos);
+    CHECK(alias_code.contains("return KEY_SPACE;"));
 }
 
 TEST_CASE("Codegen EnTT: extern func generates runtime header include", "[codegen-entt][extern-func]") {
@@ -869,7 +882,7 @@ TEST_CASE("Codegen EnTT: extern func generates runtime header include", "[codege
         program);
 
     auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("#include \"common/cactus_runtime.hpp\"") != std::string::npos);
+    CHECK(code.contains("#include \"common/cactus_runtime.hpp\""));
 }
 
 TEST_CASE("Codegen EnTT: no extern func means no runtime header", "[codegen-entt][extern-func]") {
@@ -877,7 +890,7 @@ TEST_CASE("Codegen EnTT: no extern func means no runtime header", "[codegen-entt
     auto decorated = full_pipeline("trait Pos:\n    var x: float\n", program);
 
     auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("#include \"cactus_runtime.hpp\"") == std::string::npos);
+    CHECK(!code.contains("#include \"cactus_runtime.hpp\""));
 }
 
 TEST_CASE("Codegen EnTT: extern func body is not emitted", "[codegen-entt][extern-func]") {
@@ -887,7 +900,7 @@ TEST_CASE("Codegen EnTT: extern func body is not emitted", "[codegen-entt][exter
     auto code = CppEnttCodegen::generate(decorated);
     // No function definition should be emitted for the extern func
     // (the include is present but no function body)
-    CHECK(code.find("float sin(") == std::string::npos);
+    CHECK(!code.contains("float sin("));
 }
 
 TEST_CASE("Codegen EnTT: imported stdlib math alias lowers to runtime namespace",
@@ -907,7 +920,7 @@ TEST_CASE("Codegen EnTT: imported stdlib math alias lowers to runtime namespace"
         program);
 
     auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("cactus::runtime::stdlib::math::lerp(0.0F, 10.0F, 0.5F)") != std::string::npos);
+    CHECK(code.contains("cactus::runtime::stdlib::math::lerp(0.0F, 10.0F, 0.5F)"));
 }
 
 TEST_CASE("Codegen EnTT: unqualified imported stdlib func lowers to runtime namespace",
@@ -927,7 +940,7 @@ TEST_CASE("Codegen EnTT: unqualified imported stdlib func lowers to runtime name
         program);
 
     auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("cactus::runtime::stdlib::math::lerp(0.0F, 10.0F, 0.5F)") != std::string::npos);
+    CHECK(code.contains("cactus::runtime::stdlib::math::lerp(0.0F, 10.0F, 0.5F)"));
 }
 
 TEST_CASE("Codegen EnTT: std.input extern calls lower to backend runtime namespace",
@@ -950,7 +963,7 @@ TEST_CASE("Codegen EnTT: std.input extern calls lower to backend runtime namespa
         std_input_imports());
 
     auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("cactus::runtime::entt_backend::down(K_JUMP)") != std::string::npos);
+    CHECK(code.contains("cactus::runtime::entt_backend::down(K_JUMP)"));
 }
 
 TEST_CASE("Codegen EnTT: cursor capture aliases and canonical calls lower identically",
@@ -969,10 +982,10 @@ TEST_CASE("Codegen EnTT: cursor capture aliases and canonical calls lower identi
 
     const auto code = CppEnttCodegen::generate(decorated);
     CHECK(count_occurrences(code, "cactus::runtime::entt_backend::set_cursor_captured(") == 2);
-    CHECK(code.find("cactus::runtime::entt_backend::set_cursor_captured(true)") != std::string::npos);
-    CHECK(code.find("cactus::runtime::entt_backend::set_cursor_captured(false)") != std::string::npos);
-    CHECK(code.find("inp.set_cursor_captured") == std::string::npos);
-    CHECK(code.find("std.input.set_cursor_captured") == std::string::npos);
+    CHECK(code.contains("cactus::runtime::entt_backend::set_cursor_captured(true)"));
+    CHECK(code.contains("cactus::runtime::entt_backend::set_cursor_captured(false)"));
+    CHECK(!code.contains("inp.set_cursor_captured"));
+    CHECK(!code.contains("std.input.set_cursor_captured"));
 }
 
 TEST_CASE("Codegen EnTT: std.physics.flat query calls lower with registry access",
@@ -1014,10 +1027,9 @@ TEST_CASE("Codegen EnTT: std.physics.flat query calls lower with registry access
         program);
 
     auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("auto hit = cactus_query_cast_nearest(registry, entity, vec2(1.0F, 0.0F), 1, entity)") !=
-          std::string::npos);
-    CHECK(code.find("if (hit.kind == QueryResultKind::Empty)") != std::string::npos);
-    CHECK(code.find("auto contacts = cactus_query_overlap_all(registry, entity, 1, entity)") != std::string::npos);
+    CHECK(code.contains("auto hit = cactus_query_cast_nearest(registry, entity, vec2(1.0F, 0.0F), 1, entity)"));
+    CHECK(code.contains("if (hit.kind == QueryResultKind::Empty)"));
+    CHECK(code.contains("auto contacts = cactus_query_overlap_all(registry, entity, 1, entity)"));
 }
 
 TEST_CASE("Codegen EnTT: hierarchy destroy helper delegates to runtime library", "[codegen-entt][hierarchy]") {
@@ -1033,7 +1045,7 @@ TEST_CASE("Codegen EnTT: hierarchy destroy helper delegates to runtime library",
         program);
 
     auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("cactus::runtime::entt_backend::destroy_entity_recursive(") != std::string::npos);
+    CHECK(code.contains("cactus::runtime::entt_backend::destroy_entity_recursive("));
 }
 
 TEST_CASE("Codegen EnTT: sprite and animation extern rules bind to asset runtime adapters", "[codegen-entt][assets]") {
@@ -1074,9 +1086,9 @@ TEST_CASE("Codegen EnTT: sprite and animation extern rules bind to asset runtime
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("cactus::runtime::entt_backend::submit_sprite(") != std::string::npos);
-    CHECK(code.find("Renderer_comp.layer") != std::string::npos);
-    CHECK(code.find("cactus::runtime::entt_backend::advance_animated_sprite(") != std::string::npos);
+    CHECK(code.contains("cactus::runtime::entt_backend::submit_sprite("));
+    CHECK(code.contains("Renderer_comp.layer"));
+    CHECK(code.contains("cactus::runtime::entt_backend::advance_animated_sprite("));
 }
 
 TEST_CASE("Codegen EnTT: render glue brackets frames without inferring generic event dispatch",
@@ -1106,10 +1118,10 @@ TEST_CASE("Codegen EnTT: render glue brackets frames without inferring generic e
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("cactus::runtime::entt_backend::begin_render_frame();") != std::string::npos);
-    CHECK(code.find("cactus::runtime::entt_backend::end_render_frame();") != std::string::npos);
+    CHECK(code.contains("cactus::runtime::entt_backend::begin_render_frame();"));
+    CHECK(code.contains("cactus::runtime::entt_backend::end_render_frame();"));
     const auto render = generated_function(code, "void generated_render_project");
-    CHECK(render.find("sprite_renderer_tick(registry);") == std::string::npos);
+    CHECK(!render.contains("sprite_renderer_tick(registry);"));
 }
 
 TEST_CASE("Codegen EnTT: mesh renderer extern rule binds to backend runtime without user callback",
@@ -1139,9 +1151,9 @@ TEST_CASE("Codegen EnTT: mesh renderer extern rule binds to backend runtime with
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("cactus::runtime::entt_backend::submit_mesh(") != std::string::npos);
-    CHECK(code.find("Renderer_comp.color") != std::string::npos);
-    CHECK(code.find("void mesh_renderer_update(") == std::string::npos);
+    CHECK(code.contains("cactus::runtime::entt_backend::submit_mesh("));
+    CHECK(code.contains("Renderer_comp.color"));
+    CHECK(!code.contains("void mesh_renderer_update("));
 }
 
 // Regression coverage for the runtime-side directional-light rewire: codegen
@@ -1168,12 +1180,12 @@ TEST_CASE("Codegen EnTT: directional light render extern rule binds to backend r
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("cactus::runtime::entt_backend::register_directional_light(") != std::string::npos);
-    CHECK(code.find("DirectionalLight_comp.direction") != std::string::npos);
-    CHECK(code.find("DirectionalLight_comp.color") != std::string::npos);
-    CHECK(code.find("DirectionalLight_comp.intensity") != std::string::npos);
-    CHECK(code.find("DirectionalLight_comp.enabled") != std::string::npos);
-    CHECK(code.find("void directional_light_render_update(") == std::string::npos);
+    CHECK(code.contains("cactus::runtime::entt_backend::register_directional_light("));
+    CHECK(code.contains("DirectionalLight_comp.direction"));
+    CHECK(code.contains("DirectionalLight_comp.color"));
+    CHECK(code.contains("DirectionalLight_comp.intensity"));
+    CHECK(code.contains("DirectionalLight_comp.enabled"));
+    CHECK(!code.contains("void directional_light_render_update("));
 }
 
 TEST_CASE("Codegen EnTT: shape renderer draws Circle shapes via draw_shape_circle alongside Rectangle",
@@ -1209,14 +1221,14 @@ TEST_CASE("Codegen EnTT: shape renderer draws Circle shapes via draw_shape_circl
 
     const auto code = CppEnttCodegen::generate(decorated);
     // Circle draws via draw_shape_circle, passing size.x as diameter and origin through.
-    CHECK(code.find("case ShapeType::Circle:") != std::string::npos);
-    CHECK(code.find("draw_shape_circle(WorldTransform_comp.position") != std::string::npos);
-    CHECK(code.find("Shape_comp.size.x,") != std::string::npos);
-    CHECK(code.find("Shape_comp.origin,") != std::string::npos);
+    CHECK(code.contains("case ShapeType::Circle:"));
+    CHECK(code.contains("draw_shape_circle(WorldTransform_comp.position"));
+    CHECK(code.contains("Shape_comp.size.x,"));
+    CHECK(code.contains("Shape_comp.origin,"));
     // Rectangle draws via draw_shape_rectangle, passing origin and rotation through.
-    CHECK(code.find("case ShapeType::Rectangle:") != std::string::npos);
-    CHECK(code.find("draw_shape_rectangle(WorldTransform_comp.position") != std::string::npos);
-    CHECK(code.find("WorldTransform_comp.rotation,") != std::string::npos);
+    CHECK(code.contains("case ShapeType::Rectangle:"));
+    CHECK(code.contains("draw_shape_rectangle(WorldTransform_comp.position"));
+    CHECK(code.contains("WorldTransform_comp.rotation,"));
 }
 
 // editor-debug-draw: each std.debug event has exactly one generic, non-branching,
@@ -1273,25 +1285,24 @@ TEST_CASE("Codegen EnTT: std.debug 2D event renderers issue one unconditional ra
     const auto code = CppEnttCodegen::generate(decorated);
 
     const auto line_tick = generated_function(code, "void draw_debug_line2_d_renderer_tick");
-    CHECK(line_tick.find("const DrawDebugLine2DEvent& occurrence") != std::string::npos);
-    CHECK(line_tick.find("BeginMode2D(cactus::runtime::entt_backend::get_active_camera_2d())") != std::string::npos);
-    CHECK(line_tick.find("DrawLineEx(occurrence.start, occurrence.end, occurrence.thickness, occurrence.color)") !=
-          std::string::npos);
-    CHECK(line_tick.find("EndMode2D()") != std::string::npos);
+    CHECK(line_tick.contains("const DrawDebugLine2DEvent& occurrence"));
+    CHECK(line_tick.contains("BeginMode2D(cactus::runtime::entt_backend::get_active_camera_2d())"));
+    CHECK(line_tick.contains("DrawLineEx(occurrence.start, occurrence.end, occurrence.thickness, occurrence.color)"));
+    CHECK(line_tick.contains("EndMode2D()"));
     CHECK(count_occurrences(line_tick, "DrawLineEx(") == 1);
 
     const auto tri_tick = generated_function(code, "void draw_debug_triangle2_d_renderer_tick");
-    CHECK(tri_tick.find("DrawTriangle(occurrence.a, occurrence.b, occurrence.c, occurrence.color)") !=
-          std::string::npos);
+    CHECK(tri_tick.contains("DrawTriangle(occurrence.a, occurrence.b, occurrence.c, occurrence.color)"));
     CHECK(count_occurrences(tri_tick, "DrawTriangle(") == 1);
 
     const auto ring_tick = generated_function(code, "void draw_debug_ring_outline2_d_renderer_tick");
-    CHECK(ring_tick.find("DrawRing(occurrence.center, occurrence.inner_radius, occurrence.outer_radius, 0.0F, "
-                         "360.0F, 32, occurrence.color)") != std::string::npos);
+    CHECK(
+        ring_tick.contains("DrawRing(occurrence.center, occurrence.inner_radius, occurrence.outer_radius, 0.0F, "
+                           "360.0F, 32, occurrence.color)"));
 
     const auto rect_tick = generated_function(code, "void draw_debug_rect_outline2_d_renderer_tick");
-    CHECK(rect_tick.find(".x = occurrence.position.x") != std::string::npos);
-    CHECK(rect_tick.find("DrawRectangleLinesEx(__rect, occurrence.thickness, occurrence.color)") != std::string::npos);
+    CHECK(rect_tick.contains(".x = occurrence.position.x"));
+    CHECK(rect_tick.contains("DrawRectangleLinesEx(__rect, occurrence.thickness, occurrence.color)"));
 }
 
 TEST_CASE("Codegen EnTT: std.debug 3D event renderers issue one unconditional raylib call each",
@@ -1337,20 +1348,21 @@ TEST_CASE("Codegen EnTT: std.debug 3D event renderers issue one unconditional ra
     const auto code = CppEnttCodegen::generate(decorated);
 
     const auto line_tick = generated_function(code, "void draw_debug_line3_d_renderer_tick");
-    CHECK(line_tick.find("const DrawDebugLine3DEvent& occurrence") != std::string::npos);
-    CHECK(line_tick.find("BeginMode3D(cactus::runtime::entt_backend::get_active_camera_3d())") != std::string::npos);
-    CHECK(line_tick.find("DrawLine3D(occurrence.start, occurrence.end, occurrence.color)") != std::string::npos);
-    CHECK(line_tick.find("EndMode3D()") != std::string::npos);
+    CHECK(line_tick.contains("const DrawDebugLine3DEvent& occurrence"));
+    CHECK(line_tick.contains("BeginMode3D(cactus::runtime::entt_backend::get_active_camera_3d())"));
+    CHECK(line_tick.contains("DrawLine3D(occurrence.start, occurrence.end, occurrence.color)"));
+    CHECK(line_tick.contains("EndMode3D()"));
 
     const auto box_tick = generated_function(code, "void draw_debug_wire_box3_d_renderer_tick");
-    CHECK(box_tick.find("DrawCubeWiresV(occurrence.center, occurrence.size, occurrence.color)") != std::string::npos);
+    CHECK(box_tick.contains("DrawCubeWiresV(occurrence.center, occurrence.size, occurrence.color)"));
 
     const auto circle_tick = generated_function(code, "void draw_debug_circle3_d_renderer_tick");
-    CHECK(circle_tick.find("DrawCircle3D(occurrence.center, occurrence.radius, occurrence.normal, 90.0F, "
-                           "occurrence.color)") != std::string::npos);
+    CHECK(
+        circle_tick.contains("DrawCircle3D(occurrence.center, occurrence.radius, occurrence.normal, 90.0F, "
+                             "occurrence.color)"));
 
     const auto cube_tick = generated_function(code, "void draw_debug_cube3_d_renderer_tick");
-    CHECK(cube_tick.find("DrawCubeV(occurrence.center, occurrence.size, occurrence.color)") != std::string::npos);
+    CHECK(cube_tick.contains("DrawCubeV(occurrence.center, occurrence.size, occurrence.color)"));
 }
 
 TEST_CASE("Codegen EnTT: DebugGrid3D draws the grid only when an EditorCamera3D rig exists",
@@ -1371,9 +1383,9 @@ TEST_CASE("Codegen EnTT: DebugGrid3D draws the grid only when an EditorCamera3D 
 
     const auto code = CppEnttCodegen::generate(decorated);
     const auto tick = generated_function(code, "void debug_grid3_d_tick");
-    CHECK(tick.find("registry.view<EditorCamera3D>()") != std::string::npos);
-    CHECK(tick.find("if (!__has_3d_rig) { return; }") != std::string::npos);
-    CHECK(tick.find("DrawGrid(20, 1.0F)") != std::string::npos);
+    CHECK(tick.contains("registry.view<EditorCamera3D>()"));
+    CHECK(tick.contains("if (!__has_3d_rig) { return; }"));
+    CHECK(tick.contains("DrawGrid(20, 1.0F)"));
 }
 
 // editor-screen-ui: same one-event-one-unconditional-handler shape as std.debug (see the
@@ -1399,15 +1411,15 @@ TEST_CASE("Codegen EnTT: std.ui DrawScreenRect renderer draws filled or outline 
 
     const auto code = CppEnttCodegen::generate(decorated);
     const auto tick = generated_function(code, "void draw_screen_rect_renderer_tick");
-    CHECK(tick.find("const DrawScreenRectEvent& occurrence") != std::string::npos);
-    CHECK(tick.find(".x = occurrence.position.x") != std::string::npos);
-    CHECK(tick.find(".width = occurrence.size.x") != std::string::npos);
-    CHECK(tick.find("if (occurrence.filled)") != std::string::npos);
-    CHECK(tick.find("DrawRectangleRec(__rect, occurrence.color)") != std::string::npos);
-    CHECK(tick.find("DrawRectangleLinesEx(__rect, occurrence.thickness, occurrence.color)") != std::string::npos);
+    CHECK(tick.contains("const DrawScreenRectEvent& occurrence"));
+    CHECK(tick.contains(".x = occurrence.position.x"));
+    CHECK(tick.contains(".width = occurrence.size.x"));
+    CHECK(tick.contains("if (occurrence.filled)"));
+    CHECK(tick.contains("DrawRectangleRec(__rect, occurrence.color)"));
+    CHECK(tick.contains("DrawRectangleLinesEx(__rect, occurrence.thickness, occurrence.color)"));
     // Screen-space: no camera-mode wrapping (world-space std.debug primitives get one).
-    CHECK(tick.find("BeginMode2D") == std::string::npos);
-    CHECK(tick.find("BeginMode3D") == std::string::npos);
+    CHECK(!tick.contains("BeginMode2D"));
+    CHECK(!tick.contains("BeginMode3D"));
 }
 
 TEST_CASE("Codegen EnTT: model renderer extern rule binds to backend runtime without user callback",
@@ -1436,11 +1448,11 @@ TEST_CASE("Codegen EnTT: model renderer extern rule binds to backend runtime wit
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("cactus::runtime::entt_backend::submit_model(") != std::string::npos);
-    CHECK(code.find("ModelRenderer_comp.cast_shadow, ModelRenderer_comp.color);") != std::string::npos);
-    CHECK(code.find("void model_render_update(") == std::string::npos);
+    CHECK(code.contains("cactus::runtime::entt_backend::submit_model("));
+    CHECK(code.contains("ModelRenderer_comp.cast_shadow, ModelRenderer_comp.color);"));
+    CHECK(!code.contains("void model_render_update("));
     // No ModelAnimator trait in the program: the plain submission path only.
-    CHECK(code.find("try_get<ModelAnimator>") == std::string::npos);
+    CHECK(!code.contains("try_get<ModelAnimator>"));
 }
 
 TEST_CASE("Codegen EnTT: model animation extern adapter advances time without inferred update dispatch",
@@ -1472,18 +1484,18 @@ TEST_CASE("Codegen EnTT: model animation extern adapter advances time without in
 
     const auto code = CppEnttCodegen::generate(decorated);
     const auto tick = generated_function(code, "void model_animation_tick");
-    CHECK(tick.find("registry.view<ModelRenderer, ModelAnimator>()") != std::string::npos);
-    CHECK(tick.find("if (!ModelAnimator_comp.playing)") != std::string::npos);
-    CHECK(tick.find("ModelAnimator_comp.time += kFixedDt * ModelAnimator_comp.speed;") != std::string::npos);
-    CHECK(tick.find("cactus::runtime::entt_backend::model_animation_duration(") != std::string::npos);
-    CHECK(tick.find("std::fmod(ModelAnimator_comp.time, duration)") != std::string::npos);
+    CHECK(tick.contains("registry.view<ModelRenderer, ModelAnimator>()"));
+    CHECK(tick.contains("if (!ModelAnimator_comp.playing)"));
+    CHECK(tick.contains("ModelAnimator_comp.time += kFixedDt * ModelAnimator_comp.speed;"));
+    CHECK(tick.contains("cactus::runtime::entt_backend::model_animation_duration("));
+    CHECK(tick.contains("std::fmod(ModelAnimator_comp.time, duration)"));
 
     // The adapter owns time advancement, but a generic event name no longer
     // causes the backend to infer update or render scheduling.
     const auto update = generated_function(code, "void generated_update_project");
-    CHECK(update.find("model_animation_tick(registry);") == std::string::npos);
+    CHECK(!update.contains("model_animation_tick(registry);"));
     const auto render = generated_function(code, "void generated_render_project");
-    CHECK(render.find("model_animation_tick") == std::string::npos);
+    CHECK(!render.contains("model_animation_tick"));
 }
 
 TEST_CASE("Codegen EnTT: model renderer submits animator clip and time when the entity carries one",
@@ -1519,10 +1531,10 @@ TEST_CASE("Codegen EnTT: model renderer submits animator clip and time when the 
     const auto code = CppEnttCodegen::generate(decorated);
     const auto tick = generated_function(code, "void model_render_tick");
     // Animated entities go through the extended submit_model signature...
-    CHECK(tick.find("registry.try_get<ModelAnimator>(entity)") != std::string::npos);
-    CHECK(tick.find("animator->clip, animator->time, ModelRenderer_comp.color);") != std::string::npos);
+    CHECK(tick.contains("registry.try_get<ModelAnimator>(entity)"));
+    CHECK(tick.contains("animator->clip, animator->time, ModelRenderer_comp.color);"));
     // ...while entities without ModelAnimator keep the plain submission.
-    CHECK(tick.find("ModelRenderer_comp.cast_shadow, ModelRenderer_comp.color);") != std::string::npos);
+    CHECK(tick.contains("ModelRenderer_comp.cast_shadow, ModelRenderer_comp.color);"));
 }
 
 TEST_CASE("Codegen EnTT: screen label extern rule renders window-space text in flat and volume programs",
@@ -1563,18 +1575,19 @@ TEST_CASE("Codegen EnTT: screen label extern rule renders window-space text in f
         const auto tick = generated_function(code, "void screen_label_render_tick");
         // No WorldTransform in the view and no flavor gating: the same
         // emission serves flat and volume programs (dsl-model-animation D5).
-        CHECK(tick.find("registry.view<ScreenLabel>()") != std::string::npos);
-        CHECK(tick.find("cactus::runtime::entt_backend::submit_screen_label(ScreenLabel_comp.position, "
-                        "ScreenLabel_comp.font_size, ScreenLabel_comp.color, ScreenLabel_comp.text, "
-                        "ScreenLabel_comp.visible);") != std::string::npos);
-        CHECK(tick.find("(void)registry;") == std::string::npos);
+        CHECK(tick.contains("registry.view<ScreenLabel>()"));
+        CHECK(
+            tick.contains("cactus::runtime::entt_backend::submit_screen_label(ScreenLabel_comp.position, "
+                          "ScreenLabel_comp.font_size, ScreenLabel_comp.color, ScreenLabel_comp.text, "
+                          "ScreenLabel_comp.visible);"));
+        CHECK(!tick.contains("(void)registry;"));
 
         // Generic event names do not imply update or render scheduling. A
         // linked phase graph is the sole source of runtime dispatch order.
         const auto render = generated_function(code, "void generated_render_project");
-        CHECK(render.find("screen_label_render_tick(registry);") == std::string::npos);
+        CHECK(!render.contains("screen_label_render_tick(registry);"));
         const auto update = generated_function(code, "void generated_update_project");
-        CHECK(update.find("screen_label_render_tick") == std::string::npos);
+        CHECK(!update.contains("screen_label_render_tick"));
     }
 }
 
@@ -1598,8 +1611,8 @@ TEST_CASE("Codegen EnTT: std.render.models introspection funcs bind to model-pre
         program);
 
     auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("cactus::runtime::entt_backend::model_animation_count(Robot)") != std::string::npos);
-    CHECK(code.find("cactus::runtime::entt_backend::model_animation_name(Robot, ") != std::string::npos);
+    CHECK(code.contains("cactus::runtime::entt_backend::model_animation_count(Robot)"));
+    CHECK(code.contains("cactus::runtime::entt_backend::model_animation_name(Robot, "));
 }
 
 TEST_CASE("Codegen EnTT: models.bounds_size binds to the model-prefixed runtime bridge",
@@ -1620,7 +1633,7 @@ TEST_CASE("Codegen EnTT: models.bounds_size binds to the model-prefixed runtime 
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("cactus::runtime::entt_backend::model_bounds_size(Robot)") != std::string::npos);
+    CHECK(code.contains("cactus::runtime::entt_backend::model_bounds_size(Robot)"));
 }
 
 TEST_CASE("Codegen EnTT: on load handler runs via a one-shot boot activation before the frame loop",
@@ -1660,7 +1673,7 @@ TEST_CASE("Codegen EnTT: on load handler runs via a one-shot boot activation bef
     // The compatibility hook remains inert; the boot activation (emitted
     // inline in main()) is what actually dispatches to the handler.
     const auto load_hook = generated_function(code, "void generated_load_project");
-    CHECK(load_hook.find("spawn_enemies_load") == std::string::npos);
+    CHECK(!load_hook.contains("spawn_enemies_load"));
 
     // main() startup order: init project, then the (inert) load hook call,
     // then the boot activation itself — inject the load occurrence, run its
@@ -1720,7 +1733,7 @@ TEST_CASE("Codegen EnTT: programs without a load handler emit no boot activation
 
     // The hook is still exported so main() and no-main hosts can call it.
     const auto load_hook = generated_function(code, "void generated_load_project");
-    CHECK(load_hook.find("(void)registry;") != std::string::npos);
+    CHECK(load_hook.contains("(void)registry;"));
 
     const auto main_start = code.find("int main() try {");
     REQUIRE(main_start != std::string::npos);
@@ -1728,7 +1741,7 @@ TEST_CASE("Codegen EnTT: programs without a load handler emit no boot activation
     REQUIRE(main_end != std::string::npos);
     const auto main_fn = code.substr(main_start, main_end - main_start);
 
-    CHECK(main_fn.find("generated_dispatch_event(registry, loadEvent{});") == std::string::npos);
+    CHECK(!main_fn.contains("generated_dispatch_event(registry, loadEvent{});"));
 
     // init -> load hook -> frame loop, with nothing injected between them.
     const auto init_pos      = main_fn.find("generated_init_project(registry);");
@@ -1821,7 +1834,7 @@ TEST_CASE("Codegen EnTT: programs without an unload handler emit no teardown act
     REQUIRE(main_end != std::string::npos);
     const auto main_fn = code.substr(main_start, main_end - main_start);
 
-    CHECK(main_fn.find("generated_dispatch_event(registry, unloadEvent{});") == std::string::npos);
+    CHECK(!main_fn.contains("generated_dispatch_event(registry, unloadEvent{});"));
 
     const auto loop_pos  = main_fn.find("while (!WindowShouldClose())");
     const auto close_pos = main_fn.find("CloseWindow();");
@@ -1853,7 +1866,7 @@ TEST_CASE("Codegen EnTT: a deferred internal event runs as its own activation wi
 
     const auto root_fn = generated_function(
         code, "void generated_process_root_event(entt::registry& registry, const pingEvent& root_event");
-    CHECK(root_fn.find("std::optional<entt::entity> target") != std::string::npos);
+    CHECK(root_fn.contains("std::optional<entt::entity> target"));
     const auto guard    = root_fn.find("if (target.has_value() && !registry.valid(*target)) {");
     const auto dispatch = root_fn.find("generated_dispatch_event(registry, root_event, target);");
     const auto drain    = root_fn.find("generated_drain_event_cascade(registry);");
@@ -1867,30 +1880,33 @@ TEST_CASE("Codegen EnTT: a deferred internal event runs as its own activation wi
     CHECK(drain < commit);
 
     const auto drain_fn = generated_function(code, "void generated_drain_external_events");
-    CHECK(drain_fn.find("generated_process_root_event(registry, occurrence, queued.target);") != std::string::npos);
+    CHECK(drain_fn.contains("generated_process_root_event(registry, occurrence, queued.target);"));
 
     // Every event has a real processor, so no silent no-op fallback remains.
-    CHECK(code.find("void generated_process_root_event(entt::registry&, const Occurrence&) {}") == std::string::npos);
+    CHECK(!code.contains("void generated_process_root_event(entt::registry&, const Occurrence&) {}"));
 }
 
-static const std::string LIFECYCLE_PROGRAM_PREFIX =
-    "pub extern event frame:\n"
-    "    dt: float\n"
-    "phase tick:\n"
-    "    from:\n"
-    "        frame\n"
-    "pub event load\n"
-    "trait Enemy\n"
-    "trait Dying:\n"
-    "    var elapsed: float = 0.0\n"
-    "trait Burning:\n"
-    "    var intensity: float = 1.0\n"
-    "trait Unwatched\n";
+static const std::string& lifecycle_program_prefix() {
+    static const std::string value =
+        "pub extern event frame:\n"
+        "    dt: float\n"
+        "phase tick:\n"
+        "    from:\n"
+        "        frame\n"
+        "pub event load\n"
+        "trait Enemy\n"
+        "trait Dying:\n"
+        "    var elapsed: float = 0.0\n"
+        "trait Burning:\n"
+        "    var intensity: float = 1.0\n"
+        "trait Unwatched\n";
+    return value;
+}
 
 TEST_CASE("Codegen EnTT: a program without lifecycle triggers emits no tracking code",
           "[codegen-entt][trait-lifecycle]") {
     ProgramNode program;
-    auto decorated = full_pipeline(LIFECYCLE_PROGRAM_PREFIX +
+    auto decorated = full_pipeline(lifecycle_program_prefix() +
                                        "rule Move:\n"
                                        "    filter:\n"
                                        "        Dying\n"
@@ -1901,18 +1917,17 @@ TEST_CASE("Codegen EnTT: a program without lifecycle triggers emits no tracking 
     const auto code = CppEnttCodegen::generate(decorated);
 
     const auto commit_fn = generated_function(code, "void generated_commit_activation");
-    CHECK(commit_fn.find("commit_activation(activation, registry, &generated_drain_event_cascade);") !=
-          std::string::npos);
-    CHECK(code.find("LifecycleTrackers") == std::string::npos);
-    CHECK(code.find("TraitAdded") == std::string::npos);
-    CHECK(code.find("TraitRemoved") == std::string::npos);
-    CHECK(code.find("deliver_arrivals") == std::string::npos);
+    CHECK(commit_fn.contains("commit_activation(activation, registry, &generated_drain_event_cascade);"));
+    CHECK(!code.contains("LifecycleTrackers"));
+    CHECK(!code.contains("TraitAdded"));
+    CHECK(!code.contains("TraitRemoved"));
+    CHECK(!code.contains("deliver_arrivals"));
 }
 
 TEST_CASE("Codegen EnTT: on added tracks only the watched trait and dispatches to the target",
           "[codegen-entt][trait-lifecycle]") {
     ProgramNode program;
-    auto decorated = full_pipeline(LIFECYCLE_PROGRAM_PREFIX +
+    auto decorated = full_pipeline(lifecycle_program_prefix() +
                                        "rule StartDying:\n"
                                        "    filter:\n"
                                        "        Enemy\n"
@@ -1925,42 +1940,42 @@ TEST_CASE("Codegen EnTT: on added tracks only the watched trait and dispatches t
     const auto trackers_pos = code.find("LifecycleTrackers<");
     REQUIRE(trackers_pos != std::string::npos);
     const auto trackers_decl = code.substr(trackers_pos, code.find('>', trackers_pos) - trackers_pos + 1);
-    CHECK(trackers_decl.find("Dying") != std::string::npos);
-    CHECK(trackers_decl.find("Burning") == std::string::npos);
-    CHECK(trackers_decl.find("Enemy") == std::string::npos);
-    CHECK(trackers_decl.find("Unwatched") == std::string::npos);
+    CHECK(trackers_decl.contains("Dying"));
+    CHECK(!trackers_decl.contains("Burning"));
+    CHECK(!trackers_decl.contains("Enemy"));
+    CHECK(!trackers_decl.contains("Unwatched"));
 
     const auto occurrence_pos = code.find("using EventOccurrence = std::variant<");
     REQUIRE(occurrence_pos != std::string::npos);
     const auto occurrence_decl = code.substr(occurrence_pos, code.find(";\n", occurrence_pos) - occurrence_pos);
-    CHECK(occurrence_decl.find("TraitAdded<Dying>") != std::string::npos);
-    CHECK(occurrence_decl.find("TraitRemoved<Dying>") != std::string::npos);
-    CHECK(occurrence_decl.find("Burning") == std::string::npos);
+    CHECK(occurrence_decl.contains("TraitAdded<Dying>"));
+    CHECK(occurrence_decl.contains("TraitRemoved<Dying>"));
+    CHECK(!occurrence_decl.contains("Burning"));
 
     const auto commit_fn = generated_function(code, "void generated_commit_activation");
-    CHECK(commit_fn.find("generated_lifecycle_trackers()") != std::string::npos);
+    CHECK(commit_fn.contains("generated_lifecycle_trackers()"));
 
     const auto dispatch_fn = generated_function(code,
                                                 "void generated_dispatch_event(entt::registry& registry, const "
                                                 "cactus::runtime::entt_backend::TraitAdded<Dying>& occurrence");
-    CHECK(dispatch_fn.find("(registry, occurrence, target);") != std::string::npos);
+    CHECK(dispatch_fn.contains("(registry, occurrence, target);"));
 
     const auto root_fn = generated_function(code,
                                             "void generated_process_root_event(entt::registry& registry, const "
                                             "cactus::runtime::entt_backend::TraitAdded<Dying>& root_event");
-    CHECK(root_fn.find("generated_dispatch_event(registry, root_event, target);") != std::string::npos);
+    CHECK(root_fn.contains("generated_dispatch_event(registry, root_event, target);"));
 
     // The handler runs only for its recipient, with the trait in its selection and the alias bound.
     const auto handler_fn = generated_function(code, "void start_dying_added_Dying(entt::registry& registry");
-    CHECK(handler_fn.find("cactus_recipient.has_value()") != std::string::npos);
-    CHECK(handler_fn.find("registry.all_of<Enemy, Dying>(entity)") != std::string::npos);
-    CHECK(handler_fn.find("auto& dying = Dying_comp;") != std::string::npos);
-    CHECK(handler_fn.find("registry.view<") == std::string::npos);
+    CHECK(handler_fn.contains("cactus_recipient.has_value()"));
+    CHECK(handler_fn.contains("registry.all_of<Enemy, Dying>(entity)"));
+    CHECK(handler_fn.contains("auto& dying = Dying_comp;"));
+    CHECK(!handler_fn.contains("registry.view<"));
 }
 
 TEST_CASE("Codegen EnTT: on removed binds the snapshot and excludes the trait", "[codegen-entt][trait-lifecycle]") {
     ProgramNode program;
-    auto decorated = full_pipeline(LIFECYCLE_PROGRAM_PREFIX +
+    auto decorated = full_pipeline(lifecycle_program_prefix() +
                                        "rule StopBurning:\n"
                                        "    on removed Burning as old:\n"
                                        "        let heat = old.intensity\n",
@@ -1969,20 +1984,20 @@ TEST_CASE("Codegen EnTT: on removed binds the snapshot and excludes the trait", 
     const auto code = CppEnttCodegen::generate(decorated);
 
     const auto handler_fn = generated_function(code, "void stop_burning_removed_Burning(entt::registry& registry");
-    CHECK(handler_fn.find("TraitRemoved<Burning>& cactus_trigger") != std::string::npos);
-    CHECK(handler_fn.find("cactus_recipient.has_value()") != std::string::npos);
-    CHECK(handler_fn.find("!registry.any_of<Burning>(entity)") != std::string::npos);
-    CHECK(handler_fn.find("const auto& old = ") != std::string::npos);
-    CHECK(handler_fn.find(".old;") != std::string::npos);
-    CHECK(handler_fn.find("old.intensity") != std::string::npos);
-    CHECK(handler_fn.find("registry.view<") == std::string::npos);
+    CHECK(handler_fn.contains("TraitRemoved<Burning>& cactus_trigger"));
+    CHECK(handler_fn.contains("cactus_recipient.has_value()"));
+    CHECK(handler_fn.contains("!registry.any_of<Burning>(entity)"));
+    CHECK(handler_fn.contains("const auto& old = "));
+    CHECK(handler_fn.contains(".old;"));
+    CHECK(handler_fn.contains("old.intensity"));
+    CHECK(!handler_fn.contains("registry.view<"));
 }
 
 TEST_CASE("Codegen EnTT: the startup arrival activation runs after init and before load",
           "[codegen-entt][trait-lifecycle]") {
     const auto program_with = [](const std::string& trigger) {
         ProgramNode program;
-        auto decorated = full_pipeline(LIFECYCLE_PROGRAM_PREFIX +
+        auto decorated = full_pipeline(lifecycle_program_prefix() +
                                            "entity Boss:\n"
                                            "    Enemy\n"
                                            "    Dying\n"
@@ -2030,14 +2045,14 @@ TEST_CASE("Codegen EnTT: the startup arrival activation runs after init and befo
         CHECK(load_call < load_evt);
 
         const auto init_fn = generated_function(code, "void generated_init_project(entt::registry& registry)");
-        CHECK(init_fn.find("generated_connect_lifecycle_trackers(registry);") != std::string::npos);
+        CHECK(init_fn.contains("generated_connect_lifecycle_trackers(registry);"));
     }
 
     SECTION("only an on removed trigger emits no arrival activation") {
         const auto code    = program_with("removed Dying");
         const auto load_fn = generated_function(code, "void generated_load_project(entt::registry& registry)");
-        CHECK(load_fn.find("deliver_arrivals") == std::string::npos);
-        CHECK(code.find("LifecycleTrackers<") != std::string::npos);
+        CHECK(!load_fn.contains("deliver_arrivals"));
+        CHECK(code.contains("LifecycleTrackers<"));
     }
 }
 
@@ -2052,10 +2067,12 @@ TEST_CASE("Codegen EnTT: generated init registers declared mesh and material ass
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("shared_asset_registry().register_mesh(BlueCubeMesh, \"models/blue_cube.mesh\", "
-                    "static_cast<int>(BlueCubeMesh));") != std::string::npos);
-    CHECK(code.find("shared_asset_registry().register_material(BlueCubeMaterial, \"materials/blue_cube.mat\", "
-                    "static_cast<int>(BlueCubeMaterial));") != std::string::npos);
+    CHECK(
+        code.contains("shared_asset_registry().register_mesh(BlueCubeMesh, \"models/blue_cube.mesh\", "
+                      "static_cast<int>(BlueCubeMesh));"));
+    CHECK(
+        code.contains("shared_asset_registry().register_material(BlueCubeMaterial, \"materials/blue_cube.mat\", "
+                      "static_cast<int>(BlueCubeMaterial));"));
 }
 
 TEST_CASE("Codegen EnTT: generated init registers declared model assets", "[codegen-entt][assets][dsl-model-assets]") {
@@ -2068,8 +2085,9 @@ TEST_CASE("Codegen EnTT: generated init registers declared model assets", "[code
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("shared_asset_registry().register_model(Robot, \"art/robot.glb\", "
-                    "static_cast<int>(Robot));") != std::string::npos);
+    CHECK(
+        code.contains("shared_asset_registry().register_model(Robot, \"art/robot.glb\", "
+                      "static_cast<int>(Robot));"));
 }
 
 TEST_CASE("Codegen EnTT: asset paths resolve relative to the declaring module directory",
@@ -2085,10 +2103,12 @@ TEST_CASE("Codegen EnTT: asset paths resolve relative to the declaring module di
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("shared_asset_registry().register_model(Robot, \"examples/robot/art/robot.glb\", "
-                    "static_cast<int>(Robot));") != std::string::npos);
-    CHECK(code.find("shared_asset_registry().register_mesh(PlayerMesh, \"examples/shared/player.mesh\", "
-                    "static_cast<int>(PlayerMesh));") != std::string::npos);
+    CHECK(
+        code.contains("shared_asset_registry().register_model(Robot, \"examples/robot/art/robot.glb\", "
+                      "static_cast<int>(Robot));"));
+    CHECK(
+        code.contains("shared_asset_registry().register_mesh(PlayerMesh, \"examples/shared/player.mesh\", "
+                      "static_cast<int>(PlayerMesh));"));
 }
 
 TEST_CASE("Codegen EnTT: imported pub asset keeps its declaring module's path base",
@@ -2123,8 +2143,9 @@ TEST_CASE("Codegen EnTT: imported pub asset keeps its declaring module's path ba
     REQUIRE_FALSE(errors.has_errors());
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("shared_asset_registry().register_model(SharedModel, \"mods/shared/art/m.glb\", "
-                    "static_cast<int>(SharedModel));") != std::string::npos);
+    CHECK(
+        code.contains("shared_asset_registry().register_model(SharedModel, \"mods/shared/art/m.glb\", "
+                      "static_cast<int>(SharedModel));"));
 }
 
 TEST_CASE("Codegen EnTT: entity creation from unit", "[codegen-entt]") {
@@ -2141,10 +2162,10 @@ TEST_CASE("Codegen EnTT: entity creation from unit", "[codegen-entt]") {
         program);
 
     auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("create_player") != std::string::npos);
-    CHECK(code.find("registry.create()") != std::string::npos);
-    CHECK(code.find("registry.emplace<Pos>") != std::string::npos);
-    CHECK(code.find("registry.emplace<Health>") != std::string::npos);
+    CHECK(code.contains("create_player"));
+    CHECK(code.contains("registry.create()"));
+    CHECK(code.contains("registry.emplace<Pos>"));
+    CHECK(code.contains("registry.emplace<Health>"));
 }
 
 TEST_CASE("Codegen EnTT: composed unit creation uses flattened template traits",
@@ -2179,12 +2200,12 @@ TEST_CASE("Codegen EnTT: composed unit creation uses flattened template traits",
     CHECK(count_occurrences(unit_fn, "registry.emplace<Health>(entity, component);") == 1);
     CHECK(count_occurrences(unit_fn, "registry.emplace<Patrol>(entity, component);") == 1);
     CHECK(count_occurrences(unit_fn, "registry.emplace<Persistent>(entity);") == 1);
-    CHECK(unit_fn.find("component.hp") != std::string::npos);
-    CHECK(unit_fn.find("= 4;") != std::string::npos);
-    CHECK(unit_fn.find("component.armor") != std::string::npos);
-    CHECK(unit_fn.find("= 5;") != std::string::npos);
-    CHECK(unit_fn.find("component.speed") != std::string::npos);
-    CHECK(unit_fn.find("= 2.0F;") != std::string::npos);
+    CHECK(unit_fn.contains("component.hp"));
+    CHECK(unit_fn.contains("= 4;"));
+    CHECK(unit_fn.contains("component.armor"));
+    CHECK(unit_fn.contains("= 5;"));
+    CHECK(unit_fn.contains("component.speed"));
+    CHECK(unit_fn.contains("= 2.0F;"));
 }
 
 TEST_CASE("Codegen EnTT: spawn of composed template constructs flattened traits once",
@@ -2218,10 +2239,10 @@ TEST_CASE("Codegen EnTT: spawn of composed template constructs flattened traits 
 
     CHECK(count_occurrences(template_fn, "registry.emplace<Health>(entity, component);") == 1);
     CHECK(count_occurrences(template_fn, "registry.emplace<Patrol>(entity, component);") == 1);
-    CHECK(template_fn.find("component.hp") != std::string::npos);
-    CHECK(template_fn.find("= 3;") != std::string::npos);
-    CHECK(template_fn.find("component.speed") != std::string::npos);
-    CHECK(template_fn.find("= 2.0F;") != std::string::npos);
+    CHECK(template_fn.contains("component.hp"));
+    CHECK(template_fn.contains("= 3;"));
+    CHECK(template_fn.contains("component.speed"));
+    CHECK(template_fn.contains("= 2.0F;"));
 
     const auto spawned_name = extract_temp_name(system_fn, "cactus_gen_spawned_");
     REQUIRE_FALSE(spawned_name.empty());
@@ -2230,14 +2251,12 @@ TEST_CASE("Codegen EnTT: spawn of composed template constructs flattened traits 
     const auto override_name = extract_temp_name(system_fn, "cactus_gen_override_value_");
     REQUIRE_FALSE(override_name.empty());
 
-    CHECK(system_fn.find("auto " + spawned_name + " = create_walker_enemy(registry);") != std::string::npos);
-    CHECK(system_fn.find("auto " + existing_name + " = registry.try_get<Health>(" + spawned_name + ");") !=
-          std::string::npos);
-    CHECK(system_fn.find("auto " + override_name + " = " + existing_name + " ? *" + existing_name + " : Health{};") !=
-          std::string::npos);
-    CHECK(system_fn.find(override_name + ".armor = 7;") != std::string::npos);
-    CHECK(system_fn.find("registry.emplace_or_replace<Health>(" + spawned_name + ", " + override_name + ");") !=
-          std::string::npos);
+    CHECK(system_fn.contains("auto " + spawned_name + " = create_walker_enemy(registry);"));
+    CHECK(system_fn.contains("auto " + existing_name + " = registry.try_get<Health>(" + spawned_name + ");"));
+    CHECK(
+        system_fn.contains("auto " + override_name + " = " + existing_name + " ? *" + existing_name + " : Health{};"));
+    CHECK(system_fn.contains(override_name + ".armor = 7;"));
+    CHECK(system_fn.contains("registry.emplace_or_replace<Health>(" + spawned_name + ", " + override_name + ");"));
 }
 
 TEST_CASE("Codegen EnTT: spawn expression of composed template returns created entity",
@@ -2277,12 +2296,11 @@ TEST_CASE("Codegen EnTT: spawn expression of composed template returns created e
     const auto override_name = extract_temp_name(system_fn, "cactus_gen_override_value_");
     REQUIRE_FALSE(override_name.empty());
 
-    CHECK(system_fn.find("auto spawned = ([&]()") != std::string::npos);
-    CHECK(system_fn.find("auto " + inner_spawned_name + " = create_walker_enemy(registry);") != std::string::npos);
-    CHECK(system_fn.find("auto " + existing_name + " = registry.try_get<Patrol>(" + inner_spawned_name + ");") !=
-          std::string::npos);
-    CHECK(system_fn.find(override_name + ".speed = 3.0F;") != std::string::npos);
-    CHECK(system_fn.find("return " + inner_spawned_name + ";") != std::string::npos);
+    CHECK(system_fn.contains("auto spawned = ([&]()"));
+    CHECK(system_fn.contains("auto " + inner_spawned_name + " = create_walker_enemy(registry);"));
+    CHECK(system_fn.contains("auto " + existing_name + " = registry.try_get<Patrol>(" + inner_spawned_name + ");"));
+    CHECK(system_fn.contains(override_name + ".speed = 3.0F;"));
+    CHECK(system_fn.contains("return " + inner_spawned_name + ";"));
 }
 
 TEST_CASE("Codegen EnTT: add/remove trait statements", "[codegen-entt]") {
@@ -2310,9 +2328,9 @@ TEST_CASE("Codegen EnTT: add/remove trait statements", "[codegen-entt]") {
             auto code             = EnttSystemEmitter::emit_system(*sys, decorated);
             const auto value_name = extract_temp_name(code, "cactus_gen_value_");
             REQUIRE_FALSE(value_name.empty());
-            CHECK(code.find("registry.emplace_or_replace<Frozen>(entity)") != std::string::npos);
-            CHECK(code.find("registry.emplace_or_replace<Stunned>(entity, " + value_name + ")") != std::string::npos);
-            CHECK(code.find("registry.remove<Frozen>(entity)") != std::string::npos);
+            CHECK(code.contains("registry.emplace_or_replace<Frozen>(entity)"));
+            CHECK(code.contains("registry.emplace_or_replace<Stunned>(entity, " + value_name + ")"));
+            CHECK(code.contains("registry.remove<Frozen>(entity)"));
         }
     }
 }
@@ -2333,10 +2351,10 @@ TEST_CASE("Codegen EnTT: cross-entity add/remove/destroy use validity guards", "
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            CHECK(code.find("if (registry.valid(c.other))") != std::string::npos);
-            CHECK(code.find("registry.emplace_or_replace<Frozen>(c.other)") != std::string::npos);
-            CHECK(code.find("registry.remove<Frozen>(c.other)") != std::string::npos);
-            CHECK(code.find("cactus_destroy_entity_recursive(registry, c.other)") != std::string::npos);
+            CHECK(code.contains("if (registry.valid(c.other))"));
+            CHECK(code.contains("registry.emplace_or_replace<Frozen>(c.other)"));
+            CHECK(code.contains("registry.remove<Frozen>(c.other)"));
+            CHECK(code.contains("cactus_destroy_entity_recursive(registry, c.other)"));
         }
     }
 }
@@ -2357,11 +2375,11 @@ TEST_CASE("Codegen EnTT: targeted emit uses validity guard", "[codegen-entt][ent
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            CHECK(code.find("if (registry.valid(c.other))") != std::string::npos);
+            CHECK(code.contains("if (registry.valid(c.other))"));
             // Buffer identifier is built from the canonical event type name (HitEvent), not
             // the raw source spelling, so cross-module dotted emit names (e.g. "std.debug.Foo")
             // never leak a dot into a C++ identifier.
-            CHECK(code.find("HitEvent_buffer.push_back({.amount = 1})") != std::string::npos);
+            CHECK(code.contains("HitEvent_buffer.push_back({.amount = 1})"));
         }
     }
 }
@@ -2380,7 +2398,7 @@ TEST_CASE("Codegen EnTT: exists compiles to registry.valid", "[codegen-entt][ent
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            CHECK(code.find("if (registry.valid(c.other))") != std::string::npos);
+            CHECK(code.contains("if (registry.valid(c.other))"));
         }
     }
 }
@@ -2415,8 +2433,8 @@ TEST_CASE("Codegen EnTT: vector binary expression and compound assignment lower 
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            CHECK(code.find("auto sum = (p.pos + m.velocity);") != std::string::npos);
-            CHECK(code.find("p.pos += m.velocity;") != std::string::npos);
+            CHECK(code.contains("auto sum = (p.pos + m.velocity);"));
+            CHECK(code.contains("p.pos += m.velocity;"));
         }
     }
 }
@@ -2440,8 +2458,8 @@ TEST_CASE("Codegen EnTT: trait match is guarded by entity validity", "[codegen-e
             auto code                    = EnttSystemEmitter::emit_system(*sys, decorated);
             const auto match_entity_name = extract_temp_name(code, "cactus_gen_match_entity_");
             REQUIRE_FALSE(match_entity_name.empty());
-            CHECK(code.find("auto " + match_entity_name + " = c.other") != std::string::npos);
-            CHECK(code.find("if (registry.valid(" + match_entity_name + "))") != std::string::npos);
+            CHECK(code.contains("auto " + match_entity_name + " = c.other"));
+            CHECK(code.contains("if (registry.valid(" + match_entity_name + "))"));
         }
     }
 }
@@ -2470,10 +2488,10 @@ TEST_CASE("Codegen EnTT: trait match emits try_get, all_of, and else", "[codegen
             auto code                    = EnttSystemEmitter::emit_system(*sys, decorated);
             const auto match_entity_name = extract_temp_name(code, "cactus_gen_match_entity_");
             REQUIRE_FALSE(match_entity_name.empty());
-            CHECK(code.find("auto " + match_entity_name + " = c.other") != std::string::npos);
-            CHECK(code.find("auto* b = registry.try_get<Boss>(" + match_entity_name + ")") != std::string::npos);
-            CHECK(code.find("registry.all_of<Spike>(" + match_entity_name + ")") != std::string::npos);
-            CHECK(code.find("else {") != std::string::npos);
+            CHECK(code.contains("auto " + match_entity_name + " = c.other"));
+            CHECK(code.contains("auto* b = registry.try_get<Boss>(" + match_entity_name + ")"));
+            CHECK(code.contains("registry.all_of<Spike>(" + match_entity_name + ")"));
+            CHECK(code.contains("else {"));
         }
     }
 }
@@ -2495,8 +2513,8 @@ TEST_CASE("Codegen EnTT: aliased event handler uses alias in signature and body"
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            CHECK(code.find("const stepEvent& s") != std::string::npos);
-            CHECK(code.find("Pos_comp.x = (Pos_comp.x + s.dt)") != std::string::npos);
+            CHECK(code.contains("const stepEvent& s"));
+            CHECK(code.contains("Pos_comp.x = (Pos_comp.x + s.dt)"));
         }
     }
 }
@@ -2517,8 +2535,7 @@ TEST_CASE("Codegen EnTT: marker event handler takes the marker event parameter",
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            CHECK(code.find("void init_ping(entt::registry& registry, const pingEvent& ping,") !=
-                  std::string::npos);
+            CHECK(code.contains("void init_ping(entt::registry& registry, const pingEvent& ping,"));
         }
     }
 }
@@ -2542,8 +2559,8 @@ TEST_CASE("Codegen EnTT: trait match without wildcard emits no else", "[codegen-
             auto code                    = EnttSystemEmitter::emit_system(*sys, decorated);
             const auto match_entity_name = extract_temp_name(code, "cactus_gen_match_entity_");
             REQUIRE_FALSE(match_entity_name.empty());
-            CHECK(code.find("auto* b = registry.try_get<Boss>(" + match_entity_name + ")") != std::string::npos);
-            CHECK(code.find("else {") == std::string::npos);
+            CHECK(code.contains("auto* b = registry.try_get<Boss>(" + match_entity_name + ")"));
+            CHECK(!code.contains("else {"));
         }
     }
 }
@@ -2577,11 +2594,11 @@ TEST_CASE("Codegen EnTT: legacy nested else+if compiles to doubly-braced else { 
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            CHECK(code.find("if (Health_comp.hp > 50) {") != std::string::npos);
-            CHECK(code.find("Health_comp.hp = 1;") != std::string::npos);
-            CHECK(code.find("if (Health_comp.hp > 0) {") != std::string::npos);
-            CHECK(code.find("Health_comp.hp = 2;") != std::string::npos);
-            CHECK(code.find("Health_comp.hp = 3;") != std::string::npos);
+            CHECK(code.contains("if (Health_comp.hp > 50) {"));
+            CHECK(code.contains("Health_comp.hp = 1;"));
+            CHECK(code.contains("if (Health_comp.hp > 0) {"));
+            CHECK(code.contains("Health_comp.hp = 2;"));
+            CHECK(code.contains("Health_comp.hp = 3;"));
 
             // The doubly-braced shape: an outer `} else {` immediately
             // followed (module whitespace/indentation) by the nested `if`,
@@ -2625,11 +2642,11 @@ TEST_CASE("Codegen EnTT: else-if chain compiles equivalent to legacy nested else
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            CHECK(code.find("if (Health_comp.hp > 50) {") != std::string::npos);
-            CHECK(code.find("Health_comp.hp = 1;") != std::string::npos);
-            CHECK(code.find("else if (Health_comp.hp > 0) {") != std::string::npos);
-            CHECK(code.find("Health_comp.hp = 2;") != std::string::npos);
-            CHECK(code.find("Health_comp.hp = 3;") != std::string::npos);
+            CHECK(code.contains("if (Health_comp.hp > 50) {"));
+            CHECK(code.contains("Health_comp.hp = 1;"));
+            CHECK(code.contains("else if (Health_comp.hp > 0) {"));
+            CHECK(code.contains("Health_comp.hp = 2;"));
+            CHECK(code.contains("Health_comp.hp = 3;"));
 
             // Flat cascade, not the doubly-braced legacy shape: exactly one
             // `else if` in the shared handler-body lambda (dedupe-handler-
@@ -2637,7 +2654,7 @@ TEST_CASE("Codegen EnTT: else-if chain compiles equivalent to legacy nested else
             // targeted-recipient and broadcast dispatch sites). 2 would
             // indicate the doubly-braced `else { if` shape leaking back in.
             CHECK(count_occurrences(code, "else if (") == 1);
-            CHECK(code.find("} else {\n") != std::string::npos);
+            CHECK(code.contains("} else {\n"));
         }
     }
 }
@@ -2679,15 +2696,15 @@ TEST_CASE("Codegen EnTT: nested control flow mutates visible lexical locals with
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("auto sum +=") == std::string::npos);
-    CHECK(code.find("auto count +=") == std::string::npos);
-    CHECK(code.find("auto maximum = value") == std::string::npos);
-    CHECK(code.find("auto cursor = (cursor + 1)") == std::string::npos);
-    CHECK(code.find("sum += value;") != std::string::npos);
-    CHECK(code.find("count += 1;") != std::string::npos);
-    CHECK(code.find("maximum = value;") != std::string::npos);
-    CHECK(code.find("cursor = (cursor + 1);") != std::string::npos);
-    CHECK(code.find("sum += boss->rank;") != std::string::npos);
+    CHECK(!code.contains("auto sum +="));
+    CHECK(!code.contains("auto count +="));
+    CHECK(!code.contains("auto maximum = value"));
+    CHECK(!code.contains("auto cursor = (cursor + 1)"));
+    CHECK(code.contains("sum += value;"));
+    CHECK(code.contains("count += 1;"));
+    CHECK(code.contains("maximum = value;"));
+    CHECK(code.contains("cursor = (cursor + 1);"));
+    CHECK(code.contains("sum += boss->rank;"));
 }
 
 TEST_CASE("Codegen EnTT: unsupported generic extern scaffold is rejected", "[codegen-entt][extern-rule]") {
@@ -2762,17 +2779,17 @@ TEST_CASE("Codegen EnTT: rule order by emits registry sort for single key", "[co
             // trait), then the anchor pool is permuted to match via EnTT's
             // range-sort overload rather than a comparator invoked over the
             // anchor's whole (potentially wider) pool.
-            CHECK(code.find("std::ranges::stable_sort(") != std::string::npos);
-            CHECK(code.find("registry.storage<Sprite>().sort_as(") != std::string::npos);
+            CHECK(code.contains("std::ranges::stable_sort("));
+            CHECK(code.contains("registry.storage<Sprite>().sort_as("));
             // The sorted pool must also drive the view, or a multi-element
             // view is free to iterate from some other, unsorted pool.
-            CHECK(code.find("view.use<Sprite>();") != std::string::npos);
+            CHECK(code.contains("view.use<Sprite>();"));
             // Each key is evaluated by a per-entity extractor lambda rather
             // than being inlined twice into the comparator, so an arbitrary
             // expression lowers through the ordinary expression emitter.
-            CHECK(code.find("= [&](entt::entity entity) {") != std::string::npos);
-            CHECK(code.find("return s.layer;") != std::string::npos);
-            CHECK(code.find("return cactus_lhs_key < cactus_rhs_key;") != std::string::npos);
+            CHECK(code.contains("= [&](entt::entity entity) {"));
+            CHECK(code.contains("return s.layer;"));
+            CHECK(code.contains("return cactus_lhs_key < cactus_rhs_key;"));
         }
     }
 }
@@ -2802,8 +2819,8 @@ TEST_CASE("Codegen EnTT: rule order by emits multi-key comparator", "[codegen-en
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
             // Lexicographic: the primary key compares ascending and only a tie
             // falls through to the secondary key's descending compare.
-            CHECK(code.find("return s.layer;") != std::string::npos);
-            CHECK(code.find("return p.pos.y;") != std::string::npos);
+            CHECK(code.contains("return s.layer;"));
+            CHECK(code.contains("return p.pos.y;"));
             const auto ascending  = code.find("return cactus_lhs_key < cactus_rhs_key;");
             const auto descending = code.find("return cactus_lhs_key > cactus_rhs_key;");
             CHECK(ascending != std::string::npos);
@@ -2830,7 +2847,7 @@ TEST_CASE("Codegen EnTT: rule without order by emits no sort call", "[codegen-en
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            CHECK(code.find("registry.sort<") == std::string::npos);
+            CHECK(!code.contains("registry.sort<"));
         }
     }
 }
@@ -2892,8 +2909,8 @@ TEST_CASE("Codegen EnTT: self lowers to current entity and destroy self uses rec
     auto code             = CppEnttCodegen::generate(decorated);
     const auto value_name = extract_temp_name(code, "cactus_gen_value_");
     REQUIRE_FALSE(value_name.empty());
-    CHECK(code.find(value_name + ".parent = entity") != std::string::npos);
-    CHECK(code.find("cactus_destroy_entity_recursive(registry, entity)") != std::string::npos);
+    CHECK(code.contains(value_name + ".parent = entity"));
+    CHECK(code.contains("cactus_destroy_entity_recursive(registry, entity)"));
 }
 
 TEST_CASE("Codegen EnTT: flat transform propagation extern rule is recognized", "[codegen-entt][hierarchy]") {
@@ -2925,9 +2942,9 @@ TEST_CASE("Codegen EnTT: flat transform propagation extern rule is recognized", 
         program);
 
     auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("cactus::runtime::entt_backend::propagate_hierarchy(") != std::string::npos);
-    CHECK(code.find("parent_world.position.x + local.position.x") != std::string::npos);
-    CHECK(code.find("if (auto* parent = registry.try_get<Parent>(entity)") != std::string::npos);
+    CHECK(code.contains("cactus::runtime::entt_backend::propagate_hierarchy("));
+    CHECK(code.contains("parent_world.position.x + local.position.x"));
+    CHECK(code.contains("if (auto* parent = registry.try_get<Parent>(entity)"));
 }
 
 TEST_CASE("Codegen EnTT: hierarchy propagation handles stale parents and cycles safely", "[codegen-entt][hierarchy]") {
@@ -2959,11 +2976,10 @@ TEST_CASE("Codegen EnTT: hierarchy propagation handles stale parents and cycles 
         program);
 
     auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("cactus::runtime::entt_backend::propagate_hierarchy(") != std::string::npos);
-    CHECK(code.find("return entt::entity{entt::null};") != std::string::npos);
-    CHECK(code.find("registry.all_of<LocalTransform, WorldTransform>(entity)") != std::string::npos);
-    CHECK(code.find(".has_world = [&](entt::entity entity) { return registry.all_of<WorldTransform>(entity); }") !=
-          std::string::npos);
+    CHECK(code.contains("cactus::runtime::entt_backend::propagate_hierarchy("));
+    CHECK(code.contains("return entt::entity{entt::null};"));
+    CHECK(code.contains("registry.all_of<LocalTransform, WorldTransform>(entity)"));
+    CHECK(code.contains(".has_world = [&](entt::entity entity) { return registry.all_of<WorldTransform>(entity); }"));
 }
 
 TEST_CASE("Codegen EnTT: volume transform propagation extern rule is recognized", "[codegen-entt][hierarchy]") {
@@ -2995,11 +3011,10 @@ TEST_CASE("Codegen EnTT: volume transform propagation extern rule is recognized"
         program);
 
     auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("world.position = Vector3{") != std::string::npos);
-    CHECK(code.find("parent_world.position.x + local.position.x") != std::string::npos);
-    CHECK(code.find("cactus::runtime::stdlib::math::quat::compose(parent_world.rotation, local.rotation)") !=
-          std::string::npos);
-    CHECK(code.find("parent_world.scale.z * local.scale.z") != std::string::npos);
+    CHECK(code.contains("world.position = Vector3{"));
+    CHECK(code.contains("parent_world.position.x + local.position.x"));
+    CHECK(code.contains("cactus::runtime::stdlib::math::quat::compose(parent_world.rotation, local.rotation)"));
+    CHECK(code.contains("parent_world.scale.z * local.scale.z"));
 }
 
 TEST_CASE("Codegen EnTT: stdlib flat colliders emit query helpers and no collision pass",
@@ -3046,9 +3061,9 @@ TEST_CASE("Codegen EnTT: stdlib flat colliders emit query helpers and no collisi
     program.traits[capsule.name] = capsule;
 
     const auto code = CppEnttCodegen::generate(program);
-    CHECK(code.find("registry.view<WorldTransform, Collider, BoxCollider>()") != std::string::npos);
-    CHECK(code.find("cactus_dispatch_stdlib_flat_collisions") == std::string::npos);
-    CHECK(code.find("CollisionEnterEvent") == std::string::npos);
+    CHECK(code.contains("registry.view<WorldTransform, Collider, BoxCollider>()"));
+    CHECK(!code.contains("cactus_dispatch_stdlib_flat_collisions"));
+    CHECK(!code.contains("CollisionEnterEvent"));
 }
 
 TEST_CASE("Codegen EnTT: stdlib flat collider queries emit cast and overlap helpers",
@@ -3114,23 +3129,21 @@ TEST_CASE("Codegen EnTT: stdlib flat collider queries emit cast and overlap help
     program.traits[capsule.name] = capsule;
 
     const auto code = CppEnttCodegen::generate(program);
-    CHECK(code.find("QueryResult2D cactus_query_cast_nearest(entt::registry& registry") != std::string::npos);
-    CHECK(code.find("if (delta.x == 0.0F && delta.y == 0.0F)") != std::string::npos);
-    CHECK(code.find("if (!cactus_find_flat_collider(registry, subject_entity, subject))") != std::string::npos);
-    CHECK(code.find("return cactus_empty_query_result();") != std::string::npos);
-    CHECK(code.find("if (!nearest.has_value() || contact->distance < nearest->distance)") != std::string::npos);
-    CHECK(code.find("entry > exit || entry < 0.0F || entry > 1.0F") != std::string::npos);
-    CHECK(code.find("const float distance = cactus_flat_length(delta) * std::max(0.0F, entry)") != std::string::npos);
-    CHECK(code.find("normal.y = delta.y > 0.0F ? -1.0F : 1.0F") != std::string::npos);
-    CHECK(code.find("QueryResult2D cactus_query_overlap_deepest(entt::registry& registry") != std::string::npos);
-    CHECK(code.find("const float amount = std::abs(contact->overlap.x) + std::abs(contact->overlap.y)") !=
-          std::string::npos);
-    CHECK(code.find("if (!deepest.has_value() || amount > deepest_amount)") != std::string::npos);
-    CHECK(code.find("std::vector<QueryContact2D> cactus_query_overlap_all(entt::registry& registry") !=
-          std::string::npos);
-    CHECK(code.find("candidate.entity == exclude || !cactus_query_mask_allows(candidate, mask)") != std::string::npos);
-    CHECK(code.find("contacts.push_back(*contact)") != std::string::npos);
-    CHECK(code.find("return contacts;") != std::string::npos);
+    CHECK(code.contains("QueryResult2D cactus_query_cast_nearest(entt::registry& registry"));
+    CHECK(code.contains("if (delta.x == 0.0F && delta.y == 0.0F)"));
+    CHECK(code.contains("if (!cactus_find_flat_collider(registry, subject_entity, subject))"));
+    CHECK(code.contains("return cactus_empty_query_result();"));
+    CHECK(code.contains("if (!nearest.has_value() || contact->distance < nearest->distance)"));
+    CHECK(code.contains("entry > exit || entry < 0.0F || entry > 1.0F"));
+    CHECK(code.contains("const float distance = cactus_flat_length(delta) * std::max(0.0F, entry)"));
+    CHECK(code.contains("normal.y = delta.y > 0.0F ? -1.0F : 1.0F"));
+    CHECK(code.contains("QueryResult2D cactus_query_overlap_deepest(entt::registry& registry"));
+    CHECK(code.contains("const float amount = std::abs(contact->overlap.x) + std::abs(contact->overlap.y)"));
+    CHECK(code.contains("if (!deepest.has_value() || amount > deepest_amount)"));
+    CHECK(code.contains("std::vector<QueryContact2D> cactus_query_overlap_all(entt::registry& registry"));
+    CHECK(code.contains("candidate.entity == exclude || !cactus_query_mask_allows(candidate, mask)"));
+    CHECK(code.contains("contacts.push_back(*contact)"));
+    CHECK(code.contains("return contacts;"));
 }
 
 TEST_CASE("Codegen EnTT: bounded foreach evaluates iterable once", "[codegen-entt][foreach]") {
@@ -3154,10 +3167,10 @@ TEST_CASE("Codegen EnTT: bounded foreach evaluates iterable once", "[codegen-ent
         program);
 
     auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("auto foreach_snapshot_") != std::string::npos);
-    CHECK(code.find("= Detector_comp.hits;") != std::string::npos);
-    CHECK(code.find("for ([[maybe_unused]] const auto& hit : foreach_snapshot_") != std::string::npos);
-    CHECK(code.find("if (registry.valid(hit.victim))") != std::string::npos);
+    CHECK(code.contains("auto foreach_snapshot_"));
+    CHECK(code.contains("= Detector_comp.hits;"));
+    CHECK(code.contains("for ([[maybe_unused]] const auto& hit : foreach_snapshot_"));
+    CHECK(code.contains("if (registry.valid(hit.victim))"));
 }
 
 TEST_CASE("Codegen EnTT: projected traits use registry components in filters and clear after render",
@@ -3192,18 +3205,17 @@ TEST_CASE("Codegen EnTT: projected traits use registry components in filters and
     auto code = CppEnttCodegen::generate(decorated);
     // Tracking storage is runtime-hosted (ProjectedTraitTracker,
     // backends/cpp-entt/runtime.hpp) — codegen only instantiates the tracker.
-    CHECK(code.find("cactus::runtime::entt_backend::ProjectedTraitTracker<DamageFlash> projected_DamageFlash;") !=
-          std::string::npos);
+    CHECK(code.contains("cactus::runtime::entt_backend::ProjectedTraitTracker<DamageFlash> projected_DamageFlash;"));
     const auto projected_name = extract_temp_name(code, "cactus_gen_projected_");
     REQUIRE_FALSE(projected_name.empty());
-    CHECK(code.find("auto& " + projected_name + " = project_DamageFlash(registry, entity)") != std::string::npos);
-    CHECK(code.find(projected_name + ".intensity = 1.0F") != std::string::npos);
-    CHECK(code.find("registry.view<Health, DamageFlash>(entt::exclude<Suppressed>)") != std::string::npos);
-    CHECK(code.find("auto& flash = DamageFlash_comp") != std::string::npos);
-    CHECK(code.find("cactus_projected_DamageFlash") == std::string::npos);
-    CHECK(code.find("cactus_try_get_projected_or_durable_DamageFlash") == std::string::npos);
-    CHECK(code.find("cactus_has_projected_or_durable_Suppressed") == std::string::npos);
-    CHECK(code.find("clear_projected_traits(registry);") != std::string::npos);
+    CHECK(code.contains("auto& " + projected_name + " = project_DamageFlash(registry, entity)"));
+    CHECK(code.contains(projected_name + ".intensity = 1.0F"));
+    CHECK(code.contains("registry.view<Health, DamageFlash>(entt::exclude<Suppressed>)"));
+    CHECK(code.contains("auto& flash = DamageFlash_comp"));
+    CHECK(!code.contains("cactus_projected_DamageFlash"));
+    CHECK(!code.contains("cactus_try_get_projected_or_durable_DamageFlash"));
+    CHECK(!code.contains("cactus_has_projected_or_durable_Suppressed"));
+    CHECK(code.contains("clear_projected_traits(registry);"));
 }
 
 TEST_CASE("Codegen EnTT: filtered rules use native views and no early-return guards", "[codegen-entt][project]") {
@@ -3225,9 +3237,9 @@ TEST_CASE("Codegen EnTT: filtered rules use native views and no early-return gua
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            CHECK(code.find("registry.view<Wanted>(entt::exclude<Blocked>)") != std::string::npos);
-            CHECK(code.find("registry.storage<entt::entity>()") == std::string::npos);
-            CHECK(code.find("return;") == std::string::npos);
+            CHECK(code.contains("registry.view<Wanted>(entt::exclude<Blocked>)"));
+            CHECK(!code.contains("registry.storage<entt::entity>()"));
+            CHECK(!code.contains("return;"));
         }
     }
 }
@@ -3259,12 +3271,11 @@ TEST_CASE("Codegen EnTT: projected trait cleanup restores durable or removes pro
     // test_runtime_projected_trait_tracker.cpp; this codegen-level test only
     // checks the tracker is instantiated and the `remove Flash` statement
     // (a separate, non-projected-trait code path) still lowers as before.
-    CHECK(code.find("cactus::runtime::entt_backend::ProjectedTraitTracker<Flash> projected_Flash;") !=
-          std::string::npos);
-    CHECK(code.find("projected_Flash.project(registry, entity)") != std::string::npos);
-    CHECK(code.find("registry.remove<Flash>(entity)") != std::string::npos);
-    CHECK(code.find("cancel_projected_Flash(entity)") != std::string::npos);
-    CHECK(code.find("projected_Flash.cancel(entity)") != std::string::npos);
+    CHECK(code.contains("cactus::runtime::entt_backend::ProjectedTraitTracker<Flash> projected_Flash;"));
+    CHECK(code.contains("projected_Flash.project(registry, entity)"));
+    CHECK(code.contains("registry.remove<Flash>(entity)"));
+    CHECK(code.contains("cancel_projected_Flash(entity)"));
+    CHECK(code.contains("projected_Flash.cancel(entity)"));
 }
 
 TEST_CASE("Codegen EnTT: projected marker traits avoid value snapshots", "[codegen-entt][project]") {
@@ -3285,12 +3296,11 @@ TEST_CASE("Codegen EnTT: projected marker traits avoid value snapshots", "[codeg
     // Tag vs. data-bearing storage selection (std::is_empty_v branch) is
     // runtime-hosted and covered by test_runtime_projected_trait_tracker.cpp;
     // this codegen-level test only checks the tracker is instantiated.
-    CHECK(code.find("cactus::runtime::entt_backend::ProjectedTraitTracker<Grounded> projected_Grounded;") !=
-          std::string::npos);
-    CHECK(code.find("void project_Grounded(entt::registry& registry, entt::entity entity)") != std::string::npos);
-    CHECK(code.find("project_Grounded(registry, entity);") != std::string::npos);
-    CHECK(code.find("registry.try_get<Grounded>") == std::string::npos);
-    CHECK(code.find("std::optional<Grounded>") == std::string::npos);
+    CHECK(code.contains("cactus::runtime::entt_backend::ProjectedTraitTracker<Grounded> projected_Grounded;"));
+    CHECK(code.contains("void project_Grounded(entt::registry& registry, entt::entity entity)"));
+    CHECK(code.contains("project_Grounded(registry, entity);"));
+    CHECK(!code.contains("registry.try_get<Grounded>"));
+    CHECK(!code.contains("std::optional<Grounded>"));
 }
 
 // ── std.text.format codegen tests (add-stdlib-text-format) ───────────────────
@@ -3312,8 +3322,8 @@ TEST_CASE("Codegen EnTT: aliased std.text.format lowers to std::format in rule h
         program);
 
     auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("std::format(") != std::string::npos);
-    CHECK(code.find("\"Score: {}\"") != std::string::npos);
+    CHECK(code.contains("std::format("));
+    CHECK(code.contains("\"Score: {}\""));
 }
 
 TEST_CASE("Codegen EnTT: std.text import causes format header to be emitted", "[codegen-entt][std-text-format]") {
@@ -3332,7 +3342,7 @@ TEST_CASE("Codegen EnTT: std.text import causes format header to be emitted", "[
         program);
 
     auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("#include <format>") != std::string::npos);
+    CHECK(code.contains("#include <format>"));
 }
 
 TEST_CASE("Codegen EnTT: no std.text import means no format header", "[codegen-entt][std-text-format]") {
@@ -3343,7 +3353,7 @@ TEST_CASE("Codegen EnTT: no std.text import means no format header", "[codegen-e
         program);
 
     auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("#include <format>") == std::string::npos);
+    CHECK(!code.contains("#include <format>"));
 }
 
 TEST_CASE("Codegen EnTT: unaliased std.text format lowers to std::format in rule handler",
@@ -3363,7 +3373,7 @@ TEST_CASE("Codegen EnTT: unaliased std.text format lowers to std::format in rule
         program);
 
     auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("std::format(") != std::string::npos);
+    CHECK(code.contains("std::format("));
 }
 
 // ── Task 3.5: Template-backed entity backend tests ────────────────────────────
@@ -3390,10 +3400,10 @@ TEST_CASE("Codegen EnTT: template-backed entity emits template components plus o
 
     auto code = CppEnttCodegen::generate(decorated);
     // Should have a create function for Gem1 that emplaces Shape, Collectible, and WorldTransform
-    CHECK(code.find("create_gem1") != std::string::npos);
-    CHECK(code.find("emplace<Shape>") != std::string::npos);
-    CHECK(code.find("emplace<Collectible>") != std::string::npos);
-    CHECK(code.find("emplace<WorldTransform>") != std::string::npos);
+    CHECK(code.contains("create_gem1"));
+    CHECK(code.contains("emplace<Shape>"));
+    CHECK(code.contains("emplace<Collectible>"));
+    CHECK(code.contains("emplace<WorldTransform>"));
 }
 
 TEST_CASE("Codegen EnTT: flat archetype's non-hinted creation function delegates to its hinted counterpart",
@@ -3414,8 +3424,8 @@ TEST_CASE("Codegen EnTT: flat archetype's non-hinted creation function delegates
           "    return create_particle_at(registry, registry.create());\n"
           "}\n");
     // Not a second copy of create_particle_at's field-initialization statements.
-    CHECK(wrapper.find("component") == std::string::npos);
-    CHECK(wrapper.find("registry.emplace<Position>") == std::string::npos);
+    CHECK(!wrapper.contains("component"));
+    CHECK(!wrapper.contains("registry.emplace<Position>"));
 }
 
 TEST_CASE("Codegen EnTT: mixed entity creation order preserved", "[codegen-entt][entity]") {
@@ -3497,17 +3507,17 @@ TEST_CASE("Codegen EnTT: editor.cactus module generates EditorState component, E
     auto code = CppEnttCodegen::generate(decorated);
 
     // EditorState should have a component struct
-    CHECK(code.find("struct EditorState") != std::string::npos);
+    CHECK(code.contains("struct EditorState"));
     // Editor entity should be created
-    CHECK(code.find("create_editor") != std::string::npos);
+    CHECK(code.contains("create_editor"));
     // EditorSelected marker trait should be registered
-    CHECK(code.find("struct EditorSelected") != std::string::npos);
+    CHECK(code.contains("struct EditorSelected"));
     // EditorSnap should have fields
-    CHECK(code.find("struct EditorSnap") != std::string::npos);
+    CHECK(code.contains("struct EditorSnap"));
     // EditorSelectionChanged event should have a struct
-    CHECK(code.find("struct EditorSelectionChanged") != std::string::npos);
+    CHECK(code.contains("struct EditorSelectionChanged"));
     // EditorPropertyPanel extern rule stub (snake_case name)
-    CHECK(code.find("editor_property_panel_tick") != std::string::npos);
+    CHECK(code.contains("editor_property_panel_tick"));
     // HexColor for #00FF00FF is not in this test, but HexColor conversion path should exist
 }
 
@@ -3537,10 +3547,10 @@ TEST_CASE("Codegen EnTT: editor active_mode() reads the singleton EditorState.mo
     // Impl registered from generated_init_project, reading EditorState.mode off the
     // singleton Editor entity — mirrors the hit_test/spawn/raycast impl-registration idiom.
     const auto init = generated_function(code, "void generated_init_project");
-    CHECK(init.find("register_editor_active_mode_impl(") != std::string::npos);
-    CHECK(init.find("reg.view<EditorState>()") != std::string::npos);
-    CHECK(init.find("-> int {") != std::string::npos);
-    CHECK(init.find("static_cast<int>(view.get<EditorState>(entity).mode)") != std::string::npos);
+    CHECK(init.contains("register_editor_active_mode_impl("));
+    CHECK(init.contains("reg.view<EditorState>()"));
+    CHECK(init.contains("-> int {"));
+    CHECK(init.contains("static_cast<int>(view.get<EditorState>(entity).mode)"));
 }
 
 TEST_CASE("Codegen EnTT: editor template_names()/template_index() expose a declaration-ordered companion list",
@@ -3574,10 +3584,11 @@ TEST_CASE("Codegen EnTT: editor template_names()/template_index() expose a decla
     REQUIRE(box_pos != std::string::npos);
     REQUIRE(spawn_pos != std::string::npos);
     CHECK(box_pos < spawn_pos);
-    CHECK(code.find("std::vector<std::string> editor_template_names() { return "
-                    "cactus_template_registry_order; }") != std::string::npos);
-    CHECK(code.find("int editor_template_index(const std::string& name) noexcept {") != std::string::npos);
-    CHECK(code.find("return -1;") != std::string::npos);
+    CHECK(
+        code.contains("std::vector<std::string> editor_template_names() { return "
+                      "cactus_template_registry_order; }"));
+    CHECK(code.contains("int editor_template_index(const std::string& name) noexcept {"));
+    CHECK(code.contains("return -1;"));
 }
 
 // The palette stores every factory as entt::entity(*)(entt::registry&), which a
@@ -3662,13 +3673,13 @@ TEST_CASE(
 
     const auto code = CppEnttCodegen::generate(decorated);
     const auto rule = generated_function(code, "void probe_test_tick");
-    CHECK(rule.find("cactus::runtime::entt_backend::editor_active_mode(registry)") != std::string::npos);
-    CHECK(rule.find("cactus::runtime::entt_backend::editor_template_index(\"Box\")") != std::string::npos);
-    CHECK(rule.find("cactus::runtime::entt_backend::editor_screen_size()") != std::string::npos);
+    CHECK(rule.contains("cactus::runtime::entt_backend::editor_active_mode(registry)"));
+    CHECK(rule.contains("cactus::runtime::entt_backend::editor_template_index(\"Box\")"));
+    CHECK(rule.contains("cactus::runtime::entt_backend::editor_screen_size()"));
     // Only active_mode reads ECS state (the EditorState singleton); the others read
     // codegen-emitted globals or raw window state and take no registry argument.
-    CHECK(rule.find("editor_template_index(registry,") == std::string::npos);
-    CHECK(rule.find("editor_screen_size(registry)") == std::string::npos);
+    CHECK(!rule.contains("editor_template_index(registry,"));
+    CHECK(!rule.contains("editor_screen_size(registry)"));
 }
 
 // runtime.hpp's editor_active_mode/editor_mode_label stay int-based (program-independent,
@@ -3700,8 +3711,7 @@ TEST_CASE("Codegen EnTT: active_mode() lowers to a static_cast from the runtime'
 
     const auto code = CppEnttCodegen::generate(decorated);
     const auto rule = generated_function(code, "void probe_test_tick");
-    CHECK(rule.find("static_cast<GizmoMode>(cactus::runtime::entt_backend::editor_active_mode(registry))") !=
-          std::string::npos);
+    CHECK(rule.contains("static_cast<GizmoMode>(cactus::runtime::entt_backend::editor_active_mode(registry))"));
 }
 
 TEST_CASE("Codegen EnTT: mode_label(mode) lowers to a static_cast from GizmoMode to the runtime's int parameter",
@@ -3730,7 +3740,7 @@ TEST_CASE("Codegen EnTT: mode_label(mode) lowers to a static_cast from GizmoMode
 
     const auto code = CppEnttCodegen::generate(decorated);
     const auto rule = generated_function(code, "void probe_test_tick");
-    CHECK(rule.find("cactus::runtime::entt_backend::editor_mode_label(static_cast<int>(") != std::string::npos);
+    CHECK(rule.contains("cactus::runtime::entt_backend::editor_mode_label(static_cast<int>("));
 }
 
 TEST_CASE("Codegen EnTT: EditorGizmoRenderer2D gates on is_editor_active and emits mode-specific debug-draw events",
@@ -3822,13 +3832,13 @@ TEST_CASE("Codegen EnTT: EditorGizmoRenderer2D gates on is_editor_active and emi
     const auto tick = generated_function(code, "void editor_gizmo_renderer2_d_render");
     // Early return when inactive: EditorSelected persists across an editor toggle-off, so the
     // rule can't rely on the filter alone to gate drawing.
-    CHECK(tick.find("editor_is_active(registry)") != std::string::npos);
+    CHECK(tick.contains("editor_is_active(registry)"));
     // Mode drives both the projection and the mode-specific branches, not a hardcoded literal.
-    CHECK(tick.find("editor_active_mode(registry)") != std::string::npos);
-    CHECK(tick.find("project_EditorGizmo2D(registry, entity)") != std::string::npos);
-    CHECK(tick.find(".mode = mode;") != std::string::npos);
+    CHECK(tick.contains("editor_active_mode(registry)"));
+    CHECK(tick.contains("project_EditorGizmo2D(registry, entity)"));
+    CHECK(tick.contains(".mode = mode;"));
     // Always-drawn AABB outline, independent of mode.
-    CHECK(tick.find("DrawDebugRectOutline2DEvent_buffer.push_back(") != std::string::npos);
+    CHECK(tick.contains("DrawDebugRectOutline2DEvent_buffer.push_back("));
     // Translate handles only inside the mode == GizmoMode::Translate branch.
     const auto mode1 = tick.find("if (mode == GizmoMode::Translate) {");
     REQUIRE(mode1 != std::string::npos);
@@ -3915,19 +3925,19 @@ TEST_CASE(
     const auto code = CppEnttCodegen::generate(decorated);
     const auto tick = generated_function(code, "void editor_template_palette_render");
     // Inactive branch: labels hidden via ScreenLabel.visible = false, no DrawScreenRect emitted.
-    CHECK(tick.find("visible = false;") != std::string::npos);
+    CHECK(tick.contains("visible = false;"));
     // Active branch: index comes from template_index(name), not a loop-local counter — bounded
     // `for` can't mutate an outer-scope var across iterations.
-    CHECK(tick.find("editor_template_index(name)") != std::string::npos);
+    CHECK(tick.contains("editor_template_index(name)"));
     // Color comes from the palette_color() extern func, not a DSL if-chain — `if`/`for` bodies
     // can't mutate an outer-scope local either (same root cause), so a computed-then-conditionally
     // -overridden local would silently keep its first value.
-    CHECK(tick.find("editor_palette_color(idx)") != std::string::npos);
-    CHECK(tick.find("DrawScreenRectEvent_buffer.push_back(") != std::string::npos);
+    CHECK(tick.contains("editor_palette_color(idx)"));
+    CHECK(tick.contains("DrawScreenRectEvent_buffer.push_back("));
     // Click hit-testing and the EditorState writes happen directly in this rule (self bound to
     // EditorState), writing the real component fields, not a generic renderer.
-    CHECK(tick.find(".active_template = name;") != std::string::npos);
-    CHECK(tick.find(".mode = GizmoMode::Place;") != std::string::npos);
+    CHECK(tick.contains(".active_template = name;"));
+    CHECK(tick.contains(".mode = GizmoMode::Place;"));
 }
 
 TEST_CASE("Codegen EnTT: EditorHUDOverlay draws a screen border and mode-text label only while active",
@@ -4000,9 +4010,9 @@ TEST_CASE("Codegen EnTT: EditorHUDOverlay draws a screen border and mode-text la
     REQUIRE(border != std::string::npos);
     CHECK(border > early_return);
     // Active: border spans screen_size(), mode text built via mode_label(), then shown.
-    CHECK(render.find("editor_screen_size()") != std::string::npos);
-    CHECK(render.find("editor_mode_label(") != std::string::npos);
-    CHECK(render.find("visible = true;") != std::string::npos);
+    CHECK(render.contains("editor_screen_size()"));
+    CHECK(render.contains("editor_mode_label("));
+    CHECK(render.contains("visible = true;"));
 }
 
 TEST_CASE("Codegen EnTT: editor projected traits generate registry helpers", "[codegen-entt][stdlib][editor]") {
@@ -4039,15 +4049,15 @@ TEST_CASE("Codegen EnTT: editor projected traits generate registry helpers", "[c
     auto code = CppEnttCodegen::generate(decorated);
 
     // Should generate a projected trait tracker for EditorGizmo2D
-    CHECK(code.find("project_EditorGizmo2D") != std::string::npos);
-    CHECK(code.find("cactus::runtime::entt_backend::ProjectedTraitTracker<EditorGizmo2D> projected_EditorGizmo2D;") !=
-          std::string::npos);
+    CHECK(code.contains("project_EditorGizmo2D"));
+    CHECK(
+        code.contains("cactus::runtime::entt_backend::ProjectedTraitTracker<EditorGizmo2D> projected_EditorGizmo2D;"));
     // Should generate a projected trait tracker for EditorGizmo3D
-    CHECK(code.find("project_EditorGizmo3D") != std::string::npos);
-    CHECK(code.find("cactus::runtime::entt_backend::ProjectedTraitTracker<EditorGizmo3D> projected_EditorGizmo3D;") !=
-          std::string::npos);
+    CHECK(code.contains("project_EditorGizmo3D"));
+    CHECK(
+        code.contains("cactus::runtime::entt_backend::ProjectedTraitTracker<EditorGizmo3D> projected_EditorGizmo3D;"));
     // Should have the general projected trait cleanup call
-    CHECK(code.find("clear_projected_traits(registry)") != std::string::npos);
+    CHECK(code.contains("clear_projected_traits(registry)"));
 }
 
 TEST_CASE("Codegen EnTT: editor extern rules generate correct dispatch calls",
@@ -4079,7 +4089,7 @@ TEST_CASE("Codegen EnTT: editor extern rules generate correct dispatch calls",
     auto code = CppEnttCodegen::generate(decorated);
 
     // EditorPropertyPanel should have a tick call (snake_case name)
-    CHECK(code.find("editor_property_panel_tick") != std::string::npos);
+    CHECK(code.contains("editor_property_panel_tick"));
 }
 
 // Replaces the old "GizmoRenderer3D emits grid wire boxes..." test, which asserted the hardcoded
@@ -4162,13 +4172,13 @@ TEST_CASE("Codegen EnTT: EditorGizmoRenderer3D gates on is_editor_active and emi
     const auto tick = generated_function(code, "void editor_gizmo_renderer3_d_render");
     // Early return when inactive: EditorSelected persists across an editor toggle-off, so the
     // rule can't rely on the filter alone to gate drawing.
-    CHECK(tick.find("editor_is_active(registry)") != std::string::npos);
+    CHECK(tick.contains("editor_is_active(registry)"));
     // Mode drives both the projection and the mode-specific branches, not a hardcoded literal.
-    CHECK(tick.find("editor_active_mode(registry)") != std::string::npos);
-    CHECK(tick.find("project_EditorGizmo3D(registry, entity)") != std::string::npos);
-    CHECK(tick.find(".mode = mode;") != std::string::npos);
+    CHECK(tick.contains("editor_active_mode(registry)"));
+    CHECK(tick.contains("project_EditorGizmo3D(registry, entity)"));
+    CHECK(tick.contains(".mode = mode;"));
     // Always-drawn wire box, independent of mode.
-    CHECK(tick.find("DrawDebugWireBox3DEvent_buffer.push_back(") != std::string::npos);
+    CHECK(tick.contains("DrawDebugWireBox3DEvent_buffer.push_back("));
     // Translate/scale axis line only inside the (mode == Translate || mode == Scale) branch;
     // circle only inside mode == Rotate.
     const auto translate_branch = tick.find("mode == GizmoMode::Translate");
@@ -4181,9 +4191,9 @@ TEST_CASE("Codegen EnTT: EditorGizmoRenderer3D gates on is_editor_active and emi
     // The rule is not implicitly attached to either legacy hook — linked phase metadata is
     // required to schedule it, same as any other rule.
     const auto render_project = generated_function(code, "void generated_render_project");
-    CHECK(render_project.find("editor_gizmo_renderer3_d_render(registry)") == std::string::npos);
+    CHECK(!render_project.contains("editor_gizmo_renderer3_d_render(registry)"));
     const auto update_project = generated_function(code, "void generated_update_project");
-    CHECK(update_project.find("editor_gizmo_renderer3_d_render") == std::string::npos);
+    CHECK(!update_project.contains("editor_gizmo_renderer3_d_render"));
 }
 
 TEST_CASE("Codegen EnTT: volume-transform editor program registers pos3d spawn impl and raycast impl",
@@ -4208,16 +4218,16 @@ TEST_CASE("Codegen EnTT: volume-transform editor program registers pos3d spawn i
     auto code = CppEnttCodegen::generate(decorated);
 
     // Spawn impl writes the 3D position into both transform components
-    CHECK(code.find("register_editor_spawn_impl") != std::string::npos);
-    CHECK(code.find("lt->position = pos3d") != std::string::npos);
-    CHECK(code.find("wt->position = pos3d") != std::string::npos);
-    CHECK(code.find("wt->position = pos2d") == std::string::npos);
+    CHECK(code.contains("register_editor_spawn_impl"));
+    CHECK(code.contains("lt->position = pos3d"));
+    CHECK(code.contains("wt->position = pos3d"));
+    CHECK(!code.contains("wt->position = pos2d"));
 
     // Raycast impl tests scaled/translated model bounds and skips locked entities
-    CHECK(code.find("register_editor_raycast_impl") != std::string::npos);
-    CHECK(code.find("model_bounds_box") != std::string::npos);
-    CHECK(code.find("GetRayCollisionBox") != std::string::npos);
-    CHECK(code.find("reg.view<WorldTransform, ModelRenderer>(entt::exclude<EditorLocked>)") != std::string::npos);
+    CHECK(code.contains("register_editor_raycast_impl"));
+    CHECK(code.contains("model_bounds_box"));
+    CHECK(code.contains("GetRayCollisionBox"));
+    CHECK(code.contains("reg.view<WorldTransform, ModelRenderer>(entt::exclude<EditorLocked>)"));
 }
 
 TEST_CASE("Codegen EnTT: flat-transform editor program keeps pos2d spawn impl and no raycast impl",
@@ -4238,11 +4248,11 @@ TEST_CASE("Codegen EnTT: flat-transform editor program keeps pos2d spawn impl an
 
     auto code = CppEnttCodegen::generate(decorated);
 
-    CHECK(code.find("register_editor_spawn_impl") != std::string::npos);
-    CHECK(code.find("lt->position = pos2d") != std::string::npos);
-    CHECK(code.find("wt->position = pos2d") != std::string::npos);
-    CHECK(code.find("pos3d;") == std::string::npos);
-    CHECK(code.find("register_editor_raycast_impl") == std::string::npos);
+    CHECK(code.contains("register_editor_spawn_impl"));
+    CHECK(code.contains("lt->position = pos2d"));
+    CHECK(code.contains("wt->position = pos2d"));
+    CHECK(!code.contains("pos3d;"));
+    CHECK(!code.contains("register_editor_raycast_impl"));
 }
 
 TEST_CASE("Codegen EnTT: volume editor program without ModelRenderer registers no raycast impl",
@@ -4260,10 +4270,10 @@ TEST_CASE("Codegen EnTT: volume editor program without ModelRenderer registers n
     auto code = CppEnttCodegen::generate(decorated);
 
     // Spawn impl still registers (WorldTransform only — no LocalTransform patch)
-    CHECK(code.find("register_editor_spawn_impl") != std::string::npos);
-    CHECK(code.find("wt->position = pos3d") != std::string::npos);
-    CHECK(code.find("lt->position") == std::string::npos);
-    CHECK(code.find("register_editor_raycast_impl") == std::string::npos);
+    CHECK(code.contains("register_editor_spawn_impl"));
+    CHECK(code.contains("wt->position = pos3d"));
+    CHECK(!code.contains("lt->position"));
+    CHECK(!code.contains("register_editor_raycast_impl"));
 }
 
 static constexpr const char* kViewportTrait =
@@ -4294,24 +4304,24 @@ TEST_CASE("Codegen EnTT: std.camera.viewport emits viewport render loop and no c
     const auto code = CppEnttCodegen::generate(decorated);
 
     // Viewport loop is in generated_render_project
-    CHECK(code.find("registry.view<Viewport>()") != std::string::npos);
-    CHECK(code.find("BeginScissorMode") != std::string::npos);
-    CHECK(code.find("EndScissorMode") != std::string::npos);
-    CHECK(code.find("std::ranges::sort") != std::string::npos);
-    CHECK(code.find("__vp.active") != std::string::npos);
-    CHECK(code.find("__vp.depth") != std::string::npos);
-    CHECK(code.find("if (__vp.clear) { cactus::runtime::raylib::ClearBackground") != std::string::npos);
+    CHECK(code.contains("registry.view<Viewport>()"));
+    CHECK(code.contains("BeginScissorMode"));
+    CHECK(code.contains("EndScissorMode"));
+    CHECK(code.contains("std::ranges::sort"));
+    CHECK(code.contains("__vp.active"));
+    CHECK(code.contains("__vp.depth"));
+    CHECK(code.contains("if (__vp.clear) { cactus::runtime::raylib::ClearBackground"));
 
     // 2D camera set per viewport via translate helper
-    CHECK(code.find("__translate_camera_2d") != std::string::npos);
-    CHECK(code.find("set_active_camera_2d") != std::string::npos);
+    CHECK(code.contains("__translate_camera_2d"));
+    CHECK(code.contains("set_active_camera_2d"));
 
     // No legacy camera-sync block in generated_update_project
-    CHECK(code.find("__cam.active") == std::string::npos);
-    CHECK(code.find("registry.view<Camera>()") == std::string::npos);
+    CHECK(!code.contains("__cam.active"));
+    CHECK(!code.contains("registry.view<Camera>()"));
 
     // #include <algorithm> is present for std::sort
-    CHECK(code.find("#include <algorithm>") != std::string::npos);
+    CHECK(code.contains("#include <algorithm>"));
 }
 
 TEST_CASE("Codegen EnTT: viewport loop sorts by depth (lower depth first)", "[codegen-entt][camera][viewport]") {
@@ -4321,9 +4331,9 @@ TEST_CASE("Codegen EnTT: viewport loop sorts by depth (lower depth first)", "[co
     const auto code = CppEnttCodegen::generate(decorated);
 
     // Depth-ordered collection and sort
-    CHECK(code.find("static std::vector<std::pair<int,entt::entity>> __vps") != std::string::npos);
-    CHECK(code.find("__vps.emplace_back(__vp.depth, __vp_e)") != std::string::npos);
-    CHECK(code.find("std::ranges::sort(__vps)") != std::string::npos);
+    CHECK(code.contains("static std::vector<std::pair<int,entt::entity>> __vps"));
+    CHECK(code.contains("__vps.emplace_back(__vp.depth, __vp_e)"));
+    CHECK(code.contains("std::ranges::sort(__vps)"));
 }
 
 TEST_CASE("Codegen EnTT: viewport loop emits clear and no-clear paths", "[codegen-entt][camera][viewport]") {
@@ -4333,8 +4343,7 @@ TEST_CASE("Codegen EnTT: viewport loop emits clear and no-clear paths", "[codege
     const auto code = CppEnttCodegen::generate(decorated);
 
     // clear path: conditional ClearBackground per viewport
-    CHECK(code.find("if (__vp.clear) { cactus::runtime::raylib::ClearBackground(__vp.clear_color); }") !=
-          std::string::npos);
+    CHECK(code.contains("if (__vp.clear) { cactus::runtime::raylib::ClearBackground(__vp.clear_color); }"));
 }
 
 TEST_CASE("Codegen EnTT: viewport loop emits scissor for each viewport (split-screen)",
@@ -4348,14 +4357,15 @@ TEST_CASE("Codegen EnTT: viewport loop emits scissor for each viewport (split-sc
     const auto code = CppEnttCodegen::generate(decorated);
 
     // Each viewport iteration sets scissor region based on normalized rect
-    CHECK(code.find("BeginScissorMode(\n"
-                    "                static_cast<int>(__vp.x * static_cast<float>(__sw))") != std::string::npos);
-    CHECK(code.find("static_cast<int>(__vp.width * static_cast<float>(__sw))") != std::string::npos);
-    CHECK(code.find("static_cast<int>(__vp.height * static_cast<float>(__sh))") != std::string::npos);
+    CHECK(
+        code.contains("BeginScissorMode(\n"
+                      "                static_cast<int>(__vp.x * static_cast<float>(__sw))"));
+    CHECK(code.contains("static_cast<int>(__vp.width * static_cast<float>(__sw))"));
+    CHECK(code.contains("static_cast<int>(__vp.height * static_cast<float>(__sh))"));
 
     // Per-viewport camera is set with the entity's Camera component
-    CHECK(code.find("registry.all_of<Camera>(__vp_ent)") != std::string::npos);
-    CHECK(code.find("__translate_camera_2d(__cam, __sw, __sh)") != std::string::npos);
+    CHECK(code.contains("registry.all_of<Camera>(__vp_ent)"));
+    CHECK(code.contains("__translate_camera_2d(__cam, __sw, __sh)"));
 }
 
 TEST_CASE("Codegen EnTT: Camera trait no longer has active field after multi-viewport change",
@@ -4372,9 +4382,9 @@ TEST_CASE("Codegen EnTT: Camera trait no longer has active field after multi-vie
     const auto code = CppEnttCodegen::generate(decorated);
 
     // Camera struct without active field — no camera-sync block is emitted
-    CHECK(code.find("__cam.active") == std::string::npos);
+    CHECK(!code.contains("__cam.active"));
     // Camera struct is still generated
-    CHECK(code.find("struct Camera") != std::string::npos);
+    CHECK(code.contains("struct Camera"));
 }
 
 // ── Query expression backend codegen tests ──────────────────────────────────
@@ -4399,8 +4409,8 @@ TEST_CASE("Codegen EnTT: query.exists lowers to entt view begin/end check", "[co
                                    program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("registry.view<Boss>()") != std::string::npos);
-    CHECK(code.find("view.begin() != view.end()") != std::string::npos);
+    CHECK(code.contains("registry.view<Boss>()"));
+    CHECK(code.contains("view.begin() != view.end()"));
 }
 
 TEST_CASE("Codegen EnTT: query.exists with negation lowers to excluded view", "[codegen-entt][query]") {
@@ -4413,7 +4423,7 @@ TEST_CASE("Codegen EnTT: query.exists with negation lowers to excluded view", "[
                                    program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("registry.view<Enemy>(entt::exclude<Dead>)") != std::string::npos);
+    CHECK(code.contains("registry.view<Enemy>(entt::exclude<Dead>)"));
 }
 
 TEST_CASE("Codegen EnTT: query.count lowers to counting loop", "[codegen-entt][query]") {
@@ -4425,8 +4435,8 @@ TEST_CASE("Codegen EnTT: query.count lowers to counting loop", "[codegen-entt][q
                                    program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("registry.view<Enemy>(entt::exclude<Dead>)") != std::string::npos);
-    CHECK(code.find("std::ranges::distance") != std::string::npos);
+    CHECK(code.contains("registry.view<Enemy>(entt::exclude<Dead>)"));
+    CHECK(code.contains("std::ranges::distance"));
 }
 
 TEST_CASE("Codegen EnTT: query.first lowers to begin/end with null fallback", "[codegen-entt][query]") {
@@ -4438,10 +4448,10 @@ TEST_CASE("Codegen EnTT: query.first lowers to begin/end with null fallback", "[
                                    program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("registry.view<Boss>()") != std::string::npos);
-    CHECK(code.find("entt::entity{entt::null}") != std::string::npos);
+    CHECK(code.contains("registry.view<Boss>()"));
+    CHECK(code.contains("entt::entity{entt::null}"));
     // empty result returns null sentinel (total entity_id semantics)
-    CHECK(code.find("it != view.end()") != std::string::npos);
+    CHECK(code.contains("it != view.end()"));
 }
 
 TEST_CASE("Codegen EnTT: query.all lowers to vector collection loop", "[codegen-entt][query]") {
@@ -4453,9 +4463,9 @@ TEST_CASE("Codegen EnTT: query.all lowers to vector collection loop", "[codegen-
                                    program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("registry.view<Enemy>()") != std::string::npos);
-    CHECK(code.find("std::vector<entt::entity> result") != std::string::npos);
-    CHECK(code.find("result.push_back(e)") != std::string::npos);
+    CHECK(code.contains("registry.view<Enemy>()"));
+    CHECK(code.contains("std::vector<entt::entity> result"));
+    CHECK(code.contains("result.push_back(e)"));
 }
 
 TEST_CASE("Codegen EnTT: query.children lowers to a stable filtered direct-child snapshot",
@@ -4479,20 +4489,19 @@ TEST_CASE("Codegen EnTT: query.children lowers to a stable filtered direct-child
     const auto code             = CppEnttCodegen::generate(decorated);
     const auto requested_parent = extract_temp_name(code, "cactus_gen_requested_parent_");
     REQUIRE_FALSE(requested_parent.empty());
-    CHECK(code.find("const auto " + requested_parent + " = (Selection_comp.parent)") != std::string::npos);
+    CHECK(code.contains("const auto " + requested_parent + " = (Selection_comp.parent)"));
     // The handler body lives in one shared lambda invoked from both the
     // targeted-delivery and broadcast dispatch sites (dedupe-handler-
     // dispatch-codegen), so the authored expression appears once in the
     // generated function and is evaluated once per runtime invocation.
     CHECK(count_occurrences(code, "const auto " + requested_parent + " = (Selection_comp.parent)") == 1);
-    CHECK(code.find("if (!registry.valid(" + requested_parent + ")) return std::vector<entt::entity>{}") !=
-          std::string::npos);
-    CHECK(code.find("registry.view<Parent, Node>(entt::exclude<Hidden>)") != std::string::npos);
-    CHECK(code.find("registry.get<Parent>(e).parent == " + requested_parent) != std::string::npos);
-    CHECK(code.find("registry.get<cactus::runtime::entt_backend::CreationOrdinal>(e).value") != std::string::npos);
-    CHECK(code.find("std::ranges::sort(ordered)") != std::string::npos);
-    CHECK(code.find("std::vector<entt::entity> result; result.reserve(ordered.size())") != std::string::npos);
-    CHECK(code.find("result.push_back(e)") != std::string::npos);
+    CHECK(code.contains("if (!registry.valid(" + requested_parent + ")) return std::vector<entt::entity>{}"));
+    CHECK(code.contains("registry.view<Parent, Node>(entt::exclude<Hidden>)"));
+    CHECK(code.contains("registry.get<Parent>(e).parent == " + requested_parent));
+    CHECK(code.contains("registry.get<cactus::runtime::entt_backend::CreationOrdinal>(e).value"));
+    CHECK(code.contains("std::ranges::sort(ordered)"));
+    CHECK(code.contains("std::vector<entt::entity> result; result.reserve(ordered.size())"));
+    CHECK(code.contains("result.push_back(e)"));
 }
 
 TEST_CASE("Codegen EnTT: hierarchy traversals lower to stable filtered-forest snapshots with cycle containment",
@@ -4512,16 +4521,15 @@ TEST_CASE("Codegen EnTT: hierarchy traversals lower to stable filtered-forest sn
 
     const auto code = CppEnttCodegen::generate(decorated);
     CHECK(count_occurrences(code, "registry.view<Node>(entt::exclude<Hidden>)") >= 2);
-    CHECK(code.find("std::ranges::sort(ordered)") != std::string::npos);
-    CHECK(code.find("std::unordered_set<entt::entity> matching") != std::string::npos);
-    CHECK(code.find("registry.try_get<Parent>(e)") != std::string::npos);
-    CHECK(code.find("registry.valid(relation->parent) && matching.contains(relation->parent)") != std::string::npos);
-    CHECK(code.find("else roots.push_back(e)") != std::string::npos);
-    CHECK(code.find("children[relation->parent].push_back(e)") != std::string::npos);
-    CHECK(code.find("if (!visited.insert(e).second) return") != std::string::npos);
-    CHECK(code.find("for (const auto root : roots) visit(visit, root)") != std::string::npos);
-    CHECK(code.find("for (const auto& [ordinal, e] : ordered) { (void)ordinal; visit(visit, e); }") !=
-          std::string::npos);
+    CHECK(code.contains("std::ranges::sort(ordered)"));
+    CHECK(code.contains("std::unordered_set<entt::entity> matching"));
+    CHECK(code.contains("registry.try_get<Parent>(e)"));
+    CHECK(code.contains("registry.valid(relation->parent) && matching.contains(relation->parent)"));
+    CHECK(code.contains("else roots.push_back(e)"));
+    CHECK(code.contains("children[relation->parent].push_back(e)"));
+    CHECK(code.contains("if (!visited.insert(e).second) return"));
+    CHECK(code.contains("for (const auto root : roots) visit(visit, root)"));
+    CHECK(code.contains("for (const auto& [ordinal, e] : ordered) { (void)ordinal; visit(visit, e); }"));
 
     const auto preorder_start = code.find("auto preorder = ");
     REQUIRE(preorder_start != std::string::npos);
@@ -4562,9 +4570,9 @@ TEST_CASE("Codegen EnTT: query.parent lowers to Parent component try_get", "[cod
     const auto code                  = CppEnttCodegen::generate(decorated);
     const auto parent_component_name = extract_temp_name(code, "cactus_gen_parent_component_");
     REQUIRE_FALSE(parent_component_name.empty());
-    CHECK(code.find("registry.try_get<Parent>") != std::string::npos);
-    CHECK(code.find(parent_component_name + "->parent") != std::string::npos);
-    CHECK(code.find("entt::entity{entt::null}") != std::string::npos);
+    CHECK(code.contains("registry.try_get<Parent>"));
+    CHECK(code.contains(parent_component_name + "->parent"));
+    CHECK(code.contains("entt::entity{entt::null}"));
 }
 
 TEST_CASE("Codegen EnTT: fully qualified std.query path is lowered correctly", "[codegen-entt][query]") {
@@ -4581,8 +4589,8 @@ TEST_CASE("Codegen EnTT: fully qualified std.query path is lowered correctly", "
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("registry.view<Boss>()") != std::string::npos);
-    CHECK(code.find("entt::entity{entt::null}") != std::string::npos);
+    CHECK(code.contains("registry.view<Boss>()"));
+    CHECK(code.contains("entt::entity{entt::null}"));
 }
 
 static const char* const kFlatQueryPreamble =
@@ -4607,13 +4615,13 @@ TEST_CASE("Codegen EnTT: flat query.nearest lowers to WorldTransform distance se
                                    program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("registry.view<WorldTransform, Enemy>()") != std::string::npos);
+    CHECK(code.contains("registry.view<WorldTransform, Enemy>()"));
     // call site delegates the search to the shared runtime helper instead of an inline loop
-    CHECK(code.find("cactus::runtime::entt_backend::query_nearest(") != std::string::npos);
-    CHECK(code.find("registry.get<WorldTransform>(e).position") != std::string::npos);
+    CHECK(code.contains("cactus::runtime::entt_backend::query_nearest("));
+    CHECK(code.contains("registry.get<WorldTransform>(e).position"));
     // no reserved double-leading-underscore locals at the call site
-    CHECK(code.find("__best") == std::string::npos);
-    CHECK(code.find("__from") == std::string::npos);
+    CHECK(!code.contains("__best"));
+    CHECK(!code.contains("__from"));
 }
 
 TEST_CASE("Codegen EnTT: flat query.overlap_box excludes negative filter matches", "[codegen-entt][query][spatial]") {
@@ -4626,11 +4634,11 @@ TEST_CASE("Codegen EnTT: flat query.overlap_box excludes negative filter matches
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("registry.view<WorldTransform, Pickup>(entt::exclude<Collected>)") != std::string::npos);
-    CHECK(code.find("cactus::runtime::entt_backend::query_overlap_box(") != std::string::npos);
-    CHECK(code.find("registry.get<WorldTransform>(e).position") != std::string::npos);
-    CHECK(code.find("__ct") == std::string::npos);
-    CHECK(code.find("__sz") == std::string::npos);
+    CHECK(code.contains("registry.view<WorldTransform, Pickup>(entt::exclude<Collected>)"));
+    CHECK(code.contains("cactus::runtime::entt_backend::query_overlap_box("));
+    CHECK(code.contains("registry.get<WorldTransform>(e).position"));
+    CHECK(!code.contains("__ct"));
+    CHECK(!code.contains("__sz"));
 }
 
 TEST_CASE("Codegen EnTT: flat query.overlap_circle lowers to radius-based search", "[codegen-entt][query][spatial]") {
@@ -4643,10 +4651,10 @@ TEST_CASE("Codegen EnTT: flat query.overlap_circle lowers to radius-based search
                       program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("registry.view<WorldTransform, Enemy>()") != std::string::npos);
-    CHECK(code.find("cactus::runtime::entt_backend::query_overlap_circle(") != std::string::npos);
-    CHECK(code.find("registry.get<WorldTransform>(e).position") != std::string::npos);
-    CHECK(code.find("__rad") == std::string::npos);
+    CHECK(code.contains("registry.view<WorldTransform, Enemy>()"));
+    CHECK(code.contains("cactus::runtime::entt_backend::query_overlap_circle("));
+    CHECK(code.contains("registry.get<WorldTransform>(e).position"));
+    CHECK(!code.contains("__rad"));
 }
 
 TEST_CASE("Codegen EnTT: flat query.raycast lowers to directional hit search", "[codegen-entt][query][spatial]") {
@@ -4659,11 +4667,11 @@ TEST_CASE("Codegen EnTT: flat query.raycast lowers to directional hit search", "
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("registry.view<WorldTransform, Wall>()") != std::string::npos);
-    CHECK(code.find("cactus::runtime::entt_backend::query_raycast(") != std::string::npos);
-    CHECK(code.find("registry.get<WorldTransform>(e).position") != std::string::npos);
-    CHECK(code.find("__proj") == std::string::npos);
-    CHECK(code.find("__best") == std::string::npos);
+    CHECK(code.contains("registry.view<WorldTransform, Wall>()"));
+    CHECK(code.contains("cactus::runtime::entt_backend::query_raycast("));
+    CHECK(code.contains("registry.get<WorldTransform>(e).position"));
+    CHECK(!code.contains("__proj"));
+    CHECK(!code.contains("__best"));
 }
 
 static const char* const kVolumeQueryPreamble =
@@ -4685,11 +4693,11 @@ TEST_CASE("Codegen EnTT: volume query.nearest lowers to 3D distance search", "[c
                                    program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("registry.view<WorldTransform, Enemy>()") != std::string::npos);
-    CHECK(code.find("cactus::runtime::entt_backend::query_nearest(") != std::string::npos);
-    CHECK(code.find("registry.get<WorldTransform>(e).position") != std::string::npos);
-    CHECK(code.find("__dz") == std::string::npos);
-    CHECK(code.find("__best") == std::string::npos);
+    CHECK(code.contains("registry.view<WorldTransform, Enemy>()"));
+    CHECK(code.contains("cactus::runtime::entt_backend::query_nearest("));
+    CHECK(code.contains("registry.get<WorldTransform>(e).position"));
+    CHECK(!code.contains("__dz"));
+    CHECK(!code.contains("__best"));
 }
 
 TEST_CASE("Codegen EnTT: volume query.overlap_sphere lowers to 3D radius search",
@@ -4703,48 +4711,50 @@ TEST_CASE("Codegen EnTT: volume query.overlap_sphere lowers to 3D radius search"
                       program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("registry.view<WorldTransform, Enemy>()") != std::string::npos);
-    CHECK(code.find("cactus::runtime::entt_backend::query_overlap_sphere(") != std::string::npos);
-    CHECK(code.find("registry.get<WorldTransform>(e).position") != std::string::npos);
-    CHECK(code.find("__dz") == std::string::npos);
-    CHECK(code.find("__ct") == std::string::npos);
+    CHECK(code.contains("registry.view<WorldTransform, Enemy>()"));
+    CHECK(code.contains("cactus::runtime::entt_backend::query_overlap_sphere("));
+    CHECK(code.contains("registry.get<WorldTransform>(e).position"));
+    CHECK(!code.contains("__dz"));
+    CHECK(!code.contains("__ct"));
 }
 
 // ── Hierarchical entity templates (dsl-hierarchical-entity-templates) ───────
 
-static const std::string HIERARCHY_SOURCE_PREFIX =
-    "pub event tick:\n"
-    "    dt: float\n"
-    "trait Parent:\n"
-    "    var parent: entity_id\n"
-    "trait Tag:\n"
-    "    var value: int = 0\n"
-    "trait Growth:\n"
-    "    var target_scale: float = 1.0\n"
-    "template Rig:\n"
-    "    Tag\n"
-    "    children:\n"
-    "        entity Socket:\n"
-    "            Tag:\n"
-    "                value = 1\n"
-    "            children:\n"
-    "                entity Gem:\n"
-    "                    Growth\n";
+static const std::string& hierarchy_source_prefix() {
+    static const std::string value =
+        "pub event tick:\n"
+        "    dt: float\n"
+        "trait Parent:\n"
+        "    var parent: entity_id\n"
+        "trait Tag:\n"
+        "    var value: int = 0\n"
+        "trait Growth:\n"
+        "    var target_scale: float = 1.0\n"
+        "template Rig:\n"
+        "    Tag\n"
+        "    children:\n"
+        "        entity Socket:\n"
+        "            Tag:\n"
+        "                value = 1\n"
+        "            children:\n"
+        "                entity Gem:\n"
+        "                    Growth\n";
+    return value;
+}
 
 TEST_CASE("Codegen EnTT: hierarchical template emits per-node helpers and canonical wrapper",
           "[codegen-entt][hierarchy]") {
     ProgramNode program;
-    auto decorated  = full_pipeline(HIERARCHY_SOURCE_PREFIX, program);
+    auto decorated  = full_pipeline(hierarchy_source_prefix(), program);
     const auto code = CppEnttCodegen::generate(decorated);
 
-    CHECK(code.find("static entt::entity create_rig__node(entt::registry& registry)") != std::string::npos);
-    CHECK(code.find("static entt::entity create_rig__node__socket(entt::registry& registry)") != std::string::npos);
-    CHECK(code.find("static entt::entity create_rig__node__socket__gem(entt::registry& registry)") !=
-          std::string::npos);
+    CHECK(code.contains("static entt::entity create_rig__node(entt::registry& registry)"));
+    CHECK(code.contains("static entt::entity create_rig__node__socket(entt::registry& registry)"));
+    CHECK(code.contains("static entt::entity create_rig__node__socket__gem(entt::registry& registry)"));
 
     const auto wrapper = generated_function(code, "entt::entity create_rig(entt::registry& registry)");
-    CHECK(wrapper.find("auto entity = create_rig__node(registry);") != std::string::npos);
-    CHECK(wrapper.find("return entity;") != std::string::npos);
+    CHECK(wrapper.contains("auto entity = create_rig__node(registry);"));
+    CHECK(wrapper.contains("return entity;"));
 }
 
 TEST_CASE(
@@ -4752,7 +4762,7 @@ TEST_CASE(
     "counterpart",
     "[codegen-entt][hierarchy]") {
     ProgramNode program;
-    auto decorated  = full_pipeline(HIERARCHY_SOURCE_PREFIX, program);
+    auto decorated  = full_pipeline(hierarchy_source_prefix(), program);
     const auto code = CppEnttCodegen::generate(decorated);
 
     const auto wrapper = generated_function(code, "static entt::entity create_rig__node(entt::registry& registry)");
@@ -4761,27 +4771,26 @@ TEST_CASE(
           "    return create_rig__node_at(registry, registry.create());\n"
           "}\n");
     // Not a second copy of create_rig__node_at's field-initialization statements.
-    CHECK(wrapper.find("component") == std::string::npos);
-    CHECK(wrapper.find("registry.emplace<Tag>") == std::string::npos);
+    CHECK(!wrapper.contains("component"));
+    CHECK(!wrapper.contains("registry.emplace<Tag>"));
 }
 
 TEST_CASE("Codegen EnTT: hierarchical creation assigns Parent to the immediate parent", "[codegen-entt][hierarchy]") {
     ProgramNode program;
-    auto decorated  = full_pipeline(HIERARCHY_SOURCE_PREFIX, program);
+    auto decorated  = full_pipeline(hierarchy_source_prefix(), program);
     const auto code = CppEnttCodegen::generate(decorated);
 
     const auto wrapper = generated_function(code, "entt::entity create_rig(entt::registry& registry)");
     // Direct child points at the root; grandchild points at the child, not the root.
-    CHECK(wrapper.find("registry.emplace_or_replace<Parent>(child_0, Parent{.parent = entity});") != std::string::npos);
-    CHECK(wrapper.find("registry.emplace_or_replace<Parent>(child_0_0, Parent{.parent = child_0});") !=
-          std::string::npos);
+    CHECK(wrapper.contains("registry.emplace_or_replace<Parent>(child_0, Parent{.parent = entity});"));
+    CHECK(wrapper.contains("registry.emplace_or_replace<Parent>(child_0_0, Parent{.parent = child_0});"));
     // The root never receives a generated Parent relation.
-    CHECK(wrapper.find("Parent>(entity") == std::string::npos);
+    CHECK(!wrapper.contains("Parent>(entity"));
 }
 
 TEST_CASE("Codegen EnTT: hierarchical creation is parent-first preorder", "[codegen-entt][hierarchy]") {
     ProgramNode program;
-    auto decorated  = full_pipeline(HIERARCHY_SOURCE_PREFIX +
+    auto decorated  = full_pipeline(hierarchy_source_prefix() +
                                         "template Pair:\n"
                                         "    Tag\n"
                                         "    children:\n"
@@ -4813,7 +4822,7 @@ TEST_CASE("Codegen EnTT: hierarchical creation is parent-first preorder", "[code
 TEST_CASE("Codegen EnTT: override-free spawn of hierarchical template calls canonical wrapper and returns root",
           "[codegen-entt][hierarchy]") {
     ProgramNode program;
-    auto decorated  = full_pipeline(HIERARCHY_SOURCE_PREFIX +
+    auto decorated  = full_pipeline(hierarchy_source_prefix() +
                                         "rule S:\n"
                                         "    on tick:\n"
                                         "        let root = spawn Rig:\n"
@@ -4824,13 +4833,13 @@ TEST_CASE("Codegen EnTT: override-free spawn of hierarchical template calls cano
 
     const auto spawned_name = extract_temp_name(code, "cactus_gen_spawned_");
     REQUIRE_FALSE(spawned_name.empty());
-    CHECK(code.find("auto " + spawned_name + " = create_rig(registry);") != std::string::npos);
-    CHECK(code.find("return " + spawned_name + ";") != std::string::npos);
+    CHECK(code.contains("auto " + spawned_name + " = create_rig(registry);"));
+    CHECK(code.contains("return " + spawned_name + ";"));
 }
 
 TEST_CASE("Codegen EnTT: spawn with child overrides expands inline per node", "[codegen-entt][hierarchy]") {
     ProgramNode program;
-    auto decorated  = full_pipeline(HIERARCHY_SOURCE_PREFIX +
+    auto decorated  = full_pipeline(hierarchy_source_prefix() +
                                         "rule S:\n"
                                         "    on tick:\n"
                                         "        let root = spawn Rig:\n"
@@ -4851,21 +4860,20 @@ TEST_CASE("Codegen EnTT: spawn with child overrides expands inline per node", "[
     REQUIRE_FALSE(spawned_name.empty());
 
     // Inline expansion uses the per-node helpers, not the canonical wrapper.
-    CHECK(code.find("auto " + spawned_name + " = create_rig__node(registry);") != std::string::npos);
-    CHECK(code.find("auto child_0 = create_rig__node__socket(registry);") != std::string::npos);
-    CHECK(code.find("registry.emplace_or_replace<Parent>(child_0, Parent{.parent = " + spawned_name + "});") !=
-          std::string::npos);
-    CHECK(code.find("auto child_0_0 = create_rig__node__socket__gem(registry);") != std::string::npos);
-    CHECK(code.find("registry.emplace_or_replace<Parent>(child_0_0, Parent{.parent = child_0});") != std::string::npos);
+    CHECK(code.contains("auto " + spawned_name + " = create_rig__node(registry);"));
+    CHECK(code.contains("auto child_0 = create_rig__node__socket(registry);"));
+    CHECK(code.contains("registry.emplace_or_replace<Parent>(child_0, Parent{.parent = " + spawned_name + "});"));
+    CHECK(code.contains("auto child_0_0 = create_rig__node__socket__gem(registry);"));
+    CHECK(code.contains("registry.emplace_or_replace<Parent>(child_0_0, Parent{.parent = child_0});"));
     // Per-node overrides applied to the matching created entity.
-    CHECK(code.find("registry.try_get<Tag>(child_0)") != std::string::npos);
-    CHECK(code.find("registry.try_get<Growth>(child_0_0)") != std::string::npos);
-    CHECK(code.find("return " + spawned_name + ";") != std::string::npos);
+    CHECK(code.contains("registry.try_get<Tag>(child_0)"));
+    CHECK(code.contains("registry.try_get<Growth>(child_0_0)"));
+    CHECK(code.contains("return " + spawned_name + ";"));
 }
 
 TEST_CASE("Codegen EnTT: hierarchical load-time entity creates descendants in setup", "[codegen-entt][hierarchy]") {
     ProgramNode program;
-    auto decorated  = full_pipeline(HIERARCHY_SOURCE_PREFIX +
+    auto decorated  = full_pipeline(hierarchy_source_prefix() +
                                         "entity Rig1 from Rig:\n"
                                         "    Tag:\n"
                                         "        value = 5\n"
@@ -4877,20 +4885,20 @@ TEST_CASE("Codegen EnTT: hierarchical load-time entity creates descendants in se
     const auto code = CppEnttCodegen::generate(decorated);
 
     // generated_init_project fills the pre-allocated root through the entity wrapper, which expands the tree.
-    CHECK(code.find("create_rig1_at(registry, generated_named_slots().test__Rig1);") != std::string::npos);
+    CHECK(code.contains("create_rig1_at(registry, generated_named_slots().test__Rig1);"));
     const auto at_wrapper = generated_function(code, "entt::entity create_rig1_at(entt::registry& registry");
-    CHECK(at_wrapper.find("create_rig1__node__socket(registry)") != std::string::npos);
+    CHECK(at_wrapper.contains("create_rig1__node__socket(registry)"));
     const auto wrapper = generated_function(code, "entt::entity create_rig1(entt::registry& registry)");
-    CHECK(wrapper.find("create_rig1__node__socket(registry)") != std::string::npos);
-    CHECK(wrapper.find("registry.emplace_or_replace<Parent>(child_0, Parent{.parent = entity});") != std::string::npos);
+    CHECK(wrapper.contains("create_rig1__node__socket(registry)"));
+    CHECK(wrapper.contains("registry.emplace_or_replace<Parent>(child_0, Parent{.parent = entity});"));
     // Child override value is baked into the per-node helper.
     const auto socket_fn = generated_function(code, "entt::entity create_rig1__node__socket(entt::registry&");
-    CHECK(socket_fn.find("component.value = 7") != std::string::npos);
+    CHECK(socket_fn.contains("component.value = 7"));
 }
 
 TEST_CASE("Codegen EnTT: destroy cascade code coexists with hierarchical creation", "[codegen-entt][hierarchy]") {
     ProgramNode program;
-    auto decorated  = full_pipeline(HIERARCHY_SOURCE_PREFIX +
+    auto decorated  = full_pipeline(hierarchy_source_prefix() +
                                         "rule S:\n"
                                         "    filter:\n"
                                         "        Tag\n"
@@ -4901,7 +4909,7 @@ TEST_CASE("Codegen EnTT: destroy cascade code coexists with hierarchical creatio
 
     // The existing Parent-based recursive destroy support keys off the Parent
     // trait, which hierarchical templates rely on unchanged.
-    CHECK(code.find("registry.view<Parent>()") != std::string::npos);
+    CHECK(code.contains("registry.view<Parent>()"));
 }
 
 // ── 5.1: Key constant mapping and new extern declarations ───────────────────
@@ -4923,10 +4931,10 @@ TEST_CASE("Codegen EnTT: Key.Shift/Minus/Equal/F map to correct raylib constants
         std_input_imports());
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("KEY_LEFT_SHIFT") != std::string::npos);
-    CHECK(code.find("KEY_EQUAL") != std::string::npos);
-    CHECK(code.find("KEY_MINUS") != std::string::npos);
-    CHECK(code.find("KEY_F") != std::string::npos);
+    CHECK(code.contains("KEY_LEFT_SHIFT"));
+    CHECK(code.contains("KEY_EQUAL"));
+    CHECK(code.contains("KEY_MINUS"));
+    CHECK(code.contains("KEY_F"));
 }
 
 TEST_CASE("Codegen EnTT: std.input mouse_delta and wheel_delta lower to correct runtime calls",
@@ -4950,8 +4958,8 @@ TEST_CASE("Codegen EnTT: std.input mouse_delta and wheel_delta lower to correct 
 
     const auto code = CppEnttCodegen::generate(decorated);
     const auto rule = generated_function(code, "void nav_poll_tick");
-    CHECK(rule.find("cactus::runtime::entt_backend::editor_wheel_delta()") != std::string::npos);
-    CHECK(rule.find("cactus::runtime::entt_backend::editor_mouse_delta_screen()") != std::string::npos);
+    CHECK(rule.contains("cactus::runtime::entt_backend::editor_wheel_delta()"));
+    CHECK(rule.contains("cactus::runtime::entt_backend::editor_mouse_delta_screen()"));
 }
 
 // ── 5.3: editor_consume generates correct runtime call ───────────────────────
@@ -4977,7 +4985,7 @@ TEST_CASE("Codegen EnTT: input.consume call generates runtime consume invocation
     const auto code = CppEnttCodegen::generate(decorated);
     const auto rule = generated_function(code, "void editor_input_consume_input");
     // The call must pass K_NAV_DRAG (the generated enum constant) to editor_consume.
-    CHECK(rule.find("cactus::runtime::entt_backend::editor_consume(K_NAV_DRAG)") != std::string::npos);
+    CHECK(rule.contains("cactus::runtime::entt_backend::editor_consume(K_NAV_DRAG)"));
 }
 
 // ── 5.4: Camera rig lifecycle registration in generated_init_project ─────────
@@ -5007,26 +5015,26 @@ TEST_CASE("Codegen EnTT: 2D editor+viewport program registers 2D camera rig life
     const auto init = generated_function(code, "void generated_init_project");
 
     // Enter and exit impls are always registered together
-    CHECK(init.find("register_editor_camera_enter_impl") != std::string::npos);
-    CHECK(init.find("register_editor_camera_exit_impl") != std::string::npos);
+    CHECK(init.contains("register_editor_camera_enter_impl"));
+    CHECK(init.contains("register_editor_camera_exit_impl"));
 
     // Enter impl captures 2D pose and spawns rig with EditorCamera2D
-    CHECK(init.find("EditorCamera2D{.view_center") != std::string::npos);
-    CHECK(init.find(".min_zoom = 0.05F") != std::string::npos);
-    CHECK(init.find(".max_zoom = 20.0F") != std::string::npos);
-    CHECK(init.find("set_editor_saved_viewports") != std::string::npos);
+    CHECK(init.contains("EditorCamera2D{.view_center"));
+    CHECK(init.contains(".min_zoom = 0.05F"));
+    CHECK(init.contains(".max_zoom = 20.0F"));
+    CHECK(init.contains("set_editor_saved_viewports"));
 
     // Exit impl destroys rig and restores viewports
-    CHECK(init.find("reg.destroy(rig)") != std::string::npos);
-    CHECK(init.find("__vp->active = true") != std::string::npos);
+    CHECK(init.contains("reg.destroy(rig)"));
+    CHECK(init.contains("__vp->active = true"));
 
     // 2D apply impl writes zoom and offset back to rig Camera
-    CHECK(init.find("register_editor_apply_camera_2d_impl") != std::string::npos);
-    CHECK(init.find("__cam->zoom = zoom") != std::string::npos);
-    CHECK(init.find("__cam->offset = view_center") != std::string::npos);
+    CHECK(init.contains("register_editor_apply_camera_2d_impl"));
+    CHECK(init.contains("__cam->zoom = zoom"));
+    CHECK(init.contains("__cam->offset = view_center"));
 
     // No 3D impls without uses_volume
-    CHECK(init.find("register_editor_apply_camera_3d_impl") == std::string::npos);
+    CHECK(!init.contains("register_editor_apply_camera_3d_impl"));
 }
 
 TEST_CASE("Codegen EnTT: 3D editor+viewport program registers 3D camera rig lifecycle impls",
@@ -5042,31 +5050,31 @@ TEST_CASE("Codegen EnTT: 3D editor+viewport program registers 3D camera rig life
     const auto init = generated_function(code, "void generated_init_project");
 
     // Enter impl derives orbit state from camera pose
-    CHECK(init.find("register_editor_camera_enter_impl") != std::string::npos);
-    CHECK(init.find("std::atan2(-__dx, -__dz)") != std::string::npos);  // yaw derivation
-    CHECK(init.find("std::asin") != std::string::npos);                 // pitch derivation
-    CHECK(init.find("EditorCamera3D{.focus") != std::string::npos);
-    CHECK(init.find(".orbit_speed = 0.005F") != std::string::npos);
-    CHECK(init.find(".min_pitch = -1.5F") != std::string::npos);
-    CHECK(init.find(".max_pitch = 1.5F") != std::string::npos);
-    CHECK(init.find(".min_distance = 0.1F") != std::string::npos);
-    CHECK(init.find(".max_distance = 1000.0F") != std::string::npos);
+    CHECK(init.contains("register_editor_camera_enter_impl"));
+    CHECK(init.contains("std::atan2(-__dx, -__dz)"));  // yaw derivation
+    CHECK(init.contains("std::asin"));                 // pitch derivation
+    CHECK(init.contains("EditorCamera3D{.focus"));
+    CHECK(init.contains(".orbit_speed = 0.005F"));
+    CHECK(init.contains(".min_pitch = -1.5F"));
+    CHECK(init.contains(".max_pitch = 1.5F"));
+    CHECK(init.contains(".min_distance = 0.1F"));
+    CHECK(init.contains(".max_distance = 1000.0F"));
 
     // Exit impl destroys rig
-    CHECK(init.find("register_editor_camera_exit_impl") != std::string::npos);
-    CHECK(init.find("reg.destroy(rig)") != std::string::npos);
+    CHECK(init.contains("register_editor_camera_exit_impl"));
+    CHECK(init.contains("reg.destroy(rig)"));
 
     // 3D apply impl writes position and rotation to rig WorldTransform (5.5 clamping driven by these writes)
-    CHECK(init.find("register_editor_apply_camera_3d_impl") != std::string::npos);
-    CHECK(init.find("__wt->position = position") != std::string::npos);
-    CHECK(init.find("__wt->rotation = rotation") != std::string::npos);
+    CHECK(init.contains("register_editor_apply_camera_3d_impl"));
+    CHECK(init.contains("__wt->position = position"));
+    CHECK(init.contains("__wt->rotation = rotation"));
 
     // Entity position impl returns WorldTransform.position
-    CHECK(init.find("register_editor_entity_position_3d_impl") != std::string::npos);
-    CHECK(init.find("return __wt->position") != std::string::npos);
+    CHECK(init.contains("register_editor_entity_position_3d_impl"));
+    CHECK(init.contains("return __wt->position"));
 
     // No 2D-specific impls without uses_flat
-    CHECK(init.find("register_editor_apply_camera_2d_impl") == std::string::npos);
+    CHECK(!init.contains("register_editor_apply_camera_2d_impl"));
 }
 
 // ── 5.5: Camera and transform projection lowering ─────────────────────────
@@ -5089,8 +5097,8 @@ TEST_CASE("Codegen EnTT: std.camera.flat projection helpers lower to correct run
 
     const auto code = CppEnttCodegen::generate(decorated);
     const auto rule = generated_function(code, "void project2_d_tick");
-    CHECK(rule.find("cactus::runtime::entt_backend::editor_screen_to_world_2d(") != std::string::npos);
-    CHECK(rule.find("cactus::runtime::entt_backend::screen_delta_to_world_2d(") != std::string::npos);
+    CHECK(rule.contains("cactus::runtime::entt_backend::editor_screen_to_world_2d("));
+    CHECK(rule.contains("cactus::runtime::entt_backend::screen_delta_to_world_2d("));
 }
 
 TEST_CASE("Codegen EnTT: std.transform.flat world_position injects registry as first argument",
@@ -5110,7 +5118,7 @@ TEST_CASE("Codegen EnTT: std.transform.flat world_position injects registry as f
 
     const auto code = CppEnttCodegen::generate(decorated);
     const auto rule = generated_function(code, "void get_pos_tick");
-    CHECK(rule.find("cactus::runtime::entt_backend::editor_entity_position_2d(registry,") != std::string::npos);
+    CHECK(rule.contains("cactus::runtime::entt_backend::editor_entity_position_2d(registry,"));
 }
 
 TEST_CASE("Codegen EnTT: std.transform.flat world_position registers live-position impl without std.editor",
@@ -5132,8 +5140,8 @@ TEST_CASE("Codegen EnTT: std.transform.flat world_position registers live-positi
 
     const auto code = CppEnttCodegen::generate(decorated);
     const auto init = generated_function(code, "void generated_init_project");
-    CHECK(init.find("register_editor_entity_position_2d_impl") != std::string::npos);
-    CHECK(init.find("return Vector2{.x = __wt->position.x, .y = __wt->position.y}") != std::string::npos);
+    CHECK(init.contains("register_editor_entity_position_2d_impl"));
+    CHECK(init.contains("return Vector2{.x = __wt->position.x, .y = __wt->position.y}"));
 }
 
 TEST_CASE("Codegen EnTT: std.transform.volume world_position registers live-position impl without std.editor",
@@ -5154,8 +5162,8 @@ TEST_CASE("Codegen EnTT: std.transform.volume world_position registers live-posi
 
     const auto code = CppEnttCodegen::generate(decorated);
     const auto init = generated_function(code, "void generated_init_project");
-    CHECK(init.find("register_editor_entity_position_3d_impl") != std::string::npos);
-    CHECK(init.find("return __wt->position") != std::string::npos);
+    CHECK(init.contains("register_editor_entity_position_3d_impl"));
+    CHECK(init.contains("return __wt->position"));
 }
 
 TEST_CASE("Codegen EnTT: clean-named editor extern func spawn_template lowers with registry injected",
@@ -5178,7 +5186,7 @@ TEST_CASE("Codegen EnTT: clean-named editor extern func spawn_template lowers wi
 
     const auto code = CppEnttCodegen::generate(decorated);
     const auto rule = generated_function(code, "void place_test_tick");
-    CHECK(rule.find("cactus::runtime::entt_backend::editor_spawn_template(registry,") != std::string::npos);
+    CHECK(rule.contains("cactus::runtime::entt_backend::editor_spawn_template(registry,"));
 }
 
 TEST_CASE("Codegen EnTT: same simple component name from different modules produces distinct C++ symbols",
@@ -5196,10 +5204,10 @@ TEST_CASE("Codegen EnTT: same simple component name from different modules produ
     const auto flat_code = EnttComponentEmitter::emit_component(flat_wt);
     const auto vol_code  = EnttComponentEmitter::emit_component(vol_wt);
 
-    CHECK(flat_code.find("struct std_transform_flat__WorldTransform") != std::string::npos);
-    CHECK(vol_code.find("struct std_transform_volume__WorldTransform") != std::string::npos);
-    CHECK(flat_code.find("struct WorldTransform ") == std::string::npos);
-    CHECK(vol_code.find("struct WorldTransform ") == std::string::npos);
+    CHECK(flat_code.contains("struct std_transform_flat__WorldTransform"));
+    CHECK(vol_code.contains("struct std_transform_volume__WorldTransform"));
+    CHECK(!flat_code.contains("struct WorldTransform "));
+    CHECK(!vol_code.contains("struct WorldTransform "));
 }
 
 TEST_CASE("Codegen EnTT: user-defined trait with explicit module_name produces canonical C++ type",
@@ -5210,8 +5218,8 @@ TEST_CASE("Codegen EnTT: user-defined trait with explicit module_name produces c
     trait.fields.push_back({.name = "position", .type = {.kind = TypeKind::Vec2, .name = "vec2"}, .is_var = true});
 
     const auto code = EnttComponentEmitter::emit_component(trait);
-    CHECK(code.find("struct game_transforms__WorldTransform") != std::string::npos);
-    CHECK(code.find("struct WorldTransform") == std::string::npos);
+    CHECK(code.contains("struct game_transforms__WorldTransform"));
+    CHECK(!code.contains("struct WorldTransform"));
 }
 
 TEST_CASE("Codegen EnTT: rule function name uses canonical module prefix when program.module_name is set",
@@ -5231,8 +5239,8 @@ TEST_CASE("Codegen EnTT: rule function name uses canonical module prefix when pr
     decorated.module_name = "my.game";
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("void my_game__move_tick(") != std::string::npos);
-    CHECK(code.find("void move_tick(") == std::string::npos);
+    CHECK(code.contains("void my_game__move_tick("));
+    CHECK(!code.contains("void move_tick("));
 }
 
 TEST_CASE("Codegen EnTT: registry view uses canonical C++ type names for module-qualified traits",
@@ -5254,9 +5262,9 @@ TEST_CASE("Codegen EnTT: registry view uses canonical C++ type names for module-
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<RuleNode>(&decl)) {
             const auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            CHECK(code.find("registry.view<my_game__Position>()") != std::string::npos);
-            CHECK(code.find("my_game__Position& my_game__Position_comp") != std::string::npos);
-            CHECK(code.find("my_game__Position_comp.x") != std::string::npos);
+            CHECK(code.contains("registry.view<my_game__Position>()"));
+            CHECK(code.contains("my_game__Position& my_game__Position_comp"));
+            CHECK(code.contains("my_game__Position_comp.x"));
         }
     }
 }
@@ -5284,7 +5292,7 @@ TEST_CASE("Codegen EnTT: stdlib func lowering falls back to program.funcs when n
     decorated.funcs["lerp"] = lerp_func;
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("cactus::runtime::stdlib::math::lerp(0.0F, 10.0F, 0.5F)") != std::string::npos);
+    CHECK(code.contains("cactus::runtime::stdlib::math::lerp(0.0F, 10.0F, 0.5F)"));
 }
 
 TEST_CASE("Codegen EnTT: stdlib extern rule lowering uses canonical C++ names for module-qualified traits",
@@ -5317,10 +5325,9 @@ TEST_CASE("Codegen EnTT: stdlib extern rule lowering uses canonical C++ names fo
 
     const auto code = CppEnttCodegen::generate(decorated);
     const auto tick = generated_function(code, "void sprite_renderer_tick");
-    CHECK(tick.find("registry.view<std_transform_flat__WorldTransform, std_render_sprites__Renderer>()") !=
-          std::string::npos);
-    CHECK(tick.find("std_transform_flat__WorldTransform_comp.position") != std::string::npos);
-    CHECK(tick.find("std_render_sprites__Renderer_comp.layer") != std::string::npos);
+    CHECK(tick.contains("registry.view<std_transform_flat__WorldTransform, std_render_sprites__Renderer>()"));
+    CHECK(tick.contains("std_transform_flat__WorldTransform_comp.position"));
+    CHECK(tick.contains("std_render_sprites__Renderer_comp.layer"));
 }
 
 TEST_CASE("Codegen EnTT: ambiguous simple-name trait lookup fails loudly under canonical keys",
@@ -5354,7 +5361,7 @@ TEST_CASE("Codegen EnTT: ambiguous simple-name trait lookup fails loudly under c
         (void)EnttCodegenUtils::find_trait(program, "WorldTransform");
         FAIL("expected ambiguous trait lookup to throw");
     } catch (const std::runtime_error& e) {
-        CHECK(std::string(e.what()).find("WorldTransform") != std::string::npos);
+        CHECK(std::string(e.what()).contains("WorldTransform"));
     }
 
     // Canonical ids resolve to their exact variant.
@@ -5404,46 +5411,45 @@ TEST_CASE("Codegen EnTT: graph scheduler state owns typed events phases commands
 
     const auto code = CppEnttCodegen::generate(decorated);
 
-    CHECK(code.find("#include <deque>") != std::string::npos);
-    CHECK(code.find("#include <functional>") != std::string::npos);
-    CHECK(code.find("#include <variant>") != std::string::npos);
-    CHECK(code.find("using EventOccurrence = std::variant<ContactEvent, frameEvent>;") != std::string::npos);
-    CHECK(code.find("void generated_inject_external_event(frameEvent occurrence)") != std::string::npos);
-    CHECK(code.find("void generated_inject_external_event(ContactEvent occurrence)") == std::string::npos);
+    CHECK(code.contains("#include <deque>"));
+    CHECK(code.contains("#include <functional>"));
+    CHECK(code.contains("#include <variant>"));
+    CHECK(code.contains("using EventOccurrence = std::variant<ContactEvent, frameEvent>;"));
+    CHECK(code.contains("void generated_inject_external_event(frameEvent occurrence)"));
+    CHECK(!code.contains("void generated_inject_external_event(ContactEvent occurrence)"));
 
     // QueuedEvent<Occurrence>/ActivationRuntime<Occurrence> are runtime-hosted
     // (backends/cpp-entt/runtime.hpp, covered directly by
     // test_runtime_activation_scheduler.cpp) — codegen only instantiates
     // ActivationRuntime<EventOccurrence> as SchedulerState's activation field,
     // it doesn't redefine either struct's body inline.
-    CHECK(code.find("struct QueuedEvent") == std::string::npos);
-    CHECK(code.find("struct ActivationRuntime") == std::string::npos);
-    CHECK(code.find("enum class Kind : std::uint8_t { Spawn, Destroy, Add, Remove };") == std::string::npos);
-    CHECK(code.find("ActivationRuntime<EventOccurrence> activation;") != std::string::npos);
+    CHECK(!code.contains("struct QueuedEvent"));
+    CHECK(!code.contains("struct ActivationRuntime"));
+    CHECK(!code.contains("enum class Kind : std::uint8_t { Spawn, Destroy, Add, Remove };"));
+    CHECK(code.contains("ActivationRuntime<EventOccurrence> activation;"));
 
-    CHECK(code.find("struct game_scheduler__inputPhaseRuntimeState") != std::string::npos);
-    CHECK(code.find("struct game_scheduler__fixed_tickPhaseRuntimeState") != std::string::npos);
-    CHECK(code.find("double accumulator{};") != std::string::npos);
-    CHECK(code.find("double alpha{};") != std::string::npos);
-    CHECK(code.find("std::uint64_t completed_batches{};") != std::string::npos);
-    CHECK(code.find("float dt{};") != std::string::npos);
-    CHECK(code.find("game_scheduler__inputPhaseRuntimeState game_scheduler__input;") != std::string::npos);
-    CHECK(code.find("game_scheduler__fixed_tickPhaseRuntimeState game_scheduler__fixed_tick;") != std::string::npos);
+    CHECK(code.contains("struct game_scheduler__inputPhaseRuntimeState"));
+    CHECK(code.contains("struct game_scheduler__fixed_tickPhaseRuntimeState"));
+    CHECK(code.contains("double accumulator{};"));
+    CHECK(code.contains("double alpha{};"));
+    CHECK(code.contains("std::uint64_t completed_batches{};"));
+    CHECK(code.contains("float dt{};"));
+    CHECK(code.contains("game_scheduler__inputPhaseRuntimeState game_scheduler__input;"));
+    CHECK(code.contains("game_scheduler__fixed_tickPhaseRuntimeState game_scheduler__fixed_tick;"));
 
     const auto input_batch = code.find("void generated_run_phase_batch_game_scheduler__input");
     const auto fixed_batch = code.find("void generated_run_phase_batch_game_scheduler__fixed_tick");
     REQUIRE(input_batch != std::string::npos);
     REQUIRE(fixed_batch != std::string::npos);
     CHECK(input_batch < fixed_batch);
-    CHECK(code.find("phase.accumulator += static_cast<double>(root_event.dt);") != std::string::npos);
-    CHECK(code.find("const auto due = static_cast<std::uint64_t>(std::floor(phase.accumulator / interval));") !=
-          std::string::npos);
-    CHECK(code.find("constexpr std::uint64_t max_repetitions = 2;") != std::string::npos);
-    CHECK(code.find("const auto repetitions = std::min(due, max_repetitions);") != std::string::npos);
-    CHECK(code.find("phase.dt = interval;") != std::string::npos);
-    CHECK(code.find("phase.accumulator -= static_cast<double>(due) * interval;") != std::string::npos);
-    CHECK(code.find("phase.alpha = phase.accumulator / interval;") != std::string::npos);
-    CHECK(code.find("++phase.completed_batches;") != std::string::npos);
+    CHECK(code.contains("phase.accumulator += static_cast<double>(root_event.dt);"));
+    CHECK(code.contains("const auto due = static_cast<std::uint64_t>(std::floor(phase.accumulator / interval));"));
+    CHECK(code.contains("constexpr std::uint64_t max_repetitions = 2;"));
+    CHECK(code.contains("const auto repetitions = std::min(due, max_repetitions);"));
+    CHECK(code.contains("phase.dt = static_cast<float>(interval);"));
+    CHECK(code.contains("phase.accumulator -= static_cast<double>(due) * interval;"));
+    CHECK(code.contains("phase.alpha = phase.accumulator / interval;"));
+    CHECK(code.contains("++phase.completed_batches;"));
 
     const auto root_dispatch =
         code.find("void generated_process_root_event(entt::registry& registry, const frameEvent&");
@@ -5455,7 +5461,7 @@ TEST_CASE("Codegen EnTT: graph scheduler state owns typed events phases commands
     REQUIRE(input_call != std::string::npos);
     REQUIRE(fixed_call != std::string::npos);
     CHECK(input_call < fixed_call);
-    CHECK(code.find("void generated_drain_external_events(entt::registry& registry)") != std::string::npos);
+    CHECK(code.contains("void generated_drain_external_events(entt::registry& registry)"));
 
     // reset_consumed_input() fires once per frame occurrence, before any phase
     // batch runs, regardless of the module's own phase-name choices.
@@ -5470,23 +5476,23 @@ TEST_CASE("Codegen EnTT: graph scheduler state owns typed events phases commands
     const auto legacy_start = code.find("void generated_update_project");
     REQUIRE(legacy_start != std::string::npos);
     const auto graph_driven_code = code.substr(0, legacy_start);
-    CHECK(graph_driven_code.find("begin_render_frame()") == std::string::npos);
-    CHECK(graph_driven_code.find("end_render_frame()") == std::string::npos);
-    CHECK(graph_driven_code.find("clear_projected_traits(registry);") == std::string::npos);
+    CHECK(!graph_driven_code.contains("begin_render_frame()"));
+    CHECK(!graph_driven_code.contains("end_render_frame()"));
+    CHECK(!graph_driven_code.contains("clear_projected_traits(registry);"));
 
     const auto main_start = code.find("int main()");
     const auto main_end   = code.find("#endif  // CACTUS_GENERATED_NO_MAIN", main_start);
     REQUIRE(main_start != std::string::npos);
     REQUIRE(main_end != std::string::npos);
     const auto main = code.substr(main_start, main_end - main_start);
-    CHECK(main.find("const float dt = GetFrameTime();") != std::string::npos);
-    CHECK(main.find("generated_inject_external_event(frameEvent{.dt = dt});") != std::string::npos);
-    CHECK(main.find("generated_drain_external_events(registry);") != std::string::npos);
-    CHECK(main.find("generated_update_project") == std::string::npos);
-    CHECK(main.find("generated_render_project") == std::string::npos);
+    CHECK(main.contains("const float dt = GetFrameTime();"));
+    CHECK(main.contains("generated_inject_external_event(frameEvent{.dt = dt});"));
+    CHECK(main.contains("generated_drain_external_events(registry);"));
+    CHECK(!main.contains("generated_update_project"));
+    CHECK(!main.contains("generated_render_project"));
     CHECK(main.find("generated_inject_external_event(frameEvent{.dt = dt});") ==
           main.rfind("generated_inject_external_event(frameEvent{.dt = dt});"));
-    CHECK(code.find("#ifndef CACTUS_GENERATED_NO_MAIN") != std::string::npos);
+    CHECK(code.contains("#ifndef CACTUS_GENERATED_NO_MAIN"));
 
     const auto first_dispatch  = code.find("{\"game.scheduler.First/on game.scheduler.input\", true}");
     const auto second_dispatch = code.find("{\"game.scheduler.Second/on game.scheduler.input\", false}");
@@ -5525,19 +5531,19 @@ TEST_CASE("Codegen EnTT: graph scheduler state owns typed events phases commands
         "        let sample = tick.dt\n",
         legacy_program);
     const auto legacy_code = CppEnttCodegen::generate(legacy);
-    CHECK(legacy_code.find("Graph Activation Runtime State") == std::string::npos);
-    CHECK(legacy_code.find("SchedulerState") == std::string::npos);
-    CHECK(legacy_code.find("#include <variant>") == std::string::npos);
+    CHECK(!legacy_code.contains("Graph Activation Runtime State"));
+    CHECK(!legacy_code.contains("SchedulerState"));
+    CHECK(!legacy_code.contains("#include <variant>"));
     const auto legacy_main_start = legacy_code.find("int main()");
     const auto legacy_main_end   = legacy_code.find("#endif  // CACTUS_GENERATED_NO_MAIN", legacy_main_start);
     REQUIRE(legacy_main_start != std::string::npos);
     REQUIRE(legacy_main_end != std::string::npos);
     const auto legacy_main = legacy_code.substr(legacy_main_start, legacy_main_end - legacy_main_start);
-    CHECK(legacy_main.find("generated_update_project(registry, dispatcher, dt);") != std::string::npos);
-    CHECK(legacy_main.find("generated_render_project(registry, dispatcher);") != std::string::npos);
+    CHECK(legacy_main.contains("generated_update_project(registry, dispatcher, dt);"));
+    CHECK(legacy_main.contains("generated_render_project(registry, dispatcher);"));
     const auto legacy_update = generated_function(legacy_code, "void generated_update_project");
-    CHECK(legacy_update.find("legacy_tick") == std::string::npos);
-    CHECK(legacy_code.find("struct TickEvent") == std::string::npos);
+    CHECK(!legacy_update.contains("legacy_tick"));
+    CHECK(!legacy_code.contains("struct TickEvent"));
 }
 
 TEST_CASE("Codegen EnTT: declared phase fields are assigned from their resolved binding",
@@ -5578,7 +5584,7 @@ TEST_CASE("Codegen EnTT: declared phase fields are assigned from their resolved 
     REQUIRE(tick_batch < fixed_batch_decl);
     const auto tick_batch_body = code.substr(tick_batch, fixed_batch_decl - tick_batch);
     // A field is read from root_event, so the batch no longer needs to silence an unused parameter.
-    CHECK(tick_batch_body.find("(void)root_event;") == std::string::npos);
+    CHECK(!tick_batch_body.contains("(void)root_event;"));
 
     // Upstream-phase-bound field: `render.alpha` is assigned from `fixed_tick`'s own persisted runtime state.
     const auto render_batch = code.find("void generated_run_phase_batch_game_propagation__render");
@@ -5594,9 +5600,9 @@ TEST_CASE("Codegen EnTT: declared phase fields are assigned from their resolved 
     // The periodic phase's own synthesized dt/alpha bookkeeping is unaffected.
     REQUIRE(fixed_batch_decl < render_batch);
     const auto fixed_batch_body = code.substr(fixed_batch_decl, render_batch - fixed_batch_decl);
-    CHECK(fixed_batch_body.find("phase.dt = interval;") != std::string::npos);
-    CHECK(fixed_batch_body.find("phase.alpha = phase.accumulator / interval;") != std::string::npos);
-    CHECK(fixed_batch_body.find("phase.dt = static_cast<float>(root_event.dt);") == std::string::npos);
+    CHECK(fixed_batch_body.contains("phase.dt = static_cast<float>(interval);"));
+    CHECK(fixed_batch_body.contains("phase.alpha = phase.accumulator / interval;"));
+    CHECK(!fixed_batch_body.contains("phase.dt = static_cast<float>(root_event.dt);"));
 
     // This module never declares phases named input/fixed_tick/tick/late_tick — its
     // pipeline is tick -> fixed_tick -> render, from a non-std.core module. The
@@ -5608,11 +5614,11 @@ TEST_CASE("Codegen EnTT: declared phase fields are assigned from their resolved 
     REQUIRE(render_end_flush != std::string::npos);
     CHECK(render_begin_flush < render_dispatch);
     CHECK(render_dispatch < render_end_flush);
-    CHECK(fixed_batch_body.find("begin_render_frame()") == std::string::npos);
-    CHECK(fixed_batch_body.find("end_render_frame()") == std::string::npos);
+    CHECK(!fixed_batch_body.contains("begin_render_frame()"));
+    CHECK(!fixed_batch_body.contains("end_render_frame()"));
     const auto tick_batch_body_full = code.substr(tick_batch, fixed_batch_decl - tick_batch);
-    CHECK(tick_batch_body_full.find("begin_render_frame()") == std::string::npos);
-    CHECK(tick_batch_body_full.find("end_render_frame()") == std::string::npos);
+    CHECK(!tick_batch_body_full.contains("begin_render_frame()"));
+    CHECK(!tick_batch_body_full.contains("end_render_frame()"));
 }
 
 TEST_CASE("Codegen EnTT: graph-driven render flush wires per-frame housekeeping in the correct order",
@@ -5685,8 +5691,8 @@ TEST_CASE("Codegen EnTT: graph-driven render flush wires per-frame housekeeping 
 
     // The input phase batch is untouched by the render-flush wrap.
     const auto input_batch = generated_function(code, "void generated_run_phase_batch_game_flush__input");
-    CHECK(input_batch.find("begin_render_frame()") == std::string::npos);
-    CHECK(input_batch.find("end_render_frame()") == std::string::npos);
+    CHECK(!input_batch.contains("begin_render_frame()"));
+    CHECK(!input_batch.contains("end_render_frame()"));
 }
 
 TEST_CASE("Codegen EnTT: phase activations drain stable bounded event cascades",
@@ -5725,14 +5731,14 @@ TEST_CASE("Codegen EnTT: phase activations drain stable bounded event cascades",
     // test_runtime_activation_scheduler.cpp); codegen only declares
     // SchedulerState's ActivationRuntime<EventOccurrence> field and routes
     // handler-emitted events through the runtime helper by call name.
-    CHECK(code.find("ActivationRuntime<EventOccurrence> activation;") != std::string::npos);
-    CHECK(code.find("generated_emit_event(ContactEvent{.amount = 1});") != std::string::npos);
-    CHECK(code.find("Contact.amount") == std::string::npos);
+    CHECK(code.contains("ActivationRuntime<EventOccurrence> activation;"));
+    CHECK(code.contains("generated_emit_event(ContactEvent{.amount = 1});"));
+    CHECK(!code.contains("Contact.amount"));
     const auto first_contact = generated_function(code, "void first_contact_Contact(");
-    CHECK(first_contact.find("generated_emit_event(ReactionEvent{.amount = " + handler_payload_param(first_contact) +
-                             ".amount});") != std::string::npos);
-    CHECK(code.find("generated_drain_event_cascade(registry);") != std::string::npos);
-    CHECK(code.find("generated_dispatch_event(reg, occurrence, target);") != std::string::npos);
+    CHECK(first_contact.contains(
+        "generated_emit_event(ReactionEvent{.amount = " + handler_payload_param(first_contact) + ".amount});"));
+    CHECK(code.contains("generated_drain_event_cascade(registry);"));
+    CHECK(code.contains("generated_dispatch_event(reg, occurrence, target);"));
 
     const auto contact_dispatch =
         code.find("void generated_dispatch_event(entt::registry& registry, const ContactEvent& occurrence,");
@@ -5776,21 +5782,21 @@ TEST_CASE("Codegen EnTT: trigger-name reads lower to the handler payload paramet
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("Turn.amount") == std::string::npos);
+    CHECK(!code.contains("Turn.amount"));
 
     const auto filtered = generated_function(code, "void read_filtered_Turn(");
-    CHECK(filtered.find("h.amount = " + handler_payload_param(filtered) + ".amount;") != std::string::npos);
+    CHECK(filtered.contains("h.amount = " + handler_payload_param(filtered) + ".amount;"));
 
     const auto selectionless = generated_function(code, "void read_selectionless_Turn(");
-    CHECK(selectionless.find(handler_payload_param(selectionless) + ".amount + 1") != std::string::npos);
+    CHECK(selectionless.contains(handler_payload_param(selectionless) + ".amount + 1"));
 
     const auto aliased = generated_function(code, "void read_aliased_Turn(");
     CHECK(handler_payload_param(aliased) == "t");
-    CHECK(aliased.find("h.amount = (t.amount + t.amount);") != std::string::npos);
+    CHECK(aliased.contains("h.amount = (t.amount + t.amount);"));
 
     const auto tick = generated_function(code, "void read_tick_tick(");
     CHECK(handler_payload_param(tick) == "tick");
-    CHECK(tick.find("h.elapsed = (h.elapsed + tick.dt);") != std::string::npos);
+    CHECK(tick.contains("h.elapsed = (h.elapsed + tick.dt);"));
 }
 
 TEST_CASE("Codegen EnTT: a module-qualified trigger name lowers to the handler payload parameter",
@@ -5818,9 +5824,9 @@ TEST_CASE("Codegen EnTT: a module-qualified trigger name lowers to the handler p
         imports);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("combat.Hit") == std::string::npos);
+    CHECK(!code.contains("combat.Hit"));
     const auto handler = generated_function(code, "void read_qualified_");
-    CHECK(handler.find("h.amount = " + handler_payload_param(handler) + ".amount;") != std::string::npos);
+    CHECK(handler.contains("h.amount = " + handler_payload_param(handler) + ".amount;"));
 }
 
 TEST_CASE("Codegen EnTT: a pair handler reads its trigger name through the payload parameter",
@@ -5847,9 +5853,9 @@ TEST_CASE("Codegen EnTT: a pair handler reads its trigger name through the paylo
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("Turn.amount") == std::string::npos);
+    CHECK(!code.contains("Turn.amount"));
     const auto handler = generated_function(code, "void pair_read_Turn(");
-    CHECK(handler.find(handler_payload_param(handler) + ".amount > 0") != std::string::npos);
+    CHECK(handler.contains(handler_payload_param(handler) + ".amount > 0"));
 }
 
 TEST_CASE("Codegen EnTT: graph structural commands commit after cascades and between fixed repetitions",
@@ -5891,14 +5897,14 @@ TEST_CASE("Codegen EnTT: graph structural commands commit after cascades and bet
     const auto code         = CppEnttCodegen::generate(decorated);
     const auto spawned_name = extract_temp_name(code, "cactus_gen_spawned_");
     REQUIRE_FALSE(spawned_name.empty());
-    CHECK(code.find("auto " + spawned_name + " = cactus::runtime::entt_backend::generated_reserve_entity(registry);") !=
-          std::string::npos);
-    CHECK(code.find("create_particle_at(registry, " + spawned_name + ");") != std::string::npos);
-    CHECK(code.find("generated_queue_structural_command(") != std::string::npos);
-    CHECK(code.find("StructuralCommand::Kind::Spawn") != std::string::npos);
-    CHECK(code.find("StructuralCommand::Kind::Add") != std::string::npos);
-    CHECK(code.find("StructuralCommand::Kind::Remove") != std::string::npos);
-    CHECK(code.find("StructuralCommand::Kind::Destroy") != std::string::npos);
+    CHECK(code.contains("auto " + spawned_name +
+                        " = cactus::runtime::entt_backend::generated_reserve_entity(registry);"));
+    CHECK(code.contains("create_particle_at(registry, " + spawned_name + ");"));
+    CHECK(code.contains("generated_queue_structural_command("));
+    CHECK(code.contains("StructuralCommand::Kind::Spawn"));
+    CHECK(code.contains("StructuralCommand::Kind::Add"));
+    CHECK(code.contains("StructuralCommand::Kind::Remove"));
+    CHECK(code.contains("StructuralCommand::Kind::Destroy"));
 
     const auto fixed_batch = code.find("void generated_run_phase_batch_game_commands__fixed_tick");
     REQUIRE(fixed_batch != std::string::npos);
@@ -5942,9 +5948,9 @@ TEST_CASE("Codegen EnTT: graph structural commands commit after cascades and bet
     const auto legacy_code         = CppEnttCodegen::generate(legacy);
     const auto legacy_spawned_name = extract_temp_name(legacy_code, "cactus_gen_spawned_");
     REQUIRE_FALSE(legacy_spawned_name.empty());
-    CHECK(legacy_code.find("auto " + legacy_spawned_name + " = create_particle(registry);") != std::string::npos);
-    CHECK(legacy_code.find("generated_reserve_entity") == std::string::npos);
-    CHECK(legacy_code.find("generated_queue_structural_command") == std::string::npos);
+    CHECK(legacy_code.contains("auto " + legacy_spawned_name + " = create_particle(registry);"));
+    CHECK(!legacy_code.contains("generated_reserve_entity"));
+    CHECK(!legacy_code.contains("generated_queue_structural_command"));
 }
 
 TEST_CASE("Codegen EnTT: set queues a durable-value patch without projection cancel or baseline retain",
@@ -5976,12 +5982,12 @@ TEST_CASE("Codegen EnTT: set queues a durable-value patch without projection can
     REQUIRE(end != std::string::npos);
     const auto command = code.substr(start, end - start);
 
-    CHECK(command.find("durable_Health(registry, ") != std::string::npos);
-    CHECK(command.find("->current = ") != std::string::npos);
-    CHECK(command.find("max") == std::string::npos);
-    CHECK(command.find("cancel_projected_") == std::string::npos);
-    CHECK(command.find("retain_construction") == std::string::npos);
-    CHECK(command.find("emplace") == std::string::npos);
+    CHECK(command.contains("durable_Health(registry, "));
+    CHECK(command.contains("->current = "));
+    CHECK(!command.contains("max"));
+    CHECK(!command.contains("cancel_projected_"));
+    CHECK(!command.contains("retain_construction"));
+    CHECK(!command.contains("emplace"));
 }
 
 TEST_CASE("Codegen EnTT: compiler-owned contracted effects execute only through stable graph dispatch",
@@ -6053,14 +6059,14 @@ TEST_CASE("Codegen EnTT: compiler-owned contracted effects execute only through 
     CHECK(count_occurrences(dispatch, "::sprite_renderer_tick(registry);") == 1);
     CHECK(count_occurrences(dispatch, "::sprite_animation_tick(registry);") == 1);
 
-    CHECK(code.find("cactus_external__std_render_sprites__SpriteRenderer") == std::string::npos);
-    CHECK(code.find("cactus_external__std_render_sprites__SpriteAnimation") == std::string::npos);
+    CHECK(!code.contains("cactus_external__std_render_sprites__SpriteRenderer"));
+    CHECK(!code.contains("cactus_external__std_render_sprites__SpriteAnimation"));
     const auto update = generated_function(code, "void generated_update_project(");
     const auto render = generated_function(code, "void generated_render_project(");
-    CHECK(update.find("sprite_renderer_tick") == std::string::npos);
-    CHECK(update.find("sprite_animation_tick") == std::string::npos);
-    CHECK(render.find("sprite_renderer_tick") == std::string::npos);
-    CHECK(render.find("sprite_animation_tick") == std::string::npos);
+    CHECK(!update.contains("sprite_renderer_tick"));
+    CHECK(!update.contains("sprite_animation_tick"));
+    CHECK(!render.contains("sprite_renderer_tick"));
+    CHECK(!render.contains("sprite_animation_tick"));
 }
 
 TEST_CASE(
@@ -6161,17 +6167,20 @@ TEST_CASE(
 
 // ── Pair relations (dsl-pair-relations, 5.5) ─────────────────────────────────
 
-static const std::string PAIR_CODEGEN_TRAITS =
-    "trait DynamicBody:\n"
-    "    var vx: float\n"
-    "trait Transform:\n"
-    "    var x: float\n"
-    "trait Solid:\n"
-    "    var active: bool = true\n"
-    "trait Collider:\n"
-    "    var mask: int\n"
-    "event Contact:\n"
-    "    other: entity_id\n";
+static const std::string& pair_codegen_traits() {
+    static const std::string value =
+        "trait DynamicBody:\n"
+        "    var vx: float\n"
+        "trait Transform:\n"
+        "    var x: float\n"
+        "trait Solid:\n"
+        "    var active: bool = true\n"
+        "trait Collider:\n"
+        "    var mask: int\n"
+        "event Contact:\n"
+        "    other: entity_id\n";
+    return value;
+}
 
 TEST_CASE("Codegen EnTT: pair handler snapshots both bindings and iterates their product",
           "[codegen-entt][pair-relations]") {
@@ -6179,7 +6188,7 @@ TEST_CASE("Codegen EnTT: pair handler snapshots both bindings and iterates their
     auto decorated = full_pipeline(
         "event tick:\n"
         "    dt: float\n" +
-            PAIR_CODEGEN_TRAITS +
+            pair_codegen_traits() +
             "rule DetectContacts:\n"
             "    pairs:\n"
             "        body:\n"
@@ -6198,15 +6207,14 @@ TEST_CASE("Codegen EnTT: pair handler snapshots both bindings and iterates their
         if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
             // Two independent typed snapshots, not a materialized tuple list.
-            CHECK(code.find("std::vector<entt::entity> body_snapshot;") != std::string::npos);
-            CHECK(code.find("registry.view<DynamicBody, Transform>()") != std::string::npos);
-            CHECK(code.find("std::vector<entt::entity> wall_snapshot;") != std::string::npos);
-            CHECK(code.find("registry.view<Solid, Collider>()") != std::string::npos);
+            CHECK(code.contains("std::vector<entt::entity> body_snapshot;"));
+            CHECK(code.contains("registry.view<DynamicBody, Transform>()"));
+            CHECK(code.contains("std::vector<entt::entity> wall_snapshot;"));
+            CHECK(code.contains("registry.view<Solid, Collider>()"));
             // Sorted by creation ordinal for deterministic tuple order, reading
             // each entity's ordinal exactly once rather than per comparison.
-            CHECK(code.find("registry.get<cactus::runtime::entt_backend::CreationOrdinal>(pair_entity).value,") !=
-                  std::string::npos);
-            CHECK(code.find("std::ranges::sort(body_ordered);") != std::string::npos);
+            CHECK(code.contains("registry.get<cactus::runtime::entt_backend::CreationOrdinal>(pair_entity).value,"));
+            CHECK(code.contains("std::ranges::sort(body_ordered);"));
             // Left-binding-major nested iteration over the snapshots, in the
             // untargeted (broadcast) branch — the recipient-targeted branch
             // precedes it and has its own incident-tuple loop shapes.
@@ -6219,15 +6227,15 @@ TEST_CASE("Codegen EnTT: pair handler snapshots both bindings and iterates their
             CHECK(body_loop < wall_loop);
             // Recipient-targeted delivery: incident tuples only, tested via an
             // O(1) all_of<> membership check against the recipient.
-            CHECK(code.find("if (cactus_recipient.has_value()) {") != std::string::npos);
-            CHECK(code.find("const auto target = *cactus_recipient;") != std::string::npos);
-            CHECK(code.find("if (registry.all_of<DynamicBody, Transform>(target)) {") != std::string::npos);
-            CHECK(code.find("if (body == target) { continue; }") != std::string::npos);
+            CHECK(code.contains("if (cactus_recipient.has_value()) {"));
+            CHECK(code.contains("const auto target = *cactus_recipient;"));
+            CHECK(code.contains("if (registry.all_of<DynamicBody, Transform>(target)) {"));
+            CHECK(code.contains("if (body == target) { continue; }"));
             // Pair-bound trait reads are const.
-            CHECK(code.find("registry.get<const Transform>(body).x") != std::string::npos);
-            CHECK(code.find("registry.get<const Collider>(wall).mask") != std::string::npos);
+            CHECK(code.contains("registry.get<const Transform>(body).x"));
+            CHECK(code.contains("registry.get<const Collider>(wall).mask"));
             // Bare binding identifiers used directly as entity_id (emit target).
-            CHECK(code.find("(body != wall)") != std::string::npos);
+            CHECK(code.contains("(body != wall)"));
         }
     }
 }
@@ -6249,7 +6257,7 @@ TEST_CASE(
     auto decorated = full_pipeline(
         "event tick:\n"
         "    dt: float\n" +
-            PAIR_CODEGEN_TRAITS +
+            pair_codegen_traits() +
             "rule DetectBubbleContact:\n"
             "    pairs:\n"
             "        a:\n"
@@ -6303,7 +6311,7 @@ TEST_CASE(
     auto decorated = full_pipeline(
         "event tick:\n"
         "    dt: float\n" +
-            PAIR_CODEGEN_TRAITS +
+            pair_codegen_traits() +
             "rule DetectBubbleContact:\n"
             "    pairs:\n"
             "        a:\n"
@@ -6358,7 +6366,7 @@ TEST_CASE("Codegen EnTT: pair handler body text appears exactly once across all 
     auto decorated = full_pipeline(
         "event tick:\n"
         "    dt: float\n" +
-            PAIR_CODEGEN_TRAITS +
+            pair_codegen_traits() +
             "rule DetectBubbleContact:\n"
             "    pairs:\n"
             "        a:\n"
@@ -6390,7 +6398,7 @@ TEST_CASE("Codegen EnTT: pair binding selecting the same trait as the other bind
     auto decorated = full_pipeline(
         "event tick:\n"
         "    dt: float\n" +
-            PAIR_CODEGEN_TRAITS +
+            pair_codegen_traits() +
             "rule DetectContacts:\n"
             "    pairs:\n"
             "        body:\n"
@@ -6406,8 +6414,8 @@ TEST_CASE("Codegen EnTT: pair binding selecting the same trait as the other bind
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            CHECK(code.find("registry.get<const Collider>(body).mask") != std::string::npos);
-            CHECK(code.find("registry.get<const Collider>(wall).mask") != std::string::npos);
+            CHECK(code.contains("registry.get<const Collider>(body).mask"));
+            CHECK(code.contains("registry.get<const Collider>(wall).mask"));
         }
     }
 }
@@ -6427,7 +6435,7 @@ TEST_CASE(
     auto decorated = full_pipeline(
         "event tick:\n"
         "    dt: float\n" +
-            PAIR_CODEGEN_TRAITS +
+            pair_codegen_traits() +
             "rule DetectContacts:\n"
             "    pairs:\n"
             "        body:\n"
@@ -6443,8 +6451,8 @@ TEST_CASE(
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            CHECK(code.find("registry.get<const Solid>(wall).active") != std::string::npos);
-            CHECK(code.find("registry.get<const Collider>(wall)") == std::string::npos);
+            CHECK(code.contains("registry.get<const Solid>(wall).active"));
+            CHECK(!code.contains("registry.get<const Collider>(wall)"));
         }
     }
 }
@@ -6455,7 +6463,7 @@ TEST_CASE("Codegen EnTT: pair binding-local alias and qualified imported trait r
     auto decorated = full_pipeline(
         "event tick:\n"
         "    dt: float\n" +
-            PAIR_CODEGEN_TRAITS +
+            pair_codegen_traits() +
             "rule DetectContacts:\n"
             "    pairs:\n"
             "        body:\n"
@@ -6471,7 +6479,7 @@ TEST_CASE("Codegen EnTT: pair binding-local alias and qualified imported trait r
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            CHECK(code.find("registry.get<const Collider>(wall).mask") != std::string::npos);
+            CHECK(code.contains("registry.get<const Collider>(wall).mask"));
         }
     }
 }
@@ -6485,7 +6493,7 @@ TEST_CASE("Codegen EnTT: pair handler under the graph runtime uses targeted emit
         "phase tick:\n"
         "    from:\n"
         "        frame\n" +
-            PAIR_CODEGEN_TRAITS +
+            pair_codegen_traits() +
             "trait GroundContact:\n"
             "    var active: bool = true\n"
             "rule DetectContacts:\n"
@@ -6504,7 +6512,7 @@ TEST_CASE("Codegen EnTT: pair handler under the graph runtime uses targeted emit
     // CreationOrdinal is runtime-hosted (backends/cpp-entt/runtime.hpp);
     // codegen must not redefine it inline (duplicate-definition error, since
     // runtime.hpp is always included).
-    CHECK(code.find("struct CreationOrdinal {") == std::string::npos);
+    CHECK(!code.contains("struct CreationOrdinal {"));
     // Targeted emit resolves `body` to the per-tuple loop variable, evaluates
     // it once, and carries it into the queued occurrence via the targeted
     // emit path (targeted-event-delivery) rather than a validity guard around
@@ -6513,12 +6521,11 @@ TEST_CASE("Codegen EnTT: pair handler under the graph runtime uses targeted emit
     // `target` (e.g. `emit X(to: target)`).
     const auto emit_target_name = extract_temp_name(code, "cactus_gen_emit_target_");
     REQUIRE_FALSE(emit_target_name.empty());
-    CHECK(code.find("const auto " + emit_target_name + " = body;") != std::string::npos);
-    CHECK(code.find("if (registry.valid(" + emit_target_name + ")) {") != std::string::npos);
-    CHECK(code.find("generated_emit_targeted_event(ContactEvent{.other = wall}, " + emit_target_name + ");") !=
-          std::string::npos);
+    CHECK(code.contains("const auto " + emit_target_name + " = body;"));
+    CHECK(code.contains("if (registry.valid(" + emit_target_name + ")) {"));
+    CHECK(code.contains("generated_emit_targeted_event(ContactEvent{.other = wall}, " + emit_target_name + ");"));
     // Project remains an immediate (non-buffered) call, same as unary rules.
-    CHECK(code.find("project_GroundContact(registry, body);") != std::string::npos);
+    CHECK(code.contains("project_GroundContact(registry, body);"));
 }
 
 TEST_CASE("Codegen EnTT: pair binding on a marker (zero-field) trait still snapshots correctly",
@@ -6546,9 +6553,9 @@ TEST_CASE("Codegen EnTT: pair binding on a marker (zero-field) trait still snaps
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            CHECK(code.find("registry.view<Solid>()") != std::string::npos);
-            CHECK(code.find("std::vector<entt::entity> wall_snapshot;") != std::string::npos);
-            CHECK(code.find("for (auto wall : wall_snapshot)") != std::string::npos);
+            CHECK(code.contains("registry.view<Solid>()"));
+            CHECK(code.contains("std::vector<entt::entity> wall_snapshot;"));
+            CHECK(code.contains("for (auto wall : wall_snapshot)"));
         }
     }
 }
@@ -6581,9 +6588,9 @@ TEST_CASE("Codegen EnTT: drain_event_cascade drops a stale-recipient occurrence 
     // A forward declaration of this function precedes its definition, so the
     // search must include the opening brace to skip past it.
     const auto drain = generated_function(code, "void generated_drain_event_cascade(entt::registry& registry) {");
-    CHECK(drain.find("drain_event_cascade(") != std::string::npos);
-    CHECK(drain.find("generated_scheduler_state().activation, registry,") != std::string::npos);
-    CHECK(drain.find("generated_dispatch_event(reg, occurrence, target);") != std::string::npos);
+    CHECK(drain.contains("drain_event_cascade("));
+    CHECK(drain.contains("generated_scheduler_state().activation, registry,"));
+    CHECK(drain.contains("generated_dispatch_event(reg, occurrence, target);"));
 }
 
 TEST_CASE("Codegen EnTT: deferred cascade preserves a targeted occurrence's recipient",
@@ -6614,9 +6621,8 @@ TEST_CASE("Codegen EnTT: deferred cascade preserves a targeted occurrence's reci
     // target through to it.
     const auto targeted =
         generated_function(code, "void generated_emit_targeted_event(Occurrence occurrence, entt::entity target)");
-    CHECK(
-        targeted.find("emit_targeted_event(generated_scheduler_state().activation, std::move(occurrence), target);") !=
-        std::string::npos);
+    CHECK(targeted.contains(
+        "emit_targeted_event(generated_scheduler_state().activation, std::move(occurrence), target);"));
 }
 
 TEST_CASE("Codegen EnTT: selectionless event handler accepts and ignores an optional recipient",
@@ -6633,12 +6639,12 @@ TEST_CASE("Codegen EnTT: selectionless event handler accepts and ignores an opti
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            CHECK(code.find("std::optional<entt::entity> cactus_recipient = std::nullopt") != std::string::npos);
-            CHECK(code.find("(void)cactus_recipient;") != std::string::npos);
+            CHECK(code.contains("std::optional<entt::entity> cactus_recipient = std::nullopt"));
+            CHECK(code.contains("(void)cactus_recipient;"));
             // No recipient-conditioned branch — a selectionless consumer runs
             // once regardless of targeting (targeted-event-delivery,
             // "Selectionless observer receives targeted occurrence once").
-            CHECK(code.find("cactus_recipient.has_value()") == std::string::npos);
+            CHECK(!code.contains("cactus_recipient.has_value()"));
         }
     }
 }
@@ -6661,15 +6667,15 @@ TEST_CASE("Codegen EnTT: targeted unary handler runs at most once for the recipi
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            CHECK(code.find("if (cactus_recipient.has_value()) {") != std::string::npos);
-            CHECK(code.find("entt::entity entity = *cactus_recipient;") != std::string::npos);
-            CHECK(code.find("if (registry.all_of<Health>(entity)) {") != std::string::npos);
+            CHECK(code.contains("if (cactus_recipient.has_value()) {"));
+            CHECK(code.contains("entt::entity entity = *cactus_recipient;"));
+            CHECK(code.contains("if (registry.all_of<Health>(entity)) {"));
             // Component access for the targeted branch mirrors the broadcast
             // branch's binding name so the same body text works unmodified.
-            CHECK(code.find("auto& Health_comp = registry.get<Health>(entity);") != std::string::npos);
+            CHECK(code.contains("auto& Health_comp = registry.get<Health>(entity);"));
             // Broadcast fallback for an untargeted occurrence remains the
             // ordinary full-view iteration.
-            CHECK(code.find("registry.view<Health>()") != std::string::npos);
+            CHECK(code.contains("registry.view<Health>()"));
         }
     }
 }
@@ -6700,8 +6706,8 @@ TEST_CASE("Codegen EnTT: targeted external handler dispatch is gated on the reci
         code.find("void generated_dispatch_event(entt::registry& registry, const ContactEvent& occurrence,");
     REQUIRE(dispatch != std::string::npos);
     const auto tail = code.substr(dispatch);
-    CHECK(tail.find("if (target.has_value()) {") != std::string::npos);
-    CHECK(tail.find("entt::entity entity = *target;") != std::string::npos);
+    CHECK(tail.contains("if (target.has_value()) {"));
+    CHECK(tail.contains("entt::entity entity = *target;"));
 }
 
 TEST_CASE("Codegen EnTT: dotted assignment through a filter alias writes the field instead of shadowing the alias",
@@ -6726,8 +6732,8 @@ TEST_CASE("Codegen EnTT: dotted assignment through a filter alias writes the fie
             // component; the assignment must reuse it via ordinary member
             // access rather than redeclaring it with `auto`, which would be a
             // compile error (redefinition of `hp`).
-            CHECK(code.find("hp.current = (hp.current - dmg.amount);") != std::string::npos);
-            CHECK(code.find("auto hp = ") == std::string::npos);
+            CHECK(code.contains("hp.current = (hp.current - dmg.amount);"));
+            CHECK(!code.contains("auto hp = "));
         }
     }
 }
@@ -6756,17 +6762,17 @@ TEST_CASE("Codegen EnTT: range() lowers to a zero-allocation ascending/descendin
 
         // No list[T] snapshot (std::vector, or the generic foreach_snapshot_
         // temp) is constructed for the range itself.
-        CHECK(code.find("std::vector") == std::string::npos);
-        CHECK(code.find("foreach_snapshot_") == std::string::npos);
+        CHECK(!code.contains("std::vector"));
+        CHECK(!code.contains("foreach_snapshot_"));
 
         const auto step_name = extract_temp_name(code, "cactus_gen_range_step_");
         REQUIRE_FALSE(step_name.empty());
-        CHECK(code.find("if (" + step_name + " > 0) {") != std::string::npos);
-        CHECK(code.find("} else if (" + step_name + " < 0) {") != std::string::npos);
+        CHECK(code.contains("if (" + step_name + " > 0) {"));
+        CHECK(code.contains("} else if (" + step_name + " < 0) {"));
         // No unconditional trailing branch: a step of 0 falls through both
         // arms and executes the loop body zero times.
-        CHECK(code.find("} else {\n") == std::string::npos);
-        CHECK(code.find("for (int k = ") != std::string::npos);
+        CHECK(!code.contains("} else {\n"));
+        CHECK(code.contains("for (int k = "));
     }
 }
 
@@ -6790,9 +6796,9 @@ TEST_CASE("Codegen EnTT: range() descending iteration counts down", "[codegen-en
             continue;
         }
         auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-        CHECK(code.find("k < ") != std::string::npos);
-        CHECK(code.find("k > ") != std::string::npos);
-        CHECK(code.find("k += ") != std::string::npos);
+        CHECK(code.contains("k < "));
+        CHECK(code.contains("k > "));
+        CHECK(code.contains("k += "));
     }
 }
 
@@ -6844,7 +6850,7 @@ TEST_CASE("Codegen EnTT: range() default step omits a third argument but still e
         auto code            = EnttSystemEmitter::emit_system(*sys, decorated);
         const auto step_name = extract_temp_name(code, "cactus_gen_range_step_");
         REQUIRE_FALSE(step_name.empty());
-        CHECK(code.find("const int " + step_name + " = 1;") != std::string::npos);
+        CHECK(code.contains("const int " + step_name + " = 1;"));
     }
 }
 
@@ -6901,7 +6907,7 @@ TEST_CASE("Codegen EnTT: range() with a non-literal step has no unconditional fa
             REQUIRE(brace_pos != std::string::npos);
         }
         const auto own_closes = code.substr(increment_pos, brace_pos + 1 - increment_pos);
-        CHECK(own_closes.find("else") == std::string::npos);
+        CHECK(!own_closes.contains("else"));
     }
 }
 
@@ -6927,8 +6933,8 @@ TEST_CASE("Codegen EnTT: vec2/vec3 int arguments are wrapped in static_cast<floa
         // int-kind arguments (the loop variable `k`, and the bare int
         // literal `0`) are cast; the already-float argument `0.0` is not
         // redundantly wrapped.
-        CHECK(code.find("vec2(static_cast<float>(k), 0.0F)") != std::string::npos);
-        CHECK(code.find("vec3(static_cast<float>(k), static_cast<float>(0), 0.0F)") != std::string::npos);
+        CHECK(code.contains("vec2(static_cast<float>(k), 0.0F)"));
+        CHECK(code.contains("vec3(static_cast<float>(k), static_cast<float>(0), 0.0F)"));
     }
 }
 
@@ -6951,10 +6957,10 @@ TEST_CASE("Codegen EnTT: vec2 int arguments are wrapped in static_cast<float> (V
             continue;
         }
         auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-        CHECK(code.find("static_cast<float>(k)") != std::string::npos);
-        CHECK(code.find("0.0F") != std::string::npos);
+        CHECK(code.contains("static_cast<float>(k)"));
+        CHECK(code.contains("0.0F"));
         // The already-float argument isn't redundantly wrapped.
-        CHECK(code.find("static_cast<float>(0.0F)") == std::string::npos);
+        CHECK(!code.contains("static_cast<float>(0.0F)"));
     }
 }
 
@@ -6975,9 +6981,9 @@ TEST_CASE("Codegen EnTT: color(...) constructor routes through color_from_compon
             continue;
         }
         auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-        CHECK(code.find("color_from_components(1.0F, 0.0F, 0.0F, 1.0F)") != std::string::npos);
+        CHECK(code.contains("color_from_components(1.0F, 0.0F, 0.0F, 1.0F)"));
         // Never a raw `color(...)` call left un-rewritten.
-        CHECK(code.find(" color(1.0F") == std::string::npos);
+        CHECK(!code.contains(" color(1.0F"));
     }
 }
 
@@ -6999,8 +7005,9 @@ TEST_CASE("Codegen EnTT: color(...) constructor int arguments are wrapped in sta
             continue;
         }
         auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-        CHECK(code.find("color_from_components(static_cast<float>(k), static_cast<float>(0), "
-                        "static_cast<float>(0), 1.0F)") != std::string::npos);
+        CHECK(
+            code.contains("color_from_components(static_cast<float>(k), static_cast<float>(0), "
+                          "static_cast<float>(0), 1.0F)"));
     }
 }
 
@@ -7010,7 +7017,7 @@ TEST_CASE("Codegen EnTT: pair-bound color channel read normalizes the raw byte f
     auto decorated = full_pipeline(
         "event tick:\n"
         "    dt: float\n" +
-            PAIR_CODEGEN_TRAITS +
+            pair_codegen_traits() +
             "trait Tint:\n"
             "    var tint: color\n"
             "rule DetectContacts:\n"
@@ -7029,7 +7036,7 @@ TEST_CASE("Codegen EnTT: pair-bound color channel read normalizes the raw byte f
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            CHECK(code.find("static_cast<float>(registry.get<const Tint>(body).tint.a) / 255.0F") != std::string::npos);
+            CHECK(code.contains("static_cast<float>(registry.get<const Tint>(body).tint.a) / 255.0F"));
         }
     }
 }
@@ -7061,7 +7068,7 @@ TEST_CASE("Codegen EnTT: binary arithmetic mixing a range loop variable with a c
             continue;
         }
         auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-        CHECK(code.find("static_cast<float>(k) * (test__TAU / static_cast<float>(test__PARTICLE_COUNT))") != std::string::npos);
+        CHECK(code.contains("static_cast<float>(k) * (test__TAU / static_cast<float>(test__PARTICLE_COUNT))"));
     }
 }
 
@@ -7086,22 +7093,25 @@ static std::string emit_named_rule(const std::string& source, const std::string&
     return {};
 }
 
-static const std::string SPATIAL_JOIN_TRAITS =
-    "trait Transform:\n"
-    "    var position: vec2\n"
-    "trait Collider:\n"
-    "    var radius: float\n"
-    "pub func circles_overlap(a_position: vec2, a_radius: float, b_position: vec2, b_radius: float) bool:\n"
-    "    return a_radius + b_radius >= 0.0\n"
-    "event tick:\n"
-    "    dt: float\n"
-    "event Contact:\n"
-    "    other: entity_id\n";
+static const std::string& spatial_join_traits() {
+    static const std::string value =
+        "trait Transform:\n"
+        "    var position: vec2\n"
+        "trait Collider:\n"
+        "    var radius: float\n"
+        "pub func circles_overlap(a_position: vec2, a_radius: float, b_position: vec2, b_radius: float) bool:\n"
+        "    return a_radius + b_radius >= 0.0\n"
+        "event tick:\n"
+        "    dt: float\n"
+        "event Contact:\n"
+        "    other: entity_id\n";
+    return value;
+}
 
 TEST_CASE("Codegen EnTT: SAP-eligible pair rule calls the runtime broad phase instead of a hand-rolled sweep",
           "[codegen-entt][spatial-join]") {
     ProgramNode program;
-    auto decorated = full_pipeline("module std.collision.flat\n" + SPATIAL_JOIN_TRAITS +
+    auto decorated = full_pipeline("module std.collision.flat\n" + spatial_join_traits() +
                                        "rule DetectContact:\n"
                                        "    pairs:\n"
                                        "        a:\n"
@@ -7126,14 +7136,14 @@ TEST_CASE("Codegen EnTT: SAP-eligible pair rule calls the runtime broad phase in
         auto code = EnttSystemEmitter::emit_system(*sys, decorated);
         // Runtime-owned SAP API called with the same ordinal-sorted snapshot
         // machinery every pair rule already builds.
-        CHECK(code.find("cactus::runtime::entt_backend::circle_proxy(") != std::string::npos);
-        CHECK(code.find("cactus::runtime::entt_backend::SapBroadPhase2D") != std::string::npos);
-        CHECK(code.find(".sync(__sap_proxies)") != std::string::npos);
-        CHECK(code.find("__sap.candidate_pairs()") != std::string::npos);
+        CHECK(code.contains("cactus::runtime::entt_backend::circle_proxy("));
+        CHECK(code.contains("cactus::runtime::entt_backend::SapBroadPhase2D"));
+        CHECK(code.contains(".sync(__sap_proxies)"));
+        CHECK(code.contains("__sap.candidate_pairs()"));
         // The recognized predicate is still re-verified per tuple (SAP's
         // candidates are a conservative superset), via the exact same
         // synthesized-guard/body-emission machinery as before.
-        CHECK(code.find("std_collision_flat__circles_overlap(") != std::string::npos);
+        CHECK(code.contains("std_collision_flat__circles_overlap("));
         // No hand-rolled sort/sweep/candidate-generation loop of its own: the
         // untargeted (broadcast) branch no longer contains the plain nested
         // Cartesian double-loop. The recipient-targeted branch precedes it and
@@ -7148,24 +7158,27 @@ TEST_CASE("Codegen EnTT: SAP-eligible pair rule calls the runtime broad phase in
 
 // dot is declared locally within a module literally named "std.math.vec2" so
 // its canonical id matches the recognized target exactly, mirroring
-// SPATIAL_JOIN_TRAITS above.
-static const std::string MANUAL_DOT_SPATIAL_JOIN_TRAITS =
-    "trait Transform:\n"
-    "    var position: vec2\n"
-    "trait Collider:\n"
-    "    var radius: float\n"
-    "pub func dot(a: vec2, b: vec2) float:\n"
-    "    return 0.0\n"
-    "event tick:\n"
-    "    dt: float\n"
-    "event Contact:\n"
-    "    other: entity_id\n";
+// spatial_join_traits() above.
+static const std::string& manual_dot_spatial_join_traits() {
+    static const std::string value =
+        "trait Transform:\n"
+        "    var position: vec2\n"
+        "trait Collider:\n"
+        "    var radius: float\n"
+        "pub func dot(a: vec2, b: vec2) float:\n"
+        "    return 0.0\n"
+        "event tick:\n"
+        "    dt: float\n"
+        "event Contact:\n"
+        "    other: entity_id\n";
+    return value;
+}
 
 TEST_CASE("Codegen EnTT: manual dot-product where: shape calls the runtime broad phase instead of a hand-rolled sweep",
           "[codegen-entt][spatial-join]") {
     ProgramNode program;
     auto decorated =
-        full_pipeline("module std.math.vec2\n" + MANUAL_DOT_SPATIAL_JOIN_TRAITS +
+        full_pipeline("module std.math.vec2\n" + manual_dot_spatial_join_traits() +
                           "rule DetectContact:\n"
                           "    pairs:\n"
                           "        a:\n"
@@ -7189,10 +7202,10 @@ TEST_CASE("Codegen EnTT: manual dot-product where: shape calls the runtime broad
             continue;
         }
         auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-        CHECK(code.find("cactus::runtime::entt_backend::circle_proxy(") != std::string::npos);
-        CHECK(code.find("cactus::runtime::entt_backend::SapBroadPhase2D") != std::string::npos);
-        CHECK(code.find(".sync(__sap_proxies)") != std::string::npos);
-        CHECK(code.find("__sap.candidate_pairs()") != std::string::npos);
+        CHECK(code.contains("cactus::runtime::entt_backend::circle_proxy("));
+        CHECK(code.contains("cactus::runtime::entt_backend::SapBroadPhase2D"));
+        CHECK(code.contains(".sync(__sap_proxies)"));
+        CHECK(code.contains("__sap.candidate_pairs()"));
     }
 }
 
@@ -7275,15 +7288,15 @@ TEST_CASE("Codegen EnTT: bouncy-bubbles' migrated DetectBubbleContact where: sha
             continue;
         }
         auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-        CHECK(code.find("cactus::runtime::entt_backend::circle_proxy(") != std::string::npos);
-        CHECK(code.find("cactus::runtime::entt_backend::SapBroadPhase2D") != std::string::npos);
+        CHECK(code.contains("cactus::runtime::entt_backend::circle_proxy("));
+        CHECK(code.contains("cactus::runtime::entt_backend::SapBroadPhase2D"));
     }
 }
 
 TEST_CASE("Codegen EnTT: cross-domain pair rule with a recognized-shape call builds proxies from both snapshots",
           "[codegen-entt][spatial-join]") {
     ProgramNode program;
-    auto decorated = full_pipeline("module std.collision.flat\n" + SPATIAL_JOIN_TRAITS +
+    auto decorated = full_pipeline("module std.collision.flat\n" + spatial_join_traits() +
                                        "trait Wall:\n"
                                        "    var active: bool = true\n"
                                        "rule DetectContact:\n"
@@ -7322,24 +7335,27 @@ TEST_CASE("Codegen EnTT: cross-domain pair rule with a recognized-shape call bui
     }
 }
 
-static const std::string VOLUME_JOIN_TRAITS =
-    "const:\n"
-    "    PROBE = 0.5\n"
-    "trait Body:\n"
-    "    var position: vec3\n"
-    "    var radius: float\n"
-    "trait Solid:\n"
-    "    var position: vec3\n"
-    "    var size: vec3\n"
-    "    var rotation: quat\n"
-    "pub func sphere_box_overlap(sphere_position: vec3, sphere_radius: float, box_position: vec3, box_size: vec3, "
-    "box_rotation: quat) bool:\n"
-    "    return sphere_radius >= 0.0\n"
-    "event tick:\n"
-    "    dt: float\n";
+static const std::string& volume_join_traits() {
+    static const std::string value =
+        "const:\n"
+        "    PROBE = 0.5\n"
+        "trait Body:\n"
+        "    var position: vec3\n"
+        "    var radius: float\n"
+        "trait Solid:\n"
+        "    var position: vec3\n"
+        "    var size: vec3\n"
+        "    var rotation: quat\n"
+        "pub func sphere_box_overlap(sphere_position: vec3, sphere_radius: float, box_position: vec3, box_size: vec3, "
+        "box_rotation: quat) bool:\n"
+        "    return sphere_radius >= 0.0\n"
+        "event tick:\n"
+        "    dt: float\n";
+    return value;
+}
 
 static std::string emit_sphere_box_rule(const std::string& bindings, const std::string& predicate) {
-    return emit_named_rule("module std.collision.volume\n" + VOLUME_JOIN_TRAITS + "rule Detect:\n    pairs:\n" +
+    return emit_named_rule("module std.collision.volume\n" + volume_join_traits() + "rule Detect:\n    pairs:\n" +
                                bindings + "    where:\n        " + predicate + "\n    on tick:\n        let x = 1\n",
                            "Detect");
 }
@@ -7366,16 +7382,15 @@ TEST_CASE("Codegen EnTT: sphere-box pair rule builds sphere and box proxies from
     CHECK(code.find("SapSide::Right", box) != std::string::npos);
     // Each slot is rewritten for its own binding, constants included.
     const auto sphere_line = code.substr(sphere, code.find('\n', sphere) - sphere);
-    CHECK(sphere_line.find("PROBE") != std::string::npos);
-    CHECK(sphere_line.find("wall") == std::string::npos);
+    CHECK(sphere_line.contains("PROBE"));
+    CHECK(!sphere_line.contains("wall"));
     const auto box_line = code.substr(box, code.find('\n', box) - box);
-    CHECK(box_line.find(".size") != std::string::npos);
-    CHECK(box_line.find(".rotation") != std::string::npos);
-    CHECK(box_line.find("actor") == std::string::npos);
-    CHECK(code.find("cactus::runtime::entt_backend::SapBroadPhase3D") != std::string::npos);
-    CHECK(code.find("for (const auto& __sap_pair : __sap.candidate_pairs())") != std::string::npos);
-    CHECK(code.find("__sap_proxies[__sap_pair.left].entity, __sap_proxies[__sap_pair.right].entity") !=
-          std::string::npos);
+    CHECK(box_line.contains(".size"));
+    CHECK(box_line.contains(".rotation"));
+    CHECK(!box_line.contains("actor"));
+    CHECK(code.contains("cactus::runtime::entt_backend::SapBroadPhase3D"));
+    CHECK(code.contains("for (const auto& __sap_pair : __sap.candidate_pairs())"));
+    CHECK(code.contains("__sap_proxies[__sap_pair.left].entity, __sap_proxies[__sap_pair.right].entity"));
 }
 
 TEST_CASE("Codegen EnTT: a shape on the right binding builds right-side proxies",
@@ -7383,9 +7398,8 @@ TEST_CASE("Codegen EnTT: a shape on the right binding builds right-side proxies"
     const auto code = emit_sphere_box_rule("        wall:\n            Solid\n        actor:\n            Body\n",
                                            "sphere_box_overlap(actor.Body.position, actor.Body.radius, "
                                            "wall.Solid.position, wall.Solid.size, wall.Solid.rotation)");
-    CHECK(code.find("sphere_proxy(actor, __sap_i, cactus::runtime::entt_backend::SapSide::Right, ") !=
-          std::string::npos);
-    CHECK(code.find("box_proxy(wall, __sap_i, cactus::runtime::entt_backend::SapSide::Left, ") != std::string::npos);
+    CHECK(code.contains("sphere_proxy(actor, __sap_i, cactus::runtime::entt_backend::SapSide::Right, "));
+    CHECK(code.contains("box_proxy(wall, __sap_i, cactus::runtime::entt_backend::SapSide::Left, "));
 }
 
 // dsl-render-passes: a stage handler's `let`-bound local is an ordinary
@@ -7448,8 +7462,8 @@ TEST_CASE("Codegen EnTT: render-pass stage handler's `let` locals are mangled to
         imports);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("let_half") != std::string::npos);
-    CHECK(code.find("float half") == std::string::npos);
+    CHECK(code.contains("let_half"));
+    CHECK(!code.contains("float half"));
 }
 
 // dsl-render-passes: a stage handler body's binary-operator expressions must
@@ -7508,7 +7522,7 @@ TEST_CASE("Codegen EnTT: render-pass stage handler accepts vec2 + vec2 * float, 
         imports);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("screen_position = (u_xf_position + (corner * let_half_size));") != std::string::npos);
+    CHECK(code.contains("screen_position = (u_xf_position + (corner * let_half_size));"));
 }
 
 // dsl-render-passes: the shared operand-type table still rejects a genuinely
@@ -7577,30 +7591,33 @@ TEST_CASE("Codegen EnTT: render-pass stage handler still rejects Vec2 + Color", 
 
 // ── Conditional expressions and value match ────────────────────────────────
 
-static const std::string CONDITIONAL_CODEGEN_PRELUDE =
-    "event tick:\n"
-    "    dt: float\n"
-    "enum Mode:\n"
-    "    Idle\n"
-    "    Run\n"
-    "    Flee\n"
-    "const:\n"
-    "    FAST = true\n"
-    "    STEP = if FAST: 2.0 else: 1.0\n"
-    "    LEVEL = 2\n"
-    "    GAIN = match LEVEL:\n"
-    "        1 => 0.5\n"
-    "        2 => 1.0\n"
-    "        _ => 2.0\n"
-    "trait Actor:\n"
-    "    var mode: Mode = Mode.Idle\n"
-    "    var hp: int = 0\n"
-    "    var speed: float = 0.0\n"
-    "pub extern func pick() int\n";
+static const std::string& conditional_codegen_prelude() {
+    static const std::string value =
+        "event tick:\n"
+        "    dt: float\n"
+        "enum Mode:\n"
+        "    Idle\n"
+        "    Run\n"
+        "    Flee\n"
+        "const:\n"
+        "    FAST = true\n"
+        "    STEP = if FAST: 2.0 else: 1.0\n"
+        "    LEVEL = 2\n"
+        "    GAIN = match LEVEL:\n"
+        "        1 => 0.5\n"
+        "        2 => 1.0\n"
+        "        _ => 2.0\n"
+        "trait Actor:\n"
+        "    var mode: Mode = Mode.Idle\n"
+        "    var hp: int = 0\n"
+        "    var speed: float = 0.0\n"
+        "pub extern func pick() int\n";
+    return value;
+}
 
 static std::string conditional_codegen(const std::string& declarations) {
     ProgramNode program;
-    auto decorated = full_pipeline(CONDITIONAL_CODEGEN_PRELUDE + declarations, program);
+    auto decorated = full_pipeline(conditional_codegen_prelude() + declarations, program);
     return CppEnttCodegen::generate(decorated);
 }
 
@@ -7631,11 +7648,11 @@ TEST_CASE("Codegen EnTT: conditional expressions and value match lower without p
         "                a.speed = 2.0\n"
         "            _ =>\n"
         "                a.speed = 3.0\n");
-    CHECK(code.find("unsupported expr") == std::string::npos);
-    CHECK(code.find("? 1 : cactus_chosen(") != std::string::npos);
-    CHECK(code.find("== -1") != std::string::npos);
-    CHECK(code.find("LEVEL == 1) ? 0.5F : cactus_chosen(((") != std::string::npos);
-    CHECK(code.find("LEVEL == 2) ? 1.0F : 2.0F)))") != std::string::npos);
+    CHECK(!code.contains("unsupported expr"));
+    CHECK(code.contains("? 1 : cactus_chosen("));
+    CHECK(code.contains("== -1"));
+    CHECK(code.contains("LEVEL == 1) ? 0.5F : cactus_chosen((("));
+    CHECK(code.contains("LEVEL == 2) ? 1.0F : 2.0F)))"));
 }
 
 TEST_CASE("Codegen EnTT: a match subject is evaluated once", "[codegen-entt][conditional-expressions]") {
@@ -7676,8 +7693,8 @@ TEST_CASE("Codegen EnTT: an exhaustive match emits its last arm unconditionally"
         "                a.hp = 2\n"
         "            Mode.Flee =>\n"
         "                a.hp = 3\n");
-    CHECK(code.find("Mode::Run") != std::string::npos);
-    CHECK(code.find("Mode::Flee") == std::string::npos);
+    CHECK(code.contains("Mode::Run"));
+    CHECK(!code.contains("Mode::Flee"));
 }
 
 TEST_CASE("Codegen EnTT: conditional expressions are accepted in rule clauses",
@@ -7694,7 +7711,7 @@ TEST_CASE("Codegen EnTT: conditional expressions are accepted in rule clauses",
         "        if FAST: STEP > 1.0 else: false\n"
         "    on tick:\n"
         "        a.hp += 1\n");
-    CHECK(code.find("unsupported expr") == std::string::npos);
+    CHECK(!code.contains("unsupported expr"));
     CHECK(count_occurrences(code, "? (a.speed > 1.0F) : false)") >= 1);
 }
 
@@ -7712,8 +7729,8 @@ TEST_CASE("Codegen EnTT: only the selected branch evaluates its call", "[codegen
         "            Mode.Idle => pick()\n"
         "            _ => 2\n");
     // C++ evaluates only the chosen operand of `?:`, and a returned arm only when its test passed.
-    CHECK(code.find("((a.speed > 1.0F) ? pick() : 0)") != std::string::npos);
-    CHECK(code.find("== Mode::Idle) { return pick(); } return 2; }()") != std::string::npos);
+    CHECK(code.contains("((a.speed > 1.0F) ? pick() : 0)"));
+    CHECK(code.contains("== Mode::Idle) { return pick(); } return 2; }()"));
 }
 
 TEST_CASE("Codegen EnTT: an expression form with no lowering is a located error, not placeholder text",
@@ -7725,7 +7742,7 @@ TEST_CASE("Codegen EnTT: an expression form with no lowering is a located error,
         FAIL("emit_expr accepted an expression form it cannot lower");
     } catch (const CodegenError& error) {
         CHECK(error.location() == location);
-        CHECK(std::string(error.what()).find("cannot be lowered") != std::string::npos);
+        CHECK(std::string(error.what()).contains("cannot be lowered"));
     }
 }
 
@@ -7786,7 +7803,7 @@ TEST_CASE("Codegen EnTT: render-pass fragment handler lowers an if expression to
     const auto code = conditional_render_pass_codegen(
         "        let k = if f.uv.x > 0.5: 1.0 else: 0.0\n"
         "        f.frag_color = f.tint * k\n");
-    CHECK(code.find("float let_k = ((uv.x > 0.5) ? 1.0 : 0.0);") != std::string::npos);
+    CHECK(code.contains("float let_k = ((uv.x > 0.5) ? 1.0 : 0.0);"));
 }
 
 TEST_CASE("Codegen EnTT: render-pass fragment handler lowers a match expression to GLSL",
@@ -7796,7 +7813,7 @@ TEST_CASE("Codegen EnTT: render-pass fragment handler lowers a match expression 
         "            1 => 0.25\n"
         "            _ => 0.5\n"
         "        f.frag_color = f.tint * k\n");
-    CHECK(code.find("float let_k = ((2.0 == 1.0) ? 0.25 : 0.5);") != std::string::npos);
+    CHECK(code.contains("float let_k = ((2.0 == 1.0) ? 0.25 : 0.5);"));
 }
 
 TEST_CASE("Codegen EnTT: render-pass fragment handler lowers a value match statement to GLSL",
@@ -7807,24 +7824,27 @@ TEST_CASE("Codegen EnTT: render-pass fragment handler lowers a value match state
         "                f.frag_color = f.tint\n"
         "            _ =>\n"
         "                f.frag_color = #000000FF\n");
-    CHECK(code.find("if ((match_subject_") != std::string::npos);
-    CHECK(code.find("== 2.0)) {") != std::string::npos);
-    CHECK(code.find("else {") != std::string::npos);
+    CHECK(code.contains("if ((match_subject_"));
+    CHECK(code.contains("== 2.0)) {"));
+    CHECK(code.contains("else {"));
 }
 
 // ── Limit clause (dsl-rule-limit) ───────────────────────────────────────────
 
-static const std::string LIMIT_TRAITS =
-    "event tick:\n"
-    "    dt: float\n"
-    "trait Actor:\n"
-    "    var ground: int = 0\n"
-    "trait Surface:\n"
-    "    var code: int = 0\n";
+static const std::string& limit_traits() {
+    static const std::string value =
+        "event tick:\n"
+        "    dt: float\n"
+        "trait Actor:\n"
+        "    var ground: int = 0\n"
+        "trait Surface:\n"
+        "    var code: int = 0\n";
+    return value;
+}
 
 TEST_CASE("Codegen EnTT: a pair sort key that reads one binding marks both parameters maybe-unused",
           "[codegen-entt][rule-order-by][pair-relations]") {
-    const auto code = emit_named_rule(LIMIT_TRAITS +
+    const auto code = emit_named_rule(limit_traits() +
                                           "rule Rank:\n"
                                           "    pairs:\n"
                                           "        actor:\n"
@@ -7836,13 +7856,12 @@ TEST_CASE("Codegen EnTT: a pair sort key that reads one binding marks both param
                                           "    on tick:\n"
                                           "        let x = 1\n",
                                       "Rank");
-    CHECK(code.find("[&]([[maybe_unused]] entt::entity actor, [[maybe_unused]] entt::entity surface)") !=
-          std::string::npos);
+    CHECK(code.contains("[&]([[maybe_unused]] entt::entity actor, [[maybe_unused]] entt::entity surface)"));
 }
 
 TEST_CASE("Codegen EnTT: a grouped reduction folds broad-phase rows and writes its retained binding",
           "[codegen-entt][rule-reduce][spatial-join]") {
-    const auto code = emit_named_rule("module std.collision.volume\n" + VOLUME_JOIN_TRAITS +
+    const auto code = emit_named_rule("module std.collision.volume\n" + volume_join_traits() +
                                           "rule Sense:\n"
                                           "    pairs:\n"
                                           "        actor:\n"
@@ -7880,10 +7899,10 @@ TEST_CASE("Codegen EnTT: a grouped reduction folds broad-phase rows and writes i
     CHECK(group_filter < fold);
     CHECK(code.find("registry.get<const Body>(actor).radius > 0.0", fold) == std::string::npos);
     // Folds use the runtime helpers; min's default applies only to empty input.
-    CHECK(code.find("cactus_acc.walls = cactus::runtime::reduce::add(cactus_acc.walls, 1);") != std::string::npos);
-    CHECK(code.find("cactus::runtime::reduce::min(cactus_acc.low, cactus_value)") != std::string::npos);
-    CHECK(code.find("cactus_acc.low_seen ? cactus_acc.low : 9.0F;") != std::string::npos);
-    CHECK(code.find("if (!cactus_acc.near) {") != std::string::npos);
+    CHECK(code.contains("cactus_acc.walls = cactus::runtime::reduce::add(cactus_acc.walls, 1);"));
+    CHECK(code.contains("cactus::runtime::reduce::min(cactus_acc.low, cactus_value)"));
+    CHECK(code.contains("cactus_acc.low_seen ? cactus_acc.low : 9.0F;"));
+    CHECK(code.contains("if (!cactus_acc.near) {"));
     // The handler writes the retained binding through a mutable reference.
     CHECK(code.find("registry.get<Body>(actor).radius =", rows) != std::string::npos);
     // With no group there is no handler run, so the pass skips the fold and
@@ -7896,12 +7915,12 @@ TEST_CASE("Codegen EnTT: a grouped reduction folds broad-phase rows and writes i
     // Spawned entities have huge indices, so groups are found by snapshot position.
     CHECK(code.find("SnapshotPositions cactus_positions_actor(actor_snapshot);") < groups);
     CHECK(code.find("cactus_positions_actor.find(actor)", fold) != std::string::npos);
-    CHECK(code.find("entt::to_entity") == std::string::npos);
+    CHECK(!code.contains("entt::to_entity"));
 }
 
 TEST_CASE("Codegen EnTT: a global unary reduction folds in creation order and runs once",
           "[codegen-entt][rule-reduce]") {
-    const auto code = emit_named_rule(LIMIT_TRAITS +
+    const auto code = emit_named_rule(limit_traits() +
                                           "rule Total:\n"
                                           "    filter:\n"
                                           "        Surface as surface\n"
@@ -7919,13 +7938,13 @@ TEST_CASE("Codegen EnTT: a global unary reduction folds in creation order and ru
     REQUIRE(fold != std::string::npos);
     CHECK(sort < fold);
     CHECK(code.find("CreationOrdinal") < sort);
-    CHECK(code.find("cactus_rows.resize(") != std::string::npos);
-    CHECK(code.find("cactus_reduced_body(cactus_row);") != std::string::npos);
+    CHECK(code.contains("cactus_rows.resize("));
+    CHECK(code.contains("cactus_reduced_body(cactus_row);"));
 }
 
 TEST_CASE("Codegen EnTT: a provably-one per-binding limit emits a mutable write through its binding",
           "[codegen-entt][rule-limit][pair-relations]") {
-    const auto code = emit_named_rule(LIMIT_TRAITS +
+    const auto code = emit_named_rule(limit_traits() +
                                           "rule Ground:\n"
                                           "    pairs:\n"
                                           "        actor:\n"
@@ -7939,14 +7958,14 @@ TEST_CASE("Codegen EnTT: a provably-one per-binding limit emits a mutable write 
 
     // The assignment target must be a mutable component reference; the
     // non-limited binding it reads from stays const.
-    CHECK(code.find("registry.get<Actor>(actor).ground =") != std::string::npos);
-    CHECK(code.find("registry.get<const Surface>(surface).code") != std::string::npos);
-    CHECK(code.find("registry.get<const Actor>(actor)") == std::string::npos);
+    CHECK(code.contains("registry.get<Actor>(actor).ground ="));
+    CHECK(code.contains("registry.get<const Surface>(surface).code"));
+    CHECK(!code.contains("registry.get<const Actor>(actor)"));
 }
 
 TEST_CASE("Codegen EnTT: a pair binding under a non-provable limit keeps read-only access",
           "[codegen-entt][rule-limit][pair-relations]") {
-    const auto code = emit_named_rule(LIMIT_TRAITS +
+    const auto code = emit_named_rule(limit_traits() +
                                           "rule Ground:\n"
                                           "    pairs:\n"
                                           "        actor:\n"
@@ -7958,8 +7977,8 @@ TEST_CASE("Codegen EnTT: a pair binding under a non-provable limit keeps read-on
                                           "        let x = actor.Actor.ground\n",
                                       "Ground");
 
-    CHECK(code.find("registry.get<const Actor>(actor)") != std::string::npos);
-    CHECK(code.find("registry.get<Actor>(actor)") == std::string::npos);
+    CHECK(code.contains("registry.get<const Actor>(actor)"));
+    CHECK(!code.contains("registry.get<Actor>(actor)"));
 }
 
 // Task 6.3's regression guard, checked directly rather than inferred: a rule
@@ -7967,7 +7986,7 @@ TEST_CASE("Codegen EnTT: a pair binding under a non-provable limit keeps read-on
 // so no separate predicate lambda appears and the body carries the guard.
 TEST_CASE("Codegen EnTT: a where: rule without a limit keeps the desugared body guard",
           "[codegen-entt][rule-limit][where-clause]") {
-    const auto code = emit_named_rule(LIMIT_TRAITS +
+    const auto code = emit_named_rule(limit_traits() +
                                           "rule Ground:\n"
                                           "    pairs:\n"
                                           "        actor:\n"
@@ -7980,8 +7999,8 @@ TEST_CASE("Codegen EnTT: a where: rule without a limit keeps the desugared body 
                                           "        let x = surface.Surface.code\n",
                                       "Ground");
 
-    CHECK(code.find("cactus_gen_pair_where_") == std::string::npos);
-    CHECK(code.find("if (!(") != std::string::npos);
+    CHECK(!code.contains("cactus_gen_pair_where_"));
+    CHECK(code.contains("if (!("));
 }
 
 // Recipient-targeted delivery is a separate runtime branch from the broadcast
@@ -7990,7 +8009,7 @@ TEST_CASE("Codegen EnTT: a where: rule without a limit keeps the desugared body 
 // would still deliver to a directly targeted entity).
 TEST_CASE("Codegen EnTT: a global limit also gates recipient-targeted delivery",
           "[codegen-entt][rule-limit]") {
-    const auto code = emit_named_rule(LIMIT_TRAITS +
+    const auto code = emit_named_rule(limit_traits() +
                                           "rule TakeOne:\n"
                                           "    filter:\n"
                                           "        Actor as a\n"
@@ -8004,55 +8023,58 @@ TEST_CASE("Codegen EnTT: a global limit also gates recipient-targeted delivery",
     const auto broadcast_start = code.find("} else {", recipient_start);
     REQUIRE(broadcast_start != std::string::npos);
     const auto recipient_block = code.substr(recipient_start, broadcast_start - recipient_start);
-    CHECK(recipient_block.find(" > 0)") != std::string::npos);
+    CHECK(recipient_block.contains(" > 0)"));
 }
 
 // ── Named entity access (dsl-named-entity-access, dsl-when-clause) ─────────
 
-static const std::string NAMED_CODEGEN_SOURCE =
-    "event tick:\n"
-    "    dt: float\n"
-    "event Hit\n"
-    "trait Match:\n"
-    "    var over: bool = false\n"
-    "    var score: int = 0\n"
-    "trait Stats:\n"
-    "    var ticks: int = 0\n"
-    "trait Enemy:\n"
-    "    var steps: int = 0\n"
-    "trait Rival:\n"
-    "    var rival: entity_id\n"
-    "entity Game:\n"
-    "    Match\n"
-    "    Stats\n"
-    "entity Nemesis:\n"
-    "    Rival:\n"
-    "        rival = Boss\n"
-    "entity Boss:\n"
-    "    Rival:\n"
-    "        rival = Nemesis\n"
-    "rule Move:\n"
-    "    filter:\n"
-    "        Enemy as enemy\n"
-    "    when:\n"
-    "        not Game.Match.over\n"
-    "    on tick:\n"
-    "        enemy.steps += 1\n"
-    "        Game.Stats.ticks += 1\n"
-    "rule Score:\n"
-    "    on Hit:\n"
-    "        Game.Match.score += 1\n"
-    "        emit Hit to Boss\n";
+static const std::string& named_codegen_source() {
+    static const std::string value =
+        "event tick:\n"
+        "    dt: float\n"
+        "event Hit\n"
+        "trait Match:\n"
+        "    var over: bool = false\n"
+        "    var score: int = 0\n"
+        "trait Stats:\n"
+        "    var ticks: int = 0\n"
+        "trait Enemy:\n"
+        "    var steps: int = 0\n"
+        "trait Rival:\n"
+        "    var rival: entity_id\n"
+        "entity Game:\n"
+        "    Match\n"
+        "    Stats\n"
+        "entity Nemesis:\n"
+        "    Rival:\n"
+        "        rival = Boss\n"
+        "entity Boss:\n"
+        "    Rival:\n"
+        "        rival = Nemesis\n"
+        "rule Move:\n"
+        "    filter:\n"
+        "        Enemy as enemy\n"
+        "    when:\n"
+        "        not Game.Match.over\n"
+        "    on tick:\n"
+        "        enemy.steps += 1\n"
+        "        Game.Stats.ticks += 1\n"
+        "rule Score:\n"
+        "    on Hit:\n"
+        "        Game.Match.score += 1\n"
+        "        emit Hit to Boss\n";
+    return value;
+}
 
 static std::string named_codegen(DecoratedProgram& decorated, ProgramNode& program) {
-    decorated     = full_pipeline(NAMED_CODEGEN_SOURCE, program);
+    decorated     = full_pipeline(named_codegen_source(), program);
     decorated.ast = &program;
     return CppEnttCodegen::generate(decorated);
 }
 
 static std::string named_rule_code(const std::string& rule_name) {
     ProgramNode program;
-    auto decorated = full_pipeline(NAMED_CODEGEN_SOURCE, program);
+    auto decorated = full_pipeline(named_codegen_source(), program);
     for (auto& decl : program.declarations) {
         auto* sys = std::get_if<RuleNode>(&decl);
         if (sys != nullptr && sys->name == rule_name) {
@@ -8094,8 +8116,8 @@ TEST_CASE("Codegen EnTT: an entity name as an override value reads its slot", "[
     ProgramNode program;
     DecoratedProgram decorated;
     const auto code = named_codegen(decorated, program);
-    CHECK(code.find("component.rival = generated_named_slots().test__Boss;") != std::string::npos);
-    CHECK(code.find("component.rival = generated_named_slots().test__Nemesis;") != std::string::npos);
+    CHECK(code.contains("component.rival = generated_named_slots().test__Boss;"));
+    CHECK(code.contains("component.rival = generated_named_slots().test__Nemesis;"));
 }
 
 TEST_CASE("Codegen EnTT: a named handler guards the pass, checks when:, and hoists trait references",
@@ -8118,14 +8140,14 @@ TEST_CASE("Codegen EnTT: a named handler guards the pass, checks when:, and hois
     CHECK(guard < match_ref);
     CHECK(match_ref < when);
     CHECK(when < loop);
-    CHECK(code.find("named_ref__test__Game__Stats.ticks += 1;") != std::string::npos);
+    CHECK(code.contains("named_ref__test__Game__Stats.ticks += 1;"));
     CHECK(count_occurrences(code, "registry.get<Match>(generated_named_slots().test__Game)") == 1);
 }
 
 TEST_CASE("Codegen EnTT: a named read in a limited rule's where: is guarded and hoisted",
           "[codegen-entt][named-entity][rule-limit]") {
     ProgramNode program;
-    auto decorated = full_pipeline(NAMED_CODEGEN_SOURCE +
+    auto decorated = full_pipeline(named_codegen_source() +
                                        "rule Pick:\n"
                                        "    filter:\n"
                                        "        Enemy as enemy\n"
@@ -8142,7 +8164,7 @@ TEST_CASE("Codegen EnTT: a named read in a limited rule's where: is guarded and 
         }
     }
     INFO(code);
-    CHECK(code.find("named_alive<Stats>(registry, generated_named_slots().test__Game)") != std::string::npos);
+    CHECK(code.contains("named_alive<Stats>(registry, generated_named_slots().test__Game)"));
     const auto declared = code.find("auto& named_ref__test__Game__Stats = registry.get<Stats>(");
     const auto used     = code.find("< named_ref__test__Game__Stats.ticks");
     REQUIRE(declared != std::string::npos);
@@ -8152,48 +8174,52 @@ TEST_CASE("Codegen EnTT: a named read in a limited rule's where: is guarded and 
 
 TEST_CASE("Codegen EnTT: an event handler writes by name and targets a name", "[codegen-entt][named-entity]") {
     const auto code = named_rule_code("Score");
-    CHECK(code.find("named_alive<Match>(registry, generated_named_slots().test__Game)") != std::string::npos);
-    CHECK(code.find("named_ref__test__Game__Match.score += 1;") != std::string::npos);
-    CHECK(code.find("generated_named_slots().test__Boss") != std::string::npos);
-    CHECK(code.find("named_alive<Rival>") == std::string::npos);
+    CHECK(code.contains("named_alive<Match>(registry, generated_named_slots().test__Game)"));
+    CHECK(code.contains("named_ref__test__Game__Match.score += 1;"));
+    CHECK(code.contains("generated_named_slots().test__Boss"));
+    CHECK(!code.contains("named_alive<Rival>"));
 }
 
 // ── Exclusive states ────────────────────────────────────────────────────────
 
-static const std::string STATE_PROGRAM_PREFIX =
-    "pub extern event frame:\n"
-    "    dt: float\n"
-    "phase tick:\n"
-    "    from:\n"
-    "        frame\n"
-    "trait Log:\n"
-    "    var n: int = 0\n"
-    "state EnemyMode:\n"
-    "    Idle\n"
-    "    Chasing:\n"
-    "        var speed: float = 2.0\n"
-    "    Dying final:\n"
-    "        var elapsed: float = 0.0\n";
+static const std::string& state_program_prefix() {
+    static const std::string value =
+        "pub extern event frame:\n"
+        "    dt: float\n"
+        "phase tick:\n"
+        "    from:\n"
+        "        frame\n"
+        "trait Log:\n"
+        "    var n: int = 0\n"
+        "state EnemyMode:\n"
+        "    Idle\n"
+        "    Chasing:\n"
+        "        var speed: float = 2.0\n"
+        "    Dying final:\n"
+        "        var elapsed: float = 0.0\n";
+    return value;
+}
 
 TEST_CASE("Codegen EnTT: a state emits variant components, a slot and its final mask",
           "[codegen-entt][exclusive-states]") {
     ProgramNode program;
-    auto decorated  = full_pipeline(STATE_PROGRAM_PREFIX, program);
+    auto decorated  = full_pipeline(state_program_prefix(), program);
     const auto code = CppEnttCodegen::generate(decorated);
 
-    CHECK(code.find("struct EnemyMode__Idle {};") != std::string::npos);
-    CHECK(code.find("struct EnemyMode__Chasing {\n    float speed") != std::string::npos);
-    CHECK(code.find("struct EnemyMode {\n    std::uint8_t index = 0;\n"
-                    "    static constexpr std::uint64_t final_mask = 0x4;\n};") != std::string::npos);
+    CHECK(code.contains("struct EnemyMode__Idle {};"));
+    CHECK(code.contains("struct EnemyMode__Chasing {\n    float speed"));
+    CHECK(
+        code.contains("struct EnemyMode {\n    std::uint8_t index = 0;\n"
+                      "    static constexpr std::uint64_t final_mask = 0x4;\n};"));
 
     const auto remove_fn = generated_function(code, "inline void remove_state_variant<EnemyMode>(");
-    CHECK(remove_fn.find("case 0:\n            registry.remove<EnemyMode__Idle>(entity);") != std::string::npos);
-    CHECK(remove_fn.find("case 2:\n            registry.remove<EnemyMode__Dying>(entity);") != std::string::npos);
+    CHECK(remove_fn.contains("case 0:\n            registry.remove<EnemyMode__Idle>(entity);"));
+    CHECK(remove_fn.contains("case 2:\n            registry.remove<EnemyMode__Dying>(entity);"));
 }
 
 TEST_CASE("Codegen EnTT: add of a variant swaps and remove of a state leaves it", "[codegen-entt][exclusive-states]") {
     ProgramNode program;
-    auto decorated  = full_pipeline(STATE_PROGRAM_PREFIX +
+    auto decorated  = full_pipeline(state_program_prefix() +
                                         "entity Grunt:\n"
                                         "    EnemyMode\n"
                                         "    Log\n"
@@ -8209,19 +8235,19 @@ TEST_CASE("Codegen EnTT: add of a variant swaps and remove of a state leaves it"
     const auto code = CppEnttCodegen::generate(decorated);
 
     const auto handler = generated_function(code, "void hunt_tick(entt::registry& registry");
-    CHECK(handler.find("cactus::runtime::entt_backend::enter_state<EnemyMode, 1>(registry, ") != std::string::npos);
-    CHECK(handler.find("cactus::runtime::entt_backend::enter_state<EnemyMode, 2>(registry, ") != std::string::npos);
-    CHECK(handler.find("cactus::runtime::entt_backend::leave_state<EnemyMode>(registry, ") != std::string::npos);
-    CHECK(handler.find("registry.emplace_or_replace<EnemyMode__Chasing>") == std::string::npos);
-    CHECK(handler.find("registry.remove<EnemyMode>") == std::string::npos);
+    CHECK(handler.contains("cactus::runtime::entt_backend::enter_state<EnemyMode, 1>(registry, "));
+    CHECK(handler.contains("cactus::runtime::entt_backend::enter_state<EnemyMode, 2>(registry, "));
+    CHECK(handler.contains("cactus::runtime::entt_backend::leave_state<EnemyMode>(registry, "));
+    CHECK(!handler.contains("registry.emplace_or_replace<EnemyMode__Chasing>"));
+    CHECK(!handler.contains("registry.remove<EnemyMode>"));
 
-    CHECK(code.find("cactus::runtime::entt_backend::enter_state<EnemyMode, 0>(registry, entity, EnemyMode__Idle{});") !=
-          std::string::npos);
+    CHECK(code.contains(
+        "cactus::runtime::entt_backend::enter_state<EnemyMode, 0>(registry, entity, EnemyMode__Idle{});"));
 }
 
 TEST_CASE("Codegen EnTT: a state match switches on the slot index", "[codegen-entt][exclusive-states]") {
     ProgramNode program;
-    auto decorated  = full_pipeline(STATE_PROGRAM_PREFIX +
+    auto decorated  = full_pipeline(state_program_prefix() +
                                         "rule Inspect:\n"
                                         "    filter:\n"
                                         "        EnemyMode as m\n"
@@ -8239,19 +8265,19 @@ TEST_CASE("Codegen EnTT: a state match switches on the slot index", "[codegen-en
     const auto code = CppEnttCodegen::generate(decorated);
 
     const auto handler = generated_function(code, "void inspect_tick(entt::registry& registry");
-    CHECK(handler.find("switch (m.index) {") != std::string::npos);
-    CHECK(handler.find("case 1: {") != std::string::npos);
-    CHECK(handler.find("auto& c = registry.get<EnemyMode__Chasing>(entity);") != std::string::npos);
-    CHECK(handler.find("default: {") != std::string::npos);
+    CHECK(handler.contains("switch (m.index) {"));
+    CHECK(handler.contains("case 1: {"));
+    CHECK(handler.contains("auto& c = registry.get<EnemyMode__Chasing>(entity);"));
+    CHECK(handler.contains("default: {"));
     const auto subject = extract_temp_name(handler, "cactus_gen_match_subject_");
     REQUIRE_FALSE(subject.empty());
-    CHECK(handler.find("const auto " + subject + " = m.index; switch (" + subject +
-                       ") { case 0: { return 10; } default: { return 20; } }") != std::string::npos);
+    CHECK(handler.contains("const auto " + subject + " = m.index; switch (" + subject +
+                           ") { case 0: { return 10; } default: { return 20; } }"));
 }
 
 TEST_CASE("Codegen EnTT: a trait match arm without an alias only tests presence", "[codegen-entt][exclusive-states]") {
     ProgramNode program;
-    auto decorated  = full_pipeline(STATE_PROGRAM_PREFIX +
+    auto decorated  = full_pipeline(state_program_prefix() +
                                         "trait Watch:\n"
                                         "    var subject: entity_id\n"
                                         "rule Look:\n"
@@ -8268,8 +8294,8 @@ TEST_CASE("Codegen EnTT: a trait match arm without an alias only tests presence"
     const auto code = CppEnttCodegen::generate(decorated);
 
     const auto handler = generated_function(code, "void look_tick(entt::registry& registry");
-    CHECK(handler.find("if (registry.all_of<EnemyMode__Chasing>(") != std::string::npos);
-    CHECK(handler.find("registry.try_get<EnemyMode__Chasing>") == std::string::npos);
+    CHECK(handler.contains("if (registry.all_of<EnemyMode__Chasing>("));
+    CHECK(!handler.contains("registry.try_get<EnemyMode__Chasing>"));
 }
 
 TEST_CASE("Codegen EnTT: large states widen the index and final mask", "[codegen-entt][exclusive-states]") {
@@ -8280,8 +8306,61 @@ TEST_CASE("Codegen EnTT: large states widen the index and final mask", "[codegen
     ProgramNode program;
     const auto decorated = full_pipeline(source, program);
     const auto code      = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("std::size_t index = 0;") != std::string::npos);
-    CHECK(code.find("std::array<std::uint64_t, 5> final_mask{0x0, 0x1, 0x0, 0x0, 0x1}") != std::string::npos);
+    CHECK(code.contains("std::size_t index = 0;"));
+    CHECK(code.contains("std::array<std::uint64_t, 5> final_mask{0x0, 0x1, 0x0, 0x0, 0x1}"));
 }
 
+TEST_CASE("Codegen: compact domains normalize to the same native strategy", "[codegen][concise]") {
+    const std::string declarations = R"(module notation
+pub event tick
+trait Position:
+    var x: float = 0.0
+trait Motion:
+    var speed: float = 1.0
+trait Frozen
+)";
+    const std::string compact      = R"(rule Move:
+    each: Position as p, Motion as m
+    without: Frozen
+    order by: p.x desc, m.speed
+    where: m.speed > 0.0, p.x >= 0.0
+    when: true, not false
+    on tick:
+        p.x += m.speed
+)";
+    const std::string legacy       = R"(rule Move:
+    filter:
+        Position as p
+        Motion as m
+    exclude:
+        Frozen
+    order by:
+        p.x desc
+        m.speed
+    where:
+        m.speed > 0.0
+        p.x >= 0.0
+    when:
+        true
+        not false
+    on tick:
+        p.x += m.speed
+)";
+    const auto generate            = [&declarations](const std::string& rules) {
+        ErrorReporter errors;
+        Lexer lexer(declarations + rules, "notation.cactus", errors);
+        auto tokens = lexer.tokenize();
+        for (auto& token : tokens) {
+            token.location = SourceLocation{"notation.cactus", 1, 1};
+        }
+        Parser parser(std::move(tokens), errors);
+        auto ast = parser.parse_program();
+        REQUIRE_FALSE(errors.has_errors());
+        SemanticAnalyzer analyzer(errors);
+        auto program = analyzer.analyze(ast);
+        REQUIRE_FALSE(errors.has_errors());
+        return CppEnttCodegen::generate(program);
+    };
+    CHECK(generate(compact) == generate(legacy));
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

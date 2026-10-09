@@ -1,7 +1,6 @@
 #include "frontend/semantic_analyzer.hpp"
 
 #include "common/ast_expressions.hpp"
-
 #include "common/render_pass_builtin_fields.hpp"
 #include "common/render_pass_intrinsics.hpp"
 #include "common/vector_binary_ops.hpp"
@@ -11,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cassert>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -108,8 +108,8 @@ std::string imported_reference_diagnostic(const ModuleImports& imports,
     std::ostringstream msg;
     msg << "ambiguous reference '" << name << "': defined as";
     for (std::size_t i = 0; i < modules.size(); ++i) {
-        msg << (i == 0 ? " '" : (i + 1 == modules.size() ? " and '" : ", '")) << make_canonical_id(modules[i], name)
-            << "'";
+        const auto* const separator = i + 1 == modules.size() ? " and '" : ", '";
+        msg << (i == 0 ? " '" : separator) << make_canonical_id(modules[i], name) << "'";
     }
     msg << "; use qualified access to disambiguate";
     return msg.str();
@@ -305,22 +305,26 @@ struct NumericConstant {
     long double value{};
 };
 
+std::optional<NumericConstant> numeric_literal(const LiteralExpr& literal) {
+    try {
+        if (literal.kind == LiteralExpr::Kind::Int) {
+            return NumericConstant{.kind = TypeKind::Int, .value = std::stold(literal.value)};
+        }
+        if (literal.kind == LiteralExpr::Kind::Float) {
+            return NumericConstant{.kind = TypeKind::Float, .value = std::stold(literal.value)};
+        }
+    } catch (...) {
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
 std::optional<NumericConstant> evaluate_numeric_constant(
     const ExprNode& expr,
     const std::unordered_map<std::string, const ExprNode*>& constants,
     std::unordered_set<std::string>& evaluating) {
     if (const auto* literal = std::get_if<LiteralExpr>(&expr.expr)) {
-        try {
-            if (literal->kind == LiteralExpr::Kind::Int) {
-                return NumericConstant{.kind = TypeKind::Int, .value = std::stold(literal->value)};
-            }
-            if (literal->kind == LiteralExpr::Kind::Float) {
-                return NumericConstant{.kind = TypeKind::Float, .value = std::stold(literal->value)};
-            }
-        } catch (...) {
-            return std::nullopt;
-        }
-        return std::nullopt;
+        return numeric_literal(*literal);
     }
     if (const auto* ident = std::get_if<IdentExpr>(&expr.expr)) {
         const auto found = constants.find(ident->name);
@@ -801,6 +805,36 @@ struct FormatStringAnalysis {
     bool has_manual      = false;
 };
 
+bool analyze_format_field(const std::string& content, FormatStringAnalysis& result, std::string& error_msg) {
+    if (content.empty() || content[0] == ':') {
+        result.has_automatic = true;
+        result.automatic_count++;
+    } else if (std::isdigit(static_cast<unsigned char>(content[0])) != 0) {
+        result.has_manual         = true;
+        const size_t colon_pos    = content.find(':');
+        const std::string idx_str = content.substr(0, colon_pos == std::string::npos ? content.size() : colon_pos);
+        try {
+            const int idx = std::stoi(idx_str);
+            if (idx < 0) {
+                error_msg = "malformed format string: negative placeholder index";
+                return false;
+            }
+            result.manual_max_index = std::max(result.manual_max_index, idx);
+        } catch (...) {
+            error_msg = "malformed format string: invalid placeholder index";
+            return false;
+        }
+    } else {
+        error_msg = "malformed format string: invalid replacement field content";
+        return false;
+    }
+    if (result.has_automatic && result.has_manual) {
+        error_msg = "format string mixes automatic and manual positional placeholders";
+        return false;
+    }
+    return true;
+}
+
 bool analyze_format_string(const std::string& fmt, FormatStringAnalysis& result, std::string& error_msg) {
     size_t i = 0;
     while (i < fmt.size()) {
@@ -819,31 +853,7 @@ bool analyze_format_string(const std::string& fmt, FormatStringAnalysis& result,
                 return false;
             }
             const std::string content = fmt.substr(i + 1, j - i - 1);
-            if (content.empty() || content[0] == ':') {
-                result.has_automatic = true;
-                result.automatic_count++;
-            } else if (std::isdigit(static_cast<unsigned char>(content[0])) != 0) {
-                result.has_manual      = true;
-                const size_t colon_pos = content.find(':');
-                const std::string idx_str =
-                    content.substr(0, colon_pos == std::string::npos ? content.size() : colon_pos);
-                try {
-                    const int idx = std::stoi(idx_str);
-                    if (idx < 0) {
-                        error_msg = "malformed format string: negative placeholder index";
-                        return false;
-                    }
-                    result.manual_max_index = std::max(result.manual_max_index, idx);
-                } catch (...) {
-                    error_msg = "malformed format string: invalid placeholder index";
-                    return false;
-                }
-            } else {
-                error_msg = "malformed format string: invalid replacement field content";
-                return false;
-            }
-            if (result.has_automatic && result.has_manual) {
-                error_msg = "format string mixes automatic and manual positional placeholders";
+            if (!analyze_format_field(content, result, error_msg)) {
                 return false;
             }
             i = j + 1;
@@ -932,10 +942,7 @@ void for_each_reducer_expr(Clause& reduce, const Fn& fn) {
 
 // ── ModuleImports::add ──────────────────────────────────────────────────────
 
-void ModuleImports::add(const std::string& qualifier,
-                        ImportedSymbols pub_syms,
-                        std::unordered_set<std::string> non_pub,
-                        std::unordered_set<std::string> non_pub_templates) {
+static void prepare_import_identities(ImportedSymbols& pub_syms) {
     for (auto& [name, trait] : pub_syms.traits) {
         ensure_symbol_identity(trait, SymbolKind::Trait, pub_syms.module_name, name);
     }
@@ -989,6 +996,13 @@ void ModuleImports::add(const std::string& qualifier,
         rule.canonical_id = make_canonical_id(symbol);
         rule.symbol_id    = symbol;
     }
+}
+
+void ModuleImports::add(const std::string& qualifier,
+                        ImportedSymbols pub_syms,
+                        std::unordered_set<std::string> non_pub,
+                        std::unordered_set<std::string> non_pub_templates) {
+    prepare_import_identities(pub_syms);
 
     const auto existing = modules.find(qualifier);
     if (existing != modules.end() && existing->second.module_name == pub_syms.module_name) {
@@ -1498,71 +1512,236 @@ void SemanticAnalyzer::desugar_where_clauses(ProgramNode& program) {
 
 // ── Phase 2: Resolve Types ──────────────────────────────────────────────────
 
+template <typename T>
+void SemanticAnalyzer::resolve_declaration_types(T& node) {
+    if constexpr (std::is_same_v<T, StructNode>) {
+        const auto struct_id = make_symbol_id(SymbolKind::Struct, current_module_id_, node.name);
+        ResolvedStruct rs;
+        rs.name = struct_id.local_name;
+        assign_canonical_identity(rs, struct_id);
+        for (auto& f : node.fields) {
+            ResolvedField rf;
+            rf.name = f.name;
+            rf.type = resolve_type_ref(f.type);
+            rs.fields.push_back(std::move(rf));
+        }
+        result_.structs[node.name] = std::move(rs);
+    } else if constexpr (std::is_same_v<T, TraitNode>) {
+        const auto trait_id = make_symbol_id(SymbolKind::Trait, current_module_id_, node.name);
+        ResolvedTrait rt;
+        rt.name = trait_id.local_name;
+        assign_canonical_identity(rt, trait_id);
+        rt.is_pub    = node.is_pub;
+        rt.is_stdlib = node.is_stdlib;
+        rt.state     = node.state.transform(
+            [this](const std::string& state) { return make_symbol_id(SymbolKind::State, current_module_id_, state); });
+        for (auto& f : node.fields) {
+            ResolvedField rf;
+            rf.name        = f.name;
+            rf.type        = resolve_type_ref(f.type);
+            rf.is_let      = f.modifiers.is_let;
+            rf.is_var      = f.modifiers.is_var;
+            rf.is_persist  = f.modifiers.is_persist;
+            rf.is_pub      = f.modifiers.is_pub;
+            rf.has_default = f.default_value.has_value();
+            rt.fields.push_back(std::move(rf));
+        }
+        result_.traits[node.name] = std::move(rt);
+    } else if constexpr (std::is_same_v<T, FuncNode>) {
+        const auto func_id = make_symbol_id(SymbolKind::Func, current_module_id_, node.name);
+        ResolvedFunc rf;
+        rf.name = func_id.local_name;
+        assign_canonical_identity(rf, func_id);
+        rf.is_pub    = node.is_pub;
+        rf.is_extern = node.is_extern;
+        rf.is_stdlib = node.is_stdlib;
+        if (!rf.is_extern) {
+            rf.effect_summary = std::unordered_set<std::string>{};
+        } else {
+            rf.effect_summary = known_stdlib_effect_summary(func_id);
+        }
+        for (auto& p : node.params) {
+            ResolvedParam rp;
+            rp.name = p.name;
+            rp.type = resolve_type_ref(p.type);
+            rf.params.push_back(std::move(rp));
+        }
+        if (node.return_type.has_value()) {
+            rf.return_type = resolve_type_ref(*node.return_type);
+        }
+        result_.funcs[node.name] = std::move(rf);
+    }
+}
+
 void SemanticAnalyzer::resolve_all_types(ProgramNode& program) {
     for (auto& decl : program.declarations) {
-        std::visit(
-            [this](auto& node) {
-                using T = std::decay_t<decltype(node)>;
-                if constexpr (std::is_same_v<T, StructNode>) {
-                    const auto struct_id = make_symbol_id(SymbolKind::Struct, current_module_id_, node.name);
-                    ResolvedStruct rs;
-                    rs.name = struct_id.local_name;
-                    assign_canonical_identity(rs, struct_id);
-                    for (auto& f : node.fields) {
-                        ResolvedField rf;
-                        rf.name = f.name;
-                        rf.type = resolve_type_ref(f.type);
-                        rs.fields.push_back(std::move(rf));
-                    }
-                    result_.structs[node.name] = std::move(rs);
-                } else if constexpr (std::is_same_v<T, TraitNode>) {
-                    const auto trait_id = make_symbol_id(SymbolKind::Trait, current_module_id_, node.name);
-                    ResolvedTrait rt;
-                    rt.name = trait_id.local_name;
-                    assign_canonical_identity(rt, trait_id);
-                    rt.is_pub    = node.is_pub;
-                    rt.is_stdlib = node.is_stdlib;
-                    rt.state     = node.state.transform([this](const std::string& state) {
-                        return make_symbol_id(SymbolKind::State, current_module_id_, state);
-                    });
-                    for (auto& f : node.fields) {
-                        ResolvedField rf;
-                        rf.name        = f.name;
-                        rf.type        = resolve_type_ref(f.type);
-                        rf.is_let      = f.modifiers.is_let;
-                        rf.is_var      = f.modifiers.is_var;
-                        rf.is_persist  = f.modifiers.is_persist;
-                        rf.is_pub      = f.modifiers.is_pub;
-                        rf.has_default = f.default_value.has_value();
-                        rt.fields.push_back(std::move(rf));
-                    }
-                    result_.traits[node.name] = std::move(rt);
-                } else if constexpr (std::is_same_v<T, FuncNode>) {
-                    const auto func_id = make_symbol_id(SymbolKind::Func, current_module_id_, node.name);
-                    ResolvedFunc rf;
-                    rf.name = func_id.local_name;
-                    assign_canonical_identity(rf, func_id);
-                    rf.is_pub    = node.is_pub;
-                    rf.is_extern = node.is_extern;
-                    rf.is_stdlib = node.is_stdlib;
-                    if (!rf.is_extern) {
-                        rf.effect_summary = std::unordered_set<std::string>{};
-                    } else {
-                        rf.effect_summary = known_stdlib_effect_summary(func_id);
-                    }
-                    for (auto& p : node.params) {
-                        ResolvedParam rp;
-                        rp.name = p.name;
-                        rp.type = resolve_type_ref(p.type);
-                        rf.params.push_back(std::move(rp));
-                    }
-                    if (node.return_type.has_value()) {
-                        rf.return_type = resolve_type_ref(*node.return_type);
-                    }
-                    result_.funcs[node.name] = std::move(rf);
-                }
-            },
-            decl);
+        std::visit([this](auto& node) { resolve_declaration_types(node); }, decl);
+    }
+}
+
+template <typename Node, typename ResolveTrait, typename ResolveChildren>
+void SemanticAnalyzer::resolve_spawn_references(Node& node,
+                                                const std::function<void(ExprNode&)>& resolve_expr,
+                                                const ResolveTrait& resolve_trait_entry,
+                                                const ResolveChildren& resolve_child_overrides) {
+    node.resolved_template_id = try_resolve_template_ref_to_symbol(node.template_name);
+    for (auto& argument : node.arguments.values) {
+        resolve_expr(*argument.value);
+    }
+    for (auto& override_entry : node.overrides) {
+        resolve_trait_entry(override_entry);
+        for (auto& assignment : override_entry.assignments) {
+            resolve_expr(*assignment.value);
+        }
+    }
+    resolve_child_overrides(node.child_overrides);
+}
+
+template <typename E, typename ResolveTrait, typename ResolveChildren>
+void SemanticAnalyzer::resolve_expression_references(E& e,
+                                                     ExprNode& expr,
+                                                     const std::function<void(ExprNode&)>& resolve_expr,
+                                                     const ResolveTrait& resolve_trait_entry,
+                                                     const ResolveChildren& resolve_child_overrides) {
+    if constexpr (std::is_same_v<E, UnaryExpr>) {
+        resolve_expr(*e.operand);
+    } else if constexpr (std::is_same_v<E, BinaryExpr>) {
+        resolve_expr(*e.left);
+        resolve_expr(*e.right);
+    } else if constexpr (std::is_same_v<E, CallExpr>) {
+        e.resolved_callee_id = resolve_callee_symbol(*e.callee);
+        e.resolved_struct_id = resolve_struct_callee(*e.callee);
+        if (const auto* ident = std::get_if<IdentExpr>(&e.callee->expr);
+            ident != nullptr && template_names_.contains(ident->name)) {
+            errors_.error(e.location, "template applications are only valid at creation sites");
+        }
+        resolve_expr(*e.callee);
+        for (auto& arg : e.args) {
+            resolve_expr(*arg);
+        }
+    } else if constexpr (std::is_same_v<E, MemberExpr>) {
+        resolve_expr(*e.object);
+        // Enum member chains (`Key.A`, `inp.Key.A`, `std.input.Key.A`)
+        // resolve here; non-enum chains fall through untouched.
+        resolve_enum_member_expr(e, expr.location);
+    } else if constexpr (std::is_same_v<E, MatchExpr>) {
+        resolve_expr(*e.subject);
+        for (auto& arm : e.arms) {
+            resolve_expr(*arm.pattern);
+            resolve_expr(*arm.body);
+        }
+    } else if constexpr (std::is_same_v<E, IfExpr>) {
+        resolve_expr(*e.condition);
+        resolve_expr(*e.then_expr);
+        resolve_expr(*e.else_expr);
+    } else if constexpr (std::is_same_v<E, ListExpr>) {
+        for (auto& element : e.elements) {
+            resolve_expr(*element);
+        }
+    } else if constexpr (std::is_same_v<E, SpawnExpr>) {
+        resolve_spawn_references(e, resolve_expr, resolve_trait_entry, resolve_child_overrides);
+    } else if constexpr (std::is_same_v<E, QueryCallExpr>) {
+        e.resolved_callee_id = resolve_callee_symbol(*e.callee);
+        resolve_expr(*e.callee);
+        for (auto& pred : e.filters) {
+            pred.resolved_trait_id = try_resolve_trait_ref_to_symbol(pred.trait_name);
+        }
+        for (auto& arg : e.named_args) {
+            resolve_expr(*arg.value);
+        }
+    }
+}
+
+template <typename S, typename ResolveTrait, typename ResolveChildren>
+void SemanticAnalyzer::resolve_command_references(S& s,
+                                                  const std::function<void(ExprNode&)>& resolve_expr,
+                                                  const ResolveTrait& resolve_trait_entry,
+                                                  const ResolveChildren& resolve_child_overrides) {
+    if constexpr (std::is_same_v<S, SpawnStmt>) {
+        resolve_spawn_references(s, resolve_expr, resolve_trait_entry, resolve_child_overrides);
+    } else if constexpr (std::is_same_v<S, DestroyStmt>) {
+        if (s.target_expr.has_value()) {
+            resolve_expr(**s.target_expr);
+        }
+    } else if constexpr (std::is_same_v<S, AddTraitStmt>) {
+        s.resolved_trait_id = try_resolve_trait_ref_to_symbol(s.trait_name);
+        for (auto& arg : s.args) {
+            resolve_expr(*arg.value);
+        }
+        if (s.target_expr.has_value()) {
+            resolve_expr(**s.target_expr);
+        }
+    } else if constexpr (std::is_same_v<S, RemoveTraitStmt>) {
+        s.resolved_trait_id = try_resolve_trait_or_slot_ref(s.trait_name);
+        if (s.target_expr.has_value()) {
+            resolve_expr(**s.target_expr);
+        }
+    } else if constexpr (std::is_same_v<S, ProjectTraitStmt>) {
+        s.resolved_trait_id = try_resolve_trait_ref_to_symbol(s.trait_name);
+        for (auto& arg : s.args) {
+            resolve_expr(*arg.value);
+        }
+        if (s.target_expr.has_value()) {
+            resolve_expr(**s.target_expr);
+        }
+    } else if constexpr (std::is_same_v<S, SetTraitStmt>) {
+        s.resolved_trait_id = try_resolve_trait_ref_to_symbol(s.trait_name);
+        if (s.target_expr != nullptr) {
+            resolve_expr(*s.target_expr);
+        }
+        for (auto& arg : s.args) {
+            resolve_expr(*arg.value);
+        }
+    }
+}
+
+template <typename S, typename ResolveTrait, typename ResolveChildren>
+void SemanticAnalyzer::resolve_statement_references(
+    S& s,
+    const std::function<void(ExprNode&)>& resolve_expr,
+    const std::function<void(std::vector<std::unique_ptr<StmtNode>>&)>& resolve_stmts,
+    const ResolveTrait& resolve_trait_entry,
+    const ResolveChildren& resolve_child_overrides) {
+    if constexpr (std::is_same_v<S, LetStmt> || std::is_same_v<S, VarAssign>) {
+        resolve_expr(*s.value);
+    } else if constexpr (std::is_same_v<S, EmitStmt>) {
+        s.resolved_event_id = try_resolve_event_ref_to_symbol(s.event_name);
+        if (s.target.has_value()) {
+            resolve_expr(**s.target);
+        }
+        for (auto& field : s.payload) {
+            resolve_expr(*field.value);
+        }
+    } else if constexpr (std::is_same_v<S, ReturnStmt>) {
+        if (s.value.has_value()) {
+            resolve_expr(**s.value);
+        }
+    } else if constexpr (std::is_same_v<S, ExprStmt>) {
+        resolve_expr(*s.expr);
+    } else if constexpr (std::is_same_v<S, IfStmt>) {
+        resolve_expr(*s.condition);
+        resolve_stmts(s.then_body);
+        for (auto& branch : s.else_if_branches) {
+            resolve_expr(*branch.condition);
+            resolve_stmts(branch.body);
+        }
+        resolve_stmts(s.else_body);
+    } else if constexpr (std::is_same_v<S, ForeachStmt>) {
+        resolve_expr(*s.iterable);
+        resolve_stmts(s.body);
+    } else if constexpr (std::is_same_v<S, MatchStmt>) {
+        resolve_expr(*s.subject);
+        for (auto& arm : s.arms) {
+            if (!arm.is_wildcard()) {
+                arm.resolved_trait_id = try_resolve_trait_ref_to_symbol(arm.trait_name());
+            }
+            if (!arm.resolved_trait_id.has_value()) {
+                resolve_expr(*arm.pattern);
+            }
+            resolve_stmts(arm.body);
+        }
+    } else {
+        resolve_command_references(s, resolve_expr, resolve_trait_entry, resolve_child_overrides);
     }
 }
 
@@ -1662,64 +1841,7 @@ void SemanticAnalyzer::resolve_trait_references(ProgramNode& program) {
         }
         std::visit(
             [&](auto& e) {  // NOLINT(readability-function-cognitive-complexity) -- per-ExprNode-kind resolution
-                using E = std::decay_t<decltype(e)>;
-                if constexpr (std::is_same_v<E, UnaryExpr>) {
-                    resolve_expr(*e.operand);
-                } else if constexpr (std::is_same_v<E, BinaryExpr>) {
-                    resolve_expr(*e.left);
-                    resolve_expr(*e.right);
-                } else if constexpr (std::is_same_v<E, CallExpr>) {
-                    e.resolved_callee_id = resolve_callee_symbol(*e.callee);
-                    e.resolved_struct_id = resolve_struct_callee(*e.callee);
-                    if (const auto* ident = std::get_if<IdentExpr>(&e.callee->expr);
-                        ident != nullptr && template_names_.contains(ident->name)) {
-                        errors_.error(e.location, "template applications are only valid at creation sites");
-                    }
-                    resolve_expr(*e.callee);
-                    for (auto& arg : e.args) {
-                        resolve_expr(*arg);
-                    }
-                } else if constexpr (std::is_same_v<E, MemberExpr>) {
-                    resolve_expr(*e.object);
-                    // Enum member chains (`Key.A`, `inp.Key.A`, `std.input.Key.A`)
-                    // resolve here; non-enum chains fall through untouched.
-                    resolve_enum_member_expr(e, expr.location);
-                } else if constexpr (std::is_same_v<E, MatchExpr>) {
-                    resolve_expr(*e.subject);
-                    for (auto& arm : e.arms) {
-                        resolve_expr(*arm.pattern);
-                        resolve_expr(*arm.body);
-                    }
-                } else if constexpr (std::is_same_v<E, IfExpr>) {
-                    resolve_expr(*e.condition);
-                    resolve_expr(*e.then_expr);
-                    resolve_expr(*e.else_expr);
-                } else if constexpr (std::is_same_v<E, ListExpr>) {
-                    for (auto& element : e.elements) {
-                        resolve_expr(*element);
-                    }
-                } else if constexpr (std::is_same_v<E, SpawnExpr>) {
-                    e.resolved_template_id = try_resolve_template_ref_to_symbol(e.template_name);
-                    for (auto& argument : e.arguments.values) {
-                        resolve_expr(*argument.value);
-                    }
-                    for (auto& override_entry : e.overrides) {
-                        resolve_trait_entry(override_entry);
-                        for (auto& assignment : override_entry.assignments) {
-                            resolve_expr(*assignment.value);
-                        }
-                    }
-                    resolve_child_overrides(e.child_overrides);
-                } else if constexpr (std::is_same_v<E, QueryCallExpr>) {
-                    e.resolved_callee_id = resolve_callee_symbol(*e.callee);
-                    resolve_expr(*e.callee);
-                    for (auto& pred : e.filters) {
-                        pred.resolved_trait_id = try_resolve_trait_ref_to_symbol(pred.trait_name);
-                    }
-                    for (auto& arg : e.named_args) {
-                        resolve_expr(*arg.value);
-                    }
-                }
+                resolve_expression_references(e, expr, resolve_expr, resolve_trait_entry, resolve_child_overrides);
             },
             expr.expr);
     };
@@ -1728,91 +1850,8 @@ void SemanticAnalyzer::resolve_trait_references(ProgramNode& program) {
         for (auto& stmt : stmts) {
             std::visit(
                 [&](auto& s) {  // NOLINT(readability-function-cognitive-complexity) -- per-StmtNode-kind resolution
-                    using S = std::decay_t<decltype(s)>;
-                    if constexpr (std::is_same_v<S, LetStmt> || std::is_same_v<S, VarAssign>) {
-                        resolve_expr(*s.value);
-                    } else if constexpr (std::is_same_v<S, EmitStmt>) {
-                        s.resolved_event_id = try_resolve_event_ref_to_symbol(s.event_name);
-                        if (s.target.has_value()) {
-                            resolve_expr(**s.target);
-                        }
-                        for (auto& field : s.payload) {
-                            resolve_expr(*field.value);
-                        }
-                    } else if constexpr (std::is_same_v<S, ReturnStmt>) {
-                        if (s.value.has_value()) {
-                            resolve_expr(**s.value);
-                        }
-                    } else if constexpr (std::is_same_v<S, ExprStmt>) {
-                        resolve_expr(*s.expr);
-                    } else if constexpr (std::is_same_v<S, IfStmt>) {
-                        resolve_expr(*s.condition);
-                        resolve_stmts(s.then_body);
-                        for (auto& branch : s.else_if_branches) {
-                            resolve_expr(*branch.condition);
-                            resolve_stmts(branch.body);
-                        }
-                        resolve_stmts(s.else_body);
-                    } else if constexpr (std::is_same_v<S, ForeachStmt>) {
-                        resolve_expr(*s.iterable);
-                        resolve_stmts(s.body);
-                    } else if constexpr (std::is_same_v<S, MatchStmt>) {
-                        resolve_expr(*s.subject);
-                        for (auto& arm : s.arms) {
-                            if (!arm.is_wildcard()) {
-                                arm.resolved_trait_id = try_resolve_trait_ref_to_symbol(arm.trait_name());
-                            }
-                            if (!arm.resolved_trait_id.has_value()) {
-                                resolve_expr(*arm.pattern);
-                            }
-                            resolve_stmts(arm.body);
-                        }
-                    } else if constexpr (std::is_same_v<S, SpawnStmt>) {
-                        s.resolved_template_id = try_resolve_template_ref_to_symbol(s.template_name);
-                        for (auto& argument : s.arguments.values) {
-                            resolve_expr(*argument.value);
-                        }
-                        for (auto& override_entry : s.overrides) {
-                            resolve_trait_entry(override_entry);
-                            for (auto& assignment : override_entry.assignments) {
-                                resolve_expr(*assignment.value);
-                            }
-                        }
-                        resolve_child_overrides(s.child_overrides);
-                    } else if constexpr (std::is_same_v<S, DestroyStmt>) {
-                        if (s.target_expr.has_value()) {
-                            resolve_expr(**s.target_expr);
-                        }
-                    } else if constexpr (std::is_same_v<S, AddTraitStmt>) {
-                        s.resolved_trait_id = try_resolve_trait_ref_to_symbol(s.trait_name);
-                        for (auto& arg : s.args) {
-                            resolve_expr(*arg.value);
-                        }
-                        if (s.target_expr.has_value()) {
-                            resolve_expr(**s.target_expr);
-                        }
-                    } else if constexpr (std::is_same_v<S, RemoveTraitStmt>) {
-                        s.resolved_trait_id = try_resolve_trait_or_slot_ref(s.trait_name);
-                        if (s.target_expr.has_value()) {
-                            resolve_expr(**s.target_expr);
-                        }
-                    } else if constexpr (std::is_same_v<S, ProjectTraitStmt>) {
-                        s.resolved_trait_id = try_resolve_trait_ref_to_symbol(s.trait_name);
-                        for (auto& arg : s.args) {
-                            resolve_expr(*arg.value);
-                        }
-                        if (s.target_expr.has_value()) {
-                            resolve_expr(**s.target_expr);
-                        }
-                    } else if constexpr (std::is_same_v<S, SetTraitStmt>) {
-                        s.resolved_trait_id = try_resolve_trait_ref_to_symbol(s.trait_name);
-                        if (s.target_expr != nullptr) {
-                            resolve_expr(*s.target_expr);
-                        }
-                        for (auto& arg : s.args) {
-                            resolve_expr(*arg.value);
-                        }
-                    }
+                    resolve_statement_references(
+                        s, resolve_expr, resolve_stmts, resolve_trait_entry, resolve_child_overrides);
                 },
                 stmt->stmt);
         }
@@ -2107,97 +2146,96 @@ void SemanticAnalyzer::check_const_strings(ProgramNode& program) {
     }
 }
 
+template <typename S>
+void SemanticAnalyzer::check_const_strings_statement(const S& s) {
+    if constexpr (std::is_same_v<S, VarAssign> || std::is_same_v<S, LetStmt>) {
+        check_const_strings_expr(*s.value, false);
+    } else if constexpr (std::is_same_v<S, ExprStmt>) {
+        check_const_strings_expr(*s.expr, false);
+    } else if constexpr (std::is_same_v<S, ReturnStmt>) {
+        if (s.value) {
+            check_const_strings_expr(**s.value, false);
+        }
+    } else if constexpr (std::is_same_v<S, EmitStmt>) {
+        if (s.target.has_value()) {
+            check_const_strings_expr(**s.target, false);
+        }
+        for (const auto& field : s.payload) {
+            check_const_strings_expr(*field.value, false);
+        }
+    } else if constexpr (std::is_same_v<S, IfStmt>) {
+        check_const_strings_expr(*s.condition, false);
+        check_const_strings_stmts(s.then_body);
+        for (const auto& branch : s.else_if_branches) {
+            check_const_strings_expr(*branch.condition, false);
+            check_const_strings_stmts(branch.body);
+        }
+        check_const_strings_stmts(s.else_body);
+    } else if constexpr (std::is_same_v<S, MatchStmt>) {
+        check_const_strings_expr(*s.subject, false);
+        for (const auto& arm : s.arms) {
+            check_const_strings_stmts(arm.body);
+        }
+    }
+}
+
 void SemanticAnalyzer::check_const_strings_stmts(const std::vector<std::unique_ptr<StmtNode>>& stmts) {
     for (const auto& stmt : stmts) {
-        std::visit(
-            [this](const auto& s) {
-                using S = std::decay_t<decltype(s)>;
-                if constexpr (std::is_same_v<S, VarAssign> || std::is_same_v<S, LetStmt>) {
-                    check_const_strings_expr(*s.value, false);
-                } else if constexpr (std::is_same_v<S, ExprStmt>) {
-                    check_const_strings_expr(*s.expr, false);
-                } else if constexpr (std::is_same_v<S, ReturnStmt>) {
-                    if (s.value) {
-                        check_const_strings_expr(**s.value, false);
-                    }
-                } else if constexpr (std::is_same_v<S, EmitStmt>) {
-                    if (s.target.has_value()) {
-                        check_const_strings_expr(**s.target, false);
-                    }
-                    for (const auto& field : s.payload) {
-                        check_const_strings_expr(*field.value, false);
-                    }
-                } else if constexpr (std::is_same_v<S, IfStmt>) {
-                    check_const_strings_expr(*s.condition, false);
-                    check_const_strings_stmts(s.then_body);
-                    for (const auto& branch : s.else_if_branches) {
-                        check_const_strings_expr(*branch.condition, false);
-                        check_const_strings_stmts(branch.body);
-                    }
-                    check_const_strings_stmts(s.else_body);
-                } else if constexpr (std::is_same_v<S, MatchStmt>) {
-                    check_const_strings_expr(*s.subject, false);
-                    for (const auto& arm : s.arms) {
-                        check_const_strings_stmts(arm.body);
-                    }
-                }
-            },
-            stmt->stmt);
+        std::visit([this](const auto& s) { check_const_strings_statement(s); }, stmt->stmt);
+    }
+}
+
+void SemanticAnalyzer::check_call_const_strings(const CallExpr& e, bool in_const) {
+    check_const_strings_expr(*e.callee, in_const);
+    const bool is_format = is_std_text_format_callee(*e.callee);
+    for (size_t i = 0; i < e.args.size(); ++i) {
+        check_const_strings_expr(*e.args[i], in_const || (is_format && i == 0));
+    }
+}
+
+template <typename E>
+void SemanticAnalyzer::check_expression_const_strings(const E& e, bool in_const) {
+    if constexpr (std::is_same_v<E, LiteralExpr>) {
+        if (e.kind == LiteralExpr::Kind::String && !in_const) {
+            errors_.error(e.location, "string literals are only allowed in const blocks");
+        }
+    } else if constexpr (std::is_same_v<E, BinaryExpr>) {
+        check_const_strings_expr(*e.left, in_const);
+        check_const_strings_expr(*e.right, in_const);
+    } else if constexpr (std::is_same_v<E, UnaryExpr>) {
+        check_const_strings_expr(*e.operand, in_const);
+    } else if constexpr (std::is_same_v<E, CallExpr>) {
+        check_call_const_strings(e, in_const);
+    } else if constexpr (std::is_same_v<E, MemberExpr>) {
+        check_const_strings_expr(*e.object, in_const);
+    } else if constexpr (std::is_same_v<E, IfExpr>) {
+        check_const_strings_expr(*e.condition, in_const);
+        check_const_strings_expr(*e.then_expr, in_const);
+        check_const_strings_expr(*e.else_expr, in_const);
+    } else if constexpr (std::is_same_v<E, MatchExpr>) {
+        check_const_strings_expr(*e.subject, in_const);
+        for (auto& arm : e.arms) {
+            check_const_strings_expr(*arm.body, in_const);
+        }
+    } else if constexpr (std::is_same_v<E, ListExpr>) {
+        for (auto& el : e.elements) {
+            check_const_strings_expr(*el, in_const);
+        }
+    } else if constexpr (std::is_same_v<E, SpawnExpr>) {
+        for (auto& trait : e.overrides) {
+            for (auto& field : trait.assignments) {
+                check_const_strings_expr(*field.value, in_const);
+            }
+        }
+    } else if constexpr (std::is_same_v<E, QueryCallExpr>) {
+        for (auto& arg : e.named_args) {
+            check_const_strings_expr(*arg.value, in_const);
+        }
     }
 }
 
 void SemanticAnalyzer::check_const_strings_expr(const ExprNode& expr, bool in_const) {
-    std::visit(
-        [this, in_const](auto& e) {
-            using E = std::decay_t<decltype(e)>;
-            if constexpr (std::is_same_v<E, LiteralExpr>) {
-                if (e.kind == LiteralExpr::Kind::String && !in_const) {
-                    errors_.error(e.location, "string literals are only allowed in const blocks");
-                }
-            } else if constexpr (std::is_same_v<E, BinaryExpr>) {
-                check_const_strings_expr(*e.left, in_const);
-                check_const_strings_expr(*e.right, in_const);
-            } else if constexpr (std::is_same_v<E, UnaryExpr>) {
-                check_const_strings_expr(*e.operand, in_const);
-            } else if constexpr (std::is_same_v<E, CallExpr>) {
-                check_const_strings_expr(*e.callee, in_const);
-                if (is_std_text_format_callee(*e.callee)) {
-                    for (size_t i = 0; i < e.args.size(); ++i) {
-                        check_const_strings_expr(*e.args[i], in_const || (i == 0));
-                    }
-                } else {
-                    for (auto& arg : e.args) {
-                        check_const_strings_expr(*arg, in_const);
-                    }
-                }
-            } else if constexpr (std::is_same_v<E, MemberExpr>) {
-                check_const_strings_expr(*e.object, in_const);
-            } else if constexpr (std::is_same_v<E, IfExpr>) {
-                check_const_strings_expr(*e.condition, in_const);
-                check_const_strings_expr(*e.then_expr, in_const);
-                check_const_strings_expr(*e.else_expr, in_const);
-            } else if constexpr (std::is_same_v<E, MatchExpr>) {
-                check_const_strings_expr(*e.subject, in_const);
-                for (auto& arm : e.arms) {
-                    check_const_strings_expr(*arm.body, in_const);
-                }
-            } else if constexpr (std::is_same_v<E, ListExpr>) {
-                for (auto& el : e.elements) {
-                    check_const_strings_expr(*el, in_const);
-                }
-            } else if constexpr (std::is_same_v<E, SpawnExpr>) {
-                for (auto& trait : e.overrides) {
-                    for (auto& field : trait.assignments) {
-                        check_const_strings_expr(*field.value, in_const);
-                    }
-                }
-            } else if constexpr (std::is_same_v<E, QueryCallExpr>) {
-                for (auto& arg : e.named_args) {
-                    check_const_strings_expr(*arg.value, in_const);
-                }
-            }
-        },
-        expr.expr);
+    std::visit([this, in_const](auto& e) { check_expression_const_strings(e, in_const); }, expr.expr);
 }
 
 // ── Phase 3b: Func Purity ───────────────────────────────────────────────────
@@ -2216,44 +2254,44 @@ void SemanticAnalyzer::check_func_purity(ProgramNode& program) {
     }
 }
 
-void SemanticAnalyzer::check_func_purity_stmt(const StmtNode& stmt, const std::string& func_name) {
-    std::visit(
-        [this, &func_name](auto& s) {
-            using S = std::decay_t<decltype(s)>;
-            if constexpr (std::is_same_v<S, EmitStmt>) {
-                errors_.error(s.location, "func '" + func_name + "' cannot use 'emit' (funcs must be pure)");
-            } else if constexpr (std::is_same_v<S, LetStmt> || std::is_same_v<S, VarAssign>) {
-                check_func_purity_expr(*s.value, func_name);
-            } else if constexpr (std::is_same_v<S, ExprStmt>) {
-                check_func_purity_expr(*s.expr, func_name);
-            } else if constexpr (std::is_same_v<S, ReturnStmt>) {
-                if (s.value) {
-                    check_func_purity_expr(**s.value, func_name);
-                }
-            } else if constexpr (std::is_same_v<S, IfStmt>) {
-                check_func_purity_expr(*s.condition, func_name);
-                for (auto& inner : s.then_body) {
-                    check_func_purity_stmt(*inner, func_name);
-                }
-                for (auto& branch : s.else_if_branches) {
-                    check_func_purity_expr(*branch.condition, func_name);
-                    for (auto& inner : branch.body) {
-                        check_func_purity_stmt(*inner, func_name);
-                    }
-                }
-                for (auto& inner : s.else_body) {
-                    check_func_purity_stmt(*inner, func_name);
-                }
-            } else if constexpr (std::is_same_v<S, MatchStmt>) {
-                check_func_purity_expr(*s.subject, func_name);
-                for (auto& arm : s.arms) {
-                    for (auto& inner : arm.body) {
-                        check_func_purity_stmt(*inner, func_name);
-                    }
-                }
+template <typename S>
+void SemanticAnalyzer::check_statement_purity(const S& s, const std::string& func_name) {
+    if constexpr (std::is_same_v<S, EmitStmt>) {
+        errors_.error(s.location, "func '" + func_name + "' cannot use 'emit' (funcs must be pure)");
+    } else if constexpr (std::is_same_v<S, LetStmt> || std::is_same_v<S, VarAssign>) {
+        check_func_purity_expr(*s.value, func_name);
+    } else if constexpr (std::is_same_v<S, ExprStmt>) {
+        check_func_purity_expr(*s.expr, func_name);
+    } else if constexpr (std::is_same_v<S, ReturnStmt>) {
+        if (s.value) {
+            check_func_purity_expr(**s.value, func_name);
+        }
+    } else if constexpr (std::is_same_v<S, IfStmt>) {
+        check_func_purity_expr(*s.condition, func_name);
+        for (auto& inner : s.then_body) {
+            check_func_purity_stmt(*inner, func_name);
+        }
+        for (auto& branch : s.else_if_branches) {
+            check_func_purity_expr(*branch.condition, func_name);
+            for (auto& inner : branch.body) {
+                check_func_purity_stmt(*inner, func_name);
             }
-        },
-        stmt.stmt);
+        }
+        for (auto& inner : s.else_body) {
+            check_func_purity_stmt(*inner, func_name);
+        }
+    } else if constexpr (std::is_same_v<S, MatchStmt>) {
+        check_func_purity_expr(*s.subject, func_name);
+        for (auto& arm : s.arms) {
+            for (auto& inner : arm.body) {
+                check_func_purity_stmt(*inner, func_name);
+            }
+        }
+    }
+}
+
+void SemanticAnalyzer::check_func_purity_stmt(const StmtNode& stmt, const std::string& func_name) {
+    std::visit([this, &func_name](auto& s) { check_statement_purity(s, func_name); }, stmt.stmt);
 }
 
 // The recursive deny-list traversal shared by check_func_purity_expr,
@@ -3354,7 +3392,7 @@ void SemanticAnalyzer::bind_lifecycle_trigger_alias(
     const EventHandlerNode& handler,
     std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
     std::unordered_map<std::string, TypeInfo>& local_bindings) const {
-    if (!handler.alias.has_value() || !handler.has_lifecycle_trigger()) {
+    if (!handler.alias.has_value() || !handler.resolved_trigger.has_value() || !handler.has_lifecycle_trigger()) {
         return;
     }
     const auto& trait_symbol = handler.resolved_trigger->symbol;
@@ -3613,6 +3651,9 @@ bool SemanticAnalyzer::limit_count_is_provably_one(const ExprNode& count) const 
 // is meant to bound. Reports and yields nullopt when either rule is violated.
 std::optional<PairScope> SemanticAnalyzer::resolve_limit_count_scope(const RuleNode& rule) {
     PairScope per_scope;
+    if (!rule.limit.has_value()) {
+        return std::nullopt;
+    }
     if (!rule.pairs.has_value()) {
         // `per` requires `pairs:` (rejected earlier in validateLimitClause), so
         // this is always the global form here: its count may reference only
@@ -3643,7 +3684,7 @@ std::optional<PairScope> SemanticAnalyzer::resolve_limit_count_scope(const RuleN
     // Scanned in the bindings' source order so a count naming both bindings
     // always reports the same one.
     const std::string* offender = nullptr;
-    for (const auto& binding : rule.pairs->bindings) {
+    for (const auto& binding : rule.pairs.value().bindings) {
         if (!per_scope.contains(binding.name) && expr_references_ident(*limit.count, binding.name)) {
             offender = &binding.name;
             break;
@@ -3813,7 +3854,7 @@ static std::vector<const ExprNode*> post_reduce_clause_roots(const RuleNode& rul
 void SemanticAnalyzer::reject_eliminated_bindings(const RuleNode& rule, const ReduceClause& reduce) {
     std::unordered_set<std::string> eliminated = unary_domain_scope_names(build_filter_bindings(rule.filter));
     if (rule.pairs.has_value()) {
-        for (const auto& binding : rule.pairs->bindings) {
+        for (const auto& binding : rule.pairs.value().bindings) {
             if (binding.name == reduce.per_binding) {
                 continue;
             }
@@ -4251,21 +4292,24 @@ void SemanticAnalyzer::resolve_phase_lineage(const PhaseCollection& phases) {
     std::unordered_map<std::string, Visit> visit;
     std::vector<std::string> stack;
     std::unordered_set<std::string> reported_cycles;
+    const auto report_cycle = [&](const std::string& name) {
+        const auto cycle_start = std::ranges::find(stack, name);
+        std::ostringstream path;
+        for (auto it = cycle_start; it != stack.end(); ++it) {
+            if (it != cycle_start) {
+                path << " -> ";
+            }
+            path << make_canonical_id(current_module_name_, *it);
+        }
+        path << " -> " << make_canonical_id(current_module_name_, name);
+        if (reported_cycles.insert(path.str()).second) {
+            errors_.error(phases.local_phases.at(name)->location, "phase cycle: " + path.str());
+        }
+    };
     std::function<void(const std::string&)> resolve_lineage = [&](const std::string& name) {
         if (visit.contains(name)) {
             if (visit.at(name) == Visit::Visiting) {
-                const auto cycle_start = std::ranges::find(stack, name);
-                std::ostringstream path;
-                for (auto it = cycle_start; it != stack.end(); ++it) {
-                    if (it != cycle_start) {
-                        path << " -> ";
-                    }
-                    path << make_canonical_id(current_module_name_, *it);
-                }
-                path << " -> " << make_canonical_id(current_module_name_, name);
-                if (reported_cycles.insert(path.str()).second) {
-                    errors_.error(phases.local_phases.at(name)->location, "phase cycle: " + path.str());
-                }
+                report_cycle(name);
             }
             return;
         }
@@ -4628,6 +4672,149 @@ void SemanticAnalyzer::validate_render_pass_stage_handler_shape(const RuleNode& 
     }
 }
 
+void SemanticAnalyzer::validate_render_stage_call(const CallExpr& node, const SourceLocation& location) const {
+    const auto* callee_ident = std::get_if<IdentExpr>(&node.callee->expr);
+    const bool is_vector_ctor =
+        callee_ident != nullptr &&
+        (callee_ident->name == "vec2" || callee_ident->name == "vec3" || callee_ident->name == "color");
+    if (!is_vector_ctor) {
+        auto callee_symbol = resolve_callee_symbol(*node.callee);
+        const auto* func   = callee_symbol.has_value() ? find_resolved_func(*callee_symbol) : nullptr;
+        if (func != nullptr && func->is_extern && !is_render_pass_portable_glsl_intrinsic(*callee_symbol)) {
+            errors_.error(location,
+                          "extern func '" + make_canonical_id(*callee_symbol) +
+                              "' has no registered portable GLSL translation for a render-pass "
+                              "stage handler");
+        }
+    }
+}
+
+template <typename E>
+void SemanticAnalyzer::validate_render_stage_expression(const E& node,
+                                                        const ExprNode& expr,
+                                                        const std::function<void(const ExprNode&)>& visit_expr,
+                                                        const char* stage_desc) const {
+    if constexpr (std::is_same_v<E, QueryCallExpr>) {
+        errors_.error(
+            expr.location,
+            std::string("a world query is not allowed in a render-pass ") + stage_desc + "-stage handler body");
+    } else if constexpr (std::is_same_v<E, SpawnExpr>) {
+        errors_.error(expr.location,
+                      std::string("'spawn' is not allowed in a render-pass ") + stage_desc + "-stage handler body");
+    } else if constexpr (std::is_same_v<E, BinaryExpr>) {
+        visit_expr(*node.left);
+        visit_expr(*node.right);
+    } else if constexpr (std::is_same_v<E, UnaryExpr>) {
+        visit_expr(*node.operand);
+    } else if constexpr (std::is_same_v<E, CallExpr>) {
+        validate_render_stage_call(node, expr.location);
+        for (const auto& arg : node.args) {
+            visit_expr(*arg);
+        }
+    } else if constexpr (std::is_same_v<E, MemberExpr>) {
+        if (node.resolved_const_id.has_value()) {
+            check_stage_constant(*node.resolved_const_id, expr.location, stage_desc);
+        } else {
+            visit_expr(*node.object);
+        }
+    } else if constexpr (std::is_same_v<E, IdentExpr>) {
+        if (node.resolved_const_id.has_value()) {
+            check_stage_constant(*node.resolved_const_id, expr.location, stage_desc);
+        }
+    } else if constexpr (std::is_same_v<E, MatchExpr>) {
+        visit_expr(*node.subject);
+        for (const auto& arm : node.arms) {
+            visit_expr(*arm.pattern);
+            visit_expr(*arm.body);
+        }
+    } else if constexpr (std::is_same_v<E, IfExpr>) {
+        visit_expr(*node.condition);
+        visit_expr(*node.then_expr);
+        visit_expr(*node.else_expr);
+    } else if constexpr (std::is_same_v<E, ListExpr>) {
+        for (const auto& element : node.elements) {
+            visit_expr(*element);
+        }
+    }
+    // LiteralExpr, SelfExpr: no sub-expressions to visit.
+}
+
+void SemanticAnalyzer::validate_render_stage_assignment(const VarAssign& node,
+                                                        const std::string& alias,
+                                                        const std::unordered_set<std::string>& filter_alias_names,
+                                                        const std::unordered_set<std::string>& writable_output_fields,
+                                                        const char* stage_desc) const {
+    if (node.name == alias) {
+        if (node.path.size() != 1 || !writable_output_fields.contains(node.path.front())) {
+            errors_.error(node.location,
+                          std::string("render-pass ") + stage_desc +
+                              "-stage handler may only assign to its own built-in output "
+                              "field(s)");
+        }
+    } else if (filter_alias_names.contains(node.name)) {
+        errors_.error(
+            node.location,
+            "only built-in stage-output fields are writable; '" + node.name + "' is a filtered trait binding");
+    }
+}
+
+template <typename S, typename Forbid>
+void SemanticAnalyzer::validate_render_stage_statement(
+    const S& node,
+    const std::string& alias,
+    const std::unordered_set<std::string>& filter_alias_names,
+    const std::unordered_set<std::string>& writable_output_fields,
+    const char* stage_desc,
+    const std::function<void(const ExprNode&)>& visit_expr,
+    const std::function<void(const std::vector<std::unique_ptr<StmtNode>>&)>& visit_stmts,
+    const Forbid& forbid_statement) const {
+    if constexpr (std::is_same_v<S, LetStmt>) {
+        visit_expr(*node.value);
+    } else if constexpr (std::is_same_v<S, VarAssign>) {
+        visit_expr(*node.value);
+        validate_render_stage_assignment(node, alias, filter_alias_names, writable_output_fields, stage_desc);
+    } else if constexpr (std::is_same_v<S, IfStmt>) {
+        visit_expr(*node.condition);
+        visit_stmts(node.then_body);
+        for (const auto& branch : node.else_if_branches) {
+            visit_expr(*branch.condition);
+            visit_stmts(branch.body);
+        }
+        visit_stmts(node.else_body);
+    } else if constexpr (std::is_same_v<S, ExprStmt>) {
+        visit_expr(*node.expr);
+    } else if constexpr (std::is_same_v<S, EmitStmt>) {
+        forbid_statement(node.location, "emit");
+    } else if constexpr (std::is_same_v<S, SpawnStmt>) {
+        forbid_statement(node.location, "spawn");
+    } else if constexpr (std::is_same_v<S, DestroyStmt>) {
+        forbid_statement(node.location, "destroy");
+    } else if constexpr (std::is_same_v<S, LoadStmt>) {
+        forbid_statement(node.location, "load");
+    } else if constexpr (std::is_same_v<S, AddTraitStmt>) {
+        forbid_statement(node.location, "add");
+    } else if constexpr (std::is_same_v<S, RemoveTraitStmt>) {
+        forbid_statement(node.location, "remove");
+    } else if constexpr (std::is_same_v<S, ProjectTraitStmt>) {
+        forbid_statement(node.location, "project");
+    } else if constexpr (std::is_same_v<S, SetTraitStmt>) {
+        forbid_statement(node.location, "set");
+    } else if constexpr (std::is_same_v<S, ReturnStmt>) {
+        forbid_statement(node.location, "return");
+    } else if constexpr (std::is_same_v<S, ForeachStmt>) {
+        forbid_statement(node.location, "for");
+    } else if constexpr (std::is_same_v<S, MatchStmt>) {
+        if (std::ranges::any_of(node.arms, [](const MatchStmtArm& arm) { return arm.resolved_trait_id.has_value(); })) {
+            forbid_statement(node.location, "trait match");
+            return;
+        }
+        visit_expr(*node.subject);
+        for (const auto& arm : node.arms) {
+            visit_stmts(arm.body);
+        }
+    }
+}
+
 // dsl-render-passes: validates the restricted statement/expression subset a
 // stage handler body may use (design.md Decision 3): `let`, assignment to
 // invocation-local variables and the handler's own writable built-in output
@@ -4646,69 +4833,8 @@ void SemanticAnalyzer::validate_render_pass_stage_handler_body(
     std::function<void(const std::vector<std::unique_ptr<StmtNode>>&)> visit_stmts;
 
     visit_expr = [&](const ExprNode& expr) {
-        std::visit(
-            [&](const auto& node) {
-                using E = std::decay_t<decltype(node)>;
-                if constexpr (std::is_same_v<E, QueryCallExpr>) {
-                    errors_.error(expr.location,
-                                  std::string("a world query is not allowed in a render-pass ") + stage_desc +
-                                      "-stage handler body");
-                } else if constexpr (std::is_same_v<E, SpawnExpr>) {
-                    errors_.error(expr.location,
-                                  std::string("'spawn' is not allowed in a render-pass ") + stage_desc +
-                                      "-stage handler body");
-                } else if constexpr (std::is_same_v<E, BinaryExpr>) {
-                    visit_expr(*node.left);
-                    visit_expr(*node.right);
-                } else if constexpr (std::is_same_v<E, UnaryExpr>) {
-                    visit_expr(*node.operand);
-                } else if constexpr (std::is_same_v<E, CallExpr>) {
-                    const auto* callee_ident = std::get_if<IdentExpr>(&node.callee->expr);
-                    const bool is_vector_ctor =
-                        callee_ident != nullptr &&
-                        (callee_ident->name == "vec2" || callee_ident->name == "vec3" || callee_ident->name == "color");
-                    if (!is_vector_ctor) {
-                        auto callee_symbol = resolve_callee_symbol(*node.callee);
-                        const auto* func    = callee_symbol.has_value() ? find_resolved_func(*callee_symbol) : nullptr;
-                        if (func != nullptr && func->is_extern &&
-                            !is_render_pass_portable_glsl_intrinsic(*callee_symbol)) {
-                            errors_.error(expr.location,
-                                          "extern func '" + make_canonical_id(*callee_symbol) +
-                                              "' has no registered portable GLSL translation for a render-pass "
-                                              "stage handler");
-                        }
-                    }
-                    for (const auto& arg : node.args) {
-                        visit_expr(*arg);
-                    }
-                } else if constexpr (std::is_same_v<E, MemberExpr>) {
-                    if (node.resolved_const_id.has_value()) {
-                        check_stage_constant(*node.resolved_const_id, expr.location, stage_desc);
-                    } else {
-                        visit_expr(*node.object);
-                    }
-                } else if constexpr (std::is_same_v<E, IdentExpr>) {
-                    if (node.resolved_const_id.has_value()) {
-                        check_stage_constant(*node.resolved_const_id, expr.location, stage_desc);
-                    }
-                } else if constexpr (std::is_same_v<E, MatchExpr>) {
-                    visit_expr(*node.subject);
-                    for (const auto& arm : node.arms) {
-                        visit_expr(*arm.pattern);
-                        visit_expr(*arm.body);
-                    }
-                } else if constexpr (std::is_same_v<E, IfExpr>) {
-                    visit_expr(*node.condition);
-                    visit_expr(*node.then_expr);
-                    visit_expr(*node.else_expr);
-                } else if constexpr (std::is_same_v<E, ListExpr>) {
-                    for (const auto& element : node.elements) {
-                        visit_expr(*element);
-                    }
-                }
-                // LiteralExpr, SelfExpr: no sub-expressions to visit.
-            },
-            expr.expr);
+        std::visit([&](const auto& node) { validate_render_stage_expression(node, expr, visit_expr, stage_desc); },
+                   expr.expr);
     };
 
     const auto forbid_statement = [&](const SourceLocation& loc, const char* keyword) {
@@ -4721,64 +4847,14 @@ void SemanticAnalyzer::validate_render_pass_stage_handler_body(
         for (const auto& stmt : stmts) {
             std::visit(
                 [&](const auto& node) {
-                    using S = std::decay_t<decltype(node)>;
-                    if constexpr (std::is_same_v<S, LetStmt>) {
-                        visit_expr(*node.value);
-                    } else if constexpr (std::is_same_v<S, VarAssign>) {
-                        visit_expr(*node.value);
-                        if (node.name == alias) {
-                            if (node.path.size() != 1 || !writable_output_fields.contains(node.path.front())) {
-                                errors_.error(node.location,
-                                              std::string("render-pass ") + stage_desc +
-                                                  "-stage handler may only assign to its own built-in output "
-                                                  "field(s)");
-                            }
-                        } else if (filter_alias_names.contains(node.name)) {
-                            errors_.error(node.location,
-                                          "only built-in stage-output fields are writable; '" + node.name +
-                                              "' is a filtered trait binding");
-                        }
-                    } else if constexpr (std::is_same_v<S, IfStmt>) {
-                        visit_expr(*node.condition);
-                        visit_stmts(node.then_body);
-                        for (const auto& branch : node.else_if_branches) {
-                            visit_expr(*branch.condition);
-                            visit_stmts(branch.body);
-                        }
-                        visit_stmts(node.else_body);
-                    } else if constexpr (std::is_same_v<S, ExprStmt>) {
-                        visit_expr(*node.expr);
-                    } else if constexpr (std::is_same_v<S, EmitStmt>) {
-                        forbid_statement(node.location, "emit");
-                    } else if constexpr (std::is_same_v<S, SpawnStmt>) {
-                        forbid_statement(node.location, "spawn");
-                    } else if constexpr (std::is_same_v<S, DestroyStmt>) {
-                        forbid_statement(node.location, "destroy");
-                    } else if constexpr (std::is_same_v<S, LoadStmt>) {
-                        forbid_statement(node.location, "load");
-                    } else if constexpr (std::is_same_v<S, AddTraitStmt>) {
-                        forbid_statement(node.location, "add");
-                    } else if constexpr (std::is_same_v<S, RemoveTraitStmt>) {
-                        forbid_statement(node.location, "remove");
-                    } else if constexpr (std::is_same_v<S, ProjectTraitStmt>) {
-                        forbid_statement(node.location, "project");
-                    } else if constexpr (std::is_same_v<S, SetTraitStmt>) {
-                        forbid_statement(node.location, "set");
-                    } else if constexpr (std::is_same_v<S, ReturnStmt>) {
-                        forbid_statement(node.location, "return");
-                    } else if constexpr (std::is_same_v<S, ForeachStmt>) {
-                        forbid_statement(node.location, "for");
-                    } else if constexpr (std::is_same_v<S, MatchStmt>) {
-                        if (std::ranges::any_of(node.arms,
-                                                [](const MatchStmtArm& arm) { return arm.resolved_trait_id.has_value(); })) {
-                            forbid_statement(node.location, "trait match");
-                            return;
-                        }
-                        visit_expr(*node.subject);
-                        for (const auto& arm : node.arms) {
-                            visit_stmts(arm.body);
-                        }
-                    }
+                    validate_render_stage_statement(node,
+                                                    alias,
+                                                    filter_alias_names,
+                                                    writable_output_fields,
+                                                    stage_desc,
+                                                    visit_expr,
+                                                    visit_stmts,
+                                                    forbid_statement);
                 },
                 stmt->stmt);
         }
@@ -4909,8 +4985,34 @@ void SemanticAnalyzer::validate_filter_clause_traits(FilterClause& filter, const
             const auto prev_errors = errors_.error_count();
             const auto canonical   = resolve_trait_ref_to_canonical(trait_name, filter.location);
             if (canonical.empty() && errors_.error_count() == prev_errors) {
-                errors_.error(filter.location, owner_desc + " filters on unknown trait '" + trait_name + "'");
+                errors_.error(filter.location, std::format("{} filters on unknown trait '{}'", owner_desc, trait_name));
             }
+        }
+    }
+}
+
+void SemanticAnalyzer::validate_selectionless_handlers(RuleNode& rule) {
+    // task 11.12: if rule has no filter traits, handler bodies cannot
+    // access trait fields through a dotted assignment.
+    // Pair rules get their own read-only/no-implicit-entity diagnostics
+    // instead of this generic "no filter clause" message.
+    bool has_filter = !rule.filter.entries.empty() || !rule.filter.trait_names.empty();
+    if (!has_filter && !rule.pairs.has_value()) {
+        for (auto& handler : rule.handlers) {
+            // dsl-render-passes: a fragment-stage handler is selectionless
+            // (no filter:) by design, but legitimately accesses its own
+            // built-in fields through its alias — validated separately by
+            // validate_render_pass_stage_handler_body, not this generic
+            // "no entity to access fields on" check.
+            if (handler.resolved_trigger.has_value() &&
+                handler.resolved_trigger->kind == HandlerTriggerKind::RenderStage) {
+                continue;
+            }
+            std::unordered_set<std::string> trigger_aliases;
+            if (handler.alias.has_value() && handler.has_lifecycle_trigger()) {
+                trigger_aliases.insert(*handler.alias);
+            }
+            check_no_field_access(handler.body, rule.name, std::move(trigger_aliases));
         }
     }
 }
@@ -4920,29 +5022,7 @@ void SemanticAnalyzer::validate_rule_filters(ProgramNode& program) {
         if (auto* rule = std::get_if<RuleNode>(&decl)) {
             validate_filter_clause_traits(rule->filter, "rule '" + rule->name + "'");
 
-            // task 11.12: if rule has no filter traits, handler bodies cannot
-            // access trait fields through a dotted assignment.
-            // Pair rules get their own read-only/no-implicit-entity diagnostics
-            // instead of this generic "no filter clause" message.
-            bool has_filter = !rule->filter.entries.empty() || !rule->filter.trait_names.empty();
-            if (!has_filter && !rule->pairs.has_value()) {
-                for (auto& handler : rule->handlers) {
-                    // dsl-render-passes: a fragment-stage handler is selectionless
-                    // (no filter:) by design, but legitimately accesses its own
-                    // built-in fields through its alias — validated separately by
-                    // validate_render_pass_stage_handler_body, not this generic
-                    // "no entity to access fields on" check.
-                    if (handler.resolved_trigger.has_value() &&
-                        handler.resolved_trigger->kind == HandlerTriggerKind::RenderStage) {
-                        continue;
-                    }
-                    std::unordered_set<std::string> trigger_aliases;
-                    if (handler.alias.has_value() && handler.has_lifecycle_trigger()) {
-                        trigger_aliases.insert(*handler.alias);
-                    }
-                    check_no_field_access(handler.body, rule->name, std::move(trigger_aliases));
-                }
-            }
+            validate_selectionless_handlers(*rule);
 
             validate_pair_bindings(*rule);
             validateReduceClause(*rule);
@@ -5080,7 +5160,7 @@ std::unordered_set<std::string> SemanticAnalyzer::rule_binding_names(const RuleN
 std::unordered_set<std::string> SemanticAnalyzer::rule_domain_names(const RuleNode& rule) const {
     auto names = unary_domain_scope_names(build_filter_bindings(rule.filter));
     if (rule.pairs.has_value()) {
-        for (const auto& binding : rule.pairs->bindings) {
+        for (const auto& binding : rule.pairs.value().bindings) {
             names.insert(binding.name);
             for (const auto& entry : binding.traits) {
                 if (entry.alias.has_value()) {
@@ -5318,64 +5398,71 @@ std::optional<SemanticAnalyzer::NamedPath> SemanticAnalyzer::resolve_named_path(
     return path;
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity) -- one arm per ExprNode kind
+void SemanticAnalyzer::resolve_named_ident(IdentExpr& e,
+                                           const std::unordered_set<std::string>& shadowed,
+                                           NamedAccessContext context) {
+    if (e.template_slot.has_value() || shadowed.contains(e.name)) {
+        return;
+    }
+    if (resolve_const_ident(e)) {
+        return;
+    }
+    if (entity_names_.contains(e.name) && context != NamedAccessContext::Elsewhere) {
+        e.resolved_entity_id = make_symbol_id(SymbolKind::Entity, current_module_id_, e.name);
+    } else if (template_names_.contains(e.name) && context == NamedAccessContext::Rule) {
+        errors_.error(e.location, "template '" + e.name + "' is not an entity_id value; spawn it instead");
+    }
+}
+
+template <typename E>
+void SemanticAnalyzer::resolve_named_expression(E& e,
+                                                const std::unordered_set<std::string>& shadowed,
+                                                NamedAccessContext context) {
+    const auto walk = [&](ExprNode& child) { resolve_named_access_expr(child, shadowed, context); };
+    if constexpr (std::is_same_v<E, IdentExpr>) {
+        resolve_named_ident(e, shadowed, context);
+    } else if constexpr (std::is_same_v<E, MemberExpr>) {
+        if (resolve_const_member(e, shadowed) || resolve_phase_dt(e, shadowed)) {
+            return;
+        }
+        if (!resolve_named_access_chain(e, shadowed, context)) {
+            walk(*e.object);
+        }
+    } else if constexpr (std::is_same_v<E, UnaryExpr>) {
+        walk(*e.operand);
+    } else if constexpr (std::is_same_v<E, BinaryExpr>) {
+        walk(*e.left);
+        walk(*e.right);
+    } else if constexpr (std::is_same_v<E, CallExpr>) {
+        if (!std::holds_alternative<IdentExpr>(e.callee->expr)) {
+            walk(*e.callee);
+        }
+        std::ranges::for_each(e.args, [&](auto& arg) { walk(*arg); });
+    } else if constexpr (std::is_same_v<E, MatchExpr>) {
+        walk(*e.subject);
+        for (auto& arm : e.arms) {
+            walk(*arm.pattern);
+            walk(*arm.body);
+        }
+    } else if constexpr (std::is_same_v<E, IfExpr>) {
+        walk(*e.condition);
+        walk(*e.then_expr);
+        walk(*e.else_expr);
+    } else if constexpr (std::is_same_v<E, ListExpr>) {
+        std::ranges::for_each(e.elements, [&](auto& element) { walk(*element); });
+    } else if constexpr (std::is_same_v<E, SpawnExpr>) {
+        std::ranges::for_each(e.arguments.values, [&](FieldAssignment& argument) { walk(*argument.value); });
+        resolve_named_access_entries(e.overrides, shadowed, context);
+        resolve_named_access_overrides(e.child_overrides, shadowed, context);
+    } else if constexpr (std::is_same_v<E, QueryCallExpr>) {
+        std::ranges::for_each(e.named_args, [&](FieldAssignment& argument) { walk(*argument.value); });
+    }
+}
+
 void SemanticAnalyzer::resolve_named_access_expr(ExprNode& expr,
                                                  const std::unordered_set<std::string>& shadowed,
                                                  NamedAccessContext context) {
-    const auto walk = [&](ExprNode& child) { resolve_named_access_expr(child, shadowed, context); };
-    std::visit(
-        [&](auto& e) {
-            using E = std::decay_t<decltype(e)>;
-            if constexpr (std::is_same_v<E, IdentExpr>) {
-                if (e.template_slot.has_value() || shadowed.contains(e.name)) {
-                    return;
-                }
-                if (resolve_const_ident(e)) {
-                    return;
-                }
-                if (entity_names_.contains(e.name) && context != NamedAccessContext::Elsewhere) {
-                    e.resolved_entity_id = make_symbol_id(SymbolKind::Entity, current_module_id_, e.name);
-                } else if (template_names_.contains(e.name) && context == NamedAccessContext::Rule) {
-                    errors_.error(e.location, "template '" + e.name + "' is not an entity_id value; spawn it instead");
-                }
-            } else if constexpr (std::is_same_v<E, MemberExpr>) {
-                if (resolve_const_member(e, shadowed) || resolve_phase_dt(e, shadowed)) {
-                    return;
-                }
-                if (!resolve_named_access_chain(e, shadowed, context)) {
-                    walk(*e.object);
-                }
-            } else if constexpr (std::is_same_v<E, UnaryExpr>) {
-                walk(*e.operand);
-            } else if constexpr (std::is_same_v<E, BinaryExpr>) {
-                walk(*e.left);
-                walk(*e.right);
-            } else if constexpr (std::is_same_v<E, CallExpr>) {
-                if (!std::holds_alternative<IdentExpr>(e.callee->expr)) {
-                    walk(*e.callee);
-                }
-                std::ranges::for_each(e.args, [&](auto& arg) { walk(*arg); });
-            } else if constexpr (std::is_same_v<E, MatchExpr>) {
-                walk(*e.subject);
-                for (auto& arm : e.arms) {
-                    walk(*arm.pattern);
-                    walk(*arm.body);
-                }
-            } else if constexpr (std::is_same_v<E, IfExpr>) {
-                walk(*e.condition);
-                walk(*e.then_expr);
-                walk(*e.else_expr);
-            } else if constexpr (std::is_same_v<E, ListExpr>) {
-                std::ranges::for_each(e.elements, [&](auto& element) { walk(*element); });
-            } else if constexpr (std::is_same_v<E, SpawnExpr>) {
-                std::ranges::for_each(e.arguments.values, [&](FieldAssignment& argument) { walk(*argument.value); });
-                resolve_named_access_entries(e.overrides, shadowed, context);
-                resolve_named_access_overrides(e.child_overrides, shadowed, context);
-            } else if constexpr (std::is_same_v<E, QueryCallExpr>) {
-                std::ranges::for_each(e.named_args, [&](FieldAssignment& argument) { walk(*argument.value); });
-            }
-        },
-        expr.expr);
+    std::visit([&](auto& e) { this->resolve_named_expression(e, shadowed, context); }, expr.expr);
 }
 
 void SemanticAnalyzer::resolve_named_access_entries(std::vector<ArchetypeTraitEntry>& entries,
@@ -5408,10 +5495,54 @@ void SemanticAnalyzer::resolve_named_access_children(std::vector<ChildArchetypeN
     }
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity) -- one arm per StmtNode kind
-void SemanticAnalyzer::resolve_named_access_stmts(std::vector<std::unique_ptr<StmtNode>>& stmts,
-                                                  std::unordered_set<std::string> shadowed,
-                                                  NamedAccessContext context) {
+void SemanticAnalyzer::resolve_named_assignment(VarAssign& s,
+                                                const std::unordered_set<std::string>& shadowed,
+                                                NamedAccessContext context) {
+    if (s.path.empty() || shadowed.contains(s.name)) {
+        return;
+    }
+    if (!entity_names_.contains(s.name) && !imports_.modules.contains(s.name)) {
+        return;
+    }
+    std::vector<std::string> chain{s.name};
+    chain.insert(chain.end(), s.path.begin(), s.path.end());
+    if (auto path = resolve_named_path(chain, context, s.location); path.has_value()) {
+        s.named_target = std::move(path->trait);
+    }
+}
+
+void SemanticAnalyzer::resolve_named_block(std::vector<std::unique_ptr<StmtNode>>& body,
+                                           const std::unordered_set<std::string>& shadowed,
+                                           NamedAccessContext context,
+                                           const std::string* bound) {
+    auto inner = shadowed;
+    if (bound != nullptr) {
+        inner.insert(*bound);
+    }
+    resolve_named_access_stmts(body, std::move(inner), context);
+}
+
+void SemanticAnalyzer::resolve_named_match(MatchStmt& s,
+                                           std::unordered_set<std::string>& shadowed,
+                                           NamedAccessContext context) {
+    const auto walk = [&](const std::unique_ptr<ExprNode>& expression) {
+        if (expression != nullptr) {
+            resolve_named_access_expr(*expression, shadowed, context);
+        }
+    };
+    walk(s.subject);
+    for (auto& arm : s.arms) {
+        if (!arm.resolved_trait_id.has_value()) {
+            walk(arm.pattern);
+        }
+        resolve_named_block(arm.body, shadowed, context, arm.alias.has_value() ? &*arm.alias : nullptr);
+    }
+}
+
+template <typename S>
+void SemanticAnalyzer::resolve_named_statement(S& s,
+                                               std::unordered_set<std::string>& shadowed,
+                                               NamedAccessContext context) {
     const auto walk = [&](const std::unique_ptr<ExprNode>& expr) {
         if (expr != nullptr) {
             resolve_named_access_expr(*expr, shadowed, context);
@@ -5426,78 +5557,64 @@ void SemanticAnalyzer::resolve_named_access_stmts(std::vector<std::unique_ptr<St
         std::ranges::for_each(fields, [&](const FieldAssignment& field) { walk(field.value); });
     };
     const auto walk_block = [&](std::vector<std::unique_ptr<StmtNode>>& body, const std::string* bound) {
-        auto inner = shadowed;
-        if (bound != nullptr) {
-            inner.insert(*bound);
-        }
-        resolve_named_access_stmts(body, std::move(inner), context);
+        resolve_named_block(body, shadowed, context, bound);
     };
-    for (auto& stmt : stmts) {
-        std::visit(
-            [&](auto& s) {
-                using S = std::decay_t<decltype(s)>;
-                if constexpr (std::is_same_v<S, LetStmt>) {
-                    walk(s.value);
-                    shadowed.insert(s.name);
-                } else if constexpr (std::is_same_v<S, VarAssign>) {
-                    walk(s.value);
-                    if (s.path.empty() || shadowed.contains(s.name)) {
-                        return;
-                    }
-                    if (!entity_names_.contains(s.name) && !imports_.modules.contains(s.name)) {
-                        return;
-                    }
-                    std::vector<std::string> chain{s.name};
-                    chain.insert(chain.end(), s.path.begin(), s.path.end());
-                    if (auto path = resolve_named_path(chain, context, s.location); path.has_value()) {
-                        s.named_target = std::move(path->trait);
-                    }
-                } else if constexpr (std::is_same_v<S, EmitStmt>) {
-                    walk_optional(s.target);
-                    walk_fields(s.payload);
-                } else if constexpr (std::is_same_v<S, SpawnStmt>) {
-                    walk_fields(s.arguments.values);
-                    resolve_named_access_entries(s.overrides, shadowed, context);
-                    resolve_named_access_overrides(s.child_overrides, shadowed, context);
-                } else if constexpr (std::is_same_v<S, DestroyStmt> || std::is_same_v<S, RemoveTraitStmt>) {
-                    walk_optional(s.target_expr);
-                } else if constexpr (std::is_same_v<S, AddTraitStmt> || std::is_same_v<S, ProjectTraitStmt>) {
-                    walk_fields(s.args);
-                    walk_optional(s.target_expr);
-                } else if constexpr (std::is_same_v<S, SetTraitStmt>) {
-                    walk_fields(s.args);
-                    walk(s.target_expr);
-                } else if constexpr (std::is_same_v<S, ReturnStmt>) {
-                    walk_optional(s.value);
-                } else if constexpr (std::is_same_v<S, ExprStmt>) {
-                    walk(s.expr);
-                } else if constexpr (std::is_same_v<S, IfStmt>) {
-                    walk(s.condition);
-                    walk_block(s.then_body, nullptr);
-                    for (auto& branch : s.else_if_branches) {
-                        walk(branch.condition);
-                        walk_block(branch.body, nullptr);
-                    }
-                    walk_block(s.else_body, nullptr);
-                } else if constexpr (std::is_same_v<S, ForeachStmt>) {
-                    walk(s.iterable);
-                    walk_block(s.body, &s.var_name);
-                } else if constexpr (std::is_same_v<S, MatchStmt>) {
-                    walk(s.subject);
-                    for (auto& arm : s.arms) {
-                        if (!arm.resolved_trait_id.has_value()) {
-                            walk(arm.pattern);
-                        }
-                        walk_block(arm.body, arm.alias.has_value() ? &*arm.alias : nullptr);
-                    }
-                }
-            },
-            stmt->stmt);
+    if constexpr (std::is_same_v<S, LetStmt>) {
+        walk(s.value);
+        shadowed.insert(s.name);
+    } else if constexpr (std::is_same_v<S, VarAssign>) {
+        walk(s.value);
+        resolve_named_assignment(s, shadowed, context);
+    } else if constexpr (std::is_same_v<S, EmitStmt>) {
+        walk_optional(s.target);
+        walk_fields(s.payload);
+    } else if constexpr (std::is_same_v<S, SpawnStmt>) {
+        walk_fields(s.arguments.values);
+        resolve_named_access_entries(s.overrides, shadowed, context);
+        resolve_named_access_overrides(s.child_overrides, shadowed, context);
+    } else if constexpr (std::is_same_v<S, DestroyStmt> || std::is_same_v<S, RemoveTraitStmt>) {
+        walk_optional(s.target_expr);
+    } else if constexpr (std::is_same_v<S, AddTraitStmt> || std::is_same_v<S, ProjectTraitStmt>) {
+        walk_fields(s.args);
+        walk_optional(s.target_expr);
+    } else if constexpr (std::is_same_v<S, SetTraitStmt>) {
+        walk_fields(s.args);
+        walk(s.target_expr);
+    } else if constexpr (std::is_same_v<S, ReturnStmt>) {
+        walk_optional(s.value);
+    } else if constexpr (std::is_same_v<S, ExprStmt>) {
+        walk(s.expr);
+    } else if constexpr (std::is_same_v<S, IfStmt>) {
+        walk(s.condition);
+        walk_block(s.then_body, nullptr);
+        for (auto& branch : s.else_if_branches) {
+            walk(branch.condition);
+            walk_block(branch.body, nullptr);
+        }
+        walk_block(s.else_body, nullptr);
+    } else if constexpr (std::is_same_v<S, ForeachStmt>) {
+        walk(s.iterable);
+        walk_block(s.body, &s.var_name);
+    } else if constexpr (std::is_same_v<S, MatchStmt>) {
+        resolve_named_match(s, shadowed, context);
     }
 }
 
-void SemanticAnalyzer::validate_external_handler_contracts(ProgramNode& program) {
-    const auto valid_effect_domain = [](const std::string& domain) {
+void SemanticAnalyzer::resolve_named_access_stmts(std::vector<std::unique_ptr<StmtNode>>& stmts,
+                                                  std::unordered_set<std::string> shadowed,
+                                                  NamedAccessContext context) {
+    for (auto& stmt : stmts) {
+        std::visit([&](auto& s) { this->resolve_named_statement(s, shadowed, context); }, stmt->stmt);
+    }
+}
+
+struct SemanticAnalyzer::ExternalContractValidator {
+    SemanticAnalyzer* analyzer = nullptr;
+    ExternRuleNode* rule;
+    std::unordered_map<std::string, SymbolId> aliases;
+    std::unordered_set<SymbolId> selected_traits;
+
+    static bool valid_effect_domain(const std::string& domain) {
         if (domain.empty() || domain.front() == '.' || domain.back() == '.') {
             return false;
         }
@@ -5510,16 +5627,184 @@ void SemanticAnalyzer::validate_external_handler_contracts(ProgramNode& program)
                 at_segment_start = true;
                 continue;
             }
-            if (at_segment_start ? !std::isalpha(ch) && ch != '_' : !std::isalnum(ch) && ch != '_') {
+            if (at_segment_start ? std::isalpha(ch) == 0 && ch != '_' : std::isalnum(ch) == 0 && ch != '_') {
                 return false;
             }
             at_segment_start = false;
         }
         return !at_segment_start;
-    };
+    }
 
-    for (auto& decl : program.declarations) {
-        auto* rule = std::get_if<ExternRuleNode>(&decl);
+    void add_filter_aliases(const FilterClause& clause) {
+        for (const auto& entry : clause.entries) {
+            auto symbol = entry.resolved_trait_id.has_value()
+                              ? entry.resolved_trait_id
+                              : analyzer->try_resolve_trait_ref_to_symbol(entry.qualified_name);
+            if (!symbol.has_value()) {
+                continue;
+            }
+            const auto dot = entry.qualified_name.rfind('.');
+            aliases[dot == std::string::npos ? entry.qualified_name : entry.qualified_name.substr(dot + 1)] = *symbol;
+            if (entry.alias.has_value()) {
+                aliases[*entry.alias] = *symbol;
+            }
+        }
+        for (const auto& name : clause.trait_names) {
+            if (auto symbol = analyzer->try_resolve_trait_ref_to_symbol(name); symbol.has_value()) {
+                aliases[name] = *symbol;
+            }
+        }
+    }
+
+    void collect_selected_traits() {
+        for (const auto& entry : rule->filter.entries) {
+            const auto symbol = entry.resolved_trait_id.has_value()
+                                    ? entry.resolved_trait_id
+                                    : analyzer->try_resolve_trait_ref_to_symbol(entry.qualified_name);
+            if (symbol.has_value()) {
+                selected_traits.insert(*symbol);
+            }
+        }
+        for (const auto& name : rule->filter.trait_names) {
+            if (const auto symbol = analyzer->try_resolve_trait_ref_to_symbol(name); symbol.has_value()) {
+                selected_traits.insert(*symbol);
+            }
+        }
+    }
+
+    void resolve_traits(const std::vector<LocatedName>& entries,
+                        std::vector<SymbolId>& output,
+                        const char* clause,
+                        bool must_be_selected = false) {
+        std::unordered_set<SymbolId> seen;
+        for (const auto& entry : entries) {
+            std::optional<SymbolId> symbol;
+            if (const auto alias = aliases.find(entry.spelling); alias != aliases.end()) {
+                symbol = alias->second;
+            } else {
+                symbol = analyzer->try_resolve_trait_ref_to_symbol(entry.spelling);
+            }
+            if (!symbol.has_value()) {
+                analyzer->errors_.error(entry.location,
+                                        "unknown " + std::string(clause) + " contract entry '" + entry.spelling +
+                                            "' in extern rule '" + rule->name + "'");
+                continue;
+            }
+            if (!seen.insert(*symbol).second) {
+                analyzer->errors_.error(
+                    entry.location,
+                    "duplicate " + std::string(clause) + " contract entry '" + make_canonical_id(*symbol) + "'");
+                continue;
+            }
+            if (must_be_selected && !selected_traits.contains(*symbol)) {
+                analyzer->errors_.error(entry.location,
+                                        std::string(clause) + " contract entry '" + make_canonical_id(*symbol) +
+                                            "' must be selected by extern rule '" + rule->name + "' filter");
+                continue;
+            }
+            output.push_back(*symbol);
+        }
+    }
+
+    void resolve_emits(ExternHandlerNode& handler) const {
+        std::unordered_set<SymbolId> emitted;
+        for (const auto& entry : handler.emits) {
+            auto symbol = analyzer->try_resolve_event_ref_to_symbol(entry.spelling);
+            if (!symbol.has_value()) {
+                analyzer->errors_.error(entry.location, "unknown emits contract event '" + entry.spelling + "'");
+                continue;
+            }
+            if (!emitted.insert(*symbol).second) {
+                analyzer->errors_.error(entry.location,
+                                        "duplicate emits contract entry '" + make_canonical_id(*symbol) + "'");
+                continue;
+            }
+            handler.resolved_emits.push_back(*symbol);
+        }
+    }
+
+    void resolve_commands(ExternHandlerNode& handler) const {
+        std::unordered_set<std::string> commands;
+        for (auto& command : handler.commands) {
+            std::optional<SymbolId> target;
+            if (command.kind == HandlerCommandKind::Destroy) {
+                if (command.target.has_value()) {
+                    analyzer->errors_.error(command.location, "destroy command must not name a target");
+                }
+            } else if (!command.target.has_value()) {
+                analyzer->errors_.error(
+                    command.location,
+                    std::string(handler_command_kind_name(command.kind)) + " command requires a target");
+            } else if (command.kind == HandlerCommandKind::Spawn) {
+                target = analyzer->try_resolve_ref_of_kind(command.target->spelling, {SymbolKind::Template});
+                if (!target.has_value()) {
+                    analyzer->errors_.error(
+                        command.target->location,
+                        "spawn command target '" + command.target->spelling + "' is not a template");
+                }
+            } else {
+                target = analyzer->try_resolve_trait_ref_to_symbol(command.target->spelling);
+                if (!target.has_value()) {
+                    analyzer->errors_.error(command.target->location,
+                                            std::string(handler_command_kind_name(command.kind)) + " command target '" +
+                                                command.target->spelling + "' is not a trait");
+                }
+            }
+            command.resolved_target_id = target;
+            const auto key             = std::string(handler_command_kind_name(command.kind)) +
+                                         (target.has_value() ? ":" + make_canonical_id(*target) : "");
+            if (!commands.insert(key).second) {
+                analyzer->errors_.error(command.location, "duplicate commands contract entry '" + key + "'");
+            }
+        }
+    }
+
+    void resolve_effects(ExternHandlerNode& handler) const {
+        std::unordered_set<std::string> effects;
+        for (const auto& entry : handler.effects) {
+            if (!valid_effect_domain(entry.spelling)) {
+                analyzer->errors_.error(entry.location, "invalid effect domain '" + entry.spelling + "'");
+                continue;
+            }
+            if (!effects.insert(entry.spelling).second) {
+                analyzer->errors_.error(entry.location, "duplicate effects contract entry '" + entry.spelling + "'");
+                continue;
+            }
+            handler.resolved_effects.push_back(entry.spelling);
+        }
+    }
+
+    void validate_handler(ExternHandlerNode& handler) {
+        handler.resolved_reads.clear();
+        handler.resolved_writes.clear();
+        handler.resolved_projects.clear();
+        handler.resolved_emits.clear();
+        handler.resolved_effects.clear();
+
+        resolve_traits(handler.reads, handler.resolved_reads, "reads");
+        resolve_traits(handler.writes, handler.resolved_writes, "writes");
+        resolve_traits(handler.projects, handler.resolved_projects, "projects", true);
+
+        const std::unordered_set<SymbolId> durable_writes(handler.resolved_writes.begin(),
+                                                          handler.resolved_writes.end());
+        for (const auto& projected : handler.resolved_projects) {
+            if (durable_writes.contains(projected)) {
+                analyzer->errors_.error(handler.location,
+                                        "trait '" + make_canonical_id(projected) +
+                                            "' cannot be both a writes and projects contract entry in extern rule '" +
+                                            rule->name + "'");
+            }
+        }
+
+        resolve_emits(handler);
+        resolve_commands(handler);
+        resolve_effects(handler);
+    }
+};
+
+void SemanticAnalyzer::validate_external_handler_contracts(ProgramNode& program) {
+    for (auto& declaration : program.declarations) {
+        auto* rule = std::get_if<ExternRuleNode>(&declaration);
         if (rule == nullptr) {
             continue;
         }
@@ -5528,162 +5813,12 @@ void SemanticAnalyzer::validate_external_handler_contracts(ProgramNode& program)
                           "extern rule '" + rule->name + "' requires at least one external handler contract");
             continue;
         }
-
-        std::unordered_map<std::string, SymbolId> aliases;
-        const auto add_filter_aliases = [this, &aliases](const FilterClause& clause) {
-            for (const auto& entry : clause.entries) {
-                auto symbol = entry.resolved_trait_id.has_value()
-                                  ? entry.resolved_trait_id
-                                  : try_resolve_trait_ref_to_symbol(entry.qualified_name);
-                if (!symbol.has_value()) {
-                    continue;
-                }
-                const auto dot = entry.qualified_name.rfind('.');
-                aliases[dot == std::string::npos ? entry.qualified_name : entry.qualified_name.substr(dot + 1)] =
-                    *symbol;
-                if (entry.alias.has_value()) {
-                    aliases[*entry.alias] = *symbol;
-                }
-            }
-            for (const auto& name : clause.trait_names) {
-                if (auto symbol = try_resolve_trait_ref_to_symbol(name); symbol.has_value()) {
-                    aliases[name] = *symbol;
-                }
-            }
-        };
-        add_filter_aliases(rule->filter);
-        add_filter_aliases(rule->exclude);
-
-        std::unordered_set<SymbolId> selected_traits;
-        for (const auto& entry : rule->filter.entries) {
-            const auto symbol = entry.resolved_trait_id.has_value()
-                                    ? entry.resolved_trait_id
-                                    : try_resolve_trait_ref_to_symbol(entry.qualified_name);
-            if (symbol.has_value()) {
-                selected_traits.insert(*symbol);
-            }
-        }
-        for (const auto& name : rule->filter.trait_names) {
-            if (const auto symbol = try_resolve_trait_ref_to_symbol(name); symbol.has_value()) {
-                selected_traits.insert(*symbol);
-            }
-        }
-
+        ExternalContractValidator validator{.analyzer = this, .rule = rule, .aliases = {}, .selected_traits = {}};
+        validator.add_filter_aliases(rule->filter);
+        validator.add_filter_aliases(rule->exclude);
+        validator.collect_selected_traits();
         for (auto& handler : rule->handlers) {
-            handler.resolved_reads.clear();
-            handler.resolved_writes.clear();
-            handler.resolved_projects.clear();
-            handler.resolved_emits.clear();
-            handler.resolved_effects.clear();
-
-            const auto resolve_traits = [this, &aliases, &rule, &selected_traits](
-                                            const std::vector<LocatedName>& entries,
-                                            std::vector<SymbolId>& output,
-                                            const char* clause,
-                                            bool must_be_selected = false) {
-                std::unordered_set<SymbolId> seen;
-                for (const auto& entry : entries) {
-                    std::optional<SymbolId> symbol;
-                    if (const auto alias = aliases.find(entry.spelling); alias != aliases.end()) {
-                        symbol = alias->second;
-                    } else {
-                        symbol = try_resolve_trait_ref_to_symbol(entry.spelling);
-                    }
-                    if (!symbol.has_value()) {
-                        errors_.error(entry.location,
-                                      "unknown " + std::string(clause) + " contract entry '" + entry.spelling +
-                                          "' in extern rule '" + rule->name + "'");
-                        continue;
-                    }
-                    if (!seen.insert(*symbol).second) {
-                        errors_.error(entry.location,
-                                      "duplicate " + std::string(clause) + " contract entry '" +
-                                          make_canonical_id(*symbol) + "'");
-                        continue;
-                    }
-                    if (must_be_selected && !selected_traits.contains(*symbol)) {
-                        errors_.error(entry.location,
-                                      std::string(clause) + " contract entry '" + make_canonical_id(*symbol) +
-                                          "' must be selected by extern rule '" + rule->name + "' filter");
-                        continue;
-                    }
-                    output.push_back(*symbol);
-                }
-            };
-            resolve_traits(handler.reads, handler.resolved_reads, "reads");
-            resolve_traits(handler.writes, handler.resolved_writes, "writes");
-            resolve_traits(handler.projects, handler.resolved_projects, "projects", true);
-
-            const std::unordered_set<SymbolId> durable_writes(handler.resolved_writes.begin(),
-                                                              handler.resolved_writes.end());
-            for (const auto& projected : handler.resolved_projects) {
-                if (durable_writes.contains(projected)) {
-                    errors_.error(handler.location,
-                                  "trait '" + make_canonical_id(projected) +
-                                      "' cannot be both a writes and projects contract entry in extern rule '" +
-                                      rule->name + "'");
-                }
-            }
-
-            std::unordered_set<SymbolId> emitted;
-            for (const auto& entry : handler.emits) {
-                auto symbol = try_resolve_event_ref_to_symbol(entry.spelling);
-                if (!symbol.has_value()) {
-                    errors_.error(entry.location, "unknown emits contract event '" + entry.spelling + "'");
-                    continue;
-                }
-                if (!emitted.insert(*symbol).second) {
-                    errors_.error(entry.location,
-                                  "duplicate emits contract entry '" + make_canonical_id(*symbol) + "'");
-                    continue;
-                }
-                handler.resolved_emits.push_back(*symbol);
-            }
-
-            std::unordered_set<std::string> commands;
-            for (auto& command : handler.commands) {
-                std::optional<SymbolId> target;
-                if (command.kind == HandlerCommandKind::Destroy) {
-                    if (command.target.has_value()) {
-                        errors_.error(command.location, "destroy command must not name a target");
-                    }
-                } else if (!command.target.has_value()) {
-                    errors_.error(command.location,
-                                  std::string(handler_command_kind_name(command.kind)) + " command requires a target");
-                } else if (command.kind == HandlerCommandKind::Spawn) {
-                    target = try_resolve_ref_of_kind(command.target->spelling, {SymbolKind::Template});
-                    if (!target.has_value()) {
-                        errors_.error(command.target->location,
-                                      "spawn command target '" + command.target->spelling + "' is not a template");
-                    }
-                } else {
-                    target = try_resolve_trait_ref_to_symbol(command.target->spelling);
-                    if (!target.has_value()) {
-                        errors_.error(command.target->location,
-                                      std::string(handler_command_kind_name(command.kind)) + " command target '" +
-                                          command.target->spelling + "' is not a trait");
-                    }
-                }
-                command.resolved_target_id = target;
-                const auto key             = std::string(handler_command_kind_name(command.kind)) +
-                                             (target.has_value() ? ":" + make_canonical_id(*target) : "");
-                if (!commands.insert(key).second) {
-                    errors_.error(command.location, "duplicate commands contract entry '" + key + "'");
-                }
-            }
-
-            std::unordered_set<std::string> effects;
-            for (const auto& entry : handler.effects) {
-                if (!valid_effect_domain(entry.spelling)) {
-                    errors_.error(entry.location, "invalid effect domain '" + entry.spelling + "'");
-                    continue;
-                }
-                if (!effects.insert(entry.spelling).second) {
-                    errors_.error(entry.location, "duplicate effects contract entry '" + entry.spelling + "'");
-                    continue;
-                }
-                handler.resolved_effects.push_back(entry.spelling);
-            }
+            validator.validate_handler(handler);
         }
     }
 }
@@ -6577,11 +6712,12 @@ std::optional<SemanticAnalyzer::PatternValue> SemanticAnalyzer::match_pattern_va
         return PatternValue{.type = make_resolved_user_type(TypeKind::Enum, member->resolved_enum_member->enum_id),
                             .key  = member->resolved_enum_member->member};
     }
-    const auto* ident  = std::get_if<IdentExpr>(&pattern.expr);
-    const auto* member = std::get_if<MemberExpr>(&pattern.expr);
-    const auto const_id = ident != nullptr    ? ident->resolved_const_id
-                          : member != nullptr ? member->resolved_const_id
-                                              : std::nullopt;
+    std::optional<SymbolId> const_id;
+    if (const auto* ident = std::get_if<IdentExpr>(&pattern.expr)) {
+        const_id = ident->resolved_const_id;
+    } else if (const auto* member = std::get_if<MemberExpr>(&pattern.expr)) {
+        const_id = member->resolved_const_id;
+    }
     if (!const_id.has_value()) {
         return std::nullopt;
     }
@@ -6643,7 +6779,7 @@ void SemanticAnalyzer::check_value_patterns(const std::vector<const ExprNode*>& 
             continue;
         }
         const auto value = match_pattern_value(pattern);
-        if (!check_match_pattern_type(value, subject_type, pattern)) {
+        if (!check_match_pattern_type(value, subject_type, pattern) || !value.has_value()) {
             continue;
         }
         const auto spelling = pattern_spelling(pattern);
@@ -7200,6 +7336,162 @@ void SemanticAnalyzer::walk_expression_reads(  // NOLINT(readability-function-co
         expr.expr);
 }
 
+struct SemanticAnalyzer::HandlerBodyVisitor {
+    const SemanticAnalyzer* analyzer = nullptr;
+    LocalNames* locals;
+    InferredHandlerContract* contract;
+    std::reference_wrapper<const std::function<void(const ExprNode&, const LocalNames&)>> visit_expr;
+    std::reference_wrapper<const std::function<void(const std::vector<ChildOverrideNode>&, const LocalNames&)>>
+        visit_child_overrides;
+    std::reference_wrapper<const std::function<void(const std::vector<std::unique_ptr<StmtNode>>&, LocalNames)>>
+        visit_stmts;
+    std::reference_wrapper<const std::function<bool(const ExprNode&, const LocalNames&)>> resolve_read;
+    std::reference_wrapper<const std::function<void(const VarAssign&, const LocalNames&)>> handle_var_assign;
+    std::reference_wrapper<const std::function<void(const SymbolId&)>> on_project_trait;
+
+    template <typename Node>
+    void operator()(const Node& /*node*/) const {}
+
+    void operator()(const LetStmt& node) const {
+        visit_expr(*node.value, *locals);
+        locals->insert(node.name);
+    }
+
+    void operator()(const VarAssign& node) const {
+        visit_expr(*node.value, *locals);
+        if (node.named_target.has_value()) {
+            record_named_write(*contract,
+                               *node.named_target,
+                               segment_at(named_target_fields(node), 0),
+                               analyzer->find_resolved_trait(node.named_target->trait));
+        } else {
+            handle_var_assign(node, *locals);
+        }
+    }
+
+    void operator()(const EmitStmt& node) const {
+        if (node.resolved_event_id.has_value()) {
+            contract->emits.insert(*node.resolved_event_id);
+        }
+        if (node.target.has_value()) {
+            visit_expr(**node.target, *locals);
+        }
+        for (const auto& field : node.payload) {
+            visit_expr(*field.value, *locals);
+        }
+    }
+
+    void operator()(const SpawnStmt& node) const {
+        add_contract_command(*contract, HandlerCommandKind::Spawn, node.resolved_template_id);
+        for (const auto& argument : node.arguments.values) {
+            visit_expr(*argument.value, *locals);
+        }
+        for (const auto& override_entry : node.overrides) {
+            for (const auto& field : override_entry.assignments) {
+                visit_expr(*field.value, *locals);
+            }
+        }
+        visit_child_overrides(node.child_overrides, *locals);
+    }
+
+    void operator()(const DestroyStmt& node) const {
+        add_contract_command(*contract, HandlerCommandKind::Destroy, std::nullopt);
+        if (node.target_expr.has_value()) {
+            visit_expr(**node.target_expr, *locals);
+        }
+    }
+
+    void operator()(const AddTraitStmt& node) const {
+        add_contract_command(*contract, HandlerCommandKind::Add, node.resolved_trait_id);
+        analyzer->record_state_writes(*contract, node.resolved_trait_id);
+        for (const auto& field : node.args) {
+            visit_expr(*field.value, *locals);
+        }
+        if (node.target_expr.has_value()) {
+            visit_expr(**node.target_expr, *locals);
+        }
+    }
+
+    void operator()(const RemoveTraitStmt& node) const {
+        add_contract_command(*contract, HandlerCommandKind::Remove, node.resolved_trait_id);
+        analyzer->record_state_writes(*contract, node.resolved_trait_id);
+        if (node.target_expr.has_value()) {
+            visit_expr(**node.target_expr, *locals);
+        }
+    }
+
+    void operator()(const SetTraitStmt& node) const {
+        // The patch lands after the commit, so it is a command, not a write.
+        add_contract_command(*contract, HandlerCommandKind::Set, node.resolved_trait_id);
+        if (node.target_expr != nullptr) {
+            visit_expr(*node.target_expr, *locals);
+        }
+        for (const auto& field : node.args) {
+            visit_expr(*field.value, *locals);
+        }
+    }
+
+    void operator()(const ProjectTraitStmt& node) const {
+        if (node.resolved_trait_id.has_value()) {
+            on_project_trait(*node.resolved_trait_id);
+        }
+        for (const auto& field : node.args) {
+            visit_expr(*field.value, *locals);
+        }
+        if (node.target_expr.has_value()) {
+            visit_expr(**node.target_expr, *locals);
+        }
+    }
+
+    void operator()(const ReturnStmt& node) const {
+        if (node.value.has_value()) {
+            visit_expr(**node.value, *locals);
+        }
+    }
+
+    void operator()(const ExprStmt& node) const {
+        visit_expr(*node.expr, *locals);
+    }
+
+    void operator()(const IfStmt& node) const {
+        visit_expr(*node.condition, *locals);
+        visit_stmts(node.then_body, *locals);
+        for (const auto& branch : node.else_if_branches) {
+            visit_expr(*branch.condition, *locals);
+            visit_stmts(branch.body, *locals);
+        }
+        visit_stmts(node.else_body, *locals);
+    }
+
+    void operator()(const ForeachStmt& node) const {
+        visit_expr(*node.iterable, *locals);
+        auto loop_locals = *locals;
+        loop_locals.insert(node.var_name);
+        visit_stmts(node.body, std::move(loop_locals));
+    }
+
+    void operator()(const MatchStmt& node) const {
+        visit_expr(*node.subject, *locals);
+        for (const auto& arm : node.arms) {
+            if (node.kind == MatchKind::Trait && arm.resolved_trait_id.has_value()) {
+                record_read(*contract, *arm.resolved_trait_id, std::nullopt, nullptr);
+            }
+            if (node.kind == MatchKind::Value) {
+                visit_expr(*arm.pattern, *locals);
+            }
+            if (analyzer->walk_state_arm(
+                    node, arm, *locals, *contract, resolve_read, handle_var_assign, on_project_trait)) {
+                continue;
+            }
+            auto arm_locals = *locals;
+            if (arm.alias.has_value()) {
+                arm_locals.insert(*arm.alias);
+            }
+            visit_stmts(arm.body, std::move(arm_locals));
+        }
+    }
+};
+
 void SemanticAnalyzer::walk_handler_body(  // NOLINT(readability-function-cognitive-complexity) -- the single
                                            // consolidated home for what used to be two independently-duplicated AST
                                            // walkers; see design.md task 3.1
@@ -7209,13 +7501,10 @@ void SemanticAnalyzer::walk_handler_body(  // NOLINT(readability-function-cognit
     const std::function<bool(const ExprNode&, const LocalNames&)>& resolve_read,
     const std::function<void(const VarAssign&, const LocalNames&)>& handle_var_assign,
     const std::function<void(const SymbolId&)>& on_project_trait) const {
-    auto add_command = [&contract](HandlerCommandKind kind, std::optional<SymbolId> target) {
-        add_contract_command(contract, kind, std::move(target));
-    };
-
     std::function<void(const std::vector<ChildOverrideNode>&, const LocalNames&)> visit_child_overrides;
     std::function<void(const std::vector<std::unique_ptr<StmtNode>>&, LocalNames)> visit_stmts;
-    auto visit_expr = [&](const ExprNode& expr, const LocalNames& locals) {
+    const std::function<void(const ExprNode&, const LocalNames&)> visit_expr = [&](const ExprNode& expr,
+                                                                                   const LocalNames& locals) {
         walk_expression_reads(expr, locals, contract, resolve_read);
     };
     visit_child_overrides = [&](const std::vector<ChildOverrideNode>& overrides, const LocalNames& locals) {
@@ -7230,123 +7519,16 @@ void SemanticAnalyzer::walk_handler_body(  // NOLINT(readability-function-cognit
     };
     visit_stmts = [&](const std::vector<std::unique_ptr<StmtNode>>& stmts, LocalNames locals) {
         for (const auto& stmt : stmts) {
-            std::visit(
-                [&](const auto& node) {
-                    using S = std::decay_t<decltype(node)>;
-                    if constexpr (std::is_same_v<S, LetStmt>) {
-                        visit_expr(*node.value, locals);
-                        locals.insert(node.name);
-                    } else if constexpr (std::is_same_v<S, VarAssign>) {
-                        visit_expr(*node.value, locals);
-                        if (node.named_target.has_value()) {
-                            record_named_write(contract,
-                                               *node.named_target,
-                                               segment_at(named_target_fields(node), 0),
-                                               find_resolved_trait(node.named_target->trait));
-                        } else {
-                            handle_var_assign(node, locals);
-                        }
-                    } else if constexpr (std::is_same_v<S, EmitStmt>) {
-                        if (node.resolved_event_id.has_value()) {
-                            contract.emits.insert(*node.resolved_event_id);
-                        }
-                        if (node.target.has_value()) {
-                            visit_expr(**node.target, locals);
-                        }
-                        for (const auto& field : node.payload) {
-                            visit_expr(*field.value, locals);
-                        }
-                    } else if constexpr (std::is_same_v<S, SpawnStmt>) {
-                        add_command(HandlerCommandKind::Spawn, node.resolved_template_id);
-                        for (const auto& argument : node.arguments.values) {
-                            visit_expr(*argument.value, locals);
-                        }
-                        for (const auto& override_entry : node.overrides) {
-                            for (const auto& field : override_entry.assignments) {
-                                visit_expr(*field.value, locals);
-                            }
-                        }
-                        visit_child_overrides(node.child_overrides, locals);
-                    } else if constexpr (std::is_same_v<S, DestroyStmt>) {
-                        add_command(HandlerCommandKind::Destroy, std::nullopt);
-                        if (node.target_expr.has_value()) {
-                            visit_expr(**node.target_expr, locals);
-                        }
-                    } else if constexpr (std::is_same_v<S, AddTraitStmt>) {
-                        add_command(HandlerCommandKind::Add, node.resolved_trait_id);
-                        record_state_writes(contract, node.resolved_trait_id);
-                        for (const auto& field : node.args) {
-                            visit_expr(*field.value, locals);
-                        }
-                        if (node.target_expr.has_value()) {
-                            visit_expr(**node.target_expr, locals);
-                        }
-                    } else if constexpr (std::is_same_v<S, RemoveTraitStmt>) {
-                        add_command(HandlerCommandKind::Remove, node.resolved_trait_id);
-                        record_state_writes(contract, node.resolved_trait_id);
-                        if (node.target_expr.has_value()) {
-                            visit_expr(**node.target_expr, locals);
-                        }
-                    } else if constexpr (std::is_same_v<S, SetTraitStmt>) {
-                        // The patch lands after the commit, so it is a command, not a write.
-                        add_command(HandlerCommandKind::Set, node.resolved_trait_id);
-                        if (node.target_expr != nullptr) {
-                            visit_expr(*node.target_expr, locals);
-                        }
-                        for (const auto& field : node.args) {
-                            visit_expr(*field.value, locals);
-                        }
-                    } else if constexpr (std::is_same_v<S, ProjectTraitStmt>) {
-                        if (node.resolved_trait_id.has_value()) {
-                            on_project_trait(*node.resolved_trait_id);
-                        }
-                        for (const auto& field : node.args) {
-                            visit_expr(*field.value, locals);
-                        }
-                        if (node.target_expr.has_value()) {
-                            visit_expr(**node.target_expr, locals);
-                        }
-                    } else if constexpr (std::is_same_v<S, ReturnStmt>) {
-                        if (node.value.has_value()) {
-                            visit_expr(**node.value, locals);
-                        }
-                    } else if constexpr (std::is_same_v<S, ExprStmt>) {
-                        visit_expr(*node.expr, locals);
-                    } else if constexpr (std::is_same_v<S, IfStmt>) {
-                        visit_expr(*node.condition, locals);
-                        visit_stmts(node.then_body, locals);
-                        for (const auto& branch : node.else_if_branches) {
-                            visit_expr(*branch.condition, locals);
-                            visit_stmts(branch.body, locals);
-                        }
-                        visit_stmts(node.else_body, locals);
-                    } else if constexpr (std::is_same_v<S, ForeachStmt>) {
-                        visit_expr(*node.iterable, locals);
-                        auto loop_locals = locals;
-                        loop_locals.insert(node.var_name);
-                        visit_stmts(node.body, std::move(loop_locals));
-                    } else if constexpr (std::is_same_v<S, MatchStmt>) {
-                        visit_expr(*node.subject, locals);
-                        for (const auto& arm : node.arms) {
-                            if (node.kind == MatchKind::Trait && arm.resolved_trait_id.has_value()) {
-                                record_read(contract, *arm.resolved_trait_id, std::nullopt, nullptr);
-                            }
-                            if (node.kind == MatchKind::Value) {
-                                visit_expr(*arm.pattern, locals);
-                            }
-                            if (walk_state_arm(
-                                    node, arm, locals, contract, resolve_read, handle_var_assign, on_project_trait)) {
-                                continue;
-                            }
-                            auto arm_locals = locals;
-                            if (arm.alias.has_value()) {
-                                arm_locals.insert(*arm.alias);
-                            }
-                            visit_stmts(arm.body, std::move(arm_locals));
-                        }
-                    }
-                },
-                stmt->stmt);
+            std::visit(HandlerBodyVisitor{.analyzer              = this,
+                                          .locals                = &locals,
+                                          .contract              = &contract,
+                                          .visit_expr            = visit_expr,
+                                          .visit_child_overrides = visit_child_overrides,
+                                          .visit_stmts           = visit_stmts,
+                                          .resolve_read          = resolve_read,
+                                          .handle_var_assign     = handle_var_assign,
+                                          .on_project_trait      = on_project_trait},
+                       stmt->stmt);
         }
     };
 
@@ -7413,6 +7595,7 @@ void SemanticAnalyzer::record_state_writes(HandlerContract& contract, const std:
 // the body.
 static std::vector<const ExprNode*> rule_clause_read_roots(const RuleNode& rule) {
     std::vector<const ExprNode*> roots;
+    roots.reserve(rule.order_by.size());
     for (const auto& key : rule.order_by) {
         roots.push_back(key.expression.get());
     }
@@ -7634,12 +7817,14 @@ void SemanticAnalyzer::record_pair_binding_write(const VarAssign& node,
 InferredHandlerContract SemanticAnalyzer::infer_pair_handler_contract(const RuleNode& rule,
                                                                       const EventHandlerNode& handler,
                                                                       const PairScope& pair_scope) const {
+    assert(rule.pairs.has_value());
+    const auto& pairs = *rule.pairs;
     InferredHandlerContract contract;
     contract.rule        = *rule.resolved_rule_id;
     contract.trigger     = *handler.resolved_trigger;
     contract.domain_kind = HandlerDomainKind::Pair;
 
-    for (const auto& binding : rule.pairs->bindings) {
+    for (const auto& binding : pairs.bindings) {
         RelationBinding relation;
         relation.name = binding.name;
         for (const auto& entry : binding.traits) {
@@ -7707,7 +7892,7 @@ InferredHandlerContract SemanticAnalyzer::infer_pair_handler_contract(const Rule
     if (handler.alias.has_value()) {
         handler_locals.insert(*handler.alias);
     }
-    for (const auto& binding : rule.pairs->bindings) {
+    for (const auto& binding : pairs.bindings) {
         handler_locals.insert(binding.name);
     }
     walk_handler_body(
@@ -8176,10 +8361,10 @@ std::optional<SemanticAnalyzer::SpatialJoinMatch> SemanticAnalyzer::try_recogniz
     // Paths: delta operands sit at {0, 0, i}, radius-sum operands at {1, 0, i}.
     const auto radius_operand = [&sum_left](const SpatialJoinResolvedArg& position) -> std::optional<std::uint8_t> {
         if (position.binding_name == sum_left->first.binding_name) {
-            return 0;
+            return std::uint8_t{0};
         }
         if (position.binding_name == sum_left->second.binding_name) {
-            return 1;
+            return std::uint8_t{1};
         }
         return std::nullopt;
     };
@@ -8293,37 +8478,37 @@ std::optional<SpatialJoinPlan> SemanticAnalyzer::recognize_spatial_join(const Ru
     return std::nullopt;
 }
 
+template <typename S>
+void SemanticAnalyzer::collect_statement_deps(const S& s, RuleDependency& dep) {
+    if constexpr (std::is_same_v<S, LetStmt> || std::is_same_v<S, VarAssign>) {
+        if constexpr (std::is_same_v<S, VarAssign>) {
+            dep.writes.insert(s.name);
+        }
+    } else if constexpr (std::is_same_v<S, EmitStmt>) {
+        dep.emits.insert(s.event_name);
+    } else if constexpr (std::is_same_v<S, ProjectTraitStmt>) {
+        dep.writes.insert(s.trait_name);
+    } else if constexpr (std::is_same_v<S, ForeachStmt>) {
+        collect_rule_deps(s.body, dep);
+    } else if constexpr (std::is_same_v<S, IfStmt>) {
+        collect_rule_deps(s.then_body, dep);
+        for (const auto& branch : s.else_if_branches) {
+            collect_rule_deps(branch.body, dep);
+        }
+        collect_rule_deps(s.else_body, dep);
+    } else if constexpr (std::is_same_v<S, MatchStmt>) {
+        for (const auto& arm : s.arms) {
+            if (s.kind == MatchKind::Trait && !arm.is_wildcard()) {
+                dep.reads.insert(arm.trait_name());
+            }
+            collect_rule_deps(arm.body, dep);
+        }
+    }
+}
+
 void SemanticAnalyzer::collect_rule_deps(const std::vector<std::unique_ptr<StmtNode>>& stmts, RuleDependency& dep) {
     for (const auto& stmt : stmts) {
-        std::visit(
-            [this, &dep](auto& s) {
-                using S = std::decay_t<decltype(s)>;
-                if constexpr (std::is_same_v<S, LetStmt> || std::is_same_v<S, VarAssign>) {
-                    if constexpr (std::is_same_v<S, VarAssign>) {
-                        dep.writes.insert(s.name);
-                    }
-                } else if constexpr (std::is_same_v<S, EmitStmt>) {
-                    dep.emits.insert(s.event_name);
-                } else if constexpr (std::is_same_v<S, ProjectTraitStmt>) {
-                    dep.writes.insert(s.trait_name);
-                } else if constexpr (std::is_same_v<S, ForeachStmt>) {
-                    collect_rule_deps(s.body, dep);
-                } else if constexpr (std::is_same_v<S, IfStmt>) {
-                    collect_rule_deps(s.then_body, dep);
-                    for (const auto& branch : s.else_if_branches) {
-                        collect_rule_deps(branch.body, dep);
-                    }
-                    collect_rule_deps(s.else_body, dep);
-                } else if constexpr (std::is_same_v<S, MatchStmt>) {
-                    for (const auto& arm : s.arms) {
-                        if (s.kind == MatchKind::Trait && !arm.is_wildcard()) {
-                            dep.reads.insert(arm.trait_name());
-                        }
-                        collect_rule_deps(arm.body, dep);
-                    }
-                }
-            },
-            stmt->stmt);
+        std::visit([this, &dep](auto& s) { collect_statement_deps(s, dep); }, stmt->stmt);
     }
 }
 
@@ -8434,6 +8619,43 @@ bool SemanticAnalyzer::resolve_archetype_template_use(const ArchetypeTemplateUse
     return false;
 }
 
+const ResolvedTrait* SemanticAnalyzer::find_qualified_trait(const std::string& name, std::size_t dot) const {
+    auto qualifier  = name.substr(0, dot);
+    auto local_name = name.substr(dot + 1);
+
+    // Local canonical ID: strip the current module prefix.
+    if (qualifier == current_module_name_) {
+        auto lit = result_.traits.find(local_name);
+        if (lit != result_.traits.end()) {
+            return &lit->second;
+        }
+    }
+
+    // Qualifier matches an alias/module in imports.
+    auto mod_it = imports_.modules.find(qualifier);
+    if (mod_it != imports_.modules.end()) {
+        auto tit = mod_it->second.traits.find(local_name);
+        if (tit != mod_it->second.traits.end()) {
+            return &tit->second;
+        }
+    }
+
+    // Full canonical ID scan: find the trait whose canonical_id matches.
+    for (const auto& [q, syms] : imports_.modules) {
+        for (const auto& [local, trait] : syms.traits) {
+            if (trait.canonical_id == name) {
+                return &trait;
+            }
+        }
+    }
+    for (const auto& [local, trait] : result_.traits) {
+        if (trait.canonical_id == name) {
+            return &trait;
+        }
+    }
+    return nullptr;
+}
+
 const ResolvedTrait* SemanticAnalyzer::find_resolved_trait(const std::string& name) const {
     auto it = result_.traits.find(name);
     if (it != result_.traits.end()) {
@@ -8442,59 +8664,22 @@ const ResolvedTrait* SemanticAnalyzer::find_resolved_trait(const std::string& na
     // Handle canonical IDs and qualified references (dotted names).
     auto dot = name.rfind('.');
     if (dot != std::string::npos) {
-        auto qualifier  = name.substr(0, dot);
-        auto local_name = name.substr(dot + 1);
-
-        // Local canonical ID: strip the current module prefix.
-        if (qualifier == current_module_name_) {
-            auto lit = result_.traits.find(local_name);
-            if (lit != result_.traits.end()) {
-                return &lit->second;
-            }
-        }
-
-        // Qualifier matches an alias/module in imports.
-        auto mod_it = imports_.modules.find(qualifier);
-        if (mod_it != imports_.modules.end()) {
-            auto tit = mod_it->second.traits.find(local_name);
-            if (tit != mod_it->second.traits.end()) {
-                return &tit->second;
-            }
-        }
-
-        // Full canonical ID scan: find the trait whose canonical_id matches.
-        for (const auto& [q, syms] : imports_.modules) {
-            for (const auto& [local, trait] : syms.traits) {
-                if (trait.canonical_id == name) {
-                    return &trait;
-                }
-            }
-        }
-        for (const auto& [local, trait] : result_.traits) {
-            if (trait.canonical_id == name) {
-                return &trait;
-            }
-        }
+        return find_qualified_trait(name, dot);
+    }
+    const auto provider = imports_.trait_providers.find(name);
+    if (provider == imports_.trait_providers.end()) {
         return nullptr;
     }
-    if (!imports_.empty()) {
-        auto pit = imports_.trait_providers.find(name);
-        if (pit != imports_.trait_providers.end()) {
-            if (const auto prelude = find_std_core_provider(imports_, pit->second)) {
-                const auto& qualifier = *prelude;
-                auto mit              = imports_.modules.find(qualifier);
-                if (mit != imports_.modules.end()) {
-                    auto tit = mit->second.traits.find(name);
-                    if (tit != mit->second.traits.end()) {
-                        return &tit->second;
-                    }
-                }
-            }
-        }
+    const auto prelude = find_std_core_provider(imports_, provider->second);
+    if (!prelude.has_value()) {
         return nullptr;
     }
-
-    return nullptr;
+    const auto module = imports_.modules.find(*prelude);
+    if (module == imports_.modules.end()) {
+        return nullptr;
+    }
+    const auto trait = module->second.traits.find(name);
+    return trait == module->second.traits.end() ? nullptr : &trait->second;
 }
 
 const ResolvedTrait* SemanticAnalyzer::find_resolved_trait(const SymbolId& symbol) const {
@@ -8562,6 +8747,18 @@ const ResolvedFunc* SemanticAnalyzer::find_resolved_func(const SymbolId& symbol)
     return nullptr;
 }
 
+const ResolvedStruct* SemanticAnalyzer::find_imported_struct(const std::string& module, const std::string& name) const {
+    for (const auto& [_, imported] : imports_.modules) {
+        if (imported.module_name != module) {
+            continue;
+        }
+        if (const auto found = imported.structs.find(name); found != imported.structs.end()) {
+            return &found->second;
+        }
+    }
+    return nullptr;
+}
+
 const ResolvedStruct* SemanticAnalyzer::find_resolved_struct(const SymbolId& symbol) const {
     if (symbol.kind != SymbolKind::Struct) {
         return nullptr;
@@ -8570,15 +8767,7 @@ const ResolvedStruct* SemanticAnalyzer::find_resolved_struct(const SymbolId& sym
         const auto found = result_.structs.find(symbol.local_name);
         return found == result_.structs.end() ? nullptr : &found->second;
     }
-    for (const auto& [_, imported] : imports_.modules) {
-        if (imported.module_name != symbol.module.name) {
-            continue;
-        }
-        if (const auto found = imported.structs.find(symbol.local_name); found != imported.structs.end()) {
-            return &found->second;
-        }
-    }
-    return nullptr;
+    return find_imported_struct(symbol.module.name, symbol.local_name);
 }
 
 std::optional<SymbolId> SemanticAnalyzer::resolve_struct_callee(const ExprNode& callee) const {
@@ -8813,12 +9002,17 @@ std::optional<ResolvedHandlerTrigger> SemanticAnalyzer::try_resolve_render_stage
     if (phase_it == result_.phases.end() || !phase_it->second.render_pass.has_value()) {
         return std::nullopt;
     }
+    const auto& pass = phase_it->second.render_pass;
+    if (!pass.has_value()) {
+        return std::nullopt;
+    }
+    const auto& render_pass = *pass;
     const auto& stage = resolved->member_segments.front();
     if (stage == "vertex") {
-        return phase_it->second.render_pass->vertex_trigger;
+        return render_pass.vertex_trigger;
     }
     if (stage == "fragment") {
-        return phase_it->second.render_pass->fragment_trigger;
+        return render_pass.fragment_trigger;
     }
     return std::nullopt;
 }
@@ -9130,7 +9324,7 @@ std::optional<ResolvedRef> SemanticAnalyzer::resolve_name_required(const std::ve
                 return;
             }
             for (const auto& qualifier : pit->second) {
-                suggestions.push_back("'" + qualifier + "." + spelled + "'");
+                suggestions.push_back(std::format("'{}.{}'", qualifier, spelled));
                 const auto* mod = find_imported_module(qualifier);
                 if (mod != nullptr && mod->module_name != qualifier) {
                     suggestions.push_back("'" + mod->module_name + "." + spelled + "'");
@@ -9246,67 +9440,71 @@ void SemanticAnalyzer::resolve_enum_member_expr(MemberExpr& member, const Source
     errors_.error(loc, "'" + wanted + "' is not a member of enum '" + canonical + "'");
 }
 
-void SemanticAnalyzer::validate_input_decl_props(const InputDeclNode& node) {
-    for (const auto& prop : node.props) {
-        const bool is_key_prop   = prop.key == "key" || prop.key == "negative" || prop.key == "positive";
-        const bool is_mouse_prop = prop.key == "mouse";
-        const bool is_gamepad    = prop.key == "gamepad";
+void SemanticAnalyzer::validate_input_property(const InputPropNode& prop, InputKind input_kind) {
+    const bool is_key_prop   = prop.key == "key" || prop.key == "negative" || prop.key == "positive";
+    const bool is_mouse_prop = prop.key == "mouse";
+    const bool is_gamepad    = prop.key == "gamepad";
 
-        if (!is_key_prop && !is_mouse_prop && !is_gamepad) {
-            if (prop.key == "invert") {
-                const auto* lit = std::get_if<LiteralExpr>(&prop.value->expr);
-                if (lit == nullptr || lit->kind != LiteralExpr::Kind::Bool) {
-                    errors_.error(prop.location, "input property 'invert' requires a bool value");
-                }
+    if (!is_key_prop && !is_mouse_prop && !is_gamepad) {
+        if (prop.key == "invert") {
+            const auto* lit = std::get_if<LiteralExpr>(&prop.value->expr);
+            if (lit == nullptr || lit->kind != LiteralExpr::Kind::Bool) {
+                errors_.error(prop.location, "input property 'invert' requires a bool value");
             }
-            continue;
         }
+        return;
+    }
 
-        std::string expected = "Key";
-        if (is_mouse_prop) {
-            expected = "MouseButton";
-        } else if (is_gamepad) {
-            expected = node.input_kind == InputKind::Button ? "GamepadButton" : "GamepadAxis";
-        }
-        const std::string expected_canonical = "std.input." + expected;
+    std::string expected = "Key";
+    if (is_mouse_prop) {
+        expected = "MouseButton";
+    } else if (is_gamepad) {
+        expected = input_kind == InputKind::Button ? "GamepadButton" : "GamepadAxis";
+    }
+    const std::string expected_canonical = "std.input." + expected;
 
-        const auto* member = std::get_if<MemberExpr>(&prop.value->expr);
-        if (member == nullptr) {
-            errors_.error(prop.location,
-                          "input property '" + prop.key + "' must reference a " + expected_canonical + " member");
-            continue;
-        }
+    const auto* member = std::get_if<MemberExpr>(&prop.value->expr);
+    if (member == nullptr) {
+        errors_.error(prop.location,
+                      "input property '" + prop.key + "' must reference a " + expected_canonical + " member");
+        return;
+    }
 
-        if (member->resolved_enum_member.has_value()) {
-            const auto& rem = *member->resolved_enum_member;
-            if (rem.enum_id.module.name != "std.input" || rem.enum_id.local_name != expected) {
-                errors_.error(prop.location,
-                              "input property '" + prop.key + "' requires a " + expected_canonical + " member, got '" +
-                                  make_canonical_id(rem.enum_id) + "." + rem.member + "'");
-            }
-            continue;
-        }
-
-        // No resolved member: produce a precise required-mode diagnostic,
-        // avoiding a duplicate when resolve_enum_member_expr already reported
-        // (known enum, unknown member).
-        auto segments = member_chain_segments(*member);
-        if (!segments.has_value() || segments->size() < 2) {
-            errors_.error(prop.location,
-                          "input property '" + prop.key + "' must reference a " + expected_canonical + " member");
-            continue;
-        }
-        auto resolved = resolve_name(*segments);
-        if (resolved.has_value()) {
-            if (resolved->symbol.kind == SymbolKind::Enum) {
-                continue;  // unknown-member error already reported by resolve_enum_member_expr
-            }
+    if (member->resolved_enum_member.has_value()) {
+        const auto& rem = *member->resolved_enum_member;
+        if (rem.enum_id.module.name != "std.input" || rem.enum_id.local_name != expected) {
             errors_.error(prop.location,
                           "input property '" + prop.key + "' requires a " + expected_canonical + " member, got '" +
-                              make_canonical_id(resolved->symbol) + "'");
-            continue;
+                              make_canonical_id(rem.enum_id) + "." + rem.member + "'");
         }
-        (void)resolve_name_required(*segments, prop.location);
+        return;
+    }
+
+    // No resolved member: produce a precise required-mode diagnostic,
+    // avoiding a duplicate when resolve_enum_member_expr already reported
+    // (known enum, unknown member).
+    auto segments = member_chain_segments(*member);
+    if (!segments.has_value() || segments->size() < 2) {
+        errors_.error(prop.location,
+                      "input property '" + prop.key + "' must reference a " + expected_canonical + " member");
+        return;
+    }
+    auto resolved = resolve_name(*segments);
+    if (resolved.has_value()) {
+        if (resolved->symbol.kind == SymbolKind::Enum) {
+            return;  // unknown-member error already reported by resolve_enum_member_expr
+        }
+        errors_.error(prop.location,
+                      "input property '" + prop.key + "' requires a " + expected_canonical + " member, got '" +
+                          make_canonical_id(resolved->symbol) + "'");
+        return;
+    }
+    (void)resolve_name_required(*segments, prop.location);
+}
+
+void SemanticAnalyzer::validate_input_decl_props(const InputDeclNode& node) {
+    for (const auto& prop : node.props) {
+        validate_input_property(prop, node.input_kind);
     }
 }
 
@@ -9353,42 +9551,28 @@ std::string SemanticAnalyzer::resolve_rule_after_ref(const std::string& ref,
 static std::optional<std::string> extract_dotted_path(const ExprNode& expr);
 
 bool SemanticAnalyzer::is_std_text_format_callee(const ExprNode& callee) const {
-    // Explicit namespace binding: qualifier.format(...), where qualifier is
-    // either the full imported module path (`std.text`) or an authored alias.
-    if (const auto* member = std::get_if<MemberExpr>(&callee.expr)) {
-        if (member->member != "format") {
-            return false;
-        }
-        auto qualifier = extract_dotted_path(*member->object);
-        if (!qualifier.has_value()) {
-            return false;
-        }
-        if (*qualifier == "std.text") {
-            return true;
-        }
-        auto import_it = imports_.modules.find(*qualifier);
-        if (import_it != imports_.modules.end() && import_it->second.module_name == "std.text") {
-            return true;
-        }
-        // Fall back to scanning UseNode declarations in the AST. This handles
-        // unit-test scenarios where the caller omits an explicit imports table
-        // but the source still has `use std.text as <qualifier>`.
-        if (result_.ast != nullptr) {
-            for (const auto& decl : result_.ast->declarations) {
-                const auto* use_node = std::get_if<UseNode>(&decl);
-                if (use_node == nullptr || use_node->module_name != "std.text") {
-                    continue;
-                }
-                if (use_node->alias.has_value() && *use_node->alias == *qualifier) {
-                    return true;
-                }
-                if (!use_node->alias.has_value() && *qualifier == "std.text") {
-                    return true;
-                }
-            }
-        }
+    const auto* member = std::get_if<MemberExpr>(&callee.expr);
+    if (member == nullptr || member->member != "format") {
+        return false;
     }
-    return false;
+    const auto qualifier = extract_dotted_path(*member->object);
+    if (!qualifier.has_value()) {
+        return false;
+    }
+    if (*qualifier == "std.text") {
+        return true;
+    }
+    const auto imported = imports_.modules.find(*qualifier);
+    if (imported != imports_.modules.end() && imported->second.module_name == "std.text") {
+        return true;
+    }
+    if (result_.ast == nullptr) {
+        return false;
+    }
+    return std::ranges::any_of(result_.ast->declarations, [&qualifier](const Declaration& declaration) {
+        const auto* use = std::get_if<UseNode>(&declaration);
+        return use != nullptr && use->module_name == "std.text" && use->alias == qualifier;
+    });
 }
 
 // ── Query expression helpers ──────────────────────────────────────────────────
@@ -9493,18 +9677,17 @@ void SemanticAnalyzer::validate_query_named_args(
     if (func_name == "raycast" && (!has_arg("origin") || !has_arg("dir") || !has_arg("max_dist"))) {
         errors_.error(qcall.location, "`raycast` requires `origin`, `dir`, and `max_dist` named arguments");
     }
-    if (func_name == "parent" || func_name == "children" || func_name == "stacking_order") {
-        if (!has_arg("of")) {
-            errors_.error(qcall.location, "`" + func_name + "` requires an `of` named argument");
-        } else {
-            auto of_it = std::ranges::find_if(qcall.named_args, [](const auto& a) { return a.name == "of"; });
-            if (of_it != qcall.named_args.end()) {
-                auto of_type = infer_expr_type(*of_it->value, filter_bindings, local_bindings, handler_event);
-                if (of_type.kind != TypeKind::EntityId && of_type.kind != TypeKind::Unknown) {
-                    errors_.error(of_it->location, "`" + func_name + "` `of` argument must be of type `entity_id`");
-                }
-            }
-        }
+    if (func_name != "parent" && func_name != "children" && func_name != "stacking_order") {
+        return;
+    }
+    const auto of = std::ranges::find_if(qcall.named_args, [](const auto& argument) { return argument.name == "of"; });
+    if (of == qcall.named_args.end()) {
+        errors_.error(qcall.location, "`" + func_name + "` requires an `of` named argument");
+        return;
+    }
+    const auto type = infer_expr_type(*of->value, filter_bindings, local_bindings, handler_event);
+    if (type.kind != TypeKind::EntityId && type.kind != TypeKind::Unknown) {
+        errors_.error(of->location, "`" + func_name + "` `of` argument must be of type `entity_id`");
     }
 }
 
@@ -9614,6 +9797,49 @@ void SemanticAnalyzer::validate_text_format_in_expr(
     }
 }
 
+template <typename S>
+void SemanticAnalyzer::validate_statement_text_format(
+    const S& s,
+    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+    std::unordered_map<std::string, TypeInfo>& locals,
+    const ResolvedStruct* handler_event) {
+    if constexpr (std::is_same_v<S, LetStmt>) {
+        validate_text_format_in_expr(*s.value, filter_bindings, locals, handler_event);
+        locals[s.name] = infer_expr_type(*s.value, filter_bindings, locals, handler_event);
+    } else if constexpr (std::is_same_v<S, VarAssign>) {
+        validate_text_format_in_expr(*s.value, filter_bindings, locals, handler_event);
+    } else if constexpr (std::is_same_v<S, ExprStmt>) {
+        validate_text_format_in_expr(*s.expr, filter_bindings, locals, handler_event);
+    } else if constexpr (std::is_same_v<S, ReturnStmt>) {
+        if (s.value) {
+            validate_text_format_in_expr(**s.value, filter_bindings, locals, handler_event);
+        }
+    } else if constexpr (std::is_same_v<S, EmitStmt>) {
+        if (s.target) {
+            validate_text_format_in_expr(**s.target, filter_bindings, locals, handler_event);
+        }
+        for (const auto& field : s.payload) {
+            validate_text_format_in_expr(*field.value, filter_bindings, locals, handler_event);
+        }
+    } else if constexpr (std::is_same_v<S, IfStmt>) {
+        validate_text_format_in_expr(*s.condition, filter_bindings, locals, handler_event);
+        validate_text_format_in_stmts(s.then_body, filter_bindings, locals, handler_event);
+        for (const auto& branch : s.else_if_branches) {
+            validate_text_format_in_expr(*branch.condition, filter_bindings, locals, handler_event);
+            validate_text_format_in_stmts(branch.body, filter_bindings, locals, handler_event);
+        }
+        validate_text_format_in_stmts(s.else_body, filter_bindings, locals, handler_event);
+    } else if constexpr (std::is_same_v<S, ForeachStmt>) {
+        validate_text_format_in_expr(*s.iterable, filter_bindings, locals, handler_event);
+        validate_text_format_in_stmts(s.body, filter_bindings, locals, handler_event);
+    } else if constexpr (std::is_same_v<S, MatchStmt>) {
+        validate_text_format_in_expr(*s.subject, filter_bindings, locals, handler_event);
+        for (const auto& arm : s.arms) {
+            validate_text_format_in_stmts(arm.body, filter_bindings, locals, handler_event);
+        }
+    }
+}
+
 void SemanticAnalyzer::validate_text_format_in_stmts(
     const std::vector<std::unique_ptr<StmtNode>>& stmts,
     const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
@@ -9622,44 +9848,7 @@ void SemanticAnalyzer::validate_text_format_in_stmts(
     auto locals = local_bindings;
     for (const auto& stmt : stmts) {
         std::visit(
-            [&](const auto& s) {
-                using S = std::decay_t<decltype(s)>;
-                if constexpr (std::is_same_v<S, LetStmt>) {
-                    validate_text_format_in_expr(*s.value, filter_bindings, locals, handler_event);
-                    locals[s.name] = infer_expr_type(*s.value, filter_bindings, locals, handler_event);
-                } else if constexpr (std::is_same_v<S, VarAssign>) {
-                    validate_text_format_in_expr(*s.value, filter_bindings, locals, handler_event);
-                } else if constexpr (std::is_same_v<S, ExprStmt>) {
-                    validate_text_format_in_expr(*s.expr, filter_bindings, locals, handler_event);
-                } else if constexpr (std::is_same_v<S, ReturnStmt>) {
-                    if (s.value) {
-                        validate_text_format_in_expr(**s.value, filter_bindings, locals, handler_event);
-                    }
-                } else if constexpr (std::is_same_v<S, EmitStmt>) {
-                    if (s.target) {
-                        validate_text_format_in_expr(**s.target, filter_bindings, locals, handler_event);
-                    }
-                    for (const auto& field : s.payload) {
-                        validate_text_format_in_expr(*field.value, filter_bindings, locals, handler_event);
-                    }
-                } else if constexpr (std::is_same_v<S, IfStmt>) {
-                    validate_text_format_in_expr(*s.condition, filter_bindings, locals, handler_event);
-                    validate_text_format_in_stmts(s.then_body, filter_bindings, locals, handler_event);
-                    for (const auto& branch : s.else_if_branches) {
-                        validate_text_format_in_expr(*branch.condition, filter_bindings, locals, handler_event);
-                        validate_text_format_in_stmts(branch.body, filter_bindings, locals, handler_event);
-                    }
-                    validate_text_format_in_stmts(s.else_body, filter_bindings, locals, handler_event);
-                } else if constexpr (std::is_same_v<S, ForeachStmt>) {
-                    validate_text_format_in_expr(*s.iterable, filter_bindings, locals, handler_event);
-                    validate_text_format_in_stmts(s.body, filter_bindings, locals, handler_event);
-                } else if constexpr (std::is_same_v<S, MatchStmt>) {
-                    validate_text_format_in_expr(*s.subject, filter_bindings, locals, handler_event);
-                    for (const auto& arm : s.arms) {
-                        validate_text_format_in_stmts(arm.body, filter_bindings, locals, handler_event);
-                    }
-                }
-            },
+            [&](const auto& s) { this->validate_statement_text_format(s, filter_bindings, locals, handler_event); },
             stmt->stmt);
     }
 }
@@ -9838,6 +10027,145 @@ TypeInfo SemanticAnalyzer::descend_vector_color_members(TypeInfo start,
     return current;
 }
 
+std::optional<TypeInfo> SemanticAnalyzer::infer_symbol_member_type(const SymbolId& symbol,
+                                                                   const TypeInfo& local_type,
+                                                                   const MemberExpr& member,
+                                                                   const SourceLocation& location,
+                                                                   const ResolvedStruct* handler_event) const {
+    switch (symbol.kind) {
+        case SymbolKind::Struct: {
+            if (symbol.module.name == current_module_name_) {
+                if (auto struct_it = result_.structs.find(symbol.local_name); struct_it != result_.structs.end()) {
+                    return find_field_type_in(struct_it->second.fields, member.member);
+                }
+            }
+            if (const auto* structure = find_imported_struct(symbol.module.name, symbol.local_name)) {
+                return find_field_type_in(structure->fields, member.member);
+            }
+            break;
+        }
+        case SymbolKind::Event: {
+            if (auto event_it = event_structs_.find(symbol.local_name); event_it != event_structs_.end()) {
+                return find_field_type_in(event_it->second.fields, member.member);
+            }
+            break;
+        }
+        case SymbolKind::Trait: {
+            if (const auto* trait = find_resolved_trait(make_canonical_id(symbol)); trait != nullptr) {
+                return find_field_type_in(trait->fields, member.member);
+            }
+            break;
+        }
+        case SymbolKind::Phase: {
+            const auto* fields = find_phase_fields(symbol);
+            const auto* field  = fields == nullptr ? nullptr : find_field_in(*fields, member.member);
+            if (field != nullptr && field->is_completion_only) {
+                errors_.error(location,
+                              "phase completion field '" + make_canonical_id(symbol) + "." + member.member +
+                                  "' is available only to downstream phases");
+            }
+            if (field != nullptr) {
+                return field->type;
+            }
+            // A render-pass stage handler's built-in-field alias (e.g.
+            // `v` in `on my_pass.vertex as v:`) is keyed under the
+            // phase's own derived trigger symbol ("my_pass__vertex"),
+            // which find_phase_fields (declared phase descriptor fields
+            // only) never sees — its real field table
+            // (build_render_stage_activation_struct's quads_*_fields())
+            // only exists on the call stack as `handler_event`.
+            if (handler_event != nullptr && local_type.name == handler_event->name) {
+                return find_field_type_in(handler_event->fields, member.member);
+            }
+            return make_unknown_type();
+        }
+        default:
+            break;
+    }
+    return std::nullopt;
+}
+
+TypeInfo SemanticAnalyzer::infer_named_struct_member_type(const std::string& type_name,
+                                                          const MemberExpr& member) const {
+    const auto dot = type_name.rfind('.');
+    if (dot != std::string::npos) {
+        // Qualified alias name ("alias.StructName") or canonical name from resolved TypeInfo.
+        const auto qualifier  = type_name.substr(0, dot);
+        const auto local_name = type_name.substr(dot + 1);
+        if (qualifier == current_module_name_) {
+            if (auto struct_it = result_.structs.find(local_name); struct_it != result_.structs.end()) {
+                return find_field_type_in(struct_it->second.fields, member.member);
+            }
+        }
+        if (auto mod_it = imports_.modules.find(qualifier); mod_it != imports_.modules.end()) {
+            if (auto s_it = mod_it->second.structs.find(local_name); s_it != mod_it->second.structs.end()) {
+                return find_field_type_in(s_it->second.fields, member.member);
+            }
+        }
+        if (const auto* structure = find_imported_struct(qualifier, local_name)) {
+            return find_field_type_in(structure->fields, member.member);
+        }
+    }
+    if (auto struct_it = result_.structs.find(type_name); struct_it != result_.structs.end()) {
+        return find_field_type_in(struct_it->second.fields, member.member);
+    }
+    if (auto event_it = event_structs_.find(type_name); event_it != event_structs_.end()) {
+        return find_field_type_in(event_it->second.fields, member.member);
+    }
+    return make_unknown_type();
+}
+
+std::optional<TypeInfo> SemanticAnalyzer::infer_pair_member_type(const std::vector<std::string>& chain,
+                                                                 const SourceLocation& location,
+                                                                 const PairScope& pair_scope) const {
+    const auto& root_name = chain.front();
+    if (!pair_scope.contains(root_name)) {
+        return std::nullopt;
+    }
+    const std::vector<std::string> segments(chain.begin() + 1, chain.end());
+    auto resolved = resolve_pair_member_chain(root_name, segments, pair_scope);
+    if (!resolved.has_value()) {
+        errors_.error(location, "'" + segments.front() + "' is unavailable on pair binding '" + root_name + "'");
+        return make_unknown_type();
+    }
+    const auto* trait = find_resolved_trait(make_canonical_id(resolved->trait_id));
+    if (resolved->consumed_segments >= segments.size()) {
+        return make_unknown_type();
+    }
+    const auto first = trait == nullptr ? make_unknown_type()
+                                        : find_field_type_in(trait->fields, segments[resolved->consumed_segments]);
+    return descend_vector_color_members(first, segments, resolved->consumed_segments + 1);
+}
+
+std::optional<TypeInfo> SemanticAnalyzer::infer_filter_member_type(
+    const std::vector<std::string>& chain,
+    const SourceLocation& location,
+    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings) const {
+    if (auto trait_it = filter_bindings.find(chain.front());
+        trait_it != filter_bindings.end() && trait_it->second != nullptr) {
+        if (trait_it->second->is_state_slot()) {
+            errors_.error(location, kStateSlotUseMessage);
+            return make_unknown_type();
+        }
+        const auto first = find_field_type_in(trait_it->second->fields, chain[1]);
+        return descend_vector_color_members(first, chain, 2);
+    }
+    return std::nullopt;
+}
+
+TypeInfo SemanticAnalyzer::infer_handler_field_type(const MemberExpr& member,
+                                                    const SourceLocation& location,
+                                                    const ResolvedStruct& event) const {
+    const auto* field = find_field_in(event.fields, member.member);
+    if (field != nullptr && field->is_completion_only && event.symbol_id.has_value() &&
+        event.symbol_id->kind == SymbolKind::Phase) {
+        errors_.error(location,
+                      "phase completion field '" + make_canonical_id(*event.symbol_id) + "." + member.member +
+                          "' is available only to downstream phases");
+    }
+    return field == nullptr ? make_unknown_type() : field->type;
+}
+
 TypeInfo SemanticAnalyzer::infer_member_expr_type(
     const MemberExpr& member,
     const SourceLocation& location,
@@ -9862,46 +10190,15 @@ TypeInfo SemanticAnalyzer::infer_member_expr_type(
     if (const auto named = named_field_path(member); named.has_value()) {
         return named_field_type(*named->first, named->second);
     }
-    if (pair_scope != nullptr) {
-        // Flatten a (possibly nested) member-access chain rooted at a pair
-        // binding into ordered dotted segments, e.g.
-        // `body.tf.WorldTransform.position` -> root "body",
-        // segments ["tf", "WorldTransform", "position"].
-        if (auto chain = member_chain_segments(member); chain.has_value()) {
-            const std::string& root_name = chain->front();
-            std::vector<std::string> segments(chain->begin() + 1, chain->end());
-            if (auto scope_it = pair_scope->find(root_name); scope_it != pair_scope->end()) {
-                auto resolved = resolve_pair_member_chain(root_name, segments, *pair_scope);
-                if (!resolved.has_value()) {
-                    errors_.error(location,
-                                  "'" + segments.front() + "' is unavailable on pair binding '" + root_name + "'");
-                    return make_unknown_type();
-                }
-                const auto* trait = find_resolved_trait(make_canonical_id(resolved->trait_id));
-                if (resolved->consumed_segments >= segments.size()) {
-                    return make_unknown_type();
-                }
-                const auto first =
-                    trait == nullptr ? make_unknown_type()
-                                     : find_field_type_in(trait->fields, segments[resolved->consumed_segments]);
-                return descend_vector_color_members(first, segments, resolved->consumed_segments + 1);
-            }
+    const auto chain = member_chain_segments(member);
+    if (chain.has_value() && pair_scope != nullptr) {
+        if (auto type = infer_pair_member_type(*chain, location, *pair_scope)) {
+            return *type;
         }
     }
-    // Flatten the chain the same way for a plain filter-alias/local root, so a
-    // nested access like `p.pos.y` resolves through vec2/vec3/color component
-    // descent identically to the pair-binding case above (dsl-rule-order-by
-    // needs this to type-check computed sort keys; where: predicates gain the
-    // same precision as an incidental side effect of sharing the walk).
-    if (auto chain = member_chain_segments(member); chain.has_value() && chain->size() >= 2) {
-        if (auto trait_it = filter_bindings.find(chain->front());
-            trait_it != filter_bindings.end() && trait_it->second != nullptr) {
-            if (trait_it->second->is_state_slot()) {
-                errors_.error(location, kStateSlotUseMessage);
-                return make_unknown_type();
-            }
-            const auto first = find_field_type_in(trait_it->second->fields, (*chain)[1]);
-            return descend_vector_color_members(first, *chain, 2);
+    if (chain.has_value() && chain->size() >= 2) {
+        if (auto type = infer_filter_member_type(*chain, location, filter_bindings)) {
+            return *type;
         }
     }
     const auto* owner = std::get_if<IdentExpr>(&member.object->expr);
@@ -9914,100 +10211,19 @@ TypeInfo SemanticAnalyzer::infer_member_expr_type(
         return make_unknown_type();
     }
     if (handler_event != nullptr && owner->name == handler_event->name) {
-        const auto* field = find_field_in(handler_event->fields, member.member);
-        if (field != nullptr && field->is_completion_only && handler_event->symbol_id.has_value() &&
-            handler_event->symbol_id->kind == SymbolKind::Phase) {
-            errors_.error(location,
-                          "phase completion field '" + make_canonical_id(*handler_event->symbol_id) + "." +
-                              member.member + "' is available only to downstream phases");
-        }
-        return field == nullptr ? make_unknown_type() : field->type;
+        return infer_handler_field_type(member, location, *handler_event);
     }
-    if (auto local_it = local_bindings.find(owner->name);
-        local_it != local_bindings.end() && local_it->second.kind == TypeKind::Struct) {
-        const auto& local_type = local_it->second;
-        if (local_type.symbol_id.has_value()) {
-            const auto& symbol = *local_type.symbol_id;
-            if (symbol.kind == SymbolKind::Struct) {
-                if (symbol.module.name == current_module_name_) {
-                    if (auto struct_it = result_.structs.find(symbol.local_name); struct_it != result_.structs.end()) {
-                        return find_field_type_in(struct_it->second.fields, member.member);
-                    }
-                }
-                for (const auto& [_, syms] : imports_.modules) {
-                    if (syms.module_name != symbol.module.name) {
-                        continue;
-                    }
-                    if (auto struct_it = syms.structs.find(symbol.local_name); struct_it != syms.structs.end()) {
-                        return find_field_type_in(struct_it->second.fields, member.member);
-                    }
-                }
-            } else if (symbol.kind == SymbolKind::Event) {
-                if (auto event_it = event_structs_.find(symbol.local_name); event_it != event_structs_.end()) {
-                    return find_field_type_in(event_it->second.fields, member.member);
-                }
-            } else if (symbol.kind == SymbolKind::Trait) {
-                if (const auto* trait = find_resolved_trait(make_canonical_id(symbol)); trait != nullptr) {
-                    return find_field_type_in(trait->fields, member.member);
-                }
-            } else if (symbol.kind == SymbolKind::Phase) {
-                const auto* fields = find_phase_fields(symbol);
-                const auto* field  = fields == nullptr ? nullptr : find_field_in(*fields, member.member);
-                if (field != nullptr && field->is_completion_only) {
-                    errors_.error(location,
-                                  "phase completion field '" + make_canonical_id(symbol) + "." + member.member +
-                                      "' is available only to downstream phases");
-                }
-                if (field != nullptr) {
-                    return field->type;
-                }
-                // A render-pass stage handler's built-in-field alias (e.g.
-                // `v` in `on my_pass.vertex as v:`) is keyed under the
-                // phase's own derived trigger symbol ("my_pass__vertex"),
-                // which find_phase_fields (declared phase descriptor fields
-                // only) never sees — its real field table
-                // (build_render_stage_activation_struct's quads_*_fields())
-                // only exists on the call stack as `handler_event`.
-                if (handler_event != nullptr && local_type.name == handler_event->name) {
-                    return find_field_type_in(handler_event->fields, member.member);
-                }
-                return make_unknown_type();
-            }
-        }
-
-        const auto& type_name = local_type.name;
-        const auto dot        = type_name.rfind('.');
-        if (dot != std::string::npos) {
-            // Qualified alias name ("alias.StructName") or canonical name from resolved TypeInfo.
-            const auto qualifier  = type_name.substr(0, dot);
-            const auto local_name = type_name.substr(dot + 1);
-            if (qualifier == current_module_name_) {
-                if (auto struct_it = result_.structs.find(local_name); struct_it != result_.structs.end()) {
-                    return find_field_type_in(struct_it->second.fields, member.member);
-                }
-            }
-            if (auto mod_it = imports_.modules.find(qualifier); mod_it != imports_.modules.end()) {
-                if (auto s_it = mod_it->second.structs.find(local_name); s_it != mod_it->second.structs.end()) {
-                    return find_field_type_in(s_it->second.fields, member.member);
-                }
-            }
-            for (const auto& [_, syms] : imports_.modules) {
-                if (syms.module_name != qualifier) {
-                    continue;
-                }
-                if (auto s_it = syms.structs.find(local_name); s_it != syms.structs.end()) {
-                    return find_field_type_in(s_it->second.fields, member.member);
-                }
-            }
-        }
-        if (auto struct_it = result_.structs.find(type_name); struct_it != result_.structs.end()) {
-            return find_field_type_in(struct_it->second.fields, member.member);
-        }
-        if (auto event_it = event_structs_.find(type_name); event_it != event_structs_.end()) {
-            return find_field_type_in(event_it->second.fields, member.member);
+    const auto local = local_bindings.find(owner->name);
+    if (local == local_bindings.end() || local->second.kind != TypeKind::Struct) {
+        return make_unknown_type();
+    }
+    const auto& local_type = local->second;
+    if (local_type.symbol_id.has_value()) {
+        if (auto type = infer_symbol_member_type(*local_type.symbol_id, local_type, member, location, handler_event)) {
+            return *type;
         }
     }
-    return make_unknown_type();
+    return infer_named_struct_member_type(local_type.name, member);
 }
 
 std::optional<TypeInfo> SemanticAnalyzer::infer_vector_constructor_call_type(
@@ -10499,7 +10715,7 @@ void SemanticAnalyzer::validate_archetype_template_ref(const std::string& tmpl_r
         }
         for (const auto& [qualifier, names] : imports_.non_pub_template_names) {
             if (names.contains(tmpl_ref)) {
-                errors_.error(location, "template '" + tmpl_ref + "' is not public in module '" + qualifier + "'");
+                errors_.error(location, std::format("template '{}' is not public in module '{}'", tmpl_ref, qualifier));
                 return;
             }
         }
@@ -10520,8 +10736,10 @@ void SemanticAnalyzer::validate_child_archetypes(  // NOLINT(readability-functio
     for (const auto& child : children) {
         if (!sibling_roles.insert(child.role).second) {
             errors_.error(child.location,
-                          "duplicate child role '" + child.role + "' in " + archetype_kind + " '" + archetype_name +
-                              "'; sibling child roles must be unique");
+                          std::format("duplicate child role '{}' in {} '{}'; sibling child roles must be unique",
+                                      child.role,
+                                      archetype_kind,
+                                      archetype_name));
         }
 
         for (const auto& entry : child.traits) {
@@ -10537,7 +10755,7 @@ void SemanticAnalyzer::validate_child_archetypes(  // NOLINT(readability-functio
             validate_archetype_template_ref(
                 *child.template_ref,
                 child.location,
-                "child '" + child.role + "' of " + archetype_kind + " '" + archetype_name + "'");
+                std::format("child '{}' of {} '{}'", child.role, archetype_kind, archetype_name));
         } else {
             for (const auto& entry : child.traits) {
                 if (entry.trait_name == "Parent") {
@@ -10545,8 +10763,11 @@ void SemanticAnalyzer::validate_child_archetypes(  // NOLINT(readability-functio
                 }
                 if (!is_trait_declared(entry.trait_name)) {
                     errors_.error(entry.location,
-                                  "undeclared trait '" + entry.trait_name + "' in child '" + child.role + "' of " +
-                                      archetype_kind + " '" + archetype_name + "'");
+                                  std::format("undeclared trait '{}' in child '{}' of {} '{}'",
+                                              entry.trait_name,
+                                              child.role,
+                                              archetype_kind,
+                                              archetype_name));
                 }
             }
 
@@ -10617,6 +10838,16 @@ void SemanticAnalyzer::validate_child_override_tree(const std::vector<ChildOverr
 
 // Check that every required field (var, no default) of each descendant is
 // satisfied by the flattened child traits or by creation-site overrides.
+static std::unordered_set<std::string> provided_field_names(const std::vector<ArchetypeTraitEntry>& entries) {
+    std::unordered_set<std::string> provided;
+    for (const auto& entry : entries) {
+        for (const auto& assignment : entry.assignments) {
+            provided.insert(assignment.name);
+        }
+    }
+    return provided;
+}
+
 void SemanticAnalyzer::validate_child_required_fields(const std::vector<ChildArchetypeNode>& children,
                                                       const std::vector<ChildOverrideNode>& overrides,
                                                       const std::string& site_desc,
@@ -10630,18 +10861,10 @@ void SemanticAnalyzer::validate_child_required_fields(const std::vector<ChildArc
             }
         }
 
-        std::unordered_set<std::string> provided;
-        for (const auto& entry : child.traits) {
-            for (const auto& assign : entry.assignments) {
-                provided.insert(assign.name);
-            }
-        }
+        auto provided = provided_field_names(child.traits);
         if (override_node != nullptr) {
-            for (const auto& entry : override_node->traits) {
-                for (const auto& assign : entry.assignments) {
-                    provided.insert(assign.name);
-                }
-            }
+            const auto overridden = provided_field_names(override_node->traits);
+            provided.insert(overridden.begin(), overridden.end());
         }
 
         for (const auto& entry : child.traits) {
@@ -10678,64 +10901,64 @@ void SemanticAnalyzer::validate_hierarchical_entities(ProgramNode& program) {
     }
 }
 
-void SemanticAnalyzer::validate_template_use_cycles(ProgramNode& program) {
-    struct TemplateUseEdge {
+struct SemanticAnalyzer::TemplateCycleValidator {
+    struct Edge {
         std::string target;
         SourceLocation location;
     };
-
-    std::unordered_map<std::string, std::vector<TemplateUseEdge>> graph;
+    enum class VisitState : std::uint8_t { Visiting, Done };
+    SemanticAnalyzer* analyzer = nullptr;
+    std::unordered_map<std::string, std::vector<Edge>> graph;
     std::vector<std::string> template_order;
-
-    for (auto& decl : program.declarations) {
-        auto* tmpl = std::get_if<TemplateNode>(&decl);
-        if (tmpl == nullptr) {
-            continue;
-        }
-
-        template_order.push_back(tmpl->name);
-        auto& edges = graph[tmpl->name];
-
-        auto add_edge = [this, &edges](const std::string& target, const SourceLocation& location) {
-            if (target.contains('.')) {
-                return;
-            }
-            if (template_names_.contains(target)) {
-                edges.push_back({.target = target, .location = location});
-            }
-        };
-
-        for (const auto& use : tmpl->template_uses) {
-            add_edge(use.template_name, use.location);
-        }
-
-        // Child `from` references and child body `use` entries are template
-        // dependency edges too: creating the template creates its children
-        // (dsl-hierarchical-entity-templates D7/D11).
-        std::function<void(const ChildArchetypeNode&)> collect_child_edges =
-            [&add_edge, &collect_child_edges](const ChildArchetypeNode& child) {
-                if (child.template_ref.has_value()) {
-                    add_edge(*child.template_ref, child.location);
-                }
-                for (const auto& use : child.template_uses) {
-                    add_edge(use.template_name, use.location);
-                }
-                for (const auto& grandchild : child.children) {
-                    collect_child_edges(grandchild);
-                }
-            };
-        for (const auto& child : tmpl->children) {
-            collect_child_edges(child);
-        }
-    }
-
-    enum class VisitState { Visiting, Done };
     std::unordered_map<std::string, VisitState> state;
     std::vector<std::string> stack;
     std::unordered_set<std::string> reported_cycle_keys;
 
-    auto report_cycle = [this, &stack, &reported_cycle_keys](const std::string& target,
-                                                             const SourceLocation& location) {
+    void collect(ProgramNode& program) {
+        for (auto& decl : program.declarations) {
+            auto* tmpl = std::get_if<TemplateNode>(&decl);
+            if (tmpl == nullptr) {
+                continue;
+            }
+
+            template_order.push_back(tmpl->name);
+            auto& edges = graph[tmpl->name];
+
+            auto add_edge = [this, &edges](const std::string& target, const SourceLocation& location) {
+                if (target.contains('.')) {
+                    return;
+                }
+                if (analyzer->template_names_.contains(target)) {
+                    edges.push_back({.target = target, .location = location});
+                }
+            };
+
+            for (const auto& use : tmpl->template_uses) {
+                add_edge(use.template_name, use.location);
+            }
+
+            // Child `from` references and child body `use` entries are template
+            // dependency edges too: creating the template creates its children
+            // (dsl-hierarchical-entity-templates D7/D11).
+            std::function<void(const ChildArchetypeNode&)> collect_child_edges =
+                [&add_edge, &collect_child_edges](const ChildArchetypeNode& child) {
+                    if (child.template_ref.has_value()) {
+                        add_edge(*child.template_ref, child.location);
+                    }
+                    for (const auto& use : child.template_uses) {
+                        add_edge(use.template_name, use.location);
+                    }
+                    for (const auto& grandchild : child.children) {
+                        collect_child_edges(grandchild);
+                    }
+                };
+            for (const auto& child : tmpl->children) {
+                collect_child_edges(child);
+            }
+        }
+    }
+
+    void report_cycle(const std::string& target, const SourceLocation& location) {
         auto cycle_start = std::ranges::find(stack, target);
         if (cycle_start == stack.end()) {
             return;
@@ -10763,10 +10986,10 @@ void SemanticAnalyzer::validate_template_use_cycles(ProgramNode& program) {
             }
             msg << cycle[i];
         }
-        errors_.error(location, msg.str());
-    };
+        analyzer->errors_.error(location, msg.str());
+    }
 
-    std::function<void(const std::string&)> visit = [&](const std::string& name) {
+    void visit(const std::string& name) {
         if (auto state_it = state.find(name); state_it != state.end()) {
             return;
         }
@@ -10789,10 +11012,15 @@ void SemanticAnalyzer::validate_template_use_cycles(ProgramNode& program) {
 
         stack.pop_back();
         state[name] = VisitState::Done;
-    };
+    }
+};
 
-    for (const auto& name : template_order) {
-        visit(name);
+void SemanticAnalyzer::validate_template_use_cycles(ProgramNode& program) {
+    TemplateCycleValidator validator{
+        .analyzer = this, .graph = {}, .template_order = {}, .state = {}, .stack = {}, .reported_cycle_keys = {}};
+    validator.collect(program);
+    for (const auto& name : validator.template_order) {
+        validator.visit(name);
     }
 }
 
@@ -10856,6 +11084,38 @@ void SemanticAnalyzer::validate_template_value_names(
     });
 }
 
+void SemanticAnalyzer::collect_template_signature(const TemplateNode& node) {
+    auto& signature = result_.template_parameters[node.name];
+    std::unordered_map<std::string, TypeInfo> earlier;
+    for (const auto& parameter : node.parameters) {
+        auto type = resolve_type_ref(parameter.type);
+        if (earlier.contains(parameter.name)) {
+            errors_.error(parameter.location, "duplicate template parameter '" + parameter.name + "'");
+            continue;
+        }
+        ResolvedTemplateParameter resolved{.name = parameter.name, .type = type, .location = parameter.location};
+        if (parameter.default_value.has_value()) {
+            resolved.default_value = clone_expr(**parameter.default_value);
+            const auto scope       = template_value_scope(earlier);
+            validate_template_argument_purity(*resolved.default_value);
+            validate_template_value_names(*resolved.default_value, {}, scope, nullptr);
+            const auto actual = infer_expr_type(*resolved.default_value, {}, scope, nullptr);
+            if (!same_type(type, actual)) {
+                errors_.error(
+                    parameter.location,
+                    "template default must match parameter type and use only constants or earlier parameters");
+            }
+        }
+        signature.push_back(std::move(resolved));
+        earlier.emplace(parameter.name, std::move(type));
+    }
+    for (const auto& child : node.children) {
+        if (earlier.contains(child.role)) {
+            errors_.error(child.location, "child role conflicts with template parameter '" + child.role + "'");
+        }
+    }
+}
+
 void SemanticAnalyzer::collect_template_parameters(ProgramNode& program) {
     // Applications are looked up by their source spelling, and an aliased import
     // is addressable by either its alias or its canonical module path, so both
@@ -10883,33 +11143,7 @@ void SemanticAnalyzer::collect_template_parameters(ProgramNode& program) {
         if (node == nullptr) {
             continue;
         }
-        auto& signature = result_.template_parameters[node->name];
-        std::unordered_map<std::string, TypeInfo> earlier;
-        for (const auto& parameter : node->parameters) {
-            auto type = resolve_type_ref(parameter.type);
-            if (earlier.contains(parameter.name)) {
-                errors_.error(parameter.location, "duplicate template parameter '" + parameter.name + "'");
-                continue;
-            }
-            ResolvedTemplateParameter resolved{.name = parameter.name, .type = type, .location = parameter.location};
-            if (parameter.default_value.has_value()) {
-                resolved.default_value = clone_expr(**parameter.default_value);
-                const auto scope = template_value_scope(earlier);
-                validate_template_argument_purity(*resolved.default_value);
-                validate_template_value_names(*resolved.default_value, {}, scope, nullptr);
-                const auto actual = infer_expr_type(*resolved.default_value, {}, scope, nullptr);
-                if (!same_type(type, actual)) {
-                    errors_.error(parameter.location, "template default must match parameter type and use only constants or earlier parameters");
-                }
-            }
-            signature.push_back(std::move(resolved));
-            earlier.emplace(parameter.name, std::move(type));
-        }
-        for (const auto& child : node->children) {
-            if (earlier.contains(child.role)) {
-                errors_.error(child.location, "child role conflicts with template parameter '" + child.role + "'");
-            }
-        }
+        collect_template_signature(*node);
     }
 }
 
@@ -11025,45 +11259,27 @@ void SemanticAnalyzer::validate_state_archetypes(const ProgramNode& program) {
     }
 }
 
-void SemanticAnalyzer::flatten_template_compositions(ProgramNode& program) {
-    std::unordered_map<std::string, TemplateNode*> local_templates;
-    std::vector<TemplateNode*> template_order;
-
-    for (auto& decl : program.declarations) {
-        if (auto* tmpl = std::get_if<TemplateNode>(&decl)) {
-            local_templates[tmpl->name] = tmpl;
-            template_order.push_back(tmpl);
-        }
-    }
-
+struct SemanticAnalyzer::TemplateFlattener {
+    SemanticAnalyzer* analyzer = nullptr;
+    std::reference_wrapper<const std::unordered_map<std::string, TemplateNode*>> local_templates;
     std::unordered_map<std::string, FlattenedArchetype> flattened_templates;
     std::unordered_set<std::string> visiting;
 
-    std::function<FlattenedArchetype(TemplateNode&)> flatten_template;
-    std::function<FlattenedArchetype(const std::vector<ArchetypeBodyEntry>&,
-                                     const std::vector<ArchetypeTemplateUseEntry>&,
-                                     const std::vector<ArchetypeTraitEntry>&,
-                                     const std::vector<ChildArchetypeNode>&,
-                                     std::vector<InitializerSlot>)>
-        flatten_body;
-    std::function<ChildArchetypeNode(const ChildArchetypeNode&, std::vector<InitializerSlot>&)> flatten_child;
-
-    // Blueprints cover imported templates and locals already flattened this pass.
-    auto find_flattened_template = [&](const std::string& name) -> std::optional<FlattenedArchetype> {
-        const auto found = result_.template_blueprints.find(name);
-        if (found == result_.template_blueprints.end() || found->second == nullptr) {
+    [[nodiscard]] std::optional<FlattenedArchetype> find_flattened_template(const std::string& name) const {
+        const auto found = analyzer->result_.template_blueprints.find(name);
+        if (found == analyzer->result_.template_blueprints.end() || found->second == nullptr) {
             return std::nullopt;
         }
         const auto& blueprint = *found->second;
         return FlattenedArchetype{.traits = clone_archetype_trait_entries(blueprint.traits),
                                   .children = clone_child_archetype_nodes(blueprint.children),
                                   .initializers = blueprint.initializers};
-    };
+    }
 
-    auto append_template_use = [&](FlattenedArchetype& merged, const ArchetypeTemplateUseEntry& use) {
+    void append_template_use(FlattenedArchetype& merged, const ArchetypeTemplateUseEntry& use) {
         std::optional<FlattenedArchetype> used;
-        if (auto template_it = local_templates.find(use.template_name);
-            template_it != local_templates.end() && template_it->second != nullptr) {
+        if (auto template_it = local_templates.get().find(use.template_name);
+            template_it != local_templates.get().end() && template_it->second != nullptr) {
             used = flatten_template(*template_it->second);
         } else {
             used = find_flattened_template(use.template_name);
@@ -11079,13 +11295,13 @@ void SemanticAnalyzer::flatten_template_compositions(ProgramNode& program) {
         for (const auto& used_child : used->children) {
             merge_child_archetype_into(merged.children, used_child);
         }
-    };
+    }
 
-    flatten_body = [&](const std::vector<ArchetypeBodyEntry>& body_entries,
-                       const std::vector<ArchetypeTemplateUseEntry>& template_uses,
-                       const std::vector<ArchetypeTraitEntry>& traits,
-                       const std::vector<ChildArchetypeNode>& children,
-                       std::vector<InitializerSlot> slots) {
+    FlattenedArchetype flatten_body(const std::vector<ArchetypeBodyEntry>& body_entries,
+                                    const std::vector<ArchetypeTemplateUseEntry>& template_uses,
+                                    const std::vector<ArchetypeTraitEntry>& traits,
+                                    const std::vector<ChildArchetypeNode>& children,
+                                    std::vector<InitializerSlot> slots) {
         FlattenedArchetype merged;
         merged.initializers = std::move(slots);
 
@@ -11120,9 +11336,9 @@ void SemanticAnalyzer::flatten_template_compositions(ProgramNode& program) {
         }
 
         return merged;
-    };
+    }
 
-    flatten_child = [&](const ChildArchetypeNode& node, std::vector<InitializerSlot>& slots) {
+    ChildArchetypeNode flatten_child(const ChildArchetypeNode& node, std::vector<InitializerSlot>& slots) {
         ChildArchetypeNode flat;
         flat.role     = node.role;
         flat.location = node.location;
@@ -11149,8 +11365,8 @@ void SemanticAnalyzer::flatten_template_compositions(ProgramNode& program) {
         if (auto imported = find_flattened_template(tmpl_ref); imported.has_value()) {
             base           = std::move(*imported);
             base_available = true;
-        } else if (auto template_it = local_templates.find(local_name);
-                   template_it != local_templates.end() && template_it->second != nullptr) {
+        } else if (auto template_it = local_templates.get().find(local_name);
+                   template_it != local_templates.get().end() && template_it->second != nullptr) {
             base           = flatten_template(*template_it->second);
             base_available = true;
         }
@@ -11165,19 +11381,20 @@ void SemanticAnalyzer::flatten_template_compositions(ProgramNode& program) {
             merge_child_archetype_into(base.children, child);
         }
         if (base_available) {
-            validate_child_override_tree(node.child_overrides,
-                                         base.children,
-                                         "child '" + node.role + "' (from template '" + *node.template_ref + "')",
-                                         /*allow_self=*/false);
+            analyzer->validate_child_override_tree(
+                node.child_overrides,
+                base.children,
+                "child '" + node.role + "' (from template '" + *node.template_ref + "')",
+                /*allow_self=*/false);
         }
         apply_child_overrides_onto(base.children, node.child_overrides);
 
         flat.traits   = std::move(base.traits);
         flat.children = std::move(base.children);
         return flat;
-    };
+    }
 
-    flatten_template = [&](TemplateNode& tmpl) -> FlattenedArchetype {
+    FlattenedArchetype flatten_template(TemplateNode& tmpl) {
         if (auto flattened_it = flattened_templates.find(tmpl.name); flattened_it != flattened_templates.end()) {
             return clone_flattened(flattened_it->second);
         }
@@ -11189,7 +11406,7 @@ void SemanticAnalyzer::flatten_template_compositions(ProgramNode& program) {
         }
 
         std::vector<InitializerSlot> slots;
-        for (const auto& parameter : result_.template_parameters.at(tmpl.name)) {
+        for (const auto& parameter : analyzer->result_.template_parameters.at(tmpl.name)) {
             slots.push_back({.index = slots.size(), .type = parameter.type});
         }
         auto flattened = flatten_body(tmpl.body_entries, tmpl.template_uses, tmpl.traits, tmpl.children, std::move(slots));
@@ -11205,72 +11422,91 @@ void SemanticAnalyzer::flatten_template_compositions(ProgramNode& program) {
         blueprint->traits = clone_archetype_trait_entries(tmpl.traits);
         blueprint->children = clone_child_archetype_nodes(tmpl.children);
         blueprint->initializers = tmpl.initializers;
-        result_.template_blueprints[tmpl.name] = std::move(blueprint);
-        archetype_traits_[tmpl.name]   = &tmpl.traits;
-        archetype_children_[tmpl.name] = &tmpl.children;
+        analyzer->result_.template_blueprints[tmpl.name] = std::move(blueprint);
+        analyzer->archetype_traits_[tmpl.name]           = &tmpl.traits;
+        analyzer->archetype_children_[tmpl.name]         = &tmpl.children;
         return flattened;
-    };
+    }
+
+    void flatten_entity(EntityNode* entity) {
+        if (entity->template_ref.has_value()) {
+            // Template-backed entity: start from template's flattened archetype, apply overrides
+            const auto& tmpl_ref = *entity->template_ref;
+            // analyzer->archetype_traits_ uses unqualified names; strip module qualifier if present
+            const auto dot        = tmpl_ref.rfind('.');
+            const auto lookup_key = dot != std::string::npos ? tmpl_ref.substr(dot + 1) : tmpl_ref;
+            auto applied          = find_flattened_template(tmpl_ref);
+            if (!applied.has_value()) {
+                if (const auto found = local_templates.get().find(lookup_key);
+                    found != local_templates.get().end() && found->second != nullptr) {
+                    applied = flatten_template(*found->second);
+                }
+            }
+            if (applied.has_value()) {
+                bind_application(*applied, entity->arguments, entity->initializers);
+                for (const auto& entry : entity->traits) {
+                    merge_trait_entry_into(applied->traits, entry);
+                }
+                apply_child_overrides_onto(applied->children, entity->child_overrides);
+                entity->traits                              = std::move(applied->traits);
+                entity->children                            = std::move(applied->children);
+                analyzer->archetype_traits_[entity->name]   = &entity->traits;
+                analyzer->archetype_children_[entity->name] = &entity->children;
+                return;
+            }
+            auto tmpl_it = analyzer->archetype_traits_.find(lookup_key);
+            if (tmpl_it != analyzer->archetype_traits_.end() && tmpl_it->second != nullptr) {
+                auto merged = clone_archetype_trait_entries(*tmpl_it->second);
+                for (const auto& override_entry : entity->traits) {
+                    merge_trait_entry_into(merged, override_entry);
+                }
+                entity->traits = std::move(merged);
+            }
+            // Splice the template's flattened child tree and apply the
+            // entity's nested child overrides (validated afterwards in
+            // validate_template_backed_entity_overrides).
+            if (auto children_it = analyzer->archetype_children_.find(lookup_key);
+                children_it != analyzer->archetype_children_.end() && children_it->second != nullptr) {
+                auto merged_children = clone_child_archetype_nodes(*children_it->second);
+                apply_child_overrides_onto(merged_children, entity->child_overrides);
+                entity->children = std::move(merged_children);
+            }
+            // (If template not found, validation already reported the error; leave traits as-is)
+        } else {
+            auto flattened =
+                flatten_body(entity->body_entries, entity->template_uses, entity->traits, entity->children, {});
+            entity->traits       = clone_archetype_trait_entries(flattened.traits);
+            entity->children     = clone_child_archetype_nodes(flattened.children);
+            entity->initializers = std::move(flattened.initializers);
+        }
+        analyzer->archetype_traits_[entity->name]   = &entity->traits;
+        analyzer->archetype_children_[entity->name] = &entity->children;
+    }
+};
+
+void SemanticAnalyzer::flatten_template_compositions(ProgramNode& program) {
+    std::unordered_map<std::string, TemplateNode*> local_templates;
+    std::vector<TemplateNode*> template_order;
+
+    for (auto& decl : program.declarations) {
+        if (auto* tmpl = std::get_if<TemplateNode>(&decl)) {
+            local_templates[tmpl->name] = tmpl;
+            template_order.push_back(tmpl);
+        }
+    }
+
+    TemplateFlattener flattener{
+        .analyzer = this, .local_templates = local_templates, .flattened_templates = {}, .visiting = {}};
 
     for (auto* tmpl : template_order) {
         if (tmpl != nullptr) {
-            (void)flatten_template(*tmpl);
+            (void)flattener.flatten_template(*tmpl);
         }
     }
 
     for (auto& decl : program.declarations) {
         if (auto* entity = std::get_if<EntityNode>(&decl)) {
-            if (entity->template_ref.has_value()) {
-                // Template-backed entity: start from template's flattened archetype, apply overrides
-                const auto& tmpl_ref = *entity->template_ref;
-                // archetype_traits_ uses unqualified names; strip module qualifier if present
-                const auto dot        = tmpl_ref.rfind('.');
-                const auto lookup_key = dot != std::string::npos ? tmpl_ref.substr(dot + 1) : tmpl_ref;
-                auto applied          = find_flattened_template(tmpl_ref);
-                if (!applied.has_value()) {
-                    if (const auto found = local_templates.find(lookup_key);
-                        found != local_templates.end() && found->second != nullptr) {
-                        applied = flatten_template(*found->second);
-                    }
-                }
-                if (applied.has_value()) {
-                    bind_application(*applied, entity->arguments, entity->initializers);
-                    for (const auto& entry : entity->traits) {
-                        merge_trait_entry_into(applied->traits, entry);
-                    }
-                    apply_child_overrides_onto(applied->children, entity->child_overrides);
-                    entity->traits                    = std::move(applied->traits);
-                    entity->children                  = std::move(applied->children);
-                    archetype_traits_[entity->name]   = &entity->traits;
-                    archetype_children_[entity->name] = &entity->children;
-                    continue;
-                }
-                auto tmpl_it          = archetype_traits_.find(lookup_key);
-                if (tmpl_it != archetype_traits_.end() && tmpl_it->second != nullptr) {
-                    auto merged = clone_archetype_trait_entries(*tmpl_it->second);
-                    for (const auto& override_entry : entity->traits) {
-                        merge_trait_entry_into(merged, override_entry);
-                    }
-                    entity->traits = std::move(merged);
-                }
-                // Splice the template's flattened child tree and apply the
-                // entity's nested child overrides (validated afterwards in
-                // validate_template_backed_entity_overrides).
-                if (auto children_it = archetype_children_.find(lookup_key);
-                    children_it != archetype_children_.end() && children_it->second != nullptr) {
-                    auto merged_children = clone_child_archetype_nodes(*children_it->second);
-                    apply_child_overrides_onto(merged_children, entity->child_overrides);
-                    entity->children = std::move(merged_children);
-                }
-                // (If template not found, validation already reported the error; leave traits as-is)
-            } else {
-                auto flattened =
-                    flatten_body(entity->body_entries, entity->template_uses, entity->traits, entity->children, {});
-                entity->traits   = clone_archetype_trait_entries(flattened.traits);
-                entity->children = clone_child_archetype_nodes(flattened.children);
-                entity->initializers = std::move(flattened.initializers);
-            }
-            archetype_traits_[entity->name]   = &entity->traits;
-            archetype_children_[entity->name] = &entity->children;
+            flattener.flatten_entity(entity);
         }
     }
 
@@ -11280,12 +11516,7 @@ void SemanticAnalyzer::flatten_template_compositions(ProgramNode& program) {
             continue;
         }
 
-        std::unordered_set<std::string> provided;
-        for (const auto& entry : tmpl->traits) {
-            for (const auto& assign : entry.assignments) {
-                provided.insert(assign.name);
-            }
-        }
+        const auto provided = provided_field_names(tmpl->traits);
 
         std::unordered_set<std::string> required;
         for (const auto& entry : tmpl->traits) {
@@ -11357,12 +11588,7 @@ void SemanticAnalyzer::validate_template_backed_entity_overrides(  // NOLINT(rea
         // counts its field names toward "provided", however incidentally.
         auto req_it = template_required_fields_.find(tmpl_key);
         if (req_it != template_required_fields_.end()) {
-            std::unordered_set<std::string> provided;
-            for (const auto& entry : entity->traits) {
-                for (const auto& assign : entry.assignments) {
-                    provided.insert(assign.name);
-                }
-            }
+            const auto provided = provided_field_names(entity->traits);
             for (const auto& req : req_it->second) {
                 if (!provided.contains(req)) {
                     errors_.error(entity->location,
@@ -12119,6 +12345,87 @@ void SemanticAnalyzer::record_rule_group_facts(const SymbolId& rule,
     record(ordering.before_groups, GroupOrderingDirection::Before);
 }
 
+struct SemanticAnalyzer::HandlerOrderingResolver {
+    SemanticAnalyzer* analyzer = nullptr;
+    std::reference_wrapper<const std::unordered_set<std::string>> local_rule_names;
+    std::reference_wrapper<const std::unordered_set<SymbolId>> local_rule_ids;
+    std::reference_wrapper<const std::unordered_map<HandlerIdentity, HandlerNode*, HandlerIdentityHash>> nodes;
+
+    void add_edge(HandlerNode& dependent, const HandlerIdentity& predecessor, const SourceLocation& location) const {
+        if (predecessor == dependent.identity) {
+            analyzer->errors_.error(location,
+                                    "handler '" + dependent.identity.canonical_id() + "' cannot list itself in after:");
+            return;
+        }
+        if (local_rule_ids.get().contains(predecessor.rule) && !nodes.get().contains(predecessor)) {
+            analyzer->errors_.error(location, "unknown handler '" + predecessor.canonical_id() + "' in after: clause");
+            return;
+        }
+        if (std::ranges::find(dependent.explicit_after, predecessor) == dependent.explicit_after.end()) {
+            dependent.explicit_after.push_back(predecessor);
+        }
+        analyzer->push_explicit_edge(predecessor, dependent.identity, ScheduleEdgeKind::ExplicitHandler);
+    }
+
+    void resolve_reference(HandlerNode& dependent, const HandlerReferenceNode& reference) const {
+        auto predecessor_rule = analyzer->resolve_rule_after_ref_to_symbol(
+            reference.rule.spelling, reference.rule.location, local_rule_names);
+        if (!predecessor_rule.has_value()) {
+            const auto previous_errors = analyzer->errors_.error_count();
+            (void)analyzer->resolve_rule_after_ref(reference.rule.spelling, reference.rule.location, "after");
+            if (analyzer->errors_.error_count() == previous_errors) {
+                analyzer->errors_.error(reference.rule.location,
+                                        "unknown rule '" + reference.rule.spelling + "' in handler after: clause");
+            }
+            return;
+        }
+        const auto predecessor_trigger = analyzer->try_resolve_handler_trigger(reference.trigger.spelling);
+        if (!predecessor_trigger.has_value()) {
+            analyzer->errors_.error(
+                reference.trigger.location,
+                "unknown handler trigger '" + reference.trigger.spelling + "' in handler after: clause");
+            return;
+        }
+        if (*predecessor_trigger != dependent.identity.trigger) {
+            analyzer->errors_.error(reference.location,
+                                    "handler dependency '" + reference.spelling() + "' is not eligible for '" +
+                                        dependent.identity.canonical_id() + "': resolved triggers differ");
+            return;
+        }
+        add_edge(
+            dependent, HandlerIdentity{.rule = *predecessor_rule, .trigger = *predecessor_trigger}, reference.location);
+    }
+
+    template <typename Rule>
+    void expand_rule(Rule& rule) {
+        if (!rule.resolved_rule_id.has_value()) {
+            return;
+        }
+
+        analyzer->add_rule_level_edges(
+            *rule.resolved_rule_id, rule.resolved_after_rule_ids, rule.resolved_ordering.before_rules, local_rule_ids);
+        analyzer->record_rule_group_facts(*rule.resolved_rule_id, rule.resolved_ordering, rule.location);
+
+        for (std::size_t handler_index = 0; handler_index < rule.handlers.size(); ++handler_index) {
+            const auto& handler = rule.handlers[handler_index];
+            if (!handler.resolved_trigger.has_value()) {
+                continue;
+            }
+            const HandlerIdentity dependent_identity{.rule    = *rule.resolved_rule_id,
+                                                     .trigger = *handler.resolved_trigger};
+            const auto dependent_it = nodes.get().find(dependent_identity);
+            if (dependent_it == nodes.get().end() ||
+                dependent_it->second->declaration_order.handler_index != handler_index) {
+                continue;
+            }
+            auto& dependent = *dependent_it->second;
+            for (const auto& reference : handler.after_handlers) {
+                resolve_reference(dependent, reference);
+            }
+        }
+    }
+};
+
 void SemanticAnalyzer::validate_after_clauses(ProgramNode& program) {
     std::unordered_set<std::string> local_rule_names;
     std::unordered_set<SymbolId> local_rule_ids;
@@ -12141,9 +12448,10 @@ void SemanticAnalyzer::validate_after_clauses(ProgramNode& program) {
     for (auto& decl : program.declarations) {
         const auto resolve = [&](auto& rule) {
             resolve_rule_ordering(rule);
-            for (const auto& predecessor : rule.resolved_after_rule_ids) {
-                after_resolved[rule.name].push_back(make_canonical_id(predecessor));
-            }
+            auto& predecessors = after_resolved[rule.name];
+            std::ranges::transform(rule.resolved_after_rule_ids,
+                                   std::back_inserter(predecessors),
+                                   [](const SymbolId& predecessor) { return make_canonical_id(predecessor); });
         };
         if (auto* rule = std::get_if<RuleNode>(&decl)) {
             resolve(*rule);
@@ -12165,81 +12473,13 @@ void SemanticAnalyzer::validate_after_clauses(ProgramNode& program) {
         nodes.emplace(node.identity, &node);
     }
 
-    auto add_edge = [&](HandlerNode& dependent, const HandlerIdentity& predecessor, const SourceLocation& location) {
-        if (predecessor == dependent.identity) {
-            errors_.error(location, "handler '" + dependent.identity.canonical_id() + "' cannot list itself in after:");
-            return;
-        }
-        if (local_rule_ids.contains(predecessor.rule) && !nodes.contains(predecessor)) {
-            errors_.error(location, "unknown handler '" + predecessor.canonical_id() + "' in after: clause");
-            return;
-        }
-        if (std::ranges::find(dependent.explicit_after, predecessor) == dependent.explicit_after.end()) {
-            dependent.explicit_after.push_back(predecessor);
-        }
-        push_explicit_edge(predecessor, dependent.identity, ScheduleEdgeKind::ExplicitHandler);
-    };
-
-    for (auto& decl : program.declarations) {
-        auto expand_rule = [&](auto& rule) {
-            if (!rule.resolved_rule_id.has_value()) {
-                return;
-            }
-
-            add_rule_level_edges(*rule.resolved_rule_id,
-                                 rule.resolved_after_rule_ids,
-                                 rule.resolved_ordering.before_rules,
-                                 local_rule_ids);
-            record_rule_group_facts(*rule.resolved_rule_id, rule.resolved_ordering, rule.location);
-
-            for (std::size_t handler_index = 0; handler_index < rule.handlers.size(); ++handler_index) {
-                const auto& handler = rule.handlers[handler_index];
-                if (!handler.resolved_trigger.has_value()) {
-                    continue;
-                }
-                const HandlerIdentity dependent_identity{.rule    = *rule.resolved_rule_id,
-                                                         .trigger = *handler.resolved_trigger};
-                const auto dependent_it = nodes.find(dependent_identity);
-                if (dependent_it == nodes.end() ||
-                    dependent_it->second->declaration_order.handler_index != handler_index) {
-                    continue;
-                }
-                auto& dependent = *dependent_it->second;
-                for (const auto& reference : handler.after_handlers) {
-                    auto predecessor_rule = resolve_rule_after_ref_to_symbol(
-                        reference.rule.spelling, reference.rule.location, local_rule_names);
-                    if (!predecessor_rule.has_value()) {
-                        const auto previous_errors = errors_.error_count();
-                        (void)resolve_rule_after_ref(reference.rule.spelling, reference.rule.location, "after");
-                        if (errors_.error_count() == previous_errors) {
-                            errors_.error(reference.rule.location,
-                                          "unknown rule '" + reference.rule.spelling + "' in handler after: clause");
-                        }
-                        continue;
-                    }
-                    const auto predecessor_trigger = try_resolve_handler_trigger(reference.trigger.spelling);
-                    if (!predecessor_trigger.has_value()) {
-                        errors_.error(
-                            reference.trigger.location,
-                            "unknown handler trigger '" + reference.trigger.spelling + "' in handler after: clause");
-                        continue;
-                    }
-                    if (*predecessor_trigger != dependent.identity.trigger) {
-                        errors_.error(reference.location,
-                                      "handler dependency '" + reference.spelling() + "' is not eligible for '" +
-                                          dependent.identity.canonical_id() + "': resolved triggers differ");
-                        continue;
-                    }
-                    add_edge(dependent,
-                             HandlerIdentity{.rule = *predecessor_rule, .trigger = *predecessor_trigger},
-                             reference.location);
-                }
-            }
-        };
-        if (auto* rule = std::get_if<RuleNode>(&decl)) {
-            expand_rule(*rule);
-        } else if (auto* extern_rule = std::get_if<ExternRuleNode>(&decl)) {
-            expand_rule(*extern_rule);
+    HandlerOrderingResolver resolver{
+        .analyzer = this, .local_rule_names = local_rule_names, .local_rule_ids = local_rule_ids, .nodes = nodes};
+    for (auto& declaration : program.declarations) {
+        if (auto* rule = std::get_if<RuleNode>(&declaration)) {
+            resolver.expand_rule(*rule);
+        } else if (auto* external = std::get_if<ExternRuleNode>(&declaration)) {
+            resolver.expand_rule(*external);
         }
     }
 

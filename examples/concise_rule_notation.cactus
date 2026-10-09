@@ -1,0 +1,243 @@
+module concise_rule_notation
+use std.core
+
+trait CompactBody:
+    var x: int = 0
+    var total: int = -1
+    var enters: int = 0
+    var exits: int = 0
+    var visible: int = -1
+    var rank: int = -1
+trait CompactZone:
+    var x: int = 1
+    var id: int = 10
+trait CompactKept:
+    var n: int = 0
+trait CompactControl:
+    var enabled: bool = true
+    var trace: int = 0
+    var empty: int = -1
+event CompactTrace:
+    id: int
+entity CompactSettings:
+    CompactControl
+entity CompactActor:
+    CompactBody
+entity CompactEmpty:
+    CompactBody:
+        x = 100
+entity CompactPool:
+    CompactZone
+entity CompactPoolTwo:
+    CompactZone:
+        id = 20
+group CompactContacts:
+    phase: fixed_tick
+rule CompactMove:
+    each: CompactBody as body
+    when: CompactSettings.CompactControl.enabled
+    on fixed_tick:
+        body.x += 1
+rule CompactTotal:
+    pairs:
+        body: CompactBody
+        zone: CompactZone
+    after: CompactMove
+    where: body.CompactBody.x == zone.CompactZone.x
+    reduce per body:
+        n = count()
+    on fixed_tick:
+        body.CompactBody.total = n
+rule CompactKeep:
+    pairs:
+        body: CompactBody
+        zone: CompactZone
+    group: CompactContacts
+    after: CompactMove
+    where: body.CompactBody.x == zone.CompactZone.x
+    reduce per body:
+        n = count()
+    keep CompactKept on body:
+        n = n
+rule CompactObserve:
+    each: CompactBody as body
+    after: CompactKeep
+    on fixed_tick:
+        return
+    on added CompactKept:
+        body.enters += 1
+    on removed CompactKept:
+        body.exits += 1
+trait LegacyBody:
+    var x: int = 0
+    var total: int = -1
+    var enters: int = 0
+    var exits: int = 0
+    var visible: int = -1
+    var rank: int = -1
+trait LegacyZone:
+    var x: int = 1
+    var id: int = 10
+trait LegacyKept:
+    var n: int = 0
+trait LegacyControl:
+    var enabled: bool = true
+    var trace: int = 0
+    var empty: int = -1
+event LegacyTrace:
+    id: int
+entity LegacySettings:
+    LegacyControl
+entity LegacyActor:
+    LegacyBody
+entity LegacyEmpty:
+    LegacyBody:
+        x = 100
+entity LegacyPool:
+    LegacyZone
+entity LegacyPoolTwo:
+    LegacyZone:
+        id = 20
+group LegacyContacts:
+    phase: fixed_tick
+rule LegacyMove:
+    filter:
+        LegacyBody as body
+    when:
+        LegacySettings.LegacyControl.enabled
+    on fixed_tick:
+        body.x += 1
+rule LegacyTotal:
+    pairs:
+        body:
+            LegacyBody
+        zone:
+            LegacyZone
+    after:
+        LegacyMove
+    where:
+        body.LegacyBody.x == zone.LegacyZone.x
+    reduce:
+        per: body
+        n = count()
+    on fixed_tick:
+        body.LegacyBody.total = n
+rule LegacyKeep:
+    pairs:
+        body:
+            LegacyBody
+        zone:
+            LegacyZone
+    group: LegacyContacts
+    after:
+        LegacyMove
+    where:
+        body.LegacyBody.x == zone.LegacyZone.x
+    reduce:
+        per: body
+        n = count()
+    keep LegacyKept on body:
+        n = n
+rule LegacyObserve:
+    filter:
+        LegacyBody as body
+    after:
+        LegacyKeep
+    on fixed_tick:
+        return
+    on added LegacyKept:
+        body.enters += 1
+    on removed LegacyKept:
+        body.exits += 1
+
+rule CompactObserveKept:
+    each: CompactBody as body, CompactKept as kept
+    after: CompactKeep
+    on fixed_tick:
+        body.visible = kept.n
+rule CompactOrderedPairs:
+    pairs:
+        body: CompactBody
+        zone: CompactZone
+    order by: zone.CompactZone.id desc
+    after: CompactMove
+    where: body.CompactBody.x == zone.CompactZone.x
+    on fixed_tick:
+        emit CompactTrace:
+            id = zone.CompactZone.id
+rule CompactRecord:
+    on CompactTrace as observed:
+        CompactSettings.CompactControl.trace = CompactSettings.CompactControl.trace * 100 + observed.id
+rule CompactRank:
+    pairs:
+        body: CompactBody
+        zone: CompactZone
+    after: CompactMove
+    where: body.CompactBody.x == zone.CompactZone.x
+    reduce per body:
+        n = count()
+    order by: n desc
+    limit: 1
+    on fixed_tick:
+        body.CompactBody.rank = n
+rule CompactGlobalEmpty:
+    each: CompactZone
+    where: false
+    reduce:
+        n = count()
+    on fixed_tick:
+        CompactSettings.CompactControl.empty = n
+
+rule LegacyObserveKept:
+    filter:
+        LegacyBody as body
+        LegacyKept as kept
+    after:
+        LegacyKeep
+    on fixed_tick:
+        body.visible = kept.n
+rule LegacyOrderedPairs:
+    pairs:
+        body:
+            LegacyBody
+        zone:
+            LegacyZone
+    order by:
+        zone.LegacyZone.id desc
+    after:
+        LegacyMove
+    where:
+        body.LegacyBody.x == zone.LegacyZone.x
+    on fixed_tick:
+        emit LegacyTrace:
+            id = zone.LegacyZone.id
+rule LegacyRecord:
+    on LegacyTrace as observed:
+        LegacySettings.LegacyControl.trace = LegacySettings.LegacyControl.trace * 100 + observed.id
+rule LegacyRank:
+    pairs:
+        body:
+            LegacyBody
+        zone:
+            LegacyZone
+    after:
+        LegacyMove
+    where:
+        body.LegacyBody.x == zone.LegacyZone.x
+    reduce:
+        per: body
+        n = count()
+    order by:
+        n desc
+    limit: 1
+    on fixed_tick:
+        body.LegacyBody.rank = n
+rule LegacyGlobalEmpty:
+    filter:
+        LegacyZone
+    where:
+        false
+    reduce:
+        n = count()
+    on fixed_tick:
+        LegacySettings.LegacyControl.empty = n

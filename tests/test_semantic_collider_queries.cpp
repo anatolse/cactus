@@ -605,3 +605,14 @@ TEST_CASE("Collider planner: a where: overlap predicate still wins over reduce:"
     REQUIRE(plan.has_value());
     CHECK(plan->source == SpatialJoinSource::Where);
 }
+TEST_CASE("Collider planner: inline predicates preserve the spatial plan", "[semantic][concise]") {
+    const auto compact = analyze(bullet_rule("    where: bullet != target, physics.touching(bullet, target)\n"));
+    const auto legacy =
+        analyze(bullet_rule("    where:\n        bullet != target\n        physics.touching(bullet, target)\n"));
+    INFO(describe(compact));
+    REQUIRE(compact.clean());
+    REQUIRE(legacy.clean());
+    CHECK(compact.contract("MoveBullets").spatial_join == legacy.contract("MoveBullets").spatial_join);
+    CHECK(compact.contract("MoveBullets").reads == legacy.contract("MoveBullets").reads);
+    CHECK(compact.contract("MoveBullets").writes == legacy.contract("MoveBullets").writes);
+}

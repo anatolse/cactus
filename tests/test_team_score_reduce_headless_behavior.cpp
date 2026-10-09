@@ -9,6 +9,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <exception>
+
 namespace {
 
 void drive_frame(entt::registry& registry) {
@@ -30,7 +32,7 @@ const team_score_reduce_runtime__Team& team_of(entt::registry& registry, int id)
         }
     }
     FAIL("no team with id " << id);
-    std::unreachable();
+    std::terminate();
 }
 
 constexpr int RED_TEAM  = 1;
@@ -94,8 +96,8 @@ TEST_CASE("a targeted event runs only the recipient's group", "[runtime][codegen
 TEST_CASE("a global reduction ignores the event target", "[runtime][codegen-entt][rule-reduce]") {
     entt::registry registry;
     run_one_frame(registry);
-    const auto& totals = registry.get<team_score_reduce_runtime__Totals>(
-        *registry.view<team_score_reduce_runtime__Totals>().begin());
+    const auto& totals =
+        registry.get<team_score_reduce_runtime__Totals>(*registry.view<team_score_reduce_runtime__Totals>().begin());
     CHECK(totals.recounts == 1);
     CHECK(totals.recount_members == 1);
 }

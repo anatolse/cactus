@@ -203,11 +203,11 @@ TEST_CASE("program_linker: states of different modules are merged by canonical i
     const auto make_state_program = [](const std::string& module) {
         DecoratedProgram prog;
         ResolvedState state;
-        state.name         = "Mode";
-        state.module_name  = module;
-        state.canonical_id = make_canonical_id(module, "Mode");
-        state.symbol_id    = make_symbol_id(SymbolKind::State, module, "Mode");
-        state.variants     = {{.name = "Idle"}, {.name = "Gone", .is_final = true}};
+        state.name          = "Mode";
+        state.module_name   = module;
+        state.canonical_id  = make_canonical_id(module, "Mode");
+        state.symbol_id     = make_symbol_id(SymbolKind::State, module, "Mode");
+        state.variants      = {{.name = "Idle"}, {.name = "Gone", .is_final = true}};
         prog.states["Mode"] = state;
         return prog;
     };
@@ -427,8 +427,8 @@ TEST_CASE("program_linker: duplicate canonical identity from distinct artifacts 
     CHECK_FALSE(merged.has_value());
     CHECK(link_errors.has_errors());
     const auto& msg = link_errors.diagnostics()[0].message;
-    CHECK(msg.find("duplicate canonical symbol") != std::string::npos);
-    CHECK(msg.find("shared.Position") != std::string::npos);
+    CHECK(msg.contains("duplicate canonical symbol"));
+    CHECK(msg.contains("shared.Position"));
 
     fs::remove_all(build_dir, ec);
 }
@@ -701,18 +701,17 @@ TEST_CASE("program_linker: artifact link preserves explicit cross-module edge an
 
 // ── add-world-save-restore: persistence requires the graph-driven scheduler ─
 
-TEST_CASE("program_linker: std.persistence with no declared phases is rejected at link time",
-          "[linker][persistence]") {
+TEST_CASE("program_linker: std.persistence with no declared phases is rejected at link time", "[linker][persistence]") {
     auto build_dir = linker_build_dir() / "persistence_legacy";
     std::error_code ec;
     fs::remove_all(build_dir, ec);
 
     DecoratedProgram program;
     ResolvedEvent save_requested;
-    save_requested.name        = "SaveRequested";
-    save_requested.module_name = "std.persistence";
-    save_requested.symbol_id   = linked_symbol(SymbolKind::Event, "std.persistence", "SaveRequested");
-    save_requested.is_pub      = true;
+    save_requested.name             = "SaveRequested";
+    save_requested.module_name      = "std.persistence";
+    save_requested.symbol_id        = linked_symbol(SymbolKind::Event, "std.persistence", "SaveRequested");
+    save_requested.is_pub           = true;
     program.events["SaveRequested"] = save_requested;
     // No phases pushed to program.execution_graph: this is the legacy
     // update_project/render_project shape, not graph-driven.
@@ -775,7 +774,7 @@ TEST_CASE("program_linker: std.persistence with declared phases links without er
     fs::remove_all(build_dir, ec);
 
     const auto frame = linked_symbol(SymbolKind::Event, "std.core", "frame");
-    const auto tick   = linked_symbol(SymbolKind::Phase, "std.core", "tick");
+    const auto tick  = linked_symbol(SymbolKind::Phase, "std.core", "tick");
 
     DecoratedProgram program;
     ResolvedEvent save_requested;
@@ -785,9 +784,7 @@ TEST_CASE("program_linker: std.persistence with declared phases links without er
     save_requested.is_pub           = true;
     program.events["SaveRequested"] = save_requested;
     program.execution_graph.phases.push_back(
-        PhasePlan{.phase             = tick,
-                  .runtime_root      = frame,
-                  .declaration_order = {.declaration_index = 0}});
+        PhasePlan{.phase = tick, .runtime_root = frame, .declaration_order = {.declaration_index = 0}});
 
     ErrorReporter save_errors;
     ModuleArtifact artifact(save_errors);
@@ -815,10 +812,10 @@ TEST_CASE("program_linker: a program using only RestoreRequested is also gated o
 
     DecoratedProgram program;
     ResolvedEvent restore_requested;
-    restore_requested.name        = "RestoreRequested";
-    restore_requested.module_name = "std.persistence";
-    restore_requested.symbol_id   = linked_symbol(SymbolKind::Event, "std.persistence", "RestoreRequested");
-    restore_requested.is_pub      = true;
+    restore_requested.name             = "RestoreRequested";
+    restore_requested.module_name      = "std.persistence";
+    restore_requested.symbol_id        = linked_symbol(SymbolKind::Event, "std.persistence", "RestoreRequested");
+    restore_requested.is_pub           = true;
     program.events["RestoreRequested"] = restore_requested;
 
     ErrorReporter save_errors;
@@ -867,9 +864,9 @@ TEST_CASE("program_linker: linked handler cycles are rejected canonically", "[li
     REQUIRE(linker.merge_into(merged, left, "left"));
     CHECK_FALSE(linker.merge_into(merged, right, "right"));
     REQUIRE(errors.has_errors());
-    CHECK(errors.diagnostics().back().message.find("handler cycle:") != std::string::npos);
-    CHECK(errors.diagnostics().back().message.find(first.identity.canonical_id()) != std::string::npos);
-    CHECK(errors.diagnostics().back().message.find(second.identity.canonical_id()) != std::string::npos);
+    CHECK(errors.diagnostics().back().message.contains("handler cycle:"));
+    CHECK(errors.diagnostics().back().message.contains(first.identity.canonical_id()));
+    CHECK(errors.diagnostics().back().message.contains(second.identity.canonical_id()));
 }
 
 // ── add-rule-groups: group ordering across separately compiled modules ──────
@@ -1218,8 +1215,8 @@ TEST_CASE("program_linker: a group's after: orders members from every module", "
     lib.execution_graph.handlers.push_back(mover);
     lib.execution_graph.group_declarations.push_back(
         GroupDeclaration{.group = solve, .phase = tick, .is_pub = true, .location = {}});
-    lib.execution_graph.group_declarations.push_back(GroupDeclaration{
-        .group = contacts, .phase = tick, .is_pub = true, .location = {}, .after_groups = {solve}});
+    lib.execution_graph.group_declarations.push_back(
+        GroupDeclaration{.group = contacts, .phase = tick, .is_pub = true, .location = {}, .after_groups = {solve}});
     DecoratedProgram app;
     app.execution_graph.handlers.push_back(toucher);
 

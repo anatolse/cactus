@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <exception>
 #include <random>
 #include <raymath.h>
 #include <sstream>
@@ -201,9 +202,11 @@ AssetRegistry::LazyResolver& AssetRegistry::resolver_for(const AssetKind kind) n
     return texture_resolver_;
 }
 
-AssetRegistry& shared_asset_registry() noexcept {
+AssetRegistry& shared_asset_registry() noexcept try {
     static AssetRegistry registry;
     return registry;
+} catch (...) {
+    std::terminate();
 }
 
 namespace stdlib::math {
@@ -366,10 +369,12 @@ bool same_rotation(Quat a, Quat b, float tolerance) noexcept {
 
 namespace stdlib::random {
 
-Rng seeded(int s) noexcept {
+Rng seeded(int s) noexcept try {
     std::seed_seq seq{static_cast<std::uint32_t>(s)};
     std::minstd_rand engine{seq};
     return Rng{static_cast<int>(engine())};
+} catch (...) {
+    std::terminate();
 }
 
 Uniform uniform(float lo, float hi) noexcept {
@@ -385,26 +390,22 @@ Normal normal(float mean, float stddev) noexcept {
 }
 
 Rng advance(Rng rng) noexcept {
-    std::minstd_rand engine;
-    engine.seed(static_cast<std::minstd_rand::result_type>(rng.state));
+    std::minstd_rand engine{static_cast<std::minstd_rand::result_type>(rng.state)};
     return Rng{static_cast<int>(engine())};
 }
 
 float sample(Rng rng, Uniform dist) noexcept {
-    std::minstd_rand engine;
-    engine.seed(static_cast<std::minstd_rand::result_type>(rng.state));
+    std::minstd_rand engine{static_cast<std::minstd_rand::result_type>(rng.state)};
     return std::uniform_real_distribution<float>{dist.lo, dist.hi}(engine);
 }
 
 int sample_int(Rng rng, UniformInt dist) noexcept {
-    std::minstd_rand engine;
-    engine.seed(static_cast<std::minstd_rand::result_type>(rng.state));
+    std::minstd_rand engine{static_cast<std::minstd_rand::result_type>(rng.state)};
     return std::uniform_int_distribution<int>{dist.lo, dist.hi}(engine);
 }
 
 float sample_normal(Rng rng, Normal dist) noexcept {
-    std::minstd_rand engine;
-    engine.seed(static_cast<std::minstd_rand::result_type>(rng.state));
+    std::minstd_rand engine{static_cast<std::minstd_rand::result_type>(rng.state)};
     return std::normal_distribution<float>{dist.mean, dist.stddev}(engine);
 }
 
@@ -415,8 +416,7 @@ bool chance(Rng rng, float p) noexcept {
     if (p <= 0.0F) {
         return false;
     }
-    std::minstd_rand engine;
-    engine.seed(static_cast<std::minstd_rand::result_type>(rng.state));
+    std::minstd_rand engine{static_cast<std::minstd_rand::result_type>(rng.state)};
     return std::bernoulli_distribution{static_cast<double>(p)}(engine);
 }
 

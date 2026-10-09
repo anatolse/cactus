@@ -759,7 +759,10 @@ DeclarationOrder ModuleArtifact::read_declaration_order(std::istream& in) {
 }
 
 SourceLocation ModuleArtifact::read_location(std::istream& in) {
-    return SourceLocation{read_str(in), static_cast<int>(read_i64(in)), static_cast<int>(read_i64(in))};
+    auto filename     = read_str(in);
+    const auto line   = static_cast<int>(read_i64(in));
+    const auto column = static_cast<int>(read_i64(in));
+    return SourceLocation{std::move(filename), line, column};
 }
 
 TypeInfo ModuleArtifact::read_type_info(std::istream& in) {
@@ -1492,6 +1495,29 @@ std::optional<DecoratedProgram> ModuleArtifact::load(const fs::path& path, std::
 
 // ── Extract pub symbols ───────────────────────────────────────────────────────
 
+namespace {
+template <bool PublicOnly, typename Declarations>
+void export_declarations(Declarations& source, Declarations& target, SymbolKind kind, const std::string& module_name) {
+    for (auto& [name, declaration] : source) {
+        if constexpr (PublicOnly) {
+            if (!declaration.is_pub) {
+                continue;
+            }
+        }
+        if (declaration.canonical_id.empty()) {
+            declaration.canonical_id = make_canonical_id(module_name, declaration.name);
+        }
+        if (declaration.module_name.empty()) {
+            declaration.module_name = module_name;
+        }
+        if (!declaration.symbol_id.has_value()) {
+            declaration.symbol_id = make_symbol_id(kind, declaration.module_name, declaration.name);
+        }
+        target[name] = declaration;
+    }
+}
+}  // namespace
+
 std::optional<ImportedSymbols> ModuleArtifact::extract_pub_symbols(const fs::path& path) {
     std::string module_name;
     auto program = load(path, module_name);
@@ -1503,61 +1529,12 @@ std::optional<ImportedSymbols> ModuleArtifact::extract_pub_symbols(const fs::pat
     symbols.module_name = module_name;
     symbols.consts      = program->consts;
 
-    for (auto& [name, trait] : program->traits) {
-        if (trait.is_pub) {
-            // canonical_id is populated during load (read_traits). Ensure non-empty.
-            if (trait.canonical_id.empty()) {
-                trait.canonical_id = make_canonical_id(module_name, trait.name);
-            }
-            if (trait.module_name.empty()) {
-                trait.module_name = module_name;
-            }
-            if (!trait.symbol_id.has_value()) {
-                trait.symbol_id = make_symbol_id(SymbolKind::Trait, trait.module_name, trait.name);
-            }
-            symbols.traits[name] = trait;
-        }
-    }
+    export_declarations<true>(program->traits, symbols.traits, SymbolKind::Trait, module_name);
     symbols.states = program->states;
     std::erase_if(symbols.states, [](const auto& entry) { return !entry.second.is_pub; });
-    for (auto& [name, strct] : program->structs) {
-        if (strct.canonical_id.empty()) {
-            strct.canonical_id = make_canonical_id(module_name, strct.name);
-        }
-        if (strct.module_name.empty()) {
-            strct.module_name = module_name;
-        }
-        if (!strct.symbol_id.has_value()) {
-            strct.symbol_id = make_symbol_id(SymbolKind::Struct, strct.module_name, strct.name);
-        }
-        symbols.structs[name] = strct;
-    }
-    for (auto& [name, enm] : program->enums) {
-        if (enm.canonical_id.empty()) {
-            enm.canonical_id = make_canonical_id(module_name, enm.name);
-        }
-        if (enm.module_name.empty()) {
-            enm.module_name = module_name;
-        }
-        if (!enm.symbol_id.has_value()) {
-            enm.symbol_id = make_symbol_id(SymbolKind::Enum, enm.module_name, enm.name);
-        }
-        symbols.enums[name] = enm;
-    }
-    for (auto& [name, func] : program->funcs) {
-        if (func.is_pub) {
-            if (func.canonical_id.empty()) {
-                func.canonical_id = make_canonical_id(module_name, func.name);
-            }
-            if (func.module_name.empty()) {
-                func.module_name = module_name;
-            }
-            if (!func.symbol_id.has_value()) {
-                func.symbol_id = make_symbol_id(SymbolKind::Func, func.module_name, func.name);
-            }
-            symbols.funcs[name] = func;
-        }
-    }
+    export_declarations<false>(program->structs, symbols.structs, SymbolKind::Struct, module_name);
+    export_declarations<false>(program->enums, symbols.enums, SymbolKind::Enum, module_name);
+    export_declarations<true>(program->funcs, symbols.funcs, SymbolKind::Func, module_name);
 
     for (const auto& tmpl_name : program->pub_templates) {
         symbols.templates[tmpl_name] = exported_template(*program, module_name, tmpl_name);

@@ -8,6 +8,7 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <exception>
 #include <filesystem>
 #include <limits>
 #include <memory_resource>
@@ -257,29 +258,39 @@ std::vector<ScreenLabelSubmission>& screen_label_queue() noexcept {
     return queue;
 }
 
-std::unordered_map<uint32_t, TextLabel3DEntry>& text_label_3d_cache() noexcept {
+std::unordered_map<uint32_t, TextLabel3DEntry>& text_label_3d_cache() noexcept try {
     static std::unordered_map<uint32_t, TextLabel3DEntry> cache;
     return cache;
+} catch (...) {
+    std::terminate();
 }
 
-std::unordered_map<int, TextureResourceEntry>& textures() noexcept {
+std::unordered_map<int, TextureResourceEntry>& textures() noexcept try {
     static std::unordered_map<int, TextureResourceEntry> entries;
     return entries;
+} catch (...) {
+    std::terminate();
 }
 
-std::unordered_map<int, MeshResourceEntry>& meshes() noexcept {
+std::unordered_map<int, MeshResourceEntry>& meshes() noexcept try {
     static std::unordered_map<int, MeshResourceEntry> entries;
     return entries;
+} catch (...) {
+    std::terminate();
 }
 
-std::unordered_map<int, MaterialResourceEntry>& materials() noexcept {
+std::unordered_map<int, MaterialResourceEntry>& materials() noexcept try {
     static std::unordered_map<int, MaterialResourceEntry> entries;
     return entries;
+} catch (...) {
+    std::terminate();
 }
 
-std::unordered_map<int, ModelResourceEntry>& models() noexcept {
+std::unordered_map<int, ModelResourceEntry>& models() noexcept try {
     static std::unordered_map<int, ModelResourceEntry> entries;
     return entries;
+} catch (...) {
+    std::terminate();
 }
 
 // Root directory under which registered (project-root-relative) model asset
@@ -292,16 +303,20 @@ std::optional<std::filesystem::path>& cached_model_asset_root() noexcept {
 }
 
 // Handles that already produced a missing-model diagnostic (at most one per asset).
-std::unordered_set<std::uint32_t>& diagnosed_missing_model_handles() noexcept {
+std::unordered_set<std::uint32_t>& diagnosed_missing_model_handles() noexcept try {
     static std::unordered_set<std::uint32_t> handles;
     return handles;
+} catch (...) {
+    std::terminate();
 }
 
 // (model runtime id, clip index) pairs that already produced an invalid-clip
 // diagnostic (at most one per pair, dsl-model-animation D3).
-std::unordered_set<std::uint64_t>& diagnosed_invalid_clips() noexcept {
+std::unordered_set<std::uint64_t>& diagnosed_invalid_clips() noexcept try {
     static std::unordered_set<std::uint64_t> keys;
     return keys;
+} catch (...) {
+    std::terminate();
 }
 
 constexpr int kMaxMeshLights        = 4;
@@ -1225,7 +1240,7 @@ Matrix mesh_transform_matrix(const MeshSubmission& submission) noexcept {
     return MatrixMultiply(MatrixMultiply(scale, rotation), translation);
 }
 
-void flush_mesh_queue() noexcept {
+void flush_mesh_queue() noexcept try {
     if (mesh_queue().empty()) {
         return;
     }
@@ -1254,9 +1269,11 @@ void flush_mesh_queue() noexcept {
         cactus::runtime::raylib::DrawMesh(*mesh, *material, mesh_transform_matrix(submission));
     }
     cactus::runtime::raylib::EndMode3D();
+} catch (...) {
+    std::terminate();
 }
 
-void flush_model_queue() noexcept {
+void flush_model_queue() noexcept try {
     if (model_queue().empty()) {
         return;
     }
@@ -1317,6 +1334,8 @@ void flush_model_queue() noexcept {
     if (window_ready) {
         cactus::runtime::raylib::EndMode3D();
     }
+} catch (...) {
+    std::terminate();
 }
 
 // Shared 1×1 XY-plane mesh (normal = +Z). V coordinates are pre-flipped to
@@ -1431,7 +1450,7 @@ void flush_screen_label_queue() noexcept {
     }
 }
 
-void flush_text_3d_queue() noexcept {
+void flush_text_3d_queue() noexcept try {
     if (text_3d_queue().empty() || !cactus::runtime::raylib::IsWindowReady()) {
         return;
     }
@@ -1500,9 +1519,11 @@ void flush_text_3d_queue() noexcept {
     }
     cactus::runtime::raylib::EndMode3D();
     UnloadMaterial(mat);
+} catch (...) {
+    std::terminate();
 }
 
-void flush_sprite_queue() noexcept {
+void flush_sprite_queue() noexcept try {
     if (sprite_queue().empty()) {
         return;
     }
@@ -1542,6 +1563,8 @@ void flush_sprite_queue() noexcept {
             *texture, src, dst, Vector2{.x = 0.0F, .y = 0.0F}, 0.0F, submission.color);
     }
     cactus::runtime::raylib::EndMode2D();
+} catch (...) {
+    std::terminate();
 }
 
 void submit_model_impl(const Vector3 position,
@@ -1553,7 +1576,7 @@ void submit_model_impl(const Vector3 position,
                        const bool animated,
                        const int clip,
                        const float time,
-                       const Color tint) noexcept {
+                       const Color tint) noexcept try {
     if (!visible) {
         return;
     }
@@ -1586,6 +1609,8 @@ void submit_model_impl(const Vector3 position,
     if (animated) {
         render_debug_state_storage().animated_model_submissions.push_back({.clip = clip, .time = time});
     }
+} catch (...) {
+    std::terminate();
 }
 }  // namespace
 
@@ -1675,7 +1700,7 @@ void submit_sprite(const Vector2 position,
                    const Color color,
                    const AssetHandle texture,
                    const bool visible,
-                   const int layer) noexcept {
+                   const int layer) noexcept try {
     if (!visible) {
         return;
     }
@@ -1692,6 +1717,8 @@ void submit_sprite(const Vector2 position,
         .layer      = layer,
     });
     ++render_debug_state_storage().submitted_sprites;
+} catch (...) {
+    std::terminate();
 }
 
 void advance_animated_sprite(const AssetHandle texture,
@@ -1723,7 +1750,7 @@ void submit_mesh(const Vector3 position,
                  const AssetHandle material,
                  const bool visible,
                  const bool /*cast_shadow*/,
-                 const Color tint) noexcept {
+                 const Color tint) noexcept try {
     if (!visible) {
         return;
     }
@@ -1757,6 +1784,8 @@ void submit_mesh(const Vector3 position,
     });
     render_debug_state_storage().submitted_mesh_colors.push_back(resolved_color);
     ++render_debug_state_storage().submitted_meshes;
+} catch (...) {
+    std::terminate();
 }
 
 void submit_model(const Vector3 position,
@@ -1789,7 +1818,7 @@ struct ModelEntryAccess {
     Model* loaded;
 };
 
-static ModelEntryAccess prepare_model_entry(const AssetHandle model) noexcept {
+static ModelEntryAccess prepare_model_entry(const AssetHandle model) noexcept try {
     const auto resolved = shared_asset_registry().resolve(AssetKind::Model, model);
     if (!resolved.valid()) {
         return {.entry = nullptr, .loaded = nullptr};
@@ -1799,18 +1828,22 @@ static ModelEntryAccess prepare_model_entry(const AssetHandle model) noexcept {
         entry.path = std::string{resolved.asset_id};
     }
     return {.entry = &entry, .loaded = ensure_model_resource(resolved.runtime_id)};
+} catch (...) {
+    std::terminate();
 }
 
-int model_animation_count(const AssetHandle model) noexcept {
+int model_animation_count(const AssetHandle model) noexcept try {
     auto [entry, loaded] = prepare_model_entry(model);
     if (entry == nullptr) {
         return 0;
     }
     ensure_model_animations(*entry);
     return entry->animation_count;
+} catch (...) {
+    std::terminate();
 }
 
-std::string model_animation_name(const AssetHandle model, const int clip) noexcept {
+std::string model_animation_name(const AssetHandle model, const int clip) noexcept try {
     auto [entry, loaded] = prepare_model_entry(model);
     if (entry == nullptr) {
         return "";
@@ -1821,9 +1854,11 @@ std::string model_animation_name(const AssetHandle model, const int clip) noexce
     }
     const auto& anim = entry->animations[clip];
     return std::string{anim.name, strnlen(anim.name, sizeof(anim.name))};
+} catch (...) {
+    std::terminate();
 }
 
-float model_animation_duration(const AssetHandle model, const int clip) noexcept {
+float model_animation_duration(const AssetHandle model, const int clip) noexcept try {
     auto [entry, loaded] = prepare_model_entry(model);
     if (entry == nullptr) {
         return 0.0F;
@@ -1833,6 +1868,8 @@ float model_animation_duration(const AssetHandle model, const int clip) noexcept
         return 0.0F;
     }
     return static_cast<float>(entry->animations[clip].keyframeCount) / kGltfKeyframesPerSecond;
+} catch (...) {
+    std::terminate();
 }
 
 namespace {
@@ -1968,7 +2005,7 @@ PlaybackAdvanceResult advance_model_playback(const float old_time,
                                              const float requested_delta,
                                              const float duration,
                                              const bool once,
-                                             const std::span<const AnimationCueEntry> cues) noexcept {
+                                             const std::span<const AnimationCueEntry> cues) noexcept try {
     if (!(duration > 0.0F) || !std::isfinite(old_time) || !std::isfinite(requested_delta) || requested_delta == 0.0F) {
         PlaybackAdvanceResult result;
         result.new_time = old_time;
@@ -1990,6 +2027,8 @@ PlaybackAdvanceResult advance_model_playback(const float old_time,
         once ? advance_once(old_time, delta, duration, cues) : advance_loop(old_time, delta, duration, cues);
     result.capped = capped;
     return result;
+} catch (...) {
+    std::terminate();
 }
 
 PlaybackBaseline resolve_playback_baseline(const int clip,
@@ -2007,17 +2046,23 @@ PlaybackBaseline resolve_playback_baseline(const int clip,
     return PlaybackBaseline{.time = prior.prior_time, .completed = prior.completed};
 }
 
-void diagnose_invalid_animation_cue(const entt::entity owner, const int clip, const float time,
-                                    const std::string& name) noexcept {
+void diagnose_invalid_animation_cue(const entt::entity owner,
+                                    const int clip,
+                                    const float time,
+                                    const std::string& name) noexcept try {
     render_debug_state_storage().model_diagnostics.push_back(
         "invalid animation cue on entity " + std::to_string(entt::to_integral(owner)) + ": clip " +
         std::to_string(clip) + " time " + std::to_string(time) + " name '" + name + "'");
+} catch (...) {
+    std::terminate();
 }
 
-void diagnose_capped_playback_advance(const entt::entity entity) noexcept {
+void diagnose_capped_playback_advance(const entt::entity entity) noexcept try {
     render_debug_state_storage().model_diagnostics.push_back(
         "model playback on entity " + std::to_string(entt::to_integral(entity)) +
         " requested more than 64 clip durations of advancement in one update; clamped");
+} catch (...) {
+    std::terminate();
 }
 
 Vector3 model_bounds_size(const AssetHandle model) noexcept {
@@ -2065,7 +2110,7 @@ void register_point_light(const Vector3 position,
                           const Color color,
                           const float intensity,
                           const float range,
-                          const bool enabled) noexcept {
+                          const bool enabled) noexcept try {
     if (enabled) {
         point_light_queue().push_back(PointLightSubmission{
             .position  = position,
@@ -2075,12 +2120,14 @@ void register_point_light(const Vector3 position,
         });
         ++render_debug_state_storage().registered_point_lights;
     }
+} catch (...) {
+    std::terminate();
 }
 
 void register_directional_light(const Vector3 direction,
                                 const Color color,
                                 const float intensity,
-                                const bool enabled) noexcept {
+                                const bool enabled) noexcept try {
     if (enabled) {
         directional_light_queue().push_back(DirectionalLightSubmission{
             .direction = direction,
@@ -2089,6 +2136,8 @@ void register_directional_light(const Vector3 direction,
         });
         ++render_debug_state_storage().registered_directional_lights;
     }
+} catch (...) {
+    std::terminate();
 }
 
 void submit_text_2d(const Vector2 position,
@@ -2096,7 +2145,7 @@ void submit_text_2d(const Vector2 position,
                     const int font_size,
                     const Color color,
                     const std::string& text,
-                    const bool visible) noexcept {
+                    const bool visible) noexcept try {
     if (!visible) {
         return;
     }
@@ -2108,13 +2157,15 @@ void submit_text_2d(const Vector2 position,
         .color        = color,
         .text         = text,
     });
+} catch (...) {
+    std::terminate();
 }
 
 void submit_screen_label(const Vector2 position,
                          const int font_size,
                          const Color color,
                          const std::string& text,
-                         const bool visible) noexcept {
+                         const bool visible) noexcept try {
     if (!visible) {
         return;
     }
@@ -2125,6 +2176,8 @@ void submit_screen_label(const Vector2 position,
         .text      = text,
     });
     ++render_debug_state_storage().submitted_screen_labels;
+} catch (...) {
+    std::terminate();
 }
 
 void submit_text_3d(const uint32_t entity_id,
@@ -2134,7 +2187,7 @@ void submit_text_3d(const uint32_t entity_id,
                     const int font_size,
                     const Color color,
                     const std::string& text,
-                    const bool visible) noexcept {
+                    const bool visible) noexcept try {
     if (!visible) {
         return;
     }
@@ -2147,6 +2200,8 @@ void submit_text_3d(const uint32_t entity_id,
         .color     = color,
         .text      = text,
     });
+} catch (...) {
+    std::terminate();
 }
 
 std::uint64_t generated_next_creation_ordinal() noexcept {
@@ -2220,10 +2275,12 @@ void propagate_hierarchy_below(entt::registry& registry,
 
 namespace {
 
-std::pmr::unordered_set<entt::entity>& destroying_entities_storage() noexcept {
+std::pmr::unordered_set<entt::entity>& destroying_entities_storage() noexcept try {
     static std::pmr::unsynchronized_pool_resource destroying_resource;
     static std::pmr::unordered_set<entt::entity> destroying_entities{&destroying_resource};
     return destroying_entities;
+} catch (...) {
+    std::terminate();
 }
 
 }  // namespace
@@ -2500,14 +2557,18 @@ void SapBroadPhase3D::set_small_domain_threshold_for_testing(std::size_t thresho
 
 namespace {
 
-std::unordered_set<int>& consumed_key_codes() noexcept {
+std::unordered_set<int>& consumed_key_codes() noexcept try {
     static std::unordered_set<int> codes;
     return codes;
+} catch (...) {
+    std::terminate();
 }
 
-std::unordered_set<int>& consumed_mouse_codes() noexcept {
+std::unordered_set<int>& consumed_mouse_codes() noexcept try {
     static std::unordered_set<int> codes;
     return codes;
+} catch (...) {
+    std::terminate();
 }
 
 }  // namespace
@@ -2517,16 +2578,20 @@ void reset_consumed_input() noexcept {
     consumed_mouse_codes().clear();
 }
 
-void mark_input_key_consumed(const int key) noexcept {
+void mark_input_key_consumed(const int key) noexcept try {
     if (key != 0) {
         consumed_key_codes().insert(key);
     }
+} catch (...) {
+    std::terminate();
 }
 
-void mark_input_mouse_consumed(const int mouse_button) noexcept {
+void mark_input_mouse_consumed(const int mouse_button) noexcept try {
     if (mouse_button >= 0) {
         consumed_mouse_codes().insert(mouse_button);
     }
+} catch (...) {
+    std::terminate();
 }
 
 bool is_input_key_consumed(const int key) noexcept {
@@ -2704,7 +2769,7 @@ void register_pointer_world_candidates_impl(PointerCandidatesImpl fn) noexcept {
     pointer_world_candidates_impl_storage() = std::move(fn);
 }
 
-entt::entity pointer_top_target(entt::registry& registry) noexcept {
+entt::entity pointer_top_target(entt::registry& registry) noexcept try {
     const Vector2 pointer_position = cactus::runtime::raylib::GetMousePosition();
     std::vector<PointerCandidate> ordered;
     if (pointer_window_candidates_impl_storage()) {
@@ -2716,6 +2781,8 @@ entt::entity pointer_top_target(entt::registry& registry) noexcept {
         ordered.insert(ordered.end(), world.begin(), world.end());
     }
     return resolve_pointer_target(ordered);
+} catch (...) {
+    std::terminate();
 }
 
 void reset_pointer_router_state() noexcept {
@@ -2920,7 +2987,7 @@ void draw_ui_label(const std::string& text,
     cactus::runtime::raylib::DrawTextEx(GetFontDefault(), text.c_str(), position, safe_font_size, 1.0F, color);
 }
 
-void draw_ui_image(const UiPrimitive& primitive, const Rectangle bounds, const float opacity) noexcept {
+void draw_ui_image(const UiPrimitive& primitive, const Rectangle bounds, const float opacity) noexcept try {
     const auto resolved = shared_asset_registry().resolve(AssetKind::Texture, primitive.image_texture);
     if (!resolved.ready()) {
         return;
@@ -2944,6 +3011,8 @@ void draw_ui_image(const UiPrimitive& primitive, const Rectangle bounds, const f
                                             Vector2{.x = 0.0F, .y = 0.0F},
                                             0.0F,
                                             tint_with_opacity(primitive.image_tint, opacity));
+} catch (...) {
+    std::terminate();
 }
 
 // disabled, pressed, hovered, then normal — spec.md "Button presentation
@@ -3090,7 +3159,7 @@ Color editor_palette_color(const int index) noexcept {
     return kPalette[static_cast<std::size_t>(remainder)];
 }
 
-std::string editor_mode_label(const int mode) noexcept {
+std::string editor_mode_label(const int mode) noexcept try {
     switch (mode) {
         case 1:
             return "TRANSLATE";
@@ -3103,6 +3172,8 @@ std::string editor_mode_label(const int mode) noexcept {
         default:
             return "SELECT";
     }
+} catch (...) {
+    std::terminate();
 }
 
 float editor_palette_button_y(const int index) noexcept {

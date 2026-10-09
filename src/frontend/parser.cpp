@@ -264,10 +264,10 @@ Declaration Parser::parse_declaration() {  // NOLINT(readability-function-cognit
         if (check(TokenType::STRUCT)) {
             return parse_struct();
         }
-        errors_.error(
-            peek().location,
-            "expected trait, state, entity, template, func, extern func, asset, input, event, phase, group, enum, or struct "
-            "after 'pub'");
+        errors_.error(peek().location,
+                      "expected trait, state, entity, template, func, extern func, asset, input, event, phase, group, "
+                      "enum, or struct "
+                      "after 'pub'");
     }
 
     if (tok.type == TokenType::ENTITY) {
@@ -687,18 +687,10 @@ EventHandlerNode Parser::parse_event_handler() {
 }
 
 std::vector<HandlerReferenceNode> Parser::parse_handler_order_block() {
-    const auto loc = peek().location;
-    consume(TokenType::AFTER, "expected 'after'");
+    const auto location = advance().location;
     consume(TokenType::COLON, "expected ':'");
-    expect_newline();
-    expect_indent();
-
     std::vector<HandlerReferenceNode> references;
-    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
-        skip_newlines();
-        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
-            break;
-        }
+    parse_clause_list(location, "handler after: block must contain at least one exact handler reference", [&] {
         const auto reference_location = peek().location;
         auto rule                     = parse_located_name();
         consume(TokenType::SLASH, "expected '/' before handler trigger");
@@ -706,59 +698,27 @@ std::vector<HandlerReferenceNode> Parser::parse_handler_order_block() {
         auto trigger = parse_located_name();
         references.push_back(HandlerReferenceNode{
             .rule = std::move(rule), .trigger = std::move(trigger), .location = reference_location});
-        expect_newline();
-    }
-    expect_dedent();
-    if (references.empty()) {
-        errors_.error(loc, "handler after: block must contain at least one exact handler reference");
-    }
+    });
     return references;
 }
 
 std::vector<LocatedName> Parser::parse_name_block(TokenType keyword, const char* clause_name) {
-    const auto loc = peek().location;
-    if (check(keyword) || (check(TokenType::IDENTIFIER) && peek().value == clause_name)) {
-        advance();
-    } else {
-        errors_.error(peek().location, std::string("expected '") + clause_name + "'");
-    }
+    const auto location = advance().location;
     consume(TokenType::COLON, "expected ':'");
-    expect_newline();
-    expect_indent();
-
     std::vector<LocatedName> names;
-    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
-        skip_newlines();
-        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
-            break;
-        }
-        names.push_back(parse_located_name());
-        expect_newline();
-    }
-    expect_dedent();
-    if (names.empty()) {
-        errors_.error(loc, std::string(clause_name) + ": block must contain at least one entry");
-    }
+    parse_clause_list(
+        location,
+        std::string(clause_name) + ": block must contain at least one entry",
+        [&] { names.push_back(parse_located_name()); },
+        keyword != TokenType::FROM);
     return names;
 }
 
 std::vector<HandlerCommandNode> Parser::parse_command_block() {
-    const auto loc = peek().location;
-    if (check(TokenType::COMMANDS) || (check(TokenType::IDENTIFIER) && peek().value == "commands")) {
-        advance();
-    } else {
-        errors_.error(peek().location, "expected 'commands'");
-    }
+    const auto location = advance().location;
     consume(TokenType::COLON, "expected ':'");
-    expect_newline();
-    expect_indent();
-
     std::vector<HandlerCommandNode> commands;
-    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
-        skip_newlines();
-        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
-            break;
-        }
+    parse_clause_list(location, "commands: block must contain at least one command", [&] {
         HandlerCommandNode command;
         command.location = peek().location;
         if (match(TokenType::SPAWN)) {
@@ -779,16 +739,10 @@ std::vector<HandlerCommandNode> Parser::parse_command_block() {
         } else {
             errors_.error(peek().location,
                           "expected command form: spawn Template, destroy, add Trait, remove Trait, or set Trait");
-            synchronize();
-            continue;
+            return;
         }
-        expect_newline();
         commands.push_back(std::move(command));
-    }
-    expect_dedent();
-    if (commands.empty()) {
-        errors_.error(loc, "commands: block must contain at least one command");
-    }
+    });
     return commands;
 }
 
@@ -899,10 +853,7 @@ TypeRef Parser::parse_type_ref() {
 FuncParam Parser::parse_param() {
     auto loc = peek().location;
     std::string name;
-    if (check(TokenType::IDENTIFIER)) {
-        name = advance().value;
-    } else if (check(TokenType::EXCLUDE)) {
-        // `exclude` is a rule-clause keyword, but stdlib extern functions use it as a parameter name.
+    if (check(TokenType::IDENTIFIER) || check(TokenType::EXCLUDE)) {
         name = advance().value;
     } else {
         name = consume(TokenType::IDENTIFIER, "expected parameter name").value;
@@ -1109,9 +1060,9 @@ Parser::ParsedArchetypeBody Parser::parse_archetype_body_entries(ChildBlockMode 
             advance();  // ':'
             if (child_mode == ChildBlockMode::Overrides) {
                 auto overrides = parse_children_override_block();
-                for (auto& override_node : overrides) {
-                    body.child_overrides.push_back(std::move(override_node));
-                }
+                body.child_overrides.insert(body.child_overrides.end(),
+                                            std::make_move_iterator(overrides.begin()),
+                                            std::make_move_iterator(overrides.end()));
             } else {
                 auto children = parse_children_declaration_block();
                 for (auto& child : children) {
@@ -1364,12 +1315,8 @@ RuleNode Parser::parse_rule() {
 
     skip_newlines();
     if (at_pairs_clause()) {
-        saw_pairs               = true;
-        auto error_count_before = errors_.error_count();
-        node.pairs              = parse_pairs_clause();
-        if (errors_.error_count() > error_count_before) {
-            synchronize();
-        }
+        saw_pairs  = true;
+        node.pairs = parse_pairs_clause();
     }
 
     // A pairs: rule selects tuples, not a single-entity filter, so it cannot
@@ -1418,17 +1365,22 @@ RuleNode Parser::parse_rule() {
 
     skip_newlines();
     if (at_when_clause()) {
-        auto error_count_before = errors_.error_count();
-        node.when_clause        = parse_when_clause();
-        if (errors_.error_count() > error_count_before) {
-            synchronize();
-        }
+        node.when_clause = parse_when_clause();
     }
 
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
         skip_newlines();
         if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
             break;
+        }
+        if (!check(TokenType::ON)) {
+            errors_.error(peek().location, "expected rule clause or handler");
+            const auto before = current_;
+            synchronize();
+            if (current_ == before) {
+                break;
+            }
+            continue;
         }
         auto error_count_before = errors_.error_count();
         auto handler            = parse_event_handler();
@@ -1451,43 +1403,37 @@ Parser::parse_common_rule_clauses(  // NOLINT(readability-function-cognitive-com
     const std::function<void(const SourceLocation&, const char*)>& on_clause_parsed) {
     CommonRuleClauses result;
 
+    bool saw_positive = false;
+    bool saw_negative = false;
     skip_newlines();
-    if (check(TokenType::FILTER)) {
-        auto filter_loc         = peek().location;
-        auto error_count_before = errors_.error_count();
-        result.filter           = parse_filter_clause();
+    while (check(TokenType::FILTER) || at_contextual_clause("each") || check(TokenType::EXCLUDE) ||
+           at_contextual_clause("without")) {
+        const auto location  = peek().location;
+        const bool positive  = check(TokenType::FILTER) || at_contextual_clause("each");
+        auto clause          = parse_selection_clause(positive);
+        const bool duplicate = positive ? saw_positive : saw_negative;
+        if (duplicate) {
+            errors_.error(location, positive ? "duplicate each:/filter: clause" : "duplicate without:/exclude: clause");
+        } else if (positive && saw_negative) {
+            errors_.error(location, "each:/filter: must precede without:/exclude:");
+        } else if (positive) {
+            result.filter = std::move(clause);
+        } else {
+            result.exclude = std::move(clause);
+        }
+        (positive ? saw_positive : saw_negative) = true;
         if (on_clause_parsed) {
-            on_clause_parsed(filter_loc, "filter:");
+            on_clause_parsed(location, positive ? "filter:" : "exclude:");
         }
-        if (errors_.error_count() > error_count_before) {
-            synchronize();
-        }
-    }
-
-    // Task 4.4: Parse optional exclude: clause
-    skip_newlines();
-    if (check(TokenType::EXCLUDE)) {
-        auto exclude_loc        = peek().location;
-        auto error_count_before = errors_.error_count();
-        result.exclude          = parse_exclude_clause();
-        if (on_clause_parsed) {
-            on_clause_parsed(exclude_loc, "exclude:");
-        }
-        if (errors_.error_count() > error_count_before) {
-            synchronize();
-        }
+        skip_newlines();
     }
 
     skip_newlines();
     if (at_order_by_clause()) {
-        auto order_loc          = peek().location;
-        auto error_count_before = errors_.error_count();
-        result.order_by         = parse_order_by_clause();
+        auto order_loc  = peek().location;
+        result.order_by = parse_order_by_clause();
         if (on_clause_parsed) {
             on_clause_parsed(order_loc, "order by:");
-        }
-        if (errors_.error_count() > error_count_before) {
-            synchronize();
         }
     }
 
@@ -1517,74 +1463,125 @@ Parser::parse_common_rule_clauses(  // NOLINT(readability-function-cognitive-com
     return result;
 }
 
-// Block format: KEYWORD COLON NEWLINE INDENT { dotted_name NEWLINE } DEDENT. Unlike
-// filter:/exclude:/order by:, ordering clauses are compatible with pairs:.
 std::vector<std::string> Parser::parse_rule_order_block(const char* empty_block_message) {
-    const auto clause_loc         = peek().location;
-    const auto error_count_before = errors_.error_count();
-    advance();  // consume 'after' / 'before'
+    const auto location = advance().location;
     consume(TokenType::COLON, "expected ':'");
-    expect_newline();
-    skip_newlines();
-    if (!match(TokenType::INDENT)) {
-        errors_.error(clause_loc, empty_block_message);
-        return {};
-    }
     std::vector<std::string> names;
-    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
-        skip_newlines();
-        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
-            break;
-        }
-        names.push_back(parse_dotted_name());
-        expect_newline();
-        if (errors_.error_count() > error_count_before) {
-            synchronize();
-            break;
-        }
-    }
-    expect_dedent();
-    if (names.empty()) {
-        errors_.error(clause_loc, empty_block_message);
-    }
-    if (errors_.error_count() > error_count_before) {
-        synchronize();
-    }
+    parse_clause_list(location, empty_block_message, [&] { names.push_back(parse_dotted_name()); });
     return names;
 }
 
-FilterClause Parser::parse_filter_clause() {
-    auto loc = peek().location;
-    consume(TokenType::FILTER, "expected 'filter'");
-    consume(TokenType::COLON, "expected ':'");
-
-    FilterClause clause;
-    clause.location = loc;
-
-    // Block syntax (consistent with exclude: and after:)
-    expect_newline();
-    expect_indent();
-    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
-        skip_newlines();
-        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
-            break;
-        }
-        auto error_count_before = errors_.error_count();
-        auto entry_loc          = peek().location;
-        auto qname              = parse_dotted_name();
-        std::optional<std::string> alias;
-        if (match(TokenType::AS)) {
-            alias = consume(TokenType::IDENTIFIER, "expected alias name").value;
-        }
-        clause.entries.push_back({.qualified_name = qname, .alias = alias, .location = entry_loc});
-        auto dot_pos = qname.rfind('.');
-        clause.trait_names.push_back(dot_pos != std::string::npos ? qname.substr(dot_pos + 1) : qname);
-        expect_newline();
-        if (errors_.error_count() > error_count_before) {
-            synchronize();
+void Parser::skip_invalid_list_continuation() {
+    skip_newlines();
+    if (!check(TokenType::INDENT)) {
+        return;
+    }
+    errors_.error(peek().location, "an inline list cannot have an indented continuation");
+    advance();
+    int depth = 1;
+    while (depth > 0 && !check(TokenType::EOF_TOKEN)) {
+        if (match(TokenType::INDENT)) {
+            ++depth;
+        } else if (match(TokenType::DEDENT)) {
+            --depth;
+        } else {
+            advance();
         }
     }
-    expect_dedent();
+}
+
+void Parser::skip_list_line() {
+    while (!check(TokenType::NEWLINE) && !check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        advance();
+    }
+}
+
+bool Parser::parse_clause_list_entry(const std::function<void()>& parse_entry, bool block) {
+    if (check(TokenType::COMMA)) {
+        errors_.error(peek().location, "expected a list entry before ','");
+        skip_list_line();
+        expect_newline();
+        return block;
+    }
+    const auto error_count = errors_.error_count();
+    parse_entry();
+    if (errors_.error_count() != error_count) {
+        skip_list_line();
+    }
+    if (!block && match(TokenType::COMMA)) {
+        return true;
+    }
+    if (!check(TokenType::NEWLINE) && !check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        errors_.error(peek().location, block ? "expected newline" : "expected ',' or newline after list entry");
+        skip_list_line();
+    }
+    expect_newline();
+    return block;
+}
+
+void Parser::parse_clause_list(const SourceLocation& location,
+                               const std::string& empty_message,
+                               const std::function<void()>& parse_entry,
+                               bool allow_inline) {
+    const bool block = match(TokenType::NEWLINE);
+    if (block) {
+        skip_newlines();
+        if (!match(TokenType::INDENT)) {
+            errors_.error(location, empty_message);
+            return;
+        }
+    } else if (!allow_inline) {
+        errors_.error(location, "expected an indented block");
+    }
+    bool parsed_entry = false;
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        if (block) {
+            skip_newlines();
+        }
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN) || check(TokenType::NEWLINE)) {
+            break;
+        }
+        parsed_entry = true;
+        if (!parse_clause_list_entry(parse_entry, block)) {
+            skip_invalid_list_continuation();
+            return;
+        }
+    }
+    if (!parsed_entry) {
+        errors_.error(location, empty_message);
+    }
+    if (block) {
+        expect_dedent();
+        return;
+    }
+    expect_newline();
+    skip_invalid_list_continuation();
+}
+
+FilterEntry Parser::parse_filter_entry(bool allow_alias) {
+    FilterEntry entry;
+    entry.location       = peek().location;
+    entry.qualified_name = parse_dotted_name();
+    if (allow_alias && match(TokenType::AS)) {
+        entry.alias = consume(TokenType::IDENTIFIER, "expected alias name").value;
+    }
+    return entry;
+}
+
+FilterClause Parser::parse_selection_clause(bool allow_alias) {
+    FilterClause clause;
+    clause.location = advance().location;
+    consume(TokenType::COLON, "expected ':'");
+    if (check(TokenType::LBRACKET)) {
+        errors_.error(peek().location, "use an inline comma-separated list or an indented block, not brackets");
+    }
+    parse_clause_list(clause.location, "expected an inline comma-separated list or an indented block", [&] {
+        auto entry     = parse_filter_entry(allow_alias);
+        const auto dot = entry.qualified_name.rfind('.');
+        clause.trait_names.push_back(dot == std::string::npos ? entry.qualified_name
+                                                              : entry.qualified_name.substr(dot + 1));
+        clause.entries.push_back(std::move(entry));
+    });
     return clause;
 }
 
@@ -1611,49 +1608,20 @@ PairClause Parser::parse_pairs_clause() {
         if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
             break;
         }
-        auto error_count_before = errors_.error_count();
-        auto binding_loc        = peek().location;
-        auto binding_name       = consume(TokenType::IDENTIFIER, "expected pair binding name").value;
+        auto binding_loc  = peek().location;
+        auto binding_name = consume(TokenType::IDENTIFIER, "expected pair binding name").value;
         consume(TokenType::COLON, "expected ':'");
-        expect_newline();
-        expect_indent();
-
         PairBindingNode binding;
         binding.name     = binding_name;
         binding.location = binding_loc;
-
-        while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
-            skip_newlines();
-            if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
-                break;
-            }
-            auto trait_error_count_before = errors_.error_count();
-            auto entry_loc                = peek().location;
-            auto qname                    = parse_dotted_name();
-            std::optional<std::string> alias;
-            if (match(TokenType::AS)) {
-                alias = consume(TokenType::IDENTIFIER, "expected alias name").value;
-            }
-            binding.traits.push_back({.qualified_name = qname, .alias = alias, .location = entry_loc});
-            expect_newline();
-            // Mirrors parse_filter_clause: a malformed entry (e.g. a stray token where a
-            // dotted trait name is expected) can raise an error without consuming any
-            // tokens, since consume()/parse_dotted_name() do not advance on failure. Without
-            // resynchronizing here, the loop would re-examine the same token forever.
-            if (errors_.error_count() > trait_error_count_before) {
-                synchronize();
-            }
-        }
-        expect_dedent();
+        parse_clause_list(binding_loc, "pair binding must declare at least one trait", [&] {
+            binding.traits.push_back(parse_filter_entry(true));
+        });
 
         if (binding.traits.empty()) {
             errors_.error(binding.location, "pair binding '" + binding.name + "' must declare at least one trait");
         }
         clause.bindings.push_back(std::move(binding));
-
-        if (errors_.error_count() > error_count_before) {
-            synchronize();
-        }
     }
     expect_dedent();
 
@@ -1688,35 +1656,13 @@ WhenClause Parser::parse_when_clause() {
     return clause;
 }
 
-// The `: NEWLINE INDENT expr NEWLINE ... DEDENT` body shared by where: and when:.
 std::vector<std::unique_ptr<ExprNode>> Parser::parse_predicate_block(const SourceLocation& loc,
                                                                      const char* clause_name) {
     consume(TokenType::COLON, "expected ':'");
-    expect_newline();
-
     std::vector<std::unique_ptr<ExprNode>> predicates;
-    if (!check(TokenType::INDENT)) {
-        errors_.error(loc, std::string(clause_name) + ": block must contain at least one predicate");
-        return predicates;
-    }
-    expect_indent();
-    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
-        skip_newlines();
-        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
-            break;
-        }
-        auto error_count_before = errors_.error_count();
+    parse_clause_list(loc, std::string(clause_name) + ": block must contain at least one predicate", [&] {
         predicates.push_back(parse_expression());
-        expect_newline();
-        if (errors_.error_count() > error_count_before) {
-            synchronize();
-        }
-    }
-    expect_dedent();
-
-    if (predicates.empty()) {
-        errors_.error(loc, std::string(clause_name) + ": block must contain at least one predicate");
-    }
+    });
     return predicates;
 }
 
@@ -1754,11 +1700,7 @@ bool Parser::at_order_by_clause() const {
 
 // After `reduce:`, `order by:` ranks aggregate rows, so it is written there.
 void Parser::parse_reduce_and_order_by(RuleNode& node) {
-    auto error_count_before = errors_.error_count();
-    node.reduce             = parse_reduce_clause();
-    if (errors_.error_count() > error_count_before) {
-        synchronize();
-    }
+    node.reduce = parse_reduce_clause();
     if (!node.order_by.empty()) {
         errors_.error(node.order_by.front().location, "with 'reduce:', 'order by:' goes after 'reduce:'");
     }
@@ -1766,17 +1708,17 @@ void Parser::parse_reduce_and_order_by(RuleNode& node) {
     if (!at_order_by_clause()) {
         return;
     }
-    error_count_before = errors_.error_count();
-    node.order_by      = parse_order_by_clause();
-    if (errors_.error_count() > error_count_before) {
-        synchronize();
-    }
+    node.order_by = parse_order_by_clause();
 }
 
 ReduceClause Parser::parse_reduce_clause() {
     ReduceClause clause;
     clause.location = peek().location;
     advance();  // consume 'reduce'
+    if (check(TokenType::IDENTIFIER) && peek().value == "per") {
+        clause.per_location = advance().location;
+        clause.per_binding  = consume(TokenType::IDENTIFIER, "expected binding name after 'per'").value;
+    }
     consume(TokenType::COLON, "expected ':'");
     expect_newline();
     if (!check(TokenType::INDENT)) {
@@ -1786,10 +1728,15 @@ ReduceClause Parser::parse_reduce_clause() {
     expect_indent();
     skip_newlines();
     if (check(TokenType::IDENTIFIER) && peek().value == "per" && peek_next().type == TokenType::COLON) {
-        clause.per_location = peek().location;
+        const auto location = advance().location;
         advance();
-        advance();
-        clause.per_binding = consume(TokenType::IDENTIFIER, "expected binding name after 'per:'").value;
+        auto binding = consume(TokenType::IDENTIFIER, "expected binding name after 'per:'").value;
+        if (clause.per_binding.has_value()) {
+            errors_.error(location, "duplicate reduction grouping");
+        } else {
+            clause.per_location = location;
+            clause.per_binding  = std::move(binding);
+        }
         expect_newline();
     }
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
@@ -1885,45 +1832,21 @@ std::optional<ReducerDecl> Parser::parse_reducer_decl() {
 }
 
 std::vector<SortKey> Parser::parse_order_by_clause() {
-    auto loc      = peek().location;
-    auto order_kw = consume(TokenType::IDENTIFIER, "expected 'order'");
-    if (order_kw.value != "order") {
-        errors_.error(order_kw.location, "expected 'order by:'");
-    }
-    auto by_kw = consume(TokenType::IDENTIFIER, "expected 'by' after 'order'");
-    if (by_kw.value != "by") {
-        errors_.error(by_kw.location, "expected 'by' after 'order'");
-    }
+    const auto location = advance().location;
+    advance();
     consume(TokenType::COLON, "expected ':'");
-    expect_newline();
-    expect_indent();
-
     std::vector<SortKey> keys;
-    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
-        skip_newlines();
-        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
-            break;
-        }
-
-        auto key_loc            = peek().location;
-        auto error_count_before = errors_.error_count();
+    parse_clause_list(location, "order by: block must contain at least one sort key", [&] {
+        const auto key_location = peek().location;
         auto expression         = parse_expression();
 
         bool descending = false;
         if (check(TokenType::IDENTIFIER) && (peek().value == "asc" || peek().value == "desc")) {
             descending = advance().value == "desc";
         }
-        expect_newline();
-        keys.push_back(SortKey{.expression = std::move(expression), .descending = descending, .location = key_loc});
-        if (errors_.error_count() > error_count_before) {
-            synchronize();
-        }
-    }
-
-    expect_dedent();
-    if (keys.empty()) {
-        errors_.error(loc, "order by: block must contain at least one sort key");
-    }
+        keys.push_back(
+            SortKey{.expression = std::move(expression), .descending = descending, .location = key_location});
+    });
     return keys;
 }
 
@@ -2945,163 +2868,122 @@ std::unique_ptr<ExprNode> Parser::parse_unary_expr() {
     return parse_postfix_expr();
 }
 
-std::unique_ptr<ExprNode> Parser::parse_postfix_expr() {
-    // Named-arg names may be keywords (e.g. `from`); accept any non-structural token.
-    auto parse_named_arg_name = [this]() -> std::string {
-        if (check(TokenType::IDENTIFIER)) {
-            return advance().value;
-        }
-        const auto& tok     = peek();
-        const auto tok_type = tok.type;
-        bool is_usable =
-            !tok.value.empty() && tok_type != TokenType::NEWLINE && tok_type != TokenType::DEDENT &&
-            tok_type != TokenType::EOF_TOKEN && tok_type != TokenType::COLON && tok_type != TokenType::INDENT &&
-            tok_type != TokenType::COMMA && tok_type != TokenType::DOT && tok_type != TokenType::LPAREN &&
-            tok_type != TokenType::RPAREN && tok_type != TokenType::LBRACKET && tok_type != TokenType::RBRACKET &&
-            tok_type != TokenType::ASSIGN && tok_type != TokenType::EQUALS && tok_type != TokenType::NOT_EQUALS;
-        if (is_usable) {
-            return advance().value;
-        }
-        errors_.error(tok.location, std::string("expected argument name, got ") + token_type_to_string(tok.type));
-        return "<error>";
-    };
+std::string Parser::parse_named_arg_name() {
+    if (check(TokenType::IDENTIFIER)) {
+        return advance().value;
+    }
+    const auto& tok     = peek();
+    const auto tok_type = tok.type;
+    bool is_usable =
+        !tok.value.empty() && tok_type != TokenType::NEWLINE && tok_type != TokenType::DEDENT &&
+        tok_type != TokenType::EOF_TOKEN && tok_type != TokenType::COLON && tok_type != TokenType::INDENT &&
+        tok_type != TokenType::COMMA && tok_type != TokenType::DOT && tok_type != TokenType::LPAREN &&
+        tok_type != TokenType::RPAREN && tok_type != TokenType::LBRACKET && tok_type != TokenType::RBRACKET &&
+        tok_type != TokenType::ASSIGN && tok_type != TokenType::EQUALS && tok_type != TokenType::NOT_EQUALS;
+    if (is_usable) {
+        return advance().value;
+    }
+    errors_.error(tok.location, std::string("expected argument name, got ") + token_type_to_string(tok.type));
+    return "<error>";
+}
 
-    auto expr = parse_primary_expr();
+std::string Parser::parse_member_name() {
+    if (check(TokenType::IDENTIFIER)) {
+        return advance().value;
+    }
+    const auto& tok = peek();
+    if (tok.type != TokenType::NEWLINE && tok.type != TokenType::DEDENT && tok.type != TokenType::EOF_TOKEN &&
+        tok.type != TokenType::COLON && tok.type != TokenType::INDENT && tok.type != TokenType::COMMA &&
+        tok.type != TokenType::DOT && tok.type != TokenType::LPAREN && tok.type != TokenType::RPAREN &&
+        tok.type != TokenType::LBRACKET && tok.type != TokenType::RBRACKET && tok.type != TokenType::LBRACE &&
+        tok.type != TokenType::RBRACE && tok.type != TokenType::ASSIGN && tok.type != TokenType::ARROW &&
+        tok.type != TokenType::FAT_ARROW && tok.type != TokenType::PLUS_ASSIGN && tok.type != TokenType::MINUS_ASSIGN &&
+        tok.type != TokenType::STAR_ASSIGN && tok.type != TokenType::SLASH_ASSIGN && tok.type != TokenType::EQUALS &&
+        tok.type != TokenType::NOT_EQUALS && tok.type != TokenType::LESS && tok.type != TokenType::GREATER &&
+        tok.type != TokenType::LESS_EQ && tok.type != TokenType::GREATER_EQ && tok.type != TokenType::PLUS &&
+        tok.type != TokenType::MINUS && tok.type != TokenType::STAR && tok.type != TokenType::SLASH &&
+        tok.type != TokenType::PERCENT && tok.type != TokenType::AMPERSAND && tok.type != TokenType::PIPE &&
+        tok.type != TokenType::CARET && tok.type != TokenType::TILDE && !tok.value.empty()) {
+        return advance().value;
+    }
+    return consume(TokenType::IDENTIFIER, "expected member name").value;
+}
 
-    while (true) {
-        if (check(TokenType::DOT)) {
-            auto loc = peek().location;
-            advance();
-            // Accept any identifier or keyword token as member name (e.g., `hit.entity`)
-            std::string member;
-            if (check(TokenType::IDENTIFIER)) {
-                member = advance().value;
-            } else {
-                const auto& tok = peek();
-                if (tok.type != TokenType::NEWLINE && tok.type != TokenType::DEDENT &&
-                    tok.type != TokenType::EOF_TOKEN && tok.type != TokenType::COLON && tok.type != TokenType::INDENT &&
-                    tok.type != TokenType::COMMA && tok.type != TokenType::DOT && tok.type != TokenType::LPAREN &&
-                    tok.type != TokenType::RPAREN && tok.type != TokenType::LBRACKET &&
-                    tok.type != TokenType::RBRACKET && tok.type != TokenType::LBRACE && tok.type != TokenType::RBRACE &&
-                    tok.type != TokenType::ASSIGN && tok.type != TokenType::ARROW && tok.type != TokenType::FAT_ARROW &&
-                    tok.type != TokenType::PLUS_ASSIGN && tok.type != TokenType::MINUS_ASSIGN &&
-                    tok.type != TokenType::STAR_ASSIGN && tok.type != TokenType::SLASH_ASSIGN &&
-                    tok.type != TokenType::EQUALS && tok.type != TokenType::NOT_EQUALS && tok.type != TokenType::LESS &&
-                    tok.type != TokenType::GREATER && tok.type != TokenType::LESS_EQ &&
-                    tok.type != TokenType::GREATER_EQ && tok.type != TokenType::PLUS && tok.type != TokenType::MINUS &&
-                    tok.type != TokenType::STAR && tok.type != TokenType::SLASH && tok.type != TokenType::PERCENT &&
-                    tok.type != TokenType::AMPERSAND && tok.type != TokenType::PIPE && tok.type != TokenType::CARET &&
-                    tok.type != TokenType::TILDE && !tok.value.empty()) {
-                    member = advance().value;
-                } else {
-                    member = consume(TokenType::IDENTIFIER, "expected member name").value;
-                }
-            }
-
-            // Check for query call: .member[filters](named_args)
-            if (check(TokenType::LBRACKET)) {
-                advance();  // consume '['
-                std::vector<QueryFilterPredicate> filters;
-                while (!check(TokenType::RBRACKET) && !check(TokenType::EOF_TOKEN)) {
-                    QueryFilterPredicate pred;
-                    pred.location = peek().location;
-                    if (match(TokenType::NOT)) {
-                        pred.negated = true;
-                    }
-                    pred.trait_name = parse_dotted_name();
-                    filters.push_back(std::move(pred));
-                    if (!check(TokenType::RBRACKET)) {
-                        consume(TokenType::COMMA, "expected ',' or ']' in query filter");
-                    }
-                }
-                consume(TokenType::RBRACKET, "expected ']' after query filter");
-                consume(TokenType::LPAREN, "expected '(' after query filter");
-                std::vector<FieldAssignment> named_args;
-                while (!check(TokenType::RPAREN) && !check(TokenType::EOF_TOKEN)) {
-                    auto arg_loc  = peek().location;
-                    auto arg_name = parse_named_arg_name();
-                    consume(TokenType::ASSIGN, "expected '='");
-                    auto arg_value = parse_expression();
-                    named_args.push_back(
-                        FieldAssignment{.name = arg_name, .value = std::move(arg_value), .location = arg_loc});
-                    if (!check(TokenType::RPAREN)) {
-                        consume(TokenType::COMMA, "expected ',' or ')'");
-                    }
-                }
-                consume(TokenType::RPAREN, "expected ')'");
-                MemberExpr mem;
-                mem.object   = std::move(expr);
-                mem.member   = member;
-                mem.location = loc;
-                QueryCallExpr qcall;
-                qcall.callee     = std::make_unique<ExprNode>(ExprNode::Variant{std::move(mem)}, loc);
-                qcall.filters    = std::move(filters);
-                qcall.named_args = std::move(named_args);
-                qcall.location   = loc;
-                expr             = std::make_unique<ExprNode>(ExprNode::Variant{std::move(qcall)}, loc);
-            }
-            // Check for named-arg query call: .member(name = expr, ...) — no filter bracket
-            else if (check(TokenType::LPAREN) && at_named_argument(current_ + 1)) {
-                advance();  // consume '('
-                std::vector<FieldAssignment> named_args;
-                skip_template_list_spacing();
-                while (!check(TokenType::RPAREN) && !check(TokenType::EOF_TOKEN)) {
-                    auto arg_loc  = peek().location;
-                    auto arg_name = parse_named_arg_name();
-                    consume(TokenType::ASSIGN, "expected '='");
-                    auto arg_value = parse_expression();
-                    named_args.push_back(
-                        FieldAssignment{.name = arg_name, .value = std::move(arg_value), .location = arg_loc});
-                    skip_template_list_spacing();
-                    if (!check(TokenType::RPAREN)) {
-                        consume(TokenType::COMMA, "expected ',' or ')'");
-                        skip_template_list_spacing();
-                    }
-                }
-                consume(TokenType::RPAREN, "expected ')'");
-                MemberExpr mem;
-                mem.object   = std::move(expr);
-                mem.member   = member;
-                mem.location = loc;
-                QueryCallExpr qcall;
-                qcall.callee     = std::make_unique<ExprNode>(ExprNode::Variant{std::move(mem)}, loc);
-                qcall.named_args = std::move(named_args);
-                qcall.location   = loc;
-                expr             = std::make_unique<ExprNode>(ExprNode::Variant{std::move(qcall)}, loc);
-            }
-            // Check for method call: .member(args)
-            else if (check(TokenType::LPAREN)) {
-                advance();
-                CallExpr call;
-                parse_call_arguments(call);
-                MemberExpr mem;
-                mem.object    = std::move(expr);
-                mem.member    = member;
-                mem.location  = loc;
-                call.callee   = std::make_unique<ExprNode>(ExprNode::Variant{std::move(mem)}, loc);
-                call.location = loc;
-                expr          = std::make_unique<ExprNode>(ExprNode::Variant{std::move(call)}, loc);
-            } else {
-                MemberExpr mem;
-                mem.object   = std::move(expr);
-                mem.member   = member;
-                mem.location = loc;
-                expr         = std::make_unique<ExprNode>(ExprNode::Variant{std::move(mem)}, loc);
-            }
-        } else if (check(TokenType::LPAREN)) {
-            auto loc = peek().location;
-            advance();
-            CallExpr call;
-            parse_call_arguments(call);
-            call.callee   = std::move(expr);
-            call.location = loc;
-            expr          = std::make_unique<ExprNode>(ExprNode::Variant{std::move(call)}, loc);
-        } else {
-            break;
+std::vector<QueryFilterPredicate> Parser::parse_query_filters() {
+    std::vector<QueryFilterPredicate> filters;
+    while (!check(TokenType::RBRACKET) && !check(TokenType::EOF_TOKEN)) {
+        QueryFilterPredicate predicate;
+        predicate.location   = peek().location;
+        predicate.negated    = match(TokenType::NOT);
+        predicate.trait_name = parse_dotted_name();
+        filters.push_back(std::move(predicate));
+        if (!check(TokenType::RBRACKET)) {
+            consume(TokenType::COMMA, "expected ',' or ']' in query filter");
         }
     }
+    consume(TokenType::RBRACKET, "expected ']' after query filter");
+    return filters;
+}
 
-    return expr;
+std::unique_ptr<ExprNode> Parser::parse_query_call(std::unique_ptr<ExprNode> callee, const SourceLocation& location) {
+    QueryCallExpr call;
+    call.callee         = std::move(callee);
+    call.location       = location;
+    const bool filtered = match(TokenType::LBRACKET);
+    if (filtered) {
+        call.filters = parse_query_filters();
+    }
+    consume(TokenType::LPAREN, "expected '(' after query filter");
+    if (!filtered) {
+        skip_template_list_spacing();
+    }
+    while (!check(TokenType::RPAREN) && !check(TokenType::EOF_TOKEN)) {
+        const auto arg_location = peek().location;
+        auto name               = parse_named_arg_name();
+        consume(TokenType::ASSIGN, "expected '='");
+        auto value = parse_expression();
+        call.named_args.push_back(
+            FieldAssignment{.name = std::move(name), .value = std::move(value), .location = arg_location});
+        if (!filtered) {
+            skip_template_list_spacing();
+        }
+        if (!check(TokenType::RPAREN)) {
+            consume(TokenType::COMMA, "expected ',' or ')'");
+            if (!filtered) {
+                skip_template_list_spacing();
+            }
+        }
+    }
+    consume(TokenType::RPAREN, "expected ')'");
+    return std::make_unique<ExprNode>(ExprNode::Variant{std::move(call)}, location);
+}
+
+std::unique_ptr<ExprNode> Parser::parse_postfix_expr() {
+    auto expression = parse_primary_expr();
+    while (check(TokenType::DOT) || check(TokenType::LPAREN)) {
+        const auto location = peek().location;
+        if (match(TokenType::DOT)) {
+            MemberExpr member;
+            member.object   = std::move(expression);
+            member.member   = parse_member_name();
+            member.location = location;
+            expression      = std::make_unique<ExprNode>(ExprNode::Variant{std::move(member)}, location);
+            if (check(TokenType::LBRACKET) || (check(TokenType::LPAREN) && at_named_argument(current_ + 1))) {
+                expression = parse_query_call(std::move(expression), location);
+                continue;
+            }
+            if (!check(TokenType::LPAREN)) {
+                continue;
+            }
+        }
+        advance();
+        CallExpr call;
+        parse_call_arguments(call);
+        call.callee   = std::move(expression);
+        call.location = location;
+        expression    = std::make_unique<ExprNode>(ExprNode::Variant{std::move(call)}, location);
+    }
+    return expression;
 }
 
 std::unique_ptr<ExprNode> Parser::parse_spawn_expr() {
@@ -3324,42 +3206,6 @@ IfExpr Parser::parse_if_expr() {
     return if_expr;
 }
 
-// ── Exclude Clause ───────────────────────────────────────────────────────────
-
-// Task 4.4: Parse optional exclude: indented block
-FilterClause Parser::parse_exclude_clause() {
-    auto loc = peek().location;
-    consume(TokenType::EXCLUDE, "expected 'exclude'");
-    consume(TokenType::COLON, "expected ':'");
-    expect_newline();
-    expect_indent();
-
-    FilterClause clause;
-    clause.location = loc;
-
-    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
-        skip_newlines();
-        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
-            break;
-        }
-        auto error_count_before = errors_.error_count();
-        auto entry_loc          = peek().location;
-        // Qualified names allowed, mirroring filter entries (alias or
-        // canonical module path plus trait name).
-        auto name = parse_dotted_name();
-        clause.entries.push_back({.qualified_name = name, .alias = std::nullopt, .location = entry_loc});
-        auto dot_pos = name.rfind('.');
-        clause.trait_names.push_back(dot_pos != std::string::npos ? name.substr(dot_pos + 1) : name);
-        expect_newline();
-        if (errors_.error_count() > error_count_before) {
-            synchronize();
-        }
-    }
-
-    expect_dedent();
-    return clause;
-}
-
 ExternRuleNode Parser::parse_extern_rule() {
     auto loc = peek().location;
     consume(TokenType::EXTERN, "expected 'extern'");
@@ -3376,12 +3222,8 @@ ExternRuleNode Parser::parse_extern_rule() {
     skip_newlines();
     if (at_pairs_clause()) {
         auto pairs_loc          = peek().location;
-        auto error_count_before = errors_.error_count();
         parse_pairs_clause();  // parsed and discarded; pair domains are regular-rule-only
         errors_.error(pairs_loc, "pair domains are regular-rule-only; 'extern rule' cannot declare 'pairs:'");
-        if (errors_.error_count() > error_count_before) {
-            synchronize();
-        }
     }
 
     auto common      = parse_common_rule_clauses();
@@ -3395,12 +3237,8 @@ ExternRuleNode Parser::parse_extern_rule() {
     skip_newlines();
     if (at_where_clause()) {
         auto where_loc          = peek().location;
-        auto error_count_before = errors_.error_count();
         parse_where_clause();  // parsed and discarded; where: is regular-rule-only
         errors_.error(where_loc, "'where:' is not valid on external rules");
-        if (errors_.error_count() > error_count_before) {
-            synchronize();
-        }
     }
 
     skip_newlines();
@@ -3408,7 +3246,6 @@ ExternRuleNode Parser::parse_extern_rule() {
         auto reduce_loc = peek().location;
         parse_reduce_clause();  // parsed and discarded; reduce: is regular-rule-only
         errors_.error(reduce_loc, "'reduce:' is not valid on external rules");
-        synchronize();
     }
 
     skip_newlines();
@@ -3435,7 +3272,6 @@ ExternRuleNode Parser::parse_extern_rule() {
         auto when_loc = peek().location;
         parse_when_clause();  // parsed and discarded; when: is regular-rule-only
         errors_.error(when_loc, "'when:' is only allowed on regular rules");
-        synchronize();
     }
 
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {

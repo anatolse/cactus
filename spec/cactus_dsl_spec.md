@@ -475,31 +475,21 @@ rule_decl       = "rule" IDENTIFIER ":" NEWLINE INDENT
 
 unary_domain    = [ filter_clause ] [ exclude_clause ] ;
 
-filter_clause   = "filter" ":" NEWLINE INDENT
-                  { filter_entry }
-                  DEDENT ;
+filter_clause   = ( "each" | "filter" ) ":" clause_list(filter_entry) ;
 
-filter_entry    = dotted_name [ "as" IDENTIFIER ] NEWLINE ;
+filter_entry    = dotted_name [ "as" IDENTIFIER ] ;
 
-exclude_clause  = "exclude" ":" NEWLINE INDENT
-                  { dotted_name NEWLINE }
-                  DEDENT ;
+exclude_clause  = ( "without" | "exclude" ) ":" clause_list(dotted_name) ;
 
-order_by_clause = "order" "by" ":" NEWLINE INDENT
-                  { sort_key NEWLINE }
-                  DEDENT ;
+order_by_clause = "order" "by" ":" clause_list(sort_key) ;
 
 sort_key        = expression [ "asc" | "desc" ] ;
 
 group_clause    = "group" ":" dotted_name NEWLINE ;
 
-after_clause    = "after" ":" NEWLINE INDENT
-                  { dotted_name NEWLINE }
-                  DEDENT ;
+after_clause = "after" ":" clause_list(dotted_name) ;
 
-before_clause   = "before" ":" NEWLINE INDENT
-                  { dotted_name NEWLINE }
-                  DEDENT ;
+before_clause = "before" ":" clause_list(dotted_name) ;
 
 group_decl      = [ "pub" ] "group" IDENTIFIER ":" NEWLINE INDENT
                   "phase" ":" dotted_name NEWLINE
@@ -508,6 +498,45 @@ group_decl      = [ "pub" ] "group" IDENTIFIER ":" NEWLINE INDENT
 
 limit_clause    = "limit" ":" expression [ "per" IDENTIFIER ] NEWLINE ;
 ```
+
+`each:` and `without:` are the canonical unary selection spellings. `filter:` and
+`exclude:` remain equivalent, with no deprecation warnings. `each` and `without`
+are contextual only at unary clause positions; they remain ordinary identifiers
+elsewhere. Declaring both spellings of a selection clause is a duplicate error.
+Positive selection precedes negative selection, and neither can accompany `pairs:`.
+
+The parameterized `clause_list(entry)` notation means the same typed entries in
+either layout:
+
+```ebnf
+clause_list(entry) = entry { "," entry } [ "," ] NEWLINE
+                  | NEWLINE INDENT { entry NEWLINE } DEDENT ;
+```
+
+| Clause position | Entry grammar |
+|---|---|
+| `each:` / `filter:` and each pair binding | dotted trait name with optional `as` alias |
+| `without:` / `exclude:` | dotted trait name, without alias |
+| Rule `after:` / `before:`, group `after:`, phase `after:` | existing dotted rule, group, or phase reference |
+| Leading handler `after:` | `Rule/on trigger` reference |
+| `where:` / `when:` | pure expression |
+| `order by:` | expression with optional `asc` or `desc` |
+| External `reads:`, `writes:`, `projects:`, `emits:`, `effects:` | existing dotted capability reference |
+| External `commands:` | existing structured command capability |
+
+Inline lists are nonempty, end at the line boundary, and allow one trailing comma
+and a trailing comment. Calls, constructors, list literals, and conditional
+expressions keep their internal commas and colons. Each entry retains its own
+source location. Empty entries, repeated commas, bracket-style selection lists,
+and an indented continuation after an inline list are errors. Existing block
+emptiness checks still apply. Malformed lists report errors and recover to later
+handlers and declarations.
+
+List layout does not change clause placement, scope, contracts, ordering, or
+commit timing. Each pair binding chooses its own layout independently. Phase
+`from:`, scalar clauses, payload blocks, and reducer declaration blocks retain
+their existing grammar. Inline notation does not make external contracts valid
+inside ordinary handlers or add `before:` to groups or phases.
 
 A sort key is a pure expression of the same class as a `where:` predicate (§3.8.2) — literals and constants, reads through in-scope bindings, operators, and calls to functions proven pure — and must type-check as scalar-comparable (`int`, `float`, or `bool`). A bare `alias.field` path is simply the trivial case of that grammar. Direction defaults to `asc` when omitted; multiple sort keys order lexicographically, each breaking the preceding key's ties.
 
@@ -554,9 +583,7 @@ pairs_clause    = "pairs" ":" NEWLINE INDENT
                   pair_binding pair_binding
                   DEDENT ;
 
-pair_binding    = IDENTIFIER ":" NEWLINE INDENT
-                  { filter_entry }
-                  DEDENT ;
+pair_binding    = IDENTIFIER ":" clause_list(filter_entry) ;
 ```
 
 Each binding requires at least one positive trait entry; a `pairs:` block always has exactly two bindings.
@@ -615,10 +642,7 @@ Untargeted `emit` remains valid and is a broadcast occurrence (one per tuple, no
 `where:` declares a pure boolean predicate list that restricts an existing unary (`filter:`) or pair (`pairs:`) domain, independent of any particular execution strategy. `where` is recognized contextually at the rule-clause position (like `pairs`); it is not a reserved keyword elsewhere. `where:` is rejected on rules that declare neither `filter:` nor `pairs:`, and on `extern rule` declarations.
 
 ```ebnf
-where_clause    = "where" ":" NEWLINE INDENT
-                  expression NEWLINE
-                  { expression NEWLINE }
-                  DEDENT ;
+where_clause = "where" ":" clause_list(expression) ;
 ```
 
 At least one predicate line is required. Multiple lines form an unordered logical conjunction: every line must evaluate to `true` for the entity or tuple to remain in the domain.
@@ -706,10 +730,7 @@ rule GroundActor:
 `when:` switches a whole rule on or off from game-wide state. It holds one or more pure `bool` predicates that form a conjunction; when any predicate is false, a handler pass does nothing — no entity or tuple is visited, the body does not run, and no writes or commands are produced. `when` is recognized contextually at the rule-clause position, after `where:` and `limit:`; it is not a reserved keyword elsewhere. It applies to every handler of the rule, including event handlers and rules with no `filter:` or `pairs:`, and it is rejected on `extern rule` declarations.
 
 ```ebnf
-when_clause     = "when" ":" NEWLINE INDENT
-                  expression NEWLINE
-                  { expression NEWLINE }
-                  DEDENT ;
+when_clause = "when" ":" clause_list(expression) ;
 ```
 
 ```cactus
@@ -735,7 +756,7 @@ rule SeekPlayer:
 `reduce:` turns the rows of an existing unary (`filter:`) or pair (`pairs:`) domain into aggregate rows. `reduce` is a keyword at the rule-clause position. `reduce:` is rejected on rules that declare neither `filter:` nor `pairs:`, and on `extern rule` declarations. With `reduce:`, `order by:` is written after it, because it ranks aggregate rows.
 
 ```ebnf
-reduce_clause   = "reduce" ":" NEWLINE INDENT
+reduce_clause   = "reduce" [ "per" IDENTIFIER ] ":" NEWLINE INDENT
                   [ "per" ":" IDENTIFIER NEWLINE ]
                   reducer_decl { reducer_decl }
                   DEDENT ;
@@ -774,6 +795,13 @@ rule TeamTotals:
     on tick:
         team.Team.total = total
 ```
+
+`reduce per body:` is equivalent to `reduce:` with a leading `per: body`
+entry. `per` remains contextual, so `per = count()` is a valid reducer declaration.
+Using header and body grouping together is an error, even if both names match.
+Grouping still requires a declared pair binding and a nonempty reducer block.
+Sorting follows the reduction, and empty-group identities, retained writes, and
+`keep` commit visibility are unchanged.
 
 **Reducers are typed and pure.** `count()` counts rows; `count(binding)` also counts rows (not distinct entities) and requires a pair binding. `sum` takes `int`, `float`, `vec2` or `vec3` and keeps that type; a vector sum adds per component in fold order. `min` and `max` take `int` or `float`, keep that type, and require a `default` of exactly that type. `any` takes `bool` and yields `bool`. `first_hit` takes and yields `std.physics.volume.SweepHit` (§7.7): it ignores misses and keeps the hit with the smallest `t`, and on equal `t` the row that comes first in fold order. `best(binding, by = key)` names a pair binding other than the `per` binding and an `int` or `float` key, and yields `entity_id`: that binding's entity in the row with the highest key, the earlier row in fold order on a tie; rows whose key is NaN are skipped. Reducer inputs have the purity class of a `where:` predicate (§3.8.2) and read the domain's bindings, constants and named entity fields. Reducer names are unique and must not reuse a pair binding name.
 
@@ -870,9 +898,8 @@ lifecycle_trigger = ( "added" | "removed" ) dotted_name ;
 
 event_name      = dotted_name ;
 
-handler_after_clause = "after" ":" NEWLINE INDENT
-                       { dotted_name NEWLINE }
-                       DEDENT ;
+handler_after_clause = "after" ":" clause_list(handler_reference) ;
+handler_reference = dotted_name "/" "on" dotted_name ;
 ```
 
 `added` and `removed` are trigger words only when a trait name follows them; `on added:` still names an event called `added`. `on added T` and `on removed T` react to a durable trait's arrival and departure (§4.4). `<phase>.vertex` and `<phase>.fragment` are derived triggers of render-pass phases (§3.11.1).
@@ -912,9 +939,8 @@ extern_handler      = "on" event_name ":" NEWLINE INDENT
                       DEDENT ;
 
 contract_clause     = ( "reads" | "writes" | "emits" | "effects" | "projects" ) ":"
-                      NEWLINE INDENT { dotted_name NEWLINE } DEDENT
-                    | "commands" ":" NEWLINE INDENT
-                      { command_capability NEWLINE } DEDENT ;
+                      clause_list(dotted_name)
+                    | "commands" ":" clause_list(command_capability) ;
 
 command_capability  = "spawn" dotted_name
                     | "destroy"
@@ -969,7 +995,7 @@ phase_decl       = [ "pub" ] "phase" IDENTIFIER ":" NEWLINE INDENT
                    DEDENT ;
 
 from_clause      = "from" ":" NEWLINE INDENT { dotted_name NEWLINE } DEDENT ;
-phase_after_clause = "after" ":" NEWLINE INDENT { dotted_name NEWLINE } DEDENT ;
+phase_after_clause = "after" ":" clause_list(dotted_name) ;
 every_clause     = "every" ":" constant_expression NEWLINE ;
 max_clause       = "max" ":" INTEGER_LITERAL NEWLINE ;
 phase_field_decl = IDENTIFIER ":" type_ref "=" expression NEWLINE ;

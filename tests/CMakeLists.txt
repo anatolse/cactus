@@ -1,5 +1,8 @@
 # ── Catch2 Test Targets ──────────────────────────────────────────────────────────
 
+# Analyze the same Catch2 registration macros used by compiled tests.
+add_compile_definitions(CATCH_CONFIG_NO_EXPERIMENTAL_STATIC_ANALYSIS_SUPPORT)
+
 # Test fixture directory available as compile definition
 add_compile_definitions(CACTUS_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 
@@ -755,6 +758,13 @@ add_test(NAME CliDiagnosticsTests COMMAND test_cli_diagnostics)
 #     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
 #     COMMENT "Running focused example C++ compilation integration check"
 # )
+
+
+cactus_add_headless_behavior_test(test_concise_rule_notation_headless_behavior
+    CACTUS_SOURCE examples/concise_rule_notation.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_concise_rule_notation_headless_behavior.cpp
+)
 
 # Every executable defined in this directory is a test or a test subprocess, so
 # collecting them here keeps coverage_check's list in step with new tests.

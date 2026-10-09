@@ -5,6 +5,7 @@
 #include "frontend/symbol_identity.hpp"
 
 #include <algorithm>
+#include <format>
 #include <functional>
 
 namespace cactus {
@@ -92,6 +93,34 @@ void merge_states(DecoratedProgram& target, const DecoratedProgram& src) {
     }
 }
 
+template <typename Declarations, typename CheckConflict>
+bool merge_declarations(Declarations& target,
+                        const Declarations& source,
+                        std::unordered_map<std::string, std::string>& origins,
+                        const std::string& module_name,
+                        ErrorReporter& errors,
+                        CheckConflict check_conflict) {
+    bool ok = true;
+    for (const auto& [name, declaration] : source) {
+        if (check_conflict(declaration)) {
+            const auto key = declaration.canonical_id.empty() ? make_canonical_id(module_name, declaration.name)
+                                                              : declaration.canonical_id;
+            const auto [origin, inserted] = origins.emplace(key, module_name);
+            if (!inserted) {
+                errors.error({},
+                             std::format("duplicate canonical symbol '{}' defined in module '{}' and module '{}'",
+                                         key,
+                                         origin->second,
+                                         module_name));
+                ok = false;
+                continue;
+            }
+        }
+        target[declaration.canonical_id.empty() ? name : declaration.canonical_id] = declaration;
+    }
+    return ok;
+}
+
 }  // namespace
 
 ProgramLinker::ProgramLinker(ErrorReporter& errors)
@@ -106,12 +135,6 @@ bool ProgramLinker::merge_into(DecoratedProgram& target,
         return true;
     }
 
-    // Canonical key for conflict detection: prefer stored canonical_id; derive from
-    // module + simple name when absent (e.g. for programs without explicit module declarations).
-    auto canonical_key = [&src_module_name](const auto& decl) -> std::string {
-        return decl.canonical_id.empty() ? make_canonical_id(src_module_name, decl.name) : decl.canonical_id;
-    };
-
     // Map insertion key: prefer canonical_id so same-local-named declarations from
     // different modules (e.g. flat.WorldTransform vs volume.WorldTransform) coexist;
     // fall back to the source map key (simple name) when canonical_id is absent.
@@ -122,68 +145,14 @@ bool ProgramLinker::merge_into(DecoratedProgram& target,
     bool ok                 = true;
     const auto module_index = static_cast<std::uint64_t>(merged_modules_.size());
 
-    // ── Merge traits (task 4.4: conflict by canonical identity, not simple name) ──
-    for (const auto& [name, trait] : src.traits) {
-        if (trait.is_pub) {
-            const std::string key = canonical_key(trait);
-            auto it               = symbol_origins_.find(key);
-            if (it != symbol_origins_.end()) {
-                std::string msg = "duplicate canonical symbol '";
-                msg += key;
-                msg += "' defined in module '";
-                msg += it->second;
-                msg += "' and module '";
-                msg += src_module_name;
-                msg += "'";
-                errors_.error({}, msg);
-                ok = false;
-                continue;
-            }
-            symbol_origins_[key] = src_module_name;
-        }
-        target.traits[insert_key(trait, name)] = trait;
-    }
+    ok &=
+        merge_declarations(target.traits, src.traits, symbol_origins_, src_module_name, errors_, [](const auto& trait) {
+            return trait.is_pub;
+        });
     merge_states(target, src);
-
-    // ── Merge structs ────────────────────────────────────────────────────────
-    for (const auto& [name, strct] : src.structs) {
-        const std::string key = canonical_key(strct);
-        auto it               = symbol_origins_.find(key);
-        if (it != symbol_origins_.end()) {
-            std::string msg = "duplicate canonical symbol '";
-            msg += key;
-            msg += "' defined in module '";
-            msg += it->second;
-            msg += "' and module '";
-            msg += src_module_name;
-            msg += "'";
-            errors_.error({}, msg);
-            ok = false;
-            continue;
-        }
-        symbol_origins_[key]                    = src_module_name;
-        target.structs[insert_key(strct, name)] = strct;
-    }
-
-    // ── Merge enums ──────────────────────────────────────────────────────────
-    for (const auto& [name, enm] : src.enums) {
-        const std::string key = canonical_key(enm);
-        auto it               = symbol_origins_.find(key);
-        if (it != symbol_origins_.end()) {
-            std::string msg = "duplicate canonical symbol '";
-            msg += key;
-            msg += "' defined in module '";
-            msg += it->second;
-            msg += "' and module '";
-            msg += src_module_name;
-            msg += "'";
-            errors_.error({}, msg);
-            ok = false;
-            continue;
-        }
-        symbol_origins_[key]                = src_module_name;
-        target.enums[insert_key(enm, name)] = enm;
-    }
+    const auto check_all = [](const auto&) { return true; };
+    ok &= merge_declarations(target.structs, src.structs, symbol_origins_, src_module_name, errors_, check_all);
+    ok &= merge_declarations(target.enums, src.enums, symbol_origins_, src_module_name, errors_, check_all);
 
     for (const auto& [name, func] : src.funcs) {
         target.funcs[insert_key(func, name)] = func;

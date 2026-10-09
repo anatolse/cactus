@@ -25,13 +25,8 @@ pub trait Shape:
     var origin: vec2 = vec2(0.0, 0.0)
 
 extern rule ShapeRenderer:
-    filter:
-        tf.WorldTransform
-        Shape
+    each: tf.WorldTransform, Shape
 
     on render:
-        reads:
-            tf.WorldTransform
-            Shape
-        effects:
-            graphics
+        reads: tf.WorldTransform, Shape
+        effects: graphics

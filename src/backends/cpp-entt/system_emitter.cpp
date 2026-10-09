@@ -96,45 +96,49 @@ struct StdlibFuncInfo {
     bool needs_registry = false;
 };
 using FuncRenameMap = std::unordered_map<std::string, StdlibFuncInfo>;
-const std::unordered_map<std::string, FuncRenameMap> kRuntimeFuncNames = {
-    {"std.render.models",
-     {{"animation_count", {.runtime_name = "model_animation_count"}},
-      {"animation_name", {.runtime_name = "model_animation_name"}},
-      {"bounds_size", {.runtime_name = "model_bounds_size"}},
-      {"bounds_center", {.runtime_name = "model_bounds_center"}}}},
-    {"std.editor",
-     {{"spawn_template", {.runtime_name = "editor_spawn_template", .needs_registry = true}},
-      {"hit_test_2d", {.runtime_name = "editor_hit_test_2d", .needs_registry = true}},
-      {"raycast_3d", {.runtime_name = "editor_raycast_3d", .needs_registry = true}},
-      {"camera_enter", {.runtime_name = "editor_camera_enter", .needs_registry = true}},
-      {"camera_exit", {.runtime_name = "editor_camera_exit", .needs_registry = true}},
-      {"apply_camera_2d", {.runtime_name = "editor_apply_camera_2d", .needs_registry = true}},
-      {"apply_camera_3d", {.runtime_name = "editor_apply_camera_3d", .needs_registry = true}},
-      {"active_mode", {.runtime_name = "editor_active_mode", .needs_registry = true}},
-      {"is_editor_active", {.runtime_name = "editor_is_active", .needs_registry = true}},
-      {"template_names", {.runtime_name = "editor_template_names"}},
-      {"template_index", {.runtime_name = "editor_template_index"}},
-      {"screen_size", {.runtime_name = "editor_screen_size"}},
-      {"palette_label_slot", {.runtime_name = "editor_palette_label_slot", .needs_registry = true}},
-      {"palette_color", {.runtime_name = "editor_palette_color"}},
-      {"mode_label", {.runtime_name = "editor_mode_label"}},
-      {"palette_button_y", {.runtime_name = "editor_palette_button_y"}}}},
-    {"std.input",
-     {{"mouse_delta", {.runtime_name = "editor_mouse_delta_screen"}},
-      {"wheel_delta", {.runtime_name = "editor_wheel_delta"}},
-      {"consume", {.runtime_name = "editor_consume"}},
-      {"set_cursor_captured", {.runtime_name = "set_cursor_captured"}}}},
-    {"std.camera.flat",
-     {{"screen_to_world", {.runtime_name = "editor_screen_to_world_2d"}},
-      {"screen_delta_to_world", {.runtime_name = "screen_delta_to_world_2d"}}}},
-    {"std.camera.volume",
-     {{"screen_to_plane", {.runtime_name = "editor_plane_project_3d"}},
-      {"screen_delta_on_plane", {.runtime_name = "screen_delta_on_plane_3d"}}}},
-    {"std.transform.flat", {{"world_position", {.runtime_name = "editor_entity_position_2d", .needs_registry = true}}}},
-    {"std.transform.volume",
-     {{"world_position", {.runtime_name = "editor_entity_position_3d", .needs_registry = true}}}},
-    {"std.pointer", {{"top_target", {.runtime_name = "pointer_top_target", .needs_registry = true}}}},
-};
+const std::unordered_map<std::string, FuncRenameMap>& runtime_func_names() {
+    static const std::unordered_map<std::string, FuncRenameMap> value = {
+        {"std.render.models",
+         {{"animation_count", {.runtime_name = "model_animation_count"}},
+          {"animation_name", {.runtime_name = "model_animation_name"}},
+          {"bounds_size", {.runtime_name = "model_bounds_size"}},
+          {"bounds_center", {.runtime_name = "model_bounds_center"}}}},
+        {"std.editor",
+         {{"spawn_template", {.runtime_name = "editor_spawn_template", .needs_registry = true}},
+          {"hit_test_2d", {.runtime_name = "editor_hit_test_2d", .needs_registry = true}},
+          {"raycast_3d", {.runtime_name = "editor_raycast_3d", .needs_registry = true}},
+          {"camera_enter", {.runtime_name = "editor_camera_enter", .needs_registry = true}},
+          {"camera_exit", {.runtime_name = "editor_camera_exit", .needs_registry = true}},
+          {"apply_camera_2d", {.runtime_name = "editor_apply_camera_2d", .needs_registry = true}},
+          {"apply_camera_3d", {.runtime_name = "editor_apply_camera_3d", .needs_registry = true}},
+          {"active_mode", {.runtime_name = "editor_active_mode", .needs_registry = true}},
+          {"is_editor_active", {.runtime_name = "editor_is_active", .needs_registry = true}},
+          {"template_names", {.runtime_name = "editor_template_names"}},
+          {"template_index", {.runtime_name = "editor_template_index"}},
+          {"screen_size", {.runtime_name = "editor_screen_size"}},
+          {"palette_label_slot", {.runtime_name = "editor_palette_label_slot", .needs_registry = true}},
+          {"palette_color", {.runtime_name = "editor_palette_color"}},
+          {"mode_label", {.runtime_name = "editor_mode_label"}},
+          {"palette_button_y", {.runtime_name = "editor_palette_button_y"}}}},
+        {"std.input",
+         {{"mouse_delta", {.runtime_name = "editor_mouse_delta_screen"}},
+          {"wheel_delta", {.runtime_name = "editor_wheel_delta"}},
+          {"consume", {.runtime_name = "editor_consume"}},
+          {"set_cursor_captured", {.runtime_name = "set_cursor_captured"}}}},
+        {"std.camera.flat",
+         {{"screen_to_world", {.runtime_name = "editor_screen_to_world_2d"}},
+          {"screen_delta_to_world", {.runtime_name = "screen_delta_to_world_2d"}}}},
+        {"std.camera.volume",
+         {{"screen_to_plane", {.runtime_name = "editor_plane_project_3d"}},
+          {"screen_delta_on_plane", {.runtime_name = "screen_delta_on_plane_3d"}}}},
+        {"std.transform.flat",
+         {{"world_position", {.runtime_name = "editor_entity_position_2d", .needs_registry = true}}}},
+        {"std.transform.volume",
+         {{"world_position", {.runtime_name = "editor_entity_position_3d", .needs_registry = true}}}},
+        {"std.pointer", {{"top_target", {.runtime_name = "pointer_top_target", .needs_registry = true}}}},
+    };
+    return value;
+}
 
 // std.ui mixes a handful of backend-owned metric facts (window_size/text_size/
 // texture_size — platform state per design.md decision #10) with ordinary
@@ -142,21 +146,24 @@ const std::unordered_map<std::string, FuncRenameMap> kRuntimeFuncNames = {
 // it cannot use the blanket per-module prefix above: that would route every
 // authored helper call through a nonexistent cactus::runtime::entt_backend
 // symbol of the same name. Name the three metric facts explicitly instead.
-const std::unordered_map<std::string, std::string> kUiMetricFuncNames = {
-    {"window_size", "ui_window_size"},
-    {"text_size", "ui_text_size"},
-    {"texture_size", "ui_texture_size"},
-};
+const std::unordered_map<std::string, std::string>& ui_metric_func_names() {
+    static const std::unordered_map<std::string, std::string> value = {
+        {"window_size", "ui_window_size"},
+        {"text_size", "ui_text_size"},
+        {"texture_size", "ui_texture_size"},
+    };
+    return value;
+}
 
 bool is_stdlib_ui_metric_func(const SymbolId& func_id) {
     return func_id.kind == SymbolKind::Func && func_id.module.name == "std.ui" &&
-           kUiMetricFuncNames.contains(func_id.local_name);
+           ui_metric_func_names().contains(func_id.local_name);
 }
 
 std::string stdlib_ui_metric_func_call(const SymbolId& func_id,
                                        const std::vector<std::unique_ptr<ExprNode>>& args,
                                        const auto& emit_arg) {
-    std::string result = "cactus::runtime::entt_backend::" + kUiMetricFuncNames.at(func_id.local_name) + "(";
+    std::string result = "cactus::runtime::entt_backend::" + ui_metric_func_names().at(func_id.local_name) + "(";
     for (size_t i = 0; i < args.size(); ++i) {
         if (i > 0) {
             result += ", ";
@@ -168,8 +175,8 @@ std::string stdlib_ui_metric_func_call(const SymbolId& func_id,
 }
 
 std::string stdlib_runtime_func_name(const std::string& module_name, const std::string& func_name) {
-    const auto module_it = kRuntimeFuncNames.find(module_name);
-    if (module_it != kRuntimeFuncNames.end()) {
+    const auto module_it = runtime_func_names().find(module_name);
+    if (module_it != runtime_func_names().end()) {
         const auto func_it = module_it->second.find(func_name);
         if (func_it != module_it->second.end()) {
             return func_it->second.runtime_name;
@@ -246,8 +253,8 @@ bool stdlib_call_needs_registry(const SymbolId& func_id) {
     if (func_id.kind != SymbolKind::Func) {
         return false;
     }
-    const auto module_it = kRuntimeFuncNames.find(func_id.module.name);
-    if (module_it == kRuntimeFuncNames.end()) {
+    const auto module_it = runtime_func_names().find(func_id.module.name);
+    if (module_it == runtime_func_names().end()) {
         return false;
     }
     const auto func_it = module_it->second.find(func_id.local_name);
@@ -499,6 +506,12 @@ struct PairCodegenTraitAccess {
 };
 
 struct PairCodegenBinding {
+    PairCodegenBinding()                                                = default;
+    PairCodegenBinding(const PairCodegenBinding&)                       = default;
+    PairCodegenBinding& operator=(const PairCodegenBinding&)            = default;
+    PairCodegenBinding(PairCodegenBinding&&) noexcept(false)            = default;
+    PairCodegenBinding& operator=(PairCodegenBinding&&) noexcept(false) = default;
+    ~PairCodegenBinding()                                               = default;
     std::string binding_name;
     // dsl-rule-limit: the binding a provably-one `limit: ... per` names, whose
     // trait access is emitted mutable (registry.get<T>) instead of the
@@ -635,6 +648,12 @@ std::vector<std::string> filter_cpp_type_names(const FilterClause& filter, const
 // ── Pair binding codegen (dsl-pair-relations) ────────────────────────────────
 
 struct PairBindingCodegen {
+    PairBindingCodegen()                                                = default;
+    PairBindingCodegen(const PairBindingCodegen&)                       = default;
+    PairBindingCodegen& operator=(const PairBindingCodegen&)            = default;
+    PairBindingCodegen(PairBindingCodegen&&) noexcept(false)            = default;
+    PairBindingCodegen& operator=(PairBindingCodegen&&) noexcept(false) = default;
+    ~PairBindingCodegen()                                               = default;
     std::vector<std::string> cpp_types;  // dedup'd view<> template args, source order
     PairCodegenBinding scope;            // access-key -> resolved trait, for rewrite_expr; scope.binding_name
                                          // is also this binding's source-level name
@@ -903,12 +922,12 @@ std::string emit_event_renderer_body(const ExternRuleNode& sys,
     return out.str();
 }
 
-const std::string kBeginMode2D =
+constexpr const char* kBeginMode2D =
     "cactus::runtime::raylib::BeginMode2D(cactus::runtime::entt_backend::get_active_camera_2d());";
-const std::string kEndMode2D = "cactus::runtime::raylib::EndMode2D();";
-const std::string kBeginMode3D =
+constexpr const char* kEndMode2D = "cactus::runtime::raylib::EndMode2D();";
+constexpr const char* kBeginMode3D =
     "cactus::runtime::raylib::BeginMode3D(cactus::runtime::entt_backend::get_active_camera_3d());";
-const std::string kEndMode3D = "cactus::runtime::raylib::EndMode3D();";
+constexpr const char* kEndMode3D = "cactus::runtime::raylib::EndMode3D();";
 
 // One row per generic event-payload renderer (see the comment above); (module_name, rule_name)
 // identifies the extern rule to match, mode_begin/mode_end wrap world-space primitives in a
@@ -1184,112 +1203,133 @@ static std::unordered_set<std::string> collect_trait_fields(const std::vector<st
 // resolve (one Int, one Float) — a missed cast opportunity is safe, a wrong
 // one (e.g. silently turning an all-int `%`/`/` computation into float
 // arithmetic because the other operand's type was merely unresolved) is not.
-// NOLINTNEXTLINE(readability-function-cognitive-complexity) -- exhaustive AST-dispatch arms, same
-// inherent shape as rewrite_expr/rewrite_stmt below.
+static NumericKind infer_numeric_kind(const ExprNode& expr,
+                                      const std::vector<std::string>& trait_names,
+                                      const DecoratedProgram& program,
+                                      const LocalNumericKinds* local_kinds);
+
+struct NumericKindResolver {
+    const std::vector<std::string>* trait_names;
+    const DecoratedProgram* program;
+    const LocalNumericKinds* local_kinds;
+
+    NumericKind operator()(const LiteralExpr& e) const {
+        if (e.kind == LiteralExpr::Kind::Float) {
+            return NumericKind::Float;
+        }
+        if (e.kind == LiteralExpr::Kind::Int) {
+            return NumericKind::Int;
+        }
+        return NumericKind::Unknown;
+    }
+
+    NumericKind operator()(const IdentExpr& e) const {
+        if (local_kinds != nullptr) {
+            if (const auto found = local_kinds->find(e.name); found != local_kinds->end()) {
+                return found->second;
+            }
+        }
+        // Trait fields take priority, matching rewrite_expr's own IdentExpr
+        // precedence (a known trait field is qualified as `comp.field`; anything
+        // else, including a const, is emitted as a bare name) — checking fields
+        // first here keeps this resolution order consistent with that one.
+        if (e.resolved_const_id.has_value()) {
+            return const_numeric_kind(*e.resolved_const_id, *program);
+        }
+        const auto comp = find_comp_for_field(e.name, *trait_names, *program);
+        if (comp.empty()) {
+            return NumericKind::Unknown;
+        }
+        const auto* trait = EnttCodegenUtils::find_trait(*program, comp);
+        if (trait == nullptr) {
+            return NumericKind::Unknown;
+        }
+        for (const auto& f : trait->fields) {
+            if (f.name != e.name) {
+                continue;
+            }
+            if (f.type.kind == TypeKind::Int) {
+                return NumericKind::Int;
+            }
+            if (f.type.kind == TypeKind::Float) {
+                return NumericKind::Float;
+            }
+            return NumericKind::Unknown;
+        }
+        return NumericKind::Unknown;
+    }
+
+    NumericKind operator()(const MemberExpr& e) const {
+        // vec2/vec3 components are always float in this type system —
+        // covers the overwhelmingly common operand shape (`.x`/`.y`/`.z`)
+        // without needing to resolve the object's own declared type.
+        if (e.member == "x" || e.member == "y" || e.member == "z" || e.resolved_phase_dt.has_value()) {
+            return NumericKind::Float;
+        }
+        if (e.resolved_const_id.has_value()) {
+            return const_numeric_kind(*e.resolved_const_id, *program);
+        }
+        return NumericKind::Unknown;
+    }
+
+    NumericKind operator()(const UnaryExpr& e) const {
+        return infer_numeric_kind(*e.operand, *trait_names, *program, local_kinds);
+    }
+
+    NumericKind operator()(const BinaryExpr& e) const {
+        static const std::unordered_set<std::string> kArithmeticOps{"+", "-", "*", "/", "%"};
+        if (!kArithmeticOps.contains(e.op)) {
+            return NumericKind::Unknown;
+        }
+        const auto left  = infer_numeric_kind(*e.left, *trait_names, *program, local_kinds);
+        const auto right = infer_numeric_kind(*e.right, *trait_names, *program, local_kinds);
+        if (left == NumericKind::Unknown || right == NumericKind::Unknown) {
+            return NumericKind::Unknown;
+        }
+        return (left == NumericKind::Float || right == NumericKind::Float) ? NumericKind::Float : NumericKind::Int;
+    }
+
+    NumericKind operator()(const CallExpr& e) const {
+        const ResolvedFunc* func = nullptr;
+        if (e.resolved_callee_id.has_value()) {
+            func = EnttCodegenUtils::find_func(*program, *e.resolved_callee_id);
+        } else if (const auto* ident = std::get_if<IdentExpr>(&e.callee->expr)) {
+            if (const auto found = program->funcs.find(ident->name); found != program->funcs.end()) {
+                func = &found->second;
+            }
+        }
+        if (func == nullptr || !func->return_type.has_value()) {
+            return NumericKind::Unknown;
+        }
+        if (func->return_type->kind == TypeKind::Int) {
+            return NumericKind::Int;
+        }
+        if (func->return_type->kind == TypeKind::Float) {
+            return NumericKind::Float;
+        }
+        return NumericKind::Unknown;
+    }
+
+    NumericKind operator()(const IfExpr& e) const {
+        return infer_numeric_kind(*e.then_expr, *trait_names, *program, local_kinds);
+    }
+
+    NumericKind operator()(const MatchExpr& e) const {
+        return e.arms.empty() ? NumericKind::Unknown
+                              : infer_numeric_kind(*e.arms.front().body, *trait_names, *program, local_kinds);
+    }
+
+    NumericKind operator()(const auto& /*expression*/) const {
+        return NumericKind::Unknown;
+    }
+};
+
 static NumericKind infer_numeric_kind(const ExprNode& expr,
                                       const std::vector<std::string>& trait_names,
                                       const DecoratedProgram& program,
                                       const LocalNumericKinds* local_kinds) {
-    return std::visit(
-        // NOLINTNEXTLINE(readability-function-cognitive-complexity) -- same reason as the outer function
-        [&](const auto& e) -> NumericKind {
-            using E = std::decay_t<decltype(e)>;
-            if constexpr (std::is_same_v<E, LiteralExpr>) {
-                if (e.kind == LiteralExpr::Kind::Float) {
-                    return NumericKind::Float;
-                }
-                if (e.kind == LiteralExpr::Kind::Int) {
-                    return NumericKind::Int;
-                }
-                return NumericKind::Unknown;
-            } else if constexpr (std::is_same_v<E, IdentExpr>) {
-                if (local_kinds != nullptr) {
-                    if (const auto found = local_kinds->find(e.name); found != local_kinds->end()) {
-                        return found->second;
-                    }
-                }
-                // Trait fields take priority, matching rewrite_expr's own IdentExpr
-                // precedence (a known trait field is qualified as `comp.field`; anything
-                // else, including a const, is emitted as a bare name) — checking fields
-                // first here keeps this resolution order consistent with that one.
-                if (e.resolved_const_id.has_value()) {
-                    return const_numeric_kind(*e.resolved_const_id, program);
-                }
-                const auto comp = find_comp_for_field(e.name, trait_names, program);
-                if (comp.empty()) {
-                    return NumericKind::Unknown;
-                }
-                const auto* trait = EnttCodegenUtils::find_trait(program, comp);
-                if (trait == nullptr) {
-                    return NumericKind::Unknown;
-                }
-                for (const auto& f : trait->fields) {
-                    if (f.name != e.name) {
-                        continue;
-                    }
-                    if (f.type.kind == TypeKind::Int) {
-                        return NumericKind::Int;
-                    }
-                    if (f.type.kind == TypeKind::Float) {
-                        return NumericKind::Float;
-                    }
-                    return NumericKind::Unknown;
-                }
-                return NumericKind::Unknown;
-            } else if constexpr (std::is_same_v<E, MemberExpr>) {
-                // vec2/vec3 components are always float in this type system —
-                // covers the overwhelmingly common operand shape (`.x`/`.y`/`.z`)
-                // without needing to resolve the object's own declared type.
-                if (e.member == "x" || e.member == "y" || e.member == "z" || e.resolved_phase_dt.has_value()) {
-                    return NumericKind::Float;
-                }
-                if (e.resolved_const_id.has_value()) {
-                    return const_numeric_kind(*e.resolved_const_id, program);
-                }
-                return NumericKind::Unknown;
-            } else if constexpr (std::is_same_v<E, UnaryExpr>) {
-                return infer_numeric_kind(*e.operand, trait_names, program, local_kinds);
-            } else if constexpr (std::is_same_v<E, BinaryExpr>) {
-                static const std::unordered_set<std::string> kArithmeticOps{"+", "-", "*", "/", "%"};
-                if (!kArithmeticOps.contains(e.op)) {
-                    return NumericKind::Unknown;
-                }
-                const auto left  = infer_numeric_kind(*e.left, trait_names, program, local_kinds);
-                const auto right = infer_numeric_kind(*e.right, trait_names, program, local_kinds);
-                if (left == NumericKind::Unknown || right == NumericKind::Unknown) {
-                    return NumericKind::Unknown;
-                }
-                return (left == NumericKind::Float || right == NumericKind::Float) ? NumericKind::Float
-                                                                                   : NumericKind::Int;
-            } else if constexpr (std::is_same_v<E, CallExpr>) {
-                const ResolvedFunc* func = nullptr;
-                if (e.resolved_callee_id.has_value()) {
-                    func = EnttCodegenUtils::find_func(program, *e.resolved_callee_id);
-                } else if (const auto* ident = std::get_if<IdentExpr>(&e.callee->expr)) {
-                    if (const auto found = program.funcs.find(ident->name); found != program.funcs.end()) {
-                        func = &found->second;
-                    }
-                }
-                if (func == nullptr || !func->return_type.has_value()) {
-                    return NumericKind::Unknown;
-                }
-                if (func->return_type->kind == TypeKind::Int) {
-                    return NumericKind::Int;
-                }
-                if (func->return_type->kind == TypeKind::Float) {
-                    return NumericKind::Float;
-                }
-                return NumericKind::Unknown;
-            } else if constexpr (std::is_same_v<E, IfExpr>) {
-                return infer_numeric_kind(*e.then_expr, trait_names, program, local_kinds);
-            } else if constexpr (std::is_same_v<E, MatchExpr>) {
-                return e.arms.empty() ? NumericKind::Unknown
-                                      : infer_numeric_kind(*e.arms.front().body, trait_names, program, local_kinds);
-            } else {
-                return NumericKind::Unknown;
-            }
-        },
-        expr.expr);
+    return std::visit(NumericKindResolver{.trait_names = &trait_names, .program = &program, .local_kinds = local_kinds},
+                      expr.expr);
 }
 
 static std::string rewrite_expr(const ExprNode& expr,
@@ -2244,57 +2284,58 @@ static std::string lower_ui_query_call(const QueryCallExpr& qcall,
     return "/* unsupported std.ui func: " + func_name + " */";
 }
 
+static std::string lower_query_by_module(const auto& qcall,
+                                         const DecoratedProgram& program,
+                                         const auto& emit_arg,
+                                         const std::string& module,
+                                         const std::string& func_name) {
+    if (module == "std.query") {
+        return lower_ecs_query_call(qcall, func_name, emit_arg, program);
+    }
+    if (module == "std.physics.flat.query") {
+        return lower_flat_spatial_query(qcall, func_name, emit_arg, program);
+    }
+    if (module == "std.physics.volume.query") {
+        return lower_volume_spatial_query(qcall, func_name, emit_arg, program);
+    }
+    if (module == "std.ui") {
+        return lower_ui_query_call(qcall, func_name, emit_arg, program);
+    }
+    return {};
+}
+
 static std::string lower_query_call_expr(const QueryCallExpr& qcall,
                                          const DecoratedProgram& program,
                                          const auto& emit_arg) {
-    auto lower_by_module = [&](const std::string& module, const std::string& func_name) -> std::string {
-        if (module == "std.query") {
-            return lower_ecs_query_call(qcall, func_name, emit_arg, program);
-        }
-        if (module == "std.physics.flat.query") {
-            return lower_flat_spatial_query(qcall, func_name, emit_arg, program);
-        }
-        if (module == "std.physics.volume.query") {
-            return lower_volume_spatial_query(qcall, func_name, emit_arg, program);
-        }
-        if (module == "std.ui") {
-            return lower_ui_query_call(qcall, func_name, emit_arg, program);
-        }
-        return {};
-    };
-
     if (!qcall.resolved_callee_id.has_value()) {
-        // Fallback: infer module from UseNode declarations when semantic resolution was unavailable.
-        if (qcall.callee != nullptr && program.ast != nullptr) {
-            if (const auto* member = std::get_if<MemberExpr>(&qcall.callee->expr)) {
-                const std::string& func_name = member->member;
-                for (const auto& decl : program.ast->declarations) {
-                    const auto* use_node = std::get_if<UseNode>(&decl);
-                    if (use_node == nullptr) {
-                        continue;
-                    }
-                    bool matches = false;
-                    if (use_node->alias.has_value()) {
-                        if (const auto* ident = std::get_if<IdentExpr>(&member->object->expr)) {
-                            matches = (ident->name == *use_node->alias);
-                        }
-                    } else {
-                        matches = (dotted_name_of(*member->object) == use_node->module_name);
-                    }
-                    if (matches) {
-                        const auto result = lower_by_module(use_node->module_name, func_name);
-                        if (!result.empty()) {
-                            return result;
-                        }
-                    }
-                }
+        if (qcall.callee == nullptr || program.ast == nullptr) {
+            return "/* unresolved query call */";
+        }
+        const auto* member = std::get_if<MemberExpr>(&qcall.callee->expr);
+        if (member == nullptr) {
+            return "/* unresolved query call */";
+        }
+        for (const auto& decl : program.ast->declarations) {
+            const auto* use_node = std::get_if<UseNode>(&decl);
+            if (use_node == nullptr) {
+                continue;
+            }
+            const auto* ident  = std::get_if<IdentExpr>(&member->object->expr);
+            const bool matches = use_node->alias.has_value() ? ident != nullptr && ident->name == *use_node->alias
+                                                             : dotted_name_of(*member->object) == use_node->module_name;
+            if (!matches) {
+                continue;
+            }
+            auto result = lower_query_by_module(qcall, program, emit_arg, use_node->module_name, member->member);
+            if (!result.empty()) {
+                return result;
             }
         }
         return "/* unresolved query call */";
     }
     const std::string& module    = qcall.resolved_callee_id->module.name;
     const std::string& func_name = qcall.resolved_callee_id->local_name;
-    const auto result            = lower_by_module(module, func_name);
+    auto result                  = lower_query_by_module(qcall, program, emit_arg, module, func_name);
     if (!result.empty()) {
         return result;
     }
@@ -3658,8 +3699,9 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                     std::visit([](const auto& node) {
                         if constexpr (requires { node.resolved_const_id; }) {
                             return node.resolved_const_id.has_value();
+                        } else {
+                            return false;
                         }
-                        return false;
                     }, s.iterable->expr);
                 std::string result =
                     ind + (constant_iterable ? "const auto& " : "auto ") + temp + " = " +
@@ -4154,6 +4196,12 @@ static void emit_recipient_handler_call(std::ostringstream& out,
 // trigger; `recipient_only` omits the broadcast pass for handlers that are only
 // ever delivered to one entity; `prelude` is spliced into the body lambda.
 struct HandlerDomainCodegen {
+    HandlerDomainCodegen()                                                  = default;
+    HandlerDomainCodegen(const HandlerDomainCodegen&)                       = default;
+    HandlerDomainCodegen& operator=(const HandlerDomainCodegen&)            = default;
+    HandlerDomainCodegen(HandlerDomainCodegen&&) noexcept(false)            = default;
+    HandlerDomainCodegen& operator=(HandlerDomainCodegen&&) noexcept(false) = default;
+    ~HandlerDomainCodegen()                                                 = default;
     FilterClause filter;
     std::vector<FilterBinding> filter_bindings_list;
     std::vector<std::string> filter_traits;
@@ -4169,11 +4217,12 @@ struct HandlerDomainCodegen {
 static HandlerDomainCodegen build_handler_domain(const FilterClause& filter,
                                                  const FilterClause& exclude,
                                                  const DecoratedProgram& program) {
-    HandlerDomainCodegen domain{.filter               = filter,
-                                .filter_bindings_list = filter_bindings(filter, program),
-                                .filter_traits        = filter_trait_names(filter, program),
-                                .filter_cpp_types     = filter_cpp_type_names(filter, program),
-                                .exclude_cpp_types    = filter_cpp_type_names(exclude, program)};
+    HandlerDomainCodegen domain;
+    domain.filter               = filter;
+    domain.filter_bindings_list = filter_bindings(filter, program);
+    domain.filter_traits        = filter_trait_names(filter, program);
+    domain.filter_cpp_types     = filter_cpp_type_names(filter, program);
+    domain.exclude_cpp_types    = filter_cpp_type_names(exclude, program);
     for (const auto& binding : domain.filter_bindings_list) {
         domain.filter_cpp_overrides.emplace(binding.trait_name, binding.cpp_type_name);
         domain.filter_cpp_overrides.emplace(binding.lookup_name, binding.cpp_type_name);

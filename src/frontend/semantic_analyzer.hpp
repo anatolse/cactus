@@ -743,6 +743,57 @@ public:
     DecoratedProgram analyze(ProgramNode& program, const ModuleImports& imports = ModuleImports{});
 
 private:
+    struct HandlerOrderingResolver;
+    struct TemplateCycleValidator;
+    void validate_input_property(const InputPropNode& prop, InputKind input_kind);
+    void validate_selectionless_handlers(RuleNode& rule);
+    void collect_template_signature(const TemplateNode& node);
+    void check_call_const_strings(const CallExpr& e, bool in_const);
+    struct TemplateFlattener;
+    template <typename E, typename ResolveTrait, typename ResolveChildren>
+    void resolve_expression_references(E& e,
+                                       ExprNode& expr,
+                                       const std::function<void(ExprNode&)>& resolve_expr,
+                                       const ResolveTrait& resolve_trait_entry,
+                                       const ResolveChildren& resolve_child_overrides);
+    template <typename S, typename ResolveTrait, typename ResolveChildren>
+    void resolve_statement_references(S& s,
+                                      const std::function<void(ExprNode&)>& resolve_expr,
+                                      const std::function<void(std::vector<std::unique_ptr<StmtNode>>&)>& resolve_stmts,
+                                      const ResolveTrait& resolve_trait_entry,
+                                      const ResolveChildren& resolve_child_overrides);
+    template <typename E>
+    void validate_render_stage_expression(const E& node,
+                                          const ExprNode& expr,
+                                          const std::function<void(const ExprNode&)>& visit_expr,
+                                          const char* stage_desc) const;
+    template <typename S, typename Forbid>
+    void validate_render_stage_statement(
+        const S& node,
+        const std::string& alias,
+        const std::unordered_set<std::string>& filter_alias_names,
+        const std::unordered_set<std::string>& writable_output_fields,
+        const char* stage_desc,
+        const std::function<void(const ExprNode&)>& visit_expr,
+        const std::function<void(const std::vector<std::unique_ptr<StmtNode>>&)>& visit_stmts,
+        const Forbid& forbid_statement) const;
+    struct ExternalContractValidator;
+    struct HandlerBodyVisitor;
+    template <typename T>
+    void resolve_declaration_types(T& node);
+    template <typename S>
+    void check_const_strings_statement(const S& s);
+    template <typename S>
+    void collect_statement_deps(const S& s, RuleDependency& dep);
+    template <typename S>
+    void validate_statement_text_format(const S& s,
+                                        const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                                        std::unordered_map<std::string, TypeInfo>& locals,
+                                        const ResolvedStruct* handler_event);
+    template <typename S>
+    void check_statement_purity(const S& s, const std::string& func_name);
+    template <typename E>
+    void check_expression_const_strings(const E& e, bool in_const);
     // Phase 1: Collect type declarations
     // Inserts, after each state, one trait per variant (`S.V`) and its slot trait (`S`).
     void synthesize_state_traits(ProgramNode& program);
@@ -1677,6 +1728,58 @@ private:
 
     // Expressions are typed more than once; report each entity_id read once.
     mutable std::set<std::tuple<std::string, int, int>> reported_entity_id_reads_;
+    template <typename S, typename ResolveTrait, typename ResolveChildren>
+    void resolve_command_references(S& s,
+                                    const std::function<void(ExprNode&)>& resolve_expr,
+                                    const ResolveTrait& resolve_trait_entry,
+                                    const ResolveChildren& resolve_child_overrides);
+    template <typename E>
+    void resolve_named_expression(E& e, const std::unordered_set<std::string>& shadowed, NamedAccessContext context);
+    template <typename S>
+    void resolve_named_statement(S& s, std::unordered_set<std::string>& shadowed, NamedAccessContext context);
+
+    std::optional<TypeInfo> infer_symbol_member_type(const SymbolId& symbol,
+                                                     const TypeInfo& local_type,
+                                                     const MemberExpr& member,
+                                                     const SourceLocation& location,
+                                                     const ResolvedStruct* handler_event) const;
+    TypeInfo infer_named_struct_member_type(const std::string& type_name, const MemberExpr& member) const;
+    std::optional<TypeInfo> infer_pair_member_type(const std::vector<std::string>& chain,
+                                                   const SourceLocation& location,
+                                                   const PairScope& pair_scope) const;
+
+    const ResolvedTrait* find_qualified_trait(const std::string& name, std::size_t dot) const;
+
+    template <typename Node, typename ResolveTrait, typename ResolveChildren>
+    void resolve_spawn_references(Node& node,
+                                  const std::function<void(ExprNode&)>& resolve_expr,
+                                  const ResolveTrait& resolve_trait_entry,
+                                  const ResolveChildren& resolve_child_overrides);
+    void validate_render_stage_call(const CallExpr& node, const SourceLocation& location) const;
+    void validate_render_stage_assignment(const VarAssign& node,
+                                          const std::string& alias,
+                                          const std::unordered_set<std::string>& filter_alias_names,
+                                          const std::unordered_set<std::string>& writable_output_fields,
+                                          const char* stage_desc) const;
+    void resolve_named_ident(IdentExpr& e, const std::unordered_set<std::string>& shadowed, NamedAccessContext context);
+    void resolve_named_assignment(VarAssign& s,
+                                  const std::unordered_set<std::string>& shadowed,
+                                  NamedAccessContext context);
+    void resolve_named_block(std::vector<std::unique_ptr<StmtNode>>& body,
+                             const std::unordered_set<std::string>& shadowed,
+                             NamedAccessContext context,
+                             const std::string* bound);
+
+    const ResolvedStruct* find_imported_struct(const std::string& module, const std::string& name) const;
+    std::optional<TypeInfo> infer_filter_member_type(
+        const std::vector<std::string>& chain,
+        const SourceLocation& location,
+        const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings) const;
+
+    void resolve_named_match(MatchStmt& s, std::unordered_set<std::string>& shadowed, NamedAccessContext context);
+    TypeInfo infer_handler_field_type(const MemberExpr& member,
+                                      const SourceLocation& location,
+                                      const ResolvedStruct& event) const;
 };
 
 }  // namespace cactus

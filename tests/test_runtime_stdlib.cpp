@@ -685,11 +685,11 @@ TEST_CASE("Runtime stdlib: backend hierarchy runtime sources enforce pmr allocat
 
     REQUIRE_FALSE(entt_runtime.empty());
 
-    CHECK(entt_runtime.find("std::pmr::monotonic_buffer_resource scratch_resource") != std::string::npos);
-    CHECK(entt_runtime.find("std::pmr::unordered_set<entt::entity> active_entities") != std::string::npos);
-    CHECK(entt_runtime.find("std::pmr::unsynchronized_pool_resource destroying_resource") != std::string::npos);
-    CHECK(entt_runtime.find("std::pmr::unordered_set<entt::entity> destroying_entities") != std::string::npos);
-    CHECK(entt_runtime.find("std::pmr::vector<entt::entity> child_entities") != std::string::npos);
+    CHECK(entt_runtime.contains("std::pmr::monotonic_buffer_resource scratch_resource"));
+    CHECK(entt_runtime.contains("std::pmr::unordered_set<entt::entity> active_entities"));
+    CHECK(entt_runtime.contains("std::pmr::unsynchronized_pool_resource destroying_resource"));
+    CHECK(entt_runtime.contains("std::pmr::unordered_set<entt::entity> destroying_entities"));
+    CHECK(entt_runtime.contains("std::pmr::vector<entt::entity> child_entities"));
 }
 
 TEST_CASE("Runtime stdlib: shared asset registry supports eager and lazy resolution", "[runtime][assets]") {
@@ -835,7 +835,7 @@ TEST_CASE("Runtime stdlib: EnTT missing model file skips draw without placeholde
     CHECK(debug.submitted_models == 3);
     CHECK(debug.drawn_models == 0);
     REQUIRE(debug.model_diagnostics.size() == 1);
-    CHECK(debug.model_diagnostics[0].find("does/not/exist.glb") != std::string::npos);
+    CHECK(debug.model_diagnostics[0].contains("does/not/exist.glb"));
 }
 
 TEST_CASE("Runtime stdlib: EnTT unregistered model handle reports one diagnostic across submissions",
@@ -982,7 +982,7 @@ TEST_CASE("Runtime stdlib: EnTT invalid animation clip degrades to bind pose wit
     }
     const auto& debug = cactus::runtime::entt_backend::render_debug_state();
     REQUIRE(debug.model_diagnostics.size() == 1);
-    CHECK(debug.model_diagnostics[0].find("invalid animation clip 99") != std::string::npos);
+    CHECK(debug.model_diagnostics[0].contains("invalid animation clip 99"));
 
     // A different invalid clip on the same asset gets its own diagnostic.
     cactus::runtime::entt_backend::begin_render_frame();
@@ -1026,7 +1026,7 @@ TEST_CASE("Runtime stdlib: EnTT animator on a clip-less model reports a single b
 
     const auto& debug = cactus::runtime::entt_backend::render_debug_state();
     REQUIRE(debug.model_diagnostics.size() == 1);
-    CHECK(debug.model_diagnostics[0].find("invalid animation clip 0 (model has 0)") != std::string::npos);
+    CHECK(debug.model_diagnostics[0].contains("invalid animation clip 0 (model has 0)"));
     fs::remove(junk_path);
     registry.clear();
     cactus::runtime::entt_backend::reset_render_debug_state();
@@ -1858,16 +1858,22 @@ using entt_backend::AnimationCueEntry;
 using entt_backend::ModelPlaybackBookkeeping;
 using entt_backend::PlaybackAdvanceResult;
 
-const std::vector<AnimationCueEntry> kLeftRightCues{
-    {.clip = 0, .time = 0.25F, .name = "left"},
-    {.clip = 0, .time = 0.75F, .name = "right"},
-};
-const std::vector<AnimationCueEntry> kMidCue{{.clip = 0, .time = 0.5F, .name = "mid"}};
+const std::vector<AnimationCueEntry>& left_right_cues() {
+    static const std::vector<AnimationCueEntry> value{
+        {.clip = 0, .time = 0.25F, .name = "left"},
+        {.clip = 0, .time = 0.75F, .name = "right"},
+    };
+    return value;
+}
+const std::vector<AnimationCueEntry>& mid_cue() {
+    static const std::vector<AnimationCueEntry> value{{.clip = 0, .time = 0.5F, .name = "mid"}};
+    return value;
+}
 }  // namespace
 
 TEST_CASE("Runtime stdlib: model playback forward loop crosses multiple cues in order",
           "[runtime][entt][dsl-model-animation-events]") {
-    const auto result = entt_backend::advance_model_playback(0.0F, 1.0F, 1.0F, false, kLeftRightCues);
+    const auto result = entt_backend::advance_model_playback(0.0F, 1.0F, 1.0F, false, left_right_cues());
     REQUIRE(result.crossed_cue_names.size() == 2);
     CHECK(result.crossed_cue_names[0] == "left");
     CHECK(result.crossed_cue_names[1] == "right");
@@ -1880,7 +1886,7 @@ TEST_CASE("Runtime stdlib: model playback reverse loop crosses cues back to fron
           "[runtime][entt][dsl-model-animation-events]") {
     // old_time=1.0 normalizes to 0.0 (the same loop phase); moving back a
     // full duration returns to that same phase, i.e. 0.0, not 1.0.
-    const auto result = entt_backend::advance_model_playback(1.0F, -1.0F, 1.0F, false, kLeftRightCues);
+    const auto result = entt_backend::advance_model_playback(1.0F, -1.0F, 1.0F, false, left_right_cues());
     REQUIRE(result.crossed_cue_names.size() == 2);
     CHECK(result.crossed_cue_names[0] == "right");
     CHECK(result.crossed_cue_names[1] == "left");
@@ -1929,13 +1935,13 @@ TEST_CASE("Runtime stdlib: model playback equal-time cues cross in caller-suppli
 
 TEST_CASE("Runtime stdlib: model playback Once forward clamps at duration and completes once",
           "[runtime][entt][dsl-model-animation-events]") {
-    const auto result = entt_backend::advance_model_playback(0.8F, 0.5F, 1.0F, true, kMidCue);
+    const auto result = entt_backend::advance_model_playback(0.8F, 0.5F, 1.0F, true, mid_cue());
     CHECK(result.new_time == Catch::Approx(1.0F));
     CHECK(result.completed);
     CHECK(result.crossed_cue_names.empty());
 
     // Already parked at the endpoint: calling again must not re-fire completion.
-    const auto again = entt_backend::advance_model_playback(1.0F, 0.5F, 1.0F, true, kMidCue);
+    const auto again = entt_backend::advance_model_playback(1.0F, 0.5F, 1.0F, true, mid_cue());
     CHECK(again.new_time == Catch::Approx(1.0F));
     CHECK_FALSE(again.completed);
     CHECK(again.crossed_cue_names.empty());
@@ -1992,7 +1998,7 @@ TEST_CASE("Runtime stdlib: model playback Once still completes from an out-of-ra
 
 TEST_CASE("Runtime stdlib: model playback paused or zero-speed advancement is a no-op",
           "[runtime][entt][dsl-model-animation-events]") {
-    const auto result = entt_backend::advance_model_playback(0.3F, 0.0F, 1.0F, false, kMidCue);
+    const auto result = entt_backend::advance_model_playback(0.3F, 0.0F, 1.0F, false, mid_cue());
     CHECK(result.new_time == Catch::Approx(0.3F));
     CHECK(result.crossed_cue_names.empty());
     CHECK_FALSE(result.completed);
@@ -2001,24 +2007,24 @@ TEST_CASE("Runtime stdlib: model playback paused or zero-speed advancement is a 
 
 TEST_CASE("Runtime stdlib: model playback stays total on non-positive duration and non-finite inputs",
           "[runtime][entt][dsl-model-animation-events]") {
-    const auto zero_duration = entt_backend::advance_model_playback(0.3F, 0.5F, 0.0F, false, kMidCue);
+    const auto zero_duration = entt_backend::advance_model_playback(0.3F, 0.5F, 0.0F, false, mid_cue());
     CHECK(zero_duration.new_time == Catch::Approx(0.3F));
     CHECK(zero_duration.crossed_cue_names.empty());
 
-    const auto negative_duration = entt_backend::advance_model_playback(0.3F, 0.5F, -1.0F, false, kMidCue);
+    const auto negative_duration = entt_backend::advance_model_playback(0.3F, 0.5F, -1.0F, false, mid_cue());
     CHECK(negative_duration.new_time == Catch::Approx(0.3F));
 
-    const auto nan_delta = entt_backend::advance_model_playback(0.3F, std::nanf(""), 1.0F, false, kMidCue);
+    const auto nan_delta = entt_backend::advance_model_playback(0.3F, std::nanf(""), 1.0F, false, mid_cue());
     CHECK(nan_delta.new_time == Catch::Approx(0.3F));
 
-    const auto nan_time = entt_backend::advance_model_playback(std::nanf(""), 0.5F, 1.0F, false, kMidCue);
+    const auto nan_time = entt_backend::advance_model_playback(std::nanf(""), 0.5F, 1.0F, false, mid_cue());
     CHECK(nan_time.crossed_cue_names.empty());
 }
 
 TEST_CASE("Runtime stdlib: model playback caps loop advancement at 64 durations and flags it",
           "[runtime][entt][dsl-model-animation-events]") {
-    const auto capped   = entt_backend::advance_model_playback(0.0F, 100.0F, 1.0F, false, kMidCue);
-    const auto expected = entt_backend::advance_model_playback(0.0F, 64.0F, 1.0F, false, kMidCue);
+    const auto capped   = entt_backend::advance_model_playback(0.0F, 100.0F, 1.0F, false, mid_cue());
+    const auto expected = entt_backend::advance_model_playback(0.0F, 64.0F, 1.0F, false, mid_cue());
     CHECK(capped.capped);
     CHECK(capped.new_time == Catch::Approx(expected.new_time).margin(1e-4));
     CHECK(capped.crossed_cue_names.size() == expected.crossed_cue_names.size());
@@ -2176,13 +2182,13 @@ TEST_CASE("reduce: integer sums saturate at each fold step", "[runtime][rule-red
 }
 
 TEST_CASE("reduce: vector sums add per component from the zero vector", "[runtime][rule-reduce]") {
-    constexpr Vector3 total =
-        reduce::add(reduce::add(reduce::add(Vector3{}, Vector3{1.0F, 0.0F, 0.0F}), Vector3{0.0F, 2.0F, 0.0F}),
-                    Vector3{1.0F, 0.0F, -1.0F});
+    constexpr Vector3 total = reduce::add(reduce::add(reduce::add(Vector3{}, Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F}),
+                                                      Vector3{.x = 0.0F, .y = 2.0F, .z = 0.0F}),
+                                          Vector3{.x = 1.0F, .y = 0.0F, .z = -1.0F});
     STATIC_CHECK(total.x == 2.0F);
     STATIC_CHECK(total.y == 2.0F);
     STATIC_CHECK(total.z == -1.0F);
-    constexpr Vector2 flat = reduce::add(Vector2{0.5F, -1.0F}, Vector2{0.25F, 3.0F});
+    constexpr Vector2 flat = reduce::add(Vector2{.x = 0.5F, .y = -1.0F}, Vector2{.x = 0.25F, .y = 3.0F});
     STATIC_CHECK(flat.x == 0.75F);
     STATIC_CHECK(flat.y == 2.0F);
 }

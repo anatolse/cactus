@@ -73,8 +73,9 @@ static ErrorReporter parse_expect_errors(const std::string& source,
 }
 
 static ErrorReporter parse_fixture_expect_errors_with_timeout(const std::string& fixture_name) {
-    auto future = std::async(
-        std::launch::async, [fixture_name]() { return parse_expect_errors(read_fixture(fixture_name), fixture_name); });
+    auto future = std::async(std::launch::async, [&fixture_name]() {
+        return parse_expect_errors(read_fixture(fixture_name), fixture_name);
+    });
 
     auto future_status = future.wait_for(std::chrono::seconds(5));
     REQUIRE(future_status == std::future_status::ready);
@@ -162,7 +163,7 @@ TEST_CASE("Parser: missing module declaration rejected", "[parser][modules]") {
 
     bool found = false;
     for (const auto& diagnostic : errors.diagnostics()) {
-        if (diagnostic.message.find("source file must start with a module declaration") != std::string::npos) {
+        if (diagnostic.message.contains("source file must start with a module declaration")) {
             found = true;
             break;
         }
@@ -180,7 +181,7 @@ TEST_CASE("Parser: duplicate module declaration rejected", "[parser][modules]") 
 
     bool found = false;
     for (const auto& diagnostic : errors.diagnostics()) {
-        if (diagnostic.message.find("only one module declaration is allowed") != std::string::npos) {
+        if (diagnostic.message.contains("only one module declaration is allowed")) {
             found = true;
             break;
         }
@@ -567,7 +568,7 @@ TEST_CASE("Parser: event declaration rejects trait modifiers", "[parser]") {
     auto errors = parse_expect_errors(
         "event Tick:\n"
         "    let dt: float\n");
-    CHECK(errors.diagnostics().front().message.find("event fields use bare `name: type` syntax") != std::string::npos);
+    CHECK(errors.diagnostics().front().message.contains("event fields use bare `name: type` syntax"));
 }
 
 TEST_CASE("Parser: func declaration", "[parser]") {
@@ -1465,9 +1466,8 @@ TEST_CASE("Parser: remove statement with target", "[parser][dynamic-ecs]") {
 }
 
 static bool has_diagnostic(const ErrorReporter& errors, const std::string& text) {
-    return std::ranges::any_of(errors.diagnostics(), [&](const auto& diagnostic) {
-        return diagnostic.message.find(text) != std::string::npos;
-    });
+    return std::ranges::any_of(errors.diagnostics(),
+                               [&](const auto& diagnostic) { return diagnostic.message.contains(text); });
 }
 
 TEST_CASE("Parser: set statement with field block and target", "[parser][deferred-set]") {
@@ -2602,7 +2602,7 @@ TEST_CASE("Parser: when clause on extern rule is rejected", "[parser][when-claus
         "            Position\n");
     REQUIRE(errors.has_errors());
     CHECK(std::ranges::any_of(errors.diagnostics(), [](const Diagnostic& diagnostic) {
-        return diagnostic.message.find("'when:' is only allowed on regular rules") != std::string::npos;
+        return diagnostic.message.contains("'when:' is only allowed on regular rules");
     }));
 }
 
@@ -2814,7 +2814,7 @@ TEST_CASE("Parser: order by before reduce is rejected", "[parser][rule-reduce]")
         "        x = 1\n");
     REQUIRE(errors.has_errors());
     CHECK(std::ranges::any_of(errors.diagnostics(), [](const Diagnostic& diagnostic) {
-        return diagnostic.message.find("after 'reduce:'") != std::string::npos;
+        return diagnostic.message.contains("after 'reduce:'");
     }));
 }
 
@@ -2835,7 +2835,7 @@ TEST_CASE("Parser: unknown reducers are rejected", "[parser][rule-reduce]") {
             "        x = 1\n");
         REQUIRE(errors.has_errors());
         CHECK(std::ranges::any_of(errors.diagnostics(), [](const Diagnostic& diagnostic) {
-            return diagnostic.message.find("unknown reducer") != std::string::npos;
+            return diagnostic.message.contains("unknown reducer");
         }));
     }
 }
@@ -3049,7 +3049,7 @@ TEST_CASE("Parser: handler after clause must precede executable statements", "[p
 
     bool found = false;
     for (const auto& diagnostic : errors.diagnostics()) {
-        if (diagnostic.message.find("handler after: clause must be the first entry") != std::string::npos) {
+        if (diagnostic.message.contains("handler after: clause must be the first entry")) {
             found = true;
             break;
         }
@@ -3453,7 +3453,7 @@ TEST_CASE("Parser: struct field named 'entity' produces reserved-keyword error a
     REQUIRE(errors.error_count() >= 1);
     bool has_kw_error = false;
     for (const auto& d : errors.diagnostics()) {
-        if (d.message.find("reserved keyword") != std::string::npos && d.message.find("entity") != std::string::npos) {
+        if (d.message.contains("reserved keyword") && d.message.contains("entity")) {
             has_kw_error = true;
             break;
         }
@@ -3471,7 +3471,7 @@ TEST_CASE("Parser: trait field named 'entity' produces reserved-keyword error", 
     REQUIRE(errors.error_count() >= 1);
     bool has_kw_error = false;
     for (const auto& d : errors.diagnostics()) {
-        if (d.message.find("reserved keyword") != std::string::npos && d.message.find("entity") != std::string::npos) {
+        if (d.message.contains("reserved keyword") && d.message.contains("entity")) {
             has_kw_error = true;
             break;
         }
@@ -3553,7 +3553,7 @@ TEST_CASE("Parser: event field named 'entity' produces reserved-keyword error", 
     REQUIRE(errors.error_count() >= 1);
     bool has_kw_error = false;
     for (const auto& d : errors.diagnostics()) {
-        if (d.message.find("reserved keyword") != std::string::npos && d.message.find("entity") != std::string::npos) {
+        if (d.message.contains("reserved keyword") && d.message.contains("entity")) {
             has_kw_error = true;
             break;
         }
@@ -3987,9 +3987,8 @@ TEST_CASE("Parser: qualified after clause with multiple rules", "[parser][module
 }
 
 static bool has_diagnostic_containing(const ErrorReporter& errors, const std::string& needle) {
-    return std::ranges::any_of(errors.diagnostics(), [&](const auto& diagnostic) {
-        return diagnostic.message.find(needle) != std::string::npos;
-    });
+    return std::ranges::any_of(errors.diagnostics(),
+                               [&](const auto& diagnostic) { return diagnostic.message.contains(needle); });
 }
 
 TEST_CASE("Parser: pub group declaration with phase entry", "[parser][rule-groups]") {
@@ -4275,5 +4274,212 @@ TEST_CASE("Parser: a state without a body parses with no variants", "[parser][ex
         "trait T\n");
     REQUIRE(prog.declarations.size() == 2);
     CHECK(std::get<StateNode>(prog.declarations[0]).variants.empty());
+}
+
+TEST_CASE("Parser: concise unary lists preserve aliases and entry locations", "[parser][concise]") {
+    const auto program = parse(R"(
+rule Move:
+    each: phys.Position as pos, Motion, # selected state
+    without: Frozen, Hidden
+    order by: distance(pos.value, vec2(1.0, 2.0)) asc, pos.priority desc
+    after: Input, phys.solve
+    before: Draw, ui.paint
+    where: touching(pos, pos), pos.priority > 0
+    when: true, not false
+    on tick:
+        return
+)");
+    const auto& rule   = std::get<RuleNode>(program.declarations.front());
+    REQUIRE(rule.filter.entries.size() == 2);
+    CHECK(rule.filter.entries[0].qualified_name == "phys.Position");
+    CHECK(rule.filter.entries[0].alias == "pos");
+    CHECK(rule.filter.entries[0].location.column < rule.filter.entries[1].location.column);
+    CHECK(rule.exclude.entries.size() == 2);
+    REQUIRE(rule.order_by.size() == 2);
+    CHECK_FALSE(rule.order_by[0].descending);
+    CHECK(rule.order_by[1].descending);
+    CHECK(rule.after_rules == std::vector<std::string>{"Input", "phys.solve"});
+    CHECK(rule.before_rules == std::vector<std::string>{"Draw", "ui.paint"});
+    REQUIRE(rule.where_clause.has_value());
+    CHECK(rule.where_clause->predicates.size() == 2);
+    REQUIRE(rule.when_clause.has_value());
+    CHECK(rule.when_clause->predicates.size() == 2);
+    CHECK(rule.handlers.size() == 1);
+}
+
+TEST_CASE("Parser: concise pair bindings and header grouping preserve contextual names", "[parser][concise]") {
+    const auto program = parse(R"(
+rule Count:
+    pairs:
+        each: Health as without, phys.Body
+        without:
+            Zone
+    reduce per each:
+        per = count()
+    order by: per desc
+    on tick:
+        return
+)");
+    const auto& rule   = std::get<RuleNode>(program.declarations.front());
+    REQUIRE(rule.pairs.has_value());
+    REQUIRE(rule.pairs->bindings.size() == 2);
+    CHECK(rule.pairs->bindings[0].name == "each");
+    REQUIRE(rule.pairs->bindings[0].traits.size() == 2);
+    CHECK(rule.pairs->bindings[0].traits[0].alias == "without");
+    REQUIRE(rule.reduce.has_value());
+    CHECK(rule.reduce->per_binding == "each");
+    REQUIRE(rule.reduce->reducers.size() == 1);
+    CHECK(rule.reduce->reducers[0].name == "per");
+}
+
+TEST_CASE("Parser: concise contracts retain every typed capability", "[parser][concise]") {
+    const auto program = parse(R"(
+extern rule Native:
+    each: Position, Velocity
+    without: Frozen
+    on tick:
+        after: Input/on tick, phys.Solve/on tick
+        reads: Velocity, Config
+        writes: Position
+        projects: Contact, Focus
+        emits: Hit, Sound
+        commands: spawn Bullet, destroy, add Health, remove Frozen, set Health,
+        effects: physics, audio
+)");
+    const auto& rule   = std::get<ExternRuleNode>(program.declarations.front());
+    REQUIRE(rule.handlers.size() == 1);
+    const auto& handler = rule.handlers.front();
+    CHECK(handler.after_handlers.size() == 2);
+    CHECK(handler.reads.size() == 2);
+    CHECK(handler.writes.size() == 1);
+    CHECK(handler.projects.size() == 2);
+    CHECK(handler.emits.size() == 2);
+    REQUIRE(handler.commands.size() == 5);
+    CHECK(handler.commands.back().kind == HandlerCommandKind::Set);
+    CHECK(handler.effects.size() == 2);
+}
+
+TEST_CASE("Parser: malformed concise lists recover to later declarations", "[parser][concise]") {
+    const std::vector<std::string> clauses{
+        "    each: , Position\n",
+        "    each: Position,, Motion\n",
+        "    each: Position\n        Motion\n",
+        "    each: [Position, Motion]\n",
+        "    each: Position\n    filter: Motion\n",
+        "    without: Frozen\n    exclude: Hidden\n",
+        "    pairs:\n        a: Position,, Motion\n        b: Zone\n",
+        "    pairs:\n        a: Position\n        b: Zone\n    reduce per a:\n        per: a\n        n = count()\n",
+        "    pairs:\n        a: Position\n        b: Zone\n    reduce per:\n        n = count()\n",
+        "    pairs:\n        a: Position\n        b: Zone\n    reduce per a:\n"};
+    for (const auto& clause : clauses) {
+        CAPTURE(clause);
+        ErrorReporter errors;
+        Lexer lexer("module test\nrule Bad:\n" + clause +
+                        "    on tick:\n        return\nrule Later:\n    on tick:\n        return\n",
+                    "test.cactus",
+                    errors);
+        Parser parser(lexer.tokenize(), errors);
+        const auto program = parser.parse_program();
+        CHECK(errors.has_errors());
+        REQUIRE(program.declarations.size() >= 3);
+        const auto* bad = std::get_if<RuleNode>(&program.declarations[1]);
+        REQUIRE(bad != nullptr);
+        CHECK(bad->handlers.size() == 1);
+        CHECK(std::ranges::any_of(program.declarations, [](const auto& declaration) {
+            const auto* rule = std::get_if<RuleNode>(&declaration);
+            return rule != nullptr && rule->name == "Later";
+        }));
+    }
+}
+
+TEST_CASE("Parser: compact list families preserve nesting and existing ordering positions", "[parser][concise]") {
+    const auto program = parse(R"(
+phase update:
+    after: core.tick, core.late_tick,
+group simulation:
+    phase: update
+    after: input, physics.solve
+rule R:
+    filter: Position as each, Motion as without
+    exclude: Frozen
+    where: if each.x > 0: test([1, 2], vec2(1.0, 2.0)) else: false, true
+    on tick:
+        after: Input/on tick, Other/on tick,
+        let without = 1
+        let each = without
+)");
+    REQUIRE(program.declarations.size() == 3);
+    CHECK(std::get<PhaseNode>(program.declarations[0]).after_phases.size() == 2);
+    CHECK(std::get<GroupNode>(program.declarations[1]).after_groups.size() == 2);
+    const auto& rule = std::get<RuleNode>(program.declarations[2]);
+    REQUIRE(rule.where_clause.has_value());
+    CHECK(rule.where_clause->predicates.size() == 2);
+    CHECK(rule.handlers.front().after_handlers.size() == 2);
+    CHECK(rule.handlers.front().body.size() == 2);
+}
+
+TEST_CASE("Parser: compact notation retains clause placement and context restrictions", "[parser][concise]") {
+    const std::vector<std::string> sources{
+        "phase update:\n    from: core.tick\n",
+        "group simulation:\n    phase: tick\n    before: other\n",
+        "rule R:\n    each: A\n    on tick:\n        writes: A\n",
+        "rule R:\n    each: A\n    on tick:\n        return\n        after: Other/on tick\n",
+        "rule R:\n    pairs:\n        a: A\n        b: B\n    each: A\n",
+        "extern rule R:\n    pairs:\n        a: A\n        b: B\n    on tick:\n        effects: physics\n",
+        R"(rule R:
+    pairs:
+        a: A
+        b: B
+    order by: a.A.x
+    reduce per a:
+        n = count()
+)",
+        "rule R:\n    pairs:\n        a: A\n    on tick:\n        return\n",
+        "rule R:\n    pairs:\n        a: A\n        b: B\n        c: C\n    on tick:\n        return\n"};
+    for (const auto& source : sources) {
+        CAPTURE(source);
+        CHECK(parse_expect_errors(source).has_errors());
+    }
+}
+
+TEST_CASE("Parser: invalid compact external clauses preserve later contracts", "[parser][concise]") {
+    const std::vector<std::string> clauses{"    pairs:\n        a: A\n        b: B\n",
+                                           "    where: true\n",
+                                           "    when: true\n",
+                                           "    reduce per a:\n        n = count()\n"};
+    for (const auto& clause : clauses) {
+        CAPTURE(clause);
+        ErrorReporter errors;
+        Lexer lexer("module test\nextern rule Bad:\n" + clause +
+                        "    on tick:\n        effects: physics\nrule Later:\n    on tick:\n        return\n",
+                    "test.cactus",
+                    errors);
+        Parser parser(lexer.tokenize(), errors);
+        const auto program = parser.parse_program();
+        REQUIRE(errors.has_errors());
+        REQUIRE(program.declarations.size() == 3);
+        const auto* rule = std::get_if<ExternRuleNode>(&program.declarations[1]);
+        REQUIRE(rule != nullptr);
+        REQUIRE(rule->handlers.size() == 1);
+        CHECK(rule->handlers.front().effects.size() == 1);
+    }
+}
+
+TEST_CASE("Parser: independent inline errors report their own locations", "[parser][concise]") {
+    ErrorReporter errors;
+    Lexer lexer(
+        "module test\nrule First:\n    each: A,, B\n    on tick:\n        return\n"
+        "rule Second:\n    without: C,, D\n    on tick:\n        return\n",
+        "test.cactus",
+        errors);
+    Parser parser(lexer.tokenize(), errors);
+    const auto program = parser.parse_program();
+    CHECK(program.declarations.size() == 3);
+    CHECK(std::ranges::any_of(errors.diagnostics(), [](const auto& diagnostic) {
+        return diagnostic.location.line == 3 && diagnostic.location.column == 13;
+    }));
+    CHECK(std::ranges::any_of(errors.diagnostics(), [](const auto& diagnostic) {
+        return diagnostic.location.line == 7 && diagnostic.location.column == 16;
+    }));
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

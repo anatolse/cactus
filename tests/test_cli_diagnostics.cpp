@@ -38,7 +38,7 @@ CliResult run_cactus(const fs::path& input) {
     const fs::path stderr_file = work_dir / (input.stem().string() + ".stderr.txt");
     const std::string command = quote(fs::path{CACTUS_COMPILER_PATH}) + " " + quote(input) + " -o " +
                                 quote(output_file) + " 2> " + quote(stderr_file);
-    // NOLINTNEXTLINE(cert-env33-c,concurrency-mt-unsafe) -- the test drives the real CLI binary.
+    // NOLINTNEXTLINE(bugprone-command-processor,concurrency-mt-unsafe) -- the test drives the real CLI binary.
     const int raw_exit = std::system(("\"" + command + "\"").c_str());
 
     CliResult result;

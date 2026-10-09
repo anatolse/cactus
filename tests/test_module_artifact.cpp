@@ -6,6 +6,7 @@
 #include "frontend/lexer.hpp"
 #include "frontend/module_artifact.hpp"
 #include "frontend/parser.hpp"
+#include "frontend/program_linker.hpp"
 #include "frontend/semantic_analyzer.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -891,7 +892,7 @@ TEST_CASE("ModuleArtifact: artifact from before shape-generic spatial plans is r
     std::string name;
     CHECK_FALSE(artifact.load(path, name).has_value());
     REQUIRE(errors.has_errors());
-    CHECK(errors.diagnostics()[0].message.find("incompatible module artifact version") != std::string::npos);
+    CHECK(errors.diagnostics()[0].message.contains("incompatible module artifact version"));
 
     fs::remove_all(build_dir, ec);
 }
@@ -1072,7 +1073,7 @@ TEST_CASE("ModuleArtifact: artifact from before collider sweep plans is rejected
     std::string name;
     CHECK_FALSE(artifact.load(path, name).has_value());
     REQUIRE(errors.has_errors());
-    CHECK(errors.diagnostics()[0].message.find("incompatible module artifact version") != std::string::npos);
+    CHECK(errors.diagnostics()[0].message.contains("incompatible module artifact version"));
 
     fs::remove_all(build_dir, ec);
 }
@@ -1096,7 +1097,7 @@ TEST_CASE("ModuleArtifact: artifact from before module imports is rejected", "[a
     std::string name;
     CHECK_FALSE(artifact.load(path, name).has_value());
     REQUIRE(errors.has_errors());
-    CHECK(errors.diagnostics()[0].message.find("incompatible module artifact version") != std::string::npos);
+    CHECK(errors.diagnostics()[0].message.contains("incompatible module artifact version"));
 
     fs::remove_all(build_dir, ec);
 }
@@ -1120,7 +1121,7 @@ TEST_CASE("ModuleArtifact: artifact from before rule reductions is rejected", "[
     std::string name;
     CHECK_FALSE(artifact.load(path, name).has_value());
     REQUIRE(errors.has_errors());
-    CHECK(errors.diagnostics()[0].message.find("incompatible module artifact version") != std::string::npos);
+    CHECK(errors.diagnostics()[0].message.contains("incompatible module artifact version"));
 
     fs::remove_all(build_dir, ec);
 }
@@ -1847,7 +1848,7 @@ TEST_CASE("ModuleArtifact: unknown trigger kind is rejected", "[artifact][trait-
     std::string module_name;
     CHECK_FALSE(artifact.load(build_dir / "removed.cmod", module_name).has_value());
     REQUIRE(errors.has_errors());
-    CHECK(errors.diagnostics().back().message.find("malformed") != std::string::npos);
+    CHECK(errors.diagnostics().back().message.contains("malformed"));
 
     fs::remove_all(build_dir, ec);
 }
@@ -1872,7 +1873,7 @@ TEST_CASE("ModuleArtifact: artifact from before lifecycle triggers is rejected",
     std::string name;
     CHECK_FALSE(artifact.load(path, name).has_value());
     REQUIRE(errors.has_errors());
-    CHECK(errors.diagnostics()[0].message.find("incompatible module artifact version") != std::string::npos);
+    CHECK(errors.diagnostics()[0].message.contains("incompatible module artifact version"));
 
     fs::remove_all(build_dir, ec);
 }
@@ -1976,7 +1977,7 @@ TEST_CASE("ModuleArtifact: unknown group ordering direction is malformed", "[art
     std::string module_name;
     CHECK_FALSE(artifact.load(build_dir / "runtime.lib.cmod", module_name).has_value());
     REQUIRE(errors.has_errors());
-    CHECK(errors.diagnostics().back().message.find("malformed") != std::string::npos);
+    CHECK(errors.diagnostics().back().message.contains("malformed"));
 
     fs::remove_all(build_dir, ec);
 }
@@ -2001,7 +2002,7 @@ TEST_CASE("ModuleArtifact: artifact from before rule groups is rejected", "[arti
     std::string name;
     CHECK_FALSE(artifact.load(path, name).has_value());
     REQUIRE(errors.has_errors());
-    CHECK(errors.diagnostics()[0].message.find("incompatible module artifact version") != std::string::npos);
+    CHECK(errors.diagnostics()[0].message.contains("incompatible module artifact version"));
 
     fs::remove_all(build_dir, ec);
 }
@@ -2116,5 +2117,113 @@ TEST_CASE("ModuleArtifact: a pub state round-trips and resolves from another mod
     CHECK(contract.writes.contains(make_symbol_id(SymbolKind::Trait, "enemies", "Mode.Dying")));
 
     fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("ModuleArtifact: compact relations and contracts preserve canonical linked data", "[artifact][concise]") {
+    const std::string prelude   = R"(module notation
+pub event tick
+pub event Hit
+pub trait Body:
+    var total: int = 0
+pub trait Zone
+pub trait Projected
+rule Input:
+    on tick:
+        return
+)";
+    const std::string compact   = R"(rule Totals:
+    pairs:
+        body: Body
+        zone: Zone
+    after: Input
+    where: body != zone, true
+    reduce per body:
+        n = count()
+    order by: n desc
+    limit: 2
+    on tick:
+        body.Body.total = n
+extern rule Native:
+    each: Body, Projected
+    on tick:
+        after: Totals/on tick
+        reads: Zone
+        projects: Projected
+        emits: Hit
+        commands: destroy, add Zone
+        effects: physics
+)";
+    const std::string legacy    = R"(rule Totals:
+    pairs:
+        body:
+            Body
+        zone:
+            Zone
+    after:
+        Input
+    where:
+        body != zone
+        true
+    reduce:
+        per: body
+        n = count()
+    order by:
+        n desc
+    limit: 2
+    on tick:
+        body.Body.total = n
+extern rule Native:
+    filter:
+        Body
+        Projected
+    on tick:
+        after:
+            Totals/on tick
+        reads:
+            Zone
+        projects:
+            Projected
+        emits:
+            Hit
+        commands:
+            destroy
+            add Zone
+        effects:
+            physics
+)";
+    const auto compile_and_link = [&prelude](const std::string& rules, const std::string& directory) {
+        ErrorReporter errors;
+        Lexer lexer(prelude + rules, "notation.cactus", errors);
+        auto tokens = lexer.tokenize();
+        for (auto& token : tokens) {
+            token.location = SourceLocation{"notation.cactus", 1, 1};
+        }
+        Parser parser(std::move(tokens), errors);
+        auto ast = parser.parse_program();
+        REQUIRE_FALSE(errors.has_errors());
+        SemanticAnalyzer analyzer(errors);
+        auto program = analyzer.analyze(ast);
+        INFO((errors.diagnostics().empty() ? "no diagnostics" : errors.diagnostics().front().message));
+        REQUIRE_FALSE(errors.has_errors());
+        const auto path = test_build_dir() / directory;
+        ModuleArtifact artifact(errors);
+        REQUIRE(artifact.save(program, "notation", path));
+        ProgramLinker linker(errors);
+        const auto linked = linker.link({path / "notation.cmod"});
+        INFO((errors.diagnostics().empty() ? "no diagnostics" : errors.diagnostics().back().message));
+        REQUIRE(linked.has_value());
+        REQUIRE_FALSE(errors.has_errors());
+        REQUIRE(artifact.save(*linked, "notation", path / "linked"));
+        std::ifstream input(path / "linked" / "notation.cmod", std::ios::binary);
+        REQUIRE(input.good());
+        const std::string bytes(std::istreambuf_iterator<char>(input), {});
+        input.close();
+        fs::remove(path / "linked" / "notation.cmod");
+        fs::remove(path / "linked");
+        fs::remove(path / "notation.cmod");
+        fs::remove(path);
+        return bytes;
+    };
+    CHECK(compile_and_link(compact, "concise") == compile_and_link(legacy, "legacy"));
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

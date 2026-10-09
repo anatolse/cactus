@@ -132,8 +132,15 @@ private:
     ChildArchetypeNode parse_child_declaration();
     std::vector<ChildOverrideNode> parse_children_override_block();
     ChildOverrideNode parse_child_override();
-    FilterClause parse_filter_clause();
-    FilterClause parse_exclude_clause();
+    void parse_clause_list(const SourceLocation& location,
+                           const std::string& empty_message,
+                           const std::function<void()>& parse_entry,
+                           bool allow_inline = true);
+    bool parse_clause_list_entry(const std::function<void()>& parse_entry, bool block);
+    void skip_list_line();
+    void skip_invalid_list_continuation();
+    FilterEntry parse_filter_entry(bool allow_alias);
+    FilterClause parse_selection_clause(bool allow_alias);
     std::vector<SortKey> parse_order_by_clause();
     PairClause parse_pairs_clause();
     [[nodiscard]] bool at_pairs_clause() const;
@@ -190,6 +197,10 @@ private:
     std::unique_ptr<ExprNode> parse_additive_expr();
     std::unique_ptr<ExprNode> parse_multiplicative_expr();
     std::unique_ptr<ExprNode> parse_unary_expr();
+    std::string parse_named_arg_name();
+    std::string parse_member_name();
+    std::vector<QueryFilterPredicate> parse_query_filters();
+    std::unique_ptr<ExprNode> parse_query_call(std::unique_ptr<ExprNode> callee, const SourceLocation& location);
     std::unique_ptr<ExprNode> parse_postfix_expr();
     std::unique_ptr<ExprNode> parse_primary_expr();
     std::unique_ptr<ExprNode> parse_spawn_expr();

@@ -4090,4 +4090,13 @@ TEST_CASE("keep: another module can't change an imported kept trait", "[semantic
     CHECK(has_diagnostic(diagnostics, "'InZone' is kept by rule 'Touch'; rule 'Cheat' can't change it"));
     CHECK(has_diagnostic(diagnostics, "'InZone' is kept by rule 'Touch'; entity 'Camper' can't change it"));
 }
+
+TEST_CASE("Concise ordering retains imported group visibility", "[semantic][modules][concise]") {
+    for (const auto& clause : {"    before: phys.solve\n", "    after: phys.solve\n"}) {
+        const auto [program, diagnostics] = analyze_source(std::string("module game.player\nrule MovePlayer:\n") +
+                                                               clause + "    on fixed_tick:\n        let value = 1\n",
+                                                           imports_with_physics_group(false));
+        CHECK(has_diagnostic(diagnostics, "group 'solve' is not public in module 'phys'"));
+    }
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

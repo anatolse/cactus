@@ -58,11 +58,14 @@ std::unordered_map<std::string, std::unordered_set<std::string>> import_closure(
     return closure;
 }
 
-const FieldAccess ALL_FIELDS{.all = true, .fields = {}};
+const FieldAccess& all_fields() {
+    static const FieldAccess value{.all = true, .fields = {}};
+    return value;
+}
 
 const FieldAccess& field_access(const std::unordered_map<SymbolId, FieldAccess>& table, const SymbolId& trait) {
     const auto found = table.find(trait);
-    return found == table.end() ? ALL_FIELDS : found->second;
+    return found == table.end() ? all_fields() : found->second;
 }
 
 std::optional<FieldAccess> overlapping_fields(const FieldAccess& left, const FieldAccess& right) {
@@ -84,18 +87,18 @@ std::optional<FieldAccess> produced_overlap(const HandlerNode& producer,
     const bool projected = producer.contract.projects.contains(trait);
     if (projected && !consumer.contract.projects.contains(trait) &&
         std::ranges::find(consumer.contract.selection, trait) != consumer.contract.selection.end()) {
-        return ALL_FIELDS;
+        return all_fields();
     }
     if (!consumer.contract.reads.contains(trait)) {
         return std::nullopt;
     }
-    const FieldAccess& produced = projected ? ALL_FIELDS : field_access(producer.contract.write_fields, trait);
+    const FieldAccess& produced = projected ? all_fields() : field_access(producer.contract.write_fields, trait);
     return overlapping_fields(produced, field_access(consumer.contract.read_fields, trait));
 }
 
 void merge_field_access(FieldAccess& into, const FieldAccess& from) {
     if (into.all || from.all) {
-        into = ALL_FIELDS;
+        into = all_fields();
         return;
     }
     into.fields.insert(from.fields.begin(), from.fields.end());

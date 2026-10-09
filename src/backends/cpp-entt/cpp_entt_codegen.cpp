@@ -372,6 +372,143 @@ void emit_external_set_capability(std::ostringstream& out,
     out << "    }\n";
 }
 
+void emit_external_command_capability(std::ostringstream& out,
+                                      const DecoratedProgram& program,
+                                      const auto& command,
+                                      const std::string& method_name) {
+    switch (command.kind) {
+        case HandlerCommandKind::Spawn: {
+            if (!command.target.has_value()) {
+                throw std::runtime_error("cpp-entt received an external spawn capability without a target");
+            }
+            const auto* template_node = find_template(program, *command.target);
+            if (template_node == nullptr) {
+                throw std::runtime_error("cpp-entt cannot lower external spawn capability for missing template '" +
+                                         make_canonical_id(*command.target) + "'");
+            }
+            if (creation_takes_parameters(template_node->initializers)) {
+                throw std::runtime_error(
+                    "cpp-entt cannot lower external spawn capability for parameterized template '" +
+                    make_canonical_id(*command.target) +
+                    "': an external handler has no place to supply template arguments");
+            }
+            const auto factory = archetype_create_at_function_name(program.module_name, template_node->name);
+            out << "    [[nodiscard]] entt::entity " << method_name << "() const {\n";
+            out << "        const auto entity = generated_reserve_entity(registry);\n";
+            out << "        generated_queue_structural_command(StructuralCommand::Kind::Spawn,\n";
+            out << "            [entity](entt::registry& registry) { (void)::" << factory
+                << "(registry, entity); });\n";
+            out << "        return entity;\n";
+            out << "    }\n";
+            break;
+        }
+        case HandlerCommandKind::Destroy: {
+            out << "    void " << method_name << "(entt::entity target) const {\n";
+            out << "        generated_queue_structural_command(StructuralCommand::Kind::Destroy,\n";
+            out << "            [target](entt::registry& registry) {\n";
+            out << "                if (!registry.valid(target)) { return; }\n";
+            if (EnttCodegenUtils::find_trait(program, "Parent") != nullptr) {
+                out << "                ::cactus_destroy_entity_recursive(registry, target);\n";
+            } else {
+                out << "                registry.destroy(target);\n";
+            }
+            out << "            });\n";
+            out << "    }\n";
+            break;
+        }
+        case HandlerCommandKind::Add: {
+            if (!command.target.has_value()) {
+                throw std::runtime_error("cpp-entt received an external add capability without a target");
+            }
+            const auto type = EnttCodegenUtils::trait_cpp_name(*command.target);
+            out << "    void " << method_name << "(entt::entity target, " << type << " value = {}) const {\n";
+            out << "        generated_queue_structural_command(StructuralCommand::Kind::Add,\n";
+            out << "            [target, value = std::move(value)](entt::registry& registry) mutable {\n";
+            out << "                if (!registry.valid(target)) { return; }\n";
+            out << "                ::cancel_projected_" << type << "(target);\n";
+            out << "                registry.emplace_or_replace<" << type << ">(target, std::move(value));\n";
+            if (EnttPersistenceEmitter::structural_site_tracks_construction(
+                    program, command.target, command.target->local_name)) {
+                out << EnttPersistenceEmitter::emit_retain_construction(type, "target", "                ");
+            }
+            out << "            });\n";
+            out << "    }\n";
+            break;
+        }
+        case HandlerCommandKind::Remove: {
+            if (!command.target.has_value()) {
+                throw std::runtime_error("cpp-entt received an external remove capability without a target");
+            }
+            const auto type = EnttCodegenUtils::trait_cpp_name(*command.target);
+            out << "    void " << method_name << "(entt::entity target) const {\n";
+            out << "        generated_queue_structural_command(StructuralCommand::Kind::Remove,\n";
+            out << "            [target](entt::registry& registry) {\n";
+            out << "                if (!registry.valid(target)) { return; }\n";
+            out << "                ::cancel_projected_" << type << "(target);\n";
+            out << "                if (registry.all_of<" << type << ">(target)) { registry.remove<" << type
+                << ">(target); }\n";
+            if (EnttPersistenceEmitter::structural_site_tracks_construction(
+                    program, command.target, command.target->local_name)) {
+                out << EnttPersistenceEmitter::emit_discard_construction(type, "target", "                ");
+            }
+            out << "            });\n";
+            out << "    }\n";
+            break;
+        }
+        case HandlerCommandKind::Set:
+            emit_external_set_capability(out, program, command, method_name);
+            break;
+    }
+}
+
+void emit_external_capability(std::ostringstream& out, const DecoratedProgram& program, const HandlerNode& node) {
+    const auto capability_name = external_handler_capability_name(node.identity);
+    out << "struct " << capability_name << " {\n";
+    out << "    entt::registry& registry;\n";
+    for (const auto& trait : sorted_symbols(node.contract.projects)) {
+        const auto type            = EnttCodegenUtils::trait_cpp_name(trait);
+        const auto* resolved_trait = EnttCodegenUtils::find_trait(program, make_canonical_id(trait));
+        if (resolved_trait == nullptr) {
+            throw std::runtime_error("cpp-entt cannot lower external project capability for missing trait '" +
+                                     make_canonical_id(trait) + "'");
+        }
+        if (resolved_trait->fields.empty()) {
+            out << "    [[nodiscard]] bool project_" << type << "(entt::entity target) const {\n";
+            out << "        if (!registry.valid(target)) { return false; }\n";
+            out << "        ::project_" << type << "(registry, target);\n";
+            out << "        return true;\n";
+            out << "    }\n";
+        } else {
+            out << "    [[nodiscard]] " << type << "* project_" << type << "(entt::entity target) const {\n";
+            out << "        if (!registry.valid(target)) { return nullptr; }\n";
+            out << "        return &::project_" << type << "(registry, target);\n";
+            out << "    }\n";
+        }
+    }
+    for (const auto& event : sorted_symbols(node.contract.emits)) {
+        const auto event_name = canonical_to_cpp_name(event);
+        const auto event_type = event_runtime_cpp_type(program, event);
+        out << "    void emit_" << event_name << "(" << event_type << " occurrence) const {\n";
+        out << "        generated_emit_event(std::move(occurrence));\n";
+        out << "    }\n";
+    }
+    std::unordered_set<std::string> emitted_commands;
+    for (const auto& command : node.contract.commands) {
+        const auto method_name = external_handler_command_method_name(command);
+        if (!emitted_commands.insert(method_name).second) {
+            continue;
+        }
+        emit_external_command_capability(out, program, command, method_name);
+    }
+    for (const auto& effect : sorted_strings(node.contract.effects)) {
+        out << "    [[nodiscard]] EffectService " << external_handler_effect_method_name(effect)
+            << "() const noexcept {\n";
+        out << "        return EffectService{.domain = \"" << effect << "\"};\n";
+        out << "    }\n";
+    }
+    out << "};\n\n";
+}
+
 std::string emit_graph_external_handler_abi(const DecoratedProgram& program) {
     if (program.execution_graph.phases.empty()) {
         return {};
@@ -387,134 +524,7 @@ std::string emit_graph_external_handler_abi(const DecoratedProgram& program) {
         if (!is_user_external_handler(program, node)) {
             continue;
         }
-        const auto capability_name = external_handler_capability_name(node.identity);
-        out << "struct " << capability_name << " {\n";
-        out << "    entt::registry& registry;\n";
-        for (const auto& trait : sorted_symbols(node.contract.projects)) {
-            const auto type            = EnttCodegenUtils::trait_cpp_name(trait);
-            const auto* resolved_trait = EnttCodegenUtils::find_trait(program, make_canonical_id(trait));
-            if (resolved_trait == nullptr) {
-                throw std::runtime_error("cpp-entt cannot lower external project capability for missing trait '" +
-                                         make_canonical_id(trait) + "'");
-            }
-            if (resolved_trait->fields.empty()) {
-                out << "    [[nodiscard]] bool project_" << type << "(entt::entity target) const {\n";
-                out << "        if (!registry.valid(target)) { return false; }\n";
-                out << "        ::project_" << type << "(registry, target);\n";
-                out << "        return true;\n";
-                out << "    }\n";
-            } else {
-                out << "    [[nodiscard]] " << type << "* project_" << type << "(entt::entity target) const {\n";
-                out << "        if (!registry.valid(target)) { return nullptr; }\n";
-                out << "        return &::project_" << type << "(registry, target);\n";
-                out << "    }\n";
-            }
-        }
-        for (const auto& event : sorted_symbols(node.contract.emits)) {
-            const auto event_name = canonical_to_cpp_name(event);
-            const auto event_type = event_runtime_cpp_type(program, event);
-            out << "    void emit_" << event_name << "(" << event_type << " occurrence) const {\n";
-            out << "        generated_emit_event(std::move(occurrence));\n";
-            out << "    }\n";
-        }
-        std::unordered_set<std::string> emitted_commands;
-        for (const auto& command : node.contract.commands) {
-            const auto method_name = external_handler_command_method_name(command);
-            if (!emitted_commands.insert(method_name).second) {
-                continue;
-            }
-            switch (command.kind) {
-                case HandlerCommandKind::Spawn: {
-                    if (!command.target.has_value()) {
-                        throw std::runtime_error("cpp-entt received an external spawn capability without a target");
-                    }
-                    const auto* template_node = find_template(program, *command.target);
-                    if (template_node == nullptr) {
-                        throw std::runtime_error(
-                            "cpp-entt cannot lower external spawn capability for missing template '" +
-                            make_canonical_id(*command.target) + "'");
-                    }
-                    if (creation_takes_parameters(template_node->initializers)) {
-                        throw std::runtime_error(
-                            "cpp-entt cannot lower external spawn capability for parameterized template '" +
-                            make_canonical_id(*command.target) +
-                            "': an external handler has no place to supply template arguments");
-                    }
-                    const auto factory = archetype_create_at_function_name(program.module_name, template_node->name);
-                    out << "    [[nodiscard]] entt::entity " << method_name << "() const {\n";
-                    out << "        const auto entity = generated_reserve_entity(registry);\n";
-                    out << "        generated_queue_structural_command(StructuralCommand::Kind::Spawn,\n";
-                    out << "            [entity](entt::registry& registry) { (void)::" << factory
-                        << "(registry, entity); });\n";
-                    out << "        return entity;\n";
-                    out << "    }\n";
-                    break;
-                }
-                case HandlerCommandKind::Destroy: {
-                    out << "    void " << method_name << "(entt::entity target) const {\n";
-                    out << "        generated_queue_structural_command(StructuralCommand::Kind::Destroy,\n";
-                    out << "            [target](entt::registry& registry) {\n";
-                    out << "                if (!registry.valid(target)) { return; }\n";
-                    if (EnttCodegenUtils::find_trait(program, "Parent") != nullptr) {
-                        out << "                ::cactus_destroy_entity_recursive(registry, target);\n";
-                    } else {
-                        out << "                registry.destroy(target);\n";
-                    }
-                    out << "            });\n";
-                    out << "    }\n";
-                    break;
-                }
-                case HandlerCommandKind::Add: {
-                    if (!command.target.has_value()) {
-                        throw std::runtime_error("cpp-entt received an external add capability without a target");
-                    }
-                    const auto type = EnttCodegenUtils::trait_cpp_name(*command.target);
-                    out << "    void " << method_name << "(entt::entity target, " << type << " value = {}) const {\n";
-                    out << "        generated_queue_structural_command(StructuralCommand::Kind::Add,\n";
-                    out << "            [target, value = std::move(value)](entt::registry& registry) mutable {\n";
-                    out << "                if (!registry.valid(target)) { return; }\n";
-                    out << "                ::cancel_projected_" << type << "(target);\n";
-                    out << "                registry.emplace_or_replace<" << type << ">(target, std::move(value));\n";
-                    if (EnttPersistenceEmitter::structural_site_tracks_construction(
-                            program, command.target, command.target->local_name)) {
-                        out << EnttPersistenceEmitter::emit_retain_construction(type, "target", "                ");
-                    }
-                    out << "            });\n";
-                    out << "    }\n";
-                    break;
-                }
-                case HandlerCommandKind::Remove: {
-                    if (!command.target.has_value()) {
-                        throw std::runtime_error("cpp-entt received an external remove capability without a target");
-                    }
-                    const auto type = EnttCodegenUtils::trait_cpp_name(*command.target);
-                    out << "    void " << method_name << "(entt::entity target) const {\n";
-                    out << "        generated_queue_structural_command(StructuralCommand::Kind::Remove,\n";
-                    out << "            [target](entt::registry& registry) {\n";
-                    out << "                if (!registry.valid(target)) { return; }\n";
-                    out << "                ::cancel_projected_" << type << "(target);\n";
-                    out << "                if (registry.all_of<" << type << ">(target)) { registry.remove<" << type
-                        << ">(target); }\n";
-                    if (EnttPersistenceEmitter::structural_site_tracks_construction(
-                            program, command.target, command.target->local_name)) {
-                        out << EnttPersistenceEmitter::emit_discard_construction(type, "target", "                ");
-                    }
-                    out << "            });\n";
-                    out << "    }\n";
-                    break;
-                }
-                case HandlerCommandKind::Set:
-                    emit_external_set_capability(out, program, command, method_name);
-                    break;
-            }
-        }
-        for (const auto& effect : sorted_strings(node.contract.effects)) {
-            out << "    [[nodiscard]] EffectService " << external_handler_effect_method_name(effect)
-                << "() const noexcept {\n";
-            out << "        return EffectService{.domain = \"" << effect << "\"};\n";
-            out << "    }\n";
-        }
-        out << "};\n\n";
+        emit_external_capability(out, program, node);
     }
     out << "}  // namespace cactus::runtime::entt_backend\n\n";
 
@@ -661,43 +671,195 @@ std::vector<const PhasePlan*> phase_activation_order(const DecoratedProgram& pro
     return ordered;
 }
 
-std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
-    if (program.execution_graph.phases.empty()) {
-        return {};
+void emit_viewport_phase_dispatch(std::ostringstream& out,
+                                  const std::string& indent,
+                                  const std::string& phase_name,
+                                  bool render_uses_viewport,
+                                  bool render_emit_2d_helper,
+                                  bool render_emit_3d_helper,
+                                  const std::string& render_vp_cpp,
+                                  const std::string& render_cam2d_cpp,
+                                  const std::string& render_cam3d_cpp) {
+    if (!render_uses_viewport || (!render_emit_2d_helper && !render_emit_3d_helper)) {
+        out << indent << "generated_dispatch_phase_" << phase_name << "(registry, phase);\n";
+        return;
     }
+    out << indent << "{\n";
+    out << indent << "    const int __sw = cactus::runtime::raylib::GetScreenWidth();\n";
+    out << indent << "    const int __sh = cactus::runtime::raylib::GetScreenHeight();\n";
+    out << indent << "    static std::vector<std::pair<int,entt::entity>> __vps;\n";
+    out << indent << "    __vps.clear();\n";
+    out << indent << "    for (const auto& [__vp_e, __vp] : registry.view<" << render_vp_cpp << ">().each()) {\n";
+    out << indent << "        if (__vp.active) { __vps.emplace_back(__vp.depth, __vp_e); }\n";
+    out << indent << "    }\n";
+    out << indent << "    std::ranges::sort(__vps);\n";
+    out << indent << "    for (auto& [__depth, __vp_ent] : __vps) {\n";
+    out << indent << "        (void)__depth;\n";
+    out << indent << "        const auto& __vp = registry.get<" << render_vp_cpp << ">(__vp_ent);\n";
+    out << indent << "        cactus::runtime::raylib::BeginScissorMode(\n";
+    out << indent << "            static_cast<int>(__vp.x * static_cast<float>(__sw)),\n";
+    out << indent << "            static_cast<int>(__vp.y * static_cast<float>(__sh)),\n";
+    out << indent << "            static_cast<int>(__vp.width * static_cast<float>(__sw)),\n";
+    out << indent << "            static_cast<int>(__vp.height * static_cast<float>(__sh)));\n";
+    out << indent << "        if (__vp.clear) { cactus::runtime::raylib::ClearBackground(__vp.clear_color); }\n";
+    if (render_emit_2d_helper) {
+        out << indent << "        if (registry.all_of<" << render_cam2d_cpp << ">(__vp_ent)) {\n";
+        out << indent << "            const auto& __cam = registry.get<" << render_cam2d_cpp << ">(__vp_ent);\n";
+        out << indent << "            set_active_camera_2d(__translate_camera_2d(__cam, __sw, __sh));\n";
+        out << indent << "        }\n";
+    }
+    if (render_emit_3d_helper) {
+        out << indent << (render_emit_2d_helper ? "        else if (registry.all_of<" : "        if (registry.all_of<")
+            << render_cam3d_cpp << ">(__vp_ent)) {\n";
+        out << indent << "            const auto& __cam = registry.get<" << render_cam3d_cpp << ">(__vp_ent);\n";
+        out << indent << "            set_active_camera_3d(__translate_camera_3d(__vp_ent, __cam, registry));\n";
+        out << indent << "        }\n";
+    }
+    out << indent << "        generated_dispatch_phase_" << phase_name << "(registry, phase);\n";
+    out << indent << "        flush_viewport_3d();\n";
+    out << indent << "        cactus::runtime::raylib::EndScissorMode();\n";
+    out << indent << "    }\n";
+    out << indent << "}\n";
+}
 
-    std::vector<const ResolvedEvent*> all_events;
-    std::vector<const ResolvedEvent*> external_events;
+void emit_phase_batch(std::ostringstream& out,
+                      const DecoratedProgram& program,
+                      const auto* phase,
+                      const auto* render_phase,
+                      const auto& emit_render_phase_dispatch) {
+    if (!phase->runtime_root.has_value()) {
+        return;
+    }
+    const auto phase_name            = canonical_to_cpp_name(phase->phase);
+    const auto root_type             = event_runtime_cpp_type(program, *phase->runtime_root);
+    const bool is_render_phase_batch = phase == render_phase;
+    out << "void generated_dispatch_phase_" << phase_name << "(entt::registry&, const " << phase_name
+        << "PhaseRuntimeState&);\n\n";
+    out << "void generated_run_phase_batch_" << phase_name << "(entt::registry& registry, const " << root_type
+        << "& root_event) {\n";
+    out << "    auto& scheduler = generated_scheduler_state();\n";
+    out << "    auto& phase = scheduler." << phase_name << ";\n";
+    if (phase->every_seconds.has_value()) {
+        const auto interval = *phase->every_seconds;
+        out << "    constexpr double interval = " << cpp_double_literal(interval) << ";\n";
+        out << "    phase.accumulator += static_cast<double>(root_event.dt);\n";
+        out << "    const auto due = static_cast<std::uint64_t>(std::floor(phase.accumulator / interval));\n";
+        if (phase->max_repetitions.has_value()) {
+            out << "    constexpr std::uint64_t max_repetitions = " << *phase->max_repetitions << ";\n";
+            out << "    const auto repetitions = std::min(due, max_repetitions);\n";
+        } else {
+            out << "    const auto repetitions = due;\n";
+        }
+        out << "    phase.dt = static_cast<float>(interval);\n";
+        out << "    for (std::uint64_t repetition = 0; repetition < repetitions; ++repetition) {\n";
+        out << "        scheduler.activation.active = true;\n";
+        if (is_render_phase_batch) {
+            out << "        begin_render_frame();\n";
+            emit_render_phase_dispatch("        ", phase_name);
+            out << "        end_render_frame();\n";
+        } else {
+            out << "        generated_dispatch_phase_" << phase_name << "(registry, phase);\n";
+        }
+        out << "        generated_drain_event_cascade(registry);\n";
+        out << "        generated_commit_activation(registry);\n";
+        out << "        scheduler.activation.active = false;\n";
+        out << "    }\n";
+        out << "    phase.accumulator -= static_cast<double>(due) * interval;\n";
+        out << "    if (phase.accumulator < 0.0) { phase.accumulator = 0.0; }\n";
+        out << "    if (phase.accumulator >= interval) { phase.accumulator = std::fmod(phase.accumulator, "
+               "interval); }\n";
+        out << "    phase.alpha = phase.accumulator / interval;\n";
+    } else {
+        bool used_root_event = false;
+        for (const auto& field : phase->fields) {
+            if (!field.source_binding.has_value()) {
+                continue;
+            }
+            const auto& binding   = *field.source_binding;
+            const auto field_type = EnttCodegenUtils::value_type_to_cpp(field.type);
+            if (binding.kind == PhaseFieldSource::Kind::RootEvent) {
+                used_root_event = true;
+                out << "    phase." << field.name << " = static_cast<" << field_type << ">(root_event."
+                    << binding.member << ");\n";
+            } else {
+                out << "    phase." << field.name << " = static_cast<" << field_type << ">(scheduler."
+                    << canonical_to_cpp_name(binding.source) << "." << binding.member << ");\n";
+            }
+        }
+        if (!used_root_event) {
+            out << "    (void)root_event;\n";
+        }
+        out << "    scheduler.activation.active = true;\n";
+        if (is_render_phase_batch) {
+            out << "    begin_render_frame();\n";
+            emit_render_phase_dispatch("    ", phase_name);
+            out << "    end_render_frame();\n";
+        } else {
+            out << "    generated_dispatch_phase_" << phase_name << "(registry, phase);\n";
+        }
+        out << "    generated_drain_event_cascade(registry);\n";
+        out << "    generated_commit_activation(registry);\n";
+        out << "    scheduler.activation.active = false;\n";
+    }
+    out << "    ++phase.completed_batches;\n";
+    out << "}\n\n";
+}
+
+void emit_root_event_processor(std::ostringstream& out,
+                               const DecoratedProgram& program,
+                               const ResolvedEvent* event,
+                               const ResolvedEvent* frame_event,
+                               const auto* render_phase,
+                               const auto& phase_order,
+                               const auto& emit_own_activation) {
+    const auto root_type     = event_runtime_cpp_type(program, *event->symbol_id);
+    const bool is_frame_root = event == frame_event;
+    out << "void generated_process_root_event(entt::registry& registry, const " << root_type
+        << "& root_event, std::optional<entt::entity> target = std::nullopt) {\n";
+    // Input-consumption reset fires once per real (display) frame, before
+    // any phase batch observes input — mirrors the legacy
+    // generated_update_project ordering.
+    if (is_frame_root) {
+        out << "    reset_consumed_input();\n";
+    }
+    bool routed_to_phase = false;
+    for (const auto* phase : phase_order) {
+        if (phase->runtime_root.has_value() && *phase->runtime_root == *event->symbol_id) {
+            routed_to_phase = true;
+            out << "    generated_run_phase_batch_" << canonical_to_cpp_name(phase->phase)
+                << "(registry, root_event);\n";
+            // Projected-trait cleanup fires once per frame, immediately
+            // after the render phase batch completes.
+            if (is_frame_root && phase == render_phase) {
+                out << "    clear_projected_traits(registry);\n";
+            }
+        }
+    }
+    if (routed_to_phase) {
+        out << "    (void)target;\n";
+    } else {
+        emit_own_activation();
+    }
+    out << "}\n\n";
+}
+
+std::vector<const ResolvedEvent*> sorted_events(const DecoratedProgram& program) {
+    std::vector<const ResolvedEvent*> events;
     for (const auto& [_, event] : program.events) {
         if (event.symbol_id.has_value()) {
-            all_events.push_back(&event);
-        }
-        if (event.is_external && event.symbol_id.has_value()) {
-            external_events.push_back(&event);
+            events.push_back(&event);
         }
     }
-    std::ranges::sort(all_events,
+    std::ranges::sort(events,
                       [](const auto* left, const auto* right) { return left->canonical_id < right->canonical_id; });
-    std::ranges::sort(external_events,
-                      [](const auto* left, const auto* right) { return left->canonical_id < right->canonical_id; });
+    return events;
+}
 
-    const auto* frame_event  = find_external_frame_event(program);
-    const auto* render_phase = find_render_phase(program);
-
-    // Programs with no lifecycle trigger get no tracking code at all.
-    const auto lifecycle_triggers = lifecycle_occurrence_triggers(program);
-    std::vector<std::string> occurrence_types;
-    occurrence_types.reserve(all_events.size() + lifecycle_triggers.size());
-    for (const auto* event : all_events) {
-        occurrence_types.push_back(event_runtime_cpp_type(program, *event->symbol_id));
-    }
-    std::vector<std::string> lifecycle_types;
-    lifecycle_types.reserve(lifecycle_triggers.size());
-    for (const auto& trigger : lifecycle_triggers) {
-        lifecycle_types.push_back(*EnttCodegenUtils::lifecycle_occurrence_cpp_type(trigger, program));
-    }
-    occurrence_types.insert(occurrence_types.end(), lifecycle_types.begin(), lifecycle_types.end());
-
+void emit_render_phase_dispatch(std::ostringstream& out,
+                                const DecoratedProgram& program,
+                                const auto* render_phase,
+                                const std::string& indent,
+                                const std::string& phase_name) {
     // Mirrors the same flag/name computation CppEnttCodegen::generate() uses
     // for the legacy per-viewport render loop and edit-mode HUD overlay (see
     // the early __translate_camera_2d/3d helper emission there) — these are
@@ -717,6 +879,81 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
         render_uses_viewport && viewport_uses_flat && (render_rig_is_2d || !render_rig_is_3d);
     const bool render_emit_3d_helper = render_uses_viewport && viewport_uses_volume && render_rig_is_3d;
 
+    emit_viewport_phase_dispatch(out,
+                                 indent,
+                                 phase_name,
+                                 render_uses_viewport,
+                                 render_emit_2d_helper,
+                                 render_emit_3d_helper,
+                                 render_vp_cpp,
+                                 render_cam2d_cpp,
+                                 render_cam3d_cpp);
+}
+
+void emit_phase_runtime_states(std::ostringstream& out, const DecoratedProgram& program) {
+    for (const auto& phase : program.execution_graph.phases) {
+        const auto phase_name = canonical_to_cpp_name(phase.phase);
+        out << "struct " << phase_name << "PhaseRuntimeState {\n";
+        if (phase.every_seconds.has_value()) {
+            out << "    double accumulator{};\n";
+            out << "    double alpha{};\n";
+        }
+        out << "    std::uint64_t completed_batches{};\n";
+        for (const auto& field : phase.fields) {
+            if (field.is_completion_only) {
+                continue;
+            }
+            out << "    " << EnttCodegenUtils::value_type_to_cpp(field.type) << " " << field.name << "{};\n";
+        }
+        out << "};\n\n";
+    }
+}
+
+void emit_stable_handler_table(std::ostringstream& out, const DecoratedProgram& program) {
+    out << "struct StableHandlerDispatch {\n";
+    out << "    std::string_view canonical_id;\n";
+    out << "    bool selectionless;\n";
+    out << "};\n";
+    out << "inline constexpr std::array<StableHandlerDispatch, "
+        << program.execution_graph.stable_topological_order.size() << "> kStableHandlerDispatch = {{\n";
+    for (const auto& identity : program.execution_graph.stable_topological_order) {
+        const auto found = std::ranges::find_if(program.execution_graph.handlers,
+                                                [&](const auto& handler) { return handler.identity == identity; });
+        out << "    {\"" << identity.canonical_id() << "\", "
+            << (found != program.execution_graph.handlers.end() && found->contract.is_selectionless() ? "true"
+                                                                                                      : "false")
+            << "},\n";
+    }
+    out << "}};\n\n";
+}
+
+std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
+    if (program.execution_graph.phases.empty()) {
+        return {};
+    }
+
+    const auto all_events = sorted_events(program);
+    std::vector<const ResolvedEvent*> external_events;
+    std::ranges::copy_if(
+        all_events, std::back_inserter(external_events), [](const auto* event) { return event->is_external; });
+
+    const auto* frame_event  = find_external_frame_event(program);
+    const auto* render_phase = find_render_phase(program);
+
+    // Programs with no lifecycle trigger get no tracking code at all.
+    const auto lifecycle_triggers = lifecycle_occurrence_triggers(program);
+    std::vector<std::string> occurrence_types;
+    occurrence_types.reserve(all_events.size() + lifecycle_triggers.size());
+    for (const auto* event : all_events) {
+        occurrence_types.push_back(event_runtime_cpp_type(program, *event->symbol_id));
+    }
+    std::vector<std::string> lifecycle_types;
+    lifecycle_types.reserve(lifecycle_triggers.size());
+    for (const auto& trigger : lifecycle_triggers) {
+        lifecycle_types.push_back(*EnttCodegenUtils::lifecycle_occurrence_cpp_type(trigger, program));
+    }
+    occurrence_types.insert(occurrence_types.end(), lifecycle_types.begin(), lifecycle_types.end());
+
     std::ostringstream out;
     out << "// ── Graph Activation Runtime State ──────────────────────────────────\n\n";
     out << "namespace cactus::runtime::entt_backend {\n\n";
@@ -735,22 +972,7 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
     }
     out << "\n";
 
-    for (const auto& phase : program.execution_graph.phases) {
-        const auto phase_name = canonical_to_cpp_name(phase.phase);
-        out << "struct " << phase_name << "PhaseRuntimeState {\n";
-        if (phase.every_seconds.has_value()) {
-            out << "    double accumulator{};\n";
-            out << "    double alpha{};\n";
-        }
-        out << "    std::uint64_t completed_batches{};\n";
-        for (const auto& field : phase.fields) {
-            if (field.is_completion_only) {
-                continue;
-            }
-            out << "    " << EnttCodegenUtils::value_type_to_cpp(field.type) << " " << field.name << "{};\n";
-        }
-        out << "};\n\n";
-    }
+    emit_phase_runtime_states(out, program);
 
     out << "struct SchedulerState {\n";
     out << "    ActivationRuntime<EventOccurrence> activation;\n";
@@ -834,21 +1056,7 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
     out << "template <typename Occurrence>\n";
     out << "void generated_dispatch_event(entt::registry&, const Occurrence&) {}\n\n";
 
-    out << "struct StableHandlerDispatch {\n";
-    out << "    std::string_view canonical_id;\n";
-    out << "    bool selectionless;\n";
-    out << "};\n";
-    out << "inline constexpr std::array<StableHandlerDispatch, "
-        << program.execution_graph.stable_topological_order.size() << "> kStableHandlerDispatch = {{\n";
-    for (const auto& identity : program.execution_graph.stable_topological_order) {
-        const auto found = std::ranges::find_if(program.execution_graph.handlers,
-                                                [&](const auto& handler) { return handler.identity == identity; });
-        out << "    {\"" << identity.canonical_id() << "\", "
-            << (found != program.execution_graph.handlers.end() && found->contract.is_selectionless() ? "true"
-                                                                                                      : "false")
-            << "},\n";
-    }
-    out << "}};\n\n";
+    emit_stable_handler_table(out, program);
 
     // Emits the render phase's dispatch call. When the program links
     // std.camera.viewport, the dispatch runs once per active viewport —
@@ -858,128 +1066,13 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
     // legacy generated_render_project's per-viewport loop (see
     // CppEnttCodegen::generate()). Without std.camera.viewport, it's a plain
     // single call, relying on the runtime's static default camera.
-    const auto emit_render_phase_dispatch = [&](const std::string& indent, const std::string& phase_name) {
-        if (!render_uses_viewport || (!render_emit_2d_helper && !render_emit_3d_helper)) {
-            out << indent << "generated_dispatch_phase_" << phase_name << "(registry, phase);\n";
-            return;
-        }
-        out << indent << "{\n";
-        out << indent << "    const int __sw = cactus::runtime::raylib::GetScreenWidth();\n";
-        out << indent << "    const int __sh = cactus::runtime::raylib::GetScreenHeight();\n";
-        out << indent << "    static std::vector<std::pair<int,entt::entity>> __vps;\n";
-        out << indent << "    __vps.clear();\n";
-        out << indent << "    for (const auto& [__vp_e, __vp] : registry.view<" << render_vp_cpp << ">().each()) {\n";
-        out << indent << "        if (__vp.active) { __vps.emplace_back(__vp.depth, __vp_e); }\n";
-        out << indent << "    }\n";
-        out << indent << "    std::ranges::sort(__vps);\n";
-        out << indent << "    for (auto& [__depth, __vp_ent] : __vps) {\n";
-        out << indent << "        (void)__depth;\n";
-        out << indent << "        const auto& __vp = registry.get<" << render_vp_cpp << ">(__vp_ent);\n";
-        out << indent << "        cactus::runtime::raylib::BeginScissorMode(\n";
-        out << indent << "            static_cast<int>(__vp.x * static_cast<float>(__sw)),\n";
-        out << indent << "            static_cast<int>(__vp.y * static_cast<float>(__sh)),\n";
-        out << indent << "            static_cast<int>(__vp.width * static_cast<float>(__sw)),\n";
-        out << indent << "            static_cast<int>(__vp.height * static_cast<float>(__sh)));\n";
-        out << indent << "        if (__vp.clear) { cactus::runtime::raylib::ClearBackground(__vp.clear_color); }\n";
-        if (render_emit_2d_helper) {
-            out << indent << "        if (registry.all_of<" << render_cam2d_cpp << ">(__vp_ent)) {\n";
-            out << indent << "            const auto& __cam = registry.get<" << render_cam2d_cpp << ">(__vp_ent);\n";
-            out << indent << "            set_active_camera_2d(__translate_camera_2d(__cam, __sw, __sh));\n";
-            out << indent << "        }\n";
-        }
-        if (render_emit_3d_helper) {
-            out << indent
-                << (render_emit_2d_helper ? "        else if (registry.all_of<" : "        if (registry.all_of<")
-                << render_cam3d_cpp << ">(__vp_ent)) {\n";
-            out << indent << "            const auto& __cam = registry.get<" << render_cam3d_cpp << ">(__vp_ent);\n";
-            out << indent << "            set_active_camera_3d(__translate_camera_3d(__vp_ent, __cam, registry));\n";
-            out << indent << "        }\n";
-        }
-        out << indent << "        generated_dispatch_phase_" << phase_name << "(registry, phase);\n";
-        out << indent << "        flush_viewport_3d();\n";
-        out << indent << "        cactus::runtime::raylib::EndScissorMode();\n";
-        out << indent << "    }\n";
-        out << indent << "}\n";
+    const auto emit_render_dispatch = [&](const std::string& indent, const std::string& phase_name) {
+        emit_render_phase_dispatch(out, program, render_phase, indent, phase_name);
     };
 
     const auto phase_order = phase_activation_order(program);
     for (const auto* phase : phase_order) {
-        if (!phase->runtime_root.has_value()) {
-            continue;
-        }
-        const auto phase_name            = canonical_to_cpp_name(phase->phase);
-        const auto root_type             = event_runtime_cpp_type(program, *phase->runtime_root);
-        const bool is_render_phase_batch = phase == render_phase;
-        out << "void generated_dispatch_phase_" << phase_name << "(entt::registry&, const " << phase_name
-            << "PhaseRuntimeState&);\n\n";
-        out << "void generated_run_phase_batch_" << phase_name << "(entt::registry& registry, const " << root_type
-            << "& root_event) {\n";
-        out << "    auto& scheduler = generated_scheduler_state();\n";
-        out << "    auto& phase = scheduler." << phase_name << ";\n";
-        if (phase->every_seconds.has_value()) {
-            const auto interval = *phase->every_seconds;
-            out << "    constexpr double interval = " << cpp_double_literal(interval) << ";\n";
-            out << "    phase.accumulator += static_cast<double>(root_event.dt);\n";
-            out << "    const auto due = static_cast<std::uint64_t>(std::floor(phase.accumulator / interval));\n";
-            if (phase->max_repetitions.has_value()) {
-                out << "    constexpr std::uint64_t max_repetitions = " << *phase->max_repetitions << ";\n";
-                out << "    const auto repetitions = std::min(due, max_repetitions);\n";
-            } else {
-                out << "    const auto repetitions = due;\n";
-            }
-            out << "    phase.dt = interval;\n";
-            out << "    for (std::uint64_t repetition = 0; repetition < repetitions; ++repetition) {\n";
-            out << "        scheduler.activation.active = true;\n";
-            if (is_render_phase_batch) {
-                out << "        begin_render_frame();\n";
-                emit_render_phase_dispatch("        ", phase_name);
-                out << "        end_render_frame();\n";
-            } else {
-                out << "        generated_dispatch_phase_" << phase_name << "(registry, phase);\n";
-            }
-            out << "        generated_drain_event_cascade(registry);\n";
-            out << "        generated_commit_activation(registry);\n";
-            out << "        scheduler.activation.active = false;\n";
-            out << "    }\n";
-            out << "    phase.accumulator -= static_cast<double>(due) * interval;\n";
-            out << "    if (phase.accumulator < 0.0) { phase.accumulator = 0.0; }\n";
-            out << "    if (phase.accumulator >= interval) { phase.accumulator = std::fmod(phase.accumulator, "
-                   "interval); }\n";
-            out << "    phase.alpha = phase.accumulator / interval;\n";
-        } else {
-            bool used_root_event = false;
-            for (const auto& field : phase->fields) {
-                if (!field.source_binding.has_value()) {
-                    continue;
-                }
-                const auto& binding   = *field.source_binding;
-                const auto field_type = EnttCodegenUtils::value_type_to_cpp(field.type);
-                if (binding.kind == PhaseFieldSource::Kind::RootEvent) {
-                    used_root_event = true;
-                    out << "    phase." << field.name << " = static_cast<" << field_type << ">(root_event."
-                        << binding.member << ");\n";
-                } else {
-                    out << "    phase." << field.name << " = static_cast<" << field_type << ">(scheduler."
-                        << canonical_to_cpp_name(binding.source) << "." << binding.member << ");\n";
-                }
-            }
-            if (!used_root_event) {
-                out << "    (void)root_event;\n";
-            }
-            out << "    scheduler.activation.active = true;\n";
-            if (is_render_phase_batch) {
-                out << "    begin_render_frame();\n";
-                emit_render_phase_dispatch("    ", phase_name);
-                out << "    end_render_frame();\n";
-            } else {
-                out << "    generated_dispatch_phase_" << phase_name << "(registry, phase);\n";
-            }
-            out << "    generated_drain_event_cascade(registry);\n";
-            out << "    generated_commit_activation(registry);\n";
-            out << "    scheduler.activation.active = false;\n";
-        }
-        out << "    ++phase.completed_batches;\n";
-        out << "}\n\n";
+        emit_phase_batch(out, program, phase, render_phase, emit_render_dispatch);
     }
 
     // The per-event generated_dispatch_event overloads are defined later in
@@ -1008,35 +1101,7 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
     // Every event gets a processor, not only external ones: a cascade-deferred
     // occurrence of any event is re-queued as a root event.
     for (const auto* event : all_events) {
-        const auto root_type     = event_runtime_cpp_type(program, *event->symbol_id);
-        const bool is_frame_root = event == frame_event;
-        out << "void generated_process_root_event(entt::registry& registry, const " << root_type
-            << "& root_event, std::optional<entt::entity> target = std::nullopt) {\n";
-        // Input-consumption reset fires once per real (display) frame, before
-        // any phase batch observes input — mirrors the legacy
-        // generated_update_project ordering.
-        if (is_frame_root) {
-            out << "    reset_consumed_input();\n";
-        }
-        bool routed_to_phase = false;
-        for (const auto* phase : phase_order) {
-            if (phase->runtime_root.has_value() && *phase->runtime_root == *event->symbol_id) {
-                routed_to_phase = true;
-                out << "    generated_run_phase_batch_" << canonical_to_cpp_name(phase->phase)
-                    << "(registry, root_event);\n";
-                // Projected-trait cleanup fires once per frame, immediately
-                // after the render phase batch completes.
-                if (is_frame_root && phase == render_phase) {
-                    out << "    clear_projected_traits(registry);\n";
-                }
-            }
-        }
-        if (routed_to_phase) {
-            out << "    (void)target;\n";
-        } else {
-            emit_own_activation();
-        }
-        out << "}\n\n";
+        emit_root_event_processor(out, program, event, frame_event, render_phase, phase_order, emit_own_activation);
     }
     for (const auto& type : lifecycle_types) {
         out << "void generated_process_root_event(entt::registry& registry, const " << type
@@ -1097,6 +1162,158 @@ const ResolvedPhase* find_resolved_phase(const DecoratedProgram& program, const 
 
 }  // namespace
 
+bool emit_phase_handler_call(std::ostringstream& out,
+                             const DecoratedProgram& program,
+                             const auto& phase,
+                             const auto& identity,
+                             std::unordered_set<std::string>& emitted_callees) {
+    if (identity.trigger.kind != HandlerTriggerKind::Phase || identity.trigger.symbol != phase.phase) {
+        return false;
+    }
+    const auto graph_node = std::ranges::find_if(program.execution_graph.handlers,
+                                                 [&](const auto& node) { return node.identity == identity; });
+    if (graph_node == program.execution_graph.handlers.end()) {
+        return false;
+    }
+    if (is_user_external_handler(program, *graph_node)) {
+        if (emitted_callees.insert(external_handler_callback_name(graph_node->identity)).second) {
+            emit_external_handler_call(out, *graph_node, "phase", "    ");
+        }
+        return true;
+    }
+    if (graph_node->implementation == HandlerImplementationKind::External) {
+        const auto* rule = find_external_rule(program, graph_node->identity.rule);
+        if (rule == nullptr || !rule->is_stdlib) {
+            return false;
+        }
+        const auto callee = system_function_name(program.module_name, rule->name, "tick");
+        if (emitted_callees.insert(callee).second) {
+            out << "    ::" << callee << "(registry);\n";
+        }
+        return true;
+    }
+    if (graph_node->implementation != HandlerImplementationKind::Cactus) {
+        return false;
+    }
+    const auto callee = cactus_handler_callee(program, identity);
+    if (!callee.has_value()) {
+        return false;
+    }
+    if (emitted_callees.insert(*callee).second) {
+        out << "    ::" << *callee << "(registry, phase);\n";
+    }
+    return true;
+}
+
+bool emit_phase_handler_calls(std::ostringstream& out, const DecoratedProgram& program, const auto& phase) {
+    bool emitted = false;
+    std::unordered_set<std::string> emitted_callees;
+    for (const auto& identity : program.execution_graph.stable_topological_order) {
+        emitted |= emit_phase_handler_call(out, program, phase, identity, emitted_callees);
+    }
+    return emitted;
+}
+
+void emit_phase_handler_dispatch(std::ostringstream& out, const DecoratedProgram& program, const auto& phase) {
+    const auto phase_name = canonical_to_cpp_name(phase.phase);
+    out << "void generated_dispatch_phase_" << phase_name << "(entt::registry& registry, const " << phase_name
+        << "PhaseRuntimeState& phase) {\n";
+    out << "    (void)phase;\n";
+
+    // dsl-render-passes: a render-pass phase's derived vertex/fragment
+    // stage handlers use HandlerTriggerKind::RenderStage, not Phase, so
+    // the generic per-handler loop below finds nothing for them by
+    // design (their bodies are translated to GLSL, not C++) — substitute
+    // the render-pass draw step wholesale instead.
+    if (const auto* resolved_phase = find_resolved_phase(program, phase.phase);
+        resolved_phase != nullptr && resolved_phase->render_pass.has_value()) {
+        const auto render_pass_body = emit_render_pass_dispatch_body(program, *resolved_phase);
+        out << (render_pass_body.has_value() ? *render_pass_body : "    (void)registry;\n");
+        out << "}\n\n";
+        return;
+    }
+
+    const bool emitted = emit_phase_handler_calls(out, program, phase);
+    if (!emitted) {
+        out << "    (void)registry;\n";
+        out << "    (void)phase;\n";
+    }
+    out << "}\n\n";
+}
+
+void emit_event_handler_dispatch(std::ostringstream& out, const DecoratedProgram& program, const ResolvedEvent* event) {
+    const auto event_type = event_runtime_cpp_type(program, *event->symbol_id);
+    // The default argument lives on the forward declaration emitted by
+    // emit_graph_scheduler_state; repeating it here would be a redefinition.
+    out << "void generated_dispatch_event(entt::registry& registry, const " << event_type << "& occurrence, "
+        << "std::optional<entt::entity> target) {\n";
+    out << "    (void)occurrence;\n";
+    out << "    (void)target;\n";
+    // std.persistence.SaveRequested is a runtime-owned effect domain
+    // (dsl-stdlib-persistence decision 6), not a gameplay handler target:
+    // every occurrence joins the request queue regardless of whether any
+    // rule also declares `on SaveRequested:`. This is a direct special
+    // case rather than an `extern rule ...: effects: persistence` in the
+    // style of std.debug's renderers, because that style is not actually
+    // a generic effects-keyed dispatch: `system_emitter.cpp`'s renderer
+    // table is a hardcoded (module, rule_name) lookup that still needs a
+    // native C++ handler registered by name for each entry. Routing
+    // through it here would trade this one dispatch-site branch for a
+    // second hardcoded table entry plus a native function — more
+    // machinery for the same outcome, not less.
+    if (event->symbol_id.has_value() && event->name == "SaveRequested" &&
+        event->symbol_id->module.name == "std.persistence") {
+        out << "    generated_queue_save_request(occurrence.slot, occurrence.request_id);\n";
+    }
+    // RestoreRequested is the same runtime-owned effect domain as
+    // SaveRequested above, sharing its request queue and boundary.
+    if (event->symbol_id.has_value() && event->name == "RestoreRequested" &&
+        event->symbol_id->module.name == "std.persistence") {
+        out << "    generated_queue_restore_request(occurrence.slot, occurrence.request_id);\n";
+    }
+    bool emitted = false;
+    for (const auto& identity : program.execution_graph.stable_topological_order) {
+        if (identity.trigger.kind != HandlerTriggerKind::Event || identity.trigger.symbol != *event->symbol_id) {
+            continue;
+        }
+        const auto graph_node = std::ranges::find_if(program.execution_graph.handlers,
+                                                     [&](const auto& node) { return node.identity == identity; });
+        if (graph_node == program.execution_graph.handlers.end()) {
+            continue;
+        }
+        if (is_user_external_handler(program, *graph_node)) {
+            emit_external_handler_call(out, *graph_node, "occurrence", "    ", "target");
+            emitted = true;
+            continue;
+        }
+        if (graph_node->implementation == HandlerImplementationKind::External) {
+            const auto* rule = find_external_rule(program, graph_node->identity.rule);
+            if (rule != nullptr && rule->is_stdlib) {
+                // Event-triggered extern rules (editor-debug-draw / editor-screen-ui generic
+                // renderers) have no filter view to iterate, so their generated body takes the
+                // occurrence directly instead of the (registry)-only shape phase-triggered
+                // filter/view extern rules use — see emit_event_renderer_body in system_emitter.cpp.
+                out << "    ::" << system_function_name(program.module_name, rule->name, "tick")
+                    << "(registry, occurrence);\n";
+                emitted = true;
+            }
+            continue;
+        }
+        if (graph_node->implementation != HandlerImplementationKind::Cactus) {
+            continue;
+        }
+        if (const auto callee = cactus_handler_callee(program, identity)) {
+            out << "    ::" << *callee << "(registry, occurrence, target);\n";
+            emitted = true;
+        }
+    }
+    if (!emitted) {
+        out << "    (void)registry;\n";
+        out << "    (void)occurrence;\n";
+    }
+    out << "}\n\n";
+}
+
 std::string emit_graph_handler_dispatch(const DecoratedProgram& program) {
     if (program.execution_graph.phases.empty() || program.ast == nullptr) {
         return {};
@@ -1105,160 +1322,12 @@ std::string emit_graph_handler_dispatch(const DecoratedProgram& program) {
     std::ostringstream out;
     out << "namespace cactus::runtime::entt_backend {\n\n";
     for (const auto& phase : program.execution_graph.phases) {
-        const auto phase_name = canonical_to_cpp_name(phase.phase);
-        out << "void generated_dispatch_phase_" << phase_name << "(entt::registry& registry, const " << phase_name
-            << "PhaseRuntimeState& phase) {\n";
-        out << "    (void)phase;\n";
-
-        // dsl-render-passes: a render-pass phase's derived vertex/fragment
-        // stage handlers use HandlerTriggerKind::RenderStage, not Phase, so
-        // the generic per-handler loop below finds nothing for them by
-        // design (their bodies are translated to GLSL, not C++) — substitute
-        // the render-pass draw step wholesale instead.
-        if (const auto* resolved_phase = find_resolved_phase(program, phase.phase);
-            resolved_phase != nullptr && resolved_phase->render_pass.has_value()) {
-            const auto render_pass_body = emit_render_pass_dispatch_body(program, *resolved_phase);
-            out << (render_pass_body.has_value() ? *render_pass_body : "    (void)registry;\n");
-            out << "}\n\n";
-            continue;
-        }
-
-        bool emitted = false;
-        // Two distinct execution-graph nodes in this phase batch can resolve
-        // to the same underlying generated implementation (e.g.
-        // std.transform.flat.TransformPropagation and
-        // std.transform.volume.TransformPropagation both compiling to the
-        // same system_function_name when only one WorldTransform dimension
-        // is active). Track callee names already emitted for this phase
-        // batch and skip re-emitting the call for a repeat, while still
-        // treating the node as handled for the existing fallback bookkeeping
-        // below. Scoped per-phase (declared inside this loop) so a
-        // legitimate call to the same function in a different phase is
-        // unaffected.
-        std::unordered_set<std::string> emitted_callees;
-        for (const auto& identity : program.execution_graph.stable_topological_order) {
-            if (identity.trigger.kind != HandlerTriggerKind::Phase || identity.trigger.symbol != phase.phase) {
-                continue;
-            }
-            const auto graph_node = std::ranges::find_if(program.execution_graph.handlers,
-                                                         [&](const auto& node) { return node.identity == identity; });
-            if (graph_node == program.execution_graph.handlers.end()) {
-                continue;
-            }
-            if (is_user_external_handler(program, *graph_node)) {
-                emitted = true;
-                if (emitted_callees.insert(external_handler_callback_name(graph_node->identity)).second) {
-                    emit_external_handler_call(out, *graph_node, "phase", "    ");
-                }
-                continue;
-            }
-            if (graph_node->implementation == HandlerImplementationKind::External) {
-                const auto* rule = find_external_rule(program, graph_node->identity.rule);
-                if (rule != nullptr && rule->is_stdlib) {
-                    const auto callee = system_function_name(program.module_name, rule->name, "tick");
-                    emitted           = true;
-                    if (emitted_callees.insert(callee).second) {
-                        out << "    ::" << callee << "(registry);\n";
-                    }
-                }
-                continue;
-            }
-            if (graph_node->implementation != HandlerImplementationKind::Cactus) {
-                continue;
-            }
-            if (const auto callee = cactus_handler_callee(program, identity)) {
-                emitted = true;
-                if (emitted_callees.insert(*callee).second) {
-                    out << "    ::" << *callee << "(registry, phase);\n";
-                }
-            }
-        }
-        if (!emitted) {
-            out << "    (void)registry;\n";
-            out << "    (void)phase;\n";
-        }
-        out << "}\n\n";
+        emit_phase_handler_dispatch(out, program, phase);
     }
 
-    std::vector<const ResolvedEvent*> events;
-    for (const auto& [_, event] : program.events) {
-        if (event.symbol_id.has_value()) {
-            events.push_back(&event);
-        }
-    }
-    std::ranges::sort(events,
-                      [](const auto* left, const auto* right) { return left->canonical_id < right->canonical_id; });
+    const auto events = sorted_events(program);
     for (const auto* event : events) {
-        const auto event_type = event_runtime_cpp_type(program, *event->symbol_id);
-        // The default argument lives on the forward declaration emitted by
-        // emit_graph_scheduler_state; repeating it here would be a redefinition.
-        out << "void generated_dispatch_event(entt::registry& registry, const " << event_type << "& occurrence, "
-            << "std::optional<entt::entity> target) {\n";
-        out << "    (void)occurrence;\n";
-        out << "    (void)target;\n";
-        // std.persistence.SaveRequested is a runtime-owned effect domain
-        // (dsl-stdlib-persistence decision 6), not a gameplay handler target:
-        // every occurrence joins the request queue regardless of whether any
-        // rule also declares `on SaveRequested:`. This is a direct special
-        // case rather than an `extern rule ...: effects: persistence` in the
-        // style of std.debug's renderers, because that style is not actually
-        // a generic effects-keyed dispatch: `system_emitter.cpp`'s renderer
-        // table is a hardcoded (module, rule_name) lookup that still needs a
-        // native C++ handler registered by name for each entry. Routing
-        // through it here would trade this one dispatch-site branch for a
-        // second hardcoded table entry plus a native function — more
-        // machinery for the same outcome, not less.
-        if (event->symbol_id.has_value() && event->name == "SaveRequested" &&
-            event->symbol_id->module.name == "std.persistence") {
-            out << "    generated_queue_save_request(occurrence.slot, occurrence.request_id);\n";
-        }
-        // RestoreRequested is the same runtime-owned effect domain as
-        // SaveRequested above, sharing its request queue and boundary.
-        if (event->symbol_id.has_value() && event->name == "RestoreRequested" &&
-            event->symbol_id->module.name == "std.persistence") {
-            out << "    generated_queue_restore_request(occurrence.slot, occurrence.request_id);\n";
-        }
-        bool emitted = false;
-        for (const auto& identity : program.execution_graph.stable_topological_order) {
-            if (identity.trigger.kind != HandlerTriggerKind::Event || identity.trigger.symbol != *event->symbol_id) {
-                continue;
-            }
-            const auto graph_node = std::ranges::find_if(program.execution_graph.handlers,
-                                                         [&](const auto& node) { return node.identity == identity; });
-            if (graph_node == program.execution_graph.handlers.end()) {
-                continue;
-            }
-            if (is_user_external_handler(program, *graph_node)) {
-                emit_external_handler_call(out, *graph_node, "occurrence", "    ", "target");
-                emitted = true;
-                continue;
-            }
-            if (graph_node->implementation == HandlerImplementationKind::External) {
-                const auto* rule = find_external_rule(program, graph_node->identity.rule);
-                if (rule != nullptr && rule->is_stdlib) {
-                    // Event-triggered extern rules (editor-debug-draw / editor-screen-ui generic
-                    // renderers) have no filter view to iterate, so their generated body takes the
-                    // occurrence directly instead of the (registry)-only shape phase-triggered
-                    // filter/view extern rules use — see emit_event_renderer_body in system_emitter.cpp.
-                    out << "    ::" << system_function_name(program.module_name, rule->name, "tick")
-                        << "(registry, occurrence);\n";
-                    emitted = true;
-                }
-                continue;
-            }
-            if (graph_node->implementation != HandlerImplementationKind::Cactus) {
-                continue;
-            }
-            if (const auto callee = cactus_handler_callee(program, identity)) {
-                out << "    ::" << *callee << "(registry, occurrence, target);\n";
-                emitted = true;
-            }
-        }
-        if (!emitted) {
-            out << "    (void)registry;\n";
-            out << "    (void)occurrence;\n";
-        }
-        out << "}\n\n";
+        emit_event_handler_dispatch(out, program, event);
     }
 
     // Lifecycle triggers are only ever declared on Cactus rules.
@@ -1957,9 +2026,12 @@ void emit_archetype_trait_initializers(std::ostringstream& out,
         // A state variant also sets its state's slot.
         const auto variant = EnttCodegenUtils::state_variant(program, trait.resolved_trait_id);
         if (resolved_trait != program.traits.end() && resolved_trait->second.fields.empty()) {
-            out << ind
-                << (variant.has_value() ? EnttCodegenUtils::enter_state_call(*variant, entity_name, cpp_name + "{}")
-                                        : "registry.emplace<" + cpp_name + ">(" + entity_name + ");\n");
+            out << ind;
+            if (variant.has_value()) {
+                out << EnttCodegenUtils::enter_state_call(*variant, entity_name, cpp_name + "{}");
+            } else {
+                out << "registry.emplace<" << cpp_name << ">(" << entity_name << ");\n";
+            }
             continue;
         }
 
@@ -1975,9 +2047,12 @@ void emit_archetype_trait_initializers(std::ostringstream& out,
             out << ind << "    " << pad_to_width("component." + assignment.name, widest) << " = "
                 << EnttCodegenUtils::emit_expr(*assignment.value, program) << ";\n";
         }
-        out << ind << "    "
-            << (variant.has_value() ? EnttCodegenUtils::enter_state_call(*variant, entity_name, "component")
-                                    : "registry.emplace<" + cpp_name + ">(" + entity_name + ", component);\n");
+        out << ind << "    ";
+        if (variant.has_value()) {
+            out << EnttCodegenUtils::enter_state_call(*variant, entity_name, "component");
+        } else {
+            out << "registry.emplace<" << cpp_name << ">(" << entity_name << ", component);\n";
+        }
         if (retain) {
             out << EnttPersistenceEmitter::emit_retain_construction(cpp_name, entity_name, ind + "    ");
         }

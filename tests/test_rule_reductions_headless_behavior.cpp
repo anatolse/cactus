@@ -9,6 +9,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <exception>
+
 namespace {
 
 void run_one_frame(entt::registry& registry) {
@@ -32,7 +34,7 @@ const rule_reductions__Team& team_of(entt::registry& registry, int id) {
         }
     }
     FAIL("no team with id " << id);
-    std::unreachable();
+    std::terminate();
 }
 
 constexpr int RED_TEAM   = 1;
@@ -119,8 +121,7 @@ TEST_CASE("a where predicate on the group binding removes the group", "[runtime]
     CHECK(team_of(registry, GOLD_TEAM).activations == 1);
 }
 
-TEST_CASE("order by and limit rank aggregate rows with creation-order ties",
-          "[runtime][codegen-entt][rule-reduce]") {
+TEST_CASE("order by and limit rank aggregate rows with creation-order ties", "[runtime][codegen-entt][rule-reduce]") {
     // Red and Gold both total 8; Red was created first.
     entt::registry registry;
     run_one_frame(registry);

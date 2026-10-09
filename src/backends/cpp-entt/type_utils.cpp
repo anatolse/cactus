@@ -368,8 +368,12 @@ std::string EnttCodegenUtils::match_ternary_chain(const std::string& subject,
     std::string chain = last_value;
     for (auto arm = tested_arms.rbegin(); arm != tested_arms.rend(); ++arm) {
         const bool nested = wrap_nested && arm != tested_arms.rbegin();
-        chain = "((" + subject + " == " + arm->first + ") ? " + arm->second + " : " +
-                (nested ? "cactus_chosen(" + chain + ")" : chain) + ")";
+        if (nested) {
+            chain.insert(0, "cactus_chosen(");
+            chain += ")";
+        }
+        chain.insert(0, "((" + subject + " == " + arm->first + ") ? " + arm->second + " : ");
+        chain += ")";
     }
     return chain;
 }

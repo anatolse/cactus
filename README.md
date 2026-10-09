@@ -24,9 +24,7 @@ entity Player:
         move_speed = MOVE_SPEED
 
 rule MovementSystem:
-    filter:
-        tf.WorldTransform
-        PlayerMotion
+    each: tf.WorldTransform, PlayerMotion
 
     on tick:
         velocity = vec2(move_axis * move_speed, velocity.y)

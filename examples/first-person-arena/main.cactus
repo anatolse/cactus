@@ -14,6 +14,7 @@ use std.render.models as models
 use std.render.text as text
 use std.camera.volume as camera
 use std.camera.viewport as viewport
+use std.time as time
 
 # Per-kind enemy data. Clip indices are positions in the GLB's own animation
 # list (models.animation_name). The animator plays at speed /
@@ -159,18 +160,14 @@ pub trait Hurtbox
 # Kept on the player while a hurtbox touches them.
 pub trait Caught
 
-pub trait RobotSpawnPoint:
-    var countdown: float = 0.0
+pub trait RobotSpawnPoint
 
-pub trait KnightSpawnPoint:
-    var countdown: float = 0.0
+pub trait KnightSpawnPoint
 
-pub trait Shooter:
-    var cooldown: float = 0.0
+pub trait Shooter
 
 pub trait Bullet:
     var velocity: vec3 = vec3(0.0, 0.0, 0.0)
-    var lifetime: float = 2.0
 
 event EnemyHit
 
@@ -279,6 +276,8 @@ template BulletTemplate:
         mask = BULLET_MASK
     physics.BoxCollider:
         size = vec3(BULLET_RADIUS * 2.0, BULLET_RADIUS * 2.0, BULLET_RADIUS * 2.0)
+    time.Lifetime:
+        remaining = BULLET_LIFETIME
     Bullet
 
 entity ArenaFloor from FloorBox:
@@ -506,6 +505,7 @@ entity PlayerBody:
             viewport.Viewport:
                 clear_color = #4890E0FF
             Shooter
+            time.Timer
             CameraRig
 
 entity RobotSpawnerNorthEast:
@@ -513,6 +513,8 @@ entity RobotSpawnerNorthEast:
         position = vec3(12.0, ENEMY_HALF_HEIGHT, -12.0)
         rotation = quat.identity()
         scale = vec3(1.0, 1.0, 1.0)
+    time.Timer:
+        armed = true
     RobotSpawnPoint
 
 entity RobotSpawnerSouthWest:
@@ -520,6 +522,8 @@ entity RobotSpawnerSouthWest:
         position = vec3(-12.0, ENEMY_HALF_HEIGHT, 12.0)
         rotation = quat.identity()
         scale = vec3(1.0, 1.0, 1.0)
+    time.Timer:
+        armed = true
     RobotSpawnPoint
 
 entity KnightSpawnerNorthWest:
@@ -527,6 +531,8 @@ entity KnightSpawnerNorthWest:
         position = vec3(-12.0, ENEMY_HALF_HEIGHT, -12.0)
         rotation = quat.identity()
         scale = vec3(1.0, 1.0, 1.0)
+    time.Timer:
+        armed = true
     KnightSpawnPoint
 
 entity KnightSpawnerSouthEast:
@@ -534,6 +540,8 @@ entity KnightSpawnerSouthEast:
         position = vec3(12.0, ENEMY_HALF_HEIGHT, 12.0)
         rotation = quat.identity()
         scale = vec3(1.0, 1.0, 1.0)
+    time.Timer:
+        armed = true
     KnightSpawnPoint
 
 entity CrosshairHud:
@@ -671,16 +679,13 @@ rule ComposeCameraPose:
 
 rule SpawnRobots:
     each:
-        RobotSpawnPoint as spawn_point
+        RobotSpawnPoint
         tv.WorldTransform as transform
 
     when:
         not Game.Match.over
 
-    on fixed_tick:
-        spawn_point.countdown -= fixed_tick.dt
-        if spawn_point.countdown > 0.0:
-            return
+    on time.TimerExpired:
         let bounds = models.bounds_size(Robot)
         let model_scale = if bounds.y > 0.0: CHARACTER_HEIGHT / bounds.y else: 1.0
         spawn RobotTemplate:
@@ -698,20 +703,18 @@ rule SpawnRobots:
                     models.ModelAnimator:
                         clip = ROBOT.run_clip
                         speed = ROBOT.speed / ROBOT.run_reference_speed
-        spawn_point.countdown = SPAWN_INTERVAL
+        emit time.RestartTimer to self:
+            duration = SPAWN_INTERVAL
 
 rule SpawnKnights:
     each:
-        KnightSpawnPoint as spawn_point
+        KnightSpawnPoint
         tv.WorldTransform as transform
 
     when:
         not Game.Match.over
 
-    on fixed_tick:
-        spawn_point.countdown -= fixed_tick.dt
-        if spawn_point.countdown > 0.0:
-            return
+    on time.TimerExpired:
         let bounds = models.bounds_size(Knight)
         let model_scale = if bounds.y > 0.0: CHARACTER_HEIGHT / bounds.y else: 1.0
         spawn KnightTemplate:
@@ -729,7 +732,8 @@ rule SpawnKnights:
                     models.ModelAnimator:
                         clip = KNIGHT.run_clip
                         speed = KNIGHT.speed / KNIGHT.run_reference_speed
-        spawn_point.countdown = SPAWN_INTERVAL
+        emit time.RestartTimer to self:
+            duration = SPAWN_INTERVAL
 
 # The ground-plane heading from position toward target, turned by angle.
 func steer_heading(position: vec3, goal: vec3, angle: float) vec3:
@@ -826,18 +830,11 @@ rule SeekPlayer:
         enemy.body.velocity.x = direction.x * enemy.Enemy.kind.speed
         enemy.body.velocity.z = direction.z * enemy.Enemy.kind.speed
 
-rule CooldownShooter:
-    each:
-        Shooter as shooter
-
-    on tick:
-        if shooter.cooldown > 0.0:
-            shooter.cooldown = math.max(0.0, shooter.cooldown - tick.dt)
-
 rule FireBullet:
     each:
         CameraRig
-        Shooter as shooter
+        Shooter
+        time.Timer as cooldown
         tv.WorldTransform as transform
     after:
         CursorCaptureToggle
@@ -845,7 +842,7 @@ rule FireBullet:
         not Game.Match.over
 
     on input:
-        if not input.pressed(Fire) or shooter.cooldown > 0.0:
+        if not input.pressed(Fire) or cooldown.armed:
             return
         let direction = quat.forward(transform.rotation)
         spawn BulletTemplate:
@@ -853,7 +850,8 @@ rule FireBullet:
                 position = transform.position + direction * 0.5
             Bullet:
                 velocity = direction * BULLET_SPEED
-        shooter.cooldown = FIRE_COOLDOWN
+        emit time.RestartTimer to self:
+            duration = FIRE_COOLDOWN
 
 # Each tick a bullet sweeps its motion against every solid its mask selects,
 # so it can't pass through anything between ticks, and hurtboxes don't stop
@@ -876,9 +874,6 @@ rule MoveBullets:
             destroy bullet
             return
         bullet.tv.WorldTransform.position += bullet.Bullet.velocity * fixed_tick.dt
-        bullet.Bullet.lifetime -= fixed_tick.dt
-        if bullet.Bullet.lifetime <= 0.0:
-            destroy bullet
 
 # Only a hunting enemy starts its death; Dying is final, so it is never left.
 rule BeginDeath:
@@ -986,11 +981,11 @@ rule RestartOnGameOver:
         for bullet in query.all[Bullet]():
             destroy bullet
         for spawn_point in query.all[RobotSpawnPoint]():
-            set RobotSpawnPoint on spawn_point:
-                countdown = 0.0
+            emit time.RestartTimer to spawn_point:
+                duration = 0.0
         for spawn_point in query.all[KnightSpawnPoint]():
-            set KnightSpawnPoint on spawn_point:
-                countdown = 0.0
+            emit time.RestartTimer to spawn_point:
+                duration = 0.0
         set text.ScreenLabel on CrosshairHud:
             visible = true
         set text.ScreenLabel on GameOverHud:

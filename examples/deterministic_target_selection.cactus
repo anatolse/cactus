@@ -25,7 +25,7 @@ trait Target:
 event Damage
 
 rule ResetTarget:
-    filter:
+    each:
         Target as slot
 
     on fixed_tick:
@@ -54,7 +54,7 @@ rule SelectTarget:
         tower.Target.has_target = true
 
 rule ConsumeTarget:
-    filter:
+    each:
         Target as slot
     after:
         SelectTarget
@@ -64,7 +64,7 @@ rule ConsumeTarget:
             emit Damage to slot.selected
 
 rule ApplyDamage:
-    filter:
+    each:
         Enemy as foe
 
     on Damage:

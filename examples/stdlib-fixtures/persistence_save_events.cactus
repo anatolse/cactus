@@ -39,7 +39,7 @@ entity Tracker:
     SaveStatus
 
 rule RequestSave:
-    filter:
+    each:
         SaveStatus as status
 
     on tick:
@@ -67,7 +67,7 @@ rule RequestSave:
                 request_id = status.requests_sent
 
 rule ObserveSaveCompleted:
-    filter:
+    each:
         SaveStatus as status
 
     on storage.SaveCompleted as outcome:
@@ -82,7 +82,7 @@ rule ObserveSaveCompleted:
                 request_id = status.requests_sent
 
 rule ObserveSaveFailed:
-    filter:
+    each:
         SaveStatus as status
 
     on storage.SaveFailed as outcome:
@@ -99,7 +99,7 @@ rule ObserveSaveFailed:
                 request_id = status.requests_sent
 
 rule ObserveRestoreCompleted:
-    filter:
+    each:
         SaveStatus as status
 
     on storage.RestoreCompleted as outcome:
@@ -107,7 +107,7 @@ rule ObserveRestoreCompleted:
         status.last_restore_completed_id = outcome.request_id
 
 rule ObserveRestoreFailed:
-    filter:
+    each:
         SaveStatus as status
 
     on storage.RestoreFailed as outcome:

@@ -4,7 +4,7 @@
 TBD - created by archiving change rename-system-to-rule. Update Purpose after archive.
 ## Requirements
 ### Requirement: `order by:` clause on rule declarations
-Rule declarations SHALL support an optional `order by:` block on a unary (`filter:`) domain or on a binary `pairs:` domain. When present, the domain's entity or tuple iteration order SHALL be sorted according to the specified sort keys before each handler invocation. A sort key SHALL be a pure expression — of the same expression and purity class as a `where:` predicate (literals and constants, in-scope binding reads, arithmetic and boolean operators, and calls to functions whose complete call graph is proven pure), rather than a bare field path — and MUST type-check as scalar-comparable (`int`, `float`, or `bool`). Multiple sort keys produce lexicographic ordering: the first key is the primary sort, subsequent keys break ties.
+Rule declarations SHALL support an optional `order by:` block on a unary (`each:`) domain or on a binary `pairs:` domain. When present, the domain's entity or tuple iteration order SHALL be sorted according to the specified sort keys before each handler invocation. A sort key SHALL be a pure expression — of the same expression and purity class as a `where:` predicate (literals and constants, in-scope binding reads, arithmetic and boolean operators, and calls to functions whose complete call graph is proven pure), rather than a bare field path — and MUST type-check as scalar-comparable (`int`, `float`, or `bool`). Multiple sort keys produce lexicographic ordering: the first key is the primary sort, subsequent keys break ties.
 
 ```ebnf
 order_by_clause = "order" "by" ":" INDENT sort_key+ DEDENT ;
@@ -38,19 +38,19 @@ Direction is optional; `asc` is the default when omitted.
 - **THEN** the semantic analyzer accepts the expression as a sort key and evaluates it once per tuple before sorting
 
 ### Requirement: Sort keys must reference filter aliases
-A sort key expression MUST reference only bindings in scope for the rule's domain: a `filter:` alias for a unary rule, or either of the two pair bindings for a `pairs:` rule. Referencing a name not in scope SHALL be a compile-time error.
+A sort key expression MUST reference only bindings in scope for the rule's domain: an `each:` alias for a unary rule, or either of the two pair bindings for a `pairs:` rule. Referencing a name not in scope SHALL be a compile-time error.
 
 #### Scenario: Sort key alias in filter is valid
-- **WHEN** `filter:` declares `Sprite as s` and `order by:` uses `s.layer`
+- **WHEN** `each:` declares `Sprite as s` and `order by:` uses `s.layer`
 - **THEN** the semantic analyzer accepts it
 
 #### Scenario: Sort key alias not in filter is an error
-- **WHEN** `order by:` uses `h.value` but `Health as h` is not in `filter:`
+- **WHEN** `order by:` uses `h.value` but `Health as h` is not in `each:`
 - **THEN** the semantic analyzer SHALL report: "sort key alias 'h' is not declared in filter:"
 
 #### Scenario: order by on filterless rule is an error
-- **WHEN** a rule has neither a `filter:` block nor a `pairs:` block and declares `order by:`
-- **THEN** the semantic analyzer SHALL report: "`order by:` requires a `filter:` or `pairs:` clause"
+- **WHEN** a rule has neither an `each:` block nor a `pairs:` block and declares `order by:`
+- **THEN** the semantic analyzer SHALL report: "`order by:` requires an `each:` or `pairs:` clause"
 
 #### Scenario: Sort key expression spanning both pair bindings is valid
 - **WHEN** a `pairs:` rule binds `actor` and `target` and its `order by:` expression reads fields through both `actor` and `target`

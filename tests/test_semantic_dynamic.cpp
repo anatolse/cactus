@@ -468,7 +468,7 @@ TEST_CASE("Semantic: load reachable via use — ok", "[semantic][dynamic-ecs]") 
                        "trait GameState:\n"
                        "    var active: bool = true\n"
                        "rule GameMgr:\n"
-                       "    filter:\n"
+                       "    each:\n"
                        "        GameState\n"
                        "    on tick:\n"
                        "        load levels.main\n"));
@@ -479,7 +479,7 @@ TEST_CASE("Semantic: load unreachable module — error", "[semantic][dynamic-ecs
         analyze_errors("trait GameState:\n"
                        "    var active: bool = true\n"
                        "rule GameMgr:\n"
-                       "    filter:\n"
+                       "    each:\n"
                        "        GameState\n"
                        "    on tick:\n"
                        "        load unknown.scene\n"));
@@ -493,7 +493,7 @@ TEST_CASE("Semantic: add declared trait — ok", "[semantic][dynamic-ecs]") {
                        "trait Position:\n"
                        "    var x: float = 0.0\n"
                        "rule FreezeSystem:\n"
-                       "    filter:\n"
+                       "    each:\n"
                        "        Position\n"
                        "    on tick:\n"
                        "        add Frozen\n"));
@@ -504,7 +504,7 @@ TEST_CASE("Semantic: add undeclared trait — error", "[semantic][dynamic-ecs]")
         analyze_errors("trait Position:\n"
                        "    var x: float = 0.0\n"
                        "rule FreezeSystem:\n"
-                       "    filter:\n"
+                       "    each:\n"
                        "        Position\n"
                        "    on tick:\n"
                        "        add NonExistentTrait\n"));
@@ -516,7 +516,7 @@ TEST_CASE("Semantic: remove declared trait — ok", "[semantic][dynamic-ecs]") {
                        "trait Position:\n"
                        "    var x: float = 0.0\n"
                        "rule FreezeSystem:\n"
-                       "    filter:\n"
+                       "    each:\n"
                        "        Position\n"
                        "    on tick:\n"
                        "        remove Frozen\n"));
@@ -527,7 +527,7 @@ TEST_CASE("Semantic: remove undeclared trait — error", "[semantic][dynamic-ecs
         analyze_errors("trait Position:\n"
                        "    var x: float = 0.0\n"
                        "rule FreezeSystem:\n"
-                       "    filter:\n"
+                       "    each:\n"
                        "        Position\n"
                        "    on tick:\n"
                        "        remove BadTrait\n"));
@@ -540,7 +540,7 @@ TEST_CASE("Semantic: on spawn reports the lifecycle migration diagnostic", "[sem
         "trait Position:\n"
         "    var x: float = 0.0\n"
         "rule Init:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Position\n"
         "    on spawn:\n"
         "        x = 0.0\n");
@@ -553,7 +553,7 @@ TEST_CASE("Semantic: on spawn with params — error", "[semantic][dynamic-ecs]")
         analyze_errors("trait Position:\n"
                        "    var x: float = 0.0\n"
                        "rule Init:\n"
-                       "    filter:\n"
+                       "    each:\n"
                        "        Position\n"
                        "    on spawn(v: float):\n"
                        "        x = v\n"));
@@ -564,7 +564,7 @@ TEST_CASE("Semantic: on destroy reports the lifecycle migration diagnostic", "[s
         "trait Position:\n"
         "    var x: float = 0.0\n"
         "rule Cleanup:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Position\n"
         "    on destroy:\n"
         "        x = 0.0\n");
@@ -577,7 +577,7 @@ TEST_CASE("Semantic: on load with params — error", "[semantic][dynamic-ecs]") 
         analyze_errors("trait GameState:\n"
                        "    var active: bool = true\n"
                        "rule GameMgr:\n"
-                       "    filter:\n"
+                       "    each:\n"
                        "        GameState\n"
                        "    on load(name: float):\n"
                        "        active = true\n"));
@@ -588,7 +588,7 @@ TEST_CASE("Semantic: on unload with params — error", "[semantic][dynamic-ecs]"
         analyze_errors("trait GameState:\n"
                        "    var active: bool = true\n"
                        "rule GameMgr:\n"
-                       "    filter:\n"
+                       "    each:\n"
                        "        GameState\n"
                        "    on unload(dt: float):\n"
                        "        active = false\n"));
@@ -600,7 +600,7 @@ TEST_CASE("Semantic: exclude declared trait — valid", "[semantic][dynamic-ecs]
     CHECK_FALSE(
         analyze_errors("trait Persistent\n"
                        "rule Cleanup:\n"
-                       "    exclude:\n"
+                       "    without:\n"
                        "        Persistent\n"
                        "    on unload:\n"
                        "        destroy\n"));
@@ -609,7 +609,7 @@ TEST_CASE("Semantic: exclude declared trait — valid", "[semantic][dynamic-ecs]
 TEST_CASE("Semantic: exclude undeclared trait — error", "[semantic][dynamic-ecs]") {
     CHECK(
         analyze_errors("rule Cleanup:\n"
-                       "    exclude:\n"
+                       "    without:\n"
                        "        NonExistentTrait\n"
                        "    on unload:\n"
                        "        destroy\n"));
@@ -628,7 +628,7 @@ TEST_CASE("Semantic: rule with exclude only (no filter) — valid", "[semantic][
     CHECK_FALSE(
         analyze_errors("trait Persistent\n"
                        "rule Cleanup:\n"
-                       "    exclude:\n"
+                       "    without:\n"
                        "        Persistent\n"
                        "    on unload:\n"
                        "        destroy\n"));
@@ -690,7 +690,7 @@ TEST_CASE("Semantic: lifecycle events not treated as unknown events", "[semantic
         analyze_errors("trait Position:\n"
                        "    var x: float = 0.0\n"
                        "rule Sys:\n"
-                       "    filter:\n"
+                       "    each:\n"
                        "        Position\n"
                        "    on load:\n"
                        "        x = 1.0\n"
@@ -715,7 +715,7 @@ TEST_CASE("Semantic: marker trait in exclude is valid", "[semantic][dynamic-ecs]
     CHECK_FALSE(
         analyze_errors("trait Persistent\n"
                        "rule Cleanup:\n"
-                       "    exclude:\n"
+                       "    without:\n"
                        "        Persistent\n"
                        "    on tick:\n"
                        "        destroy\n"));
@@ -728,7 +728,7 @@ TEST_CASE("Semantic: destroy in rule handler — valid", "[semantic][dynamic-ecs
         analyze_errors("trait Health:\n"
                        "    var hp: int = 100\n"
                        "rule DeathSystem:\n"
-                       "    filter:\n"
+                       "    each:\n"
                        "        Health\n"
                        "    on tick:\n"
                        "        destroy\n"));
@@ -743,7 +743,7 @@ TEST_CASE("Semantic: spawn in on tick handler — valid", "[semantic][dynamic-ec
                        "template Enemy:\n"
                        "    Position\n"
                        "rule Spawner:\n"
-                       "    filter:\n"
+                       "    each:\n"
                        "        Position\n"
                        "    on tick:\n"
                        "        spawn Enemy:\n"
@@ -757,7 +757,7 @@ TEST_CASE("Semantic: marker trait in filter is valid (task 11.10)", "[semantic][
     CHECK_FALSE(
         analyze_errors("trait Persistent\n"
                        "rule Sys:\n"
-                       "    filter:\n"
+                       "    each:\n"
                        "        Persistent\n"
                        "    on tick:\n"
                        "        destroy\n"));
@@ -768,9 +768,9 @@ TEST_CASE("Semantic: marker trait filter + exclude combination (task 11.10)", "[
         analyze_errors("trait Persistent\n"
                        "trait Active\n"
                        "rule Sys:\n"
-                       "    filter:\n"
+                       "    each:\n"
                        "        Active\n"
-                       "    exclude:\n"
+                       "    without:\n"
                        "        Persistent\n"
                        "    on tick:\n"
                        "        destroy\n"));
@@ -802,7 +802,7 @@ TEST_CASE("Semantic: field access in filter rule body — ok (task 11.12)", "[se
         analyze_errors("trait Position:\n"
                        "    var x: float = 0.0\n"
                        "rule Move:\n"
-                       "    filter:\n"
+                       "    each:\n"
                        "        Position\n"
                        "    on tick:\n"
                        "        x = x + tick.dt\n"));
@@ -883,7 +883,7 @@ TEST_CASE("Semantic: EditorGizmo2D and EditorGizmo3D traits are valid for projec
         "    var color: color = #00FF00FF\n"
         "    var size: float = 1.0\n"
         "rule Gizmo2D:\n"
-        "    filter:\n"
+        "    each:\n"
         "        EditorGizmo2D\n"
         "    on tick:\n"
         "        let m = mode\n");
@@ -970,7 +970,7 @@ TEST_CASE("Semantic: extern rule EditorTemplatePalette filter on EditorState is 
                        "    var mode: int = 0\n"
                        "    var selected: entity_id\n"
                        "pub extern rule EditorTemplatePalette:\n"
-                       "    filter:\n"
+                       "    each:\n"
                        "        EditorState\n"
                        "    on render:\n"
                        "        writes:\n"
@@ -987,7 +987,7 @@ TEST_CASE("Semantic: extern rule EditorPropertyPanel filter on EditorState is va
                        "    var active: bool = true\n"
                        "    var mode: int = 0\n"
                        "pub extern rule EditorPropertyPanel:\n"
-                       "    filter:\n"
+                       "    each:\n"
                        "        EditorState\n"
                        "    on render:\n"
                        "        reads:\n"
@@ -1005,7 +1005,7 @@ TEST_CASE("Semantic: extern rule GizmoRenderer2D filter on EditorGizmo2D is vali
                        "    var color: color = #00FF00FF\n"
                        "    var size: float = 1.0\n"
                        "pub extern rule GizmoRenderer2D:\n"
-                       "    filter:\n"
+                       "    each:\n"
                        "        EditorGizmo2D\n"
                        "    on render:\n"
                        "        reads:\n"
@@ -1023,7 +1023,7 @@ TEST_CASE("Semantic: extern rule GizmoRenderer3D filter on EditorGizmo3D is vali
                        "    var color: color = #00FF00FF\n"
                        "    var size: float = 1.0\n"
                        "pub extern rule GizmoRenderer3D:\n"
-                       "    filter:\n"
+                       "    each:\n"
                        "        EditorGizmo3D\n"
                        "    on render:\n"
                        "        reads:\n"
@@ -1379,7 +1379,7 @@ static const std::string SET_TRAITS =
 TEST_CASE("Semantic: set with known trait and fields is valid", "[semantic][deferred-set]") {
     CHECK(first_error(SET_TRAITS +
                       "rule Heal:\n"
-                      "    filter:\n"
+                      "    each:\n"
                       "        Target as aim\n"
                       "    on tick:\n"
                       "        set Health on aim.other:\n"
@@ -1505,7 +1505,7 @@ static const std::string LIFECYCLE_TRAITS =
 TEST_CASE("Semantic: lifecycle triggers resolve to trait trigger kinds", "[semantic][trait-lifecycle]") {
     const auto program = analyze_program(LIFECYCLE_TRAITS +
                                          "rule StartDying:\n"
-                                         "    filter:\n"
+                                         "    each:\n"
                                          "        Enemy\n"
                                          "    on added Dying:\n"
                                          "        let x = 1\n"
@@ -1542,12 +1542,12 @@ TEST_CASE("Semantic: lifecycle trigger on a projected trait is rejected", "[sema
     const auto error = first_error(LIFECYCLE_TRAITS +
                                    "trait Hovered\n"
                                    "rule Hover:\n"
-                                   "    filter:\n"
+                                   "    each:\n"
                                    "        Enemy\n"
                                    "    on tick:\n"
                                    "        project Hovered\n"
                                    "rule React:\n"
-                                   "    filter:\n"
+                                   "    each:\n"
                                    "        Enemy\n"
                                    "    on added Hovered:\n"
                                    "        let x = 1\n");
@@ -1570,7 +1570,7 @@ TEST_CASE("Semantic: lifecycle trigger in a pair rule is rejected", "[semantic][
 TEST_CASE("Semantic: on added alias writes like a filter alias", "[semantic][trait-lifecycle]") {
     const auto program = analyze_program(LIFECYCLE_TRAITS +
                                          "rule StartDying:\n"
-                                         "    filter:\n"
+                                         "    each:\n"
                                          "        Enemy\n"
                                          "    on added Dying as dying:\n"
                                          "        dying.elapsed = 0.0\n");
@@ -1583,19 +1583,19 @@ TEST_CASE("Semantic: on added alias writes like a filter alias", "[semantic][tra
 TEST_CASE("Semantic: on removed snapshot is typed and read-only", "[semantic][trait-lifecycle]") {
     CHECK_FALSE(analyze_errors(LIFECYCLE_TRAITS +
                                "rule StopBurning:\n"
-                               "    filter:\n"
+                               "    each:\n"
                                "        Enemy\n"
                                "    on removed Burning as old:\n"
                                "        let heat: float = old.intensity\n"));
     CHECK(analyze_errors(LIFECYCLE_TRAITS +
                          "rule StopBurning:\n"
-                         "    filter:\n"
+                         "    each:\n"
                          "        Enemy\n"
                          "    on removed Burning as old:\n"
                          "        let heat: bool = old.intensity\n"));
     CHECK(first_error(LIFECYCLE_TRAITS +
                       "rule StopBurning:\n"
-                      "    filter:\n"
+                      "    each:\n"
                       "        Enemy\n"
                       "    on removed Burning as old:\n"
                       "        old.intensity = 0.0\n")
@@ -1603,7 +1603,7 @@ TEST_CASE("Semantic: on removed snapshot is typed and read-only", "[semantic][tr
 
     const auto program = analyze_program(LIFECYCLE_TRAITS +
                                          "rule StopBurning:\n"
-                                         "    filter:\n"
+                                         "    each:\n"
                                          "        Enemy\n"
                                          "    on removed Burning as old:\n"
                                          "        let heat = old.intensity\n");
@@ -1616,7 +1616,7 @@ TEST_CASE("Semantic: lifecycle trigger without alias has no binding", "[semantic
     // A binding would type `Dying.elapsed` as float and reject the bool local.
     CHECK(first_error(LIFECYCLE_TRAITS +
                       "rule StartDying:\n"
-                      "    filter:\n"
+                      "    each:\n"
                       "        Enemy\n"
                       "    on added Dying:\n"
                       "        let t: bool = Dying.elapsed\n")

@@ -186,7 +186,7 @@ template Particle:
     Sparkle
 
 rule Promote:
-    filter:
+    each:
         Sparkle as sparkle
 
     on Step:
@@ -215,7 +215,7 @@ template Particle:
     Sparkle
 
 rule Stun:
-    filter:
+    each:
         Sparkle as sparkle
 
     on Step:
@@ -486,7 +486,7 @@ template Boss(maximum: int = 500):
             Turret
 
 rule Promote:
-    filter:
+    each:
         Turret as turret
 
     on Step:

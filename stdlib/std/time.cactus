@@ -44,7 +44,7 @@ func seconds_or_zero(value: float) float:
     return 0.0
 
 rule AdvanceLifetime:
-    filter:
+    each:
         Lifetime as lifetime
 
     on core.fixed_tick as step:
@@ -57,7 +57,7 @@ rule AdvanceLifetime:
         destroy
 
 rule AdvanceTimer:
-    filter:
+    each:
         Timer as timer
 
     on RestartTimer as request:

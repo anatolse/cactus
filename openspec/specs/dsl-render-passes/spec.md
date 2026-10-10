@@ -82,21 +82,21 @@ exactly one handler targeting its `<phase>.fragment` trigger for the program to 
 
 ### Requirement: Vertex handler is unary; fragment handler is selectionless
 
-The handler targeting `<phase>.vertex` MUST have a unary domain (`filter:` selects the
-per-instance entity domain; `exclude:`/`order by:`/`where:` remain legal exactly as on an ordinary
+The handler targeting `<phase>.vertex` MUST have a unary domain (`each:` selects the
+per-instance entity domain; `without:`/`order by:`/`where:` remain legal exactly as on an ordinary
 rule; `pairs:` is rejected). The handler targeting `<phase>.fragment` MUST be selectionless: it
-MUST NOT declare `filter:`, `exclude:`, `pairs:`, or `where:`, and MUST NOT read any durable ECS
+MUST NOT declare `each:`, `without:`, `pairs:`, or `where:`, and MUST NOT read any durable ECS
 trait.
 
 #### Scenario: Vertex handler without filter is diagnosed
 
-- **WHEN** a handler targeting `<phase>.vertex` declares no `filter:`
+- **WHEN** a handler targeting `<phase>.vertex` declares no `each:`
 - **THEN** compilation fails with a diagnostic stating the vertex handler requires an instance
   domain
 
 #### Scenario: Fragment handler with a filter is diagnosed
 
-- **WHEN** a handler targeting `<phase>.fragment` declares a `filter:` block
+- **WHEN** a handler targeting `<phase>.fragment` declares an `each:` block
 - **THEN** compilation fails with a diagnostic stating the fragment stage is selectionless
 
 ### Requirement: Stage handler body is restricted to a fixed, GLSL-translatable statement subset
@@ -129,7 +129,7 @@ placement is a backend decision never surfaced to the author.
 
 #### Scenario: Vertex handler may read its filtered traits but not write them
 
-- **WHEN** a vertex-stage handler reads a trait field bound by its own `filter:` (e.g.
+- **WHEN** a vertex-stage handler reads a trait field bound by its own `each:` (e.g.
   `xf.position`)
 - **THEN** the read is accepted
 - **WHEN** the same handler attempts to assign to that trait field
@@ -159,7 +159,7 @@ placement is a backend decision never surfaced to the author.
 
 ### Requirement: Instances drawn by a vertex-stage handler render independently
 
-When a vertex-stage handler's `filter:` selects more than one entity within the same draw, each
+When a vertex-stage handler's `each:` selects more than one entity within the same draw, each
 selected entity MUST be rendered using its own per-instance values (its own filtered-trait field
 values and any values derived from them). One instance's values MUST NOT be observable when
 rendering another instance selected by the same handler in the same draw — in particular, the

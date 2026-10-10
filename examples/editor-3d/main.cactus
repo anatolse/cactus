@@ -112,7 +112,7 @@ pub entity MainCamera:
 # spawns an EditorCamera3D rig at MainCamera's captured pose.
 
 rule Enable3DEditor:
-    filter:
+    each:
         editor.EditorState
 
     on load:
@@ -125,7 +125,7 @@ rule Enable3DEditor:
 # retried next tick; the flag is only set once the scale is written.
 
 rule NormalizeSpawnedScale:
-    filter:
+    each:
         tv.WorldTransform
         models.ModelRenderer
         CharacterScale

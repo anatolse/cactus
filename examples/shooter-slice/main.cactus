@@ -74,7 +74,7 @@ template PlayerBullet:
         lifetime = BULLET_LIFETIME
 
 rule ReadPlayerInput:
-    filter:
+    each:
         PlayerInput as input_state
 
     on input:
@@ -82,7 +82,7 @@ rule ReadPlayerInput:
         input_state.fire_pressed = input.pressed(Fire)
 
 rule MovePlayer:
-    filter:
+    each:
         Position as pos
         PlayerInput as input_state
         PlayerTag
@@ -92,7 +92,7 @@ rule MovePlayer:
         pos.pos = pos.pos + pos.velocity * tick.dt
 
 rule Fire:
-    filter:
+    each:
         Position as pos
         PlayerInput as input_state
         Shooter as shooter
@@ -112,7 +112,7 @@ rule Fire:
                 origin = pos.pos
 
 rule MoveBullet:
-    filter:
+    each:
         Position as pos
         Bullet as bullet
 
@@ -123,7 +123,7 @@ rule MoveBullet:
             destroy
 
 rule DetectHit:
-    filter:
+    each:
         Position as pos
         Bullet as bullet
 
@@ -135,7 +135,7 @@ rule DetectHit:
             destroy
 
 rule DamageEnemy:
-    filter:
+    each:
         Enemy as enemy
 
     on EnemyHit as hit:

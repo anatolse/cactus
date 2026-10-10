@@ -17,8 +17,8 @@ A rule-level `after:` clause SHALL be shorthand over handler nodes and is a supp
 - **WHEN** a rule has an `after:` block listing `RuleA`, `RuleB`, `RuleC` on separate lines
 - **THEN** `RuleNode.after_rules` contains `["RuleA", "RuleB", "RuleC"]`
 
-#### Scenario: `after:` appears after `filter:` and `exclude:` and before handlers
-- **WHEN** a rule body has `filter:`, then `exclude:`, then `after:`, then `on tick():`
+#### Scenario: `after:` appears after `each:` and `without:` and before handlers
+- **WHEN** a rule body has `each:`, then `without:`, then `after:`, then `on tick():`
 - **THEN** the parser accepts the ordering and populates all clauses correctly
 
 #### Scenario: Matching phase handlers are ordered

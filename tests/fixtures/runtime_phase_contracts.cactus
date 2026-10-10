@@ -63,7 +63,7 @@ extern rule InputSource:
             input
 
 extern rule NativeMovement:
-    filter:
+    each:
         Position
         Velocity
     on fixed_tick:
@@ -79,7 +79,7 @@ extern rule NativeMovement:
             physics
 
 extern rule SpriteRenderer:
-    filter:
+    each:
         Position
         Sprite
     on render:

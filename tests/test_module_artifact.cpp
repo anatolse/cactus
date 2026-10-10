@@ -2098,7 +2098,7 @@ TEST_CASE("ModuleArtifact: a pub state round-trips and resolves from another mod
         "trait Log:\n"
         "    var n: int = 0\n"
         "rule Inspect:\n"
-        "    filter:\n"
+        "    each:\n"
         "        en.Mode as m\n"
         "        Log as log\n"
         "    on tick:\n"
@@ -2164,8 +2164,7 @@ extern rule Native:
     where:
         body != zone
         true
-    reduce:
-        per: body
+    reduce per body:
         n = count()
     order by:
         n desc
@@ -2173,7 +2172,7 @@ extern rule Native:
     on tick:
         body.Body.total = n
 extern rule Native:
-    filter:
+    each:
         Body
         Projected
     on tick:

@@ -219,11 +219,11 @@ The generated backend SHALL produce the most performant code derivable from the 
 Because every rule domain, predicate, and write is declared, the backend sees the whole program: every query, every archetype, and which data is ever written. The choice of acceleration structures, specializations, and data layout SHALL belong to the backend, derived from that whole-program knowledge. The language SHALL NOT expose author-facing controls for these choices. When the backend cannot accelerate a declared query, the compiler SHALL say so with a diagnostic rather than degrade silently.
 
 #### Scenario: Filter generates typed view, not dynamic query
-- **WHEN** a rule declares `filter: Position as p, Velocity as v`
+- **WHEN** a rule declares `each: Position as p, Velocity as v`
 - **THEN** the EnTT backend SHALL generate a statically typed view rather than a runtime-reflective lookup
 
 #### Scenario: Author declarations do not require performance annotations
-- **WHEN** an author writes `filter: Health as h` in a rule with many entities
+- **WHEN** an author writes `each: Health as h` in a rule with many entities
 - **THEN** no special performance annotation is required from the author
 
 #### Scenario: Authors do not choose acceleration structures

@@ -94,14 +94,14 @@ The semantic analyzer SHALL detect recursive calls in non-extern `func` declarat
 - **THEN** the analyzer does NOT report a recursion error
 
 ### Requirement: Rule filter validation
-The semantic analyzer SHALL verify that all trait names referenced in rule `filter:` clauses correspond to declared traits (local or imported).
+The semantic analyzer SHALL verify that all trait names referenced in rule `each:` clauses correspond to declared traits (local or imported).
 
 #### Scenario: Valid filter traits
-- **WHEN** a rule has `filter:` listing `Position` and `Velocity`, and both traits are declared
+- **WHEN** a rule has `each:` listing `Position` and `Velocity`, and both traits are declared
 - **THEN** the analyzer accepts the filter clause
 
 #### Scenario: Unknown trait in filter
-- **WHEN** a rule has `filter:` listing `NonExistent` and that trait is not declared
+- **WHEN** a rule has `each:` listing `NonExistent` and that trait is not declared
 - **THEN** the analyzer reports an error "unknown trait 'NonExistent' in rule filter"
 
 ### Requirement: Event validation
@@ -209,7 +209,7 @@ The semantic analyzer SHALL produce a resolved representation in which every mod
 - **THEN** the semantic representation stores the referenced rule's canonical symbol identity rather than the authored string
 
 ### Requirement: Filter clause aliases for trait fields
-The semantic analyzer SHALL support `as` aliases in rule `filter:` clauses. The alias, the trait name, and — when it resolves to exactly one filtered trait — the bare field name are all valid access paths. See "Field access validation in rule handlers" for the bare-field resolution rule.
+The semantic analyzer SHALL support `as` aliases in rule `each:` clauses. The alias, the trait name, and — when it resolves to exactly one filtered trait — the bare field name are all valid access paths. See "Field access validation in rule handlers" for the bare-field resolution rule.
 
 #### Scenario: Filter alias used for field access
 - **WHEN** a rule has a filter entry `phys.Body as b`
@@ -223,11 +223,11 @@ The semantic analyzer SHALL support `as` aliases in rule `filter:` clauses. The 
 The semantic analyzer SHALL accept trait field access within rule handler bodies in the `alias.field` form, the `TraitName.field` form, or as a bare (unqualified) field name when the field name resolves to exactly one filtered trait.
 
 #### Scenario: Alias.field access accepted
-- **WHEN** a rule has `filter: Position as pos` and the handler body contains `pos.x += 1.0`
+- **WHEN** a rule has `each: Position as pos` and the handler body contains `pos.x += 1.0`
 - **THEN** the analyzer accepts the access
 
 #### Scenario: Trait name as implicit alias accepted
-- **WHEN** a rule has `filter: Position` (no alias) and the handler body contains `Position.x += 1.0`
+- **WHEN** a rule has `each: Position` (no alias) and the handler body contains `Position.x += 1.0`
 - **THEN** the analyzer accepts `Position.x`
 
 #### Scenario: Bare field name resolves to the sole matching trait
@@ -385,10 +385,10 @@ The semantic analyzer SHALL reject a `where:` predicate whose expression contain
 - **THEN** semantic analysis reports that `where:` predicates must be pure
 
 ### Requirement: where: requires an existing unary or pair selection
-The semantic analyzer SHALL reject `where:` on a rule that declares neither `filter:` nor `pairs:`.
+The semantic analyzer SHALL reject `where:` on a rule that declares neither `each:` nor `pairs:`.
 
 #### Scenario: where: on selectionless rule rejected
-- **WHEN** a rule declares a `where:` block but no `filter:` and no `pairs:`
+- **WHEN** a rule declares a `where:` block but no `each:` and no `pairs:`
 - **THEN** semantic analysis reports that `where:` requires an existing unary or pair domain
 
 ### Requirement: `self` type-checks as `entity_id` in rule handlers
@@ -513,26 +513,26 @@ The semantic analyzer SHALL verify that the module name in a `load` statement is
 - **WHEN** `load unknown.module` is used and that module was not imported via `use`
 - **THEN** the analyzer SHALL report an error: "unknown module 'unknown.module'; add `use unknown.module` to import it"
 
-### Requirement: `exclude:` trait reference validation
-The semantic analyzer SHALL verify that all trait names listed in an `exclude:` block are declared traits.
+### Requirement: `without:` trait reference validation
+The semantic analyzer SHALL verify that all trait names listed in an `without:` block are declared traits.
 
 #### Scenario: Exclude with undeclared trait rejected
-- **WHEN** `exclude: SomeTrait` is used and `SomeTrait` is not declared anywhere
+- **WHEN** `without: SomeTrait` is used and `SomeTrait` is not declared anywhere
 - **THEN** the analyzer SHALL report an error: "undeclared trait 'SomeTrait' in exclude clause"
 
 #### Scenario: Exclude with declared marker trait accepted
-- **WHEN** `exclude: Frozen` is used and `trait Frozen` is declared (even as a marker trait)
+- **WHEN** `without: Frozen` is used and `trait Frozen` is declared (even as a marker trait)
 - **THEN** the exclude clause is valid
 
 ### Requirement: Filter and exclude validation — both optional; no filter matches all
-The semantic analyzer SHALL validate that all trait names in `filter:` and `exclude:` blocks are declared traits. Both are optional. A rule with no `filter:` matches all entities and cannot access trait fields.
+The semantic analyzer SHALL validate that all trait names in `each:` and `without:` blocks are declared traits. Both are optional. A rule with no `each:` matches all entities and cannot access trait fields.
 
 #### Scenario: No filter block is valid (match-all)
-- **WHEN** a rule has no `filter:` block
+- **WHEN** a rule has no `each:` block
 - **THEN** the analyzer accepts the rule as valid; it processes all entities
 
 #### Scenario: Field access without filter rejected
-- **WHEN** a rule has no `filter:` block but its handler body reads or writes a trait field
+- **WHEN** a rule has no `each:` block but its handler body reads or writes a trait field
 - **THEN** the analyzer SHALL report an error: "trait field '<name>' not accessible — no filter clause declares this trait"
 
 ### Requirement: `add` statement semantic validation
@@ -670,18 +670,18 @@ The semantic analyzer SHALL include `pub extern func` declarations in the `Impor
 
 ### Requirement: `order by:` semantic validation
 The semantic analyzer SHALL validate `order by:` clauses in rule declarations with the following rules:
-1. Each sort key alias MUST be declared in the rule's `filter:` block
+1. Each sort key alias MUST be declared in the rule's `each:` block
 2. Each sort key field MUST exist on the trait bound to that alias
 3. The resolved field type MUST be a scalar-comparable type: `int`, `float`, or `bool`
 4. For `vec2`/`vec3` field members (e.g., `p.pos.y`): the member name must be a valid component (`x`, `y`, `z`) and resolves to `float`
-5. A rule with `order by:` MUST have a `filter:` clause
+5. A rule with `order by:` MUST have an `each:` clause
 
 #### Scenario: Valid single-key order by
 - **WHEN** `order by: s.layer asc` and `Sprite as s` in filter and `Sprite.layer` is `int`
 - **THEN** the semantic analyzer accepts it
 
 #### Scenario: Sort key alias not in filter
-- **WHEN** `order by: h.value asc` and `Health as h` is not in `filter:`
+- **WHEN** `order by: h.value asc` and `Health as h` is not in `each:`
 - **THEN** the semantic analyzer SHALL report: "sort key alias 'h' is not declared in filter:"
 
 #### Scenario: Sort key field does not exist on trait
@@ -697,8 +697,8 @@ The semantic analyzer SHALL validate `order by:` clauses in rule declarations wi
 - **THEN** the semantic analyzer accepts it, resolving the type as `float`
 
 #### Scenario: order by on filterless rule rejected
-- **WHEN** a rule has `order by:` but no `filter:` block
-- **THEN** the semantic analyzer SHALL report: "`order by:` requires a `filter:` clause"
+- **WHEN** a rule has `order by:` but no `each:` block
+- **THEN** the semantic analyzer SHALL report: "`order by:` requires an `each:` clause"
 
 ### Requirement: Semantic validation of `TraitMatchStmt`
 The semantic analyzer SHALL validate `TraitMatchStmt` nodes as follows:
@@ -723,7 +723,7 @@ The semantic analyzer SHALL validate `TraitMatchStmt` nodes as follows:
 - **THEN** the semantic analyzer SHALL report: "undeclared trait 'Phantom'"
 
 #### Scenario: Alias conflicts with filter binding rejected
-- **WHEN** rule has `filter: Position as p` and arm is `Boss as p =>`
+- **WHEN** rule has `each: Position as p` and arm is `Boss as p =>`
 - **THEN** the semantic analyzer SHALL report: "match arm alias 'p' conflicts with filter alias 'p'"
 
 #### Scenario: Marker trait with alias rejected

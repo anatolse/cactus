@@ -61,14 +61,14 @@ entity Stats:
 # ── Placed entities get arrival setup before `on load` ────────────────────────
 
 rule Arrive:
-    filter:
+    each:
         Log as log
 
     on added Enemy:
         log.arrived = true
 
 rule Boot:
-    filter:
+    each:
         Enemy
         Log as log
 
@@ -78,28 +78,28 @@ rule Boot:
 # ── Load-time state changes ───────────────────────────────────────────────────
 
 rule Doom:
-    filter:
+    each:
         Doomed
 
     on load:
         add Dying
 
 rule Desert:
-    filter:
+    each:
         Defect
 
     on load:
         remove Enemy
 
 rule PutOut:
-    filter:
+    each:
         Extinguish
 
     on load:
         remove Burning
 
 rule Scrap:
-    filter:
+    each:
         Condemned
 
     on load:
@@ -109,7 +109,7 @@ rule Scrap:
 
 # Runs only for the entity that gained Dying, then chains a second change.
 rule StartDying:
-    filter:
+    each:
         Enemy
         Log as log
 
@@ -119,7 +119,7 @@ rule StartDying:
         add Fading
 
 rule StartFading:
-    filter:
+    each:
         Log as log
 
     on added Fading:
@@ -127,7 +127,7 @@ rule StartFading:
 
 # The destroyed Wreck fires nothing; only Torch's removal counts.
 rule Cooled:
-    filter:
+    each:
         Log as log
 
     on removed Burning as old:

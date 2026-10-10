@@ -95,7 +95,7 @@ rule Setup:
                 tag = 3
 
 rule Measure:
-    filter:
+    each:
         Readings as r
 
     on tick:

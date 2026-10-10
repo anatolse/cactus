@@ -42,7 +42,7 @@ Every trait read reachable from a handler's `where:` predicates SHALL be folded 
 - **THEN** its contract's `bound_reads` records two binding-qualified reads and its conservative `reads` set contains Collider once
 
 #### Scenario: where: read on a limited unary rule is recorded
-- **WHEN** a unary rule declares `filter: Health as h`, `where: h.hp < 20`, and `limit: 3`
+- **WHEN** a unary rule declares `each: Health as h`, `where: h.hp < 20`, and `limit: 3`
 - **THEN** each of its handlers' contracts records a read of `Health.hp`, identically to the same rule without `limit:`
 
 #### Scenario: where: bound read on a limited pair rule is recorded
@@ -101,7 +101,7 @@ When a pair handler mutates a trait through the `per` binding of a provably-one 
 - **THEN** the handler's contract records the canonical KinematicActor trait in `writes`
 
 #### Scenario: Scheduling sees the same conflict information as a unary write
-- **WHEN** one rule writes a trait through a provably-limited pair binding and another rule reads the same trait through an ordinary `filter:` alias
+- **WHEN** one rule writes a trait through a provably-limited pair binding and another rule reads the same trait through an ordinary `each:` alias
 - **THEN** the execution graph orders them using the same read/write conflict rule it would apply between two unary handlers
 
 ### Requirement: External handlers declare complete contracts
@@ -142,7 +142,7 @@ An external `projects:` entry SHALL create the same project-producer scheduling 
 - **THEN** the execution graph orders the producer before the reader without classifying PointerHit as a durable write
 
 ### Requirement: Selection does not imply trait access
-`filter:` and `exclude:` SHALL determine entity selection without adding reads or writes. An `order by:` expression SHALL add a read for every trait whose data it evaluates.
+`each:` and `without:` SHALL determine entity selection without adding reads or writes. An `order by:` expression SHALL add a read for every trait whose data it evaluates.
 
 #### Scenario: Filter-only trait is not read
 - **WHEN** a handler filters Disabled as a marker and never accesses its fields
@@ -160,7 +160,7 @@ A handler with neither positive filter entries nor exclude entries SHALL execute
 - **THEN** it runs once for the input activation regardless of entity count
 
 #### Scenario: Exclude-only cleanup remains an entity pass
-- **WHEN** a handler has only `exclude: Persistent`
+- **WHEN** a handler has only `without: Persistent`
 - **THEN** it executes for every non-Persistent selected entity rather than once globally
 
 ### Requirement: Command vocabulary and validation

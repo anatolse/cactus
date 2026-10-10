@@ -19,7 +19,7 @@ pub trait ModelRenderer:
     var color: color = #FFFFFFFF
 
 extern rule ModelRender:
-    filter:
+    each:
         tv.WorldTransform
         ModelRenderer
 
@@ -50,7 +50,7 @@ pub trait ModelAnimator:
 # the active clip's duration so playback loops. Entities that add ModelPlayback
 # below opt into one-shot playback and lifecycle events instead.
 extern rule ModelAnimation:
-    filter:
+    each:
         ModelRenderer
         ModelAnimator
 

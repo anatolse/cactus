@@ -39,7 +39,7 @@ rule DetectOverlap:
             code = (a.Body.tag * 3) + b.Body.tag
 
 rule RecordTuple:
-    filter:
+    each:
         Recorder
 
     on TupleObserved as obs:

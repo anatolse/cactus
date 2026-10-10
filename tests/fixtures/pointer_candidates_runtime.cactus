@@ -16,7 +16,7 @@ trait PointerEventLog:
     var click_count: int = 0
 
 rule LogPointerEvents:
-    filter:
+    each:
         PointerEventLog as log
 
     on pointer.PointerEnter:

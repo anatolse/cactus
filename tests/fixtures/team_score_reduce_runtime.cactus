@@ -38,8 +38,7 @@ rule TeamScore:
             Member
     where:
         member.Member.team == team
-    reduce:
-        per: team
+    reduce per team:
         members = count()
         score = sum(member.Member.points)
 
@@ -63,8 +62,7 @@ rule RecountTeam:
             Member
     where:
         member.Member.team == team
-    reduce:
-        per: team
+    reduce per team:
         members = count()
 
     on Recount:
@@ -74,7 +72,7 @@ rule RecountTeam:
 # A global reduction ignores the target: Red has no Member, yet every
 # member row is counted.
 rule RecountAll:
-    filter:
+    each:
         Member as member
     reduce:
         members = count()
@@ -92,8 +90,7 @@ rule RivalBonus:
             Team
     where:
         team != rival
-    reduce:
-        per: team
+    reduce per team:
         rival_bonus = sum(rival.Team.bonus)
 
     on tick:
@@ -103,7 +100,7 @@ rule RivalBonus:
 # Folds run in creation order, one step at a time: the int sum clamps at
 # each step and the float sum is never reassociated.
 rule SumSamples:
-    filter:
+    each:
         Sample as sample
     reduce:
         whole = sum(sample.whole)

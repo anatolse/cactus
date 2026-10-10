@@ -42,7 +42,7 @@ pub entity Square:
 
 # ReadInput: runs every input poll, stores axis values into MoveInput fields
 rule ReadInput:
-    filter:
+    each:
         MoveInput
 
     on input:
@@ -51,7 +51,7 @@ rule ReadInput:
 
 # Move: applies stored input deltas to position each tick
 rule Move:
-    filter:
+    each:
         tf.WorldTransform
         MoveInput
 

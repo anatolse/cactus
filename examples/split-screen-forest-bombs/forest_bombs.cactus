@@ -424,7 +424,7 @@ pub entity Tree6 from TreeTemplate:
 
 # Task 3.3 — read each player's own keyboard mapping into shared input state.
 rule ReadPlayer1Input:
-    filter:
+    each:
         PlayerInput
         Player1Tag
 
@@ -435,7 +435,7 @@ rule ReadPlayer1Input:
         fly = input.axis(P1FlyAxis)
 
 rule ReadPlayer2Input:
-    filter:
+    each:
         PlayerInput
         Player2Tag
 
@@ -448,7 +448,7 @@ rule ReadPlayer2Input:
 # Task 3.3 — move both players on the X/Z ground plane. The camera follows for
 # free because each player entity owns its own viewport camera.
 rule MovePlayer:
-    filter:
+    each:
         tv.WorldTransform
         PlayerInput
 
@@ -462,7 +462,7 @@ rule MovePlayer:
 # std.random drives a per-entity wobble so each piece grows at a slightly
 # different pace, producing natural-looking variation without hand-authored noise.
 rule GrowTrees:
-    filter:
+    each:
         tv.WorldTransform
         TreeGrowth
         TreeRng
@@ -477,7 +477,7 @@ rule GrowTrees:
 # Task 3.4 — throw a bomb: consume one from inventory and spawn an orange bomb
 # with authored launch velocity, tagged with its owning player.
 rule ThrowBomb:
-    filter:
+    each:
         tv.WorldTransform
         PlayerInput
         BombInventory
@@ -505,7 +505,7 @@ rule ThrowBomb:
 # hierarchy child of the root, so the existing Parent-based recursive destroy
 # fells the whole tree. Score one point per felled tree for the thrower.
 rule SimulateBomb:
-    filter:
+    each:
         tv.WorldTransform
         Bomb
 
@@ -529,7 +529,7 @@ rule SimulateBomb:
 # delivery broadcasts to every entity the handler's filter matches, so the
 # payload carries the thrower and the handler credits only that entity.
 rule TallyScore:
-    filter:
+    each:
         Score
 
     on TreeHit as hit:

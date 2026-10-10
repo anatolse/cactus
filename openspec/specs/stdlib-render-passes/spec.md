@@ -36,7 +36,7 @@ either trigger alias for the `Quads` pass kind in this increment.
 
 #### Scenario: Vertex handler writes screen_position from a filtered trait and the built-in corner
 
-- **WHEN** a vertex-stage handler on a `Quads` render pass reads `xf.position` from its `filter:`
+- **WHEN** a vertex-stage handler on a `Quads` render pass reads `xf.position` from its `each:`
   and the built-in `v.corner`
 - **THEN** it may assign `v.screen_position = xf.position + v.corner * half_size` (or equivalent)
   and this is accepted

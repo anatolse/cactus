@@ -32,7 +32,7 @@ rule Start:
             amount = 5
 
 rule ReadTurn:
-    filter:
+    each:
         Reading as reading
 
     on Turn:
@@ -42,14 +42,14 @@ rule ReadTurn:
             amount = Turn.amount
 
 rule ReadEcho:
-    filter:
+    each:
         Reading as reading
 
     on Echo:
         reading.echoed = Echo.amount
 
 rule ReadHit:
-    filter:
+    each:
         Reading as reading
 
     on combat.Hit:

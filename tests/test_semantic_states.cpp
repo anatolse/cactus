@@ -178,15 +178,14 @@ TEST_CASE("Semantic: a state variant cannot be kept or projected", "[semantic][e
         "            Log\n"
         "    where:\n"
         "        a.Body.x < 1.0\n"
-        "    reduce:\n"
-        "        per: b\n"
+        "    reduce per b:\n"
         "        n = count()\n"
         "    keep EnemyMode.Idle on b\n");
     CHECK(kept.has("state variant 'EnemyMode.Idle' cannot be kept"));
 
     const auto projected = analyze(
         "rule Show:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Body\n"
         "    on tick:\n"
         "        project EnemyMode.Idle\n");
@@ -198,22 +197,22 @@ TEST_CASE("Semantic: a state variant cannot be kept or projected", "[semantic][e
 TEST_CASE("Semantic: a variant works wherever a trait does", "[semantic][exclusive-states]") {
     const auto analysis = analyze(
         "rule Chase:\n"
-        "    filter:\n"
+        "    each:\n"
         "        EnemyMode.Chasing as c\n"
         "        Log as log\n"
-        "    exclude:\n"
+        "    without:\n"
         "        EnemyMode.Dying\n"
         "    on tick:\n"
         "        log.n = if c.target == Player: 1 else: 0\n"
         "        set EnemyMode.Attacking on c.target:\n"
         "            windup = 1.0\n"
         "rule Enter:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Log as log\n"
         "    on added EnemyMode.Chasing as c:\n"
         "        log.n = 1\n"
         "rule Leave:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Log as log\n"
         "    on removed EnemyMode.Attacking as old:\n"
         "        log.n = if old.windup > 0.0: 1 else: 2\n");
@@ -228,7 +227,7 @@ TEST_CASE("Semantic: a variant works wherever a trait does", "[semantic][exclusi
 TEST_CASE("Semantic: a variant is a query type argument", "[semantic][exclusive-states]") {
     const auto analysis = analyze(
         "rule Count:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Log as log\n"
         "    on tick:\n"
         "        for child in query.children[EnemyMode.Dying](of = self):\n"
@@ -238,7 +237,7 @@ TEST_CASE("Semantic: a variant is a query type argument", "[semantic][exclusive-
 
     const auto unknown = analyze(
         "rule Count:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Log as log\n"
         "    on tick:\n"
         "        for child in query.children[EnemyMode.Gone](of = self):\n"
@@ -249,7 +248,7 @@ TEST_CASE("Semantic: a variant is a query type argument", "[semantic][exclusive-
 TEST_CASE("Semantic: a bare variant name is not a trait", "[semantic][exclusive-states]") {
     const auto analysis = analyze(
         "rule Chase:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Chasing\n"
         "    on tick:\n"
         "        let x = 1\n");
@@ -259,7 +258,7 @@ TEST_CASE("Semantic: a bare variant name is not a trait", "[semantic][exclusive-
 TEST_CASE("Semantic: an unknown variant of a state is not a trait", "[semantic][exclusive-states]") {
     const auto analysis = analyze(
         "rule Chase:\n"
-        "    filter:\n"
+        "    each:\n"
         "        EnemyMode.Fleeing\n"
         "    on tick:\n"
         "        let x = 1\n");
@@ -271,10 +270,10 @@ TEST_CASE("Semantic: an unknown variant of a state is not a trait", "[semantic][
 TEST_CASE("Semantic: filter and exclude on a state use its slot", "[semantic][exclusive-states]") {
     const auto analysis = analyze(
         "rule Inspect:\n"
-        "    filter:\n"
+        "    each:\n"
         "        EnemyMode as m\n"
         "        Log as log\n"
-        "    exclude:\n"
+        "    without:\n"
         "        JumpPhase\n"
         "    on tick:\n"
         "        match m:\n"
@@ -293,7 +292,7 @@ TEST_CASE("Semantic: filter and exclude on a state use its slot", "[semantic][ex
 TEST_CASE("Semantic: a state slot is only a match subject", "[semantic][exclusive-states]") {
     const auto as_value = analyze(
         "rule Inspect:\n"
-        "    filter:\n"
+        "    each:\n"
         "        EnemyMode as m\n"
         "    on tick:\n"
         "        let x = m\n");
@@ -301,7 +300,7 @@ TEST_CASE("Semantic: a state slot is only a match subject", "[semantic][exclusiv
 
     const auto as_field = analyze(
         "rule Inspect:\n"
-        "    filter:\n"
+        "    each:\n"
         "        EnemyMode as m\n"
         "        Log as log\n"
         "    on tick:\n"
@@ -312,7 +311,7 @@ TEST_CASE("Semantic: a state slot is only a match subject", "[semantic][exclusiv
 TEST_CASE("Semantic: remove names the state, not a variant", "[semantic][exclusive-states]") {
     const auto variant = analyze(
         "rule Calm:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Body\n"
         "    on tick:\n"
         "        remove EnemyMode.Chasing\n");
@@ -320,7 +319,7 @@ TEST_CASE("Semantic: remove names the state, not a variant", "[semantic][exclusi
 
     const auto slot = analyze(
         "rule Calm:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Body\n"
         "    on tick:\n"
         "        remove EnemyMode\n");
@@ -331,7 +330,7 @@ TEST_CASE("Semantic: remove names the state, not a variant", "[semantic][exclusi
 TEST_CASE("Semantic: add needs a variant, not the bare state", "[semantic][exclusive-states]") {
     const auto analysis = analyze(
         "rule Calm:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Body\n"
         "    on tick:\n"
         "        add EnemyMode\n");
@@ -377,18 +376,18 @@ TEST_CASE("Semantic: an entity variant replaces its template's", "[semantic][exc
 TEST_CASE("Semantic: add and remove of a state write the whole state", "[semantic][exclusive-states]") {
     const auto analysis = analyze(
         "rule Hunt:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Body\n"
         "    on tick:\n"
         "        add EnemyMode.Chasing:\n"
         "            target = Player\n"
         "rule Calm:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Log\n"
         "    on tick:\n"
         "        remove EnemyMode\n"
         "rule Wind:\n"
-        "    filter:\n"
+        "    each:\n"
         "        EnemyMode.Attacking as a\n"
         "    on tick:\n"
         "        a.windup -= 0.1\n");
@@ -414,7 +413,7 @@ namespace {
 
 std::string inspect_rule(const std::string& arms) {
     return "rule Inspect:\n"
-           "    filter:\n"
+           "    each:\n"
            "        EnemyMode as m\n"
            "        Log as log\n"
            "    on tick:\n"
@@ -490,7 +489,7 @@ TEST_CASE("Semantic: a marker variant arm cannot declare an alias", "[semantic][
 TEST_CASE("Semantic: the match expression accepts a state slot", "[semantic][exclusive-states]") {
     const auto analysis = analyze(
         "rule Inspect:\n"
-        "    filter:\n"
+        "    each:\n"
         "        EnemyMode as m\n"
         "        Log as log\n"
         "    on tick:\n"
@@ -503,7 +502,7 @@ TEST_CASE("Semantic: the match expression accepts a state slot", "[semantic][exc
 
     const auto incomplete = analyze(
         "rule Inspect:\n"
-        "    filter:\n"
+        "    each:\n"
         "        EnemyMode as m\n"
         "        Log as log\n"
         "    on tick:\n"
@@ -526,7 +525,7 @@ TEST_CASE("Semantic: a state is not a value type", "[semantic][exclusive-states]
 TEST_CASE("Semantic: the statement match subject diagnostic lists state slots", "[semantic][exclusive-states]") {
     const auto analysis = analyze(
         "rule R:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Body as b\n"
         "    on tick:\n"
         "        match b.x:\n"

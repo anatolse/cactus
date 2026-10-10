@@ -62,7 +62,7 @@ event BallBounce:
 # MoveBalls: integrates every ball's position from its current velocity. No
 # gravity term — balls drift at constant speed between collisions.
 rule MoveBalls:
-    filter:
+    each:
         Ball
         tv.WorldTransform
 
@@ -104,7 +104,7 @@ rule DetectWallContact:
 # ResolveWallBounce: unary consumer. Reflects the ball's own velocity across
 # the wall normal carried by the event (elastic reflection, speed-preserving).
 rule ResolveWallBounce:
-    filter:
+    each:
         Ball
 
     on WallBounce as bounce:
@@ -164,7 +164,7 @@ rule DetectBallContact:
 # ResolveBallBounce: unary consumer. Applies the resolved post-collision
 # velocity computed by DetectBallContact directly.
 rule ResolveBallBounce:
-    filter:
+    each:
         Ball
 
     on BallBounce as bounce:
@@ -276,7 +276,7 @@ entity Spawner:
 # sampled). Each draw advances the spawner's shared Rng first, so no two
 # balls in the batch repeat the same draw.
 rule SpawnInitialBalls:
-    filter:
+    each:
         BallSpawner
 
     on load:
@@ -316,7 +316,7 @@ rule SpawnInitialBalls:
 # DetectWallContact's margin math), so clamping to +/-(2.7 - radius) keeps
 # the spawned sphere clear of the walls. No cap on total ball count.
 rule SpawnBallOnClick:
-    filter:
+    each:
         BallSpawner
 
     on input:

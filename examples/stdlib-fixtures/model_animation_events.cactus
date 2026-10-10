@@ -64,7 +64,7 @@ entity Sitter:
                 name = "loop-mark"
 
 rule RecordPlaybackEvents:
-    filter:
+    each:
         PlaybackLog as log
 
     on models.AnimationMarker as marker:
@@ -104,7 +104,7 @@ entity Restarter:
                 name = "early"
 
 rule DriveRestartScenario:
-    filter:
+    each:
         RestartControl as ctrl
         models.ModelPlayback as playback
         models.ModelAnimator as anim

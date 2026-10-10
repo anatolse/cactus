@@ -70,14 +70,14 @@ entity Boss:
     Health
 
 rule OnBossArrive:
-    filter:
+    each:
         Health
 
     on added Health as health:
         health.current = 100
 
 rule OnBossCalm:
-    filter:
+    each:
         Health
 
     on removed Alerted:

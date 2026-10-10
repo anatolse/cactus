@@ -7,14 +7,14 @@ Define the `limit:` clause on rule declarations: bounding the number of handler 
 ## Requirements
 
 ### Requirement: `limit:` clause on rule declarations
-A regular rule with a unary (`filter:`) or pair (`pairs:`) domain SHALL support an optional `limit:` clause. `limit:` SHALL be rejected on a selectionless rule (neither `filter:` nor `pairs:`) and on `extern rule` declarations. `limit:` logically applies after `where:` and `order by:`: it bounds the already-filtered and, if present, ordered domain, without changing which rows survive `where:` or their relative order.
+A regular rule with a unary (`each:`) or pair (`pairs:`) domain SHALL support an optional `limit:` clause. `limit:` SHALL be rejected on a selectionless rule (neither `each:` nor `pairs:`) and on `extern rule` declarations. `limit:` logically applies after `where:` and `order by:`: it bounds the already-filtered and, if present, ordered domain, without changing which rows survive `where:` or their relative order.
 
 ```ebnf
 limit_clause = "limit" ":" expression [ "per" IDENTIFIER ] NEWLINE ;
 ```
 
 #### Scenario: Global limit on a unary domain is accepted
-- **WHEN** a `filter:` rule declares `limit: 10`
+- **WHEN** an `each:` rule declares `limit: 10`
 - **THEN** at most 10 entities produce a handler activation, chosen by the domain's order
 
 #### Scenario: Global limit on a pair domain is accepted
@@ -22,8 +22,8 @@ limit_clause = "limit" ":" expression [ "per" IDENTIFIER ] NEWLINE ;
 - **THEN** at most 10 tuples in total produce a handler activation
 
 #### Scenario: Limit on a selectionless rule is rejected
-- **WHEN** a rule with neither `filter:` nor `pairs:` declares `limit:`
-- **THEN** semantic analysis reports that `limit:` requires a `filter:` or `pairs:` clause
+- **WHEN** a rule with neither `each:` nor `pairs:` declares `limit:`
+- **THEN** semantic analysis reports that `limit:` requires an `each:` or `pairs:` clause
 
 #### Scenario: Limit is rejected on extern rule
 - **WHEN** an `extern rule` declares `limit:`
@@ -37,7 +37,7 @@ The `per <binding>` form of `limit:` SHALL be accepted only on a `pairs:` rule, 
 - **THEN** each distinct `actor` value produces at most one tuple activation
 
 #### Scenario: Per-binding limit is rejected on a unary rule
-- **WHEN** a `filter:` rule declares `limit: 1 per something`
+- **WHEN** an `each:` rule declares `limit: 1 per something`
 - **THEN** semantic analysis rejects it, since a unary domain has no second binding to partition by
 
 #### Scenario: Per-binding limit naming an undeclared binding is rejected

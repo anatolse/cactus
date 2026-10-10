@@ -17,7 +17,7 @@ pub entity GradientSquare:
         position = vec2(400.0, 300.0)
 
 rule SquareVertex:
-    filter:
+    each:
         tf.WorldTransform as xf
 
     on gradient_pass.vertex as v:

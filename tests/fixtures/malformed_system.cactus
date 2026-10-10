@@ -1,7 +1,7 @@
 module malformed_system
 
 rule BrokenSystem:
-    filter:
+    each:
         Position
         ???
     after:

@@ -62,7 +62,7 @@ exception — see `examples/CLAUDE.md`).
   hurtboxes don't.
 - To react when something enters or leaves an area (lava, water, a checkpoint, an enemy
   reaching the player), write a pair rule in `group: physics.contacts` that tests
-  `physics.touching`, reduces `per:` the entity that needs the transitions, and
+  `physics.touching`, uses `reduce per` on the entity that needs the transitions, and
   `keep`s a marker trait on it. React with `on added` / `on removed` of that trait.
   Don't re-emit an event every tick from a `where:` match. See the lava and checkpoint
   examples in `spec/cactus_dsl_spec.md` §3.8.6.

@@ -99,7 +99,7 @@ rule NearestPlain:
             code = (actor.Actor.tag * 1000) + wall.Solid.tag
 
 rule RecordTuples:
-    filter:
+    each:
         Recorder
 
     on AcceleratedHit as hit:

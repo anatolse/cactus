@@ -52,14 +52,14 @@ rule DetectBallContactWhere:
             dummy = 1
 
 rule ResolveHit:
-    filter:
+    each:
         Ball
 
     on Hit:
         hits += 1
 
 rule ResolveHitWhere:
-    filter:
+    each:
         Ball
 
     on HitWhere:

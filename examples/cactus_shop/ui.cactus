@@ -16,7 +16,7 @@ const:
     COIN_COLOR = #FFD700
 
 rule DrawHud:
-    filter:
+    each:
         Health as h
         Wallet as w
 
@@ -25,7 +25,7 @@ rule DrawHud:
         draw_hud(h.health, h.max_health, w.coins)
 
 rule ToggleShopPanel:
-    filter:
+    each:
         Inventory as inv
         Wallet as w
 

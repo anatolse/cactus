@@ -68,86 +68,84 @@ rule CompactObserve:
         body.enters += 1
     on removed CompactKept:
         body.exits += 1
-trait LegacyBody:
+trait BlockBody:
     var x: int = 0
     var total: int = -1
     var enters: int = 0
     var exits: int = 0
     var visible: int = -1
     var rank: int = -1
-trait LegacyZone:
+trait BlockZone:
     var x: int = 1
     var id: int = 10
-trait LegacyKept:
+trait BlockKept:
     var n: int = 0
-trait LegacyControl:
+trait BlockControl:
     var enabled: bool = true
     var trace: int = 0
     var empty: int = -1
-event LegacyTrace:
+event BlockTrace:
     id: int
-entity LegacySettings:
-    LegacyControl
-entity LegacyActor:
-    LegacyBody
-entity LegacyEmpty:
-    LegacyBody:
+entity BlockSettings:
+    BlockControl
+entity BlockActor:
+    BlockBody
+entity BlockEmpty:
+    BlockBody:
         x = 100
-entity LegacyPool:
-    LegacyZone
-entity LegacyPoolTwo:
-    LegacyZone:
+entity BlockPool:
+    BlockZone
+entity BlockPoolTwo:
+    BlockZone:
         id = 20
-group LegacyContacts:
+group BlockContacts:
     phase: fixed_tick
-rule LegacyMove:
-    filter:
-        LegacyBody as body
+rule BlockMove:
+    each:
+        BlockBody as body
     when:
-        LegacySettings.LegacyControl.enabled
+        BlockSettings.BlockControl.enabled
     on fixed_tick:
         body.x += 1
-rule LegacyTotal:
+rule BlockTotal:
     pairs:
         body:
-            LegacyBody
+            BlockBody
         zone:
-            LegacyZone
+            BlockZone
     after:
-        LegacyMove
+        BlockMove
     where:
-        body.LegacyBody.x == zone.LegacyZone.x
-    reduce:
-        per: body
+        body.BlockBody.x == zone.BlockZone.x
+    reduce per body:
         n = count()
     on fixed_tick:
-        body.LegacyBody.total = n
-rule LegacyKeep:
+        body.BlockBody.total = n
+rule BlockKeep:
     pairs:
         body:
-            LegacyBody
+            BlockBody
         zone:
-            LegacyZone
-    group: LegacyContacts
+            BlockZone
+    group: BlockContacts
     after:
-        LegacyMove
+        BlockMove
     where:
-        body.LegacyBody.x == zone.LegacyZone.x
-    reduce:
-        per: body
+        body.BlockBody.x == zone.BlockZone.x
+    reduce per body:
         n = count()
-    keep LegacyKept on body:
+    keep BlockKept on body:
         n = n
-rule LegacyObserve:
-    filter:
-        LegacyBody as body
+rule BlockObserve:
+    each:
+        BlockBody as body
     after:
-        LegacyKeep
+        BlockKeep
     on fixed_tick:
         return
-    on added LegacyKept:
+    on added BlockKept:
         body.enters += 1
-    on removed LegacyKept:
+    on removed BlockKept:
         body.exits += 1
 
 rule CompactObserveKept:
@@ -188,56 +186,55 @@ rule CompactGlobalEmpty:
     on fixed_tick:
         CompactSettings.CompactControl.empty = n
 
-rule LegacyObserveKept:
-    filter:
-        LegacyBody as body
-        LegacyKept as kept
+rule BlockObserveKept:
+    each:
+        BlockBody as body
+        BlockKept as kept
     after:
-        LegacyKeep
+        BlockKeep
     on fixed_tick:
         body.visible = kept.n
-rule LegacyOrderedPairs:
+rule BlockOrderedPairs:
     pairs:
         body:
-            LegacyBody
+            BlockBody
         zone:
-            LegacyZone
+            BlockZone
     order by:
-        zone.LegacyZone.id desc
+        zone.BlockZone.id desc
     after:
-        LegacyMove
+        BlockMove
     where:
-        body.LegacyBody.x == zone.LegacyZone.x
+        body.BlockBody.x == zone.BlockZone.x
     on fixed_tick:
-        emit LegacyTrace:
-            id = zone.LegacyZone.id
-rule LegacyRecord:
-    on LegacyTrace as observed:
-        LegacySettings.LegacyControl.trace = LegacySettings.LegacyControl.trace * 100 + observed.id
-rule LegacyRank:
+        emit BlockTrace:
+            id = zone.BlockZone.id
+rule BlockRecord:
+    on BlockTrace as observed:
+        BlockSettings.BlockControl.trace = BlockSettings.BlockControl.trace * 100 + observed.id
+rule BlockRank:
     pairs:
         body:
-            LegacyBody
+            BlockBody
         zone:
-            LegacyZone
+            BlockZone
     after:
-        LegacyMove
+        BlockMove
     where:
-        body.LegacyBody.x == zone.LegacyZone.x
-    reduce:
-        per: body
+        body.BlockBody.x == zone.BlockZone.x
+    reduce per body:
         n = count()
     order by:
         n desc
     limit: 1
     on fixed_tick:
-        body.LegacyBody.rank = n
-rule LegacyGlobalEmpty:
-    filter:
-        LegacyZone
+        body.BlockBody.rank = n
+rule BlockGlobalEmpty:
+    each:
+        BlockZone
     where:
         false
     reduce:
         n = count()
     on fixed_tick:
-        LegacySettings.LegacyControl.empty = n
+        BlockSettings.BlockControl.empty = n

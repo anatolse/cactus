@@ -20,7 +20,7 @@ pub group solve:
     phase: fixed_tick
 
 rule CopyVelocity:
-    filter:
+    each:
         Body as body
     group: solve
 
@@ -28,7 +28,7 @@ rule CopyVelocity:
         body.velocity = body.thrust
 
 rule WriteThrust:
-    filter:
+    each:
         Body as body
     before:
         solve
@@ -38,7 +38,7 @@ rule WriteThrust:
         body.thrust = body.velocity + 1.0
 
 rule Observe:
-    filter:
+    each:
         Body as body
         Observed as observed
     after:

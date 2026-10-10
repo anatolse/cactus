@@ -228,7 +228,7 @@ phase simulate:
         frame
 
 extern rule Integrate:
-    filter:
+    each:
         Position
         Velocity
     on simulate:
@@ -256,7 +256,7 @@ extern rule Monitor:
     SECTION("legacy blocks") {}
     SECTION("compact clauses") {
         const std::vector<std::pair<std::string, std::string>> replacements{
-            {"    filter:\n        Position\n        Velocity", "    each: Position, Velocity"},
+            {"    each:\n        Position\n        Velocity", "    each: Position, Velocity"},
             {"        reads:\n            Position", "        reads: Position"},
             {"        projects:\n            Position", "        projects: Position"},
             {"        writes:\n            Velocity", "        writes: Velocity"},
@@ -344,7 +344,7 @@ phase simulate:
         frame
 
 extern rule Heal:
-    filter:
+    each:
         Aim
     on simulate:
         reads:
@@ -531,7 +531,7 @@ TEST_CASE("Codegen EnTT: registry view rule", "[codegen-entt]") {
         "    var x: float\n"
         "    var y: float\n"
         "rule Move:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Pos\n"
         "    on step:\n"
         "        x = x + step.dt\n",
@@ -561,7 +561,7 @@ TEST_CASE("Codegen EnTT: filtered handler body is emitted once and both dispatch
         "    var x: float\n"
         "    var y: float\n"
         "rule Move:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Pos\n"
         "    on step:\n"
         "        x = x + step.dt\n",
@@ -733,7 +733,7 @@ TEST_CASE("Codegen EnTT: full pipeline", "[codegen-entt]") {
         "    dt: float\n"
         "trait Pos:\n    persist var x: float\n    persist var y: float\n"
         "rule Move:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Pos\n"
         "    on tick:\n"
         "        x = x + tick.dt\n ",
@@ -787,7 +787,7 @@ TEST_CASE("Codegen EnTT: std.input mouse button actions and mouse_position lower
         "trait MouseState:\n"
         "    var pos: vec2\n"
         "rule ReadMouse:\n"
-        "    filter:\n"
+        "    each:\n"
         "        MouseState\n"
         "    on input:\n"
         "        if input.pressed(Select):\n"
@@ -913,7 +913,7 @@ TEST_CASE("Codegen EnTT: imported stdlib math alias lowers to runtime namespace"
         "trait Value:\n"
         "    var x: float\n"
         "rule Demo:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Value\n"
         "    on tick:\n"
         "        x = math.lerp(0.0, 10.0, 0.5)\n",
@@ -933,7 +933,7 @@ TEST_CASE("Codegen EnTT: unqualified imported stdlib func lowers to runtime name
         "trait Value:\n"
         "    var x: float\n"
         "rule Demo:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Value\n"
         "    on tick:\n"
         "        x = lerp(0.0, 10.0, 0.5)\n",
@@ -955,7 +955,7 @@ TEST_CASE("Codegen EnTT: std.input extern calls lower to backend runtime namespa
         "trait Controller:\n"
         "    var active: bool = false\n"
         "rule Demo:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Controller\n"
         "    on tick:\n"
         "        active = down(Jump)\n",
@@ -1017,7 +1017,7 @@ TEST_CASE("Codegen EnTT: std.physics.flat query calls lower with registry access
         "trait BoxCollider:\n"
         "    var size: vec2\n"
         "rule QueryProbe:\n"
-        "    filter:\n"
+        "    each:\n"
         "        WorldTransform\n"
         "        BoxCollider\n"
         "    on tick:\n"
@@ -1070,7 +1070,7 @@ TEST_CASE("Codegen EnTT: sprite and animation extern rules bind to asset runtime
         "    var playing: bool\n"
         "event run\n"
         "extern rule SpriteRenderer:\n"
-        "    filter:\n"
+        "    each:\n"
         "        WorldTransform\n"
         "        Renderer\n"
         "    on run:\n"
@@ -1078,7 +1078,7 @@ TEST_CASE("Codegen EnTT: sprite and animation extern rules bind to asset runtime
         "            WorldTransform\n"
         "            Renderer\n"
         "extern rule SpriteAnimation:\n"
-        "    filter:\n"
+        "    each:\n"
         "        AnimatedSprite\n"
         "    on run:\n"
         "        writes:\n"
@@ -1108,7 +1108,7 @@ TEST_CASE("Codegen EnTT: render glue brackets frames without inferring generic e
         "    var layer: int\n"
         "event run\n"
         "extern rule SpriteRenderer:\n"
-        "    filter:\n"
+        "    each:\n"
         "        WorldTransform\n"
         "        Renderer\n"
         "    on run:\n"
@@ -1141,7 +1141,7 @@ TEST_CASE("Codegen EnTT: mesh renderer extern rule binds to backend runtime with
         "    var color: color\n"
         "event run\n"
         "extern rule MeshRenderer:\n"
-        "    filter:\n"
+        "    each:\n"
         "        WorldTransform\n"
         "        Renderer\n"
         "    on run:\n"
@@ -1172,7 +1172,7 @@ TEST_CASE("Codegen EnTT: directional light render extern rule binds to backend r
         "    var enabled: bool\n"
         "event run\n"
         "extern rule DirectionalLightRender:\n"
-        "    filter:\n"
+        "    each:\n"
         "        DirectionalLight\n"
         "    on run:\n"
         "        reads:\n"
@@ -1208,7 +1208,7 @@ TEST_CASE("Codegen EnTT: shape renderer draws Circle shapes via draw_shape_circl
         "    var origin: vec2\n"
         "event render\n"
         "extern rule ShapeRenderer:\n"
-        "    filter:\n"
+        "    each:\n"
         "        WorldTransform\n"
         "        Shape\n"
         "    on render:\n"
@@ -1374,7 +1374,7 @@ TEST_CASE("Codegen EnTT: DebugGrid3D draws the grid only when an EditorCamera3D 
         "    var focus: vec3\n"
         "event render\n"
         "pub extern rule DebugGrid3D:\n"
-        "    filter:\n"
+        "    each:\n"
         "        EditorCamera3D\n"
         "    on render:\n"
         "        effects:\n"
@@ -1438,7 +1438,7 @@ TEST_CASE("Codegen EnTT: model renderer extern rule binds to backend runtime wit
         "    var color: color = #FFFFFFFF\n"
         "event run\n"
         "extern rule ModelRender:\n"
-        "    filter:\n"
+        "    each:\n"
         "        WorldTransform\n"
         "        ModelRenderer\n"
         "    on run:\n"
@@ -1472,7 +1472,7 @@ TEST_CASE("Codegen EnTT: model animation extern adapter advances time without in
         "    var time: float\n"
         "event run\n"
         "extern rule ModelAnimation:\n"
-        "    filter:\n"
+        "    each:\n"
         "        ModelRenderer\n"
         "        ModelAnimator\n"
         "    on run:\n"
@@ -1519,7 +1519,7 @@ TEST_CASE("Codegen EnTT: model renderer submits animator clip and time when the 
         "    var time: float\n"
         "event run\n"
         "extern rule ModelRender:\n"
-        "    filter:\n"
+        "    each:\n"
         "        WorldTransform\n"
         "        ModelRenderer\n"
         "    on run:\n"
@@ -1548,7 +1548,7 @@ TEST_CASE("Codegen EnTT: screen label extern rule renders window-space text in f
         "    var visible: bool\n"
         "event run\n"
         "extern rule ScreenLabelRender:\n"
-        "    filter:\n"
+        "    each:\n"
         "        ScreenLabel\n"
         "    on run:\n"
         "        reads:\n"
@@ -1603,7 +1603,7 @@ TEST_CASE("Codegen EnTT: std.render.models introspection funcs bind to model-pre
         "    var clips: int\n"
         "    var label: string\n"
         "rule Probe:\n"
-        "    filter:\n"
+        "    each:\n"
         "        ClipState\n"
         "    on tick:\n"
         "        clips = models.animation_count(Robot)\n"
@@ -1626,7 +1626,7 @@ TEST_CASE("Codegen EnTT: models.bounds_size binds to the model-prefixed runtime 
         "trait SizeState:\n"
         "    var height: float\n"
         "rule Probe:\n"
-        "    filter:\n"
+        "    each:\n"
         "        SizeState\n"
         "    on tick:\n"
         "        height = models.bounds_size(Robot).y\n",
@@ -1658,7 +1658,7 @@ TEST_CASE("Codegen EnTT: on load handler runs via a one-shot boot activation bef
         "entity Bootstrap:\n"
         "    Marker\n"
         "rule SpawnEnemies:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Marker\n"
         "    on load:\n"
         "        spawn Enemy:\n"
@@ -1719,7 +1719,7 @@ TEST_CASE("Codegen EnTT: programs without a load handler emit no boot activation
         "trait Pos:\n"
         "    var x: float = 0.0\n"
         "rule Move:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Pos\n"
         "    on tick:\n"
         "        x = x + tick.dt\n",
@@ -1768,7 +1768,7 @@ TEST_CASE("Codegen EnTT: on unload handler runs via a one-shot teardown activati
         "entity Bootstrap:\n"
         "    Marker\n"
         "rule SceneCleanup:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Marker\n"
         "    on unload:\n"
         "        destroy\n",
@@ -1818,7 +1818,7 @@ TEST_CASE("Codegen EnTT: programs without an unload handler emit no teardown act
         "trait Pos:\n"
         "    var x: float = 0.0\n"
         "rule Move:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Pos\n"
         "    on tick:\n"
         "        x = x + tick.dt\n",
@@ -1856,7 +1856,7 @@ TEST_CASE("Codegen EnTT: a deferred internal event runs as its own activation wi
         "trait Pos:\n"
         "    var x: float = 0.0\n"
         "rule Pong:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Pos\n"
         "    on ping:\n"
         "        x = x + 1.0\n",
@@ -1908,7 +1908,7 @@ TEST_CASE("Codegen EnTT: a program without lifecycle triggers emits no tracking 
     ProgramNode program;
     auto decorated = full_pipeline(lifecycle_program_prefix() +
                                        "rule Move:\n"
-                                       "    filter:\n"
+                                       "    each:\n"
                                        "        Dying\n"
                                        "    on tick:\n"
                                        "        elapsed = elapsed + tick.dt\n",
@@ -1929,7 +1929,7 @@ TEST_CASE("Codegen EnTT: on added tracks only the watched trait and dispatches t
     ProgramNode program;
     auto decorated = full_pipeline(lifecycle_program_prefix() +
                                        "rule StartDying:\n"
-                                       "    filter:\n"
+                                       "    each:\n"
                                        "        Enemy\n"
                                        "    on added Dying as dying:\n"
                                        "        dying.elapsed = 0.0\n",
@@ -2002,14 +2002,14 @@ TEST_CASE("Codegen EnTT: the startup arrival activation runs after init and befo
                                            "    Enemy\n"
                                            "    Dying\n"
                                            "rule React:\n"
-                                           "    filter:\n"
+                                           "    each:\n"
                                            "        Enemy\n"
                                            "    on " +
                                            trigger +
                                            ":\n"
                                            "        let x = 1\n"
                                            "rule Boot:\n"
-                                           "    filter:\n"
+                                           "    each:\n"
                                            "        Enemy\n"
                                            "    on load:\n"
                                            "        let y = 1\n",
@@ -2314,7 +2314,7 @@ TEST_CASE("Codegen EnTT: add/remove trait statements", "[codegen-entt]") {
         "trait Position:\n"
         "    var x: float = 0.0\n"
         "rule Freeze:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Position\n"
         "    on tick:\n"
         "        add Frozen\n"
@@ -2422,7 +2422,7 @@ TEST_CASE("Codegen EnTT: vector binary expression and compound assignment lower 
         "trait Motion:\n"
         "    var velocity: vec2\n"
         "rule Move:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Position as p\n"
         "        Motion as m\n"
         "    on tick:\n"
@@ -2504,7 +2504,7 @@ TEST_CASE("Codegen EnTT: aliased event handler uses alias in signature and body"
         "trait Pos:\n"
         "    var x: float\n"
         "rule Move:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Pos\n"
         "    on step as s:\n"
         "        x = x + s.dt\n",
@@ -2526,7 +2526,7 @@ TEST_CASE("Codegen EnTT: marker event handler takes the marker event parameter",
         "trait Pos:\n"
         "    var x: float\n"
         "rule Init:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Pos\n"
         "    on ping:\n"
         "        x = 0.0\n",
@@ -2579,7 +2579,7 @@ TEST_CASE("Codegen EnTT: legacy nested else+if compiles to doubly-braced else { 
         "trait Health:\n"
         "    var hp: int = 0\n"
         "rule HealthState:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Health\n"
         "    on tick:\n"
         "        if hp > 50:\n"
@@ -2628,7 +2628,7 @@ TEST_CASE("Codegen EnTT: else-if chain compiles equivalent to legacy nested else
         "trait Health:\n"
         "    var hp: int = 0\n"
         "rule HealthState:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Health\n"
         "    on tick:\n"
         "        if hp > 50:\n"
@@ -2672,7 +2672,7 @@ TEST_CASE("Codegen EnTT: nested control flow mutates visible lexical locals with
         "trait Boss:\n"
         "    var rank: int\n"
         "rule Accumulate:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Values\n"
         "    on Collision as c:\n"
         "        var sum = 0\n"
@@ -2716,7 +2716,7 @@ TEST_CASE("Codegen EnTT: unsupported generic extern scaffold is rejected", "[cod
         "    var dx: float\n"
         "event run\n"
         "extern rule ParticleSystem:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Position\n"
         "        Velocity\n"
         "    on run:\n"
@@ -2739,7 +2739,7 @@ TEST_CASE("Codegen EnTT: unsupported ordered extern scaffold is rejected", "[cod
         "    var y: float\n"
         "event run\n"
         "extern rule SortedRenderer:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Position\n"
         "    order by:\n"
         "        Position.y desc\n"
@@ -2763,7 +2763,7 @@ TEST_CASE("Codegen EnTT: rule order by emits registry sort for single key", "[co
         "trait Sprite:\n"
         "    var layer: int\n"
         "rule Render:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Sprite as s\n"
         "    order by:\n"
         "        s.layer asc\n"
@@ -2804,7 +2804,7 @@ TEST_CASE("Codegen EnTT: rule order by emits multi-key comparator", "[codegen-en
         "trait Sprite:\n"
         "    var layer: int\n"
         "rule Render:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Position as p\n"
         "        Sprite as s\n"
         "    order by:\n"
@@ -2838,7 +2838,7 @@ TEST_CASE("Codegen EnTT: rule without order by emits no sort call", "[codegen-en
         "trait Sprite:\n"
         "    var layer: int\n"
         "rule Render:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Sprite\n"
         "    on tick:\n"
         "        let x = 1\n",
@@ -2859,7 +2859,7 @@ TEST_CASE("Codegen EnTT: generic extern rule name does not infer lifecycle dispa
         "    var x: float\n"
         "event run\n"
         "extern rule SpriteRenderer:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Position\n"
         "    on run:\n"
         "        reads:\n"
@@ -2879,7 +2879,7 @@ TEST_CASE("Codegen EnTT: stdlib-style spelling cannot impersonate compiler-owned
         "    var layer: int\n"
         "event run\n"
         "extern rule SpriteRenderer:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Transform\n"
         "        Renderer\n"
         "    on run:\n"
@@ -2929,7 +2929,7 @@ TEST_CASE("Codegen EnTT: flat transform propagation extern rule is recognized", 
         "    var scale: vec2\n"
         "event run\n"
         "extern rule TransformPropagation:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Parent\n"
         "        LocalTransform\n"
         "        WorldTransform\n"
@@ -2963,7 +2963,7 @@ TEST_CASE("Codegen EnTT: hierarchy propagation handles stale parents and cycles 
         "    var scale: vec2\n"
         "event run\n"
         "extern rule TransformPropagation:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Parent\n"
         "        LocalTransform\n"
         "        WorldTransform\n"
@@ -2998,7 +2998,7 @@ TEST_CASE("Codegen EnTT: volume transform propagation extern rule is recognized"
         "    var scale: vec3\n"
         "event run\n"
         "extern rule TransformPropagation:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Parent\n"
         "        LocalTransform\n"
         "        WorldTransform\n"
@@ -3158,7 +3158,7 @@ TEST_CASE("Codegen EnTT: bounded foreach evaluates iterable once", "[codegen-ent
         "trait Detector:\n"
         "    var hits: list[Hit]\n"
         "rule Detect:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Detector\n"
         "    on tick:\n"
         "        for hit in hits:\n"
@@ -3184,16 +3184,16 @@ TEST_CASE("Codegen EnTT: projected traits use registry components in filters and
         "trait DamageFlash:\n"
         "    var intensity: float = 0.0\n"
         "rule Producer:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Health\n"
         "    on tick:\n"
         "        project DamageFlash:\n"
         "            intensity = 1.0\n"
         "rule Consumer:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Health\n"
         "        DamageFlash as flash\n"
-        "    exclude:\n"
+        "    without:\n"
         "        Suppressed\n"
         "    after:\n"
         "        Producer\n"
@@ -3226,9 +3226,9 @@ TEST_CASE("Codegen EnTT: filtered rules use native views and no early-return gua
         "trait Wanted\n"
         "trait Blocked\n"
         "rule Consumer:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Wanted\n"
-        "    exclude:\n"
+        "    without:\n"
         "        Blocked\n"
         "    on tick:\n"
         "        let seen = 1\n",
@@ -3255,7 +3255,7 @@ TEST_CASE("Codegen EnTT: projected trait cleanup restores durable or removes pro
         "trait Flash:\n"
         "    var amount: int = 0\n"
         "rule Producer:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Health\n"
         "    on tick:\n"
         "        project Flash:\n"
@@ -3286,7 +3286,7 @@ TEST_CASE("Codegen EnTT: projected marker traits avoid value snapshots", "[codeg
         "trait Actor\n"
         "trait Grounded\n"
         "rule Producer:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Actor\n"
         "    on tick:\n"
         "        project Grounded\n",
@@ -3315,7 +3315,7 @@ TEST_CASE("Codegen EnTT: aliased std.text.format lowers to std::format in rule h
         "trait Score:\n"
         "    var value: int\n"
         "rule Display:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Score\n"
         "    on tick:\n"
         "        let s = text.format(\"Score: {}\", value)\n",
@@ -3335,7 +3335,7 @@ TEST_CASE("Codegen EnTT: std.text import causes format header to be emitted", "[
         "trait Score:\n"
         "    var value: int\n"
         "rule Display:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Score\n"
         "    on tick:\n"
         "        let s = text.format(\"Score: {}\", value)\n",
@@ -3366,7 +3366,7 @@ TEST_CASE("Codegen EnTT: unaliased std.text format lowers to std::format in rule
         "trait Score:\n"
         "    var value: int\n"
         "rule Display:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Score\n"
         "    on tick:\n"
         "        let s = format(\"Score: {}\", value)\n",
@@ -3495,7 +3495,7 @@ TEST_CASE("Codegen EnTT: editor.cactus module generates EditorState component, E
         // remaining one, still exercising the same generic
         // extern-rule-stub-emission mechanism this test checks.
         "pub extern rule EditorPropertyPanel:\n"
-        "    filter:\n"
+        "    each:\n"
         "        EditorState\n"
         "    on tick:\n"
         "        reads:\n"
@@ -3658,7 +3658,7 @@ TEST_CASE(
         "    var idx: int = 0\n"
         "    var sz: vec2 = vec2(0.0, 0.0)\n"
         "rule ProbeTest:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Probe\n"
         "    on tick:\n"
         "        mode = active_mode()\n"
@@ -3698,7 +3698,7 @@ TEST_CASE("Codegen EnTT: active_mode() lowers to a static_cast from the runtime'
         "trait Probe:\n"
         "    var mode: GizmoMode = GizmoMode.Select\n"
         "rule ProbeTest:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Probe\n"
         "    on tick:\n"
         "        mode = active_mode()\n",
@@ -3727,7 +3727,7 @@ TEST_CASE("Codegen EnTT: mode_label(mode) lowers to a static_cast from GizmoMode
         "    var mode: GizmoMode = GizmoMode.Select\n"
         "    var label: string = \"\"\n"
         "rule ProbeTest:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Probe\n"
         "    on tick:\n"
         "        label = mode_label(mode)\n",
@@ -3792,7 +3792,7 @@ TEST_CASE("Codegen EnTT: EditorGizmoRenderer2D gates on is_editor_active and emi
         "pub extern func active_mode() GizmoMode\n"
         "pub extern func is_editor_active() bool\n"
         "rule EditorGizmoRenderer2D:\n"
-        "    filter:\n"
+        "    each:\n"
         "        WorldTransform as xform\n"
         "        EditorSelected\n"
         "    on render:\n"
@@ -3883,7 +3883,7 @@ TEST_CASE(
         "pub extern func palette_label_slot(index: int) entity_id\n"
         "pub extern func palette_color(index: int) color\n"
         "rule EditorTemplatePalette:\n"
-        "    filter:\n"
+        "    each:\n"
         "        EditorState\n"
         "    on render:\n"
         "        let names = template_names()\n"
@@ -3975,7 +3975,7 @@ TEST_CASE("Codegen EnTT: EditorHUDOverlay draws a screen border and mode-text la
         "pub extern func screen_size() vec2\n"
         "pub extern func mode_label(mode: GizmoMode) string\n"
         "rule EditorHUDOverlay:\n"
-        "    filter:\n"
+        "    each:\n"
         "        EditorState\n"
         "        ScreenLabel\n"
         "    on render:\n"
@@ -4033,7 +4033,7 @@ TEST_CASE("Codegen EnTT: editor projected traits generate registry helpers", "[c
         "    var color: color = #00FF00FF\n"
         "    var size: float = 1.0\n"
         "rule Gizmo2D:\n"
-        "    filter:\n"
+        "    each:\n"
         "        EditorGizmo2D\n"
         "    on tick:\n"
         "        project EditorGizmo2D:\n"
@@ -4077,7 +4077,7 @@ TEST_CASE("Codegen EnTT: editor extern rules generate correct dispatch calls",
         "    var active: bool = true\n"
         "    var mode: GizmoMode = GizmoMode.Select\n"
         "pub extern rule EditorPropertyPanel:\n"
-        "    filter:\n"
+        "    each:\n"
         "        EditorState\n"
         "    on tick:\n"
         "        reads:\n"
@@ -4139,7 +4139,7 @@ TEST_CASE("Codegen EnTT: EditorGizmoRenderer3D gates on is_editor_active and emi
         "pub extern func active_mode() GizmoMode\n"
         "pub extern func is_editor_active() bool\n"
         "rule EditorGizmoRenderer3D:\n"
-        "    filter:\n"
+        "    each:\n"
         "        WorldTransform as xform\n"
         "        EditorSelected\n"
         "    on render:\n"
@@ -4480,7 +4480,7 @@ TEST_CASE("Codegen EnTT: query.children lowers to a stable filtered direct-child
         "trait Node\n"
         "trait Hidden\n"
         "rule CollectChildren:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Selection\n"
         "    on tick:\n"
         "        let snapshot = query.children[Node, not Hidden](of = parent)\n",
@@ -4561,7 +4561,7 @@ TEST_CASE("Codegen EnTT: query.parent lowers to Parent component try_get", "[cod
         "trait Child:\n"
         "    var child_id: entity_id\n"
         "rule S:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Child\n"
         "    on tick:\n"
         "        let p = query.parent(of = child_id)\n",
@@ -4900,7 +4900,7 @@ TEST_CASE("Codegen EnTT: destroy cascade code coexists with hierarchical creatio
     ProgramNode program;
     auto decorated  = full_pipeline(hierarchy_source_prefix() +
                                         "rule S:\n"
-                                        "    filter:\n"
+                                        "    each:\n"
                                         "        Tag\n"
                                         "    on tick:\n"
                                         "        destroy self\n",
@@ -4949,7 +4949,7 @@ TEST_CASE("Codegen EnTT: std.input mouse_delta and wheel_delta lower to correct 
         "trait Rig:\n"
         "    var active: bool\n"
         "rule NavPoll:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Rig\n"
         "    on tick:\n"
         "        let _w = input.wheel_delta()\n"
@@ -4975,7 +4975,7 @@ TEST_CASE("Codegen EnTT: input.consume call generates runtime consume invocation
         "trait EditorSt:\n"
         "    var active: bool = true\n"
         "rule EditorInputConsume:\n"
-        "    filter:\n"
+        "    each:\n"
         "        EditorSt\n"
         "    on input:\n"
         "        input.consume(NavDrag)\n",
@@ -5088,7 +5088,7 @@ TEST_CASE("Codegen EnTT: std.camera.flat projection helpers lower to correct run
         "trait Scene:\n"
         "    var active: bool\n"
         "rule Project2D:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Scene\n"
         "    on tick:\n"
         "        let _wp = camera2d.screen_to_world(vec2(0.0, 0.0))\n"
@@ -5110,7 +5110,7 @@ TEST_CASE("Codegen EnTT: std.transform.flat world_position injects registry as f
         "trait Selection:\n"
         "    var sel: entity_id\n"
         "rule GetPos:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Selection\n"
         "    on tick:\n"
         "        let _pos = transform2d.world_position(sel)\n",
@@ -5132,7 +5132,7 @@ TEST_CASE("Codegen EnTT: std.transform.flat world_position registers live-positi
         "trait Selection:\n"
         "    var sel: entity_id\n"
         "rule GetPos:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Selection\n"
         "    on tick:\n"
         "        let _pos = transform2d.world_position(sel)\n",
@@ -5154,7 +5154,7 @@ TEST_CASE("Codegen EnTT: std.transform.volume world_position registers live-posi
             "trait Selection:\n"
             "    var sel: entity_id\n"
             "rule GetPos:\n"
-            "    filter:\n"
+            "    each:\n"
             "        Selection\n"
             "    on tick:\n"
             "        let _pos = transform3d.world_position(sel)\n",
@@ -5175,7 +5175,7 @@ TEST_CASE("Codegen EnTT: clean-named editor extern func spawn_template lowers wi
         "trait Placer:\n"
         "    var result: entity_id\n"
         "rule PlaceTest:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Placer\n"
         "    on tick:\n"
         "        result = spawn_template(\"Enemy\", vec2(0.0, 0.0), vec3(0.0, 0.0, 0.0))\n",
@@ -5231,7 +5231,7 @@ TEST_CASE("Codegen EnTT: rule function name uses canonical module prefix when pr
         "trait Velocity:\n"
         "    var vx: float\n"
         "rule Move:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Velocity\n"
         "    on tick:\n"
         "        vx = vx + tick.dt\n",
@@ -5252,7 +5252,7 @@ TEST_CASE("Codegen EnTT: registry view uses canonical C++ type names for module-
         "trait Position:\n"
         "    var x: float\n"
         "rule Move:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Position\n"
         "    on tick:\n"
         "        x = x + tick.dt\n",
@@ -5278,7 +5278,7 @@ TEST_CASE("Codegen EnTT: stdlib func lowering falls back to program.funcs when n
         "trait Value:\n"
         "    var x: float\n"
         "rule Demo:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Value\n"
         "    on tick:\n"
         "        x = lerp(0.0, 10.0, 0.5)\n",
@@ -5312,7 +5312,7 @@ TEST_CASE("Codegen EnTT: stdlib extern rule lowering uses canonical C++ names fo
         "    var layer: int\n"
         "event tick\n"
         "extern rule SpriteRenderer:\n"
-        "    filter:\n"
+        "    each:\n"
         "        WorldTransform\n"
         "        Renderer\n"
         "    on tick:\n"
@@ -5403,7 +5403,7 @@ TEST_CASE("Codegen EnTT: graph scheduler state owns typed events phases commands
         "    on input:\n"
         "        let sample = input.dt\n"
         "rule Second:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Marker\n"
         "    on input:\n"
         "        value = value + 1\n",
@@ -5639,7 +5639,7 @@ TEST_CASE("Codegen EnTT: graph-driven render flush wires per-frame housekeeping 
         "    after:\n"
         "        input\n"
         "extern rule SpriteRenderer:\n"
-        "    filter:\n"
+        "    each:\n"
         "        WorldTransform\n"
         "        Renderer\n"
         "    on render:\n"
@@ -5762,7 +5762,7 @@ TEST_CASE("Codegen EnTT: trigger-name reads lower to the handler payload paramet
         "    var amount: int\n"
         "    var elapsed: float\n"
         "rule ReadFiltered:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Holder as h\n"
         "    on Turn:\n"
         "        h.amount = Turn.amount\n"
@@ -5770,12 +5770,12 @@ TEST_CASE("Codegen EnTT: trigger-name reads lower to the handler payload paramet
         "    on Turn:\n"
         "        let sample = Turn.amount + 1\n"
         "rule ReadAliased:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Holder as h\n"
         "    on Turn as t:\n"
         "        h.amount = t.amount + Turn.amount\n"
         "rule ReadTick:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Holder as h\n"
         "    on tick:\n"
         "        h.elapsed = h.elapsed + tick.dt\n",
@@ -5816,7 +5816,7 @@ TEST_CASE("Codegen EnTT: a module-qualified trigger name lowers to the handler p
         "trait Holder:\n"
         "    var amount: int\n"
         "rule ReadQualified:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Holder as h\n"
         "    on combat.Hit:\n"
         "        h.amount = combat.Hit.amount\n",
@@ -5879,7 +5879,7 @@ TEST_CASE("Codegen EnTT: graph structural commands commit after cascades and bet
         "    every: 0.5\n"
         "    max: 2\n"
         "rule Producer:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Position\n"
         "    on fixed_tick:\n"
         "        let particle = spawn Particle:\n"
@@ -5968,7 +5968,7 @@ TEST_CASE("Codegen EnTT: set queues a durable-value patch without projection can
                                          "    from:\n"
                                          "        frame\n"
                                          "rule Patch:\n"
-                                         "    filter:\n"
+                                         "    each:\n"
                                          "        Aim as aim\n"
                                          "    on tick:\n"
                                          "        set Health on aim.other:\n"
@@ -6017,7 +6017,7 @@ TEST_CASE("Codegen EnTT: compiler-owned contracted effects execute only through 
         "    from:\n"
         "        frame\n"
         "extern rule SpriteRenderer:\n"
-        "    filter:\n"
+        "    each:\n"
         "        WorldTransform\n"
         "        Renderer\n"
         "    on render:\n"
@@ -6027,7 +6027,7 @@ TEST_CASE("Codegen EnTT: compiler-owned contracted effects execute only through 
         "        effects:\n"
         "            graphics\n"
         "extern rule SpriteAnimation:\n"
-        "    filter:\n"
+        "    each:\n"
         "        AnimatedSprite\n"
         "    on render:\n"
         "        writes:\n"
@@ -6104,7 +6104,7 @@ TEST_CASE(
         "    from:\n"
         "        frame\n"
         "extern rule TransformPropagation:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Parent\n"
         "        LocalTransform\n"
         "        WorldTransform\n"
@@ -6658,7 +6658,7 @@ TEST_CASE("Codegen EnTT: targeted unary handler runs at most once for the recipi
         "trait Health:\n"
         "    var hp: int\n"
         "rule ResolveContact:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Health\n"
         "    on Contact:\n"
         "        hp = hp - 1\n",
@@ -6694,7 +6694,7 @@ TEST_CASE("Codegen EnTT: targeted external handler dispatch is gated on the reci
         "trait Health:\n"
         "    var hp: int\n"
         "extern rule ResolveContact:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Health\n"
         "    on Contact:\n"
         "        reads:\n"
@@ -6719,7 +6719,7 @@ TEST_CASE("Codegen EnTT: dotted assignment through a filter alias writes the fie
         "trait Health:\n"
         "    var current: int\n"
         "rule ResolveContact:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Health as hp\n"
         "    on Contact as dmg:\n"
         "        hp.current = hp.current - dmg.amount\n",
@@ -6872,7 +6872,7 @@ TEST_CASE("Codegen EnTT: range() with a non-literal step has no unconditional fa
         "trait Source:\n"
         "    var step_value: int\n"
         "rule CountVariableStep:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Source\n"
         "    on tick:\n"
         "        for k in range(0, 10, step_value):\n"
@@ -7446,7 +7446,7 @@ TEST_CASE("Codegen EnTT: render-pass stage handler's `let` locals are mangled to
         "    output: passes.Target = passes.Target.Screen\n"
         "\n"
         "rule MyVertex:\n"
-        "    filter:\n"
+        "    each:\n"
         "        WorldTransform as xf\n"
         "\n"
         "    on my_pass.vertex as v:\n"
@@ -7506,7 +7506,7 @@ TEST_CASE("Codegen EnTT: render-pass stage handler accepts vec2 + vec2 * float, 
         "    output: passes.Target = passes.Target.Screen\n"
         "\n"
         "rule MyVertex:\n"
-        "    filter:\n"
+        "    each:\n"
         "        WorldTransform as xf\n"
         "\n"
         "    on my_pass.vertex as v:\n"
@@ -7565,7 +7565,7 @@ TEST_CASE("Codegen EnTT: render-pass stage handler still rejects Vec2 + Color", 
         "    output: passes.Target = passes.Target.Screen\n"
         "\n"
         "rule MyVertex:\n"
-        "    filter:\n"
+        "    each:\n"
         "        WorldTransform as xf\n"
         "\n"
         "    on my_pass.vertex as v:\n"
@@ -7633,7 +7633,7 @@ TEST_CASE("Codegen EnTT: conditional expressions and value match lower without p
         "            c = 2\n"
         "    return c\n"
         "rule R:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Actor as a\n"
         "    on tick:\n"
         "        a.hp = if a.speed > 1.0: 1 else if a.speed > 0.5: 2 else: 3\n"
@@ -7658,7 +7658,7 @@ TEST_CASE("Codegen EnTT: conditional expressions and value match lower without p
 TEST_CASE("Codegen EnTT: a match subject is evaluated once", "[codegen-entt][conditional-expressions]") {
     const auto code = conditional_codegen(
         "rule R:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Actor as a\n"
         "    on tick:\n"
         "        a.speed = match pick():\n"
@@ -7679,7 +7679,7 @@ TEST_CASE("Codegen EnTT: an exhaustive match emits its last arm unconditionally"
           "[codegen-entt][conditional-expressions]") {
     const auto code = conditional_codegen(
         "rule R:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Actor as a\n"
         "    on tick:\n"
         "        a.speed = match a.mode:\n"
@@ -7701,7 +7701,7 @@ TEST_CASE("Codegen EnTT: conditional expressions are accepted in rule clauses",
           "[codegen-entt][conditional-expressions]") {
     const auto code = conditional_codegen(
         "rule R:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Actor as a\n"
         "    order by:\n"
         "        if a.hp > 0: a.speed else: 0.0 desc\n"
@@ -7718,7 +7718,7 @@ TEST_CASE("Codegen EnTT: conditional expressions are accepted in rule clauses",
 TEST_CASE("Codegen EnTT: only the selected branch evaluates its call", "[codegen-entt][conditional-expressions]") {
     const auto code = conditional_codegen(
         "rule R:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Actor as a\n"
         "    on tick:\n"
         "        a.hp = if a.speed > 1.0: pick() else: 0\n"
@@ -7782,7 +7782,7 @@ static std::string conditional_render_pass_codegen(const std::string& fragment_b
         "    output: passes.Target = passes.Target.Screen\n"
         "\n"
         "rule MyVertex:\n"
-        "    filter:\n"
+        "    each:\n"
         "        WorldTransform as xf\n"
         "\n"
         "    on my_pass.vertex as v:\n"
@@ -7872,8 +7872,7 @@ TEST_CASE("Codegen EnTT: a grouped reduction folds broad-phase rows and writes i
                                           "        actor.Body.radius > 0.0\n"
                                           "        sphere_box_overlap(actor.Body.position, actor.Body.radius + PROBE, "
                                           "wall.Solid.position, wall.Solid.size, wall.Solid.rotation)\n"
-                                          "    reduce:\n"
-                                          "        per: actor\n"
+                                          "    reduce per actor:\n"
                                           "        near = any(wall.Solid.size.x > 1.0)\n"
                                           "        walls = count()\n"
                                           "        low = min(wall.Solid.position.y, default = 9.0)\n"
@@ -7922,7 +7921,7 @@ TEST_CASE("Codegen EnTT: a global unary reduction folds in creation order and ru
           "[codegen-entt][rule-reduce]") {
     const auto code = emit_named_rule(limit_traits() +
                                           "rule Total:\n"
-                                          "    filter:\n"
+                                          "    each:\n"
                                           "        Surface as surface\n"
                                           "    where:\n"
                                           "        surface.code > 0\n"
@@ -8011,7 +8010,7 @@ TEST_CASE("Codegen EnTT: a global limit also gates recipient-targeted delivery",
           "[codegen-entt][rule-limit]") {
     const auto code = emit_named_rule(limit_traits() +
                                           "rule TakeOne:\n"
-                                          "    filter:\n"
+                                          "    each:\n"
                                           "        Actor as a\n"
                                           "    limit: 1\n"
                                           "    on tick:\n"
@@ -8052,7 +8051,7 @@ static const std::string& named_codegen_source() {
         "    Rival:\n"
         "        rival = Nemesis\n"
         "rule Move:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Enemy as enemy\n"
         "    when:\n"
         "        not Game.Match.over\n"
@@ -8149,7 +8148,7 @@ TEST_CASE("Codegen EnTT: a named read in a limited rule's where: is guarded and 
     ProgramNode program;
     auto decorated = full_pipeline(named_codegen_source() +
                                        "rule Pick:\n"
-                                       "    filter:\n"
+                                       "    each:\n"
                                        "        Enemy as enemy\n"
                                        "    where:\n"
                                        "        enemy.steps < Game.Stats.ticks\n"
@@ -8224,7 +8223,7 @@ TEST_CASE("Codegen EnTT: add of a variant swaps and remove of a state leaves it"
                                         "    EnemyMode\n"
                                         "    Log\n"
                                         "rule Hunt:\n"
-                                        "    filter:\n"
+                                        "    each:\n"
                                         "        Log\n"
                                         "    on tick:\n"
                                         "        add EnemyMode.Chasing:\n"
@@ -8249,7 +8248,7 @@ TEST_CASE("Codegen EnTT: a state match switches on the slot index", "[codegen-en
     ProgramNode program;
     auto decorated  = full_pipeline(state_program_prefix() +
                                         "rule Inspect:\n"
-                                        "    filter:\n"
+                                        "    each:\n"
                                         "        EnemyMode as m\n"
                                         "        Log as log\n"
                                         "    on tick:\n"
@@ -8281,7 +8280,7 @@ TEST_CASE("Codegen EnTT: a trait match arm without an alias only tests presence"
                                         "trait Watch:\n"
                                         "    var subject: entity_id\n"
                                         "rule Look:\n"
-                                        "    filter:\n"
+                                        "    each:\n"
                                         "        Watch as w\n"
                                         "        Log as log\n"
                                         "    on tick:\n"
@@ -8328,11 +8327,11 @@ trait Frozen
     on tick:
         p.x += m.speed
 )";
-    const std::string legacy       = R"(rule Move:
-    filter:
+    const std::string block        = R"(rule Move:
+    each:
         Position as p
         Motion as m
-    exclude:
+    without:
         Frozen
     order by:
         p.x desc
@@ -8361,6 +8360,6 @@ trait Frozen
         REQUIRE_FALSE(errors.has_errors());
         return CppEnttCodegen::generate(program);
     };
-    CHECK(generate(compact) == generate(legacy));
+    CHECK(generate(compact) == generate(block));
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

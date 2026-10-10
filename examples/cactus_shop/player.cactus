@@ -67,7 +67,7 @@ func clamp_int(value: int, min_val: int, max_val: int) int:
     return value
 
 rule Move:
-    filter:
+    each:
         Position as p
         PlayerController as ctrl
 
@@ -89,7 +89,7 @@ rule Move:
             ctrl.state = PlayerState.Idle
 
 rule UpdateCamera:
-    filter:
+    each:
         Position as p
         ThirdPersonCamera as cam
 

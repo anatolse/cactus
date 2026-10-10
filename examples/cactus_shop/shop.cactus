@@ -88,7 +88,7 @@ func can_afford(coins: int, price: int) bool:
     return coins >= price
 
 rule ShopInteraction:
-    filter:
+    each:
         Position as p
         ShopKeeper as shop
 
@@ -102,7 +102,7 @@ rule ShopInteraction:
                     shop_entity = get_self_entity()
 
 rule Purchase:
-    filter:
+    each:
         Wallet as w
         Inventory as inv
 

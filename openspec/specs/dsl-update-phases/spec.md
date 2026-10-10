@@ -46,9 +46,9 @@ The `on fixed_tick:`, `on tick:`, and `on late_tick:` handlers SHALL use the par
 - **THEN** its handler runs after all `on tick:` handlers in the same frame
 
 ### Requirement: Handler filter applies to all phases within a rule
-The `filter:` and `exclude:` clauses of a `rule` declaration SHALL apply uniformly to all handlers within that rule. A rule cannot have different filters for different phases.
+The `each:` and `without:` clauses of a `rule` declaration SHALL apply uniformly to all handlers within that rule. A rule cannot have different filters for different phases.
 
 #### Scenario: Single filter applies across tick and late_tick
-- **WHEN** a rule declares `filter: Transform, FollowCamera` and both `on tick:` and `on late_tick:`
+- **WHEN** a rule declares `each: Transform, FollowCamera` and both `on tick:` and `on late_tick:`
 - **THEN** both handlers operate on entities that have both `Transform` and `FollowCamera` traits
 

@@ -16,7 +16,7 @@ pub entity Observer:
     Results
 
 rule CollectHierarchySnapshots:
-    filter:
+    each:
         Results
 
     on tick:

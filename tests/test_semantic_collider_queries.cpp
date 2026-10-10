@@ -142,8 +142,7 @@ std::string bullet_rule(const std::string& clauses, const std::string& handler_l
 }
 
 const std::string kFirstHit =
-    "    reduce:\n"
-    "        per: bullet\n"
+    "    reduce per bullet:\n"
     "        first = first_hit(physics.sweep(bullet, bullet.Bullet.velocity * fixed_tick.dt, target))\n";
 
 SymbolId trait_id(const std::string& module, const std::string& trait) {
@@ -187,7 +186,7 @@ TEST_CASE("Phase dt: a periodic phase's dt is a constant in const blocks", "[sem
         "const:\n"
         "    STEP_DISTANCE = 4.0 * fixed_tick.dt\n"
         "rule Use:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Probe as probe\n"
         "    on fixed_tick:\n"
         "        probe.total = STEP_DISTANCE\n");
@@ -197,8 +196,7 @@ TEST_CASE("Phase dt: a periodic phase's dt is a constant in const blocks", "[sem
 
 TEST_CASE("Phase dt: a periodic phase's dt is a constant in reduce:", "[semantic][phase-activation][rule-reduce]") {
     const auto analysis = analyze("rule Sum:\n" + kProbePairs +
-                                  "    reduce:\n"
-                                  "        per: probe\n"
+                                  "    reduce per probe:\n"
                                   "        travelled = sum(probe.Probe.speed * fixed_tick.dt)\n"
                                   "    on tick:\n"
                                   "        probe.Probe.total = travelled\n");
@@ -209,7 +207,7 @@ TEST_CASE("Phase dt: a periodic phase's dt is a constant in reduce:", "[semantic
 TEST_CASE("Phase dt: a periodic phase's dt is a constant in where:", "[semantic][phase-activation][where-clause]") {
     const auto analysis = analyze(
         "rule Fast:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Probe as probe\n"
         "    where:\n"
         "        probe.speed * fixed_tick.dt > 1.0\n"
@@ -222,7 +220,7 @@ TEST_CASE("Phase dt: a periodic phase's dt is a constant in where:", "[semantic]
 TEST_CASE("Phase dt: a periodic phase's dt is a constant in order by:", "[semantic][phase-activation][order-by]") {
     const auto analysis = analyze(
         "rule Ranked:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Probe as probe\n"
         "    order by:\n"
         "        probe.speed * fixed_tick.dt desc\n"
@@ -235,7 +233,7 @@ TEST_CASE("Phase dt: a periodic phase's dt is a constant in order by:", "[semant
 TEST_CASE("Phase dt: a periodic phase's dt still reads the event inside its handlers", "[semantic][phase-activation]") {
     const auto analysis = analyze(
         "rule Step:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Probe as probe\n"
         "    on fixed_tick:\n"
         "        probe.total += fixed_tick.dt\n");
@@ -245,8 +243,7 @@ TEST_CASE("Phase dt: a periodic phase's dt still reads the event inside its hand
 
 TEST_CASE("Phase dt: a variable-rate phase's dt is not a constant", "[semantic][phase-activation]") {
     const auto analysis = analyze("rule Sum:\n" + kProbePairs +
-                                  "    reduce:\n"
-                                  "        per: probe\n"
+                                  "    reduce per probe:\n"
                                   "        travelled = sum(probe.Probe.speed * tick.dt)\n"
                                   "    on tick:\n"
                                   "        probe.Probe.total = travelled\n");
@@ -277,8 +274,7 @@ TEST_CASE("Collider queries: a named entity argument is rejected", "[semantic][s
     const auto analysis = analyze(
         "entity Game:\n"
         "    Solid\n" +
-        bullet_rule("    reduce:\n"
-                    "        per: bullet\n"
+        bullet_rule("    reduce per bullet:\n"
                     "        first = first_hit(physics.sweep(bullet, vec3(1.0, 0.0, 0.0), Game))\n"));
     const auto* error = analysis.error_with("'Game' is not a binding of rule 'MoveBullets'");
     INFO(describe(analysis));
@@ -333,8 +329,7 @@ TEST_CASE("Collider queries: both bindings' collider data join the contract", "[
 }
 
 const std::string kPushOut =
-    "    reduce:\n"
-    "        per: bullet\n"
+    "    reduce per bullet:\n"
     "        push = sum(physics.push_out(bullet, target))\n";
 
 TEST_CASE("Collider queries: push_out takes the rule's bindings and returns vec3", "[semantic][stdlib-physics]") {
@@ -347,8 +342,7 @@ TEST_CASE("Collider queries: push_out rejects a named entity", "[semantic][stdli
     const auto analysis = analyze(
         "entity Game:\n"
         "    Solid\n" +
-        bullet_rule("    reduce:\n"
-                    "        per: bullet\n"
+        bullet_rule("    reduce per bullet:\n"
                     "        push = sum(physics.push_out(bullet, Game))\n"));
     const auto* error = analysis.error_with("'Game' is not a binding of rule 'MoveBullets'");
     INFO(describe(analysis));
@@ -358,8 +352,7 @@ TEST_CASE("Collider queries: push_out rejects a named entity", "[semantic][stdli
 }
 
 TEST_CASE("Collider queries: push_out needs two pair bindings", "[semantic][stdlib-physics]") {
-    const auto analysis = analyze(bullet_rule("    reduce:\n"
-                                              "        per: bullet\n"
+    const auto analysis = analyze(bullet_rule("    reduce per bullet:\n"
                                               "        push = sum(physics.push_out(bullet, bullet.Bullet.owner))\n"));
     INFO(describe(analysis));
     CHECK(analysis.has("physics.push_out takes bindings of the calling rule"));
@@ -404,8 +397,7 @@ TEST_CASE("first_hit: the result is a SweepHit", "[semantic][rule-reduce][stdlib
 
 TEST_CASE("first_hit: the input must be a SweepHit", "[semantic][rule-reduce][stdlib-physics]") {
     const auto analysis = analyze(bullet_rule(
-        "    reduce:\n"
-        "        per: bullet\n"
+        "    reduce per bullet:\n"
         "        first = first_hit(bullet.Bullet.travelled)\n"));
     INFO(describe(analysis));
     CHECK(analysis.has("first_hit(...) input must be of type 'std.physics.volume.SweepHit', got 'float'"));
@@ -562,8 +554,7 @@ TEST_CASE("Collider planner: wrapped touching is an ordinary predicate", "[seman
 
 TEST_CASE("Collider planner: a delta reading the target is not eligible", "[semantic][rule-reduce][spatial-join]") {
     const auto analysis = analyze(bullet_rule(
-        "    reduce:\n"
-        "        per: bullet\n"
+        "    reduce per bullet:\n"
         "        first = first_hit(physics.sweep(bullet, target.tv.WorldTransform.position, target))\n"));
     INFO(describe(analysis));
     CHECK_FALSE(analysis.contract("MoveBullets").spatial_join.has_value());

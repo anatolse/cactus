@@ -53,7 +53,7 @@ pub trait DirectionalLight:
     var enabled: bool = true
 
 extern rule MeshRenderer:
-    filter:
+    each:
         tv.WorldTransform
         Renderer
 
@@ -65,7 +65,7 @@ extern rule MeshRenderer:
             graphics
 
 extern rule PointLightRender:
-    filter:
+    each:
         tv.WorldTransform
         PointLight
 
@@ -77,7 +77,7 @@ extern rule PointLightRender:
             graphics
 
 extern rule DirectionalLightRender:
-    filter:
+    each:
         DirectionalLight
 
     on render:

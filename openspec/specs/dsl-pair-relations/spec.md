@@ -6,14 +6,14 @@ Define the DSL surface, semantics, and validation rules for binary pair-relation
 ## Requirements
 
 ### Requirement: Regular rules support a binary pair domain
-A regular `rule` SHALL accept a `pairs:` block containing exactly two ordered, uniquely named entity bindings. Each binding SHALL contain one or more positive trait entries using the same dotted trait-name and optional `as` alias form as unary filters. `pairs:` SHALL be mutually exclusive with `filter:` and `exclude:`, MAY be combined with `order by:` (`dsl-rule-order-by`), and SHALL NOT be accepted on `extern rule` declarations.
+A regular `rule` SHALL accept a `pairs:` block containing exactly two ordered, uniquely named entity bindings. Each binding SHALL contain one or more positive trait entries using the same dotted trait-name and optional `as` alias form as unary filters. `pairs:` SHALL be mutually exclusive with `each:` and `without:`, MAY be combined with `order by:` (`dsl-rule-order-by`), and SHALL NOT be accepted on `extern rule` declarations.
 
 #### Scenario: Two-binding pair rule is accepted
 - **WHEN** `DetectContacts` declares `pairs:` bindings `body` and `wall`, each with at least one declared trait
 - **THEN** the rule has a binary pair domain in source binding order
 
 #### Scenario: Pair and unary domains cannot be mixed
-- **WHEN** one rule declares both `pairs:` and `filter:`
+- **WHEN** one rule declares both `pairs:` and `each:`
 - **THEN** semantic analysis reports that a rule must choose one execution domain
 
 #### Scenario: Pair domain requires exactly two non-empty bindings
@@ -22,7 +22,7 @@ A regular `rule` SHALL accept a `pairs:` block containing exactly two ordered, u
 
 #### Scenario: Pairs rule may declare order by
 - **WHEN** a `pairs:` rule also declares an `order by:` block
-- **THEN** semantic analysis accepts the combination, unlike `filter:` or `exclude:` combined with `pairs:`
+- **THEN** semantic analysis accepts the combination, unlike `each:` or `without:` combined with `pairs:`
 
 ### Requirement: Pair bindings are entity identifiers and trait namespaces
 Each pair binding SHALL have type `entity_id` and SHALL also namespace the traits selected for that entity. `binding.Trait.field` SHALL access an unaliased local trait, `binding.module_alias.Trait.field` SHALL preserve imported qualification, and `binding.trait_alias.field` SHALL use an alias declared only within that binding. Pair binding names and their aliases MUST be unambiguous within every handler scope.

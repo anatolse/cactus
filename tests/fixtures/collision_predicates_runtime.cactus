@@ -35,7 +35,7 @@ trait Probe:
     var box_overlap_unrotated_corner: bool = true
 
 rule ComputeProbe:
-    filter:
+    each:
         Probe
 
     on tick:
@@ -96,7 +96,7 @@ rule DetectOverlapWhere:
             dummy = 1
 
 rule ResolveOverlap:
-    filter:
+    each:
         Body
 
     on OverlapDetected:
@@ -143,7 +143,7 @@ rule DetectSphereBoxWhere:
         emit SphereBoxAccepted to sphere
 
 rule RecordSphereBoxWhere:
-    filter:
+    each:
         SphereBoxCandidate
 
     on SphereBoxAccepted:
@@ -164,7 +164,7 @@ rule DetectSphereBoxOverlapWhere:
         emit SphereBoxOverlapAccepted to sphere
 
 rule RecordSphereBoxOverlapWhere:
-    filter:
+    each:
         SphereBoxCandidate
 
     on SphereBoxOverlapAccepted:
@@ -200,7 +200,7 @@ rule DetectSphereSphereWhere:
         emit SphereSphereAccepted to sphere_a
 
 rule RecordSphereSphereWhere:
-    filter:
+    each:
         SphereSphereCandidate
 
     on SphereSphereAccepted:

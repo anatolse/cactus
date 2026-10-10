@@ -139,7 +139,7 @@ pub entity MainCamera:
 # normalized to TARGET_HEIGHT from its model's bind-pose bounds. A zero height
 # (unloadable model) falls back to unscaled.
 rule SpawnCharacters:
-    filter:
+    each:
         SpawnerMarker
 
     on load:
@@ -187,7 +187,7 @@ rule SpawnCharacters:
                 base_scale = robot_scale
 
 rule ReadControls:
-    filter:
+    each:
         ControlInput
 
     on input:
@@ -197,7 +197,7 @@ rule ReadControls:
         clip_pressed = input.pressed(NextClip)
 
 rule CycleSelection:
-    filter:
+    each:
         CharacterState
         ControlInput
 
@@ -209,7 +209,7 @@ rule CycleSelection:
 # SELECTED_SCALE while selected and back toward 1.0 otherwise, then write the
 # combined normalization * emphasis scale to the transform.
 rule AnimateSelection:
-    filter:
+    each:
         tv.WorldTransform
         CharacterState
     after:
@@ -227,7 +227,7 @@ rule AnimateSelection:
         scale = vec3(base_scale * scale_mult, base_scale * scale_mult, base_scale * scale_mult)
 
 rule RotateSelected:
-    filter:
+    each:
         tv.WorldTransform
         CharacterState
         ControlInput
@@ -244,7 +244,7 @@ rule RotateSelected:
             # rotation = quat.rotate_world(quat.rotate_world(rotation, yaw_delta), pitch_delta)
 
 rule CycleClip:
-    filter:
+    each:
         CharacterState
         ControlInput
         models.ModelRenderer
@@ -260,7 +260,7 @@ rule CycleClip:
                 time = 0.0
 
 rule UpdateHud:
-    filter:
+    each:
         CharacterState
         models.ModelRenderer
         models.ModelAnimator

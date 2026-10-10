@@ -53,7 +53,7 @@ Rules MAY declare an `on load():` handler. This handler fires once after every `
 - **THEN** the spawned entities exist before the first frame's `on tick()` handlers run
 
 #### Scenario: On load handler body runs per matching entity
-- **WHEN** a rule with `filter: Marker` declares `on load()` and exactly one entity has `Marker`
+- **WHEN** a rule with `each: Marker` declares `on load()` and exactly one entity has `Marker`
 - **THEN** the handler body executes exactly once (a run-once bootstrap is expressed by filtering on a single-instance marker trait)
 
 ### Requirement: Modules as scenes — execution model
@@ -86,7 +86,7 @@ Rules MAY declare an `on unload():` handler. This handler SHALL fire during the 
 - **THEN** `on unload()` fires while only the old scene's entities exist (no new entities yet)
 
 #### Scenario: on unload runs in rules matching current entities
-- **WHEN** a rule with `exclude: std.core.KeepOnLoad` has `on unload()` with `destroy`
+- **WHEN** a rule with `without: std.core.KeepOnLoad` has `on unload()` with `destroy`
 - **THEN** all entities without `KeepOnLoad` are destroyed before the new scene loads
 
 ### Requirement: `std.core` module provides `KeepOnLoad` and `SceneCleanup`
@@ -102,7 +102,7 @@ The standard library module `std.core` SHALL export `pub trait KeepOnLoad` (a ma
 
 #### Scenario: Removed KeepOnLoad does not protect
 - **WHEN** an entity's template includes `KeepOnLoad` but gameplay has executed `remove KeepOnLoad` on it
-- **THEN** `SceneCleanup`'s `exclude: KeepOnLoad` no longer excludes it; the entity IS destroyed on unload
+- **THEN** `SceneCleanup`'s `without: KeepOnLoad` no longer excludes it; the entity IS destroyed on unload
 
 #### Scenario: Old Persistent name is rejected
 - **WHEN** a module references `Persistent` or `std.core.Persistent` without declaring its own trait of that name

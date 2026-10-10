@@ -39,7 +39,7 @@ The `std.editor` module SHALL declare `pub trait EditorSelected`, `pub trait Edi
 
 #### Scenario: EditorLocked excludes entity from selection
 - **WHEN** an entity has `EditorLocked` component
-- **AND** an editor selection rule uses `exclude: EditorLocked` in its filter
+- **AND** an editor selection rule uses `without: EditorLocked` in its filter
 - **THEN** the entity is not considered for selection
 
 ### Requirement: std.editor module exposes EditorSnap trait

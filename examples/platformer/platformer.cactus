@@ -276,7 +276,7 @@ pub entity GoldGem1 from GoldGemBase:
 # ── Rules ────────────────────────────────────────────────────────────────────────
 
 rule ReadPlayerInput:
-    filter:
+    each:
         PlayerMotion
 
     on input:
@@ -284,7 +284,7 @@ rule ReadPlayerInput:
         jump_requested = input.pressed(Jump)
 
 rule Move:
-    filter:
+    each:
         tf.WorldTransform
         PlayerMotion
         phys.BoxCollider
@@ -346,7 +346,7 @@ rule Move:
                 jump_state = JumpState.Grounded
 
 rule DecayInvincibility:
-    filter:
+    each:
         Health
 
     on tick:
@@ -354,7 +354,7 @@ rule DecayInvincibility:
             invincible_timer = invincible_timer - tick.dt
 
 rule Patrol:
-    filter:
+    each:
         tf.WorldTransform
         PatrolMotion
 
@@ -370,7 +370,7 @@ rule Patrol:
             position = vec2(patrol_min_x, position.y)
 
 rule Collect:
-    filter:
+    each:
         Collectible
         shapes.Shape
 

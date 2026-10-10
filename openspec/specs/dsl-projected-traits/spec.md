@@ -42,16 +42,16 @@ Projected traits SHALL NOT create multiple per-entity facts. Multiple occurrence
 - **THEN** authored code uses `emit Damage` for each occurrence rather than relying on accumulated projected traits
 
 ### Requirement: Projected traits participate in rule filtering
-Rule `filter:` and `exclude:` matching SHALL consider both durable trait state and projected trait state visible at the time the rule handler is scheduled.
+Rule `each:` and `without:` matching SHALL consider both durable trait state and projected trait state visible at the time the rule handler is scheduled.
 
 `after:` ordering constraints SHALL be the author-facing mechanism for ensuring a consumer rule runs after a producer rule that projects traits.
 
 #### Scenario: Later rule filters projected trait
-- **WHEN** `DetectGround` projects `GroundContact` and `ApplyGroundState` has `filter: GroundContact as ground` with `after: DetectGround`
+- **WHEN** `DetectGround` projects `GroundContact` and `ApplyGroundState` has `each: GroundContact as ground` with `after: DetectGround`
 - **THEN** `ApplyGroundState` matches the entity during the same frame and may access `ground` fields
 
 #### Scenario: Exclude sees projected traits
-- **WHEN** an entity has a projected `Suppressed` trait and a later rule has `exclude: Suppressed`
+- **WHEN** an entity has a projected `Suppressed` trait and a later rule has `without: Suppressed`
 - **THEN** that entity is skipped by the later rule for the current frame
 
 ### Requirement: Projected traits support VFX and render hints

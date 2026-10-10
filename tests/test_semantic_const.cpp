@@ -84,7 +84,7 @@ const std::string kSquad =
 std::string in_handler(const std::string& statement) {
     return kSquad +
            "rule Build:\n"
-           "    filter:\n"
+           "    each:\n"
            "        Roster as r\n"
            "    on tick:\n"
            "        let other = self\n"
@@ -167,7 +167,7 @@ TEST_CASE("Struct construction: an imported struct is built through its alias", 
         "trait Holder:\n"
         "    var unit: units.UnitDef\n"
         "rule Build:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Holder as h\n"
         "    on tick:\n"
         "        h.unit = units.UnitDef(\n"
@@ -268,7 +268,7 @@ TEST_CASE("Const expressions: accepted forms type-check", "[semantic][const]") {
                                 "    var x: float = 0.0\n"
                                 "    var speed: float = 0.0\n"
                                 "rule Read:\n"
-                                "    filter:\n"
+                                "    each:\n"
                                 "        Probe as p\n"
                                 "    on tick:\n"
                                 "        p.x = ORIGIN.x + HALF_PI\n"
@@ -501,7 +501,7 @@ TEST_CASE("Const expressions: a bare name does not reach an imported constant", 
         "trait Probe:\n"
         "    var x: float = 0.0\n"
         "rule Read:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Probe as p\n"
         "    on tick:\n"
         "        p.x = PI\n",
@@ -565,7 +565,7 @@ std::string render_pass_program(const std::string& constants,
            "    pipeline: passes.Pass = passes.Pass.Quads\n"
            "    output: passes.Target = passes.Target.Screen\n"
            "rule Vertex:\n"
-           "    filter:\n"
+           "    each:\n"
            "        Sprite as s\n"
            "    on my_pass.vertex as v:\n"
            "        v.screen_position = s.position + v.corner * " +

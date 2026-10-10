@@ -78,7 +78,7 @@ pub entity RightPointLight:
         enabled = true
 
 rule ReadRotationInput:
-    filter:
+    each:
         RotationInput
 
     on input:
@@ -86,7 +86,7 @@ rule ReadRotationInput:
         vertical = input.axis(RotateVertical)
 
 rule ApplyScreenSpaceRotation:
-    filter:
+    each:
         tv.WorldTransform
         RotationInput
 

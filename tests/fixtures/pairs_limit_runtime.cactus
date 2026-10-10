@@ -83,7 +83,7 @@ rule GroundActor:
 # Ascending score over tags 1/2/3 with scores 3/1/2 orders tag2, tag3, tag1;
 # taking 2 makes the fingerprint 23 rather than the unlimited 231.
 rule TakeTwoRanked:
-    filter:
+    each:
         Ranked as r
         Contender as c
     order by:
@@ -100,7 +100,7 @@ rule TakeTwoRanked:
 # uses the domain's existing stable iteration order") rather than a
 # restatement of whichever direction EnTT's view happens to run.
 rule TakeOneMarked:
-    filter:
+    each:
         Marked as m
     limit: 1
 
@@ -109,7 +109,7 @@ rule TakeOneMarked:
             code = m.tag
 
 rule VisitAllMarked:
-    filter:
+    each:
         Marked as m
 
     on tick:
@@ -145,35 +145,35 @@ rule TakeTwoPerLead:
             code = ((lead.Ranked.tag - 1) * 3) + mate.Ranked.tag
 
 rule RecordUnary:
-    filter:
+    each:
         Recorder
 
     on UnaryVisited as visit:
         unary_sequence = (unary_sequence * 10) + visit.code
 
 rule RecordMark:
-    filter:
+    each:
         Recorder
 
     on MarkVisited as visit:
         mark_sequence = (mark_sequence * 10) + visit.code
 
 rule RecordMarkAll:
-    filter:
+    each:
         Recorder
 
     on MarkAllVisited as visit:
         mark_all_sequence = (mark_all_sequence * 10) + visit.code
 
 rule RecordPair:
-    filter:
+    each:
         Recorder
 
     on PairVisited as visit:
         pair_sequence = (pair_sequence * 10) + visit.code
 
 rule RecordPer:
-    filter:
+    each:
         Recorder
 
     on PerVisited as visit:

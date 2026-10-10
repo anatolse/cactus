@@ -121,7 +121,7 @@ rule SpawnGrunts:
 # Declared before MoveEnemies so it runs first and closes its gate in the
 # same activation.
 rule EndGameOnRequest:
-    filter:
+    each:
         Control as control
 
     on tick:
@@ -129,7 +129,7 @@ rule EndGameOnRequest:
             Game.Match.over = true
 
 rule MoveEnemies:
-    filter:
+    each:
         Enemy as enemy
     when:
         not Game.Match.over
@@ -139,7 +139,7 @@ rule MoveEnemies:
 
 # Closing the gate on the first entity must not stop the pass.
 rule CloseGateMidPass:
-    filter:
+    each:
         Enemy as enemy
     when:
         Switch.Control.close_mid_pass
@@ -162,7 +162,7 @@ rule SendPing:
         emit Ping
 
 rule CountPings:
-    filter:
+    each:
         Probe as probe
     when:
         not Game.Match.over
@@ -171,14 +171,14 @@ rule CountPings:
         probe.gated_pings += 1
 
 rule ReadOver:
-    filter:
+    each:
         Probe as probe
 
     on tick:
         probe.over_seen = Game.Match.over
 
 rule AddScore:
-    filter:
+    each:
         Control as control
 
     on tick:
@@ -186,7 +186,7 @@ rule AddScore:
             Game.Match.score += 1
 
 rule ObserveScore:
-    filter:
+    each:
         Probe as probe
     after:
         AddScore
@@ -195,14 +195,14 @@ rule ObserveScore:
         probe.score_seen = Game.Match.score
 
 rule CollectCoins:
-    filter:
+    each:
         Coin as coin
 
     on tick:
         Game.Match.coins += coin.value
 
 rule HideHud:
-    filter:
+    each:
         Control as control
 
     on tick:
@@ -211,7 +211,7 @@ rule HideHud:
                 visible = false
 
 rule HitBoss:
-    filter:
+    each:
         Control as control
 
     on tick:
@@ -224,7 +224,7 @@ rule HitBoss:
             marked = true
 
 rule TakeHit:
-    filter:
+    each:
         Health as health
 
     on Hit as hit:
@@ -233,7 +233,7 @@ rule TakeHit:
         health.from_switch = hit.source == Switch
 
 rule DestroyBoss:
-    filter:
+    each:
         Control as control
 
     on tick:
@@ -241,7 +241,7 @@ rule DestroyBoss:
             destroy Boss
 
 rule DestroyGame:
-    filter:
+    each:
         Control as control
 
     on tick:
@@ -249,7 +249,7 @@ rule DestroyGame:
             destroy Game
 
 rule StripMatch:
-    filter:
+    each:
         Control as control
 
     on tick:
@@ -257,7 +257,7 @@ rule StripMatch:
             remove Match from Game
 
 rule DestroyThenRead:
-    filter:
+    each:
         Control as control
 
     on tick:
@@ -267,7 +267,7 @@ rule DestroyThenRead:
         control.read_after_destroy = Game.Match.score
 
 rule CountMatchPasses:
-    filter:
+    each:
         Probe as probe
 
     on tick:
@@ -276,7 +276,7 @@ rule CountMatchPasses:
             probe.branch_flag = true
 
 rule CountStatsPasses:
-    filter:
+    each:
         Probe as probe
 
     on tick:
@@ -285,7 +285,7 @@ rule CountStatsPasses:
 
 # The name appears in one branch only, yet it gates the whole pass.
 rule CountBranchPasses:
-    filter:
+    each:
         Probe as probe
 
     on tick:

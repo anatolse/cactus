@@ -67,17 +67,17 @@ each of its traits. `set` and ordinary field writes SHALL NOT fire lifecycle tri
 ### Requirement: Targeted delivery after commit
 A lifecycle trigger SHALL be delivered only to the entity whose trait set changed, after the
 commit round that changed it, and SHALL observe the committed state. The handler SHALL run for
-that entity only if the entity matches the rule's `filter:`, `exclude:` and `when:` in that
+that entity only if the entity matches the rule's `each:`, `without:` and `when:` in that
 committed state. `on added T` SHALL imply that the entity carries `T`; `on removed T` SHALL
-imply that it does not. Authors SHALL NOT need to list `T` in `filter:` or `exclude:`.
+imply that it does not. Authors SHALL NOT need to list `T` in `each:` or `without:`.
 
 #### Scenario: Other matching entities are not triggered
 - **WHEN** two entities carry `Enemy` and only one of them gains `Dying`
-- **THEN** a rule with `filter: Enemy` and `on added Dying` runs exactly once, for the entity that gained `Dying`
+- **THEN** a rule with `each: Enemy` and `on added Dying` runs exactly once, for the entity that gained `Dying`
 
 #### Scenario: Filter evaluated after commit
 - **WHEN** an entity gains `Dying` and, in the same round, loses `Enemy`
-- **THEN** a rule with `filter: Enemy` and `on added Dying` does not run for it
+- **THEN** a rule with `each: Enemy` and `on added Dying` does not run for it
 
 #### Scenario: Structural results are visible to the handler
 - **WHEN** a handler adds `Dying` and, in the same round, spawns a bullet

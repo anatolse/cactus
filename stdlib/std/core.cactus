@@ -52,7 +52,7 @@ pub event unload
 
 # SceneCleanup destroys every entity without KeepOnLoad on scene unload.
 rule SceneCleanup:
-    exclude:
+    without:
         KeepOnLoad
     on unload:
         destroy

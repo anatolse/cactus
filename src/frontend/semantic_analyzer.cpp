@@ -2046,7 +2046,7 @@ TypeInfo SemanticAnalyzer::resolve_type_ref(const TypeRef& ref) {
 
     if (try_resolve_state_ref(ref.name).has_value()) {
         errors_.error(ref.location,
-                      "state '" + ref.name + "' is not a value type; a rule reads it with `filter: " + ref.name +
+                      "state '" + ref.name + "' is not a value type; a rule reads it with `each: " + ref.name +
                           " as m` and `match m:`");
         return make_unknown_type();
     }
@@ -3328,8 +3328,8 @@ void SemanticAnalyzer::validate_pair_bindings(RuleNode& rule) {
     if (has_unary_clause) {
         errors_.error(pairs.location,
                       "rule '" + rule.name +
-                          "' must choose one execution domain: `pairs:` cannot be combined with `filter:` or "
-                          "`exclude:`");
+                          "' must choose one execution domain: `pairs:` cannot be combined with `each:` or "
+                          "`without:`");
     }
 
     if (pairs.bindings.size() != 2) {
@@ -3450,7 +3450,7 @@ bool SemanticAnalyzer::report_unbound_sort_key_root(
         return true;
     }
     if (pair_scope == nullptr && !filter_bindings.contains(root)) {
-        errors_.error(key.location, "sort key alias '" + root + "' is not declared in filter:");
+        errors_.error(key.location, "sort key alias '" + root + "' is not declared in each:");
         return true;
     }
     return false;
@@ -3516,7 +3516,7 @@ void SemanticAnalyzer::validate_unary_order_by(const FilterClause& filter,
                                                const SourceLocation& location,
                                                const std::string& rule_name) {
     if (filter.entries.empty() && filter.trait_names.empty()) {
-        errors_.error(location, "rule '" + rule_name + "': `order by:` requires a `filter:` or `pairs:` clause");
+        errors_.error(location, "rule '" + rule_name + "': `order by:` requires an `each:` or `pairs:` clause");
         return;
     }
 
@@ -3713,7 +3713,7 @@ void SemanticAnalyzer::validateLimitClause(RuleNode& rule) {
     auto& limit          = *rule.limit;
     const bool has_pairs = rule.pairs.has_value();
     if (!rule_has_domain(rule)) {
-        errors_.error(limit.location, "rule '" + rule.name + "': `limit:` requires a `filter:` or `pairs:` clause");
+        errors_.error(limit.location, "rule '" + rule.name + "': `limit:` requires an `each:` or `pairs:` clause");
         return;
     }
     if (limit.per_binding.has_value() && rule.reduce.has_value()) {
@@ -3772,7 +3772,7 @@ void SemanticAnalyzer::validateReduceClause(RuleNode& rule) {
     auto& reduce         = *rule.reduce;
     const bool has_pairs = rule.pairs.has_value();
     if (!rule_has_domain(rule)) {
-        errors_.error(reduce.location, "rule '" + rule.name + "': `reduce:` requires a `filter:` or `pairs:` clause");
+        errors_.error(reduce.location, "rule '" + rule.name + "': `reduce:` requires an `each:` or `pairs:` clause");
         return;
     }
     if (reduce.per_binding.has_value() && !has_pairs) {
@@ -4043,7 +4043,7 @@ void SemanticAnalyzer::validate_keep_clause(const RuleNode& rule) {
     const auto& keep = *rule.keep;
     if (!rule.pairs.has_value() || !rule.reduce.has_value() || !rule.reduce->per_binding.has_value()) {
         errors_.error(keep.location,
-                      "rule '" + rule.name + "': `keep` requires `reduce:` with `per:` on a `pairs:` rule");
+                      "rule '" + rule.name + "': `keep` requires `reduce per <binding>:` on a `pairs:` rule");
         return;
     }
     const auto& per = *rule.reduce->per_binding;
@@ -4657,9 +4657,9 @@ void SemanticAnalyzer::validate_render_pass_stage_handler_shape(const RuleNode& 
         const bool has_filter = !rule.filter.entries.empty() || !rule.filter.trait_names.empty();
         if (rule.pairs.has_value()) {
             errors_.error(rule.location,
-                          "render-pass vertex-stage handler cannot use 'pairs:'; it requires a unary 'filter:'");
+                          "render-pass vertex-stage handler cannot use 'pairs:'; it requires a unary 'each:'");
         } else if (!has_filter) {
-            errors_.error(rule.location, "render-pass vertex-stage handler requires an instance domain ('filter:')");
+            errors_.error(rule.location, "render-pass vertex-stage handler requires an instance domain ('each:')");
         }
         return;
     }
@@ -4667,7 +4667,7 @@ void SemanticAnalyzer::validate_render_pass_stage_handler_shape(const RuleNode& 
     const bool has_exclude = !rule.exclude.entries.empty() || !rule.exclude.trait_names.empty();
     if (has_filter || has_exclude || rule.pairs.has_value() || rule.where_clause.has_value()) {
         errors_.error(rule.location,
-                      "render-pass fragment-stage handler is selectionless: 'filter:'/'exclude:'/'pairs:'/'where:' "
+                      "render-pass fragment-stage handler is selectionless: 'each:'/'without:'/'pairs:'/'where:' "
                       "are not allowed");
     }
 }
@@ -5074,7 +5074,7 @@ void SemanticAnalyzer::validate_where_clauses(ProgramNode& program) {
 
         if (rule->filter.entries.empty() && !rule->pairs.has_value()) {
             errors_.error(rule->where_clause->location,
-                          "'where:' requires rule '" + rule->name + "' to declare an existing 'filter:' or 'pairs:'"
+                          "'where:' requires rule '" + rule->name + "' to declare an existing 'each:' or 'pairs:'"
                                                                     " domain");
             continue;
         }

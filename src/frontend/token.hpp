@@ -53,8 +53,6 @@ enum class TokenType : std::uint8_t {
     LATE_TICK,
 
     // Keywords — blocks
-    FILTER,
-    EXCLUDE,
     AFTER,
     EVERY,
     MAX,
@@ -226,10 +224,6 @@ inline const char* token_type_to_string(TokenType t) {
             return "FIXED_TICK";
         case TokenType::LATE_TICK:
             return "LATE_TICK";
-        case TokenType::FILTER:
-            return "FILTER";
-        case TokenType::EXCLUDE:
-            return "EXCLUDE";
         case TokenType::AFTER:
             return "AFTER";
         case TokenType::EVERY:

@@ -51,7 +51,7 @@ template Ember:
 
 # One place turns test intent into events, so the rules below stay small.
 rule RunStage:
-    filter:
+    each:
         Stage as stage
 
     on tick:
@@ -71,7 +71,7 @@ rule RunStage:
             emit Rekindle
 
 rule AwakenEmbers:
-    filter:
+    each:
         Sparkle as sparkle
 
     on Awaken:
@@ -80,14 +80,14 @@ rule AwakenEmbers:
         add Blessed
 
 rule WitherHealth:
-    filter:
+    each:
         Health as health
 
     on Wither:
         remove Health
 
 rule RekindleEmbers:
-    filter:
+    each:
         Sparkle as sparkle
 
     on Rekindle:

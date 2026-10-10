@@ -84,7 +84,7 @@ pub entity YellowMarker:
 # ── Rules ─────────────────────────────────────────────────────────────────────
 
 rule ReadInput:
-    filter:
+    each:
         PlayerInput
 
     on input:
@@ -92,7 +92,7 @@ rule ReadInput:
         dy = input.axis(MoveY)
 
 rule Move:
-    filter:
+    each:
         tf.WorldTransform
         PlayerInput
 

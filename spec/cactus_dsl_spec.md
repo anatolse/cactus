@@ -53,7 +53,7 @@ The current gameplay-core profile includes:
 - `entity`, `template`
 - `rule`, `extern rule`, `event`, `extern event`, `phase`, `func`, `extern func`
 - `asset`, `input`
-- `rule` selection domains: selectionless, unary `filter:`/`exclude:`, and binary `pairs:` relations, with `order by:` and `limit:` available to either non-selectionless domain
+- `rule` selection domains: selectionless, unary `each:`/`without:`, and binary `pairs:` relations, with `order by:` and `limit:` available to either non-selectionless domain
 - handlers triggered by declared phases or ordinary events, such as `on input:`, `on fixed_tick:`, `on tick:`, and `on PlayerDamaged:`
 - statements: `let`, `var`, assignment, `if`, bounded `for ... in ...:`, `emit` (broadcast or targeted with `to`), `spawn`, `destroy`, `load`, `add`, `remove`, `project`, `return`
 
@@ -94,7 +94,7 @@ module  use     const   struct  enum    trait   entity  template
 rule    event   phase   func    extern  asset   input
 let     var     persist pub
 on      emit    if      else    match   return
-filter  exclude order   by      after   as      every  max
+order   by      after   as      every   max
 reads   writes  emits   commands effects
 spawn   destroy load    add     remove  project for     in
 to      from    self
@@ -262,9 +262,9 @@ state EnemyMode:
         var elapsed: float = 0.0
 ```
 
-- Each variant `V` of state `S` is a trait, written `S.V` (or `m.S.V` through a module alias). A bare `V` names nothing. `S.V` works wherever a trait does: `filter:`, `exclude:`, `on added`, `on removed`, `set S.V on e:`, field access through an alias, trait-match arms and query type arguments.
+- Each variant `V` of state `S` is a trait, written `S.V` (or `m.S.V` through a module alias). A bare `V` names nothing. `S.V` works wherever a trait does: `each:`, `without:`, `on added`, `on removed`, `set S.V on e:`, field access through an alias, trait-match arms and query type arguments.
 - A variant body holds only field declarations, with the same rules as a trait body. Variant names in one state must be unique, and a state needs at least one variant. A trait and a state cannot share a name.
-- `filter: S as m` selects every entity that carries `S` and binds `m` to its slot. `exclude: S` excludes every carrier. The slot `m` is only a `match` subject (§3.17).
+- `each: S as m` selects every entity that carries `S` and binds `m` to its slot. `without: S` excludes every carrier. The slot `m` is only a `match` subject (§3.17).
 - An entity or template body places an archetype in a variant by naming `S.V` (with an optional field block), or the bare `S`, which means the first declared variant with its field defaults. An archetype names at most one variant of each state. An entity's variant replaces its template's.
 - `add S.V` swaps the variant, `remove S` drops the whole state, and `remove S.V` is an error (§4.4). A `final` variant is never left.
 - Variants cannot declare `persist` fields, and cannot be targets of `project` or `keep`. A save does not record states.
@@ -456,7 +456,7 @@ Hierarchy syntax creates parent-child **relations only**. It does not by itself 
 
 ### 3.8 Rules
 
-Rules contain gameplay logic over filtered entities. A regular rule has exactly one execution domain: **selectionless** (no `filter:`/`exclude:`/`pairs:`), **unary** (`filter:`/`exclude:`), or **binary pair** (`pairs:`). `pairs:` is mutually exclusive with `filter:` and `exclude:`. `order by:`, `limit:` and `reduce:` belong to no single domain — each may accompany either a unary `filter:` domain or a binary `pairs:` domain, and each requires one of them.
+Rules contain gameplay logic over filtered entities. A regular rule has exactly one execution domain: **selectionless** (no `each:`/`without:`/`pairs:`), **unary** (`each:`/`without:`), or **binary pair** (`pairs:`). `pairs:` is mutually exclusive with `each:` and `without:`. `order by:`, `limit:` and `reduce:` belong to no single domain — each may accompany either a unary `each:` domain or a binary `pairs:` domain, and each requires one of them.
 
 ```ebnf
 rule_decl       = "rule" IDENTIFIER ":" NEWLINE INDENT
@@ -475,11 +475,11 @@ rule_decl       = "rule" IDENTIFIER ":" NEWLINE INDENT
 
 unary_domain    = [ filter_clause ] [ exclude_clause ] ;
 
-filter_clause   = ( "each" | "filter" ) ":" clause_list(filter_entry) ;
+filter_clause   = "each" ":" clause_list(filter_entry) ;
 
 filter_entry    = dotted_name [ "as" IDENTIFIER ] ;
 
-exclude_clause  = ( "without" | "exclude" ) ":" clause_list(dotted_name) ;
+exclude_clause  = "without" ":" clause_list(dotted_name) ;
 
 order_by_clause = "order" "by" ":" clause_list(sort_key) ;
 
@@ -499,11 +499,13 @@ group_decl      = [ "pub" ] "group" IDENTIFIER ":" NEWLINE INDENT
 limit_clause    = "limit" ":" expression [ "per" IDENTIFIER ] NEWLINE ;
 ```
 
-`each:` and `without:` are the canonical unary selection spellings. `filter:` and
-`exclude:` remain equivalent, with no deprecation warnings. `each` and `without`
+`each:` and `without:` are the only unary selection spellings. `each` and `without`
 are contextual only at unary clause positions; they remain ordinary identifiers
-elsewhere. Declaring both spellings of a selection clause is a duplicate error.
-Positive selection precedes negative selection, and neither can accompany `pairs:`.
+elsewhere. `filter` and `exclude` are not reserved and can name traits, fields,
+parameters and locals. At a unary clause position, the removed spellings `filter:` and
+`without:` are errors that name `each:` and `without:` instead. Declaring a selection
+clause twice is a duplicate error. Positive selection precedes negative selection, and
+neither can accompany `pairs:`.
 
 The parameterized `clause_list(entry)` notation means the same typed entries in
 either layout:
@@ -515,8 +517,8 @@ clause_list(entry) = entry { "," entry } [ "," ] NEWLINE
 
 | Clause position | Entry grammar |
 |---|---|
-| `each:` / `filter:` and each pair binding | dotted trait name with optional `as` alias |
-| `without:` / `exclude:` | dotted trait name, without alias |
+| `each:` and each pair binding | dotted trait name with optional `as` alias |
+| `without:` | dotted trait name, without alias |
 | Rule `after:` / `before:`, group `after:`, phase `after:` | existing dotted rule, group, or phase reference |
 | Leading handler `after:` | `Rule/on trigger` reference |
 | `where:` / `when:` | pure expression |
@@ -532,6 +534,10 @@ and an indented continuation after an inline list are errors. Existing block
 emptiness checks still apply. Malformed lists report errors and recover to later
 handlers and declarations.
 
+Each external handler declares each of `reads:`, `writes:`, `projects:`,
+`emits:`, `commands:`, and `effects:` at most once. Repeating a clause is an
+error in either list layout; different handlers have independent contracts.
+
 List layout does not change clause placement, scope, contracts, ordering, or
 commit timing. Each pair binding chooses its own layout independently. Phase
 `from:`, scalar clauses, payload blocks, and reducer declaration blocks retain
@@ -540,14 +546,14 @@ inside ordinary handlers or add `before:` to groups or phases.
 
 A sort key is a pure expression of the same class as a `where:` predicate (§3.8.2) — literals and constants, reads through in-scope bindings, operators, and calls to functions proven pure — and must type-check as scalar-comparable (`int`, `float`, or `bool`). A bare `alias.field` path is simply the trivial case of that grammar. Direction defaults to `asc` when omitted; multiple sort keys order lexicographically, each breaking the preceding key's ties.
 
-`order by:` requires a `filter:` or `pairs:` domain and may reference only that domain's bindings — a `filter:` alias for a unary rule, or either binding for a pair rule (so a pair sort key may read across both). On a pair domain it reorders the tuple pass only; it never changes which tuples run or how many.
+`order by:` requires an `each:` or `pairs:` domain and may reference only that domain's bindings — an `each:` alias for a unary rule, or either binding for a pair rule (so a pair sort key may read across both). On a pair domain it reorders the tuple pass only; it never changes which tuples run or how many.
 
 ```cactus
 rule Patrol:
-    filter:
+    each:
         Position as pos
         EnemyAI as ai
-    exclude:
+    without:
         Frozen
 
     on tick:
@@ -576,7 +582,7 @@ rule MovePlayer:
 
 #### 3.8.1 Pair Relations
 
-`pairs:` declares a binary iteration domain over two ordered, uniquely named entity bindings, each with its own positive trait requirements. `pairs` is recognized contextually at the rule-clause position (like `children` inside archetype bodies); it is not a reserved keyword elsewhere and does not appear in the global keyword list. `pairs:` is rejected on `extern rule` declarations. It is mutually exclusive with `filter:` and `exclude:`, but may be combined with `order by:` (§3.8) to fix the tuple pass's invocation order.
+`pairs:` declares a binary iteration domain over two ordered, uniquely named entity bindings, each with its own positive trait requirements. `pairs` is recognized contextually at the rule-clause position (like `children` inside archetype bodies); it is not a reserved keyword elsewhere and does not appear in the global keyword list. `pairs:` is rejected on `extern rule` declarations. It is mutually exclusive with `each:` and `without:`, but may be combined with `order by:` (§3.8) to fix the tuple pass's invocation order.
 
 ```ebnf
 pairs_clause    = "pairs" ":" NEWLINE INDENT
@@ -620,7 +626,7 @@ Binding names and their aliases must be unambiguous within every handler scope o
 
 **Passes snapshot membership, not values.** Before executing any tuple body, the runtime records both bindings' live membership in stable, creation-order-sorted snapshots (a monotonic per-entity creation ordinal, assigned at load time and at spawn commit, defines this order independently of backend storage layout) and lazily iterates their product left-binding-major: for `left = [a, b]` and `right = [x, y]`, tuple order is `(a,x)`, `(a,y)`, `(b,x)`, `(b,y)`. Membership is fixed for the whole pass; component values are read live from storage when each tuple executes. Projected traits and buffered structural commands issued mid-pass cannot add or remove tuples from the pass already in progress — they become visible only in a later pass or at the next activation commit.
 
-**Pair-bound durable trait access is read-only.** A pair handler may read any trait it selected (`body.Collider.mask`, `wall.transform.position`), but direct or indirect mutation — assignment, compound assignment, or a data-bearing trait-match alias obtained from a binding — is rejected during semantic analysis. Selecting a trait does not itself count as a read. The exceptions are a binding named by a provably-one `limit: ... per` (§3.8.3) and the retained binding of `reduce: per:` (§3.8.5), which admit ordinary dotted-path assignment; a trait-match alias stays rejected even there.
+**Pair-bound durable trait access is read-only.** A pair handler may read any trait it selected (`body.Collider.mask`, `wall.transform.position`), but direct or indirect mutation — assignment, compound assignment, or a data-bearing trait-match alias obtained from a binding — is rejected during semantic analysis. Selecting a trait does not itself count as a read. The exceptions are a binding named by a provably-one `limit: ... per` (§3.8.3) and the retained binding of `reduce per b:` (§3.8.5), which admit ordinary dotted-path assignment; a trait-match alias stays rejected even there.
 
 **There is no implicit current entity.** `self` and any statement form that defaults to `self` (bare `destroy`, bare `remove`, `add`/`project` with no `to`) are rejected in pair handlers. Every entity-targeting operation must name a binding explicitly:
 
@@ -639,7 +645,7 @@ Untargeted `emit` remains valid and is a broadcast occurrence (one per tuple, no
 
 #### 3.8.2 Where Clause
 
-`where:` declares a pure boolean predicate list that restricts an existing unary (`filter:`) or pair (`pairs:`) domain, independent of any particular execution strategy. `where` is recognized contextually at the rule-clause position (like `pairs`); it is not a reserved keyword elsewhere. `where:` is rejected on rules that declare neither `filter:` nor `pairs:`, and on `extern rule` declarations.
+`where:` declares a pure boolean predicate list that restricts an existing unary (`each:`) or pair (`pairs:`) domain, independent of any particular execution strategy. `where` is recognized contextually at the rule-clause position (like `pairs`); it is not a reserved keyword elsewhere. `where:` is rejected on rules that declare neither `each:` nor `pairs:`, and on `extern rule` declarations.
 
 ```ebnf
 where_clause = "where" ":" clause_list(expression) ;
@@ -671,7 +677,7 @@ rule DetectBallContact:
 
 **Evaluation order is unspecified.** Because every predicate is pure, the compiler is free to reorder, combine, inline, or otherwise replace the predicate list with an equivalent restriction; no observable short-circuit behavior is guaranteed.
 
-**`where:` evaluates once per pass, against the already-selected domain.** It runs once per entity or tuple, at the start of that entity's or tuple's handler invocation, against the membership `filter:`/`exclude:`/`pairs:` already snapshotted for the pass. It can only shrink that membership — never add to it — and is not re-evaluated mid-pass as a result of mutations, projections, or buffered structural commands from earlier invocations in the same pass. On a pair rule, rejected tuples never begin their handler body invocation, and the tuples that do remain keep the same left-binding-major relative order described in §3.8.1.
+**`where:` evaluates once per pass, against the already-selected domain.** It runs once per entity or tuple, at the start of that entity's or tuple's handler invocation, against the membership `each:`/`without:`/`pairs:` already snapshotted for the pass. It can only shrink that membership — never add to it — and is not re-evaluated mid-pass as a result of mutations, projections, or buffered structural commands from earlier invocations in the same pass. On a pair rule, rejected tuples never begin their handler body invocation, and the tuples that do remain keep the same left-binding-major relative order described in §3.8.1.
 
 `where:` and a leading `if`/`return` in the handler body are equally valid, freely interchangeable ways to reject an entity or tuple: `where: body != wall` and `if body == wall: return` (§3.8.1) admit the same tuples. `where:` exists to make that rejection declarative and analyzable — the reads it touches fold into the handler's contract with the same precision as an equivalent body read.
 
@@ -696,7 +702,7 @@ This is purely an optimization: it never changes which entities or tuples satisf
 
 #### 3.8.3 Limit Clause
 
-`limit:` bounds how many rows or tuples of an existing unary (`filter:`) or pair (`pairs:`) domain produce a handler activation. `limit` is recognized contextually at the rule-clause position (like `pairs` and `where`); it is not a reserved keyword elsewhere, and neither is `per`. `limit:` is rejected on rules that declare neither `filter:` nor `pairs:`, and on `extern rule` declarations. A rule carries at most one `limit:`.
+`limit:` bounds how many rows or tuples of an existing unary (`each:`) or pair (`pairs:`) domain produce a handler activation. `limit` is recognized contextually at the rule-clause position (like `pairs` and `where`); it is not a reserved keyword elsewhere, and neither is `per`. `limit:` is rejected on rules that declare neither `each:` nor `pairs:`, and on `extern rule` declarations. A rule carries at most one `limit:`.
 
 **It applies after `where:` and `order by:`.** The logical pipeline is `filter → where → order by → limit`: `limit:` bounds the already-filtered and, if present, ordered domain. It never changes which rows survive `where:` or their relative order — only how many of them run. In particular, a row rejected by `where:` never occupies a slot; the bound counts survivors, so a rule under `limit: 1 per actor` whose top-ranked candidate fails `where:` activates on the next-ranked survivor rather than not at all.
 
@@ -723,11 +729,11 @@ rule GroundActor:
 
 **Selection is deterministic.** With `order by:`, sort keys are evaluated against the rule's snapshot and equal keys break ties by stable creation order. Without `order by:`, `limit:` takes the domain's existing stable iteration order — for a pair domain, the left-binding-major snapshot order of §3.8.1. Each partition of a `per` limit resolves independently of every other. A conforming backend's physical strategy must not change which rows this selects.
 
-**A provably-one `per` limit makes its binding writable.** When a `limit: <expr> per <binding>`'s count expression is the literal `1`, or a name whose `const:` initializer is literally `1`, the compiler proves that at most one tuple per `<binding>` value can run — and `<binding>` becomes an ordinary mutable assignment target inside that rule's handlers, carved out of §3.8.1's pair read-only rule. The proof is deliberately syntactic: any other expression, including one that always evaluates to `1` at runtime (`2 - 1`, a non-constant field read), is not provable. The rule's other binding stays read-only, a global `limit:` grants no writability on either binding, and trait-matching directly on a pair binding stays rejected regardless of any `limit:` — only ordinary dotted-path assignment is admitted. Such a write is inferred into the handler's contract exactly like a write through a unary `filter:` alias, so scheduling sees the same read/write conflict information.
+**A provably-one `per` limit makes its binding writable.** When a `limit: <expr> per <binding>`'s count expression is the literal `1`, or a name whose `const:` initializer is literally `1`, the compiler proves that at most one tuple per `<binding>` value can run — and `<binding>` becomes an ordinary mutable assignment target inside that rule's handlers, carved out of §3.8.1's pair read-only rule. The proof is deliberately syntactic: any other expression, including one that always evaluates to `1` at runtime (`2 - 1`, a non-constant field read), is not provable. The rule's other binding stays read-only, a global `limit:` grants no writability on either binding, and trait-matching directly on a pair binding stays rejected regardless of any `limit:` — only ordinary dotted-path assignment is admitted. Such a write is inferred into the handler's contract exactly like a write through a unary `each:` alias, so scheduling sees the same read/write conflict information.
 
 #### 3.8.4 When Clause
 
-`when:` switches a whole rule on or off from game-wide state. It holds one or more pure `bool` predicates that form a conjunction; when any predicate is false, a handler pass does nothing — no entity or tuple is visited, the body does not run, and no writes or commands are produced. `when` is recognized contextually at the rule-clause position, after `where:` and `limit:`; it is not a reserved keyword elsewhere. It applies to every handler of the rule, including event handlers and rules with no `filter:` or `pairs:`, and it is rejected on `extern rule` declarations.
+`when:` switches a whole rule on or off from game-wide state. It holds one or more pure `bool` predicates that form a conjunction; when any predicate is false, a handler pass does nothing — no entity or tuple is visited, the body does not run, and no writes or commands are produced. `when` is recognized contextually at the rule-clause position, after `where:` and `limit:`; it is not a reserved keyword elsewhere. It applies to every handler of the rule, including event handlers and rules with no `each:` or `pairs:`, and it is rejected on `extern rule` declarations.
 
 ```ebnf
 when_clause = "when" ":" clause_list(expression) ;
@@ -735,7 +741,7 @@ when_clause = "when" ":" clause_list(expression) ;
 
 ```cactus
 rule SeekPlayer:
-    filter:
+    each:
         Enemy as enemy
         tv.WorldTransform as transform
     when:
@@ -753,11 +759,10 @@ rule SeekPlayer:
 
 #### 3.8.5 Reduce Clause
 
-`reduce:` turns the rows of an existing unary (`filter:`) or pair (`pairs:`) domain into aggregate rows. `reduce` is a keyword at the rule-clause position. `reduce:` is rejected on rules that declare neither `filter:` nor `pairs:`, and on `extern rule` declarations. With `reduce:`, `order by:` is written after it, because it ranks aggregate rows.
+`reduce:` turns the rows of an existing unary (`each:`) or pair (`pairs:`) domain into aggregate rows. `reduce` is a keyword at the rule-clause position. `reduce:` is rejected on rules that declare neither `each:` nor `pairs:`, and on `extern rule` declarations. With `reduce:`, `order by:` is written after it, because it ranks aggregate rows.
 
 ```ebnf
 reduce_clause   = "reduce" [ "per" IDENTIFIER ] ":" NEWLINE INDENT
-                  [ "per" ":" IDENTIFIER NEWLINE ]
                   reducer_decl { reducer_decl }
                   DEDENT ;
 
@@ -782,8 +787,7 @@ rule TeamTotals:
     where:
         team.Team.active
         player.Player.team == team
-    reduce:
-        per: team
+    reduce per team:
         players = count(player)
         total = sum(player.Player.points)
         best = max(player.Player.speed, default = -1.0)
@@ -796,28 +800,29 @@ rule TeamTotals:
         team.Team.total = total
 ```
 
-`reduce per body:` is equivalent to `reduce:` with a leading `per: body`
-entry. `per` remains contextual, so `per = count()` is a valid reducer declaration.
-Using header and body grouping together is an error, even if both names match.
-Grouping still requires a declared pair binding and a nonempty reducer block.
+`reduce per body:` groups by the `body` binding; `reduce:` makes one global group.
+Grouping is written only in the header. A `per: body` line inside the reducer block is
+an error that names `reduce per body:` instead. `per` remains contextual, so
+`per = count()` is a valid reducer declaration. Grouping still requires a declared pair
+binding and a nonempty reducer block.
 Sorting follows the reduction, and empty-group identities, retained writes, and
 `keep` commit visibility are unchanged.
 
 **Reducers are typed and pure.** `count()` counts rows; `count(binding)` also counts rows (not distinct entities) and requires a pair binding. `sum` takes `int`, `float`, `vec2` or `vec3` and keeps that type; a vector sum adds per component in fold order. `min` and `max` take `int` or `float`, keep that type, and require a `default` of exactly that type. `any` takes `bool` and yields `bool`. `first_hit` takes and yields `std.physics.volume.SweepHit` (§7.7): it ignores misses and keeps the hit with the smallest `t`, and on equal `t` the row that comes first in fold order. `best(binding, by = key)` names a pair binding other than the `per` binding and an `int` or `float` key, and yields `entity_id`: that binding's entity in the row with the highest key, the earlier row in fold order on a tie; rows whose key is NaN are skipped. Reducer inputs have the purity class of a `where:` predicate (§3.8.2) and read the domain's bindings, constants and named entity fields. Reducer names are unique and must not reuse a pair binding name.
 
-**Groups are outer.** Without `per:`, the whole domain is one group, so the handler runs exactly once, even for empty input. `per: binding` names a pair binding and creates one group for every entity in that binding's membership snapshot that passes the group filters, whether or not any row survives for it. An empty group gets identity values: `count` and `sum` are `0` (the zero vector for a vector `sum`), `min`/`max` their default, `any` is `false`, `first_hit` is the miss value `sweep` itself returns (`hit = false`, `t = 1.0`), and `best` is a stale `entity_id`. Defaults apply only to empty input.
+**Groups are outer.** Without `per`, the whole domain is one group, so the handler runs exactly once, even for empty input. `reduce per binding:` names a pair binding and creates one group for every entity in that binding's membership snapshot that passes the group filters, whether or not any row survives for it. An empty group gets identity values: `count` and `sum` are `0` (the zero vector for a vector `sum`), `min`/`max` their default, `any` is `false`, `first_hit` is the miss value `sweep` itself returns (`hit = false`, `t = 1.0`), and `best` is a stale `entity_id`. Defaults apply only to empty input.
 
-**`where:` splits into group and row filters.** With `per: b`, a `where:` predicate whose pair-binding reads all root at `b` filters groups: an entity that fails it gets no group and no activation. Every other predicate filters rows. Without `per:`, every predicate filters rows. The split is syntactic.
+**`where:` splits into group and row filters.** With `reduce per b:`, a `where:` predicate whose pair-binding reads all root at `b` filters groups: an entity that fails it gets no group and no activation. Every other predicate filters rows. Without `per`, every predicate filters rows. The split is syntactic.
 
 **Pipeline.** The logical order is domain → `where:` → `reduce:` → `order by:` → `limit:` → handler. All aggregates are computed from one snapshot of the input before any handler of the pass runs, so a handler's write can't change an aggregate of the same pass. Rows fold in stable order (pair rows left-binding-major, unary rows by creation order); groups follow the `per` binding's creation order, and sort ties keep it. A global `limit:` bounds aggregate rows.
 
-**Scope after reduction.** Handlers and sort keys see the aggregates as immutable values and, with `per: b`, the binding `b`. Every other binding, filter alias and implicit filter field is eliminated and can't be named; there is no `self`. The retained binding `b` is writable: the handler runs exactly once per `b` entity, so dotted-path assignment through `b` is accepted and recorded as a contract write, as for a provably-one `limit: … per` (§3.8.3). A targeted event keeps only the recipient's group; a global reduction ignores the target. Lifecycle triggers are rejected on reduced rules.
+**Scope after reduction.** Handlers and sort keys see the aggregates as immutable values and, with `reduce per b:`, the binding `b`. Every other binding, filter alias and implicit filter field is eliminated and can't be named; there is no `self`. The retained binding `b` is writable: the handler runs exactly once per `b` entity, so dotted-path assignment through `b` is accepted and recorded as a contract write, as for a provably-one `limit: … per` (§3.8.3). A targeted event keeps only the recipient's group; a global reduction ignores the target. Lifecycle triggers are rejected on reduced rules.
 
 **Numbers.** Integer `count` and `sum` saturate at the signed 32-bit bounds at each fold step; this applies only to reducers. Floating `sum` keeps the fold order and is never reassociated. Floating `min`/`max` yield NaN when any input is NaN.
 
 #### 3.8.6 Keep Clause
 
-`keep T on b` names a trait that the compiler keeps on each group entity of a pair rule reduced `per: b`: present exactly while the group has at least one row after `where:`. Entering and leaving the relation are then ordinary lifecycle triggers, `on added T` and `on removed T as old`. `keep` is a contextual word at the rule-clause position, written after `reduce:`.
+`keep T on b` names a trait that the compiler keeps on each group entity of a pair rule with `reduce per b:`: present exactly while the group has at least one row after `where:`. Entering and leaving the relation are then ordinary lifecycle triggers, `on added T` and `on removed T as old`. `keep` is a contextual word at the rule-clause position, written after `reduce:`.
 
 ```ebnf
 keep_clause     = "keep" dotted_name "on" IDENTIFIER
@@ -840,8 +845,7 @@ rule TouchLava:
     group: physics.contacts
     where:
         physics.touching(body, lava)
-    reduce:
-        per: body
+    reduce per body:
         n = count()
         damage = sum(lava.Lava.damage_per_second)
     keep InLava on body:
@@ -849,7 +853,7 @@ rule TouchLava:
         dps = damage
 
 rule Burn:
-    filter:
+    each:
         Health
     on added InLava:
         emit StartBurning to self
@@ -877,8 +881,7 @@ rule StandOnCheckpoint:
     group: physics.contacts
     where:
         physics.touching(player, point)
-    reduce:
-        per: player
+    reduce per player:
         top = best(point, by = point.Checkpoint.order)
     keep AtCheckpoint on player:
         checkpoint = top
@@ -951,7 +954,7 @@ command_capability  = "spawn" dotted_name
 
 ```cactus
 extern rule NativeMovement:
-    filter:
+    each:
         Position
         Velocity
     on fixed_tick:
@@ -970,7 +973,7 @@ extern rule InputSource:
             input
 ```
 
-An extern handler is **selectionless** when its owner has neither `filter:` nor `exclude:` and therefore runs once per trigger occurrence. Any filter or exclude clause creates an entity-selection pass. Selection does not itself grant read access: every component access by an extern handler must appear in `reads:` or `writes:`. `writes:` includes read access to the same trait.
+An extern handler is **selectionless** when its owner has neither `each:` nor `without:` and therefore runs once per trigger occurrence. Any `each:` or `without:` clause creates an entity-selection pass. Selection does not itself grant read access: every component access by an extern handler must appear in `reads:` or `writes:`. `writes:` includes read access to the same trait.
 
 `projects:` declares, per trait, that the handler's generated callback capability object exposes a target-safe frame-local projection call for that trait — the same `project` overlay semantics `project_stmt` (§3.16) gives authored Cactus code, but reachable from a native/compiler-owned callback instead. A trait entry cannot appear in both `writes:` and `projects:` on the same handler, and duplicate entries within `projects:` are rejected. This is a generic capability for external producers (e.g. a future pointer/render-adjacent native adapter); Standard UI's own `MeasureUi`/`ArrangeUi` project `DesiredSize`/`ComputedLayout` through ordinary authored `project` statements and do not need it.
 
@@ -1032,7 +1035,7 @@ A render pass is a phase that draws instanced quads with its own vertex and frag
 
 **Stage triggers.** A render-pass phase exposes two derived triggers, `<phase>.vertex` and `<phase>.fragment`, used with the ordinary `on ... as alias:` handler syntax. The alias is required, since the stage's built-in fields are reached through it. They don't exist on other phases; `on tick.vertex:` is an error. Each render-pass phase needs exactly one vertex handler and exactly one fragment handler.
 
-**Domains.** The vertex handler is unary: it needs a `filter:` (and may use `exclude:`, `where:`, and `order by:`; `pairs:` is rejected). Each matching entity is drawn as one quad. The fragment handler is selectionless: no `filter:`, `exclude:`, `pairs:`, or `where:`, and it reads no durable trait.
+**Domains.** The vertex handler is unary: it needs an `each:` (and may use `without:`, `where:`, and `order by:`; `pairs:` is rejected). Each matching entity is drawn as one quad. The fragment handler is selectionless: no `each:`, `without:`, `pairs:`, or `where:`, and it reads no durable trait.
 
 **Built-in stage fields** (the `Quads` pass kind), reached through the trigger alias:
 
@@ -1043,7 +1046,7 @@ A render pass is a phase that draws instanced quads with its own vertex and frag
 
 The fragment stage's `uv` and `tint` are the vertex stage's `uv_out` and `tint_out`, interpolated across the quad.
 
-**Statement subset.** A stage handler body is translated to GLSL, so it accepts only: `let`/`var` locals; assignment and compound assignment to locals and to the stage's writable built-in fields; `if`/`else`; and calls to `func` or to an `extern func` that has a GLSL translation. `spawn`, `destroy`, `add`, `remove`, `set`, `project`, `emit`, `load`, `return`, trait `match`, world queries, and `for` are rejected. A vertex handler may read the traits its `filter:` selects but not write them. Operators and operand types are the same as in any other handler (§3.15).
+**Statement subset.** A stage handler body is translated to GLSL, so it accepts only: `let`/`var` locals; assignment and compound assignment to locals and to the stage's writable built-in fields; `if`/`else`; and calls to `func` or to an `extern func` that has a GLSL translation. `spawn`, `destroy`, `add`, `remove`, `set`, `project`, `emit`, `load`, `return`, trait `match`, world queries, and `for` are rejected. A vertex handler may read the traits its `each:` selects but not write them. Operators and operand types are the same as in any other handler (§3.15).
 
 **Independent instances.** Each matching entity is drawn with its own trait values. One instance's values never leak into another instance's quad in the same draw.
 
@@ -1058,7 +1061,7 @@ pub phase gradient_pass:
     output: passes.Target = passes.Target.Screen
 
 rule SquareVertex:
-    filter:
+    each:
         tf.WorldTransform as xf
 
     on gradient_pass.vertex as v:
@@ -1336,7 +1339,7 @@ Field values and the target expression of `add`, `spawn` override blocks (includ
 
 Bounded foreach is allowed only inside rule event handlers. The iterable expression is evaluated once before the loop and must have type `list[T]`; the loop variable is a read-only binding scoped to the loop body. Cactus still does not support `while`, numeric/indexed `for`, `break`, or `continue`.
 
-`project` mirrors `add` field-initialization syntax but writes to a frame-local projected trait overlay instead of durable ECS component storage. If no `to` target is provided, the target is `self`. Projected traits are coalesced by `(entity, trait)`, visible to later `filter:` / `exclude:` matching during the same rendered frame, and cleared at the frame boundary after render processing. Use:
+`project` mirrors `add` field-initialization syntax but writes to a frame-local projected trait overlay instead of durable ECS component storage. If no `to` target is provided, the target is `self`. Projected traits are coalesced by `(entity, trait)`, visible to later `each:` / `without:` matching during the same rendered frame, and cleared at the frame boundary after render processing. Use:
 
 - `emit` for occurrence-oriented messages, especially when multiple occurrences matter;
 - `add` / `remove` for durable entity state;
@@ -1395,7 +1398,7 @@ A state match runs the arm of the entity's current variant. Each arm names a var
 
 ```cactus
 rule Think:
-    filter:
+    each:
         EnemyMode as m
     on tick:
         match m:
@@ -1433,7 +1436,7 @@ Phase and event payloads are accessed through:
 
 ```cactus
 rule Move:
-    filter:
+    each:
         Position as pos
         Velocity as vel
 
@@ -1441,7 +1444,7 @@ rule Move:
         pos.pos = pos.pos + vel.value * tick.dt
 
 rule Damage:
-    filter:
+    each:
         Health as hp
 
     on PlayerDamaged as dmg:
@@ -1461,7 +1464,7 @@ entity Game:
     Match
 
 rule CollectCoins:
-    filter:
+    each:
         Coin as coin
 
     on tick:
@@ -1498,13 +1501,13 @@ Rules react to these changes with lifecycle triggers:
 
 ```cactus
 rule BeginDeath:
-    filter:
+    each:
         Enemy
     on EnemyHit:
         add Dying
 
 rule StartDying:
-    filter:
+    each:
         Enemy
     on added Dying as dying:
         dying.elapsed = 0.0
@@ -1517,7 +1520,7 @@ rule StopBurning:
 
 - `on added T` fires when `T` goes from absent to present on an entity; spawning an entity counts as the arrival of each of its traits. `on removed T` fires when `T` goes from present to absent.
 - Firing is by net change per commit round (§5.3): replacing a trait the entity already carries, adding and removing it in the same round, or `set` fires nothing.
-- A trigger is delivered only to the entity whose trait set changed, after the round that changed it. The handler runs if that entity matches the rule's `filter:`, `exclude:` and `when:` in the committed state. `on added T` implies the entity carries `T`, and `on removed T` implies it does not; neither needs `T` in `filter:` or `exclude:`.
+- A trigger is delivered only to the entity whose trait set changed, after the round that changed it. The handler runs if that entity matches the rule's `each:`, `without:` and `when:` in the committed state. `on added T` implies the entity carries `T`, and `on removed T` implies it does not; neither needs `T` in `each:` or `without:`.
 - `on added T as x` binds `x` to the entity's live `T`, like a filter alias. `on removed T as old` binds a read-only copy of `T`'s value just before removal. Without `as`, the trigger binds nothing.
 - Destroying an entity fires no trigger for it. To react to an entity's end, add a marker trait (for example `Dying`), react with `on added Dying`, then `destroy`.
 - `T` must be a durable trait: a trait some handler projects is rejected, and so is a trigger in a `pairs:` rule. World restore fires no trigger.
@@ -1538,15 +1541,15 @@ String literals are only allowed in:
 
 ### 4.7 Ordering and Filtering
 
-- `filter:` selects entities
-- `exclude:` removes entities from consideration
+- `each:` selects entities
+- `without:` removes entities from consideration
 - a leading handler `after:` names canonical handler identities and constrains order for that trigger
 - rule-level `after:` is shorthand for ordering the rule's handlers after the named rule's handlers with the same canonical trigger; it never creates cross-trigger edges
 - rule-level `before:` is the mirror of `after:`: the rule's handlers run before the named rule's handlers with the same canonical trigger
 - a `group` declaration names an ordering point inside exactly one phase and has no runtime behavior. A rule joins it with `group:`; the rule's handler for the group's phase becomes a member, and its other handlers are unaffected. Rules in the group's own module may join any of its groups; rules in other modules may join only a `pub` group. A rule joins at most one group. A group's `after:` lists groups in the same phase, and every member runs after every member of each listed group, across the linked program
 - a group name in `after:` or `before:` orders the rule's handler for the group's phase after or before every member handler of the group. The rule must have a handler for that phase, and a member cannot list its own group. A group with no members gives no edges. Group names resolve like other declarations, by local name or through a module qualifier, and obey `pub`
 - `order by:` constrains iteration order for a rule pass
-- `filter:` and `exclude:` select entities but do not imply component reads
+- `each:` and `without:` select entities but do not imply component reads
 - regular handler contracts are inferred from their bodies; extern handler contracts are declared explicitly
 
 Every handler has a canonical identity composed from its module, owning rule, and resolved phase/event trigger. Co-eligible handlers are serialized for write/read, read/write, write/write, and matching observable-effect conflicts. Read/read and filter overlap do not conflict. Edge direction uses explicit ordering first (`after:`, `before:`, and group edges). Next, a conflict between a handler and a member of a `pub group` from a module it imports (directly or transitively) is judged against the whole group, so all of that handler's edges to the group point the same way: if they conflict in both directions, or only through shared effects, the importing handler runs first; if only one writes what the other reads, the writer runs first. Then one-way writer-before-reader dependencies, then stable linked declaration order for remaining conflicts. The combined handler schedule must be acyclic.
@@ -1656,7 +1659,7 @@ Targeted delivery obeys the same total `entity_id` semantics as the rest of the 
 For a live targeted occurrence, delivery is routed per consumer domain rather than broadcast to every matching entity:
 
 - a **selectionless** consumer runs once, exactly as it would for a broadcast occurrence — targeting is routing, not privacy, and does not grant it an implicit current entity;
-- a **unary** consumer runs at most once, for the recipient only, and only if the recipient currently satisfies that consumer's `filter:`/`exclude:` selection — a live recipient that fails the filter causes the consumer not to run at all;
+- a **unary** consumer runs at most once, for the recipient only, and only if the recipient currently satisfies that consumer's `each:`/`without:` selection — a live recipient that fails the filter causes the consumer not to run at all;
 - a **pair** consumer runs only the snapshotted tuples where at least one binding equals the recipient (a tuple where both bindings equal the recipient still runs once, since the tuple itself occurs once).
 
 An untargeted occurrence always uses each consumer's full ordinary domain: every unary match, every pair tuple, one selectionless run. Targeted occurrences use the same stable consumer graph order, bounded cascade rules, and activation command buffer as broadcast occurrences — a targeted delivery is routing over the ordinary schedule, never an immediate out-of-band call at the emit site.
@@ -1674,7 +1677,7 @@ trait MoveIntent:
     var jump_pressed: bool = false
 
 rule ReadInput:
-    filter:
+    each:
         MoveIntent as move
 
     on input:
@@ -1682,7 +1685,7 @@ rule ReadInput:
         move.jump_pressed = input.pressed(Jump)
 
 rule Jump:
-    filter:
+    each:
         Position as p
         PlayerPhysics as phys
         MoveIntent as move
@@ -1708,7 +1711,7 @@ template Bullet:
         lifetime = 1.0
 
 rule Fire:
-    filter:
+    each:
         Position as p
         Shooter as shooter
         PlayerInput as input_state
@@ -1724,7 +1727,7 @@ rule Fire:
                 origin = p.pos
 
 rule ExpireBullets:
-    filter:
+    each:
         Bullet as bullet
 
     on tick:
@@ -1765,14 +1768,14 @@ rule DetectContacts:
                 other = wall
 
 rule ResolveContact:
-    filter:
+    each:
         Health as hp
 
     on Contact:
         hp.health = hp.health - 1
 ```
 
-`DetectContacts` iterates the directed product of every `body` (`DynamicBody` + `Collider`) against every `wall` (`Solid` + `Collider`); `if body != wall:` rejects self-pairs before the mask/layer check. Each qualifying tuple emits a targeted `Contact` to its `body` binding. `ResolveContact` is an ordinary unary consumer: because the occurrence is targeted, it runs at most once — for `body` — and only if `body` currently satisfies `filter: Health`, rather than broadcasting to every entity with `Health`.
+`DetectContacts` iterates the directed product of every `body` (`DynamicBody` + `Collider`) against every `wall` (`Solid` + `Collider`); `if body != wall:` rejects self-pairs before the mask/layer check. Each qualifying tuple emits a targeted `Contact` to its `body` binding. `ResolveContact` is an ordinary unary consumer: because the occurrence is targeted, it runs at most once — for `body` — and only if `body` currently satisfies `each: Health`, rather than broadcasting to every entity with `Health`.
 
 ## 7. Stdlib and Backend Surface
 
@@ -1835,7 +1838,7 @@ render:     RenderUi
 
 #### 7.4.2 Frame-Local Projected Layout
 
-Because `DesiredSize`/`ComputedLayout` are projected traits, they are visible to `filter:`/`exclude:` matching and direct reads only until the end-of-frame projected-trait cleanup that follows `render` (§3.16) — never across a frame boundary. Code (including tests) that needs a value computed by an earlier phase in the *same* frame can read it normally; code that runs after a full frame has completed must not assume it survived, and should instead re-derive it (Standard UI recomputes both every frame regardless) rather than caching a stale read.
+Because `DesiredSize`/`ComputedLayout` are projected traits, they are visible to `each:`/`without:` matching and direct reads only until the end-of-frame projected-trait cleanup that follows `render` (§3.16) — never across a frame boundary. Code (including tests) that needs a value computed by an earlier phase in the *same* frame can read it normally; code that runs after a full frame has completed must not assume it survived, and should instead re-derive it (Standard UI recomputes both every frame regardless) rather than caching a stale read.
 
 #### 7.4.3 Deferred UI Features
 
@@ -1883,7 +1886,7 @@ template BulletTemplate:
 
 ```cactus
 rule RelayReload:
-    filter:
+    each:
         TimerOwner as link
         ReloadChannel
 
@@ -1891,7 +1894,7 @@ rule RelayReload:
         emit ReloadReady to link.owner
 
 rule StartReload:
-    filter:
+    each:
         Weapon as weapon
 
     on ShotFired:
@@ -2027,8 +2030,7 @@ rule MoveBullets:
         target:
             physics.Collider
             physics.Solid
-    reduce:
-        per: bullet
+    reduce per bullet:
         first = first_hit(physics.sweep(bullet, bullet.Bullet.velocity * fixed_tick.dt, target))
 
     on fixed_tick:

@@ -146,7 +146,7 @@ TEST_CASE("standard-ui example: layout, top-hit agreement, capture, Click delive
     CHECK(registry.get<std_pointer__PointerState>(click_button).pressed);
 
     // Release over the same target: Click is delivered to the real
-    // ClickButtonGameplay rule (an ordinary `filter: ClickCounter` handler
+    // ClickButtonGameplay rule (an ordinary `each: ClickCounter` handler
     // reading a targeted pointer.Click through `self`), which increments
     // the gameplay counter and starts the bump — this is the exact
     // self-reference + targeted-emit path that had to be fixed in

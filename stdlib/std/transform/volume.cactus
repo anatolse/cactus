@@ -25,7 +25,7 @@ pub trait WorldTransform:
 # Composes each LocalTransform child onto its parent's WorldTransform, after
 # every other late_tick rule that writes WorldTransform.
 extern rule TransformPropagation:
-    filter:
+    each:
         LocalTransform
         WorldTransform
 

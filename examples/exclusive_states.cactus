@@ -82,7 +82,7 @@ entity Lookout:
 # The second order runs after the first, so both land in one commit round in
 # command order.
 rule FirstOrder:
-    filter:
+    each:
         Orders as o
 
     on tick:
@@ -106,7 +106,7 @@ rule FirstOrder:
                 return
 
 rule SecondOrder:
-    filter:
+    each:
         Orders as o
     after:
         FirstOrder
@@ -134,14 +134,14 @@ rule SecondOrder:
 # ── Entry and exit ────────────────────────────────────────────────────────────
 
 rule EnterIdle:
-    filter:
+    each:
         Log as log
 
     on added EnemyMode.Idle:
         log.idle_added += 1
 
 rule LeaveIdle:
-    filter:
+    each:
         Log as log
 
     on removed EnemyMode.Idle:
@@ -150,7 +150,7 @@ rule LeaveIdle:
         log.idle_left_at = log.seq
 
 rule EnterChasing:
-    filter:
+    each:
         Log as log
 
     on added EnemyMode.Chasing as c:
@@ -160,21 +160,21 @@ rule EnterChasing:
         log.hunted_hero = c.target == Player
 
 rule LeaveChasing:
-    filter:
+    each:
         Log as log
 
     on removed EnemyMode.Chasing:
         log.chasing_left += 1
 
 rule EnterAttacking:
-    filter:
+    each:
         Log as log
 
     on added EnemyMode.Attacking:
         log.attacking_added += 1
 
 rule EnterDying:
-    filter:
+    each:
         Log as log
 
     on added EnemyMode.Dying:
@@ -183,7 +183,7 @@ rule EnterDying:
 # ── Selection by state ────────────────────────────────────────────────────────
 
 rule Chase:
-    filter:
+    each:
         EnemyMode.Chasing
         Log as log
 
@@ -191,25 +191,25 @@ rule Chase:
         log.chase_ticks += 1
 
 rule Awake:
-    filter:
+    each:
         Log as log
-    exclude:
+    without:
         EnemyMode.Dying
 
     on tick:
         log.awake_ticks += 1
 
 rule Stateless:
-    filter:
+    each:
         Log as log
-    exclude:
+    without:
         EnemyMode
 
     on tick:
         log.stateless_ticks += 1
 
 rule Inspect:
-    filter:
+    each:
         EnemyMode as m
         Log as log
 
@@ -229,7 +229,7 @@ rule Inspect:
             EnemyMode.Dying => 40
 
 rule Watch:
-    filter:
+    each:
         Watcher as w
 
     on tick:
@@ -311,7 +311,7 @@ entity WideCarrier:
     WideMode.V63
 
 rule FinishWideState:
-    filter:
+    each:
         WideMode.V63
     on tick:
         add WideMode.Done
@@ -319,7 +319,7 @@ rule FinishWideState:
         remove WideMode
 
 rule KeepWideStateFinal:
-    filter:
+    each:
         WideMode.Done
     on tick:
         add WideMode.Done:

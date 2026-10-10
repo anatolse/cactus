@@ -691,7 +691,7 @@ rule ArrangeUi:
 # (playing = false) simply stops elapsed from advancing, leaving frame
 # untouched.
 rule AnimateUiFrames:
-    filter:
+    each:
         FrameAnimation as anim
 
     on core.tick as tick:
@@ -706,7 +706,7 @@ rule AnimateUiFrames:
 # terminal to_scale/playing=false on completion rather than trusting a t=1.0
 # lerp to land exactly on it.
 rule AnimateUiBump:
-    filter:
+    each:
         Visual as visual
         BumpAnimation as bump
 

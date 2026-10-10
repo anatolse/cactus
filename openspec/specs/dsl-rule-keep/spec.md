@@ -5,14 +5,14 @@ Define kept traits: a reduced pair rule names a marker trait that the compiler k
 ## Requirements
 ### Requirement: Keep clause shape
 
-A pair rule with `reduce:` and `per: b` SHALL accept one `keep T on b:` clause, written after `reduce:`. `b` SHALL be the `per` binding. `T` SHALL be a durable trait declared in the same module as the rule, with no `persist` fields. The clause body SHALL assign zero or more fields of `T` from expressions that read only aggregates, the `per` binding, constants and named entity fields; every field it leaves out SHALL take `T`'s declared default. `keep` is recognized contextually at the rule-clause position. The compiler SHALL reject `keep` on unary, selectionless, unreduced, globally reduced and extern rules, on a binding other than the `per` binding, and with a field or type that does not match `T`.
+A pair rule with `reduce per b:` SHALL accept one `keep T on b:` clause, written after `reduce:`. `b` SHALL be the `per` binding. `T` SHALL be a durable trait declared in the same module as the rule, with no `persist` fields. The clause body SHALL assign zero or more fields of `T` from expressions that read only aggregates, the `per` binding, constants and named entity fields; every field it leaves out SHALL take `T`'s declared default. `keep` is recognized contextually at the rule-clause position. The compiler SHALL reject `keep` on unary, selectionless, unreduced, globally reduced and extern rules, on a binding other than the `per` binding, and with a field or type that does not match `T`.
 
 #### Scenario: Valid keep clause
-- **WHEN** a rule over `pairs: body, lava` reduces `per: body` with `n = count()` and declares `keep InLava on body:` with `zones = n`
+- **WHEN** a rule over `pairs: body, lava` uses `reduce per body:` with `n = count()` and declares `keep InLava on body:` with `zones = n`
 - **THEN** compilation accepts it
 
 #### Scenario: Wrong binding
-- **WHEN** a rule reduced `per: body` declares `keep InLava on lava:`
+- **WHEN** a rule with `reduce per body:` declares `keep InLava on lava:`
 - **THEN** the compiler reports a source-located error naming the `per` binding
 
 #### Scenario: Eliminated binding read

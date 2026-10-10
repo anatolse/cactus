@@ -359,7 +359,7 @@ TEST_CASE("integration: explicit std.core import with lifecycle handler generate
             << "        value = 0\n"
             << "    KeepOnLoad\n\n"
             << "rule CountTicks:\n"
-            << "    filter:\n"
+            << "    each:\n"
             << "        Counter\n\n"
             << "    on tick:\n"
             << "        value = value + 1\n";
@@ -479,7 +479,7 @@ TEST_CASE("integration: a form the backend cannot lower is a located error and w
             << "    output: passes.Target = passes.Target.Screen\n"
             << "\n"
             << "rule TileVertex:\n"
-            << "    filter:\n"
+            << "    each:\n"
             << "        Tile as tile\n"
             << "\n"
             << "    on tile_pass.vertex as v:\n"

@@ -31,7 +31,7 @@ event BubbleBounce:
 
 # MoveBubbles: integrates every bubble's position from its current velocity.
 rule MoveBubbles:
-    filter:
+    each:
         Bubble
         tf.WorldTransform
 
@@ -78,7 +78,7 @@ rule DetectWallContact:
 # ResolveWallBounce: unary consumer. Reflects the bubble's own velocity across
 # the wall normal carried by the event (elastic reflection, speed-preserving).
 rule ResolveWallBounce:
-    filter:
+    each:
         Bubble
 
     on WallBounce as bounce:
@@ -140,7 +140,7 @@ rule DetectBubbleContact:
 # ResolveBubbleBounce: unary consumer. Applies the resolved post-collision
 # velocity computed by DetectBubbleContact directly.
 rule ResolveBubbleBounce:
-    filter:
+    each:
         Bubble
 
     on BubbleBounce as bounce:

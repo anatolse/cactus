@@ -1,7 +1,7 @@
 module rule_reductions
 
 # `reduce:` turns the rows of a rule's domain into aggregate values. Without
-# `per:` the whole domain becomes one row; with `per: team` every team gets
+# `per` the whole domain becomes one row; with `reduce per team:` every team gets
 # exactly one row, even a team with no players.
 
 use std.core
@@ -42,8 +42,7 @@ template Squad(id: int):
 
 # No entity has Enemy, so this runs once with the identity values.
 rule CountEnemies:
-    filter:
-        Enemy as enemy
+    each: Enemy as enemy
     reduce:
         enemies = count()
         threat = sum(enemy.threat)
@@ -56,8 +55,7 @@ rule CountEnemies:
         Scoreboard.Board.enemy_passes += 1
 
 rule CountPlayers:
-    filter:
-        Player as player
+    each: Player as player
     reduce:
         players = count()
         points = sum(player.points)
@@ -80,8 +78,7 @@ rule TeamTotals:
     where:
         team.Team.active
         player.Player.team == team
-    reduce:
-        per: team
+    reduce per team:
         players = count(player)
         total = sum(player.Player.points)
         best = max(player.Player.speed, default = -1.0)
@@ -106,8 +103,7 @@ rule RankTeams:
             Player
     where:
         player.Player.team == team
-    reduce:
-        per: team
+    reduce per team:
         total = sum(player.Player.points)
     order by:
         total desc

@@ -563,7 +563,7 @@ entity Sun:
         enabled = true
 
 rule CursorLifecycle:
-    filter:
+    each:
         Player
 
     on load:
@@ -573,7 +573,7 @@ rule CursorLifecycle:
         inp.set_cursor_captured(false)
 
 rule ReadPlayerLook:
-    filter:
+    each:
         Player
         camera.FirstPersonCamera as first_person
         tv.WorldTransform as transform
@@ -588,7 +588,7 @@ rule ReadPlayerLook:
         transform.rotation = quat.from_euler(0.0, first_person.yaw, 0.0)
 
 rule CursorCaptureToggle:
-    filter:
+    each:
         Player
 
     when:
@@ -605,7 +605,7 @@ rule CursorCaptureToggle:
             input.consume(Fire)
 
 rule MovePlayer:
-    filter:
+    each:
         Player
         tv.WorldTransform as transform
         physics.CharacterBody as body
@@ -635,7 +635,7 @@ rule MovePlayer:
 # per frame under its accumulator cadence and would risk stacking multiple
 # impulses from a single press.
 rule ApplyJump:
-    filter:
+    each:
         Player
         physics.CharacterBody as body
 
@@ -648,7 +648,7 @@ rule ApplyJump:
 
 # Bodies keep their velocity, so they stand still once the match is over.
 rule HaltWhenOver:
-    filter:
+    each:
         physics.CharacterBody as body
 
     when:
@@ -659,7 +659,7 @@ rule HaltWhenOver:
         body.velocity.z = 0.0
 
 rule ComposeCameraPose:
-    filter:
+    each:
         CameraRig
         tv.WorldTransform as transform
 
@@ -670,7 +670,7 @@ rule ComposeCameraPose:
         transform.rotation = quat.compose(quat.from_euler(0.0, yaw, 0.0), quat.from_euler(pitch, 0.0, 0.0))
 
 rule SpawnRobots:
-    filter:
+    each:
         RobotSpawnPoint as spawn_point
         tv.WorldTransform as transform
 
@@ -701,7 +701,7 @@ rule SpawnRobots:
         spawn_point.countdown = SPAWN_INTERVAL
 
 rule SpawnKnights:
-    filter:
+    each:
         KnightSpawnPoint as spawn_point
         tv.WorldTransform as transform
 
@@ -775,8 +775,7 @@ rule SeekPlayer:
             tv.WorldTransform as place
     where:
         collision.sphere_box_overlap(enemy.transform.position, ENEMY_SENSE_RADIUS, wall.place.position, wall.box.size, wall.place.rotation)
-    reduce:
-        per: enemy
+    reduce per enemy:
         direct_blocked = any(is_probe_blocked(enemy.transform.position, PlayerBody.tv.WorldTransform.position, 0.0, 0.0, wall.place.position, wall.box.size, wall.place.rotation))
         # An obstacle that still blocks at jump-clearance height is too tall to vault.
         direct_high_blocked = any(is_probe_blocked(enemy.transform.position, PlayerBody.tv.WorldTransform.position, 0.0, ENEMY_VAULT_CLEARANCE_HEIGHT, wall.place.position, wall.box.size, wall.place.rotation))
@@ -828,7 +827,7 @@ rule SeekPlayer:
         enemy.body.velocity.z = direction.z * enemy.Enemy.kind.speed
 
 rule CooldownShooter:
-    filter:
+    each:
         Shooter as shooter
 
     on tick:
@@ -836,7 +835,7 @@ rule CooldownShooter:
             shooter.cooldown = math.max(0.0, shooter.cooldown - tick.dt)
 
 rule FireBullet:
-    filter:
+    each:
         CameraRig
         Shooter as shooter
         tv.WorldTransform as transform
@@ -868,8 +867,7 @@ rule MoveBullets:
         target:
             physics.Collider
             physics.Solid
-    reduce:
-        per: bullet
+    reduce per bullet:
         first = first_hit(physics.sweep(bullet, bullet.Bullet.velocity * fixed_tick.dt, target))
 
     on fixed_tick:
@@ -884,7 +882,7 @@ rule MoveBullets:
 
 # Only a hunting enemy starts its death; Dying is final, so it is never left.
 rule BeginDeath:
-    filter:
+    each:
         Enemy as enemy
         EnemyLife.Hunting
 
@@ -902,7 +900,7 @@ rule BeginDeath:
 # moving. It leaves every collider layer, so bullets and live bodies pass
 # through it, and collides only with the map.
 rule StartDying:
-    filter:
+    each:
         physics.Collider as collider
         physics.CharacterBody as body
 
@@ -913,7 +911,7 @@ rule StartDying:
 
 # The model child tips over and fades; the collision root keeps its yaw.
 rule AnimateEnemyDeath:
-    filter:
+    each:
         Enemy as enemy
         EnemyLife.Dying as dying
 
@@ -943,13 +941,12 @@ rule CatchPlayer:
     group: physics.contacts
     where:
         physics.touching(hurtbox, player)
-    reduce:
-        per: player
+    reduce per player:
         hurtboxes = count()
     keep Caught on player
 
 rule EndGame:
-    filter:
+    each:
         Player
     when:
         not Game.Match.over
@@ -965,7 +962,7 @@ rule EndGame:
             visible = true
 
 rule RestartOnGameOver:
-    filter:
+    each:
         Player
         tv.WorldTransform as transform
         camera.FirstPersonCamera as first_person

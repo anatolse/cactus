@@ -36,12 +36,12 @@ The cpp-entt backend SHALL consume resolved typed symbol identities for all modu
 - **THEN** cpp-entt treats it as `game.custom.WorldTransform` and does not apply stdlib transform behavior unless the resolved symbol identity is the stdlib symbol
 
 ### Requirement: Registry-based system generation
-The backend SHALL generate system functions that iterate over the EnTT registry and apply declared filter clauses. For ordinary generated systems with non-empty filters, the backend SHALL use `entt::registry::view<Components...>()`-style iteration so filtering is performed by EnTT rather than by scanning every entity with early-exit guards. When `exclude:` clauses are present, the backend SHALL use native EnTT exclusion where possible. For each event handler the backend SHALL emit a second parameter `const EventType& <name>` where `<name>` is the handler alias if present, otherwise a C++ identifier derived from the trigger name. In the handler body, every reference to the trigger name — bare, or module-qualified as written after `on` — and every reference to the alias SHALL lower to that parameter. The backend SHALL NOT emit individual field parameters (e.g., `float dt`) — handler body code accesses fields via the event variable (e.g., `tick.dt`).
+The backend SHALL generate system functions that iterate over the EnTT registry and apply declared filter clauses. For ordinary generated systems with non-empty filters, the backend SHALL use `entt::registry::view<Components...>()`-style iteration so filtering is performed by EnTT rather than by scanning every entity with early-exit guards. When `without:` clauses are present, the backend SHALL use native EnTT exclusion where possible. For each event handler the backend SHALL emit a second parameter `const EventType& <name>` where `<name>` is the handler alias if present, otherwise a C++ identifier derived from the trigger name. In the handler body, every reference to the trigger name — bare, or module-qualified as written after `on` — and every reference to the alias SHALL lower to that parameter. The backend SHALL NOT emit individual field parameters (e.g., `float dt`) — handler body code accesses fields via the event variable (e.g., `tick.dt`).
 
 Projected traits SHALL participate in this same registry-based filtering by being materialized as registry components during the current frame.
 
 #### Scenario: System with filter
-- **WHEN** a rule has `filter:` listing `Position` and `Velocity`, and an `on tick:` handler
+- **WHEN** a rule has `each:` listing `Position` and `Velocity`, and an `on tick:` handler
 - **THEN** the backend generates a function `void RuleName_tick(entt::registry& registry, const TickEvent& tick)` that iterates matching entities through an EnTT view and binds `Position` and `Velocity` component references for the handler body
 
 #### Scenario: Non-matching entity does not terminate handler
@@ -1247,14 +1247,14 @@ The cpp-entt test surface SHALL expose sufficient deterministic debug state or h
 - **THEN** it can assert that only the visually topmost accepted target received Click
 
 ### Requirement: cpp-entt lowers Quads render passes to a generated raylib shader pair
-For a render-pass phase whose `Pass` field is `passes.Pass.Quads`, the `cpp-entt` backend SHALL generate one GLSL vertex shader and one GLSL fragment shader translated directly from the phase's vertex- and fragment-stage handler bodies (per the restricted statement/expression subset in `dsl-render-passes`), load them via raylib's `LoadShaderFromMemory`, and draw one instanced quad per entity selected by the vertex handler's `filter:` using `BeginShaderMode`/raylib's existing draw-call surface. The generated draw step SHALL participate in the existing `effects: graphics` scheduling domain (per `handler-execution-graph`, "Contract conflict edges") the same way `SpriteRenderer`/`MeshRenderer` already do.
+For a render-pass phase whose `Pass` field is `passes.Pass.Quads`, the `cpp-entt` backend SHALL generate one GLSL vertex shader and one GLSL fragment shader translated directly from the phase's vertex- and fragment-stage handler bodies (per the restricted statement/expression subset in `dsl-render-passes`), load them via raylib's `LoadShaderFromMemory`, and draw one instanced quad per entity selected by the vertex handler's `each:` using `BeginShaderMode`/raylib's existing draw-call surface. The generated draw step SHALL participate in the existing `effects: graphics` scheduling domain (per `handler-execution-graph`, "Contract conflict edges") the same way `SpriteRenderer`/`MeshRenderer` already do.
 
 #### Scenario: Vertex/fragment handler bodies translate to GLSL
 - **WHEN** `cpp-entt` compiles a `Quads` render-pass phase with vertex handler `V` and fragment handler `F`
 - **THEN** the generated output contains one GLSL vertex shader derived from `V`'s body and one GLSL fragment shader derived from `F`'s body, loaded via raylib at program startup
 
 #### Scenario: Per-instance draw uses the selected entity domain
-- **WHEN** the vertex handler's `filter:` selects entities carrying `WorldTransform` and `Particle`
+- **WHEN** the vertex handler's `each:` selects entities carrying `WorldTransform` and `Particle`
 - **THEN** the generated draw step issues one instanced quad per currently-matching entity each time the render-pass phase activates
 
 #### Scenario: Render-pass draw step shares graphics-effect ordering with existing renderers

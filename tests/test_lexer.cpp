@@ -316,11 +316,12 @@ TEST_CASE("Lexer: new action keywords add remove to from", "[lexer][dynamic-ecs]
     CHECK(types[3] == TokenType::FROM);
 }
 
-TEST_CASE("Lexer: new block keyword exclude", "[lexer][dynamic-ecs]") {
-    auto tokens = lex("exclude");
+TEST_CASE("Lexer: filter and exclude are identifiers", "[lexer][concise]") {
+    auto tokens = lex("filter exclude");
     auto types  = token_types(tokens);
-    REQUIRE(types.size() == 1);
-    CHECK(types[0] == TokenType::EXCLUDE);
+    REQUIRE(types.size() == 2);
+    CHECK(types[0] == TokenType::IDENTIFIER);
+    CHECK(types[1] == TokenType::IDENTIFIER);
 }
 
 TEST_CASE("Lexer: new keywords are distinct from identifiers with similar names", "[lexer][dynamic-ecs]") {
@@ -351,7 +352,6 @@ TEST_CASE("Lexer: new keywords have correct string representations", "[lexer][dy
     CHECK(std::string(token_type_to_string(TokenType::UNLOAD)) == "UNLOAD");
     CHECK(std::string(token_type_to_string(TokenType::ADD)) == "ADD");
     CHECK(std::string(token_type_to_string(TokenType::REMOVE)) == "REMOVE");
-    CHECK(std::string(token_type_to_string(TokenType::EXCLUDE)) == "EXCLUDE");
 }
 
 TEST_CASE("Lexer: all dynamic ECS keywords in one string", "[lexer][dynamic-ecs]") {
@@ -367,7 +367,7 @@ TEST_CASE("Lexer: all dynamic ECS keywords in one string", "[lexer][dynamic-ecs]
     CHECK(types[6] == TokenType::REMOVE);
     CHECK(types[7] == TokenType::TO);
     CHECK(types[8] == TokenType::FROM);
-    CHECK(types[9] == TokenType::EXCLUDE);
+    CHECK(types[9] == TokenType::IDENTIFIER);
 }
 
 // ── New keyword tests (dsl-spec-new-features) ─────────────────────────────────

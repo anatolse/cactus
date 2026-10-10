@@ -98,10 +98,20 @@ Analysis analyze(const std::string& body) {
     return analysis;
 }
 
+std::string reduce_rule(const std::string& header, const std::string& reduce_lines, const std::string& handler_lines,
+                        const std::string& where_lines) {
+    return "rule TeamScore:\n" + kTeamPairs + (where_lines.empty() ? "" : "    where:\n" + where_lines) + "    " +
+           header + ":\n" + reduce_lines + "    on tick:\n" + handler_lines;
+}
+
 std::string team_rule(const std::string& reduce_lines, const std::string& handler_lines,
                       const std::string& where_lines = "") {
-    return "rule TeamScore:\n" + kTeamPairs + (where_lines.empty() ? "" : "    where:\n" + where_lines) +
-           "    reduce:\n" + reduce_lines + "    on tick:\n" + handler_lines;
+    return reduce_rule("reduce", reduce_lines, handler_lines, where_lines);
+}
+
+std::string grouped_rule(const std::string& per, const std::string& reduce_lines, const std::string& handler_lines,
+                         const std::string& where_lines = "") {
+    return reduce_rule("reduce per " + per, reduce_lines, handler_lines, where_lines);
 }
 
 bool reads_trait(const HandlerContract& contract, const std::string& trait) {
@@ -117,18 +127,17 @@ bool writes_trait(const HandlerContract& contract, const std::string& trait) {
 // ── Reducer typing ──────────────────────────────────────────────────────────
 
 TEST_CASE("Reduce: reducers have exact result types", "[semantic][rule-reduce]") {
-    const auto analysis = analyze(team_rule("        per: team\n"
-                                            "        rows = count()\n"
-                                            "        players = count(player)\n"
-                                            "        points = sum(player.Member.points)\n"
-                                            "        speed = sum(player.Member.speed)\n"
-                                            "        low = min(player.Member.points, default = 0)\n"
-                                            "        fast = max(player.Member.speed, default = 0.0)\n"
-                                            "        ready = any(player.Member.ready)\n",
-                                            "        team.Team.total = rows + players + points + low\n"
-                                            "        team.Team.best = speed + fast\n"
-                                            "        team.Team.crowded = ready\n",
-                                            "        player.Member.team == team\n"));
+    const auto analysis = analyze(grouped_rule("team", "        rows = count()\n"
+                                                       "        players = count(player)\n"
+                                                       "        points = sum(player.Member.points)\n"
+                                                       "        speed = sum(player.Member.speed)\n"
+                                                       "        low = min(player.Member.points, default = 0)\n"
+                                                       "        fast = max(player.Member.speed, default = 0.0)\n"
+                                                       "        ready = any(player.Member.ready)\n",
+                                                       "        team.Team.total = rows + players + points + low\n"
+                                                       "        team.Team.best = speed + fast\n"
+                                                       "        team.Team.crowded = ready\n",
+                                                       "        player.Member.team == team\n"));
     INFO(describe(analysis));
     REQUIRE(analysis.clean());
     const auto& reducers = analysis.rule("TeamScore").reduce->reducers;
@@ -143,40 +152,34 @@ TEST_CASE("Reduce: reducers have exact result types", "[semantic][rule-reduce]")
 }
 
 TEST_CASE("Reduce: aggregate types are checked in the handler", "[semantic][rule-reduce]") {
-    const auto analysis = analyze(team_rule("        per: team\n"
-                                            "        ready = any(player.Member.ready)\n",
-                                            "        let total: int = ready\n"));
+    const auto analysis = analyze(grouped_rule("team", "        ready = any(player.Member.ready)\n",
+                                                       "        let total: int = ready\n"));
     CHECK_FALSE(analysis.clean());
 }
 
 TEST_CASE("Reduce: min and max need a default of the input type", "[semantic][rule-reduce]") {
-    CHECK(analyze(team_rule("        per: team\n"
-                            "        low = min(player.Member.points, default = 0.0)\n",
-                            "        let x = 1\n"))
+    CHECK(analyze(grouped_rule("team", "        low = min(player.Member.points, default = 0.0)\n",
+                                       "        let x = 1\n"))
               .has("default"));
-    CHECK(analyze(team_rule("        per: team\n"
-                            "        low = max(player.Member.speed)\n",
-                            "        let x = 1\n"))
+    CHECK(analyze(grouped_rule("team", "        low = max(player.Member.speed)\n",
+                                       "        let x = 1\n"))
               .has("default"));
 }
 
 TEST_CASE("Reduce: sum, min and max take int or float", "[semantic][rule-reduce]") {
-    CHECK(analyze(team_rule("        per: team\n"
-                            "        s = sum(player.Member.ready)\n",
-                            "        let x = 1\n"))
+    CHECK(analyze(grouped_rule("team", "        s = sum(player.Member.ready)\n",
+                                       "        let x = 1\n"))
               .has("'int', 'float', 'vec2' or 'vec3'"));
-    CHECK(analyze(team_rule("        per: team\n"
-                            "        s = min(player.Member.team, default = team)\n",
-                            "        let x = 1\n"))
+    CHECK(analyze(grouped_rule("team", "        s = min(player.Member.team, default = team)\n",
+                                       "        let x = 1\n"))
               .has("'int' or 'float'"));
 }
 
 TEST_CASE("Reduce: sum takes vec2 and vec3 and keeps the type", "[semantic][rule-reduce]") {
-    const auto analysis = analyze(team_rule("        per: team\n"
-                                            "        push = sum(player.Member.push)\n"
-                                            "        drift = sum(player.Member.drift)\n",
-                                            "        team.Team.push = push\n"
-                                            "        team.Team.drift = drift\n"));
+    const auto analysis = analyze(grouped_rule("team", "        push = sum(player.Member.push)\n"
+                                                       "        drift = sum(player.Member.drift)\n",
+                                                       "        team.Team.push = push\n"
+                                                       "        team.Team.drift = drift\n"));
     INFO(describe(analysis));
     REQUIRE(analysis.clean());
     const auto& reducers = analysis.rule("TeamScore").reduce->reducers;
@@ -187,9 +190,8 @@ TEST_CASE("Reduce: sum takes vec2 and vec3 and keeps the type", "[semantic][rule
 
 TEST_CASE("Reduce: vector min and max are rejected with a location", "[semantic][rule-reduce]") {
     for (const std::string reducer : {"min", "max"}) {
-        const auto analysis = analyze(team_rule("        per: team\n"
-                                                "        v = " + reducer + "(player.Member.push, default = vec3(0.0, 0.0, 0.0))\n",
-                                                "        let x = 1\n"));
+        const auto analysis = analyze(grouped_rule("team", "        v = " + reducer + "(player.Member.push, default = vec3(0.0, 0.0, 0.0))\n",
+                                                           "        let x = 1\n"));
         CHECK(analysis.has("'int' or 'float'"));
         const auto error = std::ranges::find_if(
             analysis.diagnostics, [](const Diagnostic& d) { return d.level == DiagnosticLevel::Error; });
@@ -199,19 +201,17 @@ TEST_CASE("Reduce: vector min and max are rejected with a location", "[semantic]
 }
 
 TEST_CASE("Reduce: any takes a bool", "[semantic][rule-reduce]") {
-    CHECK(analyze(team_rule("        per: team\n"
-                            "        a = any(player.Member.points)\n",
-                            "        let x = 1\n"))
+    CHECK(analyze(grouped_rule("team", "        a = any(player.Member.points)\n",
+                                       "        let x = 1\n"))
               .has("'bool'"));
 }
 
 TEST_CASE("Reduce: count of a name that is not a pair binding is rejected", "[semantic][rule-reduce]") {
-    CHECK(analyze(team_rule("        per: team\n"
-                            "        n = count(coach)\n",
-                            "        let x = 1\n"))
+    CHECK(analyze(grouped_rule("team", "        n = count(coach)\n",
+                                       "        let x = 1\n"))
               .has("pair binding"));
     CHECK(analyze("rule Count:\n"
-                  "    filter:\n"
+                  "    each:\n"
                   "        Enemy as e\n"
                   "    reduce:\n"
                   "        n = count(e)\n"
@@ -221,18 +221,16 @@ TEST_CASE("Reduce: count of a name that is not a pair binding is rejected", "[se
 }
 
 TEST_CASE("Reduce: reducer inputs must be pure", "[semantic][rule-reduce]") {
-    CHECK(analyze(team_rule("        per: team\n"
-                            "        n = sum(query.count[Enemy]())\n",
-                            "        let x = 1\n"))
+    CHECK(analyze(grouped_rule("team", "        n = sum(query.count[Enemy]())\n",
+                                       "        let x = 1\n"))
               .has("pure"));
 }
 
 TEST_CASE("Reduce: reducer inputs resolve function calls", "[semantic][rule-reduce]") {
     const auto analysis = analyze("func doubled(value: int) int:\n"
                                   "    return value * 2\n" +
-                                  team_rule("        per: team\n"
-                                            "        total = sum(doubled(player.Member.points))\n",
-                                            "        team.Team.total = total\n"));
+                                  grouped_rule("team", "        total = sum(doubled(player.Member.points))\n",
+                                                       "        team.Team.total = total\n"));
     INFO(describe(analysis));
     REQUIRE(analysis.clean());
     const auto& input = *analysis.rule("TeamScore").reduce->reducers.front().input;
@@ -243,21 +241,18 @@ TEST_CASE("Reduce: reducer inputs resolve function calls", "[semantic][rule-redu
 }
 
 TEST_CASE("Reduce: reducer names are unique and don't shadow bindings", "[semantic][rule-reduce]") {
-    CHECK(analyze(team_rule("        per: team\n"
-                            "        n = count()\n"
-                            "        n = count(player)\n",
-                            "        let x = 1\n"))
+    CHECK(analyze(grouped_rule("team", "        n = count()\n"
+                                       "        n = count(player)\n",
+                                       "        let x = 1\n"))
               .has("duplicate"));
-    CHECK(analyze(team_rule("        per: team\n"
-                            "        player = count()\n",
-                            "        let x = 1\n"))
+    CHECK(analyze(grouped_rule("team", "        player = count()\n",
+                                       "        let x = 1\n"))
               .has("player"));
 }
 
 TEST_CASE("Reduce: aggregates are immutable", "[semantic][rule-reduce]") {
-    CHECK_FALSE(analyze(team_rule("        per: team\n"
-                                  "        n = count()\n",
-                                  "        n = 3\n"))
+    CHECK_FALSE(analyze(grouped_rule("team", "        n = count()\n",
+                                             "        n = 3\n"))
                     .clean());
 }
 
@@ -269,12 +264,12 @@ TEST_CASE("Reduce: a selectionless rule rejects reduce", "[semantic][rule-reduce
                   "        n = count()\n"
                   "    on tick:\n"
                   "        Board.Stats.enemies = n\n")
-              .has("`reduce:` requires a `filter:` or `pairs:` clause"));
+              .has("`reduce:` requires an `each:` or `pairs:` clause"));
 }
 
 TEST_CASE("Reduce: a global reduce over a filter domain is accepted", "[semantic][rule-reduce]") {
     const auto analysis = analyze("rule Count:\n"
-                                  "    filter:\n"
+                                  "    each:\n"
                                   "        Enemy as e\n"
                                   "    reduce:\n"
                                   "        n = count()\n"
@@ -287,23 +282,21 @@ TEST_CASE("Reduce: a global reduce over a filter domain is accepted", "[semantic
 
 TEST_CASE("Reduce: per needs a declared pair binding", "[semantic][rule-reduce]") {
     CHECK(analyze("rule Count:\n"
-                  "    filter:\n"
+                  "    each:\n"
                   "        Enemy as e\n"
-                  "    reduce:\n"
-                  "        per: e\n"
+                  "    reduce per e:\n"
                   "        n = count()\n"
                   "    on tick:\n"
                   "        let x = n\n")
               .has("`per` requires a `pairs:` clause"));
-    CHECK(analyze(team_rule("        per: coach\n"
-                            "        n = count()\n",
-                            "        let x = n\n"))
+    CHECK(analyze(grouped_rule("coach", "        n = count()\n",
+                                        "        let x = n\n"))
               .has("pair binding"));
 }
 
 TEST_CASE("Reduce: lifecycle triggers are rejected on a reduced rule", "[semantic][rule-reduce]") {
     CHECK_FALSE(analyze("rule Count:\n"
-                        "    filter:\n"
+                        "    each:\n"
                         "        Enemy as e\n"
                         "    reduce:\n"
                         "        n = count()\n"
@@ -315,20 +308,18 @@ TEST_CASE("Reduce: lifecycle triggers are rejected on a reduced rule", "[semanti
 // ── Scope after reduction ───────────────────────────────────────────────────
 
 TEST_CASE("Reduce: the eliminated binding is not accessible", "[semantic][rule-reduce]") {
-    CHECK_FALSE(analyze(team_rule("        per: team\n"
-                                  "        n = count()\n",
-                                  "        let p = player.Member.points\n"))
+    CHECK_FALSE(analyze(grouped_rule("team", "        n = count()\n",
+                                             "        let p = player.Member.points\n"))
                     .clean());
-    CHECK_FALSE(analyze(team_rule("        per: team\n"
-                                  "        n = count()\n",
-                                  "        emit Ping to player\n"))
+    CHECK_FALSE(analyze(grouped_rule("team", "        n = count()\n",
+                                             "        emit Ping to player\n"))
                     .clean());
 }
 
 TEST_CASE("Reduce: a global reduce eliminates every binding", "[semantic][rule-reduce]") {
     CHECK_FALSE(analyze(team_rule("        n = count()\n", "        let p = team.Team.id\n")).clean());
     CHECK_FALSE(analyze("rule Count:\n"
-                        "    filter:\n"
+                        "    each:\n"
                         "        Enemy as e\n"
                         "    reduce:\n"
                         "        n = count()\n"
@@ -338,10 +329,9 @@ TEST_CASE("Reduce: a global reduce eliminates every binding", "[semantic][rule-r
 }
 
 TEST_CASE("Reduce: the retained binding is writable", "[semantic][rule-reduce]") {
-    const auto analysis = analyze(team_rule("        per: team\n"
-                                            "        total = sum(player.Member.points)\n",
-                                            "        team.Team.total = total\n",
-                                            "        player.Member.team == team\n"));
+    const auto analysis = analyze(grouped_rule("team", "        total = sum(player.Member.points)\n",
+                                                       "        team.Team.total = total\n",
+                                                       "        player.Member.team == team\n"));
     INFO(describe(analysis));
     REQUIRE(analysis.clean());
     const auto& contract = analysis.contract("TeamScore");
@@ -354,7 +344,7 @@ TEST_CASE("Reduce: the retained binding is writable", "[semantic][rule-reduce]")
 
 TEST_CASE("Reduce: reducer reads join the handler contract", "[semantic][rule-reduce]") {
     const auto analysis = analyze("rule Count:\n"
-                                  "    filter:\n"
+                                  "    each:\n"
                                   "        Enemy as e\n"
                                   "    reduce:\n"
                                   "        threat = sum(e.threat)\n"
@@ -373,8 +363,7 @@ TEST_CASE("Reduce: reducer reads join the handler contract", "[semantic][rule-re
 
 TEST_CASE("Reduce: sort keys read aggregates and the retained binding", "[semantic][rule-reduce]") {
     const auto analysis = analyze("rule Rank:\n" + kTeamPairs +
-                                  "    reduce:\n"
-                                  "        per: team\n"
+                                  "    reduce per team:\n"
                                   "        total = sum(player.Member.points)\n"
                                   "    order by:\n"
                                   "        total desc\n"
@@ -388,8 +377,7 @@ TEST_CASE("Reduce: sort keys read aggregates and the retained binding", "[semant
 
 TEST_CASE("Reduce: sort keys can't read the eliminated binding", "[semantic][rule-reduce]") {
     CHECK_FALSE(analyze("rule Rank:\n" + kTeamPairs +
-                        "    reduce:\n"
-                        "        per: team\n"
+                        "    reduce per team:\n"
                         "        total = sum(player.Member.points)\n"
                         "    order by:\n"
                         "        player.Member.points\n"
@@ -400,8 +388,7 @@ TEST_CASE("Reduce: sort keys can't read the eliminated binding", "[semantic][rul
 
 TEST_CASE("Reduce: a per-binding limit is rejected", "[semantic][rule-reduce]") {
     CHECK(analyze("rule Rank:\n" + kTeamPairs +
-                  "    reduce:\n"
-                  "        per: team\n"
+                  "    reduce per team:\n"
                   "        total = sum(player.Member.points)\n"
                   "    limit: 1 per team\n"
                   "    on tick:\n"
@@ -412,12 +399,11 @@ TEST_CASE("Reduce: a per-binding limit is rejected", "[semantic][rule-reduce]") 
 // ── where: split ────────────────────────────────────────────────────────────
 
 TEST_CASE("Reduce: a where predicate reading only the per binding filters groups", "[semantic][rule-reduce]") {
-    const auto analysis = analyze(team_rule("        per: team\n"
-                                            "        n = count()\n",
-                                            "        team.Team.total = n\n",
-                                            "        team.Team.active\n"
-                                            "        player.Member.team == team\n"
-                                            "        player.Member.points > 0\n"));
+    const auto analysis = analyze(grouped_rule("team", "        n = count()\n",
+                                                       "        team.Team.total = n\n",
+                                                       "        team.Team.active\n"
+                                                       "        player.Member.team == team\n"
+                                                       "        player.Member.points > 0\n"));
     INFO(describe(analysis));
     REQUIRE(analysis.clean());
     const auto& reduce = *analysis.rule("TeamScore").reduce;
@@ -438,11 +424,10 @@ TEST_CASE("Reduce: a var local is reassignable in pair handlers", "[semantic][ru
                                   "    on tick:\n"
                                   "        var n = 0\n"
                                   "        n = 1\n" +
-                                  team_rule("        per: team\n"
-                                            "        total = sum(player.Member.points)\n",
-                                            "        var best = total\n"
-                                            "        best = best + 1\n"
-                                            "        team.Team.total = best\n"));
+                                  grouped_rule("team", "        total = sum(player.Member.points)\n",
+                                                       "        var best = total\n"
+                                                       "        best = best + 1\n"
+                                                       "        team.Team.total = best\n"));
     INFO(describe(analysis));
     CHECK(analysis.clean());
     CHECK_FALSE(analyze("rule Plain:\n" + kTeamPairs +

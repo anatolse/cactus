@@ -16,7 +16,7 @@ pub entity Observer:
     Results
 
 rule AccumulateNestedLocals:
-    filter:
+    each:
         Results
 
     on tick:

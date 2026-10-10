@@ -55,7 +55,7 @@ template BulletTemplate:
         remaining = BULLET_LIFETIME
 
 rule FireBullets:
-    filter:
+    each:
         Muzzle as muzzle
 
     on fixed_tick:
@@ -100,7 +100,7 @@ entity MetronomeTimer:
     TimerRequests
 
 rule RelayReload:
-    filter:
+    each:
         TimerOwner as link
         ReloadChannel
 
@@ -108,7 +108,7 @@ rule RelayReload:
         emit ReloadReady to link.owner
 
 rule RelayShield:
-    filter:
+    each:
         TimerOwner as link
         ShieldChannel
 
@@ -116,7 +116,7 @@ rule RelayShield:
         emit ShieldReady to link.owner
 
 rule CountWeaponEvents:
-    filter:
+    each:
         Weapon as weapon
 
     on ReloadReady:
@@ -129,7 +129,7 @@ rule CountWeaponEvents:
 # disarms before emitting and advances at most once per fixed step, this
 # expires exactly once per step instead of looping inside one.
 rule RepeatMetronome:
-    filter:
+    each:
         Metronome as metronome
 
     on time.TimerExpired:
@@ -138,7 +138,7 @@ rule RepeatMetronome:
             duration = 0.0
 
 rule ApplyTimerRequests:
-    filter:
+    each:
         TimerRequests as requests
 
     on input:

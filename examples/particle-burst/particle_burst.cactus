@@ -47,7 +47,7 @@ rule EmitParticleBurst:
                     velocity = vec2(math.cos(angle), math.sin(angle)) * PARTICLE_SPEED
 
 rule SimulateParticles:
-    filter:
+    each:
         tf.WorldTransform as xf
         Particle as particle
 
@@ -59,7 +59,7 @@ rule SimulateParticles:
             destroy
 
 rule ParticleVertex:
-    filter:
+    each:
         tf.WorldTransform as xf
         Particle as particle
 

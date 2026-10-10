@@ -11,7 +11,7 @@ entity CursorDriver:
     CursorSequence
 
 rule DriveCursorSequence:
-    filter:
+    each:
         CursorSequence
 
     on tick:

@@ -11,12 +11,12 @@ per-entity check.
 ### Requirement: `when:` gates every handler of a rule
 A regular rule SHALL accept an optional `when:` block containing one or more boolean predicate
 expressions, forming a logical conjunction. It SHALL apply to every handler of the rule, including
-event handlers and rules without `filter:` or `pairs:`. When any predicate is false, the handler's
+event handlers and rules without `each:` or `pairs:`. When any predicate is false, the handler's
 pass SHALL do nothing: no entity or tuple is visited, the body does not run, and no writes or
 commands are produced. `when:` SHALL be rejected on `extern rule` declarations.
 
 #### Scenario: Gate off skips the whole filter pass
-- **WHEN** a rule declares `filter: Enemy` and `when: not Game.Match.over`, and `Game.Match.over` is
+- **WHEN** a rule declares `each: Enemy` and `when: not Game.Match.over`, and `Game.Match.over` is
   true
 - **THEN** the handler body runs for no `Enemy`
 
@@ -40,7 +40,7 @@ call graph is proven pure. It MUST NOT read filter, pair, or `self` bindings, ev
 handler locals, and it MUST NOT contain any effect that a `where:` predicate forbids.
 
 #### Scenario: Binding read in when: is rejected
-- **WHEN** a rule with `filter: Enemy as enemy` declares `when: enemy.dying`
+- **WHEN** a rule with `each: Enemy as enemy` declares `when: enemy.dying`
 - **THEN** semantic analysis reports that `when:` cannot read a binding, and suggests `where:`
 
 #### Scenario: Non-bool predicate is rejected

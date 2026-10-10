@@ -38,7 +38,7 @@ wildcard_arm     = "_" "=>" stmt+ ;
 - **THEN** the wildcard arm body executes
 
 #### Scenario: Slot subject selects a state match
-- **WHEN** a handler with `filter: EnemyMode as m` runs `match m:` with variant arms
+- **WHEN** a handler with `each: EnemyMode as m` runs `match m:` with variant arms
 - **THEN** the semantic analyzer treats it as a state match, not a trait or value match
 
 #### Scenario: match on non-entity_id subject is a type error
@@ -53,7 +53,7 @@ The alias introduced by `TraitName as alias =>` SHALL be in scope for the durati
 - **THEN** the semantic analyzer accepts it; `b.phase` resolves to the `Boss.phase` field on the matched entity
 
 #### Scenario: Alias conflicts with filter alias is an error
-- **WHEN** the rule has `filter: Position as p` and a match arm uses `Boss as p =>`
+- **WHEN** the rule has `each: Position as p` and a match arm uses `Boss as p =>`
 - **THEN** the semantic analyzer SHALL report: "match arm alias 'p' conflicts with filter alias 'p'"
 
 #### Scenario: Marker trait arm with alias is an error

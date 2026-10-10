@@ -130,7 +130,7 @@ func slide_along(v: vec3, hit: SweepHit, max_slope: float) vec3:
     return vec3(clipped.x, rise, clipped.z)
 
 rule Integrate:
-    filter:
+    each:
         CharacterBody as body
         Collider
         tv.WorldTransform
@@ -163,8 +163,7 @@ rule Lift:
     group: solve
     after:
         Integrate
-    reduce:
-        per: body
+    reduce per body:
         hit = first_hit(sweep(body, vec3(0.0, body.CharacterBody.lift, 0.0), other))
 
     on core.fixed_tick:
@@ -184,8 +183,7 @@ rule Slide1:
     group: solve
     after:
         Lift
-    reduce:
-        per: body
+    reduce per body:
         hit = first_hit(sweep(body, body.CharacterBody.motion, other))
 
     on core.fixed_tick:
@@ -210,8 +208,7 @@ rule Slide2:
     group: solve
     after:
         Slide1
-    reduce:
-        per: body
+    reduce per body:
         hit = first_hit(sweep(body, body.CharacterBody.motion, other))
 
     on core.fixed_tick:
@@ -236,8 +233,7 @@ rule Slide3:
     group: solve
     after:
         Slide2
-    reduce:
-        per: body
+    reduce per body:
         hit = first_hit(sweep(body, body.CharacterBody.motion, other))
 
     on core.fixed_tick:
@@ -265,8 +261,7 @@ rule Snap:
     group: solve
     after:
         Slide3
-    reduce:
-        per: body
+    reduce per body:
         hit = first_hit(sweep(body, vec3(0.0, (body.CharacterBody.lift + body.CharacterBody.drop) * -1.0, 0.0), other))
 
     on core.fixed_tick as step:
@@ -299,8 +294,7 @@ rule Depenetrate:
     group: solve
     after:
         Snap
-    reduce:
-        per: body
+    reduce per body:
         push = sum(push_out(body, other))
 
     on core.fixed_tick:

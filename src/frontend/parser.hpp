@@ -60,9 +60,9 @@ private:
         std::vector<std::string> after_rules;
         std::vector<std::string> before_rules;
     };
-    // Parses the filter:/exclude:/order by:/group:/after:/before: clauses shared by
+    // Parses the each:/without:/order by:/group:/after:/before: clauses shared by
     // `rule` and `extern rule` declarations, in that order. on_clause_parsed,
-    // when set, is invoked with each of filter:/exclude:/order by:'s start
+    // when set, is invoked with each of each:/without:/order by:'s start
     // location and name right after that clause is parsed (before its own
     // synchronize check) — never for the ordering clauses, which are compatible
     // with `pairs:`. parse_rule uses this to reject a clause combined with

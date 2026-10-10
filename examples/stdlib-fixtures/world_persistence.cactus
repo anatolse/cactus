@@ -117,7 +117,7 @@ rule SetupWorld:
         spawn Camera()
 
 rule RestoreGame:
-    filter:
+    each:
         RestoreControl as control
 
     on tick:
@@ -132,7 +132,7 @@ rule RebuildCameraAfterRestore:
         spawn Camera()
 
 rule SpawnWorld:
-    filter:
+    each:
         Spawner as spawner
 
     on tick:

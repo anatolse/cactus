@@ -1,13 +1,13 @@
 # dsl-where-clause Specification
 
 ## Purpose
-Define the `where:` clause: a pure boolean predicate list that restricts a regular rule's unary (`filter:`) or pair (`pairs:`) domain before its handler executes, independent of any particular execution strategy.
+Define the `where:` clause: a pure boolean predicate list that restricts a regular rule's unary (`each:`) or pair (`pairs:`) domain before its handler executes, independent of any particular execution strategy.
 ## Requirements
 ### Requirement: `where:` restricts an existing unary or pair domain
-A regular rule that declares `filter:` and/or `pairs:` SHALL accept an optional `where:` block containing one or more boolean predicate expressions. Multiple predicate lines SHALL form an unordered logical conjunction: every line MUST evaluate to `true` for the entity or tuple to remain in the domain. `where:` SHALL be rejected on rules with neither `filter:` nor `pairs:` and on `extern rule` declarations.
+A regular rule that declares `each:` and/or `pairs:` SHALL accept an optional `where:` block containing one or more boolean predicate expressions. Multiple predicate lines SHALL form an unordered logical conjunction: every line MUST evaluate to `true` for the entity or tuple to remain in the domain. `where:` SHALL be rejected on rules with neither `each:` nor `pairs:` and on `extern rule` declarations.
 
 #### Scenario: where: restricts a unary filter domain
-- **WHEN** a rule declares `filter: Ball as ball` and `where: ball.velocity.x > 0.0`
+- **WHEN** a rule declares `each: Ball as ball` and `where: ball.velocity.x > 0.0`
 - **THEN** the handler executes only for entities satisfying both the filter and the predicate
 
 #### Scenario: where: restricts a pair domain
@@ -19,7 +19,7 @@ A regular rule that declares `filter:` and/or `pairs:` SHALL accept an optional 
 - **THEN** a tuple executes only when both lines evaluate to `true`
 
 #### Scenario: where: without filter or pairs is rejected
-- **WHEN** a rule declares `where:` but neither `filter:` nor `pairs:`
+- **WHEN** a rule declares `where:` but neither `each:` nor `pairs:`
 - **THEN** compilation reports that `where:` requires an existing unary or pair domain
 
 ### Requirement: Every `where:` predicate type-checks as bool
@@ -60,10 +60,10 @@ The compiler SHALL NOT guarantee an evaluation order or observable short-circuit
 - **THEN** the compiled program admits the same entities or tuples regardless of source order
 
 ### Requirement: `where:` evaluates once per pass, against the already-selected domain
-`where:` SHALL be evaluated once per entity or tuple, at the start of that entity's or tuple's handler invocation, against the domain membership already determined by `filter:`/`exclude:`/`pairs:`. `where:` MAY only remove entities or tuples from that membership; it MUST NOT add any and MUST NOT be re-evaluated mid-pass as a result of mutations, projections, or buffered structural commands performed by earlier invocations in the same pass.
+`where:` SHALL be evaluated once per entity or tuple, at the start of that entity's or tuple's handler invocation, against the domain membership already determined by `each:`/`without:`/`pairs:`. `where:` MAY only remove entities or tuples from that membership; it MUST NOT add any and MUST NOT be re-evaluated mid-pass as a result of mutations, projections, or buffered structural commands performed by earlier invocations in the same pass.
 
 #### Scenario: Rejected entities do not run the handler body
-- **WHEN** an entity satisfies `filter:` but not `where:`
+- **WHEN** an entity satisfies `each:` but not `where:`
 - **THEN** its handler body does not execute for that activation
 
 #### Scenario: where: cannot expand the pass
@@ -202,7 +202,7 @@ When a pair rule has no broad-phase-eligible predicate in its `where:` clause an
 - **AND** does not emit the unaccelerated pair rule warning for that rule
 
 #### Scenario: Unary rules are never flagged
-- **WHEN** a rule uses `filter:` rather than `pairs:`
+- **WHEN** a rule uses `each:` rather than `pairs:`
 - **THEN** no unaccelerated pair rule warning is emitted for it
 
 ### Requirement: Collider queries are broad-phase eligible without author-written bounds
@@ -239,7 +239,7 @@ Other reducers count rows or sum values that pruned rows would change, so mixing
 - **THEN** the predicate is evaluated as an ordinary predicate, with no compile error
 
 ### Requirement: Inline row predicates
-A regular rule SHALL accept inline `where: predicate, predicate` as equivalent to its existing block predicate list. `each:` SHALL qualify as the same positive unary selection as `filter:`. Boolean typing, purity, predicate evaluation rules, group/row classification during reduction, and spatial recognition SHALL remain unchanged. Inline predicates SHALL remain rejected in selectionless and extern rules under the existing domain restrictions.
+A regular rule SHALL accept inline `where: predicate, predicate` as equivalent to its existing block predicate list. `each:` SHALL qualify as the same positive unary selection as `each:`. Boolean typing, purity, predicate evaluation rules, group/row classification during reduction, and spatial recognition SHALL remain unchanged. Inline predicates SHALL remain rejected in selectionless and extern rules under the existing domain restrictions.
 
 #### Scenario: Inline predicates constrain the same rows
 - **WHEN** a pair rule uses `where: touching(body, lava), body != lava` with a valid pure geometric function
@@ -247,7 +247,7 @@ A regular rule SHALL accept inline `where: predicate, predicate` as equivalent t
 
 #### Scenario: Canonical unary selection supports where
 - **WHEN** a rule uses `each: Motion as motion` and `where: motion.speed > 0.0`
-- **THEN** it selects the same invocations as the corresponding `filter:` rule
+- **THEN** it selects the same invocations as the corresponding `each:` rule
 
 #### Scenario: Inline predicates retain purity and type errors
 - **WHEN** an inline predicate is non-boolean or calls an effectful function

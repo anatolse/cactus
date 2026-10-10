@@ -49,7 +49,7 @@ rule FirstKnock:
         emit Knock to Front
 
 rule Answer:
-    filter:
+    each:
         Door as door
 
     on Knock:

@@ -33,18 +33,18 @@ state EnemyMode:
 - **THEN** it parses as a field, not as a state declaration
 
 ### Requirement: Variants are traits named through their state
-Every variant `V` of state `S` SHALL be a trait written `S.V`, qualified like an enum variant, and through a module alias as `m.S.V`. A bare `V` SHALL NOT name the variant. `S.V` SHALL be usable wherever a trait name is accepted, unless a requirement of this capability restricts it: `filter:`, `exclude:`, `on added`, `on removed`, `set S.V on e:`, field access through an alias, trait-match arms and `query.*[S.V]` type arguments.
+Every variant `V` of state `S` SHALL be a trait written `S.V`, qualified like an enum variant, and through a module alias as `m.S.V`. A bare `V` SHALL NOT name the variant. `S.V` SHALL be usable wherever a trait name is accepted, unless a requirement of this capability restricts it: `each:`, `without:`, `on added`, `on removed`, `set S.V on e:`, field access through an alias, trait-match arms and `query.*[S.V]` type arguments.
 
 #### Scenario: Filter on one variant
-- **WHEN** a rule has `filter: EnemyMode.Chasing as c` and a handler reads `c.target`
+- **WHEN** a rule has `each: EnemyMode.Chasing as c` and a handler reads `c.target`
 - **THEN** the handler visits only entities in `Chasing`, and `c.target` reads that variant's field
 
 #### Scenario: Exclude a variant
-- **WHEN** a rule has `filter: Enemy` and `exclude: EnemyMode.Dying`
+- **WHEN** a rule has `each: Enemy` and `without: EnemyMode.Dying`
 - **THEN** the rule visits no entity in `Dying`
 
 #### Scenario: Bare variant name is not a trait
-- **WHEN** a rule has `filter: Chasing` and no trait named `Chasing` exists
+- **WHEN** a rule has `each: Chasing` and no trait named `Chasing` exists
 - **THEN** the semantic analyzer reports an unknown trait `Chasing`
 
 #### Scenario: Trait match arm on a variant
@@ -52,14 +52,14 @@ Every variant `V` of state `S` SHALL be a trait written `S.V`, qualified like an
 - **THEN** that arm runs
 
 ### Requirement: Exactly one variant per carrier
-An entity that carries state `S` SHALL carry exactly one variant of `S` in every committed state of the world. `filter: S as m` SHALL select every entity that carries `S` and bind `m` to its state slot. `exclude: S` SHALL exclude every carrier. The slot `m` SHALL be usable only as a `match` subject.
+An entity that carries state `S` SHALL carry exactly one variant of `S` in every committed state of the world. `each: S as m` SHALL select every entity that carries `S` and bind `m` to its state slot. `without: S` SHALL exclude every carrier. The slot `m` SHALL be usable only as a `match` subject.
 
 #### Scenario: Slot filter selects every carrier
-- **WHEN** three enemies are in `Idle`, `Chasing` and `Dying`, and a rule has `filter: EnemyMode as m`
+- **WHEN** three enemies are in `Idle`, `Chasing` and `Dying`, and a rule has `each: EnemyMode as m`
 - **THEN** the rule visits all three
 
 #### Scenario: Slot used outside match is rejected
-- **WHEN** a handler with `filter: EnemyMode as m` writes `let x = m`
+- **WHEN** a handler with `each: EnemyMode as m` writes `let x = m`
 - **THEN** the semantic analyzer reports that a state slot can only be a `match` subject
 
 ### Requirement: Entities start in a variant

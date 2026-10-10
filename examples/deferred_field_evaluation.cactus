@@ -42,7 +42,7 @@ entity Subject:
     Probe
 
 rule Snapshot:
-    filter:
+    each:
         Probe as probe
         tv.WorldTransform as transform
 

@@ -6,6 +6,7 @@
 #include "frontend/parser.hpp"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -16,6 +17,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -474,7 +476,7 @@ TEST_CASE("Parser: pub entity with nested trait blocks", "[parser]") {
 TEST_CASE("Parser: rule with filter and handler", "[parser]") {
     auto prog = parse(
         "rule MoveSystem:\n"
-        "    filter:\n"
+        "    each:\n"
         "       Position\n"
         "       Velocity\n"
         "    on tick:\n"
@@ -1035,7 +1037,7 @@ TEST_CASE("Parser: use with dotted path and alias", "[parser][modules]") {
 TEST_CASE("Parser: filter with qualified trait names", "[parser][modules]") {
     auto prog = parse(
         "rule Render:\n"
-        "    filter:  \n"
+        "    each:  \n"
         "        phys.Body\n"
         "        render.Sprite\n"
         "    on tick:\n"
@@ -1054,7 +1056,7 @@ TEST_CASE("Parser: filter with qualified trait names", "[parser][modules]") {
 TEST_CASE("Parser: filter with aliases", "[parser][modules]") {
     auto prog = parse(
         "rule Render:\n"
-        "    filter:\n"
+        "    each:\n"
         "        phys.Body as b\n"
         "        render.Sprite as s\n"
         "    on tick:\n"
@@ -1072,7 +1074,7 @@ TEST_CASE("Parser: filter with aliases", "[parser][modules]") {
 TEST_CASE("Parser: filter mixed qualified and unqualified", "[parser][modules]") {
     auto prog = parse(
         "rule Mixed:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Position\n"
         "        phys.Body as b\n"
         "    on tick:\n"
@@ -1092,7 +1094,7 @@ TEST_CASE("Parser: filter mixed qualified and unqualified", "[parser][modules]")
 TEST_CASE("Parser: filter with unqualified aliases", "[parser][modules]") {
     auto prog = parse(
         "rule Simple:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Position as pos\n"
         "        Velocity as vel\n"
         "    on tick:\n"
@@ -1266,7 +1268,7 @@ TEST_CASE("Parser: pub template declaration", "[parser][dynamic-ecs]") {
 TEST_CASE("Parser: on spawn lifecycle handler", "[parser][dynamic-ecs]") {
     auto prog = parse(
         "rule Init:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Position\n"
         "    on spawn:\n"
         "        x = 0.0\n");
@@ -1278,7 +1280,7 @@ TEST_CASE("Parser: on spawn lifecycle handler", "[parser][dynamic-ecs]") {
 TEST_CASE("Parser: on destroy lifecycle handler", "[parser][dynamic-ecs]") {
     auto prog = parse(
         "rule Cleanup:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Position\n"
         "    on destroy:\n"
         "        x = 0.0\n");
@@ -1289,7 +1291,7 @@ TEST_CASE("Parser: on destroy lifecycle handler", "[parser][dynamic-ecs]") {
 TEST_CASE("Parser: on load and on unload lifecycle handlers", "[parser][dynamic-ecs]") {
     auto prog = parse(
         "rule LevelMgr:\n"
-        "    filter: \n"
+        "    each: \n"
         "        GameState\n"
         "    on load:\n"
         "        x = 1\n"
@@ -1305,7 +1307,7 @@ TEST_CASE("Parser: on load and on unload lifecycle handlers", "[parser][dynamic-
 TEST_CASE("Parser: rule with exclude clause", "[parser][dynamic-ecs]") {
     auto prog = parse(
         "rule SceneCleanup:\n"
-        "    exclude:\n"
+        "    without:\n"
         "        Persistent\n"
         "    on unload:\n"
         "        x = 0\n");
@@ -1321,7 +1323,7 @@ TEST_CASE("Parser: rule with exclude clause", "[parser][dynamic-ecs]") {
 TEST_CASE("Parser: spawn statement", "[parser][dynamic-ecs]") {
     auto prog = parse(
         "rule LevelSetup:\n"
-        "    filter: \n"
+        "    each: \n"
         "        GameState\n"
         "    on load:\n"
         "        spawn Enemy:\n"
@@ -1348,7 +1350,7 @@ TEST_CASE("Parser: spawn statement", "[parser][dynamic-ecs]") {
 TEST_CASE("Parser: destroy statement", "[parser][dynamic-ecs]") {
     auto prog = parse(
         "rule DeathSys:\n"
-        "    filter: \n"
+        "    each: \n"
         "        Health\n"
         "    on tick:\n"
         "        destroy\n");
@@ -1406,7 +1408,7 @@ TEST_CASE("Parser: child is no longer reserved", "[parser][hierarchy]") {
 TEST_CASE("Parser: load statement", "[parser][dynamic-ecs]") {
     auto prog = parse(
         "rule GameMgr:\n"
-        "    filter: \n"
+        "    each: \n"
         "        GameState\n"
         "    on tick:\n"
         "        load levels.level1\n");
@@ -1419,7 +1421,7 @@ TEST_CASE("Parser: load statement", "[parser][dynamic-ecs]") {
 TEST_CASE("Parser: add and remove statements", "[parser][dynamic-ecs]") {
     auto prog = parse(
         "rule FreezeSystem:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Position\n"
         "    on tick:\n"
         "        add Frozen\n"
@@ -1437,7 +1439,7 @@ TEST_CASE("Parser: add and remove statements", "[parser][dynamic-ecs]") {
 TEST_CASE("Parser: add statement with field block and target", "[parser][dynamic-ecs]") {
     auto prog = parse(
         "rule FreezeSystem:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Position\n"
         "    on tick:\n"
         "        add Frozen to target_id:\n"
@@ -1454,7 +1456,7 @@ TEST_CASE("Parser: add statement with field block and target", "[parser][dynamic
 TEST_CASE("Parser: remove statement with target", "[parser][dynamic-ecs]") {
     auto prog = parse(
         "rule FreezeSystem:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Position\n"
         "    on tick:\n"
         "        remove Frozen from target_id\n");
@@ -1527,7 +1529,7 @@ TEST_CASE("Parser: set remains an ordinary identifier", "[parser][deferred-set]"
         "trait Settings:\n"
         "    var set: int = 0\n"
         "rule Count:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Settings as settings\n"
         "    on tick:\n"
         "        let set = settings.set\n"
@@ -2020,10 +2022,10 @@ static std::optional<std::pair<std::string, std::string>> sort_key_alias_field(c
 TEST_CASE("Parser: extern rule declaration with filter and order by", "[parser][extern-rule]") {
     auto prog = parse(
         "extern rule SpriteRenderer:\n"
-        "    filter:\n"
+        "    each:\n"
         "        std.transform.flat.Position as pos\n"
         "        std.render.sprites.Renderer as r\n"
-        "    exclude:\n"
+        "    without:\n"
         "        Hidden\n"
         "    order by:\n"
         "        r.layer asc\n"
@@ -2058,7 +2060,7 @@ TEST_CASE("Parser: extern rule declaration with filter and order by", "[parser][
 TEST_CASE("Parser: rule order by single and default asc", "[parser][rule-order-by]") {
     auto prog = parse(
         "rule Render:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Sprite as s\n"
         "    order by:\n"
         "        s.layer\n"
@@ -2077,7 +2079,7 @@ TEST_CASE("Parser: rule order by single and default asc", "[parser][rule-order-b
 TEST_CASE("Parser: rule order by multi key", "[parser][rule-order-by]") {
     auto prog = parse(
         "rule Render:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Position as p\n"
         "        Sprite as s\n"
         "    order by:\n"
@@ -2103,7 +2105,7 @@ TEST_CASE("Parser: rule order by multi key", "[parser][rule-order-by]") {
 TEST_CASE("Parser: rule without order by leaves clause empty", "[parser][rule-order-by]") {
     auto prog = parse(
         "rule Render:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Sprite\n"
         "    on tick:\n"
         "        x = 1\n");
@@ -2115,7 +2117,7 @@ TEST_CASE("Parser: rule without order by leaves clause empty", "[parser][rule-or
 TEST_CASE("Parser: rule order by accepts a computed cross-expression sort key", "[parser][rule-order-by]") {
     auto prog = parse(
         "rule Render:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Position as pos\n"
         "    order by:\n"
         "        math.length(pos.value - origin) desc\n"
@@ -2213,7 +2215,7 @@ TEST_CASE("Parser: pairs clause preserves source order and locations", "[parser]
 TEST_CASE("Parser: pairs remains a contextual identifier outside rule-clause position", "[parser][pair-relations]") {
     auto prog = parse(
         "rule UsesPairsLocal:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Position\n"
         "    on tick:\n"
         "        let pairs = 1\n"
@@ -2270,7 +2272,7 @@ TEST_CASE("Parser: pairs clause combined with filter is rejected", "[parser][pai
         "            DynamicBody\n"
         "        wall:\n"
         "            Solid\n"
-        "    filter:\n"
+        "    each:\n"
         "        Position\n"
         "    on fixed_tick:\n"
         "        x = 1\n");
@@ -2285,7 +2287,7 @@ TEST_CASE("Parser: pairs clause combined with exclude is rejected", "[parser][pa
         "            DynamicBody\n"
         "        wall:\n"
         "            Solid\n"
-        "    exclude:\n"
+        "    without:\n"
         "        Dead\n"
         "    on fixed_tick:\n"
         "        x = 1\n");
@@ -2293,7 +2295,7 @@ TEST_CASE("Parser: pairs clause combined with exclude is rejected", "[parser][pa
 }
 
 // order by: is not mutually exclusive with pairs: at the parser layer (or, as
-// of a later task, at the semantic layer either) — only filter:/exclude: are.
+// of a later task, at the semantic layer either) — only each:/without: are.
 TEST_CASE("Parser: pairs clause combined with order by parses successfully", "[parser][pair-relations]") {
     auto prog = parse(
         "rule Contacts:\n"
@@ -2341,7 +2343,7 @@ TEST_CASE("Parser: dotted assignment target parses name and path", "[parser][pai
 TEST_CASE("Parser: star-assign and slash-assign parse into VarAssign with correct op", "[parser][vector-expressions]") {
     auto prog = parse(
         "rule Simple:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Position\n"
         "    on tick:\n"
         "        motion.velocity *= 2.0\n"
@@ -2367,7 +2369,7 @@ TEST_CASE("Parser: star-assign and slash-assign parse into VarAssign with correc
 TEST_CASE("Parser: slash-assign parses a nested writable-component path", "[parser][vector-expressions]") {
     auto prog = parse(
         "rule Simple:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Position\n"
         "    on tick:\n"
         "        motion.velocity.y /= 2.0\n");
@@ -2384,7 +2386,7 @@ TEST_CASE("Parser: slash-assign parses a nested writable-component path", "[pars
 TEST_CASE("Parser: bare assignment target still has an empty path", "[parser][pair-relations]") {
     auto prog = parse(
         "rule Simple:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Position\n"
         "    on tick:\n"
         "        x = 1\n");
@@ -2432,7 +2434,7 @@ TEST_CASE("Parser: pairs clause on extern rule is rejected", "[parser][pair-rela
 TEST_CASE("Parser: where clause after filter is parsed", "[parser][where-clause]") {
     auto prog = parse(
         "rule Moving:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Body as ball\n"
         "    where:\n"
         "        ball.velocity.x > 0.0\n"
@@ -2504,7 +2506,7 @@ TEST_CASE("Parser: multiple where clause lines are parsed as a list in source or
 TEST_CASE("Parser: where remains a contextual identifier outside clause position", "[parser][where-clause]") {
     auto prog = parse(
         "rule UsesWhereLocal:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Position\n"
         "    on tick:\n"
         "        let where = 1\n"
@@ -2518,7 +2520,7 @@ TEST_CASE("Parser: where remains a contextual identifier outside clause position
 TEST_CASE("Parser: where clause on extern rule is rejected", "[parser][where-clause]") {
     auto errors = parse_expect_errors(
         "extern rule Bad:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Position\n"
         "    where:\n"
         "        true\n");
@@ -2546,7 +2548,7 @@ TEST_CASE("Parser: when clause on a selectionless rule is parsed", "[parser][whe
 TEST_CASE("Parser: multiple when lines after filter, after and where are parsed in order", "[parser][when-clause]") {
     auto prog = parse(
         "rule Move:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Enemy as enemy\n"
         "    after:\n"
         "        Spawn\n"
@@ -2593,7 +2595,7 @@ TEST_CASE("Parser: empty when clause is rejected", "[parser][when-clause]") {
 TEST_CASE("Parser: when clause on extern rule is rejected", "[parser][when-clause]") {
     auto errors = parse_expect_errors(
         "extern rule Bad:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Position\n"
         "    when:\n"
         "        true\n"
@@ -2652,7 +2654,7 @@ TEST_CASE("Parser: per-binding limit on a pairs rule is parsed", "[parser][rule-
 TEST_CASE("Parser: limit on a filter rule is parsed", "[parser][rule-limit]") {
     auto prog = parse(
         "rule Render:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Sprite as s\n"
         "    order by:\n"
         "        s.layer\n"
@@ -2688,7 +2690,7 @@ TEST_CASE("Parser: limit count accepts a computed expression", "[parser][rule-li
 TEST_CASE("Parser: rule without limit leaves clause unset", "[parser][rule-limit]") {
     auto prog = parse(
         "rule Render:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Sprite\n"
         "    on tick:\n"
         "        x = 1\n");
@@ -2698,7 +2700,7 @@ TEST_CASE("Parser: rule without limit leaves clause unset", "[parser][rule-limit
 }
 
 // The domain requirement is a semantic check (see test_semantic.cpp's
-// "limit: requires a filter: or pairs: domain"), exactly as it is for where: —
+// "limit: requires an each: or pairs: domain"), exactly as it is for where: —
 // the parser accepts the clause and records it for that later pass.
 TEST_CASE("Parser: limit on a selectionless rule still parses", "[parser][rule-limit]") {
     auto prog = parse(
@@ -2725,8 +2727,7 @@ TEST_CASE("Parser: grouped reduce parses every reducer kind", "[parser][rule-red
         "            Score\n"
         "    where:\n"
         "        player.Score.team == team\n"
-        "    reduce:\n"
-        "        per: team\n"
+        "    reduce per team:\n"
         "        rows = count()\n"
         "        players = count(player)\n"
         "        total = sum(player.Score.value)\n"
@@ -2760,7 +2761,7 @@ TEST_CASE("Parser: grouped reduce parses every reducer kind", "[parser][rule-red
 TEST_CASE("Parser: global reduce on a filter rule has no per binding", "[parser][rule-reduce]") {
     auto prog = parse(
         "rule CountEnemies:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Enemy as e\n"
         "    reduce:\n"
         "        n = count()\n"
@@ -2781,8 +2782,7 @@ TEST_CASE("Parser: order by and limit after reduce rank aggregate rows", "[parse
         "            Team\n"
         "        player:\n"
         "            Score\n"
-        "    reduce:\n"
-        "        per: team\n"
+        "    reduce per team:\n"
         "        total = sum(player.Score.value)\n"
         "    order by:\n"
         "        total desc\n"
@@ -2807,8 +2807,7 @@ TEST_CASE("Parser: order by before reduce is rejected", "[parser][rule-reduce]")
         "            Score\n"
         "    order by:\n"
         "        team.Team.id\n"
-        "    reduce:\n"
-        "        per: team\n"
+        "    reduce per team:\n"
         "        total = sum(player.Score.value)\n"
         "    on tick:\n"
         "        x = 1\n");
@@ -2843,10 +2842,9 @@ TEST_CASE("Parser: unknown reducers are rejected", "[parser][rule-reduce]") {
 TEST_CASE("Parser: reduce needs at least one reducer", "[parser][rule-reduce]") {
     auto errors = parse_expect_errors(
         "rule Bad:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Enemy\n"
-        "    reduce:\n"
-        "        per: e\n"
+        "    reduce per e:\n"
         "    on tick:\n"
         "        x = 1\n");
     REQUIRE(errors.has_errors());
@@ -2855,7 +2853,7 @@ TEST_CASE("Parser: reduce needs at least one reducer", "[parser][rule-reduce]") 
 TEST_CASE("Parser: reduce clause on extern rule is rejected", "[parser][rule-reduce]") {
     auto errors = parse_expect_errors(
         "extern rule Bad:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Position\n"
         "    reduce:\n"
         "        n = count()\n");
@@ -2865,7 +2863,7 @@ TEST_CASE("Parser: reduce clause on extern rule is rejected", "[parser][rule-red
 TEST_CASE("Parser: limit clause on extern rule is rejected", "[parser][rule-limit]") {
     auto errors = parse_expect_errors(
         "extern rule Bad:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Position\n"
         "    limit: 10\n");
     REQUIRE(errors.has_errors());
@@ -2874,14 +2872,14 @@ TEST_CASE("Parser: limit clause on extern rule is rejected", "[parser][rule-limi
 TEST_CASE("Parser: extern rule rejects executable handler statements", "[parser][extern-rule]") {
     auto errors = parse_expect_errors(
         "extern rule Bad:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Position\n"
         "    on tick:\n"
         "        pass\n");
     REQUIRE(errors.has_errors());
 }
 
-TEST_CASE("Parser: external projects clauses preserve every entry and source location",
+TEST_CASE("Parser: external projects list preserves every entry and source location",
           "[parser][extern-rule][handler-contract]") {
     auto prog = parse(
         "extern rule ExternalLayout:\n"
@@ -2891,10 +2889,9 @@ TEST_CASE("Parser: external projects clauses preserve every entry and source loc
         "        projects:\n"
         "            DesiredSize\n"
         "            ui.ComputedLayout\n"
+        "            interaction.PointerHit\n"
         "        writes:\n"
         "            PointerState\n"
-        "        projects:\n"
-        "            interaction.PointerHit\n"
         "        effects:\n"
         "            graphics\n");
 
@@ -2908,7 +2905,7 @@ TEST_CASE("Parser: external projects clauses preserve every entry and source loc
     CHECK(handler.projects[1].spelling == "ui.ComputedLayout");
     CHECK(handler.projects[1].location == SourceLocation{"test.cactus", 8, 13});
     CHECK(handler.projects[2].spelling == "interaction.PointerHit");
-    CHECK(handler.projects[2].location == SourceLocation{"test.cactus", 12, 13});
+    CHECK(handler.projects[2].location == SourceLocation{"test.cactus", 9, 13});
     REQUIRE(handler.reads.size() == 1);
     REQUIRE(handler.writes.size() == 1);
     REQUIRE(handler.effects.size() == 1);
@@ -2994,7 +2991,7 @@ TEST_CASE("Parser: selectionless producer and selected renderer contracts preser
         "        emits:\n"
         "            game.input.InputSample\n"
         "extern rule SpriteRenderer:\n"
-        "    filter:\n"
+        "    each:\n"
         "        render.Sprite as sprite\n"
         "        transform.WorldTransform as world\n"
         "    on std.core.render:\n"
@@ -3261,7 +3258,7 @@ TEST_CASE("Parser: rule with multiple after: entries", "[parser][rule-ordering]"
 TEST_CASE("Parser: on tick with alias parsed", "[parser][dsl-event-handler-syntax]") {
     auto prog = parse(
         "rule Move:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Position\n"
         "    on tick as t:\n"
         "        x = 1\n");
@@ -3532,16 +3529,16 @@ TEST_CASE("Parser: std.editor module parses enum, traits, events, extern funcs, 
         "pub extern func apply_camera_2d(view_center: vec2, zoom: float)\n"
         "pub extern func apply_camera_3d(position: vec3, rotation: quat)\n"
         "pub extern rule EditorTemplatePalette:\n"
-        "    filter:\n"
+        "    each:\n"
         "        EditorState\n"
         "pub extern rule EditorPropertyPanel:\n"
-        "    filter:\n"
+        "    each:\n"
         "        EditorState\n"
         "pub extern rule GizmoRenderer2D:\n"
-        "    filter:\n"
+        "    each:\n"
         "        EditorGizmo2D\n"
         "pub extern rule GizmoRenderer3D:\n"
-        "    filter:\n"
+        "    each:\n"
         "        EditorGizmo3D\n");
     CHECK(prog.declarations.size() >= 20);
 }
@@ -3925,7 +3922,7 @@ TEST_CASE("Parser: qualified spawn expression template and override traits", "[p
 TEST_CASE("Parser: qualified trait match arm", "[parser][module-qualified]") {
     auto prog = parse(
         "rule MatchSys:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Marker\n"
         "    on tick:\n"
         "        match self:\n"
@@ -4245,7 +4242,7 @@ TEST_CASE("Parser: an identifier named state is not a declaration", "[parser][ex
         "trait Ctrl:\n"
         "    var state: int = 0\n"
         "rule R:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Ctrl as ctrl\n"
         "    on tick:\n"
         "        ctrl.state = 1\n");
@@ -4392,6 +4389,180 @@ TEST_CASE("Parser: malformed concise lists recover to later declarations", "[par
     }
 }
 
+struct ParsedWithErrors {
+    ProgramNode program;
+    std::vector<Diagnostic> diagnostics;
+};
+
+static ParsedWithErrors parse_collecting_errors(const std::string& source) {
+    ErrorReporter errors;
+    Lexer lexer("module test\n" + source, "test.cactus", errors);
+    Parser parser(lexer.tokenize(), errors);
+    auto program = parser.parse_program();
+    return {.program = std::move(program), .diagnostics = errors.diagnostics()};
+}
+
+static const RuleNode* find_rule(const ProgramNode& program, const std::string& name) {
+    for (const auto& declaration : program.declarations) {
+        if (const auto* rule = std::get_if<RuleNode>(&declaration); rule != nullptr && rule->name == name) {
+            return rule;
+        }
+    }
+    return nullptr;
+}
+
+TEST_CASE("Parser: removed filter and exclude clauses name their replacements", "[parser][concise]") {
+    const auto [clause, replacement, positive] = GENERATE(
+        std::tuple<std::string, std::string, bool>{"    filter: Position as pos\n", "each:", true},
+        std::tuple<std::string, std::string, bool>{"    filter:\n        Position as pos\n", "each:", true},
+        std::tuple<std::string, std::string, bool>{"    exclude: Position\n", "without:", false},
+        std::tuple<std::string, std::string, bool>{"    exclude:\n        Position\n", "without:", false});
+    CAPTURE(clause);
+    const auto parsed = parse_collecting_errors("rule Bad:\n" + clause +
+                                                "    on tick:\n        return\nrule Later:\n    on tick:\n        return\n");
+    REQUIRE(parsed.diagnostics.size() == 1);
+    CHECK(parsed.diagnostics[0].message.contains("renamed to `" + replacement + "`"));
+    CHECK(parsed.diagnostics[0].location.line == 3);
+    CHECK(parsed.diagnostics[0].location.column == 5);
+    const auto* bad = find_rule(parsed.program, "Bad");
+    REQUIRE(bad != nullptr);
+    const auto& selection = positive ? bad->filter : bad->exclude;
+    REQUIRE(selection.entries.size() == 1);
+    CHECK(selection.entries[0].qualified_name == "Position");
+    CHECK(selection.entries[0].alias == (positive ? std::optional<std::string>{"pos"} : std::nullopt));
+    CHECK(bad->handlers.size() == 1);
+    CHECK(find_rule(parsed.program, "Later") != nullptr);
+}
+
+TEST_CASE("Parser: removed spelling after its canonical clause is a duplicate", "[parser][concise]") {
+    const auto [clauses, duplicate] = GENERATE(
+        std::pair<std::string, std::string>{"    each: Position\n    filter: Motion\n", "duplicate each: clause"},
+        std::pair<std::string, std::string>{"    without: Frozen\n    exclude: Hidden\n", "duplicate without: clause"});
+    CAPTURE(clauses);
+    const auto parsed = parse_collecting_errors("rule Bad:\n" + clauses + "    on tick:\n        return\n");
+    REQUIRE(parsed.diagnostics.size() == 2);
+    CHECK(parsed.diagnostics[0].message.contains("renamed to"));
+    CHECK(parsed.diagnostics[1].message.contains(duplicate));
+    CHECK_FALSE(parsed.diagnostics[1].message.contains("filter"));
+    CHECK_FALSE(parsed.diagnostics[1].message.contains("exclude"));
+}
+
+TEST_CASE("Parser: a repeated canonical clause is a duplicate and is not merged", "[parser][concise]") {
+    const auto [clauses, duplicate, positive] = GENERATE(
+        std::tuple<std::string, std::string, bool>{"    each: Position\n    each: Motion\n", "duplicate each: clause", true},
+        std::tuple<std::string, std::string, bool>{
+            "    without: Frozen\n    without: Hidden\n", "duplicate without: clause", false});
+    CAPTURE(clauses);
+    const auto parsed = parse_collecting_errors("rule Bad:\n" + clauses + "    on tick:\n        return\n");
+    REQUIRE(parsed.diagnostics.size() == 1);
+    CHECK(parsed.diagnostics[0].message.contains(duplicate));
+    const auto* bad = find_rule(parsed.program, "Bad");
+    REQUIRE(bad != nullptr);
+    const auto& selection = positive ? bad->filter : bad->exclude;
+    REQUIRE(selection.entries.size() == 1);
+    CHECK(selection.entries[0].qualified_name == (positive ? "Position" : "Frozen"));
+}
+
+TEST_CASE("Parser: filter and exclude are ordinary identifiers", "[parser][concise]") {
+    const auto program = parse(R"(
+trait filter:
+    var exclude: int = 0
+    var filter: float = 0.0
+trait exclude
+func pick(filter: int, exclude: int) int:
+    return filter + exclude
+rule R:
+    each: filter as exclude
+    without: exclude
+    on tick:
+        let filter = exclude.filter
+        exclude.exclude = pick(1, 2)
+)");
+    REQUIRE(program.declarations.size() == 4);
+    const auto& trait = std::get<TraitNode>(program.declarations[0]);
+    CHECK(trait.name == "filter");
+    REQUIRE(trait.fields.size() == 2);
+    CHECK(trait.fields[0].name == "exclude");
+    CHECK(trait.fields[1].name == "filter");
+    CHECK(std::get<TraitNode>(program.declarations[1]).name == "exclude");
+    const auto& func = std::get<FuncNode>(program.declarations[2]);
+    REQUIRE(func.params.size() == 2);
+    CHECK(func.params[0].name == "filter");
+    CHECK(func.params[1].name == "exclude");
+    const auto& rule = std::get<RuleNode>(program.declarations[3]);
+    REQUIRE(rule.filter.entries.size() == 1);
+    CHECK(rule.filter.entries[0].qualified_name == "filter");
+    CHECK(rule.filter.entries[0].alias == "exclude");
+    REQUIRE(rule.exclude.entries.size() == 1);
+    CHECK(rule.exclude.entries[0].qualified_name == "exclude");
+    CHECK(rule.handlers.front().body.size() == 2);
+}
+
+TEST_CASE("Parser: body-level per names the grouped header", "[parser][rule-reduce][concise]") {
+    const auto parsed = parse_collecting_errors(R"(rule Bad:
+    pairs:
+        team: Team
+        player: Score
+    reduce:
+        per: team
+        players = count(player)
+        total = sum(player.Score.value)
+    on tick:
+        return
+rule Later:
+    on tick:
+        return
+)");
+    REQUIRE(parsed.diagnostics.size() == 1);
+    CHECK(parsed.diagnostics[0].message.contains("reduce per team:"));
+    CHECK(parsed.diagnostics[0].location.line == 7);
+    CHECK(parsed.diagnostics[0].location.column == 9);
+    const auto* bad = find_rule(parsed.program, "Bad");
+    REQUIRE(bad != nullptr);
+    REQUIRE(bad->reduce.has_value());
+    CHECK(bad->reduce->per_binding == "team");
+    CHECK(bad->reduce->reducers.size() == 2);
+    CHECK(find_rule(parsed.program, "Later") != nullptr);
+}
+
+TEST_CASE("Parser: body-level per under a grouped header keeps the header", "[parser][rule-reduce][concise]") {
+    const auto parsed = parse_collecting_errors(R"(rule Bad:
+    pairs:
+        team: Team
+        player: Score
+    reduce per team:
+        per: player
+        players = count(player)
+    on tick:
+        return
+)");
+    REQUIRE(parsed.diagnostics.size() == 1);
+    CHECK(parsed.diagnostics[0].message.contains("reduce per player:"));
+    CHECK_FALSE(parsed.diagnostics[0].message.contains("duplicate"));
+    const auto* bad = find_rule(parsed.program, "Bad");
+    REQUIRE(bad != nullptr);
+    REQUIRE(bad->reduce.has_value());
+    CHECK(bad->reduce->per_binding == "team");
+    CHECK(bad->reduce->reducers.size() == 1);
+}
+
+TEST_CASE("Parser: a reducer may be named per", "[parser][rule-reduce][concise]") {
+    const auto program = parse(R"(rule R:
+    pairs:
+        team: Team
+        player: Score
+    reduce:
+        per = count()
+    on tick:
+        return
+)");
+    const auto& rule = std::get<RuleNode>(program.declarations.front());
+    REQUIRE(rule.reduce.has_value());
+    CHECK_FALSE(rule.reduce->per_binding.has_value());
+    REQUIRE(rule.reduce->reducers.size() == 1);
+    CHECK(rule.reduce->reducers[0].name == "per");
+}
+
 TEST_CASE("Parser: compact list families preserve nesting and existing ordering positions", "[parser][concise]") {
     const auto program = parse(R"(
 phase update:
@@ -4400,8 +4571,8 @@ group simulation:
     phase: update
     after: input, physics.solve
 rule R:
-    filter: Position as each, Motion as without
-    exclude: Frozen
+    each: Position as each, Motion as without
+    without: Frozen
     where: if each.x > 0: test([1, 2], vec2(1.0, 2.0)) else: false, true
     on tick:
         after: Input/on tick, Other/on tick,
@@ -4481,5 +4652,54 @@ TEST_CASE("Parser: independent inline errors report their own locations", "[pars
     CHECK(std::ranges::any_of(errors.diagnostics(), [](const auto& diagnostic) {
         return diagnostic.location.line == 7 && diagnostic.location.column == 16;
     }));
+}
+TEST_CASE("Parser: duplicate external list clauses are diagnosed without losing handlers", "[parser][concise]") {
+    const bool first_block  = GENERATE(false, true);
+    const bool second_block = GENERATE(false, true);
+    const std::vector<std::string> clauses{
+        "reads: A", "writes: A", "projects: A", "emits: E", "effects: physics", "commands: destroy"};
+    for (const auto& clause : clauses) {
+        CAPTURE(clause, first_block, second_block);
+        auto first  = clause;
+        auto second = clause;
+        second.replace(second.find(": ") + 2, std::string::npos, "Other");
+        if (clause.starts_with("commands:")) {
+            second = "commands: add Other";
+        }
+        if (first_block) {
+            first.replace(first.find(": "), 2, ":\n            ");
+        }
+        if (second_block) {
+            second.replace(second.find(": "), 2, ":\n            ");
+        }
+        ErrorReporter errors;
+        std::string source = "module test\nextern rule Native:\n    on tick:\n        ";
+        source.append(first).append("\n        ").append(second);
+        source.append("\n    on render:\n        effects: graphics\nrule Later:\n    on tick:\n        return\n");
+        Lexer lexer(source, "test.cactus", errors);
+        Parser parser(lexer.tokenize(), errors);
+        const auto program = parser.parse_program();
+        REQUIRE(errors.has_errors());
+        CHECK(std::ranges::any_of(errors.diagnostics(), [first_block](const auto& diagnostic) {
+            return diagnostic.location.line == (first_block ? 6 : 5) && diagnostic.message.starts_with("duplicate ");
+        }));
+        REQUIRE(program.declarations.size() == 3);
+        const auto& rule = std::get<ExternRuleNode>(program.declarations[1]);
+        REQUIRE(rule.handlers.size() == 2);
+        CHECK(rule.handlers.back().effects.size() == 1);
+    }
+}
+TEST_CASE("Parser: external contract uniqueness is local to each handler", "[parser][concise]") {
+    const auto program = parse(R"(
+extern rule Native:
+    on tick:
+        effects: physics
+    on render:
+        effects: graphics
+)");
+    const auto& rule   = std::get<ExternRuleNode>(program.declarations.front());
+    REQUIRE(rule.handlers.size() == 2);
+    CHECK(rule.handlers.front().effects.size() == 1);
+    CHECK(rule.handlers.back().effects.size() == 1);
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

@@ -112,16 +112,15 @@ std::vector<Diagnostic> parse_errors(const std::string& body) {
     return errors.diagnostics();
 }
 
-// A keep rule over body x zone, reduced per body, with the given clause lines.
-std::string touch_rule(const std::string& reduce_lines,
+// A keep rule over body x zone with the given reduce clause and clause lines.
+std::string touch_rule(const std::string& reduce_clause,
                        const std::string& keep_lines,
                        const std::string& extra_lines = "") {
-    return "rule Touch:\n" + kPairs + "    group: contacts\n" + kWhere + "    reduce:\n" + reduce_lines + keep_lines +
-           extra_lines;
+    return "rule Touch:\n" + kPairs + "    group: contacts\n" + kWhere + reduce_clause + keep_lines + extra_lines;
 }
 
-const std::string kPerBody =
-    "        per: body\n"
+const std::string kReducePerBody =
+    "    reduce per body:\n"
     "        n = count()\n";
 
 const std::string kKeepZones =
@@ -139,7 +138,7 @@ bool has_command(const HandlerContract& contract, HandlerCommandKind kind, const
 // ── Parsing ─────────────────────────────────────────────────────────────────
 
 TEST_CASE("Keep: the clause parses into the rule", "[parser][rule-keep]") {
-    const auto analysis = analyze(touch_rule(kPerBody, kKeepZones));
+    const auto analysis = analyze(touch_rule(kReducePerBody, kKeepZones));
     const auto& rule    = analysis.rule("Touch");
     REQUIRE(rule.keep.has_value());
     CHECK(rule.keep->trait_name == "InZone");
@@ -150,7 +149,7 @@ TEST_CASE("Keep: the clause parses into the rule", "[parser][rule-keep]") {
 }
 
 TEST_CASE("Keep: a fieldless clause needs no block", "[parser][rule-keep]") {
-    const auto analysis = analyze(touch_rule(kPerBody, "    keep Seen on body\n"));
+    const auto analysis = analyze(touch_rule(kReducePerBody, "    keep Seen on body\n"));
     INFO(describe(analysis));
     CHECK(analysis.clean());
     REQUIRE(analysis.rule("Touch").keep.has_value());
@@ -159,7 +158,7 @@ TEST_CASE("Keep: a fieldless clause needs no block", "[parser][rule-keep]") {
 
 TEST_CASE("Keep: extern rules reject the clause", "[parser][rule-keep]") {
     const auto errors = parse_errors("extern rule Outside:\n"
-                                     "    filter:\n"
+                                     "    each:\n"
                                      "        Body\n"
                                      "    keep Seen on body\n");
     CHECK(std::ranges::any_of(
@@ -169,7 +168,7 @@ TEST_CASE("Keep: extern rules reject the clause", "[parser][rule-keep]") {
 // ── Clause shape ────────────────────────────────────────────────────────────
 
 TEST_CASE("Keep: a valid clause is accepted and runs in its group's phase", "[semantic][rule-keep]") {
-    const auto analysis = analyze(touch_rule(kPerBody, kKeepZones));
+    const auto analysis = analyze(touch_rule(kReducePerBody, kKeepZones));
     INFO(describe(analysis));
     REQUIRE(analysis.clean());
     const auto& rule = analysis.rule("Touch");
@@ -191,7 +190,7 @@ TEST_CASE("Keep: a valid clause is accepted and runs in its group's phase", "[se
 
 TEST_CASE("Keep: a rule with a phase handler keeps through that handler", "[semantic][rule-keep]") {
     const auto analysis = analyze("rule Touch:\n" + kPairs + kWhere +
-                                  "    reduce:\n" + kPerBody + kKeepZones +
+                                  kReducePerBody + kKeepZones +
                                   "    on fixed_tick:\n"
                                   "        body.Body.x = body.Body.x\n");
     INFO(describe(analysis));
@@ -200,14 +199,14 @@ TEST_CASE("Keep: a rule with a phase handler keeps through that handler", "[sema
 }
 
 TEST_CASE("Keep: the binding must be the per binding", "[semantic][rule-keep]") {
-    CHECK(analyze(touch_rule(kPerBody,
+    CHECK(analyze(touch_rule(kReducePerBody,
                              "    keep InZone on zone:\n"
                              "        zones = n\n"))
               .has("must name the `per` binding 'body'"));
 }
 
 TEST_CASE("Keep: field expressions can't read the eliminated binding", "[semantic][rule-keep]") {
-    CHECK(analyze(touch_rule(kPerBody,
+    CHECK(analyze(touch_rule(kReducePerBody,
                              "    keep InZone on body:\n"
                              "        zones = zone.Zone.priority\n"))
               .has("'zone' is not available after `reduce:`"));
@@ -216,7 +215,7 @@ TEST_CASE("Keep: field expressions can't read the eliminated binding", "[semanti
 TEST_CASE("Keep: field expressions read aggregates, the per binding and constants", "[semantic][rule-keep]") {
     const auto analysis = analyze("const:\n"
                                   "    BONUS = 2\n" +
-                                  touch_rule(kPerBody + "        dps = sum(zone.Zone.dps)\n",
+                                  touch_rule(kReducePerBody + "        dps = sum(zone.Zone.dps)\n",
                                              "    keep InZone on body:\n"
                                              "        zones = n + BONUS\n"
                                              "        dps = dps * body.Body.x + Board.Stats.zones\n"));
@@ -226,56 +225,56 @@ TEST_CASE("Keep: field expressions read aggregates, the per binding and constant
 
 TEST_CASE("Keep: unreduced, unary and globally reduced rules reject keep", "[semantic][rule-keep]") {
     CHECK(analyze("rule Touch:\n" + kPairs + "    group: contacts\n" + kWhere + "    keep Seen on body\n")
-              .has("`keep` requires `reduce:` with `per:`"));
+              .has("`keep` requires `reduce per <binding>:`"));
     CHECK(analyze("rule Touch:\n"
-                  "    filter:\n"
+                  "    each:\n"
                   "        Body as body\n"
                   "    group: contacts\n"
                   "    reduce:\n"
                   "        n = count()\n"
                   "    keep Seen on body\n")
-              .has("`keep` requires `reduce:` with `per:`"));
-    CHECK(analyze(touch_rule("        n = count()\n", "    keep Seen on body\n"))
-              .has("`keep` requires `reduce:` with `per:`"));
+              .has("`keep` requires `reduce per <binding>:`"));
+    CHECK(analyze(touch_rule("    reduce:\n        n = count()\n", "    keep Seen on body\n"))
+              .has("`keep` requires `reduce per <binding>:`"));
 }
 
 TEST_CASE("Keep: unknown fields and type mismatches are rejected", "[semantic][rule-keep]") {
-    CHECK(analyze(touch_rule(kPerBody,
+    CHECK(analyze(touch_rule(kReducePerBody,
                              "    keep InZone on body:\n"
                              "        nope = n\n"))
               .has("unknown field 'nope'"));
-    CHECK(analyze(touch_rule(kPerBody,
+    CHECK(analyze(touch_rule(kReducePerBody,
                              "    keep InZone on body:\n"
                              "        zones = 1.5\n"))
               .has("type"));
-    CHECK(analyze(touch_rule(kPerBody,
+    CHECK(analyze(touch_rule(kReducePerBody,
                              "    keep InZone on body:\n"
                              "        zones = n\n"
                              "        zones = n\n"))
               .has("duplicate"));
-    CHECK(analyze(touch_rule(kPerBody, "    keep Missing on body\n")).has("Missing"));
+    CHECK(analyze(touch_rule(kReducePerBody, "    keep Missing on body\n")).has("Missing"));
 }
 
 TEST_CASE("Keep: fields without a default must be assigned", "[semantic][rule-keep]") {
-    CHECK(analyze(touch_rule(kPerBody, "    keep Nearest on body\n")).has("required field 'zone'"));
+    CHECK(analyze(touch_rule(kReducePerBody, "    keep Nearest on body\n")).has("required field 'zone'"));
 }
 
 TEST_CASE("Keep: a kept trait can't have persistent fields", "[semantic][rule-keep]") {
-    CHECK(analyze(touch_rule(kPerBody, "    keep Saved on body\n")).has("persistent"));
+    CHECK(analyze(touch_rule(kReducePerBody, "    keep Saved on body\n")).has("persistent"));
 }
 
 TEST_CASE("Keep: a keep rule needs a phase", "[semantic][rule-keep]") {
-    CHECK(analyze("rule Touch:\n" + kPairs + kWhere + "    reduce:\n" + kPerBody + kKeepZones)
+    CHECK(analyze("rule Touch:\n" + kPairs + kWhere + kReducePerBody + kKeepZones)
               .has("add a `group:`"));
 }
 
 TEST_CASE("Keep: event and lifecycle handlers are rejected", "[semantic][rule-keep]") {
-    CHECK(analyze(touch_rule(kPerBody,
+    CHECK(analyze(touch_rule(kReducePerBody,
                              kKeepZones,
                              "    on Ping:\n"
                              "        body.Body.x = 0.0\n"))
               .has("keep rules run only on phase activations"));
-    CHECK_FALSE(analyze(touch_rule(kPerBody,
+    CHECK_FALSE(analyze(touch_rule(kReducePerBody,
                                    kKeepZones,
                                    "    on added Seen:\n"
                                    "        body.Body.x = 0.0\n"))
@@ -285,44 +284,44 @@ TEST_CASE("Keep: event and lifecycle handlers are rejected", "[semantic][rule-ke
 // ── Writers ─────────────────────────────────────────────────────────────────
 
 TEST_CASE("Keep: two keep rules for one trait are rejected", "[semantic][rule-keep]") {
-    const auto second = "rule Again:\n" + kPairs + "    group: contacts\n" + kWhere + "    reduce:\n" + kPerBody +
+    const auto second = "rule Again:\n" + kPairs + "    group: contacts\n" + kWhere + kReducePerBody +
                         kKeepZones;
-    const auto analysis = analyze(touch_rule(kPerBody, kKeepZones) + second);
+    const auto analysis = analyze(touch_rule(kReducePerBody, kKeepZones) + second);
     CHECK(analysis.has("'InZone' is kept by both 'Touch' and 'Again'"));
 }
 
 TEST_CASE("Keep: every other write to a kept trait is rejected", "[semantic][rule-keep]") {
     const auto with_writer = [](const std::string& writer) {
-        return analyze(touch_rule(kPerBody, kKeepZones) + writer);
+        return analyze(touch_rule(kReducePerBody, kKeepZones) + writer);
     };
     const std::string kept_by = "'InZone' is kept by rule 'Touch'";
     CHECK(with_writer("rule Manual:\n"
-                      "    filter:\n"
+                      "    each:\n"
                       "        Body\n"
                       "    on fixed_tick:\n"
                       "        add InZone\n")
               .has(kept_by));
     CHECK(with_writer("rule Manual:\n"
-                      "    filter:\n"
+                      "    each:\n"
                       "        Body\n"
                       "    on fixed_tick:\n"
                       "        remove InZone\n")
               .has(kept_by));
     CHECK(with_writer("rule Manual:\n"
-                      "    filter:\n"
+                      "    each:\n"
                       "        InZone as z\n"
                       "    on fixed_tick:\n"
                       "        set InZone on self:\n"
                       "            zones = 3\n")
               .has(kept_by));
     CHECK(with_writer("rule Manual:\n"
-                      "    filter:\n"
+                      "    each:\n"
                       "        InZone as z\n"
                       "    on fixed_tick:\n"
                       "        z.zones = 3\n")
               .has(kept_by));
     CHECK(with_writer("rule Manual:\n"
-                      "    filter:\n"
+                      "    each:\n"
                       "        Body\n"
                       "    on fixed_tick:\n"
                       "        project InZone:\n"
@@ -339,22 +338,22 @@ TEST_CASE("Keep: every other write to a kept trait is rejected", "[semantic][rul
 }
 
 TEST_CASE("Keep: the keep rule's own handler can't write the kept trait", "[semantic][rule-keep]") {
-    CHECK(analyze("rule Touch:\n" + kPairs + kWhere + "    reduce:\n" + kPerBody + kKeepZones +
+    CHECK(analyze("rule Touch:\n" + kPairs + kWhere + kReducePerBody + kKeepZones +
                   "    on fixed_tick:\n"
                   "        remove InZone from body\n")
               .has("'InZone' is kept by rule 'Touch'"));
 }
 
 TEST_CASE("Keep: reading and filtering on a kept trait is allowed", "[semantic][rule-keep]") {
-    const auto analysis = analyze(touch_rule(kPerBody, kKeepZones) +
+    const auto analysis = analyze(touch_rule(kReducePerBody, kKeepZones) +
                                   "rule Burn:\n"
-                                  "    filter:\n"
+                                  "    each:\n"
                                   "        Body as b\n"
                                   "        InZone as z\n"
                                   "    on fixed_tick:\n"
                                   "        b.x = b.x + z.dps\n"
                                   "rule Enter:\n"
-                                  "    filter:\n"
+                                  "    each:\n"
                                   "        Body as b\n"
                                   "    on added InZone:\n"
                                   "        b.x = 0.0\n");
@@ -365,7 +364,7 @@ TEST_CASE("Keep: reading and filtering on a kept trait is allowed", "[semantic][
 // ── best ────────────────────────────────────────────────────────────────────
 
 TEST_CASE("Best: names the winning entity of a binding", "[semantic][rule-reduce][rule-keep]") {
-    const auto analysis = analyze(touch_rule(kPerBody + "        top = best(zone, by = zone.Zone.priority)\n"
+    const auto analysis = analyze(touch_rule(kReducePerBody + "        top = best(zone, by = zone.Zone.priority)\n"
                                                         "        hot = best(zone, by = zone.Zone.dps)\n",
                                              "    keep Nearest on body:\n"
                                              "        zone = top\n"));
@@ -381,15 +380,29 @@ TEST_CASE("Best: names the winning entity of a binding", "[semantic][rule-reduce
 }
 
 TEST_CASE("Best: the per binding is rejected", "[semantic][rule-reduce][rule-keep]") {
-    CHECK(analyze(touch_rule(kPerBody + "        top = best(body, by = body.Body.x)\n", "    keep Seen on body\n"))
+    CHECK(analyze(touch_rule(kReducePerBody + "        top = best(body, by = body.Body.x)\n", "    keep Seen on body\n"))
               .has("best(...) takes a pair binding other than the `per` binding 'body'"));
 }
 
 TEST_CASE("Best: the key must be int or float", "[semantic][rule-reduce][rule-keep]") {
-    CHECK(analyze(touch_rule(kPerBody + "        top = best(zone, by = zone.Zone.x > 0.0)\n", "    keep Seen on body\n"))
+    CHECK(analyze(touch_rule(kReducePerBody + "        top = best(zone, by = zone.Zone.x > 0.0)\n", "    keep Seen on body\n"))
               .has("best(...) key must be of type 'int' or 'float'"));
-    CHECK(analyze(touch_rule(kPerBody + "        top = best(zone)\n", "    keep Seen on body\n")).has("`by = <key>`"));
-    CHECK(analyze(touch_rule(kPerBody + "        top = best(zone.Zone.x, by = zone.Zone.x)\n", "    keep Seen on body\n"))
+    CHECK(analyze(touch_rule(kReducePerBody + "        top = best(zone)\n", "    keep Seen on body\n")).has("`by = <key>`"));
+    CHECK(analyze(touch_rule(kReducePerBody + "        top = best(zone.Zone.x, by = zone.Zone.x)\n", "    keep Seen on body\n"))
               .has("best(...) takes a pair binding"));
+}
+
+TEST_CASE("Keep: removed body-level per still groups for recovery", "[semantic][rule-keep][concise]") {
+    ErrorReporter errors;
+    Lexer lexer(
+        "module game\n" + kPrelude + touch_rule("    reduce:\n        per: body\n        n = count()\n", kKeepZones),
+        "game.cactus",
+        errors);
+    Parser parser(lexer.tokenize(), errors);
+    auto ast = parser.parse_program();
+    SemanticAnalyzer analyzer(errors);
+    (void)analyzer.analyze(ast);
+    REQUIRE(errors.error_count() == 1);
+    CHECK(errors.diagnostics().front().message.contains("reduce per body:"));
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

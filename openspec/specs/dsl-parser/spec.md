@@ -1,6 +1,6 @@
 ## Purpose
 
-Define the parser's grammar for top-level declarations, including traits, entities with nested archetypes, templates, and rule `filter:`/`exclude:` clauses, along with rejection of legacy `unit` syntax.
+Define the parser's grammar for top-level declarations, including traits, entities with nested archetypes, templates, and rule `each:`/`without:` clauses, along with rejection of legacy `unit` syntax.
 ## Requirements
 ### Requirement: Top-level declaration parsing
 The parser SHALL parse a sequence of top-level declarations from the token stream, producing a ProgramNode as the AST root. The first top-level declaration MUST be exactly one `module` declaration. Supported declarations after the module declaration are: `use`, `const`, `struct`, `enum`, `trait`, `entity`, `rule`, `event`, `func`, `extern func`, `template`, `asset`, and `input`.
@@ -156,14 +156,14 @@ The parser SHALL reject legacy `unit` declarations. Authors SHALL use `entity` d
 - **WHEN** source contains `unit Player:` at the top level
 - **THEN** the parser reports that `unit` has been renamed to `entity`
 
-### Requirement: `filter:` and `exclude:` both optional in rule grammar
-Positive and negative unary selection clauses SHALL remain independently optional on rule declarations. The parser SHALL accept positive selection only, negative selection only, both, or neither. `each:` SHALL be the canonical positive spelling and `without:` the canonical negative spelling; `filter:` and `exclude:` SHALL remain accepted equivalents without deprecation warnings. Absence of selection clauses SHALL retain the existing selectionless domain. Bracket-list selection syntax SHALL remain rejected.
+### Requirement: `each:` and `without:` both optional in rule grammar
+Positive and negative unary selection clauses SHALL remain independently optional on rule declarations. The parser SHALL accept positive selection only, negative selection only, both, or neither. `each:` SHALL be the only positive spelling and `without:` the only negative spelling. Absence of selection clauses SHALL retain the existing selectionless domain. Bracket-list selection syntax SHALL remain rejected.
 
 Positive entries SHALL support a dotted trait reference and an optional `as` alias. Negative entries SHALL support dotted trait references without aliases. Each list SHALL accept its existing indented form or a nonempty comma-separated inline form, under the shared inline-list requirements.
 
 ```ebnf
-filter_clause  = ( "filter" | "each" ) ":" trait_list ;
-exclude_clause = ( "exclude" | "without" ) ":" name_list ;
+each_clause    = "each" ":" trait_list ;
+without_clause = "without" ":" name_list ;
 trait_entry    = dotted_name [ "as" IDENTIFIER ] ;
 trait_list     = NEWLINE INDENT { trait_entry NEWLINE } DEDENT
                | trait_entry { "," trait_entry } [ "," ] NEWLINE ;
@@ -171,47 +171,58 @@ name_list      = NEWLINE INDENT { dotted_name NEWLINE } DEDENT
                | dotted_name { "," dotted_name } [ "," ] NEWLINE ;
 ```
 
-Existing block-form emptiness validation SHALL remain unchanged. `each` and `without` SHALL be contextual words at unary clause positions, not globally reserved words. Declaring both spellings of one canonical clause SHALL be rejected as a duplicate. Pair/unary exclusion and clause-order restrictions SHALL apply identically to both spellings.
+Existing block-form emptiness validation SHALL remain unchanged. `each` and `without` SHALL be contextual words at unary clause positions, not globally reserved words. `filter` and `exclude` SHALL NOT be reserved words; outside a unary clause position they SHALL parse as ordinary identifiers.
 
-#### Scenario: Rule with filter only parsed correctly
-- **WHEN** a rule has `filter:` but no `exclude:`
+At a unary clause position, `filter:` SHALL be rejected with a diagnostic at the clause that tells the author to write `each:`, and `exclude:` SHALL be rejected with a diagnostic that tells the author to write `without:`. After such a diagnostic the parser SHALL parse the clause's entries as the canonical clause, so later diagnostics in the same rule and later declarations are still reported, and SHALL report no further error for that clause alone.
+
+#### Scenario: Rule with each only parsed correctly
+- **WHEN** a rule has `each:` but no `without:`
 - **THEN** parsing preserves its positive selection and an empty negative selection
 
-#### Scenario: Rule with exclude only parsed correctly
-- **WHEN** a rule has `exclude:` but no `filter:`
+#### Scenario: Rule with without only parsed correctly
+- **WHEN** a rule has `without:` but no `each:`
 - **THEN** parsing preserves an empty positive selection and its negative selection
 
-#### Scenario: Rule with no filter or exclude parsed correctly
+#### Scenario: Rule with no each or without parsed correctly
 - **WHEN** a rule has neither positive nor negative selection and no pair domain
 - **THEN** parsing preserves the existing selectionless rule
 
 #### Scenario: Old bracket syntax produces parse error
-- **WHEN** source contains `filter: [Position, EnemyAI]` or `each: [Position, EnemyAI]`
+- **WHEN** source contains `each: [Position, EnemyAI]`
 - **THEN** compilation rejects bracket selection and directs the author to an inline comma-separated list or an indented block
 
-#### Scenario: Filter entry with as alias parsed
+#### Scenario: Each entry with as alias parsed
 - **WHEN** a positive selection contains `Position as pos`
 - **THEN** parsing preserves the trait reference and alias `pos`
 
-#### Scenario: Filter entry without alias parsed
+#### Scenario: Each entry without alias parsed
 - **WHEN** a positive selection contains `Position` without `as`
 - **THEN** parsing preserves that reference without an alias
 
-#### Scenario: Filter entry with qualified name and alias
+#### Scenario: Each entry with qualified name and alias
 - **WHEN** a positive selection contains `phys.Body as body`
 - **THEN** parsing preserves the qualified reference `phys.Body` and alias `body`
-
-#### Scenario: Canonical and legacy inline domains are equivalent
-- **WHEN** equivalent rules use `each: Position as pos, Motion` / `without: Frozen` and `filter: Position as pos, Motion` / `exclude: Frozen`
-- **THEN** their resolved selections, accesses, and runtime behavior are equivalent apart from source locations
 
 #### Scenario: Contextual words remain identifiers
 - **WHEN** valid authored declarations or handler locals use `each` or `without` as an identifier outside a unary clause position
 - **THEN** parsing and name resolution retain their existing identifier behavior
 
-#### Scenario: Alias and legacy clause are duplicates
-- **WHEN** a rule declares both `each:` and `filter:`, or both `without:` and `exclude:`
-- **THEN** compilation reports a duplicate canonical clause without merging its entries
+#### Scenario: Former keywords are identifiers
+- **WHEN** a trait field, function parameter, handler local, or trait is named `filter` or `exclude`
+- **THEN** parsing and name resolution accept it as an ordinary identifier
+
+#### Scenario: filter clause names its replacement
+- **WHEN** a rule declares `filter: Position as pos` in block or inline form
+- **THEN** compilation reports one error at that clause telling the author to use `each:`
+- **AND** the rule's other clauses and later declarations are still parsed and checked
+
+#### Scenario: exclude clause names its replacement
+- **WHEN** a rule declares `exclude: Frozen` in block or inline form
+- **THEN** compilation reports one error at that clause telling the author to use `without:`
+
+#### Scenario: Duplicate canonical clause
+- **WHEN** a rule declares `each:` twice, or `without:` twice
+- **THEN** compilation reports a duplicate clause without merging its entries
 
 #### Scenario: Canonical unary clauses cannot accompany pairs
 - **WHEN** a rule declares `pairs:` with `each:` or `without:`
@@ -601,7 +612,7 @@ trait_decl      = [ "pub" ] "trait" IDENTIFIER
 - **THEN** the parser reports an error: "func declarations are not allowed in trait bodies; use a top-level func instead"
 
 ### Requirement: `after:` clause parsing in rule declarations
-The parser SHALL parse an optional `after:` clause inside a rule body using the same indented block structure as `filter:` and `exclude:`. The `after:` clause MUST appear after any `filter:` and `exclude:` blocks and before the first event handler.
+The parser SHALL parse an optional `after:` clause inside a rule body using the same indented block structure as `each:` and `without:`. The `after:` clause MUST appear after any `each:` and `without:` blocks and before the first event handler.
 
 ```ebnf
 after_clause    = "after" ":" NEWLINE INDENT
@@ -624,7 +635,7 @@ The keyword `after` is added to the lexer keyword set with token type `AFTER`.
 - **THEN** the parser reports an error: "after: block must contain at least one rule name"
 
 ### Requirement: `order by:` clause parsing in rule declarations
-The parser SHALL recognize an optional `order by:` block in rule declarations, positioned between the `filter:`/`exclude:` clauses and the event handler list. The `order by:` block contains one or more sort key lines, each consisting of a dotted alias-field expression followed by an optional direction keyword.
+The parser SHALL recognize an optional `order by:` block in rule declarations, positioned between the `each:`/`without:` clauses and the event handler list. The `order by:` block contains one or more sort key lines, each consisting of a dotted alias-field expression followed by an optional direction keyword.
 
 ```ebnf
 rule_decl       = "rule" IDENTIFIER ":" INDENT
@@ -679,10 +690,10 @@ The spelling `pairs` SHALL remain an ordinary identifier outside this rule-claus
 - **THEN** parsing or semantic validation reports that pair domains are regular-rule-only
 
 ### Requirement: Parser recognizes `where:` clause
-The parser SHALL accept an optional `where:` block on a regular rule, positioned after `filter:`/`exclude:`/`pairs:`/`order by:`/`after:`/`target:` and before its `on` handlers, containing one or more indented boolean expression lines. `where` SHALL be a contextual identifier keyword recognized only in this clause position, not a reserved word — an identifier named `where` elsewhere in source SHALL continue to parse as an ordinary identifier. The parser SHALL reject `where:` on `extern rule` declarations.
+The parser SHALL accept an optional `where:` block on a regular rule, positioned after `each:`/`without:`/`pairs:`/`order by:`/`after:`/`target:` and before its `on` handlers, containing one or more indented boolean expression lines. `where` SHALL be a contextual identifier keyword recognized only in this clause position, not a reserved word — an identifier named `where` elsewhere in source SHALL continue to parse as an ordinary identifier. The parser SHALL reject `where:` on `extern rule` declarations.
 
 #### Scenario: where: after filter: is parsed
-- **WHEN** a rule declares `filter:` followed by a `where:` block with one predicate line
+- **WHEN** a rule declares `each:` followed by a `where:` block with one predicate line
 - **THEN** the rule's parsed domain includes that predicate
 
 #### Scenario: where: after pairs: is parsed
@@ -1088,3 +1099,23 @@ Changing only an accepted clause spelling or list layout SHALL preserve resolved
 #### Scenario: Module artifact round trip preserves compact rules
 - **WHEN** compact rules are compiled to module artifacts and linked with dependent modules
 - **THEN** their behavior and dependencies equal the corresponding block-form program
+
+### Requirement: External list clauses are unique per handler
+Each external handler SHALL declare each of reads, writes, projects, emits, commands, and effects at most once. Repeating a clause SHALL produce a diagnostic at the repeated clause, regardless of inline or block layout or whether the entries differ. Parsing SHALL continue through the repeated list and preserve later clauses, handlers, and declarations. The same clause SHALL remain valid in a different handler. Multiple entries within a single clause SHALL retain their existing validation rules.
+
+#### Scenario: Repeated inline contract
+- **WHEN** an external handler declares reads twice using inline lists
+- **THEN** compilation reports a duplicate reads clause at the second declaration
+- **AND** later handlers and rules are still parsed
+
+#### Scenario: Repeated block and mixed contracts
+- **WHEN** a contract clause is repeated using block lists or mixing block and inline forms
+- **THEN** compilation reports the duplicate clause at the second declaration
+
+#### Scenario: Independent handlers
+- **WHEN** two external handlers each declare one effects clause
+- **THEN** compilation accepts both clauses without a duplicate-clause error
+
+#### Scenario: All contract families enforce uniqueness
+- **WHEN** any of reads, writes, projects, emits, commands, or effects is repeated in one external handler
+- **THEN** compilation reports a duplicate-clause error even if its entries differ

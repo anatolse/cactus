@@ -33,7 +33,7 @@ func can_afford(coins: int, price: int) bool:
     return coins >= price
 
 rule ShopSystem:
-    filter:
+    each:
         Wallet
         Inventory
 

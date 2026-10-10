@@ -38,7 +38,7 @@ pub trait Canvas2D:
     var visible: bool = true
 
 extern rule SpriteRenderer:
-    filter:
+    each:
         std.transform.flat.WorldTransform
         Renderer
 
@@ -50,7 +50,7 @@ extern rule SpriteRenderer:
             graphics
 
 extern rule SpriteAnimation:
-    filter:
+    each:
         AnimatedSprite
 
     on tick:

@@ -47,8 +47,7 @@ rule TouchLava:
     group: contacts
     where:
         (walker.Walker.x - lava.Lava.x) * (walker.Walker.x - lava.Lava.x) <= lava.Lava.radius * lava.Lava.radius
-    reduce:
-        per: walker
+    reduce per walker:
         n = count()
         total = sum(lava.Lava.heat)
         top = best(lava, by = lava.Lava.priority)
@@ -68,8 +67,7 @@ rule RankPools:
             Lava
     where:
         (walker.Walker.x - lava.Lava.x) * (walker.Walker.x - lava.Lava.x) <= lava.Lava.radius * lava.Lava.radius
-    reduce:
-        per: walker
+    reduce per walker:
         top = best(lava, by = lava.Lava.priority)
         hot = best(lava, by = lava.Lava.heat)
 
@@ -79,14 +77,14 @@ rule RankPools:
             hot = hot
 
 rule Enter:
-    filter:
+    each:
         Walker as w
 
     on added InLava:
         w.enters += 1
 
 rule Exit:
-    filter:
+    each:
         Walker as w
 
     on removed InLava as old:

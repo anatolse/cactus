@@ -27,7 +27,7 @@ entity Mover:
     Heading
 
 extern rule NativeMovement:
-    filter:
+    each:
         Position
         Velocity
     on fixed_tick:

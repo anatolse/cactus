@@ -259,7 +259,7 @@ pub extern func palette_button_y(index: int) float
 # only extern rule — still an unimplemented stub.
 
 pub extern rule EditorPropertyPanel:
-    filter:
+    each:
         EditorState
 
     on render:
@@ -275,7 +275,7 @@ pub extern rule EditorPropertyPanel:
 # independent of std.editor — see the editor-debug-draw capability for the
 # documented behavior.
 pub extern rule DebugGrid3D:
-    filter:
+    each:
         EditorCamera3D
 
     on render:
@@ -285,7 +285,7 @@ pub extern rule DebugGrid3D:
 # ── Built-in Editor Rules ─────────────────────────────────────────────────────
 
 rule EditorModeToggle:
-    filter:
+    each:
         EditorState
 
     on input:
@@ -327,7 +327,7 @@ rule EditorModeToggle:
                 mode = GizmoMode.Place
 
 rule EditorSelection2D:
-    filter:
+    each:
         EditorState
 
     after:
@@ -355,14 +355,14 @@ rule EditorSelection2D:
             current = hit
 
 rule EditorTranslate2D:
-    filter:
+    each:
         EditorSelected
 
     on tick:
         let delta = camera2d.screen_delta_to_world(input.mouse_delta())
 
 rule EditorPlace2D:
-    filter:
+    each:
         EditorState
 
     after:
@@ -393,7 +393,7 @@ rule EditorPlace2D:
 # instead of reading BoxCollider.size).
 # Select and Place draw no mode-specific handles, only the always-drawn AABB below.
 rule EditorGizmoRenderer2D:
-    filter:
+    each:
         transform2d.WorldTransform as xform
         EditorSelected
 
@@ -470,7 +470,7 @@ rule EditorGizmoRenderer2D:
                 color = #00E430FF
 
 rule EditorSelection3D:
-    filter:
+    each:
         EditorState
 
     after:
@@ -498,14 +498,14 @@ rule EditorSelection3D:
             current = hit
 
 rule EditorTranslate3D:
-    filter:
+    each:
         EditorSelected
 
     on tick:
         let delta = camera3d.screen_delta_on_plane(input.mouse_position(), input.mouse_delta(), vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0))
 
 rule EditorPlace3D:
-    filter:
+    each:
         EditorState
 
     after:
@@ -532,7 +532,7 @@ rule EditorPlace3D:
 # instead of reading ModelRenderer bind-pose bounds). The always-on ground grid
 # is a separate, dedicated extern rule (DebugGrid3D above), not part of this rule.
 rule EditorGizmoRenderer3D:
-    filter:
+    each:
         transform3d.WorldTransform as xform
         EditorSelected
 
@@ -603,7 +603,7 @@ rule EditorGizmoRenderer3D:
 # onto palette_label_slot(idx) — see its doc comment for why a fixed entity
 # pool is needed instead of one ScreenLabel per rule invocation.
 rule EditorTemplatePalette:
-    filter:
+    each:
         EditorState
 
     # Runs in the input phase, before EditorSelection2D/3D and EditorPlace2D/3D
@@ -674,7 +674,7 @@ rule EditorTemplatePalette:
 # there's exactly one HUD label, always tied 1:1 to the singleton EditorState
 # entity, so no per-frame dynamic count/indexing problem exists here.
 rule EditorHUDOverlay:
-    filter:
+    each:
         EditorState
         labels.ScreenLabel
 
@@ -701,7 +701,7 @@ rule EditorHUDOverlay:
 # only while 2D edit mode is active, so no EditorState check is needed here.
 
 rule EditorCameraNav2D:
-    filter:
+    each:
         EditorCamera2D
 
     on input:
@@ -733,7 +733,7 @@ rule EditorCameraNav2D:
 # forward(rotation) * distance.
 
 rule EditorCameraNav3D:
-    filter:
+    each:
         EditorCamera3D
 
     on input:
@@ -781,7 +781,7 @@ rule EditorCameraNav3D:
 # editor-owned controls stay invisible to gameplay for the whole edit session.
 
 rule EditorInputConsume:
-    filter:
+    each:
         EditorState
 
     on input:

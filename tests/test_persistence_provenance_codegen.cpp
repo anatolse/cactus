@@ -157,7 +157,7 @@ TEST_CASE("a persistence-bearing add path extends provenance to every archetype"
           "[codegen-entt][persistence][provenance]") {
     const auto unit = generate(std::string(kDeclarations) + R"(
 rule Promote:
-    filter:
+    each:
         Sparkle as sparkle
 
     on Step:
@@ -193,7 +193,7 @@ template Particle:
     Sparkle
 
 rule Stun:
-    filter:
+    each:
         Sparkle as sparkle
 
     on Step:
@@ -215,7 +215,7 @@ TEST_CASE("adding a trait with no persist field leaves the bound down",
 trait Stunned
 
 rule Stun:
-    filter:
+    each:
         Sparkle as sparkle
 
     on Step:
@@ -325,7 +325,7 @@ entity Director:
     Spawner
 
 rule SpawnWave:
-    filter:
+    each:
         Spawner as spawner
 
     on Step:
@@ -357,7 +357,7 @@ template Particle:
     Sparkle
 
 rule Promote:
-    filter:
+    each:
         Sparkle as sparkle
 
     on Step:
@@ -393,7 +393,7 @@ phase simulate:
         frame
 
 extern rule Native:
-    filter:
+    each:
         Sparkle
     on simulate:
         reads:
@@ -472,7 +472,7 @@ entity Boss:
     Health
 
 rule Poison:
-    filter:
+    each:
         Health as health
 
     on Step:
@@ -500,7 +500,7 @@ entity Boss:
     Health
 
 rule Glow:
-    filter:
+    each:
         Health as health
 
     on Step:
@@ -529,7 +529,7 @@ entity Boss:
         maximum = 500
 
 rule Strip:
-    filter:
+    each:
         Health as health
 
     on Step:

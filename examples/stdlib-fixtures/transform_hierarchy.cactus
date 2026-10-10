@@ -64,7 +64,7 @@ entity MovingRoot:
 
 # Moves a pose root in the same phase that propagates it.
 rule DriftRoot:
-    filter:
+    each:
         Drift as drift
         tv.WorldTransform as world
 

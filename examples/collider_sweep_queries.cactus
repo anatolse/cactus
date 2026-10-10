@@ -25,7 +25,7 @@ entity ProbeAnchor:
     Anchor
 
 rule MoveProbe:
-    filter:
+    each:
         Probe
         tv.WorldTransform as transform
 
@@ -33,7 +33,7 @@ rule MoveProbe:
         transform.position.x += 1.0
 
 rule ReadProbe:
-    filter:
+    each:
         Probe as probe
         tv.WorldTransform as transform
     after:
@@ -51,8 +51,7 @@ rule ReadProbeInPair:
             Anchor
     after:
         MoveProbe
-    reduce:
-        per: probe
+    reduce per probe:
         anchors = count()
         steps = sum(fixed_tick.dt * 60.0)
 
@@ -156,8 +155,7 @@ rule SweepShots:
             tv.WorldTransform
         target:
             physics.Collider
-    reduce:
-        per: shot
+    reduce per shot:
         first = first_hit(physics.sweep(shot, shot.Shot.velocity * fixed_tick.dt, target))
 
     on fixed_tick:
@@ -177,8 +175,7 @@ rule SweepShotsUnaccelerated:
             tv.WorldTransform
         target:
             physics.Collider
-    reduce:
-        per: shot
+    reduce per shot:
         first = first_hit(physics.sweep(shot, shot.Shot.velocity * fixed_tick.dt, target))
         rows = count()
 
@@ -189,7 +186,7 @@ rule SweepShotsUnaccelerated:
             emit PlainShotHit to first.other
 
 rule CountStrikes:
-    filter:
+    each:
         Struck as struck
 
     on ShotHit:
@@ -206,8 +203,7 @@ rule CountTouching:
             physics.Collider
     where:
         physics.touching(toucher, other)
-    reduce:
-        per: toucher
+    reduce per toucher:
         touching = count()
 
     on fixed_tick:
@@ -267,8 +263,7 @@ rule PushOut:
             physics.CharacterBody
         other:
             physics.Collider
-    reduce:
-        per: body
+    reduce per body:
         push = sum(physics.push_out(body, other))
 
     on fixed_tick:
@@ -283,8 +278,7 @@ rule PushOutUnaccelerated:
             physics.CharacterBody
         other:
             physics.Collider
-    reduce:
-        per: body
+    reduce per body:
         push = sum(physics.push_out(body, other))
         rows = count()
 

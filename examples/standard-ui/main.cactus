@@ -30,7 +30,7 @@ trait ClickCounter:
     var count: int = 0
 
 rule ClickButtonGameplay:
-    filter:
+    each:
         ClickCounter as counter
 
     on pointer.Click:

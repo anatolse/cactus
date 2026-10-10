@@ -34,7 +34,7 @@ func stamina_cost(mode: Mode) int:
     return cost
 
 rule Classify:
-    filter:
+    each:
         Actor as a
 
     on tick:

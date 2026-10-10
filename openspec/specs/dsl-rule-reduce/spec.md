@@ -42,7 +42,7 @@ A regular unary or pair rule SHALL accept one `reduce:` clause. It SHALL declare
 
 ### Requirement: Global and outer-grouped empty-input behavior
 
-Omitting `per:` SHALL produce exactly one global aggregate row, even for empty input. `per: binding` SHALL be allowed only for a declared pair binding and SHALL produce exactly one group for every entity in that binding's membership snapshot that passes the group filter (see "`where:` splits into group and row filters"), whether or not any row survives for it. Identity values SHALL apply to empty input: `count` and `sum` zero (the zero vector for a vector `sum`), `min`/`max` their default, `any` false, `first_hit` the miss value that `sweep` itself returns (`hit = false`, `t = 1.0`, stale `other`, zero `point` and `normal`).
+A `reduce:` clause without a `per` grouping SHALL produce exactly one global aggregate row, even for empty input. `reduce per binding:` SHALL be allowed only for a declared pair binding and SHALL produce exactly one group for every entity in that binding's membership snapshot that passes the group filter (see "`where:` splits into group and row filters"), whether or not any row survives for it. Identity values SHALL apply to empty input: `count` and `sum` zero (the zero vector for a vector `sum`), `min`/`max` their default, `any` false, `first_hit` the miss value that `sweep` itself returns (`hit = false`, `t = 1.0`, stale `other`, zero `point` and `normal`).
 
 #### Scenario: Global empty input
 - **WHEN** no enemies survive the filter
@@ -74,14 +74,14 @@ Omitting `per:` SHALL produce exactly one global aggregate row, even for empty i
 
 ### Requirement: `where:` splits into group and row filters
 
-When a rule declares `reduce:` with `per: binding`, each `where:` predicate whose pair-binding reads all root at the `per` binding SHALL filter groups: an entity failing it gets no group. Every other `where:` predicate SHALL filter rows only. Without `per:`, every `where:` predicate SHALL filter rows.
+When a rule declares `reduce per binding:`, each `where:` predicate whose pair-binding reads all root at the `per` binding SHALL filter groups: an entity failing it gets no group. Every other `where:` predicate SHALL filter rows only. Without `per`, every `where:` predicate SHALL filter rows.
 
 #### Scenario: Group-only predicate removes the group
-- **WHEN** a rule reduces `per: team` and its `where:` contains `team.Team.active`
+- **WHEN** a rule uses `reduce per team:` and its `where:` contains `team.Team.active`
 - **THEN** an inactive team gets no reduction activation
 
 #### Scenario: Row predicate keeps the group
-- **WHEN** a rule reduces `per: enemy` and its `where:` contains a predicate reading both `enemy` and `wall`
+- **WHEN** a rule uses `reduce per enemy:` and its `where:` contains a predicate reading both `enemy` and `wall`
 - **THEN** an enemy for which the predicate rejects every row still gets one activation with identity values
 
 ### Requirement: Reduction scope and deterministic pipeline
@@ -93,11 +93,11 @@ The logical pipeline SHALL be domain → `where:` → `reduce:` → `order by:` 
 - **THEN** at most two aggregate handlers run, with creation-order ties
 
 #### Scenario: Eliminated binding
-- **WHEN** a grouped handler accesses the `player` binding eliminated by `per: team`
+- **WHEN** a grouped handler accesses the `player` binding eliminated by `reduce per team:`
 - **THEN** compilation rejects the access
 
 #### Scenario: Write through the retained binding
-- **WHEN** a handler grouped `per: enemy` assigns `enemy.Enemy.facing_yaw = 1.0`
+- **WHEN** a handler grouped by `reduce per enemy:` assigns `enemy.Enemy.facing_yaw = 1.0`
 - **THEN** compilation accepts it and the write applies to that enemy once per activation
 
 #### Scenario: No live-value drift
@@ -126,7 +126,7 @@ Integer `count` and `sum` SHALL saturate at the signed 32-bit bounds, clamping e
 
 ### Requirement: Reduced rule placement and triggers
 
-With `reduce:`, `order by:` SHALL be written after the `reduce:` clause; an `order by:` before it SHALL be rejected. A lifecycle trigger (`on added`/`on removed`) SHALL be rejected on a reduced rule. A targeted event delivered to a reduced rule with `per: binding` SHALL produce at most the recipient's group; a global reduction SHALL ignore the target.
+With `reduce:`, `order by:` SHALL be written after the `reduce:` clause; an `order by:` before it SHALL be rejected. A lifecycle trigger (`on added`/`on removed`) SHALL be rejected on a reduced rule. A targeted event delivered to a rule with `reduce per binding:` SHALL produce at most the recipient's group; a global reduction SHALL ignore the target.
 
 #### Scenario: Sort keys after reduce
 - **WHEN** a reduced rule writes `order by: total desc` after `reduce:`
@@ -141,7 +141,7 @@ With `reduce:`, `order by:` SHALL be written after the `reduce:` clause; an `ord
 - **THEN** compilation rejects it
 
 #### Scenario: Targeted event
-- **WHEN** an event targeted at team A reaches a rule reduced `per: team`
+- **WHEN** an event targeted at team A reaches a rule with `reduce per team:`
 - **THEN** only team A's group runs, with aggregates over all of team A's rows
 
 ### Requirement: first_hit keeps the earliest hit deterministically
@@ -156,24 +156,29 @@ With `reduce:`, `order by:` SHALL be written after the `reduce:` clause; an `ord
 - **WHEN** two rows hit at the same `t`
 - **THEN** `first_hit` yields the row that comes first in stable domain order
 
-### Requirement: Header-level reduction grouping
-A regular rule SHALL accept `reduce per binding:` with an indented, nonempty reducer declaration block as equivalent to `reduce:` with a leading body-level `per: binding`. The header's binding SHALL obey the existing declared-pair-binding restriction. The ungrouped form SHALL remain `reduce:`. A clause SHALL reject simultaneous header-level and body-level grouping, even when both names are equal. Reducer names, typing, purity, and clause placement SHALL obey their existing rules.
+### Requirement: Reduction grouping is declared in the header
+A regular rule SHALL declare reduction grouping only in the clause header, as `reduce per binding:` with an indented, nonempty reducer declaration block. The header's binding SHALL obey the existing declared-pair-binding restriction. The ungrouped form SHALL remain `reduce:`. A `per: binding` line inside the reducer block SHALL be rejected with a diagnostic at that line telling the author to write `reduce per binding:`; for recovery the parser SHALL use that binding as the grouping when the header has none, so the rule produces no further errors from the removed spelling alone, and SHALL continue with the remaining reducers and later declarations. `per = count()` SHALL remain a reducer named `per`. Reducer names, typing, purity, and clause placement SHALL obey their existing rules.
 
-#### Scenario: Header and body grouping are equivalent
-- **WHEN** equivalent pair rules use `reduce per team:` and `reduce:` with `per: team`
-- **THEN** they retain the same groups, retained writable binding, aggregates, contracts, and handler scope
+#### Scenario: Header grouping
+- **WHEN** a pair rule uses `reduce per team:` with reducers `players = count(player)` and `total = sum(player.Player.points)`
+- **THEN** it produces one aggregate row per retained team, with the team binding writable and the player binding eliminated from handler scope
 
 #### Scenario: Empty groups retain identities
 - **WHEN** a retained team passes its group predicates but has no matching player rows
-- **THEN** either grouping spelling produces the same aggregate row with existing reducer identities
+- **THEN** header grouping produces the aggregate row with existing reducer identities
 
-#### Scenario: Ranking and keep retain their timing
-- **WHEN** grouped rules use header grouping with aggregate sorting/limits or a `keep` result
-- **THEN** ranking, aggregate snapshots, commit visibility, and kept-trait lifecycle notifications equal the legacy spelling
+#### Scenario: Body-level per names its replacement
+- **WHEN** a `reduce:` block contains `per: team` followed by reducers
+- **THEN** compilation reports one error at the `per:` line telling the author to use `reduce per team:`
+- **AND** the remaining reducers and later declarations are still parsed
 
-#### Scenario: Duplicate grouping is rejected
+#### Scenario: Body-level per under a grouped header
 - **WHEN** `reduce per team:` also contains `per: team` or `per: other` in its body
-- **THEN** compilation reports duplicate grouping
+- **THEN** compilation reports the body `per:` line as a removed spelling and keeps the header grouping
+
+#### Scenario: Reducer named per
+- **WHEN** a `reduce:` block declares `per = count()`
+- **THEN** compilation accepts it as a reducer named `per`
 
 #### Scenario: Invalid grouped header is rejected
 - **WHEN** the header omits its binding, names an unknown binding, uses grouping on a unary rule, or contains no reducers

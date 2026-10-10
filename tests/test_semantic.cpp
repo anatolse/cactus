@@ -172,7 +172,7 @@ template Projectile(speed: float):
     Motion:
         speed = speed
 rule Fire:
-    filter:
+    each:
         Pos
     on tick:
         spawn Projectile(speed = x + tick.dt)
@@ -240,7 +240,7 @@ template Made(value: int):
     Data:
         value = value
 rule R:
-    filter:
+    each:
         Source as s
     on tick:
         spawn Made(value = s.value + 1)
@@ -258,7 +258,7 @@ template Made(value: int):
     Data:
         value = value
 rule Reader:
-    filter:
+    each:
         Source
     on tick:
         spawn Made(value = value)
@@ -452,7 +452,7 @@ TEST_CASE("Semantic: rule filter — valid trait", "[semantic]") {
     CHECK_FALSE(analyze_has_errors(stdlib_events() + "trait Pos:\n"
                                                      "    var x: float\n"
                                                      "rule Move:\n"
-                                                     "    filter: \n"
+                                                     "    each: \n"
                                                      "        Pos\n"
                                                      "    on tick:\n"
                                                      "        x = x + tick.dt\n"));
@@ -460,7 +460,7 @@ TEST_CASE("Semantic: rule filter — valid trait", "[semantic]") {
 
 TEST_CASE("Semantic: rule filter — unknown trait", "[semantic]") {
     CHECK(analyze_has_errors(stdlib_events() + "rule Bad:\n"
-                                               "    filter: \n"
+                                               "    each: \n"
                                                "        NonExistent\n"
                                                "    on tick:\n"
                                                "        x = 0\n"));
@@ -473,7 +473,7 @@ TEST_CASE("Semantic: event handler — valid event", "[semantic]") {
                            "event Hit:\n"
                            "    dmg: int\n"
                            "rule Combat:\n"
-                           "    filter: \n"
+                           "    each: \n"
                            "        Pos\n"
                            "    on Hit:\n"
                            "        x = x + 1.0\n"));
@@ -484,7 +484,7 @@ TEST_CASE("Semantic: event handler — unknown event", "[semantic]") {
         analyze_has_errors("trait Pos:\n"
                            "    var x: float\n"
                            "rule Bad:\n"
-                           "    filter: \n"
+                           "    each: \n"
                            "        Pos\n"
                            "    on FakeEvent:\n"
                            "        x = 0\n"));
@@ -525,7 +525,7 @@ TEST_CASE("Semantic: extern event can still be handled by authored code — ok",
                                                      "trait Pos:\n"
                                                      "    var x: float\n"
                                                      "rule Handle:\n"
-                                                     "    filter:\n"
+                                                     "    each:\n"
                                                      "        Pos\n"
                                                      "    on SaveCompleted as outcome:\n"
                                                      "        x = 0.0\n"));
@@ -550,7 +550,7 @@ TEST_CASE("Semantic: restore's extern event can still be handled by authored cod
                                                      "trait Pos:\n"
                                                      "    var x: float\n"
                                                      "rule Handle:\n"
-                                                     "    filter:\n"
+                                                     "    each:\n"
                                                      "        Pos\n"
                                                      "    on RestoreCompleted as outcome:\n"
                                                      "        x = 0.0\n"));
@@ -560,7 +560,7 @@ TEST_CASE("Semantic: tick handler — always valid", "[semantic]") {
     CHECK_FALSE(analyze_has_errors(stdlib_events() + "trait Pos:\n"
                                                      "    var x: float\n"
                                                      "rule Move:\n"
-                                                     "    filter: \n"
+                                                     "    each: \n"
                                                      "        Pos\n"
                                                      "    on tick:\n"
                                                      "        x = x + tick.dt\n"));
@@ -571,7 +571,7 @@ TEST_CASE("Semantic: dependency graph built", "[semantic]") {
                           "trait Pos:\n"
                           "    var x: float\n"
                           "rule Move:\n"
-                          "    filter: \n"
+                          "    each: \n"
                           "        Pos\n"
                           "    on tick as t:\n"
                           "        x = x + t.dt\n");
@@ -740,7 +740,7 @@ TEST_CASE("Semantic: extern rule with filter is valid", "[semantic][extern-rule]
     CHECK_FALSE(analyze_has_errors(stdlib_events() + "trait Position:\n"
                                                      "    var x: float\n"
                                                      "extern rule SpriteRenderer:\n"
-                                                     "    filter:\n"
+                                                     "    each:\n"
                                                      "        Position\n"
                                                      "    on tick:\n"
                                                      "        reads:\n"
@@ -760,12 +760,12 @@ TEST_CASE("Semantic: after cycle with extern rule reports error", "[semantic][ex
     CHECK(analyze_has_errors(stdlib_events() + "trait T:\n"
                                                "    var x: float\n"
                                                "extern rule A:\n"
-                                               "    filter:\n"
+                                               "    each:\n"
                                                "        T\n"
                                                "    after:\n"
                                                "        B\n"
                                                "rule B:\n"
-                                               "    filter:\n"
+                                               "    each:\n"
                                                "        T\n"
                                                "    after:\n"
                                                "        A\n"
@@ -808,19 +808,19 @@ TEST_CASE("Semantic: after: linear chain passes and populates after_rules", "[se
                           "trait T:\n"
                           "    var x: float\n"
                           "rule A:\n"
-                          "    filter: \n"
+                          "    each: \n"
                           "       T\n"
                           "    on tick:\n"
                           "        x = 1.0\n"
                           "rule B:\n"
-                          "    filter:\n"
+                          "    each:\n"
                           "       T\n"
                           "    after:\n"
                           "        A\n"
                           "    on tick:\n"
                           "        x = 2.0\n"
                           "rule C:\n"
-                          "    filter:\n"
+                          "    each:\n"
                           "       T\n"
                           "    after:\n"
                           "        B\n"
@@ -852,7 +852,7 @@ TEST_CASE("Semantic: order by valid alias and scalar fields", "[semantic][rule-o
                                                      "trait Sprite:\n"
                                                      "    var layer: int\n"
                                                      "rule Render:\n"
-                                                     "    filter:\n"
+                                                     "    each:\n"
                                                      "        Position as p\n"
                                                      "        Sprite as s\n"
                                                      "    order by:\n"
@@ -866,7 +866,7 @@ TEST_CASE("Semantic: order by alias not in filter errors", "[semantic][rule-orde
     CHECK(analyze_has_errors(stdlib_events() + "trait Position:\n"
                                                "    var pos: vec2\n"
                                                "rule Render:\n"
-                                               "    filter:\n"
+                                               "    each:\n"
                                                "        Position as p\n"
                                                "    order by:\n"
                                                "        s.pos.y asc\n"
@@ -878,7 +878,7 @@ TEST_CASE("Semantic: order by non-orderable type errors", "[semantic][rule-order
     CHECK(analyze_has_errors(stdlib_events() + "trait Position:\n"
                                                "    var pos: vec2\n"
                                                "rule Render:\n"
-                                               "    filter:\n"
+                                               "    each:\n"
                                                "        Position as p\n"
                                                "    order by:\n"
                                                "        p.pos asc\n"
@@ -890,7 +890,7 @@ TEST_CASE("Semantic: order by invalid vec2 member errors", "[semantic][rule-orde
     CHECK(analyze_has_errors(stdlib_events() + "trait Position:\n"
                                                "    var pos: vec2\n"
                                                "rule Render:\n"
-                                               "    filter:\n"
+                                               "    each:\n"
                                                "        Position as p\n"
                                                "    order by:\n"
                                                "        p.pos.z asc\n"
@@ -902,7 +902,7 @@ TEST_CASE("Semantic: order by valid color channel", "[semantic][rule-order-by][v
     CHECK_FALSE(analyze_has_errors(stdlib_events() + "trait Tint:\n"
                                                      "    var tint: color\n"
                                                      "rule Render:\n"
-                                                     "    filter:\n"
+                                                     "    each:\n"
                                                      "        Tint as t\n"
                                                      "    order by:\n"
                                                      "        t.tint.a desc\n"
@@ -920,7 +920,7 @@ TEST_CASE("Semantic: order by invalid color member errors", "[semantic][rule-ord
                                        "trait Tint:\n"
                                        "    var tint: color\n"
                                        "rule Render:\n"
-                                       "    filter:\n"
+                                       "    each:\n"
                                        "        Tint as t\n"
                                        "    order by:\n"
                                        "        t.tint.w asc\n"
@@ -937,7 +937,7 @@ TEST_CASE("Semantic: impure order by sort key is rejected", "[semantic][rule-ord
                                    "    Health:\n"
                                    "        value = 1\n"
                                    "rule Render:\n"
-                                   "    filter:\n"
+                                   "    each:\n"
                                    "        Health as h\n"
                                    "    order by:\n"
                                    "        spawn Marker:\n"
@@ -954,7 +954,7 @@ TEST_CASE("Semantic: order by accepts a computed sort key over a single filter a
                                                      "func doubled(v: int) int:\n"
                                                      "    return v * 2\n"
                                                      "rule Render:\n"
-                                                     "    filter:\n"
+                                                     "    each:\n"
                                                      "        Health as h\n"
                                                      "    order by:\n"
                                                      "        doubled(h.value) desc\n"
@@ -969,7 +969,7 @@ TEST_CASE("Semantic: order by rejects a computed sort key with a non-scalar resu
                                                "func identity(v: vec2) vec2:\n"
                                                "    return v\n"
                                                "rule Render:\n"
-                                               "    filter:\n"
+                                               "    each:\n"
                                                "        Position as p\n"
                                                "    order by:\n"
                                                "        identity(p.pos) asc\n"
@@ -984,7 +984,7 @@ TEST_CASE("Semantic: order by without filter or pairs reports the specific diagn
                                    "        1\n"
                                    "    on tick:\n"
                                    "        let x = 1\n");
-    CHECK(err.contains("`order by:` requires a `filter:` or `pairs:` clause"));
+    CHECK(err.contains("`order by:` requires an `each:` or `pairs:` clause"));
 }
 
 TEST_CASE("Semantic: order by accepts a cross-binding computed pair sort key", "[semantic][rule-order-by][pair-relations]") {
@@ -1021,7 +1021,7 @@ TEST_CASE("Semantic: order by rejects a pair sort key naming an undeclared bindi
 }
 
 // Regression guard (task 4.3): only order by: was carved out of pairs:'s
-// unary-clause exclusion — filter:/exclude: combined with pairs: must still
+// unary-clause exclusion — each:/without: combined with pairs: must still
 // be rejected end to end.
 TEST_CASE("Semantic: pairs combined with filter is still rejected", "[semantic][pair-relations]") {
     CHECK(analyze_has_errors(stdlib_events() + "trait Position:\n"
@@ -1032,7 +1032,7 @@ TEST_CASE("Semantic: pairs combined with filter is still rejected", "[semantic][
                                                "            Position\n"
                                                "        victim:\n"
                                                "            Position\n"
-                                               "    filter:\n"
+                                               "    each:\n"
                                                "        Position\n"
                                                "    on fixed_tick:\n"
                                                "        let x = 1\n"));
@@ -1047,7 +1047,7 @@ TEST_CASE("Semantic: pairs combined with exclude is still rejected", "[semantic]
                                                "            Position\n"
                                                "        victim:\n"
                                                "            Position\n"
-                                               "    exclude:\n"
+                                               "    without:\n"
                                                "        Position\n"
                                                "    on fixed_tick:\n"
                                                "        let x = 1\n"));
@@ -1175,7 +1175,7 @@ TEST_CASE("Semantic: vec2/vec3 constructors resolve to real types outside trait 
     CHECK_FALSE(analyze_has_errors(stdlib_events() + "trait Position:\n"
                                                      "    var pos: vec2\n"
                                                      "rule Move:\n"
-                                                     "    filter:\n"
+                                                     "    each:\n"
                                                      "        Position as p\n"
                                                      "    on tick:\n"
                                                      "        let origin = vec2(0.0)\n"
@@ -1232,7 +1232,7 @@ static const std::string& vector_matrix_stdlib() {
 TEST_CASE("Semantic: vec2/vec3 component addition and subtraction typecheck", "[semantic][vector-expressions]") {
     CHECK_FALSE(analyze_has_errors(stdlib_events() + vector_matrix_stdlib() +
                                    "rule Test:\n"
-                                   "    filter:\n"
+                                   "    each:\n"
                                    "        Position as p\n"
                                    "        Motion as m\n"
                                    "    on tick:\n"
@@ -1245,7 +1245,7 @@ TEST_CASE("Semantic: vec2/vec3 component addition and subtraction typecheck", "[
 TEST_CASE("Semantic: vec2/vec3 scalar multiply is commutative in both orders", "[semantic][vector-expressions]") {
     CHECK_FALSE(analyze_has_errors(stdlib_events() + vector_matrix_stdlib() +
                                    "rule Test:\n"
-                                   "    filter:\n"
+                                   "    each:\n"
                                    "        Position as p\n"
                                    "    on tick:\n"
                                    "        let a = p.pos2 * tick.dt\n"
@@ -1257,7 +1257,7 @@ TEST_CASE("Semantic: vec2/vec3 scalar multiply is commutative in both orders", "
 TEST_CASE("Semantic: vec2/vec3 divide by float typechecks", "[semantic][vector-expressions]") {
     CHECK_FALSE(analyze_has_errors(stdlib_events() + vector_matrix_stdlib() +
                                    "rule Test:\n"
-                                   "    filter:\n"
+                                   "    each:\n"
                                    "        Position as p\n"
                                    "    on tick:\n"
                                    "        let a = p.pos2 / tick.dt\n"
@@ -1271,7 +1271,7 @@ TEST_CASE("Semantic: vec2/vec3 component-wise multiply stays vector-typed, not a
     // `float + vec2` row); accepting it proves the result stayed `vec2`.
     CHECK_FALSE(analyze_has_errors(stdlib_events() + vector_matrix_stdlib() +
                                    "rule Test:\n"
-                                   "    filter:\n"
+                                   "    each:\n"
                                    "        Position as p\n"
                                    "        Motion as m\n"
                                    "    on tick:\n"
@@ -1281,7 +1281,7 @@ TEST_CASE("Semantic: vec2/vec3 component-wise multiply stays vector-typed, not a
 TEST_CASE("Semantic: mismatched vec2/vec3 dimensions rejected", "[semantic][vector-expressions]") {
     auto message = analyze_first_error(stdlib_events() + vector_matrix_stdlib() +
                                        "rule Test:\n"
-                                       "    filter:\n"
+                                       "    each:\n"
                                        "        Position as p\n"
                                        "    on tick:\n"
                                        "        let bad = p.pos2 + p.pos3\n");
@@ -1292,7 +1292,7 @@ TEST_CASE("Semantic: mismatched vec2/vec3 dimensions rejected", "[semantic][vect
 TEST_CASE("Semantic: vector-by-vector division rejected", "[semantic][vector-expressions]") {
     CHECK(analyze_has_errors(stdlib_events() + vector_matrix_stdlib() +
                              "rule Test:\n"
-                             "    filter:\n"
+                             "    each:\n"
                              "        Position as p\n"
                              "        Motion as m\n"
                              "    on tick:\n"
@@ -1302,7 +1302,7 @@ TEST_CASE("Semantic: vector-by-vector division rejected", "[semantic][vector-exp
 TEST_CASE("Semantic: vector plus bare scalar rejected", "[semantic][vector-expressions]") {
     CHECK(analyze_has_errors(stdlib_events() + vector_matrix_stdlib() +
                              "rule Test:\n"
-                             "    filter:\n"
+                             "    each:\n"
                              "        Position as p\n"
                              "    on tick:\n"
                              "        let bad = p.pos2 + tick.dt\n"));
@@ -1319,7 +1319,7 @@ static const std::string& color_matrix_stdlib() {
 TEST_CASE("Semantic: color component addition and subtraction typecheck", "[semantic][vector-expressions]") {
     CHECK_FALSE(analyze_has_errors(stdlib_events() + color_matrix_stdlib() +
                                    "rule Test:\n"
-                                   "    filter:\n"
+                                   "    each:\n"
                                    "        Tint as t\n"
                                    "    on tick:\n"
                                    "        let sum = t.primary + t.secondary\n"
@@ -1329,7 +1329,7 @@ TEST_CASE("Semantic: color component addition and subtraction typecheck", "[sema
 TEST_CASE("Semantic: color scalar multiply is commutative in both orders", "[semantic][vector-expressions]") {
     CHECK_FALSE(analyze_has_errors(stdlib_events() + color_matrix_stdlib() +
                                    "rule Test:\n"
-                                   "    filter:\n"
+                                   "    each:\n"
                                    "        Tint as t\n"
                                    "    on tick:\n"
                                    "        let a = t.primary * tick.dt\n"
@@ -1339,7 +1339,7 @@ TEST_CASE("Semantic: color scalar multiply is commutative in both orders", "[sem
 TEST_CASE("Semantic: color divide by float typechecks", "[semantic][vector-expressions]") {
     CHECK_FALSE(analyze_has_errors(stdlib_events() + color_matrix_stdlib() +
                                    "rule Test:\n"
-                                   "    filter:\n"
+                                   "    each:\n"
                                    "        Tint as t\n"
                                    "    on tick:\n"
                                    "        let a = t.primary / tick.dt\n"));
@@ -1352,7 +1352,7 @@ TEST_CASE("Semantic: color component-wise multiply stays color-typed, not a dot 
     // rejected (no such row) - accepting it proves the result stayed `color`.
     CHECK_FALSE(analyze_has_errors(stdlib_events() + color_matrix_stdlib() +
                                    "rule Test:\n"
-                                   "    filter:\n"
+                                   "    each:\n"
                                    "        Tint as t\n"
                                    "    on tick:\n"
                                    "        let component_product = t.primary * t.secondary + t.primary\n"));
@@ -1361,7 +1361,7 @@ TEST_CASE("Semantic: color component-wise multiply stays color-typed, not a dot 
 TEST_CASE("Semantic: color plus bare scalar rejected", "[semantic][vector-expressions]") {
     auto message = analyze_first_error(stdlib_events() + color_matrix_stdlib() +
                                        "rule Test:\n"
-                                       "    filter:\n"
+                                       "    each:\n"
                                        "        Tint as t\n"
                                        "    on tick:\n"
                                        "        let bad = t.primary + tick.dt\n");
@@ -1373,7 +1373,7 @@ TEST_CASE("Semantic: color plus bare scalar rejected", "[semantic][vector-expres
 TEST_CASE("Semantic: color-by-color division rejected", "[semantic][vector-expressions]") {
     auto message = analyze_first_error(stdlib_events() + color_matrix_stdlib() +
                                        "rule Test:\n"
-                                       "    filter:\n"
+                                       "    each:\n"
                                        "        Tint as t\n"
                                        "    on tick:\n"
                                        "        let bad = t.primary / t.secondary\n");
@@ -1384,7 +1384,7 @@ TEST_CASE("Semantic: color-by-color division rejected", "[semantic][vector-expre
 TEST_CASE("Semantic: vec2 addition compound assignment on a trait field", "[semantic][vector-expressions]") {
     CHECK_FALSE(analyze_has_errors(stdlib_events() + vector_matrix_stdlib() +
                                    "rule Test:\n"
-                                   "    filter:\n"
+                                   "    each:\n"
                                    "        Position as p\n"
                                    "        Motion as m\n"
                                    "    on tick:\n"
@@ -1394,7 +1394,7 @@ TEST_CASE("Semantic: vec2 addition compound assignment on a trait field", "[sema
 TEST_CASE("Semantic: vec3 scalar-multiply compound assignment on a trait field", "[semantic][vector-expressions]") {
     CHECK_FALSE(analyze_has_errors(stdlib_events() + vector_matrix_stdlib() +
                                    "rule Test:\n"
-                                   "    filter:\n"
+                                   "    each:\n"
                                    "        Position as p\n"
                                    "    on tick:\n"
                                    "        p.pos3 *= tick.dt\n"));
@@ -1403,7 +1403,7 @@ TEST_CASE("Semantic: vec3 scalar-multiply compound assignment on a trait field",
 TEST_CASE("Semantic: vec2 component-wise compound multiply on a trait field", "[semantic][vector-expressions]") {
     CHECK_FALSE(analyze_has_errors(stdlib_events() + vector_matrix_stdlib() +
                                    "rule Test:\n"
-                                   "    filter:\n"
+                                   "    each:\n"
                                    "        Position as p\n"
                                    "        Motion as m\n"
                                    "    on tick:\n"
@@ -1413,7 +1413,7 @@ TEST_CASE("Semantic: vec2 component-wise compound multiply on a trait field", "[
 TEST_CASE("Semantic: vec2 divide compound assignment on a trait field", "[semantic][vector-expressions]") {
     CHECK_FALSE(analyze_has_errors(stdlib_events() + vector_matrix_stdlib() +
                                    "rule Test:\n"
-                                   "    filter:\n"
+                                   "    each:\n"
                                    "        Position as p\n"
                                    "    on tick:\n"
                                    "        p.pos2 /= tick.dt\n"));
@@ -1422,7 +1422,7 @@ TEST_CASE("Semantic: vec2 divide compound assignment on a trait field", "[semant
 TEST_CASE("Semantic: vec2 compound assignment on a handler-local var", "[semantic][vector-expressions]") {
     CHECK_FALSE(analyze_has_errors(stdlib_events() + vector_matrix_stdlib() +
                                    "rule Test:\n"
-                                   "    filter:\n"
+                                   "    each:\n"
                                    "        Position as p\n"
                                    "    on tick:\n"
                                    "        var accel = vec2(0.0)\n"
@@ -1433,7 +1433,7 @@ TEST_CASE("Semantic: vec2 compound assignment on a handler-local var", "[semanti
 TEST_CASE("Semantic: incompatible vec2 compound-assignment operand rejected", "[semantic][vector-expressions]") {
     auto message = analyze_first_error(stdlib_events() + vector_matrix_stdlib() +
                                        "rule Test:\n"
-                                       "    filter:\n"
+                                       "    each:\n"
                                        "        Position as p\n"
                                        "    on tick:\n"
                                        "        p.pos2 += 5\n");
@@ -1444,7 +1444,7 @@ TEST_CASE("Semantic: incompatible vec2 compound-assignment operand rejected", "[
 TEST_CASE("Semantic: compound-assignment diagnostic names target and source types", "[semantic][vector-expressions]") {
     auto message = analyze_first_error(stdlib_events() + vector_matrix_stdlib() +
                                        "rule Test:\n"
-                                       "    filter:\n"
+                                       "    each:\n"
                                        "        Position as p\n"
                                        "    on tick:\n"
                                        "        p.pos2 -= \"east\"\n");
@@ -1556,7 +1556,7 @@ TEST_CASE("Semantic: trait match alias conflict error", "[semantic][trait-match]
                            "trait Boss:\n"
                            "    var phase: int\n"
                            "rule Combat:\n"
-                           "    filter:\n"
+                           "    each:\n"
                            "        Position as p\n"
                            "    on Collision as c:\n"
                            "        match c.other:\n"
@@ -1681,7 +1681,7 @@ TEST_CASE("Semantic: bounded foreach over list binds read-only element", "[seman
                                                      "event Damage:\n"
                                                      "    amount: int\n"
                                                      "rule ApplyHits:\n"
-                                                     "    filter:\n"
+                                                     "    each:\n"
                                                      "        Source\n"
                                                      "    on tick:\n"
                                                      "        for hit in hits:\n"
@@ -1691,7 +1691,7 @@ TEST_CASE("Semantic: bounded foreach over list binds read-only element", "[seman
     CHECK(analyze_first_error(stdlib_events() + "trait Source:\n"
                                                 "    var count: int\n"
                                                 "rule BadLoop:\n"
-                                                "    filter:\n"
+                                                "    each:\n"
                                                 "        Source\n"
                                                 "    on tick:\n"
                                                 "        for item in count:\n"
@@ -1701,7 +1701,7 @@ TEST_CASE("Semantic: bounded foreach over list binds read-only element", "[seman
     CHECK(analyze_first_error(stdlib_events() + "trait Source:\n"
                                                 "    var values: list[int]\n"
                                                 "rule BadAssign:\n"
-                                                "    filter:\n"
+                                                "    each:\n"
                                                 "        Source\n"
                                                 "    on tick:\n"
                                                 "        for value in values:\n"
@@ -1844,7 +1844,7 @@ TEST_CASE("Semantic: trait read through self is rejected", "[semantic][entity-id
 TEST_CASE("Semantic: trait read through self in a where clause is rejected", "[semantic][entity-id-access]") {
     const auto messages = analyze_messages(entity_id_traits() +
                                            "rule R:\n"
-                                           "    filter:\n"
+                                           "    each:\n"
                                            "        Player\n"
                                            "    where:\n"
                                            "        self.Health.hp > 0\n"
@@ -1905,7 +1905,7 @@ TEST_CASE("Semantic: pair binding, filter alias and trait match access stay lega
                                            "    on tick:\n"
                                            "        let hp = body.Health.hp\n"
                                            "rule F:\n"
-                                           "    filter:\n"
+                                           "    each:\n"
                                            "        Health as h\n"
                                            "    on tick:\n"
                                            "        h.hp += 1\n"
@@ -2062,7 +2062,7 @@ TEST_CASE("Semantic: project validates trait fields target and transient restric
                                                      "trait Target:\n"
                                                      "    var victim: entity_id\n"
                                                      "rule Flash:\n"
-                                                     "    filter:\n"
+                                                     "    each:\n"
                                                      "        Target\n"
                                                      "    on tick:\n"
                                                      "        project DamageFlash to victim:\n"
@@ -2099,7 +2099,7 @@ TEST_CASE("Semantic: project participates in dependency writes", "[semantic][pro
                           "trait Health:\n"
                           "    var hp: int\n"
                           "rule Producer:\n"
-                          "    filter:\n"
+                          "    each:\n"
                           "        Health\n"
                           "    on tick:\n"
                           "        let x = hp\n"
@@ -2192,7 +2192,7 @@ TEST_CASE("Semantic: std.text.format — unsupported vec2 arg type rejected", "[
                                    "trait Pos:\n"
                                    "    var pos: vec2\n"
                                    "rule S:\n"
-                                   "    filter:\n"
+                                   "    each:\n"
                                    "        Pos\n"
                                    "    on tick:\n"
                                    "        let s = text.format(\"pos={}\", pos)\n");
@@ -2433,7 +2433,7 @@ TEST_CASE("Semantic: query parent with entity_id of argument accepted", "[semant
                            "    var child_id: entity_id\n" +
                            stdlib_events() +
                            "rule S:\n"
-                           "    filter:\n"
+                           "    each:\n"
                            "        Child\n"
                            "    on tick:\n"
                            "        let p = query.parent(of = child_id)\n"));
@@ -2454,7 +2454,7 @@ TEST_CASE("Semantic: hierarchy snapshot query forms are accepted", "[semantic][q
                            "    var id: entity_id\n" +
                            stdlib_events() +
                            "rule S:\n"
-                           "    filter:\n"
+                           "    each:\n"
                            "        Node\n"
                            "    on tick:\n"
                            "        let direct = query.children[Node](of = id)\n"
@@ -2878,7 +2878,7 @@ TEST_CASE("Semantic: unary handler contract folds reads from a computed order by
                           "func doubled(v: int) int:\n"
                           "    return v * 2\n"
                           "rule Ranked:\n"
-                          "    filter:\n"
+                          "    each:\n"
                           "        DynamicBody as body\n"
                           "        Collider as col\n"
                           "    order by:\n"
@@ -2925,7 +2925,7 @@ TEST_CASE("Semantic: unary rules keep their existing domain and are unaffected b
                           "trait Pos:\n"
                           "    var x: float\n"
                           "rule Move:\n"
-                          "    filter:\n"
+                          "    each:\n"
                           "        Pos\n"
                           "    on tick:\n"
                           "        x = x + tick.dt\n");
@@ -2942,7 +2942,7 @@ TEST_CASE("Semantic: unary rules keep their existing domain and are unaffected b
 TEST_CASE("Semantic: bool-typed where predicate is accepted", "[semantic][where-clause]") {
     CHECK_FALSE(analyze_has_errors(stdlib_events() + pair_traits() +
                                    "rule Moving:\n"
-                                   "    filter:\n"
+                                   "    each:\n"
                                    "        DynamicBody as body\n"
                                    "    where:\n"
                                    "        body.vx > 0.0\n"
@@ -2953,7 +2953,7 @@ TEST_CASE("Semantic: bool-typed where predicate is accepted", "[semantic][where-
 TEST_CASE("Semantic: non-bool where predicate is rejected with a type error", "[semantic][where-clause]") {
     CHECK(analyze_has_errors(stdlib_events() + pair_traits() +
                              "rule Moving:\n"
-                             "    filter:\n"
+                             "    each:\n"
                              "        DynamicBody as body\n"
                              "    where:\n"
                              "        body.vx\n"
@@ -2966,7 +2966,7 @@ TEST_CASE("Semantic: pure user func call in where is accepted", "[semantic][wher
                                    "func is_positive(v: float) bool:\n"
                                    "    return v > 0.0\n"
                                    "rule Moving:\n"
-                                   "    filter:\n"
+                                   "    each:\n"
                                    "        DynamicBody as body\n"
                                    "    where:\n"
                                    "        is_positive(body.vx)\n"
@@ -2977,7 +2977,7 @@ TEST_CASE("Semantic: pure user func call in where is accepted", "[semantic][wher
 TEST_CASE("Semantic: emit in where is rejected", "[semantic][where-clause]") {
     CHECK(analyze_has_errors(stdlib_events() + pair_traits() +
                              "rule Moving:\n"
-                             "    filter:\n"
+                             "    each:\n"
                              "        DynamicBody as body\n"
                              "    where:\n"
                              "        emit Contact\n"
@@ -2988,7 +2988,7 @@ TEST_CASE("Semantic: emit in where is rejected", "[semantic][where-clause]") {
 TEST_CASE("Semantic: world query in where is rejected", "[semantic][where-clause]") {
     auto err = analyze_first_error("use std.query as query\n" + stdlib_events() + pair_traits() +
                                    "rule Moving:\n"
-                                   "    filter:\n"
+                                   "    each:\n"
                                    "        DynamicBody as body\n"
                                    "    where:\n"
                                    "        query.exists[Solid]()\n"
@@ -3003,7 +3003,7 @@ TEST_CASE("Semantic: spawn in where is rejected", "[semantic][where-clause]") {
                                    "    Solid:\n"
                                    "        active = true\n"
                                    "rule Moving:\n"
-                                   "    filter:\n"
+                                   "    each:\n"
                                    "        DynamicBody as body\n"
                                    "    where:\n"
                                    "        spawn Marker:\n"
@@ -3017,7 +3017,7 @@ TEST_CASE("Semantic: spawn in where is rejected", "[semantic][where-clause]") {
 TEST_CASE("Semantic: destroy in where is rejected", "[semantic][where-clause]") {
     CHECK(analyze_has_errors(stdlib_events() + pair_traits() +
                              "rule Moving:\n"
-                             "    filter:\n"
+                             "    each:\n"
                              "        DynamicBody as body\n"
                              "    where:\n"
                              "        destroy\n"
@@ -3028,7 +3028,7 @@ TEST_CASE("Semantic: destroy in where is rejected", "[semantic][where-clause]") 
 TEST_CASE("Semantic: add in where is rejected", "[semantic][where-clause]") {
     CHECK(analyze_has_errors(stdlib_events() + pair_traits() +
                              "rule Moving:\n"
-                             "    filter:\n"
+                             "    each:\n"
                              "        DynamicBody as body\n"
                              "    where:\n"
                              "        add Solid\n"
@@ -3039,7 +3039,7 @@ TEST_CASE("Semantic: add in where is rejected", "[semantic][where-clause]") {
 TEST_CASE("Semantic: remove in where is rejected", "[semantic][where-clause]") {
     CHECK(analyze_has_errors(stdlib_events() + pair_traits() +
                              "rule Moving:\n"
-                             "    filter:\n"
+                             "    each:\n"
                              "        DynamicBody as body\n"
                              "    where:\n"
                              "        remove Solid\n"
@@ -3050,7 +3050,7 @@ TEST_CASE("Semantic: remove in where is rejected", "[semantic][where-clause]") {
 TEST_CASE("Semantic: project in where is rejected", "[semantic][where-clause]") {
     CHECK(analyze_has_errors(stdlib_events() + pair_traits() +
                              "rule Moving:\n"
-                             "    filter:\n"
+                             "    each:\n"
                              "        DynamicBody as body\n"
                              "    where:\n"
                              "        project Solid\n"
@@ -3063,7 +3063,7 @@ TEST_CASE("Semantic: call to extern func without a proven-pure effect summary is
     auto err = analyze_first_error(stdlib_events() + pair_traits() +
                                    "pub extern func mystery(v: float) float\n"
                                    "rule Moving:\n"
-                                   "    filter:\n"
+                                   "    each:\n"
                                    "        DynamicBody as body\n"
                                    "    where:\n"
                                    "        mystery(body.vx) > 0.0\n"
@@ -3072,7 +3072,7 @@ TEST_CASE("Semantic: call to extern func without a proven-pure effect summary is
     CHECK(err.contains("must be pure"));
 }
 
-TEST_CASE("Semantic: where on rule with neither filter nor pairs is rejected", "[semantic][where-clause]") {
+TEST_CASE("Semantic: where on rule with neither each nor pairs is rejected", "[semantic][where-clause]") {
     auto err = analyze_first_error(stdlib_events() +
                                    "rule NoDomain:\n"
                                    "    where:\n"
@@ -3080,14 +3080,14 @@ TEST_CASE("Semantic: where on rule with neither filter nor pairs is rejected", "
                                    "    on tick:\n"
                                    "        let x = 1\n");
     CHECK(err.contains("where:"));
-    CHECK(err.contains("filter"));
+    CHECK(err.contains("each:"));
 }
 
 TEST_CASE("Semantic: unary handler contract from where matches equivalent leading if guard",
           "[semantic][where-clause][handler-contracts]") {
     auto where_result = analyze(stdlib_events() + pair_traits() +
                                 "rule MovingWhere:\n"
-                                "    filter:\n"
+                                "    each:\n"
                                 "        DynamicBody as body\n"
                                 "    where:\n"
                                 "        body.vx > 0.0\n"
@@ -3095,7 +3095,7 @@ TEST_CASE("Semantic: unary handler contract from where matches equivalent leadin
                                 "        let x = 1\n");
     auto if_result    = analyze(stdlib_events() + pair_traits() +
                                 "rule MovingIf:\n"
-                                "    filter:\n"
+                                "    each:\n"
                                 "        DynamicBody as body\n"
                                 "    on tick:\n"
                                 "        if body.vx <= 0.0:\n"
@@ -4062,7 +4062,7 @@ TEST_CASE("Semantic: unary rule with where: is never flagged as unaccelerated",
                                                           "trait Collider:\n"
                                                           "    var radius: float\n"
                                                           "rule Shrink:\n"
-                                                          "    filter:\n"
+                                                          "    each:\n"
                                                           "        Collider\n"
                                                           "    where:\n"
                                                           "        Collider.radius > 1.0\n"
@@ -4116,13 +4116,13 @@ TEST_CASE("Semantic: limit without filter or pairs reports the specific diagnost
                                    "    limit: 10\n"
                                    "    on tick:\n"
                                    "        let x = 1\n");
-    CHECK(err.contains("`limit:` requires a `filter:` or `pairs:` clause"));
+    CHECK(err.contains("`limit:` requires an `each:` or `pairs:` clause"));
 }
 
 TEST_CASE("Semantic: global limit is accepted on both a unary and a pair domain", "[semantic][rule-limit]") {
     CHECK_FALSE(analyze_has_errors(stdlib_events() + limit_traits() +
                                    "rule Unary:\n"
-                                   "    filter:\n"
+                                   "    each:\n"
                                    "        Actor as a\n"
                                    "    limit: 10\n"
                                    "    on tick:\n"
@@ -4141,7 +4141,7 @@ TEST_CASE("Semantic: global limit is accepted on both a unary and a pair domain"
 TEST_CASE("Semantic: per-binding limit on a unary rule is rejected", "[semantic][rule-limit]") {
     auto err = analyze_first_error(stdlib_events() + limit_traits() +
                                    "rule Unary:\n"
-                                   "    filter:\n"
+                                   "    each:\n"
                                    "        Actor as a\n"
                                    "    limit: 1 per a\n"
                                    "    on tick:\n"
@@ -4194,7 +4194,7 @@ TEST_CASE("Semantic: per-binding limit referencing the other binding is rejected
 TEST_CASE("Semantic: non-int limit count is rejected", "[semantic][rule-limit]") {
     auto err = analyze_first_error(stdlib_events() + limit_traits() +
                                    "rule Unary:\n"
-                                   "    filter:\n"
+                                   "    each:\n"
                                    "        Actor as a\n"
                                    "    limit: 1.5\n"
                                    "    on tick:\n"
@@ -4219,7 +4219,7 @@ TEST_CASE("Semantic: a global limit count referencing a domain binding is reject
 TEST_CASE("Semantic: a global limit count referencing a unary filter alias is rejected", "[semantic][rule-limit]") {
     auto err = analyze_first_error(stdlib_events() + limit_traits() +
                                    "rule Unary:\n"
-                                   "    filter:\n"
+                                   "    each:\n"
                                    "        Actor as a\n"
                                    "    limit: a.height\n"
                                    "    on tick:\n"
@@ -4233,7 +4233,7 @@ TEST_CASE("Semantic: a global limit count referencing a unary filter alias is re
 TEST_CASE("Semantic: a global limit count referencing a bare filter field is rejected", "[semantic][rule-limit]") {
     auto err = analyze_first_error(stdlib_events() + limit_traits() +
                                    "rule Unary:\n"
-                                   "    filter:\n"
+                                   "    each:\n"
                                    "        Actor as a\n"
                                    "    limit: height\n"
                                    "    on tick:\n"
@@ -4244,7 +4244,7 @@ TEST_CASE("Semantic: a global limit count referencing a bare filter field is rej
 TEST_CASE("Semantic: impure limit count is rejected", "[semantic][rule-limit]") {
     auto err = analyze_first_error(stdlib_events() + limit_traits() +
                                    "rule Unary:\n"
-                                   "    filter:\n"
+                                   "    each:\n"
                                    "        Actor as a\n"
                                    "    limit: query.count[Surface]()\n"
                                    "    on tick:\n"
@@ -4459,7 +4459,7 @@ TEST_CASE("Semantic: a provably-limited pair write conflicts with a unary read o
                           "    on tick:\n"
                           "        actor.Actor.grounded = true\n"
                           "rule ReadGround:\n"
-                          "    filter:\n"
+                          "    each:\n"
                           "        Actor as a\n"
                           "    on tick:\n"
                           "        let x = a.grounded\n");
@@ -4598,7 +4598,7 @@ static SymbolId test_trait(const std::string& name) {
 TEST_CASE("Contract fields: an alias member read records that field", "[semantic][handler-contracts]") {
     const auto contract = only_contract(
         "rule ReadOver:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Match as m\n"
         "    on tick:\n"
         "        let x = m.over\n");
@@ -4609,7 +4609,7 @@ TEST_CASE("Contract fields: an alias member read records that field", "[semantic
 TEST_CASE("Contract fields: a nested alias member write stops at the trait field", "[semantic][handler-contracts]") {
     const auto contract = only_contract(
         "rule Nudge:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Body as b\n"
         "    on tick:\n"
         "        b.position.x = 1.0\n");
@@ -4620,7 +4620,7 @@ TEST_CASE("Contract fields: a nested alias member write stops at the trait field
 TEST_CASE("Contract fields: a bare field identifier records its field", "[semantic][handler-contracts]") {
     const auto contract = only_contract(
         "rule Check:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Player\n"
         "    on tick:\n"
         "        let x = game_over\n");
@@ -4630,7 +4630,7 @@ TEST_CASE("Contract fields: a bare field identifier records its field", "[semant
 TEST_CASE("Contract fields: a bare field assignment records its field", "[semantic][handler-contracts]") {
     const auto contract = only_contract(
         "rule End:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Player\n"
         "    on tick:\n"
         "        game_over = true\n");
@@ -4641,7 +4641,7 @@ TEST_CASE("Contract fields: a trait-rooted assignment records the field after th
           "[semantic][handler-contracts]") {
     const auto via_alias = only_contract(
         "rule End:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Match\n"
         "    on tick:\n"
         "        Match.over = true\n");
@@ -4649,7 +4649,7 @@ TEST_CASE("Contract fields: a trait-rooted assignment records the field after th
 
     const auto via_leading_trait = only_contract(
         "rule End:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Match as m\n"
         "    on tick:\n"
         "        foo.Match.over = true\n");
@@ -4659,7 +4659,7 @@ TEST_CASE("Contract fields: a trait-rooted assignment records the field after th
 TEST_CASE("Contract fields: a trait_for_field fallback assignment covers all fields", "[semantic][handler-contracts]") {
     const auto contract = only_contract(
         "rule End:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Match as m\n"
         "    on tick:\n"
         "        foo.over = true\n");
@@ -4672,7 +4672,7 @@ TEST_CASE("Contract fields: a bare alias used as a value reads all fields", "[se
         "func pick(e: entity_id) int:\n"
         "    return 1\n"
         "rule Pass:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Match as m\n"
         "    on tick:\n"
         "        let y = pick(m)\n");
@@ -4681,7 +4681,7 @@ TEST_CASE("Contract fields: a bare alias used as a value reads all fields", "[se
 
     const auto as_local = only_contract(
         "rule Keep:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Match as m\n"
         "    on tick:\n"
         "        let y = m\n");
@@ -4701,7 +4701,7 @@ TEST_CASE("Contract fields: a trait-match arm reads all fields of its trait", "[
 TEST_CASE("Contract fields: set stays a command with no field access", "[semantic][handler-contracts][deferred-set]") {
     const auto contract = only_contract(
         "rule Heal:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Target as aim\n"
         "    on tick:\n"
         "        set Health on aim.other:\n"
@@ -4789,7 +4789,7 @@ TEST_CASE("Contract fields: where and order by reads record fields", "[semantic]
 
     const auto unary = only_pair_contract(
         "rule Rank:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Collider as c\n"
         "    order by:\n"
         "        c.mask desc\n"
@@ -4804,7 +4804,7 @@ TEST_CASE("Contract fields: where on a limited unary rule records its reads",
           "[semantic][handler-contracts][where-clause][rule-limit]") {
     const auto contract = only_contract(
         "rule Pick:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Health as h\n"
         "    where:\n"
         "        h.hp < 20\n"
@@ -4861,7 +4861,7 @@ TEST_CASE("Contract fields: a per-binding limit count records its bound read",
 TEST_CASE("Contract fields: a constant limit count adds no read", "[semantic][handler-contracts][rule-limit]") {
     const auto contract = only_pair_contract(
         "rule Pick:\n"
-        "    filter:\n"
+        "    each:\n"
         "        Surface as s\n"
         "    limit: 3\n"
         "    on tick:\n"
@@ -4873,7 +4873,7 @@ TEST_CASE("Contract fields: a constant limit count adds no read", "[semantic][ha
 TEST_CASE("Contract fields: extern rule declarations cover all fields", "[semantic][handler-contracts][extern-rule]") {
     auto result        = analyze(stdlib_events() + field_traits() +
                                  "extern rule Scoreboard:\n"
-                                 "    filter:\n"
+                                 "    each:\n"
                                  "        Match as m\n"
                                  "    order by:\n"
                                  "        m.score desc\n"
@@ -4980,7 +4980,7 @@ SymbolId test_entity(const std::string& name) {
 
 TEST_CASE("Semantic: an entity name is an entity_id value in handler bodies", "[semantic][named-entity]") {
     const auto messages = named_messages("rule R:\n"
-                                         "    filter:\n"
+                                         "    each:\n"
                                          "        Enemy as enemy\n"
                                          "    on tick:\n"
                                          "        let aim_at: entity_id = Game\n"
@@ -5015,7 +5015,7 @@ TEST_CASE("Semantic: an entity name value is annotated with its canonical identi
 
 TEST_CASE("Semantic: an entity name is a value in rule clauses", "[semantic][named-entity]") {
     const auto messages = named_messages("rule R:\n"
-                                         "    filter:\n"
+                                         "    each:\n"
                                          "        Enemy as enemy\n"
                                          "    where:\n"
                                          "        enemy.aim == Boss\n"
@@ -5090,7 +5090,7 @@ TEST_CASE("Semantic: named field reads and writes are annotated with entity and 
 TEST_CASE("Semantic: named writes and compound writes are accepted in unary and pair handlers",
           "[semantic][named-entity]") {
     const auto messages = named_messages("rule R:\n"
-                                         "    filter:\n"
+                                         "    each:\n"
                                          "        Enemy as enemy\n"
                                          "    on tick:\n"
                                          "        Game.Match.over = true\n"
@@ -5152,7 +5152,7 @@ TEST_CASE("Semantic: when: accepts named reads, constants, and pure calls", "[se
                                          "    on tick:\n"
                                          "        Game.Match.score += 1\n"
                                          "rule Hits:\n"
-                                         "    filter:\n"
+                                         "    each:\n"
                                          "        Enemy as enemy\n"
                                          "    when:\n"
                                          "        not Game.Match.over\n"
@@ -5173,7 +5173,7 @@ TEST_CASE("Semantic: a non-bool when: predicate is rejected", "[semantic][when-c
 
 TEST_CASE("Semantic: when: cannot read bindings, self, or event payloads", "[semantic][when-clause]") {
     const auto binding = named_messages("rule R:\n"
-                                        "    filter:\n"
+                                        "    each:\n"
                                         "        Enemy as enemy\n"
                                         "    when:\n"
                                         "        enemy.dying\n"
@@ -5182,7 +5182,7 @@ TEST_CASE("Semantic: when: cannot read bindings, self, or event payloads", "[sem
     CHECK(has_message(binding, "when: cannot read 'enemy'"));
     CHECK(has_message(binding, "use where:"));
     CHECK(has_message(named_messages("rule R:\n"
-                                     "    filter:\n"
+                                     "    each:\n"
                                      "        Enemy\n"
                                      "    when:\n"
                                      "        dying\n"
@@ -5190,7 +5190,7 @@ TEST_CASE("Semantic: when: cannot read bindings, self, or event payloads", "[sem
                                      "        let y = 1\n"),
                       "when: cannot read 'dying'"));
     CHECK(has_message(named_messages("rule R:\n"
-                                     "    filter:\n"
+                                     "    each:\n"
                                      "        Enemy\n"
                                      "    when:\n"
                                      "        self != Game\n"
@@ -5204,7 +5204,7 @@ TEST_CASE("Semantic: when: cannot read bindings, self, or event payloads", "[sem
                                      "        let y = 1\n"),
                       "when: cannot read 'tick'"));
     CHECK(has_message(named_messages("rule R:\n"
-                                     "    filter:\n"
+                                     "    each:\n"
                                      "        Enemy\n"
                                      "    when:\n"
                                      "        hit.source == Game\n"
@@ -5274,7 +5274,7 @@ const NamedRequirement& game_match() {
 TEST_CASE("Contract: a named read in when: is recorded with entity, field, and requirement",
           "[semantic][handler-contracts][named-entity]") {
     const auto program   = analyze_named("rule R:\n"
-                                         "    filter:\n"
+                                         "    each:\n"
                                          "        Enemy as enemy\n"
                                          "    when:\n"
                                          "        not Game.Match.over\n"
@@ -5315,7 +5315,7 @@ TEST_CASE("Contract: a named write orders against a filter reader of the same fi
                                        "    on tick:\n"
                                        "        Game.Match.over = true\n"
                                        "rule Watch:\n"
-                                       "    filter:\n"
+                                       "    each:\n"
                                        "        Match as m\n"
                                        "    on tick:\n"
                                        "        if m.over:\n"
@@ -5341,7 +5341,7 @@ TEST_CASE("Contract: disjoint named fields do not conflict", "[semantic][handler
 TEST_CASE("Contract: a named write marks a filter handler unsplittable",
           "[semantic][handler-contracts][named-entity]") {
     const auto program   = analyze_named("rule Count:\n"
-                                         "    filter:\n"
+                                         "    each:\n"
                                          "        Enemy\n"
                                          "    on tick:\n"
                                          "        Game.Match.score += 1\n");
@@ -5370,7 +5370,7 @@ TEST_CASE("Contract: an entity name used as a value adds no named access",
 TEST_CASE("Contract: a named read in where: on a limited rule records its requirement",
           "[semantic][handler-contracts][named-entity][rule-limit]") {
     const auto unary = analyze_named("rule Pick:\n"
-                                     "    filter:\n"
+                                     "    each:\n"
                                      "        Enemy as enemy\n"
                                      "    where:\n"
                                      "        enemy.dying == Game.Match.over\n"
@@ -5455,7 +5455,7 @@ static const std::string& conditional_prelude() {
 static std::vector<std::string> conditional_handler_errors(const std::string& body) {
     return analyze_error_messages(conditional_prelude() +
                                   "rule R:\n"
-                                  "    filter:\n"
+                                  "    each:\n"
                                   "        Actor as a\n"
                                   "    on Ping:\n" +
                                   body);
@@ -5695,6 +5695,24 @@ TEST_CASE("Semantic: concise clauses preserve domain and predicate restrictions"
         CAPTURE(rule);
         CHECK(analyze_has_errors(declarations + rule));
     }
+}
+
+TEST_CASE("Semantic: filter and exclude resolve as ordinary names", "[semantic][concise]") {
+    const auto program = analyze(R"(pub event tick
+trait filter:
+    var exclude: int = 0
+    var filter: float = 0.0
+trait exclude
+func pick(filter: int, exclude: int) int:
+    return filter + exclude
+rule R:
+    each: filter as exclude
+    without: exclude
+    on tick:
+        let filter = exclude.filter
+        exclude.exclude = pick(1, 2)
+)");
+    CHECK(program.execution_graph.handlers.size() == 1);
 }
 
 TEST_CASE("Semantic: compact dependencies retain cycle diagnostics", "[semantic][concise]") {

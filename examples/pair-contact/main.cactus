@@ -49,7 +49,7 @@ rule DetectContacts:
 # body entity named by the pair producer — rather than broadcasting to every
 # entity with Health.
 rule ResolveContact:
-    filter:
+    each:
         Health as hp
 
     on Contact:

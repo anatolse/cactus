@@ -2,6 +2,7 @@
 
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace cactus {
 
@@ -766,8 +767,15 @@ ExternHandlerNode Parser::parse_extern_handler() {
     handler.location         = loc;
 
     bool saw_non_after_clause = false;
-    const auto at_clause      = [this](TokenType type, const char* spelling) {
-        return check(type) || (check(TokenType::IDENTIFIER) && peek().value == spelling);
+    std::unordered_set<TokenType> seen_clauses;
+    const auto at_clause = [this, &seen_clauses](TokenType type, const char* spelling) {
+        if (!check(type) && !(check(TokenType::IDENTIFIER) && peek().value == spelling)) {
+            return false;
+        }
+        if (!seen_clauses.emplace(type).second) {
+            errors_.error(peek().location, std::string("duplicate ") + spelling + ": clause");
+        }
+        return true;
     };
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
         skip_newlines();
@@ -852,12 +860,7 @@ TypeRef Parser::parse_type_ref() {
 
 FuncParam Parser::parse_param() {
     auto loc = peek().location;
-    std::string name;
-    if (check(TokenType::IDENTIFIER) || check(TokenType::EXCLUDE)) {
-        name = advance().value;
-    } else {
-        name = consume(TokenType::IDENTIFIER, "expected parameter name").value;
-    }
+    auto name = consume(TokenType::IDENTIFIER, "expected parameter name").value;
     consume(TokenType::COLON, "expected ':'");
     auto type = parse_type_ref();
     return {.name = name, .type = std::move(type), .location = loc};
@@ -1320,7 +1323,7 @@ RuleNode Parser::parse_rule() {
     }
 
     // A pairs: rule selects tuples, not a single-entity filter, so it cannot
-    // also carry a filter/exclude clause meant for that model. order by: is
+    // also carry an each:/without: clause meant for that model. order by: is
     // exempt — a pairs: rule may declare it (dsl-pair-relations).
     auto common      = parse_common_rule_clauses([&](const SourceLocation& clause_loc, const char* clause_name) {
         if (saw_pairs && std::string(clause_name) != "order by:") {
@@ -1406,16 +1409,21 @@ Parser::parse_common_rule_clauses(  // NOLINT(readability-function-cognitive-com
     bool saw_positive = false;
     bool saw_negative = false;
     skip_newlines();
-    while (check(TokenType::FILTER) || at_contextual_clause("each") || check(TokenType::EXCLUDE) ||
-           at_contextual_clause("without")) {
-        const auto location  = peek().location;
-        const bool positive  = check(TokenType::FILTER) || at_contextual_clause("each");
+    const auto at_positive = [this] { return at_contextual_clause("each") || at_contextual_clause("filter"); };
+    const auto at_negative = [this] { return at_contextual_clause("without") || at_contextual_clause("exclude"); };
+    while (at_positive() || at_negative()) {
+        const auto location = peek().location;
+        const bool positive = at_positive();
+        if (peek().value == "filter" || peek().value == "exclude") {
+            errors_.error(location,
+                          "`" + peek().value + ":` was renamed to `" + (positive ? "each:" : "without:") + "`");
+        }
         auto clause          = parse_selection_clause(positive);
         const bool duplicate = positive ? saw_positive : saw_negative;
         if (duplicate) {
-            errors_.error(location, positive ? "duplicate each:/filter: clause" : "duplicate without:/exclude: clause");
+            errors_.error(location, positive ? "duplicate each: clause" : "duplicate without: clause");
         } else if (positive && saw_negative) {
-            errors_.error(location, "each:/filter: must precede without:/exclude:");
+            errors_.error(location, "each: must precede without:");
         } else if (positive) {
             result.filter = std::move(clause);
         } else {
@@ -1423,7 +1431,7 @@ Parser::parse_common_rule_clauses(  // NOLINT(readability-function-cognitive-com
         }
         (positive ? saw_positive : saw_negative) = true;
         if (on_clause_parsed) {
-            on_clause_parsed(location, positive ? "filter:" : "exclude:");
+            on_clause_parsed(location, positive ? "each:" : "without:");
         }
         skip_newlines();
     }
@@ -1727,13 +1735,13 @@ ReduceClause Parser::parse_reduce_clause() {
     }
     expect_indent();
     skip_newlines();
-    if (check(TokenType::IDENTIFIER) && peek().value == "per" && peek_next().type == TokenType::COLON) {
+    if (at_contextual_clause("per")) {
         const auto location = advance().location;
         advance();
         auto binding = consume(TokenType::IDENTIFIER, "expected binding name after 'per:'").value;
-        if (clause.per_binding.has_value()) {
-            errors_.error(location, "duplicate reduction grouping");
-        } else {
+        errors_.error(location, "`per:` inside `reduce:` was removed; write `reduce per " + binding + ":`");
+        // Group anyway so later keep/write checks don't cascade from the removed spelling.
+        if (!clause.per_binding.has_value()) {
             clause.per_location = location;
             clause.per_binding  = std::move(binding);
         }

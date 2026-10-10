@@ -32,14 +32,14 @@ pub entity Sun:
         intensity = 1.0
 
 rule WorldRenderer:
-    filter:
+    each:
         Terrain as t
 
     on tick:
         draw_plane(vec3(0.0, 0.0, 0.0), vec2(t.ground_size, t.ground_size), t.ground_color)
 
 rule UpdateLight:
-    filter:
+    each:
         SunLight as sun
 
     on tick:

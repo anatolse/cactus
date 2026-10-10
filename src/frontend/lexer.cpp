@@ -36,8 +36,6 @@ const std::unordered_map<std::string, TokenType>& keyword_map() {
         {"in", TokenType::IN},
         {"return", TokenType::RETURN},
         {"self", TokenType::SELF},
-        {"filter", TokenType::FILTER},
-        {"exclude", TokenType::EXCLUDE},
         {"after", TokenType::AFTER},
         {"template", TokenType::TEMPLATE},
         {"spawn", TokenType::SPAWN},

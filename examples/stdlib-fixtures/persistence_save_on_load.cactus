@@ -20,7 +20,7 @@ entity Tracker:
     SaveStatus
 
 rule RequestSaveOnLoad:
-    filter:
+    each:
         SaveStatus as status
 
     on load:
@@ -30,7 +30,7 @@ rule RequestSaveOnLoad:
             request_id = status.requests_sent
 
 rule ObserveSaveFailed:
-    filter:
+    each:
         SaveStatus as status
 
     on storage.SaveFailed as outcome:

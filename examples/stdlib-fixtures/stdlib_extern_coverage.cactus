@@ -27,7 +27,7 @@ pub entity ExternSurface:
     ContactSnapshot
 
 rule Demo:
-    filter:
+    each:
         Motion
         ContactSnapshot
 
@@ -37,7 +37,7 @@ rule Demo:
         add DamageFlash
 
 rule ConsumeProjectedFlash:
-    filter:
+    each:
         DamageFlash as flash
     after:
         Demo

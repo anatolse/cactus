@@ -45,7 +45,7 @@ event PairVisited:
 
 # Ascending computed penalty => tag2, tag3, tag1 => 231.
 rule RankByPenalty:
-    filter:
+    each:
         Ranked as r
         Marker as m
     order by:
@@ -59,7 +59,7 @@ rule RankByPenalty:
 # traits in the opposite order. Which trait codegen picks as the physical sort
 # anchor is arbitrary, so this rule must produce the same 231 fingerprint.
 rule RankByPenaltySwapped:
-    filter:
+    each:
         Marker as m
         Ranked as r
     order by:
@@ -90,21 +90,21 @@ rule RankPairsByGap:
             code = ((actor.Ranked.tag - 1) * 3) + (rival.Ranked.tag - 1)
 
 rule RecordUnary:
-    filter:
+    each:
         Recorder
 
     on UnaryVisited as visit:
         unary_sequence = (unary_sequence * 10) + visit.code
 
 rule RecordSwapped:
-    filter:
+    each:
         Recorder
 
     on SwappedVisited as visit:
         swapped_sequence = (swapped_sequence * 10) + visit.code
 
 rule RecordPair:
-    filter:
+    each:
         Recorder
 
     on PairVisited as visit:
@@ -156,7 +156,7 @@ event WeightVisited:
 # Same ascending-computed-penalty shape as RankByPenalty: values 1/4/7 give
 # penalties 16/1/4, so ascending order is group2, group3, group1 => 231.
 rule RankByWeight:
-    filter:
+    each:
         Weight as w
         Tint as t
     order by:
@@ -167,7 +167,7 @@ rule RankByWeight:
             code = w.group
 
 rule RecordWeight:
-    filter:
+    each:
         Recorder
 
     on WeightVisited as visit:

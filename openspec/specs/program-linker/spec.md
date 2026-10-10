@@ -49,7 +49,7 @@ The program linker SHALL verify that all cross-module symbol references target s
 The program linker SHALL order declarations in the merged program such that all dependencies come before their dependents: enums and structs first, then traits, then events, then units, then rules and funcs. Within each category, declarations from dependency modules SHALL precede those from dependent modules.
 
 #### Scenario: Cross-module trait dependency
-- **WHEN** module `enemies` has a rule with `filter:` including `Position` and `EnemyAI` where `Position` is from module `player`
+- **WHEN** module `enemies` has a rule with `each:` including `Position` and `EnemyAI` where `Position` is from module `player`
 - **THEN** the merged program lists `Position` before `EnemyAI` and both before the enemy rule
 
 ### Requirement: Resolved program for code generation

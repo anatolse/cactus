@@ -107,7 +107,7 @@ rule Setup:
             glowing = glowing
 
 rule TakeSnapshot:
-    filter:
+    each:
         Snapshot
         Probe as probe
         tv.WorldTransform as transform
@@ -122,7 +122,7 @@ rule TakeSnapshot:
         transform.position = vec3(99.0, 0.0, 0.0)
 
 rule FirstWriter:
-    filter:
+    each:
         Director as director
         Probe as probe
 
@@ -157,7 +157,7 @@ rule FirstWriter:
             level = 5
 
 rule SecondWriter:
-    filter:
+    each:
         Director as director
         Probe as probe
     after:
@@ -173,7 +173,7 @@ rule SecondWriter:
             time = 0.5
 
 rule Observe:
-    filter:
+    each:
         Health as health
         Watch as watch
     after:
@@ -201,7 +201,7 @@ rule Shove:
             amount = a.Push.amount + 1.0
 
 rule SeeTint:
-    filter:
+    each:
         Tint as tint
         TintSeen as seen
 

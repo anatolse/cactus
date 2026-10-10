@@ -26,7 +26,7 @@ A regular unary or pair rule SHALL accept one `reduce:` clause. It SHALL declare
 
 #### Scenario: Best picks the highest key
 - **WHEN** a body's group has zone rows with priorities 1, 5 and 3
-- **THEN** `best(zone, by = zone.CameraZone.priority)` yields the zone with priority 5
+- **THEN** `best(zone, by = zone[CameraZone].priority)` yields the zone with priority 5
 
 #### Scenario: Best tie and empty input
 - **WHEN** two rows share the highest key, or a group has no row
@@ -77,7 +77,7 @@ A `reduce:` clause without a `per` grouping SHALL produce exactly one global agg
 When a rule declares `reduce per binding:`, each `where:` predicate whose pair-binding reads all root at the `per` binding SHALL filter groups: an entity failing it gets no group. Every other `where:` predicate SHALL filter rows only. Without `per`, every `where:` predicate SHALL filter rows.
 
 #### Scenario: Group-only predicate removes the group
-- **WHEN** a rule uses `reduce per team:` and its `where:` contains `team.Team.active`
+- **WHEN** a rule uses `reduce per team:` and its `where:` contains `team[Team].active`
 - **THEN** an inactive team gets no reduction activation
 
 #### Scenario: Row predicate keeps the group
@@ -97,7 +97,7 @@ The logical pipeline SHALL be domain → `where:` → `reduce:` → `order by:` 
 - **THEN** compilation rejects the access
 
 #### Scenario: Write through the retained binding
-- **WHEN** a handler grouped by `reduce per enemy:` assigns `enemy.Enemy.facing_yaw = 1.0`
+- **WHEN** a handler grouped by `reduce per enemy:` assigns `enemy[Enemy].facing_yaw = 1.0`
 - **THEN** compilation accepts it and the write applies to that enemy once per activation
 
 #### Scenario: No live-value drift
@@ -160,7 +160,7 @@ With `reduce:`, `order by:` SHALL be written after the `reduce:` clause; an `ord
 A regular rule SHALL declare reduction grouping only in the clause header, as `reduce per binding:` with an indented, nonempty reducer declaration block. The header's binding SHALL obey the existing declared-pair-binding restriction. The ungrouped form SHALL remain `reduce:`. A `per: binding` line inside the reducer block SHALL be rejected with a diagnostic at that line telling the author to write `reduce per binding:`; for recovery the parser SHALL use that binding as the grouping when the header has none, so the rule produces no further errors from the removed spelling alone, and SHALL continue with the remaining reducers and later declarations. `per = count()` SHALL remain a reducer named `per`. Reducer names, typing, purity, and clause placement SHALL obey their existing rules.
 
 #### Scenario: Header grouping
-- **WHEN** a pair rule uses `reduce per team:` with reducers `players = count(player)` and `total = sum(player.Player.points)`
+- **WHEN** a pair rule uses `reduce per team:` with reducers `players = count(player)` and `total = sum(player[Player].points)`
 - **THEN** it produces one aggregate row per retained team, with the team binding writable and the player binding eliminated from handler scope
 
 #### Scenario: Empty groups retain identities

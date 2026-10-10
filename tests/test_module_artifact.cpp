@@ -873,7 +873,7 @@ TEST_CASE("ModuleArtifact: runtime declarations and handler graph round-trip", "
 }
 
 TEST_CASE("ModuleArtifact: artifact from before shape-generic spatial plans is rejected", "[artifact][spatial-join]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 28);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 29);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1237,7 +1237,7 @@ TEST_CASE("ModuleArtifact: set command capabilities round-trip", "[artifact][def
     CHECK(loaded->handler_contracts.front().commands == commands);
     REQUIRE(loaded->execution_graph.handlers.size() == 1);
     CHECK(loaded->execution_graph.handlers.front().contract.commands == commands);
-    CHECK(ModuleArtifact::CURRENT_VERSION == 28);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 29);
 
     fs::remove_all(build_dir, ec);
 }
@@ -1580,7 +1580,7 @@ TEST_CASE("ModuleArtifact: field-level access serializes deterministically", "[a
 }
 
 TEST_CASE("ModuleArtifact: artifact from before field-level contracts is rejected", "[artifact][handler-contracts]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 28);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 29);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1621,9 +1621,9 @@ pub template Minion:
         rival = Boss
 rule Score:
     when:
-        not Game.Match.over
+        not Game[Match].over
     on tick:
-        Game.Match.score += 1
+        Game[Match].score += 1
 )",
                 "library.cactus",
                 errors);
@@ -1680,53 +1680,6 @@ TEST_CASE("ModuleArtifact: named-entity contract data, pub entities, and entity 
     REQUIRE(blueprint->traits.size() == 1);
     const auto& value = std::get<IdentExpr>(blueprint->traits[0].assignments[0].value->expr);
     CHECK(value.resolved_entity_id == make_symbol_id(SymbolKind::Entity, "library", "Boss"));
-
-    fs::remove_all(build_dir, ec);
-}
-
-TEST_CASE("ModuleArtifact: named field references in expressions round-trip", "[artifact][named-entity]") {
-    auto build_dir = test_build_dir();
-    std::error_code ec;
-    fs::remove_all(build_dir, ec);
-
-    const auto game  = make_symbol_id(SymbolKind::Entity, "library", "Game");
-    const auto match = make_symbol_id(SymbolKind::Trait, "library", "Match");
-    auto blueprint   = std::make_shared<TemplateNode>();
-    blueprint->name  = "Probe";
-    auto trait_node  = std::make_unique<ExprNode>(
-        ExprNode::Variant{MemberExpr{
-            .object = std::make_unique<ExprNode>(ExprNode::Variant{IdentExpr{.name = "Game"}}, SourceLocation{}),
-            .member = "Match",
-            .resolved_named_trait = NamedTraitRef{.entity = game, .trait = match}}},
-        SourceLocation{});
-    auto qualified = std::make_unique<ExprNode>(
-        ExprNode::Variant{MemberExpr{
-            .object = std::make_unique<ExprNode>(ExprNode::Variant{IdentExpr{.name = "state"}}, SourceLocation{}),
-            .member             = "Game",
-            .resolved_entity_id = game}},
-        SourceLocation{});
-    ArchetypeTraitEntry entry{.trait_name = "Rival"};
-    entry.assignments.push_back(FieldAssignment{.name = "named", .value = std::move(trait_node)});
-    entry.assignments.push_back(FieldAssignment{.name = "qualified", .value = std::move(qualified)});
-    blueprint->traits.push_back(std::move(entry));
-
-    DecoratedProgram program;
-    program.pub_templates.insert("Probe");
-    program.template_parameters["Probe"] = {};
-    program.template_blueprints["Probe"] = blueprint;
-
-    ErrorReporter errors;
-    ModuleArtifact artifact(errors);
-    REQUIRE(artifact.save(program, "library", build_dir));
-    auto symbols = artifact.extract_pub_symbols(build_dir / "library.cmod");
-    REQUIRE_FALSE(errors.has_errors());
-    REQUIRE(symbols.has_value());
-    const auto& loaded      = symbols->templates.at("Probe").blueprint;
-    REQUIRE(loaded != nullptr);
-    const auto& assignments = loaded->traits.at(0).assignments;
-    CHECK(std::get<MemberExpr>(assignments.at(0).value->expr).resolved_named_trait ==
-          NamedTraitRef{.entity = game, .trait = match});
-    CHECK(std::get<MemberExpr>(assignments.at(1).value->expr).resolved_entity_id == game);
 
     fs::remove_all(build_dir, ec);
 }
@@ -1854,7 +1807,7 @@ TEST_CASE("ModuleArtifact: unknown trigger kind is rejected", "[artifact][trait-
 }
 
 TEST_CASE("ModuleArtifact: artifact from before lifecycle triggers is rejected", "[artifact][trait-lifecycle]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 28);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 29);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1983,7 +1936,7 @@ TEST_CASE("ModuleArtifact: unknown group ordering direction is malformed", "[art
 }
 
 TEST_CASE("ModuleArtifact: artifact from before rule groups is rejected", "[artifact][rule-groups]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 28);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 29);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2008,7 +1961,7 @@ TEST_CASE("ModuleArtifact: artifact from before rule groups is rejected", "[arti
 }
 
 TEST_CASE("ModuleArtifact: artifact from before named-entity access is rejected", "[artifact][named-entity]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 28);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 29);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2142,7 +2095,7 @@ rule Input:
     order by: n desc
     limit: 2
     on tick:
-        body.Body.total = n
+        body[Body].total = n
 extern rule Native:
     each: Body, Projected
     on tick:
@@ -2170,7 +2123,7 @@ extern rule Native:
         n desc
     limit: 2
     on tick:
-        body.Body.total = n
+        body[Body].total = n
 extern rule Native:
     each:
         Body
@@ -2225,4 +2178,165 @@ extern rule Native:
     };
     CHECK(compile_and_link(compact, "concise") == compile_and_link(legacy, "legacy"));
 }
+
+// ── Bracketed trait access (module-artifact) ────────────────────────────────
+
+static DecoratedProgram bracketed_access_program(ProgramNode& ast, ErrorReporter& errors) {
+    Lexer lexer(R"(module library
+event tick
+pub trait Match:
+    var over: bool = false
+    var score: int = 0
+pub trait Place:
+    var position: vec3 = vec3(0.0, 0.0, 0.0)
+pub trait Probe:
+    var range: float = 1.0
+pub entity Game:
+    Match
+rule Score:
+    when:
+        not Game[Match].over
+    on tick:
+        Game[Match].score += 1
+rule Near:
+    pairs:
+        body:
+            library.Place
+            Probe as probe
+        wall:
+            Place as pose
+    where:
+        body[library.Place].position.x < pose.position.x
+    on tick:
+        let reach = probe.range
+)",
+                "library.cactus",
+                errors);
+    Parser parser(lexer.tokenize(), errors);
+    ast = parser.parse_program();
+    SemanticAnalyzer analyzer(errors);
+    return analyzer.analyze(ast);
+}
+
+TEST_CASE("ModuleArtifact: bracketed trait access contracts round-trip", "[artifact][trait-access]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    ErrorReporter errors;
+    ProgramNode ast;
+    const auto program = bracketed_access_program(ast, errors);
+    for (const auto& diagnostic : errors.diagnostics()) {
+        INFO(diagnostic.message);
+    }
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(program.handler_contracts.size() == 2);
+
+    ModuleArtifact artifact(errors);
+    REQUIRE(artifact.save(program, "library", build_dir));
+    std::string module_name;
+    const auto loaded = artifact.load(build_dir / "library.cmod", module_name);
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->handler_contracts.size() == 2);
+
+    const auto contract_of = [](const DecoratedProgram& decorated, const std::string& rule) {
+        const auto found = std::ranges::find_if(decorated.handler_contracts,
+                                                [&](const auto& contract) { return contract.rule.local_name == rule; });
+        REQUIRE(found != decorated.handler_contracts.end());
+        return *found;
+    };
+    const auto game  = make_symbol_id(SymbolKind::Entity, "library", "Game");
+    const auto match = make_symbol_id(SymbolKind::Trait, "library", "Match");
+    const auto score = contract_of(*loaded, "Score");
+    CHECK(score.named_reads.at(game).at(match) == FieldAccess{.all = false, .fields = {"over", "score"}});
+    CHECK(score.named_writes.at(game).at(match) == FieldAccess{.all = false, .fields = {"score"}});
+    CHECK(score.named_requirements == std::vector<NamedRequirement>{{.entity = game, .trait = match}});
+
+    const auto place = make_symbol_id(SymbolKind::Trait, "library", "Place");
+    const auto probe = make_symbol_id(SymbolKind::Trait, "library", "Probe");
+    const auto near  = contract_of(*loaded, "Near");
+    CHECK(near.bound_reads == contract_of(program, "Near").bound_reads);
+    for (const BoundTraitAccess& expected : {BoundTraitAccess{.binding_index = 0, .trait = place},
+                                            BoundTraitAccess{.binding_index = 0, .trait = probe},
+                                            BoundTraitAccess{.binding_index = 1, .trait = place}}) {
+        CHECK(std::ranges::find(near.bound_reads, expected) != near.bound_reads.end());
+    }
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("ModuleArtifact: a trait access expression round-trips", "[artifact][trait-access]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    const auto game  = make_symbol_id(SymbolKind::Entity, "library", "Game");
+    const auto match = make_symbol_id(SymbolKind::Trait, "library", "Match");
+    auto blueprint   = std::make_shared<TemplateNode>();
+    blueprint->name  = "Probe";
+    auto access      = std::make_unique<ExprNode>(
+        ExprNode::Variant{TraitAccessExpr{
+            .object = std::make_unique<ExprNode>(ExprNode::Variant{IdentExpr{.name = "Game"}}, SourceLocation{}),
+            .trait_name         = "Match",
+            .resolved_trait_id  = match,
+            .resolved_entity_id = game,
+            .pair_binding_index = 1}},
+        SourceLocation{});
+    auto field = std::make_unique<ExprNode>(
+        ExprNode::Variant{MemberExpr{.object = std::move(access), .member = "score"}}, SourceLocation{});
+    ArchetypeTraitEntry entry{.trait_name = "Rival"};
+    entry.assignments.push_back(FieldAssignment{.name = "named", .value = std::move(field)});
+    blueprint->traits.push_back(std::move(entry));
+
+    DecoratedProgram program;
+    program.pub_templates.insert("Probe");
+    program.template_parameters["Probe"] = {};
+    program.template_blueprints["Probe"] = blueprint;
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    REQUIRE(artifact.save(program, "library", build_dir));
+    auto symbols = artifact.extract_pub_symbols(build_dir / "library.cmod");
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(symbols.has_value());
+    const auto& loaded = symbols->templates.at("Probe").blueprint;
+    REQUIRE(loaded != nullptr);
+    const auto& member = std::get<MemberExpr>(loaded->traits.at(0).assignments.at(0).value->expr);
+    CHECK(member.member == "score");
+    const auto& loaded_access = std::get<TraitAccessExpr>(member.object->expr);
+    CHECK(loaded_access.trait_name == "Match");
+    CHECK(loaded_access.resolved_trait_id == match);
+    CHECK(loaded_access.resolved_entity_id == game);
+    CHECK(loaded_access.pair_binding_index == std::optional<std::size_t>{1});
+    CHECK(std::get<IdentExpr>(loaded_access.object->expr).name == "Game");
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("ModuleArtifact: artifact from before bracketed trait access is rejected", "[artifact][trait-access]") {
+    CHECK(ModuleArtifact::CURRENT_VERSION == 29);
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+    fs::create_directories(build_dir);
+
+    auto path = build_dir / "old.cmod";
+    {
+        std::ofstream out(path, std::ios::binary);
+        out.write("CMOD", 4);
+        const char previous_version = 28;
+        out.write(&previous_version, 1);
+    }
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    std::string name;
+    CHECK_FALSE(artifact.load(path, name).has_value());
+    REQUIRE(errors.has_errors());
+    CHECK(errors.diagnostics()[0].message.contains("incompatible module artifact version"));
+
+    fs::remove_all(build_dir, ec);
+}
+
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

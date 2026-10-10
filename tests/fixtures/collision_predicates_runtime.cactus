@@ -89,7 +89,7 @@ rule DetectOverlapWhere:
             Body
     where:
         a != b
-        vol.spheres_overlap(a.Body.position, a.Body.radius, b.Body.position, b.Body.radius)
+        vol.spheres_overlap(a[Body].position, a[Body].radius, b[Body].position, b[Body].radius)
 
     on tick:
         emit OverlapDetected to a:
@@ -137,7 +137,7 @@ rule DetectSphereBoxWhere:
         box:
             SeparationBox
     where:
-        v3m.length(vol.sphere_box_separation(sphere.SphereBoxCandidate.position, sphere.SphereBoxCandidate.radius, box.SeparationBox.position, box.SeparationBox.size, box.SeparationBox.rotation)) > 0.0
+        v3m.length(vol.sphere_box_separation(sphere[SphereBoxCandidate].position, sphere[SphereBoxCandidate].radius, box[SeparationBox].position, box[SeparationBox].size, box[SeparationBox].rotation)) > 0.0
 
     on tick:
         emit SphereBoxAccepted to sphere
@@ -158,7 +158,7 @@ rule DetectSphereBoxOverlapWhere:
         box:
             SeparationBox
     where:
-        vol.sphere_box_overlap(sphere.SphereBoxCandidate.position, sphere.SphereBoxCandidate.radius, box.SeparationBox.position, box.SeparationBox.size, box.SeparationBox.rotation)
+        vol.sphere_box_overlap(sphere[SphereBoxCandidate].position, sphere[SphereBoxCandidate].radius, box[SeparationBox].position, box[SeparationBox].size, box[SeparationBox].rotation)
 
     on tick:
         emit SphereBoxOverlapAccepted to sphere
@@ -194,7 +194,7 @@ rule DetectSphereSphereWhere:
         sphere_b:
             SeparationSphere
     where:
-        v3m.length(vol.sphere_sphere_separation(sphere_a.SphereSphereCandidate.position, sphere_a.SphereSphereCandidate.radius, sphere_b.SeparationSphere.position, sphere_b.SeparationSphere.radius)) > 0.0
+        v3m.length(vol.sphere_sphere_separation(sphere_a[SphereSphereCandidate].position, sphere_a[SphereSphereCandidate].radius, sphere_b[SeparationSphere].position, sphere_b[SeparationSphere].radius)) > 0.0
 
     on tick:
         emit SphereSphereAccepted to sphere_a

@@ -13,4 +13,4 @@ rule P:
         b:
             Enemy
     on tick:
-        let total = a.Enemy.hp + b.Enemy.hp
+        let total = a[Enemy].hp + b[Enemy].hp

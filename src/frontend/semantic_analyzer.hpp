@@ -706,20 +706,23 @@ struct ModuleImports {
 // provably one) so its rejection can say what would have made it writable.
 enum class PairBindingWritability : std::uint8_t { ReadOnly, Writable, UnprovenPerLimit };
 
-// Resolved binding-relative trait namespace for one pair binding, built once
-// per rule (from its `pairs:` clause) and reused across that rule's
-// handlers while typing and validating handler bodies. Keys are the dotted
-// access spelling used at that binding: a bare local trait name ("Transform"),
-// an imported module-qualified name ("tf.WorldTransform"), or a binding-local
-// alias ("transform") — mirroring FilterEntry's dotted-name/alias shape.
+// Resolved trait namespace for one pair binding, built once per rule (from its
+// `pairs:` clause). `trait_by_access_key` is keyed by the trait spelling used
+// in brackets ("Transform", "tf.WorldTransform"); `trait_by_alias` maps each
+// rule-scoped alias to that spelling.
 struct PairBindingScope {
     std::size_t index                     = 0;
     PairBindingWritability writability = PairBindingWritability::ReadOnly;
     std::unordered_map<std::string, SymbolId> trait_by_access_key;
+    std::unordered_map<std::string, std::string> trait_by_alias;
 };
 
 // binding identifier (e.g. "body") -> its resolved trait namespace.
 using PairScope = std::unordered_map<std::string, PairBindingScope>;
+
+// The binding name and trait spelling a rule-scoped pair alias stands for.
+[[nodiscard]] std::optional<std::pair<std::string, std::string>> find_pair_alias(const PairScope& pair_scope,
+                                                                                const std::string& alias);
 
 // ── Unified name resolution (unified-name-resolution change) ────────────────
 
@@ -874,6 +877,7 @@ private:
 
     void validate_rule_filters(ProgramNode& program);
     void validate_pair_bindings(RuleNode& rule);
+    void validate_pair_aliases(const std::string& rule_name, const PairClause& pairs);
     [[nodiscard]] static PairScope build_pair_scope(const PairClause& pairs);
     // The same scope plus the rule's `limit:` writability proof applied, for
     // every site that validates or infers against a whole rule rather than a
@@ -912,10 +916,46 @@ private:
     void resolve_named_access_expr(ExprNode& expr,
                                    const std::unordered_set<std::string>& shadowed,
                                    NamedAccessContext context);
-    // Returns true when the chain is rooted at an entity name (and so needs no further walk).
+    // Returns true when the chain is a bare entity name used as a value.
     bool resolve_named_access_chain(MemberExpr& member,
                                     const std::unordered_set<std::string>& shadowed,
                                     NamedAccessContext context);
+    void resolve_trait_access(TraitAccessExpr& access,
+                              const std::vector<std::string>& fields,
+                              const SourceLocation& location,
+                              const std::unordered_set<std::string>& shadowed,
+                              NamedAccessContext context);
+    void resolve_named_trait_access(TraitAccessExpr& access,
+                                    const SymbolId& entity,
+                                    const std::vector<std::string>& fields,
+                                    const SourceLocation& location,
+                                    NamedAccessContext context);
+    void resolve_pair_trait_access(TraitAccessExpr& access,
+                                   const std::string& binding_name,
+                                   const PairBindingScope& binding,
+                                   const std::vector<std::string>& fields,
+                                   const SourceLocation& location);
+    void check_trait_access_fields(const TraitAccessExpr& access,
+                                   const std::vector<std::string>& fields,
+                                   const SourceLocation& location,
+                                   const std::string& kind);
+    // The bracketed form of a dotted trait access (reported as a rename) or of a
+    // bare pair alias; null for any other chain.
+    std::unique_ptr<ExprNode> dotted_trait_access(const std::vector<std::string>& chain,
+                                                  const SourceLocation& location,
+                                                  const std::unordered_set<std::string>& shadowed);
+    std::unique_ptr<ExprNode> dotted_pair_access(const std::vector<std::string>& chain,
+                                                 const PairBindingScope& binding,
+                                                 const SourceLocation& location);
+    std::unique_ptr<ExprNode> dotted_named_access(const std::vector<std::string>& chain,
+                                                  std::size_t entity_segments,
+                                                  const SourceLocation& location);
+    std::unique_ptr<ExprNode> renamed_trait_access(const std::vector<std::string>& chain,
+                                                   std::size_t base_end,
+                                                   std::size_t trait_end,
+                                                   const SourceLocation& location);
+    // Set while a rule's clauses and handlers go through the pre-pass.
+    const PairScope* access_pair_scope_ = nullptr;
     void resolve_named_access_stmts(std::vector<std::unique_ptr<StmtNode>>& stmts,
                                     std::unordered_set<std::string> shadowed,
                                     NamedAccessContext context);
@@ -930,21 +970,8 @@ private:
     // The entity a member chain starts with (`Game` or `hud.Game`) and how many segments name it.
     [[nodiscard]] std::optional<std::pair<SymbolId, std::size_t>> find_named_entity_root(
         const std::vector<std::string>& chain) const;
-    // A chain rooted at an entity name: the bare entity, or its trait (unset once an error is reported).
-    struct NamedPath {
-        SymbolId entity;
-        bool bare = false;
-        std::optional<NamedTraitRef> trait;
-    };
-    [[nodiscard]] std::optional<NamedPath> resolve_named_path(const std::vector<std::string>& chain,
-                                                              NamedAccessContext context,
-                                                              const SourceLocation& location);
     [[nodiscard]] const ImportedEntity* find_named_entity(const SymbolId& entity) const;
-    std::optional<NamedTraitRef> resolve_named_trait_path(const SymbolId& entity,
-                                                          const std::vector<std::string>& chain,
-                                                          std::size_t entity_segments,
-                                                          const SourceLocation& location);
-    [[nodiscard]] TypeInfo named_field_type(const NamedTraitRef& ref, const std::vector<std::string>& fields) const;
+    [[nodiscard]] TypeInfo trait_field_type(const SymbolId& trait_id, const std::vector<std::string>& fields) const;
     // Names a rule's handlers bind: filter aliases and fields, pair bindings, triggers and their aliases.
     [[nodiscard]] std::unordered_set<std::string> rule_binding_names(const RuleNode& rule) const;
     [[nodiscard]] std::unordered_set<std::string> rule_domain_names(const RuleNode& rule) const;
@@ -994,6 +1021,14 @@ private:
     bool reject_local_assignment(const VarAssign& stmt,
                                  const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
                                  const std::unordered_map<std::string, TypeInfo>& locals);
+    // Returns true when a bracketed target may not be written.
+    bool reject_trait_access_write(const VarAssign& stmt,
+                                   const TraitAccessExpr& access,
+                                   const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                                   const std::unordered_map<std::string, TypeInfo>& locals,
+                                   const ResolvedStruct* handler_event,
+                                   const PairScope* pair_scope);
+    void report_pair_read_only(const VarAssign& stmt, const PairBindingScope* binding);
     // Returns true when the target writes a trait through an entity_id value.
     bool reject_entity_id_trait_write(const VarAssign& stmt,
                                       const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
@@ -1208,6 +1243,13 @@ private:
                                    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
                                    const std::unordered_map<std::string, TypeInfo>& local_bindings,
                                    const PairScope* pair_scope) const;
+    TypeInfo infer_trait_access_type(const TraitAccessExpr& access,
+                                     const std::vector<std::string>& fields,
+                                     const SourceLocation& location,
+                                     const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                                     const std::unordered_map<std::string, TypeInfo>& local_bindings,
+                                     const ResolvedStruct* handler_event,
+                                     const PairScope* pair_scope) const;
     // `next_segment` is the enclosing member's name, so an entity_id access
     // diagnostic can name a two-segment trait (`tv.WorldTransform`).
     TypeInfo infer_member_expr_type(const MemberExpr& member,
@@ -1295,19 +1337,6 @@ private:
                                      const ResolvedStruct* handler_event,
                                      const PairScope* pair_scope);
 
-    // Resolved binding + canonical trait identity for a pair member-access
-    // chain (e.g. `body.tf.WorldTransform.position`), plus how many leading
-    // dotted segments (after the binding) named the trait itself — the
-    // remainder is an ordinary field/aggregate-member path on that trait.
-    struct PairMemberResolution {
-        std::size_t binding_index = 0;
-        SymbolId trait_id;
-        std::size_t consumed_segments = 0;
-    };
-    [[nodiscard]] static std::optional<PairMemberResolution> resolve_pair_member_chain(
-        const std::string& binding_name,
-        const std::vector<std::string>& segments,
-        const PairScope& pair_scope);
     InferredHandlerContract infer_pair_handler_contract(const RuleNode& rule,
                                                         const EventHandlerNode& handler,
                                                         const PairScope& pair_scope) const;
@@ -1334,7 +1363,7 @@ private:
                                                                                const PairScope& pair_scope,
                                                                                ErrorReporter& errors);
 
-    // A pair-binding-rooted member chain: its binding plus the segments after it.
+    // A pair-binding trait path: its binding plus the trait identity and fields.
     struct SpatialJoinResolvedArg {
         std::string binding_name;
         std::vector<std::string> segments;
@@ -1483,6 +1512,10 @@ private:
                                const LocalNames& locals,
                                HandlerContract& contract,
                                const std::function<bool(const ExprNode&, const LocalNames&)>& resolve_read) const;
+    // Records a resolved named or pair trait read; false when `access` is unresolved.
+    bool record_trait_access_read(HandlerContract& contract,
+                                  const TraitAccessExpr& access,
+                                  const std::vector<std::string>& fields) const;
 
     // The two contract mutations walk_expression_reads and walk_handler_body's
     // statement half both perform, shared so a `spawn`/`destroy` reached

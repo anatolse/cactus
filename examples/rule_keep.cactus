@@ -46,17 +46,17 @@ rule TouchLava:
             Lava
     group: contacts
     where:
-        (walker.Walker.x - lava.Lava.x) * (walker.Walker.x - lava.Lava.x) <= lava.Lava.radius * lava.Lava.radius
+        (walker[Walker].x - lava[Lava].x) * (walker[Walker].x - lava[Lava].x) <= lava[Lava].radius * lava[Lava].radius
     reduce per walker:
         n = count()
-        total = sum(lava.Lava.heat)
-        top = best(lava, by = lava.Lava.priority)
+        total = sum(lava[Lava].heat)
+        top = best(lava, by = lava[Lava].priority)
     keep InLava on walker:
         zones = n
         heat = total
         hottest = top
     when:
-        not Settings.Control.frozen
+        not Settings[Control].frozen
 
 # best() on its own, recorded on the walker so empty groups are visible too.
 rule RankPools:
@@ -66,10 +66,10 @@ rule RankPools:
         lava:
             Lava
     where:
-        (walker.Walker.x - lava.Lava.x) * (walker.Walker.x - lava.Lava.x) <= lava.Lava.radius * lava.Lava.radius
+        (walker[Walker].x - lava[Lava].x) * (walker[Walker].x - lava[Lava].x) <= lava[Lava].radius * lava[Lava].radius
     reduce per walker:
-        top = best(lava, by = lava.Lava.priority)
-        hot = best(lava, by = lava.Lava.heat)
+        top = best(lava, by = lava[Lava].priority)
+        hot = best(lava, by = lava[Lava].heat)
 
     on fixed_tick:
         add Ranked to walker:
@@ -90,11 +90,11 @@ rule Exit:
     on removed InLava as old:
         w.exits += 1
         w.last_zones = old.zones
-        Clock.Tally.exits += 1
+        Clock[Tally].exits += 1
 
 rule Count:
     on fixed_tick:
-        Clock.Tally.ticks += 1
+        Clock[Tally].ticks += 1
 
 entity Settings:
     Control

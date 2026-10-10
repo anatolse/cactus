@@ -98,7 +98,7 @@ rule TouchLava:
 
     reduce per body:
         zones = count()
-        damage = sum(lava.Lava.damage_per_second)
+        damage = sum(lava[Lava].damage_per_second)
 
     keep InLava on body:
         zones = zones
@@ -121,12 +121,12 @@ Inline entries support the same `as` aliases as block entries:
 
 ```cactus
 pairs:
-    body: Health as health, tf.WorldTransform as pose
-    lava: Lava, tf.WorldTransform as pose
+    body: Health as health, tf.WorldTransform as body_pose
+    lava: Lava, tf.WorldTransform as lava_pose
 ```
 
-Field paths remain binding-qualified, such as `body.health.current` and
-`lava.pose.position`. Alias validation follows the current rules. One binding
+Aliases are rule-scoped and written bare, such as `health.current` and
+`lava_pose.position`. Alias validation follows the current rules. One binding
 may be inline while the other is a block; one binding may not mix both forms.
 
 The domain still has exactly two nonempty bindings. Its directed product,
@@ -210,7 +210,7 @@ expressions. For example:
 
 ```cactus
 where: physics.touching(body, lava), body != lava
-order by: v2.distance(body.pose.position, lava.pose.position) asc, lava.Lava.priority desc
+order by: v2.distance(body_pose.position, lava_pose.position) asc, lava[Lava].priority desc
 ```
 
 Multiple `where` or `when` entries retain the existing conjunction and

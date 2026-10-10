@@ -26,7 +26,7 @@ namespace cactus {
 /// deserialization. Callers that need the AST must re-parse from source.
 class ModuleArtifact {
 public:
-    static constexpr uint8_t CURRENT_VERSION = 28;
+    static constexpr uint8_t CURRENT_VERSION = 29;
     static constexpr const char* MAGIC       = "CMOD";
 
     explicit ModuleArtifact(ErrorReporter& errors);
@@ -104,7 +104,6 @@ private:
     static void write_field_access(std::ostream& out, const FieldAccess& access);
     static void write_field_table(std::ostream& out, const std::unordered_map<SymbolId, FieldAccess>& table);
     static void write_named_field_table(std::ostream& out, const NamedFieldTable& table);
-    static void write_optional_named_trait(std::ostream& out, const std::optional<NamedTraitRef>& ref);
     static void write_entities(std::ostream& out, const std::unordered_map<std::string, ImportedEntity>& entities);
     static void write_string_vector(std::ostream& out, const std::vector<std::string>& values);
     static void write_dep_graph(std::ostream& out, const std::vector<RuleDependency>& graph);
@@ -144,7 +143,6 @@ private:
     static FieldAccess read_field_access(std::istream& in);
     static std::unordered_map<SymbolId, FieldAccess> read_field_table(std::istream& in);
     static NamedFieldTable read_named_field_table(std::istream& in);
-    static std::optional<NamedTraitRef> read_optional_named_trait(std::istream& in);
     static std::unordered_map<std::string, ImportedEntity> read_entities(std::istream& in);
     static std::vector<std::string> read_string_vector(std::istream& in);
     static std::vector<RuleDependency> read_dep_graph(std::istream& in);

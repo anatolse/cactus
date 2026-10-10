@@ -80,11 +80,11 @@ dot-product expression) appropriate to the predicate's dimension. This diagnosti
 error and SHALL NOT change compilation output.
 
 #### Scenario: Linear 2D distance-vs-radius-sum predicate is flagged
-- **WHEN** a pair rule's `where:` clause reads `v2m.distance(a.tf.WorldTransform.position, b.tf.WorldTransform.position) < a.Collider.radius + b.Collider.radius`
+- **WHEN** a pair rule's `where:` clause reads `v2m.distance(a[tf.WorldTransform].position, b[tf.WorldTransform].position) < a[Collider].radius + b[Collider].radius`
 - **THEN** compilation succeeds and emits a warning diagnostic pointing at `circles_overlap` for that `where:` predicate
 
 #### Scenario: Linear 3D distance-vs-radius-sum predicate is flagged
-- **WHEN** a pair rule's `where:` clause reads `v3m.distance(a.tv.WorldTransform.position, b.tv.WorldTransform.position) >= a.Collider.radius + b.Collider.radius`
+- **WHEN** a pair rule's `where:` clause reads `v3m.distance(a[tv.WorldTransform].position, b[tv.WorldTransform].position) >= a[Collider].radius + b[Collider].radius`
 - **THEN** compilation succeeds and emits a warning diagnostic pointing at `spheres_overlap` for that `where:` predicate
 
 #### Scenario: Unrelated where: predicates produce no diagnostic
@@ -126,7 +126,7 @@ predicate evaluated exactly as authored, and no backend is required to implement
 acceleration.
 
 #### Scenario: Direct call to a recognized predicate is eligible
-- **WHEN** a pair rule's `where:` clause calls `circles_overlap(a.tf.WorldTransform.position, a.Collider.radius, b.tf.WorldTransform.position, b.Collider.radius)`
+- **WHEN** a pair rule's `where:` clause calls `circles_overlap(a[tf.WorldTransform].position, a[Collider].radius, b[tf.WorldTransform].position, b[Collider].radius)`
 - **THEN** the predicate is recognized as broad-phase eligible
 
 #### Scenario: Aliased import is recognized identically
@@ -134,7 +134,7 @@ acceleration.
 - **THEN** the predicate is recognized as broad-phase eligible, matched by resolved canonical identity rather than the spelling used at the call site
 
 #### Scenario: Manual squared-distance expression is recognized
-- **WHEN** a pair rule's `where:` clause is written as `v2m.dot(b.tf.WorldTransform.position - a.tf.WorldTransform.position, b.tf.WorldTransform.position - a.tf.WorldTransform.position) < (a.Collider.radius + b.Collider.radius) * (a.Collider.radius + b.Collider.radius)`
+- **WHEN** a pair rule's `where:` clause is written as `v2m.dot(b[tf.WorldTransform].position - a[tf.WorldTransform].position, b[tf.WorldTransform].position - a[tf.WorldTransform].position) < (a[Collider].radius + b[Collider].radius) * (a[Collider].radius + b[Collider].radius)`
 - **THEN** the predicate is recognized as broad-phase eligible, equivalently to calling `circles_overlap` directly
 
 #### Scenario: Different trait sets are eligible
@@ -142,23 +142,23 @@ acceleration.
 - **THEN** the predicate is recognized as broad-phase eligible
 
 #### Scenario: Sphere against box is eligible in either binding order
-- **WHEN** a pair rule's `where:` calls `sphere_box_overlap(actor.tv.WorldTransform.position, actor.Actor.radius, wall.tv.WorldTransform.position, wall.physics.BoxCollider.size, wall.tv.WorldTransform.rotation)`, or the same call with the left binding supplying the box and the right binding supplying the sphere
+- **WHEN** a pair rule's `where:` calls `sphere_box_overlap(actor[tv.WorldTransform].position, actor[Actor].radius, wall[tv.WorldTransform].position, wall[physics.BoxCollider].size, wall[tv.WorldTransform].rotation)`, or the same call with the left binding supplying the box and the right binding supplying the sphere
 - **THEN** the predicate is recognized as broad-phase eligible
 
 #### Scenario: Single-binding expression argument is eligible
-- **WHEN** a recognized call's radius argument is `a.Actor.radius + PROBE_DISTANCE`, where `PROBE_DISTANCE` is a constant
+- **WHEN** a recognized call's radius argument is `a[Actor].radius + PROBE_DISTANCE`, where `PROBE_DISTANCE` is a constant
 - **THEN** the predicate is recognized as broad-phase eligible
 
 #### Scenario: Named entity read in an argument is eligible
-- **WHEN** a recognized call's radius argument is `a.Actor.radius + Game.Tuning.margin`, where `Game` is a declared named entity
+- **WHEN** a recognized call's radius argument is `a[Actor].radius + Game[Tuning].margin`, where `Game` is a declared named entity
 - **THEN** the predicate is recognized as broad-phase eligible
 
 #### Scenario: Constant argument is eligible
-- **WHEN** a recognized call's radius argument is the constant `BULLET_RADIUS` and its position argument is `bullet.tv.WorldTransform.position`
+- **WHEN** a recognized call's radius argument is the constant `BULLET_RADIUS` and its position argument is `bullet[tv.WorldTransform].position`
 - **THEN** the predicate is recognized as broad-phase eligible, with the sphere supplied by `bullet`
 
 #### Scenario: Argument mixing both bindings is not eligible
-- **WHEN** a recognized call's radius argument is `a.Actor.radius + b.Actor.radius`
+- **WHEN** a recognized call's radius argument is `a[Actor].radius + b[Actor].radius`
 - **THEN** the predicate is evaluated as an ordinary (non-accelerated) predicate, with no compile error
 
 #### Scenario: Both shapes from one binding are not eligible
@@ -197,7 +197,7 @@ When a pair rule has no broad-phase-eligible predicate in its `where:` clause an
 - **THEN** no unaccelerated pair rule warning is emitted for that rule
 
 #### Scenario: Linear-distance warning replaces the generic warning
-- **WHEN** a pair rule's only distance test is `v3m.distance(a.tv.WorldTransform.position, b.tv.WorldTransform.position) < a.Collider.radius + b.Collider.radius`
+- **WHEN** a pair rule's only distance test is `v3m.distance(a[tv.WorldTransform].position, b[tv.WorldTransform].position) < a[Collider].radius + b[Collider].radius`
 - **THEN** compilation emits the linear-distance warning pointing at `spheres_overlap`
 - **AND** does not emit the unaccelerated pair rule warning for that rule
 
@@ -219,7 +219,7 @@ Other reducers count rows or sum values that pruned rows would change, so mixing
 - **THEN** the rule is broad-phase eligible and no unaccelerated pair rule warning is emitted
 
 #### Scenario: Swept first hit is eligible on its own
-- **WHEN** a pair rule has no `where:` clause and reduces `first = first_hit(physics.sweep(bullet, bullet.Bullet.velocity * fixed_tick.dt, target))` per bullet
+- **WHEN** a pair rule has no `where:` clause and reduces `first = first_hit(physics.sweep(bullet, bullet[Bullet].velocity * fixed_tick.dt, target))` per bullet
 - **THEN** the rule is broad-phase eligible and no unaccelerated pair rule warning is emitted
 
 #### Scenario: Push-out sum is eligible on its own

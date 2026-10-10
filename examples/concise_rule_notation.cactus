@@ -35,7 +35,7 @@ group CompactContacts:
     phase: fixed_tick
 rule CompactMove:
     each: CompactBody as body
-    when: CompactSettings.CompactControl.enabled
+    when: CompactSettings[CompactControl].enabled
     on fixed_tick:
         body.x += 1
 rule CompactTotal:
@@ -43,18 +43,18 @@ rule CompactTotal:
         body: CompactBody
         zone: CompactZone
     after: CompactMove
-    where: body.CompactBody.x == zone.CompactZone.x
+    where: body[CompactBody].x == zone[CompactZone].x
     reduce per body:
         n = count()
     on fixed_tick:
-        body.CompactBody.total = n
+        body[CompactBody].total = n
 rule CompactKeep:
     pairs:
         body: CompactBody
         zone: CompactZone
     group: CompactContacts
     after: CompactMove
-    where: body.CompactBody.x == zone.CompactZone.x
+    where: body[CompactBody].x == zone[CompactZone].x
     reduce per body:
         n = count()
     keep CompactKept on body:
@@ -104,7 +104,7 @@ rule BlockMove:
     each:
         BlockBody as body
     when:
-        BlockSettings.BlockControl.enabled
+        BlockSettings[BlockControl].enabled
     on fixed_tick:
         body.x += 1
 rule BlockTotal:
@@ -116,11 +116,11 @@ rule BlockTotal:
     after:
         BlockMove
     where:
-        body.BlockBody.x == zone.BlockZone.x
+        body[BlockBody].x == zone[BlockZone].x
     reduce per body:
         n = count()
     on fixed_tick:
-        body.BlockBody.total = n
+        body[BlockBody].total = n
 rule BlockKeep:
     pairs:
         body:
@@ -131,7 +131,7 @@ rule BlockKeep:
     after:
         BlockMove
     where:
-        body.BlockBody.x == zone.BlockZone.x
+        body[BlockBody].x == zone[BlockZone].x
     reduce per body:
         n = count()
     keep BlockKept on body:
@@ -157,34 +157,34 @@ rule CompactOrderedPairs:
     pairs:
         body: CompactBody
         zone: CompactZone
-    order by: zone.CompactZone.id desc
+    order by: zone[CompactZone].id desc
     after: CompactMove
-    where: body.CompactBody.x == zone.CompactZone.x
+    where: body[CompactBody].x == zone[CompactZone].x
     on fixed_tick:
         emit CompactTrace:
-            id = zone.CompactZone.id
+            id = zone[CompactZone].id
 rule CompactRecord:
     on CompactTrace as observed:
-        CompactSettings.CompactControl.trace = CompactSettings.CompactControl.trace * 100 + observed.id
+        CompactSettings[CompactControl].trace = CompactSettings[CompactControl].trace * 100 + observed.id
 rule CompactRank:
     pairs:
         body: CompactBody
         zone: CompactZone
     after: CompactMove
-    where: body.CompactBody.x == zone.CompactZone.x
+    where: body[CompactBody].x == zone[CompactZone].x
     reduce per body:
         n = count()
     order by: n desc
     limit: 1
     on fixed_tick:
-        body.CompactBody.rank = n
+        body[CompactBody].rank = n
 rule CompactGlobalEmpty:
     each: CompactZone
     where: false
     reduce:
         n = count()
     on fixed_tick:
-        CompactSettings.CompactControl.empty = n
+        CompactSettings[CompactControl].empty = n
 
 rule BlockObserveKept:
     each:
@@ -201,17 +201,17 @@ rule BlockOrderedPairs:
         zone:
             BlockZone
     order by:
-        zone.BlockZone.id desc
+        zone[BlockZone].id desc
     after:
         BlockMove
     where:
-        body.BlockBody.x == zone.BlockZone.x
+        body[BlockBody].x == zone[BlockZone].x
     on fixed_tick:
         emit BlockTrace:
-            id = zone.BlockZone.id
+            id = zone[BlockZone].id
 rule BlockRecord:
     on BlockTrace as observed:
-        BlockSettings.BlockControl.trace = BlockSettings.BlockControl.trace * 100 + observed.id
+        BlockSettings[BlockControl].trace = BlockSettings[BlockControl].trace * 100 + observed.id
 rule BlockRank:
     pairs:
         body:
@@ -221,14 +221,14 @@ rule BlockRank:
     after:
         BlockMove
     where:
-        body.BlockBody.x == zone.BlockZone.x
+        body[BlockBody].x == zone[BlockZone].x
     reduce per body:
         n = count()
     order by:
         n desc
     limit: 1
     on fixed_tick:
-        body.BlockBody.rank = n
+        body[BlockBody].rank = n
 rule BlockGlobalEmpty:
     each:
         BlockZone
@@ -237,4 +237,4 @@ rule BlockGlobalEmpty:
     reduce:
         n = count()
     on fixed_tick:
-        BlockSettings.BlockControl.empty = n
+        BlockSettings[BlockControl].empty = n

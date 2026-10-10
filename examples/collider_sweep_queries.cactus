@@ -56,8 +56,8 @@ rule ReadProbeInPair:
         steps = sum(fixed_tick.dt * 60.0)
 
     on fixed_tick:
-        probe.Probe.pair_seen_x = probe.tv.WorldTransform.position.x
-        probe.Probe.step_seen = steps + HALF_STEP
+        probe[Probe].pair_seen_x = probe[tv.WorldTransform].position.x
+        probe[Probe].step_seen = steps + HALF_STEP
 
 # ── Collider queries ──────────────────────────────────────────────────────────
 # Shots sweep their per-tick motion against every collider their mask selects
@@ -156,13 +156,13 @@ rule SweepShots:
         target:
             physics.Collider
     reduce per shot:
-        first = first_hit(physics.sweep(shot, shot.Shot.velocity * fixed_tick.dt, target))
+        first = first_hit(physics.sweep(shot, shot[Shot].velocity * fixed_tick.dt, target))
 
     on fixed_tick:
-        shot.Shot.hit = first.hit
-        shot.Shot.t = first.t
-        shot.Shot.point = first.point
-        shot.Shot.normal = first.normal
+        shot[Shot].hit = first.hit
+        shot[Shot].t = first.t
+        shot[Shot].point = first.point
+        shot[Shot].normal = first.normal
         if first.hit:
             emit ShotHit to first.other
 
@@ -176,12 +176,12 @@ rule SweepShotsUnaccelerated:
         target:
             physics.Collider
     reduce per shot:
-        first = first_hit(physics.sweep(shot, shot.Shot.velocity * fixed_tick.dt, target))
+        first = first_hit(physics.sweep(shot, shot[Shot].velocity * fixed_tick.dt, target))
         rows = count()
 
     on fixed_tick:
-        shot.Shot.plain_hit = first.hit
-        shot.Shot.plain_t = first.t
+        shot[Shot].plain_hit = first.hit
+        shot[Shot].plain_t = first.t
         if first.hit:
             emit PlainShotHit to first.other
 
@@ -207,7 +207,7 @@ rule CountTouching:
         touching = count()
 
     on fixed_tick:
-        toucher.Toucher.touching = touching
+        toucher[Toucher].touching = touching
 
 # ── Push-out ─────────────────────────────────────────────────────────────────
 # Each pusher sums how far it must move to leave every collider it overlaps.
@@ -267,8 +267,8 @@ rule PushOut:
         push = sum(physics.push_out(body, other))
 
     on fixed_tick:
-        body.Pusher.push = push
-        body.physics.CharacterBody.velocity = vec3(0.0, 0.0, 0.0)
+        body[Pusher].push = push
+        body[physics.CharacterBody].velocity = vec3(0.0, 0.0, 0.0)
 
 # The extra count() turns acceleration off; the push must not change.
 rule PushOutUnaccelerated:
@@ -283,5 +283,5 @@ rule PushOutUnaccelerated:
         rows = count()
 
     on fixed_tick:
-        body.Pusher.plain_push = push
-        body.physics.CharacterBody.velocity = vec3(0.0, 0.0, 0.0)
+        body[Pusher].plain_push = push
+        body[physics.CharacterBody].velocity = vec3(0.0, 0.0, 0.0)

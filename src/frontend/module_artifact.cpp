@@ -428,17 +428,6 @@ void ModuleArtifact::write_named_field_table(std::ostream& out, const NamedField
     }
 }
 
-void ModuleArtifact::write_optional_named_trait(std::ostream& out, const std::optional<NamedTraitRef>& ref) {
-    write_bool(out, ref.has_value());
-    if (!ref.has_value()) {
-        return;
-    }
-    write_symbol_id(out, ref->entity);
-    write_symbol_id(out, ref->trait);
-    write_u64(out, static_cast<uint64_t>(ref->entity_segments));
-    write_u64(out, static_cast<uint64_t>(ref->trait_segments));
-}
-
 void ModuleArtifact::write_entities(std::ostream& out, const std::unordered_map<std::string, ImportedEntity>& entities) {
     std::vector<const ImportedEntity*> ordered;
     ordered.reserve(entities.size());
@@ -1046,16 +1035,6 @@ NamedFieldTable ModuleArtifact::read_named_field_table(std::istream& in) {
     return table;
 }
 
-std::optional<NamedTraitRef> ModuleArtifact::read_optional_named_trait(std::istream& in) {
-    if (!read_bool(in)) {
-        return std::nullopt;
-    }
-    NamedTraitRef ref{.entity = read_symbol_id(in), .trait = read_symbol_id(in)};
-    ref.entity_segments = static_cast<std::size_t>(read_u64(in));
-    ref.trait_segments  = static_cast<std::size_t>(read_u64(in));
-    return ref;
-}
-
 std::unordered_map<std::string, ImportedEntity> ModuleArtifact::read_entities(std::istream& in) {
     std::unordered_map<std::string, ImportedEntity> entities;
     const auto count = read_u32(in);
@@ -1618,6 +1597,7 @@ static_assert(expr_alternative_is<6, MemberExpr>);
 static_assert(expr_alternative_is<7, MatchExpr>);
 static_assert(expr_alternative_is<8, IfExpr>);
 static_assert(expr_alternative_is<9, ListExpr>);
+static_assert(expr_alternative_is<12, TraitAccessExpr>);
 
 namespace {
 
@@ -1697,7 +1677,6 @@ void ModuleArtifact::write_expression(std::ostream& out, const ExprNode& express
             write_str(out, node.member);
             write_enum_member(out, node.resolved_enum_member);
             write_optional_symbol_id(out, node.resolved_entity_id);
-            write_optional_named_trait(out, node.resolved_named_trait);
             write_optional_symbol_id(out, node.resolved_const_id);
             write_optional_symbol_id(out, node.resolved_phase_dt);
         } else if constexpr (std::is_same_v<Node, IfExpr>) {
@@ -1706,6 +1685,13 @@ void ModuleArtifact::write_expression(std::ostream& out, const ExprNode& express
             write_expression(out, *node.else_expr);
         } else if constexpr (std::is_same_v<Node, ListExpr>) {
             expressions(node.elements);
+        } else if constexpr (std::is_same_v<Node, TraitAccessExpr>) {
+            write_expression(out, *node.object);
+            write_str(out, node.trait_name);
+            write_optional_symbol_id(out, node.resolved_trait_id);
+            write_optional_symbol_id(out, node.resolved_entity_id);
+            write_bool(out, node.pair_binding_index.has_value());
+            write_u64(out, static_cast<uint64_t>(node.pair_binding_index.value_or(0)));
         } else if constexpr (std::is_same_v<Node, MatchExpr>) {
             write_expression(out, *node.subject);
             write_u32(out, static_cast<uint32_t>(node.arms.size()));
@@ -1791,7 +1777,6 @@ std::unique_ptr<ExprNode> ModuleArtifact::read_expression(std::istream& in) {
                 node.resolved_enum_member = std::move(member);
             }
             node.resolved_entity_id = read_optional_symbol_id(in);
-            node.resolved_named_trait = read_optional_named_trait(in);
             node.resolved_const_id = read_optional_symbol_id(in);
             node.resolved_phase_dt = read_optional_symbol_id(in);
             return wrap(std::move(node));
@@ -1818,6 +1803,19 @@ std::unique_ptr<ExprNode> ModuleArtifact::read_expression(std::istream& in) {
         }
         case 9:
             return wrap(ListExpr{.elements = expressions()});
+        case 12: {
+            TraitAccessExpr node;
+            node.object = read_expression(in);
+            node.trait_name = read_str(in);
+            node.resolved_trait_id = read_optional_symbol_id(in);
+            node.resolved_entity_id = read_optional_symbol_id(in);
+            const auto has_binding = read_bool(in);
+            const auto binding = read_u64(in);
+            if (has_binding) {
+                node.pair_binding_index = static_cast<std::size_t>(binding);
+            }
+            return wrap(std::move(node));
+        }
         default:
             in.setstate(std::ios::failbit);
             return nullptr;

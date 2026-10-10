@@ -34,7 +34,7 @@ Direction is optional; `asc` is the default when omitted.
 - **THEN** the semantic analyzer accepts the expression as a sort key and evaluates it once per entity before sorting
 
 #### Scenario: Computed sort key over two pair bindings is valid
-- **WHEN** a `pairs:` rule with bindings `actor` and `target` declares `order by: spatial.distance_squared(actor.Position.value, target.Position.value)`
+- **WHEN** a `pairs:` rule with bindings `actor` and `target` declares `order by: spatial.distance_squared(actor[Position].value, target[Position].value)`
 - **THEN** the semantic analyzer accepts the expression as a sort key and evaluates it once per tuple before sorting
 
 ### Requirement: Sort keys must reference filter aliases
@@ -113,7 +113,7 @@ A `pairs:` rule MAY declare `order by:`. This reorders the deterministic tuple i
 A valid `order by:` position SHALL accept comma-separated inline sort keys alongside its block form. Each entry SHALL preserve its optional direction, with `asc` the existing default. Lexicographic key order, scope, purity, comparable typing, evaluation timing, and existing stable tie-breaking SHALL remain unchanged. Inline syntax SHALL preserve the current placement of sorting after `reduce:` when reduction is present.
 
 #### Scenario: Computed keys retain nested arguments and directions
-- **WHEN** a pair rule uses `order by: distance(a.pose.position, b.pose.position) asc, b.Priority.value desc` with a valid pure distance function
+- **WHEN** a pair rule uses `order by: distance(a_pose.position, b_pose.position) asc, b[Priority].value desc` with a valid pure distance function
 - **THEN** it parses two keys and ranks tuples exactly as the corresponding block
 
 #### Scenario: Aggregate sorting uses retained scope

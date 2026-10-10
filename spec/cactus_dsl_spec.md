@@ -608,25 +608,25 @@ rule DetectContacts:
             Collider
 
     on fixed_tick:
-        if body != wall and body.Collider.mask == wall.Collider.layer:
+        if body != wall and body[Collider].mask == wall[Collider].layer:
             emit Contact to body:
                 other = wall
 ```
 
-**Bindings are entity identifiers and trait namespaces.** Each binding name has type `entity_id` and also namespaces the traits selected for that entity:
+**Bindings are entity identifiers and trait namespaces.** Each binding name has type `entity_id` and also namespaces the traits selected for that entity. The trait is written in square brackets after the binding:
 
 - `body` — the binding itself, usable as an `entity_id` (comparison, event target, `to`/`from` argument)
-- `body.Collider.mask` — an unaliased local trait, reached as `binding.Trait.field`
-- `body.tf.WorldTransform.position` — an imported trait, reached as `binding.module_alias.Trait.field` (the authored `use ... as` qualification is preserved under the binding)
-- `wall.transform.position` — a binding-local alias declared with `as` inside that binding's block, reached as `binding.alias.field`
+- `body[Collider].mask` — an unaliased local trait, reached as `binding[Trait].field`
+- `body[tf.WorldTransform].position` — an imported trait, reached as `binding[module_alias.Trait].field` (the authored `use ... as` qualification is kept inside the brackets)
+- `transform.position` — an alias declared with `as` under a binding, written bare as `alias.field`
 
-Binding names and their aliases must be unambiguous within every handler scope on that rule.
+The brackets hold exactly one selected trait reference; `not`, commas and aliases are rejected there. Aliases share one scope per rule: an alias must be unique across both bindings and must not equal a binding name. An alias is visible wherever its binding is, so after `reduce per b:` the aliases of the eliminated binding are gone too. The dotted forms `body.Collider.mask`, `body.tf.WorldTransform.position` and `wall.transform.position` are rejected with a diagnostic that names the replacement.
 
 **The relation is a directed Cartesian product.** For bindings A and B, the handler executes once per pair `(a, b)` where `a` satisfies every trait A requires and `b` satisfies every trait B requires. The product is directed and finite: self-pairs (`a == b`, when one entity satisfies both bindings) and reverse-role tuples are included whenever membership permits, unless excluded by a `where:` clause (§3.8.2) or by an ordinary `if`/`return` in the handler body — both are equally valid authored mechanisms for rejecting tuples, as with `if body != wall:` above or `where: body != wall`.
 
 **Passes snapshot membership, not values.** Before executing any tuple body, the runtime records both bindings' live membership in stable, creation-order-sorted snapshots (a monotonic per-entity creation ordinal, assigned at load time and at spawn commit, defines this order independently of backend storage layout) and lazily iterates their product left-binding-major: for `left = [a, b]` and `right = [x, y]`, tuple order is `(a,x)`, `(a,y)`, `(b,x)`, `(b,y)`. Membership is fixed for the whole pass; component values are read live from storage when each tuple executes. Projected traits and buffered structural commands issued mid-pass cannot add or remove tuples from the pass already in progress — they become visible only in a later pass or at the next activation commit.
 
-**Pair-bound durable trait access is read-only.** A pair handler may read any trait it selected (`body.Collider.mask`, `wall.transform.position`), but direct or indirect mutation — assignment, compound assignment, or a data-bearing trait-match alias obtained from a binding — is rejected during semantic analysis. Selecting a trait does not itself count as a read. The exceptions are a binding named by a provably-one `limit: ... per` (§3.8.3) and the retained binding of `reduce per b:` (§3.8.5), which admit ordinary dotted-path assignment; a trait-match alias stays rejected even there.
+**Pair-bound durable trait access is read-only.** A pair handler may read any trait it selected (`body[Collider].mask`, `transform.position`), but direct or indirect mutation — assignment, compound assignment, or a data-bearing trait-match alias obtained from a binding — is rejected during semantic analysis. Selecting a trait does not itself count as a read. The exceptions are a binding named by a provably-one `limit: ... per` (§3.8.3) and the retained binding of `reduce per b:` (§3.8.5), which admit assignment through `binding[Trait].field` and through the bare aliases of that binding's traits; a trait-match alias stays rejected even there.
 
 **There is no implicit current entity.** `self` and any statement form that defaults to `self` (bare `destroy`, bare `remove`, `add`/`project` with no `to`) are rejected in pair handlers. Every entity-targeting operation must name a binding explicitly:
 
@@ -666,7 +666,7 @@ rule DetectBallContact:
             tv.WorldTransform
     where:
         a != b
-        collision.spheres_overlap(a.tv.WorldTransform.position, a.SphereCollider.radius, b.tv.WorldTransform.position, b.SphereCollider.radius)
+        collision.spheres_overlap(a[tv.WorldTransform].position, a[SphereCollider].radius, b[tv.WorldTransform].position, b[SphereCollider].radius)
 
     on fixed_tick:
         # only overlapping, distinct pairs reach the handler body
@@ -714,13 +714,13 @@ rule GroundActor:
         surface:
             Solid
     order by:
-        actor.KinematicActor.feet_y - surface.Solid.top asc
+        actor[KinematicActor].feet_y - surface[Solid].top asc
     where:
-        surface.Solid.top <= actor.KinematicActor.feet_y
+        surface[Solid].top <= actor[KinematicActor].feet_y
     limit: 1 per actor
 
     on fixed_tick:
-        actor.KinematicActor.ground_surface = surface.Solid.top
+        actor[KinematicActor].ground_surface = surface[Solid].top
 ```
 
 **The global form bounds total count; the `per` form bounds each partition.** `limit: N` with no `per` admits at most `N` rows (unary) or `N` tuples in total (pair), and guarantees nothing about how often any single entity occurs among them. `limit: N per <binding>` is accepted only on a `pairs:` rule without `reduce:` (each group is already one row) and only when `<binding>` names one of that rule's two bindings; it admits at most `N` tuples for each distinct value of that binding. A binding value with no surviving tuples produces no activation at all.
@@ -729,7 +729,7 @@ rule GroundActor:
 
 **Selection is deterministic.** With `order by:`, sort keys are evaluated against the rule's snapshot and equal keys break ties by stable creation order. Without `order by:`, `limit:` takes the domain's existing stable iteration order — for a pair domain, the left-binding-major snapshot order of §3.8.1. Each partition of a `per` limit resolves independently of every other. A conforming backend's physical strategy must not change which rows this selects.
 
-**A provably-one `per` limit makes its binding writable.** When a `limit: <expr> per <binding>`'s count expression is the literal `1`, or a name whose `const:` initializer is literally `1`, the compiler proves that at most one tuple per `<binding>` value can run — and `<binding>` becomes an ordinary mutable assignment target inside that rule's handlers, carved out of §3.8.1's pair read-only rule. The proof is deliberately syntactic: any other expression, including one that always evaluates to `1` at runtime (`2 - 1`, a non-constant field read), is not provable. The rule's other binding stays read-only, a global `limit:` grants no writability on either binding, and trait-matching directly on a pair binding stays rejected regardless of any `limit:` — only ordinary dotted-path assignment is admitted. Such a write is inferred into the handler's contract exactly like a write through a unary `each:` alias, so scheduling sees the same read/write conflict information.
+**A provably-one `per` limit makes its binding writable.** When a `limit: <expr> per <binding>`'s count expression is the literal `1`, or a name whose `const:` initializer is literally `1`, the compiler proves that at most one tuple per `<binding>` value can run — and `<binding>` becomes an ordinary mutable assignment target inside that rule's handlers, carved out of §3.8.1's pair read-only rule. The proof is deliberately syntactic: any other expression, including one that always evaluates to `1` at runtime (`2 - 1`, a non-constant field read), is not provable. The rule's other binding stays read-only, a global `limit:` grants no writability on either binding, and trait-matching directly on a pair binding stays rejected regardless of any `limit:` — only assignment through `binding[Trait].field` or a bare alias of that binding's traits is admitted. Such a write is inferred into the handler's contract exactly like a write through a unary `each:` alias, so scheduling sees the same read/write conflict information.
 
 #### 3.8.4 When Clause
 
@@ -745,13 +745,13 @@ rule SeekPlayer:
         Enemy as enemy
         tv.WorldTransform as transform
     when:
-        not Game.Match.over
+        not Game[Match].over
 
     on fixed_tick:
         ...
 ```
 
-**`when:` reads only game-wide values.** A predicate may use literals, constants, named field reads (`Game.Match.over`, §4.2), entity names as values (§4.3), operators, and calls to functions proven pure. It must not read a filter, pair, or `self` binding, an event or phase payload, or a handler local — a condition on the current entity or tuple belongs in `where:`. It has the same purity rules as `where:` (§3.8.2).
+**`when:` reads only game-wide values.** A predicate may use literals, constants, named field reads (`Game[Match].over`, §4.2), entity names as values (§4.3), operators, and calls to functions proven pure. It must not read a filter, pair, or `self` binding, an event or phase payload, or a handler local — a condition on the current entity or tuple belongs in `where:`. It has the same purity rules as `where:` (§3.8.2).
 
 **`when:` evaluates once per pass.** A pass is one phase activation of a handler, or one delivered event occurrence. The runtime evaluates `when:` after the implicit named-entity requirement holds (§4.2) and before the first entity or tuple. It sees immediate writes made earlier in the same activation by handlers scheduled before it, and it is not re-evaluated during the pass: a write that closes the gate mid-pass affects only later passes.
 
@@ -785,19 +785,19 @@ rule TeamTotals:
         player:
             Player
     where:
-        team.Team.active
-        player.Player.team == team
+        team[Team].active
+        player[Player].team == team
     reduce per team:
         players = count(player)
-        total = sum(player.Player.points)
-        best = max(player.Player.speed, default = -1.0)
-        has_star = any(player.Player.star)
+        total = sum(player[Player].points)
+        best = max(player[Player].speed, default = -1.0)
+        has_star = any(player[Player].star)
     order by:
         total desc
     limit: 2
 
     on tick:
-        team.Team.total = total
+        team[Team].total = total
 ```
 
 `reduce per body:` groups by the `body` binding; `reduce:` makes one global group.
@@ -816,7 +816,7 @@ Sorting follows the reduction, and empty-group identities, retained writes, and
 
 **Pipeline.** The logical order is domain → `where:` → `reduce:` → `order by:` → `limit:` → handler. All aggregates are computed from one snapshot of the input before any handler of the pass runs, so a handler's write can't change an aggregate of the same pass. Rows fold in stable order (pair rows left-binding-major, unary rows by creation order); groups follow the `per` binding's creation order, and sort ties keep it. A global `limit:` bounds aggregate rows.
 
-**Scope after reduction.** Handlers and sort keys see the aggregates as immutable values and, with `reduce per b:`, the binding `b`. Every other binding, filter alias and implicit filter field is eliminated and can't be named; there is no `self`. The retained binding `b` is writable: the handler runs exactly once per `b` entity, so dotted-path assignment through `b` is accepted and recorded as a contract write, as for a provably-one `limit: … per` (§3.8.3). A targeted event keeps only the recipient's group; a global reduction ignores the target. Lifecycle triggers are rejected on reduced rules.
+**Scope after reduction.** Handlers and sort keys see the aggregates as immutable values and, with `reduce per b:`, the binding `b`. Every other binding, filter alias and implicit filter field is eliminated and can't be named; there is no `self`. The retained binding `b` is writable: the handler runs exactly once per `b` entity, so assignment through `b[Trait].field` or a bare alias of `b`'s traits is accepted and recorded as a contract write, as for a provably-one `limit: … per` (§3.8.3). A targeted event keeps only the recipient's group; a global reduction ignores the target. Lifecycle triggers are rejected on reduced rules.
 
 **Numbers.** Integer `count` and `sum` saturate at the signed 32-bit bounds at each fold step; this applies only to reducers. Floating `sum` keeps the fold order and is never reassociated. Floating `min`/`max` yield NaN when any input is NaN.
 
@@ -847,7 +847,7 @@ rule TouchLava:
         physics.touching(body, lava)
     reduce per body:
         n = count()
-        damage = sum(lava.Lava.damage_per_second)
+        damage = sum(lava[Lava].damage_per_second)
     keep InLava on body:
         zones = n
         dps = damage
@@ -882,7 +882,7 @@ rule StandOnCheckpoint:
     where:
         physics.touching(player, point)
     reduce per player:
-        top = best(point, by = point.Checkpoint.order)
+        top = best(point, by = point[Checkpoint].order)
     keep AtCheckpoint on player:
         checkpoint = top
 ```
@@ -1144,12 +1144,15 @@ comparison_expr = additive_expr { ( "<" | ">" | "<=" | ">=" ) additive_expr } ;
 additive_expr   = multiplicative_expr { ( "+" | "-" ) multiplicative_expr } ;
 multiplicative_expr = unary_expr { ( "*" | "/" | "%" ) unary_expr } ;
 unary_expr      = ( "not" | "-" ) unary_expr | postfix_expr ;
-postfix_expr    = primary_expr { "." IDENTIFIER | call_args } ;
+postfix_expr    = primary_expr { "." IDENTIFIER | call_args | trait_access } ;
+trait_access    = "[" dotted_name "]" ;
 call_args       = "(" [ call_argument { "," call_argument } [ "," ] ] ")" ;
 call_argument   = [ IDENTIFIER "=" ] expression ;
 primary_expr    = literal | IDENTIFIER | "self" | "(" expression ")"
                 | match_expr | if_expr | list_literal | spawn_expr ;
 ```
+
+A `trait_access` follows an identifier, `self` or a member on the same line. A bracket list followed directly by `(` is a query call's filter list instead (§3.15.1). The brackets hold exactly one trait reference: `Game[Match, Score]` and `Game[not Match]` are errors. Only a named entity (§4.2) or a pair binding (§3.8.1) may carry a trait access, and a field must follow it.
 
 The operands of `and`, `or` and `not` must be `bool`. There is no implicit truthiness: `if t.hp:` is an error, write `if t.hp > 0:`.
 
@@ -1245,7 +1248,9 @@ statement       = let_decl | var_decl | var_assign | emit_stmt | destroy_stmt
 
 let_decl        = "let" IDENTIFIER [ ":" type_ref ] "=" expression NEWLINE ;
 var_decl        = "var" IDENTIFIER [ ":" type_ref ] "=" expression NEWLINE ;
-var_assign      = IDENTIFIER ( "=" | "+=" | "-=" ) expression NEWLINE ;
+var_assign      = assign_target ( "=" | "+=" | "-=" | "*=" | "/=" ) expression NEWLINE ;
+assign_target   = IDENTIFIER { "." IDENTIFIER }
+                | dotted_name trait_access "." IDENTIFIER { "." IDENTIFIER } ;
 
 emit_stmt       = "emit" IDENTIFIER [ "to" expression ] NEWLINE
                 | "emit" IDENTIFIER [ "to" expression ] ":" NEWLINE INDENT
@@ -1453,11 +1458,11 @@ rule Damage:
 
 Bare (unqualified) trait-field access is accepted when it resolves to exactly one selected trait; `alias.field`/`TraitName.field` remain the preferred style for handlers filtering multiple substantial traits.
 
-Pair handlers (§3.8.1) use a third, binding-qualified form instead of a filter alias: `binding.Trait.field`, `binding.module_alias.Trait.field`, or `binding.alias.field` for a binding-local `as` alias. Pair-bound access is read-only, except through a binding a provably-one `limit: ... per` made writable (§3.8.3).
+Pair handlers (§3.8.1) put the trait in brackets after the binding instead: `binding[Trait].field` or `binding[module_alias.Trait].field`. A trait selected with `as alias` is written bare, `alias.field`, like a filter alias. Pair-bound access is read-only, except through a binding a provably-one `limit: ... per` made writable (§3.8.3).
 
-**An `entity_id` value carries no fields.** Member access through any other `entity_id` value — a `let`/`var` local, a `for` loop variable, a `func` parameter, an event field, `self`, or a call result — is an error, in handler bodies, `func` bodies and rule clauses alike. A read reports `can't read trait '<T>' through entity_id '<e>'; read another entity's traits in a pairs: rule`; a write or compound write reports `can't write trait '<T>' through entity_id '<e>'; use 'set <T> on <e>:'`. Read another entity's traits by joining it in a `pairs:` rule, and change them with `set T on e:` (§3.16).
+**An `entity_id` value carries no fields.** Trait access through any other `entity_id` value — a `let`/`var` local, a `for` loop variable, a `func` parameter, an event field, `self`, or a call result — is an error, whether written with brackets (`e[Health].hp`) or dots (`e.Health.hp`), in handler bodies, `func` bodies and rule clauses alike. A read reports `can't read trait '<T>' through entity_id '<e>'; read another entity's traits in a pairs: rule`; a write or compound write reports `can't write trait '<T>' through entity_id '<e>'; use 'set <T> on <e>:'`. Read another entity's traits by joining it in a `pairs:` rule, and change them with `set T on e:` (§3.16).
 
-**Named field access** reaches a declared entity's traits by name, with the same `Name.Trait.field` shape: `Game.Match.over`, `Game.Transform.position.x`, or `Hud.text.ScreenLabel.visible` for an imported trait. The trait segment is required, and the entity's archetype must declare the trait. A read returns the current value; `=` and compound assignment write immediately, like a write through `self`. Named field access is allowed in rule handlers and rule clauses, and rejected in `func` bodies, `const` blocks, and archetype bodies. This is how game-wide state works: keep it on an ordinary named entity.
+**Named field access** reaches a declared entity's traits by name, with the trait in brackets: `Game[Match].over`, `Game[Transform].position.x`, `Hud[text.ScreenLabel].visible` for an imported trait, or `hud.Hud[text.ScreenLabel].visible` for an entity of another module. The brackets hold exactly one trait reference, a field must follow them, and the entity's archetype must declare the trait. The dotted form `Game.Match.over` is rejected with a diagnostic that names the bracketed replacement. A read returns the current value; `=` and compound assignment write immediately, like a write through `self`. Named field access is allowed in rule handlers and rule clauses, and rejected in `func` bodies, `const` blocks, and archetype bodies. This is how game-wide state works: keep it on an ordinary named entity.
 
 ```cactus
 entity Game:
@@ -1468,7 +1473,7 @@ rule CollectCoins:
         Coin as coin
 
     on tick:
-        Game.Match.score += coin.value
+        Game[Match].score += coin.value
 ```
 
 **Named access is an implicit requirement.** For every `(Name, Trait)` a handler accesses by name — in its body or in any clause of its rule — the handler runs a pass only while `Name` is alive and carries `Trait`. The runtime checks this once per pass, before `when:` and before any entity or tuple; when it fails the pass does nothing, and no error is raised. The requirement covers the **whole handler**, even when the name appears only in one branch: move such a branch into its own rule if the rest of the handler must keep running. Because `destroy` and `remove` apply at the activation commit, a requirement that holds at the start of a pass holds for the whole pass. A handler that writes a named entity runs as one sequential pass over its domain; a backend never splits it per entity.
@@ -1763,7 +1768,7 @@ rule DetectContacts:
             Collider
 
     on fixed_tick:
-        if body != wall and body.Collider.mask == wall.Collider.layer:
+        if body != wall and body[Collider].mask == wall[Collider].layer:
             emit Contact to body:
                 other = wall
 
@@ -2031,14 +2036,14 @@ rule MoveBullets:
             physics.Collider
             physics.Solid
     reduce per bullet:
-        first = first_hit(physics.sweep(bullet, bullet.Bullet.velocity * fixed_tick.dt, target))
+        first = first_hit(physics.sweep(bullet, bullet[Bullet].velocity * fixed_tick.dt, target))
 
     on fixed_tick:
         if first.hit:
             emit EnemyHit to first.other
             destroy bullet
             return
-        bullet.tv.WorldTransform.position += bullet.Bullet.velocity * fixed_tick.dt
+        bullet[tv.WorldTransform].position += bullet[Bullet].velocity * fixed_tick.dt
 ```
 
 **Solids and triggers.** `Solid` is a fieldless trait. A `Collider` with `Solid` is solid; one without it is a trigger. The character controller treats only solids as obstacles; `sweep`, `touching` and `push_out` see every collider, so a rule picks solids or triggers in its pair binding's filter. `std.physics.flat` has the same `Solid` trait, but nothing moves a 2D body. Neither module has a collision event: a contact is a rule over `touching`, usually with a `keep` clause (§3.8.6).

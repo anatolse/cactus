@@ -533,6 +533,9 @@ std::string translate_stmts(const std::vector<std::unique_ptr<StmtNode>>& body, 
             out << pad << glsl_type_name(value.type) << " " << local_reference(let_stmt->name, ctx) << " = "
                 << value.text << ";\n";
         } else if (const auto* assign = std::get_if<VarAssign>(&stmt->stmt)) {
+            if (assign->target != nullptr) {
+                throw CodegenError(stmt->location, "render-pass GLSL codegen: trait access in stage handler body");
+            }
             const auto value = translate_expr(*assign->value, ctx);
             const std::string target = assign->name == ctx.alias && assign->path.size() == 1
                                           ? assign->path.front()

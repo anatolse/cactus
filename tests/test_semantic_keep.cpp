@@ -51,7 +51,7 @@ const std::string kPairs =
 
 const std::string kWhere =
     "    where:\n"
-    "        (body.Body.x - zone.Zone.x) * (body.Body.x - zone.Zone.x) <= zone.Zone.radius * zone.Zone.radius\n";
+    "        (body[Body].x - zone[Zone].x) * (body[Body].x - zone[Zone].x) <= zone[Zone].radius * zone[Zone].radius\n";
 
 struct Analysis {
     std::unique_ptr<ProgramNode> ast;
@@ -192,7 +192,7 @@ TEST_CASE("Keep: a rule with a phase handler keeps through that handler", "[sema
     const auto analysis = analyze("rule Touch:\n" + kPairs + kWhere +
                                   kReducePerBody + kKeepZones +
                                   "    on fixed_tick:\n"
-                                  "        body.Body.x = body.Body.x\n");
+                                  "        body[Body].x = body[Body].x\n");
     INFO(describe(analysis));
     CHECK(analysis.clean());
     CHECK(analysis.rule("Touch").handlers.size() == 1);
@@ -208,17 +208,17 @@ TEST_CASE("Keep: the binding must be the per binding", "[semantic][rule-keep]") 
 TEST_CASE("Keep: field expressions can't read the eliminated binding", "[semantic][rule-keep]") {
     CHECK(analyze(touch_rule(kReducePerBody,
                              "    keep InZone on body:\n"
-                             "        zones = zone.Zone.priority\n"))
+                             "        zones = zone[Zone].priority\n"))
               .has("'zone' is not available after `reduce:`"));
 }
 
 TEST_CASE("Keep: field expressions read aggregates, the per binding and constants", "[semantic][rule-keep]") {
     const auto analysis = analyze("const:\n"
                                   "    BONUS = 2\n" +
-                                  touch_rule(kReducePerBody + "        dps = sum(zone.Zone.dps)\n",
+                                  touch_rule(kReducePerBody + "        dps = sum(zone[Zone].dps)\n",
                                              "    keep InZone on body:\n"
                                              "        zones = n + BONUS\n"
-                                             "        dps = dps * body.Body.x + Board.Stats.zones\n"));
+                                             "        dps = dps * body[Body].x + Board[Stats].zones\n"));
     INFO(describe(analysis));
     CHECK(analysis.clean());
 }
@@ -272,12 +272,12 @@ TEST_CASE("Keep: event and lifecycle handlers are rejected", "[semantic][rule-ke
     CHECK(analyze(touch_rule(kReducePerBody,
                              kKeepZones,
                              "    on Ping:\n"
-                             "        body.Body.x = 0.0\n"))
+                             "        body[Body].x = 0.0\n"))
               .has("keep rules run only on phase activations"));
     CHECK_FALSE(analyze(touch_rule(kReducePerBody,
                                    kKeepZones,
                                    "    on added Seen:\n"
-                                   "        body.Body.x = 0.0\n"))
+                                   "        body[Body].x = 0.0\n"))
                     .clean());
 }
 
@@ -364,8 +364,8 @@ TEST_CASE("Keep: reading and filtering on a kept trait is allowed", "[semantic][
 // ── best ────────────────────────────────────────────────────────────────────
 
 TEST_CASE("Best: names the winning entity of a binding", "[semantic][rule-reduce][rule-keep]") {
-    const auto analysis = analyze(touch_rule(kReducePerBody + "        top = best(zone, by = zone.Zone.priority)\n"
-                                                        "        hot = best(zone, by = zone.Zone.dps)\n",
+    const auto analysis = analyze(touch_rule(kReducePerBody + "        top = best(zone, by = zone[Zone].priority)\n"
+                                                        "        hot = best(zone, by = zone[Zone].dps)\n",
                                              "    keep Nearest on body:\n"
                                              "        zone = top\n"));
     INFO(describe(analysis));
@@ -380,15 +380,15 @@ TEST_CASE("Best: names the winning entity of a binding", "[semantic][rule-reduce
 }
 
 TEST_CASE("Best: the per binding is rejected", "[semantic][rule-reduce][rule-keep]") {
-    CHECK(analyze(touch_rule(kReducePerBody + "        top = best(body, by = body.Body.x)\n", "    keep Seen on body\n"))
+    CHECK(analyze(touch_rule(kReducePerBody + "        top = best(body, by = body[Body].x)\n", "    keep Seen on body\n"))
               .has("best(...) takes a pair binding other than the `per` binding 'body'"));
 }
 
 TEST_CASE("Best: the key must be int or float", "[semantic][rule-reduce][rule-keep]") {
-    CHECK(analyze(touch_rule(kReducePerBody + "        top = best(zone, by = zone.Zone.x > 0.0)\n", "    keep Seen on body\n"))
+    CHECK(analyze(touch_rule(kReducePerBody + "        top = best(zone, by = zone[Zone].x > 0.0)\n", "    keep Seen on body\n"))
               .has("best(...) key must be of type 'int' or 'float'"));
     CHECK(analyze(touch_rule(kReducePerBody + "        top = best(zone)\n", "    keep Seen on body\n")).has("`by = <key>`"));
-    CHECK(analyze(touch_rule(kReducePerBody + "        top = best(zone.Zone.x, by = zone.Zone.x)\n", "    keep Seen on body\n"))
+    CHECK(analyze(touch_rule(kReducePerBody + "        top = best(zone[Zone].x, by = zone[Zone].x)\n", "    keep Seen on body\n"))
               .has("best(...) takes a pair binding"));
 }
 

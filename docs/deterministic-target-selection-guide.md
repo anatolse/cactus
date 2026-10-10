@@ -48,17 +48,17 @@ rule SelectTarget:
             Enemy
             Position
     order by:
-        v2.distance(tower.Position.pos, enemy.Position.pos) asc
+        v2.distance(tower[Position].pos, enemy[Position].pos) asc
     after:
         ResetTarget
     where:
-        not enemy.Enemy.cloaked
-        v2.distance(tower.Position.pos, enemy.Position.pos) <= tower.Tower.range
+        not enemy[Enemy].cloaked
+        v2.distance(tower[Position].pos, enemy[Position].pos) <= tower[Tower].range
     limit: 1 per tower
 
     on fixed_tick:
-        tower.Target.selected = enemy
-        tower.Target.has_target = true
+        tower[Target].selected = enemy
+        tower[Target].has_target = true
 
 rule ConsumeTarget:
     filter:
@@ -147,7 +147,7 @@ tick. It drops out of selection from the next tick on.
 
 ## Per-binding write permission
 
-`SelectTarget` writes `tower.Target.selected` and `tower.Target.has_target`
+`SelectTarget` writes `tower[Target].selected` and `tower[Target].has_target`
 directly, with no event and no second rule, because `limit: 1 per tower` is a
 statically provable one (the literal `1`): the compiler can prove the handler
 runs at most once for each `tower`, so the pair-relations read-only carve-out
@@ -168,4 +168,4 @@ bracketed traits, or a stale handle if none exists, in one call with no rule
 of its own required. Guard its result with `exists(id)` before relying on it.
 Reach for `pairs:` + `order by:` + `limit:` when the selection genuinely
 depends on both sides of the pair, as `SelectTarget` above does through
-`tower.Tower.range`.
+`tower[Tower].range`.

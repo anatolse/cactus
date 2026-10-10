@@ -41,17 +41,17 @@ rule SelectTarget:
             Enemy
             Position
     order by:
-        v2.distance(tower.Position.pos, enemy.Position.pos) asc
+        v2.distance(tower[Position].pos, enemy[Position].pos) asc
     after:
         ResetTarget
     where:
-        not enemy.Enemy.cloaked
-        v2.distance(tower.Position.pos, enemy.Position.pos) <= tower.Tower.range
+        not enemy[Enemy].cloaked
+        v2.distance(tower[Position].pos, enemy[Position].pos) <= tower[Tower].range
     limit: 1 per tower
 
     on fixed_tick:
-        tower.Target.selected = enemy
-        tower.Target.has_target = true
+        tower[Target].selected = enemy
+        tower[Target].has_target = true
 
 rule ConsumeTarget:
     each:

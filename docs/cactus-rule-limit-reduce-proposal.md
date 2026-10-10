@@ -75,14 +75,14 @@ rule SelectTarget:
             Enemy
             Position
     order by:
-        v2.distance(actor.Position.value, enemy.Position.value) asc
+        v2.distance(actor[Position].value, enemy[Position].value) asc
     where:
-        v2.distance(actor.Position.value, enemy.Position.value) <= actor.AI.range
+        v2.distance(actor[Position].value, enemy[Position].value) <= actor[AI].range
     limit: 1 per actor
 
     on fixed_tick:
-        actor.Target.selected = enemy
-        actor.Target.has_target = true
+        actor[Target].selected = enemy
+        actor[Target].has_target = true
 ```
 
 The handler writes `actor` directly; see "Pair mutation" below. An actor with no
@@ -145,12 +145,12 @@ rule CalculateTeamScore:
             Score
 
     where:
-        player.MemberOf.team == team
+        player[MemberOf].team == team
 
     reduce:
         per: team
         player_count = count(player)
-        total_score = sum(player.Score.value)
+        total_score = sum(player[Score].value)
 
     on tick:
         emit TeamScore to team:
@@ -176,7 +176,7 @@ with no surviving `(team, player)` row still gets one activation, with identity 
 
 An author who wants the old inner behavior returns early when `count() == 0`.
 
-`where:` predicates that read only the `per` binding (`team.Team.active`) filter groups:
+`where:` predicates that read only the `per` binding (`team[Team].active`) filter groups:
 a team that fails one gets no activation. Every other predicate filters rows.
 
 ## Global Reduction
@@ -273,11 +273,11 @@ rule RankTeams:
             Score
 
     where:
-        player.MemberOf.team == team
+        player[MemberOf].team == team
 
     reduce:
         per: team
-        total_score = sum(player.Score.value)
+        total_score = sum(player[Score].value)
         player_count = count(player)
 
     order by:
@@ -325,8 +325,8 @@ rule DetectBulletEnemyContact:
     order by:
         collision.hit_distance(bullet, enemy) asc
     where:
-        not bullet.Bullet.consumed
-        not enemy.Enemy.dying
+        not bullet[Bullet].consumed
+        not enemy[Enemy].dying
         collision.bullet_hits_actor(bullet, enemy)
     limit: 1 per bullet
 
@@ -360,9 +360,9 @@ rule SelectGroundSurface:
     on fixed_tick:
         let top = collision.surface_top(surface)
 
-        actor.KinematicActor.ground_surface = top
-        actor.tv.WorldTransform.position.y =
-            top + actor.KinematicActor.half_height
+        actor[KinematicActor].ground_surface = top
+        actor[tv.WorldTransform].position.y =
+            top + actor[KinematicActor].half_height
 ```
 
 This replaces the emission and subsequent comparison of multiple `GroundCandidate` events.

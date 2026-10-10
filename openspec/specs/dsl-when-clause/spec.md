@@ -16,17 +16,17 @@ pass SHALL do nothing: no entity or tuple is visited, the body does not run, and
 commands are produced. `when:` SHALL be rejected on `extern rule` declarations.
 
 #### Scenario: Gate off skips the whole filter pass
-- **WHEN** a rule declares `each: Enemy` and `when: not Game.Match.over`, and `Game.Match.over` is
+- **WHEN** a rule declares `each: Enemy` and `when: not Game[Match].over`, and `Game[Match].over` is
   true
 - **THEN** the handler body runs for no `Enemy`
 
 #### Scenario: Gate applies to event handlers
-- **WHEN** a rule with `when: not Game.Match.over` handles `on GameOver:`, and the gate is false when an
+- **WHEN** a rule with `when: not Game[Match].over` handles `on GameOver:`, and the gate is false when an
   occurrence is delivered
 - **THEN** that occurrence does not run the handler
 
 #### Scenario: Multiple predicate lines form a conjunction
-- **WHEN** `when:` contains `not Game.Match.over` and `Game.Match.wave > 0`
+- **WHEN** `when:` contains `not Game[Match].over` and `Game[Match].wave > 0`
 - **THEN** the handler runs only when both are true
 
 #### Scenario: when: on an extern rule is rejected
@@ -35,7 +35,7 @@ commands are produced. `when:` SHALL be rejected on `extern rule` declarations.
 
 ### Requirement: `when:` predicates are pure and read only game-wide values
 Each `when:` predicate SHALL have static type `bool`. It MAY contain literals, constants, named
-field reads (`Name.Trait.field`), entity names as values, operators, and calls to functions whose
+field reads (`Name[Trait].field`), entity names as values, operators, and calls to functions whose
 call graph is proven pure. It MUST NOT read filter, pair, or `self` bindings, event payloads, or
 handler locals, and it MUST NOT contain any effect that a `where:` predicate forbids.
 
@@ -58,12 +58,12 @@ entity or tuple is visited. It SHALL observe immediate writes made earlier in th
 by handlers scheduled before it. Its result SHALL NOT be re-evaluated during the pass.
 
 #### Scenario: Earlier writer in the same activation is observed
-- **WHEN** handler A writes `Game.Match.over = true`, and handler B's rule has `when: not Game.Match.over`
+- **WHEN** handler A writes `Game[Match].over = true`, and handler B's rule has `when: not Game[Match].over`
   and reads nothing else from A
 - **THEN** A is scheduled before B, and B's pass in that activation does nothing
 
 #### Scenario: A write during the pass does not re-open or close the gate
-- **WHEN** a handler whose `when:` is true sets `Game.Match.over = true` while visiting the first of
+- **WHEN** a handler whose `when:` is true sets `Game[Match].over = true` while visiting the first of
   three entities
 - **THEN** the handler still visits all three entities in that pass
 
@@ -73,14 +73,14 @@ handler body, for every handler of the rule, and SHALL be folded into each handl
 a read.
 
 #### Scenario: Missing entity in when: stops the rule
-- **WHEN** a rule has `when: not Game.Match.over` and `Game` is stale
+- **WHEN** a rule has `when: not Game[Match].over` and `Game` is stale
 - **THEN** none of the rule's handlers run
 
 ### Requirement: Inline pass gates
 A regular rule SHALL accept inline `when: predicate, predicate` as equivalent to its existing block gate list. The conjunction SHALL retain game-wide-only scope, boolean typing, purity, implicit named-entity requirements, inferred reads, and evaluation once per handler pass. Both phase and event handlers SHALL obey it; selectionless rules SHALL remain supported and extern rules SHALL remain rejected.
 
 #### Scenario: Inline conjunction gates the whole pass
-- **WHEN** a rule uses `when: not Game.Match.over, Game.Match.wave > 0`
+- **WHEN** a rule uses `when: not Game[Match].over, Game[Match].wave > 0`
 - **THEN** every handler pass runs only when both predicates hold, as for the block form
 
 #### Scenario: Binding access remains forbidden in gates

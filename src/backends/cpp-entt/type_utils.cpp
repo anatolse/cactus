@@ -24,9 +24,6 @@ namespace {
 // such access must normalize to a float in [0,1] the same way regardless of
 // which emit_expr overload reaches it, mirroring rewrite_expr's handling of
 // the same access on a trait field (system_emitter.cpp).
-bool is_color_component_member(const std::string& member) {
-    return member == "r" || member == "g" || member == "b" || member == "a";
-}
 
 template <typename ResolvedDecl>
 std::string resolved_decl_cpp_name(const ResolvedDecl& decl) {
@@ -337,7 +334,7 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const ProgramNode*
                         return ident->name + "::" + e.member;
                     }
                 }
-                if (is_color_component_member(e.member)) {
+                if (EnttCodegenUtils::is_color_component_member(e.member)) {
                     return "(static_cast<float>(" + emit_expr(*e.object, ast) + "." + e.member + ") / 255.0F)";
                 }
                 return emit_expr(*e.object, ast) + "." + e.member;
@@ -522,7 +519,7 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const DecoratedPro
                         return EnttCodegenUtils::enum_cpp_name(ident->name, program) + "::" + e.member;
                     }
                 }
-                if (is_color_component_member(e.member)) {
+                if (EnttCodegenUtils::is_color_component_member(e.member)) {
                     return "(static_cast<float>(" + EnttCodegenUtils::emit_expr(*e.object, program) + "." + e.member +
                           ") / 255.0F)";
                 }
@@ -564,13 +561,23 @@ std::string EnttCodegenUtils::named_trait_ref_name(const NamedTraitRef& ref, con
            trait_cpp_name(ref.trait, ref.trait.local_name, program);
 }
 
+bool EnttCodegenUtils::is_color_component_member(const std::string& member) {
+    return member == "r" || member == "g" || member == "b" || member == "a";
+}
+
 std::optional<std::string> EnttCodegenUtils::named_member_cpp(const MemberExpr& member,
                                                               const DecoratedProgram& program) {
     if (member.resolved_entity_id.has_value()) {
         return named_slot_name(*member.resolved_entity_id);
     }
-    if (member.resolved_named_trait.has_value()) {
-        return named_trait_ref_name(*member.resolved_named_trait, program);
+    if (const auto path = trait_field_path(member); path.has_value()) {
+        if (const auto named = path->first->named_ref(); named.has_value()) {
+            auto lowered = named_trait_ref_name(*named, program);
+            for (const auto& field : path->second) {
+                lowered += "." + field;
+            }
+            return lowered;
+        }
     }
     return std::nullopt;
 }

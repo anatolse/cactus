@@ -1429,7 +1429,7 @@ The accelerated pass SHALL execute exactly the tuples the unaccelerated directed
 - **THEN** the accelerated pass executes that tuple
 
 #### Scenario: Expression radius is evaluated per entity
-- **WHEN** the sphere radius argument is `a.Actor.radius + PROBE_DISTANCE`
+- **WHEN** the sphere radius argument is `a[Actor].radius + PROBE_DISTANCE`
 - **THEN** each left entity's bounds use its own radius plus the constant, and tuples within that inflated radius execute
 
 #### Scenario: Targeted delivery stays incident to the recipient

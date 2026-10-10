@@ -997,7 +997,7 @@ TEST_CASE("Semantic: order by accepts a cross-binding computed pair sort key", "
                                                      "        victim:\n"
                                                      "            Position\n"
                                                      "    order by:\n"
-                                                     "        actor.Position.pos.x - victim.Position.pos.x desc\n"
+                                                     "        actor[Position].pos.x - victim[Position].pos.x desc\n"
                                                      "    on fixed_tick:\n"
                                                      "        let x = 1\n"));
 }
@@ -1901,9 +1901,9 @@ TEST_CASE("Semantic: pair binding, filter alias and trait match access stay lega
                                            "        other:\n"
                                            "            Health\n"
                                            "    where:\n"
-                                           "        body.Health.hp > other.Health.hp\n"
+                                           "        body[Health].hp > other[Health].hp\n"
                                            "    on tick:\n"
-                                           "        let hp = body.Health.hp\n"
+                                           "        let hp = body[Health].hp\n"
                                            "rule F:\n"
                                            "    each:\n"
                                            "        Health as h\n"
@@ -2594,7 +2594,7 @@ TEST_CASE("Semantic: pair binding trait field read is accepted and typed", "[sem
                                    "            Solid\n"
                                    "            Collider\n"
                                    "    on fixed_tick:\n"
-                                   "        if body.Transform.x > 0.0 and wall.Collider.mask > 0:\n"
+                                   "        if body[Transform].x > 0.0 and wall[Collider].mask > 0:\n"
                                    "            emit Contact:\n"
                                    "                other = wall\n"));
 }
@@ -2612,7 +2612,7 @@ TEST_CASE("Semantic: pair binding color channel read is accepted and typed",
                                    "        wall:\n"
                                    "            Solid\n"
                                    "    on fixed_tick:\n"
-                                   "        if body.Tint.tint.a > 0.5:\n"
+                                   "        if body[Tint].tint.a > 0.5:\n"
                                    "            emit Contact:\n"
                                    "                other = wall\n"));
 }
@@ -2640,7 +2640,7 @@ TEST_CASE("Semantic: binding-local trait alias resolves shortened access", "[sem
                                    "        wall:\n"
                                    "            Collider as c\n"
                                    "    on fixed_tick:\n"
-                                   "        if wall.c.mask > 0:\n"
+                                   "        if c.mask > 0:\n"
                                    "            emit Contact:\n"
                                    "                other = wall\n"));
 }
@@ -2654,7 +2654,7 @@ TEST_CASE("Semantic: self-qualified pair trait resolves via longest prefix", "[s
                                    "        wall:\n"
                                    "            test.Collider\n"
                                    "    on fixed_tick:\n"
-                                   "        if wall.test.Collider.mask > 0:\n"
+                                   "        if wall[test.Collider].mask > 0:\n"
                                    "            emit Contact:\n"
                                    "                other = wall\n"));
 }
@@ -2723,7 +2723,7 @@ TEST_CASE("Semantic: assignment through a pair trait path is rejected as read-on
                              "        wall:\n"
                              "            Solid\n"
                              "    on fixed_tick:\n"
-                             "        body.Transform.x += 1.0\n"));
+                             "        body[Transform].x += 1.0\n"));
 }
 
 TEST_CASE("Semantic: compound assignment through a pair trait path is rejected as read-only",
@@ -2736,7 +2736,7 @@ TEST_CASE("Semantic: compound assignment through a pair trait path is rejected a
                                        "        wall:\n"
                                        "            Solid\n"
                                        "    on fixed_tick:\n"
-                                       "        body.DynamicBody.vx = 1.0\n");
+                                       "        body[DynamicBody].vx = 1.0\n");
     CHECK(message.contains("read-only"));
 }
 
@@ -2837,7 +2837,7 @@ TEST_CASE("Semantic: pair handler contract records domain, bindings, bound reads
                           "            Solid\n"
                           "            Collider\n"
                           "    on fixed_tick:\n"
-                          "        if body != wall and body.Transform.x > 0.0 and wall.Collider.mask > 0:\n"
+                          "        if body != wall and body[Transform].x > 0.0 and wall[Collider].mask > 0:\n"
                           "            emit Contact to body:\n"
                           "                other = wall\n"
                           "            project GroundContact to body\n");
@@ -2901,7 +2901,7 @@ TEST_CASE("Semantic: pair handler contract folds binding-qualified reads from an
                           "        victim:\n"
                           "            Transform\n"
                           "    order by:\n"
-                          "        actor.Transform.x - victim.Transform.x desc\n"
+                          "        actor[Transform].x - victim[Transform].x desc\n"
                           "    on fixed_tick:\n"
                           "        let x = 1\n");
 
@@ -3118,7 +3118,7 @@ TEST_CASE("Semantic: pair handler contract from where matches equivalent leading
                                 "        b:\n"
                                 "            Transform\n"
                                 "    where:\n"
-                                "        a.Transform.x > 0.0\n"
+                                "        a[Transform].x > 0.0\n"
                                 "    on tick:\n"
                                 "        let x = 1\n");
     auto if_result    = analyze(stdlib_events() + pair_traits() +
@@ -3129,7 +3129,7 @@ TEST_CASE("Semantic: pair handler contract from where matches equivalent leading
                                 "        b:\n"
                                 "            Transform\n"
                                 "    on tick:\n"
-                                "        if a.Transform.x <= 0.0:\n"
+                                "        if a[Transform].x <= 0.0:\n"
                                 "            return\n"
                                 "        let x = 1\n");
 
@@ -3199,8 +3199,8 @@ TEST_CASE("Semantic: direct spatial call with same-domain bindings is recognized
                           "            Transform\n"
                           "            Collider\n"
                           "    where:\n"
-                          "        circles_overlap(a.Transform.position, a.Collider.radius, b.Transform.position, "
-                          "b.Collider.radius)\n"
+                          "        circles_overlap(a[Transform].position, a[Collider].radius, b[Transform].position, "
+                          "b[Collider].radius)\n"
                           "    on tick:\n"
                           "        let x = 1\n");
 
@@ -3239,8 +3239,8 @@ TEST_CASE("Semantic: matched predicate index reflects its position among multipl
                           "            Collider\n"
                           "    where:\n"
                           "        a != b\n"
-                          "        circles_overlap(a.Transform.position, a.Collider.radius, b.Transform.position, "
-                          "b.Collider.radius)\n"
+                          "        circles_overlap(a[Transform].position, a[Collider].radius, b[Transform].position, "
+                          "b[Collider].radius)\n"
                           "    on tick:\n"
                           "        let x = 1\n");
 
@@ -3269,8 +3269,8 @@ TEST_CASE("Semantic: spatial call recognition succeeds through a renamed import 
                                            "            Transform\n"
                                            "            Collider\n"
                                            "    where:\n"
-                                           "        foo.spheres_overlap(a.Transform.position, a.Collider.radius, "
-                                           "b.Transform.position, b.Collider.radius)\n"
+                                           "        foo.spheres_overlap(a[Transform].position, a[Collider].radius, "
+                                           "b[Transform].position, b[Collider].radius)\n"
                                            "    on tick:\n"
                                            "        let x = 1\n",
                                        imports);
@@ -3300,8 +3300,8 @@ TEST_CASE("Semantic: negated spatial call remains an ordinary residual predicate
                           "            Transform\n"
                           "            Collider\n"
                           "    where:\n"
-                          "        not circles_overlap(a.Transform.position, a.Collider.radius, "
-                          "b.Transform.position, b.Collider.radius)\n"
+                          "        not circles_overlap(a[Transform].position, a[Collider].radius, "
+                          "b[Transform].position, b[Collider].radius)\n"
                           "    on tick:\n"
                           "        let x = 1\n");
 
@@ -3328,8 +3328,8 @@ TEST_CASE("Semantic: computed single-binding radius argument is eligible",
                           "            Transform\n"
                           "            Collider\n"
                           "    where:\n"
-                          "        circles_overlap(a.Transform.position, a.Collider.radius * 2.0, "
-                          "b.Transform.position, b.Collider.radius)\n"
+                          "        circles_overlap(a[Transform].position, a[Collider].radius * 2.0, "
+                          "b[Transform].position, b[Collider].radius)\n"
                           "    on tick:\n"
                           "        let x = 1\n");
 
@@ -3359,8 +3359,8 @@ TEST_CASE("Semantic: cross-domain pair rule with a recognized call is eligible",
                           "            Collider\n"
                           "            Wall\n"
                           "    where:\n"
-                          "        circles_overlap(a.Transform.position, a.Collider.radius, b.Transform.position, "
-                          "b.Collider.radius)\n"
+                          "        circles_overlap(a[Transform].position, a[Collider].radius, b[Transform].position, "
+                          "b[Collider].radius)\n"
                           "    on tick:\n"
                           "        let x = 1\n");
 
@@ -3417,8 +3417,8 @@ static std::optional<SpatialJoinPlan> volume_overlap_plan(const std::string& whe
 TEST_CASE("Semantic: sphere_box_overlap with the sphere on the left binding is eligible",
           "[semantic][where-clause][spatial-join]") {
     const auto plan = volume_overlap_plan(
-        "sphere_box_overlap(actor.Body.position, actor.Body.radius, wall.Solid.position, wall.Solid.size, "
-        "wall.Solid.rotation)");
+        "sphere_box_overlap(actor[Body].position, actor[Body].radius, wall[Solid].position, wall[Solid].size, "
+        "wall[Solid].rotation)");
     REQUIRE(plan.has_value());
     CHECK(plan->dimension == SpatialJoinDimension::Volume3D);
     CHECK(plan->left.binding_index == 0);
@@ -3439,8 +3439,8 @@ TEST_CASE("Semantic: sphere_box_overlap with the box on the left binding is elig
                           "        actor:\n"
                           "            Body\n"
                           "    where:\n"
-                          "        sphere_box_overlap(actor.Body.position, actor.Body.radius, "
-                          "wall.Solid.position, wall.Solid.size, wall.Solid.rotation)\n"
+                          "        sphere_box_overlap(actor[Body].position, actor[Body].radius, "
+                          "wall[Solid].position, wall[Solid].size, wall[Solid].rotation)\n"
                           "    on tick:\n"
                           "        let x = 1\n");
     REQUIRE(result.handler_contracts.size() == 1);
@@ -3454,54 +3454,54 @@ TEST_CASE("Semantic: sphere_box_overlap with the box on the left binding is elig
 
 TEST_CASE("Semantic: spheres_overlap across different trait sets is eligible", "[semantic][where-clause][spatial-join]") {
     const auto plan =
-        volume_overlap_plan("spheres_overlap(actor.Body.position, actor.Body.radius, wall.Solid.position, 1.0 + "
-                            "wall.Solid.size.x)");
+        volume_overlap_plan("spheres_overlap(actor[Body].position, actor[Body].radius, wall[Solid].position, 1.0 + "
+                            "wall[Solid].size.x)");
     REQUIRE(plan.has_value());
     CHECK(plan->left.kind == SpatialShapeKind::Sphere);
     CHECK(plan->right.kind == SpatialShapeKind::Sphere);
 }
 
 TEST_CASE("Semantic: single-binding expression slots are eligible", "[semantic][where-clause][spatial-join]") {
-    CHECK(volume_overlap_plan("sphere_box_overlap(actor.Body.position, actor.Body.radius + PROBE, wall.Solid.position, "
-                              "wall.Solid.size, wall.Solid.rotation)")
+    CHECK(volume_overlap_plan("sphere_box_overlap(actor[Body].position, actor[Body].radius + PROBE, wall[Solid].position, "
+                              "wall[Solid].size, wall[Solid].rotation)")
               .has_value());
-    CHECK(volume_overlap_plan("sphere_box_overlap(actor.Body.position, actor.Body.radius + Game.Tuning.margin, "
-                              "wall.Solid.position, wall.Solid.size, wall.Solid.rotation)")
+    CHECK(volume_overlap_plan("sphere_box_overlap(actor[Body].position, actor[Body].radius + Game[Tuning].margin, "
+                              "wall[Solid].position, wall[Solid].size, wall[Solid].rotation)")
               .has_value());
-    CHECK(volume_overlap_plan("sphere_box_overlap(actor.Body.position, inflate(actor.Body.radius), "
-                              "wall.Solid.position, wall.Solid.size * 1.5, wall.Solid.rotation)")
+    CHECK(volume_overlap_plan("sphere_box_overlap(actor[Body].position, inflate(actor[Body].radius), "
+                              "wall[Solid].position, wall[Solid].size * 1.5, wall[Solid].rotation)")
               .has_value());
 }
 
 TEST_CASE("Semantic: an argument mixing both bindings is not eligible", "[semantic][where-clause][spatial-join]") {
-    CHECK_FALSE(volume_overlap_plan("spheres_overlap(actor.Body.position, actor.Body.radius + wall.Solid.size.x, "
-                                    "wall.Solid.position, wall.Solid.size.x)")
+    CHECK_FALSE(volume_overlap_plan("spheres_overlap(actor[Body].position, actor[Body].radius + wall[Solid].size.x, "
+                                    "wall[Solid].position, wall[Solid].size.x)")
                     .has_value());
 }
 
 TEST_CASE("Semantic: a binding-free argument joins its shape's binding", "[semantic][where-clause][spatial-join]") {
     const auto plan = volume_overlap_plan(
-        "sphere_box_overlap(actor.Body.position, PROBE, wall.Solid.position, wall.Solid.size, wall.Solid.rotation)");
+        "sphere_box_overlap(actor[Body].position, PROBE, wall[Solid].position, wall[Solid].size, wall[Solid].rotation)");
     REQUIRE(plan.has_value());
     CHECK(plan->left.binding_index == 0);
     CHECK(plan->left.slots == std::vector<ExprPath>{{0}, {1}});
 }
 
 TEST_CASE("Semantic: a shape that reads no pair binding is not eligible", "[semantic][where-clause][spatial-join]") {
-    CHECK_FALSE(volume_overlap_plan("sphere_box_overlap(vec3(0.0, 0.0, 0.0), PROBE, wall.Solid.position, "
-                                    "wall.Solid.size, wall.Solid.rotation)")
+    CHECK_FALSE(volume_overlap_plan("sphere_box_overlap(vec3(0.0, 0.0, 0.0), PROBE, wall[Solid].position, "
+                                    "wall[Solid].size, wall[Solid].rotation)")
                     .has_value());
 }
 
 TEST_CASE("Semantic: both shapes from one binding are not eligible", "[semantic][where-clause][spatial-join]") {
-    CHECK_FALSE(volume_overlap_plan("spheres_overlap(actor.Body.position, actor.Body.radius, actor.Body.position, "
-                                    "actor.Body.radius)")
+    CHECK_FALSE(volume_overlap_plan("spheres_overlap(actor[Body].position, actor[Body].radius, actor[Body].position, "
+                                    "actor[Body].radius)")
                     .has_value());
 }
 
 TEST_CASE("Semantic: or-combined overlap predicate is not eligible", "[semantic][where-clause][spatial-join]") {
-    CHECK_FALSE(volume_overlap_plan("spheres_overlap(actor.Body.position, actor.Body.radius, wall.Solid.position, "
-                                    "wall.Solid.size.x) or actor.Body.radius > 1.0")
+    CHECK_FALSE(volume_overlap_plan("spheres_overlap(actor[Body].position, actor[Body].radius, wall[Solid].position, "
+                                    "wall[Solid].size.x) or actor[Body].radius > 1.0")
                     .has_value());
 }
 
@@ -3581,9 +3581,9 @@ TEST_CASE("Semantic: manual squared-distance-via-dot where: expression is recogn
                           "            Transform\n"
                           "            Collider\n"
                           "    where:\n"
-                          "        dot(b.Transform.position - a.Transform.position, b.Transform.position - "
-                          "a.Transform.position) < (a.Collider.radius + b.Collider.radius) * (a.Collider.radius + "
-                          "b.Collider.radius)\n"
+                          "        dot(b[Transform].position - a[Transform].position, b[Transform].position - "
+                          "a[Transform].position) < (a[Collider].radius + b[Collider].radius) * (a[Collider].radius + "
+                          "b[Collider].radius)\n"
                           "    on tick:\n"
                           "        let x = 1\n");
 
@@ -3624,9 +3624,9 @@ TEST_CASE("Semantic: manual squared-distance-via-dot where: expression is recogn
                           "            Transform\n"
                           "            Collider\n"
                           "    where:\n"
-                          "        dot(b.Transform.position - a.Transform.position, b.Transform.position - "
-                          "a.Transform.position) < (a.Collider.radius + b.Collider.radius) * (a.Collider.radius + "
-                          "b.Collider.radius)\n"
+                          "        dot(b[Transform].position - a[Transform].position, b[Transform].position - "
+                          "a[Transform].position) < (a[Collider].radius + b[Collider].radius) * (a[Collider].radius + "
+                          "b[Collider].radius)\n"
                           "    on tick:\n"
                           "        let x = 1\n");
 
@@ -3653,9 +3653,9 @@ TEST_CASE("Semantic: manual squared-distance-via-dot where: expression accepts <
                           "            Transform\n"
                           "            Collider\n"
                           "    where:\n"
-                          "        dot(b.Transform.position - a.Transform.position, b.Transform.position - "
-                          "a.Transform.position) <= (a.Collider.radius + b.Collider.radius) * (a.Collider.radius + "
-                          "b.Collider.radius)\n"
+                          "        dot(b[Transform].position - a[Transform].position, b[Transform].position - "
+                          "a[Transform].position) <= (a[Collider].radius + b[Collider].radius) * (a[Collider].radius + "
+                          "b[Collider].radius)\n"
                           "    on tick:\n"
                           "        let x = 1\n");
 
@@ -3682,9 +3682,9 @@ TEST_CASE("Semantic: manual dot-product recognition succeeds through a renamed i
                                            "            Transform\n"
                                            "            Collider\n"
                                            "    where:\n"
-                                           "        v2m.dot(b.Transform.position - a.Transform.position, "
-                                           "b.Transform.position - a.Transform.position) < (a.Collider.radius + "
-                                           "b.Collider.radius) * (a.Collider.radius + b.Collider.radius)\n"
+                                           "        v2m.dot(b[Transform].position - a[Transform].position, "
+                                           "b[Transform].position - a[Transform].position) < (a[Collider].radius + "
+                                           "b[Collider].radius) * (a[Collider].radius + b[Collider].radius)\n"
                                            "    on tick:\n"
                                            "        let x = 1\n",
                                        imports);
@@ -3715,9 +3715,9 @@ TEST_CASE("Semantic: cross-domain pair rule with manual dot-product shape is eli
                           "            Collider\n"
                           "            Wall\n"
                           "    where:\n"
-                          "        dot(b.Transform.position - a.Transform.position, b.Transform.position - "
-                          "a.Transform.position) < (a.Collider.radius + b.Collider.radius) * (a.Collider.radius + "
-                          "b.Collider.radius)\n"
+                          "        dot(b[Transform].position - a[Transform].position, b[Transform].position - "
+                          "a[Transform].position) < (a[Collider].radius + b[Collider].radius) * (a[Collider].radius + "
+                          "b[Collider].radius)\n"
                           "    on tick:\n"
                           "        let x = 1\n");
 
@@ -3742,9 +3742,9 @@ TEST_CASE("Semantic: component-wise squared-distance arithmetic remains an ordin
                           "            Transform\n"
                           "            Collider\n"
                           "    where:\n"
-                          "        (b.Transform.x - a.Transform.x) * (b.Transform.x - a.Transform.x) + "
-                          "(b.Transform.y - a.Transform.y) * (b.Transform.y - a.Transform.y) < "
-                          "(a.Collider.radius + b.Collider.radius) * (a.Collider.radius + b.Collider.radius)\n"
+                          "        (b[Transform].x - a[Transform].x) * (b[Transform].x - a[Transform].x) + "
+                          "(b[Transform].y - a[Transform].y) * (b[Transform].y - a[Transform].y) < "
+                          "(a[Collider].radius + b[Collider].radius) * (a[Collider].radius + b[Collider].radius)\n"
                           "    on tick:\n"
                           "        let x = 1\n");
 
@@ -3772,9 +3772,9 @@ TEST_CASE(
                           "            Transform\n"
                           "            Collider\n"
                           "    on tick:\n"
-                          "        let delta = b.Transform.position - a.Transform.position\n"
+                          "        let delta = b[Transform].position - a[Transform].position\n"
                           "        let dist_sq = dot(delta, delta)\n"
-                          "        let radius_sum = a.Collider.radius + b.Collider.radius\n"
+                          "        let radius_sum = a[Collider].radius + b[Collider].radius\n"
                           "        if dist_sq >= radius_sum * radius_sum:\n"
                           "            return\n"
                           "        let x = 1\n");
@@ -3801,9 +3801,9 @@ TEST_CASE("Semantic: manual dot-product expression with a comparison operator ou
                           "            Transform\n"
                           "            Collider\n"
                           "    where:\n"
-                          "        dot(b.Transform.position - a.Transform.position, b.Transform.position - "
-                          "a.Transform.position) == (a.Collider.radius + b.Collider.radius) * (a.Collider.radius + "
-                          "b.Collider.radius)\n"
+                          "        dot(b[Transform].position - a[Transform].position, b[Transform].position - "
+                          "a[Transform].position) == (a[Collider].radius + b[Collider].radius) * (a[Collider].radius + "
+                          "b[Collider].radius)\n"
                           "    on tick:\n"
                           "        let x = 1\n");
 
@@ -3853,7 +3853,7 @@ TEST_CASE("Semantic: linear 2D distance-vs-radius-sum where: predicate is flagge
         "            Transform\n"
         "            Collider\n"
         "    where:\n"
-        "        distance(a.Transform.position, b.Transform.position) < a.Collider.radius + b.Collider.radius\n"
+        "        distance(a[Transform].position, b[Transform].position) < a[Collider].radius + b[Collider].radius\n"
         "    on tick:\n"
         "        let x = 1\n");
 
@@ -3882,7 +3882,7 @@ TEST_CASE("Semantic: linear 3D distance-vs-radius-sum where: predicate is flagge
         "            Transform\n"
         "            Collider\n"
         "    where:\n"
-        "        distance(a.Transform.position, b.Transform.position) >= a.Collider.radius + b.Collider.radius\n"
+        "        distance(a[Transform].position, b[Transform].position) >= a[Collider].radius + b[Collider].radius\n"
         "    on tick:\n"
         "        let x = 1\n");
 
@@ -3911,7 +3911,7 @@ TEST_CASE("Semantic: linear-distance where: predicate is flagged with > as well 
         "            Transform\n"
         "            Collider\n"
         "    where:\n"
-        "        distance(a.Transform.position, b.Transform.position) > a.Collider.radius + b.Collider.radius\n"
+        "        distance(a[Transform].position, b[Transform].position) > a[Collider].radius + b[Collider].radius\n"
         "    on tick:\n"
         "        let x = 1\n");
 
@@ -3965,8 +3965,8 @@ TEST_CASE("Semantic: direct-call recognized predicate produces no unaccelerated-
         "            Transform\n"
         "            Collider\n"
         "    where:\n"
-        "        circles_overlap(a.Transform.position, a.Collider.radius, b.Transform.position, "
-        "b.Collider.radius)\n"
+        "        circles_overlap(a[Transform].position, a[Collider].radius, b[Transform].position, "
+        "b[Collider].radius)\n"
         "    on tick:\n"
         "        let x = 1\n");
 
@@ -3994,8 +3994,8 @@ TEST_CASE("Semantic: manual dot-product recognized predicate produces no unaccel
         "            Transform\n"
         "            Collider\n"
         "    where:\n"
-        "        dot(b.Transform.position - a.Transform.position, b.Transform.position - a.Transform.position) < "
-        "(a.Collider.radius + b.Collider.radius) * (a.Collider.radius + b.Collider.radius)\n"
+        "        dot(b[Transform].position - a[Transform].position, b[Transform].position - a[Transform].position) < "
+        "(a[Collider].radius + b[Collider].radius) * (a[Collider].radius + b[Collider].radius)\n"
         "    on tick:\n"
         "        let x = 1\n");
 
@@ -4046,8 +4046,8 @@ TEST_CASE("Semantic: recognized predicate next to a residual one is not flagged"
         "            Collider\n"
         "    where:\n"
         "        a != b\n"
-        "        circles_overlap(a.Transform.position, a.Collider.radius, b.Transform.position, "
-        "b.Collider.radius)\n"
+        "        circles_overlap(a[Transform].position, a[Collider].radius, b[Transform].position, "
+        "b[Collider].radius)\n"
         "    on tick:\n"
         "        let x = 1\n");
 
@@ -4172,7 +4172,7 @@ TEST_CASE("Semantic: per-binding limit computed from the per binding's own trait
                                    "            Tower\n"
                                    "        surface:\n"
                                    "            Surface\n"
-                                   "    limit: tower.Tower.target_count per tower\n"
+                                   "    limit: tower[Tower].target_count per tower\n"
                                    "    on tick:\n"
                                    "        let x = 1\n"));
 }
@@ -4185,7 +4185,7 @@ TEST_CASE("Semantic: per-binding limit referencing the other binding is rejected
                                    "            Tower\n"
                                    "        other:\n"
                                    "            Tower\n"
-                                   "    limit: other.Tower.target_count per tower\n"
+                                   "    limit: other[Tower].target_count per tower\n"
                                    "    on tick:\n"
                                    "        let x = 1\n");
     CHECK(err.contains("limit"));
@@ -4210,7 +4210,7 @@ TEST_CASE("Semantic: a global limit count referencing a domain binding is reject
                                    "            Tower\n"
                                    "        surface:\n"
                                    "            Surface\n"
-                                   "    limit: tower.Tower.target_count\n"
+                                   "    limit: tower[Tower].target_count\n"
                                    "    on tick:\n"
                                    "        let x = 1\n");
     CHECK(err.contains("limit"));
@@ -4301,7 +4301,7 @@ TEST_CASE("Semantic: a non-constant count is not provably one", "[semantic][rule
                                            "            Tower\n"
                                            "        surface:\n"
                                            "            Surface\n"
-                                           "    limit: tower.Tower.target_count per tower\n"
+                                           "    limit: tower[Tower].target_count per tower\n"
                                            "    on tick:\n"
                                            "        let x = 1\n"));
 }
@@ -4318,7 +4318,7 @@ TEST_CASE("Semantic: mutation through a provably-one per binding is accepted", "
                                    "            Surface\n"
                                    "    limit: 1 per actor\n"
                                    "    on tick:\n"
-                                   "        actor.Actor.grounded = true\n"));
+                                   "        actor[Actor].grounded = true\n"));
 }
 
 TEST_CASE("Semantic: the non-limited binding remains read-only under a per-binding limit",
@@ -4332,7 +4332,7 @@ TEST_CASE("Semantic: the non-limited binding remains read-only under a per-bindi
                                    "            Surface\n"
                                    "    limit: 1 per actor\n"
                                    "    on tick:\n"
-                                   "        surface.Surface.top = 1.0\n");
+                                   "        surface[Surface].top = 1.0\n");
     CHECK(err.contains("read-only"));
 }
 
@@ -4347,7 +4347,7 @@ TEST_CASE("Semantic: mutation is rejected when the limit is not provably one",
                                    "            Surface\n"
                                    "    limit: 2 per actor\n"
                                    "    on tick:\n"
-                                   "        actor.Actor.grounded = true\n");
+                                   "        actor[Actor].grounded = true\n");
     CHECK(err.contains("read-only"));
 }
 
@@ -4361,7 +4361,7 @@ TEST_CASE("Semantic: a global limit grants no pair-binding write access", "[sema
                                    "            Surface\n"
                                    "    limit: 10\n"
                                    "    on tick:\n"
-                                   "        actor.Actor.grounded = true\n");
+                                   "        actor[Actor].grounded = true\n");
     CHECK(err.contains("read-only"));
 }
 
@@ -4375,7 +4375,7 @@ TEST_CASE("Semantic: a rule with no limit still rejects mutation on either pair 
                              "        surface:\n"
                              "            Surface\n"
                              "    on tick:\n"
-                             "        actor.Actor.grounded = true\n"));
+                             "        actor[Actor].grounded = true\n"));
     CHECK(analyze_has_errors(stdlib_events() + limit_traits() +
                              "rule Ground:\n"
                              "    pairs:\n"
@@ -4384,7 +4384,7 @@ TEST_CASE("Semantic: a rule with no limit still rejects mutation on either pair 
                              "        surface:\n"
                              "            Surface\n"
                              "    on tick:\n"
-                             "        surface.Surface.top = 1.0\n"));
+                             "        surface[Surface].top = 1.0\n"));
 }
 
 // The trait-match check stays unconditional: only ordinary dotted-path
@@ -4437,7 +4437,7 @@ TEST_CASE("Semantic: a provably-limited pair write is recorded in the contract",
                           "            Surface\n"
                           "    limit: 1 per actor\n"
                           "    on tick:\n"
-                          "        actor.Actor.grounded = true\n");
+                          "        actor[Actor].grounded = true\n");
 
     REQUIRE(result.handler_contracts.size() == 1);
     const auto& contract = result.handler_contracts[0];
@@ -4457,7 +4457,7 @@ TEST_CASE("Semantic: a provably-limited pair write conflicts with a unary read o
                           "            Surface\n"
                           "    limit: 1 per actor\n"
                           "    on tick:\n"
-                          "        actor.Actor.grounded = true\n"
+                          "        actor[Actor].grounded = true\n"
                           "rule ReadGround:\n"
                           "    each:\n"
                           "        Actor as a\n"
@@ -4746,7 +4746,7 @@ TEST_CASE("Contract fields: a pair bound read records its field and keeps the bo
         "        wall:\n"
         "            Surface\n"
         "    on tick:\n"
-        "        if body.Collider.radius > 0.0:\n"
+        "        if body[Collider].radius > 0.0:\n"
         "            let x = 1\n");
     const auto collider = test_trait("Collider");
     CHECK(contract.read_fields.at(collider) == fields_of({"radius"}));
@@ -4765,7 +4765,7 @@ TEST_CASE("Contract fields: a provably-limited pair write records its field",
         "            Surface\n"
         "    limit: 1 per actor\n"
         "    on tick:\n"
-        "        actor.Actor.grounded = true\n");
+        "        actor[Actor].grounded = true\n");
     const auto actor = test_trait("Actor");
     CHECK(contract.write_fields.at(actor) == fields_of({"grounded"}));
     CHECK(contract.read_fields.at(actor) == fields_of({"grounded"}));
@@ -4780,9 +4780,9 @@ TEST_CASE("Contract fields: where and order by reads record fields", "[semantic]
         "        b:\n"
         "            Collider\n"
         "    order by:\n"
-        "        b.Collider.mask desc\n"
+        "        b[Collider].mask desc\n"
         "    where:\n"
-        "        a.Collider.radius > 0.0\n"
+        "        a[Collider].radius > 0.0\n"
         "    on tick:\n"
         "        let x = 1\n");
     CHECK(pair.read_fields.at(test_trait("Collider")) == fields_of({"mask", "radius"}));
@@ -4826,7 +4826,7 @@ TEST_CASE("Contract fields: where on a limited pair rule records its bound reads
         "        surface:\n"
         "            Surface\n"
         "    where:\n"
-        "        surface.Surface.top <= actor.Actor.height\n"
+        "        surface[Surface].top <= actor[Actor].height\n"
         "    limit: 1 per actor\n"
         "    on tick:\n"
         "        let x = 1\n");
@@ -4849,7 +4849,7 @@ TEST_CASE("Contract fields: a per-binding limit count records its bound read",
         "            Actor\n"
         "        surface:\n"
         "            Surface\n"
-        "    limit: actor.Actor.slots per actor\n"
+        "    limit: actor[Actor].slots per actor\n"
         "    on tick:\n"
         "        let x = 1\n");
     const auto actor = test_trait("Actor");
@@ -5054,37 +5054,17 @@ TEST_CASE("Semantic: a local shadows an entity name", "[semantic][named-entity]"
 TEST_CASE("Semantic: named field reads are typed by the field", "[semantic][named-entity]") {
     const auto messages = named_messages("rule R:\n"
                                          "    on tick:\n"
-                                         "        let over: bool = Game.Match.over\n"
-                                         "        let x: float = Game.Pos.value.x\n"
-                                         "        let v: vec2 = Game.Pos.value\n"
-                                         "        if Game.Match.score > half(LIMIT):\n"
+                                         "        let over: bool = Game[Match].over\n"
+                                         "        let x: float = Game[Pos].value.x\n"
+                                         "        let v: vec2 = Game[Pos].value\n"
+                                         "        if Game[Match].score > half(LIMIT):\n"
                                          "            let y = 1\n");
     INFO((messages.empty() ? "" : messages.front()));
     CHECK(messages.empty());
     CHECK(has_message(named_messages("rule R:\n"
                                      "    on tick:\n"
-                                     "        let wrong: int = Game.Match.over\n"),
+                                     "        let wrong: int = Game[Match].over\n"),
                       "is declared as 'int' but initialized with 'bool'"));
-}
-
-TEST_CASE("Semantic: named field reads and writes are annotated with entity and trait", "[semantic][named-entity]") {
-    const auto analyzed = analyze_named_program("rule R:\n"
-                                                "    on tick:\n"
-                                                "        let over = Game.Match.over\n"
-                                                "        Game.Match.score += 1\n");
-    REQUIRE(analyzed.messages.empty());
-    const auto& body       = rule_named(analyzed.ast, "R").handlers[0].body;
-    const auto& field_expr = std::get<MemberExpr>(std::get<LetStmt>(body[0]->stmt).value->expr);
-    const auto& trait_expr = std::get<MemberExpr>(field_expr.object->expr);
-    REQUIRE(trait_expr.resolved_named_trait.has_value());
-    CHECK(trait_expr.resolved_named_trait->entity == test_entity("Game"));
-    CHECK(trait_expr.resolved_named_trait->trait == make_symbol_id(SymbolKind::Trait, "test", "Match"));
-
-    const auto& assign = std::get<VarAssign>(body[1]->stmt);
-    REQUIRE(assign.named_target.has_value());
-    CHECK(assign.named_target->entity == test_entity("Game"));
-    CHECK(assign.named_target->trait == make_symbol_id(SymbolKind::Trait, "test", "Match"));
-    CHECK(assign.named_target->trait_segments == 1);
 }
 
 TEST_CASE("Semantic: named writes and compound writes are accepted in unary and pair handlers",
@@ -5093,9 +5073,9 @@ TEST_CASE("Semantic: named writes and compound writes are accepted in unary and 
                                          "    each:\n"
                                          "        Enemy as enemy\n"
                                          "    on tick:\n"
-                                         "        Game.Match.over = true\n"
-                                         "        Game.Match.score += 1\n"
-                                         "        Game.Pos.value.x -= 1.0\n"
+                                         "        Game[Match].over = true\n"
+                                         "        Game[Match].score += 1\n"
+                                         "        Game[Pos].value.x -= 1.0\n"
                                          "rule P:\n"
                                          "    pairs:\n"
                                          "        a:\n"
@@ -5103,7 +5083,7 @@ TEST_CASE("Semantic: named writes and compound writes are accepted in unary and 
                                          "        b:\n"
                                          "            Enemy\n"
                                          "    on tick:\n"
-                                         "        Game.Match.score += 1\n");
+                                         "        Game[Match].score += 1\n");
     REQUIRE(messages.size() == 1);
     CHECK(messages[0].starts_with("pair rule 'P' is not accelerated"));
 }
@@ -5112,50 +5092,50 @@ TEST_CASE("Semantic: named access to a trait the archetype does not declare is r
           "[semantic][named-entity]") {
     CHECK(has_message(named_messages("rule R:\n"
                                      "    on tick:\n"
-                                     "        let id = Game.Tag.id\n"),
+                                     "        let id = Game[Tag].id\n"),
                       "entity 'Game' does not declare trait 'Tag'"));
     CHECK(has_message(named_messages("rule R:\n"
                                      "    on tick:\n"
-                                     "        Hud.Match.over = true\n"),
+                                     "        Hud[Match].over = true\n"),
                       "entity 'Hud' does not declare trait 'Match'"));
 }
 
 TEST_CASE("Semantic: named access to an unknown field is rejected", "[semantic][named-entity]") {
     CHECK(has_message(named_messages("rule R:\n"
                                      "    on tick:\n"
-                                     "        let nope = Game.Match.nope\n"),
+                                     "        let nope = Game[Match].nope\n"),
                       "trait 'Match' has no field 'nope'"));
     CHECK(has_message(named_messages("rule R:\n"
                                      "    on tick:\n"
-                                     "        let whole = Game.Match\n"),
-                      "named field access needs a field after 'Game.Match'"));
+                                     "        let whole = Game[Match]\n"),
+                      "named field access needs a field after 'Game[Match]'"));
 }
 
 TEST_CASE("Semantic: named field access is rejected outside rules", "[semantic][named-entity]") {
     CHECK(has_message(named_messages("func peek() bool:\n"
-                                     "    return Game.Match.over\n"),
+                                     "    return Game[Match].over\n"),
                       "named field access is only allowed in rules"));
     CHECK(has_message(named_messages("const:\n"
-                                     "    START = Game.Match.score\n"),
+                                     "    START = Game[Match].score\n"),
                       "named field access is only allowed in rules"));
     CHECK(has_message(named_messages("entity Copy:\n"
                                      "    Tag:\n"
-                                     "        id = Game.Match.score\n"),
+                                     "        id = Game[Match].score\n"),
                       "named field access is only allowed in rules"));
 }
 
 TEST_CASE("Semantic: when: accepts named reads, constants, and pure calls", "[semantic][when-clause]") {
     const auto messages = named_messages("rule Idle:\n"
                                          "    when:\n"
-                                         "        not Game.Match.over\n"
-                                         "        Game.Match.score > half(LIMIT)\n"
+                                         "        not Game[Match].over\n"
+                                         "        Game[Match].score > half(LIMIT)\n"
                                          "    on tick:\n"
-                                         "        Game.Match.score += 1\n"
+                                         "        Game[Match].score += 1\n"
                                          "rule Hits:\n"
                                          "    each:\n"
                                          "        Enemy as enemy\n"
                                          "    when:\n"
-                                         "        not Game.Match.over\n"
+                                         "        not Game[Match].over\n"
                                          "    on Hit:\n"
                                          "        enemy.dying = true\n");
     INFO((messages.empty() ? "" : messages.front()));
@@ -5165,7 +5145,7 @@ TEST_CASE("Semantic: when: accepts named reads, constants, and pure calls", "[se
 TEST_CASE("Semantic: a non-bool when: predicate is rejected", "[semantic][when-clause]") {
     CHECK(has_message(named_messages("rule R:\n"
                                      "    when:\n"
-                                     "        Game.Match.score\n"
+                                     "        Game[Match].score\n"
                                      "    on tick:\n"
                                      "        let y = 1\n"),
                       "when: predicate must be of type 'bool'"));
@@ -5277,7 +5257,7 @@ TEST_CASE("Contract: a named read in when: is recorded with entity, field, and r
                                          "    each:\n"
                                          "        Enemy as enemy\n"
                                          "    when:\n"
-                                         "        not Game.Match.over\n"
+                                         "        not Game[Match].over\n"
                                          "    on tick:\n"
                                          "        enemy.dying = true\n");
     const auto& contract = named_contract(program, "R");
@@ -5295,9 +5275,9 @@ TEST_CASE("Contract: named reads and writes in a body record fields and one requ
           "[semantic][handler-contracts][named-entity]") {
     const auto program   = analyze_named("rule R:\n"
                                          "    on tick:\n"
-                                         "        if Game.Match.over:\n"
-                                         "            Game.Match.score += 1\n"
-                                         "        let x = Game.Pos.value.x\n");
+                                         "        if Game[Match].over:\n"
+                                         "            Game[Match].score += 1\n"
+                                         "        let x = Game[Pos].value.x\n");
     const auto& contract = named_contract(program, "R");
     const auto game      = test_entity("Game");
     CHECK(contract.named_reads.at(game).at(test_trait("Match")) == fields_of({"over", "score"}));
@@ -5313,7 +5293,7 @@ TEST_CASE("Contract: a named write orders against a filter reader of the same fi
           "[semantic][handler-contracts][named-entity]") {
     const auto program = analyze_named("rule End:\n"
                                        "    on tick:\n"
-                                       "        Game.Match.over = true\n"
+                                       "        Game[Match].over = true\n"
                                        "rule Watch:\n"
                                        "    each:\n"
                                        "        Match as m\n"
@@ -5330,10 +5310,10 @@ TEST_CASE("Contract: a named write orders against a filter reader of the same fi
 TEST_CASE("Contract: disjoint named fields do not conflict", "[semantic][handler-contracts][named-entity]") {
     const auto program = analyze_named("rule Score:\n"
                                        "    on tick:\n"
-                                       "        Game.Match.score += 1\n"
+                                       "        Game[Match].score += 1\n"
                                        "rule Watch:\n"
                                        "    on tick:\n"
-                                       "        if Game.Match.over:\n"
+                                       "        if Game[Match].over:\n"
                                        "            let y = 1\n");
     CHECK(data_edges_between(program, "Score", "Watch").empty());
 }
@@ -5344,7 +5324,7 @@ TEST_CASE("Contract: a named write marks a filter handler unsplittable",
                                          "    each:\n"
                                          "        Enemy\n"
                                          "    on tick:\n"
-                                         "        Game.Match.score += 1\n");
+                                         "        Game[Match].score += 1\n");
     const auto& contract = named_contract(program, "Count");
     CHECK_FALSE(contract.splittable_per_entity());
     CHECK(contract.named_requirements == std::vector<NamedRequirement>{game_match()});
@@ -5373,7 +5353,7 @@ TEST_CASE("Contract: a named read in where: on a limited rule records its requir
                                      "    each:\n"
                                      "        Enemy as enemy\n"
                                      "    where:\n"
-                                     "        enemy.dying == Game.Match.over\n"
+                                     "        enemy.dying == Game[Match].over\n"
                                      "    limit: 3\n"
                                      "    on tick:\n"
                                      "        let y = 1\n");
@@ -5388,7 +5368,7 @@ TEST_CASE("Contract: a named read in where: on a limited rule records its requir
                                     "        b:\n"
                                     "            Enemy\n"
                                     "    where:\n"
-                                    "        Game.Match.score > 0\n"
+                                    "        Game[Match].score > 0\n"
                                     "    limit: 1 per a\n"
                                     "    on tick:\n"
                                     "        let y = 1\n");
@@ -5403,13 +5383,391 @@ TEST_CASE("Contract: named reads in a pair handler record a requirement", "[sema
                                          "        b:\n"
                                          "            Enemy\n"
                                          "    when:\n"
-                                         "        not Game.Match.over\n"
+                                         "        not Game[Match].over\n"
                                          "    on tick:\n"
-                                         "        Game.Match.score += 1\n");
+                                         "        Game[Match].score += 1\n");
     const auto& contract = named_contract(program, "Touch");
     CHECK(contract.named_requirements == std::vector<NamedRequirement>{game_match()});
     CHECK(contract.named_writes.at(test_entity("Game")).at(test_trait("Match")) == fields_of({"score"}));
     CHECK_FALSE(contract.splittable_per_entity());
+}
+
+// ── Bracketed trait access (dsl-named-entity-access, dsl-pair-relations) ────
+
+namespace {
+
+std::vector<std::string> error_messages_of(const std::string& source) {
+    const std::string src = "module test\n" + stdlib_events() + source;
+    ErrorReporter errors;
+    Lexer lexer(src, "test.cactus", errors);
+    Parser parser(lexer.tokenize(), errors);
+    auto program = parser.parse_program();
+    REQUIRE_FALSE(errors.has_errors());
+    SemanticAnalyzer analyzer(errors);
+    analyzer.analyze(program);
+    std::vector<std::string> messages;
+    for (const auto& diagnostic : errors.diagnostics()) {
+        if (diagnostic.level == DiagnosticLevel::Error) {
+            messages.push_back(diagnostic.message);
+        }
+    }
+    return messages;
+}
+
+std::string describe_messages(const std::vector<std::string>& messages) {
+    std::string text;
+    for (const auto& message : messages) {
+        text += message + "\n";
+    }
+    return text;
+}
+
+std::string named_errors_source(const std::string& rules) {
+    return named_header() + rules;
+}
+
+std::string pair_rule(const std::string& body_traits,
+                      const std::string& wall_traits,
+                      const std::string& handler,
+                      const std::string& clauses = "") {
+    return pair_traits() +
+           "rule R:\n"
+           "    pairs:\n"
+           "        body:\n" +
+           body_traits + "        wall:\n" + wall_traits + clauses + "    on fixed_tick:\n" + handler;
+}
+
+const TraitAccessExpr* find_trait_access(const ExprNode& expr) {
+    const ExprNode* cursor = &expr;
+    while (const auto* member = std::get_if<MemberExpr>(&cursor->expr)) {
+        cursor = member->object.get();
+    }
+    return std::get_if<TraitAccessExpr>(&cursor->expr);
+}
+
+}  // namespace
+
+TEST_CASE("Semantic: bracketed named reads and writes type-check", "[semantic][named-entity][trait-access]") {
+    const auto messages = error_messages_of(named_errors_source("rule R:\n"
+                                                                "    on tick:\n"
+                                                                "        let over: bool = Game[Match].over\n"
+                                                                "        let x: float = Game[Pos].value.x\n"
+                                                                "        Game[Match].score += 1\n"
+                                                                "        Hud[test.Label].visible = false\n"));
+    INFO(describe_messages(messages));
+    CHECK(messages.empty());
+    CHECK(has_message(error_messages_of(named_errors_source("rule R:\n"
+                                                            "    on tick:\n"
+                                                            "        let wrong: int = Game[Match].over\n")),
+                      "is declared as 'int' but initialized with 'bool'"));
+}
+
+TEST_CASE("Semantic: bracketed named access is annotated with entity and trait",
+          "[semantic][named-entity][trait-access]") {
+    const auto analyzed = analyze_named_program("rule R:\n"
+                                                "    on tick:\n"
+                                                "        let over = Game[Match].over\n"
+                                                "        Game[Match].score += 1\n");
+    REQUIRE(analyzed.messages.empty());
+    const auto& body   = rule_named(analyzed.ast, "R").handlers[0].body;
+    const auto* access = find_trait_access(*std::get<LetStmt>(body[0]->stmt).value);
+    REQUIRE(access != nullptr);
+    CHECK(access->resolved_entity_id == test_entity("Game"));
+    CHECK(access->resolved_trait_id == make_symbol_id(SymbolKind::Trait, "test", "Match"));
+
+    const auto& assign = std::get<VarAssign>(body[1]->stmt);
+    REQUIRE(assign.target != nullptr);
+    const auto* target = find_trait_access(*assign.target);
+    REQUIRE(target != nullptr);
+    CHECK(target->resolved_entity_id == test_entity("Game"));
+    CHECK(target->resolved_trait_id == make_symbol_id(SymbolKind::Trait, "test", "Match"));
+}
+
+TEST_CASE("Semantic: bracketed named access to an undeclared trait is rejected",
+          "[semantic][named-entity][trait-access]") {
+    CHECK(has_message(error_messages_of(named_errors_source("rule R:\n"
+                                                            "    on tick:\n"
+                                                            "        let id = Game[Tag].id\n")),
+                      "entity 'Game' does not declare trait 'Tag'"));
+    CHECK(has_message(error_messages_of(named_errors_source("rule R:\n"
+                                                            "    on tick:\n"
+                                                            "        Hud[Match].over = true\n")),
+                      "entity 'Hud' does not declare trait 'Match'"));
+    CHECK(has_message(error_messages_of(named_errors_source("rule R:\n"
+                                                            "    on tick:\n"
+                                                            "        let nope = Game[Match].nope\n")),
+                      "trait 'Match' has no field 'nope'"));
+    CHECK(has_message(error_messages_of(named_errors_source("rule R:\n"
+                                                            "    on tick:\n"
+                                                            "        let whole = Game[Match]\n")),
+                      "named field access needs a field after 'Game[Match]'"));
+}
+
+TEST_CASE("Semantic: bracketed named access in a func body is rejected", "[semantic][named-entity][trait-access]") {
+    CHECK(has_message(error_messages_of(named_errors_source("func peek() bool:\n"
+                                                            "    return Game[Match].over\n")),
+                      "named field access is only allowed in rules"));
+}
+
+TEST_CASE("Semantic: dotted named access reports one rename error and keeps analyzing",
+          "[semantic][named-entity][trait-access]") {
+    const auto read = error_messages_of(named_errors_source("rule R:\n"
+                                                            "    on tick:\n"
+                                                            "        let over: bool = Game.Match.over\n"
+                                                            "        let wrong: int = true\n"));
+    INFO(describe_messages(read));
+    CHECK(count_message(read, "use 'Game[Match].over'") == 1);
+    CHECK(has_message(read, "is declared as 'int' but initialized with 'bool'"));
+    CHECK(read.size() == 2);
+
+    const auto write = error_messages_of(named_errors_source("rule R:\n"
+                                                             "    on tick:\n"
+                                                             "        Hud.test.Label.visible = false\n"));
+    INFO(describe_messages(write));
+    CHECK(count_message(write, "use 'Hud[test.Label].visible'") == 1);
+    CHECK(write.size() == 1);
+}
+
+TEST_CASE("Semantic: bracketed pair access resolves and types", "[semantic][pair-relations][trait-access]") {
+    const auto messages = error_messages_of(
+        pair_rule("            DynamicBody\n"
+                  "            Transform\n",
+                  "            test.Collider\n"
+                  "            Solid as solid\n",
+                  "        let x: float = body[Transform].x\n"
+                  "        let mask: int = wall[test.Collider].mask\n"
+                  "        let active: bool = solid.active\n"));
+    INFO(describe_messages(messages));
+    CHECK(messages.empty());
+    CHECK(has_message(error_messages_of(pair_rule("            DynamicBody\n",
+                                                  "            Collider\n",
+                                                  "        let wrong: float = wall[Collider].mask\n")),
+                      "is declared as 'float' but initialized with 'int'"));
+}
+
+TEST_CASE("Semantic: bracketed pair access to an unselected trait is rejected",
+          "[semantic][pair-relations][trait-access]") {
+    CHECK(has_message(error_messages_of(pair_rule("            DynamicBody\n",
+                                                  "            Solid\n",
+                                                  "        let x = body[Solid].active\n")),
+                      "pair binding 'body' does not select trait 'Solid'"));
+}
+
+TEST_CASE("Semantic: pair aliases share one scope per rule", "[semantic][pair-relations][trait-access]") {
+    CHECK(has_message(error_messages_of(pair_rule("            Transform as pose\n",
+                                                  "            Transform as pose\n",
+                                                  "        let x = pose.x\n")),
+                      "alias 'pose' is declared twice in rule 'R'"));
+    CHECK(has_message(error_messages_of(pair_rule("            Transform\n",
+                                                  "            Collider as body\n",
+                                                  "        let x = 1\n")),
+                      "alias 'body' clashes with a pair binding name"));
+}
+
+TEST_CASE("Semantic: an eliminated binding's alias is not visible after reduce per",
+          "[semantic][pair-relations][trait-access][rule-reduce]") {
+    const auto messages = error_messages_of(limit_traits() +
+                                            "rule R:\n"
+                                            "    pairs:\n"
+                                            "        actor:\n"
+                                            "            Actor as kinematic\n"
+                                            "        surface:\n"
+                                            "            Surface as ground\n"
+                                            "    reduce per actor:\n"
+                                            "        rows = count()\n"
+                                            "    on tick:\n"
+                                            "        kinematic.grounded = rows > 0\n"
+                                            "        let top = ground.top\n");
+    INFO(describe_messages(messages));
+    CHECK(has_message(messages, "'ground' is not available after `reduce:`"));
+    CHECK_FALSE(has_message(messages, "'kinematic'"));
+}
+
+TEST_CASE("Semantic: pair writes keep read-only and limit rules for brackets and aliases",
+          "[semantic][pair-relations][trait-access][rule-limit]") {
+    const auto rule = [](const std::string& limit, const std::string& body) {
+        return limit_traits() +
+               "rule Ground:\n"
+               "    pairs:\n"
+               "        actor:\n"
+               "            Actor as kinematic\n"
+               "        surface:\n"
+               "            Surface as ground\n" +
+               limit + "    on tick:\n" + body;
+    };
+    CHECK(error_messages_of(rule("    limit: 1 per actor\n", "        actor[Actor].grounded = true\n")).empty());
+    CHECK(error_messages_of(rule("    limit: 1 per actor\n", "        kinematic.grounded = true\n")).empty());
+    CHECK(has_message(error_messages_of(rule("    limit: 1 per actor\n", "        surface[Surface].top = 1.0\n")),
+                      "read-only"));
+    CHECK(has_message(error_messages_of(rule("    limit: 1 per actor\n", "        ground.top = 1.0\n")), "read-only"));
+    CHECK(has_message(error_messages_of(rule("", "        actor[Actor].grounded = true\n")), "read-only"));
+    CHECK(has_message(error_messages_of(rule("", "        kinematic.grounded = true\n")), "read-only"));
+    CHECK(has_message(error_messages_of(rule("    limit: 2 per actor\n", "        kinematic.grounded = true\n")),
+                      "read-only"));
+}
+
+TEST_CASE("Semantic: dotted pair access reports one rename error", "[semantic][pair-relations][trait-access]") {
+    const auto unaliased = error_messages_of(
+        pair_rule("            DynamicBody\n", "            Collider\n", "        let mask = wall.Collider.mask\n"));
+    INFO(describe_messages(unaliased));
+    CHECK(count_message(unaliased, "use 'wall[Collider].mask'") == 1);
+    CHECK(unaliased.size() == 1);
+
+    const auto qualified = error_messages_of(pair_rule("            DynamicBody\n",
+                                                       "            test.Collider\n",
+                                                       "        let x = 1\n",
+                                                       "    where:\n"
+                                                       "        wall.test.Collider.mask > 0\n"));
+    INFO(describe_messages(qualified));
+    CHECK(count_message(qualified, "use 'wall[test.Collider].mask'") == 1);
+    CHECK(qualified.size() == 1);
+
+    const auto prefixed = error_messages_of(pair_rule(
+        "            DynamicBody\n", "            Transform as pose\n", "        let x = wall.pose.x\n"));
+    INFO(describe_messages(prefixed));
+    CHECK(count_message(prefixed, "aliases are written bare: use 'pose.x'") == 1);
+    CHECK(prefixed.size() == 1);
+
+    const auto bracketed_alias = error_messages_of(pair_rule(
+        "            DynamicBody\n", "            Transform as pose\n", "        let x = wall[pose].x\n"));
+    INFO(describe_messages(bracketed_alias));
+    CHECK(has_message(bracketed_alias, "'pose' is an alias; use 'pose.x'"));
+}
+
+TEST_CASE("Semantic: bracketed access through entity_id values is rejected",
+          "[semantic][entity-id-access][trait-access]") {
+    const auto local = error_messages_of(entity_id_traits() +
+                                         "rule R:\n"
+                                         "    on tick:\n"
+                                         "        let e = query.first[Player]()\n"
+                                         "        let hp = e[Health].hp\n");
+    CHECK(count_message(local, entity_id_read_error("Health", "e")) == 1);
+
+    const auto self = error_messages_of(entity_id_traits() +
+                                        "rule R:\n"
+                                        "    on tick:\n"
+                                        "        let hp = self[Health].hp\n");
+    CHECK(count_message(self, entity_id_read_error("Health", "self")) == 1);
+
+    const auto event = error_messages_of(entity_id_traits() +
+                                         "event Contact:\n"
+                                         "    other: entity_id\n"
+                                         "rule R:\n"
+                                         "    on Contact as contact:\n"
+                                         "        let hp = contact.other[Health].hp\n");
+    CHECK(count_message(event, entity_id_read_error("Health", "contact.other")) == 1);
+
+    const auto loop = error_messages_of(entity_id_traits() +
+                                        "rule R:\n"
+                                        "    on tick:\n"
+                                        "        for wall in query.all[Solid]():\n"
+                                        "            let hp = wall[test.Health].hp\n");
+    CHECK(count_message(loop, entity_id_read_error("test.Health", "wall")) == 1);
+
+    const auto write = error_messages_of(entity_id_traits() +
+                                         "rule R:\n"
+                                         "    on tick:\n"
+                                         "        let e = query.first[Player]()\n"
+                                         "        e[Health].hp = 3\n");
+    INFO(describe_messages(write));
+    CHECK(has_message(write, "can't write trait 'Health' through entity_id 'e'; use 'set Health on e:'"));
+    CHECK(write.size() == 1);
+}
+
+TEST_CASE("Semantic: bracketed entity_id access is rejected in every position",
+          "[semantic][entity-id-access][trait-access]") {
+    CHECK(has_message(error_messages_of(entity_id_traits() +
+                                        "rule R:\n"
+                                        "    on tick:\n"
+                                        "        let e = query.first[Player]()\n"
+                                        "        let hp = e[Health].nonexistent\n"),
+                      entity_id_read_error("Health", "e")));
+    CHECK(has_message(error_messages_of(entity_id_traits() +
+                                        "rule R:\n"
+                                        "    each:\n"
+                                        "        Player\n"
+                                        "    where:\n"
+                                        "        self[Health].hp > 0\n"
+                                        "    on tick:\n"
+                                        "        let x = 1\n"),
+                      entity_id_read_error("Health", "self")));
+    CHECK(has_message(error_messages_of(entity_id_traits() +
+                                        "func f(e: entity_id) int:\n"
+                                        "    return e[Health].hp\n"),
+                      entity_id_read_error("Health", "e")));
+
+    const auto compound = error_messages_of(entity_id_traits() +
+                                            "rule R:\n"
+                                            "    on tick:\n"
+                                            "        for e in query.all[Health]():\n"
+                                            "            e[Health].hp += 1\n");
+    INFO(describe_messages(compound));
+    CHECK(has_message(compound, "can't write trait 'Health' through entity_id 'e'; use 'set Health on e:'"));
+    CHECK_FALSE(has_message(compound, "is read-only"));
+    CHECK(compound.size() == 1);
+
+    const auto undeclared = error_messages_of(entity_id_traits() +
+                                              "rule R:\n"
+                                              "    on tick:\n"
+                                              "        var e = query.first[Player]()\n"
+                                              "        e[Bogus].x = 1\n");
+    INFO(describe_messages(undeclared));
+    CHECK(has_message(undeclared, "can't write trait 'Bogus' through entity_id 'e'; use 'set Bogus on e:'"));
+    CHECK(undeclared.size() == 1);
+}
+
+TEST_CASE("Semantic: bracketed access on a non-entity value is rejected", "[semantic][trait-access]") {
+    CHECK(has_message(error_messages_of(entity_id_traits() +
+                                        "rule R:\n"
+                                        "    on tick:\n"
+                                        "        let n = 3\n"
+                                        "        let hp = n[Health].hp\n"),
+                      "only entities carry traits"));
+}
+
+TEST_CASE("Contract: bracketed named access records reads, writes, and one requirement",
+          "[semantic][handler-contracts][named-entity][trait-access]") {
+    const auto program   = analyze_named("rule R:\n"
+                                         "    each:\n"
+                                         "        Enemy as enemy\n"
+                                         "    when:\n"
+                                         "        not Game[Match].over\n"
+                                         "    on tick:\n"
+                                         "        Game[Match].score += 1\n");
+    const auto& contract = named_contract(program, "R");
+    const auto game      = test_entity("Game");
+    const auto match     = test_trait("Match");
+    CHECK(contract.named_reads.at(game).at(match) == fields_of({"over", "score"}));
+    CHECK(contract.named_writes.at(game).at(match) == fields_of({"score"}));
+    CHECK(contract.write_fields.at(match) == fields_of({"score"}));
+    CHECK(contract.named_requirements == std::vector<NamedRequirement>{game_match()});
+    CHECK_FALSE(contract.splittable_per_entity());
+}
+
+TEST_CASE("Contract: a bare pair alias records a bound read on its binding",
+          "[semantic][handler-contracts][pair-relations][trait-access]") {
+    auto result = analyze(stdlib_events() + pair_traits() +
+                          "rule R:\n"
+                          "    pairs:\n"
+                          "        body:\n"
+                          "            DynamicBody\n"
+                          "            Transform as pose\n"
+                          "        wall:\n"
+                          "            Collider\n"
+                          "    on fixed_tick:\n"
+                          "        if pose.x > 0.0 and wall[Collider].mask > 0:\n"
+                          "            emit Contact to body:\n"
+                          "                other = wall\n");
+    REQUIRE(result.handler_contracts.size() == 1);
+    const auto& contract    = result.handler_contracts[0];
+    const auto transform_id = make_symbol_id(SymbolKind::Trait, "test", "Transform");
+    const auto collider_id  = make_symbol_id(SymbolKind::Trait, "test", "Collider");
+    CHECK(contract.reads.contains(transform_id));
+    CHECK(contract.reads.contains(collider_id));
+    const BoundTraitAccess body_transform{.binding_index = 0, .trait = transform_id};
+    const BoundTraitAccess wall_collider{.binding_index = 1, .trait = collider_id};
+    CHECK(std::ranges::find(contract.bound_reads, body_transform) != contract.bound_reads.end());
+    CHECK(std::ranges::find(contract.bound_reads, wall_collider) != contract.bound_reads.end());
 }
 
 // ── Conditional expressions and value match ────────────────────────────────

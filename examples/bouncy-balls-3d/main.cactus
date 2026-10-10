@@ -90,13 +90,13 @@ rule DetectWallContact:
             tv.WorldTransform
 
     on fixed_tick:
-        let ball_pos = ball.tv.WorldTransform.position
-        let wall_pos = wall.tv.WorldTransform.position
-        let wall_rotation = wall.tv.WorldTransform.rotation
-        let separation = collision.sphere_box_separation(ball_pos, ball.SphereCollider.radius, wall_pos, wall.BoxCollider.size, wall_rotation)
+        let ball_pos = ball[tv.WorldTransform].position
+        let wall_pos = wall[tv.WorldTransform].position
+        let wall_rotation = wall[tv.WorldTransform].rotation
+        let separation = collision.sphere_box_separation(ball_pos, ball[SphereCollider].radius, wall_pos, wall[BoxCollider].size, wall_rotation)
         let normal = quat.rotate(wall_rotation, vec3(0.0, 1.0, 0.0))
         let overlapping = v3m.length(separation) > 0.0
-        let closing = v3m.dot(ball.Ball.velocity, normal) > 0.0
+        let closing = v3m.dot(ball[Ball].velocity, normal) > 0.0
         if overlapping and closing:
             emit WallBounce to ball:
                 normal = normal
@@ -137,19 +137,19 @@ rule DetectBallContact:
             tv.WorldTransform
     where:
         a != b
-        collision.spheres_overlap(a.tv.WorldTransform.position, a.SphereCollider.radius, b.tv.WorldTransform.position, b.SphereCollider.radius)
-        v3m.dot(a.Ball.velocity - b.Ball.velocity, b.tv.WorldTransform.position - a.tv.WorldTransform.position) > 0.0
+        collision.spheres_overlap(a[tv.WorldTransform].position, a[SphereCollider].radius, b[tv.WorldTransform].position, b[SphereCollider].radius)
+        v3m.dot(a[Ball].velocity - b[Ball].velocity, b[tv.WorldTransform].position - a[tv.WorldTransform].position) > 0.0
 
     on fixed_tick:
-        let pos_a = a.tv.WorldTransform.position
-        let pos_b = b.tv.WorldTransform.position
-        let radius_a = a.SphereCollider.radius
-        let radius_b = b.SphereCollider.radius
+        let pos_a = a[tv.WorldTransform].position
+        let pos_b = b[tv.WorldTransform].position
+        let radius_a = a[SphereCollider].radius
+        let radius_b = b[SphereCollider].radius
         let dist = v3m.distance(pos_a, pos_b)
 
         let normal = (pos_b - pos_a) / dist
-        let vel_a = a.Ball.velocity
-        let vel_b = b.Ball.velocity
+        let vel_a = a[Ball].velocity
+        let vel_b = b[Ball].velocity
 
         let mass_a = radius_a * radius_a
         let mass_b = radius_b * radius_b

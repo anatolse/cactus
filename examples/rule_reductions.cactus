@@ -49,10 +49,10 @@ rule CountEnemies:
         weakest = min(enemy.threat, default = 7)
 
     on tick:
-        Scoreboard.Board.enemies = enemies
-        Scoreboard.Board.threat = threat
-        Scoreboard.Board.weakest = weakest
-        Scoreboard.Board.enemy_passes += 1
+        Scoreboard[Board].enemies = enemies
+        Scoreboard[Board].threat = threat
+        Scoreboard[Board].weakest = weakest
+        Scoreboard[Board].enemy_passes += 1
 
 rule CountPlayers:
     each: Player as player
@@ -62,11 +62,11 @@ rule CountPlayers:
         push = sum(player.push)
 
     on tick:
-        Scoreboard.Board.players = players
-        Scoreboard.Board.points = points
-        Scoreboard.Board.push = push
+        Scoreboard[Board].players = players
+        Scoreboard[Board].points = points
+        Scoreboard[Board].push = push
 
-# `team.Team.active` reads only the group binding, so it filters teams;
+# `team[Team].active` reads only the group binding, so it filters teams;
 # the membership test reads both bindings, so it filters rows. Green has no
 # players and still gets one activation; Gray is inactive and gets none.
 rule TeamTotals:
@@ -76,22 +76,22 @@ rule TeamTotals:
         player:
             Player
     where:
-        team.Team.active
-        player.Player.team == team
+        team[Team].active
+        player[Player].team == team
     reduce per team:
         players = count(player)
-        total = sum(player.Player.points)
-        best = max(player.Player.speed, default = -1.0)
-        has_star = any(player.Player.star)
-        push = sum(player.Player.push)
+        total = sum(player[Player].points)
+        best = max(player[Player].speed, default = -1.0)
+        has_star = any(player[Player].star)
+        push = sum(player[Player].push)
 
     on tick:
-        team.Team.players = players
-        team.Team.total = total
-        team.Team.best = best
-        team.Team.has_star = has_star
-        team.Team.push = push
-        team.Team.activations += 1
+        team[Team].players = players
+        team[Team].total = total
+        team[Team].best = best
+        team[Team].has_star = has_star
+        team[Team].push = push
+        team[Team].activations += 1
 
 # Aggregate rows are ranked like any other rows: the two best teams, with
 # ties kept in creation order.
@@ -102,15 +102,15 @@ rule RankTeams:
         player:
             Player
     where:
-        player.Player.team == team
+        player[Player].team == team
     reduce per team:
-        total = sum(player.Player.points)
+        total = sum(player[Player].points)
     order by:
         total desc
     limit: 2
 
     on tick:
-        Scoreboard.Board.ranked = (Scoreboard.Board.ranked * 10) + team.Team.id
+        Scoreboard[Board].ranked = (Scoreboard[Board].ranked * 10) + team[Team].id
 
 entity Scoreboard:
     Board

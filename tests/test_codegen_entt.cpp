@@ -6198,7 +6198,7 @@ TEST_CASE("Codegen EnTT: pair handler snapshots both bindings and iterates their
             "            Solid\n"
             "            Collider\n"
             "    on tick:\n"
-            "        if body != wall and body.Transform.x > 0.0 and wall.Collider.mask > 0:\n"
+            "        if body != wall and body[Transform].x > 0.0 and wall[Collider].mask > 0:\n"
             "            emit Contact:\n"
             "                other = wall\n",
         program);
@@ -6406,7 +6406,7 @@ TEST_CASE("Codegen EnTT: pair binding selecting the same trait as the other bind
             "        wall:\n"
             "            Collider\n"
             "    on tick:\n"
-            "        if body.Collider.mask > wall.Collider.mask:\n"
+            "        if body[Collider].mask > wall[Collider].mask:\n"
             "            emit Contact:\n"
             "                other = wall\n",
         program);
@@ -6443,7 +6443,7 @@ TEST_CASE(
             "        wall:\n"
             "            Solid as Collider\n"
             "    on tick:\n"
-            "        if wall.Collider.active:\n"
+            "        if Collider.active:\n"
             "            emit Contact:\n"
             "                other = wall\n",
         program);
@@ -6471,7 +6471,7 @@ TEST_CASE("Codegen EnTT: pair binding-local alias and qualified imported trait r
             "        wall:\n"
             "            Collider as c\n"
             "    on tick:\n"
-            "        if wall.c.mask > 0:\n"
+            "        if c.mask > 0:\n"
             "            emit Contact:\n"
             "                other = wall\n",
         program);
@@ -7028,7 +7028,7 @@ TEST_CASE("Codegen EnTT: pair-bound color channel read normalizes the raw byte f
             "        wall:\n"
             "            Solid\n"
             "    on tick:\n"
-            "        if body != wall and body.Tint.tint.a > 0.5:\n"
+            "        if body != wall and body[Tint].tint.a > 0.5:\n"
             "            emit Contact:\n"
             "                other = wall\n",
         program);
@@ -7121,8 +7121,8 @@ TEST_CASE("Codegen EnTT: SAP-eligible pair rule calls the runtime broad phase in
                                        "            Transform\n"
                                        "            Collider\n"
                                        "    where:\n"
-                                       "        circles_overlap(a.Transform.position, a.Collider.radius, "
-                                       "b.Transform.position, b.Collider.radius)\n"
+                                       "        circles_overlap(a[Transform].position, a[Collider].radius, "
+                                       "b[Transform].position, b[Collider].radius)\n"
                                        "    on tick:\n"
                                        "        emit Contact:\n"
                                        "            other = b\n",
@@ -7188,9 +7188,9 @@ TEST_CASE("Codegen EnTT: manual dot-product where: shape calls the runtime broad
                           "            Transform\n"
                           "            Collider\n"
                           "    where:\n"
-                          "        dot(b.Transform.position - a.Transform.position, b.Transform.position - "
-                          "a.Transform.position) < (a.Collider.radius + b.Collider.radius) * "
-                          "(a.Collider.radius + b.Collider.radius)\n"
+                          "        dot(b[Transform].position - a[Transform].position, b[Transform].position - "
+                          "a[Transform].position) < (a[Collider].radius + b[Collider].radius) * "
+                          "(a[Collider].radius + b[Collider].radius)\n"
                           "    on tick:\n"
                           "        emit Contact:\n"
                           "            other = b\n",
@@ -7274,11 +7274,11 @@ TEST_CASE("Codegen EnTT: bouncy-bubbles' migrated DetectBubbleContact where: sha
         "            WorldTransform\n"
         "    where:\n"
         "        a != b\n"
-        "        collision.circles_overlap(a.WorldTransform.position, "
-        "a.CircleCollider.radius, b.WorldTransform.position, b.CircleCollider.radius)\n"
+        "        collision.circles_overlap(a[WorldTransform].position, "
+        "a[CircleCollider].radius, b[WorldTransform].position, b[CircleCollider].radius)\n"
         "    on tick:\n"
         "        emit BubbleBounce to a:\n"
-        "            new_velocity = a.Bubble.velocity\n",
+        "            new_velocity = a[Bubble].velocity\n",
         program,
         imports);
 
@@ -7309,8 +7309,8 @@ TEST_CASE("Codegen EnTT: cross-domain pair rule with a recognized-shape call bui
                                        "            Collider\n"
                                        "            Wall\n"
                                        "    where:\n"
-                                       "        circles_overlap(a.Transform.position, a.Collider.radius, "
-                                       "b.Transform.position, b.Collider.radius)\n"
+                                       "        circles_overlap(a[Transform].position, a[Collider].radius, "
+                                       "b[Transform].position, b[Collider].radius)\n"
                                        "    on tick:\n"
                                        "        emit Contact:\n"
                                        "            other = b\n",
@@ -7363,8 +7363,8 @@ static std::string emit_sphere_box_rule(const std::string& bindings, const std::
 TEST_CASE("Codegen EnTT: sphere-box pair rule builds sphere and box proxies from both snapshots",
           "[codegen-entt][spatial-join]") {
     const auto code = emit_sphere_box_rule("        actor:\n            Body\n        wall:\n            Solid\n",
-                                           "sphere_box_overlap(actor.Body.position, actor.Body.radius + PROBE, "
-                                           "wall.Solid.position, wall.Solid.size, wall.Solid.rotation)");
+                                           "sphere_box_overlap(actor[Body].position, actor[Body].radius + PROBE, "
+                                           "wall[Solid].position, wall[Solid].size, wall[Solid].rotation)");
     const auto actor_loop = code.find("< actor_snapshot.size(); ++__sap_i)");
     const auto wall_loop  = code.find("< wall_snapshot.size(); ++__sap_i)");
     REQUIRE(actor_loop != std::string::npos);
@@ -7396,8 +7396,8 @@ TEST_CASE("Codegen EnTT: sphere-box pair rule builds sphere and box proxies from
 TEST_CASE("Codegen EnTT: a shape on the right binding builds right-side proxies",
           "[codegen-entt][spatial-join]") {
     const auto code = emit_sphere_box_rule("        wall:\n            Solid\n        actor:\n            Body\n",
-                                           "sphere_box_overlap(actor.Body.position, actor.Body.radius, "
-                                           "wall.Solid.position, wall.Solid.size, wall.Solid.rotation)");
+                                           "sphere_box_overlap(actor[Body].position, actor[Body].radius, "
+                                           "wall[Solid].position, wall[Solid].size, wall[Solid].rotation)");
     CHECK(code.contains("sphere_proxy(actor, __sap_i, cactus::runtime::entt_backend::SapSide::Right, "));
     CHECK(code.contains("box_proxy(wall, __sap_i, cactus::runtime::entt_backend::SapSide::Left, "));
 }
@@ -7852,7 +7852,7 @@ TEST_CASE("Codegen EnTT: a pair sort key that reads one binding marks both param
                                           "        surface:\n"
                                           "            Surface\n"
                                           "    order by:\n"
-                                          "        surface.Surface.code desc\n"
+                                          "        surface[Surface].code desc\n"
                                           "    on tick:\n"
                                           "        let x = 1\n",
                                       "Rank");
@@ -7869,16 +7869,16 @@ TEST_CASE("Codegen EnTT: a grouped reduction folds broad-phase rows and writes i
                                           "        wall:\n"
                                           "            Solid\n"
                                           "    where:\n"
-                                          "        actor.Body.radius > 0.0\n"
-                                          "        sphere_box_overlap(actor.Body.position, actor.Body.radius + PROBE, "
-                                          "wall.Solid.position, wall.Solid.size, wall.Solid.rotation)\n"
+                                          "        actor[Body].radius > 0.0\n"
+                                          "        sphere_box_overlap(actor[Body].position, actor[Body].radius + PROBE, "
+                                          "wall[Solid].position, wall[Solid].size, wall[Solid].rotation)\n"
                                           "    reduce per actor:\n"
-                                          "        near = any(wall.Solid.size.x > 1.0)\n"
+                                          "        near = any(wall[Solid].size.x > 1.0)\n"
                                           "        walls = count()\n"
-                                          "        low = min(wall.Solid.position.y, default = 9.0)\n"
+                                          "        low = min(wall[Solid].position.y, default = 9.0)\n"
                                           "    on tick:\n"
                                           "        if near:\n"
-                                          "            actor.Body.radius = low + walls\n",
+                                          "            actor[Body].radius = low + walls\n",
                                       "Sense");
     // Groups and their filter come first, then the broad phase feeds the fold.
     const auto groups = code.find("cactus_group_live[cactus_i] = 1;");
@@ -7952,7 +7952,7 @@ TEST_CASE("Codegen EnTT: a provably-one per-binding limit emits a mutable write 
                                           "            Surface\n"
                                           "    limit: 1 per actor\n"
                                           "    on tick:\n"
-                                          "        actor.Actor.ground = surface.Surface.code\n",
+                                          "        actor[Actor].ground = surface[Surface].code\n",
                                       "Ground");
 
     // The assignment target must be a mutable component reference; the
@@ -7973,7 +7973,7 @@ TEST_CASE("Codegen EnTT: a pair binding under a non-provable limit keeps read-on
                                           "            Surface\n"
                                           "    limit: 2 per actor\n"
                                           "    on tick:\n"
-                                          "        let x = actor.Actor.ground\n",
+                                          "        let x = actor[Actor].ground\n",
                                       "Ground");
 
     CHECK(code.contains("registry.get<const Actor>(actor)"));
@@ -7993,9 +7993,9 @@ TEST_CASE("Codegen EnTT: a where: rule without a limit keeps the desugared body 
                                           "        surface:\n"
                                           "            Surface\n"
                                           "    where:\n"
-                                          "        actor.Actor.ground == 0\n"
+                                          "        actor[Actor].ground == 0\n"
                                           "    on tick:\n"
-                                          "        let x = surface.Surface.code\n",
+                                          "        let x = surface[Surface].code\n",
                                       "Ground");
 
     CHECK(!code.contains("cactus_gen_pair_where_"));
@@ -8054,13 +8054,13 @@ static const std::string& named_codegen_source() {
         "    each:\n"
         "        Enemy as enemy\n"
         "    when:\n"
-        "        not Game.Match.over\n"
+        "        not Game[Match].over\n"
         "    on tick:\n"
         "        enemy.steps += 1\n"
-        "        Game.Stats.ticks += 1\n"
+        "        Game[Stats].ticks += 1\n"
         "rule Score:\n"
         "    on Hit:\n"
-        "        Game.Match.score += 1\n"
+        "        Game[Match].score += 1\n"
         "        emit Hit to Boss\n";
     return value;
 }
@@ -8151,7 +8151,7 @@ TEST_CASE("Codegen EnTT: a named read in a limited rule's where: is guarded and 
                                        "    each:\n"
                                        "        Enemy as enemy\n"
                                        "    where:\n"
-                                       "        enemy.steps < Game.Stats.ticks\n"
+                                       "        enemy.steps < Game[Stats].ticks\n"
                                        "    limit: 3\n"
                                        "    on tick:\n"
                                        "        enemy.steps += 1\n",

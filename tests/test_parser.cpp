@@ -2305,20 +2305,21 @@ TEST_CASE("Parser: pairs clause combined with order by parses successfully", "[p
         "        wall:\n"
         "            Solid\n"
         "    order by:\n"
-        "        body.DynamicBody.x\n"
+        "        body[DynamicBody].x\n"
         "    on fixed_tick:\n"
         "        x = 1\n");
 
     auto& sys = std::get<RuleNode>(prog.declarations[0]);
     REQUIRE(sys.pairs.has_value());
     REQUIRE(sys.order_by.size() == 1);
-    auto key0 = sort_key_alias_field(*sys.order_by[0].expression);
+    const auto key0 = trait_field_path(std::as_const(*sys.order_by[0].expression));
     REQUIRE(key0.has_value());
-    CHECK(key0->first == "body");
-    CHECK(key0->second == "DynamicBody.x");
+    CHECK(dotted_name_of(*key0->first->object) == "body");
+    CHECK(key0->first->trait_name == "DynamicBody");
+    CHECK(key0->second == std::vector<std::string>{"x"});
 }
 
-TEST_CASE("Parser: dotted assignment target parses name and path", "[parser][pair-relations]") {
+TEST_CASE("Parser: bracketed assignment target parses name, trait and path", "[parser][pair-relations]") {
     auto prog = parse(
         "rule DetectContacts:\n"
         "    pairs:\n"
@@ -2327,16 +2328,16 @@ TEST_CASE("Parser: dotted assignment target parses name and path", "[parser][pai
         "        wall:\n"
         "            Solid\n"
         "    on fixed_tick:\n"
-        "        body.Transform.x += 1.0\n");
+        "        body[Transform].x += 1.0\n");
 
     auto& sys = std::get<RuleNode>(prog.declarations[0]);
     REQUIRE(sys.handlers[0].body.size() == 1);
     const auto* assign = std::get_if<VarAssign>(&sys.handlers[0].body[0]->stmt);
     REQUIRE(assign != nullptr);
     CHECK(assign->name == "body");
-    REQUIRE(assign->path.size() == 2);
-    CHECK(assign->path[0] == "Transform");
-    CHECK(assign->path[1] == "x");
+    CHECK(assign->path == std::vector<std::string>{"x"});
+    REQUIRE(assign->target != nullptr);
+    CHECK(trait_field_path(std::as_const(*assign->target))->first->trait_name == "Transform");
     CHECK(assign->op == "+=");
 }
 
@@ -2407,7 +2408,7 @@ TEST_CASE("Parser: dotted member chain without assignment operator parses as exp
         "        wall:\n"
         "            Solid\n"
         "    on fixed_tick:\n"
-        "        body.DynamicBody.active\n");
+        "        body[DynamicBody].active\n");
 
     auto& sys = std::get<RuleNode>(prog.declarations[0]);
     REQUIRE(sys.handlers[0].body.size() == 1);
@@ -2676,7 +2677,7 @@ TEST_CASE("Parser: limit count accepts a computed expression", "[parser][rule-li
         "            Tower\n"
         "        other:\n"
         "            Body\n"
-        "    limit: tower.Tower.target_count per tower\n"
+        "    limit: tower[Tower].target_count per tower\n"
         "    on fixed_tick:\n"
         "        x = 1\n");
 
@@ -2726,14 +2727,14 @@ TEST_CASE("Parser: grouped reduce parses every reducer kind", "[parser][rule-red
         "        player:\n"
         "            Score\n"
         "    where:\n"
-        "        player.Score.team == team\n"
+        "        player[Score].team == team\n"
         "    reduce per team:\n"
         "        rows = count()\n"
         "        players = count(player)\n"
-        "        total = sum(player.Score.value)\n"
-        "        low = min(player.Score.value, default = 0)\n"
-        "        high = max(player.Score.value, default = 0)\n"
-        "        any_high = any(player.Score.value > 10)\n"
+        "        total = sum(player[Score].value)\n"
+        "        low = min(player[Score].value, default = 0)\n"
+        "        high = max(player[Score].value, default = 0)\n"
+        "        any_high = any(player[Score].value > 10)\n"
         "    on tick:\n"
         "        x = 1\n");
 
@@ -2783,7 +2784,7 @@ TEST_CASE("Parser: order by and limit after reduce rank aggregate rows", "[parse
         "        player:\n"
         "            Score\n"
         "    reduce per team:\n"
-        "        total = sum(player.Score.value)\n"
+        "        total = sum(player[Score].value)\n"
         "    order by:\n"
         "        total desc\n"
         "    limit: 2\n"
@@ -2806,9 +2807,9 @@ TEST_CASE("Parser: order by before reduce is rejected", "[parser][rule-reduce]")
         "        player:\n"
         "            Score\n"
         "    order by:\n"
-        "        team.Team.id\n"
+        "        team[Team].id\n"
         "    reduce per team:\n"
-        "        total = sum(player.Score.value)\n"
+        "        total = sum(player[Score].value)\n"
         "    on tick:\n"
         "        x = 1\n");
     REQUIRE(errors.has_errors());
@@ -2818,7 +2819,7 @@ TEST_CASE("Parser: order by before reduce is rejected", "[parser][rule-reduce]")
 }
 
 TEST_CASE("Parser: unknown reducers are rejected", "[parser][rule-reduce]") {
-    for (const std::string reducer : {"collect(player.Score.value)", "avg(player.Score.value)"}) {
+    for (const std::string reducer : {"collect(player[Score].value)", "avg(player[Score].value)"}) {
         auto errors = parse_expect_errors(
             "rule Bad:\n"
             "    pairs:\n"
@@ -4506,7 +4507,7 @@ TEST_CASE("Parser: body-level per names the grouped header", "[parser][rule-redu
     reduce:
         per: team
         players = count(player)
-        total = sum(player.Score.value)
+        total = sum(player[Score].value)
     on tick:
         return
 rule Later:
@@ -4601,7 +4602,7 @@ TEST_CASE("Parser: compact notation retains clause placement and context restric
     pairs:
         a: A
         b: B
-    order by: a.A.x
+    order by: a[A].x
     reduce per a:
         n = count()
 )",
@@ -4702,4 +4703,96 @@ extern rule Native:
     CHECK(rule.handlers.front().effects.size() == 1);
     CHECK(rule.handlers.back().effects.size() == 1);
 }
+
+// ── Bracketed trait access (dsl-parser) ─────────────────────────────────────
+
+static const TraitAccessExpr& trait_access_under(const ExprNode& expr, std::size_t fields) {
+    const ExprNode* cursor = &expr;
+    for (std::size_t index = 0; index < fields; ++index) {
+        const auto* member = std::get_if<MemberExpr>(&cursor->expr);
+        REQUIRE(member != nullptr);
+        cursor = member->object.get();
+    }
+    const auto* access = std::get_if<TraitAccessExpr>(&cursor->expr);
+    REQUIRE(access != nullptr);
+    return *access;
+}
+
+static const ExprNode& first_let_value(const ProgramNode& program) {
+    const auto& func = std::get<FuncNode>(program.declarations[0]);
+    const auto* let  = std::get_if<LetStmt>(&func.body[0]->stmt);
+    REQUIRE(let != nullptr);
+    return *let->value;
+}
+
+TEST_CASE("Parser: bracketed trait access on an entity name", "[parser][trait-access]") {
+    const auto program  = parse("func test():\n"
+                                "    let x = Game[Match].over\n");
+    const auto& value   = first_let_value(program);
+    const auto& field   = std::get<MemberExpr>(value.expr);
+    CHECK(field.member == "over");
+    const auto& access = trait_access_under(value, 1);
+    CHECK(access.trait_name == "Match");
+    CHECK(dotted_name_of(*access.object) == "Game");
+}
+
+TEST_CASE("Parser: bracketed trait access with qualified base and trait", "[parser][trait-access]") {
+    const auto program = parse("func test():\n"
+                               "    let x = hud.Hud[text.ScreenLabel].visible\n");
+    const auto& access = trait_access_under(first_let_value(program), 1);
+    CHECK(access.trait_name == "text.ScreenLabel");
+    CHECK(dotted_name_of(*access.object) == "hud.Hud");
+}
+
+TEST_CASE("Parser: bracketed trait access keeps a deeper field path", "[parser][trait-access]") {
+    const auto program = parse("func test():\n"
+                               "    let x = Game[Match].pos.x\n");
+    const auto& value  = first_let_value(program);
+    CHECK(std::get<MemberExpr>(value.expr).member == "x");
+    CHECK(std::get<MemberExpr>(std::get<MemberExpr>(value.expr).object->expr).member == "pos");
+    CHECK(trait_access_under(value, 2).trait_name == "Match");
+}
+
+TEST_CASE("Parser: a bracket list followed by a call stays a query call", "[parser][trait-access]") {
+    const auto program = parse("func test():\n"
+                               "    let a = query.all[Enemy]()\n"
+                               "    let b = query.count[EnemyAI, not Dead]()\n");
+    const auto& func   = std::get<FuncNode>(program.declarations[0]);
+    for (const auto& stmt : func.body) {
+        const auto& let = std::get<LetStmt>(stmt->stmt);
+        CHECK(std::holds_alternative<QueryCallExpr>(let.value->expr));
+    }
+}
+
+TEST_CASE("Parser: assignment through a bracketed trait path", "[parser][trait-access]") {
+    const auto program = parse("rule R:\n"
+                               "    on tick:\n"
+                               "        Game[Match].score += 1\n"
+                               "        hud.Hud[text.ScreenLabel].visible = false\n");
+    const auto& body   = std::get<RuleNode>(program.declarations[0]).handlers[0].body;
+    const auto& first  = std::get<VarAssign>(body[0]->stmt);
+    CHECK(first.op == "+=");
+    REQUIRE(first.target != nullptr);
+    CHECK(std::get<MemberExpr>(first.target->expr).member == "score");
+    const auto& access = trait_access_under(*first.target, 1);
+    CHECK(access.trait_name == "Match");
+    CHECK(dotted_name_of(*access.object) == "Game");
+
+    const auto& second = std::get<VarAssign>(body[1]->stmt);
+    CHECK(second.op == "=");
+    REQUIRE(second.target != nullptr);
+    CHECK(trait_access_under(*second.target, 1).trait_name == "text.ScreenLabel");
+    CHECK(dotted_name_of(*trait_access_under(*second.target, 1).object) == "hud.Hud");
+}
+
+TEST_CASE("Parser: bracketed trait access takes exactly one trait name", "[parser][trait-access]") {
+    for (const std::string access : {"Game[Match, Score].over", "Game[not Match].over"}) {
+        CAPTURE(access);
+        const auto errors = parse_expect_errors("func test():\n"
+                                                "    let x = " +
+                                                access + "\n");
+        CHECK(has_diagnostic(errors, "a trait access takes exactly one trait name"));
+    }
+}
+
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

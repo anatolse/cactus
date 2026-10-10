@@ -25,9 +25,9 @@ rule Seed:
 
 rule Respawn:
     on added Offspring:
-        if Nursery.Spawner.budget <= 0:
+        if Nursery[Spawner].budget <= 0:
             return
-        Nursery.Spawner.budget -= 1
+        Nursery[Spawner].budget -= 1
         spawn Minion()
 
 # A targeted event that re-emits itself to its recipient overflows the

@@ -51,10 +51,10 @@ rule DetectAccelerated:
         wall:
             Solid
     where:
-        vol.sphere_box_overlap(actor.Actor.pos, actor.Actor.radius + PROBE, wall.Solid.pos, wall.Solid.size, wall.Solid.rotation)
+        vol.sphere_box_overlap(actor[Actor].pos, actor[Actor].radius + PROBE, wall[Solid].pos, wall[Solid].size, wall[Solid].rotation)
     on tick:
         emit AcceleratedHit:
-            code = (actor.Actor.tag * 1000) + wall.Solid.tag
+            code = (actor[Actor].tag * 1000) + wall[Solid].tag
 
 rule DetectPlain:
     pairs:
@@ -63,10 +63,10 @@ rule DetectPlain:
         wall:
             Solid
     where:
-        vol.sphere_box_overlap(actor.Actor.pos, actor.Actor.radius + PROBE, wall.Solid.pos, wall.Solid.size, wall.Solid.rotation) == true
+        vol.sphere_box_overlap(actor[Actor].pos, actor[Actor].radius + PROBE, wall[Solid].pos, wall[Solid].size, wall[Solid].rotation) == true
     on tick:
         emit PlainHit:
-            code = (actor.Actor.tag * 1000) + wall.Solid.tag
+            code = (actor[Actor].tag * 1000) + wall[Solid].tag
 
 rule NearestAccelerated:
     pairs:
@@ -75,13 +75,13 @@ rule NearestAccelerated:
         wall:
             Solid
     order by:
-        wall.Solid.tag desc
+        wall[Solid].tag desc
     where:
-        vol.sphere_box_overlap(actor.Actor.pos, actor.Actor.radius, wall.Solid.pos, wall.Solid.size, wall.Solid.rotation)
+        vol.sphere_box_overlap(actor[Actor].pos, actor[Actor].radius, wall[Solid].pos, wall[Solid].size, wall[Solid].rotation)
     limit: 1 per actor
     on tick:
         emit NearestAcceleratedHit:
-            code = (actor.Actor.tag * 1000) + wall.Solid.tag
+            code = (actor[Actor].tag * 1000) + wall[Solid].tag
 
 rule NearestPlain:
     pairs:
@@ -90,13 +90,13 @@ rule NearestPlain:
         wall:
             Solid
     order by:
-        wall.Solid.tag desc
+        wall[Solid].tag desc
     where:
-        vol.sphere_box_overlap(actor.Actor.pos, actor.Actor.radius, wall.Solid.pos, wall.Solid.size, wall.Solid.rotation) == true
+        vol.sphere_box_overlap(actor[Actor].pos, actor[Actor].radius, wall[Solid].pos, wall[Solid].size, wall[Solid].rotation) == true
     limit: 1 per actor
     on tick:
         emit NearestPlainHit:
-            code = (actor.Actor.tag * 1000) + wall.Solid.tag
+            code = (actor[Actor].tag * 1000) + wall[Solid].tag
 
 rule RecordTuples:
     each:

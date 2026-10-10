@@ -314,14 +314,18 @@ The semantic analyzer SHALL resolve every pair trait entry to a canonical trait 
 - **THEN** semantic analysis reports a duplicate pair binding
 
 ### Requirement: Pair member access is resolved and typed
-The semantic analyzer SHALL type a pair binding as `entity_id` and SHALL resolve binding-relative trait, alias, field, and aggregate-member paths against that binding's selected traits. Access to a trait not selected by that binding SHALL be rejected.
+The semantic analyzer SHALL type a pair binding as `entity_id`. It SHALL resolve `binding[Trait]` against the traits that binding selects, and a bare alias against the trait it names, then type the field and aggregate-member path after it. Access to a trait not selected by that binding SHALL be rejected.
 
 #### Scenario: Binding trait field has declared type
-- **WHEN** `body.Collider.mask` refers to an integer field
+- **WHEN** `body[Collider].mask` refers to an integer field
+- **THEN** the expression is typed as `int` and records a bound read of body.Collider
+
+#### Scenario: Alias field has declared type
+- **WHEN** binding `body` selects `Collider as collider` and code reads `collider.mask`, an integer field
 - **THEN** the expression is typed as `int` and records a bound read of body.Collider
 
 #### Scenario: Cross-binding trait access is rejected
-- **WHEN** only `wall` selects Solid and code reads `body.Solid`
+- **WHEN** only `wall` selects Solid and code reads `body[Solid]`
 - **THEN** semantic analysis reports that Solid is unavailable on `body`
 
 ### Requirement: Pair mutability and implicit-entity restrictions are validated
@@ -966,68 +970,76 @@ Projecting a trait with `persist` fields SHALL be rejected in v1 because that mo
 - **THEN** the semantic analyzer reports that persistent traits cannot be projected
 
 ### Requirement: Trait access through entity_id values is rejected
-The semantic analyzer SHALL reject any member access whose object expression has type `entity_id`. This applies to every source of an `entity_id` value: `let`/`var` locals, `for` loop variables, `func` parameters, event fields, `self`, and call results. It applies in handler bodies, `func` bodies, and rule clauses (`where:`, `order by:`, `when:`, `limit:`). An `entity_id` carries no fields, and another entity's traits SHALL be read through a rule domain (`pairs:`) and written through `set T on e:`.
+The semantic analyzer SHALL reject any trait access whose object expression has type `entity_id`, whether written with brackets (`e[Health].hp`) or with dots (`e.Health.hp`). This applies to every source of an `entity_id` value: `let`/`var` locals, `for` loop variables, `func` parameters, event fields, `self`, and call results. It applies in handler bodies, `func` bodies, and rule clauses (`where:`, `order by:`, `when:`, `limit:`). An `entity_id` carries no fields, and another entity's traits SHALL be read through a rule domain (`pairs:`) and written through `set T on e:`.
 
 When the access is read, the analyzer SHALL report: `can't read trait '<trait>' through entity_id '<object>'; read another entity's traits in a pairs: rule`. When the access is the target of an assignment or compound assignment, the analyzer SHALL report: `can't write trait '<trait>' through entity_id '<object>'; use 'set <trait> on <object>:'`. For a write, this error SHALL replace the immutable-binding and read-only loop variable errors, so only one error is reported for the statement.
 
-`<trait>` SHALL be the trait as written in source (`Health`, `tv.WorldTransform`) when the member path resolves to a trait; otherwise it SHALL be the first member name after the object. `<object>` SHALL be the object's source spelling when it is an identifier or a dotted chain (`e`, `self`, `contact.other`); otherwise it SHALL be `value`.
+`<trait>` SHALL be the trait as written in source (`Health`, `tv.WorldTransform`): the bracket contents for the bracketed form, or the member path when it resolves to a trait for the dotted form; otherwise it SHALL be the first member name after the object. `<object>` SHALL be the object's source spelling when it is an identifier or a dotted chain (`e`, `self`, `contact.other`); otherwise it SHALL be `value`.
 
-These forms SHALL remain legal and unchanged: named entity field access (`Game.Match.over`), pair binding access in a `pairs:` handler (`body.Health.hp`), filter-alias access, and `match e: T as t =>`.
+These forms SHALL remain legal: named entity field access (`Game[Match].over`), pair binding access in a `pairs:` handler or rule clause (`body[Health].hp`, or a bare alias such as `health.hp`), filter-alias access, and `match e: T as t =>`.
 
 #### Scenario: Read through a query result local rejected
 - **WHEN** a handler declares `let e = query.first[Player]()` and reads `e.Health.hp`
 - **THEN** the analyzer reports an error: "can't read trait 'Health' through entity_id 'e'; read another entity's traits in a pairs: rule"
 
+#### Scenario: Bracketed read through a local rejected
+- **WHEN** a handler declares `let e = query.first[Player]()` and reads `e[Health].hp`
+- **THEN** the analyzer reports an error: "can't read trait 'Health' through entity_id 'e'; read another entity's traits in a pairs: rule"
+
 #### Scenario: Read through a loop variable with a module-qualified trait rejected
-- **WHEN** a handler loops `for wall in query.all[Solid]():` and reads `wall.tv.WorldTransform.position`, where `tv` is a `use ... as` alias of the module declaring `WorldTransform`
+- **WHEN** a handler loops `for wall in query.all[Solid]():` and reads `wall[tv.WorldTransform].position`, where `tv` is a `use ... as` alias of the module declaring `WorldTransform`
 - **THEN** the analyzer reports an error: "can't read trait 'tv.WorldTransform' through entity_id 'wall'; read another entity's traits in a pairs: rule"
 
 #### Scenario: Read of a missing field still rejected as entity_id access
-- **WHEN** a handler reads `e.Health.nonexistent` where `e` is an `entity_id` local
+- **WHEN** a handler reads `e[Health].nonexistent` where `e` is an `entity_id` local
 - **THEN** the analyzer reports the "can't read trait 'Health' through entity_id 'e'" error
 - **AND** the program does not reach code generation
 
 #### Scenario: Read through an event field rejected
-- **WHEN** a handler `on Contact as contact:` reads `contact.other.Health.hp`, where `other` is an `entity_id` event field
+- **WHEN** a handler `on Contact as contact:` reads `contact.other[Health].hp`, where `other` is an `entity_id` event field
 - **THEN** the analyzer reports an error: "can't read trait 'Health' through entity_id 'contact.other'; read another entity's traits in a pairs: rule"
 
 #### Scenario: Read through self rejected
-- **WHEN** a handler reads `self.Health.hp`
+- **WHEN** a handler reads `self[Health].hp` or `self.Health.hp`
 - **THEN** the analyzer reports an error: "can't read trait 'Health' through entity_id 'self'; read another entity's traits in a pairs: rule"
 
 #### Scenario: Read in a where clause rejected
-- **WHEN** a rule's `where:` predicate reads `self.Health.hp > 0`
+- **WHEN** a rule's `where:` predicate reads `self[Health].hp > 0`
 - **THEN** the analyzer reports the "can't read trait 'Health' through entity_id 'self'" error
 
 #### Scenario: Read through a func parameter rejected
-- **WHEN** a `func f(e: entity_id) int` body returns `e.Health.hp`
+- **WHEN** a `func f(e: entity_id) int` body returns `e[Health].hp`
 - **THEN** the analyzer reports the "can't read trait 'Health' through entity_id 'e'" error
 
 #### Scenario: Write through a let entity_id rejected
-- **WHEN** a handler declares `let e = query.first[Player]()` and assigns `e.Health.hp = 3`
+- **WHEN** a handler declares `let e = query.first[Player]()` and assigns `e[Health].hp = 3`
 - **THEN** the analyzer reports an error: "can't write trait 'Health' through entity_id 'e'; use 'set Health on e:'"
 - **AND** the analyzer does not report an immutable-binding error for that statement
 
 #### Scenario: Compound write through a loop variable rejected
-- **WHEN** a handler loops `for e in query.all[Health]():` and executes `e.Health.hp += 1`
+- **WHEN** a handler loops `for e in query.all[Health]():` and executes `e[Health].hp += 1`
 - **THEN** the analyzer reports an error: "can't write trait 'Health' through entity_id 'e'; use 'set Health on e:'"
 - **AND** the analyzer does not report a read-only loop variable error for that statement
 
 #### Scenario: Write to an undeclared trait rejected
-- **WHEN** a handler assigns `e.Bogus.x = 1` where `e` is an `entity_id` local and no trait `Bogus` exists
+- **WHEN** a handler assigns `e[Bogus].x = 1` where `e` is an `entity_id` local and no trait `Bogus` exists
 - **THEN** the analyzer reports an error: "can't write trait 'Bogus' through entity_id 'e'; use 'set Bogus on e:'"
 
 #### Scenario: Named entity field access still allowed
-- **WHEN** a rule reads `Game.Match.over` and `Game` is a declared entity whose archetype declares `Match`
+- **WHEN** a rule reads `Game[Match].over` and `Game` is a declared entity whose archetype declares `Match`
 - **THEN** the analyzer reports no entity_id access error
 
 #### Scenario: Pair binding access still allowed
-- **WHEN** a `pairs:` handler reads `body.Health.hp` where `body` is a pair binding that selects `Health`
+- **WHEN** a `pairs:` handler reads `body[Health].hp` where `body` is a pair binding that selects `Health`
 - **THEN** the analyzer reports no entity_id access error
 
 #### Scenario: Trait match on an entity_id still allowed
 - **WHEN** a handler loops `for e in query.all[Solid]():` and writes `match e:` with arm `Health as h =>` reading `h.hp`
 - **THEN** the analyzer reports no entity_id access error
+
+#### Scenario: Duplicate pair binding is rejected
+- **WHEN** both entries in a pair clause are named `body`
+- **THEN** semantic analysis reports a duplicate pair binding
 
 ### Requirement: Local variable scope in rule and func bodies
 The semantic analyzer SHALL maintain a per-handler and per-`func` local variable scope. `let` declarations introduce immutable bindings; `var` declarations introduce mutable bindings. Re-declaration of an existing local in the same scope SHALL produce an error. Assigning to a name that is not a declared local, trait alias, or other writable binding in scope SHALL produce an error; assignment SHALL NOT implicitly declare a local. For a `let` binding, any assignment whose target is the binding itself or a member path into its value (`v.x = ...`) SHALL be rejected. A member path into an `entity_id`-typed binding (`e.Trait.field = ...`) is not a rebinding; it is rejected as trait access through an `entity_id` value.

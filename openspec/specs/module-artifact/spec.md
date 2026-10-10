@@ -103,7 +103,7 @@ Module artifacts SHALL serialize and deserialize external-event provenance, publ
 - **THEN** the loaded contracts record the `Match.over` write and the all-fields read, and the conflict edge's field provenance is identical
 
 #### Scenario: Named-entity access and when: survive round-trip
-- **WHEN** a module has a rule with `when: not Game.Match.over` whose handler writes `Game.Match.score`, and it is saved and loaded
+- **WHEN** a module has a rule with `when: not Game[Match].over` whose handler writes `Game[Match].score`, and it is saved and loaded
 - **THEN** the loaded handler contract keeps the named read from `when:`, the named write, and the requirement on `(Game, Match)`, all with `Game`'s and `Match`'s canonical identities
 
 #### Scenario: Public entities and entity values survive round-trip
@@ -162,3 +162,17 @@ The module artifact binary format SHALL serialize and deserialize the added-trig
 - **WHEN** a version-19 `.cmod` is loaded
 - **THEN** loading reports an incompatible-version error and returns no program
 
+### Requirement: Bracketed trait access survives artifact round-trip
+The module artifact SHALL serialize bracketed trait access expressions and bracketed assignment targets with their base, trait spelling, resolved trait identity and field path, so a loaded module compiles and runs the same as the module it was saved from. Adding the expression node SHALL increment the artifact format version, and artifacts written with the previous version SHALL be rejected with the existing "incompatible module artifact version" error.
+
+#### Scenario: Named-entity bracketed access survives round-trip
+- **WHEN** a module has a rule with `when: not Game[Match].over` whose handler writes `Game[Match].score`, and it is saved and loaded
+- **THEN** the loaded handler contract keeps the named read from `when:`, the named write, and the requirement on `(Game, Match)`, all with `Game`'s and `Match`'s canonical identities
+
+#### Scenario: Pair-binding bracketed access survives round-trip
+- **WHEN** a module has a pair rule whose `where:` reads `body[tv.WorldTransform].position` and whose handler reads a bare alias `pose.position`, and it is saved and loaded
+- **THEN** both reads resolve to the same binding and canonical trait identity as before saving, and the generated program behaves the same
+
+#### Scenario: Previous-version artifact is rejected
+- **WHEN** a `.cmod` written before this format change is loaded
+- **THEN** the system reports "incompatible module artifact version in '<file>.cmod'; please recompile"

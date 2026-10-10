@@ -56,11 +56,11 @@ A `limit:` count expression MUST be pure — the same purity class as a `where:`
 - **THEN** semantic analysis accepts it
 
 #### Scenario: Per-binding limit computed from the per binding's own trait is valid
-- **WHEN** a pairs rule declares `limit: tower.Tower.target_count per tower`
+- **WHEN** a pairs rule declares `limit: tower[Tower].target_count per tower`
 - **THEN** semantic analysis accepts it, evaluating the count once per distinct `tower` value
 
 #### Scenario: Per-binding limit referencing the other binding is rejected
-- **WHEN** a pairs rule with bindings `actor` and `target` declares `limit: target.Threat.priority per actor`
+- **WHEN** a pairs rule with bindings `actor` and `target` declares `limit: target[Threat].priority per actor`
 - **THEN** semantic analysis rejects it, since the count would depend on the binding it does not partition by
 
 #### Scenario: Impure limit expression is rejected
@@ -105,7 +105,7 @@ A per-binding `limit: <expr> per <binding>` SHALL be recognized as provable to a
 - **THEN** the `actor` binding is recognized as provably limited to one
 
 #### Scenario: A non-constant count is not provable
-- **WHEN** a rule declares `limit: tower.Tower.target_count per tower`
+- **WHEN** a rule declares `limit: tower[Tower].target_count per tower`
 - **THEN** the `tower` binding is not recognized as provably limited to one, regardless of `target_count`'s runtime value
 
 #### Scenario: A constant other than one is not provable

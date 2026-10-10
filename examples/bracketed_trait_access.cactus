@@ -1,0 +1,75 @@
+module bracketed_trait_access
+
+# Traits reached through a named entity or a pair binding are written in
+# brackets: `Game[Match].score`, `Clock[time.Timer].remaining`,
+# `rival[Runner].lane`. A pair alias is written bare (`mine.lane`), never
+# behind its binding.
+
+use std.core
+use std.time as time
+
+trait Match:
+    var score: int = 0
+    var over: bool = false
+    var ticks: int = 0
+
+trait Runner:
+    var lane: int = 0
+    var next_lane: int = -1
+
+entity Game:
+    Match
+
+# A paused, disarmed timer that only this example's rules touch.
+entity Clock:
+    time.Timer:
+        paused = true
+
+template Racer(lane: int):
+    Runner:
+        lane = lane
+
+entity First from Racer(lane = 1)
+entity Second from Racer(lane = 4)
+entity Third from Racer(lane = 9)
+
+rule CountTicks:
+    when:
+        not Game[Match].over
+
+    on tick:
+        Game[Match].ticks += 1
+        if Game[Match].ticks >= 3:
+            Game[Match].over = true
+
+rule WindClock:
+    when:
+        Clock[time.Timer].paused
+
+    on tick:
+        Clock[time.Timer].remaining += 2.0
+
+# Each runner records the nearest lane above its own; the alias write is
+# allowed because `limit: 1 per me` proves one tuple per runner.
+rule FindNextLane:
+    pairs:
+        me: Runner as mine
+        rival: Runner as theirs
+    order by:
+        rival[Runner].lane - mine.lane asc
+    where:
+        theirs.lane > me[Runner].lane
+    limit: 1 per me
+
+    on tick:
+        mine.next_lane = rival[Runner].lane
+
+rule CountLanes:
+    pairs:
+        me: Runner
+        rival: Runner as other
+    where:
+        me != rival
+
+    on tick:
+        Game[Match].score += other.lane

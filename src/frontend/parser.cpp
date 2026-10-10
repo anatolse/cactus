@@ -1,6 +1,5 @@
 #include "frontend/parser.hpp"
 
-#include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -2661,6 +2660,19 @@ LoadStmt Parser::parse_load_stmt() {
     return load;
 }
 
+bool Parser::at_assignment_operator() const {
+    return check(TokenType::ASSIGN) || check(TokenType::PLUS_ASSIGN) || check(TokenType::MINUS_ASSIGN) ||
+           check(TokenType::STAR_ASSIGN) || check(TokenType::SLASH_ASSIGN);
+}
+
+std::unique_ptr<StmtNode> Parser::parse_assignment(VarAssign assign) {
+    assign.op    = advance().value;
+    assign.value = parse_expression();
+    expect_statement_end(*assign.value);
+    const auto location = assign.location;
+    return std::make_unique<StmtNode>(StmtNode::Variant{std::move(assign)}, location);
+}
+
 std::unique_ptr<StmtNode> Parser::parse_assign_or_expr_stmt() {
     auto loc = peek().location;
     if (check(TokenType::IDENTIFIER)) {
@@ -2671,18 +2683,22 @@ std::unique_ptr<StmtNode> Parser::parse_assign_or_expr_stmt() {
             advance();  // '.'
             path.push_back(advance().value);
         }
-        if (check(TokenType::ASSIGN) || check(TokenType::PLUS_ASSIGN) || check(TokenType::MINUS_ASSIGN) ||
-            check(TokenType::STAR_ASSIGN) || check(TokenType::SLASH_ASSIGN)) {
-            auto op    = advance().value;
-            auto value = parse_expression();
-            expect_statement_end(*value);
-            VarAssign assign;
-            assign.name     = name;
-            assign.path     = std::move(path);
-            assign.op       = op;
-            assign.value    = std::move(value);
-            assign.location = loc;
-            return std::make_unique<StmtNode>(StmtNode::Variant{std::move(assign)}, loc);
+        if (at_assignment_operator()) {
+            return parse_assignment(VarAssign{.name = name, .path = std::move(path), .location = loc});
+        }
+        if (check(TokenType::LBRACKET) && !at_query_filter_call()) {
+            current_    = saved_pos;
+            auto target = parse_postfix_expr();
+            if (at_assignment_operator()) {
+                auto fields = trait_field_path(*target);
+                if (!fields.has_value() || fields->second.empty()) {
+                    errors_.error(loc, "an assignment through a trait access needs a field after the brackets");
+                }
+                return parse_assignment(VarAssign{.name     = name,
+                                                  .path     = fields.has_value() ? std::move(fields->second) : path,
+                                                  .location = loc,
+                                                  .target   = std::move(target)});
+            }
         }
         current_ = saved_pos;
     }
@@ -2966,17 +2982,67 @@ std::unique_ptr<ExprNode> Parser::parse_query_call(std::unique_ptr<ExprNode> cal
     return std::make_unique<ExprNode>(ExprNode::Variant{std::move(call)}, location);
 }
 
+std::size_t Parser::matching_bracket_end(std::size_t index) const {
+    std::size_t depth = 0;
+    for (; index < tokens_.size(); ++index) {
+        const auto type = tokens_[index].type;
+        if (type == TokenType::NEWLINE || type == TokenType::EOF_TOKEN) {
+            break;
+        }
+        if (type == TokenType::LBRACKET) {
+            ++depth;
+        } else if (type == TokenType::RBRACKET && --depth == 0) {
+            return index + 1;
+        }
+    }
+    return tokens_.size();
+}
+
+bool Parser::at_query_filter_call() const {
+    const auto end = matching_bracket_end(current_);
+    return end < tokens_.size() && tokens_[end].type == TokenType::LPAREN;
+}
+
+std::unique_ptr<ExprNode> Parser::parse_trait_access(std::unique_ptr<ExprNode> object) {
+    const auto location = peek().location;
+    const auto end      = matching_bracket_end(current_);
+    advance();  // '['
+    TraitAccessExpr access;
+    access.object   = std::move(object);
+    access.location = location;
+    if (!check(TokenType::NOT) && !check(TokenType::RBRACKET)) {
+        access.trait_name = parse_dotted_name();
+    }
+    if (access.trait_name.empty() || !check(TokenType::RBRACKET)) {
+        errors_.error(location, "a trait access takes exactly one trait name");
+        current_ = std::min(end, tokens_.size() - 1);
+    } else {
+        advance();  // ']'
+    }
+    return std::make_unique<ExprNode>(ExprNode::Variant{std::move(access)}, location);
+}
+
 std::unique_ptr<ExprNode> Parser::parse_postfix_expr() {
-    auto expression = parse_primary_expr();
-    while (check(TokenType::DOT) || check(TokenType::LPAREN)) {
+    auto expression           = parse_primary_expr();
+    const auto takes_brackets = [](const ExprNode& node) {
+        return std::holds_alternative<IdentExpr>(node.expr) || std::holds_alternative<MemberExpr>(node.expr) ||
+               std::holds_alternative<SelfExpr>(node.expr);
+    };
+    while (check(TokenType::DOT) || check(TokenType::LPAREN) ||
+           (check(TokenType::LBRACKET) && takes_brackets(*expression))) {
         const auto location = peek().location;
+        if (check(TokenType::LBRACKET)) {
+            expression = at_query_filter_call() ? parse_query_call(std::move(expression), location)
+                                                : parse_trait_access(std::move(expression));
+            continue;
+        }
         if (match(TokenType::DOT)) {
             MemberExpr member;
             member.object   = std::move(expression);
             member.member   = parse_member_name();
             member.location = location;
             expression      = std::make_unique<ExprNode>(ExprNode::Variant{std::move(member)}, location);
-            if (check(TokenType::LBRACKET) || (check(TokenType::LPAREN) && at_named_argument(current_ + 1))) {
+            if (check(TokenType::LPAREN) && at_named_argument(current_ + 1)) {
                 expression = parse_query_call(std::move(expression), location);
                 continue;
             }

@@ -4,11 +4,13 @@
 #include "common/types.hpp"
 
 #include <algorithm>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -163,13 +165,10 @@ struct LiteralExpr {
     SourceLocation location;
 };
 
-// A named entity's trait reached by name (`Game.Match`, `hud.Hud.ui.Label`).
-// The segment counts say how many dotted segments spell the entity and the trait.
+// A named entity's trait reached by name (`Game[Match]`, `hud.Hud[ui.Label]`).
 struct NamedTraitRef {
     SymbolId entity;
     SymbolId trait;
-    std::size_t entity_segments = 1;
-    std::size_t trait_segments  = 1;
 
     friend bool operator==(const NamedTraitRef&, const NamedTraitRef&) = default;
 };
@@ -230,13 +229,28 @@ struct MemberExpr {
     // Set by semantic analysis: this chain is a module-qualified entity name
     // (`hud.Crosshair`) used as a value.
     std::optional<SymbolId> resolved_entity_id;
-    // Set by semantic analysis on the node whose chain ends at the trait of a
-    // named field access (`Game.Match` in `Game.Match.over`).
-    std::optional<NamedTraitRef> resolved_named_trait;
     // Set by semantic analysis on a module-qualified constant (`math.PI`).
     std::optional<SymbolId> resolved_const_id;
     // Set by semantic analysis on `<phase>.dt` read outside that phase's handlers.
     std::optional<SymbolId> resolved_phase_dt;
+};
+
+// `object[Trait]`: a trait reached through a named entity or a pair binding.
+struct TraitAccessExpr {
+    std::unique_ptr<ExprNode> object;
+    std::string trait_name;  // source spelling, e.g. "tv.WorldTransform"
+    SourceLocation location;
+    // Set by semantic analysis; at most one of the two base kinds is set.
+    std::optional<SymbolId> resolved_trait_id;
+    std::optional<SymbolId> resolved_entity_id;
+    std::optional<std::size_t> pair_binding_index;
+
+    [[nodiscard]] std::optional<NamedTraitRef> named_ref() const {
+        if (!resolved_entity_id.has_value() || !resolved_trait_id.has_value()) {
+            return std::nullopt;
+        }
+        return NamedTraitRef{.entity = *resolved_entity_id, .trait = *resolved_trait_id};
+    }
 };
 
 struct MatchArm {
@@ -278,7 +292,8 @@ struct ExprNode {
                                  IfExpr,
                                  ListExpr,
                                  SpawnExpr,
-                                 QueryCallExpr>;
+                                 QueryCallExpr,
+                                 TraitAccessExpr>;
     Variant expr;
     SourceLocation location;
 
@@ -318,19 +333,16 @@ struct ExprNode {
 struct VarAssign {
     std::string name;
     std::string op;  // "=", "+=", "-=", "*=", "/="
-    // Extra dotted segments after `name` (e.g. ["Transform", "x"] for
-    // `body.Transform.x = ...`). Empty for ordinary bare-identifier
-    // assignment, which remains the only form unary/selectionless handlers
-    // give meaning to; pair handlers use it to name a binding-relative trait
-    // path so semantic analysis can reject the write with a precise
-    // read-only diagnostic instead of an unrelated parse error.
+    // Extra dotted segments after `name` (e.g. ["x"] for `pose.x = ...`).
+    // Empty for bare-identifier assignment. For a bracketed target these are
+    // the fields after the bracket.
     std::vector<std::string> path;
     std::unique_ptr<ExprNode> value;
     SourceLocation location;
-    // Set by semantic analysis for `Game.Match.field = ...`: `name` (or its
-    // module qualifier plus the first path segment) is the entity, then
-    // `trait_segments` path segments spell the trait.
-    std::optional<NamedTraitRef> named_target;
+    // Set for a bracketed target (`Game[Match].score`, `body[Collider].mask`):
+    // the whole target as a member chain over a TraitAccessExpr. `name` is its
+    // root identifier.
+    std::unique_ptr<ExprNode> target;
 };
 
 // `vec2(...)`, `vec3(...)`, `color(...)`, or `quat(...)`.
@@ -340,38 +352,38 @@ struct VarAssign {
            (ident->name == "vec2" || ident->name == "vec3" || ident->name == "color" || ident->name == "quat");
 }
 
-// For a named field read such as `Game.Match.pos.x`: the ref on its
-// `Game.Match` node and the field path after it (["pos", "x"]).
-inline std::optional<std::pair<const NamedTraitRef*, std::vector<std::string>>> named_field_path(
-    const MemberExpr& member) {
-    const MemberExpr* node = &member;
-    std::size_t depth      = 0;
-    while (!node->resolved_named_trait.has_value()) {
-        node = std::get_if<MemberExpr>(&node->object->expr);
-        if (node == nullptr) {
-            return std::nullopt;
-        }
-        ++depth;
+// For a trait field path such as `Game[Match].pos.x`: the trait access and
+// the field path after it (["pos", "x"]). Pass a MemberExpr to start below an
+// outer member already taken as the first field.
+template <typename Node>
+    requires std::same_as<std::remove_const_t<Node>, ExprNode>
+auto trait_field_path(Node& expr, std::vector<std::string> fields = {}) {
+    using Access = std::conditional_t<std::is_const_v<Node>, const TraitAccessExpr, TraitAccessExpr>;
+    std::optional<std::pair<Access*, std::vector<std::string>>> result;
+    Node* cursor = &expr;
+    std::vector<std::string> inner;
+    while (auto* member = std::get_if<MemberExpr>(&cursor->expr)) {
+        inner.push_back(member->member);
+        cursor = member->object.get();
     }
-    std::vector<std::string> fields(depth);
-    const MemberExpr* field_node = &member;
-    for (auto index = depth; index > 0; --index) {
-        fields[index - 1] = field_node->member;
-        field_node        = std::get_if<MemberExpr>(&field_node->object->expr);
+    if (auto* access = std::get_if<TraitAccessExpr>(&cursor->expr)) {
+        fields.insert(fields.begin(), inner.rbegin(), inner.rend());
+        result.emplace(access, std::move(fields));
     }
-    return std::pair{&*node->resolved_named_trait, std::move(fields)};
+    return result;
 }
 
-// The field path a named write targets (["over"] for `Game.Match.over = ...`).
-inline std::vector<std::string> named_target_fields(const VarAssign& assign) {
-    if (!assign.named_target.has_value()) {
-        return {};
+inline auto trait_field_path(const MemberExpr& member) {
+    return trait_field_path(std::as_const(*member.object), {member.member});
+}
+
+// The trait access a bracketed assignment targets, with its field path.
+inline std::optional<std::pair<const TraitAccessExpr*, std::vector<std::string>>> assign_trait_target(
+    const VarAssign& assign) {
+    if (assign.target == nullptr) {
+        return std::nullopt;
     }
-    const auto skip = assign.named_target->entity_segments + assign.named_target->trait_segments - 1;
-    if (skip >= assign.path.size()) {
-        return {};
-    }
-    return {assign.path.begin() + static_cast<std::ptrdiff_t>(skip), assign.path.end()};
+    return trait_field_path(std::as_const(*assign.target));
 }
 
 struct LetStmt {

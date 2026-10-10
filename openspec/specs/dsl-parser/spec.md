@@ -1119,3 +1119,26 @@ Each external handler SHALL declare each of reads, writes, projects, emits, comm
 #### Scenario: All contract families enforce uniqueness
 - **WHEN** any of reads, writes, projects, emits, commands, or effects is repeated in one external handler
 - **THEN** compilation reports a duplicate-clause error even if its entries differ
+
+### Requirement: Bracketed trait access postfix
+The parser SHALL accept a bracketed trait access postfix, `expr[TraitRef]`, after an identifier or a member expression on the same line. `TraitRef` SHALL be exactly one dotted trait name (`Match`, `tv.WorldTransform`, `EnemyLife.Dying`). Member access, calls and further postfixes MAY follow the closing bracket (`Game[Match].pos.x`). A bracketed list followed directly by `(` SHALL remain a query call with a query-filter list. A bracketed trait access SHALL also be accepted as the target of an assignment or compound assignment statement (`Game[Match].over = true`, `Game[Match].score += 1`). Whether the base may carry traits is decided by semantic analysis, not by the parser.
+
+#### Scenario: Parse bracketed access on an entity name
+- **WHEN** source contains `Game[Match].over` in expression position
+- **THEN** the parser produces a trait access node with base `Game` and trait `Match`, followed by a member access `over`
+
+#### Scenario: Parse bracketed access with a qualified trait and qualified base
+- **WHEN** source contains `hud.Hud[text.ScreenLabel].visible`
+- **THEN** the parser produces a trait access node with base `hud.Hud` and trait `text.ScreenLabel`, followed by a member access `visible`
+
+#### Scenario: Query call keeps its filter list
+- **WHEN** source contains `query.all[Enemy]()` and `query.count[EnemyAI, not Dead]()`
+- **THEN** the parser produces query call expressions with those filter lists, not trait access nodes
+
+#### Scenario: Assignment to a bracketed path
+- **WHEN** a handler body contains `Game[Match].score += 1`
+- **THEN** the parser produces a compound assignment whose target is base `Game`, trait `Match`, field path `score`
+
+#### Scenario: More than one trait in brackets is rejected
+- **WHEN** source contains `Game[Match, Score].over` or `Game[not Match].over` outside a query call
+- **THEN** the parser reports that a trait access takes exactly one trait name

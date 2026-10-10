@@ -412,6 +412,12 @@ cactus_add_headless_behavior_test(test_named_entity_access_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_named_entity_access_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_bracketed_trait_access_headless_behavior
+    CACTUS_SOURCE examples/bracketed_trait_access.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_bracketed_trait_access_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_persistence_named_entity_headless_behavior
     CACTUS_SOURCE examples/named_entity_access.cactus
     BACKEND cpp-entt

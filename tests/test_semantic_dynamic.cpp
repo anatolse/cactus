@@ -1464,7 +1464,7 @@ TEST_CASE("Semantic: set on a pair binding is accepted", "[semantic][deferred-se
                       "            Collider\n"
                       "    on tick:\n"
                       "        set Push on a:\n"
-                      "            amount = a.Push.amount + 1.0\n") == "");
+                      "            amount = a[Push].amount + 1.0\n") == "");
 }
 
 // ── Trait lifecycle triggers ────────────────────────────────────────────────

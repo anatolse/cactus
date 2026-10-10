@@ -202,6 +202,11 @@ private:
     std::vector<QueryFilterPredicate> parse_query_filters();
     std::unique_ptr<ExprNode> parse_query_call(std::unique_ptr<ExprNode> callee, const SourceLocation& location);
     std::unique_ptr<ExprNode> parse_postfix_expr();
+    [[nodiscard]] std::size_t matching_bracket_end(std::size_t index) const;
+    [[nodiscard]] bool at_query_filter_call() const;
+    std::unique_ptr<ExprNode> parse_trait_access(std::unique_ptr<ExprNode> object);
+    [[nodiscard]] bool at_assignment_operator() const;
+    std::unique_ptr<StmtNode> parse_assignment(VarAssign assign);
     std::unique_ptr<ExprNode> parse_primary_expr();
     std::unique_ptr<ExprNode> parse_spawn_expr();
     MatchExpr parse_match_expr();

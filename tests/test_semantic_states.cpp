@@ -177,7 +177,7 @@ TEST_CASE("Semantic: a state variant cannot be kept or projected", "[semantic][e
         "        b:\n"
         "            Log\n"
         "    where:\n"
-        "        a.Body.x < 1.0\n"
+        "        a[Body].x < 1.0\n"
         "    reduce per b:\n"
         "        n = count()\n"
         "    keep EnemyMode.Idle on b\n");

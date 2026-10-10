@@ -3,7 +3,7 @@
 ## Purpose
 
 Let handler code refer to a declared entity by its name, both as an `entity_id` value and through
-direct `Name.Trait.field` reads and writes, so games can hold game-wide state on an ordinary named
+direct `Name[Trait].field` reads and writes, so games can hold game-wide state on an ordinary named
 entity without marker-trait queries.
 
 ## Requirements
@@ -40,30 +40,41 @@ handler.
 - **THEN** semantic analysis reports that a template is not an `entity_id` value
 
 ### Requirement: Named field access reads and writes a named entity's traits
-A handler body or rule clause SHALL accept `Name.Trait.field` (and deeper member paths such as
-`Game.Transform.position.x`), where `Name` is a declared entity and `Trait` is a trait the entity's
-archetype declares, including through an import qualifier (`Hud.text.ScreenLabel.visible`). A read
-SHALL return the field's current value. In a handler body, assignment and compound assignment to
-such a path SHALL write immediately, like a write through `self`. A trait the archetype does not
-declare SHALL be a compile error. Named field access SHALL be rejected in `func` bodies, `const`
-blocks, and archetype bodies.
+A handler body or rule clause SHALL accept `Name[Trait].field` (and deeper member paths such as
+`Game[Transform].position.x`), where `Name` is a declared entity, possibly module-qualified
+(`hud.Hud`), and `Trait` is a trait the entity's archetype declares, including through an import
+qualifier (`Hud[text.ScreenLabel].visible`). The brackets SHALL contain exactly one trait reference.
+A read SHALL return the field's current value. In a handler body, assignment and compound
+assignment to such a path SHALL write immediately, like a write through `self`. A trait the
+archetype does not declare SHALL be a compile error. Named field access SHALL be rejected in `func`
+bodies, `const` blocks, and archetype bodies.
 
 #### Scenario: Read game-wide state by name
-- **WHEN** entity `Game` declares `Match` with `over = false`, and a handler reads `Game.Match.over`
+- **WHEN** entity `Game` declares `Match` with `over = false`, and a handler reads `Game[Match].over`
 - **THEN** the read yields `false`
 
+#### Scenario: Imported trait through a named entity
+- **WHEN** a module imports `std.text as text`, entity `Hud` declares `text.ScreenLabel`, and a
+  handler assigns `Hud[text.ScreenLabel].visible = false`
+- **THEN** the program compiles, and the write is visible to handlers scheduled later in the same
+  activation
+
 #### Scenario: Immediate write by name is visible to later handlers
-- **WHEN** a handler runs `Game.Match.score += 1`, and a handler scheduled later in the same activation
-  reads `Game.Match.score`
+- **WHEN** a handler runs `Game[Match].score += 1`, and a handler scheduled later in the same
+  activation reads `Game[Match].score`
 - **THEN** the later handler observes the incremented value
 
 #### Scenario: Undeclared trait is rejected
-- **WHEN** a handler reads `Game.Health.value` and `Game`'s archetype does not declare `Health`
+- **WHEN** a handler reads `Game[Health].value` and `Game`'s archetype does not declare `Health`
 - **THEN** semantic analysis reports that `Game` does not declare `Health`
 
 #### Scenario: Named access in a func body is rejected
-- **WHEN** a `func` body reads `Game.Match.over`
+- **WHEN** a `func` body reads `Game[Match].over`
 - **THEN** semantic analysis reports that named field access is only allowed in rules
+
+#### Scenario: Brackets hold one trait reference
+- **WHEN** a handler reads `Game[Match, Score].over` or `Game[not Match].over`
+- **THEN** compilation reports that the brackets take exactly one trait name
 
 ### Requirement: Named field access implicitly requires the entity and trait
 For every `(Name, Trait)` pair that a handler accesses by name, whether in its body or in any clause of its
@@ -76,20 +87,20 @@ Because `destroy` and `remove` are buffered until the activation commit, a requi
 at the start of a pass SHALL hold for the whole pass.
 
 #### Scenario: Handler stops when the named entity is destroyed
-- **WHEN** a filter rule's handler reads `Game.Match.over`, and `Game` is destroyed at a commit
+- **WHEN** a filter rule's handler reads `Game[Match].over`, and `Game` is destroyed at a commit
 - **THEN** in later activations that handler does not run for any entity, and no error is raised
 
 #### Scenario: Handler stops when the named trait is removed
 - **WHEN** `remove Match from Game` commits
-- **THEN** handlers that access `Game.Match` by name stop running, and handlers that access only
+- **THEN** handlers that access `Game[Match]` by name stop running, and handlers that access only
   other traits of `Game` by name keep running
 
 #### Scenario: Requirement covers the whole handler
-- **WHEN** a handler reads `Game.Match.over` only inside one `if` branch, and `Game` is not alive
+- **WHEN** a handler reads `Game[Match].over` only inside one `if` branch, and `Game` is not alive
 - **THEN** the handler's pass does nothing, including the statements outside that branch
 
 #### Scenario: Destroy inside the pass does not break later reads
-- **WHEN** a handler runs `destroy Game` and then reads `Game.Match.over` in the same pass
+- **WHEN** a handler runs `destroy Game` and then reads `Game[Match].over` in the same pass
 - **THEN** the read yields the current value, and `Game` is removed at the activation commit
 
 ### Requirement: The name follows its entity's lifecycle
@@ -105,12 +116,12 @@ and restored like any other entity, and their `persist` fields SHALL be restored
 
 #### Scenario: Mutually referencing named entities load
 - **WHEN** `entity A:` overrides `Link: other = B` and `entity B:` overrides `Link: other = A`
-- **THEN** after load `A.Link.other` equals `B`'s binding and `B.Link.other` equals `A`'s binding
+- **THEN** after load `A[Link].other` equals `B`'s binding and `B[Link].other` equals `A`'s binding
 
 #### Scenario: Restore rebinds the name
 - **WHEN** a snapshot containing `Game` with a `persist` field `Match.best = 7` is restored
-- **THEN** `Game` binds to the restored instance, `Game.Match.best` reads `7`, and handlers that
-  access `Game.Match` by name run
+- **THEN** `Game` binds to the restored instance, `Game[Match].best` reads `7`, and handlers that
+  access `Game[Match]` by name run
 
 #### Scenario: Restore without the entity leaves the name stale
 - **WHEN** a restored document has no record whose origin is `Game`
@@ -123,5 +134,24 @@ pass over its domain: its iterations SHALL run in the domain's deterministic ord
 SHALL NOT run them in parallel.
 
 #### Scenario: Accumulating into a named field is deterministic
-- **WHEN** a filter rule over 100 `Coin` entities runs `Game.Match.score += coin.value`
-- **THEN** after the pass `Game.Match.score` equals the previous score plus the sum of all coin values
+- **WHEN** a filter rule over 100 `Coin` entities runs `Game[Match].score += coin.value`
+- **THEN** after the pass `Game[Match].score` equals the previous score plus the sum of all coin values
+
+### Requirement: Dotted named field access is rejected with a rename diagnostic
+A member path that starts with a declared entity name and continues with a trait the entity's
+archetype declares, written with dots (`Game.Match.over`, `Hud.text.ScreenLabel.visible`), SHALL be
+a compile error. The diagnostic SHALL name the bracketed replacement, for example
+"use `Game[Match].over`". It SHALL be reported once per access, and analysis SHALL continue as if
+the bracketed form had been written, so later errors are still reported.
+
+#### Scenario: Dotted read names the replacement
+- **WHEN** a handler reads `Game.Match.over`
+- **THEN** compilation reports one error that says to use `Game[Match].over`
+
+#### Scenario: Dotted imported write names the replacement
+- **WHEN** a handler assigns `Hud.text.ScreenLabel.visible = false`
+- **THEN** compilation reports one error that says to use `Hud[text.ScreenLabel].visible`
+
+#### Scenario: Analysis continues after the rename error
+- **WHEN** a handler reads `Game.Match.over` and later reads an undeclared local `missing`
+- **THEN** compilation reports both the rename error and the unknown-name error

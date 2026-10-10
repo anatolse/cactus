@@ -198,7 +198,7 @@ rule Shove:
 
     on tick:
         set Push on a:
-            amount = a.Push.amount + 1.0
+            amount = a[Push].amount + 1.0
 
 rule SeeTint:
     each:

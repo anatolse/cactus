@@ -164,12 +164,12 @@ rule Lift:
     after:
         Integrate
     reduce per body:
-        hit = first_hit(sweep(body, vec3(0.0, body.CharacterBody.lift, 0.0), other))
+        hit = first_hit(sweep(body, vec3(0.0, body[CharacterBody].lift, 0.0), other))
 
     on core.fixed_tick:
-        let rise = body.CharacterBody.lift * hit.t
-        body.tv.WorldTransform.position.y += rise
-        body.CharacterBody.lift = rise
+        let rise = body[CharacterBody].lift * hit.t
+        body[tv.WorldTransform].position.y += rise
+        body[CharacterBody].lift = rise
 
 rule Slide1:
     pairs:
@@ -184,17 +184,17 @@ rule Slide1:
     after:
         Lift
     reduce per body:
-        hit = first_hit(sweep(body, body.CharacterBody.motion, other))
+        hit = first_hit(sweep(body, body[CharacterBody].motion, other))
 
     on core.fixed_tick:
-        let max_slope = body.CharacterBody.max_slope
-        body.tv.WorldTransform.position += body.CharacterBody.motion * hit.t
-        body.CharacterBody.motion = slide_along(body.CharacterBody.motion * (1.0 - hit.t), hit, max_slope)
-        body.CharacterBody.velocity = slide_along(body.CharacterBody.velocity, hit, max_slope)
+        let max_slope = body[CharacterBody].max_slope
+        body[tv.WorldTransform].position += body[CharacterBody].motion * hit.t
+        body[CharacterBody].motion = slide_along(body[CharacterBody].motion * (1.0 - hit.t), hit, max_slope)
+        body[CharacterBody].velocity = slide_along(body[CharacterBody].velocity, hit, max_slope)
         if hit.hit and walkable(hit.surface, max_slope):
-            body.CharacterBody.grounded = true
-            body.CharacterBody.ground_normal = hit.surface
-            body.CharacterBody.ground_offset = body.tv.WorldTransform.position.y - hit.point.y
+            body[CharacterBody].grounded = true
+            body[CharacterBody].ground_normal = hit.surface
+            body[CharacterBody].ground_offset = body[tv.WorldTransform].position.y - hit.point.y
 
 rule Slide2:
     pairs:
@@ -209,17 +209,17 @@ rule Slide2:
     after:
         Slide1
     reduce per body:
-        hit = first_hit(sweep(body, body.CharacterBody.motion, other))
+        hit = first_hit(sweep(body, body[CharacterBody].motion, other))
 
     on core.fixed_tick:
-        let max_slope = body.CharacterBody.max_slope
-        body.tv.WorldTransform.position += body.CharacterBody.motion * hit.t
-        body.CharacterBody.motion = slide_along(body.CharacterBody.motion * (1.0 - hit.t), hit, max_slope)
-        body.CharacterBody.velocity = slide_along(body.CharacterBody.velocity, hit, max_slope)
+        let max_slope = body[CharacterBody].max_slope
+        body[tv.WorldTransform].position += body[CharacterBody].motion * hit.t
+        body[CharacterBody].motion = slide_along(body[CharacterBody].motion * (1.0 - hit.t), hit, max_slope)
+        body[CharacterBody].velocity = slide_along(body[CharacterBody].velocity, hit, max_slope)
         if hit.hit and walkable(hit.surface, max_slope):
-            body.CharacterBody.grounded = true
-            body.CharacterBody.ground_normal = hit.surface
-            body.CharacterBody.ground_offset = body.tv.WorldTransform.position.y - hit.point.y
+            body[CharacterBody].grounded = true
+            body[CharacterBody].ground_normal = hit.surface
+            body[CharacterBody].ground_offset = body[tv.WorldTransform].position.y - hit.point.y
 
 rule Slide3:
     pairs:
@@ -234,17 +234,17 @@ rule Slide3:
     after:
         Slide2
     reduce per body:
-        hit = first_hit(sweep(body, body.CharacterBody.motion, other))
+        hit = first_hit(sweep(body, body[CharacterBody].motion, other))
 
     on core.fixed_tick:
-        let max_slope = body.CharacterBody.max_slope
-        body.tv.WorldTransform.position += body.CharacterBody.motion * hit.t
-        body.CharacterBody.motion = slide_along(body.CharacterBody.motion * (1.0 - hit.t), hit, max_slope)
-        body.CharacterBody.velocity = slide_along(body.CharacterBody.velocity, hit, max_slope)
+        let max_slope = body[CharacterBody].max_slope
+        body[tv.WorldTransform].position += body[CharacterBody].motion * hit.t
+        body[CharacterBody].motion = slide_along(body[CharacterBody].motion * (1.0 - hit.t), hit, max_slope)
+        body[CharacterBody].velocity = slide_along(body[CharacterBody].velocity, hit, max_slope)
         if hit.hit and walkable(hit.surface, max_slope):
-            body.CharacterBody.grounded = true
-            body.CharacterBody.ground_normal = hit.surface
-            body.CharacterBody.ground_offset = body.tv.WorldTransform.position.y - hit.point.y
+            body[CharacterBody].grounded = true
+            body[CharacterBody].ground_normal = hit.surface
+            body[CharacterBody].ground_offset = body[tv.WorldTransform].position.y - hit.point.y
 
 # Lands a planned step on walkable ground at most step_height above the ground
 # it left. Otherwise the lift is undone, and Depenetrate clears any corner the
@@ -262,25 +262,25 @@ rule Snap:
     after:
         Slide3
     reduce per body:
-        hit = first_hit(sweep(body, vec3(0.0, (body.CharacterBody.lift + body.CharacterBody.drop) * -1.0, 0.0), other))
+        hit = first_hit(sweep(body, vec3(0.0, (body[CharacterBody].lift + body[CharacterBody].drop) * -1.0, 0.0), other))
 
     on core.fixed_tick as step:
-        let lift = body.CharacterBody.lift
-        let planned = body.CharacterBody.drop > 0.0
-        let highest = body.tv.WorldTransform.position.y - lift - body.CharacterBody.ground_offset + body.CharacterBody.step_height
-        let landed = planned and hit.hit and walkable(hit.surface, body.CharacterBody.max_slope) and hit.point.y <= highest + 0.001
+        let lift = body[CharacterBody].lift
+        let planned = body[CharacterBody].drop > 0.0
+        let highest = body[tv.WorldTransform].position.y - lift - body[CharacterBody].ground_offset + body[CharacterBody].step_height
+        let landed = planned and hit.hit and walkable(hit.surface, body[CharacterBody].max_slope) and hit.point.y <= highest + 0.001
         if landed:
-            body.tv.WorldTransform.position.y -= (lift + body.CharacterBody.drop) * hit.t
-            body.CharacterBody.velocity.y = 0.0
-            body.CharacterBody.grounded = true
-            body.CharacterBody.ground_normal = hit.surface
-            body.CharacterBody.ground_offset = body.tv.WorldTransform.position.y - hit.point.y
+            body[tv.WorldTransform].position.y -= (lift + body[CharacterBody].drop) * hit.t
+            body[CharacterBody].velocity.y = 0.0
+            body[CharacterBody].grounded = true
+            body[CharacterBody].ground_normal = hit.surface
+            body[CharacterBody].ground_offset = body[tv.WorldTransform].position.y - hit.point.y
         if planned and not landed:
-            body.tv.WorldTransform.position.y -= lift
-        if body.CharacterBody.grounded:
-            body.CharacterBody.time_since_grounded = 0.0
+            body[tv.WorldTransform].position.y -= lift
+        if body[CharacterBody].grounded:
+            body[CharacterBody].time_since_grounded = 0.0
         else:
-            body.CharacterBody.time_since_grounded += step.dt
+            body[CharacterBody].time_since_grounded += step.dt
 
 rule Depenetrate:
     pairs:
@@ -298,7 +298,7 @@ rule Depenetrate:
         push = sum(push_out(body, other))
 
     on core.fixed_tick:
-        body.tv.WorldTransform.position += push
+        body[tv.WorldTransform].position += push
 
 # Re-derives the WorldTransform of each LocalTransform descendant of a body,
 # so a rule after `solve` sees a body's children at this tick's pose. Other

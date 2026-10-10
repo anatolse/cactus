@@ -1,7 +1,7 @@
 module named_entity_access
 
 # Game-wide state lives on an ordinary named entity. Rules read and write it
-# by name (`Game.Match.over`), use names as entity values (`set ... on Hud:`),
+# by name (`Game[Match].over`), use names as entity values (`set ... on Hud:`),
 # and switch whole passes off with `when:`.
 
 use std.core
@@ -126,13 +126,13 @@ rule EndGameOnRequest:
 
     on tick:
         if control.end_game:
-            Game.Match.over = true
+            Game[Match].over = true
 
 rule MoveEnemies:
     each:
         Enemy as enemy
     when:
-        not Game.Match.over
+        not Game[Match].over
 
     on tick:
         enemy.steps += 1
@@ -142,20 +142,20 @@ rule CloseGateMidPass:
     each:
         Enemy as enemy
     when:
-        Switch.Control.close_mid_pass
-        not Game.Match.over
+        Switch[Control].close_mid_pass
+        not Game[Match].over
 
     on tick:
         enemy.closer_visits += 1
-        Game.Match.over = true
+        Game[Match].over = true
 
 rule CountActiveWaveTicks:
     when:
-        not Game.Match.over
-        Game.Match.wave > 0
+        not Game[Match].over
+        Game[Match].wave > 0
 
     on tick:
-        Switch.Probe.wave_ticks += 1
+        Switch[Probe].wave_ticks += 1
 
 rule SendPing:
     on tick:
@@ -165,7 +165,7 @@ rule CountPings:
     each:
         Probe as probe
     when:
-        not Game.Match.over
+        not Game[Match].over
 
     on Ping:
         probe.gated_pings += 1
@@ -175,7 +175,7 @@ rule ReadOver:
         Probe as probe
 
     on tick:
-        probe.over_seen = Game.Match.over
+        probe.over_seen = Game[Match].over
 
 rule AddScore:
     each:
@@ -183,7 +183,7 @@ rule AddScore:
 
     on tick:
         if control.add_score:
-            Game.Match.score += 1
+            Game[Match].score += 1
 
 rule ObserveScore:
     each:
@@ -192,14 +192,14 @@ rule ObserveScore:
         AddScore
 
     on tick:
-        probe.score_seen = Game.Match.score
+        probe.score_seen = Game[Match].score
 
 rule CollectCoins:
     each:
         Coin as coin
 
     on tick:
-        Game.Match.coins += coin.value
+        Game[Match].coins += coin.value
 
 rule HideHud:
     each:
@@ -264,7 +264,7 @@ rule DestroyThenRead:
         if not control.destroy_then_read:
             return
         destroy Game
-        control.read_after_destroy = Game.Match.score
+        control.read_after_destroy = Game[Match].score
 
 rule CountMatchPasses:
     each:
@@ -272,7 +272,7 @@ rule CountMatchPasses:
 
     on tick:
         probe.match_passes += 1
-        if Game.Match.wave < 0:
+        if Game[Match].wave < 0:
             probe.branch_flag = true
 
 rule CountStatsPasses:
@@ -281,7 +281,7 @@ rule CountStatsPasses:
 
     on tick:
         probe.stats_passes += 1
-        Game.Stats.ticks += 1
+        Game[Stats].ticks += 1
 
 # The name appears in one branch only, yet it gates the whole pass.
 rule CountBranchPasses:
@@ -291,4 +291,4 @@ rule CountBranchPasses:
     on tick:
         probe.branch_passes += 1
         if probe.branch_passes > 1000000:
-            probe.branch_flag = Game.Match.over
+            probe.branch_flag = Game[Match].over

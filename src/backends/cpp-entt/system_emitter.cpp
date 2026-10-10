@@ -1,5 +1,6 @@
 #include "backends/cpp-entt/system_emitter.hpp"
 #include "common/ast_expressions.hpp"
+#include "common/codegen_error.hpp"
 
 #include "frontend/symbol_identity.hpp"
 
@@ -488,23 +489,6 @@ struct FilterBinding {
 
 // ── Pair relation codegen scope (dsl-pair-relations) ─────────────────────────
 
-// Resolved binding-relative trait namespace for one pair binding, mirroring
-// the frontend's PairBindingScope (semantic_analyzer.hpp) but carrying the
-// generated C++ component type name instead of a canonical SymbolId — codegen
-// consumes the AST's already-resolved trait identities (via
-// EnttCodegenUtils::trait_cpp_name) and never re-derives them from source
-// dotted spelling.
-struct PairCodegenTraitAccess {
-    std::string cpp_type;
-    bool is_marker = false;
-    // Resolved trait fields, needed only to detect a `color`-typed field
-    // ahead of a trailing `.r`/`.g`/`.b`/`.a` component-access segment
-    // (rewrite_expr's MemberExpr/pair_scope branch); null for a marker trait
-    // or one the linker couldn't resolve, in which case that special-casing
-    // simply doesn't fire and the segment is appended as plain text as before.
-    const ResolvedTrait* trait = nullptr;
-};
-
 struct PairCodegenBinding {
     PairCodegenBinding()                                                = default;
     PairCodegenBinding(const PairCodegenBinding&)                       = default;
@@ -518,7 +502,6 @@ struct PairCodegenBinding {
     // read-only registry.get<const T> every other pair binding gets. Mirrors
     // the frontend's PairBindingScope::writable.
     bool writable = false;
-    std::unordered_map<std::string, PairCodegenTraitAccess> traits;  // access key -> resolved trait
     // Builds this binding's collider descriptor: a specialized builder when the
     // selection names exactly one shape trait, the generic lookup otherwise.
     std::string collider_shape_builder = EnttCodegenUtils::collider_shape_builder();
@@ -655,8 +638,7 @@ struct PairBindingCodegen {
     PairBindingCodegen& operator=(PairBindingCodegen&&) noexcept(false) = default;
     ~PairBindingCodegen()                                               = default;
     std::vector<std::string> cpp_types;  // dedup'd view<> template args, source order
-    PairCodegenBinding scope;            // access-key -> resolved trait, for rewrite_expr; scope.binding_name
-                                         // is also this binding's source-level name
+    PairCodegenBinding scope;            // scope.binding_name is also this binding's source-level name
 };
 
 std::string collider_shape_builder(const PairBindingNode& binding) {
@@ -669,10 +651,6 @@ std::string collider_shape_builder(const PairBindingNode& binding) {
     return EnttCodegenUtils::collider_shape_builder(shapes.size() == 1 ? std::optional{shapes.front()} : std::nullopt);
 }
 
-// Mirrors the frontend's build_pair_scope (semantic_analyzer.cpp): consumes
-// each already-resolved trait entry (resolved_trait_id) into an access-key ->
-// cpp-type map, keyed by qualified spelling and binding-local alias, exactly
-// as the semantic analyzer's resolve_pair_member_chain expects to look up.
 PairBindingCodegen build_pair_binding_codegen(const PairBindingNode& binding, const DecoratedProgram& program) {
     PairBindingCodegen result;
     result.scope.binding_name = binding.name;
@@ -680,17 +658,8 @@ PairBindingCodegen build_pair_binding_codegen(const PairBindingNode& binding, co
     for (const auto& entry : binding.traits) {
         const auto cpp_type_name =
             EnttCodegenUtils::trait_cpp_name(entry.resolved_trait_id, entry.qualified_name, program);
-        const auto lookup_name =
-            entry.resolved_trait_id.has_value() ? make_canonical_id(*entry.resolved_trait_id) : entry.qualified_name;
-        const auto* trait    = EnttCodegenUtils::find_trait(program, lookup_name);
-        const bool is_marker = trait == nullptr || trait->fields.empty();
         if (seen_cpp_types.insert(cpp_type_name).second) {
             result.cpp_types.push_back(cpp_type_name);
-        }
-        const PairCodegenTraitAccess access{.cpp_type = cpp_type_name, .is_marker = is_marker, .trait = trait};
-        result.scope.traits[entry.qualified_name] = access;
-        if (entry.alias.has_value()) {
-            result.scope.traits[*entry.alias] = access;
         }
     }
     result.scope.collider_shape_builder = collider_shape_builder(binding);
@@ -2374,6 +2343,41 @@ static std::string lower_match_expr(const MatchExpr& match_expr,
     return lowered + (match_expr.on_state_slot ? "} }()" : "}()");
 }
 
+// `X[T].a.b`: the named slot reference or the pair binding's component, then
+// the field path. A color field's channel reads as a normalized float.
+static std::string lower_trait_field_path(const TraitAccessExpr& access,
+                                          const std::vector<std::string>& fields,
+                                          const DecoratedProgram& program,
+                                          const PairCodegenScope* pair_scope) {
+    if (!access.resolved_trait_id.has_value()) {
+        throw CodegenError(access.location, "unresolved trait access '" + access.trait_name + "' reached code generation");
+    }
+    const auto& trait_id = *access.resolved_trait_id;
+    std::string base;
+    if (const auto named = access.named_ref(); named.has_value()) {
+        base = EnttCodegenUtils::named_trait_ref_name(*named, program);
+    } else {
+        const auto* ident   = std::get_if<IdentExpr>(&access.object->expr);
+        const auto* binding = ident != nullptr && pair_scope != nullptr ? pair_scope->find(ident->name) : nullptr;
+        if (binding == nullptr) {
+            throw CodegenError(access.location, "trait access '" + access.trait_name + "' has no named entity or pair binding");
+        }
+        base = "registry.get<" + std::string(binding->writable ? "" : "const ") +
+               EnttCodegenUtils::trait_cpp_name(trait_id, access.trait_name, program) + ">(" + ident->name + ")";
+    }
+    const auto* trait = EnttCodegenUtils::find_trait(program, make_canonical_id(trait_id));
+    if (fields.size() == 2 && trait != nullptr && EnttCodegenUtils::is_color_component_member(fields[1])) {
+        const auto field = std::ranges::find(trait->fields, fields[0], &ResolvedField::name);
+        if (field != trait->fields.end() && field->type.kind == TypeKind::Color) {
+            return "(static_cast<float>(" + base + "." + fields[0] + "." + fields[1] + ") / 255.0F)";
+        }
+    }
+    for (const auto& field : fields) {
+        base += "." + field;
+    }
+    return base;
+}
+
 static std::string rewrite_expr(  // NOLINT(readability-function-cognitive-complexity) -- still 250 after table-driving
                                   // the input/camera/transform builtin dispatch (task 5.4); this is the full
                                   // expression-rewrite dispatch, dozens of unrelated arms remain
@@ -2659,79 +2663,14 @@ static std::string rewrite_expr(  // NOLINT(readability-function-cognitive-compl
                 if (auto lowered = lowered_trigger_reference(*e.object)) {
                     return *std::move(lowered) + "." + e.member;
                 }
+                if (const auto path = trait_field_path(e); path.has_value()) {
+                    return lower_trait_field_path(*path->first, path->second, program, pair_scope);
+                }
                 if (auto named = EnttCodegenUtils::named_member_cpp(e, program)) {
                     return *std::move(named);
                 }
                 if (e.resolved_const_id.has_value()) {
                     return EnttCodegenUtils::symbol_cpp_name(*e.resolved_const_id);
-                }
-                // Pair-bound member chain (e.g. `body.tf.WorldTransform.position`):
-                // consume leading segments against the binding's resolved trait
-                // namespace using the same longest-prefix rule as the semantic
-                // analyzer's resolve_pair_member_chain, then fetch the trait as
-                // const (pair-bound traits are read-only) and append the
-                // remaining field path unchanged.
-                if (pair_scope != nullptr) {
-                    std::vector<std::string> segments{e.member};
-                    const ExprNode* cursor = e.object.get();
-                    while (const auto* chain_member = std::get_if<MemberExpr>(&cursor->expr)) {
-                        segments.push_back(chain_member->member);
-                        cursor = chain_member->object.get();
-                    }
-                    std::ranges::reverse(segments);
-                    if (const auto* root = std::get_if<IdentExpr>(&cursor->expr)) {
-                        if (const auto* binding = pair_scope->find(root->name)) {
-                            for (std::size_t len = std::min<std::size_t>(2, segments.size()); len >= 1; --len) {
-                                std::string key;
-                                for (std::size_t i = 0; i < len; ++i) {
-                                    if (i != 0) {
-                                        key += '.';
-                                    }
-                                    key += segments[i];
-                                }
-                                auto found = binding->traits.find(key);
-                                if (found == binding->traits.end()) {
-                                    continue;
-                                }
-                                std::string access = "registry.get<" +
-                                                     std::string(binding->writable ? "" : "const ") +
-                                                     found->second.cpp_type + ">(" + root->name + ")";
-                                // A `.<field>.r`/`.g`/`.b`/`.a` tail on a
-                                // color-typed field needs the same normalized-
-                                // float read every other color access uses
-                                // (dsl-vector-expressions "Color float
-                                // component access") instead of the raw byte
-                                // `.r` plain-text append below, which is
-                                // correct as-is for vec2/vec3's `.x`/`.y`/`.z`
-                                // (Vector2/Vector3's own field names already
-                                // match) but wrong for color.
-                                if (segments.size() - len == 2 && found->second.trait != nullptr) {
-                                    const auto& field_name = segments[len];
-                                    const auto& channel    = segments[len + 1];
-                                    const bool is_channel =
-                                        channel == "r" || channel == "g" || channel == "b" || channel == "a";
-                                    const auto field_it =
-                                        std::ranges::find_if(found->second.trait->fields,
-                                                             [&](const auto& f) { return f.name == field_name; });
-                                    if (is_channel && field_it != found->second.trait->fields.end() &&
-                                        field_it->type.kind == TypeKind::Color) {
-                                        std::string normalized_read = "static_cast<float>(";
-                                        normalized_read += access;
-                                        normalized_read += '.';
-                                        normalized_read += field_name;
-                                        normalized_read += '.';
-                                        normalized_read += channel;
-                                        normalized_read += ") / 255.0F";
-                                        return normalized_read;
-                                    }
-                                }
-                                for (std::size_t i = len; i < segments.size(); ++i) {
-                                    access += "." + segments[i];
-                                }
-                                return access;
-                            }
-                        }
-                    }
                 }
                 // Three-level access module.EnumName.Variant: emit CanonicalEnum::Variant.
                 if (const auto* enum_member = std::get_if<MemberExpr>(&e.object->expr)) {
@@ -2753,12 +2692,11 @@ static std::string rewrite_expr(  // NOLINT(readability-function-cognitive-compl
                     // A color-typed local/parameter's `.r`/`.g`/`.b`/`.a`
                     // needs the same normalized-float read every other color
                     // access uses (dsl-vector-expressions "Color float
-                    // component access") — the pair-bound-chain branch above
-                    // already handles this for a filter/pair trait access;
+                    // component access") — the trait-access branch above
+                    // already handles this for a named or pair trait access;
                     // this is the same fix for a plain local value (e.g. a
                     // `func`'s `color`-typed parameter).
-                    if (local_kinds != nullptr &&
-                        (e.member == "r" || e.member == "g" || e.member == "b" || e.member == "a")) {
+                    if (local_kinds != nullptr && EnttCodegenUtils::is_color_component_member(e.member)) {
                         if (const auto found = local_kinds->find(ident->name);
                             found != local_kinds->end() && found->second == NumericKind::Color) {
                             return "(static_cast<float>(" + ident->name + "." + e.member + ") / 255.0F)";
@@ -2789,6 +2727,8 @@ static std::string rewrite_expr(  // NOLINT(readability-function-cognitive-compl
                     return rewrite_expr(child, trait_names, program, pointer_aliases, cpp_overrides, pair_scope,
                                         local_kinds);
                 });
+            } else if constexpr (std::is_same_v<E, TraitAccessExpr>) {
+                return lower_trait_field_path(e, {}, program, pair_scope);
             } else {
                 static_assert(std::is_same_v<E, MatchExpr>, "every expression form needs a C++ lowering");
                 return lower_match_expr(e, [&](const ExprNode& child) {
@@ -3473,11 +3413,9 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                 return result;
             } else if constexpr (std::is_same_v<S, VarAssign>) {
                 std::string lhs;
-                if (s.named_target.has_value()) {
-                    lhs = EnttCodegenUtils::named_trait_ref_name(*s.named_target, program);
-                    for (const auto& field : named_target_fields(s)) {
-                        lhs += "." + field;
-                    }
+                if (s.target != nullptr) {
+                    lhs = rewrite_expr(
+                        *s.target, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds);
                 } else if (!s.path.empty()) {
                     // Dotted assignment target (`alias.field...`): reconstruct the
                     // equivalent member-access chain and lower it through the same

@@ -37,15 +37,15 @@ rule TeamScore:
         member:
             Member
     where:
-        member.Member.team == team
+        member[Member].team == team
     reduce per team:
         members = count()
-        score = sum(member.Member.points)
+        score = sum(member[Member].points)
 
     on tick:
-        team.Team.members = members
-        team.Team.score = score
-        team.Team.activations += 1
+        team[Team].members = members
+        team[Team].score = score
+        team[Team].activations += 1
 
 event Recount
 
@@ -61,13 +61,13 @@ rule RecountTeam:
         member:
             Member
     where:
-        member.Member.team == team
+        member[Member].team == team
     reduce per team:
         members = count()
 
     on Recount:
-        team.Team.recounts += 1
-        team.Team.recount_members = members
+        team[Team].recounts += 1
+        team[Team].recount_members = members
 
 # A global reduction ignores the target: Red has no Member, yet every
 # member row is counted.
@@ -78,8 +78,8 @@ rule RecountAll:
         members = count()
 
     on Recount:
-        Results.Totals.recounts += 1
-        Results.Totals.recount_members = members
+        Results[Totals].recounts += 1
+        Results[Totals].recount_members = members
 
 # Each handler raises its own team's bonus, which is another team's input.
 rule RivalBonus:
@@ -91,11 +91,11 @@ rule RivalBonus:
     where:
         team != rival
     reduce per team:
-        rival_bonus = sum(rival.Team.bonus)
+        rival_bonus = sum(rival[Team].bonus)
 
     on tick:
-        team.Team.rival_bonus = rival_bonus
-        team.Team.bonus += 10
+        team[Team].rival_bonus = rival_bonus
+        team[Team].bonus += 10
 
 # Folds run in creation order, one step at a time: the int sum clamps at
 # each step and the float sum is never reassociated.
@@ -107,8 +107,8 @@ rule SumSamples:
         part = sum(sample.part)
 
     on tick:
-        Results.Totals.whole = whole
-        Results.Totals.part = part
+        Results[Totals].whole = whole
+        Results[Totals].part = part
 
 entity Results:
     Totals

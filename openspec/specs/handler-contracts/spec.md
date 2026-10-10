@@ -46,7 +46,7 @@ Every trait read reachable from a handler's `where:` predicates SHALL be folded 
 - **THEN** each of its handlers' contracts records a read of `Health.hp`, identically to the same rule without `limit:`
 
 #### Scenario: where: bound read on a limited pair rule is recorded
-- **WHEN** a pair rule with bindings `actor` and `surface` declares `where: surface.Solid.top <= actor.Actor.feet_y` and `limit: 1 per actor`
+- **WHEN** a pair rule with bindings `actor` and `surface` declares `where: surface[Solid].top <= actor[Actor].feet_y` and `limit: 1 per actor`
 - **THEN** each of its handlers' contracts records binding-qualified reads of `Solid` through `surface` and `Actor` through `actor`, and reads of `Solid.top` and `Actor.feet_y`
 
 #### Scenario: A writer orders against a limited where: reader in either declaration order
@@ -57,7 +57,7 @@ Every trait read reachable from a handler's `where:` predicates SHALL be folded 
 Every trait read reachable from a rule's `limit:` count expression SHALL be folded into each of the rule's handler contracts with the same precision as reads reachable from the handler body: binding-qualified (`bound_reads`) for the `per` binding of a pair handler, and also contributing to the contract's conservative `reads` union and per-field read access. A count that reads only constants SHALL add no trait read.
 
 #### Scenario: Per-binding limit count read is recorded
-- **WHEN** a pair rule declares `limit: actor.Actor.slots per actor`
+- **WHEN** a pair rule declares `limit: actor[Actor].slots per actor`
 - **THEN** each of its handlers' contracts records a binding-qualified read of `Actor` through `actor` and a read of `Actor.slots`
 
 #### Scenario: Constant limit count adds no read
@@ -97,7 +97,7 @@ Handler contracts SHALL record projected trait outputs separately from durable w
 When a pair handler mutates a trait through the `per` binding of a provably-one `limit:` clause, contract inference SHALL record that mutation as an ordinary write: folded into the contract's `writes` and contributing to its conservative `reads`/`writes` union for scheduling, identically to a write inferred through a unary filter alias.
 
 #### Scenario: Provably-limited pair write is recorded
-- **WHEN** a pair handler under `limit: 1 per actor` assigns `actor.KinematicActor.grounded = true`
+- **WHEN** a pair handler under `limit: 1 per actor` assigns `actor[KinematicActor].grounded = true`
 - **THEN** the handler's contract records the canonical KinematicActor trait in `writes`
 
 #### Scenario: Scheduling sees the same conflict information as a unary write
@@ -194,7 +194,7 @@ Every handler contract SHALL record, for each trait in its reads and writes, whi
 - **THEN** its contract records a read of `Player.game_over`
 
 #### Scenario: Pair bound read is recorded per field
-- **WHEN** a pair handler reads `body.Collider.radius`
+- **WHEN** a pair handler reads `body[Collider].radius`
 - **THEN** its conservative read set records `Collider.radius`, and its binding-qualified read still names the `body` binding and `Collider`
 
 ### Requirement: Unnarrowable accesses cover all fields
@@ -232,19 +232,19 @@ splittable per entity. Using an entity name only as a value (`set T on Name`, `e
 comparisons) SHALL add no named access and no requirement.
 
 #### Scenario: Named read is recorded with entity and field
-- **WHEN** a handler's rule declares `when: not Game.Match.over`
+- **WHEN** a handler's rule declares `when: not Game[Match].over`
 - **THEN** the contract records a named read of `Game`'s `Match.over`, a read of `Match.over`, and the requirement `(Game, Match)`
 
 #### Scenario: Named write orders against filter readers
-- **WHEN** handler A writes `Game.Match.over`, and handler B filters `Match as m` and reads `m.over`
+- **WHEN** handler A writes `Game[Match].over`, and handler B filters `Match as m` and reads `m.over`
 - **THEN** a contract conflict edge on `Match.over` connects A and B
 
 #### Scenario: Disjoint named fields do not conflict
-- **WHEN** handler A writes `Game.Match.score`, and handler B only reads `Game.Match.over`
+- **WHEN** handler A writes `Game[Match].score`, and handler B only reads `Game[Match].over`
 - **THEN** no contract conflict edge connects A and B
 
 #### Scenario: Named write marks the handler unsplittable
-- **WHEN** a filter handler runs `Game.Match.score += 1`
+- **WHEN** a filter handler runs `Game[Match].score += 1`
 - **THEN** its contract is marked as not splittable per entity
 
 #### Scenario: Name as a value adds no access

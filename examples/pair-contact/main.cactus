@@ -40,7 +40,7 @@ rule DetectContacts:
             tf.WorldTransform as transform
 
     on fixed_tick:
-        if body != wall and body.Collider.mask == wall.Collider.layer:
+        if body != wall and body[Collider].mask == wall[Collider].layer:
             emit Contact to body:
                 other = wall
 

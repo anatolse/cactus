@@ -132,4 +132,4 @@ rule Cooled:
 
     on removed Burning as old:
         log.last_intensity = old.intensity
-        Stats.Tally.removed_burning += 1
+        Stats[Tally].removed_burning += 1

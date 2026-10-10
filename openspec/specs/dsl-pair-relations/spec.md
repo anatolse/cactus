@@ -25,19 +25,39 @@ A regular `rule` SHALL accept a `pairs:` block containing exactly two ordered, u
 - **THEN** semantic analysis accepts the combination, unlike `each:` or `without:` combined with `pairs:`
 
 ### Requirement: Pair bindings are entity identifiers and trait namespaces
-Each pair binding SHALL have type `entity_id` and SHALL also namespace the traits selected for that entity. `binding.Trait.field` SHALL access an unaliased local trait, `binding.module_alias.Trait.field` SHALL preserve imported qualification, and `binding.trait_alias.field` SHALL use an alias declared only within that binding. Pair binding names and their aliases MUST be unambiguous within every handler scope.
+Each pair binding SHALL have type `entity_id` and SHALL select the traits listed under it. `binding[Trait].field` SHALL access an unaliased selected trait, and `binding[module_alias.Trait].field` SHALL keep the imported qualification. The brackets SHALL contain exactly one trait reference, and it SHALL be a trait selected under that binding. A trait selected with `as alias` SHALL be accessed by the bare alias, `alias.field`, with no binding prefix. Aliases SHALL share one scope per rule: an alias name SHALL be unique across all bindings of the rule and SHALL NOT equal a binding name. An alias SHALL be visible wherever its binding is visible, so an alias of a binding that `reduce per` eliminates is not visible in the reduced handler.
 
 #### Scenario: Binding is used as an entity target
 - **WHEN** a pair handler executes `emit Contact to body`
 - **THEN** `body` type-checks as the current tuple's left `entity_id`
 
+#### Scenario: Unaliased trait is accessed through brackets
+- **WHEN** binding `body` selects `Collider` and the handler reads `body[Collider].mask`
+- **THEN** the access resolves to the `Collider` trait on `body`
+
 #### Scenario: Qualified imported trait is accessed through a binding
-- **WHEN** binding `body` selects `tf.WorldTransform` and the handler reads `body.tf.WorldTransform.position`
+- **WHEN** binding `body` selects `tf.WorldTransform` and the handler reads `body[tf.WorldTransform].position`
 - **THEN** the access resolves to the canonical imported WorldTransform trait on `body`
 
 #### Scenario: Binding-local alias shortens access
 - **WHEN** binding `body` selects `tf.WorldTransform as transform`
-- **THEN** `body.transform.position` resolves to that selected trait
+- **THEN** `transform.position` resolves to that selected trait on `body`
+
+#### Scenario: Unselected trait in brackets is rejected
+- **WHEN** binding `body` selects only `Collider` and the handler reads `body[Health].hp`
+- **THEN** semantic analysis reports that `body` does not select `Health`
+
+#### Scenario: Duplicate alias across bindings is rejected
+- **WHEN** binding `body` selects `tv.WorldTransform as transform` and binding `wall` also selects `tv.WorldTransform as transform`
+- **THEN** semantic analysis reports that alias `transform` is declared twice in the rule
+
+#### Scenario: Alias equal to a binding name is rejected
+- **WHEN** binding `wall` selects `Collider as body`, and the rule also has a binding named `body`
+- **THEN** semantic analysis reports that alias `body` clashes with a binding name
+
+#### Scenario: Eliminated binding's alias is not visible after reduce
+- **WHEN** a rule declares `reduce per team:` over bindings `team` and `player`, `player` selects `Score as score`, and the handler reads `score.points`
+- **THEN** semantic analysis reports that `score` is not available in the reduced handler
 
 ### Requirement: Pair relation semantics are directed and finite
 For bindings A and B, a pair handler SHALL execute over the directed Cartesian product of the live entities satisfying A and the live entities satisfying B. Self-pairs and reverse-role tuples SHALL be included when membership permits, unless excluded by `where:` or by a handler `if`/`return`. Handler `if` statements SHALL retain ordinary imperative semantics and, together with `where:` predicates, SHALL be the authored mechanisms for rejecting tuples. A `return` statement SHALL be an equally valid authored rejection mechanism and SHALL end only the current tuple's invocation — it SHALL NOT abort the remaining tuples in the pass.
@@ -85,14 +105,18 @@ Before executing tuple bodies, the runtime SHALL snapshot both binding membershi
 - **THEN** later snapshotted tuples still execute and the removal becomes visible only at activation commit
 
 ### Requirement: Pair-bound durable trait access is read-only
-Pair handlers SHALL permit reads of selected durable traits. Mutation of a pair-bound durable trait — assignment, compound assignment, or a writable trait-match alias derived from a pair binding — SHALL be rejected, UNLESS that binding is the `per` binding of a `limit:` clause (`dsl-rule-limit`) whose count expression the compiler proves equal to the literal `1`. In that case, only the named binding becomes writable; the rule's other pair binding, and any binding under a limit that is not provably one or under a global limit, remains read-only. Selection itself SHALL NOT count as a trait read.
+Pair handlers SHALL permit reads of selected durable traits. Mutation of a pair-bound durable trait — assignment, compound assignment, or a writable trait-match alias derived from a pair binding — SHALL be rejected, UNLESS that binding is the `per` binding of a `limit:` clause (`dsl-rule-limit`) whose count expression the compiler proves equal to the literal `1`. In that case, only the named binding becomes writable, through `binding[Trait].field` and through the bare aliases of its traits; the rule's other pair binding, and any binding under a limit that is not provably one or under a global limit, remains read-only. Selection itself SHALL NOT count as a trait read.
 
 #### Scenario: Pair trait field read is accepted
-- **WHEN** a condition reads `body.Collider.mask` and `wall.Collider.layer`
-- **THEN** both binding-qualified reads are accepted and inferred
+- **WHEN** a condition reads `body[Collider].mask` and `wall[Collider].layer`
+- **THEN** both bracketed reads are accepted and inferred
 
 #### Scenario: Pair trait field mutation is rejected
-- **WHEN** a pair handler assigns `body.Transform.x += 1.0`
+- **WHEN** a pair handler assigns `body[Transform].x += 1.0`
+- **THEN** semantic analysis reports that pair-bound durable traits are read-only
+
+#### Scenario: Mutation through a read-only alias is rejected
+- **WHEN** binding `body` selects `Transform as pose`, and a pair handler assigns `pose.x += 1.0` with no `limit:` on `body`
 - **THEN** semantic analysis reports that pair-bound durable traits are read-only
 
 #### Scenario: Trait match cannot bypass read-only access
@@ -100,7 +124,11 @@ Pair handlers SHALL permit reads of selected durable traits. Mutation of a pair-
 - **THEN** semantic analysis rejects the match in the initial pair profile
 
 #### Scenario: Mutation through a provably-one-per-binding is accepted
-- **WHEN** a rule declares `limit: 1 per actor` and a handler assigns `actor.KinematicActor.ground_surface = top`
+- **WHEN** a rule declares `limit: 1 per actor` and a handler assigns `actor[KinematicActor].ground_surface = top`
+- **THEN** semantic analysis accepts the mutation
+
+#### Scenario: Alias write through a provably-one-per-binding is accepted
+- **WHEN** a rule declares `limit: 1 per actor`, `actor` selects `KinematicActor as kinematic`, and a handler assigns `kinematic.grounded = true`
 - **THEN** semantic analysis accepts the mutation
 
 #### Scenario: The non-limited binding remains read-only under a per-binding limit
@@ -138,11 +166,11 @@ A pair handler SHALL produce one static handler execution-graph node identified 
 - **THEN** the complete pair pass finishes before the activation event cascade delivers those occurrences
 
 ### Requirement: Compact pair binding trait lists
-Each binding inside `pairs:` SHALL accept `binding: TraitA, TraitB as alias` as an equivalent spelling of its existing indented positive trait list. Inline and block bindings SHALL preserve qualified references, binding-local aliases, and source order, and SHALL coexist in the same pair declaration. Each binding SHALL contain at least one trait; the domain SHALL still contain exactly two ordered, uniquely named bindings. An inline binding SHALL NOT have a block continuation.
+Each binding inside `pairs:` SHALL accept `binding: TraitA, TraitB as alias` as an equivalent spelling of its existing indented positive trait list. Inline and block bindings SHALL preserve qualified references, rule-scoped aliases, and source order, and SHALL coexist in the same pair declaration. Each binding SHALL contain at least one trait; the domain SHALL still contain exactly two ordered, uniquely named bindings. An inline binding SHALL NOT have a block continuation.
 
 #### Scenario: Compact aliases retain their binding namespace
 - **WHEN** a binding declares `body: Health as health, tf.WorldTransform as pose`
-- **THEN** `body.health.current` and `body.pose.position` resolve as they do for the equivalent block declaration
+- **THEN** `health.current` and `pose.position` resolve as they do for the equivalent block declaration
 
 #### Scenario: Inline product retains deterministic behavior
 - **WHEN** a compact pair domain selects the same entities as its block-form equivalent
@@ -155,3 +183,22 @@ Each binding inside `pairs:` SHALL accept `binding: TraitA, TraitB as alias` as 
 #### Scenario: Extern compact pairs remain rejected
 - **WHEN** an extern rule declares compact pair bindings
 - **THEN** compilation rejects the pair domain and continues reporting later diagnostics
+
+### Requirement: Dotted pair-binding access is rejected with a rename diagnostic
+A member path that starts with a pair binding and continues with a trait selected under it, written with dots (`body.Collider.mask`, `body.tf.WorldTransform.position`), SHALL be a compile error whose diagnostic names the bracketed replacement (`body[Collider].mask`). A member path that starts with a pair binding and continues with one of its aliases (`body.pose.position`) SHALL be a compile error whose diagnostic says that aliases are written bare (`pose.position`). Each such access SHALL be reported once, in handler bodies and in every rule clause, and analysis SHALL continue as if the replacement had been written.
+
+#### Scenario: Dotted unaliased access names the bracket form
+- **WHEN** a pair handler reads `body.Collider.mask`
+- **THEN** compilation reports one error that says to use `body[Collider].mask`
+
+#### Scenario: Dotted imported access names the bracket form
+- **WHEN** a pair rule's `where:` reads `body.tf.WorldTransform.position`
+- **THEN** compilation reports one error that says to use `body[tf.WorldTransform].position`
+
+#### Scenario: Binding-prefixed alias names the bare form
+- **WHEN** binding `body` selects `tf.WorldTransform as pose` and a handler reads `body.pose.position`
+- **THEN** compilation reports one error that says aliases are written bare, as `pose.position`
+
+#### Scenario: Alias in brackets is rejected
+- **WHEN** binding `body` selects `tf.WorldTransform as pose` and a handler reads `body[pose].position`
+- **THEN** compilation reports that `pose` is an alias and says to use `pose.position`

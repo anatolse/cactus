@@ -2498,7 +2498,7 @@ TEST_CASE("handler graph orders a pair reader after a unary writer of the same t
         "        wall:\n"
         "            Solid\n"
         "    on tick:\n"
-        "        if body.Transform.x > 0.0:\n"
+        "        if body[Transform].x > 0.0:\n"
         "            let y = 1\n");
 
     REQUIRE(first_error(diagnostics).empty());
@@ -2663,7 +2663,7 @@ TEST_CASE("handler graph diagnoses a cycle formed through a pair handler's bound
         "        wall:\n"
         "            Solid\n"
         "    on tick:\n"
-        "        if body.LoopBack.v > 0:\n"
+        "        if body[LoopBack].v > 0:\n"
         "            let z = 1\n"
         "extern rule B:\n"
         "    on tick:\n"
@@ -3379,7 +3379,7 @@ TEST_CASE("handler graph adds no conflict between a unary field writer and a pai
                                                          "        wall:\n"
                                                          "            Solid\n"
                                                          "    on tick:\n"
-                                                         "        if body.Collider.radius > 0.0:\n"
+                                                         "        if body[Collider].radius > 0.0:\n"
                                                          "            let y = 1\n");
     REQUIRE(first_error(diagnostics).empty());
     CHECK(data_edges(decorated).empty());
@@ -3427,7 +3427,7 @@ TEST_CASE("handler graph treats a projection as covering every field of its trai
                                                          "        wall:\n"
                                                          "            Solid\n"
                                                          "    on tick:\n"
-                                                         "        if game.Match.over:\n"
+                                                         "        if game[Match].over:\n"
                                                          "            let y = 1\n"
                                                          "rule WatchScore:\n"
                                                          "    pairs:\n"
@@ -3436,7 +3436,7 @@ TEST_CASE("handler graph treats a projection as covering every field of its trai
                                                          "        wall:\n"
                                                          "            Solid\n"
                                                          "    on tick:\n"
-                                                         "        if game.Match.score > 0:\n"
+                                                         "        if game[Match].score > 0:\n"
                                                          "            let y = 1\n");
     REQUIRE(first_error(diagnostics).empty());
 
@@ -3481,11 +3481,11 @@ TEST_CASE("semantic_modules: a pub entity is a value and a named-access root thr
                                                          "event tick\n"
                                                          "rule R:\n"
                                                          "    when:\n"
-                                                         "        not state.Game.state.Match.over\n"
+                                                         "        not state.Game[state.Match].over\n"
                                                          "    on tick:\n"
                                                          "        let game: entity_id = state.Game\n"
-                                                         "        let over: bool = state.Game.state.Match.over\n"
-                                                         "        state.Game.state.Match.over = true\n",
+                                                         "        let over: bool = state.Game[state.Match].over\n"
+                                                         "        state.Game[state.Match].over = true\n",
                                                          imports_with_pub_game_entity());
     INFO((diagnostics.empty() ? "" : diagnostics.front().message));
     CHECK(diagnostics.empty());
@@ -3497,7 +3497,7 @@ TEST_CASE("semantic_modules: named access through a qualifier checks the entity'
                                                          "event tick\n"
                                                          "rule R:\n"
                                                          "    on tick:\n"
-                                                         "        let visible = state.Game.state.Label.visible\n",
+                                                         "        let visible = state.Game[state.Label].visible\n",
                                                          imports_with_pub_game_entity());
     CHECK(has_diagnostic(diagnostics, "entity 'Game' does not declare trait 'state.Label'"));
 }
@@ -3509,8 +3509,8 @@ TEST_CASE("semantic_modules: named access through an import-qualified trait", "[
                                                          "    state.Label\n"
                                                          "rule R:\n"
                                                          "    on tick:\n"
-                                                         "        Hud.state.Label.visible = false\n"
-                                                         "        let shown: bool = Hud.state.Label.visible\n",
+                                                         "        Hud[state.Label].visible = false\n"
+                                                         "        let shown: bool = Hud[state.Label].visible\n",
                                                          imports_with_pub_game_entity());
     INFO((diagnostics.empty() ? "" : diagnostics.front().message));
     CHECK(diagnostics.empty());

@@ -61,16 +61,16 @@ rule DetectWallContact:
             tf.WorldTransform
 
     on tick:
-        let bubble_pos = bubble.tf.WorldTransform.position
-        let wall_pos = wall.tf.WorldTransform.position
-        let wall_rotation = wall.tf.WorldTransform.rotation
-        let half_size = wall.SquareCollider.size / 2.0
+        let bubble_pos = bubble[tf.WorldTransform].position
+        let wall_pos = wall[tf.WorldTransform].position
+        let wall_rotation = wall[tf.WorldTransform].rotation
+        let half_size = wall[SquareCollider].size / 2.0
         let local_pos = v2m.rotate(bubble_pos - wall_pos, -wall_rotation)
         let clamped_local = v2m.clamp(local_pos, half_size * -1.0, half_size)
         let closest_point = wall_pos + v2m.rotate(clamped_local, wall_rotation)
         let normal = v2m.rotate(vec2(0.0, -1.0), wall_rotation)
-        let overlapping = v2m.distance(bubble_pos, closest_point) < bubble.CircleCollider.radius
-        let closing = v2m.dot(bubble.Bubble.velocity, normal) > 0.0
+        let overlapping = v2m.distance(bubble_pos, closest_point) < bubble[CircleCollider].radius
+        let closing = v2m.dot(bubble[Bubble].velocity, normal) > 0.0
         if overlapping and closing:
             emit WallBounce to bubble:
                 normal = normal
@@ -110,18 +110,18 @@ rule DetectBubbleContact:
 
     where:
         a != b
-        collision.circles_overlap(a.tf.WorldTransform.position, a.CircleCollider.radius, b.tf.WorldTransform.position, b.CircleCollider.radius)
+        collision.circles_overlap(a[tf.WorldTransform].position, a[CircleCollider].radius, b[tf.WorldTransform].position, b[CircleCollider].radius)
 
     on tick:
-        let pos_a = a.tf.WorldTransform.position
-        let pos_b = b.tf.WorldTransform.position
-        let radius_a = a.CircleCollider.radius
-        let radius_b = b.CircleCollider.radius
+        let pos_a = a[tf.WorldTransform].position
+        let pos_b = b[tf.WorldTransform].position
+        let radius_a = a[CircleCollider].radius
+        let radius_b = b[CircleCollider].radius
         let dist = v2m.distance(pos_a, pos_b)
 
         let normal = (pos_b - pos_a) / dist
-        let vel_a = a.Bubble.velocity
-        let vel_b = b.Bubble.velocity
+        let vel_a = a[Bubble].velocity
+        let vel_b = b[Bubble].velocity
         let closing = v2m.dot(vel_a - vel_b, normal)
 
         if closing <= 0.0:

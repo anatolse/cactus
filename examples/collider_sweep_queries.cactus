@@ -278,6 +278,8 @@ rule PushOutUnaccelerated:
             physics.CharacterBody
         other:
             physics.Collider
+    after:
+        PushOut
     reduce per body:
         push = sum(physics.push_out(body, other))
         rows = count()

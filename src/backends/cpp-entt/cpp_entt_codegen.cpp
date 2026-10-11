@@ -3,6 +3,7 @@
 
 #include "frontend/symbol_identity.hpp"
 
+#include "backends/cpp-entt/accumulation_plan.hpp"
 #include "backends/cpp-entt/component_emitter.hpp"
 #include "backends/cpp-entt/event_emitter.hpp"
 #include "backends/cpp-entt/persistence_emitter.hpp"
@@ -979,7 +980,7 @@ void emit_stable_handler_table(std::ostringstream& out, const DecoratedProgram& 
     out << "}};\n\n";
 }
 
-std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
+std::string emit_graph_scheduler_state(const DecoratedProgram& program, const AccumulationPlan& accumulation) {
     if (program.execution_graph.phases.empty()) {
         return {};
     }
@@ -1088,6 +1089,9 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
     out << "void generated_drain_event_cascade(entt::registry& registry);\n\n";
 
     out << "void generated_commit_activation(entt::registry& registry) {\n";
+    if (!accumulation.empty()) {
+        out << "    ::generated_flush_accumulations();\n";
+    }
     out << "    auto& activation = generated_scheduler_state().activation;\n";
     if (lifecycle_triggers.empty()) {
         out << "    commit_activation(activation, registry, &generated_drain_event_cascade);\n";
@@ -1264,10 +1268,16 @@ struct DispatchCall {
 
 // A set of two or more calls runs, under CACTUS_LINEARIZATION_HARNESS, in a
 // seeded linear extension of the schedule edges inside the set.
-void emit_dispatch_calls(std::ostringstream& out, const DecoratedProgram& program, const std::vector<DispatchCall>& calls) {
+void emit_dispatch_calls(std::ostringstream& out,
+                         const DecoratedProgram& program,
+                         const AccumulationPlan& accumulation,
+                         const std::vector<DispatchCall>& calls) {
+    const auto text = [&accumulation](const DispatchCall& call) {
+        return accumulation.entry_flushes(call.identity) + call.text;
+    };
     if (calls.size() < 2) {
         for (const auto& call : calls) {
-            out << call.text;
+            out << text(call);
         }
         return;
     }
@@ -1282,9 +1292,8 @@ void emit_dispatch_calls(std::ostringstream& out, const DecoratedProgram& progra
         if (before == calls.end() || after == calls.end() || before == after) {
             continue;
         }
-        const bool declaration_order = edge.orientation == ScheduleEdgeOrientation::DeclarationOrder;
         edges += std::string(edge_count++ == 0 ? "" : ", ") + "{" + std::to_string(before - calls.begin()) + ", " +
-                 std::to_string(after - calls.begin()) + ", " + (declaration_order ? "true" : "false") + "}";
+                 std::to_string(after - calls.begin()) + "}";
     }
     out << "#ifdef CACTUS_LINEARIZATION_HARNESS\n";
     out << "    static constexpr std::array<cactus::runtime::entt_backend::LinearizationEdge, " << edge_count
@@ -1294,7 +1303,7 @@ void emit_dispatch_calls(std::ostringstream& out, const DecoratedProgram& progra
     out << "        switch (cactus_index) {\n";
     for (std::size_t index = 0; index < calls.size(); ++index) {
         out << "            case " << index << ":\n";
-        out << calls[index].text;
+        out << text(calls[index]);
         out << "                break;\n";
     }
     out << "            default:\n";
@@ -1303,12 +1312,15 @@ void emit_dispatch_calls(std::ostringstream& out, const DecoratedProgram& progra
     out << "    });\n";
     out << "#else  // CACTUS_LINEARIZATION_HARNESS\n";
     for (const auto& call : calls) {
-        out << call.text;
+        out << text(call);
     }
     out << "#endif  // CACTUS_LINEARIZATION_HARNESS\n";
 }
 
-bool emit_phase_handler_calls(std::ostringstream& out, const DecoratedProgram& program, const auto& phase) {
+bool emit_phase_handler_calls(std::ostringstream& out,
+                              const DecoratedProgram& program,
+                              const AccumulationPlan& accumulation,
+                              const auto& phase) {
     bool emitted = false;
     std::unordered_set<std::string> emitted_callees;
     std::vector<DispatchCall> calls;
@@ -1319,11 +1331,14 @@ bool emit_phase_handler_calls(std::ostringstream& out, const DecoratedProgram& p
             calls.push_back(DispatchCall{.identity = identity, .text = std::move(call).str()});
         }
     }
-    emit_dispatch_calls(out, program, calls);
+    emit_dispatch_calls(out, program, accumulation, calls);
     return emitted;
 }
 
-void emit_phase_handler_dispatch(std::ostringstream& out, const DecoratedProgram& program, const auto& phase) {
+void emit_phase_handler_dispatch(std::ostringstream& out,
+                                 const DecoratedProgram& program,
+                                 const AccumulationPlan& accumulation,
+                                 const auto& phase) {
     const auto phase_name = canonical_to_cpp_name(phase.phase);
     out << "void generated_dispatch_phase_" << phase_name << "(entt::registry& registry, const " << phase_name
         << "PhaseRuntimeState& phase) {\n";
@@ -1342,7 +1357,7 @@ void emit_phase_handler_dispatch(std::ostringstream& out, const DecoratedProgram
         return;
     }
 
-    const bool emitted = emit_phase_handler_calls(out, program, phase);
+    const bool emitted = emit_phase_handler_calls(out, program, accumulation, phase);
     if (!emitted) {
         out << "    (void)registry;\n";
         out << "    (void)phase;\n";
@@ -1350,7 +1365,10 @@ void emit_phase_handler_dispatch(std::ostringstream& out, const DecoratedProgram
     out << "}\n\n";
 }
 
-void emit_event_handler_dispatch(std::ostringstream& out, const DecoratedProgram& program, const ResolvedEvent* event) {
+void emit_event_handler_dispatch(std::ostringstream& out,
+                                 const DecoratedProgram& program,
+                                 const AccumulationPlan& accumulation,
+                                 const ResolvedEvent* event) {
     const auto event_type = event_runtime_cpp_type(program, *event->symbol_id);
     // The default argument lives on the forward declaration emitted by
     // emit_graph_scheduler_state; repeating it here would be a redefinition.
@@ -1417,7 +1435,7 @@ void emit_event_handler_dispatch(std::ostringstream& out, const DecoratedProgram
             calls.push_back(DispatchCall{.identity = identity, .text = std::move(call).str()});
         }
     }
-    emit_dispatch_calls(out, program, calls);
+    emit_dispatch_calls(out, program, accumulation, calls);
     if (calls.empty()) {
         out << "    (void)registry;\n";
         out << "    (void)occurrence;\n";
@@ -1425,7 +1443,7 @@ void emit_event_handler_dispatch(std::ostringstream& out, const DecoratedProgram
     out << "}\n\n";
 }
 
-std::string emit_graph_handler_dispatch(const DecoratedProgram& program) {
+std::string emit_graph_handler_dispatch(const DecoratedProgram& program, const AccumulationPlan& accumulation) {
     if (program.execution_graph.phases.empty() || program.ast == nullptr) {
         return {};
     }
@@ -1433,12 +1451,12 @@ std::string emit_graph_handler_dispatch(const DecoratedProgram& program) {
     std::ostringstream out;
     out << "namespace cactus::runtime::entt_backend {\n\n";
     for (const auto& phase : program.execution_graph.phases) {
-        emit_phase_handler_dispatch(out, program, phase);
+        emit_phase_handler_dispatch(out, program, accumulation, phase);
     }
 
     const auto events = sorted_events(program);
     for (const auto* event : events) {
-        emit_event_handler_dispatch(out, program, event);
+        emit_event_handler_dispatch(out, program, accumulation, event);
     }
 
     // Lifecycle triggers are only ever declared on Cactus rules.
@@ -1456,7 +1474,7 @@ std::string emit_graph_handler_dispatch(const DecoratedProgram& program) {
                     DispatchCall{.identity = identity, .text = "    ::" + *callee + "(registry, occurrence, target);\n"});
             }
         }
-        emit_dispatch_calls(out, program, calls);
+        emit_dispatch_calls(out, program, accumulation, calls);
         if (calls.empty()) {
             out << "    (void)registry;\n";
             out << "    (void)occurrence;\n";
@@ -1476,6 +1494,9 @@ std::string emit_graph_handler_dispatch(const DecoratedProgram& program) {
     out << "        [](entt::registry& reg, const auto& occurrence, std::optional<entt::entity> target) {\n";
     out << "            generated_dispatch_event(reg, occurrence, target);\n";
     out << "        });\n";
+    if (!accumulation.empty()) {
+        out << "    ::generated_flush_accumulations();\n";
+    }
     out << "}\n\n";
     out << "}  // namespace cactus::runtime::entt_backend\n\n";
     return out.str();
@@ -2055,6 +2076,26 @@ std::string pad_to_width(const std::string& value, std::size_t width) {
 
 SymbolId entity_symbol(const EntityNode& entity, const DecoratedProgram& program) {
     return resolved_or_local_symbol(SymbolKind::Entity, entity.resolved_entity_id, program.module_name, entity.name);
+}
+
+std::string emit_accumulation_tables(const AccumulationPlan& accumulation) {
+    if (accumulation.empty()) {
+        return {};
+    }
+    std::ostringstream out;
+    out << "// ── Exact Float Accumulation ───────────────────────────────────────\n\n";
+    for (const auto& table : accumulation.tables()) {
+        out << "inline cactus::runtime::AccumulatedDeltas& " << table << "() {\n";
+        out << "    static cactus::runtime::AccumulatedDeltas deltas;\n";
+        out << "    return deltas;\n";
+        out << "}\n\n";
+    }
+    out << "inline void generated_flush_accumulations() {\n";
+    for (const auto& table : accumulation.tables()) {
+        out << "    " << table << "().flush();\n";
+    }
+    out << "}\n\n";
+    return out.str();
 }
 
 // A slot follows the restored record whose archetype origin is its declaration,
@@ -3062,6 +3103,8 @@ std::string emit_backend_main(const DecoratedProgram& program) {
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     std::ostringstream out;
+    // Before any system is emitted: it marks the statements that buffer.
+    const AccumulationPlan accumulation(program);
 
     const bool uses_flat     = module_uses_camera_flat(program);
     const bool uses_viewport = module_uses_camera_viewport(program);
@@ -3229,6 +3272,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
 
     out << emit_collider_query_helpers(program);
     out << emit_named_slots(program);
+    out << emit_accumulation_tables(accumulation);
     out << EnttPersistenceEmitter::emit_schema_descriptor(program);
     out << EnttPersistenceEmitter::emit_archetype_node_table(program);
     out << EnttPersistenceEmitter::emit_missing_provenance_probe(program);
@@ -3260,7 +3304,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << emit_event_structs(program);
 
     out << emit_external_command_forward_declarations(program);
-    out << emit_graph_scheduler_state(program);
+    out << emit_graph_scheduler_state(program, accumulation);
     out << emit_persistence_boundary_processor(program);
     out << emit_graph_external_handler_abi(program);
 
@@ -3463,7 +3507,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         }
     }
 
-    out << emit_graph_handler_dispatch(program);
+    out << emit_graph_handler_dispatch(program, accumulation);
 
     // Dispatcher setup
     out << "// ── Event Dispatcher ────────────────────────────────────────────────\n\n";

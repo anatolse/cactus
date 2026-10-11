@@ -10,6 +10,7 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <optional>
 #include <set>
 #include <string>
@@ -172,9 +173,22 @@ struct RuleDependency {
     std::vector<SymbolId> resolved_after_rule_ids;  // resolved after: rule identities
 };
 
+// Which fields of one trait a contract touches.
+struct FieldAccess {
+    bool all = false;
+    std::set<std::string> fields;  // ignored when `all`
+
+    [[nodiscard]] bool covers(const std::string& field) const {
+        return all || fields.contains(field);
+    }
+
+    friend bool operator==(const FieldAccess&, const FieldAccess&) = default;
+};
+
 struct InferredHandlerCommand {
     HandlerCommandKind kind = HandlerCommandKind::Destroy;
     std::optional<SymbolId> target;
+    std::optional<FieldAccess> patched;  // Add and Set: the fields it assigns (none for a marker trait)
 
     friend bool operator==(const InferredHandlerCommand&, const InferredHandlerCommand&) = default;
 };
@@ -311,13 +325,20 @@ struct ReductionPlan {
     friend bool operator==(const ReductionPlan&, const ReductionPlan&) = default;
 };
 
-// Which fields of one trait a contract touches.
-struct FieldAccess {
-    bool all = false;
-    std::set<std::string> fields;  // ignored when `all`
+// Serialized by numeric value: append new kinds, never reorder.
+enum class WriteKind : std::uint8_t { Assign, Accum, Join, General };
+enum class JoinOp : std::uint8_t { Max, Min, Or, And };
 
-    friend bool operator==(const FieldAccess&, const FieldAccess&) = default;
+// How a handler writes one trait field; `op` is Max unless `kind` is Join.
+struct FieldWriteKind {
+    WriteKind kind = WriteKind::General;
+    JoinOp op      = JoinOp::Max;
+
+    friend bool operator==(const FieldWriteKind&, const FieldWriteKind&) = default;
 };
+
+// Two writes to one field commute: both Accum, or both Join with one operator.
+[[nodiscard]] bool writes_commute(const FieldWriteKind& left, const FieldWriteKind& right);
 
 // A handler pass runs only while `entity` is alive and carries `trait`.
 struct NamedRequirement {
@@ -331,9 +352,12 @@ struct NamedRequirement {
 using NamedFieldTable = std::unordered_map<SymbolId, std::unordered_map<SymbolId, FieldAccess>>;
 
 [[nodiscard]] const FieldAccess& all_fields();
+// Every field of the trait; all fields when the declaration is unknown.
+[[nodiscard]] FieldAccess declared_fields(const ResolvedTrait* declaration);
 // A trait with no entry in `table` counts as all fields.
 [[nodiscard]] const FieldAccess& field_access(const std::unordered_map<SymbolId, FieldAccess>& table, const SymbolId& trait);
 [[nodiscard]] std::optional<FieldAccess> overlapping_fields(const FieldAccess& left, const FieldAccess& right);
+void merge_field_access(FieldAccess& into, const FieldAccess& from);
 
 struct HandlerContract {
     HandlerDomainKind domain_kind = HandlerDomainKind::Selectionless;
@@ -355,6 +379,12 @@ struct HandlerContract {
     // Keyed exactly like `reads`/`writes`; a trait with no entry counts as all fields.
     std::unordered_map<SymbolId, FieldAccess> read_fields;
     std::unordered_map<SymbolId, FieldAccess> write_fields;
+    // Kinds of the named fields in `write_fields`; read through write_kind().
+    std::unordered_map<SymbolId, std::map<std::string, FieldWriteKind>> write_kinds;
+    // Inference only: reads other than a write's own read of its target, and the
+    // `+=`/`-=` statements seen. finalize_write_kinds() uses and clears both.
+    std::unordered_map<SymbolId, FieldAccess> observed_reads;
+    std::vector<std::pair<const VarAssign*, AccumulationTarget>> accumulation_sites;
     std::unordered_set<SymbolId> projects;  // projected (transient) trait outputs
     // Named-entity access (`Game.Match.over`); every entry is also in reads/writes above.
     NamedFieldTable named_reads;
@@ -363,6 +393,7 @@ struct HandlerContract {
     std::unordered_set<SymbolId> emits;
     std::vector<InferredHandlerCommand> commands;
     std::unordered_set<std::string> effects;
+    std::unordered_set<std::string> effect_acts;  // the domains in `effects` it acts on, not only observes
     IterationOrder iteration_order = IterationOrder::Free;
 
     // A handler that writes a named entity runs as one sequential pass.
@@ -383,7 +414,7 @@ struct HandlerContract {
 // The only way inference adds a trait read or write, so the trait sets and
 // field tables stay in step. `field` covers all fields when it is nullopt or
 // names no field of `declaration` (null when the trait is not resolvable).
-// A write also records the same read.
+// A write also records the same read, which doesn't count against its kind.
 void record_read(HandlerContract& contract,
                  const SymbolId& trait,
                  const std::optional<std::string>& field,
@@ -391,7 +422,8 @@ void record_read(HandlerContract& contract,
 void record_write(HandlerContract& contract,
                   const SymbolId& trait,
                   const std::optional<std::string>& field,
-                  const ResolvedTrait* declaration);
+                  const ResolvedTrait* declaration,
+                  FieldWriteKind kind);
 // Named access: records the requirement, the named table entry, and the
 // ordinary trait read/write.
 void record_named_read(HandlerContract& contract,
@@ -401,7 +433,24 @@ void record_named_read(HandlerContract& contract,
 void record_named_write(HandlerContract& contract,
                         const NamedTraitRef& ref,
                         const std::optional<std::string>& field,
-                        const ResolvedTrait* declaration);
+                        const ResolvedTrait* declaration,
+                        FieldWriteKind kind);
+// Notes `assign` as accumulating into `trait.field` when `kind` is Accum.
+void record_accumulation(HandlerContract& contract,
+                         const VarAssign& assign,
+                         const SymbolId& trait,
+                         const std::optional<std::string>& field,
+                         FieldWriteKind kind,
+                         bool own_row);
+// A field read outside its own updates becomes General; a statement keeps its
+// AccumulationTarget only while its field stays Accum.
+void finalize_write_kinds(HandlerContract& contract);
+// General for a field the contract doesn't write by name.
+[[nodiscard]] FieldWriteKind write_kind(const HandlerContract& contract, const SymbolId& trait, const std::string& field);
+
+// Whether a call to this stdlib extern function changes the state of its
+// effect domains instead of only observing it.
+[[nodiscard]] bool stdlib_function_acts(const SymbolId& function);
 
 // Whether a pass with this contract can observe its row order; `unordered_limit`
 // is a `limit:` without `order by:`.
@@ -456,14 +505,15 @@ enum class ScheduleEdgeKind : std::uint8_t {
     ExplicitRule,
     DataConflict,
     EffectConflict,
-    ExplicitGroup
+    ExplicitGroup,
+    ChannelConflict
 };
+// Serialized by numeric value; 2 was the removed declaration-order tie-break.
 enum class ScheduleEdgeOrientation : std::uint8_t {
-    Explicit,
-    WriterBeforeReader,
-    DeclarationOrder,
-    ImporterBeforePublicGroup,
-    DerivationAfterWriters
+    Explicit                  = 0,
+    WriterBeforeReader        = 1,
+    ImporterBeforePublicGroup = 3,
+    DerivationAfterWriters    = 4
 };
 
 // The fields of one trait that made a data conflict.
@@ -478,10 +528,11 @@ struct ScheduleEdge {
     HandlerIdentity before;
     HandlerIdentity after;
     ScheduleEdgeKind kind               = ScheduleEdgeKind::DataConflict;
-    ScheduleEdgeOrientation orientation = ScheduleEdgeOrientation::DeclarationOrder;
+    ScheduleEdgeOrientation orientation;
     std::vector<SymbolId> trait_provenance;
     std::vector<FieldProvenance> field_provenance;  // one per `trait_provenance` entry, same order
     std::vector<std::string> effect_provenance;
+    std::vector<std::string> channel_provenance;  // the commands or event that conflict
 };
 
 struct PhaseBarrierEdge {
@@ -1534,9 +1585,11 @@ private:
     // The two contract mutations walk_expression_reads and walk_handler_body's
     // statement half both perform, shared so a `spawn`/`destroy` reached
     // through either produces one identical entry.
+    // An Add or Set without `patched` assigns every field.
     static void add_contract_command(HandlerContract& contract,
                                      HandlerCommandKind kind,
-                                     std::optional<SymbolId> target);
+                                     std::optional<SymbolId> target,
+                                     const FieldAccess& patched = all_fields());
     void add_contract_call_effects(HandlerContract& contract, const std::optional<SymbolId>& callee) const;
 
     InferredHandlerContract infer_regular_handler_contract(const RuleNode& rule, const EventHandlerNode& handler) const;

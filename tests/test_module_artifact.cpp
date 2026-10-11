@@ -873,7 +873,7 @@ TEST_CASE("ModuleArtifact: runtime declarations and handler graph round-trip", "
 }
 
 TEST_CASE("ModuleArtifact: artifact from before shape-generic spatial plans is rejected", "[artifact][spatial-join]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 31);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 32);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1212,7 +1212,8 @@ TEST_CASE("ModuleArtifact: set command capabilities round-trip", "[artifact][def
     const auto host   = test_symbol(SymbolKind::Rule, "Healer");
     const auto health = test_symbol(SymbolKind::Trait, "Health");
     const ResolvedHandlerTrigger trigger{.kind = HandlerTriggerKind::Event, .symbol = tick};
-    const std::vector<InferredHandlerCommand> commands{{.kind = HandlerCommandKind::Set, .target = health}};
+    const std::vector<InferredHandlerCommand> commands{
+        {.kind = HandlerCommandKind::Set, .target = health, .patched = FieldAccess{.all = false, .fields = {"hp"}}}};
 
     InferredHandlerContract inferred;
     inferred.rule     = host;
@@ -1237,7 +1238,7 @@ TEST_CASE("ModuleArtifact: set command capabilities round-trip", "[artifact][def
     CHECK(loaded->handler_contracts.front().commands == commands);
     REQUIRE(loaded->execution_graph.handlers.size() == 1);
     CHECK(loaded->execution_graph.handlers.front().contract.commands == commands);
-    CHECK(ModuleArtifact::CURRENT_VERSION == 31);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 32);
 
     fs::remove_all(build_dir, ec);
 }
@@ -1615,6 +1616,64 @@ TEST_CASE("ModuleArtifact: a contract's iteration order round-trips", "[artifact
     fs::remove_all(build_dir, ec);
 }
 
+TEST_CASE("ModuleArtifact: write kinds, set patches, effect actions and channel edges round-trip",
+          "[artifact][handler-contracts][write-kinds]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    const ResolvedHandlerTrigger trigger{.kind = HandlerTriggerKind::Event, .symbol = test_symbol(SymbolKind::Event, "tick")};
+    const auto tally  = test_symbol(SymbolKind::Trait, "Tally");
+    const auto health = test_symbol(SymbolKind::Trait, "Health");
+    InferredHandlerContract inferred;
+    inferred.rule    = test_symbol(SymbolKind::Rule, "Count");
+    inferred.trigger = trigger;
+    inferred.write_kinds[tally] = {{"best", FieldWriteKind{.kind = WriteKind::Join, .op = JoinOp::Min}},
+                                   {"flag", FieldWriteKind{.kind = WriteKind::Join, .op = JoinOp::And}},
+                                   {"name", FieldWriteKind{.kind = WriteKind::Assign}},
+                                   {"total", FieldWriteKind{.kind = WriteKind::Accum}}};
+    inferred.commands = {InferredHandlerCommand{.kind = HandlerCommandKind::Set, .target = health,
+                                                .patched = FieldAccess{.all = false, .fields = {"hp"}}},
+                         InferredHandlerCommand{.kind = HandlerCommandKind::Remove, .target = health}};
+    inferred.effects     = {"graphics", "input"};
+    inferred.effect_acts = {"graphics"};
+
+    DecoratedProgram program;
+    program.handler_contracts.push_back(inferred);
+    const HandlerIdentity first{.rule = inferred.rule, .trigger = trigger};
+    const HandlerIdentity second{.rule = test_symbol(SymbolKind::Rule, "Other"), .trigger = trigger};
+    program.execution_graph.handlers.push_back(
+        HandlerNode{.identity = first, .contract = static_cast<const HandlerContract&>(inferred)});
+    program.execution_graph.schedule_edges.push_back(ScheduleEdge{.before             = first,
+                                                                  .after              = second,
+                                                                  .kind               = ScheduleEdgeKind::ChannelConflict,
+                                                                  .orientation        = ScheduleEdgeOrientation::Explicit,
+                                                                  .channel_provenance = {"add/remove test.Health"}});
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    REQUIRE(artifact.save(program, "runtime.lib", build_dir));
+    std::string module_name;
+    const auto loaded = artifact.load(build_dir / "runtime.lib.cmod", module_name);
+
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->execution_graph.handlers.size() == 1);
+    for (const HandlerContract* contract :
+         {static_cast<const HandlerContract*>(&loaded->handler_contracts.at(0)), &loaded->execution_graph.handlers[0].contract}) {
+        CHECK(contract->write_kinds == inferred.write_kinds);
+        CHECK(contract->commands == inferred.commands);
+        CHECK(contract->effects == inferred.effects);
+        CHECK(contract->effect_acts == inferred.effect_acts);
+    }
+    REQUIRE(loaded->execution_graph.schedule_edges.size() == 1);
+    const auto& edge = loaded->execution_graph.schedule_edges[0];
+    CHECK(edge.kind == ScheduleEdgeKind::ChannelConflict);
+    CHECK(edge.channel_provenance == std::vector<std::string>{"add/remove test.Health"});
+
+    fs::remove_all(build_dir, ec);
+}
+
 TEST_CASE("ModuleArtifact: every schedule edge reason round-trips", "[artifact][handler-execution-graph]") {
     auto build_dir = test_build_dir();
     std::error_code ec;
@@ -1626,7 +1685,6 @@ TEST_CASE("ModuleArtifact: every schedule edge reason round-trips", "[artifact][
     };
     const std::vector<ScheduleEdgeOrientation> reasons{ScheduleEdgeOrientation::Explicit,
                                                        ScheduleEdgeOrientation::WriterBeforeReader,
-                                                       ScheduleEdgeOrientation::DeclarationOrder,
                                                        ScheduleEdgeOrientation::ImporterBeforePublicGroup,
                                                        ScheduleEdgeOrientation::DerivationAfterWriters};
     DecoratedProgram program;
@@ -1654,7 +1712,7 @@ TEST_CASE("ModuleArtifact: every schedule edge reason round-trips", "[artifact][
 }
 
 TEST_CASE("ModuleArtifact: artifact from before field-level contracts is rejected", "[artifact][handler-contracts]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 31);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 32);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1881,7 +1939,7 @@ TEST_CASE("ModuleArtifact: unknown trigger kind is rejected", "[artifact][trait-
 }
 
 TEST_CASE("ModuleArtifact: artifact from before lifecycle triggers is rejected", "[artifact][trait-lifecycle]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 31);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 32);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2010,7 +2068,7 @@ TEST_CASE("ModuleArtifact: unknown group ordering direction is malformed", "[art
 }
 
 TEST_CASE("ModuleArtifact: artifact from before rule groups is rejected", "[artifact][rule-groups]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 31);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 32);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2035,7 +2093,7 @@ TEST_CASE("ModuleArtifact: artifact from before rule groups is rejected", "[arti
 }
 
 TEST_CASE("ModuleArtifact: artifact from before named-entity access is rejected", "[artifact][named-entity]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 31);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 32);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2389,7 +2447,7 @@ TEST_CASE("ModuleArtifact: a trait access expression round-trips", "[artifact][t
 }
 
 TEST_CASE("ModuleArtifact: artifact from before bracketed trait access is rejected", "[artifact][trait-access]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 31);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 32);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2453,5 +2511,26 @@ TEST_CASE("ModuleArtifact: arithmetic operand marks round-trip", "[artifact][num
 
     fs::remove_all(build_dir, ec);
 }
+TEST_CASE("ModuleArtifact: an edge with the removed declaration-order reason is rejected",
+          "[artifact][handler-execution-graph]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
 
+    const ResolvedHandlerTrigger trigger{.kind = HandlerTriggerKind::Event, .symbol = test_symbol(SymbolKind::Event, "tick")};
+    DecoratedProgram program;
+    program.execution_graph.schedule_edges.push_back(
+        ScheduleEdge{.before      = HandlerIdentity{.rule = test_symbol(SymbolKind::Rule, "A"), .trigger = trigger},
+                     .after       = HandlerIdentity{.rule = test_symbol(SymbolKind::Rule, "B"), .trigger = trigger},
+                     .kind        = ScheduleEdgeKind::DataConflict,
+                     .orientation = static_cast<ScheduleEdgeOrientation>(2)});
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    REQUIRE(artifact.save(program, "runtime.lib", build_dir));
+    std::string module_name;
+    CHECK_FALSE(artifact.load(build_dir / "runtime.lib.cmod", module_name).has_value());
+
+    fs::remove_all(build_dir, ec);
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

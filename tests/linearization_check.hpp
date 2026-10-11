@@ -19,13 +19,10 @@ inline constexpr std::array<std::uint64_t, 24> kLinearizationSeeds{
 
 // `setup(registry)` runs after load, before the first frame.
 template <typename Setup>
-std::vector<std::uint64_t> linearization_digests(std::optional<std::uint64_t> seed,
-                                                 bool drop_declaration_order,
-                                                 int frames,
-                                                 const Setup& setup) {
+std::vector<std::uint64_t> linearization_digests(std::optional<std::uint64_t> seed, int frames, const Setup& setup) {
     namespace backend = cactus::runtime::entt_backend;
     backend::generated_reset_scheduler_state();
-    backend::set_linearization(seed, drop_declaration_order);
+    backend::set_linearization(seed);
     std::vector<std::uint64_t> digests;
     {
         entt::registry registry;
@@ -49,20 +46,12 @@ inline auto no_setup() {
 
 // Every seed must give the stable order's digest after every frame.
 template <typename Setup>
-void require_linearizations_match(int frames, const Setup& setup, bool drop_declaration_order = false) {
-    const auto baseline = linearization_digests(std::nullopt, false, frames, setup);
+void require_linearizations_match(int frames, const Setup& setup) {
+    const auto baseline = linearization_digests(std::nullopt, frames, setup);
     for (const auto seed : kLinearizationSeeds) {
         INFO("seed " << seed);
-        CHECK(linearization_digests(seed, drop_declaration_order, frames, setup) == baseline);
+        CHECK(linearization_digests(seed, frames, setup) == baseline);
     }
-}
-
-template <typename Setup>
-bool some_linearization_differs(int frames, const Setup& setup, bool drop_declaration_order) {
-    const auto baseline = linearization_digests(std::nullopt, false, frames, setup);
-    return std::ranges::any_of(kLinearizationSeeds, [&](std::uint64_t seed) {
-        return linearization_digests(seed, drop_declaration_order, frames, setup) != baseline;
-    });
 }
 
 }  // namespace cactus::test

@@ -129,6 +129,8 @@ rule NormalizeSpawnedScale:
         tv.WorldTransform
         models.ModelRenderer
         CharacterScale
+    after:
+        models.animate
 
     on tick:
         if not normalized:

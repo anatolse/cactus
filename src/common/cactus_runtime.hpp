@@ -528,11 +528,24 @@ private:
 [[nodiscard]] constexpr int max(int acc, int value) noexcept {
     return std::max(acc, value);
 }
+// -0 orders below +0, so both are commutative.
 [[nodiscard]] constexpr float min(float acc, float value) noexcept {
-    return acc != acc || value != value ? std::numeric_limits<float>::quiet_NaN() : std::min(acc, value);
+    if (acc != acc || value != value) {
+        return std::numeric_limits<float>::quiet_NaN();
+    }
+    if (acc == value) {
+        return (std::bit_cast<std::uint32_t>(acc) >> 31U) != 0U ? acc : value;
+    }
+    return std::min(acc, value);
 }
 [[nodiscard]] constexpr float max(float acc, float value) noexcept {
-    return acc != acc || value != value ? std::numeric_limits<float>::quiet_NaN() : std::max(acc, value);
+    if (acc != acc || value != value) {
+        return std::numeric_limits<float>::quiet_NaN();
+    }
+    if (acc == value) {
+        return (std::bit_cast<std::uint32_t>(acc) >> 31U) != 0U ? value : acc;
+    }
+    return std::max(acc, value);
 }
 // `best`: a strictly higher key wins, so ties keep the earlier row; a NaN key never wins.
 [[nodiscard]] constexpr bool improves(int key, int best, bool seen) noexcept {
@@ -543,6 +556,58 @@ private:
 }
 
 }  // namespace reduce
+
+// flush() sets each target to round(old + exact sum of its deltas), independent of write order.
+// Keyed by address: durable component storage doesn't move before the activation commits.
+class AccumulatedDeltas {
+public:
+    void add(float& target, float delta) {
+        deltas_.push_back(Delta{.target = &target, .value = delta});
+    }
+    void subtract(float& target, float delta) {
+        deltas_.push_back(Delta{.target = &target, .value = -delta});
+    }
+    void add(Vector2& target, Vector2 delta) {
+        add(target.x, delta.x);
+        add(target.y, delta.y);
+    }
+    void subtract(Vector2& target, Vector2 delta) {
+        subtract(target.x, delta.x);
+        subtract(target.y, delta.y);
+    }
+    void add(Vector3& target, Vector3 delta) {
+        add(target.x, delta.x);
+        add(target.y, delta.y);
+        add(target.z, delta.z);
+    }
+    void subtract(Vector3& target, Vector3 delta) {
+        subtract(target.x, delta.x);
+        subtract(target.y, delta.y);
+        subtract(target.z, delta.z);
+    }
+
+    void flush() {
+        std::ranges::sort(deltas_, std::ranges::less{}, &Delta::target);
+        for (auto delta = deltas_.begin(); delta != deltas_.end();) {
+            float* const target = delta->target;
+            reduce::Sum<float> sum;
+            sum.add(*target);
+            for (; delta != deltas_.end() && delta->target == target; ++delta) {
+                sum.add(delta->value);
+            }
+            *target = sum.value();
+        }
+        deltas_.clear();
+    }
+
+private:
+    struct Delta {
+        float* target;
+        float value;
+    };
+    // A flat list reused across activations: no hashing or allocation per write.
+    std::vector<Delta> deltas_;
+};
 
 namespace stdlib::math {
 

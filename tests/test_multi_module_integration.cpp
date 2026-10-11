@@ -540,6 +540,9 @@ static ImportedSymbols pub_symbols_from(const std::string& module_name, const De
     for (const auto& name : prog.pub_templates) {
         syms.templates[name] = exported_template(prog, module_name, name);
     }
+    for (const auto& group : prog.execution_graph.group_declarations) {
+        syms.groups[group.group.local_name] = group;
+    }
     for (const auto& dep : prog.dependency_graph) {
         const auto symbol = make_symbol_id(SymbolKind::Rule, module_name, dep.rule_name);
         ImportedRule sys;

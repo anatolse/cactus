@@ -1,0 +1,20 @@
+module linearization_commuting_runtime
+
+use std.core
+
+# Nothing orders the two handlers, but both only add to the field, so every
+# order gives the same score.
+
+trait Score:
+    var value: int = 0
+
+entity Board:
+    Score
+
+rule First:
+    on tick:
+        Board[Score].value += 1
+
+rule Second:
+    on tick:
+        Board[Score].value += 2

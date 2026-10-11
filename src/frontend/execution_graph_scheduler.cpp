@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <format>
 #include <functional>
 #include <iterator>
 #include <optional>
@@ -74,18 +75,183 @@ std::optional<FieldAccess> produced_overlap(const HandlerNode& producer,
     return overlapping_fields(produced, field_access(consumer.contract.read_fields, trait));
 }
 
-void merge_field_access(FieldAccess& into, const FieldAccess& from) {
-    if (into.all || from.all) {
-        into = all_fields();
-        return;
+// produced_overlap without the fields both handlers only write with commuting kinds.
+std::optional<FieldAccess> conflicting_overlap(const HandlerNode& producer,
+                                               const HandlerNode& consumer,
+                                               const SymbolId& trait) {
+    auto overlap = produced_overlap(producer, consumer, trait);
+    if (!overlap.has_value() || overlap->all) {
+        return overlap;
     }
-    into.fields.insert(from.fields.begin(), from.fields.end());
+    std::erase_if(overlap->fields, [&](const std::string& field) {
+        return writes_commute(write_kind(producer.contract, trait, field), write_kind(consumer.contract, trait, field));
+    });
+    return overlap->fields.empty() ? std::nullopt : overlap;
 }
 
 bool writes_any(const HandlerNode& producer, const HandlerNode& consumer, const std::unordered_set<SymbolId>& produced) {
     return std::ranges::any_of(
-        produced, [&](const SymbolId& trait) { return produced_overlap(producer, consumer, trait).has_value(); });
+        produced, [&](const SymbolId& trait) { return conflicting_overlap(producer, consumer, trait).has_value(); });
 }
+
+// The command table: per trait, marker adds and removes are idempotent,
+// destroy and spawn commute with everything, and the rest assign.
+bool commands_conflict(const InferredHandlerCommand& left, const InferredHandlerCommand& right) {
+    const auto structural = [](HandlerCommandKind kind) {
+        return kind == HandlerCommandKind::Spawn || kind == HandlerCommandKind::Destroy;
+    };
+    if (structural(left.kind) || structural(right.kind) || !left.target.has_value() || left.target != right.target) {
+        return false;
+    }
+    if (left.kind == HandlerCommandKind::Remove || right.kind == HandlerCommandKind::Remove) {
+        return left.kind != right.kind;
+    }
+    if (left.kind != right.kind) {
+        return true;
+    }
+    return overlapping_fields(left.patched.value_or(all_fields()), right.patched.value_or(all_fields())).has_value();
+}
+
+std::vector<std::string> command_conflicts(const HandlerContract& left, const HandlerContract& right) {
+    std::vector<std::string> conflicts;
+    for (const auto& first : left.commands) {
+        for (const auto& second : right.commands) {
+            if (!commands_conflict(first, second)) {
+                continue;
+            }
+            auto text = "commands " + make_canonical_id(*first.target) + ": " + handler_command_kind_name(first.kind) +
+                        " / " + handler_command_kind_name(second.kind);
+            if (!std::ranges::contains(conflicts, text)) {
+                conflicts.push_back(std::move(text));
+            }
+        }
+    }
+    return conflicts;
+}
+
+// Whether two executions of one handler can give different results in
+// different orders.
+bool executions_conflict(const HandlerContract& contract) {
+    if (!contract.effect_acts.empty() || !contract.projects.empty()) {
+        return true;
+    }
+    for (const auto& trait : contract.writes) {
+        const auto& access = field_access(contract.write_fields, trait);
+        const auto ordered = [&](const std::string& field) {
+            const auto kind = write_kind(contract, trait, field);
+            return !writes_commute(kind, kind);
+        };
+        if (access.all || std::ranges::any_of(access.fields, ordered)) {
+            return true;
+        }
+    }
+    return std::ranges::any_of(contract.commands, [&](const InferredHandlerCommand& command) {
+        return std::ranges::any_of(contract.commands, [&](const InferredHandlerCommand& other) {
+            return commands_conflict(command, other);
+        });
+    });
+}
+
+// The event and lifecycle triggers a handler's emits and commands deliver.
+std::vector<ResolvedHandlerTrigger> produced_triggers(const HandlerContract& contract) {
+    std::vector<ResolvedHandlerTrigger> triggers;
+    triggers.reserve(contract.emits.size() + contract.commands.size());
+    for (const auto& event : contract.emits) {
+        triggers.push_back(ResolvedHandlerTrigger{.kind = HandlerTriggerKind::Event, .symbol = event});
+    }
+    for (const auto& command : contract.commands) {
+        if (!command.target.has_value() ||
+            (command.kind != HandlerCommandKind::Add && command.kind != HandlerCommandKind::Remove)) {
+            continue;
+        }
+        const auto kind = command.kind == HandlerCommandKind::Add ? HandlerTriggerKind::TraitAdded
+                                                                  : HandlerTriggerKind::TraitRemoved;
+        triggers.push_back(ResolvedHandlerTrigger{.kind = kind, .symbol = *command.target});
+    }
+    return triggers;
+}
+
+// Per event or lifecycle trigger, the lowest-id consumer that observes occurrence order.
+class OrderObservers {
+public:
+    explicit OrderObservers(const ExecutionGraph& graph) {
+        produced_.reserve(graph.handlers.size());
+        for (const auto& handler : graph.handlers) {
+            produced_.push_back(produced_triggers(handler.contract));
+        }
+        const auto observes = observing_handlers(graph);
+        for (std::size_t index = 0; index < graph.handlers.size(); ++index) {
+            const auto& identity = graph.handlers[index].identity;
+            const bool consumer  = identity.trigger.kind != HandlerTriggerKind::Phase &&
+                                  identity.trigger.kind != HandlerTriggerKind::RenderStage;
+            if (!observes[index] || !consumer) {
+                continue;
+            }
+            auto id         = identity.canonical_id();
+            const auto key  = identity.trigger.debug_string();
+            const auto seen = observer_.find(key);
+            if (seen == observer_.end() || id < seen->second) {
+                observer_[key] = std::move(id);
+            }
+        }
+    }
+
+    // The triggers both handlers deliver that some consumer observes the order of.
+    [[nodiscard]] std::vector<std::string> conflicts(std::size_t left, std::size_t right) const {
+        std::vector<std::string> conflicts;
+        for (const auto& trigger : produced_[left]) {
+            if (!std::ranges::contains(produced_[right], trigger)) {
+                continue;
+            }
+            const auto key      = trigger.debug_string();
+            const auto observer = observer_.find(key);
+            if (observer == observer_.end()) {
+                continue;
+            }
+            auto text = key + " observed by " + observer->second;
+            if (!std::ranges::contains(conflicts, text)) {
+                conflicts.push_back(std::move(text));
+            }
+        }
+        return conflicts;
+    }
+
+private:
+    // Walks deliveries backwards from non-commuting handlers, so event cycles terminate.
+    [[nodiscard]] std::vector<bool> observing_handlers(const ExecutionGraph& graph) const {
+        const auto count = graph.handlers.size();
+        std::vector<std::vector<std::size_t>> producers(count);
+        for (std::size_t consumer = 0; consumer < count; ++consumer) {
+            for (std::size_t producer = 0; producer < count; ++producer) {
+                if (std::ranges::contains(produced_[producer], graph.handlers[consumer].identity.trigger)) {
+                    producers[consumer].push_back(producer);
+                }
+            }
+        }
+        std::vector<bool> observes(count, false);
+        std::vector<std::size_t> pending;
+        for (std::size_t index = 0; index < count; ++index) {
+            if (executions_conflict(graph.handlers[index].contract)) {
+                observes[index] = true;
+                pending.push_back(index);
+            }
+        }
+        while (!pending.empty()) {
+            const auto current = pending.back();
+            pending.pop_back();
+            for (const auto producer : producers[current]) {
+                if (!observes[producer]) {
+                    observes[producer] = true;
+                    pending.push_back(producer);
+                }
+            }
+        }
+        return observes;
+    }
+
+    std::vector<std::vector<ResolvedHandlerTrigger>> produced_;
+    std::unordered_map<std::string, std::string> observer_;
+};
 
 // The trait a transform propagation rule derives, which every other writer of
 // that trait in the same trigger must precede.
@@ -180,6 +346,98 @@ private:
     std::vector<const std::string*> group_modules_;
 };
 
+// A conflict no meaningful rule orients; `first` has the smaller canonical id.
+struct UnorientableConflict {
+    const HandlerNode* first  = nullptr;
+    const HandlerNode* second = nullptr;
+    std::vector<FieldProvenance> fields;
+    std::vector<std::string> effects;
+    std::vector<std::string> channels;
+};
+
+std::string write_kind_name(const FieldWriteKind& kind) {
+    switch (kind.kind) {
+        case WriteKind::Assign:
+            return "Assign";
+        case WriteKind::Accum:
+            return "Accum";
+        case WriteKind::General:
+            return "General";
+        case WriteKind::Join:
+            break;
+    }
+    switch (kind.op) {
+        case JoinOp::Max:
+            return "Join max";
+        case JoinOp::Min:
+            return "Join min";
+        case JoinOp::Or:
+            return "Join or";
+        case JoinOp::And:
+            return "Join and";
+    }
+    std::unreachable();
+}
+
+// How `handler` touches the field, or the whole trait when `field` is unset.
+std::string access_text(const HandlerNode& handler, const SymbolId& trait, const std::optional<std::string>& field) {
+    const auto& contract = handler.contract;
+    if (!field.has_value()) {
+        return contract.produced_traits().contains(trait) ? "write" : "read";
+    }
+    const bool writes = contract.writes.contains(trait) && field_access(contract.write_fields, trait).covers(*field);
+    return writes ? write_kind_name(write_kind(contract, trait, *field)) : "read";
+}
+
+// How `from`'s module names `handler` in an `after:` entry.
+std::string handler_reference(const HandlerNode& handler, const HandlerNode& from) {
+    const auto& rule    = handler.identity.rule;
+    const auto& trigger = handler.identity.trigger;
+    const auto& module  = from.identity.rule.module;
+    const auto name     = rule.module == module ? rule.local_name : make_canonical_id(rule);
+    // std.core is in scope everywhere; any other module's symbol is spelled in full.
+    const bool local    = trigger.symbol.module == module || trigger.symbol.module.name == "std.core";
+    const auto symbol   = local ? trigger.symbol.local_name : make_canonical_id(trigger.symbol);
+    const auto event    = trigger.is_lifecycle() ? std::string(handler_trigger_kind_name(trigger.kind)) + " " + symbol
+                                                 : symbol;
+    return name + "/on " + event;
+}
+
+std::string unorientable_message(const UnorientableConflict& conflict) {
+    const auto& first  = *conflict.first;
+    const auto& second = *conflict.second;
+    std::vector<std::string> reasons;
+    for (const auto& provenance : conflict.fields) {
+        const auto side = [&](const std::optional<std::string>& field) {
+            std::ostringstream text;
+            text << " (" << first.identity.rule.local_name << ": " << access_text(first, provenance.trait, field) << ", "
+                 << second.identity.rule.local_name << ": " << access_text(second, provenance.trait, field) << ")";
+            return std::move(text).str();
+        };
+        const auto trait = make_canonical_id(provenance.trait);
+        if (provenance.access.all) {
+            reasons.push_back(std::format("{} all fields{}", trait, side(std::nullopt)));
+            continue;
+        }
+        for (const auto& field : provenance.access.fields) {
+            reasons.push_back(std::format("{}.{}{}", trait, field, side(field)));
+        }
+    }
+    reasons.insert(reasons.end(), conflict.channels.begin(), conflict.channels.end());
+    for (const auto& effect : conflict.effects) {
+        reasons.push_back("effect " + effect);
+    }
+    std::string listed;
+    for (const auto& reason : reasons) {
+        listed += (listed.empty() ? "" : ", ") + reason;
+    }
+    return "unorientable conflict between '" + first.identity.canonical_id() + "' and '" +
+           second.identity.canonical_id() + "' on " + listed + "; nothing orders them: add 'after: " +
+           handler_reference(second, first) + "' to the " + handler_reference(first, second) +
+           " handler, or 'after: " + handler_reference(first, second) + "' to the " +
+           handler_reference(second, first) + " handler";
+}
+
 }  // namespace
 
 // The single consolidated home for what used to be two independently-duplicated
@@ -266,6 +524,39 @@ bool compute_handler_schedule(ExecutionGraph& graph, ErrorReporter& errors) {
     const auto produced_by_handler = precompute_produced_by_handler(graph.handlers);
 
     const PublicGroupOrder public_group_order(graph, produced_by_handler);
+    const OrderObservers order_observers(graph);
+    std::vector<UnorientableConflict> unorientable;
+
+    struct Orientation {
+        bool left_first = false;
+        ScheduleEdgeOrientation reason;
+    };
+    const auto orient = [&](std::size_t left_index,
+                            std::size_t right_index,
+                            bool left_writes_right,
+                            bool right_writes_left) -> std::optional<Orientation> {
+        const auto& left  = graph.handlers[left_index];
+        const auto& right = graph.handlers[right_index];
+        if (feeds_derivation(produced_by_handler[left_index], right)) {
+            return Orientation{.left_first = true, .reason = ScheduleEdgeOrientation::DerivationAfterWriters};
+        }
+        if (feeds_derivation(produced_by_handler[right_index], left)) {
+            return Orientation{.left_first = false, .reason = ScheduleEdgeOrientation::DerivationAfterWriters};
+        }
+        if (explicitly_precedes(left.identity, right.identity)) {
+            return Orientation{.left_first = true, .reason = ScheduleEdgeOrientation::Explicit};
+        }
+        if (explicitly_precedes(right.identity, left.identity)) {
+            return Orientation{.left_first = false, .reason = ScheduleEdgeOrientation::Explicit};
+        }
+        if (const auto decision = public_group_order.decide(left_index, right_index)) {
+            return Orientation{.left_first = decision->left_first, .reason = decision->orientation};
+        }
+        if (left_writes_right != right_writes_left) {
+            return Orientation{.left_first = left_writes_right, .reason = ScheduleEdgeOrientation::WriterBeforeReader};
+        }
+        return std::nullopt;
+    };
 
     for (std::size_t left_index = 0; left_index < graph.handlers.size(); ++left_index) {
         const auto& left = graph.handlers[left_index];
@@ -281,7 +572,7 @@ bool compute_handler_schedule(ExecutionGraph& graph, ErrorReporter& errors) {
                                           const std::unordered_set<SymbolId>& produced) {
                 bool found_any = false;
                 for (const auto& trait : produced) {
-                    const auto overlap = produced_overlap(producer, consumer, trait);
+                    const auto overlap = conflicting_overlap(producer, consumer, trait);
                     if (!overlap.has_value()) {
                         continue;
                     }
@@ -306,49 +597,32 @@ bool compute_handler_schedule(ExecutionGraph& graph, ErrorReporter& errors) {
 
             std::vector<std::string> effect_provenance;
             for (const auto& effect : left.contract.effects) {
-                if (right.contract.effects.contains(effect)) {
+                const bool acts = left.contract.effect_acts.contains(effect) || right.contract.effect_acts.contains(effect);
+                if (acts && right.contract.effects.contains(effect)) {
                     effect_provenance.push_back(effect);
                 }
             }
             std::ranges::sort(effect_provenance);
-            if (trait_provenance.empty() && effect_provenance.empty()) {
+            auto channel_provenance = command_conflicts(left.contract, right.contract);
+            std::ranges::move(order_observers.conflicts(left_index, right_index), std::back_inserter(channel_provenance));
+            std::ranges::sort(channel_provenance);
+            if (trait_provenance.empty() && effect_provenance.empty() && channel_provenance.empty()) {
                 continue;
             }
 
-            const HandlerNode* before           = nullptr;
-            const HandlerNode* after            = nullptr;
-            ScheduleEdgeOrientation orientation = ScheduleEdgeOrientation::DeclarationOrder;
-            if (feeds_derivation(produced_by_handler[left_index], right)) {
-                before      = &left;
-                after       = &right;
-                orientation = ScheduleEdgeOrientation::DerivationAfterWriters;
-            } else if (feeds_derivation(produced_by_handler[right_index], left)) {
-                before      = &right;
-                after       = &left;
-                orientation = ScheduleEdgeOrientation::DerivationAfterWriters;
-            } else if (explicitly_precedes(left.identity, right.identity)) {
-                before      = &left;
-                after       = &right;
-                orientation = ScheduleEdgeOrientation::Explicit;
-            } else if (explicitly_precedes(right.identity, left.identity)) {
-                before      = &right;
-                after       = &left;
-                orientation = ScheduleEdgeOrientation::Explicit;
-            } else if (const auto decision = public_group_order.decide(left_index, right_index)) {
-                before      = decision->left_first ? &left : &right;
-                after       = decision->left_first ? &right : &left;
-                orientation = decision->orientation;
-            } else if (left_writes_right != right_writes_left) {
-                before      = left_writes_right ? &left : &right;
-                after       = left_writes_right ? &right : &left;
-                orientation = ScheduleEdgeOrientation::WriterBeforeReader;
-            } else if (declaration_precedes(left, right)) {
-                before = &left;
-                after  = &right;
-            } else {
-                before = &right;
-                after  = &left;
+            const auto oriented = orient(left_index, right_index, left_writes_right, right_writes_left);
+            if (!oriented.has_value()) {
+                const bool left_smaller = left.identity.canonical_id() < right.identity.canonical_id();
+                unorientable.push_back(UnorientableConflict{.first    = left_smaller ? &left : &right,
+                                                            .second   = left_smaller ? &right : &left,
+                                                            .fields   = std::move(field_provenance),
+                                                            .effects  = std::move(effect_provenance),
+                                                            .channels = std::move(channel_provenance)});
+                continue;
             }
+            const auto* before     = oriented->left_first ? &left : &right;
+            const auto* after      = oriented->left_first ? &right : &left;
+            const auto orientation = oriented->reason;
             if (!trait_provenance.empty()) {
                 graph.schedule_edges.push_back(ScheduleEdge{.before           = before->identity,
                                                             .after            = after->identity,
@@ -364,7 +638,22 @@ bool compute_handler_schedule(ExecutionGraph& graph, ErrorReporter& errors) {
                                                             .orientation       = orientation,
                                                             .effect_provenance = std::move(effect_provenance)});
             }
+            if (!channel_provenance.empty()) {
+                graph.schedule_edges.push_back(ScheduleEdge{.before             = before->identity,
+                                                            .after              = after->identity,
+                                                            .kind               = ScheduleEdgeKind::ChannelConflict,
+                                                            .orientation        = orientation,
+                                                            .channel_provenance = std::move(channel_provenance)});
+            }
         }
+    }
+
+    std::ranges::sort(unorientable, [](const UnorientableConflict& a, const UnorientableConflict& b) {
+        return std::pair(a.first->identity.canonical_id(), a.second->identity.canonical_id()) <
+               std::pair(b.first->identity.canonical_id(), b.second->identity.canonical_id());
+    });
+    for (const auto& conflict : unorientable) {
+        errors.error(conflict.second->location, unorientable_message(conflict));
     }
 
     // ── Handler-cycle DFS ─────────────────────────────────────────────────────
@@ -560,16 +849,6 @@ void validate_lifecycle_trigger_traits(const ExecutionGraph& graph, ErrorReporte
                              "' is projected");
         }
     }
-}
-
-std::vector<const ScheduleEdge*> declaration_order_edges(const ExecutionGraph& graph) {
-    std::vector<const ScheduleEdge*> edges;
-    for (const auto& edge : graph.schedule_edges) {
-        if (edge.orientation == ScheduleEdgeOrientation::DeclarationOrder) {
-            edges.push_back(&edge);
-        }
-    }
-    return edges;
 }
 
 }  // namespace cactus

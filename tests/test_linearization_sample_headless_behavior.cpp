@@ -26,7 +26,7 @@ TEST_CASE("every linear extension of the sample gives the stable order's world",
 }
 
 TEST_CASE("the sample's world changes across frames", "[runtime][codegen-entt][handler-execution-graph]") {
-    const auto digests = cactus::test::linearization_digests(std::nullopt, false, 3, cactus::test::no_setup());
+    const auto digests = cactus::test::linearization_digests(std::nullopt, 3, cactus::test::no_setup());
     REQUIRE(digests.size() == 3);
     CHECK(digests[0] != digests[1]);
     CHECK(digests[1] != digests[2]);

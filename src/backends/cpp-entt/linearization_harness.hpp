@@ -21,14 +21,12 @@ namespace cactus::runtime::entt_backend {
 struct LinearizationEdge {
     std::size_t before;
     std::size_t after;
-    bool declaration_order;
 };
 
 struct LinearizationSettings {
     // Unset runs the stable topological order.
     std::optional<std::uint64_t> seed;
-    bool drop_declaration_order = false;
-    std::uint64_t state         = 0;
+    std::uint64_t state = 0;
 };
 
 inline LinearizationSettings& linearization_settings() {
@@ -36,11 +34,10 @@ inline LinearizationSettings& linearization_settings() {
     return settings;
 }
 
-inline void set_linearization(std::optional<std::uint64_t> seed, bool drop_declaration_order = false) {
-    auto& settings                  = linearization_settings();
-    settings.seed                   = seed;
-    settings.drop_declaration_order = drop_declaration_order;
-    settings.state                  = seed.value_or(0);
+inline void set_linearization(std::optional<std::uint64_t> seed) {
+    auto& settings = linearization_settings();
+    settings.seed  = seed;
+    settings.state = seed.value_or(0);
 }
 
 // splitmix64, so a seed picks the same orders on every platform.
@@ -64,14 +61,9 @@ void dispatch_linear_extension(std::size_t count, const std::array<Linearization
         }
         return;
     }
-    const auto active = [&settings](const LinearizationEdge& edge) {
-        return !(settings.drop_declaration_order && edge.declaration_order);
-    };
     std::vector<std::size_t> pending(count, 0);
     for (const auto& edge : edges) {
-        if (active(edge)) {
-            ++pending[edge.after];
-        }
+        ++pending[edge.after];
     }
     std::vector<std::size_t> ready;
     for (std::size_t index = 0; index < count; ++index) {
@@ -85,7 +77,7 @@ void dispatch_linear_extension(std::size_t count, const std::array<Linearization
         ready.erase(ready.begin() + pick);
         call(index);
         for (const auto& edge : edges) {
-            if (edge.before == index && active(edge) && --pending[edge.after] == 0) {
+            if (edge.before == index && --pending[edge.after] == 0) {
                 ready.push_back(edge.after);
             }
         }

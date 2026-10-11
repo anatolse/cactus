@@ -1,7 +1,6 @@
 // NOLINTBEGIN(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)
 // -- Catch2 assertion macros intentionally expand through do-while and expression decomposition.
 #include "common/error_reporter.hpp"
-#include "frontend/execution_graph_scheduler.hpp"
 #include "frontend/lexer.hpp"
 #include "frontend/parser.hpp"
 #include "frontend/semantic_analyzer.hpp"
@@ -4532,7 +4531,7 @@ TEST_CASE("Contract field access: a write also records the read of the same fiel
     const auto declaration = match_trait_declaration();
     HandlerContract contract;
     record_read(contract, match, "score", &declaration);
-    record_write(contract, match, "over", &declaration);
+    record_write(contract, match, "over", &declaration, FieldWriteKind{});
 
     CHECK(contract.writes.contains(match));
     CHECK(contract.reads.contains(match));
@@ -4546,7 +4545,7 @@ TEST_CASE("Contract field access: trait sets and field tables keep the same keys
     const auto declaration = match_trait_declaration();
     HandlerContract contract;
     record_read(contract, health, std::nullopt, nullptr);
-    record_write(contract, match, "score", &declaration);
+    record_write(contract, match, "score", &declaration, FieldWriteKind{});
 
     CHECK(contract.read_fields.size() == contract.reads.size());
     CHECK(contract.write_fields.size() == contract.writes.size());
@@ -4704,13 +4703,432 @@ TEST_CASE("Contract fields: set stays a command with no field access", "[semanti
         "        set Health on aim.other:\n"
         "            hp = 5\n");
     const auto health = test_trait("Health");
-    const InferredHandlerCommand set_health{.kind = HandlerCommandKind::Set, .target = health};
+    const InferredHandlerCommand set_health{
+        .kind = HandlerCommandKind::Set, .target = health, .patched = fields_of({"hp"})};
     CHECK(std::ranges::find(contract.commands, set_health) != contract.commands.end());
     CHECK_FALSE(contract.reads.contains(health));
     CHECK_FALSE(contract.writes.contains(health));
     CHECK_FALSE(contract.read_fields.contains(health));
     CHECK_FALSE(contract.write_fields.contains(health));
     CHECK(contract.read_fields.at(test_trait("Target")) == fields_of({"other"}));
+}
+
+TEST_CASE("Contract fields: set records its patched fields", "[semantic][handler-contracts][deferred-set]") {
+    const auto contract = only_contract(
+        "rule Heal:\n"
+        "    each:\n"
+        "        Target as aim\n"
+        "    on tick:\n"
+        "        set Health on aim.other:\n"
+        "            hp = 5\n");
+    REQUIRE(contract.commands.size() == 1);
+    CHECK(contract.commands[0].kind == HandlerCommandKind::Set);
+    CHECK(contract.commands[0].patched == fields_of({"hp"}));
+    CHECK_FALSE(contract.write_fields.contains(test_trait("Health")));
+
+    const auto both = only_contract(
+        "rule Heal:\n"
+        "    each:\n"
+        "        Target as aim\n"
+        "    on tick:\n"
+        "        set Health on aim.other:\n"
+        "            hp = 5\n"
+        "        set Health on aim.other:\n"
+        "            armor = 1\n");
+    REQUIRE(both.commands.size() == 1);
+    CHECK(both.commands[0].patched == fields_of({"hp", "armor"}));
+}
+
+TEST_CASE("Contract fields: an extern set covers every field", "[semantic][handler-contracts][deferred-set]") {
+    const auto program = analyze(stdlib_events() + field_traits() +
+                                 "extern rule HostHeal:\n"
+                                 "    on tick:\n"
+                                 "        commands:\n"
+                                 "            set Health\n"
+                                 "            add Health\n");
+    REQUIRE(program.execution_graph.handlers.size() == 1);
+    const auto& commands = program.execution_graph.handlers[0].contract.commands;
+    REQUIRE(commands.size() == 2);
+    CHECK(commands[0].patched == all_fields());
+    CHECK(commands[1].patched == fields_of({"hp", "armor"}));
+}
+
+static ImportedSymbols make_input_import() {
+    ImportedSymbols syms;
+    syms.module_name = "std.input";
+    TypeInfo bool_type;
+    bool_type.kind = TypeKind::Bool;
+    for (const std::string name : {"pressed", "consume"}) {
+        ResolvedFunc func;
+        func.name           = name;
+        func.module_name    = "std.input";
+        func.is_pub         = true;
+        func.is_extern      = true;
+        func.effect_summary = std::unordered_set<std::string>{"input"};
+        if (name == "pressed") {
+            func.return_type = bool_type;
+        }
+        const auto symbol = make_symbol_id(SymbolKind::Func, "std.input", name);
+        func.symbol_id    = symbol;
+        func.canonical_id = make_canonical_id(symbol);
+        syms.funcs[name]  = std::move(func);
+    }
+    return syms;
+}
+
+static InferredHandlerContract only_effect_contract(const std::string& source) {
+    ModuleImports imports;
+    imports.modules["input"] = make_input_import();
+    auto result              = analyze_with_imports(stdlib_events() + source, imports);
+    REQUIRE(result.handler_contracts.size() == 1);
+    return result.handler_contracts[0];
+}
+
+TEST_CASE("Effect access: an input read observes", "[semantic][handler-contracts][effects]") {
+    const auto contract = only_effect_contract(
+        "rule Look:\n"
+        "    on tick:\n"
+        "        if input.pressed():\n"
+        "            let x = 1\n");
+    CHECK(contract.effects.contains("input"));
+    CHECK(contract.effect_acts.empty());
+}
+
+TEST_CASE("Effect access: consume acts", "[semantic][handler-contracts][effects]") {
+    const auto contract = only_effect_contract(
+        "rule Take:\n"
+        "    on tick:\n"
+        "        if input.pressed():\n"
+        "            input.consume()\n");
+    CHECK(contract.effects.contains("input"));
+    CHECK(contract.effect_acts.contains("input"));
+}
+
+TEST_CASE("Effect access: an unknown extern function acts on external", "[semantic][handler-contracts][effects]") {
+    const auto contract = only_effect_contract(
+        "extern func poke()\n"
+        "rule Poke:\n"
+        "    on tick:\n"
+        "        poke()\n");
+    CHECK(contract.effects.contains("external"));
+    CHECK(contract.effect_acts.contains("external"));
+}
+
+TEST_CASE("Effect access: extern rule effects act", "[semantic][handler-contracts][effects]") {
+    const auto program = analyze(stdlib_events() +
+                                 "extern rule Draw:\n"
+                                 "    on tick:\n"
+                                 "        effects:\n"
+                                 "            graphics\n");
+    REQUIRE(program.execution_graph.handlers.size() == 1);
+    const auto& contract = program.execution_graph.handlers[0].contract;
+    CHECK(contract.effects.contains("graphics"));
+    CHECK(contract.effect_acts.contains("graphics"));
+}
+
+TEST_CASE("Effect access: acting stdlib functions are listed by identity", "[semantic][handler-contracts][effects]") {
+    CHECK(stdlib_function_acts(make_symbol_id(SymbolKind::Func, "std.input", "consume")));
+    CHECK(stdlib_function_acts(make_symbol_id(SymbolKind::Func, "std.input", "set_cursor_captured")));
+    CHECK(stdlib_function_acts(make_symbol_id(SymbolKind::Func, "std.editor", "apply_camera_3d")));
+    CHECK_FALSE(stdlib_function_acts(make_symbol_id(SymbolKind::Func, "std.input", "pressed")));
+    CHECK_FALSE(stdlib_function_acts(make_symbol_id(SymbolKind::Func, "std.query", "all")));
+    CHECK_FALSE(stdlib_function_acts(make_symbol_id(SymbolKind::Func, "game", "consume")));
+}
+
+// ── Write kinds (handler-contracts) ─────────────────────────────────────────
+
+static ImportedSymbols make_math_import() {
+    ImportedSymbols syms;
+    syms.module_name = "std.math";
+    TypeInfo float_type;
+    float_type.kind = TypeKind::Float;
+    for (const std::string name : {"max", "min"}) {
+        ResolvedFunc func;
+        func.name           = name;
+        func.module_name    = "std.math";
+        func.is_pub         = true;
+        func.effect_summary = std::unordered_set<std::string>{};
+        func.params         = {ResolvedParam{.name = "a", .type = float_type},
+                               ResolvedParam{.name = "b", .type = float_type}};
+        func.return_type    = float_type;
+        const auto symbol   = make_symbol_id(SymbolKind::Func, "std.math", name);
+        func.symbol_id      = symbol;
+        func.canonical_id   = make_canonical_id(symbol);
+        syms.funcs[name]    = std::move(func);
+    }
+    return syms;
+}
+
+static const std::string& write_kind_traits() {
+    static const std::string value =
+        "trait Tally:\n"
+        "    var total: float = 0.0\n"
+        "    var count: int = 0\n"
+        "    var best: float = 0.0\n"
+        "    var flag: bool = false\n"
+        "    var label: string = \"\"\n"
+        "trait Mover:\n"
+        "    var pos: vec2\n"
+        "    var speed: float = 1.0\n"
+        "trait Actor:\n"
+        "    var grounded: bool = false\n"
+        "trait Surface:\n"
+        "    var top: float = 0.0\n"
+        "entity Game:\n"
+        "    Tally\n";
+    return value;
+}
+
+static InferredHandlerContract only_write_kind_contract(const std::string& rules) {
+    ModuleImports imports;
+    imports.modules["math"] = make_math_import();
+    auto result             = analyze_with_imports(stdlib_events() + write_kind_traits() + rules, imports);
+    REQUIRE(result.handler_contracts.size() == 1);
+    return result.handler_contracts[0];
+}
+
+static FieldWriteKind kind_of(const std::string& rule_body, const std::string& trait, const std::string& field) {
+    return write_kind(only_write_kind_contract(rule_body), test_trait(trait), field);
+}
+
+static std::string tally_rule(const std::string& body) {
+    return "rule Update:\n"
+           "    each:\n"
+           "        Tally as t\n"
+           "    on tick:\n" +
+           body;
+}
+
+static const FieldWriteKind kAccum{.kind = WriteKind::Accum};
+static const FieldWriteKind kAssign{.kind = WriteKind::Assign};
+static const FieldWriteKind kGeneral{.kind = WriteKind::General};
+
+static FieldWriteKind join(JoinOp op) {
+    return FieldWriteKind{.kind = WriteKind::Join, .op = op};
+}
+
+TEST_CASE("Write kinds: compound addition and subtraction are Accum", "[semantic][handler-contracts][write-kinds]") {
+    CHECK(kind_of(tally_rule("        t.total += 1.0\n"), "Tally", "total") == kAccum);
+    CHECK(kind_of(tally_rule("        t.count -= 5\n"), "Tally", "count") == kAccum);
+    CHECK(kind_of(tally_rule("        t.total += 1.0\n        t.total -= 0.5\n"), "Tally", "total") == kAccum);
+}
+
+TEST_CASE("Write kinds: a vector component accumulation is Accum on the field", "[semantic][handler-contracts][write-kinds]") {
+    const std::string rule = "rule Push:\n"
+                      "    each:\n"
+                      "        Mover as m\n"
+                      "    on tick:\n"
+                      "        m.pos.x += 1.0\n";
+    CHECK(kind_of(rule, "Mover", "pos") == kAccum);
+}
+
+TEST_CASE("Write kinds: accumulating into a string is General", "[semantic][handler-contracts][write-kinds]") {
+    CHECK(kind_of(tally_rule("        t.label += \"x\"\n"), "Tally", "label") == kGeneral);
+}
+
+TEST_CASE("Write kinds: every Join form and its commuted form", "[semantic][handler-contracts][write-kinds]") {
+    const std::string local = "        let v = 2.0\n        let hit = true\n";
+    CHECK(kind_of(tally_rule(local + "        t.best = math.max(t.best, v)\n"), "Tally", "best") == join(JoinOp::Max));
+    CHECK(kind_of(tally_rule(local + "        t.best = math.max(v, t.best)\n"), "Tally", "best") == join(JoinOp::Max));
+    CHECK(kind_of(tally_rule(local + "        t.best = math.min(t.best, v)\n"), "Tally", "best") == join(JoinOp::Min));
+    CHECK(kind_of(tally_rule(local + "        t.best = math.min(v, t.best)\n"), "Tally", "best") == join(JoinOp::Min));
+    CHECK(kind_of(tally_rule(local + "        t.flag = t.flag or hit\n"), "Tally", "flag") == join(JoinOp::Or));
+    CHECK(kind_of(tally_rule(local + "        t.flag = hit or t.flag\n"), "Tally", "flag") == join(JoinOp::Or));
+    CHECK(kind_of(tally_rule(local + "        t.flag = t.flag and hit\n"), "Tally", "flag") == join(JoinOp::And));
+    CHECK(kind_of(tally_rule(local + "        t.flag = hit and t.flag\n"), "Tally", "flag") == join(JoinOp::And));
+}
+
+TEST_CASE("Write kinds: constant boolean assignments are Joins", "[semantic][handler-contracts][write-kinds]") {
+    CHECK(kind_of(tally_rule("        t.flag = true\n"), "Tally", "flag") == join(JoinOp::Or));
+    CHECK(kind_of(tally_rule("        t.flag = false\n"), "Tally", "flag") == join(JoinOp::And));
+    const std::string bare = "rule Land:\n"
+                      "    each:\n"
+                      "        Actor\n"
+                      "    on tick:\n"
+                      "        grounded = true\n";
+    CHECK(kind_of(bare, "Actor", "grounded") == join(JoinOp::Or));
+}
+
+TEST_CASE("Write kinds: a plain assignment is Assign", "[semantic][handler-contracts][write-kinds]") {
+    CHECK(kind_of(tally_rule("        t.total = 3.0\n"), "Tally", "total") == kAssign);
+    CHECK(kind_of(tally_rule("        t.total = 3.0\n        t.total = 4.0\n"), "Tally", "total") == kAssign);
+}
+
+TEST_CASE("Write kinds: scaling and division are General", "[semantic][handler-contracts][write-kinds]") {
+    CHECK(kind_of(tally_rule("        t.total *= 0.5\n"), "Tally", "total") == kGeneral);
+    CHECK(kind_of(tally_rule("        t.total /= 2.0\n"), "Tally", "total") == kGeneral);
+}
+
+TEST_CASE("Write kinds: reading the field anywhere else makes the write General",
+          "[semantic][handler-contracts][write-kinds]") {
+    CHECK(kind_of(tally_rule("        t.count -= 5\n        if t.count < 0:\n            let x = 1\n"), "Tally", "count") ==
+          kGeneral);
+    CHECK(kind_of(tally_rule("        let before = t.total\n        t.total = 1.0\n"), "Tally", "total") == kGeneral);
+    CHECK(kind_of("rule Update:\n"
+                  "    each:\n"
+                  "        Tally as t\n"
+                  "    where:\n"
+                  "        t.count > 0\n"
+                  "    on tick:\n"
+                  "        t.count += 1\n",
+                  "Tally",
+                  "count") == kGeneral);
+    CHECK(kind_of("rule Update:\n"
+                  "    each:\n"
+                  "        Tally as t\n"
+                  "    order by:\n"
+                  "        t.total desc\n"
+                  "    on tick:\n"
+                  "        t.total += 1.0\n",
+                  "Tally",
+                  "total") == kGeneral);
+    CHECK(kind_of("rule Update:\n"
+                  "    each:\n"
+                  "        Mover\n"
+                  "    limit: Game[Tally].count\n"
+                  "    on tick:\n"
+                  "        Game[Tally].count += 1\n",
+                  "Tally",
+                  "count") == kGeneral);
+    CHECK(kind_of("rule Update:\n"
+                  "    when:\n"
+                  "        Game[Tally].total > 0.0\n"
+                  "    on tick:\n"
+                  "        Game[Tally].total += 1.0\n",
+                  "Tally",
+                  "total") == kGeneral);
+}
+
+TEST_CASE("Write kinds: mixed kinds in one handler are General", "[semantic][handler-contracts][write-kinds]") {
+    CHECK(kind_of(tally_rule("        let reset = true\n"
+                             "        if reset:\n"
+                             "            t.total = 0.0\n"
+                             "        else:\n"
+                             "            t.total += 1.0\n"),
+                  "Tally",
+                  "total") == kGeneral);
+    CHECK(kind_of(tally_rule("        t.flag = true\n        t.flag = false\n"), "Tally", "flag") == kGeneral);
+}
+
+TEST_CASE("Write kinds: a delta that reads its own field is General", "[semantic][handler-contracts][write-kinds]") {
+    CHECK(kind_of(tally_rule("        t.total += t.total\n"), "Tally", "total") == kGeneral);
+    CHECK(kind_of(tally_rule("        t.best = math.max(t.best, t.best + 1.0)\n"), "Tally", "best") == kGeneral);
+    CHECK(kind_of(tally_rule("        t.flag = t.flag or (t.flag and true)\n"), "Tally", "flag") == kGeneral);
+}
+
+TEST_CASE("Write kinds: another field in the delta keeps the kind", "[semantic][handler-contracts][write-kinds]") {
+    const auto contract = only_write_kind_contract(tally_rule("        t.total += t.best\n"));
+    CHECK(write_kind(contract, test_trait("Tally"), "total") == kAccum);
+    CHECK(contract.read_fields.at(test_trait("Tally")).fields.contains("best"));
+}
+
+TEST_CASE("Write kinds: a write covering every field is General", "[semantic][handler-contracts][write-kinds]") {
+    const auto contract = only_write_kind_contract("rule End:\n"
+                                                   "    each:\n"
+                                                   "        Tally as t\n"
+                                                   "    on tick:\n"
+                                                   "        foo.flag = true\n");
+    CHECK(contract.write_fields.at(test_trait("Tally")) == all_fields());
+    CHECK(write_kind(contract, test_trait("Tally"), "flag") == kGeneral);
+    CHECK(write_kind(contract, test_trait("Tally"), "total") == kGeneral);
+}
+
+TEST_CASE("Write kinds: extern rule writes are General", "[semantic][handler-contracts][write-kinds]") {
+    const auto program = analyze(stdlib_events() + write_kind_traits() +
+                                 "extern rule Physics:\n"
+                                 "    on tick:\n"
+                                 "        writes:\n"
+                                 "            Tally\n");
+    REQUIRE(program.execution_graph.handlers.size() == 1);
+    const auto& contract = program.execution_graph.handlers[0].contract;
+    CHECK(write_kind(contract, test_trait("Tally"), "total") == kGeneral);
+    CHECK(write_kind(contract, test_trait("Tally"), "flag") == kGeneral);
+}
+
+TEST_CASE("Write kinds: a user function named max is not a Join", "[semantic][handler-contracts][write-kinds]") {
+    CHECK(kind_of("func max(a: float, b: float) float:\n"
+                  "    return a\n" +
+                      tally_rule("        let v = 2.0\n        t.best = max(t.best, v)\n"),
+                  "Tally",
+                  "best") == kGeneral);
+}
+
+TEST_CASE("Write kinds: named-entity writes are classified", "[semantic][handler-contracts][write-kinds]") {
+    const std::string rule = "rule Count:\n"
+                      "    each:\n"
+                      "        Mover\n"
+                      "    on tick:\n"
+                      "        Game[Tally].total += 0.1\n"
+                      "        Game[Tally].flag = true\n"
+                      "        Game[Tally].best = math.max(Game[Tally].best, 1.0)\n";
+    const auto contract = only_write_kind_contract(rule);
+    CHECK(write_kind(contract, test_trait("Tally"), "total") == kAccum);
+    CHECK(write_kind(contract, test_trait("Tally"), "flag") == join(JoinOp::Or));
+    CHECK(write_kind(contract, test_trait("Tally"), "best") == join(JoinOp::Max));
+}
+
+TEST_CASE("Write kinds: pair-binding writes are classified", "[semantic][handler-contracts][write-kinds]") {
+    const std::string rule = "rule Ground:\n"
+                      "    pairs:\n"
+                      "        actor:\n"
+                      "            Actor\n"
+                      "        surface:\n"
+                      "            Surface\n"
+                      "    limit: 1 per actor\n"
+                      "    on tick:\n"
+                      "        actor[Actor].grounded = true\n";
+    CHECK(kind_of(rule, "Actor", "grounded") == join(JoinOp::Or));
+}
+
+static std::vector<std::optional<AccumulationTarget>> accumulation_targets(const std::string& rule) {
+    ModuleImports imports;
+    imports.modules["math"] = make_math_import();
+    ErrorReporter errors;
+    Lexer lexer("module test\n" + stdlib_events() + write_kind_traits() + rule, "test.cactus", errors);
+    Parser parser(lexer.tokenize(), errors);
+    auto program = parser.parse_program();
+    SemanticAnalyzer analyzer(errors);
+    analyzer.analyze(program, imports);
+    REQUIRE_FALSE(errors.has_errors());
+    std::vector<std::optional<AccumulationTarget>> targets;
+    for (const auto& declaration : program.declarations) {
+        const auto* node = std::get_if<RuleNode>(&declaration);
+        if (node == nullptr) {
+            continue;
+        }
+        for (const auto& handler : node->handlers) {
+            for (const auto& statement : handler.body) {
+                if (const auto* assign = std::get_if<VarAssign>(&statement->stmt)) {
+                    targets.push_back(assign->accumulation);
+                }
+            }
+        }
+    }
+    return targets;
+}
+
+TEST_CASE("Write kinds: an Accum statement names its target for the backend",
+          "[semantic][handler-contracts][write-kinds]") {
+    const auto own = accumulation_targets(tally_rule("        t.total += 1.0\n"));
+    REQUIRE(own.size() == 1);
+    REQUIRE(own[0].has_value());
+    CHECK(own[0]->trait == test_trait("Tally"));
+    CHECK(own[0]->field == "total");
+    CHECK(own[0]->own_row);
+
+    const auto named = accumulation_targets("rule Count:\n    on tick:\n        Game[Tally].total -= 1.0\n");
+    REQUIRE(named.size() == 1);
+    REQUIRE(named[0].has_value());
+    CHECK_FALSE(named[0]->own_row);
+
+    const auto observed = accumulation_targets(tally_rule("        t.total += 1.0\n        t.best = t.total\n"));
+    REQUIRE(observed.size() == 2);
+    CHECK_FALSE(observed[0].has_value());
+    CHECK_FALSE(observed[1].has_value());
+}
+
+TEST_CASE("Write kinds: the read-tracking table is cleared after inference", "[semantic][handler-contracts][write-kinds]") {
+    CHECK(only_write_kind_contract(tally_rule("        let x = t.total\n")).observed_reads.empty());
 }
 
 static const std::string& pair_field_traits() {
@@ -6249,7 +6667,6 @@ TEST_CASE("Semantic: explicit order is recorded as the edge reason", "[semantic]
     REQUIRE_FALSE(edges.empty());
     CHECK(std::ranges::all_of(
         edges, [](const ScheduleEdge* edge) { return edge->orientation == ScheduleEdgeOrientation::Explicit; }));
-    CHECK(declaration_order_edges(program.execution_graph).empty());
 }
 
 TEST_CASE("Semantic: one-way data flow is recorded as writer before reader", "[semantic][handler-execution-graph]") {
@@ -6269,19 +6686,16 @@ TEST_CASE("Semantic: one-way data flow is recorded as writer before reader", "[s
     CHECK(has_reason(edges_from(program, "Writer", "Reader"), ScheduleEdgeOrientation::WriterBeforeReader));
 }
 
-TEST_CASE("Semantic: an edge only declaration order directs is listed", "[semantic][handler-execution-graph]") {
-    const auto program = analyze(edge_reason_prelude() +
-                                 "rule First:\n"
-                                 "    on tick:\n"
-                                 "        Game[Score].value = 1\n"
-                                 "rule Second:\n"
-                                 "    on tick:\n"
-                                 "        Game[Score].value = 2\n");
-    CHECK(has_reason(edges_from(program, "First", "Second"), ScheduleEdgeOrientation::DeclarationOrder));
-    const auto listed = declaration_order_edges(program.execution_graph);
-    REQUIRE(listed.size() == 1);
-    CHECK(listed.front()->before.rule.local_name == "First");
-    CHECK(listed.front()->after.rule.local_name == "Second");
+TEST_CASE("Semantic: two assignments that nothing orders are rejected", "[semantic][handler-execution-graph]") {
+    const auto messages = analyze_error_messages(edge_reason_prelude() +
+                                                 "rule First:\n"
+                                                 "    on tick:\n"
+                                                 "        Game[Score].value = 1\n"
+                                                 "rule Second:\n"
+                                                 "    on tick:\n"
+                                                 "        Game[Score].value = 2\n");
+    REQUIRE(messages.size() == 1);
+    CHECK(messages[0].starts_with("unorientable conflict between 'test.First/on test.tick' and 'test.Second/on test.tick'"));
 }
 
 static std::map<std::string, std::uint64_t> levels_of(const std::vector<std::string>& rules) {
@@ -6312,5 +6726,358 @@ TEST_CASE("Semantic: dependency levels follow the longest path, not declaration 
     CHECK(levels_of({a, b, c, d}) == expected);
     CHECK(levels_of({d, c, b, a}) == expected);
     CHECK(levels_of({b, a, d, c}) == expected);
+}
+
+// ── Commuting writes and channel conflicts (handler-execution-graph) ───────
+
+static const std::string& commuting_prelude() {
+    static const std::string value = stdlib_events() +
+                                     "trait Health:\n"
+                                     "    var hp: int = 10\n"
+                                     "    var max_hp: int = 10\n"
+                                     "trait Actor:\n"
+                                     "    var grounded: bool = false\n"
+                                     "trait T:\n"
+                                     "    var x: float = 0.0\n"
+                                     "trait P:\n"
+                                     "    var x: float = 0.0\n"
+                                     "    var v: float = 0.0\n"
+                                     "trait Log:\n"
+                                     "    var last: int = 0\n"
+                                     "    var total: int = 0\n"
+                                     "trait Stunned\n"
+                                     "event Damaged:\n"
+                                     "    amount: int\n"
+                                     "event Spoke:\n"
+                                     "    line: int\n"
+                                     "event Relay:\n"
+                                     "    line: int\n";
+    return value;
+}
+
+static DecoratedProgram analyze_commuting(const std::string& rules) {
+    ModuleImports imports;
+    imports.modules["input"] = make_input_import();
+    return analyze_with_imports(commuting_prelude() + rules, imports);
+}
+
+static std::string tick_rule(const std::string& name,
+                             const std::string& filter,
+                             const std::string& body,
+                             const std::string& after = "") {
+    return "rule " + name + ":\n" + (filter.empty() ? "" : "    each:\n        " + filter + "\n") +
+           (after.empty() ? "" : "    after:\n        " + after + "\n") + "    on tick:\n" + body;
+}
+
+static std::vector<const ScheduleEdge*> edges_between(const DecoratedProgram& program,
+                                                      const std::string& left,
+                                                      const std::string& right) {
+    auto edges = edges_from(program, left, right);
+    const auto reverse = edges_from(program, right, left);
+    edges.insert(edges.end(), reverse.begin(), reverse.end());
+    return edges;
+}
+
+static const ScheduleEdge* edge_of_kind(const std::vector<const ScheduleEdge*>& edges, ScheduleEdgeKind kind) {
+    const auto found = std::ranges::find(edges, kind, &ScheduleEdge::kind);
+    return found == edges.end() ? nullptr : *found;
+}
+
+TEST_CASE("Commuting writes: two damage sources add no edge", "[semantic][handler-execution-graph][write-kinds]") {
+    const auto program = analyze_commuting(tick_rule("Burn", "Health as h", "        h.hp -= 1\n") +
+                                           tick_rule("Poison", "Health as h", "        h.hp -= 2\n"));
+    CHECK(edges_between(program, "Burn", "Poison").empty());
+}
+
+TEST_CASE("Commuting writes: the same Join operator adds no edge", "[semantic][handler-execution-graph][write-kinds]") {
+    const auto program = analyze_commuting(
+        tick_rule("Land", "Actor as a", "        a.grounded = true\n") +
+        tick_rule("Touch", "Actor as a", "        let touching = true\n        a.grounded = a.grounded or touching\n"));
+    CHECK(edges_between(program, "Land", "Touch").empty());
+}
+
+static std::vector<std::string> commuting_errors(const std::string& rules) {
+    return analyze_error_messages(commuting_prelude() + rules);
+}
+
+TEST_CASE("Commuting writes: different Join operators conflict", "[semantic][handler-execution-graph][write-kinds]") {
+    const auto messages = commuting_errors(tick_rule("Lift", "Actor as a", "        a.grounded = false\n") +
+                                           tick_rule("Land", "Actor as a", "        a.grounded = true\n"));
+    REQUIRE(messages.size() == 1);
+    CHECK(messages[0].contains("test.Actor.grounded (Land: Join or, Lift: Join and)"));
+}
+
+TEST_CASE("Commuting writes: Accum against Assign conflicts", "[semantic][handler-execution-graph][write-kinds]") {
+    const auto messages = commuting_errors(tick_rule("Add", "T as t", "        t.x += 1.0\n") +
+                                           tick_rule("Reset", "T as t", "        t.x = 0.0\n"));
+    REQUIRE(messages.size() == 1);
+    CHECK(messages[0].contains("test.T.x (Add: Accum, Reset: Assign)"));
+}
+
+TEST_CASE("Commuting writes: an Accum writer precedes a reader", "[semantic][handler-execution-graph][write-kinds]") {
+    const auto program = analyze_commuting(tick_rule("Read", "Health as h", "        let x = h.hp\n") +
+                                           tick_rule("Hurt", "Health as h", "        h.hp -= 5\n"));
+    CHECK(has_reason(edges_from(program, "Hurt", "Read"), ScheduleEdgeOrientation::WriterBeforeReader));
+    CHECK(edges_from(program, "Read", "Hurt").empty());
+}
+
+TEST_CASE("Commuting writes: a delta that reads the other's write still conflicts",
+          "[semantic][handler-execution-graph][write-kinds]") {
+    const auto program = analyze_commuting(tick_rule("Move", "P as p", "        p.x += p.v\n") +
+                                           tick_rule("Stop", "P as p", "        p.v = 0.0\n        p.x += 1.0\n"));
+    const auto edges = edges_from(program, "Stop", "Move");
+    CHECK(has_reason(edges, ScheduleEdgeOrientation::WriterBeforeReader));
+    const auto* data = edge_of_kind(edges, ScheduleEdgeKind::DataConflict);
+    REQUIRE(data != nullptr);
+    REQUIRE(data->field_provenance.size() == 1);
+    CHECK(data->field_provenance[0].access == fields_of({"v"}));
+    CHECK(edges_from(program, "Move", "Stop").empty());
+}
+
+TEST_CASE("Effect access: observing calls add no edge", "[semantic][handler-execution-graph][effects]") {
+    const auto program = analyze_commuting(
+        tick_rule("LookA", "", "        if input.pressed():\n            let x = 1\n") +
+        tick_rule("LookB", "", "        if input.pressed():\n            let y = 2\n"));
+    CHECK(edges_between(program, "LookA", "LookB").empty());
+}
+
+TEST_CASE("Effect access: observing and acting conflict", "[semantic][handler-execution-graph][effects]") {
+    const auto look = tick_rule("Look", "", "        if input.pressed():\n            let x = 1\n");
+    const auto program = analyze_commuting(look + tick_rule("Take", "", "        input.consume()\n", "Look"));
+    const auto* effect = edge_of_kind(edges_between(program, "Look", "Take"), ScheduleEdgeKind::EffectConflict);
+    REQUIRE(effect != nullptr);
+    CHECK(effect->effect_provenance == std::vector<std::string>{"input"});
+
+    ModuleImports imports;
+    imports.modules["input"] = make_input_import();
+    const auto source = "module test\n" + commuting_prelude() + look + tick_rule("Take", "", "        input.consume()\n");
+    ErrorReporter errors;
+    Lexer lexer(source, "test.cactus", errors);
+    Parser parser(lexer.tokenize(), errors);
+    auto ast = parser.parse_program();
+    SemanticAnalyzer analyzer(errors);
+    analyzer.analyze(ast, imports);
+    REQUIRE(errors.diagnostics().size() == 1);
+    CHECK(errors.diagnostics().front().message.contains("on effect input;"));
+}
+
+static std::optional<ScheduleEdge> channel_edge(const std::string& rules, const std::string& left, const std::string& right) {
+    const auto program = analyze_commuting(rules);
+    const auto* edge   = edge_of_kind(edges_between(program, left, right), ScheduleEdgeKind::ChannelConflict);
+    return edge == nullptr ? std::nullopt : std::optional(*edge);
+}
+
+TEST_CASE("Channel conflicts: the command table", "[semantic][handler-execution-graph][channels]") {
+    const auto pair = [](const std::string& left, const std::string& right) {
+        return tick_rule("A", "Health as h", left) + tick_rule("B", "Health as h", right, "A");
+    };
+    SECTION("marker adds commute") {
+        CHECK(channel_edge(pair("        add Stunned\n", "        add Stunned\n"), "A", "B") == std::nullopt);
+    }
+    SECTION("removes commute") {
+        CHECK(channel_edge(pair("        remove Stunned\n", "        remove Stunned\n"), "A", "B") == std::nullopt);
+    }
+    SECTION("add against remove conflicts") {
+        const auto edge = channel_edge(pair("        add Stunned\n", "        remove Stunned\n"), "A", "B");
+        REQUIRE(edge != std::nullopt);
+        CHECK(edge->channel_provenance == std::vector<std::string>{"commands test.Stunned: add / remove"});
+    }
+    SECTION("destroy commutes with set") {
+        CHECK(channel_edge(pair("        destroy\n", "        set Log on self:\n            last = 1\n"), "A", "B") ==
+              std::nullopt);
+    }
+    SECTION("disjoint set patches commute") {
+        CHECK(channel_edge(pair("        set Log on self:\n            last = 1\n",
+                                "        set Log on self:\n            total = 1\n"),
+                           "A",
+                           "B") == std::nullopt);
+    }
+    SECTION("overlapping set patches conflict") {
+        CHECK(channel_edge(pair("        set Log on self:\n            last = 1\n",
+                                "        set Log on self:\n            last = 2\n"),
+                           "A",
+                           "B") != std::nullopt);
+    }
+    SECTION("valued adds conflict") {
+        CHECK(channel_edge(pair("        add Log:\n            last = 1\n", "        add Log:\n            last = 2\n"),
+                           "A",
+                           "B") != std::nullopt);
+    }
+    SECTION("set against add conflicts") {
+        CHECK(channel_edge(pair("        set Log on self:\n            last = 1\n", "        add Log\n"), "A", "B") !=
+              std::nullopt);
+    }
+}
+
+static std::string log_consumer(const std::string& trigger, const std::string& body) {
+    return "rule Consume:\n"
+           "    each:\n"
+           "        Log as log\n"
+           "    on " +
+           trigger + ":\n" + body;
+}
+
+TEST_CASE("Channel conflicts: lifecycle triggers from unordered commands", "[semantic][handler-execution-graph][channels]") {
+    const auto adders = tick_rule("A", "Health as h", "        add Stunned\n") +
+                        tick_rule("B", "Health as h", "        add Stunned\n", "A");
+    const auto ordered = channel_edge(adders + log_consumer("added Stunned", "        log.last = 1\n"), "A", "B");
+    REQUIRE(ordered != std::nullopt);
+    CHECK(ordered->channel_provenance ==
+          std::vector<std::string>{"added test.Stunned observed by test.Consume/on added test.Stunned"});
+    CHECK(channel_edge(adders + log_consumer("added Stunned", "        log.total += 1\n"), "A", "B") == std::nullopt);
+}
+
+TEST_CASE("Channel conflicts: event producers and observing consumers", "[semantic][handler-execution-graph][channels]") {
+    const auto emitters = [](const std::string& event, const std::string& field = "line") {
+        return tick_rule("A", "", "        emit " + event + ":\n            " + field + " = 1\n") +
+               tick_rule("B", "", "        emit " + event + ":\n            " + field + " = 2\n", "A");
+    };
+    SECTION("an Accum consumer allows unordered producers") {
+        CHECK(channel_edge(emitters("Damaged", "amount") +
+                               "rule Hurt:\n"
+                               "    each:\n"
+                               "        Health as h\n"
+                               "    on Damaged as d:\n"
+                               "        h.hp -= d.amount\n",
+                           "A",
+                           "B") == std::nullopt);
+    }
+    SECTION("an Assign consumer needs ordered producers") {
+        const auto edge = channel_edge(emitters("Spoke") + log_consumer("Spoke as s", "        log.last = s.line\n"), "A", "B");
+        REQUIRE(edge != std::nullopt);
+        CHECK(edge->channel_provenance == std::vector<std::string>{"event test.Spoke observed by test.Consume/on test.Spoke"});
+    }
+    SECTION("an emit chain ending in an observing consumer") {
+        CHECK(channel_edge(emitters("Relay") +
+                               "rule Forward:\n"
+                               "    on Relay as r:\n"
+                               "        emit Spoke:\n"
+                               "            line = r.line\n" +
+                               log_consumer("Spoke as s", "        log.last = s.line\n"),
+                           "A",
+                           "B") != std::nullopt);
+    }
+    SECTION("an event cycle of commuting consumers") {
+        CHECK(channel_edge(emitters("Relay") +
+                               "rule Echo:\n"
+                               "    each:\n"
+                               "        Log as log\n"
+                               "    on Relay as r:\n"
+                               "        log.total += 1\n"
+                               "        emit Relay:\n"
+                               "            line = r.line\n",
+                           "A",
+                           "B") == std::nullopt);
+    }
+}
+
+// ── Unorientable conflicts (handler-execution-graph) ───────────────────────
+
+TEST_CASE("Unorientable conflicts: the diagnostic names both sides and both fixes",
+          "[semantic][handler-execution-graph][unorientable]") {
+    const auto messages = commuting_errors(tick_rule("Regen", "Health as h", "        h.hp = h.max_hp\n") +
+                                           tick_rule("Poison", "Health as h", "        h.hp -= 1\n"));
+    REQUIRE(messages.size() == 1);
+    CHECK(messages[0] ==
+          "unorientable conflict between 'test.Poison/on test.tick' and 'test.Regen/on test.tick' on "
+          "test.Health.hp (Poison: Accum, Regen: Assign); nothing orders them: add 'after: Regen/on tick' to the "
+          "Poison/on tick handler, or 'after: Poison/on tick' to the Regen/on tick handler");
+}
+
+TEST_CASE("Unorientable conflicts: a read is named as a read", "[semantic][handler-execution-graph][unorientable]") {
+    const auto messages = commuting_errors(
+        tick_rule("Copy", "P as p", "        p.x = p.v\n") + tick_rule("Swap", "P as p", "        p.v = p.x\n"));
+    REQUIRE(messages.size() == 1);
+    CHECK(messages[0].contains("test.P.v (Copy: read, Swap: Assign), test.P.x (Copy: Assign, Swap: read)"));
+}
+
+TEST_CASE("Unorientable conflicts: channels and effects are named", "[semantic][handler-execution-graph][unorientable]") {
+    SECTION("commands") {
+        const auto messages = commuting_errors(tick_rule("A", "Health as h", "        add Stunned\n") +
+                                               tick_rule("B", "Health as h", "        remove Stunned\n"));
+        REQUIRE(messages.size() == 1);
+        CHECK(messages[0].contains("on commands test.Stunned: add / remove;"));
+    }
+    SECTION("events") {
+        const auto messages = commuting_errors(tick_rule("A", "", "        emit Spoke:\n            line = 1\n") +
+                                               tick_rule("B", "", "        emit Spoke:\n            line = 2\n") +
+                                               log_consumer("Spoke as s", "        log.last = s.line\n"));
+        REQUIRE(messages.size() == 1);
+        CHECK(messages[0].contains("'test.A/on test.tick' and 'test.B/on test.tick' on event test.Spoke observed by "
+                                   "test.Consume/on test.Spoke;"));
+    }
+    SECTION("effects") {
+        const auto messages = analyze_error_messages(stdlib_events() +
+                                                     "extern rule DrawA:\n"
+                                                     "    on tick:\n"
+                                                     "        effects:\n"
+                                                     "            graphics\n"
+                                                     "extern rule DrawB:\n"
+                                                     "    on tick:\n"
+                                                     "        effects:\n"
+                                                     "            graphics\n");
+        REQUIRE(messages.size() == 1);
+        CHECK(messages[0].contains("on effect graphics;"));
+    }
+}
+
+TEST_CASE("Unorientable conflicts: shared effects follow an explicit order",
+          "[semantic][handler-execution-graph][unorientable]") {
+    const auto program = analyze(stdlib_events() +
+                                 "extern rule DrawA:\n"
+                                 "    on tick:\n"
+                                 "        effects:\n"
+                                 "            graphics\n"
+                                 "extern rule DrawB:\n"
+                                 "    after:\n"
+                                 "        DrawA\n"
+                                 "    on tick:\n"
+                                 "        effects:\n"
+                                 "            graphics\n");
+    const auto* effect = edge_of_kind(edges_from(program, "DrawA", "DrawB"), ScheduleEdgeKind::EffectConflict);
+    REQUIRE(effect != nullptr);
+    CHECK(effect->orientation == ScheduleEdgeOrientation::Explicit);
+}
+
+TEST_CASE("Unorientable conflicts: every conflict is reported", "[semantic][handler-execution-graph][unorientable]") {
+    const auto messages = commuting_errors(tick_rule("A1", "T as t", "        t.x = 1.0\n") +
+                                           tick_rule("A2", "T as t", "        t.x = 2.0\n") +
+                                           tick_rule("B1", "Log as l", "        l.last = 1\n") +
+                                           tick_rule("B2", "Log as l", "        l.last = 2\n") +
+                                           tick_rule("C1", "Health as h", "        add Stunned\n") +
+                                           tick_rule("C2", "Health as h", "        remove Stunned\n"));
+    REQUIRE(messages.size() == 3);
+    CHECK(messages[0].contains("'test.A1/on test.tick' and 'test.A2/on test.tick'"));
+    CHECK(messages[1].contains("'test.B1/on test.tick' and 'test.B2/on test.tick'"));
+    CHECK(messages[2].contains("'test.C1/on test.tick' and 'test.C2/on test.tick'"));
+}
+TEST_CASE("Unorientable conflicts: a trigger from another module is suggested in full",
+          "[semantic][handler-execution-graph][unorientable]") {
+    ImportedSymbols other;
+    other.module_name = "other";
+    ResolvedTrait stunned;
+    stunned.name         = "Stunned";
+    stunned.module_name  = "other";
+    stunned.is_pub       = true;
+    const auto symbol    = make_symbol_id(SymbolKind::Trait, "other", "Stunned");
+    stunned.symbol_id    = symbol;
+    stunned.canonical_id = make_canonical_id(symbol);
+    other.traits["Stunned"] = std::move(stunned);
+    ModuleImports imports;
+    imports.modules["hp"] = std::move(other);
+
+    const auto consumer = [](const std::string& name, int value) {
+        return "rule " + name + ":\n    each:\n        Log as log\n    on added hp.Stunned:\n        log.last = " +
+               std::to_string(value) + "\n";
+    };
+    const auto source = "module test\n" + commuting_prelude() + consumer("A", 1) + consumer("B", 2);
+    ErrorReporter errors;
+    Lexer lexer(source, "test.cactus", errors);
+    Parser parser(lexer.tokenize(), errors);
+    auto ast = parser.parse_program();
+    SemanticAnalyzer analyzer(errors);
+    analyzer.analyze(ast, imports);
+    REQUIRE(errors.diagnostics().size() == 1);
+    CHECK(errors.diagnostics().front().message.contains("'after: B/on added other.Stunned'"));
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

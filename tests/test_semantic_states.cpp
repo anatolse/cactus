@@ -384,11 +384,16 @@ TEST_CASE("Semantic: add and remove of a state write the whole state", "[semanti
         "rule Calm:\n"
         "    each:\n"
         "        Log\n"
+        "    after:\n"
+        "        Hunt\n"
         "    on tick:\n"
         "        remove EnemyMode\n"
         "rule Wind:\n"
         "    each:\n"
         "        EnemyMode.Attacking as a\n"
+        "    after:\n"
+        "        Hunt\n"
+        "        Calm\n"
         "    on tick:\n"
         "        a.windup -= 0.1\n");
     INFO(describe(analysis));

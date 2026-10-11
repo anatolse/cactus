@@ -108,6 +108,8 @@ rule DriveRestartScenario:
         RestartControl as ctrl
         models.ModelPlayback as playback
         models.ModelAnimator as anim
+    after:
+        models.animate
 
     on tick:
         ctrl.frame += 1

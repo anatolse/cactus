@@ -2407,6 +2407,74 @@ TEST_CASE("math: min and max return NaN when either argument is NaN", "[runtime]
     CHECK(stdlib::math::max(2.0F, -1.0F) == 2.0F);
 }
 
+TEST_CASE("math: min and max order signed zeros the same both ways", "[runtime][stdlib][math][numeric-semantics]") {
+    for (const auto [a, b] : {std::pair{-0.0F, 0.0F}, std::pair{0.0F, -0.0F}}) {
+        CHECK(stdlib::math::max(a, b) == 0.0F);
+        CHECK_FALSE(std::signbit(stdlib::math::max(a, b)));
+        CHECK(stdlib::math::min(a, b) == 0.0F);
+        CHECK(std::signbit(stdlib::math::min(a, b)));
+    }
+    CHECK(std::signbit(stdlib::math::max(-0.0F, -0.0F)));
+    CHECK_FALSE(std::signbit(stdlib::math::min(0.0F, 0.0F)));
+}
+
+TEST_CASE("accumulated deltas: a flush adds every delta exactly, in any order", "[runtime][numeric-semantics][write-kinds]") {
+    float total = 1.0e8F;
+    AccumulatedDeltas deltas;
+    deltas.add(total, 1.0F);
+    deltas.subtract(total, 1.0e8F);
+    CHECK(total == 1.0e8F);
+    deltas.flush();
+    CHECK(total == 1.0F);
+
+    float other = 1.0e8F;
+    deltas.subtract(other, 1.0e8F);
+    deltas.add(other, 1.0F);
+    deltas.flush();
+    CHECK(other == 1.0F);
+}
+
+TEST_CASE("accumulated deltas: a flush empties the table", "[runtime][numeric-semantics][write-kinds]") {
+    float value = 2.0F;
+    AccumulatedDeltas deltas;
+    deltas.add(value, 0.5F);
+    deltas.flush();
+    deltas.flush();
+    CHECK(value == 2.5F);
+}
+
+TEST_CASE("accumulated deltas: vector deltas touch only their components", "[runtime][numeric-semantics][write-kinds]") {
+    Vector2 offset{.x = 1.0e8F, .y = -0.0F};
+    Vector3 position{.x = 0.0F, .y = 0.0F, .z = 3.0F};
+    AccumulatedDeltas deltas;
+    deltas.add(offset.x, 1.0F);
+    deltas.subtract(offset.x, 1.0e8F);
+    deltas.add(position, Vector3{.x = 0.25F, .y = 0.5F, .z = 0.0F});
+    deltas.subtract(position, Vector3{.x = 0.0F, .y = 0.5F, .z = 1.0F});
+    deltas.add(offset, Vector2{.x = 0.0F, .y = 0.0F});
+    deltas.subtract(offset, Vector2{.x = 0.0F, .y = 0.0F});
+    deltas.flush();
+    CHECK(offset.x == 1.0F);
+    CHECK(offset.y == 0.0F);
+    CHECK_FALSE(std::signbit(offset.y));
+    CHECK(position.x == 0.25F);
+    CHECK(position.y == 0.0F);
+    CHECK(position.z == 2.0F);
+}
+
+TEST_CASE("accumulated deltas: a lone delta equals a plain add", "[runtime][numeric-semantics][write-kinds]") {
+    float value = 0.0F;
+    AccumulatedDeltas deltas;
+    deltas.add(value, 0.1F);
+    deltas.flush();
+    CHECK(value == 0.0F + 0.1F);
+
+    float negative_zero = -0.0F;
+    deltas.add(negative_zero, -0.0F);
+    deltas.flush();
+    CHECK(std::signbit(negative_zero));
+}
+
 TEST_CASE("math: a multiply-add rounds the product before adding", "[runtime][stdlib][math][numeric-semantics]") {
     // (1 + 2^-23)^2 = 1 + 2^-22 + 2^-46 rounds to 1 + 2^-22, so the sum is exactly 0; a fused
     // multiply-add would keep the 2^-46.

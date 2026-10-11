@@ -3,6 +3,7 @@ module std.ui
 use std.core as core
 use std.query as query
 use std.pointer as pointer
+use std.render.layers as layers
 use std.math as math
 use std.math.vec2 as vecmath
 
@@ -734,6 +735,8 @@ pub extern func texture_size(texture: texture_id) vec2
 pub extern func stacking_order(of: entity_id) int
 
 pub extern rule RenderUi:
+    group: layers.ui
+
     on core.render:
         reads:
             Node

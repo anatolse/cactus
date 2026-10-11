@@ -11,13 +11,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-TEST_CASE("the harness sees an order that only declaration order fixed",
-          "[runtime][codegen-entt][handler-execution-graph]") {
-    CHECK(cactus::test::some_linearization_differs(2, cactus::test::no_setup(), true));
-}
-
-TEST_CASE("keeping declaration-order edges, every seed matches the stable order",
-          "[runtime][codegen-entt][handler-execution-graph]") {
-    cactus::test::require_linearizations_match(2, cactus::test::no_setup());
+TEST_CASE("unordered accumulations give the same world in every order",
+          "[runtime][codegen-entt][handler-execution-graph][write-kinds]") {
+    cactus::test::require_linearizations_match(3, cactus::test::no_setup());
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

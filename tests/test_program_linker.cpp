@@ -564,6 +564,8 @@ TEST_CASE("program_linker: schedule edge reasons survive the artifact and linkin
                 "    on tick:\n"
                 "        Game[Score].value = 1\n"
                 "rule Second:\n"
+                "    after:\n"
+                "        First\n"
                 "    on tick:\n"
                 "        Game[Score].value = 2\n"
                 "rule Third:\n"
@@ -607,8 +609,7 @@ TEST_CASE("program_linker: schedule edge reasons survive the artifact and linkin
         reasons.insert(edge.orientation);
     }
     CHECK(reasons == std::set<ScheduleEdgeOrientation>{ScheduleEdgeOrientation::Explicit,
-                                                       ScheduleEdgeOrientation::WriterBeforeReader,
-                                                       ScheduleEdgeOrientation::DeclarationOrder});
+                                                       ScheduleEdgeOrientation::WriterBeforeReader});
 
     fs::remove_all(build_dir, ec);
 }
@@ -1131,8 +1132,10 @@ TEST_CASE("program_linker: an importing module's handler runs before another mod
             "rule Helper:\n"
             "    each:\n"
             "        Body as body\n"
+            "    before:\n"
+            "        solve\n"
             "    on fixed_tick:\n"
-            "        body.velocity += 1.0\n"
+            "        body.grounded = false\n"
             "rule Step:\n"
             "    each:\n"
             "        Body as body\n"
@@ -1182,6 +1185,8 @@ TEST_CASE("program_linker: an importing module's handler runs before another mod
             "    each:\n"
             "        lib.Body as body\n"
             "        lib.Spot as spot\n"
+            "    after:\n"
+            "        Push\n"
             "    on fixed_tick:\n"
             "        body.velocity = spot.x\n"
             "rule Late:\n"
@@ -1189,6 +1194,7 @@ TEST_CASE("program_linker: an importing module's handler runs before another mod
             "        lib.Body as body\n"
             "    after:\n"
             "        lib.solve\n"
+            "        Aim\n"
             "    on fixed_tick:\n"
             "        body.velocity = 4.0\n"
             "rule Look:\n"
@@ -1207,7 +1213,7 @@ TEST_CASE("program_linker: an importing module's handler runs before another mod
             "        Clock as clock\n"
             "        mid.Marker\n"
             "    on fixed_tick:\n"
-            "        clock.t += 3.0\n");
+            "        clock.t = 3.0\n");
 
     ErrorReporter link_errors;
     ProgramLinker linker(link_errors);
@@ -1256,10 +1262,13 @@ TEST_CASE("program_linker: an importing module's handler runs before another mod
     // A one-way reader still follows the writer.
     CHECK(position(step) < position(handler("game", "Look")));
     CHECK(oriented(step, handler("game", "Look")) == ScheduleEdgeOrientation::WriterBeforeReader);
-    // A module that doesn't import the group's module keeps declaration order.
-    CHECK(oriented(step, handler("loner", "Tick")) == ScheduleEdgeOrientation::DeclarationOrder);
-    // Rules of the group's own module keep declaration order.
-    CHECK(oriented(handler("lib", "Helper"), step) == ScheduleEdgeOrientation::DeclarationOrder);
+    // Accumulations from a module that doesn't import the group's module commute.
+    CHECK(std::ranges::none_of(graph.schedule_edges, [&](const ScheduleEdge& edge) {
+        return (edge.before == step && edge.after == handler("loner", "Tick")) ||
+               (edge.before == handler("loner", "Tick") && edge.after == step);
+    }));
+    // Rules of the group's own module state their order.
+    CHECK(oriented(handler("lib", "Helper"), step) == ScheduleEdgeOrientation::Explicit);
 
     fs::remove_all(build_dir, ec);
 }
@@ -1327,5 +1336,177 @@ TEST_CASE("program_linker: a group's after: orders members from every module", "
     REQUIRE_FALSE(errors.has_errors());
     CHECK(merged.execution_graph.stable_topological_order ==
           std::vector<HandlerIdentity>{mover.identity, toucher.identity});
+}
+
+// ── Unorientable conflicts across modules ─────────────────────────────────────
+
+namespace {
+
+// Compiles modules in order into artifacts; each `uses` entry names an earlier module.
+class ModuleSet {
+public:
+    explicit ModuleSet(fs::path build_dir) : build_dir_(std::move(build_dir)) {
+        std::error_code ec;
+        fs::remove_all(build_dir_, ec);
+    }
+
+    void compile(const std::string& module, const std::vector<std::string>& uses, const std::string& source) {
+        ModuleImports imports;
+        for (const auto& used : uses) {
+            ErrorReporter errors;
+            ModuleArtifact artifact(errors);
+            auto symbols = artifact.extract_pub_symbols(artifacts_.at(used));
+            REQUIRE(symbols.has_value());
+            imports.add(used, std::move(*symbols));
+        }
+        ErrorReporter errors;
+        Lexer lexer(source, module + ".cactus", errors);
+        Parser parser(lexer.tokenize(), errors);
+        asts_.push_back(std::make_unique<ProgramNode>(parser.parse_program()));
+        SemanticAnalyzer analyzer(errors);
+        const auto program = analyzer.analyze(*asts_.back(), imports);
+        INFO((errors.diagnostics().empty() ? "" : errors.diagnostics().front().message));
+        REQUIRE_FALSE(errors.has_errors());
+        ModuleArtifact artifact(errors);
+        REQUIRE(artifact.save(program, module, build_dir_));
+        artifacts_[module] = build_dir_ / (module + ".cmod");
+        order_.push_back(artifacts_[module]);
+    }
+
+    std::optional<DecoratedProgram> link(ErrorReporter& errors) const {
+        ProgramLinker linker(errors);
+        return linker.link(order_);
+    }
+
+private:
+    fs::path build_dir_;
+    std::vector<std::unique_ptr<ProgramNode>> asts_;
+    std::map<std::string, fs::path> artifacts_;
+    std::vector<fs::path> order_;
+};
+
+const std::string& core_source() {
+    static const std::string value = "module std.core\n"
+                                     "extern event frame:\n"
+                                     "    dt: float\n"
+                                     "pub phase tick:\n"
+                                     "    from:\n"
+                                     "        frame\n"
+                                     "pub trait Score:\n"
+                                     "    var value: int = 0\n"
+                                     "pub trait Seen:\n"
+                                     "    var value: int = 0\n";
+    return value;
+}
+
+// Every schedule edge as (before rule, after rule, kind), by local rule name.
+std::set<std::tuple<std::string, std::string, ScheduleEdgeKind>> edge_directions(const DecoratedProgram& program) {
+    std::set<std::tuple<std::string, std::string, ScheduleEdgeKind>> directions;
+    for (const auto& edge : program.execution_graph.schedule_edges) {
+        directions.emplace(edge.before.rule.local_name, edge.after.rule.local_name, edge.kind);
+    }
+    return directions;
+}
+
+}  // namespace
+
+TEST_CASE("program_linker: a cross-module ambiguity is a link error", "[linker][handler-execution-graph][unorientable]") {
+    ModuleSet modules(linker_build_dir() / "cross_module_ambiguity");
+    modules.compile("std.core", {}, core_source());
+    modules.compile("alpha",
+                    {"std.core"},
+                    "module alpha\n"
+                    "use std.core\n"
+                    "rule SetScore:\n"
+                    "    each:\n"
+                    "        Score as s\n"
+                    "    on tick:\n"
+                    "        s.value = 1\n");
+    modules.compile("beta",
+                    {"std.core"},
+                    "module beta\n"
+                    "use std.core\n"
+                    "rule ResetScore:\n"
+                    "    each:\n"
+                    "        Score as s\n"
+                    "    on tick:\n"
+                    "        s.value = 0\n");
+
+    ErrorReporter errors;
+    const auto linked = modules.link(errors);
+    REQUIRE(errors.has_errors());
+    const auto& message = errors.diagnostics().front().message;
+    CHECK(message.contains("unorientable conflict between 'alpha.SetScore/on std.core.tick' and "
+                           "'beta.ResetScore/on std.core.tick'"));
+    CHECK(message.contains("add 'after: beta.ResetScore/on tick' to the alpha.SetScore/on tick handler"));
+
+    std::error_code ec;
+    fs::remove_all(linker_build_dir() / "cross_module_ambiguity", ec);
+}
+
+TEST_CASE("program_linker: moving a rule to another module keeps every edge direction",
+          "[linker][handler-execution-graph][unorientable]") {
+    const std::string rules = "rule Count:\n"
+                              "    each:\n"
+                              "        Score as s\n"
+                              "    on tick:\n"
+                              "        s.value += 1\n"
+                              "rule Bonus:\n"
+                              "    each:\n"
+                              "        Score as s\n"
+                              "    on tick:\n"
+                              "        s.value += 2\n"
+                              "rule Watch:\n"
+                              "    each:\n"
+                              "        Score as s\n"
+                              "        Seen as seen\n"
+                              "    on tick:\n"
+                              "        seen.value = s.value\n";
+
+    ModuleSet together(linker_build_dir() / "rules_together");
+    together.compile("std.core", {}, core_source());
+    together.compile("game", {"std.core"}, "module game\nuse std.core\n" + rules);
+    ErrorReporter together_errors;
+    const auto one = together.link(together_errors);
+    REQUIRE_FALSE(together_errors.has_errors());
+    REQUIRE(one.has_value());
+
+    ModuleSet split(linker_build_dir() / "rules_split");
+    split.compile("std.core", {}, core_source());
+    split.compile("watcher",
+                  {"std.core"},
+                  "module watcher\n"
+                  "use std.core\n"
+                  "rule Watch:\n"
+                  "    each:\n"
+                  "        Score as s\n"
+                  "        Seen as seen\n"
+                  "    on tick:\n"
+                  "        seen.value = s.value\n");
+    split.compile("game",
+                  {"std.core"},
+                  "module game\n"
+                  "use std.core\n"
+                  "rule Bonus:\n"
+                  "    each:\n"
+                  "        Score as s\n"
+                  "    on tick:\n"
+                  "        s.value += 2\n"
+                  "rule Count:\n"
+                  "    each:\n"
+                  "        Score as s\n"
+                  "    on tick:\n"
+                  "        s.value += 1\n");
+    ErrorReporter split_errors;
+    const auto two = split.link(split_errors);
+    REQUIRE_FALSE(split_errors.has_errors());
+    REQUIRE(two.has_value());
+
+    CHECK_FALSE(edge_directions(*one).empty());
+    CHECK(edge_directions(*one) == edge_directions(*two));
+
+    std::error_code ec;
+    fs::remove_all(linker_build_dir() / "rules_together", ec);
+    fs::remove_all(linker_build_dir() / "rules_split", ec);
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

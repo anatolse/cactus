@@ -1,5 +1,6 @@
 module std.render.meshes
 
+use std.render.layers as layers
 use std.transform.volume as tv
 
 # ── 3D Mesh Rendering Traits ──────────────────────────────────────────────────
@@ -56,6 +57,7 @@ extern rule MeshRenderer:
     each:
         tv.WorldTransform
         Renderer
+    group: layers.meshes
 
     on render:
         reads:
@@ -68,6 +70,9 @@ extern rule PointLightRender:
     each:
         tv.WorldTransform
         PointLight
+    group: layers.meshes
+    after:
+        MeshRenderer
 
     on render:
         reads:
@@ -79,6 +84,9 @@ extern rule PointLightRender:
 extern rule DirectionalLightRender:
     each:
         DirectionalLight
+    group: layers.meshes
+    after:
+        PointLightRender
 
     on render:
         reads:

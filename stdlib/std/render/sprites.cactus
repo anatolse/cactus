@@ -1,5 +1,7 @@
 module std.render.sprites
 
+use std.render.layers as layers
+
 # ── 2D Sprite Rendering Traits ────────────────────────────────────────────────
 # Passive traits — the backend reads these and renders automatically.
 # No user rule is needed. An entity with WorldTransform + Renderer is drawn.
@@ -41,6 +43,7 @@ extern rule SpriteRenderer:
     each:
         std.transform.flat.WorldTransform
         Renderer
+    group: layers.sprites
 
     on render:
         reads:

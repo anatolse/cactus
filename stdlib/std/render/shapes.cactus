@@ -1,5 +1,6 @@
 module std.render.shapes
 
+use std.render.layers as layers
 use std.transform.flat as tf
 
 # ── Simple Primitive Shape Rendering Traits ──────────────────────────────────
@@ -26,6 +27,7 @@ pub trait Shape:
 
 extern rule ShapeRenderer:
     each: tf.WorldTransform, Shape
+    group: layers.shapes
 
     on render:
         reads: tf.WorldTransform, Shape

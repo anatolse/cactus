@@ -141,6 +141,8 @@ rule MoveEnemies:
 rule CloseGateMidPass:
     each:
         Enemy as enemy
+    after:
+        EndGameOnRequest
     when:
         Switch[Control].close_mid_pass
         not Game[Match].over
@@ -287,6 +289,8 @@ rule CountStatsPasses:
 rule CountBranchPasses:
     each:
         Probe as probe
+    after:
+        CountMatchPasses
 
     on tick:
         probe.branch_passes += 1

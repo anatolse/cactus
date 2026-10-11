@@ -336,6 +336,14 @@ struct ExprNode {
 
 // ── Statement Nodes ─────────────────────────────────────────────────────────
 
+// A `+=`/`-=` whose handler accumulates into one trait field.
+struct AccumulationTarget {
+    SymbolId trait;
+    std::string field;
+    bool own_row  = false;  // targets the row being handled once: its own entity or a writable pair binding
+    bool buffered = false;  // set by the backend when the deltas of several writes can meet
+};
+
 struct VarAssign {
     std::string name;
     std::string op;  // "=", "+=", "-=", "*=", "/="
@@ -350,6 +358,8 @@ struct VarAssign {
     // root identifier.
     std::unique_ptr<ExprNode> target;
     mutable ArithmeticOperands operands = ArithmeticOperands::Unchecked;  // set by semantic analysis
+    // Set by semantic analysis when the handler's write kind for the target stays Accum.
+    mutable std::optional<AccumulationTarget> accumulation;
 };
 
 // `vec2(...)`, `vec3(...)`, `color(...)`, or `quat(...)`.

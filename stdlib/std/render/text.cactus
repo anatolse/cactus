@@ -1,5 +1,6 @@
 module std.render.text
 
+use std.render.layers as layers
 use std.transform.flat as tf
 use std.transform.volume as tv
 
@@ -23,6 +24,7 @@ extern rule TextRenderer2D:
     each:
         tf.WorldTransform
         TextLabel
+    group: layers.text
 
     on render:
         reads:
@@ -38,6 +40,9 @@ extern rule TextRenderer3D:
     each:
         tv.WorldTransform
         TextLabel
+    group: layers.text
+    after:
+        TextRenderer2D
 
     on render:
         reads:
@@ -64,6 +69,9 @@ pub trait ScreenLabel:
 extern rule ScreenLabelRender:
     each:
         ScreenLabel
+    group: layers.text
+    after:
+        TextRenderer3D
 
     on render:
         reads:

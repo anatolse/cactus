@@ -27,8 +27,4 @@ void expand_group_orderings(ExecutionGraph& graph);
 // Rejects `on added T` / `on removed T` when some handler in the graph projects T.
 void validate_lifecycle_trigger_traits(const ExecutionGraph& graph, ErrorReporter& errors);
 
-// The edges whose direction only stable declaration order picked: pairs whose
-// order the definition does not determine.
-[[nodiscard]] std::vector<const ScheduleEdge*> declaration_order_edges(const ExecutionGraph& graph);
-
 }  // namespace cactus

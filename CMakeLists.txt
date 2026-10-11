@@ -172,6 +172,7 @@ target_link_libraries(cactus_frontend PUBLIC cactus_common)
 
 # ── Backend: C++ EnTT ───────────────────────────────────────────────────────────
 add_library(cactus_backend_cpp_entt STATIC
+    src/backends/cpp-entt/accumulation_plan.cpp
     src/backends/cpp-entt/component_emitter.cpp
     src/backends/cpp-entt/type_utils.cpp
     src/backends/cpp-entt/system_emitter.cpp

@@ -575,11 +575,23 @@ cactus_add_headless_behavior_test(test_linearization_sample_headless_behavior
     LINEARIZATION_HARNESS
 )
 
-cactus_add_headless_behavior_test(test_linearization_ambiguous_headless_behavior
-    CACTUS_SOURCE tests/fixtures/linearization_ambiguous_runtime.cactus
+cactus_add_headless_behavior_test(test_linearization_commuting_headless_behavior
+    CACTUS_SOURCE tests/fixtures/linearization_commuting_runtime.cactus
     BACKEND cpp-entt
-    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_linearization_ambiguous_headless_behavior.cpp
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_linearization_commuting_headless_behavior.cpp
     LINEARIZATION_HARNESS
+)
+
+cactus_add_headless_behavior_test(test_exact_accumulation_headless_behavior
+    CACTUS_SOURCE examples/exact_accumulation.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_exact_accumulation_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_exact_accumulation_swapped_headless_behavior
+    CACTUS_SOURCE tests/fixtures/exact_accumulation_swapped/exact_accumulation.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_exact_accumulation_headless_behavior.cpp
 )
 
 cactus_add_headless_behavior_test(test_deterministic_target_selection_headless_behavior

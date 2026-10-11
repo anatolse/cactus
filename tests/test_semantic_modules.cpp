@@ -1821,7 +1821,8 @@ TEST_CASE("regular handler contracts infer canonical capabilities independently"
                                                     .target = symbol(SymbolKind::Template, "Actor")}) == 1);
     CHECK(std::ranges::find(
               movement.commands,
-              InferredHandlerCommand{.kind = HandlerCommandKind::Add, .target = symbol(SymbolKind::Trait, "Tag")}) !=
+              InferredHandlerCommand{
+                  .kind = HandlerCommandKind::Add, .target = symbol(SymbolKind::Trait, "Tag"), .patched = FieldAccess{}}) !=
           movement.commands.end());
     CHECK(std::ranges::find(
               movement.commands,
@@ -1867,8 +1868,10 @@ TEST_CASE("regular handler contracts infer set as a command, not a write", "[sem
     REQUIRE(decorated.handler_contracts.size() == 1);
     const auto& contract = decorated.handler_contracts.front();
     const auto health    = make_symbol_id(SymbolKind::Trait, "game.contracts", "Health");
-    CHECK(contract.commands ==
-          std::vector<InferredHandlerCommand>{{.kind = HandlerCommandKind::Set, .target = health}});
+    CHECK(contract.commands == std::vector<InferredHandlerCommand>{
+                                   {.kind    = HandlerCommandKind::Set,
+                                    .target  = health,
+                                    .patched = FieldAccess{.all = false, .fields = {"current"}}}});
     CHECK_FALSE(contract.writes.contains(health));
     CHECK_FALSE(contract.reads.contains(health));
 }
@@ -2236,6 +2239,8 @@ TEST_CASE("handler graph orients data and effect conflicts with deterministic pr
         "            WriteWrite\n"
         "extern rule WriteSecond:\n"
         "    on tick:\n"
+        "        after:\n"
+        "            WriteFirst/on tick\n"
         "        writes:\n"
         "            WriteWrite\n"
         "extern rule EffectFirst:\n"
@@ -2244,6 +2249,8 @@ TEST_CASE("handler graph orients data and effect conflicts with deterministic pr
         "            graphics\n"
         "extern rule EffectSecond:\n"
         "    on tick:\n"
+        "        after:\n"
+        "            EffectFirst/on tick\n"
         "        effects:\n"
         "            graphics\n"
         "extern rule ExplicitReader:\n"
@@ -2325,12 +2332,12 @@ TEST_CASE("handler graph orients data and effect conflicts with deterministic pr
     const auto& write_write = conflict_edge("WriteFirst", "WriteSecond", ScheduleEdgeKind::DataConflict);
     CHECK(write_write.before == handler("WriteFirst"));
     CHECK(write_write.after == handler("WriteSecond"));
-    CHECK(write_write.orientation == ScheduleEdgeOrientation::DeclarationOrder);
+    CHECK(write_write.orientation == ScheduleEdgeOrientation::Explicit);
 
     const auto& effect = conflict_edge("EffectFirst", "EffectSecond", ScheduleEdgeKind::EffectConflict);
     CHECK(effect.before == handler("EffectFirst"));
     CHECK(effect.after == handler("EffectSecond"));
-    CHECK(effect.orientation == ScheduleEdgeOrientation::DeclarationOrder);
+    CHECK(effect.orientation == ScheduleEdgeOrientation::Explicit);
     CHECK(effect.effect_provenance == std::vector<std::string>{"graphics"});
 
     const auto& explicit_data = conflict_edge("ExplicitReader", "ExplicitWriter", ScheduleEdgeKind::DataConflict);
@@ -4097,5 +4104,31 @@ TEST_CASE("Concise ordering retains imported group visibility", "[semantic][modu
                                                            imports_with_physics_group(false));
         CHECK(has_diagnostic(diagnostics, "group 'solve' is not public in module 'phys'"));
     }
+}
+
+TEST_CASE("rule groups: a same-module reciprocal conflict with a group member needs an explicit order",
+          "[semantic][rule-groups][unorientable]") {
+    const auto [decorated, diagnostics] =
+        analyze_source(rule_group_source("trait Velocity:\n"
+                                         "    var v: float = 0.0\n"
+                                         "pub group solve:\n"
+                                         "    phase: fixed_tick\n"
+                                         "rule Member:\n"
+                                         "    each:\n"
+                                         "        Position as p\n"
+                                         "        Velocity as vel\n"
+                                         "    group: solve\n"
+                                         "    on fixed_tick:\n"
+                                         "        p.x = vel.v\n"
+                                         "rule Outside:\n"
+                                         "    each:\n"
+                                         "        Position as p\n"
+                                         "        Velocity as vel\n"
+                                         "    on fixed_tick:\n"
+                                         "        vel.v = p.x\n"));
+    REQUIRE(diagnostics.size() == 1);
+    CHECK(diagnostics.front().message.starts_with(
+        "unorientable conflict between 'game.groups.Member/on game.groups.fixed_tick' and "
+        "'game.groups.Outside/on game.groups.fixed_tick'"));
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

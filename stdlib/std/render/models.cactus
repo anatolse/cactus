@@ -1,5 +1,7 @@
 module std.render.models
 
+use std.core as core
+use std.render.layers as layers
 use std.transform.volume as tv
 
 # ── 3D Model Rendering Traits ─────────────────────────────────────────────────
@@ -22,6 +24,7 @@ extern rule ModelRender:
     each:
         tv.WorldTransform
         ModelRenderer
+    group: layers.models
 
     on render:
         reads:
@@ -49,10 +52,14 @@ pub trait ModelAnimator:
 # Advances `time` by dt * speed each update tick while `playing`, wrapping by
 # the active clip's duration so playback loops. Entities that add ModelPlayback
 # below opt into one-shot playback and lifecycle events instead.
+pub group animate:
+    phase: core.tick
+
 extern rule ModelAnimation:
     each:
         ModelRenderer
         ModelAnimator
+    group: animate
 
     on tick:
         reads:

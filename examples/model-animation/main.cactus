@@ -251,6 +251,7 @@ rule CycleClip:
         models.ModelAnimator
     after:
         CycleSelection
+        models.animate
 
     on tick:
         if clip_pressed and index == selected:

@@ -598,6 +598,8 @@ rule ReadPlayerLook:
 rule CursorCaptureToggle:
     each:
         Player
+    after:
+        ReadPlayerLook
 
     when:
         not Game[Match].over
@@ -658,6 +660,8 @@ rule ApplyJump:
 rule HaltWhenOver:
     each:
         physics.CharacterBody as body
+    after:
+        MovePlayer
 
     when:
         Game[Match].over
@@ -710,6 +714,8 @@ rule SpawnKnights:
     each:
         KnightSpawnPoint
         tv.WorldTransform as transform
+    after:
+        SpawnRobots
 
     when:
         not Game[Match].over
@@ -777,6 +783,9 @@ rule SeekPlayer:
             physics.Solid
             physics.BoxCollider as box
             tv.WorldTransform as place
+    after:
+        MovePlayer
+        HaltWhenOver
     where:
         collision.sphere_box_overlap(transform.position, ENEMY_SENSE_RADIUS, place.position, box.size, place.rotation)
     reduce per enemy:
@@ -865,6 +874,8 @@ rule MoveBullets:
         target:
             physics.Collider
             physics.Solid
+    after:
+        SeekPlayer
     reduce per bullet:
         first = first_hit(physics.sweep(bullet, bullet[Bullet].velocity * fixed_tick.dt, target))
 
@@ -962,6 +973,10 @@ rule RestartOnGameOver:
         tv.WorldTransform as transform
         camera.FirstPersonCamera as first_person
         physics.CharacterBody as body
+    after:
+        ApplyJump
+        CursorCaptureToggle
+        ReadPlayerLook
     when:
         Game[Match].over
 

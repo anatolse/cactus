@@ -4,6 +4,7 @@
 
 #include "frontend/symbol_identity.hpp"
 
+#include "backends/cpp-entt/accumulation_plan.hpp"
 #include "backends/cpp-entt/persistence_emitter.hpp"
 #include "backends/cpp-entt/type_utils.hpp"
 
@@ -3437,6 +3438,13 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                             ovr != cpp_overrides.end() ? ovr->second : EnttCodegenUtils::trait_cpp_name(comp, program);
                         lhs = cpp + "_comp." + s.name;
                     }
+                }
+                if (s.accumulation.has_value() && s.accumulation->buffered) {
+                    return ind + "::" + AccumulationPlan::table_name(*s.accumulation, program) + "()." +
+                           (s.op == "-=" ? "subtract(" : "add(") + lhs + ", " +
+                           rewrite_expr(
+                               *s.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds) +
+                           ");\n";
                 }
                 if (const auto* call = std::get_if<CallExpr>(&s.value->expr)) {
                     if (const auto* ident = std::get_if<IdentExpr>(&call->callee->expr);

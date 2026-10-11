@@ -15,8 +15,4 @@ TEST_CASE("every linear extension of the fixture gives the stable order's world"
     cactus::test::require_linearizations_match(30, cactus::test::no_setup());
 }
 
-// Hidden: lists the fixtures whose result depends on an edge only declaration order directs.
-TEST_CASE("dropping declaration-order edges keeps the stable order's world", "[.][linearization-survey][drop-declaration-order]") {
-    cactus::test::require_linearizations_match(30, cactus::test::no_setup(), true);
-}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

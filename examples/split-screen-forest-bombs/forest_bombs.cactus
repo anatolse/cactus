@@ -438,6 +438,8 @@ rule ReadPlayer2Input:
     each:
         PlayerInput
         Player2Tag
+    after:
+        ReadPlayer1Input
 
     on input:
         move_x = input.axis(P2MoveX)
@@ -508,6 +510,8 @@ rule SimulateBomb:
     each:
         tv.WorldTransform
         Bomb
+    after:
+        MovePlayer
 
     on tick:
         velocity = vec3(velocity.x, velocity.y - gravity * tick.dt, velocity.z)

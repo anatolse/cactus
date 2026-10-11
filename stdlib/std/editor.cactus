@@ -11,6 +11,8 @@ use std.transform.volume as transform3d
 use std.debug as debug
 use std.ui as ui
 use std.text as strfmt
+use std.render.layers as layers
+use std.render.models as models
 use std.render.text as labels
 
 # ── Editor Input Actions ──────────────────────────────────────────────────────
@@ -261,6 +263,7 @@ pub extern func palette_button_y(index: int) float
 pub extern rule EditorPropertyPanel:
     each:
         EditorState
+    group: layers.editor
 
     on render:
         reads:
@@ -277,6 +280,9 @@ pub extern rule EditorPropertyPanel:
 pub extern rule DebugGrid3D:
     each:
         EditorCamera3D
+    group: layers.editor
+    after:
+        EditorPropertyPanel
 
     on render:
         effects:
@@ -358,6 +364,9 @@ rule EditorTranslate2D:
     each:
         EditorSelected
 
+    after:
+        models.animate
+
     on tick:
         let delta = camera2d.screen_delta_to_world(input.mouse_delta())
 
@@ -367,6 +376,7 @@ rule EditorPlace2D:
 
     after:
         EditorTemplatePalette
+        EditorSelection2D
 
     on input:
         if not active:
@@ -475,6 +485,7 @@ rule EditorSelection3D:
 
     after:
         EditorTemplatePalette
+        EditorPlace2D
 
     on input:
         if not active:
@@ -501,6 +512,9 @@ rule EditorTranslate3D:
     each:
         EditorSelected
 
+    after:
+        models.animate
+
     on tick:
         let delta = camera3d.screen_delta_on_plane(input.mouse_position(), input.mouse_delta(), vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0))
 
@@ -510,6 +524,7 @@ rule EditorPlace3D:
 
     after:
         EditorTemplatePalette
+        EditorSelection3D
 
     on input:
         if not active:
@@ -606,6 +621,9 @@ rule EditorTemplatePalette:
     each:
         EditorState
 
+    after:
+        EditorModeToggle
+
     # Runs in the input phase, before EditorSelection2D/3D and EditorPlace2D/3D
     # (see their after: EditorTemplatePalette), so a click that lands on a
     # palette button is consumed here and never reaches world-space
@@ -678,6 +696,9 @@ rule EditorHUDOverlay:
         EditorState
         labels.ScreenLabel
 
+    after:
+        EditorTemplatePalette
+
     on render:
         if not active:
             visible = false
@@ -703,6 +724,9 @@ rule EditorHUDOverlay:
 rule EditorCameraNav2D:
     each:
         EditorCamera2D
+
+    after:
+        EditorPlace3D
 
     on input:
         if input.down(EditorNavDrag) or input.down(EditorNavDragAlt):
@@ -735,6 +759,9 @@ rule EditorCameraNav2D:
 rule EditorCameraNav3D:
     each:
         EditorCamera3D
+
+    after:
+        EditorCameraNav2D
 
     on input:
         if input.down(EditorNavDrag) or input.down(EditorNavDragAlt):

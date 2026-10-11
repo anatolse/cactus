@@ -1,0 +1,106 @@
+module exact_accumulation
+
+use std.core
+
+# Float `+=` and `-=` from several handlers or rows to one field merge exactly:
+# after the activation the field is its old value plus the exact sum of the
+# deltas, rounded once. No order between the writers is needed.
+
+trait Tally:
+    var total: float = 100000000.0
+    var rows: float = 0.0
+
+trait Pool:
+    var level: float = 100000000.0
+
+trait Seen:
+    var level: float = 0.0
+
+trait Drift:
+    var offset: vec2 = vec2(100000000.0, -0.0)
+
+trait Chip
+
+trait Body:
+    var x: float = 0.0
+
+entity Game:
+    Tally
+    Pool
+    Seen
+    Drift
+
+entity Mover:
+    Body
+
+entity Chip0:
+    Chip
+
+entity Chip1:
+    Chip
+
+entity Chip2:
+    Chip
+
+entity Chip3:
+    Chip
+
+entity Chip4:
+    Chip
+
+entity Chip5:
+    Chip
+
+entity Chip6:
+    Chip
+
+entity Chip7:
+    Chip
+
+entity Chip8:
+    Chip
+
+entity Chip9:
+    Chip
+
+rule AddOne:
+    on tick:
+        Game[Tally].total += 1.0
+
+rule TakeLarge:
+    on tick:
+        Game[Tally].total -= 100000000.0
+
+rule CountRows:
+    each:
+        Chip
+    on tick:
+        Game[Tally].rows += 0.1
+
+rule FillPool:
+    on tick:
+        Game[Pool].level += 1.0
+
+rule DrainPool:
+    on tick:
+        Game[Pool].level -= 100000000.0
+
+# Reads after both writers, so it sees the merged level.
+rule ReadPool:
+    on tick:
+        Game[Seen].level = Game[Pool].level
+
+rule PushDrift:
+    on tick:
+        Game[Drift].offset.x += 1.0
+
+rule PullDrift:
+    on tick:
+        Game[Drift].offset.x -= 100000000.0
+
+# The only writer of Body.x, once per row on its own entity: a plain `+=`.
+rule Move:
+    each:
+        Body as b
+    on tick:
+        b.x += 0.1

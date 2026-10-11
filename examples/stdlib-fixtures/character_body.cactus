@@ -247,6 +247,8 @@ rule Jump:
     each:
         Jumper as jumper
         physics.CharacterBody as body
+    after:
+        Drive
 
     on fixed_tick:
         if jumper.pending and body.grounded:

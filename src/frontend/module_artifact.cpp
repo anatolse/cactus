@@ -17,6 +17,24 @@ namespace cactus {
 
 namespace fs = std::filesystem;
 
+namespace {
+
+// Map entries in canonical-id order, so artifacts don't depend on hash order.
+template <typename Map>
+std::vector<const typename Map::value_type*> sorted_by_canonical_id(const Map& table) {
+    std::vector<const typename Map::value_type*> ordered;
+    ordered.reserve(table.size());
+    for (const auto& entry : table) {
+        ordered.push_back(&entry);
+    }
+    std::ranges::sort(ordered, [](const auto* left, const auto* right) {
+        return make_canonical_id(left->first) < make_canonical_id(right->first);
+    });
+    return ordered;
+}
+
+}  // namespace
+
 ModuleArtifact::ModuleArtifact(ErrorReporter& errors)
     : errors_(errors) {}
 
@@ -397,14 +415,7 @@ void ModuleArtifact::write_field_access(std::ostream& out, const FieldAccess& ac
 }
 
 void ModuleArtifact::write_field_table(std::ostream& out, const std::unordered_map<SymbolId, FieldAccess>& table) {
-    std::vector<const std::pair<const SymbolId, FieldAccess>*> ordered;
-    ordered.reserve(table.size());
-    for (const auto& entry : table) {
-        ordered.push_back(&entry);
-    }
-    std::ranges::sort(ordered, [](const auto* left, const auto* right) {
-        return make_canonical_id(left->first) < make_canonical_id(right->first);
-    });
+    const auto ordered = sorted_by_canonical_id(table);
     write_u32(out, static_cast<uint32_t>(ordered.size()));
     for (const auto* entry : ordered) {
         write_symbol_id(out, entry->first);
@@ -412,15 +423,23 @@ void ModuleArtifact::write_field_table(std::ostream& out, const std::unordered_m
     }
 }
 
-void ModuleArtifact::write_named_field_table(std::ostream& out, const NamedFieldTable& table) {
-    std::vector<const NamedFieldTable::value_type*> ordered;
-    ordered.reserve(table.size());
-    for (const auto& entry : table) {
-        ordered.push_back(&entry);
+void ModuleArtifact::write_write_kinds(
+    std::ostream& out, const std::unordered_map<SymbolId, std::map<std::string, FieldWriteKind>>& table) {
+    const auto ordered = sorted_by_canonical_id(table);
+    write_u32(out, static_cast<uint32_t>(ordered.size()));
+    for (const auto* entry : ordered) {
+        write_symbol_id(out, entry->first);
+        write_u32(out, static_cast<uint32_t>(entry->second.size()));
+        for (const auto& [field, kind] : entry->second) {
+            write_str(out, field);
+            write_u8(out, static_cast<uint8_t>(kind.kind));
+            write_u8(out, static_cast<uint8_t>(kind.op));
+        }
     }
-    std::ranges::sort(ordered, [](const auto* left, const auto* right) {
-        return make_canonical_id(left->first) < make_canonical_id(right->first);
-    });
+}
+
+void ModuleArtifact::write_named_field_table(std::ostream& out, const NamedFieldTable& table) {
+    const auto ordered = sorted_by_canonical_id(table);
     write_u32(out, static_cast<uint32_t>(ordered.size()));
     for (const auto* entry : ordered) {
         write_symbol_id(out, entry->first);
@@ -498,6 +517,7 @@ void ModuleArtifact::write_contract(std::ostream& out, const HandlerContract& co
     write_symbol_set(out, contract.writes);
     write_field_table(out, contract.read_fields);
     write_field_table(out, contract.write_fields);
+    write_write_kinds(out, contract.write_kinds);
     write_symbol_set(out, contract.projects);
     write_named_field_table(out, contract.named_reads);
     write_named_field_table(out, contract.named_writes);
@@ -511,8 +531,13 @@ void ModuleArtifact::write_contract(std::ostream& out, const HandlerContract& co
     for (const auto& command : contract.commands) {
         write_u8(out, static_cast<uint8_t>(command.kind));
         write_optional_symbol_id(out, command.target);
+        write_bool(out, command.patched.has_value());
+        if (command.patched.has_value()) {
+            write_field_access(out, *command.patched);
+        }
     }
     write_string_set(out, contract.effects);
+    write_string_set(out, contract.effect_acts);
     write_u8(out, static_cast<uint8_t>(contract.iteration_order));
 
     write_bool(out, contract.spatial_join.has_value());
@@ -615,10 +640,8 @@ void ModuleArtifact::write_execution_graph(std::ostream& out, const ExecutionGra
             write_symbol_id(out, provenance.trait);
             write_field_access(out, provenance.access);
         }
-        write_u32(out, static_cast<uint32_t>(edge.effect_provenance.size()));
-        for (const auto& effect : edge.effect_provenance) {
-            write_str(out, effect);
-        }
+        write_string_vector(out, edge.effect_provenance);
+        write_string_vector(out, edge.channel_provenance);
     }
 
     write_u32(out, static_cast<uint32_t>(graph.phase_barriers.size()));
@@ -729,6 +752,19 @@ std::optional<SymbolId> ModuleArtifact::read_optional_symbol_id(std::istream& in
         return std::nullopt;
     }
     return read_symbol_id(in);
+}
+
+ScheduleEdgeOrientation ModuleArtifact::read_orientation(std::istream& in) {
+    const auto value = static_cast<ScheduleEdgeOrientation>(read_u8(in));
+    switch (value) {
+        case ScheduleEdgeOrientation::Explicit:
+        case ScheduleEdgeOrientation::WriterBeforeReader:
+        case ScheduleEdgeOrientation::ImporterBeforePublicGroup:
+        case ScheduleEdgeOrientation::DerivationAfterWriters:
+            return value;
+    }
+    in.setstate(std::ios::failbit);
+    return ScheduleEdgeOrientation::Explicit;
 }
 
 ResolvedHandlerTrigger ModuleArtifact::read_trigger(std::istream& in) {
@@ -1026,6 +1062,21 @@ std::unordered_map<SymbolId, FieldAccess> ModuleArtifact::read_field_table(std::
     return table;
 }
 
+std::unordered_map<SymbolId, std::map<std::string, FieldWriteKind>> ModuleArtifact::read_write_kinds(std::istream& in) {
+    std::unordered_map<SymbolId, std::map<std::string, FieldWriteKind>> table;
+    const auto count = read_u32(in);
+    for (uint32_t i = 0; i < count && in.good(); ++i) {
+        auto& fields            = table[read_symbol_id(in)];
+        const auto fields_count = read_u32(in);
+        for (uint32_t j = 0; j < fields_count && in.good(); ++j) {
+            auto field      = read_str(in);
+            const auto kind = static_cast<WriteKind>(read_u8(in));
+            fields[std::move(field)] = FieldWriteKind{.kind = kind, .op = static_cast<JoinOp>(read_u8(in))};
+        }
+    }
+    return table;
+}
+
 NamedFieldTable ModuleArtifact::read_named_field_table(std::istream& in) {
     NamedFieldTable table;
     const auto count = read_u32(in);
@@ -1125,6 +1176,7 @@ HandlerContract ModuleArtifact::read_contract(std::istream& in) {
     contract.writes          = read_symbol_set(in);
     contract.read_fields     = read_field_table(in);
     contract.write_fields    = read_field_table(in);
+    contract.write_kinds     = read_write_kinds(in);
     contract.projects        = read_symbol_set(in);
     contract.named_reads     = read_named_field_table(in);
     contract.named_writes    = read_named_field_table(in);
@@ -1137,10 +1189,15 @@ HandlerContract ModuleArtifact::read_contract(std::istream& in) {
     const auto command_count = read_u32(in);
     contract.commands.reserve(command_count);
     for (uint32_t i = 0; i < command_count; ++i) {
-        contract.commands.push_back(InferredHandlerCommand{.kind   = static_cast<HandlerCommandKind>(read_u8(in)),
-                                                           .target = read_optional_symbol_id(in)});
+        InferredHandlerCommand command{.kind   = static_cast<HandlerCommandKind>(read_u8(in)),
+                                       .target = read_optional_symbol_id(in)};
+        if (read_bool(in)) {
+            command.patched = read_field_access(in);
+        }
+        contract.commands.push_back(std::move(command));
     }
     contract.effects         = read_string_set(in);
+    contract.effect_acts     = read_string_set(in);
     contract.iteration_order = static_cast<IterationOrder>(read_u8(in));
 
     if (read_bool(in)) {
@@ -1260,7 +1317,7 @@ ExecutionGraph ModuleArtifact::read_execution_graph(std::istream& in) {
         edge.before             = read_handler_identity(in);
         edge.after              = read_handler_identity(in);
         edge.kind               = static_cast<ScheduleEdgeKind>(read_u8(in));
-        edge.orientation        = static_cast<ScheduleEdgeOrientation>(read_u8(in));
+        edge.orientation        = read_orientation(in);
         edge.trait_provenance   = read_symbol_vector(in);
         const auto field_count  = read_u32(in);
         edge.field_provenance.reserve(field_count);
@@ -1269,11 +1326,8 @@ ExecutionGraph ModuleArtifact::read_execution_graph(std::istream& in) {
             edge.field_provenance.push_back(
                 FieldProvenance{.trait = std::move(trait), .access = read_field_access(in)});
         }
-        const auto effect_count = read_u32(in);
-        edge.effect_provenance.reserve(effect_count);
-        for (uint32_t j = 0; j < effect_count; ++j) {
-            edge.effect_provenance.push_back(read_str(in));
-        }
+        edge.effect_provenance  = read_string_vector(in);
+        edge.channel_provenance = read_string_vector(in);
         graph.schedule_edges.push_back(std::move(edge));
     }
 

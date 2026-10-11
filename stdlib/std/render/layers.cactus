@@ -1,0 +1,56 @@
+module std.render.layers
+
+use std.core as core
+
+# Draw order of the standard renderers within `render`. Each standard renderer
+# joins one layer; a game render rule that draws over them names the layer in
+# its `after:`. Every layer lists all earlier ones, since a group with no
+# members in a program orders nothing.
+
+pub group meshes:
+    phase: core.render
+
+pub group models:
+    phase: core.render
+    after:
+        meshes
+
+pub group shapes:
+    phase: core.render
+    after:
+        meshes
+        models
+
+pub group sprites:
+    phase: core.render
+    after:
+        meshes
+        models
+        shapes
+
+pub group text:
+    phase: core.render
+    after:
+        meshes
+        models
+        shapes
+        sprites
+
+pub group ui:
+    phase: core.render
+    after:
+        meshes
+        models
+        shapes
+        sprites
+        text
+
+pub group editor:
+    phase: core.render
+    after:
+        meshes
+        models
+        shapes
+        sprites
+        text
+        ui

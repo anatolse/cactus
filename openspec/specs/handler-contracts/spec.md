@@ -250,3 +250,75 @@ comparisons) SHALL add no named access and no requirement.
 #### Scenario: Name as a value adds no access
 - **WHEN** a handler runs `set text.ScreenLabel on CrosshairHud:`
 - **THEN** its contract lists the `set` command and records no named access and no requirement
+
+### Requirement: Field writes carry a write kind
+Every field write recorded in a handler contract SHALL carry one write kind, derived from the writing statements. Authors SHALL NOT declare write kinds. For one handler and one trait field, the analyzer SHALL classify each writing statement as:
+
+- **Accum**: `x += e` or `x -= e` on an `int`, `float`, `vec2` or `vec3` field, or on a numeric member of such a field.
+- **Join** with an operator: `x = max(x, e)` or `x = max(e, x)` (operator `max`); the same with `min` (operator `min`); `x = x or e`, `x = e or x` or `x = true` (operator `or`); `x = x and e`, `x = e and x` or `x = false` (operator `and`). `max` and `min` SHALL resolve to the `std.math` functions; a user function with the same name SHALL NOT make a Join.
+- **Assign**: `x = e` that is not a Join.
+- **General**: any other write, including `*=`, `/=`, `%=`, a write through a whole-trait alias, and every `extern rule` `writes:` entry.
+
+A statement is Accum or Join only when `e` does not read `x`. The field's kind for the handler SHALL be the shared kind of all its writing statements when they agree (for Join, also the same operator) and the handler reads `x` nowhere else, including `where:`, `order by:`, `limit:` and `when:`. In every other case the field's kind SHALL be General, except that a field written only by Assign statements and read nowhere else SHALL be Assign. A write that covers all fields of a trait SHALL be General for every field.
+
+#### Scenario: Compound addition is Accum
+- **WHEN** a handler filters `Health as h` and runs `h.hp -= 5` and nothing else in it reads `h.hp`
+- **THEN** its contract records a write of `Health.hp` with kind Accum
+
+#### Scenario: Running maximum is a Join
+- **WHEN** a handler runs `stats.best = math.max(stats.best, score)` and `score` is a local
+- **THEN** its contract records a write of `Stats.best` with kind Join and operator `max`
+
+#### Scenario: Constant boolean assignment is a Join
+- **WHEN** a handler runs `actor.grounded = true` and reads `grounded` nowhere
+- **THEN** its contract records a write of `Actor.grounded` with kind Join and operator `or`
+
+#### Scenario: Reading the field elsewhere makes the write General
+- **WHEN** a handler runs `h.hp -= 5` and later `if h.hp < 0:`
+- **THEN** its contract records a write of `Health.hp` with kind General
+
+#### Scenario: Mixed kinds in one handler are General
+- **WHEN** a handler runs `t.x += 1.0` on one path and `t.x = 0.0` on another
+- **THEN** its contract records a write of `T.x` with kind General
+
+#### Scenario: Scaling is General
+- **WHEN** a handler runs `v.speed *= 0.5`
+- **THEN** its contract records a write of `V.speed` with kind General
+
+#### Scenario: Extern writes are General
+- **WHEN** an `extern rule` handler lists `Transform` under `writes:`
+- **THEN** its contract records a General write of every `Transform` field
+
+#### Scenario: Shadowing max is not a Join
+- **WHEN** a module defines its own `func max` and a handler runs `s.best = max(s.best, v)` calling it
+- **THEN** its contract records a write of `S.best` with kind General
+
+### Requirement: Set commands record their patched fields
+A `set Trait` command inferred from a regular handler SHALL record which fields of the trait its patch assigns. A `set Trait` entry in an `extern rule` `commands:` block SHALL cover all fields. Recording patched fields SHALL NOT add reads or writes to the contract.
+
+#### Scenario: Regular set records assigned fields
+- **WHEN** a handler runs `set Health on target:` assigning only `hp`
+- **THEN** its contract lists `set Health` with patched field `hp`, and records no read or write of `Health`
+
+#### Scenario: Extern set covers all fields
+- **WHEN** an `extern rule` handler declares `set Health` under `commands:`
+- **THEN** its contract lists `set Health` covering all fields
+
+### Requirement: Effect calls observe or act
+Every effect domain use recorded in a handler contract SHALL be either an observation or an action, derived from the callee. Authors SHALL NOT declare it. A call to a standard-library extern function SHALL observe the domains of its effect summary, except that a call to a function that changes the domain's state SHALL act on them; these are `std.input.consume`, `std.input.set_cursor_captured`, and the `std.editor` functions `spawn_template`, `camera_enter`, `camera_exit`, `apply_camera_2d` and `apply_camera_3d`. A call to an extern function with no known effect summary SHALL act on `external`. Every `effects:` entry of an `extern rule` SHALL act. A domain the handler both observes and acts on SHALL count as acted on.
+
+#### Scenario: Input reads observe
+- **WHEN** a handler calls `input.pressed(Jump)` and no other `std.input` function
+- **THEN** its contract carries the `input` domain as an observation
+
+#### Scenario: Consume acts
+- **WHEN** a handler calls `input.consume(Fire)`
+- **THEN** its contract carries the `input` domain as an action
+
+#### Scenario: Unknown extern effect acts
+- **WHEN** a handler calls an extern function with no known effect summary
+- **THEN** its contract carries the `external` domain as an action
+
+#### Scenario: Extern rule effects act
+- **WHEN** an `extern rule` handler lists `graphics` under `effects:`
+- **THEN** its contract carries the `graphics` domain as an action

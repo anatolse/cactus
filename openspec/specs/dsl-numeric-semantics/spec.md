@@ -105,3 +105,29 @@ Integer `/` and `%` in a render-pass stage handler SHALL follow the floor-divisi
 #### Scenario: Stage handler floor division
 - **WHEN** a fragment-stage handler evaluates `-7 / 2`
 - **THEN** the result is `-4`
+
+### Requirement: Float accumulation into one field is exact
+Within one activation, take the Accum writes (`+=`, `-=`) to one `float` field of one entity that run between two consecutive non-Accum accesses of that field, or between such an access and the activation's start or commit. They may come from several handlers, several rows of one handler, several event occurrences, or several statements of one handler execution. Each such write contributes a delta: `e` for `+=` and `-e` for `-=`. The field's value after them SHALL be its value before them plus all their deltas, summed exactly and rounded once to binary32, with the edge rules of a float `sum` reduction (NaN, infinities, overflow and the sign of an exact zero). The result SHALL NOT depend on the order of the writes. `vec2` and `vec3` fields, and Accum writes to one of their components, SHALL follow this rule per component. `int` Accum writes wrap and need no merge, because wrapping addition does not depend on order.
+
+#### Scenario: Two handlers add to one float in either order
+- **WHEN** a named entity's `Tally.total` is `1.0e8`, and in one activation handler A runs `Game[Tally].total += 1.0` and handler B runs `Game[Tally].total -= 1.0e8`, with no order between them
+- **THEN** after the activation `Tally.total` is `1.0`, and swapping A and B's declaration order gives the same value
+
+#### Scenario: Several rows add to one float
+- **WHEN** ten entities each run `Game[Tally].total += 0.1` in one handler and `Tally.total` starts at `0.0`
+- **THEN** `Tally.total` is the binary32 value nearest to the exact sum of ten binary32 `0.1` values
+
+#### Scenario: A reader sees the merged value
+- **WHEN** handlers A and B Accum-write `Pool.level` and handler C reads `Pool.level` after both
+- **THEN** C reads the exactly merged value
+
+#### Scenario: A lone accumulation is unchanged
+- **WHEN** only one handler Accum-writes `Body.x` once per row on its own entity
+- **THEN** the result equals `round(x + e)`, as for a plain `+=`
+
+### Requirement: Float min and max are commutative
+`math.min` and `math.max` on `float` SHALL be commutative, associative and idempotent: NaN in either argument SHALL give NaN, `math.max(-0.0, 0.0)` and `math.max(0.0, -0.0)` SHALL both be `0.0`, and `math.min(-0.0, 0.0)` and `math.min(0.0, -0.0)` SHALL both be `-0.0`.
+
+#### Scenario: Signed zeros order the same both ways
+- **WHEN** a handler computes `math.max(-0.0, 0.0)` and `math.max(0.0, -0.0)`
+- **THEN** both results are `0.0` with a positive sign bit

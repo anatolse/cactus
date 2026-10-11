@@ -95,55 +95,6 @@ Event-producer records SHALL be additive graph data. Introducing or reading them
 - **WHEN** a commit-synthesized `spawn` consumer emits an event whose consumer queues a further `Spawn` command
 - **THEN** the resulting producer and event-flow cycle is legal and no schedule cycle is reported
 
-### Requirement: Contract conflict edges
-Handlers eligible in the same activation SHALL be serialized when one writes a trait field the other reads or writes, or when they share an observable effect domain. Two handlers conflict on a trait only when their field accesses to it overlap; an access that covers all fields of a trait overlaps every field of it. A projected output SHALL keep producing a conflict with a handler that selects the projected trait, as before. Filters alone SHALL NOT create conflict edges. A data conflict edge SHALL name each overlapping trait and, for each, the overlapping fields or that the overlap covers all fields.
-
-Pair direction SHALL be chosen by explicit handler ordering first. Otherwise, when exactly one handler of the pair is a member of a `pub group` declared in module M and the other handler's module imports M directly or transitively, the direction SHALL be decided against the whole group, so every conflict between that handler and the group's members points the same way: when the handler and the group's members together conflict in both directions, or only through shared effects, the importing module's handler SHALL run first; when only one side writes what the other reads, the writer SHALL run first. Otherwise a one-way writer-to-reader dependency SHALL run writer first; remaining reciprocal or write/write/effect conflicts SHALL use stable declaration order. The tie-break SHALL be deterministic across builds.
-
-#### Scenario: Writer precedes reader
-- **WHEN** one fixed_tick handler writes Transform and another reads Transform with no reverse hazard or explicit order
-- **THEN** the graph orders the writer before the reader
-
-#### Scenario: Importing module runs before another module's public group
-- **WHEN** a game rule writes `CharacterBody.velocity` in `fixed_tick`, a member of `std.physics.volume`'s `pub group solve` reads and writes `CharacterBody.velocity`, and neither declares an order against the other
-- **THEN** the graph orders the game rule's handler before the group member
-
-#### Scenario: The whole group decides the direction
-- **WHEN** a game rule writes `CharacterBody.velocity` and reads `WorldTransform.position`, one `solve` member only writes `WorldTransform.position`, and another reads and writes `CharacterBody.velocity`
-- **THEN** the graph orders the game rule's handler before both members, with no cycle
-
-#### Scenario: Explicit order overrides the group tie-break
-- **WHEN** the same game rule declares `after: physics.solve`
-- **THEN** the graph orders every group member before the game rule's handler
-
-#### Scenario: One-way reader still follows the writer
-- **WHEN** a game rule only reads `CharacterBody.grounded` in `fixed_tick` and a member of `solve` writes it
-- **THEN** the graph orders the group member before the game rule's handler
-
-#### Scenario: Same-module group members use declaration order
-- **WHEN** two rules of one module conflict reciprocally and one is a member of that module's `pub group`
-- **THEN** their conflict is oriented by stable declaration order
-
-#### Scenario: Independent reads can share a graph level
-- **WHEN** two handlers only read disjoint or identical traits and have no shared effect
-- **THEN** no conflict edge is added between them
-
-#### Scenario: Shared graphics effects are deterministic
-- **WHEN** two render handlers declare `effects: graphics` without explicit ordering
-- **THEN** their conflict is oriented by stable declaration order
-
-#### Scenario: Disjoint fields of one trait do not conflict
-- **WHEN** in the same activation one handler writes `Match.over`, a second writes `Match.score`, and a third reads `Match.over`
-- **THEN** the graph adds exactly one data conflict edge, from the `Match.over` writer to the `Match.over` reader
-
-#### Scenario: Whole-trait access conflicts with every field
-- **WHEN** one handler writes `Match.score` and an `extern rule` handler in the same activation lists `Match` under `reads:`
-- **THEN** the graph orders the writer before the extern reader
-
-#### Scenario: Edge names overlapping fields
-- **WHEN** a handler writes `Match.over` and `Match.score` and another reads only `Match.over`
-- **THEN** the conflict edge names `Match` with the field `over` only
-
 ### Requirement: Pair contracts participate in conservative conflicts
 Graph conflict construction SHALL use the conservative trait-field reads, durable writes, projected outputs, commands, and effects inferred for pair handlers. Binding-qualified reads SHALL be retained as provenance but SHALL NOT weaken correctness by removing conservative conflicts.
 
@@ -254,3 +205,148 @@ The first four reasons SHALL be *meaningful*: they follow from what the definiti
 #### Scenario: Reasons survive linking
 - **WHEN** a module is compiled to an artifact and linked into a program
 - **THEN** each of its schedule edges has the same reason in the linked program as in the module's own graph
+
+### Requirement: Contract conflict edges are oriented only by meaningful rules
+Handlers eligible in the same activation SHALL be serialized when they conflict. They conflict on data when one writes a trait field the other reads or writes, unless the two writes commute (see "Commuting writes add no edge"). They conflict on a channel as defined in "Channel conflicts". Two handlers conflict on a trait only when their field accesses to it overlap; an access that covers all fields of a trait overlaps every field of it. A projected output SHALL keep producing a conflict with a handler that selects the projected trait, as before. Filters alone SHALL NOT create conflict edges. A data conflict edge SHALL name each overlapping trait and, for each, the overlapping fields or that the overlap covers all fields.
+
+Pair direction SHALL be chosen only by a meaningful orientation, in this order:
+
+1. **Derivation after writers**: a derivation handler runs after the handlers that write what it derives from.
+2. **Explicit order**: handler, rule or group `after:`/`before:` edges, directly or transitively.
+3. **Importer before public group**: when exactly one handler of the pair is a member of a `pub group` declared in module M and the other handler's module imports M directly or transitively, the direction SHALL be decided against the whole group, so every conflict between that handler and the group's members points the same way: when the handler and the group's members together conflict in both directions, or only through shared effects or channels, the importing module's handler SHALL run first; when only one side writes what the other reads, the writer SHALL run first.
+4. **Writer before reader**: when only one handler of the pair writes what the other reads, the writer SHALL run first.
+
+Declaration order, link order and source position SHALL NOT orient a conflict. A conflict that none of these orients SHALL be rejected as described in "Unorientable conflicts are compile errors".
+
+#### Scenario: Writer precedes reader
+- **WHEN** one fixed_tick handler writes Transform and another reads Transform with no reverse hazard or explicit order
+- **THEN** the graph orders the writer before the reader
+
+#### Scenario: Importing module runs before another module's public group
+- **WHEN** a game rule writes `CharacterBody.velocity` in `fixed_tick`, a member of `std.physics.volume`'s `pub group solve` reads and writes `CharacterBody.velocity`, and neither declares an order against the other
+- **THEN** the graph orders the game rule's handler before the group member
+
+#### Scenario: The whole group decides the direction
+- **WHEN** a game rule writes `CharacterBody.velocity` and reads `WorldTransform.position`, one `solve` member only writes `WorldTransform.position`, and another reads and writes `CharacterBody.velocity`
+- **THEN** the graph orders the game rule's handler before both members, with no cycle
+
+#### Scenario: Explicit order overrides the group rule
+- **WHEN** the same game rule declares `after: physics.solve`
+- **THEN** the graph orders every group member before the game rule's handler
+
+#### Scenario: One-way reader still follows the writer
+- **WHEN** a game rule only reads `CharacterBody.grounded` in `fixed_tick` and a member of `solve` writes it
+- **THEN** the graph orders the group member before the game rule's handler
+
+#### Scenario: Same-module reciprocal conflict needs an explicit order
+- **WHEN** two rules of one module conflict reciprocally, one is a member of that module's `pub group`, and neither declares an order against the other
+- **THEN** compilation fails with an unorientable-conflict error naming both handlers
+
+#### Scenario: Independent reads can share a graph level
+- **WHEN** two handlers only read disjoint or identical traits and act on no effect domain the other uses
+- **THEN** no conflict edge is added between them
+
+#### Scenario: Shared graphics effects need an explicit order
+- **WHEN** two render handlers declare `effects: graphics` and nothing orders them
+- **THEN** compilation fails with an unorientable-conflict error naming both handlers and the `graphics` domain
+
+#### Scenario: Shared graphics effects follow explicit order
+- **WHEN** two render handlers declare `effects: graphics` and one declares `after:` naming the other
+- **THEN** the graph records an effect conflict edge in that direction
+
+#### Scenario: Disjoint fields of one trait do not conflict
+- **WHEN** in the same activation one handler writes `Match.over`, a second writes `Match.score`, and a third reads `Match.over`
+- **THEN** the graph adds exactly one data conflict edge, from the `Match.over` writer to the `Match.over` reader
+
+#### Scenario: Whole-trait access conflicts with every field
+- **WHEN** one handler writes `Match.score` and an `extern rule` handler in the same activation lists `Match` under `reads:`
+- **THEN** the graph orders the writer before the extern reader
+
+#### Scenario: Edge names overlapping fields
+- **WHEN** a handler writes `Match.over` and `Match.score` and another reads only `Match.over`
+- **THEN** the conflict edge names `Match` with the field `over` only
+
+#### Scenario: Moving a rule to another file does not change the schedule
+- **WHEN** a program compiles, and one of its rules is moved to another module or its imports are reordered without changing any contract or explicit order
+- **THEN** the program still compiles and every schedule edge keeps its direction
+
+### Requirement: Commuting writes add no edge
+Two handlers' writes to the same trait field SHALL commute when both have kind Accum, or both have kind Join with the same operator. A field on which the two handlers' only accesses are commuting writes SHALL NOT contribute to a data conflict between them. Every other overlap on that field, and every overlap on other fields, SHALL conflict as before.
+
+#### Scenario: Two damage sources share a level
+- **WHEN** in one activation handler A runs `h.hp -= burn` and handler B runs `h.hp -= poison`, both Accum, and they share no other conflicting access
+- **THEN** no schedule edge connects A and B
+
+#### Scenario: Same Join operator commutes
+- **WHEN** handler A runs `actor.grounded = true` and handler B runs `actor.grounded = actor.grounded or touching`
+- **THEN** no schedule edge on `Actor.grounded` connects A and B
+
+#### Scenario: Different Join operators conflict
+- **WHEN** handler A runs `actor.grounded = false` and handler B runs `actor.grounded = true`, and nothing orders them
+- **THEN** compilation fails with an unorientable-conflict error naming `Actor.grounded`, with kinds Join `and` and Join `or`
+
+#### Scenario: Accum against Assign conflicts
+- **WHEN** handler A runs `t.x += 1.0` and handler B runs `t.x = 0.0`, and nothing orders them
+- **THEN** compilation fails with an unorientable-conflict error naming `T.x`, with kinds Accum and Assign
+
+#### Scenario: Accum writer precedes a reader
+- **WHEN** handler A runs `h.hp -= 5` and handler B only reads `h.hp`
+- **THEN** the graph orders A before B as writer before reader
+
+#### Scenario: A delta that reads the other's write still conflicts
+- **WHEN** handler A runs `p.x += p.v` and handler B runs `p.v = 0.0` and `p.x += 1.0`
+- **THEN** `P.x` adds no conflict, and the overlap on `P.v` orders B before A as writer before reader
+
+### Requirement: Channel conflicts
+Handlers eligible in the same activation SHALL also conflict through shared channels, using the same orientation rules as data conflicts and recording an edge that names the channel:
+
+- **Commands**: per canonical trait, `add` of a marker trait (a trait with no fields) commutes with another `add` of it, and `remove` commutes with `remove`. `destroy` commutes with every command. `spawn` commutes with every command. `add` of a trait with fields conflicts with another `add` of that trait. `add` and `remove` of one trait conflict. `set` of a trait conflicts with `add` or `remove` of that trait, and with another `set` of it when their patched fields overlap.
+- **Events**: two handlers that may emit the same event, or that issue commands which deliver the same `on added` or `on removed` trigger, conflict when some consumer of that event or trigger observes occurrence order. A consumer observes occurrence order when two of its executions do not commute under the data, command and effect rules above, or when it may emit an event that a consumer which observes occurrence order handles.
+- **Effects**: two handlers that carry the same effect domain conflict when at least one of them acts on it. Two handlers that only observe a domain do not conflict through it.
+
+#### Scenario: Marker adds commute
+- **WHEN** two unordered handlers both `add Stunned` and `Stunned` has no fields
+- **THEN** no edge connects them through that command
+
+#### Scenario: Add against remove conflicts
+- **WHEN** one handler runs `add Stunned` and another `remove Stunned`, and nothing orders them
+- **THEN** compilation fails with an unorientable-conflict error naming the `Stunned` commands
+
+#### Scenario: Destroy commutes
+- **WHEN** one handler runs `destroy` and another runs `set Health on target:`
+- **THEN** no edge connects them through commands
+
+#### Scenario: Disjoint set patches commute
+- **WHEN** one handler's `set Health` patches only `hp` and another's patches only `max_hp`
+- **THEN** no edge connects them through commands
+
+#### Scenario: Order-insensitive event consumer allows unordered producers
+- **WHEN** handlers A and B both emit `Damaged` and the only consumer of `Damaged` runs `h.hp -= amount`
+- **THEN** no edge connects A and B through `Damaged`
+
+#### Scenario: Order-sensitive event consumer needs ordered producers
+- **WHEN** handlers A and B both emit `Spoke` with no order between them and the consumer of `Spoke` runs `log.last = line`
+- **THEN** compilation fails with an unorientable-conflict error naming A, B, `Spoke` and the consumer
+
+#### Scenario: Observing effect calls add no edge
+- **WHEN** two handlers of one activation both only call `input.pressed`, and nothing else conflicts
+- **THEN** no edge connects them
+
+#### Scenario: Observing and acting conflict
+- **WHEN** one handler calls `input.pressed(Fire)`, another calls `input.consume(Fire)`, and nothing orders them
+- **THEN** compilation fails with an unorientable-conflict error naming both handlers and the `input` domain
+
+### Requirement: Unorientable conflicts are compile errors
+When two handlers conflict and no meaningful orientation from "Contract conflict edges are oriented only by meaningful rules" orders them, compilation SHALL fail. The diagnostic SHALL be located at one of the two handlers and SHALL name both canonical handlers; for a data conflict, each overlapping field with both handlers' write kinds (or "read"); for a channel conflict, the commands, event and observing consumer, or effect domain. It SHALL suggest adding `after:` naming either handler to the other. The compiler SHALL report every unorientable conflict in the program, not only the first. A conflict that crosses modules SHALL be reported when the program is linked.
+
+#### Scenario: Diagnostic names both sides and both fixes
+- **WHEN** `Regen/on tick` assigns `h.hp = h.max_hp` and `Poison/on tick` runs `h.hp -= 1`, and nothing orders them
+- **THEN** the error names `Regen/on tick` and `Poison/on tick`, `Health.hp` with kinds Assign and Accum, and suggests `after: Regen/on tick` in Poison or `after: Poison/on tick` in Regen
+
+#### Scenario: All ambiguities are reported
+- **WHEN** a program has three unrelated unorientable conflicts
+- **THEN** compilation reports three errors
+
+#### Scenario: Cross-module ambiguity is a link error
+- **WHEN** two modules that don't import each other each have a rule that assigns `Score.value` in `tick`
+- **THEN** linking the program fails with an unorientable-conflict error naming both handlers

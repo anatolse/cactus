@@ -1247,7 +1247,7 @@ The cpp-entt test surface SHALL expose sufficient deterministic debug state or h
 - **THEN** it can assert that only the visually topmost accepted target received Click
 
 ### Requirement: cpp-entt lowers Quads render passes to a generated raylib shader pair
-For a render-pass phase whose `Pass` field is `passes.Pass.Quads`, the `cpp-entt` backend SHALL generate one GLSL vertex shader and one GLSL fragment shader translated directly from the phase's vertex- and fragment-stage handler bodies (per the restricted statement/expression subset in `dsl-render-passes`), load them via raylib's `LoadShaderFromMemory`, and draw one instanced quad per entity selected by the vertex handler's `each:` using `BeginShaderMode`/raylib's existing draw-call surface. The generated draw step SHALL participate in the existing `effects: graphics` scheduling domain (per `handler-execution-graph`, "Contract conflict edges") the same way `SpriteRenderer`/`MeshRenderer` already do.
+For a render-pass phase whose `Pass` field is `passes.Pass.Quads`, the `cpp-entt` backend SHALL generate one GLSL vertex shader and one GLSL fragment shader translated directly from the phase's vertex- and fragment-stage handler bodies (per the restricted statement/expression subset in `dsl-render-passes`), load them via raylib's `LoadShaderFromMemory`, and draw one instanced quad per entity selected by the vertex handler's `each:` using `BeginShaderMode`/raylib's existing draw-call surface. The generated draw step SHALL participate in the existing `effects: graphics` scheduling domain (per `handler-execution-graph`, "Contract conflict edges are oriented only by meaningful rules") the same way `SpriteRenderer`/`MeshRenderer` already do.
 
 #### Scenario: Vertex/fragment handler bodies translate to GLSL
 - **WHEN** `cpp-entt` compiles a `Quads` render-pass phase with vertex handler `V` and fragment handler `F`
@@ -1259,7 +1259,7 @@ For a render-pass phase whose `Pass` field is `passes.Pass.Quads`, the `cpp-entt
 
 #### Scenario: Render-pass draw step shares graphics-effect ordering with existing renderers
 - **WHEN** a program uses both a `Quads` render pass and an existing `std.render.shapes.ShapeRenderer` extern rule
-- **THEN** their relative draw order is resolved the same deterministic way existing `effects: graphics` conflicts are resolved (declaration order, absent explicit ordering)
+- **THEN** their relative draw order follows the same rules as other `effects: graphics` conflicts: an explicit order or another meaningful rule orients them, and otherwise compilation fails with an unorientable-conflict error
 
 ### Requirement: Portable GLSL translation is an explicit per-function registration
 An `extern func` or stdlib `func` is only callable from a stage handler body if the `cpp-entt` backend has a registered GLSL translation for its canonical symbol. `std.math.sqrt`, `std.math.clamp`, and `std.render.passes.with_alpha` SHALL be registered for this increment; no other function is assumed portable merely because its signature uses supported types.

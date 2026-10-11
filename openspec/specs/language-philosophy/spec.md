@@ -49,11 +49,11 @@ The Cactus execution model SHALL be fully predictable. Authors SHALL be able to 
 
 The following timing guarantees SHALL be documented and honored by all backends:
 1. **Phase order**: declared `from:` and `after:` dependencies define activation barriers; the standard graph is input -> fixed_tick* -> tick -> late_tick -> render.
-2. **Handler order within an activation**: explicit handler ordering and inferred contract-conflict edges define dependencies, with stable declaration order resolving otherwise ambiguous conflicts.
+2. **Handler order within an activation**: explicit handler ordering and inferred contract-conflict edges define dependencies. Handlers whose writes commute need no order. A conflict that no explicit order or inferred meaningful rule orients is a compile error; declaration order, link order and source position never order handlers.
 3. **Event delivery**: emitted events activate contracted consumer nodes within the current activation's bounded cascade; overflow follows the documented deferral rule.
 4. **Structural change timing**: `add`, `remove`, `spawn`, and `destroy` commit after the complete handler/event cascade of each activation or fixed-step repetition.
 5. **Fixed-step timing**: periodic cadence, catch-up cap, dropped excess time, fixed `dt`, and interpolation `alpha` follow phase declarations identically on every backend.
-6. **External effects**: matching effect domains are observably serialized by graph order.
+6. **External effects**: an action on an effect domain is serialized by graph order against every other use of that domain; observations of a domain that no co-eligible handler acts on may run in any order.
 7. **`order by:` timing**: sorting occurs at a defined point before selected handler iteration and contributes trait reads to that handler contract.
 8. **Iteration order within a pass**: a rule pass without `order by:` iterates in entity creation order wherever its result can observe the order; elsewhere the order is not observable, so it is free for the backend.
 
@@ -72,6 +72,10 @@ The following timing guarantees SHALL be documented and honored by all backends:
 #### Scenario: Observable iteration order is creation order
 - **WHEN** a rule without `order by:` emits one event per entity and some entities were destroyed earlier
 - **THEN** the events are queued in the creation order of the remaining entities on every backend
+
+#### Scenario: Source layout does not change behavior
+- **WHEN** a compiling program's rules are moved between files or its imports are reordered, with no other change
+- **THEN** the program behaves identically
 
 ### Requirement: ECS is the primary gameplay model, with explicit boundaries
 Cactus SHALL remain ECS-first for gameplay and tool modeling: traits, rules, events, templates, hierarchy, spawning and filtering are the modeling tools for both.
@@ -116,7 +120,7 @@ Three error classes SHALL be ruled out by construction in authored code, and no 
 
 1. **Memory management.** No authored construct allocates, frees, or aliases memory. Values are copied; storage belongs to entities, traits, constants and the runtime.
 2. **Lifetime management.** No authored operation can observe a destroyed entity's storage. Entity handles are total, structural changes commit at defined boundaries, and owned descendants are destroyed with their owner.
-3. **Data races.** No two handlers can access the same data in an undefined order. Handler contracts are derived from handler bodies, and conflicting handlers are ordered by the compiler; authors write no locks and no access annotations.
+3. **Data races.** No two handlers can access the same data in an undefined order. Handler contracts and their write kinds are derived from handler bodies. The compiler orders conflicting handlers when a meaningful rule decides the order, lets commuting writes run in any order, and rejects every other conflict; authors write no locks and no access annotations.
 
 #### Scenario: Collision code does not depend on shape kinds
 - **WHEN** an author asks whether, or where, two entities collide
@@ -145,8 +149,16 @@ Three error classes SHALL be ruled out by construction in authored code, and no 
 - **THEN** every later operation through that handle is a defined no-op or no-match, and no handler reads freed storage
 
 #### Scenario: Conflicting handlers are ordered without annotations
-- **WHEN** two handlers of one activation write, or write and read, the same trait
-- **THEN** the compiler orders them deterministically from their derived contracts, and the author writes no lock or access declaration
+- **WHEN** two handlers of one activation conflict and one only writes what the other reads
+- **THEN** the compiler orders the writer first from their derived contracts, and the author writes no lock or access declaration
+
+#### Scenario: Commuting writes need no order
+- **WHEN** two handlers of one activation both add to the same field with `+=`
+- **THEN** the program compiles with no order between them, and the result is the same in every execution order
+
+#### Scenario: An ambiguous order is rejected
+- **WHEN** two handlers of one activation both assign the same field and nothing meaningful orders them
+- **THEN** the compiler reports an error naming both handlers instead of choosing an order
 
 #### Scenario: A feature that reopens an error class is rejected
 - **WHEN** a proposal would let authored code allocate memory, outlive an entity's storage, or access shared data in an undefined order
@@ -349,16 +361,15 @@ The known gaps are:
 
 | Gap | Property |
 |---|---|
-| Two conflicting handlers ordered only by stable declaration order | determinacy |
-| Unordered handlers that emit the same event, queue commands on the same entities, or call the same effect domain | determinacy |
 | Creation order of entities spawned by two unordered handlers, where a later reader observes it | determinacy |
+| Unordered handlers that emit different events whose consumers conflict, so cascade queue order decides the result | determinacy |
 | Ties in spatial single-entity queries (`nearest`, `raycast`) follow storage order | determinacy |
 | Event and lifecycle cycles cut off by a configured cascade-depth bound | determinacy, termination |
 | A rule domain or `without:` trait that no reachable entity can match, and a trigger with no producer | non-vacuity |
 
 #### Scenario: Closing a gap removes its entry
 - **WHEN** a change makes the compiler reject conflicts that only declaration order orients
-- **THEN** that change removes the first row of the table
+- **THEN** that change removes the row for handlers ordered only by stable declaration order
 
 #### Scenario: A feature may not add a gap
 - **WHEN** a proposed feature would let the compiler accept a definition whose result depends on source position

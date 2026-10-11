@@ -513,6 +513,7 @@ void ModuleArtifact::write_contract(std::ostream& out, const HandlerContract& co
         write_optional_symbol_id(out, command.target);
     }
     write_string_set(out, contract.effects);
+    write_u8(out, static_cast<uint8_t>(contract.iteration_order));
 
     write_bool(out, contract.spatial_join.has_value());
     if (contract.spatial_join.has_value()) {
@@ -1139,7 +1140,8 @@ HandlerContract ModuleArtifact::read_contract(std::istream& in) {
         contract.commands.push_back(InferredHandlerCommand{.kind   = static_cast<HandlerCommandKind>(read_u8(in)),
                                                            .target = read_optional_symbol_id(in)});
     }
-    contract.effects = read_string_set(in);
+    contract.effects         = read_string_set(in);
+    contract.iteration_order = static_cast<IterationOrder>(read_u8(in));
 
     if (read_bool(in)) {
         const auto read_shape = [&in]() {

@@ -351,6 +351,10 @@ TEST_CASE("std.time cancels an armed countdown when its owning entity is destroy
     // may reach it, and the weapon must never see a reload it did not start.
     const auto recycled = registry.create();
     registry.emplace<std_time__Timer>(recycled);
+    registry.emplace<cactus::runtime::entt_backend::CreationOrdinal>(
+        recycled,
+        cactus::runtime::entt_backend::CreationOrdinal{
+            .value = cactus::runtime::entt_backend::generated_next_creation_ordinal()});
 
     for (int step = 0; step < 20; ++step) {
         drive_frame(registry, kStep);

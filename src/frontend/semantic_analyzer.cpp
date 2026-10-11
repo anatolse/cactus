@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <format>
 #include <functional>
+#include <iterator>
 #include <limits>
 #include <ranges>
 #include <span>
@@ -7255,6 +7256,8 @@ void SemanticAnalyzer::collect_rule_dependency(const RuleNode& rule, std::size_t
             inferred.reduction    = reduction_plan(rule, pair_scope);
             fold_when_clause_named_reads(rule, inferred);
             add_keep_effects(rule, handler, inferred);
+            inferred.iteration_order =
+                derive_iteration_order(inferred, rule.limit.has_value() && rule.order_by.empty());
             result_.handler_contracts.push_back(inferred);
 
             HandlerNode node;
@@ -7433,6 +7436,45 @@ void add_bound_read(HandlerContract& contract, std::size_t binding_index, const 
 }
 
 }  // namespace
+
+const FieldAccess& all_fields() {
+    static const FieldAccess value{.all = true, .fields = {}};
+    return value;
+}
+
+const FieldAccess& field_access(const std::unordered_map<SymbolId, FieldAccess>& table, const SymbolId& trait) {
+    const auto found = table.find(trait);
+    return found == table.end() ? all_fields() : found->second;
+}
+
+std::optional<FieldAccess> overlapping_fields(const FieldAccess& left, const FieldAccess& right) {
+    if (left.all) {
+        return right.all || !right.fields.empty() ? std::optional(right) : std::nullopt;
+    }
+    if (right.all) {
+        return left.fields.empty() ? std::nullopt : std::optional(left);
+    }
+    FieldAccess shared;
+    std::ranges::set_intersection(left.fields, right.fields, std::inserter(shared.fields, shared.fields.end()));
+    return shared.fields.empty() ? std::nullopt : std::optional(shared);
+}
+
+IterationOrder derive_iteration_order(const HandlerContract& contract, bool unordered_limit) {
+    if (contract.domain_kind != HandlerDomainKind::Unary) {
+        return IterationOrder::Free;
+    }
+    // The named entity may itself be a row, so reading a field the pass writes sees earlier rows' writes.
+    const auto reads_own_write = std::ranges::any_of(contract.named_reads, [&](const auto& entity_entry) {
+        return std::ranges::any_of(entity_entry.second, [&](const auto& trait_entry) {
+            return contract.writes.contains(trait_entry.first) &&
+                   overlapping_fields(trait_entry.second, field_access(contract.write_fields, trait_entry.first))
+                       .has_value();
+        });
+    });
+    const bool observes = unordered_limit || !contract.emits.empty() || !contract.commands.empty() ||
+                          !contract.effects.empty() || !contract.named_writes.empty() || reads_own_write;
+    return observes ? IterationOrder::Creation : IterationOrder::Free;
+}
 
 void record_read(HandlerContract& contract,
                  const SymbolId& trait,

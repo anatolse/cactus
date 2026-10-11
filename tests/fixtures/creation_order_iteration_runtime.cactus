@@ -1,0 +1,98 @@
+module creation_order_iteration_runtime
+
+use std.core
+use std.query as query
+
+# Rules without `order by:` whose result can see their iteration order. Each
+# log rolls the ids it visits into one integer, so the value records the
+# visit order. The test creates the Item entities itself, destroying one so
+# that storage order differs from creation order.
+
+trait Item:
+    var id: int = 0
+    var picked: bool = false
+    var steps: int = 0
+
+trait Offspring:
+    var origin: int = 0
+
+trait Log:
+    var emitted: int = 0
+    var newest: int = 0
+    var first: int = 0
+    var all: int = 0
+
+entity Board:
+    Log
+
+template Child(origin: int):
+    Offspring:
+        origin = origin
+
+event Seen:
+    id: int
+
+rule Announce:
+    each:
+        Item as it
+
+    on tick:
+        emit Seen:
+            id = it.id
+
+rule Record:
+    on Seen:
+        Board[Log].emitted = (Board[Log].emitted * 10) + Seen.id
+
+rule PickOldest:
+    each:
+        Item as it
+    limit: 2
+
+    on tick:
+        it.picked = true
+
+rule SpawnChildren:
+    each:
+        Item as it
+
+    on tick:
+        spawn Child(origin = it.id)
+
+rule TrackNewest:
+    each:
+        Item as it
+
+    on tick:
+        Board[Log].newest = it.id
+
+event Oldest
+
+event Listed
+
+rule ListItems:
+    on tick:
+        emit Oldest to query.first[Item]()
+        for item in query.all[Item]():
+            emit Listed to item
+
+rule RecordOldest:
+    each:
+        Item as it
+
+    on Oldest:
+        Board[Log].first = it.id
+
+rule RecordListed:
+    each:
+        Item as it
+
+    on Listed:
+        Board[Log].all = (Board[Log].all * 10) + it.id
+
+rule Step:
+    each:
+        Item as it
+
+    on tick:
+        it.steps += 1

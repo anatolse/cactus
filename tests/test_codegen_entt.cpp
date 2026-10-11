@@ -34,6 +34,29 @@ static std::string generated_function(const std::string& code, const std::string
     return code.substr(start, end - start + 3);
 }
 
+// Drops every harness-only region, leaving what a build without the macro compiles.
+static std::string without_linearization_harness(const std::string& code) {
+    std::string result;
+    std::size_t position = 0;
+    while (true) {
+        const auto start = code.find("#ifdef CACTUS_LINEARIZATION_HARNESS\n", position);
+        if (start == std::string::npos) {
+            result += code.substr(position);
+            return result;
+        }
+        result += code.substr(position, start - position);
+        const auto end_marker = std::string("#endif  // CACTUS_LINEARIZATION_HARNESS\n");
+        const auto end        = code.find(end_marker, start);
+        REQUIRE(end != std::string::npos);
+        const auto else_marker = code.find("#else  // CACTUS_LINEARIZATION_HARNESS\n", start);
+        if (else_marker != std::string::npos && else_marker < end) {
+            const auto kept_start = else_marker + std::string("#else  // CACTUS_LINEARIZATION_HARNESS\n").size();
+            result += code.substr(kept_start, end - kept_start);
+        }
+        position = end + end_marker.size();
+    }
+}
+
 // The payload parameter name of a generated handler function, whatever its spelling.
 static std::string handler_payload_param(const std::string& function) {
     const std::string signature_prefix = "(entt::registry& registry, const ";
@@ -4443,7 +4466,7 @@ TEST_CASE("Codegen EnTT: query.count lowers to counting loop", "[codegen-entt][q
     CHECK(code.contains("std::ranges::distance"));
 }
 
-TEST_CASE("Codegen EnTT: query.first lowers to begin/end with null fallback", "[codegen-entt][query]") {
+TEST_CASE("Codegen EnTT: query.first lowers to an oldest-match scan", "[codegen-entt][query]") {
     ProgramNode program;
     auto decorated = full_pipeline(std::string(kQueryPreamble) +
                                        "rule S:\n"
@@ -4452,13 +4475,10 @@ TEST_CASE("Codegen EnTT: query.first lowers to begin/end with null fallback", "[
                                    program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.contains("registry.view<Boss>()"));
-    CHECK(code.contains("entt::entity{entt::null}"));
-    // empty result returns null sentinel (total entity_id semantics)
-    CHECK(code.contains("it != view.end()"));
+    CHECK(code.contains("cactus::runtime::entt_backend::oldest(registry, registry.view<Boss>())"));
 }
 
-TEST_CASE("Codegen EnTT: query.all lowers to vector collection loop", "[codegen-entt][query]") {
+TEST_CASE("Codegen EnTT: query.all lowers to a creation-ordered snapshot", "[codegen-entt][query]") {
     ProgramNode program;
     auto decorated = full_pipeline(std::string(kQueryPreamble) +
                                        "rule S:\n"
@@ -4467,9 +4487,7 @@ TEST_CASE("Codegen EnTT: query.all lowers to vector collection loop", "[codegen-
                                    program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.contains("registry.view<Enemy>()"));
-    CHECK(code.contains("std::vector<entt::entity> result"));
-    CHECK(code.contains("result.push_back(e)"));
+    CHECK(code.contains("cactus::runtime::entt_backend::creation_ordered(registry, registry.view<Enemy>())"));
 }
 
 TEST_CASE("Codegen EnTT: query.children lowers to a stable filtered direct-child snapshot",
@@ -4593,8 +4611,7 @@ TEST_CASE("Codegen EnTT: fully qualified std.query path is lowered correctly", "
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.contains("registry.view<Boss>()"));
-    CHECK(code.contains("entt::entity{entt::null}"));
+    CHECK(code.contains("cactus::runtime::entt_backend::oldest(registry, registry.view<Boss>())"));
 }
 
 static const char* const kFlatQueryPreamble =
@@ -6060,8 +6077,8 @@ TEST_CASE("Codegen EnTT: compiler-owned contracted effects execute only through 
     // collisions — two distinct nodes that resolve to two different
     // underlying functions in the same phase batch still each get exactly
     // one call.
-    CHECK(count_occurrences(dispatch, "::sprite_renderer_tick(registry);") == 1);
-    CHECK(count_occurrences(dispatch, "::sprite_animation_tick(registry);") == 1);
+    CHECK(count_occurrences(without_linearization_harness(dispatch), "::sprite_renderer_tick(registry);") == 1);
+    CHECK(count_occurrences(without_linearization_harness(dispatch), "::sprite_animation_tick(registry);") == 1);
 
     CHECK(!code.contains("cactus_external__std_render_sprites__SpriteRenderer"));
     CHECK(!code.contains("cactus_external__std_render_sprites__SpriteAnimation"));
@@ -7957,12 +7974,11 @@ TEST_CASE("Codegen EnTT: a global unary reduction folds in creation order and ru
                                           "    on tick:\n"
                                           "        let x = total\n",
                                       "Total");
-    const auto sort = code.find("std::ranges::sort(cactus_ordered);");
+    const auto sort = code.find("cactus::runtime::entt_backend::creation_ordered(registry, view)");
     const auto fold = code.find("cactus_acc.total.add(");
     REQUIRE(sort != std::string::npos);
     REQUIRE(fold != std::string::npos);
     CHECK(sort < fold);
-    CHECK(code.find("CreationOrdinal") < sort);
     CHECK(code.contains("cactus_rows.resize("));
     CHECK(code.contains("cactus_reduced_body(cactus_row);"));
 }
@@ -8049,6 +8065,199 @@ TEST_CASE("Codegen EnTT: a global limit also gates recipient-targeted delivery",
     REQUIRE(broadcast_start != std::string::npos);
     const auto recipient_block = code.substr(recipient_start, broadcast_start - recipient_start);
     CHECK(recipient_block.contains(" > 0)"));
+}
+
+// ── Linearization harness (handler-execution-graph) ─────────────────────────
+
+static std::string linearization_codegen() {
+    ProgramNode program;
+    auto decorated = full_pipeline(lifecycle_program_prefix() +
+                                       "event Hit\n"
+                                       "trait Speed:\n"
+                                       "    var value: float = 0.0\n"
+                                       "rule Heat:\n"
+                                       "    each:\n"
+                                       "        Burning as b\n"
+                                       "    on tick:\n"
+                                       "        b.intensity = b.intensity + 1.0\n"
+                                       "rule Age:\n"
+                                       "    each:\n"
+                                       "        Dying as d\n"
+                                       "    on tick:\n"
+                                       "        d.elapsed = d.elapsed + tick.dt\n"
+                                       "rule Spread:\n"
+                                       "    each:\n"
+                                       "        Burning as b\n"
+                                       "        Speed as s\n"
+                                       "    on tick:\n"
+                                       "        s.value = b.intensity\n"
+                                       "rule HitA:\n"
+                                       "    each:\n"
+                                       "        Speed as s\n"
+                                       "    on Hit:\n"
+                                       "        s.value = 1.0\n"
+                                       "rule HitB:\n"
+                                       "    each:\n"
+                                       "        Speed as s\n"
+                                       "    on Hit:\n"
+                                       "        s.value = 2.0\n"
+                                       "rule AddedA:\n"
+                                       "    each:\n"
+                                       "        Speed as s\n"
+                                       "    on added Burning as b:\n"
+                                       "        s.value = 3.0\n"
+                                       "rule AddedB:\n"
+                                       "    each:\n"
+                                       "        Dying as d\n"
+                                       "    on added Burning as b:\n"
+                                       "        d.elapsed = 0.0\n",
+                                   program);
+    return CppEnttCodegen::generate(decorated);
+}
+
+TEST_CASE("Codegen EnTT: each dispatch set gets a harness call table with predecessor edges",
+          "[codegen-entt][handler-execution-graph]") {
+    const auto code = linearization_codegen();
+    CHECK(code.contains("#include \"backends/cpp-entt/linearization_harness.hpp\""));
+
+    const auto tick = generated_function(code, "void generated_dispatch_phase_test__tick(entt::registry& registry");
+    CHECK(tick.contains("dispatch_linear_extension(3, kLinearizationEdges, [&](std::size_t cactus_index) {"));
+    // Heat writes what Spread reads: one edge, from Heat's slot to Spread's.
+    CHECK(tick.contains("std::array<cactus::runtime::entt_backend::LinearizationEdge, 1> kLinearizationEdges{{"));
+    CHECK(tick.contains("{0, 2, false}"));
+
+    const auto hit = generated_function(code, "void generated_dispatch_event(entt::registry& registry, const HitEvent&");
+    CHECK(hit.contains("dispatch_linear_extension(2, kLinearizationEdges,"));
+    // Two plain assignments to one field are ordered only by declaration order.
+    CHECK(hit.contains("{0, 1, true}"));
+
+    const auto added = generated_function(code, "TraitAdded<Burning>& occurrence");
+    CHECK(added.contains("dispatch_linear_extension(2, kLinearizationEdges,"));
+    CHECK(added.contains("std::array<cactus::runtime::entt_backend::LinearizationEdge, 0> kLinearizationEdges{};"));
+}
+
+TEST_CASE("Codegen EnTT: without the harness macro dispatch calls handlers in stable order",
+          "[codegen-entt][handler-execution-graph]") {
+    const auto plain = without_linearization_harness(linearization_codegen());
+    CHECK_FALSE(plain.contains("CACTUS_LINEARIZATION_HARNESS"));
+    CHECK_FALSE(plain.contains("dispatch_linear_extension"));
+    CHECK_FALSE(plain.contains("generated_world_digest"));
+    const auto tick  = generated_function(plain, "void generated_dispatch_phase_test__tick(entt::registry& registry");
+    const auto heat  = tick.find("::heat_tick(registry, phase);");
+    const auto age   = tick.find("::age_tick(registry, phase);");
+    const auto spread = tick.find("::spread_tick(registry, phase);");
+    REQUIRE(heat != std::string::npos);
+    REQUIRE(age != std::string::npos);
+    REQUIRE(spread != std::string::npos);
+    CHECK(heat < spread);
+}
+
+TEST_CASE("Codegen EnTT: the harness digests every trait of every entity in creation order",
+          "[codegen-entt][handler-execution-graph]") {
+    const auto code   = linearization_codegen();
+    const auto digest = generated_function(code, "std::uint64_t generated_world_digest(entt::registry& registry)");
+    CHECK(digest.contains("creation_ordered(registry, registry.view<CreationOrdinal>())"));
+    // Traits in canonical order; markers hash presence only.
+    const auto burning = digest.find("registry.try_get<Burning>(entity)");
+    const auto dying   = digest.find("registry.try_get<Dying>(entity)");
+    const auto enemy   = digest.find("registry.all_of<Enemy>(entity)");
+    REQUIRE(burning != std::string::npos);
+    REQUIRE(dying != std::string::npos);
+    REQUIRE(enemy != std::string::npos);
+    CHECK(burning < dying);
+    CHECK(dying < enemy);
+    CHECK(digest.contains("digest.add(component->intensity);"));
+}
+
+// ── Creation-order iteration (dsl-rule-order-by) ────────────────────────────
+
+static const std::string& iteration_order_traits() {
+    static const std::string value = limit_traits() +
+                                     "event Seen:\n"
+                                     "    code: int\n"
+                                     "trait Board:\n"
+                                     "    var last: int = 0\n"
+                                     "entity Game:\n"
+                                     "    Board\n";
+    return value;
+}
+
+static constexpr const char* kCreationOrderedLoop =
+    "for (auto entity : cactus::runtime::entt_backend::creation_ordered(registry, view))";
+
+TEST_CASE("Codegen EnTT: a unary pass that observes its order iterates in creation order",
+          "[codegen-entt][rule-order-by]") {
+    const auto code = emit_named_rule(iteration_order_traits() +
+                                          "rule Announce:\n"
+                                          "    each:\n"
+                                          "        Surface as surface\n"
+                                          "    on tick:\n"
+                                          "        emit Seen:\n"
+                                          "            code = surface.code\n",
+                                      "Announce");
+    CHECK(code.contains(kCreationOrderedLoop));
+    CHECK_FALSE(code.contains("view.each("));
+}
+
+TEST_CASE("Codegen EnTT: a limit without order by takes rows in creation order", "[codegen-entt][rule-order-by]") {
+    const auto code = emit_named_rule(iteration_order_traits() +
+                                          "rule Oldest:\n"
+                                          "    each:\n"
+                                          "        Surface as surface\n"
+                                          "    limit: 2\n"
+                                          "    on tick:\n"
+                                          "        surface.code = 1\n",
+                                      "Oldest");
+    const auto loop  = code.find(kCreationOrderedLoop);
+    const auto taken = code.find("int cactus_gen_taken_");
+    REQUIRE(loop != std::string::npos);
+    REQUIRE(taken != std::string::npos);
+    CHECK(taken < loop);
+    CHECK(code.find(">= cactus_gen_limit_", loop) != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: a self-only pass keeps unordered view iteration", "[codegen-entt][rule-order-by]") {
+    const auto code = emit_named_rule(iteration_order_traits() +
+                                          "rule Step:\n"
+                                          "    each:\n"
+                                          "        Surface as surface\n"
+                                          "    on tick:\n"
+                                          "        surface.code += 1\n",
+                                      "Step");
+    CHECK(code.contains("view.each("));
+    CHECK_FALSE(code.contains("creation_ordered"));
+}
+
+TEST_CASE("Codegen EnTT: an order by pass keeps its own sort", "[codegen-entt][rule-order-by]") {
+    const auto code = emit_named_rule(iteration_order_traits() +
+                                          "rule Ranked:\n"
+                                          "    each:\n"
+                                          "        Surface as surface\n"
+                                          "    order by:\n"
+                                          "        surface.code desc\n"
+                                          "    on tick:\n"
+                                          "        Game[Board].last = surface.code\n",
+                                      "Ranked");
+    CHECK(code.contains(".sort_as("));
+    CHECK(code.contains("view.each("));
+    CHECK_FALSE(code.contains("creation_ordered"));
+}
+
+TEST_CASE("Codegen EnTT: a creation-ordered pass still delivers a targeted event to one recipient",
+          "[codegen-entt][rule-order-by]") {
+    const auto code = emit_named_rule(iteration_order_traits() +
+                                          "rule Record:\n"
+                                          "    each:\n"
+                                          "        Surface as surface\n"
+                                          "    on Seen:\n"
+                                          "        Game[Board].last = surface.code\n",
+                                      "Record");
+    const auto recipient = code.find("if (cactus_recipient.has_value()) {");
+    const auto broadcast = code.find("} else {", recipient);
+    REQUIRE(recipient != std::string::npos);
+    REQUIRE(broadcast != std::string::npos);
+    CHECK(code.find("entt::entity entity = *cactus_recipient;", recipient) < broadcast);
+    CHECK(code.find(kCreationOrderedLoop, broadcast) != std::string::npos);
 }
 
 // ── Named entity access (dsl-named-entity-access, dsl-when-clause) ─────────

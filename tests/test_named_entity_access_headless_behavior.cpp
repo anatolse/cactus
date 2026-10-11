@@ -150,7 +150,12 @@ TEST_CASE("accumulating into a named field over many entities is deterministic",
     World world;
     int expected = 0;
     for (int value = 1; value <= 100; ++value) {
-        world.registry.emplace<Coin>(world.registry.create(), Coin{.value = value});
+        const auto coin = world.registry.create();
+        world.registry.emplace<Coin>(coin, Coin{.value = value});
+        world.registry.emplace<cactus::runtime::entt_backend::CreationOrdinal>(
+            coin,
+            cactus::runtime::entt_backend::CreationOrdinal{
+                .value = cactus::runtime::entt_backend::generated_next_creation_ordinal()});
         expected += value;
     }
     drive_frame(world.registry);

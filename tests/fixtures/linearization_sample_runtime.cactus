@@ -1,0 +1,124 @@
+module linearization_sample_runtime
+
+use std.core
+
+# Handlers whose schedule edges all follow from what the program says, so
+# every order the edges allow must give the same world.
+
+trait Spin:
+    var angle: float = 0.0
+
+trait Drift:
+    var x: float = 0.0
+
+trait Heat:
+    var level: int = 0
+
+trait Glow:
+    var brightness: int = 0
+
+trait Fuel:
+    var amount: int = 4
+
+trait Lit
+
+trait Tally:
+    var sparks: int = 0
+    var lit: int = 0
+
+event Burst:
+    amount: int
+
+event Spark:
+    amount: int
+
+template Torch(fuel: int):
+    Spin
+    Drift
+    Heat
+    Glow
+    Fuel:
+        amount = fuel
+
+entity First from Torch(fuel = 3)
+entity Second from Torch(fuel = 5)
+
+entity Board:
+    Tally
+
+rule Rotate:
+    each:
+        Spin as s
+
+    on tick:
+        s.angle += 1.5
+
+rule Move:
+    each:
+        Drift as d
+
+    on tick:
+        d.x += 0.25
+
+rule Warm:
+    each:
+        Heat as h
+
+    on tick:
+        h.level += 1
+
+rule Shine:
+    each:
+        Heat as h
+        Glow as g
+
+    on tick:
+        g.brightness = h.level * 2
+
+rule Burn:
+    each:
+        Fuel as f
+
+    on tick:
+        if f.amount <= 0:
+            return
+        f.amount -= 1
+        emit Burst:
+            amount = f.amount
+
+rule Relay:
+    on Burst:
+        emit Spark:
+            amount = Burst.amount + 1
+
+rule Smoke:
+    each:
+        Drift as d
+
+    on Burst:
+        d.x += 0.5
+
+rule CountSparks:
+    on Spark:
+        Board[Tally].sparks += Spark.amount
+
+rule Ignite:
+    each:
+        Heat as h
+    without:
+        Lit
+
+    on tick:
+        if h.level >= 2:
+            add Lit to self
+
+rule Flare:
+    each:
+        Glow as g
+
+    on added Lit:
+        g.brightness += 100
+
+rule CountLit:
+    on added Lit:
+        Board[Tally].lit += 1

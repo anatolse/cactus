@@ -1,6 +1,7 @@
 // NOLINTBEGIN(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)
 // -- Catch2 assertion macros intentionally expand through do-while and expression decomposition.
 #include "common/error_reporter.hpp"
+#include "frontend/execution_graph_scheduler.hpp"
 #include "frontend/lexer.hpp"
 #include "frontend/parser.hpp"
 #include "frontend/semantic_analyzer.hpp"
@@ -9,6 +10,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <map>
 #include <set>
 
 using namespace cactus;
@@ -4489,11 +4491,6 @@ static FieldAccess fields_of(std::initializer_list<std::string> names) {
     return FieldAccess{.all = false, .fields = std::set<std::string>(names)};
 }
 
-const FieldAccess& all_fields() {
-    static const FieldAccess value{.all = true, .fields = {}};
-    return value;
-}
-
 TEST_CASE("Contract field access: a named declared field is recorded alone", "[semantic][handler-contracts]") {
     const auto match       = make_symbol_id(SymbolKind::Trait, "test", "Match");
     const auto declaration = match_trait_declaration();
@@ -6102,5 +6099,218 @@ TEST_CASE("Semantic: a second inline predicate reports its own source location",
     CHECK(std::ranges::any_of(errors.diagnostics(), [](const auto& diagnostic) {
         return diagnostic.location.line == 6 && diagnostic.location.column == 18;
     }));
+}
+
+// ── Iteration order (dsl-rule-order-by) ─────────────────────────────────────
+
+static const std::string& iteration_order_prelude() {
+    static const std::string value = stdlib_events() +
+                                     "trait Pos:\n"
+                                     "    var x: float\n"
+                                     "    var y: float\n"
+                                     "trait Score:\n"
+                                     "    var value: float\n"
+                                     "trait Mover:\n"
+                                     "    var speed: float\n"
+                                     "entity Game:\n"
+                                     "    Score\n"
+                                     "event Ping:\n"
+                                     "    v: float\n"
+                                     "extern func draw(x: float)\n";
+    return value;
+}
+
+static IterationOrder iteration_order_of(const std::string& rule_source) {
+    const auto program = analyze(iteration_order_prelude() + rule_source);
+    const auto node    = std::ranges::find_if(program.execution_graph.handlers, [](const HandlerNode& candidate) {
+        return candidate.identity.rule.local_name == "R";
+    });
+    REQUIRE(node != program.execution_graph.handlers.end());
+    return node->contract.iteration_order;
+}
+
+TEST_CASE("Semantic: a unary pass that can observe its row order iterates in creation order",
+          "[semantic][rule-order-by][handler-contracts]") {
+    const auto unary = [](const std::string& extra, const std::string& body) {
+        return "rule R:\n    each:\n        Pos as p\n" + extra + "    on tick:\n" + body;
+    };
+    SECTION("limit without order by") {
+        CHECK(iteration_order_of(unary("    limit: 2\n", "        p.x = 1.0\n")) == IterationOrder::Creation);
+    }
+    SECTION("emit") {
+        CHECK(iteration_order_of(unary("", "        emit Ping:\n            v = p.x\n")) == IterationOrder::Creation);
+    }
+    SECTION("structural command") {
+        CHECK(iteration_order_of(unary("", "        destroy\n")) == IterationOrder::Creation);
+    }
+    SECTION("effect") {
+        CHECK(iteration_order_of(unary("", "        draw(p.x)\n")) == IterationOrder::Creation);
+    }
+    SECTION("named write") {
+        CHECK(iteration_order_of(unary("", "        Game[Score].value = p.x\n")) == IterationOrder::Creation);
+    }
+}
+
+TEST_CASE("Semantic: a named read of a field the pass writes observes row order",
+          "[semantic][rule-order-by][handler-contracts]") {
+    CHECK(iteration_order_of("rule R:\n"
+                             "    each:\n"
+                             "        Pos as p\n"
+                             "        Score as s\n"
+                             "    on tick:\n"
+                             "        s.value = Game[Score].value + p.x\n") == IterationOrder::Creation);
+    CHECK(iteration_order_of("rule R:\n"
+                             "    each:\n"
+                             "        Pos as p\n"
+                             "    on tick:\n"
+                             "        p.x = Game[Score].value\n") == IterationOrder::Free);
+}
+
+TEST_CASE("Semantic: passes that cannot observe their row order stay free",
+          "[semantic][rule-order-by][handler-contracts]") {
+    SECTION("self-only writes") {
+        CHECK(iteration_order_of("rule R:\n"
+                                 "    each:\n"
+                                 "        Pos as p\n"
+                                 "        Mover as m\n"
+                                 "    on tick:\n"
+                                 "        p.x = p.x + (m.speed * tick.dt)\n") == IterationOrder::Free);
+    }
+    SECTION("limit with order by") {
+        CHECK(iteration_order_of("rule R:\n"
+                                 "    each:\n"
+                                 "        Pos as p\n"
+                                 "    order by:\n"
+                                 "        p.x asc\n"
+                                 "    limit: 2\n"
+                                 "    on tick:\n"
+                                 "        p.y = 1.0\n") == IterationOrder::Free);
+    }
+    SECTION("selectionless") {
+        CHECK(iteration_order_of("rule R:\n"
+                                 "    on tick:\n"
+                                 "        Game[Score].value = 1.0\n"
+                                 "        emit Ping:\n"
+                                 "            v = 1.0\n") == IterationOrder::Free);
+    }
+    SECTION("pair") {
+        CHECK(iteration_order_of("rule R:\n"
+                                 "    pairs:\n"
+                                 "        a: Pos\n"
+                                 "        b: Pos\n"
+                                 "    on tick:\n"
+                                 "        emit Ping:\n"
+                                 "            v = a[Pos].x\n") == IterationOrder::Free);
+    }
+}
+
+// ── Schedule edge reasons and levels (handler-execution-graph) ─────────────
+
+static const std::string& edge_reason_prelude() {
+    static const std::string value = stdlib_events() +
+                                     "trait Score:\n"
+                                     "    var value: int\n"
+                                     "trait Transform:\n"
+                                     "    var position: float\n"
+                                     "trait Seen:\n"
+                                     "    var value: float\n"
+                                     "entity Game:\n"
+                                     "    Score\n";
+    return value;
+}
+
+static std::vector<const ScheduleEdge*> edges_from(const DecoratedProgram& program,
+                                                   const std::string& before,
+                                                   const std::string& after) {
+    std::vector<const ScheduleEdge*> edges;
+    for (const auto& edge : program.execution_graph.schedule_edges) {
+        if (edge.before.rule.local_name == before && edge.after.rule.local_name == after) {
+            edges.push_back(&edge);
+        }
+    }
+    return edges;
+}
+
+static bool has_reason(const std::vector<const ScheduleEdge*>& edges, ScheduleEdgeOrientation reason) {
+    return std::ranges::any_of(edges, [&](const ScheduleEdge* edge) { return edge->orientation == reason; });
+}
+
+TEST_CASE("Semantic: explicit order is recorded as the edge reason", "[semantic][handler-execution-graph]") {
+    const auto program = analyze(edge_reason_prelude() +
+                                 "rule A:\n"
+                                 "    on tick:\n"
+                                 "        Game[Score].value = 1\n"
+                                 "rule B:\n"
+                                 "    after:\n"
+                                 "        A\n"
+                                 "    on tick:\n"
+                                 "        Game[Score].value = 2\n");
+    const auto edges = edges_from(program, "A", "B");
+    REQUIRE_FALSE(edges.empty());
+    CHECK(std::ranges::all_of(
+        edges, [](const ScheduleEdge* edge) { return edge->orientation == ScheduleEdgeOrientation::Explicit; }));
+    CHECK(declaration_order_edges(program.execution_graph).empty());
+}
+
+TEST_CASE("Semantic: one-way data flow is recorded as writer before reader", "[semantic][handler-execution-graph]") {
+    const auto program = analyze(edge_reason_prelude() +
+                                 "rule Reader:\n"
+                                 "    each:\n"
+                                 "        Transform as t\n"
+                                 "        Seen as s\n"
+                                 "    on tick:\n"
+                                 "        s.value = t.position\n"
+                                 "rule Writer:\n"
+                                 "    each:\n"
+                                 "        Transform as t\n"
+                                 "    on tick:\n"
+                                 "        t.position += 1.0\n");
+    CHECK(edges_from(program, "Reader", "Writer").empty());
+    CHECK(has_reason(edges_from(program, "Writer", "Reader"), ScheduleEdgeOrientation::WriterBeforeReader));
+}
+
+TEST_CASE("Semantic: an edge only declaration order directs is listed", "[semantic][handler-execution-graph]") {
+    const auto program = analyze(edge_reason_prelude() +
+                                 "rule First:\n"
+                                 "    on tick:\n"
+                                 "        Game[Score].value = 1\n"
+                                 "rule Second:\n"
+                                 "    on tick:\n"
+                                 "        Game[Score].value = 2\n");
+    CHECK(has_reason(edges_from(program, "First", "Second"), ScheduleEdgeOrientation::DeclarationOrder));
+    const auto listed = declaration_order_edges(program.execution_graph);
+    REQUIRE(listed.size() == 1);
+    CHECK(listed.front()->before.rule.local_name == "First");
+    CHECK(listed.front()->after.rule.local_name == "Second");
+}
+
+static std::map<std::string, std::uint64_t> levels_of(const std::vector<std::string>& rules) {
+    std::string source = edge_reason_prelude() + "trait Clock:\n    var t: float\n";
+    for (const auto& rule : rules) {
+        source += rule;
+    }
+    const auto program = analyze(source);
+    std::map<std::string, std::uint64_t> levels;
+    for (const auto& level : program.execution_graph.dependency_levels) {
+        for (const auto& handler : level.handlers) {
+            levels[handler.rule.local_name] = level.index;
+        }
+    }
+    return levels;
+}
+
+TEST_CASE("Semantic: dependency levels follow the longest path, not declaration order",
+          "[semantic][handler-execution-graph]") {
+    // A -> B -> C by data flow; D touches nothing the others do.
+    const std::string a = "rule A:\n    each:\n        Transform as t\n    on tick:\n        t.position = 1.0\n";
+    const std::string b = "rule B:\n    each:\n        Transform as t\n        Seen as s\n    on tick:\n"
+                          "        s.value = t.position\n";
+    const std::string c = "rule C:\n    each:\n        Seen as s\n        Score as score\n    on tick:\n"
+                          "        if s.value > 0.0:\n            score.value = 2\n";
+    const std::string d = "rule D:\n    each:\n        Clock as c\n    on tick:\n        c.t += 1.0\n";
+    const std::map<std::string, std::uint64_t> expected{{"A", 0}, {"B", 1}, {"C", 2}, {"D", 0}};
+    CHECK(levels_of({a, b, c, d}) == expected);
+    CHECK(levels_of({d, c, b, a}) == expected);
+    CHECK(levels_of({b, a, d, c}) == expected);
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

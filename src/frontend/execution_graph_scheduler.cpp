@@ -58,28 +58,6 @@ std::unordered_map<std::string, std::unordered_set<std::string>> import_closure(
     return closure;
 }
 
-const FieldAccess& all_fields() {
-    static const FieldAccess value{.all = true, .fields = {}};
-    return value;
-}
-
-const FieldAccess& field_access(const std::unordered_map<SymbolId, FieldAccess>& table, const SymbolId& trait) {
-    const auto found = table.find(trait);
-    return found == table.end() ? all_fields() : found->second;
-}
-
-std::optional<FieldAccess> overlapping_fields(const FieldAccess& left, const FieldAccess& right) {
-    if (left.all) {
-        return right.all || !right.fields.empty() ? std::optional(right) : std::nullopt;
-    }
-    if (right.all) {
-        return left.fields.empty() ? std::nullopt : std::optional(left);
-    }
-    FieldAccess shared;
-    std::ranges::set_intersection(left.fields, right.fields, std::inserter(shared.fields, shared.fields.end()));
-    return shared.fields.empty() ? std::nullopt : std::optional(shared);
-}
-
 // The fields of `trait` that `producer` makes and `consumer` observes, if any.
 std::optional<FieldAccess> produced_overlap(const HandlerNode& producer,
                                             const HandlerNode& consumer,
@@ -582,6 +560,16 @@ void validate_lifecycle_trigger_traits(const ExecutionGraph& graph, ErrorReporte
                              "' is projected");
         }
     }
+}
+
+std::vector<const ScheduleEdge*> declaration_order_edges(const ExecutionGraph& graph) {
+    std::vector<const ScheduleEdge*> edges;
+    for (const auto& edge : graph.schedule_edges) {
+        if (edge.orientation == ScheduleEdgeOrientation::DeclarationOrder) {
+            edges.push_back(&edge);
+        }
+    }
+    return edges;
 }
 
 }  // namespace cactus

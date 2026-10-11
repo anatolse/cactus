@@ -216,6 +216,10 @@ struct DeclarationOrder {
 
 enum class HandlerDomainKind : std::uint8_t { Selectionless, Unary, Pair };
 
+// `Creation` when permuting a pass's rows can change its result, so it must
+// visit them in creation order; `Free` leaves the order to the backend.
+enum class IterationOrder : std::uint8_t { Free, Creation };
+
 // One named, ordered binding within a pair handler's relation, carrying the
 // canonical identities of the traits it requires.
 struct RelationBinding {
@@ -326,6 +330,11 @@ struct NamedRequirement {
 // entity -> trait -> accessed fields.
 using NamedFieldTable = std::unordered_map<SymbolId, std::unordered_map<SymbolId, FieldAccess>>;
 
+[[nodiscard]] const FieldAccess& all_fields();
+// A trait with no entry in `table` counts as all fields.
+[[nodiscard]] const FieldAccess& field_access(const std::unordered_map<SymbolId, FieldAccess>& table, const SymbolId& trait);
+[[nodiscard]] std::optional<FieldAccess> overlapping_fields(const FieldAccess& left, const FieldAccess& right);
+
 struct HandlerContract {
     HandlerDomainKind domain_kind = HandlerDomainKind::Selectionless;
     std::vector<SymbolId> selection;             // Unary domain: positive traits
@@ -354,6 +363,7 @@ struct HandlerContract {
     std::unordered_set<SymbolId> emits;
     std::vector<InferredHandlerCommand> commands;
     std::unordered_set<std::string> effects;
+    IterationOrder iteration_order = IterationOrder::Free;
 
     // A handler that writes a named entity runs as one sequential pass.
     [[nodiscard]] bool splittable_per_entity() const {
@@ -392,6 +402,10 @@ void record_named_write(HandlerContract& contract,
                         const NamedTraitRef& ref,
                         const std::optional<std::string>& field,
                         const ResolvedTrait* declaration);
+
+// Whether a pass with this contract can observe its row order; `unordered_limit`
+// is a `limit:` without `order by:`.
+[[nodiscard]] IterationOrder derive_iteration_order(const HandlerContract& contract, bool unordered_limit);
 
 /// Transitional inference result retained for focused semantic tests and old
 /// consumers while HandlerNode becomes the authoritative execution record.

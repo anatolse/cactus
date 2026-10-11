@@ -311,7 +311,7 @@ endfunction()
 function(cactus_add_headless_behavior_test TARGET_NAME)
     set(oneValueArgs CACTUS_SOURCE BACKEND TEST_SOURCE)
     cmake_parse_arguments(CACTUS_HEADLESS_TEST
-        ""
+        "LINEARIZATION_HARNESS"
         "${oneValueArgs}"
         ""
         ${ARGN}
@@ -327,6 +327,7 @@ function(cactus_add_headless_behavior_test TARGET_NAME)
         message(FATAL_ERROR "cactus_add_headless_behavior_test(${TARGET_NAME}) requires TEST_SOURCE")
     endif()
 
+    set_property(GLOBAL APPEND PROPERTY CACTUS_HEADLESS_FIXTURES "${TARGET_NAME}|${CACTUS_HEADLESS_TEST_CACTUS_SOURCE}")
     set(cactus_source "${CMAKE_SOURCE_DIR}/${CACTUS_HEADLESS_TEST_CACTUS_SOURCE}")
     set(generated_output "${CACTUS_GENERATED_EXAMPLES_DIR}/${TARGET_NAME}.headless.generated.cpp")
 
@@ -354,6 +355,9 @@ function(cactus_add_headless_behavior_test TARGET_NAME)
     target_compile_definitions(${TARGET_NAME} PRIVATE
         CACTUS_HEADLESS_GENERATED_CPP="${generated_output}"
     )
+    if(CACTUS_HEADLESS_TEST_LINEARIZATION_HARNESS)
+        target_compile_definitions(${TARGET_NAME} PRIVATE CACTUS_LINEARIZATION_HARNESS)
+    endif()
     set_property(TARGET ${TARGET_NAME} PROPERTY CXX_CLANG_TIDY "")
 
     if(CACTUS_HEADLESS_TEST_BACKEND STREQUAL "cpp-entt")

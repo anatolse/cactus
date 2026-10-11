@@ -1,0 +1,20 @@
+module linearization_ambiguous_runtime
+
+use std.core
+
+# Two handlers assign one field and nothing orders them but their
+# declaration order, so the result depends on which runs last.
+
+trait Score:
+    var value: int = 0
+
+entity Board:
+    Score
+
+rule First:
+    on tick:
+        Board[Score].value = 1
+
+rule Second:
+    on tick:
+        Board[Score].value = 2

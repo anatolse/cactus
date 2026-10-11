@@ -1568,12 +1568,19 @@ String literals are only allowed in:
 - a `group` declaration names an ordering point inside exactly one phase and has no runtime behavior. A rule joins it with `group:`; the rule's handler for the group's phase becomes a member, and its other handlers are unaffected. Rules in the group's own module may join any of its groups; rules in other modules may join only a `pub` group. A rule joins at most one group. A group's `after:` lists groups in the same phase, and every member runs after every member of each listed group, across the linked program
 - a group name in `after:` or `before:` orders the rule's handler for the group's phase after or before every member handler of the group. The rule must have a handler for that phase, and a member cannot list its own group. A group with no members gives no edges. Group names resolve like other declarations, by local name or through a module qualifier, and obey `pub`
 - `order by:` constrains iteration order for a rule pass
+- without `order by:`, a unary pass visits its entities in creation order wherever its result can observe the order: it has a `limit:`, emits an event, queues a structural command, calls an observable effect, writes a named entity's field, or reads by name a field the pass writes. Elsewhere the order is unobservable and left to the backend. Destroying entities does not change the relative creation order of the rest
 - `each:` and `without:` select entities but do not imply component reads
 - regular handler contracts are inferred from their bodies; extern handler contracts are declared explicitly
 
 Every handler has a canonical identity composed from its module, owning rule, and resolved phase/event trigger. Co-eligible handlers are serialized for write/read, read/write, write/write, and matching observable-effect conflicts. Read/read and filter overlap do not conflict. Edge direction uses explicit ordering first (`after:`, `before:`, and group edges). Next, a conflict between a handler and a member of a `pub group` from a module it imports (directly or transitively) is judged against the whole group, so all of that handler's edges to the group point the same way: if they conflict in both directions, or only through shared effects, the importing handler runs first; if only one writes what the other reads, the writer runs first. Then one-way writer-before-reader dependencies, then stable linked declaration order for remaining conflicts. The combined handler schedule must be acyclic.
 
 ## 5. Execution Model
+
+### 5.0 Correctness
+
+A definition is correct when it is determinate (exactly one meaning on every backend and platform), total (defined for every input), terminating (every activation finishes) and non-vacuous (every declaration can affect the result). The goal is that a definition the compiler cannot show to be correct does not compile; the classes it still accepts are listed in `openspec/specs/language-philosophy/spec.md`.
+
+The meaning of one activation is independent of handler order: every order of its handlers that respects the schedule edges gives the same world, events, commands and effect calls. The dependency levels of §4.7's schedule are the canonical form of that order, so running one level's handlers concurrently is correct. Every schedule edge records why it exists: explicit order, writer before reader, derivation after writers, importer before public group, or stable declaration order. Only the last is not a reason the definition gives.
 
 ### 5.1 Frame Phases
 
@@ -1663,7 +1670,7 @@ The cpp-entt backend does not lower the `load` statement yet, so today `load` fi
 
 ### 5.3 Structural Changes
 
-`spawn`, `destroy`, `add`, `remove`, and `set` are buffered in an activation-local deterministic command list, applied in handler execution-graph order, then entity iteration order, then statement order. Each command acts on the entity state at its position in the list: `add` then `set` patches the added trait, `remove` then `set` does nothing, and when several `set`s name the same field of the same entity the last one wins. An activation runs its phase handlers, dispatches emitted events, and drains the bounded event cascade before applying structural commands. Ordinary trait writes remain visible to later scheduled handlers; structural changes do not alter entity selection midway through an activation. A spawn committed after periodic repetition N is selectable in repetition N+1.
+`spawn`, `destroy`, `add`, `remove`, and `set` are buffered in an activation-local deterministic command list, applied in handler execution-graph order, then entity iteration order (creation order for a pass without `order by:`, §4.7), then statement order. Each command acts on the entity state at its position in the list: `add` then `set` patches the added trait, `remove` then `set` does nothing, and when several `set`s name the same field of the same entity the last one wins. An activation runs its phase handlers, dispatches emitted events, and drains the bounded event cascade before applying structural commands. Ordinary trait writes remain visible to later scheduled handlers; structural changes do not alter entity selection midway through an activation. A spawn committed after periodic repetition N is selectable in repetition N+1.
 
 Events emitted during an activation are delivered in deterministic queue order. Event handlers follow their own stable graph schedule and may emit further events. Feedback cycles are allowed, but cascade depth is bounded; overflow occurrences are deferred to a later activation. Commands produced by deferred delivery belong to that later activation.
 

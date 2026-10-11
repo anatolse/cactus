@@ -86,6 +86,17 @@ std::string resolved_event_cpp_name(const ResolvedEvent& event) {
     return canonical_to_cpp_name(event.module_name, event.name) + "Event";
 }
 
+template <typename Map>
+std::vector<const typename Map::mapped_type*> sorted_by_canonical_id(const Map& declarations) {
+    std::vector<const typename Map::mapped_type*> result;
+    result.reserve(declarations.size());
+    for (const auto& [_, declaration] : declarations) {
+        result.push_back(&declaration);
+    }
+    std::ranges::sort(result, {}, &Map::mapped_type::canonical_id);
+    return result;
+}
+
 // AST declaration order when an AST exists, canonical-id order otherwise.
 std::string emit_event_structs(const DecoratedProgram& program) {
     std::ostringstream out;
@@ -111,13 +122,7 @@ std::string emit_event_structs(const DecoratedProgram& program) {
         return out.str();
     }
 
-    std::vector<const ResolvedEvent*> events;
-    events.reserve(program.events.size());
-    for (const auto& [_, event] : program.events) {
-        events.push_back(&event);
-    }
-    std::ranges::sort(events, {}, &ResolvedEvent::canonical_id);
-    for (const auto* event : events) {
+    for (const auto* event : sorted_by_canonical_id(program.events)) {
         out << EnttEventEmitter::emit_event(*event, resolved_event_cpp_name(*event)) << "\n";
     }
     return out.str();
@@ -158,6 +163,53 @@ std::vector<SymbolId> sorted_symbols(const std::unordered_set<SymbolId>& symbols
     std::ranges::sort(
         result, [](const auto& left, const auto& right) { return make_canonical_id(left) < make_canonical_id(right); });
     return result;
+}
+
+// Harness-only: one hash of every entity's traits, entities in creation order
+// and traits in canonical order, so two worlds compare by value.
+std::string emit_world_digest(const DecoratedProgram& program) {
+    std::ostringstream out;
+    out << "#ifdef CACTUS_LINEARIZATION_HARNESS\n";
+    out << "namespace cactus::runtime::entt_backend {\n";
+    for (const auto* declaration : sorted_by_canonical_id(program.structs)) {
+        out << "inline void digest_value(WorldDigest& digest, const "
+            << canonical_to_cpp_name(declaration->module_name, declaration->name) << "& value) {\n";
+        out << "    (void)digest;\n";
+        for (const auto& field : declaration->fields) {
+            out << "    digest.add(value." << field.name << ");\n";
+        }
+        out << "}\n";
+    }
+    const auto traits = sorted_by_canonical_id(program.traits);
+    out << "std::uint64_t generated_world_digest(entt::registry& registry) {\n";
+    out << "    WorldDigest digest;\n";
+    out << "    for (const auto entity : creation_ordered(registry, registry.view<CreationOrdinal>())) {\n";
+    out << "        digest.add(entt::to_integral(entity));\n";
+    for (std::size_t index = 0; index < traits.size(); ++index) {
+        const auto& trait = *traits[index];
+        const auto cpp    = canonical_to_cpp_name(trait.module_name, trait.name);
+        if (trait.fields.empty() && !trait.is_state_slot()) {
+            out << "        if (registry.all_of<" << cpp << ">(entity)) {\n";
+            out << "            digest.add(std::uint64_t{" << index << "});\n";
+            out << "        }\n";
+            continue;
+        }
+        out << "        if (const auto* component = registry.try_get<" << cpp << ">(entity)) {\n";
+        out << "            digest.add(std::uint64_t{" << index << "});\n";
+        if (trait.is_state_slot()) {
+            out << "            digest.add(component->index);\n";
+        }
+        for (const auto& field : trait.fields) {
+            out << "            digest.add(component->" << field.name << ");\n";
+        }
+        out << "        }\n";
+    }
+    out << "    }\n";
+    out << "    return digest.value();\n";
+    out << "}\n";
+    out << "}  // namespace cactus::runtime::entt_backend\n";
+    out << "#endif  // CACTUS_LINEARIZATION_HARNESS\n";
+    return out.str();
 }
 
 std::vector<std::string> sorted_strings(const std::unordered_set<std::string>& strings) {
@@ -1205,12 +1257,69 @@ bool emit_phase_handler_call(std::ostringstream& out,
     return true;
 }
 
+struct DispatchCall {
+    HandlerIdentity identity;
+    std::string text;
+};
+
+// A set of two or more calls runs, under CACTUS_LINEARIZATION_HARNESS, in a
+// seeded linear extension of the schedule edges inside the set.
+void emit_dispatch_calls(std::ostringstream& out, const DecoratedProgram& program, const std::vector<DispatchCall>& calls) {
+    if (calls.size() < 2) {
+        for (const auto& call : calls) {
+            out << call.text;
+        }
+        return;
+    }
+    const auto slot_of = [&calls](const HandlerIdentity& identity) {
+        return std::ranges::find(calls, identity, &DispatchCall::identity);
+    };
+    std::size_t edge_count = 0;
+    std::string edges;
+    for (const auto& edge : program.execution_graph.schedule_edges) {
+        const auto before = slot_of(edge.before);
+        const auto after  = slot_of(edge.after);
+        if (before == calls.end() || after == calls.end() || before == after) {
+            continue;
+        }
+        const bool declaration_order = edge.orientation == ScheduleEdgeOrientation::DeclarationOrder;
+        edges += std::string(edge_count++ == 0 ? "" : ", ") + "{" + std::to_string(before - calls.begin()) + ", " +
+                 std::to_string(after - calls.begin()) + ", " + (declaration_order ? "true" : "false") + "}";
+    }
+    out << "#ifdef CACTUS_LINEARIZATION_HARNESS\n";
+    out << "    static constexpr std::array<cactus::runtime::entt_backend::LinearizationEdge, " << edge_count
+        << "> kLinearizationEdges{" << (edges.empty() ? "" : "{" + edges + "}") << "};\n";
+    out << "    cactus::runtime::entt_backend::dispatch_linear_extension(" << calls.size()
+        << ", kLinearizationEdges, [&](std::size_t cactus_index) {\n";
+    out << "        switch (cactus_index) {\n";
+    for (std::size_t index = 0; index < calls.size(); ++index) {
+        out << "            case " << index << ":\n";
+        out << calls[index].text;
+        out << "                break;\n";
+    }
+    out << "            default:\n";
+    out << "                break;\n";
+    out << "        }\n";
+    out << "    });\n";
+    out << "#else  // CACTUS_LINEARIZATION_HARNESS\n";
+    for (const auto& call : calls) {
+        out << call.text;
+    }
+    out << "#endif  // CACTUS_LINEARIZATION_HARNESS\n";
+}
+
 bool emit_phase_handler_calls(std::ostringstream& out, const DecoratedProgram& program, const auto& phase) {
     bool emitted = false;
     std::unordered_set<std::string> emitted_callees;
+    std::vector<DispatchCall> calls;
     for (const auto& identity : program.execution_graph.stable_topological_order) {
-        emitted |= emit_phase_handler_call(out, program, phase, identity, emitted_callees);
+        std::ostringstream call;
+        emitted |= emit_phase_handler_call(call, program, phase, identity, emitted_callees);
+        if (!call.view().empty()) {
+            calls.push_back(DispatchCall{.identity = identity, .text = std::move(call).str()});
+        }
     }
+    emit_dispatch_calls(out, program, calls);
     return emitted;
 }
 
@@ -1271,7 +1380,7 @@ void emit_event_handler_dispatch(std::ostringstream& out, const DecoratedProgram
         event->symbol_id->module.name == "std.persistence") {
         out << "    generated_queue_restore_request(occurrence.slot, occurrence.request_id);\n";
     }
-    bool emitted = false;
+    std::vector<DispatchCall> calls;
     for (const auto& identity : program.execution_graph.stable_topological_order) {
         if (identity.trigger.kind != HandlerTriggerKind::Event || identity.trigger.symbol != *event->symbol_id) {
             continue;
@@ -1281,9 +1390,10 @@ void emit_event_handler_dispatch(std::ostringstream& out, const DecoratedProgram
         if (graph_node == program.execution_graph.handlers.end()) {
             continue;
         }
+        std::ostringstream call;
         if (is_user_external_handler(program, *graph_node)) {
-            emit_external_handler_call(out, *graph_node, "occurrence", "    ", "target");
-            emitted = true;
+            emit_external_handler_call(call, *graph_node, "occurrence", "    ", "target");
+            calls.push_back(DispatchCall{.identity = identity, .text = std::move(call).str()});
             continue;
         }
         if (graph_node->implementation == HandlerImplementationKind::External) {
@@ -1293,9 +1403,9 @@ void emit_event_handler_dispatch(std::ostringstream& out, const DecoratedProgram
                 // renderers) have no filter view to iterate, so their generated body takes the
                 // occurrence directly instead of the (registry)-only shape phase-triggered
                 // filter/view extern rules use — see emit_event_renderer_body in system_emitter.cpp.
-                out << "    ::" << system_function_name(program.module_name, rule->name, "tick")
-                    << "(registry, occurrence);\n";
-                emitted = true;
+                call << "    ::" << system_function_name(program.module_name, rule->name, "tick")
+                     << "(registry, occurrence);\n";
+                calls.push_back(DispatchCall{.identity = identity, .text = std::move(call).str()});
             }
             continue;
         }
@@ -1303,11 +1413,12 @@ void emit_event_handler_dispatch(std::ostringstream& out, const DecoratedProgram
             continue;
         }
         if (const auto callee = cactus_handler_callee(program, identity)) {
-            out << "    ::" << *callee << "(registry, occurrence, target);\n";
-            emitted = true;
+            call << "    ::" << *callee << "(registry, occurrence, target);\n";
+            calls.push_back(DispatchCall{.identity = identity, .text = std::move(call).str()});
         }
     }
-    if (!emitted) {
+    emit_dispatch_calls(out, program, calls);
+    if (calls.empty()) {
         out << "    (void)registry;\n";
         out << "    (void)occurrence;\n";
     }
@@ -1335,17 +1446,18 @@ std::string emit_graph_handler_dispatch(const DecoratedProgram& program) {
         out << "void generated_dispatch_event(entt::registry& registry, const "
             << *EnttCodegenUtils::lifecycle_occurrence_cpp_type(trigger, program)
             << "& occurrence, std::optional<entt::entity> target) {\n";
-        bool emitted = false;
+        std::vector<DispatchCall> calls;
         for (const auto& identity : program.execution_graph.stable_topological_order) {
             if (identity.trigger != trigger) {
                 continue;
             }
             if (const auto callee = cactus_handler_callee(program, identity)) {
-                out << "    ::" << *callee << "(registry, occurrence, target);\n";
-                emitted = true;
+                calls.push_back(
+                    DispatchCall{.identity = identity, .text = "    ::" + *callee + "(registry, occurrence, target);\n"});
             }
         }
-        if (!emitted) {
+        emit_dispatch_calls(out, program, calls);
+        if (calls.empty()) {
             out << "    (void)registry;\n";
             out << "    (void)occurrence;\n";
             out << "    (void)target;\n";
@@ -2986,6 +3098,9 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << "// Generated C++ mirrors authored DSL constants, declarations, and system control flow.\n\n";
     out << "#include \"common/float_mode.hpp\"\n\n";
     out << "#include \"backends/cpp-entt/runtime.hpp\"\n";
+    out << "#ifdef CACTUS_LINEARIZATION_HARNESS\n";
+    out << "#include \"backends/cpp-entt/linearization_harness.hpp\"\n";
+    out << "#endif  // CACTUS_LINEARIZATION_HARNESS\n";
     if (program_uses_persistence(program)) {
         out << "#include \"backends/cpp-entt/persistence_file_adapter.hpp\"\n";
     }
@@ -3110,6 +3225,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << EnttComponentEmitter::emit_component(t, program) << "\n";
     }
     out << EnttComponentEmitter::emit_state_helpers(program);
+    out << emit_world_digest(program);
 
     out << emit_collider_query_helpers(program);
     out << emit_named_slots(program);

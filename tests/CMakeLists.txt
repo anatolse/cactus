@@ -562,6 +562,26 @@ cactus_add_headless_behavior_test(test_order_by_total_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_order_by_total_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_creation_order_iteration_headless_behavior
+    CACTUS_SOURCE tests/fixtures/creation_order_iteration_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_creation_order_iteration_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_linearization_sample_headless_behavior
+    CACTUS_SOURCE tests/fixtures/linearization_sample_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_linearization_sample_headless_behavior.cpp
+    LINEARIZATION_HARNESS
+)
+
+cactus_add_headless_behavior_test(test_linearization_ambiguous_headless_behavior
+    CACTUS_SOURCE tests/fixtures/linearization_ambiguous_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_linearization_ambiguous_headless_behavior.cpp
+    LINEARIZATION_HARNESS
+)
+
 cactus_add_headless_behavior_test(test_deterministic_target_selection_headless_behavior
     CACTUS_SOURCE examples/deterministic_target_selection.cactus
     BACKEND cpp-entt
@@ -794,3 +814,24 @@ foreach(target_name IN LISTS cactus_test_dir_targets)
         set_property(GLOBAL APPEND PROPERTY CACTUS_TEST_EXECUTABLES ${target_name})
     endif()
 endforeach()
+
+# One linearization-harness runner per headless fixture, for surveying which
+# fixtures depend on an order their schedule does not fix. Off by default.
+option(CACTUS_LINEARIZATION_SURVEY "Build a linearization-harness runner for every headless fixture" OFF)
+if(CACTUS_LINEARIZATION_SURVEY)
+    get_property(cactus_survey_fixtures GLOBAL PROPERTY CACTUS_HEADLESS_FIXTURES)
+    foreach(cactus_survey_entry IN LISTS cactus_survey_fixtures)
+        string(REPLACE "|" ";" cactus_survey_parts "${cactus_survey_entry}")
+        list(GET cactus_survey_parts 0 cactus_survey_name)
+        list(GET cactus_survey_parts 1 cactus_survey_source)
+        if(cactus_survey_name MATCHES "^(test_linearization_|survey_)")
+            continue()
+        endif()
+        cactus_add_headless_behavior_test(survey_${cactus_survey_name}
+            CACTUS_SOURCE ${cactus_survey_source}
+            BACKEND cpp-entt
+            TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/linearization_survey_main.cpp
+            LINEARIZATION_HARNESS
+        )
+    endforeach()
+endif()

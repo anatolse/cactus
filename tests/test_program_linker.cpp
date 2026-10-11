@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <set>
 
 using namespace cactus;
 namespace fs = std::filesystem;
@@ -513,6 +514,104 @@ TEST_CASE("program_linker: preserves external project capabilities across module
     CHECK(merged.execution_graph.handlers.front().contract.writes.empty());
 }
 
+TEST_CASE("program_linker: preserves a contract's iteration order across module merge", "[linker][rule-order-by]") {
+    const auto tick = linked_symbol(SymbolKind::Phase, "runtime", "tick");
+    const auto rule = linked_symbol(SymbolKind::Rule, "game", "Announce");
+    const ResolvedHandlerTrigger trigger{.kind = HandlerTriggerKind::Phase, .symbol = tick};
+
+    InferredHandlerContract inferred;
+    inferred.rule            = rule;
+    inferred.trigger         = trigger;
+    inferred.iteration_order = IterationOrder::Creation;
+
+    DecoratedProgram module;
+    module.handler_contracts.push_back(inferred);
+    auto handler                     = linked_handler(rule, trigger, 0);
+    handler.contract.domain_kind     = HandlerDomainKind::Unary;
+    handler.contract.iteration_order = IterationOrder::Creation;
+    module.execution_graph.handlers  = {handler};
+
+    ErrorReporter errors;
+    ProgramLinker linker(errors);
+    DecoratedProgram merged;
+    REQUIRE(linker.merge_into(merged, module, "game"));
+    REQUIRE_FALSE(errors.has_errors());
+
+    REQUIRE(merged.handler_contracts.size() == 1);
+    CHECK(merged.handler_contracts.front().iteration_order == IterationOrder::Creation);
+    REQUIRE(merged.execution_graph.handlers.size() == 1);
+    CHECK(merged.execution_graph.handlers.front().contract.iteration_order == IterationOrder::Creation);
+}
+
+
+TEST_CASE("program_linker: schedule edge reasons survive the artifact and linking", "[linker][handler-execution-graph]") {
+    auto build_dir = linker_build_dir() / "edge_reasons";
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    ErrorReporter errors;
+    Lexer lexer("module reasons\n"
+                "pub event tick\n"
+                "trait Score:\n"
+                "    var value: int\n"
+                "trait Transform:\n"
+                "    var position: float\n"
+                "trait Seen:\n"
+                "    var value: float\n"
+                "entity Game:\n"
+                "    Score\n"
+                "rule First:\n"
+                "    on tick:\n"
+                "        Game[Score].value = 1\n"
+                "rule Second:\n"
+                "    on tick:\n"
+                "        Game[Score].value = 2\n"
+                "rule Third:\n"
+                "    after:\n"
+                "        Second\n"
+                "    on tick:\n"
+                "        Game[Score].value = 3\n"
+                "rule Reader:\n"
+                "    each:\n"
+                "        Transform as t\n"
+                "        Seen as s\n"
+                "    on tick:\n"
+                "        s.value = t.position\n"
+                "rule Writer:\n"
+                "    each:\n"
+                "        Transform as t\n"
+                "    on tick:\n"
+                "        t.position += 1.0\n",
+                "reasons.cactus",
+                errors);
+    Parser parser(lexer.tokenize(), errors);
+    auto ast = parser.parse_program();
+    SemanticAnalyzer analyzer(errors);
+    const auto module = analyzer.analyze(ast);
+    REQUIRE_FALSE(errors.has_errors());
+    ModuleArtifact artifact(errors);
+    REQUIRE(artifact.save(module, "reasons", build_dir));
+
+    ProgramLinker linker(errors);
+    const auto linked = linker.link({build_dir / "reasons.cmod"});
+    INFO((errors.diagnostics().empty() ? "" : errors.diagnostics().front().message));
+    REQUIRE(linked.has_value());
+
+    std::set<ScheduleEdgeOrientation> reasons;
+    for (const auto& edge : module.execution_graph.schedule_edges) {
+        const auto found = std::ranges::find_if(linked->execution_graph.schedule_edges, [&](const ScheduleEdge& candidate) {
+            return candidate.before == edge.before && candidate.after == edge.after && candidate.kind == edge.kind;
+        });
+        REQUIRE(found != linked->execution_graph.schedule_edges.end());
+        CHECK(found->orientation == edge.orientation);
+        reasons.insert(edge.orientation);
+    }
+    CHECK(reasons == std::set<ScheduleEdgeOrientation>{ScheduleEdgeOrientation::Explicit,
+                                                       ScheduleEdgeOrientation::WriterBeforeReader,
+                                                       ScheduleEdgeOrientation::DeclarationOrder});
+
+    fs::remove_all(build_dir, ec);
+}
 // ── Pair relations (dsl-pair-relations, 4.4) ─────────────────────────────────
 
 TEST_CASE("program_linker: preserves pair contract domain, bindings, bound reads, and projects across merge",

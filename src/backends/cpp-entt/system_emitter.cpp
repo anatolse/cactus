@@ -2087,13 +2087,10 @@ static std::string lower_ecs_query_call(const QueryCallExpr& qcall,
         return "[&]{ return static_cast<int>(std::ranges::distance(" + view + ")); }()";
     }
     if (func_name == "first") {
-        return "[&]{ auto view = " + view +
-               "; auto it = view.begin(); return it != view.end() ? "
-               "static_cast<entt::entity>(*it) : entt::entity{entt::null}; }()";
+        return "cactus::runtime::entt_backend::oldest(registry, " + view + ")";
     }
     if (func_name == "all") {
-        return "[&]{ std::vector<entt::entity> result; for (auto e : " + view +
-               ") result.push_back(e); return result; }()";
+        return "cactus::runtime::entt_backend::creation_ordered(registry, " + view + ")";
     }
     if (func_name == "children") {
         const std::string of_expr          = find_named_arg_value(qcall.named_args, "of", emit_arg);
@@ -4173,7 +4170,8 @@ static void emit_filtered_handler_body(std::ostringstream& out,
                                        const RuleNode& sys,
                                        const EventHandlerNode& handler,
                                        const HandlerDomainCodegen& domain,
-                                       const DecoratedProgram& program) {
+                                       const DecoratedProgram& program,
+                                       bool iterate_in_creation_order) {
     const auto& filter_bindings_list = domain.filter_bindings_list;
     const auto& filter_traits        = domain.filter_traits;
     const auto& filter_cpp_types     = domain.filter_cpp_types;
@@ -4266,7 +4264,8 @@ static void emit_filtered_handler_body(std::ostringstream& out,
     out << "    } else {\n";
     const auto sort_anchor = emit_sort_call(out, sys, filter_bindings_list, filter_traits, program, filter_cpp_overrides, 2);
     emit_view_declaration(out, filter_cpp_types, exclude_cpp_types, 2, sort_anchor);
-    if (!limited) {
+    const bool creation_ordered = iterate_in_creation_order && sort_anchor.empty();
+    if (!limited && !creation_ordered) {
         emit_view_each_header(out, filter_bindings_list, 2, program);
         out << "        " << handler_body_name << "(entity";
         call_args(out);
@@ -4275,21 +4274,27 @@ static void emit_filtered_handler_body(std::ostringstream& out,
         out << "    }\n";
         return;
     }
-    // Bounded take over the same view the unlimited path iterates, after any
-    // registry.sort<> the rule's `order by:` performed: a range-for rather
-    // than view.each so the pass can stop the moment the limit is reached,
-    // and only where:-surviving candidates count toward it (dsl-rule-limit).
-    const auto taken_name = gen_temp_name("taken", sys.limit->location);
-    out << "        int " << taken_name << " = 0;\n";
-    out << "        for (auto entity : view) {\n";
-    out << "            if (" << taken_name << " >= " << limit_name << ") { break; }\n";
+    // A range-for rather than view.each so a limited pass can stop the moment
+    // the limit is reached, and only where:-surviving candidates count toward it.
+    std::string taken_name;
+    if (limited) {
+        taken_name = gen_temp_name("taken", sys.limit->location);
+        out << "        int " << taken_name << " = 0;\n";
+    }
+    out << "        for (auto entity : "
+        << (creation_ordered ? "cactus::runtime::entt_backend::creation_ordered(registry, view)" : "view") << ") {\n";
+    if (limited) {
+        out << "            if (" << taken_name << " >= " << limit_name << ") { break; }\n";
+    }
     emit_component_bindings_from_entity(out, filter_bindings_list, "entity", 3, program);
     if (has_retained_where) {
         out << "            if (!" << where_filter_name << "(entity";
         call_args(out);
         out << ")) { continue; }\n";
     }
-    out << "            ++" << taken_name << ";\n";
+    if (limited) {
+        out << "            ++" << taken_name << ";\n";
+    }
     out << "            " << handler_body_name << "(entity";
     call_args(out);
     out << ");\n";
@@ -4322,7 +4327,7 @@ static void emit_lifecycle_handler_body(std::ostringstream& out,
     if (trigger.kind == HandlerTriggerKind::TraitRemoved && handler.alias.has_value()) {
         domain.prelude = "        [[maybe_unused]] const auto& " + *handler.alias + " = " + trigger_binding + ".old;\n";
     }
-    emit_filtered_handler_body(out, sys, handler, domain, program);
+    emit_filtered_handler_body(out, sys, handler, domain, program, false);
 }
 
 // Defensive fallback (should not occur for a well-formed contract lookup):
@@ -4862,13 +4867,7 @@ static void emit_reduced_unary_handler_body(std::ostringstream& out,
     out << "    cactus_reduce_acc cactus_total{};\n";
     out << "    {\n";
     emit_view_declaration(out, domain.filter_cpp_types, domain.exclude_cpp_types, 2);
-    out << "        std::vector<std::pair<std::uint64_t, entt::entity>> cactus_ordered;\n";
-    out << "        for (auto entity : view) {\n";
-    out << "            cactus_ordered.emplace_back("
-           "registry.get<cactus::runtime::entt_backend::CreationOrdinal>(entity).value, entity);\n";
-    out << "        }\n";
-    out << "        std::ranges::sort(cactus_ordered);\n";
-    out << "        for (const auto& [cactus_ordinal, entity] : cactus_ordered) {\n";
+    out << "        for (auto entity : cactus::runtime::entt_backend::creation_ordered(registry, view)) {\n";
     emit_component_bindings_from_entity(out, domain.filter_bindings_list, "entity", 3, program);
     emit_filter_alias_bindings(out, domain.filter, program, 3);
     out << "            auto& cactus_acc = cactus_total;\n";
@@ -4956,7 +4955,12 @@ std::string EnttSystemEmitter::emit_system(const RuleNode& sys, const DecoratedP
         } else if (selectionless) {
             emit_selectionless_handler_body(out, handler, filter_traits, program, filter_cpp_overrides);
         } else if (!filter_traits.empty()) {
-            emit_filtered_handler_body(out, sys, handler, domain, program);
+            emit_filtered_handler_body(out,
+                                       sys,
+                                       handler,
+                                       domain,
+                                       program,
+                                       contract != nullptr && contract->iteration_order == IterationOrder::Creation);
         } else {
             emit_fallback_handler_body(
                 out, sys, handler, filter_bindings_list, filter_traits, program, filter_cpp_overrides);

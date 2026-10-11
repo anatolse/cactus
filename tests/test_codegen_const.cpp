@@ -129,7 +129,7 @@ TEST_CASE("Codegen constants: window configuration reads constants by symbol", "
         "const:\n"
         "    WINDOW_WIDTH = 640 * 2\n"
         "    WINDOW_TITLE = \"Tables\"\n");
-    CHECK(generated.has("inline const int test__WINDOW_WIDTH = (640 * 2);"));
+    CHECK(generated.has("inline const int test__WINDOW_WIDTH = cactus::num::mul(640, 2);"));
     CHECK(generated.has(".window_width = test__WINDOW_WIDTH"));
     CHECK(generated.has(".window_title = test__WINDOW_TITLE"));
 }

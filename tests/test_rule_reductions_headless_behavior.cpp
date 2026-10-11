@@ -121,6 +121,39 @@ TEST_CASE("a where predicate on the group binding removes the group", "[runtime]
     CHECK(team_of(registry, GOLD_TEAM).activations == 1);
 }
 
+TEST_CASE("a float sum does not depend on the order rows were created in", "[runtime][codegen-entt][rule-reduce]") {
+    // The fixture players' speeds sum to 7. Folding 1e8, 3 and -1e8 in float gives 8 or 11
+    // depending on order; the exact total is 10.
+    entt::registry registry;
+    cactus::runtime::entt_backend::generated_init_project(registry);
+    cactus::runtime::entt_backend::generated_load_project(registry);
+    const auto add_players = [&registry](std::initializer_list<float> speeds) {
+        std::vector<entt::entity> players;
+        for (const float speed : speeds) {
+            const auto player = registry.create();
+            registry.emplace<rule_reductions__Player>(player, rule_reductions__Player{.speed = speed});
+            registry.emplace<cactus::runtime::entt_backend::CreationOrdinal>(
+                player,
+                cactus::runtime::entt_backend::CreationOrdinal{
+                    .value = cactus::runtime::entt_backend::generated_next_creation_ordinal()});
+            players.push_back(player);
+        }
+        return players;
+    };
+    const auto drive_frame = [&registry] {
+        cactus::runtime::entt_backend::generated_inject_external_event(std_core__frameEvent{.dt = 1.0F / 60.0F});
+        cactus::runtime::entt_backend::generated_drain_external_events(registry);
+        return board_of(registry).speed;
+    };
+    const auto first = add_players({1.0e8F, 3.0F, -1.0e8F});
+    CHECK(drive_frame() == 10.0F);
+    for (const auto player : first) {
+        registry.destroy(player);
+    }
+    (void)add_players({-1.0e8F, 1.0e8F, 3.0F});
+    CHECK(drive_frame() == 10.0F);
+}
+
 TEST_CASE("order by and limit rank aggregate rows with creation-order ties", "[runtime][codegen-entt][rule-reduce]") {
     // Red and Gold both total 8; Red was created first.
     entt::registry registry;

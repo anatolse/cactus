@@ -255,6 +255,56 @@ static std::string cpp_operator(const std::string& op) {
     return op == "not" ? "!" : op;
 }
 
+static bool is_arithmetic_operator(std::string_view op) {
+    return op == "+" || op == "-" || op == "*" || op == "/" || op == "%";
+}
+
+static std::string total_int_helper(std::string_view op) {
+    if (op == "+") {
+        return "cactus::num::add";
+    }
+    if (op == "-") {
+        return "cactus::num::sub";
+    }
+    if (op == "*") {
+        return "cactus::num::mul";
+    }
+    if (op == "/") {
+        return "cactus::num::div";
+    }
+    return "cactus::num::mod";
+}
+
+std::string EnttCodegenUtils::emit_binary(const BinaryExpr& binary, const std::string& left, const std::string& right) {
+    if (is_arithmetic_operator(binary.op) && binary.operands != ArithmeticOperands::Other) {
+        return total_int_helper(binary.op) + "(" + left + ", " + right + ")";
+    }
+    return "(" + left + " " + cpp_operator(binary.op) + " " + right + ")";
+}
+
+std::string EnttCodegenUtils::emit_unary(const UnaryExpr& unary, const std::string& operand) {
+    // A negated literal is in range; INT_MIN is spelled so that C++ types it as `int`, not `long long`.
+    const auto* literal = std::get_if<LiteralExpr>(&unary.operand->expr);
+    if (unary.op == "-" && literal != nullptr && literal->kind == LiteralExpr::Kind::Int &&
+        literal->value == "2147483648") {
+        return "(-2147483647 - 1)";
+    }
+    if (unary.op == "-" && literal == nullptr && unary.operands != ArithmeticOperands::Other) {
+        return "cactus::num::neg(" + operand + ")";
+    }
+    return cpp_operator(unary.op) + operand;
+}
+
+std::string EnttCodegenUtils::emit_compound_assignment(const VarAssign& assign,
+                                                       const std::string& target,
+                                                       const std::string& value) {
+    if (assign.op != "=" && assign.operands != ArithmeticOperands::Other) {
+        return target + " = " + total_int_helper(std::string_view(assign.op).substr(0, 1)) + "(" + target + ", " +
+               value + ")";
+    }
+    return target + " " + assign.op + " " + value;
+}
+
 // Exhaustive per-ExprNode-kind C++ text emission; self-recursive by
 // construction (an expr tree emits its own subexpressions).
 // NOLINTNEXTLINE(readability-function-cognitive-complexity,misc-no-recursion)
@@ -299,9 +349,9 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const ProgramNode*
                 }
                 return e.name;
             } else if constexpr (std::is_same_v<E, BinaryExpr>) {
-                return "(" + emit_expr(*e.left, ast) + " " + cpp_operator(e.op) + " " + emit_expr(*e.right, ast) + ")";
+                return emit_binary(e, emit_expr(*e.left, ast), emit_expr(*e.right, ast));
             } else if constexpr (std::is_same_v<E, UnaryExpr>) {
-                return cpp_operator(e.op) + emit_expr(*e.operand, ast);
+                return emit_unary(e, emit_expr(*e.operand, ast));
             } else if constexpr (std::is_same_v<E, CallExpr>) {
                 // color(...) constructor (dsl-vector-expressions "Color
                 // constructor"): route through the shared runtime
@@ -428,9 +478,9 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const DecoratedPro
             using E = std::decay_t<decltype(e)>;
             const auto emit = [&](const ExprNode& child) { return EnttCodegenUtils::emit_expr(child, program); };
             if constexpr (std::is_same_v<E, BinaryExpr>) {
-                return "(" + emit(*e.left) + " " + cpp_operator(e.op) + " " + emit(*e.right) + ")";
+                return emit_binary(e, emit(*e.left), emit(*e.right));
             } else if constexpr (std::is_same_v<E, UnaryExpr>) {
-                return cpp_operator(e.op) + emit(*e.operand);
+                return emit_unary(e, emit(*e.operand));
             } else if constexpr (std::is_same_v<E, ListExpr>) {
                 return "{" + join_emitted_args(e.elements, program) + "}";
             } else if constexpr (std::is_same_v<E, CallExpr>) {

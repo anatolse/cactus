@@ -97,8 +97,7 @@ rule RivalBonus:
         team[Team].rival_bonus = rival_bonus
         team[Team].bonus += 10
 
-# Folds run in creation order, one step at a time: the int sum clamps at
-# each step and the float sum is never reassociated.
+# Sums don't depend on row order: the int sum wraps and the float sum is exact.
 rule SumSamples:
     each:
         Sample as sample

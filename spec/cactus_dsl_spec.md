@@ -546,6 +546,8 @@ inside ordinary handlers or add `before:` to groups or phases.
 
 A sort key is a pure expression of the same class as a `where:` predicate (§3.8.2) — literals and constants, reads through in-scope bindings, operators, and calls to functions proven pure — and must type-check as scalar-comparable (`int`, `float`, or `bool`). A bare `alias.field` path is simply the trivial case of that grammar. Direction defaults to `asc` when omitted; multiple sort keys order lexicographically, each breaking the preceding key's ties.
 
+Sort keys use a total order, so sorting is defined for every value. `false` sorts before `true`. A NaN `float` key sorts after every number for both `asc` and `desc`, and all NaNs tie; `-0.0` ties `0.0`. Rows equal on every key run in stable creation order (for a pair domain, the left-binding-major snapshot order of §3.8.1), with or without `limit:`.
+
 `order by:` requires an `each:` or `pairs:` domain and may reference only that domain's bindings — an `each:` alias for a unary rule, or either binding for a pair rule (so a pair sort key may read across both). On a pair domain it reorders the tuple pass only; it never changes which tuples run or how many.
 
 ```cactus
@@ -808,7 +810,7 @@ binding and a nonempty reducer block.
 Sorting follows the reduction, and empty-group identities, retained writes, and
 `keep` commit visibility are unchanged.
 
-**Reducers are typed and pure.** `count()` counts rows; `count(binding)` also counts rows (not distinct entities) and requires a pair binding. `sum` takes `int`, `float`, `vec2` or `vec3` and keeps that type; a vector sum adds per component in fold order. `min` and `max` take `int` or `float`, keep that type, and require a `default` of exactly that type. `any` takes `bool` and yields `bool`. `first_hit` takes and yields `std.physics.volume.SweepHit` (§7.7): it ignores misses and keeps the hit with the smallest `t`, and on equal `t` the row that comes first in fold order. `best(binding, by = key)` names a pair binding other than the `per` binding and an `int` or `float` key, and yields `entity_id`: that binding's entity in the row with the highest key, the earlier row in fold order on a tie; rows whose key is NaN are skipped. Reducer inputs have the purity class of a `where:` predicate (§3.8.2) and read the domain's bindings, constants and named entity fields. Reducer names are unique and must not reuse a pair binding name.
+**Reducers are typed and pure.** `count()` counts rows; `count(binding)` also counts rows (not distinct entities) and requires a pair binding. `sum` takes `int`, `float`, `vec2` or `vec3` and keeps that type; a vector sum adds per component. `min` and `max` take `int` or `float`, keep that type, and require a `default` of exactly that type. `any` takes `bool` and yields `bool`. `first_hit` takes and yields `std.physics.volume.SweepHit` (§7.7): it ignores misses and keeps the hit with the smallest `t`, and on equal `t` the row that comes first in fold order. `best(binding, by = key)` names a pair binding other than the `per` binding and an `int` or `float` key, and yields `entity_id`: that binding's entity in the row with the highest key, the earlier row in fold order on a tie; rows whose key is NaN are skipped. Reducer inputs have the purity class of a `where:` predicate (§3.8.2) and read the domain's bindings, constants and named entity fields. Reducer names are unique and must not reuse a pair binding name.
 
 **Groups are outer.** Without `per`, the whole domain is one group, so the handler runs exactly once, even for empty input. `reduce per binding:` names a pair binding and creates one group for every entity in that binding's membership snapshot that passes the group filters, whether or not any row survives for it. An empty group gets identity values: `count` and `sum` are `0` (the zero vector for a vector `sum`), `min`/`max` their default, `any` is `false`, `first_hit` is the miss value `sweep` itself returns (`hit = false`, `t = 1.0`), and `best` is a stale `entity_id`. Defaults apply only to empty input.
 
@@ -818,7 +820,7 @@ Sorting follows the reduction, and empty-group identities, retained writes, and
 
 **Scope after reduction.** Handlers and sort keys see the aggregates as immutable values and, with `reduce per b:`, the binding `b`. Every other binding, filter alias and implicit filter field is eliminated and can't be named; there is no `self`. The retained binding `b` is writable: the handler runs exactly once per `b` entity, so assignment through `b[Trait].field` or a bare alias of `b`'s traits is accepted and recorded as a contract write, as for a provably-one `limit: … per` (§3.8.3). A targeted event keeps only the recipient's group; a global reduction ignores the target. Lifecycle triggers are rejected on reduced rules.
 
-**Numbers.** Integer `count` and `sum` saturate at the signed 32-bit bounds at each fold step; this applies only to reducers. Floating `sum` keeps the fold order and is never reassociated. Floating `min`/`max` yield NaN when any input is NaN.
+**Numbers.** No reducer result depends on row order. Integer `count` and `sum` wrap like `+` (§3.15). A `float` `sum` is the exact sum of its inputs rounded once to the nearest `float`, ties to even, so `1.0e8`, `1.0` and `-1.0e8` sum to `1.0` in any order; a vector `sum` does this per component. A `float` `sum` is NaN when any input is NaN or the inputs hold both `+inf` and `-inf`, `±inf` when they hold only that infinity or the exact sum rounds beyond the `float` range, and `-0.0` only when every input is `-0.0`. Floating `min`/`max` yield NaN when any input is NaN.
 
 #### 3.8.6 Keep Clause
 
@@ -1126,7 +1128,7 @@ type_ref        = IDENTIFIER [ "[" type_ref "]" ] ;
 
 Built-in types include:
 
-- `int`, `float`, `bool`, `string`
+- `int` (32-bit two's complement), `float` (IEEE-754 binary32), `bool`, `string`
 - `vec2`, `vec3`, `quat`, `color`
 - `entity_id`
 - asset handles: `mesh_id`, `texture_id`, `sound_id`, `music_id`, `font_id`, `material_id`
@@ -1157,6 +1159,18 @@ A `trait_access` follows an identifier, `self` or a member on the same line. A b
 The operands of `and`, `or` and `not` must be `bool`. There is no implicit truthiness: `if t.hp:` is an error, write `if t.hp > 0:`.
 
 The operands of `+`, `-`, `*`, `/`, `%` and unary `-` must not be `bool`. There is no conversion from `bool` to a number: `1 + true` and `-ready` are errors. `==` and `!=` still compare `bool` values.
+
+**Numbers.** Every numeric operation has one defined result, the same on every backend and platform:
+
+- `int` arithmetic wraps: `+`, `-`, `*`, unary `-` and the compound assignments compute the exact result modulo 2³². `2147483647 + 1` is `-2147483648`.
+- `/` and `%` on `int` round toward minus infinity, so for `b > 0` the remainder is in `[0, b)`: `-7 / 2` is `-4`, `-7 % 2` is `1` and `-1 % 8` is `7`. `a / 0` is `0` and `a % 0` is `a`, so `a == (a / b) * b + a % b` always holds. `-2147483648 / -1` is `-2147483648`.
+- `float` operations round once to the nearest binary32 value, ties to even, in source order. No backend fuses `a * b + c`, reorders float operations, or uses approximate math. Float division by zero and invalid operations give the IEEE-754 results (`±inf`, NaN). A mixed `int`/`float` operation first converts the `int` to the nearest `float`.
+- Comparisons follow IEEE-754: any comparison with NaN is false except `!=`, and `-0.0 == 0.0`.
+- Float-to-int conversion (`math.floor`, `math.ceil`, `math.round`) is total: NaN gives `0`, and values beyond the `int` range clamp to its bounds.
+- `std.math` functions return the same bits on every platform: `sqrt`, `sin`, `cos`, `atan2` and `pow` are correctly rounded.
+- A constant has exactly the value its expression has at runtime.
+
+Render-pass stage handlers (§3.11.1) run on the GPU: their `float` results follow GLSL precision, but integer `/` and `%` keep the rules above.
 
 Two expressions choose a value:
 

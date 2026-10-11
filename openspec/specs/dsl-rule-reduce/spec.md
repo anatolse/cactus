@@ -6,7 +6,7 @@ Define deterministic, typed global and outer-grouped aggregation over rule domai
 ## Requirements
 ### Requirement: Typed reduction clauses
 
-A regular unary or pair rule SHALL accept one `reduce:` clause. It SHALL declare immutable, uniquely named aggregate values using `count()`, `count(binding)`, `sum(expression)`, `min(expression, default = value)`, `max(expression, default = value)`, `any(expression)`, `first_hit(expression)` or `best(binding, by = expression)`. `count(binding)` SHALL count rows, not distinct entities, and SHALL require a declared pair binding; `count()` SHALL count rows in either domain form. `sum` input SHALL be `int`, `float`, `vec2` or `vec3` and SHALL preserve its type; a vector `sum` SHALL add per component as floats in stable fold order. `min`/`max` inputs SHALL be `int` or `float` and preserve their type, and `min`/`max` SHALL require a default of exactly that type. `any` input SHALL be `bool` and its result SHALL be `bool`. `first_hit` input SHALL be `std.physics.volume.SweepHit` and its result SHALL be `SweepHit`. `best` SHALL require a declared pair binding other than the `per` binding, its `by` key SHALL be `int` or `float`, and its result SHALL be `entity_id`: the binding's entity in the row with the highest key; among equal keys, the row first in stable fold order; rows whose key is NaN SHALL be ignored; with no eligible row, a stale `entity_id`. Reducer expressions SHALL be pure; they MAY read the rule's bindings, constants and named entity fields. Selectionless and extern rules SHALL reject `reduce:`.
+A regular unary or pair rule SHALL accept one `reduce:` clause. It SHALL declare immutable, uniquely named aggregate values using `count()`, `count(binding)`, `sum(expression)`, `min(expression, default = value)`, `max(expression, default = value)`, `any(expression)`, `first_hit(expression)` or `best(binding, by = expression)`. `count(binding)` SHALL count rows, not distinct entities, and SHALL require a declared pair binding; `count()` SHALL count rows in either domain form. `sum` input SHALL be `int`, `float`, `vec2` or `vec3` and SHALL preserve its type; a `float` `sum` SHALL be exact, and a vector `sum` SHALL be exact per component (see "Reduction numeric edge behavior"). `min`/`max` inputs SHALL be `int` or `float` and preserve their type, and `min`/`max` SHALL require a default of exactly that type. `any` input SHALL be `bool` and its result SHALL be `bool`. `first_hit` input SHALL be `std.physics.volume.SweepHit` and its result SHALL be `SweepHit`. `best` SHALL require a declared pair binding other than the `per` binding, its `by` key SHALL be `int` or `float`, and its result SHALL be `entity_id`: the binding's entity in the row with the highest key; among equal keys, the row first in stable fold order; rows whose key is NaN SHALL be ignored; with no eligible row, a stale `entity_id`. Reducer expressions SHALL be pure; they MAY read the rule's bindings, constants and named entity fields. Selectionless and extern rules SHALL reject `reduce:`.
 
 #### Scenario: Count and sum
 - **WHEN** three input rows have integer scores 2, 3 and 5
@@ -86,7 +86,7 @@ When a rule declares `reduce per binding:`, each `where:` predicate whose pair-b
 
 ### Requirement: Reduction scope and deterministic pipeline
 
-The logical pipeline SHALL be domain → `where:` → `reduce:` → `order by:` → `limit:` → handler. All participating field values SHALL be captured in one input snapshot before any reduced handler runs. Rows SHALL fold in stable domain order; groups SHALL be ordered by the `per` binding's creation order. Floating reductions SHALL preserve that fold order without reassociation. Handlers and post-reduction sort keys SHALL see the aggregates and the retained `per` binding, but no eliminated binding. The retained `per` binding SHALL be writable in the reduced handler: direct assignment to its traits SHALL be accepted, because the handler runs exactly once per group entity. Global limits SHALL operate on aggregate rows; per-binding limits SHALL be rejected when `reduce:` is present.
+The logical pipeline SHALL be domain → `where:` → `reduce:` → `order by:` → `limit:` → handler. All participating field values SHALL be captured in one input snapshot before any reduced handler runs. Rows SHALL fold in stable domain order; groups SHALL be ordered by the `per` binding's creation order. The result of `count`, `sum`, `min`, `max` and `any` SHALL NOT depend on row order, so a backend MAY split, reorder or parallelize these folds. `first_hit` and `best` SHALL break ties by stable fold order. Handlers and post-reduction sort keys SHALL see the aggregates and the retained `per` binding, but no eliminated binding. The retained `per` binding SHALL be writable in the reduced handler: direct assignment to its traits SHALL be accepted, because the handler runs exactly once per group entity. Global limits SHALL operate on aggregate rows; per-binding limits SHALL be rejected when `reduce:` is present.
 
 #### Scenario: Rank teams
 - **WHEN** teams are ordered by total descending and limit is 2
@@ -108,17 +108,29 @@ The logical pipeline SHALL be domain → `where:` → `reduce:` → `order by:` 
 - **WHEN** `reduce:` is combined with `limit: 1 per team`
 - **THEN** compilation rejects the redundant per-binding form
 
+#### Scenario: Float sum is independent of row order
+- **WHEN** the same float inputs `1.0e8`, `1.0` and `-1.0e8` reach a `sum` in any row order
+- **THEN** the result is `1.0` every time
+
 ### Requirement: Reduction numeric edge behavior
 
-Integer `count` and `sum` SHALL saturate at the signed 32-bit bounds, clamping each fold step, as a reducer-only policy that SHALL NOT change ordinary integer-expression semantics. Floating `sum` SHALL follow the existing float representation and stable fold order; floating `min`/`max` SHALL propagate NaN when any input is NaN. Defaults SHALL apply only to empty input, not to non-finite values.
+Integer `count` and `sum` SHALL wrap modulo 2³² exactly like integer `+` (see `dsl-numeric-semantics`), so the result does not depend on fold order. A `float` `sum` SHALL be the exact real sum of its inputs rounded once to the nearest binary32 value, ties to even; the result SHALL be NaN when any input is NaN or when inputs include both `+inf` and `-inf`, `±inf` when inputs include only that infinity, and `±inf` when the exact finite sum rounds beyond the binary32 range. An exact zero sum SHALL be `-0.0` only when every input is `-0.0`, and `0.0` otherwise. A vector `sum` SHALL apply the float rule to each component. Floating `min`/`max` SHALL propagate NaN when any input is NaN. Defaults SHALL apply only to empty input, not to non-finite values.
 
 #### Scenario: Positive integer overflow
 - **WHEN** integer sum folds 2147483647 followed by 1
-- **THEN** it returns 2147483647 without native signed overflow
+- **THEN** it returns -2147483648
 
 #### Scenario: Mixed-sign saturation order
-- **WHEN** integer sum folds 2147483647, 1, then -1
-- **THEN** it returns 2147483646, preserving the defined per-step saturation order
+- **WHEN** integer sum folds 2147483647, 1 and -1 in any order
+- **THEN** it returns 2147483647, because wrapping does not depend on fold order
+
+#### Scenario: Exact float sum
+- **WHEN** a float sum folds `0.1` ten times
+- **THEN** it returns the binary32 value nearest to the exact sum of those ten binary32 inputs
+
+#### Scenario: Opposite infinities
+- **WHEN** a float sum's inputs include `+inf` and `-inf`
+- **THEN** it returns NaN
 
 #### Scenario: Non-finite minimum
 - **WHEN** a non-empty floating min input contains NaN

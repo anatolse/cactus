@@ -4,7 +4,7 @@ Define the Cactus type system, including primitive and composite types, field mo
 
 ## Requirements
 ### Requirement: Primitive type support
-The type system SHALL support the following primitive types: `int` (32-bit signed), `float` (64-bit), `bool`, `string` (UTF-8 immutable), `vec2`, `vec3`, `quat`, `color`, `entity_id`, `mesh_id`, `texture_id`, `sound_id`, `music_id`, `font_id`, `material_id`, `InputButton`, and `InputAxis`.
+The type system SHALL support the following primitive types: `int` (32-bit two's-complement, wrapping), `float` (32-bit IEEE-754 binary32; arithmetic, comparison and conversion follow `dsl-numeric-semantics`), `bool`, `string` (UTF-8 immutable), `vec2`, `vec3`, `quat`, `color`, `entity_id`, `mesh_id`, `texture_id`, `sound_id`, `music_id`, `font_id`, `material_id`, `InputButton`, and `InputAxis`.
 
 **`entity_id` semantics:** `entity_id` is an opaque entity handle. The language exposes no null or zero entity literal — authors never construct null handles. A stored `entity_id` value may become **stale** when the referenced entity is destroyed. All operations using `entity_id` are **total**: operations on stale handles are defined as safe no-ops or no-match at runtime. Authors are not required to guard against stale handles; the generated backend inserts validity checks. Use `exists(entity_id)` to explicitly test whether a handle refers to a live entity.
 
@@ -37,6 +37,11 @@ The semantic analyzer SHALL reject `entity_id` comparisons against integer liter
 #### Scenario: InputButton primitive type in field declaration
 - **WHEN** a field is declared as `let jump: InputButton`
 - **THEN** the type system resolves it to TypeInfo with kind=InputButton
+
+
+#### Scenario: float is binary32
+- **WHEN** a field is declared as `var speed: float` and assigned `0.1`
+- **THEN** it holds the binary32 value nearest to `0.1`, on every backend
 
 ### Requirement: Composite type support
 The type system SHALL support user-defined `struct` (value objects, fields only), `enum` (named integer constants), and `list[T]` (parameterized ordered collection). Every user-defined type reference SHALL carry the resolved type symbol identity for the referenced struct, enum, or trait rather than an alias-qualified or simple source spelling.

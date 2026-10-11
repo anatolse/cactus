@@ -1,0 +1,98 @@
+module total_arithmetic
+
+use std.core
+use std.math as math
+
+# Every number operation has one defined result. Integers wrap at 32 bits,
+# `/` and `%` round toward minus infinity, dividing by zero gives a value
+# instead of a crash, and float-to-int conversion never fails.
+
+const:
+    CELL = -7 / 2
+    SINE = math.sin(0.5)
+
+trait Wrap:
+    var max_plus_one: int = 0
+    var square: int = 0
+    var negated_min: int = 0
+    var counter: int = 2147483647
+
+trait Division:
+    var quotient: int = 0
+    var remainder: int = 0
+    var quotient_by_negative: int = 0
+    var remainder_by_negative: int = 0
+    var grid_cell: int = 0
+    var by_zero: int = -1
+    var remainder_by_zero: int = -1
+    var min_by_minus_one: int = 0
+    var const_cell: int = 0
+
+trait Conversion:
+    var mixed: float = 0.0
+    var floor_nan: int = -1
+    var ceil_nan: int = -1
+    var round_nan: int = -1
+    var floor_huge: int = 0
+    var ceil_huge: int = 0
+    var round_huge: int = 0
+    var min_nan: float = 0.0
+    var half: float = 0.5
+    var sine_matches: bool = false
+    var inf_quotient: float = 0.0
+    var nan_equal: bool = true
+    var zeros_equal: bool = false
+    var tenth: float = 0.0
+
+entity Numbers:
+    Wrap
+    Division
+    Conversion
+
+rule WrapIntegers:
+    each:
+        Wrap as w
+
+    on tick:
+        w.max_plus_one = 2147483647 + 1
+        w.square = 65536 * 65536
+        let lowest = -2147483648
+        w.negated_min = -lowest
+        w.counter += 2
+
+rule DivideIntegers:
+    each:
+        Division as d
+
+    on tick:
+        d.quotient = -7 / 2
+        d.remainder = -7 % 2
+        d.quotient_by_negative = 7 / -2
+        d.remainder_by_negative = 7 % -2
+        d.grid_cell = -1 % 8
+        d.by_zero = 5 / 0
+        d.remainder_by_zero = 5 % 0
+        d.min_by_minus_one = -2147483648 / -1
+        d.const_cell = CELL
+
+rule ConvertNumbers:
+    each:
+        Conversion as c
+
+    on tick:
+        let nan = 0.0 / 0.0
+        let huge = 100000000000000000000.0
+        c.mixed = 16777217 + 0.0
+        c.floor_nan = math.floor(nan)
+        c.ceil_nan = math.ceil(nan)
+        c.round_nan = math.round(nan)
+        c.floor_huge = math.floor(huge)
+        c.ceil_huge = math.ceil(huge)
+        c.round_huge = math.round(-huge)
+        c.min_nan = math.min(nan, 1.0)
+        c.sine_matches = SINE == math.sin(c.half)
+        c.inf_quotient = 1.0 / 0.0
+        let same_nan = nan
+        c.nan_equal = nan == same_nan
+        c.zeros_equal = -0.0 == 0.0
+        c.tenth = 0.1

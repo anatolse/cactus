@@ -34,6 +34,7 @@ trait Board:
     var players: int = -1
     var points: int = -1
     var push: vec3 = vec3(9.0, 9.0, 9.0)
+    var speed: float = -1.0
     var ranked: int = 0
 
 template Squad(id: int):
@@ -54,17 +55,20 @@ rule CountEnemies:
         Scoreboard[Board].weakest = weakest
         Scoreboard[Board].enemy_passes += 1
 
+# A float sum is exact, so the row order never changes its result.
 rule CountPlayers:
     each: Player as player
     reduce:
         players = count()
         points = sum(player.points)
         push = sum(player.push)
+        speed = sum(player.speed)
 
     on tick:
         Scoreboard[Board].players = players
         Scoreboard[Board].points = points
         Scoreboard[Board].push = push
+        Scoreboard[Board].speed = speed
 
 # `team[Team].active` reads only the group binding, so it filters teams;
 # the membership test reads both bindings, so it filters rows. Green has no

@@ -550,6 +550,18 @@ cactus_add_headless_behavior_test(test_team_score_reduce_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_team_score_reduce_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_total_arithmetic_headless_behavior
+    CACTUS_SOURCE examples/total_arithmetic.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_total_arithmetic_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_order_by_total_headless_behavior
+    CACTUS_SOURCE tests/fixtures/order_by_total_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_order_by_total_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_deterministic_target_selection_headless_behavior
     CACTUS_SOURCE examples/deterministic_target_selection.cactus
     BACKEND cpp-entt

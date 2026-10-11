@@ -2700,11 +2700,11 @@ TEST_CASE("Codegen EnTT: nested control flow mutates visible lexical locals with
     CHECK(!code.contains("auto count +="));
     CHECK(!code.contains("auto maximum = value"));
     CHECK(!code.contains("auto cursor = (cursor + 1)"));
-    CHECK(code.contains("sum += value;"));
-    CHECK(code.contains("count += 1;"));
+    CHECK(code.contains("sum = cactus::num::add(sum, value);"));
+    CHECK(code.contains("count = cactus::num::add(count, 1);"));
     CHECK(code.contains("maximum = value;"));
-    CHECK(code.contains("cursor = (cursor + 1);"));
-    CHECK(code.contains("sum += boss->rank;"));
+    CHECK(code.contains("cursor = cactus::num::add(cursor, 1);"));
+    CHECK(code.contains("sum = cactus::num::add(sum, boss->rank);"));
 }
 
 TEST_CASE("Codegen EnTT: unsupported generic extern scaffold is rejected", "[codegen-entt][extern-rule]") {
@@ -2781,15 +2781,18 @@ TEST_CASE("Codegen EnTT: rule order by emits registry sort for single key", "[co
             // anchor's whole (potentially wider) pool.
             CHECK(code.contains("std::ranges::stable_sort("));
             CHECK(code.contains("registry.storage<Sprite>().sort_as("));
-            // The sorted pool must also drive the view, or a multi-element
-            // view is free to iterate from some other, unsorted pool.
-            CHECK(code.contains("view.use<Sprite>();"));
+            // A single-storage view always iterates the sorted pool and has no use<>.
+            CHECK(!code.contains("view.use<"));
             // Each key is evaluated by a per-entity extractor lambda rather
             // than being inlined twice into the comparator, so an arbitrary
             // expression lowers through the ordinary expression emitter.
             CHECK(code.contains("= [&](entt::entity entity) {"));
             CHECK(code.contains("return s.layer;"));
-            CHECK(code.contains("return cactus_lhs_key < cactus_rhs_key;"));
+            CHECK(code.contains("cactus::num::key_order("));
+            CHECK(code.contains("(b), false);"));
+            // Equal keys fall back to creation order, not the snapshot's pool order.
+            CHECK(code.contains("return registry.get<cactus::runtime::entt_backend::CreationOrdinal>(a).value < "
+                                "registry.get<cactus::runtime::entt_backend::CreationOrdinal>(b).value;"));
         }
     }
 }
@@ -2821,8 +2824,9 @@ TEST_CASE("Codegen EnTT: rule order by emits multi-key comparator", "[codegen-en
             // falls through to the secondary key's descending compare.
             CHECK(code.contains("return s.layer;"));
             CHECK(code.contains("return p.pos.y;"));
-            const auto ascending  = code.find("return cactus_lhs_key < cactus_rhs_key;");
-            const auto descending = code.find("return cactus_lhs_key > cactus_rhs_key;");
+            CHECK(code.contains("view.use<"));
+            const auto ascending  = code.find("(b), false);");
+            const auto descending = code.find("(b), true);");
             CHECK(ascending != std::string::npos);
             CHECK(descending != std::string::npos);
             CHECK(ascending < descending);
@@ -5051,8 +5055,8 @@ TEST_CASE("Codegen EnTT: 3D editor+viewport program registers 3D camera rig life
 
     // Enter impl derives orbit state from camera pose
     CHECK(init.contains("register_editor_camera_enter_impl"));
-    CHECK(init.contains("std::atan2(-__dx, -__dz)"));  // yaw derivation
-    CHECK(init.contains("std::asin"));                 // pitch derivation
+    CHECK(init.contains("cactus::runtime::stdlib::math::atan2(-__dx, -__dz)"));  // yaw derivation
+    CHECK(init.contains("cactus::runtime::stdlib::math::atan2(__sin_pitch, "));   // pitch derivation
     CHECK(init.contains("EditorCamera3D{.focus"));
     CHECK(init.contains(".orbit_speed = 0.005F"));
     CHECK(init.contains(".min_pitch = -1.5F"));
@@ -5788,11 +5792,11 @@ TEST_CASE("Codegen EnTT: trigger-name reads lower to the handler payload paramet
     CHECK(filtered.contains("h.amount = " + handler_payload_param(filtered) + ".amount;"));
 
     const auto selectionless = generated_function(code, "void read_selectionless_Turn(");
-    CHECK(selectionless.contains(handler_payload_param(selectionless) + ".amount + 1"));
+    CHECK(selectionless.contains("cactus::num::add(" + handler_payload_param(selectionless) + ".amount, 1)"));
 
     const auto aliased = generated_function(code, "void read_aliased_Turn(");
     CHECK(handler_payload_param(aliased) == "t");
-    CHECK(aliased.contains("h.amount = (t.amount + t.amount);"));
+    CHECK(aliased.contains("h.amount = cactus::num::add(t.amount, t.amount);"));
 
     const auto tick = generated_function(code, "void read_tick_tick(");
     CHECK(handler_payload_param(tick) == "tick");
@@ -6732,7 +6736,7 @@ TEST_CASE("Codegen EnTT: dotted assignment through a filter alias writes the fie
             // component; the assignment must reuse it via ordinary member
             // access rather than redeclaring it with `auto`, which would be a
             // compile error (redefinition of `hp`).
-            CHECK(code.contains("hp.current = (hp.current - dmg.amount);"));
+            CHECK(code.contains("hp.current = cactus::num::sub(hp.current, dmg.amount);"));
             CHECK(!code.contains("auto hp = "));
         }
     }
@@ -7829,6 +7833,28 @@ TEST_CASE("Codegen EnTT: render-pass fragment handler lowers a value match state
     CHECK(code.contains("else {"));
 }
 
+TEST_CASE("Codegen EnTT: render-pass int division and remainder call floor helpers in GLSL",
+          "[codegen-entt][render-passes][numeric-semantics]") {
+    const auto code = conditional_render_pass_codegen(
+        "        let q = LAYER / 0\n"
+        "        let r = -7 % 2\n"
+        "        f.frag_color = f.tint * (1.0 * q * r)\n");
+    CHECK(code.contains("float cactus_div(float a, float b)"));
+    CHECK(code.contains("float cactus_mod(float a, float b)"));
+    CHECK(code.contains("float let_q = cactus_div(2.0, 0.0);"));
+    CHECK(code.contains("float let_r = cactus_mod((-7.0), 2.0);"));
+    CHECK(code.find("float cactus_div(float a, float b)") < code.find("float let_q"));
+}
+
+TEST_CASE("Codegen EnTT: render-pass float division stays a plain GLSL operator",
+          "[codegen-entt][render-passes][numeric-semantics]") {
+    const auto code = conditional_render_pass_codegen(
+        "        let k = f.uv.x / 2.0\n"
+        "        f.frag_color = f.tint * k\n");
+    CHECK(code.contains("float let_k = (uv.x / 2.0);"));
+    CHECK(!code.contains("cactus_div"));
+}
+
 // ── Limit clause (dsl-rule-limit) ───────────────────────────────────────────
 
 static const std::string& limit_traits() {
@@ -7898,7 +7924,7 @@ TEST_CASE("Codegen EnTT: a grouped reduction folds broad-phase rows and writes i
     CHECK(group_filter < fold);
     CHECK(code.find("registry.get<const Body>(actor).radius > 0.0", fold) == std::string::npos);
     // Folds use the runtime helpers; min's default applies only to empty input.
-    CHECK(code.contains("cactus_acc.walls = cactus::runtime::reduce::add(cactus_acc.walls, 1);"));
+    CHECK(code.contains("cactus_acc.walls = cactus::num::add(cactus_acc.walls, 1);"));
     CHECK(code.contains("cactus::runtime::reduce::min(cactus_acc.low, cactus_value)"));
     CHECK(code.contains("cactus_acc.low_seen ? cactus_acc.low : 9.0F;"));
     CHECK(code.contains("if (!cactus_acc.near) {"));
@@ -7932,7 +7958,7 @@ TEST_CASE("Codegen EnTT: a global unary reduction folds in creation order and ru
                                           "        let x = total\n",
                                       "Total");
     const auto sort = code.find("std::ranges::sort(cactus_ordered);");
-    const auto fold = code.find("cactus_acc.total = cactus::runtime::reduce::add(cactus_acc.total, ");
+    const auto fold = code.find("cactus_acc.total.add(");
     REQUIRE(sort != std::string::npos);
     REQUIRE(fold != std::string::npos);
     CHECK(sort < fold);
@@ -8139,7 +8165,7 @@ TEST_CASE("Codegen EnTT: a named handler guards the pass, checks when:, and hois
     CHECK(guard < match_ref);
     CHECK(match_ref < when);
     CHECK(when < loop);
-    CHECK(code.contains("named_ref__test__Game__Stats.ticks += 1;"));
+    CHECK(code.contains("named_ref__test__Game__Stats.ticks = cactus::num::add(named_ref__test__Game__Stats.ticks, 1);"));
     CHECK(count_occurrences(code, "registry.get<Match>(generated_named_slots().test__Game)") == 1);
 }
 
@@ -8174,7 +8200,7 @@ TEST_CASE("Codegen EnTT: a named read in a limited rule's where: is guarded and 
 TEST_CASE("Codegen EnTT: an event handler writes by name and targets a name", "[codegen-entt][named-entity]") {
     const auto code = named_rule_code("Score");
     CHECK(code.contains("named_alive<Match>(registry, generated_named_slots().test__Game)"));
-    CHECK(code.contains("named_ref__test__Game__Match.score += 1;"));
+    CHECK(code.contains("named_ref__test__Game__Match.score = cactus::num::add(named_ref__test__Game__Match.score, 1);"));
     CHECK(code.contains("generated_named_slots().test__Boss"));
     CHECK(!code.contains("named_alive<Rival>"));
 }
@@ -8362,4 +8388,158 @@ trait Frozen
     };
     CHECK(generate(compact) == generate(block));
 }
+// ── Total integer arithmetic ───────────────────────────────────────────────
+
+static const std::string& arithmetic_traits() {
+    static const std::string value =
+        "event tick:\n"
+        "    dt: float\n"
+        "trait Cell:\n"
+        "    var n: int = 0\n"
+        "    var d: int = 1\n"
+        "    var f: float = 0.0\n"
+        "    var v: vec2 = vec2(0.0, 0.0)\n";
+    return value;
+}
+
+TEST_CASE("Codegen EnTT: int operators in a handler lower to total helpers", "[codegen-entt][numeric-semantics]") {
+    const auto code = emit_named_rule(arithmetic_traits() +
+                                          "rule R:\n"
+                                          "    each:\n"
+                                          "        Cell as c\n"
+                                          "    on tick:\n"
+                                          "        c.n = c.n + c.d - c.n * c.d / c.d % c.d\n"
+                                          "        c.d = -c.n\n"
+                                          "        c.n = -7\n"
+                                          "        c.d = -2147483648 / c.d\n",
+                                      "R");
+    for (const auto* helper : {"add(", "sub(", "mul(", "div(", "mod(", "neg("}) {
+        CAPTURE(helper);
+        CHECK(code.contains(std::string("cactus::num::") + helper));
+    }
+    CHECK(code.contains("= -7;"));
+    CHECK(!code.contains("cactus::num::neg(7)"));
+    CHECK(code.contains("cactus::num::div((-2147483647 - 1), c.d)"));
+}
+
+TEST_CASE("Codegen EnTT: int compound assignments lower to total helpers", "[codegen-entt][numeric-semantics]") {
+    const auto code = emit_named_rule(arithmetic_traits() +
+                                          "rule R:\n"
+                                          "    each:\n"
+                                          "        Cell as c\n"
+                                          "    on tick:\n"
+                                          "        c.n += 2\n"
+                                          "        c.n -= c.d\n"
+                                          "        c.n *= 3\n"
+                                          "        c.n /= c.d\n",
+                                      "R");
+    CHECK(code.contains("c.n = cactus::num::add(c.n, 2);"));
+    CHECK(code.contains("c.n = cactus::num::sub(c.n, c.d);"));
+    CHECK(code.contains("c.n = cactus::num::mul(c.n, 3);"));
+    CHECK(code.contains("c.n = cactus::num::div(c.n, c.d);"));
+    CHECK(!code.contains("+="));
+    CHECK(!code.contains("/="));
+}
+
+TEST_CASE("Codegen EnTT: int operators in where, order by and reduce lower to total helpers",
+          "[codegen-entt][numeric-semantics]") {
+    const auto filtered = emit_named_rule(arithmetic_traits() +
+                                              "rule R:\n"
+                                              "    each:\n"
+                                              "        Cell as c\n"
+                                              "    where:\n"
+                                              "        c.n % 2 == 0\n"
+                                              "    on tick:\n"
+                                              "        c.f = 1.0\n",
+                                          "R");
+    CHECK(filtered.contains("cactus::num::mod("));
+    const auto ordered = emit_named_rule(arithmetic_traits() +
+                                             "rule R:\n"
+                                             "    each:\n"
+                                             "        Cell as c\n"
+                                             "    order by:\n"
+                                             "        c.n * 2 desc\n"
+                                             "    on tick:\n"
+                                             "        c.f = 1.0\n",
+                                         "R");
+    CHECK(ordered.contains("cactus::num::mul("));
+    const auto reduced = emit_named_rule(arithmetic_traits() +
+                                             "rule R:\n"
+                                             "    each:\n"
+                                             "        Cell as c\n"
+                                             "    reduce:\n"
+                                             "        total = sum(c.n - 1)\n"
+                                             "    on tick:\n"
+                                             "        let x = total\n",
+                                         "R");
+    CHECK(reduced.contains("cactus::num::sub("));
+}
+
+TEST_CASE("Codegen EnTT: an int constant initializer lowers to total helpers", "[codegen-entt][numeric-semantics]") {
+    ProgramNode program;
+    auto decorated  = full_pipeline(arithmetic_traits() +
+                                       "const:\n"
+                                       "    CELL = -7 / 2\n"
+                                       "    HALF = 7.0 / 2.0\n",
+                                   program);
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.contains("CELL = cactus::num::div(-7, 2);"));
+    CHECK(code.contains("HALF = (7.0F / 2.0F);"));
+}
+
+TEST_CASE("Codegen EnTT: float and vector operators stay plain operators", "[codegen-entt][numeric-semantics]") {
+    const auto code = emit_named_rule(arithmetic_traits() +
+                                          "rule R:\n"
+                                          "    each:\n"
+                                          "        Cell as c\n"
+                                          "    on tick:\n"
+                                          "        c.f = c.f / 2.0 + c.f * c.f - -c.f\n"
+                                          "        c.f += 1.0\n"
+                                          "        c.v = c.v + c.v * 2.0\n"
+                                          "        c.v += c.v\n",
+                                      "R");
+    CHECK(!code.contains("cactus::num::"));
+    CHECK(code.contains("c.f += 1.0F;"));
+    CHECK(code.contains("c.v += c.v;"));
+}
+
+TEST_CASE("Codegen EnTT: the generated file sets the float mode before any other include",
+          "[codegen-entt][numeric-semantics]") {
+    ProgramNode program;
+    auto decorated  = full_pipeline(arithmetic_traits(), program);
+    const auto code = CppEnttCodegen::generate(decorated);
+    const auto mode = code.find("#include \"common/float_mode.hpp\"\n");
+    REQUIRE(mode != std::string::npos);
+    CHECK(mode < code.find("#include", mode + 1));
+    CHECK(code.find("#include") == mode);
+}
+
+TEST_CASE("Codegen EnTT: int operators in call arguments, emit payloads and template arguments use total helpers",
+          "[codegen-entt][numeric-semantics]") {
+    ProgramNode program;
+    auto decorated  = full_pipeline(arithmetic_traits() +
+                                       "event Hit:\n"
+                                       "    amount: int\n"
+                                       "func halve(v: int) int:\n"
+                                       "    return v\n"
+                                       "template Box(size: int):\n"
+                                       "    Cell:\n"
+                                       "        n = size / 3\n"
+                                       "        d = -size\n"
+                                       "entity A from Box(size = 9)\n"
+                                       "rule R:\n"
+                                       "    each:\n"
+                                       "        Cell as c\n"
+                                       "    on tick:\n"
+                                       "        c.n = halve(c.n * 3)\n"
+                                       "        emit Hit:\n"
+                                       "            amount = c.d % 4\n",
+                                   program);
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.contains("halve(cactus::num::mul(c.n, 3))"));
+    CHECK(code.contains("cactus::num::mod(c.d, 4)"));
+    CHECK(code.contains("cactus::num::div(__cactus_template_slot_0, 3)"));
+    CHECK(code.contains("cactus::num::neg(__cactus_template_slot_0)"));
+}
+
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

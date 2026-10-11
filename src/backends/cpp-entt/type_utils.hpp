@@ -37,6 +37,13 @@ public:
     static std::string emit_if_ternary(const IfExpr& if_expr, const std::function<std::string(const ExprNode&)>& emit);
     static std::string emit_match_ternary(const MatchExpr& match_expr,
                                           const std::function<std::string(const ExprNode&)>& emit);
+    // Binary/unary operator text; `int` arithmetic calls the total `cactus::num` helpers.
+    static std::string emit_binary(const BinaryExpr& binary, const std::string& left, const std::string& right);
+    static std::string emit_unary(const UnaryExpr& unary, const std::string& operand);
+    // `target op= value` as a statement body (no indent, no trailing `;`).
+    static std::string emit_compound_assignment(const VarAssign& assign,
+                                                const std::string& target,
+                                                const std::string& value);
     // Comma-joined emit_expr(*args[i], program) for a call/query argument list.
     static std::string join_emitted_args(const std::vector<std::unique_ptr<ExprNode>>& args,
                                          const DecoratedProgram& program);

@@ -1,3 +1,5 @@
+#include "common/float_mode.hpp"
+
 #include "common/cactus_runtime.hpp"
 
 #include <algorithm>
@@ -7,6 +9,14 @@
 #include <random>
 #include <raymath.h>
 #include <sstream>
+
+// Correctly rounded binary32 functions from CORE-MATH: one result on every platform.
+extern "C" {
+float cr_sinf(float x);
+float cr_cosf(float x);
+float cr_atan2f(float y, float x);
+float cr_powf(float x, float y);
+}
 
 // Global scope, matching the header declaration (cactus_runtime.hpp):
 // generated code calls this unqualified, the same ordinary-lookup reason
@@ -216,31 +226,31 @@ float sqrt(float v) noexcept {
 }
 
 float sin(float a) noexcept {
-    return std::sin(a);
+    return cr_sinf(a);
 }
 
 float cos(float a) noexcept {
-    return std::cos(a);
+    return cr_cosf(a);
 }
 
 float atan2(float y, float x) noexcept {
-    return std::atan2(y, x);
+    return cr_atan2f(y, x);
 }
 
 int floor(float v) noexcept {
-    return static_cast<int>(std::floor(v));
+    return num::to_int(std::floor(v));
 }
 
 int ceil(float v) noexcept {
-    return static_cast<int>(std::ceil(v));
+    return num::to_int(std::ceil(v));
 }
 
 int round(float v) noexcept {
-    return static_cast<int>(std::round(v));
+    return num::to_int(std::round(v));
 }
 
 float pow(float base, float exp) noexcept {
-    return std::pow(base, exp);
+    return cr_powf(base, exp);
 }
 
 namespace vec2 {
@@ -263,7 +273,7 @@ float distance(Vector2 a, Vector2 b) noexcept {
 }
 
 float angle(Vector2 v) noexcept {
-    return std::atan2(v.y, v.x);
+    return stdlib::math::atan2(v.y, v.x);
 }
 
 Vector2 rotate(Vector2 v, float angle) noexcept {
@@ -301,12 +311,34 @@ Vector3 rotate(Vector3 v, Vector3 axis, float angle) noexcept {
 
 namespace quat {
 
+// Same formulas as raymath's QuaternionFromEuler/FromAxisAngle, on the deterministic sin/cos.
 Quat from_euler(float pitch, float yaw, float roll) noexcept {
-    return QuaternionFromEuler(pitch, yaw, roll);
+    const float x0 = stdlib::math::cos(pitch * 0.5F);
+    const float x1 = stdlib::math::sin(pitch * 0.5F);
+    const float y0 = stdlib::math::cos(yaw * 0.5F);
+    const float y1 = stdlib::math::sin(yaw * 0.5F);
+    const float z0 = stdlib::math::cos(roll * 0.5F);
+    const float z1 = stdlib::math::sin(roll * 0.5F);
+    return Quat{
+        .x = (x1 * y0 * z0) - (x0 * y1 * z1),
+        .y = (x0 * y1 * z0) + (x1 * y0 * z1),
+        .z = (x0 * y0 * z1) - (x1 * y1 * z0),
+        .w = (x0 * y0 * z0) + (x1 * y1 * z1),
+    };
 }
 
 Quat from_axis_angle(Vector3 axis, float angle) noexcept {
-    return QuaternionFromAxisAngle(axis, angle);
+    const float length = vec3::length(axis);
+    if (length == 0.0F) {
+        return identity();
+    }
+    const float inv_length = 1.0F / length;
+    const float half       = angle * 0.5F;
+    const float sin_half   = stdlib::math::sin(half);
+    return normalize_or_identity(Quat{.x = axis.x * inv_length * sin_half,
+                                      .y = axis.y * inv_length * sin_half,
+                                      .z = axis.z * inv_length * sin_half,
+                                      .w = stdlib::math::cos(half)});
 }
 
 Vector3 forward(Quat q) noexcept {
@@ -325,9 +357,36 @@ Vector3 rotate(Quat q, Vector3 v) noexcept {
     return Vector3RotateByQuaternion(v, normalize_or_identity(q));
 }
 
+// raymath's QuaternionSlerp, with acos(c) written as atan2(sqrt(1 - c*c), c) on the deterministic atan2.
 Quat slerp(Quat a, Quat b, float t) noexcept {
-    const float clamped_t = stdlib::math::clamp(t, 0.0F, 1.0F);
-    return QuaternionSlerp(normalize_or_identity(a), normalize_or_identity(b), clamped_t);
+    const float amount = stdlib::math::clamp(t, 0.0F, 1.0F);
+    const Quat from    = normalize_or_identity(a);
+    Quat to            = normalize_or_identity(b);
+    float cos_half     = dot(from, to);
+    if (cos_half < 0.0F) {
+        to       = Quat{.x = -to.x, .y = -to.y, .z = -to.z, .w = -to.w};
+        cos_half = -cos_half;
+    }
+    if (cos_half >= 1.0F) {
+        return from;
+    }
+    if (cos_half > 0.95F) {
+        return QuaternionNlerp(from, to, amount);
+    }
+    const float sin_half = std::sqrt(1.0F - (cos_half * cos_half));
+    if (sin_half < 0.000001F) {
+        return Quat{.x = (from.x * 0.5F) + (to.x * 0.5F),
+                    .y = (from.y * 0.5F) + (to.y * 0.5F),
+                    .z = (from.z * 0.5F) + (to.z * 0.5F),
+                    .w = (from.w * 0.5F) + (to.w * 0.5F)};
+    }
+    const float half_theta = stdlib::math::atan2(sin_half, cos_half);
+    const float ratio_a    = stdlib::math::sin((1.0F - amount) * half_theta) / sin_half;
+    const float ratio_b    = stdlib::math::sin(amount * half_theta) / sin_half;
+    return Quat{.x = (from.x * ratio_a) + (to.x * ratio_b),
+                .y = (from.y * ratio_a) + (to.y * ratio_b),
+                .z = (from.z * ratio_a) + (to.z * ratio_b),
+                .w = (from.w * ratio_a) + (to.w * ratio_b)};
 }
 
 Quat inverse(Quat q) noexcept {

@@ -2984,6 +2984,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
            "performance-move-const-arg,readability-named-parameter,modernize-use-designated-initializers,"
            "readability-use-std-min-max)\n";
     out << "// Generated C++ mirrors authored DSL constants, declarations, and system control flow.\n\n";
+    out << "#include \"common/float_mode.hpp\"\n\n";
     out << "#include \"backends/cpp-entt/runtime.hpp\"\n";
     if (program_uses_persistence(program)) {
         out << "#include \"backends/cpp-entt/persistence_file_adapter.hpp\"\n";
@@ -3606,8 +3607,10 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                 out << "                const float __dist = cactus::runtime::stdlib::math::vec3::length(Vector3{.x = "
                        "__dx, .y = __dy, .z = __dz});\n";
                 out << "                const float __distance = (__dist < 0.1F) ? 0.1F : __dist;\n";
-                out << "                const float __pitch = std::asin(std::clamp(__dy / __distance, -1.0F, 1.0F));\n";
-                out << "                const float __yaw = std::atan2(-__dx, -__dz);\n";
+                out << "                const float __sin_pitch = std::clamp(__dy / __distance, -1.0F, 1.0F);\n";
+                out << "                const float __pitch = cactus::runtime::stdlib::math::atan2(__sin_pitch, "
+                       "std::sqrt(1.0F - (__sin_pitch * __sin_pitch)));\n";
+                out << "                const float __yaw = cactus::runtime::stdlib::math::atan2(-__dx, -__dz);\n";
                 out << "                const Quat __rot = cactus::runtime::stdlib::math::quat::from_euler(__pitch, "
                        "__yaw, 0.0F);\n";
                 out << "                std::vector<entt::entity> __saved;\n";

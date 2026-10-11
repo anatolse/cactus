@@ -75,16 +75,15 @@ TEST_CASE("aggregates come from the input snapshot, not from earlier handlers",
     CHECK(team_of(registry, BLUE_TEAM).rival_bonus == 1);
     CHECK(team_of(registry, RED_TEAM).bonus == 11);
 }
-TEST_CASE("int sums saturate per step and float sums keep fold order", "[runtime][codegen-entt][rule-reduce]") {
-    // 2147483647 + 1 clamps, then -1 gives 2147483646. (1e8 + 1) - 1e8 is 0
-    // in float; a reassociated sum would give 1.
+TEST_CASE("int sums wrap and float sums are exact", "[runtime][codegen-entt][rule-reduce]") {
+    // 2147483647 + 1 - 1 wraps back to 2147483647 in any order. 1e8 + 1 - 1e8 is exactly 1.
     entt::registry registry;
     run_one_frame(registry);
     const auto view = registry.view<team_score_reduce_runtime__Totals>();
     REQUIRE(view.begin() != view.end());
     const auto& totals = registry.get<team_score_reduce_runtime__Totals>(*view.begin());
-    CHECK(totals.whole == 2147483646);
-    CHECK(totals.part == 0.0F);
+    CHECK(totals.whole == 2147483647);
+    CHECK(totals.part == 1.0F);
 }
 TEST_CASE("a targeted event runs only the recipient's group", "[runtime][codegen-entt][rule-reduce]") {
     entt::registry registry;

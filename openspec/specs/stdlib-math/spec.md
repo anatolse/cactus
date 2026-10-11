@@ -241,3 +241,26 @@ The `std.input` module SHALL provide concrete backend/runtime implementations fo
 #### Scenario: Usable in a constant
 - **WHEN** a module declares `const:` with `STEER = math.radians(40.0)`
 - **THEN** compilation succeeds and `STEER` is approximately `0.6981317`
+
+### Requirement: Scalar math is total and identical on every platform
+Every `std.math` scalar function SHALL return the same bits for the same inputs on every supported platform and compiler. `sqrt` SHALL be correctly rounded. `sin`, `cos`, `atan2` and `pow` SHALL be computed by implementations that the runtime owns, not by the platform math library. `floor`, `ceil` and `round` SHALL convert to `int` with the total float-to-integer rule of `dsl-numeric-semantics`: NaN gives `0` and out-of-range values clamp. `round` SHALL round halfway cases away from zero. `min` and `max` SHALL return NaN when either argument is NaN.
+
+#### Scenario: Transcendentals are identical across platforms
+- **WHEN** the runtime test suite evaluates `math.sin`, `math.cos`, `math.atan2` and `math.pow` on a fixed table of inputs on each supported platform
+- **THEN** every result matches the same expected bits on every platform
+
+#### Scenario: Floor of NaN
+- **WHEN** `math.floor` is called with NaN
+- **THEN** it returns integer `0`
+
+#### Scenario: Ceil of a huge value
+- **WHEN** `math.ceil(1.0e20)` is called
+- **THEN** it returns integer `2147483647`
+
+#### Scenario: Round halfway case
+- **WHEN** `math.round(-2.5)` is called
+- **THEN** it returns integer `-3`
+
+#### Scenario: Min with NaN
+- **WHEN** `math.min(x, 1.0)` is called and `x` is NaN
+- **THEN** it returns NaN

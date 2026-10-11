@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -87,7 +88,43 @@ struct GlslCtx {
     // other or shadow the outer stage-handler body incorrectly.
     std::unordered_map<std::string, TranslatedExpr> param_substitutions;
     std::vector<NeededUniform> uniforms;
+    bool uses_int_division = false;
 };
+
+// Stage handlers carry Cactus `int` values as GLSL floats; these divide them as integers
+// with the floor and division-by-zero rules of CPU code.
+constexpr std::string_view kGlslIntDivision =
+    "float cactus_div(float a, float b)\n"
+    "{\n"
+    "    int x = int(a);\n"
+    "    int y = int(b);\n"
+    "    if (y == 0) {\n"
+    "        return 0.0;\n"
+    "    }\n"
+    "    int q = abs(x) / abs(y);\n"
+    "    if ((x < 0) != (y < 0)) {\n"
+    "        q = -q;\n"
+    "        if (q * y != x) {\n"
+    "            q -= 1;\n"
+    "        }\n"
+    "    }\n"
+    "    return float(q);\n"
+    "}\n"
+    "\n"
+    "float cactus_mod(float a, float b)\n"
+    "{\n"
+    "    return a - cactus_div(a, b) * b;\n"
+    "}\n"
+    "\n";
+
+// The kGlslIntDivision function for an `int` `/`, `%`, `/=` or `%=`; null for any other operator.
+const char* int_division_helper(ArithmeticOperands operands, std::string_view op, GlslCtx& ctx) {
+    if (operands != ArithmeticOperands::Int || op.empty() || (op.front() != '/' && op.front() != '%')) {
+        return nullptr;
+    }
+    ctx.uses_int_division = true;
+    return op.front() == '/' ? "cactus_div" : "cactus_mod";
+}
 
 // A `let`-bound local is emitted under a mangled name so an author's
 // ordinary Cactus identifier can never collide with a GLSL reserved word
@@ -399,6 +436,9 @@ TranslatedExpr translate_ident(const IdentExpr& ident, GlslCtx& ctx) {
 TranslatedExpr translate_binary(const BinaryExpr& binary, GlslCtx& ctx) {
     auto left  = translate_expr(*binary.left, ctx);
     auto right = translate_expr(*binary.right, ctx);
+    if (const char* helper = int_division_helper(binary.operands, binary.op, ctx)) {
+        return {.text = std::string(helper) + "(" + left.text + ", " + right.text + ")", .type = GlslType::Float};
+    }
     const bool is_comparison = binary.op == "<" || binary.op == ">" || binary.op == "<=" || binary.op == ">=" ||
                                binary.op == "==" || binary.op == "!=";
     if (left.type != right.type) {
@@ -540,7 +580,11 @@ std::string translate_stmts(const std::vector<std::unique_ptr<StmtNode>>& body, 
             const std::string target = assign->name == ctx.alias && assign->path.size() == 1
                                           ? assign->path.front()
                                           : local_reference(assign->name, ctx);
-            out << pad << target << " " << assign->op << " " << value.text << ";\n";
+            if (const char* helper = int_division_helper(assign->operands, assign->op, ctx)) {
+                out << pad << target << " = " << helper << "(" << target << ", " << value.text << ");\n";
+            } else {
+                out << pad << target << " " << assign->op << " " << value.text << ";\n";
+            }
         } else if (const auto* if_stmt = std::get_if<IfStmt>(&stmt->stmt)) {
             out << translate_if(*if_stmt, ctx, indent);
         } else if (const auto* match_stmt = std::get_if<MatchStmt>(&stmt->stmt);
@@ -595,6 +639,9 @@ std::string build_vertex_shader(const std::vector<std::unique_ptr<StmtNode>>& bo
     }
     out << "\nout vec2 v_uv;\n";
     out << "out vec4 v_tint;\n\n";
+    if (ctx.uses_int_division) {
+        out << kGlslIntDivision;
+    }
     out << "void main()\n{\n";
     out << body_out.str();
     out << "}\n";
@@ -602,21 +649,26 @@ std::string build_vertex_shader(const std::vector<std::unique_ptr<StmtNode>>& bo
 }
 
 std::string build_fragment_shader(const std::vector<std::unique_ptr<StmtNode>>& body, GlslCtx& ctx) {
+    ctx.locals["uv"]         = GlslType::Vec2;
+    ctx.locals["tint"]       = GlslType::Color;
+    ctx.locals["frag_coord"] = GlslType::Vec2;
+    ctx.locals["frag_color"] = GlslType::Color;
+    const auto translated    = translate_stmts(body, ctx, 1);
+
     std::ostringstream out;
     out << "#version 330\n\n";
     out << "in vec2 v_uv;\n";
     out << "in vec4 v_tint;\n\n";
     out << "out vec4 finalColor;\n\n";
+    if (ctx.uses_int_division) {
+        out << kGlslIntDivision;
+    }
     out << "void main()\n{\n";
     out << "    vec2 uv = v_uv;\n";
     out << "    vec4 tint = v_tint;\n";
     out << "    vec2 frag_coord = gl_FragCoord.xy;\n";
     out << "    vec4 frag_color = vec4(0.0, 0.0, 0.0, 0.0);\n";
-    ctx.locals["uv"]         = GlslType::Vec2;
-    ctx.locals["tint"]       = GlslType::Color;
-    ctx.locals["frag_coord"] = GlslType::Vec2;
-    ctx.locals["frag_color"] = GlslType::Color;
-    out << translate_stmts(body, ctx, 1);
+    out << translated;
     out << "    finalColor = frag_color;\n";
     out << "}\n";
     return out.str();

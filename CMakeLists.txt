@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 project(cactus-compiler
     VERSION 0.1.0
-    LANGUAGES CXX
+    LANGUAGES C CXX
     DESCRIPTION "Cactus DSL Compiler — kid-friendly game language"
 )
 
@@ -62,8 +62,27 @@ FetchContent_Declare(
     GIT_SHALLOW    TRUE
 )
 
+# CORE-MATH — correctly rounded binary32 sin/cos/atan2/pow, so float results match on every platform
+FetchContent_Declare(
+    core_math
+    GIT_REPOSITORY https://gitlab.inria.fr/core-math/core-math.git
+    GIT_TAG        0ad8451c76003f617b1ad2b0bdfe10822619bdc3
+    SOURCE_SUBDIR  no-cmake-project
+)
+
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "Minimum CMake policy version" FORCE)
-FetchContent_MakeAvailable(Catch2 EnTT raylib)
+FetchContent_MakeAvailable(Catch2 EnTT raylib core_math)
+
+# Declared before the project warning flags: this is third-party code.
+add_library(cactus_core_math STATIC
+    ${core_math_SOURCE_DIR}/src/binary32/sin/sinf.c
+    ${core_math_SOURCE_DIR}/src/binary32/cos/cosf.c
+    ${core_math_SOURCE_DIR}/src/binary32/atan2/atan2f.c
+    ${core_math_SOURCE_DIR}/src/binary32/pow/powf.c
+)
+set_property(TARGET cactus_core_math PROPERTY C_STANDARD 11)
+target_compile_options(cactus_core_math PRIVATE -ffp-contract=off)
+set_property(TARGET cactus_core_math PROPERTY C_CLANG_TIDY "")
 
 # GPU skinning for skeletal animation (dsl-model-animation): loaders skip the
 # CPU-side animVertices buffers, so UpdateModelAnimation reduces to bone-matrix
@@ -122,7 +141,9 @@ add_library(cactus_runtime_common STATIC
     src/common/persistence_validation.cpp
 )
 target_include_directories(cactus_runtime_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(cactus_runtime_common PUBLIC cactus_common raylib)
+target_link_libraries(cactus_runtime_common PUBLIC cactus_common raylib PRIVATE cactus_core_math)
+# Public, so generated code and every runtime header user never fuse a*b+c.
+target_compile_options(cactus_runtime_common PUBLIC -ffp-contract=off)
 
 add_library(cactus_runtime_cpp_entt STATIC
     src/backends/cpp-entt/runtime.cpp

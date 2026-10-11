@@ -186,17 +186,23 @@ struct SelfExpr {
     SourceLocation location;
 };
 
+// What semantic analysis proved about an arithmetic operator's operands. Backends lower
+// `Unchecked` like `Int` but must let the target language pick the operation by type.
+enum class ArithmeticOperands : std::uint8_t { Unchecked, Int, Other };
+
 struct BinaryExpr {
     std::string op;  // "+", "-", "*", "/", "%", "==", "!=", "<", ">", "<=", ">=", "and", "or"
     std::unique_ptr<ExprNode> left;
     std::unique_ptr<ExprNode> right;
     SourceLocation location;
+    mutable ArithmeticOperands operands = ArithmeticOperands::Unchecked;  // set by semantic analysis
 };
 
 struct UnaryExpr {
     std::string op;  // "not", "-"
     std::unique_ptr<ExprNode> operand;
     SourceLocation location;
+    mutable ArithmeticOperands operands = ArithmeticOperands::Unchecked;  // set by semantic analysis
 };
 
 struct CallExpr {
@@ -343,6 +349,7 @@ struct VarAssign {
     // the whole target as a member chain over a TraitAccessExpr. `name` is its
     // root identifier.
     std::unique_ptr<ExprNode> target;
+    mutable ArithmeticOperands operands = ArithmeticOperands::Unchecked;  // set by semantic analysis
 };
 
 // `vec2(...)`, `vec3(...)`, `color(...)`, or `quat(...)`.

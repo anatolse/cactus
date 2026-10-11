@@ -1,0 +1,48 @@
+module order_by_total_runtime
+
+use std.core
+
+# Sort keys use a total order: NaN sorts last both ways, -0.0 ties 0.0, and
+# equal keys follow creation order. Each rule rolls the ids it visits into one
+# integer, so the value records the visit order. The test creates the Score
+# entities itself.
+
+trait Score:
+    var id: int = 0
+    var v: float = 0.0
+
+trait Log:
+    var ascending: int = 0
+    var descending: int = 0
+    var first: int = 0
+
+rule Ascending:
+    each:
+        Score as s
+    order by:
+        s.v asc
+
+    on tick:
+        Board[Log].ascending = (Board[Log].ascending * 10) + s.id
+
+rule Descending:
+    each:
+        Score as s
+    order by:
+        s.v desc
+
+    on tick:
+        Board[Log].descending = (Board[Log].descending * 10) + s.id
+
+rule First:
+    each:
+        Score as s
+    order by:
+        s.v asc
+    limit: 1
+
+    on tick:
+        Board[Log].first = s.id
+
+entity Board:
+    Log

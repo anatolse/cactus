@@ -1660,9 +1660,11 @@ void ModuleArtifact::write_expression(std::ostream& out, const ExprNode& express
             write_str(out, node.op);
             write_expression(out, *node.left);
             write_expression(out, *node.right);
+            write_u8(out, static_cast<uint8_t>(node.operands));
         } else if constexpr (std::is_same_v<Node, UnaryExpr>) {
             write_str(out, node.op);
             write_expression(out, *node.operand);
+            write_u8(out, static_cast<uint8_t>(node.operands));
         } else if constexpr (std::is_same_v<Node, CallExpr>) {
             write_optional_symbol_id(out, node.resolved_callee_id);
             write_optional_symbol_id(out, node.resolved_struct_id);
@@ -1745,12 +1747,14 @@ std::unique_ptr<ExprNode> ModuleArtifact::read_expression(std::istream& in) {
             node.op = read_str(in);
             node.left = read_expression(in);
             node.right = read_expression(in);
+            node.operands = static_cast<ArithmeticOperands>(read_u8(in));
             return wrap(std::move(node));
         }
         case 4: {
             UnaryExpr node;
             node.op = read_str(in);
             node.operand = read_expression(in);
+            node.operands = static_cast<ArithmeticOperands>(read_u8(in));
             return wrap(std::move(node));
         }
         case 5: {

@@ -1101,7 +1101,8 @@ void emit_view_declaration(std::ostringstream& out,
         out << ">";
     }
     out << ");\n";
-    if (!drive_from.empty()) {
+    // A single-storage view has no use<>: it always iterates the pool that was sorted.
+    if (!drive_from.empty() && (cpp_type_names.size() > 1 || !exclude_cpp_type_names.empty())) {
         out << ind << "view.use<" << drive_from << ">();\n";
     }
 }
@@ -1390,27 +1391,25 @@ std::vector<std::string> emit_sort_key_extractors(std::ostringstream& out,
     return names;
 }
 
-// Lexicographic comparator body over already-emitted key extractors: each key
-// short-circuits on inequality, later keys break earlier ties, and equal-on-
-// every-key compares false so the sort sees a strict weak ordering.
+// Lexicographic comparator body over already-emitted key extractors, using the
+// runtime's total key order: later keys break earlier ties, and `tie_break`
+// decides rows equal on every key.
 void emit_sort_comparator_body(std::ostringstream& out,
                                const RuleNode& sys,
                                const std::vector<std::string>& key_names,
                                const std::string& lhs,
                                const std::string& rhs,
-                               int indent) {
+                               int indent,
+                               const std::string& tie_break = "false") {
     const std::string ind(static_cast<size_t>(indent) * 4, ' ');
     for (std::size_t i = 0; i < key_names.size(); ++i) {
-        out << ind << "{\n";
-        out << ind << "    const auto cactus_lhs_key = " << key_names[i] << "(" << lhs << ");\n";
-        out << ind << "    const auto cactus_rhs_key = " << key_names[i] << "(" << rhs << ");\n";
-        out << ind << "    if (cactus_lhs_key != cactus_rhs_key) {\n";
-        out << ind << "        return cactus_lhs_key " << (sys.order_by[i].descending ? '>' : '<')
-            << " cactus_rhs_key;\n";
-        out << ind << "    }\n";
+        out << ind << "if (const int cactus_order = cactus::num::key_order(" << key_names[i] << "(" << lhs << "), "
+            << key_names[i] << "(" << rhs << "), " << (sys.order_by[i].descending ? "true" : "false") << ");\n";
+        out << ind << "    cactus_order != 0) {\n";
+        out << ind << "    return cactus_order < 0;\n";
         out << ind << "}\n";
     }
-    out << ind << "return false;\n";
+    out << ind << "return " << tie_break << ";\n";
 }
 
 // Returns the anchor trait it sorted by (see primary_sort_trait), or empty
@@ -1466,7 +1465,15 @@ std::string emit_sort_call(std::ostringstream& out,
     out << ind << "    " << snapshot_name << ".push_back(entity);\n";
     out << ind << "}\n";
     out << ind << "std::ranges::stable_sort(" << snapshot_name << ", [&](entt::entity a, entt::entity b) {\n";
-    emit_sort_comparator_body(out, sys, key_names, "a", "b", indent + 1);
+    // The snapshot is in pool order, so equal keys fall back to creation order.
+    emit_sort_comparator_body(out,
+                              sys,
+                              key_names,
+                              "a",
+                              "b",
+                              indent + 1,
+                              "registry.get<cactus::runtime::entt_backend::CreationOrdinal>(a).value < "
+                              "registry.get<cactus::runtime::entt_backend::CreationOrdinal>(b).value");
     out << ind << "});\n";
     out << ind << "registry.storage<" << anchor << ">().sort_as(" << snapshot_name << ".begin(), " << snapshot_name
         << ".end());\n";
@@ -2444,12 +2451,6 @@ static std::string rewrite_expr(  // NOLINT(readability-function-cognitive-compl
                 }
                 return e.name;
             } else if constexpr (std::is_same_v<E, BinaryExpr>) {
-                std::string op = e.op;
-                if (op == "and") {
-                    op = "&&";
-                } else if (op == "or") {
-                    op = "||";
-                }
                 std::string left_text = rewrite_expr(
                     *e.left, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds);
                 std::string right_text = rewrite_expr(
@@ -2462,7 +2463,7 @@ static std::string rewrite_expr(  // NOLINT(readability-function-cognitive-compl
                 // all-int computation the inference merely failed to fully
                 // resolve is never silently turned into float arithmetic.
                 static const std::unordered_set<std::string> kArithmeticOps{"+", "-", "*", "/", "%"};
-                if (kArithmeticOps.contains(op)) {
+                if (kArithmeticOps.contains(e.op)) {
                     const auto left_kind  = infer_numeric_kind(*e.left, trait_names, program, local_kinds);
                     const auto right_kind = infer_numeric_kind(*e.right, trait_names, program, local_kinds);
                     if (left_kind == NumericKind::Int && right_kind == NumericKind::Float) {
@@ -2471,15 +2472,12 @@ static std::string rewrite_expr(  // NOLINT(readability-function-cognitive-compl
                         right_text = "static_cast<float>(" + right_text + ")";
                     }
                 }
-                return "(" + left_text + " " + op + " " + right_text + ")";
+                return EnttCodegenUtils::emit_binary(e, left_text, right_text);
             } else if constexpr (std::is_same_v<E, UnaryExpr>) {
-                std::string op = e.op;
-                if (op == "not") {
-                    op = "!";
-                }
-                return op +
-                       rewrite_expr(
-                           *e.operand, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds);
+                return EnttCodegenUtils::emit_unary(
+                    e,
+                    rewrite_expr(
+                        *e.operand, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds));
             } else if constexpr (std::is_same_v<E, CallExpr>) {
                 if (e.resolved_struct_id.has_value()) {
                     return EnttCodegenUtils::emit_struct_construction(e, program, [&](const ExprNode& argument) {
@@ -3467,9 +3465,12 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                                ");\n";
                     }
                 }
-                return ind + lhs + " " + s.op + " " +
-                       rewrite_expr(
-                           *s.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds) +
+                return ind +
+                       EnttCodegenUtils::emit_compound_assignment(
+                           s,
+                           lhs,
+                           rewrite_expr(
+                               *s.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds)) +
                        ";\n";
             } else if constexpr (std::is_same_v<S, EmitStmt>) {
                 return emit_emit_stmt(
@@ -4406,7 +4407,10 @@ static std::string reducer_cpp_type(const ReducerDecl& reducer) {
 static void emit_reduce_types(std::ostringstream& out, const ReduceClause& reduce, bool count_rows) {
     out << "    struct cactus_reduce_acc {\n";
     for (const auto& reducer : reduce.reducers) {
-        out << "        " << reducer_cpp_type(reducer) << " " << reducer.name;
+        const auto type = reducer_cpp_type(reducer);
+        out << "        "
+            << (reducer.kind == ReducerKind::Sum ? "cactus::runtime::reduce::Sum<" + type + ">" : type) << " "
+            << reducer.name;
         switch (reducer.kind) {
             case ReducerKind::FirstHit:
                 out << " = cactus_collider_sweep_miss();\n";
@@ -4454,10 +4458,10 @@ static void emit_reducer_folds(std::ostringstream& out,
         const auto field = "cactus_acc." + reducer.name;
         switch (reducer.kind) {
             case ReducerKind::Count:
-                out << ind << field << " = " << ns << "add(" << field << ", 1);\n";
+                out << ind << field << " = cactus::num::add(" << field << ", 1);\n";
                 break;
             case ReducerKind::Sum:
-                out << ind << field << " = " << ns << "add(" << field << ", " << rewrite(*reducer.input) << ");\n";
+                out << ind << field << ".add(" << rewrite(*reducer.input) << ");\n";
                 break;
             case ReducerKind::Min:
             case ReducerKind::Max: {
@@ -4513,6 +4517,8 @@ static void emit_reduce_row(std::ostringstream& out,
         if (reducer_has_default(reducer.kind)) {
             out << "cactus_acc." << reducer.name << "_seen ? cactus_acc." << reducer.name << " : "
                 << rewrite_expr(*reducer.default_value, {}, program) << ";\n";
+        } else if (reducer.kind == ReducerKind::Sum) {
+            out << "cactus_acc." << reducer.name << ".value();\n";
         } else {
             out << "cactus_acc." << reducer.name << ";\n";
         }

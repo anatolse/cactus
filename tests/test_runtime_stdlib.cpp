@@ -9,7 +9,9 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -2171,33 +2173,12 @@ TEST_CASE("Runtime stdlib: animation cue cache validates, sorts, and only rebuil
     asset_registry.clear();
     entt_backend::reset_render_debug_state();
 }
-TEST_CASE("reduce: integer sums saturate at each fold step", "[runtime][rule-reduce]") {
+TEST_CASE("reduce: integer sums wrap, so fold order does not matter", "[runtime][rule-reduce]") {
     constexpr int top    = std::numeric_limits<int>::max();
     constexpr int bottom = std::numeric_limits<int>::min();
-    STATIC_CHECK(reduce::add(top, 1) == top);
-    STATIC_CHECK(reduce::add(bottom, -1) == bottom);
-    STATIC_CHECK(reduce::add(reduce::add(top, 1), -1) == top - 1);
-    STATIC_CHECK(reduce::add(reduce::add(bottom, -1), 1) == bottom + 1);
-    STATIC_CHECK(reduce::add(2, 3) == 5);
-}
-
-TEST_CASE("reduce: vector sums add per component from the zero vector", "[runtime][rule-reduce]") {
-    constexpr Vector3 total = reduce::add(reduce::add(reduce::add(Vector3{}, Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F}),
-                                                      Vector3{.x = 0.0F, .y = 2.0F, .z = 0.0F}),
-                                          Vector3{.x = 1.0F, .y = 0.0F, .z = -1.0F});
-    STATIC_CHECK(total.x == 2.0F);
-    STATIC_CHECK(total.y == 2.0F);
-    STATIC_CHECK(total.z == -1.0F);
-    constexpr Vector2 flat = reduce::add(Vector2{.x = 0.5F, .y = -1.0F}, Vector2{.x = 0.25F, .y = 3.0F});
-    STATIC_CHECK(flat.x == 0.75F);
-    STATIC_CHECK(flat.y == 2.0F);
-}
-
-TEST_CASE("reduce: float sums keep fold order", "[runtime][rule-reduce]") {
-    // (1e8 + 1) + -1e8 rounds the 1 away; 1 + (1e8 + -1e8) keeps it.
-    CHECK(reduce::add(reduce::add(1.0e8F, 1.0F), -1.0e8F) == 0.0F);
-    CHECK(reduce::add(reduce::add(1.0F, 1.0e8F), -1.0e8F) == 0.0F);
-    CHECK(reduce::add(1.0F, reduce::add(1.0e8F, -1.0e8F)) == 1.0F);
+    STATIC_CHECK(cactus::num::add(cactus::num::add(top, 1), -1) == top);
+    STATIC_CHECK(cactus::num::add(cactus::num::add(top, -1), 1) == top);
+    STATIC_CHECK(cactus::num::add(cactus::num::add(bottom, -1), 1) == bottom);
 }
 
 TEST_CASE("reduce: best takes a strictly higher key and skips NaN", "[runtime][rule-reduce]") {
@@ -2222,4 +2203,355 @@ TEST_CASE("reduce: float min and max propagate NaN", "[runtime][rule-reduce]") {
     STATIC_CHECK(reduce::min(3, -4) == -4);
     STATIC_CHECK(reduce::max(3, -4) == 3);
 }
+TEST_CASE("num: integer add, sub, mul and neg wrap modulo 2^32", "[runtime][numeric-semantics]") {
+    constexpr int top    = std::numeric_limits<int>::max();
+    constexpr int bottom = std::numeric_limits<int>::min();
+    STATIC_CHECK(cactus::num::add(top, 1) == bottom);
+    STATIC_CHECK(cactus::num::add(bottom, -1) == top);
+    STATIC_CHECK(cactus::num::sub(bottom, 1) == top);
+    STATIC_CHECK(cactus::num::sub(top, -1) == bottom);
+    STATIC_CHECK(cactus::num::mul(65536, 65536) == 0);
+    STATIC_CHECK(cactus::num::mul(top, 2) == -2);
+    STATIC_CHECK(cactus::num::neg(bottom) == bottom);
+    STATIC_CHECK(cactus::num::neg(top) == bottom + 1);
+    STATIC_CHECK(cactus::num::add(2, 3) == 5);
+    STATIC_CHECK(cactus::num::mul(-6, 7) == -42);
+}
+
+TEST_CASE("num: integer division rounds toward minus infinity", "[runtime][numeric-semantics]") {
+    STATIC_CHECK(cactus::num::div(7, 2) == 3);
+    STATIC_CHECK(cactus::num::mod(7, 2) == 1);
+    STATIC_CHECK(cactus::num::div(-7, 2) == -4);
+    STATIC_CHECK(cactus::num::mod(-7, 2) == 1);
+    STATIC_CHECK(cactus::num::div(7, -2) == -4);
+    STATIC_CHECK(cactus::num::mod(7, -2) == -1);
+    STATIC_CHECK(cactus::num::div(-7, -2) == 3);
+    STATIC_CHECK(cactus::num::mod(-7, -2) == -1);
+    STATIC_CHECK(cactus::num::div(-8, 2) == -4);
+    STATIC_CHECK(cactus::num::mod(-8, 2) == 0);
+    STATIC_CHECK(cactus::num::mod(-1, 8) == 7);
+}
+
+TEST_CASE("num: integer division by zero and INT_MIN / -1 are defined", "[runtime][numeric-semantics]") {
+    constexpr int bottom = std::numeric_limits<int>::min();
+    STATIC_CHECK(cactus::num::div(5, 0) == 0);
+    STATIC_CHECK(cactus::num::mod(5, 0) == 5);
+    STATIC_CHECK(cactus::num::div(-5, 0) == 0);
+    STATIC_CHECK(cactus::num::mod(-5, 0) == -5);
+    STATIC_CHECK(cactus::num::div(bottom, -1) == bottom);
+    STATIC_CHECK(cactus::num::mod(bottom, -1) == 0);
+}
+
+TEST_CASE("num: a == div(a, b) * b + mod(a, b) for every pair", "[runtime][numeric-semantics]") {
+    constexpr int top    = std::numeric_limits<int>::max();
+    constexpr int bottom = std::numeric_limits<int>::min();
+    constexpr std::array<int, 13> values{0, 1, -1, 2, -2, 7, -7, 8, -8, top, bottom, top - 1, bottom + 1};
+    for (const int a : values) {
+        for (const int b : values) {
+            const int q = cactus::num::div(a, b);
+            const int r = cactus::num::mod(a, b);
+            CAPTURE(a, b, q, r);
+            CHECK(cactus::num::add(cactus::num::mul(q, b), r) == a);
+            if (b > 0) {
+                CHECK((r >= 0 && r < b));
+            }
+            if (b < 0) {
+                CHECK((r <= 0 && r > b));
+            }
+        }
+    }
+}
+namespace {
+
+// Expected results are correctly rounded binary32 values, computed independently in 400-bit precision.
+// kAnyNaN accepts every NaN: NaN sign and payload are not part of a float's value.
+constexpr std::uint32_t kAnyNaN = 0xFFFFFFFFU;
+
+struct UnaryGolden {
+    std::uint32_t x;
+    std::uint32_t expected;
+};
+
+struct BinaryGolden {
+    std::uint32_t a;
+    std::uint32_t b;
+    std::uint32_t expected;
+};
+
+void check_golden(float result, std::uint32_t expected) {
+    const auto actual = std::bit_cast<std::uint32_t>(result);
+    CAPTURE(actual, expected);
+    if (expected == kAnyNaN) {
+        CHECK(std::isnan(result));
+    } else {
+        CHECK(actual == expected);
+    }
+}
+
+float from_bits(std::uint32_t bits) {
+    return std::bit_cast<float>(bits);
+}
+
+}  // namespace
+
+TEST_CASE("math: sin, cos and sqrt return correctly rounded bits", "[runtime][stdlib][math][numeric-semantics]") {
+    constexpr std::array<UnaryGolden, 18> sin_table{{
+        {0x00000000U, 0x00000000U}, {0x80000000U, 0x80000000U}, {0x3F000000U, 0x3EF57744U},
+        {0x3F800000U, 0x3F576AA4U}, {0xBFC00000U, 0xBF7F5BD5U}, {0x40490FDBU, 0xB3BBBD2EU},
+        {0x42C80000U, 0xBF01A12EU}, {0x501502F9U, 0xBEF99A64U}, {0x7E967699U, 0x3F7D39E2U},
+        {0x0DA24260U, 0x0DA24260U}, {0x00000001U, 0x00000001U}, {0x7F800000U, kAnyNaN},
+        {0xFF800000U, kAnyNaN},     {0x7FC00000U, kAnyNaN},     {0x46199998U, 0xBEB1FA5DU},
+        {0x3F3ADC51U, 0x3F2AB445U}, {0x3FA7832AU, 0x3F7741B6U}, {0x4116CBE4U, 0xB2CCDE2EU},
+    }};
+    constexpr std::array<UnaryGolden, 14> cos_table{{
+        {0x00000000U, 0x3F800000U}, {0x80000000U, 0x3F800000U}, {0x3F000000U, 0x3F60A940U},
+        {0x3FC90FDBU, 0xB33BBD2EU}, {0x42C80000U, 0x3F5CC0EEU}, {0x501502F9U, 0x3F5F84C5U},
+        {0x7E967699U, 0x3E1655CDU}, {0x7F800000U, kAnyNaN},     {0x7FC00000U, kAnyNaN},
+        {0x4096CBE4U, 0x324CDE2EU}, {0x5922AA80U, 0x3F08AEBFU}, {0x5AA4542CU, 0x3EFA40A4U},
+        {0x5F18B878U, 0x3F7F14BBU}, {0x6115CB11U, 0x3F78142FU},
+    }};
+    constexpr std::array<UnaryGolden, 7> sqrt_table{{
+        {0x40000000U, 0x3FB504F3U},
+        {0x00000000U, 0x00000000U},
+        {0x80000000U, 0x80000000U},
+        {0xBF800000U, kAnyNaN},
+        {0x7F800000U, 0x7F800000U},
+        {0x00000001U, 0x1A3504F3U},
+        {0x7149F2CAU, 0x58635FA9U},
+    }};
+    for (const auto& row : sin_table) {
+        CAPTURE(row.x);
+        check_golden(stdlib::math::sin(from_bits(row.x)), row.expected);
+    }
+    for (const auto& row : cos_table) {
+        CAPTURE(row.x);
+        check_golden(stdlib::math::cos(from_bits(row.x)), row.expected);
+    }
+    for (const auto& row : sqrt_table) {
+        CAPTURE(row.x);
+        check_golden(stdlib::math::sqrt(from_bits(row.x)), row.expected);
+    }
+}
+
+TEST_CASE("math: atan2 and pow return correctly rounded bits", "[runtime][stdlib][math][numeric-semantics]") {
+    constexpr std::array<BinaryGolden, 13> atan2_table{{
+        {0x00000000U, 0x00000000U, 0x00000000U},
+        {0x80000000U, 0x00000000U, 0x80000000U},
+        {0x00000000U, 0x80000000U, 0x40490FDBU},
+        {0x80000000U, 0x80000000U, 0xC0490FDBU},
+        {0x3F800000U, 0x3F800000U, 0x3F490FDBU},
+        {0x3F800000U, 0xBF800000U, 0x4016CBE4U},
+        {0xBF800000U, 0xBF800000U, 0xC016CBE4U},
+        {0x3F800000U, 0x00000000U, 0x3FC90FDBU},
+        {0x40400000U, 0x0DA24260U, 0x3FC90FDBU},
+        {0x7F800000U, 0x7F800000U, 0x3F490FDBU},
+        {0xFF800000U, 0xFF800000U, 0xC016CBE4U},
+        {0x3F800000U, 0x7F800000U, 0x00000000U},
+        {0x7FC00000U, 0x3F800000U, kAnyNaN},
+    }};
+    constexpr std::array<BinaryGolden, 15> pow_table{{
+        {0x40000000U, 0x41200000U, 0x44800000U},
+        {0x40000000U, 0x3F000000U, 0x3FB504F3U},
+        {0xC0000000U, 0x40400000U, 0xC1000000U},
+        {0xC0000000U, 0x3F000000U, kAnyNaN},
+        {0xC1000000U, 0x3EAAAAABU, kAnyNaN},
+        {0x00000000U, 0xBF800000U, 0x7F800000U},
+        {0x80000000U, 0xBF800000U, 0xFF800000U},
+        {0x3F000000U, 0x43160000U, 0x00000000U},
+        {0x3F800000U, 0x7FC00000U, 0x3F800000U},
+        {0x7FC00000U, 0x00000000U, 0x3F800000U},
+        {0x41200000U, 0x42180000U, 0x7E967699U},
+        {0x41200000U, 0x421C0000U, 0x7F800000U},
+        {0xBF800000U, 0x7F800000U, 0x3F800000U},
+        {0x40200000U, 0xC0400000U, 0x3D83126FU},
+        {0x3F8CCCCDU, 0x42C90000U, 0x4661D50AU},
+    }};
+    for (const auto& row : atan2_table) {
+        CAPTURE(row.a, row.b);
+        check_golden(stdlib::math::atan2(from_bits(row.a), from_bits(row.b)), row.expected);
+    }
+    for (const auto& row : pow_table) {
+        CAPTURE(row.a, row.b);
+        check_golden(stdlib::math::pow(from_bits(row.a), from_bits(row.b)), row.expected);
+    }
+}
+TEST_CASE("math: floor, ceil and round convert every float to a defined int", "[runtime][stdlib][math][numeric-semantics]") {
+    constexpr int top    = std::numeric_limits<int>::max();
+    constexpr int bottom = std::numeric_limits<int>::min();
+    const float nan      = std::numeric_limits<float>::quiet_NaN();
+    const float inf      = std::numeric_limits<float>::infinity();
+    for (const auto convert : {stdlib::math::floor, stdlib::math::ceil, stdlib::math::round}) {
+        CHECK(convert(nan) == 0);
+        CHECK(convert(-nan) == 0);
+        CHECK(convert(inf) == top);
+        CHECK(convert(-inf) == bottom);
+        CHECK(convert(1.0e20F) == top);
+        CHECK(convert(-1.0e20F) == bottom);
+        CHECK(convert(2147483648.0F) == top);
+        CHECK(convert(-2147483648.0F) == bottom);
+    }
+    CHECK(stdlib::math::floor(-2.5F) == -3);
+    CHECK(stdlib::math::ceil(-2.5F) == -2);
+    CHECK(stdlib::math::round(-2.5F) == -3);
+    CHECK(stdlib::math::round(2.5F) == 3);
+    CHECK(stdlib::math::floor(2147483520.0F) == 2147483520);
+}
+
+TEST_CASE("math: min and max return NaN when either argument is NaN", "[runtime][stdlib][math][numeric-semantics]") {
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    CHECK(std::isnan(stdlib::math::min(nan, 1.0F)));
+    CHECK(std::isnan(stdlib::math::min(1.0F, nan)));
+    CHECK(std::isnan(stdlib::math::max(nan, 1.0F)));
+    CHECK(std::isnan(stdlib::math::max(1.0F, nan)));
+    CHECK(stdlib::math::min(2.0F, -1.0F) == -1.0F);
+    CHECK(stdlib::math::max(2.0F, -1.0F) == 2.0F);
+}
+
+TEST_CASE("math: a multiply-add rounds the product before adding", "[runtime][stdlib][math][numeric-semantics]") {
+    // (1 + 2^-23)^2 = 1 + 2^-22 + 2^-46 rounds to 1 + 2^-22, so the sum is exactly 0; a fused
+    // multiply-add would keep the 2^-46.
+    volatile float near_one = 1.0F + 0x1p-23F;
+    volatile float offset   = -(1.0F + 0x1p-22F);
+    const float a           = near_one;
+    const float c           = offset;
+    CHECK((a * a) + c == 0.0F);
+    CHECK(stdlib::math::vec2::dot(Vector2{.x = a, .y = c}, Vector2{.x = a, .y = 1.0F}) == 0.0F);
+}
+
+namespace {
+
+float exact_sum(std::initializer_list<float> values) {
+    reduce::Sum<float> sum;
+    for (const float value : values) {
+        sum.add(value);
+    }
+    return sum.value();
+}
+
+}  // namespace
+
+TEST_CASE("reduce: a float sum is exact and independent of order", "[runtime][rule-reduce][numeric-semantics]") {
+    std::array<float, 3> values{1.0e8F, 1.0F, -1.0e8F};
+    std::ranges::sort(values);
+    do {
+        CAPTURE(values);
+        reduce::Sum<float> sum;
+        for (const float value : values) {
+            sum.add(value);
+        }
+        CHECK(sum.value() == 1.0F);
+    } while (std::ranges::next_permutation(values).found);
+
+    // Ten binary32 0.1 values sum to 1.00000001490116..., which rounds to 1.0; a left fold gives 1.0000001.
+    reduce::Sum<float> tenths;
+    for (int i = 0; i < 10; ++i) {
+        tenths.add(0.1F);
+    }
+    CHECK(tenths.value() == 1.0F);
+    CHECK(exact_sum({1.0F, 0x1p-24F}) == 1.0F);
+    CHECK(exact_sum({1.0F, 0x1p-24F, 0x1p-60F}) == 1.0F + 0x1p-23F);
+    CHECK(exact_sum({1.0F + 0x1p-23F, 0x1p-24F}) == 1.0F + 0x1p-22F);
+    CHECK(exact_sum({-1.5F, 0.25F}) == -1.25F);
+}
+
+TEST_CASE("reduce: a float sum handles non-finite inputs, overflow and signed zero",
+          "[runtime][rule-reduce][numeric-semantics]") {
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float inf = std::numeric_limits<float>::infinity();
+    const float top = std::numeric_limits<float>::max();
+    CHECK(std::isnan(exact_sum({1.0F, nan, 2.0F})));
+    CHECK(exact_sum({1.0F, inf, inf}) == inf);
+    CHECK(exact_sum({-inf, 1.0F}) == -inf);
+    CHECK(std::isnan(exact_sum({inf, -inf})));
+    CHECK(exact_sum({top, top}) == inf);
+    CHECK(exact_sum({-top, -top}) == -inf);
+    CHECK(exact_sum({top, top, -top}) == top);
+    CHECK(std::signbit(exact_sum({-0.0F, -0.0F})));
+    CHECK(exact_sum({-0.0F, -0.0F}) == 0.0F);
+    CHECK_FALSE(std::signbit(exact_sum({-0.0F, 0.0F})));
+    CHECK_FALSE(std::signbit(exact_sum({1.0F, -1.0F})));
+    CHECK_FALSE(std::signbit(exact_sum({})));
+}
+
+TEST_CASE("reduce: a float sum is exact for subnormal inputs", "[runtime][rule-reduce][numeric-semantics]") {
+    const float tiny = std::numeric_limits<float>::denorm_min();
+    CHECK(exact_sum({tiny, tiny, tiny}) == 3.0F * tiny);
+    CHECK(exact_sum({tiny, 1.0F, -1.0F}) == tiny);
+    CHECK(exact_sum({std::numeric_limits<float>::min(), -tiny}) == std::numeric_limits<float>::min() - tiny);
+}
+
+TEST_CASE("reduce: merging partial float sums equals one fold", "[runtime][rule-reduce][numeric-semantics]") {
+    const std::array<float, 8> values{1.0e8F, 0.1F, -3.5F, 1.0e-30F, -1.0e8F, 7.25F, 0x1p-24F, 0.1F};
+    reduce::Sum<float> whole;
+    for (const float value : values) {
+        whole.add(value);
+    }
+    for (std::size_t split = 0; split <= values.size(); ++split) {
+        reduce::Sum<float> left;
+        reduce::Sum<float> right;
+        for (std::size_t i = 0; i < values.size(); ++i) {
+            (i < split ? left : right).add(values[i]);
+        }
+        right.merge(left);
+        CAPTURE(split);
+        CHECK(std::bit_cast<std::uint32_t>(right.value()) == std::bit_cast<std::uint32_t>(whole.value()));
+    }
+}
+
+TEST_CASE("reduce: vector sums are exact per component", "[runtime][rule-reduce][numeric-semantics]") {
+    reduce::Sum<Vector3> push;
+    push.add(Vector3{.x = 1.0e8F, .y = 1.0F, .z = 0.0F});
+    push.add(Vector3{.x = 1.0F, .y = 2.0F, .z = -1.0F});
+    push.add(Vector3{.x = -1.0e8F, .y = 0.0F, .z = 0.0F});
+    const Vector3 total = push.value();
+    CHECK(total.x == 1.0F);
+    CHECK(total.y == 3.0F);
+    CHECK(total.z == -1.0F);
+    reduce::Sum<Vector2> flat;
+    flat.add(Vector2{.x = 0.5F, .y = -1.0F});
+    flat.add(Vector2{.x = 0.25F, .y = 3.0F});
+    CHECK(flat.value().x == 0.75F);
+    CHECK(flat.value().y == 2.0F);
+}
+
+TEST_CASE("reduce: an int sum wraps", "[runtime][rule-reduce][numeric-semantics]") {
+    reduce::Sum<int> sum;
+    sum.add(std::numeric_limits<int>::max());
+    sum.add(1);
+    CHECK(sum.value() == std::numeric_limits<int>::min());
+    sum.add(-1);
+    CHECK(sum.value() == std::numeric_limits<int>::max());
+}
+
+TEST_CASE("num: sort keys use a total order with NaN last", "[runtime][rule-order-by][numeric-semantics]") {
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    for (const bool descending : {false, true}) {
+        CAPTURE(descending);
+        CHECK(cactus::num::key_order(1.0F, nan, descending) == -1);
+        CHECK(cactus::num::key_order(nan, -1.0F, descending) == 1);
+        CHECK(cactus::num::key_order(nan, -nan, descending) == 0);
+        CHECK(cactus::num::key_order(-0.0F, 0.0F, descending) == 0);
+    }
+    CHECK(cactus::num::key_order(1.0F, 2.0F, false) == -1);
+    CHECK(cactus::num::key_order(1.0F, 2.0F, true) == 1);
+    STATIC_CHECK(cactus::num::key_order(3, 3, false) == 0);
+    STATIC_CHECK(cactus::num::key_order(false, true, false) == -1);
+    STATIC_CHECK(cactus::num::key_order(false, true, true) == 1);
+}
+
+TEST_CASE("num: helpers keep each operand type's own operator except for int pairs", "[runtime][numeric-semantics]") {
+    STATIC_CHECK(cactus::num::div(-7, 2) == -4);
+    STATIC_CHECK(cactus::num::div(-7.0F, 2.0F) == -3.5F);
+    STATIC_CHECK(cactus::num::add(1, 0.5F) == 1.5F);
+    STATIC_CHECK(cactus::num::sub(1.0F, 3) == -2.0F);
+    STATIC_CHECK(cactus::num::mul(0.5F, 3.0F) == 1.5F);
+    STATIC_CHECK(cactus::num::neg(2.5F) == -2.5F);
+    STATIC_CHECK(cactus::num::mod(7, -2) == -1);
+    const Vector2 sum = cactus::num::add(Vector2{.x = 1.0F, .y = 2.0F}, Vector2{.x = 0.5F, .y = 0.5F});
+    CHECK(sum.x == 1.5F);
+    CHECK(sum.y == 2.5F);
+    const Vector3 scaled = cactus::num::mul(2.0F, Vector3{.x = 1.0F, .y = -1.0F, .z = 0.5F});
+    CHECK(scaled.y == -2.0F);
+}
+
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

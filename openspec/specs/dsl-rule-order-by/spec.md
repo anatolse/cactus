@@ -123,3 +123,22 @@ A valid `order by:` position SHALL accept comma-separated inline sort keys along
 #### Scenario: Compact sorting preserves placement errors
 - **WHEN** a reduced rule places its inline `order by:` before its reduction
 - **THEN** compilation retains the existing clause-placement error
+
+### Requirement: Sort-key order is total and ties break by creation order
+Sorting SHALL use a total order on keys, so it is defined for every key value. `int` and `bool` keys SHALL compare by value, with `false` before `true`. `float` keys SHALL compare by numeric value, with `-0.0` equal to `0.0`; every NaN SHALL be equal to every other NaN and SHALL sort after every number, for both `asc` and `desc`. When all keys of two entities or tuples are equal, the one earlier in stable creation order SHALL come first, whether or not the rule declares `limit:`.
+
+#### Scenario: NaN sorts last ascending
+- **WHEN** a rule declares `order by: s.v asc` and three entities have `v` equal to `2.0`, NaN and `1.0`
+- **THEN** they are iterated in the order `1.0`, `2.0`, NaN
+
+#### Scenario: NaN sorts last descending
+- **WHEN** a rule declares `order by: s.v desc` and three entities have `v` equal to `2.0`, NaN and `1.0`
+- **THEN** they are iterated in the order `2.0`, `1.0`, NaN
+
+#### Scenario: Signed zeros tie
+- **WHEN** two entities have sort keys `-0.0` and `0.0`
+- **THEN** their order is their creation order
+
+#### Scenario: Ties follow creation order without limit
+- **WHEN** a rule with `order by:` and no `limit:` emits one event per entity, and two entities have equal keys
+- **THEN** the earlier-created entity's event is emitted first

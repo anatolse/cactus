@@ -1,3 +1,5 @@
+#include "common/float_mode.hpp"
+
 #include "common/collider_physics.hpp"
 
 #include "common/cactus_runtime.hpp"

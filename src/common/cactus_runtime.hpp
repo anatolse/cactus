@@ -4,6 +4,8 @@
 #include <raymath.h>
 
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <functional>
@@ -12,6 +14,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <unordered_map>
 #include <vector>
 
@@ -99,6 +102,108 @@ template <typename T>
     auto ch = [](const unsigned char v) { return static_cast<float>(v) / 255.0F; };
     return color_from_components(ch(a.r) * ch(b.r), ch(a.g) * ch(b.g), ch(a.b) * ch(b.b), ch(a.a) * ch(b.a));
 }
+
+// Total `int` arithmetic: wraps modulo 2^32; `/` and `%` floor, and `x / 0 == 0`, `x % 0 == x`.
+namespace cactus::num {
+
+[[nodiscard]] constexpr int add(int a, int b) noexcept {
+    return static_cast<int>(static_cast<std::uint32_t>(a) + static_cast<std::uint32_t>(b));
+}
+[[nodiscard]] constexpr int sub(int a, int b) noexcept {
+    return static_cast<int>(static_cast<std::uint32_t>(a) - static_cast<std::uint32_t>(b));
+}
+[[nodiscard]] constexpr int mul(int a, int b) noexcept {
+    return static_cast<int>(static_cast<std::uint32_t>(a) * static_cast<std::uint32_t>(b));
+}
+[[nodiscard]] constexpr int neg(int a) noexcept {
+    return static_cast<int>(0U - static_cast<std::uint32_t>(a));
+}
+[[nodiscard]] constexpr int div(int a, int b) noexcept {
+    if (b == 0) {
+        return 0;
+    }
+    if (b == -1) {
+        return neg(a);
+    }
+    const int quotient = a / b;
+    return (a % b != 0 && ((a < 0) != (b < 0))) ? quotient - 1 : quotient;
+}
+[[nodiscard]] constexpr int mod(int a, int b) noexcept {
+    if (b == 0) {
+        return a;
+    }
+    if (b == -1) {
+        return 0;
+    }
+    const int remainder = a % b;
+    return (remainder != 0 && ((remainder < 0) != (b < 0))) ? remainder + b : remainder;
+}
+
+// For operands the Cactus compiler did not type: an `int` pair picks the total overloads above,
+// and every other type keeps its own operator.
+template <typename A, typename B>
+[[nodiscard]] constexpr auto add(A a, B b) noexcept {
+    return a + b;
+}
+template <typename A, typename B>
+[[nodiscard]] constexpr auto sub(A a, B b) noexcept {
+    return a - b;
+}
+template <typename A, typename B>
+[[nodiscard]] constexpr auto mul(A a, B b) noexcept {
+    return a * b;
+}
+template <typename A, typename B>
+[[nodiscard]] constexpr auto div(A a, B b) noexcept {
+    return a / b;
+}
+template <typename A, typename B>
+[[nodiscard]] constexpr auto mod(A a, B b) noexcept {
+    return a % b;
+}
+template <typename A>
+[[nodiscard]] constexpr auto neg(A a) noexcept {
+    return -a;
+}
+
+// An already-rounded float as an `int`: NaN gives 0 and out-of-range values clamp.
+[[nodiscard]] constexpr int to_int(float rounded) noexcept {
+    if (rounded != rounded) {
+        return 0;
+    }
+    if (rounded >= 2147483648.0F) {
+        return std::numeric_limits<int>::max();
+    }
+    if (rounded <= -2147483648.0F) {
+        return std::numeric_limits<int>::min();
+    }
+    return static_cast<int>(rounded);
+}
+
+// Sort-key order as -1, 0 or 1: NaN sorts after every number in both directions, NaNs tie, -0.0 ties 0.0.
+template <typename T>
+[[nodiscard]] constexpr int key_order(T lhs, T rhs, bool descending) noexcept {
+    if constexpr (std::is_floating_point_v<T>) {
+        const bool lhs_nan = lhs != lhs;
+        const bool rhs_nan = rhs != rhs;
+        if (lhs_nan || rhs_nan) {
+            return static_cast<int>(lhs_nan) - static_cast<int>(rhs_nan);
+        }
+    }
+    if (lhs == rhs) {
+        return 0;
+    }
+    const bool before = descending ? rhs < lhs : lhs < rhs;
+    return before ? -1 : 1;
+}
+
+static_assert(add(std::numeric_limits<int>::max(), 1) == std::numeric_limits<int>::min());
+static_assert(neg(std::numeric_limits<int>::min()) == std::numeric_limits<int>::min());
+static_assert(div(-7, 2) == -4 && mod(-7, 2) == 1);
+static_assert(div(5, 0) == 0 && mod(5, 0) == 5);
+static_assert(div(std::numeric_limits<int>::min(), -1) == std::numeric_limits<int>::min());
+
+}  // namespace cactus::num
 
 namespace cactus::runtime {
 
@@ -204,35 +309,230 @@ struct GeneratedProjectInfo {
     return GeneratedProjectInfo{.backend = backend, .project_name = project_name};
 }
 
-// `reduce:` fold steps. Integer count/sum saturate at each step; float
+// `reduce:` fold steps. Sums don't depend on row order: `int` wraps and `float` is exact. Float
 // min/max return NaN once any input is NaN.
 namespace reduce {
 
-[[nodiscard]] constexpr int add(int acc, int value) noexcept {
-    const auto wide = static_cast<std::int64_t>(acc) + static_cast<std::int64_t>(value);
-    return static_cast<int>(std::clamp<std::int64_t>(
-        wide, std::numeric_limits<int>::min(), std::numeric_limits<int>::max()));
-}
-[[nodiscard]] constexpr float add(float acc, float value) noexcept {
-    return acc + value;
-}
-[[nodiscard]] constexpr Vector2 add(Vector2 acc, Vector2 value) noexcept {
-    return Vector2{.x = acc.x + value.x, .y = acc.y + value.y};
-}
-[[nodiscard]] constexpr Vector3 add(Vector3 acc, Vector3 value) noexcept {
-    return Vector3{.x = acc.x + value.x, .y = acc.y + value.y, .z = acc.z + value.z};
-}
+template <typename T>
+class Sum;
+
+template <>
+class Sum<int> {
+public:
+    constexpr void add(int input) noexcept {
+        total_ = num::add(total_, input);
+    }
+    constexpr void merge(const Sum& other) noexcept {
+        add(other.total_);
+    }
+    [[nodiscard]] constexpr int value() const noexcept {
+        return total_;
+    }
+
+private:
+    int total_ = 0;
+};
+
+// Every finite float is a multiple of 2^-149 below 2^128, so a 320-bit two's-complement fixed-point
+// integer holds the exact sum of up to 2^42 inputs. value() rounds it once, to nearest even.
+template <>
+class Sum<float> {
+public:
+    constexpr void add(float input) noexcept {
+        const auto bits          = std::bit_cast<std::uint32_t>(input);
+        const bool negative      = (bits >> 31U) != 0U;
+        const std::uint32_t exp  = (bits >> 23U) & 0xFFU;
+        const std::uint32_t frac = bits & 0x7FFFFFU;
+        seen_                    = true;
+        only_negative_zero_      = only_negative_zero_ && bits == 0x80000000U;
+        if (exp == 0xFFU) {
+            nan_               = nan_ || frac != 0U;
+            positive_infinity_ = positive_infinity_ || (frac == 0U && !negative);
+            negative_infinity_ = negative_infinity_ || (frac == 0U && negative);
+            return;
+        }
+        const std::uint64_t significand = exp == 0U ? frac : (frac | 0x800000U);
+        const std::uint32_t shift       = exp == 0U ? 0U : exp - 1U;
+        const std::size_t limb          = shift / 64U;
+        const std::uint32_t offset      = shift % 64U;
+        const std::uint64_t low         = significand << offset;
+        const std::uint64_t high        = offset == 0U ? 0U : significand >> (64U - offset);
+        if (negative) {
+            subtract_at(limb, low);
+            subtract_at(limb + 1U, high);
+        } else {
+            add_at(limb, low);
+            add_at(limb + 1U, high);
+        }
+    }
+
+    constexpr void merge(const Sum& other) noexcept {
+        for (std::size_t i = 0; i < kLimbs; ++i) {
+            add_at(i, other.limbs_[i]);
+        }
+        seen_               = seen_ || other.seen_;
+        only_negative_zero_ = only_negative_zero_ && other.only_negative_zero_;
+        nan_                = nan_ || other.nan_;
+        positive_infinity_  = positive_infinity_ || other.positive_infinity_;
+        negative_infinity_  = negative_infinity_ || other.negative_infinity_;
+    }
+
+    [[nodiscard]] constexpr float value() const noexcept {
+        if (nan_ || (positive_infinity_ && negative_infinity_)) {
+            return std::numeric_limits<float>::quiet_NaN();
+        }
+        if (positive_infinity_ || negative_infinity_) {
+            return positive_infinity_ ? std::numeric_limits<float>::infinity()
+                                      : -std::numeric_limits<float>::infinity();
+        }
+        const bool negative     = (limbs_[kLimbs - 1U] >> 63U) != 0U;
+        const auto magnitude    = negative ? negated(limbs_) : limbs_;
+        const std::uint32_t top = top_bit(magnitude);
+        const std::uint32_t sign = negative ? 0x80000000U : 0U;
+        if (top == kNoBit) {
+            return seen_ && only_negative_zero_ ? -0.0F : 0.0F;
+        }
+        if (top <= 23U) {
+            return std::bit_cast<float>(sign | static_cast<std::uint32_t>(magnitude[0]));
+        }
+        std::uint32_t low_bit = top - 23U;
+        std::uint64_t kept    = bits_at(magnitude, low_bit);
+        const bool guard      = bit_set(magnitude, low_bit - 1U);
+        if (guard && (any_below(magnitude, low_bit - 1U) || (kept & 1U) != 0U)) {
+            ++kept;
+        }
+        if (kept == (1U << 24U)) {
+            kept >>= 1U;
+            ++low_bit;
+        }
+        const std::uint32_t biased = low_bit + 1U;
+        if (biased >= 0xFFU) {
+            return std::bit_cast<float>(sign | 0x7F800000U);
+        }
+        return std::bit_cast<float>(sign | (biased << 23U) | (static_cast<std::uint32_t>(kept) & 0x7FFFFFU));
+    }
+
+private:
+    static constexpr std::size_t kLimbs   = 5;
+    static constexpr std::uint32_t kNoBit = 0xFFFFFFFFU;
+    using Limbs                           = std::array<std::uint64_t, kLimbs>;
+
+    constexpr void add_at(std::size_t index, std::uint64_t carry) noexcept {
+        for (; index < kLimbs && carry != 0U; ++index) {
+            limbs_[index] += carry;
+            carry = limbs_[index] < carry ? 1U : 0U;
+        }
+    }
+    constexpr void subtract_at(std::size_t index, std::uint64_t borrow) noexcept {
+        for (; index < kLimbs && borrow != 0U; ++index) {
+            const std::uint64_t before = limbs_[index];
+            limbs_[index] -= borrow;
+            borrow = before < borrow ? 1U : 0U;
+        }
+    }
+    [[nodiscard]] static constexpr Limbs negated(Limbs limbs) noexcept {
+        std::uint64_t carry = 1U;
+        for (auto& limb : limbs) {
+            limb  = ~limb + carry;
+            carry = (carry != 0U && limb == 0U) ? 1U : 0U;
+        }
+        return limbs;
+    }
+    [[nodiscard]] static constexpr std::uint32_t top_bit(const Limbs& limbs) noexcept {
+        for (std::size_t i = kLimbs; i-- > 0U;) {
+            if (limbs[i] != 0U) {
+                return static_cast<std::uint32_t>((i * 64U) + 63U - static_cast<std::size_t>(std::countl_zero(limbs[i])));
+            }
+        }
+        return kNoBit;
+    }
+    [[nodiscard]] static constexpr bool bit_set(const Limbs& limbs, std::uint32_t position) noexcept {
+        return ((limbs[position / 64U] >> (position % 64U)) & 1U) != 0U;
+    }
+    // The 24 bits starting at `position`.
+    [[nodiscard]] static constexpr std::uint64_t bits_at(const Limbs& limbs, std::uint32_t position) noexcept {
+        const std::size_t limb      = position / 64U;
+        const std::uint32_t offset  = position % 64U;
+        std::uint64_t bits          = limbs[limb] >> offset;
+        if (offset > 40U && limb + 1U < kLimbs) {
+            bits |= limbs[limb + 1U] << (64U - offset);
+        }
+        return bits & 0xFFFFFFU;
+    }
+    // Whether any bit below `position` is set.
+    [[nodiscard]] static constexpr bool any_below(const Limbs& limbs, std::uint32_t position) noexcept {
+        const std::size_t limb = position / 64U;
+        for (std::size_t i = 0; i < limb; ++i) {
+            if (limbs[i] != 0U) {
+                return true;
+            }
+        }
+        const std::uint32_t offset = position % 64U;
+        return offset != 0U && (limbs[limb] & ((std::uint64_t{1} << offset) - 1U)) != 0U;
+    }
+
+    Limbs limbs_{};
+    bool seen_               = false;
+    bool only_negative_zero_ = true;
+    bool nan_                = false;
+    bool positive_infinity_  = false;
+    bool negative_infinity_  = false;
+};
+
+template <>
+class Sum<Vector2> {
+public:
+    constexpr void add(Vector2 input) noexcept {
+        x_.add(input.x);
+        y_.add(input.y);
+    }
+    constexpr void merge(const Sum& other) noexcept {
+        x_.merge(other.x_);
+        y_.merge(other.y_);
+    }
+    [[nodiscard]] constexpr Vector2 value() const noexcept {
+        return Vector2{.x = x_.value(), .y = y_.value()};
+    }
+
+private:
+    Sum<float> x_;
+    Sum<float> y_;
+};
+
+template <>
+class Sum<Vector3> {
+public:
+    constexpr void add(Vector3 input) noexcept {
+        x_.add(input.x);
+        y_.add(input.y);
+        z_.add(input.z);
+    }
+    constexpr void merge(const Sum& other) noexcept {
+        x_.merge(other.x_);
+        y_.merge(other.y_);
+        z_.merge(other.z_);
+    }
+    [[nodiscard]] constexpr Vector3 value() const noexcept {
+        return Vector3{.x = x_.value(), .y = y_.value(), .z = z_.value()};
+    }
+
+private:
+    Sum<float> x_;
+    Sum<float> y_;
+    Sum<float> z_;
+};
+
 [[nodiscard]] constexpr int min(int acc, int value) noexcept {
     return std::min(acc, value);
 }
 [[nodiscard]] constexpr int max(int acc, int value) noexcept {
     return std::max(acc, value);
 }
-[[nodiscard]] inline float min(float acc, float value) noexcept {
-    return std::isnan(acc) || std::isnan(value) ? std::numeric_limits<float>::quiet_NaN() : std::min(acc, value);
+[[nodiscard]] constexpr float min(float acc, float value) noexcept {
+    return acc != acc || value != value ? std::numeric_limits<float>::quiet_NaN() : std::min(acc, value);
 }
-[[nodiscard]] inline float max(float acc, float value) noexcept {
-    return std::isnan(acc) || std::isnan(value) ? std::numeric_limits<float>::quiet_NaN() : std::max(acc, value);
+[[nodiscard]] constexpr float max(float acc, float value) noexcept {
+    return acc != acc || value != value ? std::numeric_limits<float>::quiet_NaN() : std::max(acc, value);
 }
 // `best`: a strictly higher key wins, so ties keep the earlier row; a NaN key never wins.
 [[nodiscard]] constexpr bool improves(int key, int best, bool seen) noexcept {
@@ -262,10 +562,10 @@ namespace stdlib::math {
     return (v < 0.0F) ? -v : v;
 }
 [[nodiscard]] constexpr float min(float a, float b) noexcept {
-    return (a < b) ? a : b;
+    return reduce::min(a, b);
 }
 [[nodiscard]] constexpr float max(float a, float b) noexcept {
-    return (a > b) ? a : b;
+    return reduce::max(a, b);
 }
 [[nodiscard]] float sqrt(float v) noexcept;
 [[nodiscard]] constexpr float radians(float degrees) noexcept {

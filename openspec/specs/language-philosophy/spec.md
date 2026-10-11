@@ -86,11 +86,23 @@ Rendering submission, input devices, and other engine integration SHALL default 
 - **THEN** the project records it as a language gap to close, rather than documenting the extern as the intended design
 
 ### Requirement: Total operation semantics
-All operations in Cactus that take an `entity_id` argument SHALL be total: they are defined for all possible inputs, including stale handles. Operations on stale handles produce safe no-ops or no-match results. Authors SHALL NOT be required to check entity validity before performing operations.
+All operations in Cactus SHALL be total: they are defined for all possible inputs and never have undefined behavior or stop the program.
+
+Operations that take an `entity_id` argument are defined for stale handles: they produce safe no-ops or no-match results. Authors SHALL NOT be required to check entity validity before performing operations.
+
+Numeric operations are defined for every value, as specified by `dsl-numeric-semantics`: integer arithmetic wraps, integer division by zero has a defined result, float operations follow IEEE-754, and float-to-integer conversion maps NaN and out-of-range values to defined integers. Authors SHALL NOT be required to guard a division or a conversion against special values to avoid undefined behavior.
 
 #### Scenario: Total operations require no author-side null checks
 - **WHEN** an author writes `add Frozen to f.target` and `f.target` may be stale
 - **THEN** no compile error occurs and the backend generates any required validity guard automatically
+
+#### Scenario: Integer division needs no zero guard
+- **WHEN** an author writes `per_item = total / count` and `count` may be `0`
+- **THEN** the program keeps running and `per_item` is `0` when `count` is `0`
+
+#### Scenario: Overflow is not undefined
+- **WHEN** an integer expression overflows the 32-bit range
+- **THEN** the result is the wrapped value on every backend and platform
 
 ### Requirement: Common gameplay errors are prevented by construction
 The language SHALL prefer forms in which common bugs cannot be written, or are compile errors, over forms that rely on author discipline. Facts the compiler can derive from declarations SHALL NOT be restated by authors, because each restatement can drift from the truth. Total semantics for `entity_id` is one instance of this rule; it applies to every construct.

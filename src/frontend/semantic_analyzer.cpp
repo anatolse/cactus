@@ -504,6 +504,16 @@ bool expr_contains_self(const ExprNode& expr) {
     return found;
 }
 
+// Records what an arithmetic operator's operand types prove. Some passes type an expression without
+// its full scope; their Unknown operands never undo what another pass proved.
+void mark_operands(ArithmeticOperands& operands, const TypeInfo& left, const TypeInfo& right) {
+    if (left.kind == TypeKind::Unknown || right.kind == TypeKind::Unknown) {
+        return;
+    }
+    operands = left.kind == TypeKind::Int && right.kind == TypeKind::Int ? ArithmeticOperands::Int
+                                                                         : ArithmeticOperands::Other;
+}
+
 std::unique_ptr<ExprNode> clone_expr(const ExprNode& expr) {
     return std::visit(
         [&expr](const auto& e) -> std::unique_ptr<ExprNode> {
@@ -512,11 +522,17 @@ std::unique_ptr<ExprNode> clone_expr(const ExprNode& expr) {
                           std::is_same_v<E, SelfExpr>) {
                 return std::make_unique<ExprNode>(ExprNode::Variant{e}, expr.location);
             } else if constexpr (std::is_same_v<E, UnaryExpr>) {
-                UnaryExpr copy{.op = e.op, .operand = clone_expr(*e.operand), .location = e.location};
+                UnaryExpr copy{.op             = e.op,
+                               .operand        = clone_expr(*e.operand),
+                               .location       = e.location,
+                               .operands       = e.operands};
                 return std::make_unique<ExprNode>(ExprNode::Variant{std::move(copy)}, expr.location);
             } else if constexpr (std::is_same_v<E, BinaryExpr>) {
-                BinaryExpr copy{
-                    .op = e.op, .left = clone_expr(*e.left), .right = clone_expr(*e.right), .location = e.location};
+                BinaryExpr copy{.op             = e.op,
+                                .left           = clone_expr(*e.left),
+                                .right          = clone_expr(*e.right),
+                                .location       = e.location,
+                                .operands       = e.operands};
                 return std::make_unique<ExprNode>(ExprNode::Variant{std::move(copy)}, expr.location);
             } else if constexpr (std::is_same_v<E, CallExpr>) {
                 CallExpr copy;
@@ -6557,6 +6573,7 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
             }
 
             auto value_type = infer_expr_type(*assign_stmt->value, filter_bindings, locals, handler_event, pair_scope);
+            mark_operands(assign_stmt->operands, target_type, value_type);
             if (!target_rejected && assign_stmt->op == "=" && struct_types_mismatch(target_type, value_type)) {
                 errors_.error(assign_stmt->location,
                               "type mismatch: cannot assign '" + type_display_name(value_type) + "' to '" +
@@ -10688,6 +10705,7 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
             return make_unknown_type();
         }
         if (unary->op != "not") {
+            mark_operands(unary->operands, operand, operand);
             return operand;
         }
         require_bool(operand, unary->operand->location, "operand of `not`");
@@ -10712,6 +10730,7 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
             binary->op == ">=" || binary->op == "and" || binary->op == "or") {
             return make_bool_type();
         }
+        mark_operands(binary->operands, left, right);
         if ((left.kind == TypeKind::Bool || left.kind == TypeKind::Vec2 || left.kind == TypeKind::Vec3 ||
              left.kind == TypeKind::Color || right.kind == TypeKind::Bool || right.kind == TypeKind::Vec2 ||
              right.kind == TypeKind::Vec3 || right.kind == TypeKind::Color) &&

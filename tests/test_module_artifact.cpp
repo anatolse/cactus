@@ -873,7 +873,7 @@ TEST_CASE("ModuleArtifact: runtime declarations and handler graph round-trip", "
 }
 
 TEST_CASE("ModuleArtifact: artifact from before shape-generic spatial plans is rejected", "[artifact][spatial-join]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 29);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 30);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1237,7 +1237,7 @@ TEST_CASE("ModuleArtifact: set command capabilities round-trip", "[artifact][def
     CHECK(loaded->handler_contracts.front().commands == commands);
     REQUIRE(loaded->execution_graph.handlers.size() == 1);
     CHECK(loaded->execution_graph.handlers.front().contract.commands == commands);
-    CHECK(ModuleArtifact::CURRENT_VERSION == 29);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 30);
 
     fs::remove_all(build_dir, ec);
 }
@@ -1580,7 +1580,7 @@ TEST_CASE("ModuleArtifact: field-level access serializes deterministically", "[a
 }
 
 TEST_CASE("ModuleArtifact: artifact from before field-level contracts is rejected", "[artifact][handler-contracts]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 29);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 30);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1807,7 +1807,7 @@ TEST_CASE("ModuleArtifact: unknown trigger kind is rejected", "[artifact][trait-
 }
 
 TEST_CASE("ModuleArtifact: artifact from before lifecycle triggers is rejected", "[artifact][trait-lifecycle]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 29);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 30);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1936,7 +1936,7 @@ TEST_CASE("ModuleArtifact: unknown group ordering direction is malformed", "[art
 }
 
 TEST_CASE("ModuleArtifact: artifact from before rule groups is rejected", "[artifact][rule-groups]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 29);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 30);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1961,7 +1961,7 @@ TEST_CASE("ModuleArtifact: artifact from before rule groups is rejected", "[arti
 }
 
 TEST_CASE("ModuleArtifact: artifact from before named-entity access is rejected", "[artifact][named-entity]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 29);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 30);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2315,7 +2315,7 @@ TEST_CASE("ModuleArtifact: a trait access expression round-trips", "[artifact][t
 }
 
 TEST_CASE("ModuleArtifact: artifact from before bracketed trait access is rejected", "[artifact][trait-access]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 29);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 30);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2335,6 +2335,47 @@ TEST_CASE("ModuleArtifact: artifact from before bracketed trait access is reject
     CHECK_FALSE(artifact.load(path, name).has_value());
     REQUIRE(errors.has_errors());
     CHECK(errors.diagnostics()[0].message.contains("incompatible module artifact version"));
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("ModuleArtifact: arithmetic operand marks round-trip", "[artifact][numeric-semantics]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    const auto literal = [](const std::string& value) {
+        return std::make_unique<ExprNode>(
+            ExprNode::Variant{LiteralExpr{.kind = LiteralExpr::Kind::Int, .value = value}}, SourceLocation{});
+    };
+    auto negated = std::make_unique<ExprNode>(
+        ExprNode::Variant{UnaryExpr{.op = "-", .operand = literal("7"), .operands = ArithmeticOperands::Int}}, SourceLocation{});
+    auto quotient = std::make_unique<ExprNode>(
+        ExprNode::Variant{
+            BinaryExpr{.op = "/", .left = std::move(negated), .right = literal("2"), .operands = ArithmeticOperands::Other}},
+        SourceLocation{});
+    auto blueprint  = std::make_shared<TemplateNode>();
+    blueprint->name = "Probe";
+    ArchetypeTraitEntry entry{.trait_name = "Cell"};
+    entry.assignments.push_back(FieldAssignment{.name = "n", .value = std::move(quotient)});
+    blueprint->traits.push_back(std::move(entry));
+
+    DecoratedProgram program;
+    program.pub_templates.insert("Probe");
+    program.template_parameters["Probe"] = {};
+    program.template_blueprints["Probe"] = blueprint;
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    REQUIRE(artifact.save(program, "library", build_dir));
+    auto symbols = artifact.extract_pub_symbols(build_dir / "library.cmod");
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(symbols.has_value());
+    const auto& loaded = symbols->templates.at("Probe").blueprint;
+    REQUIRE(loaded != nullptr);
+    const auto& binary = std::get<BinaryExpr>(loaded->traits.at(0).assignments.at(0).value->expr);
+    CHECK(binary.operands == ArithmeticOperands::Other);
+    CHECK(std::get<UnaryExpr>(binary.left->expr).operands == ArithmeticOperands::Int);
 
     fs::remove_all(build_dir, ec);
 }

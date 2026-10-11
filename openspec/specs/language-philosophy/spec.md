@@ -55,6 +55,7 @@ The following timing guarantees SHALL be documented and honored by all backends:
 5. **Fixed-step timing**: periodic cadence, catch-up cap, dropped excess time, fixed `dt`, and interpolation `alpha` follow phase declarations identically on every backend.
 6. **External effects**: matching effect domains are observably serialized by graph order.
 7. **`order by:` timing**: sorting occurs at a defined point before selected handler iteration and contributes trait reads to that handler contract.
+8. **Iteration order within a pass**: a rule pass without `order by:` iterates in entity creation order wherever its result can observe the order; elsewhere the order is not observable, so it is free for the backend.
 
 #### Scenario: Phase barrier is invariant
 - **WHEN** fixed_tick repeats during a frame
@@ -67,6 +68,10 @@ The following timing guarantees SHALL be documented and honored by all backends:
 #### Scenario: Structural visibility is invariant
 - **WHEN** a handler queues a structural command
 - **THEN** no handler in the same activation observes the structural result before commit
+
+#### Scenario: Observable iteration order is creation order
+- **WHEN** a rule without `order by:` emits one event per entity and some entities were destroyed earlier
+- **THEN** the events are queued in the creation order of the remaining entities on every backend
 
 ### Requirement: ECS is the primary gameplay model, with explicit boundaries
 Cactus SHALL remain ECS-first for gameplay and tool modeling: traits, rules, events, templates, hierarchy, spawning and filtering are the modeling tools for both.
@@ -257,10 +262,11 @@ All proposed changes to the language SHALL be evaluated against the following cr
 1. Is this an author concern or a backend concern?
 2. Is it a genre-neutral primitive, or does it force engine plumbing or genre-specific syntax into authored code?
 3. Does it remove a class of common errors, or introduce one? In particular, does it keep memory management, lifetime management and data-race errors impossible?
-4. Is its timing and behavior predictable without hidden backend knowledge?
-5. Are its operations total and are failure semantics defined?
-6. Does it preserve the declarative/restricted-imperative boundary, and does it prefer derived state over maintained state?
-7. Does it preserve a small, teachable gameplay-core profile?
+4. Does every definition that uses it stay correct: determinate, total, terminating and non-vacuous? Which property does the compiler enforce for it, and how?
+5. Is its timing and behavior predictable without hidden backend knowledge?
+6. Are its operations total and are failure semantics defined?
+7. Does it preserve the declarative/restricted-imperative boundary, and does it prefer derived state over maintained state?
+8. Does it preserve a small, teachable gameplay-core profile?
 
 #### Scenario: Proposed feature is a backend concern
 - **WHEN** a feature would require authors to write rendering, serialization, or lifetime-management code
@@ -277,6 +283,10 @@ All proposed changes to the language SHALL be evaluated against the following cr
 #### Scenario: Proposed feature is genre-specific
 - **WHEN** a proposal adds a keyword or declaration that only makes sense for one genre or for UI, such as `widget`, `button` or `unit`
 - **THEN** it is redirected to a genre-neutral primitive or a stdlib module
+
+#### Scenario: Proposed feature names its correctness property
+- **WHEN** a proposal adds a construct whose result could depend on an order, a value range, a cycle, or whether something matches
+- **THEN** the proposal states which of the four properties is at risk and how the compiler rejects the incorrect uses
 
 Projected traits and bounded foreach SHALL be evaluated as restricted gameplay constructs: `project` states current-frame facts for ECS filtering, while bounded foreach consumes finite query/list snapshots. Neither construct SHALL be treated as permission to add open-ended imperative scripting features by default.
 
@@ -302,3 +312,54 @@ When the language supports state that is a function of other state, it SHALL do 
 - **WHEN** state is declared as derived
 - **THEN** the backend knows its inputs and may choose when and how to recompute it, for example only when an input changed
 
+### Requirement: A correct definition has four properties
+A Cactus definition SHALL be called correct when it has all four of these properties:
+
+1. **Determinacy**: it has exactly one meaning. For a given initial world and a given sequence of host inputs, every conforming backend on every platform produces the same sequence of worlds, events and effect calls. No result depends on source position, file or module order, storage order, or any backend choice the definition does not make.
+2. **Totality**: that meaning is defined for every input. No operation has undefined behavior or stops the program, whatever the values it receives.
+3. **Termination**: every activation finishes, for every world the definition can reach.
+4. **Non-vacuity**: every declaration can affect the result. A declaration that can never run, never match, or never be observed is not part of a correct definition.
+
+The goal SHALL be that a definition the compiler cannot show to be correct does not compile. Each rejection rule SHALL be specified by the capability that enforces it, and SHALL name the property it enforces. The four properties SHALL be stated without new syntax: authors write no annotations to establish them.
+
+#### Scenario: A source-order dependence breaks determinacy
+- **WHEN** moving a rule to another file or reordering `use` lines changes what a program does
+- **THEN** the program is not correct by this definition
+
+#### Scenario: Storage order dependence breaks determinacy
+- **WHEN** the result of a frame depends on the order in which a backend's entity storage happens to hold entities
+- **THEN** the program is not correct by this definition
+
+#### Scenario: Undefined behavior breaks totality
+- **WHEN** some input value makes an operation's result undefined
+- **THEN** the program is not correct by this definition
+
+#### Scenario: A rule that can never run breaks non-vacuity
+- **WHEN** a rule's domain can never match any entity the program can create
+- **THEN** the program is not correct by this definition
+
+#### Scenario: Correctness needs no author annotations
+- **WHEN** an author writes a correct definition
+- **THEN** it contains no declaration whose only purpose is to prove one of the four properties
+
+### Requirement: Known correctness gaps are listed
+Every class of definition that the compiler accepts today although it may break one of the four properties SHALL be listed in this requirement, with the property it breaks. A change that makes the compiler reject a class, or makes the class correct by definition, SHALL remove its entry. A new feature SHALL NOT add an entry.
+
+The known gaps are:
+
+| Gap | Property |
+|---|---|
+| Two conflicting handlers ordered only by stable declaration order | determinacy |
+| Unordered handlers that emit the same event, queue commands on the same entities, or call the same effect domain | determinacy |
+| Creation order of entities spawned by two unordered handlers, where a later reader observes it | determinacy |
+| Ties in spatial single-entity queries (`nearest`, `raycast`) follow storage order | determinacy |
+| Event and lifecycle cycles cut off by a configured cascade-depth bound | determinacy, termination |
+| A rule domain or `without:` trait that no reachable entity can match, and a trigger with no producer | non-vacuity |
+
+#### Scenario: Closing a gap removes its entry
+- **WHEN** a change makes the compiler reject conflicts that only declaration order orients
+- **THEN** that change removes the first row of the table
+
+#### Scenario: A feature may not add a gap
+- **WHEN** a proposed feature would let the compiler accept a definition whose result depends on source position
+- **THEN** the proposal is revised so the compiler rejects it or gives it one defined meaning

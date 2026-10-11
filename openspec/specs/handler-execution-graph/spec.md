@@ -196,3 +196,61 @@ For a render-pass phase, the execution graph SHALL represent one synthetic, non-
 - **WHEN** the graph is validated for a render-pass phase
 - **THEN** no structural-command producer/consumer edges are introduced by the stage handlers, since `dsl-render-passes`'s body restriction already rejects `spawn`/`destroy`/`add`/`remove`/`project` in a stage handler body
 
+### Requirement: An activation denotes a trace
+The meaning of one activation SHALL be defined independently of any backend's handler order. Each handler run is a step. Two handlers *commute* when neither writes a trait field the other reads or writes, they share no observable effect domain, and they do not both append to one event queue or one structural command list in an order that a later reader can observe; otherwise they *depend*. For every pair of co-eligible handlers that depend, the graph SHALL hold a schedule edge between them.
+
+The result of an activation SHALL be the result of running its handlers in any order that respects the schedule edges (a linear extension). Every such order SHALL give the same world, the same queued events and commands, and the same effect calls. This holds for each set of handlers dispatched together: the phase handlers of an activation, the consumers of one event occurrence, and the lifecycle consumers of one commit round. The stable topological order is one linear extension; a backend SHALL NOT rely on any property of it that other linear extensions lack.
+
+#### Scenario: Commuting handlers give one result in either order
+- **WHEN** two `tick` handlers write disjoint traits and read nothing the other writes
+- **THEN** the graph holds no edge between them, and running either first gives the same world
+
+#### Scenario: Every linear extension gives the same world
+- **WHEN** an activation's handlers admit several orders that respect its schedule edges
+- **THEN** running the activation in each of those orders, from the same initial world, gives identical worlds, queued events and commands
+
+#### Scenario: The stable order is not special
+- **WHEN** a backend runs an activation in a linear extension other than the stable topological order
+- **THEN** the result is the same as with the stable topological order
+
+### Requirement: Dependency levels are the canonical form of the trace
+For each activation, dependency level 0 SHALL contain the handlers with no incoming schedule edge, and level k SHALL contain the handlers whose longest incoming path of schedule edges has length k. Every schedule edge SHALL go from a lower level to a higher one, so no two handlers in one level depend. The levels SHALL be determined by the handlers and edges alone, not by declaration order; declaration order MAY only order handlers inside one level for display and for the stable topological order. Running the handlers of one level concurrently, then the next level, SHALL be a correct execution by definition.
+
+#### Scenario: Levels follow the longest path
+- **WHEN** an activation has edges A → B and B → C, and handler D has no edges
+- **THEN** A and D are in level 0, B is in level 1 and C is in level 2
+
+#### Scenario: Handlers in one level do not depend
+- **WHEN** two handlers are in the same dependency level
+- **THEN** the graph holds no schedule edge between them in either direction
+
+#### Scenario: Declaration order does not change levels
+- **WHEN** the declarations of two rules in one activation are swapped in the source
+- **THEN** every handler keeps its dependency level
+
+### Requirement: Every schedule edge carries one reason
+Every schedule edge SHALL record exactly one reason for its direction, from this closed set:
+
+- **explicit**: an `after:`, `before:` or group ordering the author wrote;
+- **writer before reader**: only one side writes what the other reads;
+- **derivation after writers**: a derived trait's computation runs after the handlers that write its inputs;
+- **importer before public group**: the direction rule for a handler against a `pub group` of a module it imports;
+- **declaration order**: none of the above applies, and stable linked declaration order picked the direction.
+
+The first four reasons SHALL be *meaningful*: they follow from what the definition says. Declaration order SHALL NOT be a meaningful reason: an edge whose reason is declaration order marks a pair of handlers whose order the definition does not determine. The graph, the module artifact, and the linked program SHALL preserve each edge's reason, so the edges ordered only by declaration order can be listed without re-deriving them.
+
+#### Scenario: Explicit order is recorded as explicit
+- **WHEN** rule B declares `after: A` and their `tick` handlers conflict
+- **THEN** the edge from `A.tick` to `B.tick` records the reason explicit
+
+#### Scenario: One-way data flow is recorded
+- **WHEN** one `tick` handler writes `Transform.position` and another only reads it, with no explicit order
+- **THEN** the edge records the reason writer before reader
+
+#### Scenario: A declaration-order edge is distinguishable
+- **WHEN** two `tick` handlers both assign `Score.value` and nothing else orders them
+- **THEN** their edge records the reason declaration order, and listing the program's declaration-order edges includes it
+
+#### Scenario: Reasons survive linking
+- **WHEN** a module is compiled to an artifact and linked into a program
+- **THEN** each of its schedule edges has the same reason in the linked program as in the module's own graph

@@ -1,7 +1,6 @@
 ## Purpose
 Define the required behavior of the `std.query`, `std.physics.flat.query`, and `std.physics.volume.query` stdlib namespaces for ECS/world and spatial query expressions.
 ## Requirements
-
 ### Requirement: `std.query` provides ECS/world query expressions
 The stdlib SHALL provide a `std.query` namespace for world/ECS query expressions. The namespace SHALL include at least `exists`, `count`, `first`, and `all` query operations that accept bracketed trait-filter arguments.
 
@@ -143,3 +142,14 @@ Hierarchy queries SHALL terminate for every finite live registry state. Stale pa
 #### Scenario: Cyclic Parent relation terminates
 - **WHEN** runtime mutation creates a Parent cycle among three matching entities
 - **THEN** preorder and postorder queries return finite deterministic snapshots containing each entity once
+
+### Requirement: Entity-listing queries use creation order
+`std.query.first[...]()` SHALL return the earliest-created live entity that matches its filter, or a stale `entity_id` when none matches. `std.query.all[...]()` SHALL return every live matching entity in stable creation order. Neither result SHALL depend on the backend's storage order, including after entities were destroyed.
+
+#### Scenario: First returns the oldest match after a destroy
+- **WHEN** entities A, B and C with trait `Enemy` are created in that order, A is destroyed, and D with `Enemy` is created
+- **THEN** `query.first[Enemy]()` returns B
+
+#### Scenario: All lists matches in creation order
+- **WHEN** the same entities exist as above
+- **THEN** `query.all[Enemy]()` returns B, C, D in that order

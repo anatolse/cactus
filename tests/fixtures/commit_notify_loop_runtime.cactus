@@ -2,9 +2,9 @@ module commit_notify_loop_runtime
 
 use std.core
 
-# Every new Minion reacts to its own arrival by spawning one more. Commit
-# rounds share the cascade-depth bound, so each activation commits a bounded
-# number of spawns and defers the rest instead of looping forever.
+# Every new Minion reacts to its own arrival by spawning one more. The
+# arrival handler is on a cycle with itself, so each spawn's arrival waits
+# for the next activation of the clock: one new Minion per activation.
 
 trait Offspring
 
@@ -30,8 +30,8 @@ rule Respawn:
         Nursery[Spawner].budget -= 1
         spawn Minion()
 
-# A targeted event that re-emits itself to its recipient overflows the
-# cascade bound; the deferred occurrence must reach only that recipient.
+# A targeted event that re-emits itself to its recipient advances one hop
+# per activation and only ever reaches that recipient.
 
 event Knock
 

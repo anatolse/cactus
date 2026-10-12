@@ -1,0 +1,581 @@
+module delivery_clocks_runtime
+
+use std.core
+
+# Occurrences on a delivery cycle wait for the next activation of the clock
+# that produced them. A fixed_tick chain therefore advances once per
+# repetition, a chain started at load advances once per host drain, and an
+# acyclic chain of any length still finishes in one activation.
+
+trait Gate:
+    var opened: bool = false
+
+trait Door:
+    var knocks: int = 0
+
+trait Seen:
+    var count: int = 0
+
+trait Echoes:
+    var hops: int = 0
+
+trait Counter:
+    var chain_end: int = 0
+
+entity Front:
+    Gate
+    Door
+    Seen
+    Echoes
+    KeepOnLoad
+
+entity Stats:
+    Counter
+    KeepOnLoad
+
+event Knock
+
+rule StartKnock:
+    each:
+        Gate as gate
+    on fixed_tick:
+        if gate.opened:
+            return
+        gate.opened = true
+        emit Knock to self
+
+# On a cycle with itself: one hop per fixed_tick repetition.
+rule Answer:
+    each:
+        Door as door
+    on Knock:
+        if door.knocks >= 1000:
+            return
+        door.knocks = door.knocks + 1
+        emit Knock to self
+
+# Off the cycle: sees every Knock in the activation that produced it.
+rule Observe:
+    each:
+        Seen as seen
+    on Knock:
+        seen.count = seen.count + 1
+
+event Ping
+
+rule FirstPing:
+    on load:
+        emit Ping to Front
+
+# A cycle started at load runs on the host clock.
+rule Echo:
+    each:
+        Echoes as echoes
+    on Ping:
+        if echoes.hops >= 1000:
+            return
+        echoes.hops = echoes.hops + 1
+        emit Ping to self
+
+# An acyclic chain of 100 handlers.
+event Step1
+event Step2
+event Step3
+event Step4
+event Step5
+event Step6
+event Step7
+event Step8
+event Step9
+event Step10
+event Step11
+event Step12
+event Step13
+event Step14
+event Step15
+event Step16
+event Step17
+event Step18
+event Step19
+event Step20
+event Step21
+event Step22
+event Step23
+event Step24
+event Step25
+event Step26
+event Step27
+event Step28
+event Step29
+event Step30
+event Step31
+event Step32
+event Step33
+event Step34
+event Step35
+event Step36
+event Step37
+event Step38
+event Step39
+event Step40
+event Step41
+event Step42
+event Step43
+event Step44
+event Step45
+event Step46
+event Step47
+event Step48
+event Step49
+event Step50
+event Step51
+event Step52
+event Step53
+event Step54
+event Step55
+event Step56
+event Step57
+event Step58
+event Step59
+event Step60
+event Step61
+event Step62
+event Step63
+event Step64
+event Step65
+event Step66
+event Step67
+event Step68
+event Step69
+event Step70
+event Step71
+event Step72
+event Step73
+event Step74
+event Step75
+event Step76
+event Step77
+event Step78
+event Step79
+event Step80
+event Step81
+event Step82
+event Step83
+event Step84
+event Step85
+event Step86
+event Step87
+event Step88
+event Step89
+event Step90
+event Step91
+event Step92
+event Step93
+event Step94
+event Step95
+event Step96
+event Step97
+event Step98
+event Step99
+
+rule Link0:
+    on tick:
+        emit Step1
+
+rule Link1:
+    on Step1:
+        emit Step2
+
+rule Link2:
+    on Step2:
+        emit Step3
+
+rule Link3:
+    on Step3:
+        emit Step4
+
+rule Link4:
+    on Step4:
+        emit Step5
+
+rule Link5:
+    on Step5:
+        emit Step6
+
+rule Link6:
+    on Step6:
+        emit Step7
+
+rule Link7:
+    on Step7:
+        emit Step8
+
+rule Link8:
+    on Step8:
+        emit Step9
+
+rule Link9:
+    on Step9:
+        emit Step10
+
+rule Link10:
+    on Step10:
+        emit Step11
+
+rule Link11:
+    on Step11:
+        emit Step12
+
+rule Link12:
+    on Step12:
+        emit Step13
+
+rule Link13:
+    on Step13:
+        emit Step14
+
+rule Link14:
+    on Step14:
+        emit Step15
+
+rule Link15:
+    on Step15:
+        emit Step16
+
+rule Link16:
+    on Step16:
+        emit Step17
+
+rule Link17:
+    on Step17:
+        emit Step18
+
+rule Link18:
+    on Step18:
+        emit Step19
+
+rule Link19:
+    on Step19:
+        emit Step20
+
+rule Link20:
+    on Step20:
+        emit Step21
+
+rule Link21:
+    on Step21:
+        emit Step22
+
+rule Link22:
+    on Step22:
+        emit Step23
+
+rule Link23:
+    on Step23:
+        emit Step24
+
+rule Link24:
+    on Step24:
+        emit Step25
+
+rule Link25:
+    on Step25:
+        emit Step26
+
+rule Link26:
+    on Step26:
+        emit Step27
+
+rule Link27:
+    on Step27:
+        emit Step28
+
+rule Link28:
+    on Step28:
+        emit Step29
+
+rule Link29:
+    on Step29:
+        emit Step30
+
+rule Link30:
+    on Step30:
+        emit Step31
+
+rule Link31:
+    on Step31:
+        emit Step32
+
+rule Link32:
+    on Step32:
+        emit Step33
+
+rule Link33:
+    on Step33:
+        emit Step34
+
+rule Link34:
+    on Step34:
+        emit Step35
+
+rule Link35:
+    on Step35:
+        emit Step36
+
+rule Link36:
+    on Step36:
+        emit Step37
+
+rule Link37:
+    on Step37:
+        emit Step38
+
+rule Link38:
+    on Step38:
+        emit Step39
+
+rule Link39:
+    on Step39:
+        emit Step40
+
+rule Link40:
+    on Step40:
+        emit Step41
+
+rule Link41:
+    on Step41:
+        emit Step42
+
+rule Link42:
+    on Step42:
+        emit Step43
+
+rule Link43:
+    on Step43:
+        emit Step44
+
+rule Link44:
+    on Step44:
+        emit Step45
+
+rule Link45:
+    on Step45:
+        emit Step46
+
+rule Link46:
+    on Step46:
+        emit Step47
+
+rule Link47:
+    on Step47:
+        emit Step48
+
+rule Link48:
+    on Step48:
+        emit Step49
+
+rule Link49:
+    on Step49:
+        emit Step50
+
+rule Link50:
+    on Step50:
+        emit Step51
+
+rule Link51:
+    on Step51:
+        emit Step52
+
+rule Link52:
+    on Step52:
+        emit Step53
+
+rule Link53:
+    on Step53:
+        emit Step54
+
+rule Link54:
+    on Step54:
+        emit Step55
+
+rule Link55:
+    on Step55:
+        emit Step56
+
+rule Link56:
+    on Step56:
+        emit Step57
+
+rule Link57:
+    on Step57:
+        emit Step58
+
+rule Link58:
+    on Step58:
+        emit Step59
+
+rule Link59:
+    on Step59:
+        emit Step60
+
+rule Link60:
+    on Step60:
+        emit Step61
+
+rule Link61:
+    on Step61:
+        emit Step62
+
+rule Link62:
+    on Step62:
+        emit Step63
+
+rule Link63:
+    on Step63:
+        emit Step64
+
+rule Link64:
+    on Step64:
+        emit Step65
+
+rule Link65:
+    on Step65:
+        emit Step66
+
+rule Link66:
+    on Step66:
+        emit Step67
+
+rule Link67:
+    on Step67:
+        emit Step68
+
+rule Link68:
+    on Step68:
+        emit Step69
+
+rule Link69:
+    on Step69:
+        emit Step70
+
+rule Link70:
+    on Step70:
+        emit Step71
+
+rule Link71:
+    on Step71:
+        emit Step72
+
+rule Link72:
+    on Step72:
+        emit Step73
+
+rule Link73:
+    on Step73:
+        emit Step74
+
+rule Link74:
+    on Step74:
+        emit Step75
+
+rule Link75:
+    on Step75:
+        emit Step76
+
+rule Link76:
+    on Step76:
+        emit Step77
+
+rule Link77:
+    on Step77:
+        emit Step78
+
+rule Link78:
+    on Step78:
+        emit Step79
+
+rule Link79:
+    on Step79:
+        emit Step80
+
+rule Link80:
+    on Step80:
+        emit Step81
+
+rule Link81:
+    on Step81:
+        emit Step82
+
+rule Link82:
+    on Step82:
+        emit Step83
+
+rule Link83:
+    on Step83:
+        emit Step84
+
+rule Link84:
+    on Step84:
+        emit Step85
+
+rule Link85:
+    on Step85:
+        emit Step86
+
+rule Link86:
+    on Step86:
+        emit Step87
+
+rule Link87:
+    on Step87:
+        emit Step88
+
+rule Link88:
+    on Step88:
+        emit Step89
+
+rule Link89:
+    on Step89:
+        emit Step90
+
+rule Link90:
+    on Step90:
+        emit Step91
+
+rule Link91:
+    on Step91:
+        emit Step92
+
+rule Link92:
+    on Step92:
+        emit Step93
+
+rule Link93:
+    on Step93:
+        emit Step94
+
+rule Link94:
+    on Step94:
+        emit Step95
+
+rule Link95:
+    on Step95:
+        emit Step96
+
+rule Link96:
+    on Step96:
+        emit Step97
+
+rule Link97:
+    on Step97:
+        emit Step98
+
+rule Link98:
+    on Step98:
+        emit Step99
+
+rule Link99:
+    each:
+        Counter as counter
+    on Step99:
+        counter.chain_end = counter.chain_end + 1

@@ -695,7 +695,7 @@ TEST_CASE("entities carrying std.core.KeepOnLoad do not survive restore",
     CHECK(registry.view<std_core__KeepOnLoad>().size() == 0);
 }
 
-TEST_CASE("a successful restore discards old deferred events and fixed-step catch-up backlog",
+TEST_CASE("a successful restore discards old queued events and fixed-step catch-up backlog",
           "[runtime][persistence][restore][cancellation]") {
     World world;
     auto& registry = world.registry;
@@ -703,15 +703,15 @@ TEST_CASE("a successful restore discards old deferred events and fixed-step catc
     const auto snapshot = capture(registry);
 
     auto& scheduler = cactus::runtime::entt_backend::generated_scheduler_state();
-    scheduler.activation.deferred_events.push_back(
+    scheduler.activation.root_event_queue.push_back(
         cactus::runtime::entt_backend::QueuedEvent<cactus::runtime::entt_backend::EventOccurrence>{.occurrence = std_core__unloadEvent{}});
     scheduler.std_core__fixed_tick.accumulator = 10.0;
-    REQUIRE_FALSE(scheduler.activation.deferred_events.empty());
+    REQUIRE_FALSE(scheduler.activation.root_event_queue.empty());
 
     const auto outcome = cactus::runtime::entt_backend::generated_restore_world(registry, snapshot);
     REQUIRE(outcome.ok);
 
-    CHECK(scheduler.activation.deferred_events.empty());
+    CHECK(scheduler.activation.root_event_queue.empty());
     CHECK(scheduler.std_core__fixed_tick.accumulator == 0.0);
 }
 
@@ -724,14 +724,14 @@ TEST_CASE("a failed restore preserves old-world scheduler work untouched",
     incompatible.schema_fingerprint = cactus::runtime::entt_backend::generated_schema.fingerprint + 1;
 
     auto& scheduler = cactus::runtime::entt_backend::generated_scheduler_state();
-    scheduler.activation.deferred_events.push_back(
+    scheduler.activation.root_event_queue.push_back(
         cactus::runtime::entt_backend::QueuedEvent<cactus::runtime::entt_backend::EventOccurrence>{.occurrence = std_core__unloadEvent{}});
     scheduler.std_core__fixed_tick.accumulator = 10.0;
 
     const auto outcome = cactus::runtime::entt_backend::generated_restore_world(registry, incompatible);
     REQUIRE_FALSE(outcome.ok);
 
-    CHECK(scheduler.activation.deferred_events.size() == 1);
+    CHECK(scheduler.activation.root_event_queue.size() == 1);
     CHECK(scheduler.std_core__fixed_tick.accumulator == 10.0);
 }
 

@@ -570,10 +570,35 @@ struct PhaseBarrierEdge {
     HandlerIdentity downstream_handler;
 };
 
+// `delayed`: producer and consumer share a delivery cycle, so the occurrence
+// waits for the next activation of the producing clock.
 struct EventFlowEdge {
     HandlerIdentity producer;
     SymbolId event;
     HandlerIdentity consumer;
+    bool delayed = false;
+};
+
+// A commit of the producer's command may deliver `on added`/`on removed` `trait`.
+struct LifecycleFlowEdge {
+    HandlerIdentity producer;
+    SymbolId trait;
+    bool added = true;
+    HandlerIdentity consumer;
+    bool delayed = false;
+};
+
+// Serialized by numeric value: append new kinds, never reorder.
+enum class ActivationRootKind : std::uint8_t { Phase, Event, StartupArrival };
+
+// The longest chain of immediate edges one activation of this root can run.
+struct ActivationDepth {
+    ActivationRootKind kind = ActivationRootKind::Phase;
+    std::optional<SymbolId> symbol;  // the phase or event; none for startup arrival
+    std::uint32_t depth  = 0;
+    bool produces_delays = false;  // some delayed edge can fire in this activation
+
+    friend bool operator==(const ActivationDepth&, const ActivationDepth&) = default;
 };
 
 struct DependencyLevel {
@@ -632,6 +657,8 @@ struct ExecutionGraph {
     std::vector<ScheduleEdge> schedule_edges;
     std::vector<PhaseBarrierEdge> phase_barriers;
     std::vector<EventFlowEdge> event_flows;
+    std::vector<LifecycleFlowEdge> lifecycle_flows;
+    std::vector<ActivationDepth> activation_depths;
     std::vector<HandlerIdentity> stable_topological_order;
     std::vector<DependencyLevel> dependency_levels;
     std::vector<GroupDeclaration> group_declarations;

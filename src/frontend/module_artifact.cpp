@@ -671,6 +671,24 @@ void ModuleArtifact::write_execution_graph(std::ostream& out, const ExecutionGra
         write_handler_identity(out, edge.producer);
         write_symbol_id(out, edge.event);
         write_handler_identity(out, edge.consumer);
+        write_bool(out, edge.delayed);
+    }
+
+    write_u32(out, static_cast<uint32_t>(graph.lifecycle_flows.size()));
+    for (const auto& edge : graph.lifecycle_flows) {
+        write_handler_identity(out, edge.producer);
+        write_symbol_id(out, edge.trait);
+        write_bool(out, edge.added);
+        write_handler_identity(out, edge.consumer);
+        write_bool(out, edge.delayed);
+    }
+
+    write_u32(out, static_cast<uint32_t>(graph.activation_depths.size()));
+    for (const auto& depth : graph.activation_depths) {
+        write_u8(out, static_cast<uint8_t>(depth.kind));
+        write_optional_symbol_id(out, depth.symbol);
+        write_u32(out, depth.depth);
+        write_bool(out, depth.produces_delays);
     }
 
     write_u32(out, static_cast<uint32_t>(graph.stable_topological_order.size()));
@@ -1377,8 +1395,29 @@ ExecutionGraph ModuleArtifact::read_execution_graph(std::istream& in) {
     const auto flow_count = read_u32(in);
     graph.event_flows.reserve(flow_count);
     for (uint32_t i = 0; i < flow_count; ++i) {
-        graph.event_flows.push_back(EventFlowEdge{
-            .producer = read_handler_identity(in), .event = read_symbol_id(in), .consumer = read_handler_identity(in)});
+        graph.event_flows.push_back(EventFlowEdge{.producer = read_handler_identity(in),
+                                                  .event    = read_symbol_id(in),
+                                                  .consumer = read_handler_identity(in),
+                                                  .delayed  = read_bool(in)});
+    }
+
+    const auto lifecycle_count = read_u32(in);
+    graph.lifecycle_flows.reserve(lifecycle_count);
+    for (uint32_t i = 0; i < lifecycle_count; ++i) {
+        graph.lifecycle_flows.push_back(LifecycleFlowEdge{.producer = read_handler_identity(in),
+                                                          .trait    = read_symbol_id(in),
+                                                          .added    = read_bool(in),
+                                                          .consumer = read_handler_identity(in),
+                                                          .delayed  = read_bool(in)});
+    }
+
+    const auto depth_count = read_u32(in);
+    graph.activation_depths.reserve(depth_count);
+    for (uint32_t i = 0; i < depth_count; ++i) {
+        graph.activation_depths.push_back(ActivationDepth{.kind            = static_cast<ActivationRootKind>(read_u8(in)),
+                                                          .symbol          = read_optional_symbol_id(in),
+                                                          .depth           = read_u32(in),
+                                                          .produces_delays = read_bool(in)});
     }
 
     const auto order_count = read_u32(in);

@@ -21,13 +21,7 @@ namespace cactus_headless_test {
 // from the handler is processed at this same boundary, not deferred.
 template <typename Occurrence>
 void dispatch_boundary_event(entt::registry& registry, const Occurrence& occurrence) {
-    auto& boundary_activation  = cactus::runtime::entt_backend::generated_scheduler_state().activation;
-    boundary_activation.active = true;
-    cactus::runtime::entt_backend::generated_dispatch_event(registry, occurrence);
-    cactus::runtime::entt_backend::generated_drain_event_cascade(registry);
-    cactus::runtime::entt_backend::generated_commit_activation(registry);
-    cactus::runtime::entt_backend::generated_process_persistence_boundary(registry);
-    boundary_activation.active = false;
+    cactus::runtime::entt_backend::generated_run_boundary_activation(registry, occurrence);
 }
 
 inline void dispatch_load_event(entt::registry& registry) {

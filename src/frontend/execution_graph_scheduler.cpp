@@ -467,9 +467,9 @@ bool compute_handler_schedule(ExecutionGraph& graph, ErrorReporter& errors) {
         }
     }
     // Event delivery is deliberately separate from schedule dependencies:
-    // producer/consumer feedback is legal and bounded by runtime cascade
-    // semantics. Sort each producer's canonical event IDs so graph artifacts
-    // never inherit unordered_set iteration order.
+    // producer/consumer feedback is legal because every cycle is delayed
+    // (classify_delivery_cycles). Sort each producer's canonical event IDs so
+    // graph artifacts never inherit unordered_set iteration order.
     for (const auto& producer : graph.handlers) {
         std::vector<SymbolId> emitted(producer.contract.emits.begin(), producer.contract.emits.end());
         std::ranges::sort(emitted, [](const SymbolId& left, const SymbolId& right) {

@@ -810,7 +810,12 @@ TEST_CASE("ModuleArtifact: runtime declarations and handler graph round-trip", "
     prog.execution_graph.phase_barriers.push_back(
         PhaseBarrierEdge{.upstream_phase = tick, .downstream_handler = second_handler});
     prog.execution_graph.event_flows.push_back(
-        EventFlowEdge{.producer = first_handler, .event = spawned, .consumer = second_handler});
+        EventFlowEdge{.producer = first_handler, .event = spawned, .consumer = second_handler, .delayed = true});
+    prog.execution_graph.lifecycle_flows.push_back(LifecycleFlowEdge{
+        .producer = second_handler, .trait = position, .added = false, .consumer = first_handler, .delayed = true});
+    prog.execution_graph.activation_depths = {
+        ActivationDepth{.kind = ActivationRootKind::Phase, .symbol = tick, .depth = 2, .produces_delays = true},
+        ActivationDepth{.kind = ActivationRootKind::StartupArrival, .depth = 1}};
     prog.execution_graph.stable_topological_order = {first_handler, second_handler};
     prog.execution_graph.dependency_levels.push_back(
         DependencyLevel{.activation = tick_trigger, .index = 1, .handlers = {second_handler}});
@@ -853,7 +858,16 @@ TEST_CASE("ModuleArtifact: runtime declarations and handler graph round-trip", "
     CHECK(loaded->execution_graph.schedule_edges[0].trait_provenance == std::vector<SymbolId>{position});
     CHECK(loaded->execution_graph.schedule_edges[0].effect_provenance == std::vector<std::string>{"graphics"});
     CHECK(loaded->execution_graph.phase_barriers.size() == 1);
-    CHECK(loaded->execution_graph.event_flows.size() == 1);
+    REQUIRE(loaded->execution_graph.event_flows.size() == 1);
+    CHECK(loaded->execution_graph.event_flows[0].delayed);
+    REQUIRE(loaded->execution_graph.lifecycle_flows.size() == 1);
+    const auto& lifecycle = loaded->execution_graph.lifecycle_flows[0];
+    CHECK(lifecycle.producer == second_handler);
+    CHECK(lifecycle.trait == position);
+    CHECK_FALSE(lifecycle.added);
+    CHECK(lifecycle.consumer == first_handler);
+    CHECK(lifecycle.delayed);
+    CHECK(loaded->execution_graph.activation_depths == prog.execution_graph.activation_depths);
     CHECK(loaded->execution_graph.stable_topological_order ==
           std::vector<HandlerIdentity>{first_handler, second_handler});
     CHECK(loaded->execution_graph.dependency_levels[0].activation == tick_trigger);
@@ -873,7 +887,7 @@ TEST_CASE("ModuleArtifact: runtime declarations and handler graph round-trip", "
 }
 
 TEST_CASE("ModuleArtifact: artifact from before shape-generic spatial plans is rejected", "[artifact][spatial-join]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 33);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 34);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1238,7 +1252,7 @@ TEST_CASE("ModuleArtifact: set command capabilities round-trip", "[artifact][def
     CHECK(loaded->handler_contracts.front().commands == commands);
     REQUIRE(loaded->execution_graph.handlers.size() == 1);
     CHECK(loaded->execution_graph.handlers.front().contract.commands == commands);
-    CHECK(ModuleArtifact::CURRENT_VERSION == 33);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 34);
 
     fs::remove_all(build_dir, ec);
 }
@@ -1762,7 +1776,7 @@ TEST_CASE("ModuleArtifact: every schedule edge reason round-trips", "[artifact][
 }
 
 TEST_CASE("ModuleArtifact: artifact from before field-level contracts is rejected", "[artifact][handler-contracts]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 33);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 34);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1989,7 +2003,7 @@ TEST_CASE("ModuleArtifact: unknown trigger kind is rejected", "[artifact][trait-
 }
 
 TEST_CASE("ModuleArtifact: artifact from before lifecycle triggers is rejected", "[artifact][trait-lifecycle]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 33);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 34);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2118,7 +2132,7 @@ TEST_CASE("ModuleArtifact: unknown group ordering direction is malformed", "[art
 }
 
 TEST_CASE("ModuleArtifact: artifact from before rule groups is rejected", "[artifact][rule-groups]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 33);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 34);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2143,7 +2157,7 @@ TEST_CASE("ModuleArtifact: artifact from before rule groups is rejected", "[arti
 }
 
 TEST_CASE("ModuleArtifact: artifact from before named-entity access is rejected", "[artifact][named-entity]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 33);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 34);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2502,7 +2516,7 @@ TEST_CASE("ModuleArtifact: a trait access expression round-trips", "[artifact][t
 }
 
 TEST_CASE("ModuleArtifact: artifact from before bracketed trait access is rejected", "[artifact][trait-access]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 33);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 34);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);

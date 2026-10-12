@@ -17,6 +17,8 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
+#include <optional>
 #include <sstream>
 
 using namespace cactus;
@@ -627,14 +629,18 @@ TEST_CASE("integration: std.core exports KeepOnLoad, not Persistent", "[integrat
 static std::optional<DecoratedProgram> link_with_stdlib(const std::string& root_source,
                                                         const std::string& root_module,
                                                         const fs::path& build_dir,
-                                                        ProgramNode& merged_ast_out) {
+                                                        ProgramNode& merged_ast_out,
+                                                        const std::optional<fs::path>& module_dir = std::nullopt) {
     fs::create_directories(build_dir);
     const auto root_file = build_dir / (root_module + ".cactus");
     {
         std::ofstream ofs(root_file);
         ofs << root_source;
     }
-    const std::vector<fs::path> search_paths{stdlib_dir()};
+    std::vector<fs::path> search_paths{stdlib_dir()};
+    if (module_dir.has_value()) {
+        search_paths.push_back(*module_dir);
+    }
 
     ErrorReporter resolve_errors;
     ModuleResolver resolver(resolve_errors);
@@ -1122,4 +1128,55 @@ TEST_CASE("integration: collider queries lower to runtime kernels over program-b
     }
 
     fs::remove_all(build_dir, ec);
+}
+
+// Lists every delayed delivery edge of each example and fixture program. Run by hand with
+// `test_multi_module_integration "[delivery-survey]"` when cycle rules change.
+TEST_CASE("survey: delayed delivery edges of every example and fixture", "[.][delivery-survey]") {
+    const auto examples = stdlib_dir().parent_path() / "examples";
+    std::vector<fs::path> roots;
+    for (const auto& entry : fs::recursive_directory_iterator(examples)) {
+        const auto relative = fs::relative(entry.path(), examples).generic_string();
+        if (entry.path().extension() == ".cactus" && !relative.contains("build/")) {
+            roots.push_back(entry.path());
+        }
+    }
+    for (const auto& entry : fs::directory_iterator(CACTUS_TEST_FIXTURES_DIR)) {
+        if (entry.path().extension() == ".cactus") {
+            roots.push_back(entry.path());
+        }
+    }
+    std::ranges::sort(roots);
+    for (const auto& root : roots) {
+        DYNAMIC_SECTION(fs::relative(root, examples).generic_string()) {
+            std::ifstream ifs(root);
+            std::ostringstream source;
+            source << ifs.rdbuf();
+            const auto text  = source.str();
+            const auto start = text.find("module ") + 7;
+            const auto name  = text.substr(start, text.find_first_of("\r\n", start) - start);
+            ProgramNode merged_ast;
+            const auto program = link_with_stdlib(text, name, integration_build_dir() / "delivery_survey", merged_ast,
+                                                  root.parent_path());
+            REQUIRE(program.has_value());
+            const auto& graph = program->execution_graph;
+            std::ostringstream report;
+            for (const auto& edge : graph.event_flows) {
+                if (edge.delayed) {
+                    report << "  event " << make_canonical_id(edge.event) << ": " << edge.producer.canonical_id()
+                           << " -> " << edge.consumer.canonical_id() << "\n";
+                }
+            }
+            for (const auto& edge : graph.lifecycle_flows) {
+                if (edge.delayed) {
+                    report << "  " << (edge.added ? "added " : "removed ") << make_canonical_id(edge.trait) << ": "
+                           << edge.producer.canonical_id() << " -> " << edge.consumer.canonical_id() << "\n";
+                }
+            }
+            std::cout << fs::relative(root, examples).generic_string() << "\n"
+                      << (report.view().empty() ? std::string("  (no delayed edge)\n") : report.str());
+            std::error_code ec;
+            fs::remove_all(integration_build_dir() / "delivery_survey", ec);
+        }
+    }
 }

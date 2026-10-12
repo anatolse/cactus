@@ -179,6 +179,10 @@ add_executable(test_archetype_reachability test_archetype_reachability.cpp)
 target_link_libraries(test_archetype_reachability PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME ArchetypeReachabilityTests COMMAND test_archetype_reachability)
 
+add_executable(test_delivery_cycles test_delivery_cycles.cpp)
+target_link_libraries(test_delivery_cycles PRIVATE cactus_frontend Catch2::Catch2WithMain)
+add_test(NAME DeliveryCyclesTests COMMAND test_delivery_cycles)
+
 add_executable(test_semantic_states test_semantic_states.cpp)
 target_link_libraries(test_semantic_states PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticStatesTests COMMAND test_semantic_states)
@@ -502,6 +506,12 @@ cactus_add_headless_behavior_test(test_commit_notify_loop_headless_behavior
     CACTUS_SOURCE tests/fixtures/commit_notify_loop_runtime.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_commit_notify_loop_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_delivery_clocks_headless_behavior
+    CACTUS_SOURCE tests/fixtures/delivery_clocks_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_delivery_clocks_headless_behavior.cpp
 )
 
 cactus_add_headless_behavior_test(test_event_payload_reads_headless_behavior

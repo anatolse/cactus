@@ -479,6 +479,35 @@ TEST_CASE("program_linker: rebuilds cross-module conflicts and event flow", "[li
     CHECK(merged.execution_graph.stable_topological_order[1] == reader.identity);
 }
 
+TEST_CASE("program_linker: a cycle across modules is delayed after linking", "[linker][delivery-cycles]") {
+    const auto ping = linked_symbol(SymbolKind::Event, "a", "Ping");
+    const auto pong = linked_symbol(SymbolKind::Event, "b", "Pong");
+
+    DecoratedProgram a_program;
+    auto a_handler = linked_handler(linked_symbol(SymbolKind::Rule, "a", "Serve"),
+                                    {.kind = HandlerTriggerKind::Event, .symbol = pong},
+                                    0);
+    a_handler.contract.emits.insert(ping);
+    a_program.execution_graph.handlers.push_back(a_handler);
+
+    DecoratedProgram b_program;
+    auto b_handler = linked_handler(linked_symbol(SymbolKind::Rule, "b", "Return"),
+                                    {.kind = HandlerTriggerKind::Event, .symbol = ping},
+                                    0);
+    b_handler.contract.emits.insert(pong);
+    b_program.execution_graph.handlers.push_back(b_handler);
+
+    ErrorReporter errors;
+    ProgramLinker linker(errors);
+    DecoratedProgram merged;
+    REQUIRE(linker.merge_into(merged, a_program, "a"));
+    CHECK(merged.execution_graph.event_flows.empty());
+    REQUIRE(linker.merge_into(merged, b_program, "b"));
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(merged.execution_graph.event_flows.size() == 2);
+    CHECK(std::ranges::all_of(merged.execution_graph.event_flows, &EventFlowEdge::delayed));
+}
+
 TEST_CASE("program_linker: preserves external project capabilities across module merge",
           "[linker][extern-rule][projects]") {
     const auto tick   = linked_symbol(SymbolKind::Phase, "runtime", "input");

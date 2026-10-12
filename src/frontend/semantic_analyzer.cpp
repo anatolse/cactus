@@ -5,6 +5,7 @@
 #include "common/render_pass_intrinsics.hpp"
 #include "common/vector_binary_ops.hpp"
 #include "frontend/archetype_reachability.hpp"
+#include "frontend/delivery_cycles.hpp"
 #include "frontend/execution_graph_scheduler.hpp"
 #include "frontend/symbol_identity.hpp"
 
@@ -1240,6 +1241,7 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
 
     build_persistence_metadata(program);
     report_unsupported_persistence_fields(result_, errors_);
+    classify_delivery_cycles(result_.execution_graph, template_trait_lookup(result_.persistence));
 
     return std::move(result_);
 }

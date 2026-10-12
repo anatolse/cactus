@@ -1,6 +1,7 @@
 #include "frontend/program_linker.hpp"
 
 #include "frontend/archetype_reachability.hpp"
+#include "frontend/delivery_cycles.hpp"
 #include "frontend/execution_graph_scheduler.hpp"
 #include "frontend/module_artifact.hpp"
 #include "frontend/symbol_identity.hpp"
@@ -247,6 +248,8 @@ bool ProgramLinker::rebuild_execution_graph(DecoratedProgram& program, bool vali
     graph.schedule_edges.clear();
     graph.phase_barriers.clear();
     graph.event_flows.clear();
+    graph.lifecycle_flows.clear();
+    graph.activation_depths.clear();
     graph.stable_topological_order.clear();
     graph.dependency_levels.clear();
 
@@ -290,6 +293,7 @@ bool ProgramLinker::rebuild_execution_graph(DecoratedProgram& program, bool vali
 
     expand_group_orderings(graph);
     const bool schedule_ok = compute_handler_schedule(graph, errors_);
+    classify_delivery_cycles(graph, template_trait_lookup(program.persistence));
     check_phase_lineage_cycles(graph.phases, errors_);
     validate_lifecycle_trigger_traits(graph, errors_);
 

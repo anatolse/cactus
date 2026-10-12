@@ -1,6 +1,7 @@
 #include "backends/cpp-entt/cpp_entt_codegen.hpp"
 #include "common/ast_expressions.hpp"
 
+#include "frontend/delivery_cycles.hpp"
 #include "frontend/symbol_identity.hpp"
 
 #include "backends/cpp-entt/accumulation_plan.hpp"
@@ -19,6 +20,7 @@
 #include <filesystem>
 #include <iomanip>
 #include <limits>
+#include <map>
 #include <optional>
 #include <ranges>
 #include <sstream>
@@ -319,6 +321,67 @@ std::string lifecycle_trackers_cpp_type(const DecoratedProgram& program) {
     }
     return "LifecycleTrackers<" + traits + ">";
 }
+
+// What generated scheduling needs from the graph's delayed edges. An edge is
+// delayed exactly when producer and consumer share a delivery cycle.
+class DeliveryPlan {
+public:
+    explicit DeliveryPlan(const DecoratedProgram& program) : components_(delivery_components(program.execution_graph)) {
+        const auto& graph = program.execution_graph;
+        for (const auto& edge : graph.event_flows) {
+            if (edge.delayed) {
+                add(graph, {.kind = HandlerTriggerKind::Event, .symbol = edge.event}, edge.producer);
+            }
+        }
+        for (const auto& edge : graph.lifecycle_flows) {
+            if (edge.delayed) {
+                const auto kind = edge.added ? HandlerTriggerKind::TraitAdded : HandlerTriggerKind::TraitRemoved;
+                add(graph, {.kind = kind, .symbol = edge.trait}, edge.producer);
+            }
+        }
+        for (const auto& depth : graph.activation_depths) {
+            if (depth.kind == ActivationRootKind::Phase && depth.produces_delays && depth.symbol.has_value()) {
+                delaying_phases_.insert(make_canonical_id(*depth.symbol));
+            }
+        }
+    }
+
+    [[nodiscard]] bool cyclic() const {
+        return !components_.empty();
+    }
+
+    [[nodiscard]] std::string component_literal(const HandlerIdentity& handler) const {
+        const auto found = components_.find(handler);
+        return found == components_.end() ? "kNoComponent" : std::to_string(found->second) + "U";
+    }
+
+    // Producer cycle -> whether the trigger also has consumers off that cycle.
+    [[nodiscard]] const std::map<std::uint32_t, bool>* delayed(const ResolvedHandlerTrigger& trigger) const {
+        const auto found = delayed_.find(trigger.debug_string());
+        return found == delayed_.end() ? nullptr : &found->second;
+    }
+
+    [[nodiscard]] bool phase_delays(const SymbolId& phase) const {
+        return delaying_phases_.contains(make_canonical_id(phase));
+    }
+
+private:
+    void add(const ExecutionGraph& graph, const ResolvedHandlerTrigger& trigger, const HandlerIdentity& producer) {
+        const auto component         = components_.at(producer);
+        const auto [entry, inserted] = delayed_[trigger.debug_string()].try_emplace(component, false);
+        if (!inserted) {
+            return;
+        }
+        entry->second = std::ranges::any_of(graph.handlers, [&](const HandlerNode& consumer) {
+            const auto found = components_.find(consumer.identity);
+            return consumer.identity.trigger == trigger && (found == components_.end() || found->second != component);
+        });
+    }
+
+    std::unordered_map<HandlerIdentity, std::uint32_t, HandlerIdentityHash> components_;
+    std::map<std::string, std::map<std::uint32_t, bool>> delayed_;
+    std::unordered_set<std::string> delaying_phases_;
+};
 
 bool has_compiler_owned_external_handler(const DecoratedProgram& program, const ExternRuleNode& rule) {
     if (!rule.resolved_rule_id.has_value()) {
@@ -775,8 +838,37 @@ void emit_viewport_phase_dispatch(std::ostringstream& out,
     out << indent << "}\n";
 }
 
+// The delayed queue of a phase's clock, named after the phase.
+std::string phase_delayed_queue(const std::string& phase_name) {
+    return "delayed_" + phase_name;
+}
+
+// Copies the phase's root-bound and upstream-bound fields into its runtime state.
+void emit_phase_field_bindings(std::ostringstream& out, const auto* phase) {
+    bool used_root_event = false;
+    for (const auto& field : phase->fields) {
+        if (!field.source_binding.has_value()) {
+            continue;
+        }
+        const auto& binding   = *field.source_binding;
+        const auto field_type = EnttCodegenUtils::value_type_to_cpp(field.type);
+        if (binding.kind == PhaseFieldSource::Kind::RootEvent) {
+            used_root_event = true;
+            out << "    phase." << field.name << " = static_cast<" << field_type << ">(root_event." << binding.member
+                << ");\n";
+        } else {
+            out << "    phase." << field.name << " = static_cast<" << field_type << ">(scheduler."
+                << canonical_to_cpp_name(binding.source) << "." << binding.member << ");\n";
+        }
+    }
+    if (!used_root_event) {
+        out << "    (void)root_event;\n";
+    }
+}
+
 void emit_phase_batch(std::ostringstream& out,
                       const DecoratedProgram& program,
+                      const DeliveryPlan& delivery,
                       const auto* phase,
                       const auto* render_phase,
                       const auto& emit_render_phase_dispatch) {
@@ -786,74 +878,60 @@ void emit_phase_batch(std::ostringstream& out,
     const auto phase_name            = canonical_to_cpp_name(phase->phase);
     const auto root_type             = event_runtime_cpp_type(program, *phase->runtime_root);
     const bool is_render_phase_batch = phase == render_phase;
+    const bool delays                = delivery.phase_delays(phase->phase);
+    // One activation of the phase: one tick of its clock.
+    const auto emit_activation = [&](const std::string& indent) {
+        out << indent << "scheduler.activation.active = true;\n";
+        if (delivery.cyclic()) {
+            out << indent << "scheduler.activation.current_delayed = "
+                << (delays ? "&scheduler." + phase_delayed_queue(phase_name) : std::string("nullptr")) << ";\n";
+        }
+        if (is_render_phase_batch) {
+            out << indent << "begin_render_frame();\n";
+            emit_render_phase_dispatch(indent, phase_name);
+            out << indent << "end_render_frame();\n";
+        } else {
+            out << indent << "generated_dispatch_phase_" << phase_name << "(registry, phase);\n";
+        }
+        if (delays) {
+            out << indent << "deliver_delayed_events(scheduler.activation);\n";
+        }
+        out << indent << "generated_drain_event_cascade(registry);\n";
+        out << indent << "generated_commit_activation(registry);\n";
+        out << indent << "scheduler.activation.active = false;\n";
+    };
     out << "void generated_dispatch_phase_" << phase_name << "(entt::registry&, const " << phase_name
         << "PhaseRuntimeState&);\n\n";
     out << "void generated_run_phase_batch_" << phase_name << "(entt::registry& registry, const " << root_type
         << "& root_event) {\n";
     out << "    auto& scheduler = generated_scheduler_state();\n";
     out << "    auto& phase = scheduler." << phase_name << ";\n";
-    if (phase->every_seconds.has_value()) {
-        const auto interval = *phase->every_seconds;
-        out << "    constexpr double interval = " << cpp_double_literal(interval) << ";\n";
-        out << "    phase.accumulator += static_cast<double>(root_event.dt);\n";
-        out << "    const auto due = static_cast<std::uint64_t>(std::floor(phase.accumulator / interval));\n";
-        if (phase->max_repetitions.has_value()) {
-            out << "    constexpr std::uint64_t max_repetitions = " << *phase->max_repetitions << ";\n";
-            out << "    const auto repetitions = std::min(due, max_repetitions);\n";
-        } else {
-            out << "    const auto repetitions = due;\n";
-        }
-        out << "    phase.dt = static_cast<float>(interval);\n";
-        out << "    for (std::uint64_t repetition = 0; repetition < repetitions; ++repetition) {\n";
-        out << "        scheduler.activation.active = true;\n";
-        if (is_render_phase_batch) {
-            out << "        begin_render_frame();\n";
-            emit_render_phase_dispatch("        ", phase_name);
-            out << "        end_render_frame();\n";
-        } else {
-            out << "        generated_dispatch_phase_" << phase_name << "(registry, phase);\n";
-        }
-        out << "        generated_drain_event_cascade(registry);\n";
-        out << "        generated_commit_activation(registry);\n";
-        out << "        scheduler.activation.active = false;\n";
-        out << "    }\n";
-        out << "    phase.accumulator -= static_cast<double>(due) * interval;\n";
-        out << "    if (phase.accumulator < 0.0) { phase.accumulator = 0.0; }\n";
-        out << "    if (phase.accumulator >= interval) { phase.accumulator = std::fmod(phase.accumulator, "
-               "interval); }\n";
-        out << "    phase.alpha = phase.accumulator / interval;\n";
-    } else {
-        bool used_root_event = false;
-        for (const auto& field : phase->fields) {
-            if (!field.source_binding.has_value()) {
-                continue;
-            }
-            const auto& binding   = *field.source_binding;
-            const auto field_type = EnttCodegenUtils::value_type_to_cpp(field.type);
-            if (binding.kind == PhaseFieldSource::Kind::RootEvent) {
-                used_root_event = true;
-                out << "    phase." << field.name << " = static_cast<" << field_type << ">(root_event."
-                    << binding.member << ");\n";
-            } else {
-                out << "    phase." << field.name << " = static_cast<" << field_type << ">(scheduler."
-                    << canonical_to_cpp_name(binding.source) << "." << binding.member << ");\n";
-            }
-        }
-        if (!used_root_event) {
-            out << "    (void)root_event;\n";
-        }
-        out << "    scheduler.activation.active = true;\n";
-        if (is_render_phase_batch) {
-            out << "    begin_render_frame();\n";
-            emit_render_phase_dispatch("    ", phase_name);
-            out << "    end_render_frame();\n";
-        } else {
-            out << "    generated_dispatch_phase_" << phase_name << "(registry, phase);\n";
-        }
-        out << "    generated_drain_event_cascade(registry);\n";
-        out << "    generated_commit_activation(registry);\n";
-        out << "    scheduler.activation.active = false;\n";
+    if (!phase->every_seconds.has_value()) {
+        emit_phase_field_bindings(out, phase);
+        emit_activation("    ");
+        out << "    ++phase.completed_batches;\n";
+        out << "}\n\n";
+        return;
     }
+    const auto interval = *phase->every_seconds;
+    out << "    constexpr double interval = " << cpp_double_literal(interval) << ";\n";
+    out << "    phase.accumulator += static_cast<double>(root_event.dt);\n";
+    out << "    const auto due = static_cast<std::uint64_t>(std::floor(phase.accumulator / interval));\n";
+    if (phase->max_repetitions.has_value()) {
+        out << "    constexpr std::uint64_t max_repetitions = " << *phase->max_repetitions << ";\n";
+        out << "    const auto repetitions = std::min(due, max_repetitions);\n";
+    } else {
+        out << "    const auto repetitions = due;\n";
+    }
+    out << "    phase.dt = static_cast<float>(interval);\n";
+    out << "    for (std::uint64_t repetition = 0; repetition < repetitions; ++repetition) {\n";
+    emit_activation("        ");
+    out << "    }\n";
+    out << "    phase.accumulator -= static_cast<double>(due) * interval;\n";
+    out << "    if (phase.accumulator < 0.0) { phase.accumulator = 0.0; }\n";
+    out << "    if (phase.accumulator >= interval) { phase.accumulator = std::fmod(phase.accumulator, "
+           "interval); }\n";
+    out << "    phase.alpha = phase.accumulator / interval;\n";
     out << "    ++phase.completed_batches;\n";
     out << "}\n\n";
 }
@@ -980,7 +1058,151 @@ void emit_stable_handler_table(std::ostringstream& out, const DecoratedProgram& 
     out << "}};\n\n";
 }
 
-std::string emit_graph_scheduler_state(const DecoratedProgram& program, const AccumulationPlan& accumulation) {
+// One emit call per route of an occurrence whose producer is on cycle `component`.
+void emit_routed_emit_case(std::ostringstream& out, std::uint32_t component, bool outside, bool targeted) {
+    const auto literal   = std::to_string(component) + "U";
+    const auto recipient = std::string(targeted ? "target, " : "");
+    const auto now       = std::string(targeted ? "emit_targeted_event" : "emit_event");
+    const auto later     = std::string(targeted ? "emit_delayed_targeted_event" : "emit_delayed_event");
+    out << "        case " << literal << ":\n";
+    if (outside) {
+        out << "            " << now << "(activation, occurrence, " << recipient << "DeliveryRoute::ImmediateOnly, "
+            << literal << ");\n";
+    }
+    out << "            " << later << "(activation, std::move(occurrence), " << recipient
+        << "DeliveryRoute::DelayedOnly, " << literal << ");\n";
+    out << "            return;\n";
+}
+
+// For each event some cycle delays: emit overloads that route by the running
+// handler's cycle, preferred over the generic templates by overload resolution.
+void emit_delayed_emit_overloads(std::ostringstream& out,
+                                 const DecoratedProgram& program,
+                                 const DeliveryPlan& delivery,
+                                 const std::vector<const ResolvedEvent*>& events) {
+    for (const auto* event : events) {
+        const auto* delayed =
+            delivery.delayed(ResolvedHandlerTrigger{.kind = HandlerTriggerKind::Event, .symbol = *event->symbol_id});
+        if (delayed == nullptr) {
+            continue;
+        }
+        const auto type = event_runtime_cpp_type(program, *event->symbol_id);
+        for (const bool targeted : {false, true}) {
+            out << "void " << (targeted ? "generated_emit_targeted_event(" : "generated_emit_event(") << type
+                << " occurrence" << (targeted ? ", entt::entity target" : "") << ") {\n";
+            out << "    auto& activation = generated_scheduler_state().activation;\n";
+            out << "    switch (activation.current_component) {\n";
+            for (const auto& [component, outside] : *delayed) {
+                emit_routed_emit_case(out, component, outside, targeted);
+            }
+            out << "        default:\n";
+            out << "            " << (targeted ? "emit_targeted_event(activation, std::move(occurrence), target);\n"
+                                             : "emit_event(activation, std::move(occurrence));\n");
+            out << "    }\n";
+            out << "}\n\n";
+        }
+    }
+}
+
+// Which consumers of each watched trait's triggers a producer cycle reaches by delay.
+void emit_lifecycle_routes(std::ostringstream& out, const DecoratedProgram& program, const DeliveryPlan& delivery) {
+    out << "struct GeneratedLifecycleRoutes {\n";
+    out << "    [[nodiscard]] LifecycleSplit operator()(std::size_t trait_index, bool added, std::uint32_t component) "
+           "const {\n";
+    const auto traits = EnttCodegenUtils::watched_lifecycle_traits(program);
+    for (std::size_t index = 0; index < traits.size(); ++index) {
+        for (const bool added : {true, false}) {
+            const auto kind     = added ? HandlerTriggerKind::TraitAdded : HandlerTriggerKind::TraitRemoved;
+            const auto* delayed = delivery.delayed(ResolvedHandlerTrigger{.kind = kind, .symbol = traits[index]});
+            if (delayed == nullptr) {
+                continue;
+            }
+            for (const auto& [component, outside] : *delayed) {
+                out << "        if (trait_index == " << index << " && " << (added ? "added" : "!added")
+                    << " && component == " << component << "U) {\n";
+                out << "            return {.immediate = " << (outside ? "true" : "false") << ", .delayed = true};\n";
+                out << "        }\n";
+            }
+        }
+    }
+    out << "        return {};\n";
+    out << "    }\n";
+    out << "};\n\n";
+}
+
+// Per-phase runtime state, plus one delayed queue per clock that can delay.
+void emit_scheduler_state_struct(std::ostringstream& out, const DecoratedProgram& program, const DeliveryPlan& delivery) {
+    out << "struct SchedulerState {\n";
+    out << "    ActivationRuntime<EventOccurrence> activation;\n";
+    for (const auto& phase : program.execution_graph.phases) {
+        const auto phase_name = canonical_to_cpp_name(phase.phase);
+        out << "    " << phase_name << "PhaseRuntimeState " << phase_name << ";\n";
+        if (delivery.phase_delays(phase.phase)) {
+            out << "    DelayedQueue<EventOccurrence> " << phase_delayed_queue(phase_name) << ";\n";
+        }
+    }
+    if (delivery.cyclic()) {
+        out << "    DelayedQueue<EventOccurrence> delayed_host;\n";
+    }
+    out << "};\n\n";
+}
+
+// The load/unload boundary helper and the external-event drain, which runs
+// host-clock delays as activations of their own.
+void emit_host_clock_entry_points(std::ostringstream& out, const DeliveryPlan& delivery) {
+    // The load and unload boundaries: one host-clock activation each.
+    out << "template <typename Occurrence>\n";
+    out << "void generated_run_boundary_activation(entt::registry& registry, const Occurrence& occurrence) {\n";
+    out << "    auto& activation = generated_scheduler_state().activation;\n";
+    out << "    activation.active = true;\n";
+    if (delivery.cyclic()) {
+        out << "    activation.current_delayed = &generated_scheduler_state().delayed_host;\n";
+    }
+    out << "    generated_dispatch_event(registry, occurrence);\n";
+    out << "    generated_drain_event_cascade(registry);\n";
+    out << "    generated_commit_activation(registry);\n";
+    // A SaveRequested queued by the boundary is processed at the boundary too.
+    out << "    generated_process_persistence_boundary(registry);\n";
+    out << "    activation.active = false;\n";
+    out << "}\n\n";
+
+    out << "void generated_drain_external_events(entt::registry& registry) {\n";
+    out << "    auto& activation = generated_scheduler_state().activation;\n";
+    out << "    auto& queue = activation.root_event_queue;\n";
+    // Only delays queued before this drain run in it, so one drain always ends.
+    if (delivery.cyclic()) {
+        out << "    auto delayed = std::move(generated_scheduler_state().delayed_host);\n";
+        out << "    generated_scheduler_state().delayed_host.clear();\n";
+    }
+    out << "    while (!queue.empty()) {\n";
+    out << "        auto queued = std::move(queue.front());\n";
+    out << "        queue.pop_front();\n";
+    out << "        std::visit([&](const auto& occurrence) { generated_process_root_event(registry, occurrence, queued.target); },\n";
+    out << "                   queued.occurrence);\n";
+    out << "    }\n";
+    if (delivery.cyclic()) {
+        out << "    for (auto& queued : delayed) {\n";
+        out << "        if (!deliverable(registry, queued)) {\n";
+        out << "            continue;\n";
+        out << "        }\n";
+        out << "        begin_delivery(activation, queued);\n";
+        out << "        std::visit([&](const auto& occurrence) { generated_process_root_event(registry, occurrence, queued.target); },\n";
+        out << "                   queued.occurrence);\n";
+        out << "        end_delivery(activation);\n";
+        out << "    }\n";
+    }
+    // Persistence requests are processed only once this drain's own root
+    // events (and everything their handlers cascaded/committed) are fully
+    // settled — the boundary decision-6 requires. generated_process_persistence_boundary
+    // itself guards against the reentrant nested call this makes when it
+    // delivers each outcome as its own activation.
+    out << "    generated_process_persistence_boundary(registry);\n";
+    out << "}\n\n";
+}
+
+std::string emit_graph_scheduler_state(const DecoratedProgram& program,
+                                       const AccumulationPlan& accumulation,
+                                       const DeliveryPlan& delivery) {
     if (program.execution_graph.phases.empty()) {
         return {};
     }
@@ -1010,8 +1232,8 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program, const Ac
     std::ostringstream out;
     out << "// ── Graph Activation Runtime State ──────────────────────────────────\n\n";
     out << "namespace cactus::runtime::entt_backend {\n\n";
-    // kMaxEventCascadeDepth, QueuedEvent<Occurrence>, and ActivationRuntime<Occurrence>
-    // are runtime-hosted (backends/cpp-entt/runtime.hpp) — EventOccurrence
+    // QueuedEvent<Occurrence> and ActivationRuntime<Occurrence> are
+    // runtime-hosted (backends/cpp-entt/runtime.hpp) — EventOccurrence
     // (the program's concrete event-type list) is the one genuinely
     // program-specific piece, so it stays generated.
     if (occurrence_types.empty()) {
@@ -1027,13 +1249,7 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program, const Ac
 
     emit_phase_runtime_states(out, program);
 
-    out << "struct SchedulerState {\n";
-    out << "    ActivationRuntime<EventOccurrence> activation;\n";
-    for (const auto& phase : program.execution_graph.phases) {
-        const auto phase_name = canonical_to_cpp_name(phase.phase);
-        out << "    " << phase_name << "PhaseRuntimeState " << phase_name << ";\n";
-    }
-    out << "};\n\n";
+    emit_scheduler_state_struct(out, program, delivery);
     out << "SchedulerState& generated_scheduler_state() {\n";
     out << "    static SchedulerState state;\n";
     out << "    return state;\n";
@@ -1078,16 +1294,20 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program, const Ac
     // Targeted counterpart of generated_emit_event (targeted-event-delivery):
     // the recipient is evaluated once at the call site (by the caller, before
     // this is invoked) and carried in the queued envelope so it survives
-    // cascade deferral unchanged. Delivery constrains consumer cardinality by
+    // a delay unchanged. Delivery constrains consumer cardinality by
     // this recipient; it is never lowered to a validity guard around
     // broadcast dispatch.
     out << "template <typename Occurrence>\n";
     out << "void generated_emit_targeted_event(Occurrence occurrence, entt::entity target) {\n";
     out << "    emit_targeted_event(generated_scheduler_state().activation, std::move(occurrence), target);\n";
     out << "}\n\n";
+    emit_delayed_emit_overloads(out, program, delivery, all_events);
 
     out << "void generated_drain_event_cascade(entt::registry& registry);\n\n";
 
+    if (!lifecycle_triggers.empty() && delivery.cyclic()) {
+        emit_lifecycle_routes(out, program, delivery);
+    }
     out << "void generated_commit_activation(entt::registry& registry) {\n";
     if (!accumulation.empty()) {
         out << "    ::generated_flush_accumulations();\n";
@@ -1095,6 +1315,9 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program, const Ac
     out << "    auto& activation = generated_scheduler_state().activation;\n";
     if (lifecycle_triggers.empty()) {
         out << "    commit_activation(activation, registry, &generated_drain_event_cascade);\n";
+    } else if (delivery.cyclic()) {
+        out << "    commit_activation(activation, registry, &generated_drain_event_cascade, "
+               "generated_lifecycle_trackers(), GeneratedLifecycleRoutes{});\n";
     } else {
         out << "    commit_activation(activation, registry, &generated_drain_event_cascade, "
                "generated_lifecycle_trackers());\n";
@@ -1105,7 +1328,7 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program, const Ac
         const auto type = event_runtime_cpp_type(program, *event->symbol_id);
         out << "void generated_inject_external_event(" << type << " occurrence) {\n";
         out << "    generated_scheduler_state().activation.root_event_queue.push_back(\n";
-        out << "        QueuedEvent<EventOccurrence>{.occurrence = std::move(occurrence), .cascade_depth = 0});\n";
+        out << "        QueuedEvent<EventOccurrence>{.occurrence = std::move(occurrence)});\n";
         out << "}\n\n";
     }
 
@@ -1128,7 +1351,7 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program, const Ac
 
     const auto phase_order = phase_activation_order(program);
     for (const auto* phase : phase_order) {
-        emit_phase_batch(out, program, phase, render_phase, emit_render_dispatch);
+        emit_phase_batch(out, program, delivery, phase, render_phase, emit_render_dispatch);
     }
 
     // The per-event generated_dispatch_event overloads are defined later in
@@ -1140,22 +1363,26 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program, const Ac
     out << "\n";
 
     // An occurrence no phase claims as its root (e.g. std.persistence's save
-    // outcomes, a deferred internal event, or a deferred lifecycle delivery)
-    // is still its own activation: dispatch its handlers, drain whatever
-    // cascade they queue, then commit, exactly like a phase batch does.
-    const auto emit_own_activation = [&out] {
+    // outcomes, or a delayed occurrence of the host clock) is still its own
+    // activation: dispatch its handlers, drain whatever cascade they queue,
+    // then commit, exactly like a phase batch does.
+    const auto emit_own_activation = [&out, &delivery] {
         out << "    if (target.has_value() && !registry.valid(*target)) {\n";
         out << "        return;\n";
         out << "    }\n";
         out << "    generated_scheduler_state().activation.active = true;\n";
+        if (delivery.cyclic()) {
+            out << "    generated_scheduler_state().activation.current_delayed = "
+                   "&generated_scheduler_state().delayed_host;\n";
+        }
         out << "    generated_dispatch_event(registry, root_event, target);\n";
         out << "    generated_drain_event_cascade(registry);\n";
         out << "    generated_commit_activation(registry);\n";
         out << "    generated_scheduler_state().activation.active = false;\n";
     };
 
-    // Every event gets a processor, not only external ones: a cascade-deferred
-    // occurrence of any event is re-queued as a root event.
+    // Every event gets a processor, not only external ones: a host-clock
+    // delayed occurrence of any event runs as its own activation.
     for (const auto* event : all_events) {
         emit_root_event_processor(out, program, event, frame_event, render_phase, phase_order, emit_own_activation);
     }
@@ -1171,26 +1398,7 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program, const Ac
     // below resolves regardless of definition order in the file.
     out << "void generated_process_persistence_boundary(entt::registry& registry);\n\n";
 
-    out << "void generated_drain_external_events(entt::registry& registry) {\n";
-    out << "    auto& activation = generated_scheduler_state().activation;\n";
-    out << "    auto& queue = activation.root_event_queue;\n";
-    out << "    while (!activation.deferred_events.empty()) {\n";
-    out << "        queue.push_back(std::move(activation.deferred_events.front()));\n";
-    out << "        activation.deferred_events.pop_front();\n";
-    out << "    }\n";
-    out << "    while (!queue.empty()) {\n";
-    out << "        auto queued = std::move(queue.front());\n";
-    out << "        queue.pop_front();\n";
-    out << "        std::visit([&](const auto& occurrence) { generated_process_root_event(registry, occurrence, queued.target); },\n";
-    out << "                   queued.occurrence);\n";
-    out << "    }\n";
-    // Persistence requests are processed only once this drain's own root
-    // events (and everything their handlers cascaded/committed) are fully
-    // settled — the boundary decision-6 requires. generated_process_persistence_boundary
-    // itself guards against the reentrant nested call this makes when it
-    // delivers each outcome as its own activation.
-    out << "    generated_process_persistence_boundary(registry);\n";
-    out << "}\n\n";
+    emit_host_clock_entry_points(out, delivery);
     out << "}  // namespace cactus::runtime::entt_backend\n\n";
     return out.str();
 }
@@ -1268,13 +1476,30 @@ struct DispatchCall {
 
 // A set of two or more calls runs, under CACTUS_LINEARIZATION_HARNESS, in a
 // seeded linear extension of the schedule edges inside the set.
+// In a program with a delivery cycle each call first records its handler's
+// cycle; with `routed`, a call is skipped when the occurrence's route excludes it.
 void emit_dispatch_calls(std::ostringstream& out,
                          const DecoratedProgram& program,
                          const AccumulationPlan& accumulation,
-                         const std::vector<DispatchCall>& calls) {
-    const auto text = [&accumulation](const DispatchCall& call) {
-        return accumulation.entry_flushes(call.identity) + call.text;
+                         const DeliveryPlan& delivery,
+                         const std::vector<DispatchCall>& calls,
+                         bool routed = false) {
+    const auto text = [&](const DispatchCall& call) {
+        auto body = accumulation.entry_flushes(call.identity) + call.text;
+        if (!delivery.cyclic()) {
+            return body;
+        }
+        const auto component = delivery.component_literal(call.identity);
+        body                 = "    activation.current_component = " + component + ";\n" + body;
+        if (!routed) {
+            return body;
+        }
+        return "    if (route_admits(activation.delivery_route, activation.delivery_component, " + component + ")) {\n" +
+               body + "    }\n";
     };
+    if (delivery.cyclic() && !calls.empty()) {
+        out << "    auto& activation = generated_scheduler_state().activation;\n";
+    }
     if (calls.size() < 2) {
         for (const auto& call : calls) {
             out << text(call);
@@ -1320,6 +1545,7 @@ void emit_dispatch_calls(std::ostringstream& out,
 bool emit_phase_handler_calls(std::ostringstream& out,
                               const DecoratedProgram& program,
                               const AccumulationPlan& accumulation,
+                              const DeliveryPlan& delivery,
                               const auto& phase) {
     bool emitted = false;
     std::unordered_set<std::string> emitted_callees;
@@ -1331,13 +1557,14 @@ bool emit_phase_handler_calls(std::ostringstream& out,
             calls.push_back(DispatchCall{.identity = identity, .text = std::move(call).str()});
         }
     }
-    emit_dispatch_calls(out, program, accumulation, calls);
+    emit_dispatch_calls(out, program, accumulation, delivery, calls);
     return emitted;
 }
 
 void emit_phase_handler_dispatch(std::ostringstream& out,
                                  const DecoratedProgram& program,
                                  const AccumulationPlan& accumulation,
+                                 const DeliveryPlan& delivery,
                                  const auto& phase) {
     const auto phase_name = canonical_to_cpp_name(phase.phase);
     out << "void generated_dispatch_phase_" << phase_name << "(entt::registry& registry, const " << phase_name
@@ -1357,7 +1584,7 @@ void emit_phase_handler_dispatch(std::ostringstream& out,
         return;
     }
 
-    const bool emitted = emit_phase_handler_calls(out, program, accumulation, phase);
+    const bool emitted = emit_phase_handler_calls(out, program, accumulation, delivery, phase);
     if (!emitted) {
         out << "    (void)registry;\n";
         out << "    (void)phase;\n";
@@ -1368,6 +1595,7 @@ void emit_phase_handler_dispatch(std::ostringstream& out,
 void emit_event_handler_dispatch(std::ostringstream& out,
                                  const DecoratedProgram& program,
                                  const AccumulationPlan& accumulation,
+                                 const DeliveryPlan& delivery,
                                  const ResolvedEvent* event) {
     const auto event_type = event_runtime_cpp_type(program, *event->symbol_id);
     // The default argument lives on the forward declaration emitted by
@@ -1435,7 +1663,8 @@ void emit_event_handler_dispatch(std::ostringstream& out,
             calls.push_back(DispatchCall{.identity = identity, .text = std::move(call).str()});
         }
     }
-    emit_dispatch_calls(out, program, accumulation, calls);
+    const ResolvedHandlerTrigger trigger{.kind = HandlerTriggerKind::Event, .symbol = *event->symbol_id};
+    emit_dispatch_calls(out, program, accumulation, delivery, calls, delivery.delayed(trigger) != nullptr);
     if (calls.empty()) {
         out << "    (void)registry;\n";
         out << "    (void)occurrence;\n";
@@ -1443,7 +1672,9 @@ void emit_event_handler_dispatch(std::ostringstream& out,
     out << "}\n\n";
 }
 
-std::string emit_graph_handler_dispatch(const DecoratedProgram& program, const AccumulationPlan& accumulation) {
+std::string emit_graph_handler_dispatch(const DecoratedProgram& program,
+                                        const AccumulationPlan& accumulation,
+                                        const DeliveryPlan& delivery) {
     if (program.execution_graph.phases.empty() || program.ast == nullptr) {
         return {};
     }
@@ -1451,12 +1682,12 @@ std::string emit_graph_handler_dispatch(const DecoratedProgram& program, const A
     std::ostringstream out;
     out << "namespace cactus::runtime::entt_backend {\n\n";
     for (const auto& phase : program.execution_graph.phases) {
-        emit_phase_handler_dispatch(out, program, accumulation, phase);
+        emit_phase_handler_dispatch(out, program, accumulation, delivery, phase);
     }
 
     const auto events = sorted_events(program);
     for (const auto* event : events) {
-        emit_event_handler_dispatch(out, program, accumulation, event);
+        emit_event_handler_dispatch(out, program, accumulation, delivery, event);
     }
 
     // Lifecycle triggers are only ever declared on Cactus rules.
@@ -1474,7 +1705,7 @@ std::string emit_graph_handler_dispatch(const DecoratedProgram& program, const A
                     DispatchCall{.identity = identity, .text = "    ::" + *callee + "(registry, occurrence, target);\n"});
             }
         }
-        emit_dispatch_calls(out, program, accumulation, calls);
+        emit_dispatch_calls(out, program, accumulation, delivery, calls, delivery.delayed(trigger) != nullptr);
         if (calls.empty()) {
             out << "    (void)registry;\n";
             out << "    (void)occurrence;\n";
@@ -3032,21 +3263,8 @@ std::string emit_backend_main(const DecoratedProgram& program) {
     // generated_load_project stays the pre-existing empty compatibility stub for
     // hosts built against runtime.hpp; its call site in main() is unchanged.
     const auto emit_boundary_activation = [&](const ResolvedEvent& event) {
-        const auto event_type = event_runtime_cpp_type(program, *event.symbol_id);
-        out << "    {\n";
-        out << "        auto& boundary_activation = "
-               "cactus::runtime::entt_backend::generated_scheduler_state().activation;\n";
-        out << "        boundary_activation.active = true;\n";
-        out << "        cactus::runtime::entt_backend::generated_dispatch_event(registry, " << event_type << "{});\n";
-        out << "        cactus::runtime::entt_backend::generated_drain_event_cascade(registry);\n";
-        out << "        cactus::runtime::entt_backend::generated_commit_activation(registry);\n";
-        // Scene transitions obey the same boundary ordering as any other
-        // activation (dsl-stdlib-persistence): a SaveRequested queued during
-        // this load/unload activation must be processed here too, not left
-        // to accumulate until the next frame (or forever, for unload).
-        out << "        cactus::runtime::entt_backend::generated_process_persistence_boundary(registry);\n";
-        out << "        boundary_activation.active = false;\n";
-        out << "    }\n";
+        out << "    cactus::runtime::entt_backend::generated_run_boundary_activation(registry, "
+            << event_runtime_cpp_type(program, *event.symbol_id) << "{});\n";
     };
 
     out << "\n// ── Backend Entry Point ───────────────────────────────────────────────\n\n";
@@ -3105,6 +3323,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     std::ostringstream out;
     // Before any system is emitted: it marks the statements that buffer.
     const AccumulationPlan accumulation(program);
+    const DeliveryPlan delivery(program);
 
     const bool uses_flat     = module_uses_camera_flat(program);
     const bool uses_viewport = module_uses_camera_viewport(program);
@@ -3304,7 +3523,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << emit_event_structs(program);
 
     out << emit_external_command_forward_declarations(program);
-    out << emit_graph_scheduler_state(program, accumulation);
+    out << emit_graph_scheduler_state(program, accumulation, delivery);
     out << emit_persistence_boundary_processor(program);
     out << emit_graph_external_handler_abi(program);
 
@@ -3507,7 +3726,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         }
     }
 
-    out << emit_graph_handler_dispatch(program, accumulation);
+    out << emit_graph_handler_dispatch(program, accumulation, delivery);
 
     // Dispatcher setup
     out << "// ── Event Dispatcher ────────────────────────────────────────────────\n\n";
@@ -4010,6 +4229,9 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     if (tracks_lifecycle && has_added_trigger(program)) {
         out << "    auto& activation = generated_scheduler_state().activation;\n";
         out << "    activation.active = true;\n";
+        if (delivery.cyclic()) {
+            out << "    activation.current_delayed = &generated_scheduler_state().delayed_host;\n";
+        }
         out << "    generated_lifecycle_trackers().deliver_arrivals(activation, registry);\n";
         out << "    generated_drain_event_cascade(registry);\n";
         out << "    generated_commit_activation(registry);\n";

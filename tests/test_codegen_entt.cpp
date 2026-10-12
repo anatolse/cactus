@@ -34,6 +34,23 @@ static std::string generated_function(const std::string& code, const std::string
     return code.substr(start, end - start + 3);
 }
 
+// A load or unload boundary dispatches, drains, commits, then settles persistence requests.
+static void check_boundary_activation_order(const std::string& code) {
+    const auto boundary = generated_function(
+        code, "void generated_run_boundary_activation(entt::registry& registry, const Occurrence& occurrence) {");
+    const auto dispatch = boundary.find("generated_dispatch_event(registry, occurrence);");
+    const auto drain    = boundary.find("generated_drain_event_cascade(registry);");
+    const auto commit   = boundary.find("generated_commit_activation(registry);");
+    const auto settle   = boundary.find("generated_process_persistence_boundary(registry);");
+    REQUIRE(dispatch != std::string::npos);
+    REQUIRE(drain != std::string::npos);
+    REQUIRE(commit != std::string::npos);
+    REQUIRE(settle != std::string::npos);
+    CHECK(dispatch < drain);
+    CHECK(drain < commit);
+    CHECK(commit < settle);
+}
+
 // Drops every harness-only region, leaving what a build without the macro compiles.
 static std::string without_linearization_harness(const std::string& code) {
     std::string result;
@@ -1709,21 +1726,16 @@ TEST_CASE("Codegen EnTT: on load handler runs via a one-shot boot activation bef
 
     const auto init_pos      = main_fn.find("generated_init_project(registry);");
     const auto load_call_pos = main_fn.find("generated_load_project(registry);");
-    const auto dispatch_pos  = main_fn.find("generated_dispatch_event(registry, loadEvent{});");
-    const auto drain_pos     = main_fn.find("generated_drain_event_cascade(registry);");
-    const auto commit_pos    = main_fn.find("generated_commit_activation(registry);");
+    const auto boundary_pos  = main_fn.find("generated_run_boundary_activation(registry, loadEvent{});");
     const auto loop_pos      = main_fn.find("while (!WindowShouldClose())");
     REQUIRE(init_pos != std::string::npos);
     REQUIRE(load_call_pos != std::string::npos);
-    REQUIRE(dispatch_pos != std::string::npos);
-    REQUIRE(drain_pos != std::string::npos);
-    REQUIRE(commit_pos != std::string::npos);
+    REQUIRE(boundary_pos != std::string::npos);
     REQUIRE(loop_pos != std::string::npos);
     CHECK(init_pos < load_call_pos);
-    CHECK(load_call_pos < dispatch_pos);
-    CHECK(dispatch_pos < drain_pos);
-    CHECK(drain_pos < commit_pos);
-    CHECK(commit_pos < loop_pos);
+    CHECK(load_call_pos < boundary_pos);
+    CHECK(boundary_pos < loop_pos);
+    check_boundary_activation_order(code);
 }
 
 TEST_CASE("Codegen EnTT: programs without a load handler emit no boot activation",
@@ -1811,21 +1823,16 @@ TEST_CASE("Codegen EnTT: on unload handler runs via a one-shot teardown activati
     // cascade, commit), then CloseWindow().
     const auto loop_pos        = main_fn.find("while (!WindowShouldClose())");
     const auto end_drawing_pos = main_fn.find("EndDrawing();");
-    const auto dispatch_pos    = main_fn.find("generated_dispatch_event(registry, unloadEvent{});");
-    const auto drain_pos       = main_fn.find("generated_drain_event_cascade(registry);");
-    const auto commit_pos      = main_fn.find("generated_commit_activation(registry);");
+    const auto boundary_pos    = main_fn.find("generated_run_boundary_activation(registry, unloadEvent{});");
     const auto close_pos       = main_fn.find("CloseWindow();");
     REQUIRE(loop_pos != std::string::npos);
     REQUIRE(end_drawing_pos != std::string::npos);
-    REQUIRE(dispatch_pos != std::string::npos);
-    REQUIRE(drain_pos != std::string::npos);
-    REQUIRE(commit_pos != std::string::npos);
+    REQUIRE(boundary_pos != std::string::npos);
     REQUIRE(close_pos != std::string::npos);
     CHECK(loop_pos < end_drawing_pos);
-    CHECK(end_drawing_pos < dispatch_pos);
-    CHECK(dispatch_pos < drain_pos);
-    CHECK(drain_pos < commit_pos);
-    CHECK(commit_pos < close_pos);
+    CHECK(end_drawing_pos < boundary_pos);
+    CHECK(boundary_pos < close_pos);
+    check_boundary_activation_order(code);
 }
 
 TEST_CASE("Codegen EnTT: programs without an unload handler emit no teardown activation",
@@ -2060,7 +2067,7 @@ TEST_CASE("Codegen EnTT: the startup arrival activation runs after init and befo
         const auto main_fn   = code.substr(main_start, code.find("#endif  // CACTUS_GENERATED_NO_MAIN", main_start) - main_start);
         const auto init_call = main_fn.find("generated_init_project(registry);");
         const auto load_call = main_fn.find("generated_load_project(registry);");
-        const auto load_evt  = main_fn.find("generated_dispatch_event(registry, loadEvent{});");
+        const auto load_evt  = main_fn.find("generated_run_boundary_activation(registry, loadEvent{});");
         REQUIRE(init_call != std::string::npos);
         REQUIRE(load_call != std::string::npos);
         REQUIRE(load_evt != std::string::npos);
@@ -5747,11 +5754,10 @@ TEST_CASE("Codegen EnTT: phase activations drain stable bounded event cascades",
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    // Cascade-depth capping/deferral is runtime-hosted (emit_event,
-    // backends/cpp-entt/runtime.hpp, covered directly by
-    // test_runtime_activation_scheduler.cpp); codegen only declares
-    // SchedulerState's ActivationRuntime<EventOccurrence> field and routes
-    // handler-emitted events through the runtime helper by call name.
+    // Queueing is runtime-hosted (emit_event, backends/cpp-entt/runtime.hpp,
+    // covered directly by test_runtime_activation_scheduler.cpp); codegen
+    // only declares SchedulerState's ActivationRuntime<EventOccurrence> field
+    // and routes handler-emitted events through the runtime helper by call name.
     CHECK(code.contains("ActivationRuntime<EventOccurrence> activation;"));
     CHECK(code.contains("generated_emit_event(ContactEvent{.amount = 1});"));
     CHECK(!code.contains("Contact.amount"));
@@ -6618,7 +6624,7 @@ TEST_CASE("Codegen EnTT: drain_event_cascade drops a stale-recipient occurrence 
     CHECK(drain.contains("generated_dispatch_event(reg, occurrence, target);"));
 }
 
-TEST_CASE("Codegen EnTT: deferred cascade preserves a targeted occurrence's recipient",
+TEST_CASE("Codegen EnTT: a targeted emit forwards its recipient to the runtime",
           "[codegen-entt][targeted-event-delivery]") {
     ProgramNode program;
     auto decorated = full_pipeline(
@@ -6636,18 +6642,141 @@ TEST_CASE("Codegen EnTT: deferred cascade preserves a targeted occurrence's reci
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    // generated_emit_targeted_event builds one `queued` envelope carrying the
-    // target and pushes that same envelope to either the immediate queue or
-    // deferred_events depending on cascade depth — there is no separate path
-    // that drops the target when deferring. That envelope construction is now
-    // runtime-hosted (emit_targeted_event, backends/cpp-entt/runtime.hpp) and
-    // covered directly by test_runtime_activation_scheduler.cpp; this
-    // codegen-level test only checks the generated wrapper forwards the
-    // target through to it.
+    // The queued envelope keeps the recipient through any delay; that is
+    // runtime-hosted and covered by test_runtime_activation_scheduler.cpp.
     const auto targeted =
         generated_function(code, "void generated_emit_targeted_event(Occurrence occurrence, entt::entity target)");
     CHECK(targeted.contains(
         "emit_targeted_event(generated_scheduler_state().activation, std::move(occurrence), target);"));
+}
+
+namespace {
+
+const std::string kCycleFrame =
+    "pub extern event frame:\n"
+    "    dt: float\n"
+    "phase fixed_tick:\n"
+    "    from:\n"
+    "        frame\n"
+    "    every: 1.0 / 60.0\n"
+    "phase tick:\n"
+    "    after:\n"
+    "        fixed_tick\n"
+    "event Knock\n"
+    "trait Door:\n"
+    "    var knocks: int = 0\n"
+    "entity Front:\n"
+    "    Door\n"
+    "rule Starter:\n"
+    "    on fixed_tick:\n"
+    "        emit Knock to Front\n";
+
+const std::string kAnswerAndLogger =
+    "rule Answer:\n"
+    "    each:\n"
+    "        Door as door\n"
+    "    on Knock:\n"
+    "        door.knocks = door.knocks + 1\n"
+    "        emit Knock to self\n"
+    "rule Logger:\n"
+    "    on Knock:\n"
+    "        let seen = 1\n"
+    "rule Idle:\n"
+    "    on tick:\n"
+    "        let idle = 1\n";
+
+}  // namespace
+
+TEST_CASE("Codegen EnTT: an acyclic program generates no delay machinery", "[codegen-entt][delivery-cycles]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(kCycleFrame +
+                                       "rule Logger:\n"
+                                       "    on Knock:\n"
+                                       "        let seen = 1\n",
+                                   program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK_FALSE(code.contains("DelayedQueue"));
+    CHECK_FALSE(code.contains("current_delayed"));
+    CHECK_FALSE(code.contains("current_component"));
+    CHECK_FALSE(code.contains("route_admits"));
+    CHECK_FALSE(code.contains("deliver_delayed_events"));
+}
+
+TEST_CASE("Codegen EnTT: a cyclic program queues delays per producing phase and on the host clock",
+          "[codegen-entt][delivery-cycles]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(kCycleFrame + kAnswerAndLogger, program);
+
+    const auto code  = CppEnttCodegen::generate(decorated);
+    const auto state = generated_function(code, "struct SchedulerState {");
+    CHECK(state.contains("DelayedQueue<EventOccurrence> delayed_host;"));
+    CHECK(state.contains("DelayedQueue<EventOccurrence> delayed_test__fixed_tick;"));
+    CHECK_FALSE(state.contains("delayed_tick;"));
+
+    const auto fixed = generated_function(code, "void generated_run_phase_batch_test__fixed_tick(");
+    CHECK(fixed.contains("current_delayed = &scheduler.delayed_test__fixed_tick;"));
+    const auto dispatch_at = fixed.find("generated_dispatch_phase_test__fixed_tick(registry, phase);");
+    const auto deliver_at  = fixed.find("deliver_delayed_events(scheduler.activation);");
+    const auto drain_at    = fixed.find("generated_drain_event_cascade(registry);");
+    REQUIRE(dispatch_at != std::string::npos);
+    REQUIRE(deliver_at != std::string::npos);
+    CHECK(dispatch_at < deliver_at);
+    CHECK(deliver_at < drain_at);
+    const auto idle = generated_function(code, "void generated_run_phase_batch_test__tick(");
+    CHECK_FALSE(idle.contains("deliver_delayed_events"));
+
+    const auto external = generated_function(code, "void generated_drain_external_events(entt::registry& registry) {");
+    CHECK(external.contains("delayed_host"));
+}
+
+TEST_CASE("Codegen EnTT: emits and dispatch follow the routes the graph implies", "[codegen-entt][delivery-cycles]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(kCycleFrame + kAnswerAndLogger, program);
+    const auto code = CppEnttCodegen::generate(decorated);
+
+    // Answer's Knock reaches Answer by delay and Logger now, so it splits.
+    const auto targeted = generated_function(code, "void generated_emit_targeted_event(KnockEvent occurrence, entt::entity target) {");
+    CHECK(targeted.contains("switch (activation.current_component) {"));
+    CHECK(targeted.contains("DeliveryRoute::ImmediateOnly"));
+    CHECK(targeted.contains("emit_delayed_targeted_event(activation, std::move(occurrence), target, DeliveryRoute::DelayedOnly"));
+    CHECK(targeted.contains("default:"));
+
+    const auto dispatch = generated_function(code, "void generated_dispatch_event(entt::registry& registry, const KnockEvent& occurrence");
+    CHECK(dispatch.contains("route_admits(activation.delivery_route, activation.delivery_component, 0U)"));
+    CHECK(dispatch.contains("route_admits(activation.delivery_route, activation.delivery_component, kNoComponent)"));
+    CHECK(dispatch.contains("activation.current_component = 0U;"));
+
+    const auto phase = generated_function(code, "void generated_dispatch_phase_test__fixed_tick(entt::registry& registry");
+    CHECK(phase.contains("current_component = kNoComponent;"));
+    CHECK_FALSE(phase.contains("route_admits"));
+}
+
+TEST_CASE("Codegen EnTT: a lifecycle cycle passes its route table to commit", "[codegen-entt][delivery-cycles]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "pub extern event frame:\n"
+        "    dt: float\n"
+        "phase tick:\n"
+        "    from:\n"
+        "        frame\n"
+        "trait Offspring\n"
+        "template Minion:\n"
+        "    Offspring\n"
+        "rule Seed:\n"
+        "    on tick:\n"
+        "        spawn Minion()\n"
+        "rule Respawn:\n"
+        "    on added Offspring:\n"
+        "        spawn Minion()\n",
+        program);
+    const auto code = CppEnttCodegen::generate(decorated);
+
+    const auto commit = generated_function(code, "void generated_commit_activation(entt::registry& registry) {");
+    CHECK(commit.contains("generated_lifecycle_trackers(), GeneratedLifecycleRoutes{});"));
+    const auto routes = generated_function(code, "struct GeneratedLifecycleRoutes {");
+    CHECK(routes.contains("if (trait_index == 0 && added && component == 0U) {"));
+    CHECK(routes.contains("return {.immediate = false, .delayed = true};"));
 }
 
 TEST_CASE("Codegen EnTT: selectionless event handler accepts and ignores an optional recipient",

@@ -1372,6 +1372,25 @@ inline void generated_queue_restore_request(std::string slot, int request_id) {
     return PersistenceOutcome{.ok = true, .slot = slot, .request_id = request_id};
 }
 
+// ── Delivery routes ───────────────────────────────────────────────────────────
+// A delivery is delayed exactly when producer and consumer share a delivery
+// cycle, so an occurrence's route depends only on its producer's cycle.
+inline constexpr std::uint32_t kNoComponent = std::numeric_limits<std::uint32_t>::max();
+
+enum class DeliveryRoute : std::uint8_t { All, ImmediateOnly, DelayedOnly };
+
+[[nodiscard]] constexpr bool route_admits(DeliveryRoute route, std::uint32_t producer, std::uint32_t consumer) {
+    switch (route) {
+        case DeliveryRoute::All:
+            return true;
+        case DeliveryRoute::ImmediateOnly:
+            return consumer != producer;
+        case DeliveryRoute::DelayedOnly:
+            return consumer == producer;
+    }
+    return true;
+}
+
 // ── Activation/event-scheduler machinery (extract-codegen-runtime-scaffolding)
 // Structural command queued during an activation (entity spawn/destroy,
 // trait add/remove) and applied once the activation commits. Has no
@@ -1381,6 +1400,7 @@ struct StructuralCommand {
     enum class Kind : std::uint8_t { Spawn, Destroy, Add, Remove, Set };
     Kind kind{};
     std::function<void(entt::registry&)> apply;
+    std::uint32_t component = kNoComponent;  // the delivery cycle of the handler that queued it
 };
 
 // ── Exclusive states ──────────────────────────────────────────────────────────
@@ -1428,15 +1448,21 @@ void leave_state(entt::registry& registry, entt::entity entity) {
     registry.remove<Slot>(entity);
 }
 
-// Cascade-depth cap shared by emit_event/emit_targeted_event/drain_event_cascade
-// below; a queued event whose next depth would exceed this is deferred to the
-// next external-event drain instead of being processed within the current one.
-inline constexpr std::size_t kMaxEventCascadeDepth = 64;
-
 template <typename T>
 inline constexpr bool is_event_occurrence_variant_v = false;
 template <typename... Alternatives>
 inline constexpr bool is_event_occurrence_variant_v<std::variant<Alternatives...>> = true;
+
+// ── Trait lifecycle triggers ──────────────────────────────────────────────
+// `on added T` / `on removed T` occurrences, each delivered to the entity
+// whose trait set changed. `old` holds T's value just before removal.
+template <typename T>
+struct TraitAdded {};
+
+template <typename T>
+struct TraitRemoved {
+    T old;
+};
 
 // One event queued during an activation. `Occurrence` is the program's
 // generated `EventOccurrence` variant alias (every concrete event type the
@@ -1445,12 +1471,17 @@ inline constexpr bool is_event_occurrence_variant_v<std::variant<Alternatives...
 template <typename Occurrence>
 struct QueuedEvent {
     Occurrence occurrence;
-    std::size_t cascade_depth{};
     std::optional<entt::entity> target;
+    DeliveryRoute route     = DeliveryRoute::All;
+    std::uint32_t component = kNoComponent;  // the producer's delivery cycle
 };
 
-// Per-activation scheduler state: queued/deferred events, pending structural
-// commands, current cascade depth, and the deferred-entity reservation
+// Occurrences waiting for the next activation of one clock, in production order.
+template <typename Occurrence>
+using DelayedQueue = std::deque<QueuedEvent<Occurrence>>;
+
+// Per-activation scheduler state: queued events, pending structural commands,
+// the running clock's delayed queue, and the deferred-entity reservation
 // cursor. `Occurrence` is the program's `EventOccurrence` variant; codegen
 // declares `SchedulerState : ActivationRuntime<EventOccurrence>` (plus its
 // own per-phase fields) rather than re-declaring this struct's body inline
@@ -1459,9 +1490,13 @@ template <typename Occurrence>
 struct ActivationRuntime {
     std::deque<QueuedEvent<Occurrence>> root_event_queue;
     std::deque<QueuedEvent<Occurrence>> event_queue;
-    std::deque<QueuedEvent<Occurrence>> deferred_events;
     std::vector<StructuralCommand> commands;
-    std::size_t current_cascade_depth{};
+    DelayedQueue<Occurrence>* current_delayed = nullptr;
+    // The delivery cycle of the handler running now; set only by programs with a cycle.
+    std::uint32_t current_component = kNoComponent;
+    // Route of the occurrence being dispatched.
+    DeliveryRoute delivery_route     = DeliveryRoute::All;
+    std::uint32_t delivery_component = kNoComponent;
     entt::entt_traits<entt::entity>::entity_type next_reserved_entity =
         entt::entt_traits<entt::entity>::entity_mask - 1U;
     bool active{};
@@ -1497,51 +1532,133 @@ void queue_structural_command(ActivationRuntime<Occurrence>& activation,
     if (!activation.active) {
         throw std::runtime_error("cactus structural command queued outside an activation");
     }
-    activation.commands.push_back(StructuralCommand{.kind = kind, .apply = std::move(apply)});
+    auto& command     = activation.commands.emplace_back(StructuralCommand{.kind = kind, .apply = std::move(apply)});
+    command.component = activation.current_component;
 }
 
-// Enqueues `occurrence` (any type implicitly convertible to Occurrence, i.e.
-// any alternative of the program's EventOccurrence variant) for dispatch
-// within the current cascade, or defers it to the next external-event drain
-// once kMaxEventCascadeDepth would be exceeded.
+// Enqueues `occurrence` (any alternative of the program's EventOccurrence
+// variant) for dispatch within the current cascade.
 template <typename Occurrence, typename ConcreteEvent>
-void emit_event(ActivationRuntime<Occurrence>& activation, ConcreteEvent occurrence) {
-    const auto next_depth = activation.current_cascade_depth + 1;
-    auto queued           = QueuedEvent<Occurrence>{.occurrence = std::move(occurrence), .cascade_depth = next_depth};
-    if (next_depth > kMaxEventCascadeDepth) {
-        queued.cascade_depth = 0;
-        activation.deferred_events.push_back(std::move(queued));
-        return;
-    }
-    activation.event_queue.push_back(std::move(queued));
+void emit_event(ActivationRuntime<Occurrence>& activation,
+                ConcreteEvent occurrence,
+                DeliveryRoute route     = DeliveryRoute::All,
+                std::uint32_t component = kNoComponent) {
+    activation.event_queue.push_back(
+        QueuedEvent<Occurrence>{.occurrence = std::move(occurrence), .route = route, .component = component});
 }
 
 // Targeted counterpart of emit_event: the recipient is evaluated once by the
-// caller and carried in the queued envelope so it survives cascade deferral
-// unchanged.
+// caller and carried in the queued envelope so it survives a delay unchanged.
 template <typename Occurrence, typename ConcreteEvent>
-void emit_targeted_event(ActivationRuntime<Occurrence>& activation, ConcreteEvent occurrence, entt::entity target) {
-    const auto next_depth = activation.current_cascade_depth + 1;
-    auto queued =
-        QueuedEvent<Occurrence>{.occurrence = std::move(occurrence), .cascade_depth = next_depth, .target = target};
-    if (next_depth > kMaxEventCascadeDepth) {
-        queued.cascade_depth = 0;
-        activation.deferred_events.push_back(std::move(queued));
-        return;
+void emit_targeted_event(ActivationRuntime<Occurrence>& activation,
+                         ConcreteEvent occurrence,
+                         entt::entity target,
+                         DeliveryRoute route     = DeliveryRoute::All,
+                         std::uint32_t component = kNoComponent) {
+    activation.event_queue.push_back(QueuedEvent<Occurrence>{
+        .occurrence = std::move(occurrence), .target = target, .route = route, .component = component});
+}
+
+template <typename Occurrence>
+DelayedQueue<Occurrence>& running_clock(ActivationRuntime<Occurrence>& activation) {
+    if (activation.current_delayed == nullptr) {
+        throw std::runtime_error("cactus delayed occurrence emitted with no activation clock set");
     }
-    activation.event_queue.push_back(std::move(queued));
+    return *activation.current_delayed;
+}
+
+// Queues `occurrence` for the next activation of the running clock.
+template <typename Occurrence, typename ConcreteEvent>
+void emit_delayed_event(ActivationRuntime<Occurrence>& activation,
+                        ConcreteEvent occurrence,
+                        DeliveryRoute route,
+                        std::uint32_t component) {
+    running_clock(activation).push_back(
+        QueuedEvent<Occurrence>{.occurrence = std::move(occurrence), .route = route, .component = component});
+}
+
+template <typename Occurrence, typename ConcreteEvent>
+void emit_delayed_targeted_event(ActivationRuntime<Occurrence>& activation,
+                                 ConcreteEvent occurrence,
+                                 entt::entity target,
+                                 DeliveryRoute route,
+                                 std::uint32_t component) {
+    running_clock(activation).push_back(QueuedEvent<Occurrence>{
+        .occurrence = std::move(occurrence), .target = target, .route = route, .component = component});
+}
+
+// Puts the running clock's delayed occurrences at the head of this
+// activation's cascade, ahead of what its phase handlers emitted. Delays
+// produced from here on wait for the clock's next activation.
+template <typename Occurrence>
+void deliver_delayed_events(ActivationRuntime<Occurrence>& activation) {
+    auto& clock = running_clock(activation);
+    activation.event_queue.insert(activation.event_queue.begin(),
+                                  std::make_move_iterator(clock.begin()),
+                                  std::make_move_iterator(clock.end()));
+    clock.clear();
+}
+
+// A late lifecycle delivery runs only while the change still holds.
+template <typename T>
+[[nodiscard]] bool lifecycle_change_holds(const entt::registry& registry,
+                                          const TraitAdded<T>& /*occurrence*/,
+                                          entt::entity target) {
+    return registry.all_of<T>(target);
+}
+
+template <typename T>
+[[nodiscard]] bool lifecycle_change_holds(const entt::registry& registry,
+                                          const TraitRemoved<T>& /*occurrence*/,
+                                          entt::entity target) {
+    return !registry.all_of<T>(target);
+}
+
+template <typename Event>
+[[nodiscard]] bool lifecycle_change_holds(const entt::registry& /*registry*/,
+                                          const Event& /*occurrence*/,
+                                          entt::entity /*target*/) {
+    return true;
+}
+
+// Whether a queued occurrence still has someone to reach: its recipient is
+// alive and, for a delayed lifecycle delivery, the trait change still holds.
+template <typename Occurrence>
+[[nodiscard]] bool deliverable(const entt::registry& registry, const QueuedEvent<Occurrence>& queued) {
+    if (!queued.target.has_value()) {
+        return true;
+    }
+    if (!registry.valid(*queued.target)) {
+        return false;
+    }
+    return queued.route != DeliveryRoute::DelayedOnly ||
+           std::visit([&](const auto& occurrence) { return lifecycle_change_holds(registry, occurrence, *queued.target); },
+                      queued.occurrence);
+}
+
+// Makes `queued`'s route visible to generated dispatch while it runs.
+template <typename Occurrence>
+void begin_delivery(ActivationRuntime<Occurrence>& activation, const QueuedEvent<Occurrence>& queued) {
+    activation.delivery_route     = queued.route;
+    activation.delivery_component = queued.component;
+}
+
+template <typename Occurrence>
+void end_delivery(ActivationRuntime<Occurrence>& activation) {
+    activation.delivery_route     = DeliveryRoute::All;
+    activation.delivery_component = kNoComponent;
 }
 
 // Drains activation.event_queue, dispatching each occurrence through
-// `dispatch(registry, concrete_occurrence, target)` via std::visit. A
-// targeted occurrence whose recipient is no longer valid is dropped before
-// dispatch. `Dispatch` is a template parameter (a codegen-emitted lambda
-// wrapping generated_dispatch_event's overload set), not a std::function
-// like propagate_hierarchy's callbacks, because this runs once per queued
-// event — potentially many times per frame in event-heavy programs — and
-// CLAUDE.md ranks generated-code runtime speed over the std::function
-// idiom's convenience here; see extract-codegen-runtime-scaffolding
-// design.md Decision 4 before "fixing" this back to std::function.
+// `dispatch(registry, concrete_occurrence, target)` via std::visit. An
+// occurrence that is no longer deliverable is dropped before dispatch.
+// `Dispatch` is a template parameter (a codegen-emitted lambda wrapping
+// generated_dispatch_event's overload set), not a std::function like
+// propagate_hierarchy's callbacks, because this runs once per queued event —
+// potentially many times per frame in event-heavy programs — and CLAUDE.md
+// ranks generated-code runtime speed over the std::function idiom's
+// convenience here; see extract-codegen-runtime-scaffolding design.md
+// Decision 4 before "fixing" this back to std::function.
 template <typename Occurrence, typename Dispatch>
 void drain_event_cascade(ActivationRuntime<Occurrence>& activation, entt::registry& registry, Dispatch dispatch) {
     static_assert(is_event_occurrence_variant_v<Occurrence>,
@@ -1556,25 +1673,14 @@ void drain_event_cascade(ActivationRuntime<Occurrence>& activation, entt::regist
     while (!activation.event_queue.empty()) {
         auto queued = std::move(activation.event_queue.front());
         activation.event_queue.pop_front();
-        activation.current_cascade_depth = queued.cascade_depth;
-        if (queued.target.has_value() && !registry.valid(*queued.target)) {
+        if (!deliverable(registry, queued)) {
             continue;
         }
+        begin_delivery(activation, queued);
         std::visit([&](const auto& occurrence) { dispatch(registry, occurrence, queued.target); }, queued.occurrence);
     }
-    activation.current_cascade_depth = 0;
+    end_delivery(activation);
 }
-
-// ── Trait lifecycle triggers ──────────────────────────────────────────────
-// `on added T` / `on removed T` occurrences, each delivered to the entity
-// whose trait set changed. `old` holds T's value just before removal.
-template <typename T>
-struct TraitAdded {};
-
-template <typename T>
-struct TraitRemoved {
-    T old;
-};
 
 // Shared by one program's trackers. Recording is on only while a commit round
 // applies commands, so init, restore, and teardown never fire a trigger.
@@ -1582,12 +1688,29 @@ struct LifecycleRound {
     bool recording = false;
     std::uint64_t next_sequence{};
     std::uint64_t command{};  // the command being applied, in queue order
+    std::uint32_t component = kNoComponent;  // that command's producer cycle
+};
+
+// Which consumers of one lifecycle trigger a producer cycle reaches now and which by delay.
+struct LifecycleSplit {
+    bool immediate = true;
+    bool delayed   = false;
+};
+
+// The routes of a program with no delivery cycle: every delivery is immediate.
+struct ImmediateLifecycle {
+    [[nodiscard]] constexpr LifecycleSplit operator()(std::size_t /*trait_index*/,
+                                                      bool /*added*/,
+                                                      std::uint32_t /*component*/) const {
+        return {};
+    }
 };
 
 template <typename Occurrence>
 struct LifecycleDelivery {
     std::uint64_t command{};
     std::uint64_t sequence{};
+    std::uint32_t component = kNoComponent;
     std::size_t trait_index{};
     bool added{};
     Occurrence occurrence;
@@ -1617,6 +1740,7 @@ public:
             if (!change.present_before && present_after) {
                 out.push_back({.command     = change.command,
                                .sequence    = change.sequence,
+                               .component   = change.component,
                                .trait_index = trait_index,
                                .added       = true,
                                .occurrence  = TraitAdded<T>{},
@@ -1624,6 +1748,7 @@ public:
             } else if (change.present_before && !present_after && valid) {
                 out.push_back({.command     = change.command,
                                .sequence    = change.sequence,
+                               .component   = change.component,
                                .trait_index = trait_index,
                                .occurrence  = TraitRemoved<T>{.old = std::move(change.snapshot)},
                                .target      = entity});
@@ -1636,6 +1761,7 @@ private:
     struct Change {
         std::uint64_t command{};
         std::uint64_t sequence{};
+        std::uint32_t component = kNoComponent;
         bool present_before{};
         T snapshot{};
     };
@@ -1659,6 +1785,7 @@ private:
         changes_.emplace(entity,
                          Change{.command        = round_->command,
                                 .sequence       = round_->next_sequence++,
+                                .component      = round_->component,
                                 .present_before = present_before,
                                 .snapshot       = std::move(snapshot)});
     }
@@ -1688,17 +1815,19 @@ public:
         round_.recording = recording;
     }
 
-    void begin_command() {
+    void begin_command(std::uint32_t component) {
         ++round_.command;
+        round_.component = component;
     }
 
-    // Emits this round's net changes at the activation's next cascade depth;
-    // past the bound they defer like any occurrence. Order: the command that
-    // first changed them, then the entity's first touch within that command,
-    // then removals before additions (a state swap), then tracker (canonical
-    // trait) order, so a spawn's traits fire canonically.
-    template <typename Occurrence>
-    void deliver(ActivationRuntime<Occurrence>& activation, entt::registry& registry) {
+    // Emits this round's net changes, splitting each by `routes` into the
+    // consumers it reaches now and those it reaches in the clock's next
+    // activation. Order: the command that first changed them, then the
+    // entity's first touch within that command, then removals before
+    // additions (a state swap), then tracker (canonical trait) order, so a
+    // spawn's traits fire canonically.
+    template <typename Occurrence, typename Routes = ImmediateLifecycle>
+    void deliver(ActivationRuntime<Occurrence>& activation, entt::registry& registry, const Routes& routes = {}) {
         std::vector<LifecycleDelivery<Occurrence>> deliveries;
         collect_all(registry, deliveries, std::index_sequence_for<Traits...>{});
         std::map<std::pair<std::uint64_t, entt::entity>, std::uint64_t> entity_first_touch;
@@ -1716,7 +1845,23 @@ public:
                               delivery.trait_index};
         });
         for (auto& delivery : deliveries) {
-            emit_targeted_event(activation, std::move(delivery.occurrence), delivery.target);
+            const auto split = routes(delivery.trait_index, delivery.added, delivery.component);
+            if (!split.delayed) {
+                emit_targeted_event(activation, std::move(delivery.occurrence), delivery.target);
+                continue;
+            }
+            if (split.immediate) {
+                emit_targeted_event(activation,
+                                    delivery.occurrence,
+                                    delivery.target,
+                                    DeliveryRoute::ImmediateOnly,
+                                    delivery.component);
+            }
+            emit_delayed_targeted_event(activation,
+                                        std::move(delivery.occurrence),
+                                        delivery.target,
+                                        DeliveryRoute::DelayedOnly,
+                                        delivery.component);
         }
     }
 
@@ -1772,32 +1917,29 @@ void commit_activation(ActivationRuntime<Occurrence>& activation,
 
 // With lifecycle trackers, commit runs in rounds: apply the batch, deliver its
 // net trait changes, drain the cascade, and repeat while that cascade queued
-// more commands. Round r delivers at cascade depth r, so rounds and their
-// event chains share kMaxEventCascadeDepth; past it deliveries defer, nothing
-// more is queued, and the loop ends. `drain_cascade` is a callable rather than
-// drain_event_cascade itself so codegen can pass the forward-declared
-// `&generated_drain_event_cascade`.
-template <typename Occurrence, typename DrainCascade, typename... Traits>
+// more commands. The loop ends because immediate deliveries form no cycle.
+// `drain_cascade` is a callable rather than drain_event_cascade itself so
+// codegen can pass the forward-declared `&generated_drain_event_cascade`.
+template <typename Occurrence, typename DrainCascade, typename Routes = ImmediateLifecycle, typename... Traits>
 void commit_activation(ActivationRuntime<Occurrence>& activation,
                        entt::registry& registry,
                        DrainCascade drain_cascade,
-                       LifecycleTrackers<Traits...>& lifecycle) {
+                       LifecycleTrackers<Traits...>& lifecycle,
+                       const Routes& routes = {}) {
     static_assert(std::is_invocable_v<DrainCascade&, entt::registry&>,
                   "commit_activation's DrainCascade must be callable as drain_cascade(registry)");
-    for (std::size_t depth = 0; !activation.commands.empty(); ++depth) {
+    while (!activation.commands.empty()) {
         auto commands = std::move(activation.commands);
         activation.commands.clear();
-        activation.current_cascade_depth = depth;
         lifecycle.set_recording(true);
         for (auto& command : commands) {
-            lifecycle.begin_command();
+            lifecycle.begin_command(command.component);
             command.apply(registry);
         }
         lifecycle.set_recording(false);
-        lifecycle.deliver(activation, registry);
+        lifecycle.deliver(activation, registry, routes);
         drain_cascade(registry);
     }
-    activation.current_cascade_depth = 0;
 }
 
 // ── Projected-trait tracking (backend-cpp-entt registry-based projected traits)

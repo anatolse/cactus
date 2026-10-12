@@ -25,9 +25,6 @@ struct ChainEvent {};
 
 using TestOccurrence = std::variant<PingEvent, PongEvent, ChainEvent>;
 
-// Stops a regressed, unbounded commit loop from hanging the test run.
-constexpr int kRunawayGuard = 10'000;
-
 template <typename Event, typename Occurrence>
 constexpr bool is_event_v = std::is_same_v<std::decay_t<Occurrence>, Event>;
 
@@ -101,52 +98,96 @@ TEST_CASE("queue_structural_command records a command while an activation is act
     CHECK(activation.commands.front().kind == StructuralCommand::Kind::Spawn);
 }
 
-TEST_CASE("emit_event enqueues below the cascade-depth cap and defers past it",
-          "[runtime][activation][scheduler]") {
+TEST_CASE("emit_event queues for this cascade with its route", "[runtime][activation][scheduler]") {
     ActivationRuntime<TestOccurrence> activation;
 
-    SECTION("below the cap") {
-        activation.current_cascade_depth = 0;
+    SECTION("an ordinary emit reaches every consumer") {
         emit_event(activation, PingEvent{});
 
         REQUIRE(activation.event_queue.size() == 1);
-        CHECK(activation.event_queue.front().cascade_depth == 1);
-        CHECK(activation.deferred_events.empty());
+        CHECK(activation.event_queue.front().route == DeliveryRoute::All);
+        CHECK(activation.event_queue.front().component == kNoComponent);
     }
 
-    SECTION("past the cap defers with a reset cascade depth") {
-        activation.current_cascade_depth = kMaxEventCascadeDepth;
-        emit_event(activation, PingEvent{});
+    SECTION("an immediate part of a split emit keeps its producer cycle") {
+        emit_event(activation, PingEvent{}, DeliveryRoute::ImmediateOnly, 3U);
 
-        CHECK(activation.event_queue.empty());
-        REQUIRE(activation.deferred_events.size() == 1);
-        CHECK(activation.deferred_events.front().cascade_depth == 0);
+        REQUIRE(activation.event_queue.size() == 1);
+        CHECK(activation.event_queue.front().route == DeliveryRoute::ImmediateOnly);
+        CHECK(activation.event_queue.front().component == 3U);
     }
 }
 
-TEST_CASE("emit_targeted_event carries its target through both enqueue and deferral",
-          "[runtime][activation][scheduler]") {
+TEST_CASE("route_admits splits consumers by the producer's cycle", "[runtime][activation][scheduler]") {
+    CHECK(route_admits(DeliveryRoute::All, 2U, 2U));
+    CHECK(route_admits(DeliveryRoute::All, 2U, kNoComponent));
+    CHECK_FALSE(route_admits(DeliveryRoute::ImmediateOnly, 2U, 2U));
+    CHECK(route_admits(DeliveryRoute::ImmediateOnly, 2U, 5U));
+    CHECK(route_admits(DeliveryRoute::ImmediateOnly, 2U, kNoComponent));
+    CHECK(route_admits(DeliveryRoute::DelayedOnly, 2U, 2U));
+    CHECK_FALSE(route_admits(DeliveryRoute::DelayedOnly, 2U, kNoComponent));
+}
+
+TEST_CASE("a delayed emit with no clock set throws", "[runtime][activation][scheduler]") {
     entt::registry registry;
-    const auto target = registry.create();
     ActivationRuntime<TestOccurrence> activation;
 
-    SECTION("below the cap") {
-        activation.current_cascade_depth = 0;
-        emit_targeted_event(activation, PingEvent{}, target);
+    CHECK_THROWS_AS(emit_delayed_event(activation, PingEvent{}, DeliveryRoute::DelayedOnly, 0U), std::runtime_error);
+    CHECK_THROWS_AS(
+        emit_delayed_targeted_event(activation, PingEvent{}, registry.create(), DeliveryRoute::DelayedOnly, 0U),
+        std::runtime_error);
+}
 
-        REQUIRE(activation.event_queue.size() == 1);
-        REQUIRE(activation.event_queue.front().target.has_value());
-        CHECK(*activation.event_queue.front().target == target);
-    }
+TEST_CASE("delayed occurrences keep production order and recipient", "[runtime][activation][scheduler]") {
+    entt::registry registry;
+    const auto target = registry.create();
+    DelayedQueue<TestOccurrence> clock;
+    ActivationRuntime<TestOccurrence> activation;
+    activation.current_delayed = &clock;
 
-    SECTION("past the cap") {
-        activation.current_cascade_depth = kMaxEventCascadeDepth;
-        emit_targeted_event(activation, PingEvent{}, target);
+    emit_delayed_targeted_event(activation, PingEvent{}, target, DeliveryRoute::DelayedOnly, 1U);
+    emit_delayed_event(activation, PongEvent{}, DeliveryRoute::DelayedOnly, 4U);
 
-        REQUIRE(activation.deferred_events.size() == 1);
-        REQUIRE(activation.deferred_events.front().target.has_value());
-        CHECK(*activation.deferred_events.front().target == target);
-    }
+    CHECK(activation.event_queue.empty());
+    REQUIRE(clock.size() == 2);
+    CHECK(std::holds_alternative<PingEvent>(clock[0].occurrence));
+    REQUIRE(clock[0].target.has_value());
+    CHECK(*clock[0].target == target);
+    CHECK(clock[0].component == 1U);
+    CHECK(std::holds_alternative<PongEvent>(clock[1].occurrence));
+    CHECK_FALSE(clock[1].target.has_value());
+    CHECK(clock[1].route == DeliveryRoute::DelayedOnly);
+}
+
+TEST_CASE("delayed occurrences enter the cascade ahead of the activation's own emissions",
+          "[runtime][activation][scheduler]") {
+    entt::registry registry;
+    DelayedQueue<TestOccurrence> clock;
+    ActivationRuntime<TestOccurrence> activation;
+    activation.current_delayed = &clock;
+    emit_delayed_event(activation, PingEvent{}, DeliveryRoute::DelayedOnly, 0U);
+    emit_delayed_event(activation, PongEvent{}, DeliveryRoute::DelayedOnly, 0U);
+
+    // The next activation of the clock: its phase handlers emitted Chain first.
+    emit_event(activation, ChainEvent{});
+    deliver_delayed_events(activation);
+    // Delays produced while delivering wait for the activation after this one.
+    std::vector<std::string> order;
+    auto dispatch = [&](entt::registry&, const auto& occurrence, std::optional<entt::entity>) {
+        if constexpr (is_event_v<PingEvent, decltype(occurrence)>) {
+            order.emplace_back("ping");
+            emit_delayed_event(activation, PingEvent{}, DeliveryRoute::DelayedOnly, 0U);
+        } else if constexpr (is_event_v<PongEvent, decltype(occurrence)>) {
+            order.emplace_back("pong");
+        } else {
+            order.emplace_back("chain");
+        }
+    };
+    drain_event_cascade(activation, registry, dispatch);
+
+    CHECK(order == std::vector<std::string>{"ping", "pong", "chain"});
+    REQUIRE(clock.size() == 1);
+    CHECK(std::holds_alternative<PingEvent>(clock.front().occurrence));
 }
 
 TEST_CASE("drain_event_cascade dispatches valid events and drops events targeting a no-longer-valid entity",
@@ -172,7 +213,54 @@ TEST_CASE("drain_event_cascade dispatches valid events and drops events targetin
     REQUIRE(dispatched_targets.size() == 1);
     REQUIRE(dispatched_targets.front().has_value());
     CHECK(*dispatched_targets.front() == live_target);
-    CHECK(activation.current_cascade_depth == 0);
+}
+
+TEST_CASE("a delayed occurrence whose recipient is gone is dropped at delivery", "[runtime][activation][scheduler]") {
+    entt::registry registry;
+    const auto target = registry.create();
+    DelayedQueue<TestOccurrence> clock;
+    ActivationRuntime<TestOccurrence> activation;
+    activation.current_delayed = &clock;
+    emit_delayed_targeted_event(activation, PingEvent{}, target, DeliveryRoute::DelayedOnly, 0U);
+    registry.destroy(target);
+
+    deliver_delayed_events(activation);
+    int dispatched = 0;
+    drain_event_cascade(activation, registry, [&](entt::registry&, const auto&, std::optional<entt::entity>) {
+        ++dispatched;
+    });
+
+    CHECK(dispatched == 0);
+    CHECK(clock.empty());
+}
+
+TEST_CASE("drain_event_cascade exposes each occurrence's route while it is dispatched",
+          "[runtime][activation][scheduler]") {
+    entt::registry registry;
+    ActivationRuntime<TestOccurrence> activation;
+    emit_event(activation, PingEvent{}, DeliveryRoute::ImmediateOnly, 2U);
+    emit_event(activation, PongEvent{});
+
+    std::vector<std::pair<DeliveryRoute, std::uint32_t>> seen;
+    drain_event_cascade(activation, registry, [&](entt::registry&, const auto&, std::optional<entt::entity>) {
+        seen.emplace_back(activation.delivery_route, activation.delivery_component);
+    });
+
+    CHECK(seen == std::vector<std::pair<DeliveryRoute, std::uint32_t>>{{DeliveryRoute::ImmediateOnly, 2U},
+                                                                      {DeliveryRoute::All, kNoComponent}});
+    CHECK(activation.delivery_route == DeliveryRoute::All);
+    CHECK(activation.delivery_component == kNoComponent);
+}
+
+TEST_CASE("queue_structural_command records the running handler's cycle", "[runtime][activation][scheduler]") {
+    ActivationRuntime<TestOccurrence> activation;
+    activation.active            = true;
+    activation.current_component = 7U;
+
+    queue_structural_command(activation, StructuralCommand::Kind::Add, [](entt::registry&) {});
+
+    REQUIRE(activation.commands.size() == 1);
+    CHECK(activation.commands.front().component == 7U);
 }
 
 TEST_CASE("commit_activation with no lifecycle trackers applies queued commands exactly once",
@@ -215,7 +303,7 @@ using LifecycleOccurrence = std::variant<ChainEvent,
 struct Delivery {
     std::string kind;
     entt::entity target{entt::null};
-    std::size_t depth{};
+    DeliveryRoute route = DeliveryRoute::All;
     float old_intensity{};
 };
 
@@ -234,8 +322,11 @@ struct LifecycleHarness {
     ActivationRuntime<LifecycleOccurrence> activation;
     std::vector<Delivery> deliveries;
 
+    DelayedQueue<LifecycleOccurrence> clock;
+
     LifecycleHarness() {
-        activation.active = true;
+        activation.active          = true;
+        activation.current_delayed = &clock;
         lifecycle.connect(registry);
     }
 
@@ -248,7 +339,7 @@ struct LifecycleHarness {
         return [this, &on_delivery](entt::registry&, const auto& occurrence, std::optional<entt::entity> target) {
             Delivery delivery{.kind   = describe(occurrence),
                               .target = target.value_or(entt::entity{entt::null}),
-                              .depth  = activation.current_cascade_depth};
+                              .route  = activation.delivery_route};
             if constexpr (std::is_same_v<std::decay_t<decltype(occurrence)>, TraitRemoved<Burning>>) {
                 delivery.old_intensity = occurrence.old.intensity;
             }
@@ -257,14 +348,23 @@ struct LifecycleHarness {
         };
     }
 
-    template <typename OnDelivery>
-    void commit(OnDelivery on_delivery) {
+    template <typename OnDelivery, typename Routes = ImmediateLifecycle>
+    void commit(OnDelivery on_delivery, Routes routes = {}) {
         auto dispatch = dispatcher(on_delivery);
         commit_activation(
             activation,
             registry,
             [&](entt::registry& reg) { drain_event_cascade(activation, reg, dispatch); },
-            lifecycle);
+            lifecycle,
+            routes);
+    }
+
+    // The start of the clock's next activation: delayed deliveries, then their cascade.
+    template <typename OnDelivery>
+    void next_activation(OnDelivery on_delivery) {
+        deliver_delayed_events(activation);
+        auto dispatch = dispatcher(on_delivery);
+        drain_event_cascade(activation, registry, dispatch);
     }
 
     void commit() {
@@ -294,7 +394,7 @@ TEST_CASE("Lifecycle: add delivers added to the changed entity only", "[runtime]
     REQUIRE(h.deliveries.size() == 1);
     CHECK(h.deliveries[0].kind == "added Dying");
     CHECK(h.deliveries[0].target == changed);
-    CHECK(h.deliveries[0].depth == 1);
+    CHECK(h.deliveries[0].route == DeliveryRoute::All);
 }
 
 TEST_CASE("Lifecycle: remove delivers removed with the pre-removal snapshot",
@@ -447,22 +547,32 @@ TEST_CASE("Lifecycle: commands from a delivery commit in the next round", "[runt
 
     CHECK(h.kinds() == std::vector<std::string>{"added Dying", "added Burning"});
     REQUIRE(h.deliveries.size() == 2);
-    CHECK(h.deliveries[0].depth == 1);
-    CHECK(h.deliveries[1].depth == 2);
     CHECK(h.registry.all_of<Burning>(entity));
     CHECK(h.activation.commands.empty());
 }
 
-TEST_CASE("Lifecycle: self-feeding add/remove handlers terminate and defer past the bound",
+namespace {
+
+// Every watched trait's consumers sit on cycle 0; `outside` adds consumers off it.
+struct CycleZeroRoutes {
+    bool outside = false;
+
+    [[nodiscard]] LifecycleSplit operator()(std::size_t /*trait_index*/, bool /*added*/, std::uint32_t component) const {
+        if (component != 0U) {
+            return {};
+        }
+        return {.immediate = outside, .delayed = true};
+    }
+};
+
+}  // namespace
+
+TEST_CASE("Lifecycle: a self-feeding add/remove commits one round per activation and queues the trigger",
           "[runtime][activation][trait-lifecycle]") {
     LifecycleHarness h;
-    const auto entity = h.registry.create();
-    int delivered     = 0;
-    auto toggle       = [&](const Delivery& delivery) {
-        ++delivered;
-        if (delivered >= kRunawayGuard) {
-            return;
-        }
+    h.activation.current_component = 0U;
+    const auto entity              = h.registry.create();
+    auto toggle                    = [&](const Delivery& delivery) {
         if (delivery.kind == "added Pulse") {
             h.queue(StructuralCommand::Kind::Remove,
                     [target = delivery.target](entt::registry& reg) { reg.remove<Pulse>(target); });
@@ -473,38 +583,93 @@ TEST_CASE("Lifecycle: self-feeding add/remove handlers terminate and defer past 
     };
 
     h.queue(StructuralCommand::Kind::Add, [entity](entt::registry& reg) { reg.emplace<Pulse>(entity); });
-    h.commit(toggle);
+    h.commit(toggle, CycleZeroRoutes{});
 
-    CHECK(delivered == static_cast<int>(kMaxEventCascadeDepth));
+    CHECK(h.deliveries.empty());
     CHECK(h.activation.commands.empty());
-    CHECK(h.activation.current_cascade_depth == 0);
-    REQUIRE(h.activation.deferred_events.size() == 1);
-    const auto& deferred = h.activation.deferred_events.front();
-    REQUIRE(deferred.target.has_value());
-    CHECK(*deferred.target == entity);
+    CHECK(h.registry.all_of<Pulse>(entity));
+    REQUIRE(h.clock.size() == 1);
+    CHECK(std::holds_alternative<TraitAdded<Pulse>>(h.clock.front().occurrence));
+    CHECK(*h.clock.front().target == entity);
 
-    for (std::size_t round = 1; round <= h.deliveries.size(); ++round) {
-        CHECK(h.deliveries[round - 1].depth == round);
-    }
-
-    SECTION("the deferred delivery and its commands belong to a later activation") {
-        const bool pulse_before = h.registry.all_of<Pulse>(entity);
-        const auto count_before = h.deliveries.size();
-        // Replays the deferred occurrence as its own activation, as generated code does.
-        h.activation.event_queue.push_back(std::move(h.activation.deferred_events.front()));
-        h.activation.deferred_events.pop_front();
-        auto later_toggle = [&](const Delivery& delivery) {
-            if (h.deliveries.size() == count_before + 1) {
-                toggle(delivery);
-            }
-        };
-        auto dispatch = h.dispatcher(later_toggle);
-        drain_event_cascade(h.activation, h.registry, dispatch);
+    for (int activation = 0; activation < 3; ++activation) {
+        const bool had_pulse = h.registry.all_of<Pulse>(entity);
+        h.next_activation(toggle);
         REQUIRE(h.activation.commands.size() == 1);
-        h.commit(later_toggle);
+        h.commit(toggle, CycleZeroRoutes{});
+        CHECK(h.registry.all_of<Pulse>(entity) != had_pulse);
+        CHECK(h.deliveries.size() == static_cast<std::size_t>(activation) + 1);
+        CHECK(h.clock.size() == 1);
+    }
+    CHECK(h.kinds() == std::vector<std::string>{"added Pulse", "removed Pulse", "added Pulse"});
+}
 
-        CHECK(h.registry.all_of<Pulse>(entity) != pulse_before);
-        CHECK(h.deliveries.size() == count_before + 2);
+TEST_CASE("Lifecycle: a delivery splits into immediate and delayed consumers by producer component",
+          "[runtime][activation][trait-lifecycle]") {
+    LifecycleHarness h;
+    const auto entity = h.registry.create();
+
+    SECTION("a producer on the consumers' cycle splits the delivery") {
+        h.activation.current_component = 0U;
+        h.queue(StructuralCommand::Kind::Add, [entity](entt::registry& reg) { reg.emplace<Dying>(entity); });
+        h.commit([](const Delivery&) {}, CycleZeroRoutes{.outside = true});
+
+        REQUIRE(h.deliveries.size() == 1);
+        CHECK(h.deliveries[0].route == DeliveryRoute::ImmediateOnly);
+        REQUIRE(h.clock.size() == 1);
+        CHECK(h.clock.front().route == DeliveryRoute::DelayedOnly);
+        CHECK(h.clock.front().component == 0U);
+        CHECK(*h.clock.front().target == entity);
+    }
+    SECTION("a producer off every cycle delivers immediately to all") {
+        h.activation.current_component = 4U;
+        h.queue(StructuralCommand::Kind::Add, [entity](entt::registry& reg) { reg.emplace<Dying>(entity); });
+        h.commit([](const Delivery&) {}, CycleZeroRoutes{.outside = true});
+
+        REQUIRE(h.deliveries.size() == 1);
+        CHECK(h.deliveries[0].route == DeliveryRoute::All);
+        CHECK(h.clock.empty());
+    }
+}
+
+TEST_CASE("Lifecycle: a delayed added delivery is skipped when the trait is gone",
+          "[runtime][activation][trait-lifecycle]") {
+    LifecycleHarness h;
+    h.activation.current_component = 0U;
+    const auto kept                = h.registry.create();
+    const auto lost                = h.registry.create();
+    h.queue(StructuralCommand::Kind::Add, [kept](entt::registry& reg) { reg.emplace<Dying>(kept); });
+    h.queue(StructuralCommand::Kind::Add, [lost](entt::registry& reg) { reg.emplace<Dying>(lost); });
+    h.commit([](const Delivery&) {}, CycleZeroRoutes{});
+    REQUIRE(h.clock.size() == 2);
+
+    h.registry.remove<Dying>(lost);
+    h.next_activation([](const Delivery&) {});
+
+    REQUIRE(h.deliveries.size() == 1);
+    CHECK(h.deliveries[0].target == kept);
+    CHECK(h.deliveries[0].route == DeliveryRoute::DelayedOnly);
+}
+
+TEST_CASE("Lifecycle: a delayed removed delivery keeps its snapshot", "[runtime][activation][trait-lifecycle]") {
+    LifecycleHarness h;
+    h.activation.current_component = 0U;
+    const auto entity              = h.registry.create();
+    h.registry.emplace<Burning>(entity, Burning{.intensity = 3.0F});
+    h.queue(StructuralCommand::Kind::Remove, [entity](entt::registry& reg) { reg.remove<Burning>(entity); });
+    h.commit([](const Delivery&) {}, CycleZeroRoutes{});
+    REQUIRE(h.clock.size() == 1);
+
+    SECTION("delivered with the value from before removal") {
+        h.next_activation([](const Delivery&) {});
+        REQUIRE(h.deliveries.size() == 1);
+        CHECK(h.deliveries[0].kind == "removed Burning");
+        CHECK(h.deliveries[0].old_intensity == 3.0F);
+    }
+    SECTION("skipped when the trait came back") {
+        h.registry.emplace<Burning>(entity, Burning{.intensity = 8.0F});
+        h.next_activation([](const Delivery&) {});
+        CHECK(h.deliveries.empty());
     }
 }
 
@@ -530,32 +695,4 @@ TEST_CASE("Lifecycle: arrivals follow creation order, then trait order", "[runti
     CHECK(h.deliveries[2].target == later);
 }
 
-TEST_CASE("Lifecycle: commit rounds share the cascade-depth budget with event chains",
-          "[runtime][activation][trait-lifecycle]") {
-    LifecycleHarness h;
-    const auto entity = h.registry.create();
-    int chain_delivered = 0;
-
-    // Round 1's delivery queues one more add; round 2's delivery (depth 2)
-    // starts an endless chain, which must defer past the bound.
-    h.queue(StructuralCommand::Kind::Add, [entity](entt::registry& reg) { reg.emplace<Dying>(entity); });
-    h.commit([&](const Delivery& delivery) {
-        if (delivery.kind == "added Dying") {
-            h.queue(StructuralCommand::Kind::Add,
-                    [target = delivery.target](entt::registry& reg) { reg.emplace<Burning>(target); });
-        } else if (delivery.kind == "added Burning" || delivery.kind == "chain") {
-            if (delivery.kind == "chain") {
-                ++chain_delivered;
-            }
-            if (chain_delivered < kRunawayGuard) {
-                emit_event(h.activation, ChainEvent{});
-            }
-        }
-    });
-
-    CHECK(chain_delivered == static_cast<int>(kMaxEventCascadeDepth) - 2);
-    REQUIRE(h.activation.deferred_events.size() == 1);
-    CHECK(std::holds_alternative<ChainEvent>(h.activation.deferred_events.front().occurrence));
-    CHECK(h.activation.current_cascade_depth == 0);
-}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity)

@@ -6,10 +6,10 @@ Define the semantics of recipient-targeted event delivery: how a targeted occurr
 ## Requirements
 
 ### Requirement: Targeted event occurrences retain their recipient
-An `emit Event to target` statement SHALL evaluate `target` exactly once and SHALL store the resulting `entity_id` with the queued occurrence. Recipient identity SHALL survive queueing, bounded cascade deferral, and later delivery. An emit without `to` SHALL queue an occurrence with no recipient.
+An `emit Event to target` statement SHALL evaluate `target` exactly once and SHALL store the resulting `entity_id` with the queued occurrence. Recipient identity SHALL survive queueing, delay along a delayed edge to a later activation, and later delivery. An emit without `to` SHALL queue an occurrence with no recipient.
 
 #### Scenario: Recipient survives deferred cascade delivery
-- **WHEN** a targeted occurrence exceeds the current cascade depth and is deferred
+- **WHEN** a targeted occurrence travels along a delayed edge
 - **THEN** its original recipient is retained when it is delivered in the later activation
 
 #### Scenario: Broadcast occurrence has no recipient
@@ -43,8 +43,12 @@ For a live targeted occurrence, a selectionless consumer SHALL execute once; a u
 - **THEN** it executes once without acquiring an implicit current entity
 
 ### Requirement: Target routing preserves graph event semantics
-Targeted occurrences SHALL use the same stable consumer graph order, bounded cascade rules, and activation command buffer as broadcast occurrences. Targeted delivery MUST NOT invoke consumers immediately at the emit site.
+Targeted occurrences SHALL use the same stable consumer graph order, the same immediate and delayed edges, and the same activation command buffer as broadcast occurrences. Targeted delivery MUST NOT invoke consumers immediately at the emit site.
 
 #### Scenario: Targeted consumer commands join activation commit
 - **WHEN** a targeted event consumer queues a structural command
 - **THEN** the command commits at the enclosing activation boundary after the event cascade
+
+#### Scenario: Targeted self-emit is delayed like a broadcast
+- **WHEN** a handler of `Knock` issues `emit Knock to self`
+- **THEN** the occurrence is delivered in the next activation of the producing clock, to the same entity only

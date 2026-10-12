@@ -50,7 +50,7 @@ The Cactus execution model SHALL be fully predictable. Authors SHALL be able to 
 The following timing guarantees SHALL be documented and honored by all backends:
 1. **Phase order**: declared `from:` and `after:` dependencies define activation barriers; the standard graph is input -> fixed_tick* -> tick -> late_tick -> render.
 2. **Handler order within an activation**: explicit handler ordering and inferred contract-conflict edges define dependencies. Handlers whose writes commute need no order. A conflict that no explicit order or inferred meaningful rule orients is a compile error; declaration order, link order and source position never order handlers.
-3. **Event delivery**: emitted events activate contracted consumer nodes within the current activation's bounded cascade; overflow follows the documented deferral rule.
+3. **Event delivery**: emitted events and lifecycle triggers activate contracted consumer nodes within the current activation, except that a delivery from a handler to a consumer on the same event or lifecycle cycle is delayed to the next activation of the producing clock. No configured bound changes when an occurrence is delivered.
 4. **Structural change timing**: `add`, `remove`, `spawn`, and `destroy` commit after the complete handler/event cascade of each activation or fixed-step repetition.
 5. **Fixed-step timing**: periodic cadence, catch-up cap, dropped excess time, fixed `dt`, and interpolation `alpha` follow phase declarations identically on every backend.
 6. **External effects**: an action on an effect domain is serialized by graph order against every other use of that domain; observations of a domain that no co-eligible handler acts on may run in any order.
@@ -76,6 +76,10 @@ The following timing guarantees SHALL be documented and honored by all backends:
 #### Scenario: Source layout does not change behavior
 - **WHEN** a compiling program's rules are moved between files or its imports are reordered, with no other change
 - **THEN** the program behaves identically
+
+#### Scenario: Event timing does not depend on a backend setting
+- **WHEN** the same cyclic program runs on two backends, or on one backend built with different internal limits
+- **THEN** every occurrence is delivered in the same activation on both
 
 ### Requirement: ECS is the primary gameplay model, with explicit boundaries
 Cactus SHALL remain ECS-first for gameplay and tool modeling: traits, rules, events, templates, hierarchy, spawning and filtering are the modeling tools for both.
@@ -376,7 +380,6 @@ The known gaps are:
 | Creation order of entities spawned by two unordered handlers, where a later reader observes it | determinacy |
 | Unordered handlers that emit different events whose consumers conflict, so cascade queue order decides the result | determinacy |
 | Ties in spatial single-entity queries (`nearest`, `raycast`) follow storage order | determinacy |
-| Event and lifecycle cycles cut off by a configured cascade-depth bound | determinacy, termination |
 | A rule domain or `without:` trait that no reachable entity can match, and a trigger with no producer | non-vacuity |
 
 #### Scenario: Closing a gap removes its entry
@@ -387,3 +390,27 @@ The known gaps are:
 - **WHEN** a proposed feature would let the compiler accept a definition whose result depends on source position
 - **THEN** the proposal is revised so the compiler rejects it or gives it one defined meaning
 
+### Requirement: Delayed occurrences belong to the producing clock
+Every activation SHALL have a clock. A phase activation's clock is its phase: a non-periodic phase has one activation per batch, and a periodic phase has one activation per repetition. Every other activation — the load and unload boundaries, the startup arrival activation, and an activation of an event that no phase claims as its root — SHALL belong to the host clock.
+
+An occurrence travelling along a delayed edge SHALL keep its recipient and SHALL be delivered only to the consumers its delayed edges name. When it was produced in a phase activation, it SHALL be delivered in that phase's next activation, at the start of that activation's event cascade: after the phase's own handlers and before any occurrence that activation emits. When it was produced in a host-clock activation, it SHALL be delivered as an activation of its own at the next host external-event drain, after the host events already queued for that drain. Delayed occurrences of one clock SHALL be delivered in the order they were produced. Occurrences still delayed when the program reaches teardown, including those the unload activation produces, SHALL be discarded without running any handler.
+
+#### Scenario: A fixed-step chain advances one hop per repetition
+- **WHEN** a `fixed_tick` handler emits `Knock` to an entity, the `Knock` handler re-emits `Knock` to itself, and one frame runs three `fixed_tick` repetitions
+- **THEN** the `Knock` handler runs once in the first repetition, once in the second, and once in the third
+
+#### Scenario: A periodic phase with no repetition holds its delayed occurrences
+- **WHEN** a `fixed_tick` repetition produces a delayed occurrence and the next frame runs no `fixed_tick` repetition
+- **THEN** the occurrence is delivered in the next `fixed_tick` repetition, whichever frame runs it
+
+#### Scenario: Delayed occurrences run before the new activation's own emissions
+- **WHEN** a `tick` activation starts with one delayed `Knock` and a `tick` handler emits `Ping`
+- **THEN** the `Knock` consumer runs before the `Ping` consumer
+
+#### Scenario: A delay out of the load boundary reaches the host clock
+- **WHEN** an `on load` handler spawns a `Minion`, and an `on added Offspring` handler on a cycle spawns another `Minion`
+- **THEN** the second `on added Offspring` delivery runs as its own activation at the first frame's external-event drain
+
+#### Scenario: Teardown discards delayed occurrences
+- **WHEN** the frame loop exits while a delayed occurrence is pending
+- **THEN** no handler runs for it, before or after the unload activation

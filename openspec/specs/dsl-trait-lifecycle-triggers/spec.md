@@ -137,19 +137,28 @@ canonical-identity order. The same program and inputs SHALL produce the same del
 - **WHEN** a spawned entity carries `A` and `B` and both have `on added` triggers
 - **THEN** the triggers are delivered in the canonical-identity order of `A` and `B` on every run
 
-### Requirement: Trigger cascades are bounded
-Commands issued by lifecycle trigger handlers SHALL join the next commit round of the same
-activation. Lifecycle deliveries SHALL count toward the activation's cascade-depth bound in
-the same way as commit notifications; deliveries past the bound SHALL be deferred to a later
-activation, together with any commands their handlers issue.
+### Requirement: Lifecycle cycles are delayed
+Commands issued by lifecycle trigger handlers SHALL join the next commit round of the same activation. A lifecycle delivery along an immediate lifecycle edge SHALL run after the commit round that caused it, in the same activation. A lifecycle delivery along a delayed lifecycle edge (one inside an event or lifecycle cycle, as defined in `handler-execution-graph`) SHALL run in the next activation of the producing clock, while the command that caused it SHALL still commit in the activation that issued it. When a delayed delivery runs, the handler SHALL run only if the entity is still valid, still matches the rule's `each:`, `without:` and `when:`, and, for `on added T`, still carries `T`, or, for `on removed T`, still lacks `T`. The `on removed T as old` snapshot SHALL be the value taken when the trait was removed.
 
 #### Scenario: Chained state changes commit in later rounds
-- **WHEN** an `on added Dying` handler issues `add Fading`, and a rule declares `on added Fading`
+- **WHEN** an `on added Dying` handler issues `add Fading`, and a rule declares `on added Fading`, and neither handler can reach the other again
 - **THEN** `Fading` is added in the next round of the same activation and its trigger runs after that round
 
 #### Scenario: Self-feeding triggers terminate
 - **WHEN** an `on added Pulse` handler removes `Pulse`, and an `on removed Pulse` handler adds it back
-- **THEN** the activation's commit still terminates, and the deliveries past the bound are deferred
+- **THEN** every activation's commit terminates without any configured bound
+
+#### Scenario: Self-feeding triggers advance one step per activation
+- **WHEN** an `on added Pulse` handler removes `Pulse`, and an `on removed Pulse` handler adds it back
+- **THEN** each activation commits one of these changes and delivers the resulting trigger in the next activation of the same clock
+
+#### Scenario: Delayed added delivery checks the trait again
+- **WHEN** a delayed `on added Offspring` delivery is pending for an entity, and that entity loses `Offspring` before the next activation of the clock
+- **THEN** the `on added Offspring` handler does not run for it
+
+#### Scenario: Delayed removed delivery keeps its snapshot
+- **WHEN** a delayed `on removed Burning as old` delivery is pending for an entity that had `Burning { intensity = 3.0 }`
+- **THEN** `old.intensity` reads `3.0` when the handler runs in the later activation
 
 ### Requirement: Lifecycle trigger restrictions
 The compiler SHALL reject `on added` / `on removed` when `T` is a projected trait, and in a
@@ -179,4 +188,3 @@ lifecycle trigger SHALL be tracked.
 #### Scenario: Unwatched traits are not tracked
 - **WHEN** a program declares only `on added Dying`
 - **THEN** adding or removing any other trait does no lifecycle tracking work at commit
-

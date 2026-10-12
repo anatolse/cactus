@@ -22,7 +22,7 @@ A selectionless, unary, or pair handler SHALL each occupy one canonical executio
 - **THEN** the graph contains one node for that rule and trigger
 
 ### Requirement: Phase and event flow edges
-The graph SHALL include phase barrier edges from upstream phase completion to downstream phase handlers and event-flow edges from a handler that may emit an event to every handler consuming that event. Event-handler nodes SHALL be activated per event occurrence within the current activation's bounded cascade.
+The graph SHALL include phase barrier edges from upstream phase completion to downstream phase handlers and event-flow edges from a handler that may emit an event to every handler consuming that event. Event-handler nodes SHALL be activated per event occurrence within the current activation along immediate edges, and in a later activation along delayed edges, as defined by "Every event cycle passes through a delay".
 
 #### Scenario: Event producer activates consumers
 - **WHEN** NativeMovement declares `emits: EntityMoved` and Player handles EntityMoved
@@ -85,15 +85,15 @@ The graph SHALL represent a host external-event source producer for every consum
 - **THEN** the graph records both the host external-source producer edge and the handler-emitted edge into each consumer
 
 ### Requirement: Producer records do not alter scheduling
-Event-producer records SHALL be additive graph data. Introducing or reading them SHALL NOT change per-activation schedule dependencies, stable topological order, dependency levels, phase barriers, or any reported diagnostic. Producer relations describe event activation and MAY participate in cycles; they SHALL NOT participate in schedule-cycle validation.
+Event-producer records SHALL be additive graph data. Introducing or reading them SHALL NOT change per-activation schedule dependencies, stable topological order, dependency levels, phase barriers, or any reported diagnostic. Producer relations describe event activation and MAY participate in cycles; they SHALL NOT participate in schedule-cycle validation. A producer relation inside a cycle is delayed as defined by "Every event cycle passes through a delay".
 
 #### Scenario: Schedule is unchanged by producer representation
 - **WHEN** the same program's execution graph is compared with and without producer records present
 - **THEN** its schedule edges, stable topological order, and dependency levels are identical
 
 #### Scenario: Producer cycles remain legal
-- **WHEN** a commit-synthesized `spawn` consumer emits an event whose consumer queues a further `Spawn` command
-- **THEN** the resulting producer and event-flow cycle is legal and no schedule cycle is reported
+- **WHEN** an `on added Minion` handler emits an event whose consumer queues a further `spawn` of a template carrying `Minion`
+- **THEN** the resulting producer and event-flow cycle is legal, its edges are delayed, and no schedule cycle is reported
 
 ### Requirement: Pair contracts participate in conservative conflicts
 Graph conflict construction SHALL use the conservative trait-field reads, durable writes, projected outputs, commands, and effects inferred for pair handlers. Binding-qualified reads SHALL be retained as provenance but SHALL NOT weaken correctness by removing conservative conflicts.
@@ -118,7 +118,7 @@ A handler SHALL accept an optional leading `after:` block naming canonical or qu
 - **THEN** B.tick follows A.tick and B.Damaged follows A.Damaged without adding cross-trigger edges
 
 ### Requirement: Graph validation and deterministic execution
-The compiler SHALL reject cycles in the phase graph and in each handler scheduling graph after combining explicit ordering and contract-conflict edges, and SHALL report a handler-level cycle path. Event-flow edges SHALL be validated separately and MAY be cyclic because delivery is controlled by the bounded event-cascade rule. A sequential backend SHALL use a stable topological order; a parallel backend MAY execute nodes in the same dependency level concurrently while preserving activation commit semantics.
+The compiler SHALL reject cycles in the phase graph and in each handler scheduling graph after combining explicit ordering and contract-conflict edges, and SHALL report a handler-level cycle path. Event-flow and lifecycle edges SHALL be validated separately and MAY be cyclic, because every such cycle passes through a delayed edge. A sequential backend SHALL use a stable topological order; a parallel backend MAY execute nodes in the same dependency level concurrently while preserving activation commit semantics.
 
 #### Scenario: Handler cycle is diagnosed
 - **WHEN** combined ordering creates A.tick -> B.tick -> A.tick
@@ -126,7 +126,7 @@ The compiler SHALL reject cycles in the phase graph and in each handler scheduli
 
 #### Scenario: Event feedback is not a scheduling cycle
 - **WHEN** an A consumer may emit B and a B consumer may emit A
-- **THEN** semantic analysis accepts the event-flow cycle and runtime cascade limits govern delivery
+- **THEN** semantic analysis accepts the event-flow cycle, and both edges of the cycle are delayed
 
 #### Scenario: Independent nodes remain parallelizable
 - **WHEN** two nodes have no dependency or conflict edge
@@ -374,3 +374,49 @@ After linking, the compiler SHALL report an error for every handler in a non-std
 - **WHEN** a stdlib rule declares `on SaveRequested` and the program never emits `SaveRequested`
 - **THEN** compilation succeeds and the stdlib handler is recorded as unreachable
 
+### Requirement: Every event cycle passes through a delay
+The compiler SHALL build a delivery graph over the linked program's handler nodes with two kinds of edges:
+
+- an event-flow edge from each handler that may emit an event to each handler consuming that event;
+- a lifecycle edge from each handler whose contract may add trait `T` (an `add T`, a `spawn` whose template's composed trait set or own additions include `T`, a `keep` of `T`, or a state transition into variant `T`) to each `on added T` handler, and from each handler whose contract may remove `T` (a `remove T`, a `keep` of `T`, or a state transition out of variant `T`) to each `on removed T` handler.
+
+The compiler SHALL compute the strongly connected components of this graph. A component is cyclic when it has more than one handler or its single handler has an edge to itself. An edge whose producer and consumer are in the same cyclic component SHALL be a delayed edge; every other edge SHALL be an immediate edge. Each event-flow edge SHALL record whether it is delayed. The classification SHALL be computed on the whole linked program, so a cycle that spans modules is found, and SHALL depend only on resolved canonical identities, never on rule names, import aliases, source spelling, or declaration order.
+
+#### Scenario: A self-emitting handler has a delayed self edge
+- **WHEN** `Answer` handles `Knock` and emits `Knock`
+- **THEN** the event-flow edge from `Answer.Knock` to `Answer.Knock` is delayed
+
+#### Scenario: A two-handler event cycle delays both edges
+- **WHEN** an `A` consumer may emit `B` and a `B` consumer may emit `A`
+- **THEN** both event-flow edges between the two handlers are delayed
+
+#### Scenario: Edges leaving a cycle stay immediate
+- **WHEN** `Answer` emits `Knock`, which `Answer` and `Logger` both consume, and `Logger` emits nothing
+- **THEN** the edge from `Answer.Knock` to `Answer.Knock` is delayed and the edge from `Answer.Knock` to `Logger.Knock` is immediate
+
+#### Scenario: A lifecycle self-loop is delayed
+- **WHEN** an `on added Offspring` handler spawns a template that carries `Offspring`
+- **THEN** the lifecycle edge from that handler to itself is delayed
+
+#### Scenario: A mixed event and lifecycle cycle is delayed
+- **WHEN** an `on added Burning` handler emits `Ignite` and an `Ignite` handler issues `add Burning`
+- **THEN** both the event-flow edge and the lifecycle edge of that cycle are delayed
+
+#### Scenario: An acyclic program has no delayed edge
+- **WHEN** no handler can reach itself through event-flow and lifecycle edges
+- **THEN** every edge is immediate
+
+#### Scenario: A cycle across modules is found after linking
+- **WHEN** a handler in module `a` emits an event consumed by a handler in module `b` that emits an event consumed by the first handler
+- **THEN** the linked program's graph marks both edges delayed
+
+### Requirement: Activation cascade depth is static
+After delayed edges are removed, the delivery graph is acyclic. For every activation root — each phase, each event that can start an activation of its own, the load and unload boundaries, and the startup arrival activation — the compiler SHALL record the longest chain of immediate edges that can run in one activation started by that root, counting the root's own handlers as depth 1. Handlers that can receive a delayed occurrence in an activation of that root SHALL count as starting handlers of it. The recorded depth SHALL be finite for every program and SHALL NOT depend on any configured bound.
+
+#### Scenario: An acyclic chain records its length
+- **WHEN** a `tick` handler emits `A`, an `A` handler emits `B`, and nothing else in the program emits or consumes events or triggers lifecycle handlers
+- **THEN** the recorded cascade depth for the `tick` activation is 3
+
+#### Scenario: A cycle adds no depth beyond one hop
+- **WHEN** a `fixed_tick` handler emits `Knock` and the `Knock` handler emits `Knock` to itself
+- **THEN** the recorded cascade depth for the `fixed_tick` activation is 2

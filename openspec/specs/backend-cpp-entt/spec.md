@@ -1044,9 +1044,9 @@ This requirement does not apply to synthesized periodic-phase fields (`dt`, `alp
 - **THEN** its synthesized `dt` and `alpha` fields continue to be populated by the existing accumulator/catch-up logic, not by initializer-binding assignment
 
 ### Requirement: Activation command buffer and event cascade
-The cpp-entt backend SHALL buffer spawn, destroy, add, and remove commands during an activation, drain emitted event cascades under the configured depth rule, and apply buffered commands deterministically at that activation's commit boundary. When the linked program declares at least one trait lifecycle trigger (`on added T` or `on removed T`), commit SHALL deliver those triggers, as specified by `dsl-trait-lifecycle-triggers`, back into the same activation's cascade after each commit round, subject to the same cascade-depth rule already applied to handler-emitted events. Programs with no lifecycle trigger SHALL NOT emit this delivery code path.
+The cpp-entt backend SHALL buffer spawn, destroy, add, and remove commands during an activation, drain emitted event cascades, and apply buffered commands deterministically at that activation's commit boundary. Occurrences along immediate edges SHALL be delivered in the current activation; occurrences along delayed edges SHALL be queued as specified by "Delayed occurrences are queued per clock". The backend SHALL NOT apply a configured cascade-depth bound or count cascade depth at runtime. When the linked program declares at least one trait lifecycle trigger (`on added T` or `on removed T`), commit SHALL deliver those triggers, as specified by `dsl-trait-lifecycle-triggers`, back into the same activation's cascade after each commit round, along immediate lifecycle edges, and SHALL queue them along delayed lifecycle edges. Programs with no lifecycle trigger SHALL NOT emit this delivery code path.
 
-Commit applies commands in rounds: a round applies every queued command, delivers that round's lifecycle triggers, and drains the resulting cascade; commands queued by that cascade form the next round. The deliveries of round *r* (counting from 1) of one activation's commit SHALL be emitted at cascade depth *r*, so commit rounds and the event cascades they trigger share one cascade-depth budget for that activation. A delivery whose depth would exceed the bound SHALL be deferred to a later activation exactly like an overflowing handler-emitted occurrence; its handlers, and any commands they queue, SHALL belong to that later activation. Commit SHALL therefore terminate for every program, including one whose lifecycle handlers always issue further structural commands.
+Commit applies commands in rounds: a round applies every queued command, delivers that round's immediate lifecycle triggers, and drains the resulting cascade; commands queued by that cascade form the next round. Every command SHALL be applied in the activation that queued it, whether its lifecycle trigger is immediate or delayed. Because immediate edges form an acyclic graph, commit SHALL terminate for every program, including one whose lifecycle handlers always issue further structural commands.
 
 #### Scenario: Structural command is deferred to commit
 - **WHEN** a fixed_tick handler issues `spawn Particle`
@@ -1078,26 +1078,23 @@ Commit applies commands in rounds: a round applies every queued command, deliver
 
 #### Scenario: Self-feeding lifecycle handlers terminate
 - **WHEN** an `on added Pulse` handler issues `remove Pulse`, and an `on removed Pulse` handler issues `add Pulse`
-- **THEN** the activation's commit delivers triggers for at most the cascade-depth bound's number of rounds, defers the rest, and returns
+- **THEN** each activation commits one round of that cycle, queues the resulting trigger for the next activation of the same clock, and returns
 
 #### Scenario: Deferred delivery runs in a later activation
-- **WHEN** a lifecycle delivery was deferred because its round exceeded the bound
-- **THEN** its handler runs in a later activation, and a command it issues is applied at that later activation's commit
+- **WHEN** a lifecycle delivery travels along a delayed lifecycle edge
+- **THEN** its handler runs in the next activation of the producing clock, and a command it issues is applied at that later activation's commit
 
 #### Scenario: Commit rounds share depth with event cascades
-- **WHEN** a round-*r* lifecycle handler emits an event whose handler emits further events
-- **THEN** those events are emitted at depths above *r*, and a chain that would exceed the bound is deferred under the same rule as any other occurrence
+- **WHEN** a round-*r* lifecycle handler emits an event whose handler emits further events, all along immediate edges
+- **THEN** those events are delivered in the same activation, and the total chain length is bounded by the static cascade depth recorded for that activation root
 
-### Requirement: Deferred occurrences are delivered in a later activation
-The cpp-entt backend SHALL deliver every occurrence deferred by the cascade-depth bound in a later activation, whatever event it is. `generated_drain_external_events` SHALL re-queue deferred occurrences as root events together with their stored recipient. An occurrence whose event no phase claims as its runtime root SHALL run as its own activation: dispatch its handlers, drain the resulting cascade, and commit. A re-queued targeted occurrence SHALL be dropped when its recipient is no longer valid, and otherwise SHALL be delivered only to that recipient, never broadcast.
+#### Scenario: Spawning chain advances one spawn per activation
+- **WHEN** an `on added Offspring` handler spawns a template carrying `Offspring`, starting from one spawn
+- **THEN** each activation of the producing clock creates exactly one new entity and queues one `on added Offspring` delivery
 
-#### Scenario: Deferred internal event runs next drain
-- **WHEN** an occurrence of a program-declared (non-external) event is deferred past the cascade-depth bound
-- **THEN** the next `generated_drain_external_events` call dispatches its handlers, and the commands they queue are applied at that activation's commit
-
-#### Scenario: Deferred targeted event keeps its recipient
-- **WHEN** a targeted occurrence is deferred and later re-queued as a root event
-- **THEN** its handlers run only for the original recipient, and not at all if that recipient is no longer valid
+#### Scenario: Long acyclic chains are never cut off
+- **WHEN** an acyclic chain of 100 event handlers, each emitting the next event, starts in one `tick` activation
+- **THEN** all 100 handlers run in that activation
 
 ### Requirement: Activation and event-scheduler machinery is implemented as shared runtime helpers
 The cpp-entt backend SHALL implement its per-frame activation/event-scheduler machinery — entity reservation, structural command queuing and commit, trait-presence tracking and net-change computation for lifecycle triggers, event emission (including targeted emission), and event-cascade draining — using helpers templated on the program's `EventOccurrence` type and hosted in the backend runtime, rather than emitting an independent copy of this machinery as per-program generated text. Generated per-program output SHALL be limited to declaring the program's concrete `EventOccurrence` type and its program-specific hooks (the set of watched traits, lifecycle occurrence types, event dispatch to handlers), calling through to the shared runtime helpers for the scheduler logic itself.
@@ -1504,3 +1501,26 @@ When the backend meets an expression or statement form it cannot lower, compilat
 #### Scenario: Unlowered form fails compilation
 - **WHEN** the backend meets an expression form it has no lowering for
 - **THEN** the compiler exits with an error naming the form and its source location, and writes no output file
+
+### Requirement: Delayed occurrences are queued per clock
+The cpp-entt backend SHALL keep one delayed-occurrence queue per phase that can produce a delayed occurrence, and one host-clock queue. An emit, or a lifecycle delivery, whose producer has both immediate and delayed edges to the occurrence's consumers SHALL dispatch the occurrence now to the immediate consumers only and SHALL queue it for the delayed consumers only, so no consumer runs twice for one occurrence. A phase activation SHALL deliver its phase's queued occurrences at the start of its event cascade. `generated_drain_external_events` SHALL deliver the host-clock queue, each occurrence as its own activation, taking only the occurrences queued before the drain began. A queued targeted occurrence whose recipient is no longer valid SHALL be dropped, and otherwise SHALL be delivered only to that recipient. Delayed queues SHALL be discarded at teardown. A program with no delayed edge SHALL generate no delayed-queue code.
+
+#### Scenario: Delayed self-emit runs in the next repetition
+- **WHEN** a `fixed_tick` handler emits `Knock to self` from its own `Knock` handler, and a frame runs two repetitions
+- **THEN** the handler runs once per repetition, and the second run happens inside the second repetition's activation
+
+#### Scenario: Immediate and delayed consumers of one occurrence
+- **WHEN** `Answer.Knock` emits `Knock`, consumed by `Answer.Knock` (delayed) and `Logger.Knock` (immediate)
+- **THEN** `Logger.Knock` runs in the current activation, `Answer.Knock` runs in the next activation of the same clock, and neither runs twice
+
+#### Scenario: Host-clock delay waits for the next drain
+- **WHEN** an activation of an event that no phase claims produces a delayed occurrence
+- **THEN** the occurrence runs as its own activation in the next `generated_drain_external_events` call, not in the current one
+
+#### Scenario: Delayed targeted occurrence keeps its recipient
+- **WHEN** a delayed occurrence targets an entity
+- **THEN** its handlers run only for that entity, and not at all if the entity is no longer valid at delivery
+
+#### Scenario: Acyclic program has no delayed queue
+- **WHEN** the linked program has no delayed edge
+- **THEN** the generated scheduler state declares no delayed queue and no code moves occurrences between activations

@@ -526,7 +526,7 @@ void emit_external_command_capability(std::ostringstream& out,
             if (EnttCodegenUtils::find_trait(program, "Parent") != nullptr) {
                 out << "                ::cactus_destroy_entity_recursive(registry, target);\n";
             } else {
-                out << "                registry.destroy(target);\n";
+                out << "                cactus::runtime::entt_backend::release_entity(registry, target);\n";
             }
             out << "            });\n";
             out << "    }\n";
@@ -1034,7 +1034,8 @@ void emit_phase_runtime_states(std::ostringstream& out, const DecoratedProgram& 
             if (field.is_completion_only) {
                 continue;
             }
-            out << "    " << EnttCodegenUtils::value_type_to_cpp(field.type) << " " << field.name << "{};\n";
+            out << "    " << EnttCodegenUtils::value_type_to_cpp(field.type) << " " << field.name
+                << EnttCodegenUtils::value_initializer(field.type) << ";\n";
         }
         out << "};\n\n";
     }
@@ -1276,7 +1277,7 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program,
     }
 
     out << "entt::entity generated_reserve_entity(entt::registry& registry) {\n";
-    out << "    return reserve_entity(registry, generated_scheduler_state().activation);\n";
+    out << "    return reserve_entity(registry);\n";
     out << "}\n\n";
 
     out << "void generated_queue_structural_command(StructuralCommand::Kind kind,\n";
@@ -2386,7 +2387,7 @@ void emit_archetype_trait_initializers(std::ostringstream& out,
     // assigning the creation ordinal here covers all three. A small number of
     // engine-internal entities are created outside the DSL entirely (e.g. the
     // editor camera rig in emit_camera_rig_activation/-exit below) and must
-    // independently emplace CreationOrdinal at their own reg.create()
+    // independently emplace CreationOrdinal at their own create_entity()
     // site, since any pairs: rule binding on a trait such an entity also
     // carries could otherwise match it in emit_pair_binding_snapshot's view.
     out << ind << "registry.emplace<cactus::runtime::entt_backend::CreationOrdinal>(" << entity_name
@@ -2461,7 +2462,7 @@ std::string emit_archetype_creation_function(const std::string& archetype_name,
     // hinted function above already performs every field initialization; the
     // only thing this one adds is an arbitrary (non-hinted) entity.
     out << "entt::entity " << create_name << "(entt::registry& registry) {\n";
-    out << "    return " << at_name << "(registry, registry.create());\n";
+    out << "    return " << at_name << "(registry, cactus::runtime::entt_backend::create_entity(registry));\n";
     out << "}\n\n";
     return out.str();
 }
@@ -2499,7 +2500,7 @@ void emit_archetype_node_helpers(std::ostringstream& out,
         out << "static entt::entity "
             << archetype_node_create_function_name(program.module_name, archetype_name, role_path)
             << "(entt::registry& registry" << parameters << ") {\n";
-        out << "    auto entity = registry.create();\n";
+        out << "    auto entity = cactus::runtime::entt_backend::create_entity(registry);\n";
         emit_archetype_trait_initializers(
             out,
             child.traits,
@@ -2585,7 +2586,8 @@ std::string emit_planned_creation_functions(const std::string& name,
     out << "    return entity;\n}\n";
     out << "[[maybe_unused]] static entt::entity " << node_create << "(entt::registry& registry" << all_parameters
         << ") {\n";
-    out << "    return " << node_at << "(registry, registry.create()" << all_arguments << ");\n}\n";
+    out << "    return " << node_at << "(registry, cactus::runtime::entt_backend::create_entity(registry)"
+        << all_arguments << ");\n}\n";
     emit_archetype_node_helpers(out, name, archetype, children, program, role_path, all_parameters);
     out << "entt::entity " << create_at << "(entt::registry& registry, entt::entity hint" << parameters << ") {\n";
     for (const auto& slot : slots) {
@@ -2598,7 +2600,8 @@ std::string emit_planned_creation_functions(const std::string& name,
     emit_child_creation_sequence(out, program.module_name, name, children, "entity", "child", role_path, program, all_arguments);
     out << "    return entity;\n}\n";
     out << "entt::entity " << create << "(entt::registry& registry" << parameters << ") {\n";
-    out << "    return " << create_at << "(registry, registry.create()" << arguments << ");\n}\n\n";
+    out << "    return " << create_at << "(registry, cactus::runtime::entt_backend::create_entity(registry)"
+        << arguments << ");\n}\n\n";
     return out.str();
 }
 
@@ -2629,7 +2632,7 @@ std::string emit_archetype_creation_functions(const std::string& archetype_name,
     // Delegates rather than re-running emit_archetype_trait_initializers, same
     // as the flat-archetype path in emit_archetype_creation_function.
     out << "static entt::entity " << node_name << "(entt::registry& registry) {\n";
-    out << "    return " << node_at_name << "(registry, registry.create());\n";
+    out << "    return " << node_at_name << "(registry, cactus::runtime::entt_backend::create_entity(registry));\n";
     out << "}\n\n";
     emit_archetype_node_helpers(out, archetype_name, archetype, children, program, role_path);
 
@@ -3679,7 +3682,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "    if (slots.empty()) {\n";
         out << "        slots.reserve(kEditorPaletteMaxSlots);\n";
         out << "        for (int i = 0; i < kEditorPaletteMaxSlots; ++i) {\n";
-        out << "            auto entity = registry.create();\n";
+        out << "            auto entity = cactus::runtime::entt_backend::create_entity(registry);\n";
         out << "            registry.emplace<" << sl_cpp << ">(entity);\n";
         out << "            slots.push_back(entity);\n";
         out << "        }\n";
@@ -3772,7 +3775,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         // Every handle first, so initializers can name any entity of the module.
         for (const auto* entity : EnttCodegenUtils::declared_entities(program)) {
             out << "    " << EnttCodegenUtils::named_slot_name(entity_symbol(*entity, program))
-                << " = registry.create();\n";
+                << " = cactus::runtime::entt_backend::create_entity(registry);\n";
         }
         for (const auto* entity : EnttCodegenUtils::declared_entities(program)) {
             out << "    " << archetype_create_at_function_name(program.module_name, entity->name) << "(registry, "
@@ -3938,7 +3941,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                 out << "                }\n";
                 out << "                "
                        "cactus::runtime::entt_backend::set_editor_saved_viewports(std::move(__saved));\n";
-                out << "                auto __rig = reg.create();\n";
+                out << "                auto __rig = cactus::runtime::entt_backend::create_entity(reg);\n";
                 // The editor camera rig is created outside the archetype/spawn choke point in
                 // emit_archetype_trait_initializers, so it must independently receive a creation
                 // ordinal: any pairs: rule binding on a trait this rig also carries (e.g.
@@ -4001,7 +4004,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                 out << "                }\n";
                 out << "                "
                        "cactus::runtime::entt_backend::set_editor_saved_viewports(std::move(__saved));\n";
-                out << "                auto __rig = reg.create();\n";
+                out << "                auto __rig = cactus::runtime::entt_backend::create_entity(reg);\n";
                 // See the matching comment in the 2D branch above: this rig is created outside
                 // the archetype/spawn choke point and must independently receive an ordinal.
                 out << "                reg.emplace<cactus::runtime::entt_backend::CreationOrdinal>(__rig, "
@@ -4024,7 +4027,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "        });\n";
         out << "    cactus::runtime::entt_backend::register_editor_camera_exit_impl(\n";
         out << "        [](entt::registry& reg, entt::entity rig) {\n";
-        out << "            if (reg.valid(rig)) { reg.destroy(rig); }\n";
+        out << "            cactus::runtime::entt_backend::release_entity(reg, rig);\n";
         out << "            for (auto __saved_ent : cactus::runtime::entt_backend::editor_saved_viewports()) {\n";
         out << "                if (auto* __vp = reg.try_get<" << vp_cpp_rig
             << ">(__saved_ent)) { __vp->active = true; }\n";

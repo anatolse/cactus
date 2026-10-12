@@ -2301,9 +2301,7 @@ void destroy_entity_recursive(
     for (const auto child : child_entities) {
         destroy_entity_recursive(registry, child, visit_children);
     }
-    if (registry.valid(entity)) {
-        registry.destroy(entity);
-    }
+    release_entity(registry, entity);
     destroying_entities.erase(entity);
 }
 

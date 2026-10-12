@@ -713,11 +713,69 @@ template <typename... Traits>
     return registry.valid(slot) && registry.all_of<Traits...>(slot);
 }
 
+// ── Entity allocation ────────────────────────────────────────────────────
+
+// Owns slot reuse instead of EnTT so no handle value is ever given out twice
+// by one registry: a slot whose version would wrap is retired, not reused.
+struct EntityAllocator {
+    using index_type = entt::entt_traits<entt::entity>::entity_type;
+    std::vector<index_type> free_slots;
+    index_type next_fresh{};
+};
+
+[[nodiscard]] inline EntityAllocator& entity_allocator(entt::registry& registry) {
+    auto& context = registry.ctx();
+    if (auto* allocator = context.find<EntityAllocator>()) {
+        return *allocator;
+    }
+    return context.emplace<EntityAllocator>();
+}
+
+// A reserved handle is owned by its caller and stays not valid until create_reserved.
+[[nodiscard]] inline entt::entity reserve_entity(entt::registry& registry) {
+    using Traits                  = entt::entt_traits<entt::entity>;
+    constexpr auto null_index     = Traits::to_entity(entt::null);
+    constexpr auto unused_version = Traits::to_version(entt::tombstone);
+    auto& allocator               = entity_allocator(registry);
+    if (!allocator.free_slots.empty()) {
+        const auto index = allocator.free_slots.back();
+        allocator.free_slots.pop_back();
+        return Traits::construct(index, registry.current(Traits::construct(index, 0U)));
+    }
+    // Skip slots that host code created directly through the registry.
+    while (allocator.next_fresh != null_index &&
+           registry.current(Traits::construct(allocator.next_fresh, 0U)) != unused_version) {
+        ++allocator.next_fresh;
+    }
+    if (allocator.next_fresh == null_index) {
+        throw std::runtime_error("cactus entity handle space exhausted");
+    }
+    return Traits::construct(allocator.next_fresh++, 0U);
+}
+
+[[nodiscard]] inline entt::entity create_reserved(entt::registry& registry, entt::entity reserved) {
+    return registry.create(reserved);
+}
+
+[[nodiscard]] inline entt::entity create_entity(entt::registry& registry) {
+    return create_reserved(registry, reserve_entity(registry));
+}
+
+inline void release_entity(entt::registry& registry, entt::entity entity) {
+    if (!registry.valid(entity)) {
+        return;
+    }
+    // destroy returns the slot's next version; 0 means it wrapped.
+    if (registry.destroy(entity) != 0U) {
+        entity_allocator(registry).free_slots.push_back(entt::entt_traits<entt::entity>::to_entity(entity));
+    }
+}
+
 // Creation functions take a hint: a spawn reserves a free identifier, while
 // module load pre-allocates every named handle so initializers can refer to
 // each other, then fills each one in.
 [[nodiscard]] inline entt::entity adopt_or_create(entt::registry& registry, entt::entity hint) {
-    return registry.valid(hint) ? hint : registry.create(hint);
+    return registry.valid(hint) ? hint : create_reserved(registry, hint);
 }
 
 struct NamedSlotOrigin {
@@ -1481,10 +1539,10 @@ template <typename Occurrence>
 using DelayedQueue = std::deque<QueuedEvent<Occurrence>>;
 
 // Per-activation scheduler state: queued events, pending structural commands,
-// the running clock's delayed queue, and the deferred-entity reservation
-// cursor. `Occurrence` is the program's `EventOccurrence` variant; codegen
-// declares `SchedulerState : ActivationRuntime<EventOccurrence>` (plus its
-// own per-phase fields) rather than re-declaring this struct's body inline
+// and the running clock's delayed queue. `Occurrence` is the program's
+// `EventOccurrence` variant; codegen declares
+// `SchedulerState : ActivationRuntime<EventOccurrence>` (plus its own
+// per-phase fields) rather than re-declaring this struct's body inline
 // per program.
 template <typename Occurrence>
 struct ActivationRuntime {
@@ -1497,30 +1555,8 @@ struct ActivationRuntime {
     // Route of the occurrence being dispatched.
     DeliveryRoute delivery_route     = DeliveryRoute::All;
     std::uint32_t delivery_component = kNoComponent;
-    entt::entt_traits<entt::entity>::entity_type next_reserved_entity =
-        entt::entt_traits<entt::entity>::entity_mask - 1U;
     bool active{};
 };
-
-// Reserves a not-yet-valid entity identifier for a deferred spawn (the real
-// entity is created only once its Spawn StructuralCommand applies at
-// commit). Counts down from the top of the identifier space so reserved
-// identifiers never collide with registry.create()'s bottom-up allocation.
-template <typename Occurrence>
-[[nodiscard]] entt::entity reserve_entity(entt::registry& registry, ActivationRuntime<Occurrence>& activation) {
-    static_assert(is_event_occurrence_variant_v<Occurrence>,
-                  "ActivationRuntime<Occurrence>'s Occurrence must be a std::variant<...> of the program's concrete "
-                  "event types (the generated EventOccurrence alias)");
-    using Traits = entt::entt_traits<entt::entity>;
-    auto& next   = activation.next_reserved_entity;
-    while (next != 0U) {
-        const auto candidate = Traits::construct(next--, 0U);
-        if (!registry.valid(candidate)) {
-            return candidate;
-        }
-    }
-    throw std::runtime_error("cactus deferred entity identifier space exhausted");
-}
 
 // Queues a structural command (spawn/destroy/add/remove/set) to apply once the
 // current activation commits; throws if called outside an activation, which

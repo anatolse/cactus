@@ -12,7 +12,8 @@ std::string EnttEventEmitter::emit_event(const ResolvedEvent& event, const std::
     std::ostringstream out;
     out << "struct " << cpp_name << " {\n";
     for (const auto& field : event.fields) {
-        out << "    " << EnttCodegenUtils::value_type_to_cpp(field.type) << " " << field.name << "{};\n";
+        out << "    " << EnttCodegenUtils::value_type_to_cpp(field.type) << " " << field.name
+            << EnttCodegenUtils::value_initializer(field.type) << ";\n";
     }
     out << "};\n";
     return out.str();

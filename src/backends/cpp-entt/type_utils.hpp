@@ -23,6 +23,8 @@ public:
     static std::string type_to_cpp(const TypeInfo& type);
     // Stored-value type: entity ids use the live registry entity type.
     static std::string value_type_to_cpp(const TypeInfo& type);
+    // Member initializer for a field with no declared default; an unset entity id is stale.
+    static std::string value_initializer(const TypeInfo& type);
     static std::string emit_enum(const ResolvedEnum& e);
     static std::string emit_expr(const ExprNode& expr, const ProgramNode* ast = nullptr);
     static std::string emit_expr(const ExprNode& expr, const DecoratedProgram& program);

@@ -282,6 +282,10 @@ add_executable(test_runtime_activation_scheduler test_runtime_activation_schedul
 target_link_libraries(test_runtime_activation_scheduler PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
 add_test(NAME RuntimeActivationSchedulerTests COMMAND test_runtime_activation_scheduler)
 
+add_executable(test_runtime_entity_allocator test_runtime_entity_allocator.cpp)
+target_link_libraries(test_runtime_entity_allocator PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
+add_test(NAME RuntimeEntityAllocatorTests COMMAND test_runtime_entity_allocator)
+
 add_executable(test_runtime_publication_reset test_runtime_publication_reset.cpp)
 target_link_libraries(test_runtime_publication_reset PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
 add_test(NAME RuntimePublicationResetTests COMMAND test_runtime_publication_reset)
@@ -506,6 +510,12 @@ cactus_add_headless_behavior_test(test_commit_notify_loop_headless_behavior
     CACTUS_SOURCE tests/fixtures/commit_notify_loop_runtime.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_commit_notify_loop_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_entity_handle_reuse_headless_behavior
+    CACTUS_SOURCE examples/entity_handle_reuse.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_entity_handle_reuse_headless_behavior.cpp
 )
 
 cactus_add_headless_behavior_test(test_delivery_clocks_headless_behavior

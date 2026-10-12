@@ -671,8 +671,27 @@ TEST_CASE("Codegen EnTT: an event supports entity and vector payload fields", "[
     event.fields.push_back({.name = "overlap", .type = {.kind = TypeKind::Vec2, .name = "vec2"}});
 
     const auto code = EnttEventEmitter::emit_event(event, "ContactEvent");
-    CHECK(code.contains("entt::entity other{};"));
+    CHECK(code.contains("entt::entity other{entt::null};"));
     CHECK(code.contains("Vector2 overlap{};"));
+}
+
+TEST_CASE("Codegen EnTT: an unset entity_id field starts stale, never as the first entity",
+          "[codegen-entt][entity-handles]") {
+    ProgramNode program;
+    const auto decorated = full_pipeline(
+        "struct Link:\n"
+        "    target: entity_id\n"
+        "    weight: int\n"
+        "trait Holder:\n"
+        "    var who: entity_id\n"
+        "    var link: Link\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(generated_struct(code, "Holder").contains("entt::entity who{entt::null};"));
+    const auto link = generated_struct(code, "Link");
+    CHECK(link.contains("entt::entity target{entt::null};"));
+    CHECK(link.contains("int weight{};"));
 }
 
 TEST_CASE("Codegen EnTT: enum-typed event field resolves to its generated enum class type",
@@ -2193,7 +2212,7 @@ TEST_CASE("Codegen EnTT: entity creation from unit", "[codegen-entt]") {
 
     auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.contains("create_player"));
-    CHECK(code.contains("registry.create()"));
+    CHECK(code.contains("cactus::runtime::entt_backend::create_entity(registry)"));
     CHECK(code.contains("registry.emplace<Pos>"));
     CHECK(code.contains("registry.emplace<Health>"));
 }
@@ -3455,7 +3474,7 @@ TEST_CASE("Codegen EnTT: flat archetype's non-hinted creation function delegates
     const auto wrapper = generated_function(code, "entt::entity create_particle(entt::registry& registry)");
     CHECK(wrapper ==
           "entt::entity create_particle(entt::registry& registry) {\n"
-          "    return create_particle_at(registry, registry.create());\n"
+          "    return create_particle_at(registry, cactus::runtime::entt_backend::create_entity(registry));\n"
           "}\n");
     // Not a second copy of create_particle_at's field-initialization statements.
     CHECK(!wrapper.contains("component"));
@@ -4796,7 +4815,7 @@ TEST_CASE(
     const auto wrapper = generated_function(code, "static entt::entity create_rig__node(entt::registry& registry)");
     CHECK(wrapper ==
           "static entt::entity create_rig__node(entt::registry& registry) {\n"
-          "    return create_rig__node_at(registry, registry.create());\n"
+          "    return create_rig__node_at(registry, cactus::runtime::entt_backend::create_entity(registry));\n"
           "}\n");
     // Not a second copy of create_rig__node_at's field-initialization statements.
     CHECK(!wrapper.contains("component"));
@@ -5053,7 +5072,7 @@ TEST_CASE("Codegen EnTT: 2D editor+viewport program registers 2D camera rig life
     CHECK(init.contains("set_editor_saved_viewports"));
 
     // Exit impl destroys rig and restores viewports
-    CHECK(init.contains("reg.destroy(rig)"));
+    CHECK(init.contains("release_entity(reg, rig)"));
     CHECK(init.contains("__vp->active = true"));
 
     // 2D apply impl writes zoom and offset back to rig Camera
@@ -5090,7 +5109,7 @@ TEST_CASE("Codegen EnTT: 3D editor+viewport program registers 3D camera rig life
 
     // Exit impl destroys rig
     CHECK(init.contains("register_editor_camera_exit_impl"));
-    CHECK(init.contains("reg.destroy(rig)"));
+    CHECK(init.contains("release_entity(reg, rig)"));
 
     // 3D apply impl writes position and rotation to rig WorldTransform (5.5 clamping driven by these writes)
     CHECK(init.contains("register_editor_apply_camera_3d_impl"));
@@ -8470,12 +8489,14 @@ TEST_CASE("Codegen EnTT: module entities are allocated before any initializer ru
     const auto code = named_codegen(decorated, program);
     const auto init = generated_function(code, "void generated_init_project(entt::registry& registry)");
     REQUIRE_FALSE(init.empty());
-    const auto last_allocation = init.find("generated_named_slots().test__Boss = registry.create();");
-    const auto first_create    = init.find("(registry, generated_named_slots().test__Game);");
+    const auto last_allocation =
+        init.find("generated_named_slots().test__Boss = cactus::runtime::entt_backend::create_entity(registry);");
+    const auto first_create = init.find("(registry, generated_named_slots().test__Game);");
     REQUIRE(last_allocation != std::string::npos);
     REQUIRE(first_create != std::string::npos);
     CHECK(last_allocation < first_create);
-    CHECK(init.find("generated_named_slots().test__Nemesis = registry.create();") < last_allocation);
+    CHECK(init.find("generated_named_slots().test__Nemesis = cactus::runtime::entt_backend::create_entity(registry);") <
+          last_allocation);
     CHECK(init.find("(registry, generated_named_slots().test__Nemesis);") <
           init.find("(registry, generated_named_slots().test__Boss);"));
 }

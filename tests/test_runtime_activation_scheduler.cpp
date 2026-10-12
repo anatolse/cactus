@@ -58,27 +58,6 @@ TEST_CASE("StructuralCommand::Kind covers spawn, destroy, add, and remove", "[ru
     CHECK(StructuralCommand::Kind::Add != StructuralCommand::Kind::Remove);
 }
 
-TEST_CASE("reserve_entity throws once the deferred entity identifier space is exhausted",
-          "[runtime][activation][scheduler]") {
-    entt::registry registry;
-    ActivationRuntime<TestOccurrence> activation;
-    activation.next_reserved_entity = 0U;
-
-    CHECK_THROWS_AS(reserve_entity(registry, activation), std::runtime_error);
-}
-
-TEST_CASE("reserve_entity returns a not-yet-valid entity and counts down", "[runtime][activation][scheduler]") {
-    entt::registry registry;
-    ActivationRuntime<TestOccurrence> activation;
-
-    const auto first  = reserve_entity(registry, activation);
-    const auto second = reserve_entity(registry, activation);
-
-    CHECK_FALSE(registry.valid(first));
-    CHECK_FALSE(registry.valid(second));
-    CHECK(first != second);
-}
-
 TEST_CASE("queue_structural_command throws when no activation is active", "[runtime][activation][scheduler]") {
     ActivationRuntime<TestOccurrence> activation;
     activation.active = false;

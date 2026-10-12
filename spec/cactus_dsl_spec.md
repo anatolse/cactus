@@ -1494,7 +1494,7 @@ rule CollectCoins:
 
 ### 4.3 `entity_id` Semantics
 
-`entity_id` is an opaque handle. There is no null sentinel in the language surface. Operations using `entity_id` are total: stale handles produce safe no-ops or no-match behavior rather than forcing author-side null checks.
+`entity_id` is an opaque handle. There is no null sentinel in the language surface. Operations using `entity_id` are total: stale handles produce safe no-ops or no-match behavior rather than forcing author-side null checks. A stale handle stays stale for the life of its world: it never names an entity created later. An `entity_id` field with no initializer starts stale.
 
 An entity's name (§3.7) is an `entity_id` bound to its current instance. It binds when its module's entities are instantiated (program start for the entry module), and after a restore it binds to the restored record whose origin is that declaration. Once the instance is destroyed — including by scene cleanup — or when a restored document has no record for it, the name is stale: `set` and `emit` targeting it do nothing, and handlers that access its fields by name do not run. Using a name only as a value adds no requirement.
 

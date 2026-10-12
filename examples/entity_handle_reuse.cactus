@@ -1,0 +1,54 @@
+module entity_handle_reuse
+
+# A handle stays stale once its entity is gone. Each tick destroys the last
+# shot and spawns a new one, so the same few slots are reused thousands of
+# times; the handle of the very first shot must never name a later one.
+
+use std.core
+
+trait Shot:
+    var heard: int = 0
+
+trait Marked
+
+trait Memory:
+    var first: entity_id
+    var current: entity_id
+    var kept: bool = false
+    var alive_seen: int = 0
+    var matched: int = 0
+    var heard: int = 0
+
+event Ping
+
+template Bullet:
+    Shot
+
+entity Gun:
+    Memory
+
+rule Cycle:
+    on tick:
+        if exists(Gun[Memory].first):
+            Gun[Memory].alive_seen += 1
+        match Gun[Memory].first:
+            Shot =>
+                Gun[Memory].matched += 1
+            _ =>
+                Gun[Memory].matched += 1
+        add Marked to Gun[Memory].first
+        emit Ping to Gun[Memory].first
+        destroy Gun[Memory].current
+        let shot = spawn Bullet()
+        Gun[Memory].current = shot
+        if not Gun[Memory].kept:
+            Gun[Memory].first = shot
+            Gun[Memory].kept = true
+
+rule Hear:
+    each:
+        Shot as shot
+
+    on Ping:
+        shot.heard += 1
+        Gun[Memory].heard += 1

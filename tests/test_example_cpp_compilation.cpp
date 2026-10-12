@@ -574,4 +574,33 @@ TEST_CASE("examples do not present removed syntax as current syntax", "[examples
         }
     }
 }
+TEST_CASE("generated code creates and destroys entities only through the runtime allocator",
+          "[examples][entity-handles]") {
+    static const std::regex direct_call{R"(\b(registry|reg|staged)\.create\(|\.destroy\()"};
+    const auto out_dir = build_root() / "generated_examples" / "entity_allocation";
+    fs::create_directories(out_dir);
+
+    std::size_t generated = 0;
+    for (const auto& source : cactus_example_sources()) {
+        CAPTURE(source.string());
+        const auto output =
+            out_dir / (source.parent_path().filename().string() + "_" + source.stem().string() + ".cpp");
+        const auto result = run_command(repo_root(),
+                                        "entity-allocation-" + source.stem().string(),
+                                        quote(compiler_path()) + " " + quote(source) + " --output " + quote(output));
+        // Examples that fail to generate are reported by the tests that own them.
+        if (result.exit_code != 0) {
+            continue;
+        }
+        ++generated;
+        std::ifstream in(output);
+        REQUIRE(in.is_open());
+        std::string line;
+        while (std::getline(in, line)) {
+            INFO(line);
+            CHECK_FALSE(std::regex_search(line, direct_call));
+        }
+    }
+    CHECK(generated > 0);
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

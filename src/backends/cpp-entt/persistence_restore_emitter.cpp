@@ -276,7 +276,7 @@ std::string EnttRestoreEmitter::emit_world_restore(const DecoratedProgram& progr
     out << "    std::vector<entt::entity> allocated;\n";
     out << "    allocated.reserve(snapshot.entities.size());\n";
     out << "    for (const auto& record : snapshot.entities) {\n";
-    out << "        const auto entity = staged.create();\n";
+    out << "        const auto entity = create_entity(staged);\n";
     out << "        ids.allocate(record.id, entity);\n";
     out << "        allocated.push_back(entity);\n";
     out << "    }\n";

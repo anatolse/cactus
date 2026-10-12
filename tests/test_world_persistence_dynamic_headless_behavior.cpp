@@ -12,7 +12,9 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -214,6 +216,26 @@ TEST_CASE("restoring a marker trait recreates membership with no payload", "[run
     const auto restored_ember = entity_with<Sparkle>(registry);
     CHECK(registry.all_of<Blessed>(restored_ember));
     CHECK(registry.get<Health>(restored_ember).current == 42);
+}
+
+TEST_CASE("a spawn after restore takes a new handle from the restored world's allocator",
+          "[runtime][persistence][restore][entity-handles]") {
+    World world;
+    auto& registry = world.registry;
+    spawn_ember(registry);
+
+    const auto snapshot = capture(registry);
+    REQUIRE(rt::generated_restore_world(registry, snapshot).ok);
+    REQUIRE(registry.ctx().contains<rt::EntityAllocator>());
+    std::vector<entt::entity> restored;
+    for (const auto entity : registry.view<entt::entity>()) {
+        restored.push_back(entity);
+    }
+
+    REQUIRE_FALSE(restored.empty());
+
+    const auto fresh = rt::create_entity(registry);
+    CHECK(std::ranges::find(restored, fresh) == restored.end());
 }
 
 TEST_CASE("restoring after remove-and-readd uses the recorded incarnation, not the removed one",

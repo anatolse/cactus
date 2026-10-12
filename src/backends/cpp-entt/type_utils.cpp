@@ -177,6 +177,10 @@ std::string EnttCodegenUtils::value_type_to_cpp(const TypeInfo& type) {
     return type_to_cpp(type);
 }
 
+std::string EnttCodegenUtils::value_initializer(const TypeInfo& type) {
+    return type.kind == TypeKind::EntityId ? "{entt::null}" : "{}";
+}
+
 std::string EnttCodegenUtils::type_to_cpp(const TypeInfo& type) {
     switch (type.kind) {
         case TypeKind::Int:

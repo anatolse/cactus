@@ -33,7 +33,7 @@ std::string EnttComponentEmitter::emit_component(const ResolvedTrait& trait, con
         const auto* default_expr =
             EnttCodegenUtils::find_trait_field_default(program, trait.module_name, trait.name, field.name);
         if (default_expr == nullptr) {
-            out << "{};\n";
+            out << EnttCodegenUtils::value_initializer(field.type) << ";\n";
             continue;
         }
         // A default expression may call a module-aliased stdlib extern func
@@ -118,7 +118,8 @@ std::string EnttComponentEmitter::emit_pod_struct(const ResolvedStruct& s) {
     std::ostringstream out;
     out << "struct " << cpp_name << " {\n";
     for (const auto& field : s.fields) {
-        out << "    " << EnttCodegenUtils::value_type_to_cpp(field.type) << " " << field.name << ";\n";
+        out << "    " << EnttCodegenUtils::value_type_to_cpp(field.type) << " " << field.name
+            << EnttCodegenUtils::value_initializer(field.type) << ";\n";
     }
     out << "};\n";
     return out.str();

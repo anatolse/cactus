@@ -79,3 +79,22 @@ When a `match entity_id:` statement is evaluated and the referenced entity is de
 - **WHEN** an author writes `if exists(c.other): match c.other: Boss as b => ...`
 - **THEN** the match is only attempted when the entity is live; dead handle case is handled by the `if` guard
 
+
+### Requirement: A stale handle stays stale for the life of its world
+An `entity_id` SHALL name at most one entity in a world, from the world's load or restore until the world is replaced. Once that entity is destroyed, the handle SHALL stay stale for the rest of the world's life, no matter how many entities are created or destroyed later. A stale handle SHALL never compare equal to the handle of an entity created after it, and every operation on it SHALL keep the stale-handle behavior defined by the total operation semantics. If the runtime can't create an entity without giving out a handle that was already used, it SHALL stop with an error instead.
+
+#### Scenario: Stale handle survives heavy slot reuse
+- **WHEN** a trait field keeps the handle of a destroyed entity, and the program then spawns and destroys more than 5000 entities, one at a time
+- **THEN** `exists` on the kept handle returns `false` every time, `match` on it matches no arm, commands and targeted events through it are no-ops, and it equals no live entity's handle
+
+#### Scenario: Deferred spawn handle is never reissued
+- **WHEN** a handler spawns an entity, keeps its handle, the entity is destroyed in a later activation, and many more entities are spawned afterwards
+- **THEN** no later spawn returns a handle equal to the kept one
+
+#### Scenario: Unset handle field is stale
+- **WHEN** a trait, struct or event field of type `entity_id` has no initializer and is never assigned
+- **THEN** `exists` on it returns `false`, and it equals no entity's handle, including the first entity the world creates
+
+#### Scenario: Handle space exhaustion is an error
+- **WHEN** a world has created so many entities that every remaining handle value was already used
+- **THEN** the next entity creation stops the program with an error that names the exhausted handle space, and no handle is given out twice

@@ -1524,3 +1524,26 @@ The cpp-entt backend SHALL keep one delayed-occurrence queue per phase that can 
 #### Scenario: Acyclic program has no delayed queue
 - **WHEN** the linked program has no delayed edge
 - **THEN** the generated scheduler state declares no delayed queue and no code moves occurrences between activations
+
+### Requirement: Entity allocation never reissues a handle
+The cpp-entt runtime SHALL create, reserve and destroy every entity of a registry through one allocator that belongs to that registry. The allocator SHALL never give out a handle value that it gave out before for the same registry. A slot whose version would wrap SHALL be retired and never used again. Handles reserved for deferred spawns SHALL come from the same allocator as immediate creations, and reserving one SHALL NOT grow storage beyond the slots actually handed out. Generated code and runtime helpers SHALL NOT create or destroy entities by calling the registry directly.
+
+#### Scenario: Slot is retired before its version wraps
+- **WHEN** one slot is destroyed and reused until its version reaches the last value before the wrap, and that entity is destroyed
+- **THEN** the slot is never used again, and every handle that slot ever had stays not valid
+
+#### Scenario: Reserved handle never repeats a destroyed handle
+- **WHEN** an entity is created, destroyed, and later a deferred spawn reserves a handle
+- **THEN** the reserved handle differs from every handle the registry gave out before
+
+#### Scenario: Reserving a handle allocates one slot
+- **WHEN** the first deferred spawn of a run reserves a handle
+- **THEN** the registry's entity storage grows by at most one slot
+
+#### Scenario: Restore starts a fresh allocator
+- **WHEN** world restore builds a staged registry and publishes it
+- **THEN** the published registry carries its own allocator, and handles from the replaced world are unobservable as the world-persistence requirements define
+
+#### Scenario: Generated code has no direct registry creation
+- **WHEN** the backend generates C++ for any example program
+- **THEN** the generated code creates and destroys entities only through the runtime allocator helpers

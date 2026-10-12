@@ -50,11 +50,11 @@ The build configuration SHALL call the reusable example-registration function fo
 
 #### Scenario: Top-level standalone examples are registered
 - **WHEN** CMake configures example targets
-- **THEN** it registers targets for `examples/shooter-slice/main.cactus` and `examples/stdlib-fixtures/stdlib_extern_coverage.cactus`
+- **THEN** it registers a target for `examples/stdlib-fixtures/stdlib_extern_coverage.cactus`
 
 #### Scenario: Directory-based examples are registered
 - **WHEN** CMake configures example targets
-- **THEN** it registers targets for `examples/blue-square/square.cactus`, `examples/cactus_shop/main.cactus`, `examples/mesh-renderer/main.cactus`, and `examples/platformer/platformer.cactus`
+- **THEN** it registers targets for `examples/blue-square/square.cactus`, `examples/mesh-renderer/main.cactus`, and `examples/platformer/platformer.cactus`
 
 #### Scenario: Support modules are not treated as standalone applications
 - **WHEN** an example directory contains additional `.cactus` files that support its root entrypoint

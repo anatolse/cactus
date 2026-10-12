@@ -21,7 +21,7 @@ The kind follows from the layout:
   shows how to build a behavior with the core language. Write that behavior by hand;
   don't call a stdlib API that already does it. Stdlib for plumbing the example
   needs but doesn't teach (transform, render, input) is fine.
-- **Showcase examples** — other subdirectories (`platformer/`, `shooter-slice/`, …).
+- **Showcase examples** — other subdirectories (`platformer/`, `first-person-arena/`, …).
   They show a real game and use stdlib freely. Prefer a stdlib primitive over
   hand-rolled logic here.
 - **Stdlib fixtures** — `stdlib-fixtures/`. Each one exercises a stdlib API for its

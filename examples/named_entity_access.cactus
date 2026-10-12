@@ -74,6 +74,14 @@ event Hit:
 template Grunt:
     Enemy
 
+template DroppedCoin(value: int):
+    Coin:
+        value = value
+
+# The host drops coins into the world.
+pub extern event CoinDropped:
+    value: int
+
 entity Game:
     Match
     Stats
@@ -195,6 +203,10 @@ rule ObserveScore:
 
     on tick:
         probe.score_seen = Game[Match].score
+
+rule DropCoin:
+    on CoinDropped:
+        spawn DroppedCoin(value = CoinDropped.value)
 
 rule CollectCoins:
     each:

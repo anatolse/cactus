@@ -4,8 +4,7 @@ use std.core
 
 # Sort keys use a total order: NaN sorts last both ways, -0.0 ties 0.0, and
 # equal keys follow creation order. Each rule rolls the ids it visits into one
-# integer, so the value records the visit order. The test creates the Score
-# entities itself.
+# integer, so the value records the visit order. The host sends the scores in.
 
 trait Score:
     var id: int = 0
@@ -15,6 +14,19 @@ trait Log:
     var ascending: int = 0
     var descending: int = 0
     var first: int = 0
+
+template Entry(id: int, v: float):
+    Score:
+        id = id
+        v = v
+
+pub extern event Scored:
+    id: int
+    v: float
+
+rule Arrive:
+    on Scored:
+        spawn Entry(id = Scored.id, v = Scored.v)
 
 rule Ascending:
     each:

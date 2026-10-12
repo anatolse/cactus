@@ -27,7 +27,7 @@ namespace cactus {
 /// deserialization. Callers that need the AST must re-parse from source.
 class ModuleArtifact {
 public:
-    static constexpr uint8_t CURRENT_VERSION = 32;
+    static constexpr uint8_t CURRENT_VERSION = 33;
     static constexpr const char* MAGIC       = "CMOD";
 
     explicit ModuleArtifact(ErrorReporter& errors);
@@ -103,6 +103,7 @@ private:
     static void write_symbol_set(std::ostream& out, const std::unordered_set<SymbolId>& values);
     static void write_symbol_vector(std::ostream& out, const std::vector<SymbolId>& values);
     static void write_field_access(std::ostream& out, const FieldAccess& access);
+    static void write_entity_targets(std::ostream& out, const std::vector<EntityTarget>& targets);
     static void write_field_table(std::ostream& out, const std::unordered_map<SymbolId, FieldAccess>& table);
     static void write_write_kinds(std::ostream& out,
                                   const std::unordered_map<SymbolId, std::map<std::string, FieldWriteKind>>& table);
@@ -145,6 +146,7 @@ private:
     static std::unordered_set<SymbolId> read_symbol_set(std::istream& in);
     static std::vector<SymbolId> read_symbol_vector(std::istream& in);
     static FieldAccess read_field_access(std::istream& in);
+    static std::vector<EntityTarget> read_entity_targets(std::istream& in);
     static std::unordered_map<SymbolId, FieldAccess> read_field_table(std::istream& in);
     static std::unordered_map<SymbolId, std::map<std::string, FieldWriteKind>> read_write_kinds(std::istream& in);
     static NamedFieldTable read_named_field_table(std::istream& in);

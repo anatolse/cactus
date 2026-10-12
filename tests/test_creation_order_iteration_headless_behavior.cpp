@@ -20,27 +20,28 @@ using Offspring = creation_order_iteration_runtime__Offspring;
 using Log       = creation_order_iteration_runtime__Log;
 using cactus::runtime::entt_backend::CreationOrdinal;
 
-// Items A..D get ids 1..4. A is destroyed before D exists, so EnTT's
-// swap-and-pop leaves the pool as C, B, D: storage order is not creation order.
+// Items A..D get ids 1..4. A leaves before D arrives, so EnTT's swap-and-pop
+// leaves the pool as C, B, D: storage order is not creation order.
 struct World {
     entt::registry registry;
 
     World() {
         cactus::runtime::entt_backend::generated_init_project(registry);
         cactus::runtime::entt_backend::generated_load_project(registry);
-        const auto a = add(1);
-        add(2);
-        add(3);
-        registry.destroy(a);
-        add(4);
+        arrive(1);
+        arrive(2);
+        arrive(3);
+        inject(creation_order_iteration_runtime__ItemLeftEvent{.id = 1});
+        arrive(4);
     }
 
-    entt::entity add(int id) {
-        const auto entity = registry.create();
-        registry.emplace<Item>(entity, Item{.id = id});
-        registry.emplace<CreationOrdinal>(
-            entity, CreationOrdinal{.value = cactus::runtime::entt_backend::generated_next_creation_ordinal()});
-        return entity;
+    void inject(auto occurrence) {
+        cactus::runtime::entt_backend::generated_inject_external_event(occurrence);
+        cactus::runtime::entt_backend::generated_drain_external_events(registry);
+    }
+
+    void arrive(int id) {
+        inject(creation_order_iteration_runtime__ItemArrivedEvent{.id = id});
     }
 
     const Log& run_frame() {

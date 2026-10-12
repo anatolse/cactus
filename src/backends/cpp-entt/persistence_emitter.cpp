@@ -6,6 +6,7 @@
 #include "common/persistence_document.hpp"
 
 #include <algorithm>
+#include <set>
 #include <sstream>
 #include <unordered_set>
 #include <vector>
@@ -305,6 +306,58 @@ void emit_string_array(std::ostringstream& out, const std::string& name, const s
     out << "}};\n";
 }
 
+// Traits restore does not compare: those any entity may carry or lack, states
+// (a save does not record them) and Parent (restored from the hierarchy).
+std::vector<std::string> unchecked_traits(const DecoratedProgram& program) {
+    std::set<std::string> unchecked;
+    for (const auto& trait : program.reachability.free_traits) {
+        unchecked.insert(make_canonical_id(trait));
+    }
+    for (const auto& [_, trait] : program.traits) {
+        if (trait.state.has_value() || trait.name == "Parent") {
+            unchecked.insert(declaration_identity(trait));
+        }
+    }
+    return {unchecked.begin(), unchecked.end()};
+}
+
+std::vector<std::vector<std::string>> reachable_sets(const DecoratedProgram& program,
+                                                     const ArchetypeNodeId& node,
+                                                     const std::vector<std::string>& unchecked) {
+    std::set<std::vector<std::string>> sets;
+    for (const auto& origin : program.reachability.origins) {
+        if (origin.node != node) {
+            continue;
+        }
+        for (const auto& traits : origin.trait_sets) {
+            std::vector<std::string> names;
+            for (const auto& trait : traits) {
+                auto name = make_canonical_id(trait);
+                if (!std::ranges::binary_search(unchecked, name)) {
+                    names.push_back(std::move(name));
+                }
+            }
+            std::ranges::sort(names);
+            sets.insert(std::move(names));
+        }
+    }
+    return {sets.begin(), sets.end()};
+}
+
+void emit_reachable_sets(std::ostringstream& out,
+                         const std::string& name,
+                         const std::vector<std::vector<std::string>>& sets) {
+    for (std::size_t index = 0; index < sets.size(); ++index) {
+        emit_string_array(out, name + "_" + std::to_string(index), sets[index]);
+    }
+    out << "inline constexpr std::array<std::span<const std::string_view>, " << sets.size() << "> " << name
+        << " = {{\n";
+    for (std::size_t index = 0; index < sets.size(); ++index) {
+        out << "    " << name << "_" << index << ",\n";
+    }
+    out << "}};\n";
+}
+
 }  // namespace
 
 std::string EnttPersistenceEmitter::canonical_schema_text(const DecoratedProgram& program) {
@@ -401,8 +454,11 @@ std::string EnttPersistenceEmitter::emit_schema_descriptor(const DecoratedProgra
     }
     out << "}};\n\n";
 
+    const auto unchecked = unchecked_traits(program);
+    emit_string_array(out, "generated_unchecked_traits", unchecked);
     for (const auto* archetype : model.archetypes) {
         const auto node = canonical_node_string(archetype->node);
+        emit_reachable_sets(out, array_name_for(node) + "_reachable", reachable_sets(program, archetype->node, unchecked));
         std::vector<std::string> baseline;
         baseline.reserve(archetype->baseline_traits.size());
         for (const auto& trait : archetype->baseline_traits) {
@@ -417,7 +473,8 @@ std::string EnttPersistenceEmitter::emit_schema_descriptor(const DecoratedProgra
     for (const auto* archetype : model.archetypes) {
         const auto node = canonical_node_string(archetype->node);
         out << "    {.node = \"" << node << "\", .baseline_traits = " << array_name_for(node)
-            << "_baseline, .parameters = " << array_name_for(node) << "_parameters},\n";
+            << "_baseline, .parameters = " << array_name_for(node) << "_parameters, .reachable_trait_sets = "
+            << array_name_for(node) << "_reachable},\n";
     }
     out << "}};\n\n";
 
@@ -430,6 +487,8 @@ std::string EnttPersistenceEmitter::emit_schema_descriptor(const DecoratedProgra
     out << "    .structs = generated_structs,\n";
     out << "    .enums = generated_enums,\n";
     out << "    .archetypes = generated_archetypes,\n";
+    out << "    .checks_trait_sets = " << (program.reachability.derived ? "true" : "false") << ",\n";
+    out << "    .unchecked_traits = generated_unchecked_traits,\n";
     out << "};\n\n";
     out << "}  // namespace cactus::runtime::entt_backend\n\n";
     return out.str();

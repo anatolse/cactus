@@ -17,9 +17,6 @@
 
 namespace {
 
-using cactus::runtime::entt_backend::CreationOrdinal;
-using Actor    = cross_domain_spatial_join_runtime__Actor;
-using Solid    = cross_domain_spatial_join_runtime__Solid;
 using Recorder = cross_domain_spatial_join_runtime__Recorder;
 
 void drive_frame(entt::registry& registry) {
@@ -27,11 +24,9 @@ void drive_frame(entt::registry& registry) {
     cactus::runtime::entt_backend::generated_drain_external_events(registry);
 }
 
-entt::entity create_entity(entt::registry& registry) {
-    const auto entity = registry.create();
-    registry.emplace<CreationOrdinal>(
-        entity, CreationOrdinal{.value = cactus::runtime::entt_backend::generated_next_creation_ordinal()});
-    return entity;
+void place(entt::registry& registry, auto occurrence) {
+    cactus::runtime::entt_backend::generated_inject_external_event(occurrence);
+    cactus::runtime::entt_backend::generated_drain_external_events(registry);
 }
 
 // 300 spheres against 300 boxes in a 20-unit cube; every fifth sphere is also
@@ -50,17 +45,23 @@ void populate_scene(entt::registry& registry, std::uint32_t seed) {
         return cactus::runtime::stdlib::math::quat::from_axis_angle(axis, angle(rng));
     };
     for (int tag = 1; tag <= 300; ++tag) {
-        const auto entity = create_entity(registry);
         const auto center = random_vec3(position);
-        registry.emplace<Actor>(entity, Actor{.pos = center, .radius = radius(rng), .tag = tag});
-        if (tag % 5 == 0) {
-            registry.emplace<Solid>(entity,
-                                    Solid{.pos = center, .size = random_vec3(extent), .rotation = random_rotation(), .tag = tag});
+        const auto size   = radius(rng);
+        if (tag % 5 != 0) {
+            place(registry, cross_domain_spatial_join_runtime__SpherePlacedEvent{.pos = center, .radius = size, .tag = tag});
+            continue;
         }
+        const auto extent_vec = random_vec3(extent);
+        place(registry,
+              cross_domain_spatial_join_runtime__SphereBoxPlacedEvent{
+                  .pos = center, .radius = size, .size = extent_vec, .rotation = random_rotation(), .tag = tag});
     }
     for (int tag = 301; tag <= 540; ++tag) {
-        registry.emplace<Solid>(create_entity(registry),
-                                Solid{.pos = random_vec3(position), .size = random_vec3(extent), .rotation = random_rotation(), .tag = tag});
+        const auto center     = random_vec3(position);
+        const auto extent_vec = random_vec3(extent);
+        place(registry,
+              cross_domain_spatial_join_runtime__BoxPlacedEvent{
+                  .pos = center, .size = extent_vec, .rotation = random_rotation(), .tag = tag});
     }
 }
 
@@ -109,11 +110,13 @@ TEST_CASE("A sphere touching only the rotated corner of a box is not missed", "[
     cactus::runtime::entt_backend::generated_load_project(registry);
     const auto rotation = cactus::runtime::stdlib::math::quat::from_axis_angle(
         Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F}, std::numbers::pi_v<float> / 4);
-    registry.emplace<Solid>(create_entity(registry),
-                            Solid{.pos = Vector3{}, .size = Vector3{.x = 2.0F, .y = 2.0F, .z = 2.0F}, .rotation = rotation, .tag = 7});
+    place(registry,
+          cross_domain_spatial_join_runtime__BoxPlacedEvent{
+              .pos = Vector3{}, .size = Vector3{.x = 2.0F, .y = 2.0F, .z = 2.0F}, .rotation = rotation, .tag = 7});
     // The rotated corner reaches x = sqrt(2); the unrotated box would end at x = 1.
-    registry.emplace<Actor>(create_entity(registry),
-                            Actor{.pos = Vector3{.x = 1.55F, .y = 0.0F, .z = 0.0F}, .radius = 0.2F, .tag = 1});
+    place(registry,
+          cross_domain_spatial_join_runtime__SpherePlacedEvent{
+              .pos = Vector3{.x = 1.55F, .y = 0.0F, .z = 0.0F}, .radius = 0.2F, .tag = 1});
 
     drive_frame(registry);
 

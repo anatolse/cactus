@@ -185,12 +185,33 @@ struct FieldAccess {
     friend bool operator==(const FieldAccess&, const FieldAccess&) = default;
 };
 
+// Serialized by numeric value: append new kinds, never reorder.
+enum class EntityTargetKind : std::uint8_t { Self, PairBinding, Named, Spawned, Unknown };
+
+// Which entity a structural command or projection acts on.
+struct EntityTarget {
+    EntityTargetKind kind = EntityTargetKind::Unknown;
+    std::size_t binding_index = 0;   // PairBinding
+    std::optional<SymbolId> symbol;  // Named: the entity; Spawned: the template
+
+    friend bool operator==(const EntityTarget&, const EntityTarget&) = default;
+};
+
 struct InferredHandlerCommand {
     HandlerCommandKind kind = HandlerCommandKind::Destroy;
     std::optional<SymbolId> target;
     std::optional<FieldAccess> patched;  // Add and Set: the fields it assigns (none for a marker trait)
+    std::vector<EntityTarget> entities;  // every entity class it acts on; empty for Spawn
 
     friend bool operator==(const InferredHandlerCommand&, const InferredHandlerCommand&) = default;
+};
+
+// A `project` of one trait and the entity classes it overlays.
+struct InferredProjection {
+    SymbolId trait;
+    std::vector<EntityTarget> entities;
+
+    friend bool operator==(const InferredProjection&, const InferredProjection&) = default;
 };
 
 /// Canonical identity of one executable handler. A handler is identified by
@@ -337,6 +358,11 @@ struct FieldWriteKind {
     friend bool operator==(const FieldWriteKind&, const FieldWriteKind&) = default;
 };
 
+[[nodiscard]] bool module_name_is_stdlib(const std::string& module_name);
+
+// Adds `target` to `targets`, which stays sorted and free of duplicates.
+void insert_entity_target(std::vector<EntityTarget>& targets, EntityTarget target);
+
 // Two writes to one field commute: both Accum, or both Join with one operator.
 [[nodiscard]] bool writes_commute(const FieldWriteKind& left, const FieldWriteKind& right);
 
@@ -386,12 +412,14 @@ struct HandlerContract {
     std::unordered_map<SymbolId, FieldAccess> observed_reads;
     std::vector<std::pair<const VarAssign*, AccumulationTarget>> accumulation_sites;
     std::unordered_set<SymbolId> projects;  // projected (transient) trait outputs
+    std::vector<InferredProjection> projections;  // `projects` with their targets, first-use order
     // Named-entity access (`Game.Match.over`); every entry is also in reads/writes above.
     NamedFieldTable named_reads;
     NamedFieldTable named_writes;
     std::vector<NamedRequirement> named_requirements;  // first-use order, no duplicates
     std::unordered_set<SymbolId> emits;
     std::vector<InferredHandlerCommand> commands;
+    std::vector<SymbolId> native_spawns;  // called stdlib functions that create entities, sorted
     std::unordered_set<std::string> effects;
     std::unordered_set<std::string> effect_acts;  // the domains in `effects` it acts on, not only observes
     IterationOrder iteration_order = IterationOrder::Free;
@@ -442,6 +470,8 @@ void record_accumulation(HandlerContract& contract,
                          const std::optional<std::string>& field,
                          FieldWriteKind kind,
                          bool own_row);
+// Records that the contract projects `trait` onto `entity`.
+void add_projection(HandlerContract& contract, const SymbolId& trait, EntityTarget entity);
 // A field read outside its own updates becomes General; a statement keeps its
 // AccumulationTarget only while its field stays Accum.
 void finalize_write_kinds(HandlerContract& contract);
@@ -626,6 +656,30 @@ struct ImportedEntity {
     friend bool operator==(const ImportedEntity&, const ImportedEntity&) = default;
 };
 
+// Trait sets are sorted by canonical id and leave out free traits.
+using ReachableTraitSet = std::vector<SymbolId>;
+
+struct OriginReachability {
+    ArchetypeNodeId node;
+    std::vector<ReachableTraitSet> trait_sets;  // sorted
+
+    friend bool operator==(const OriginReachability&, const OriginReachability&) = default;
+};
+
+// What the linked program can create: every trait set an entity can carry.
+struct ReachabilityFacts {
+    std::vector<ReachableTraitSet> trait_sets;  // union over origins, sorted
+    std::vector<OriginReachability> origins;    // sorted by canonical node string
+    // Traits that may be present or absent on any entity; `widened` is the
+    // subset made free only to bound the analysis.
+    std::vector<SymbolId> free_traits;
+    std::vector<SymbolId> widened_traits;
+    std::vector<HandlerIdentity> unreachable_handlers;  // sorted by canonical id
+    bool derived = false;                               // the pass ran on this program
+
+    friend bool operator==(const ReachabilityFacts&, const ReachabilityFacts&) = default;
+};
+
 struct DecoratedProgram {
     std::string module_name;  // this program's explicit declaring module name
     // Map key: simple local declaration name. Each declaration still carries a non-empty
@@ -647,6 +701,7 @@ struct DecoratedProgram {
     std::vector<RuleDependency> dependency_graph;
     std::vector<InferredHandlerContract> handler_contracts;
     ExecutionGraph execution_graph;
+    ReachabilityFacts reachability;  // set on the whole program, never stored in module artifacts
     ModulePersistenceMetadata persistence;
     std::vector<ResolvedSourceModule> source_modules;
     StringPool string_pool;
@@ -1585,10 +1640,11 @@ private:
     // The two contract mutations walk_expression_reads and walk_handler_body's
     // statement half both perform, shared so a `spawn`/`destroy` reached
     // through either produces one identical entry.
-    // An Add or Set without `patched` assigns every field.
+    // An Add or Set without `patched` assigns every field; `entity` is unset only for Spawn.
     static void add_contract_command(HandlerContract& contract,
                                      HandlerCommandKind kind,
                                      std::optional<SymbolId> target,
+                                     std::optional<EntityTarget> entity,
                                      const FieldAccess& patched = all_fields());
     void add_contract_call_effects(HandlerContract& contract, const std::optional<SymbolId>& callee) const;
 

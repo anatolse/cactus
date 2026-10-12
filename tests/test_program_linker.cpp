@@ -551,7 +551,7 @@ TEST_CASE("program_linker: schedule edge reasons survive the artifact and linkin
 
     ErrorReporter errors;
     Lexer lexer("module reasons\n"
-                "pub event tick\n"
+                "pub extern event tick\n"
                 "trait Score:\n"
                 "    var value: int\n"
                 "trait Transform:\n"
@@ -560,6 +560,9 @@ TEST_CASE("program_linker: schedule edge reasons survive the artifact and linkin
                 "    var value: float\n"
                 "entity Game:\n"
                 "    Score\n"
+                "entity Watcher:\n"
+                "    Transform\n"
+                "    Seen\n"
                 "rule First:\n"
                 "    on tick:\n"
                 "        Game[Score].value = 1\n"
@@ -723,6 +726,11 @@ TEST_CASE("program_linker: artifact link preserves an imported pair trait identi
     detector.contract.bound_reads = {BoundTraitAccess{.binding_index = 1, .trait = solid}};
     detector.contract.reads       = {solid};
     game_program.execution_graph.handlers.push_back(detector);
+    for (const auto& [name, trait] : {std::pair{"Ball", dynamic_body}, std::pair{"Wall", solid}}) {
+        game_program.persistence.archetypes.push_back(PersistenceArchetypeDescriptor{
+            .node            = ArchetypeNodeId{.archetype = linked_symbol(SymbolKind::Entity, "game", name)},
+            .baseline_traits = {PersistenceBaselineTrait{.trait = trait}}});
+    }
 
     ErrorReporter save_errors;
     ModuleArtifact artifact(save_errors);
@@ -1176,6 +1184,12 @@ TEST_CASE("program_linker: an importing module's handler runs before another mod
             "use std.core\n"
             "use lib\n"
             "use mid\n"
+            "entity Rig:\n"
+            "    lib.Body\n"
+            "    lib.Spot\n"
+            "    Clock\n"
+            "    Score\n"
+            "    mid.Marker\n"
             "rule Push:\n"
             "    each:\n"
             "        lib.Body as body\n"
@@ -1410,6 +1424,50 @@ std::set<std::tuple<std::string, std::string, ScheduleEdgeKind>> edge_directions
 
 }  // namespace
 
+TEST_CASE("program_linker: link records reachable archetypes across modules", "[linker][archetype-reachability]") {
+    ModuleSet modules(linker_build_dir() / "reachability_facts");
+    modules.compile("std.core", {}, core_source());
+    modules.compile("spawner",
+                    {"std.core"},
+                    "module spawner\n"
+                    "use std.core\n"
+                    "pub template Counter:\n"
+                    "    Score\n"
+                    "rule Unused:\n"
+                    "    each:\n"
+                    "        Seen\n"
+                    "    on tick:\n"
+                    "        spawn Counter()\n");
+    modules.compile("game",
+                    {"std.core", "spawner"},
+                    "module game\n"
+                    "use std.core\n"
+                    "use spawner\n"
+                    "entity Board:\n"
+                    "    Score\n"
+                    "rule Mark:\n"
+                    "    each:\n"
+                    "        Score\n"
+                    "    on tick:\n"
+                    "        add Seen\n");
+
+    ErrorReporter errors;
+    const auto linked = modules.link(errors);
+    REQUIRE(linked.has_value());
+    const auto score = make_symbol_id(SymbolKind::Trait, "std.core", "Score");
+    const auto seen  = make_symbol_id(SymbolKind::Trait, "std.core", "Seen");
+    CHECK(linked->reachability.trait_sets ==
+          std::vector<ReachableTraitSet>{{score}, {score, seen}});
+    REQUIRE(linked->reachability.origins.size() == 2);
+    CHECK(canonical_node_string(linked->reachability.origins[0].node) == "game.Board");
+    CHECK(canonical_node_string(linked->reachability.origins[1].node) == "spawner.Counter");
+    CHECK(linked->reachability.free_traits.empty());
+    CHECK(linked->reachability.unreachable_handlers.empty());
+
+    std::error_code ec;
+    fs::remove_all(linker_build_dir() / "reachability_facts", ec);
+}
+
 TEST_CASE("program_linker: a cross-module ambiguity is a link error", "[linker][handler-execution-graph][unorientable]") {
     ModuleSet modules(linker_build_dir() / "cross_module_ambiguity");
     modules.compile("std.core", {}, core_source());
@@ -1446,7 +1504,10 @@ TEST_CASE("program_linker: a cross-module ambiguity is a link error", "[linker][
 
 TEST_CASE("program_linker: moving a rule to another module keeps every edge direction",
           "[linker][handler-execution-graph][unorientable]") {
-    const std::string rules = "rule Count:\n"
+    const std::string rules = "entity Board:\n"
+                              "    Score\n"
+                              "    Seen\n"
+                              "rule Count:\n"
                               "    each:\n"
                               "        Score as s\n"
                               "    on tick:\n"
@@ -1487,6 +1548,9 @@ TEST_CASE("program_linker: moving a rule to another module keeps every edge dire
                   {"std.core"},
                   "module game\n"
                   "use std.core\n"
+                  "entity Board:\n"
+                  "    Score\n"
+                  "    Seen\n"
                   "rule Bonus:\n"
                   "    each:\n"
                   "        Score as s\n"

@@ -41,7 +41,17 @@ template Squad(id: int):
     Team:
         id = id
 
-# No entity has Enemy, so this runs once with the identity values.
+# Enemies arrive only when the host sends reinforcements.
+pub extern event Reinforcements
+
+template Raider:
+    Enemy
+
+rule Reinforce:
+    on Reinforcements:
+        spawn Raider()
+
+# Until reinforcements arrive no entity has Enemy, so this runs once with the identity values.
 rule CountEnemies:
     each: Enemy as enemy
     reduce:

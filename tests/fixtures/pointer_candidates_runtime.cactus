@@ -15,6 +15,12 @@ trait PointerEventLog:
     var release_count: int = 0
     var click_count: int = 0
 
+# The target the end-to-end tests route events to; the test gives it a window layout.
+entity Button:
+    pointer.PointerTarget
+    pointer.PointerState
+    PointerEventLog
+
 rule LogPointerEvents:
     each:
         PointerEventLog as log

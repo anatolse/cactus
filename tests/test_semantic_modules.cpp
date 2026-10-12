@@ -1821,15 +1821,21 @@ TEST_CASE("regular handler contracts infer canonical capabilities independently"
                                                     .target = symbol(SymbolKind::Template, "Actor")}) == 1);
     CHECK(std::ranges::find(
               movement.commands,
-              InferredHandlerCommand{
-                  .kind = HandlerCommandKind::Add, .target = symbol(SymbolKind::Trait, "Tag"), .patched = FieldAccess{}}) !=
+              InferredHandlerCommand{.kind     = HandlerCommandKind::Add,
+                                     .target   = symbol(SymbolKind::Trait, "Tag"),
+                                     .patched  = FieldAccess{},
+                                     .entities = {EntityTarget{.kind = EntityTargetKind::Self}}}) !=
           movement.commands.end());
     CHECK(std::ranges::find(
               movement.commands,
-              InferredHandlerCommand{.kind = HandlerCommandKind::Remove, .target = symbol(SymbolKind::Trait, "Tag")}) !=
+              InferredHandlerCommand{.kind     = HandlerCommandKind::Remove,
+                                     .target   = symbol(SymbolKind::Trait, "Tag"),
+                                     .entities = {EntityTarget{.kind = EntityTargetKind::Self}}}) !=
           movement.commands.end());
     CHECK(std::ranges::find(movement.commands,
-                            InferredHandlerCommand{.kind = HandlerCommandKind::Destroy, .target = std::nullopt}) !=
+                            InferredHandlerCommand{.kind     = HandlerCommandKind::Destroy,
+                                                   .target   = std::nullopt,
+                                                   .entities = {EntityTarget{.kind = EntityTargetKind::Self}}}) !=
           movement.commands.end());
 
     const auto& hit = contract_for("Movement", "Hit");
@@ -1869,9 +1875,10 @@ TEST_CASE("regular handler contracts infer set as a command, not a write", "[sem
     const auto& contract = decorated.handler_contracts.front();
     const auto health    = make_symbol_id(SymbolKind::Trait, "game.contracts", "Health");
     CHECK(contract.commands == std::vector<InferredHandlerCommand>{
-                                   {.kind    = HandlerCommandKind::Set,
-                                    .target  = health,
-                                    .patched = FieldAccess{.all = false, .fields = {"current"}}}});
+                                   {.kind     = HandlerCommandKind::Set,
+                                    .target   = health,
+                                    .patched  = FieldAccess{.all = false, .fields = {"current"}},
+                                    .entities = {EntityTarget{.kind = EntityTargetKind::Unknown}}}});
     CHECK_FALSE(contract.writes.contains(health));
     CHECK_FALSE(contract.reads.contains(health));
 }

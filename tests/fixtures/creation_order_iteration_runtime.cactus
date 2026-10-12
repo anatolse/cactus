@@ -5,8 +5,8 @@ use std.query as query
 
 # Rules without `order by:` whose result can see their iteration order. Each
 # log rolls the ids it visits into one integer, so the value records the
-# visit order. The test creates the Item entities itself, destroying one so
-# that storage order differs from creation order.
+# visit order. The host sends items in and out, removing one so that storage
+# order differs from creation order.
 
 trait Item:
     var id: int = 0
@@ -28,6 +28,28 @@ entity Board:
 template Child(origin: int):
     Offspring:
         origin = origin
+
+template Stock(id: int):
+    Item:
+        id = id
+
+pub extern event ItemArrived:
+    id: int
+
+pub extern event ItemLeft:
+    id: int
+
+rule Arrive:
+    on ItemArrived:
+        spawn Stock(id = ItemArrived.id)
+
+rule Leave:
+    each:
+        Item as it
+
+    on ItemLeft:
+        if it.id == ItemLeft.id:
+            destroy
 
 event Seen:
     id: int

@@ -873,7 +873,7 @@ TEST_CASE("ModuleArtifact: runtime declarations and handler graph round-trip", "
 }
 
 TEST_CASE("ModuleArtifact: artifact from before shape-generic spatial plans is rejected", "[artifact][spatial-join]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 32);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 33);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1238,7 +1238,7 @@ TEST_CASE("ModuleArtifact: set command capabilities round-trip", "[artifact][def
     CHECK(loaded->handler_contracts.front().commands == commands);
     REQUIRE(loaded->execution_graph.handlers.size() == 1);
     CHECK(loaded->execution_graph.handlers.front().contract.commands == commands);
-    CHECK(ModuleArtifact::CURRENT_VERSION == 32);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 33);
 
     fs::remove_all(build_dir, ec);
 }
@@ -1616,6 +1616,56 @@ TEST_CASE("ModuleArtifact: a contract's iteration order round-trips", "[artifact
     fs::remove_all(build_dir, ec);
 }
 
+TEST_CASE("ModuleArtifact: command and projection target classes and native spawns round-trip", "[artifact][archetype-reachability]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    const ResolvedHandlerTrigger trigger{.kind = HandlerTriggerKind::Event, .symbol = test_symbol(SymbolKind::Event, "tick")};
+    const auto dying = test_symbol(SymbolKind::Trait, "Dying");
+    InferredHandlerContract inferred;
+    inferred.rule    = test_symbol(SymbolKind::Rule, "Doom");
+    inferred.trigger = trigger;
+    inferred.commands = {
+        InferredHandlerCommand{.kind     = HandlerCommandKind::Add,
+                               .target   = dying,
+                               .patched  = FieldAccess{.all = true},
+                               .entities = {EntityTarget{.kind = EntityTargetKind::Self},
+                                            EntityTarget{.kind = EntityTargetKind::PairBinding, .binding_index = 1},
+                                            EntityTarget{.kind   = EntityTargetKind::Named,
+                                                         .symbol = test_symbol(SymbolKind::Entity, "Game")},
+                                            EntityTarget{.kind   = EntityTargetKind::Spawned,
+                                                         .symbol = test_symbol(SymbolKind::Template, "Enemy")},
+                                            EntityTarget{.kind = EntityTargetKind::Unknown}}},
+        InferredHandlerCommand{.kind = HandlerCommandKind::Spawn, .target = test_symbol(SymbolKind::Template, "Enemy")}};
+    inferred.projects    = {dying};
+    inferred.projections = {InferredProjection{.trait = dying, .entities = {EntityTarget{.kind = EntityTargetKind::Self}}}};
+    inferred.native_spawns = {test_symbol(SymbolKind::Func, "spawn_template")};
+
+    DecoratedProgram program;
+    program.handler_contracts.push_back(inferred);
+    program.execution_graph.handlers.push_back(HandlerNode{.identity = HandlerIdentity{.rule = inferred.rule, .trigger = trigger},
+                                                           .contract = static_cast<const HandlerContract&>(inferred)});
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    REQUIRE(artifact.save(program, "runtime.lib", build_dir));
+    std::string module_name;
+    const auto loaded = artifact.load(build_dir / "runtime.lib.cmod", module_name);
+
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->handler_contracts.size() == 1);
+    CHECK(loaded->handler_contracts[0].commands == inferred.commands);
+    CHECK(loaded->handler_contracts[0].projections == inferred.projections);
+    REQUIRE(loaded->execution_graph.handlers.size() == 1);
+    CHECK(loaded->execution_graph.handlers[0].contract.commands == inferred.commands);
+    CHECK(loaded->execution_graph.handlers[0].contract.projections == inferred.projections);
+    CHECK(loaded->execution_graph.handlers[0].contract.native_spawns == inferred.native_spawns);
+
+    fs::remove_all(build_dir, ec);
+}
+
 TEST_CASE("ModuleArtifact: write kinds, set patches, effect actions and channel edges round-trip",
           "[artifact][handler-contracts][write-kinds]") {
     auto build_dir = test_build_dir();
@@ -1712,7 +1762,7 @@ TEST_CASE("ModuleArtifact: every schedule edge reason round-trips", "[artifact][
 }
 
 TEST_CASE("ModuleArtifact: artifact from before field-level contracts is rejected", "[artifact][handler-contracts]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 32);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 33);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1939,7 +1989,7 @@ TEST_CASE("ModuleArtifact: unknown trigger kind is rejected", "[artifact][trait-
 }
 
 TEST_CASE("ModuleArtifact: artifact from before lifecycle triggers is rejected", "[artifact][trait-lifecycle]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 32);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 33);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2068,7 +2118,7 @@ TEST_CASE("ModuleArtifact: unknown group ordering direction is malformed", "[art
 }
 
 TEST_CASE("ModuleArtifact: artifact from before rule groups is rejected", "[artifact][rule-groups]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 32);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 33);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2093,7 +2143,7 @@ TEST_CASE("ModuleArtifact: artifact from before rule groups is rejected", "[arti
 }
 
 TEST_CASE("ModuleArtifact: artifact from before named-entity access is rejected", "[artifact][named-entity]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 32);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 33);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2206,12 +2256,17 @@ TEST_CASE("ModuleArtifact: a pub state round-trips and resolves from another mod
 
 TEST_CASE("ModuleArtifact: compact relations and contracts preserve canonical linked data", "[artifact][concise]") {
     const std::string prelude   = R"(module notation
-pub event tick
+pub extern event tick
 pub event Hit
 pub trait Body:
     var total: int = 0
 pub trait Zone
 pub trait Projected
+entity Player:
+    Body
+    Projected
+entity Area:
+    Zone
 rule Input:
     on tick:
         return
@@ -2447,7 +2502,7 @@ TEST_CASE("ModuleArtifact: a trait access expression round-trips", "[artifact][t
 }
 
 TEST_CASE("ModuleArtifact: artifact from before bracketed trait access is rejected", "[artifact][trait-access]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 32);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 33);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);

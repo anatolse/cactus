@@ -19,14 +19,19 @@ void drive_frame(entt::registry& registry) {
     cactus::runtime::entt_backend::generated_drain_external_events(registry);
 }
 
+// The example declares one actor per (mode, hp) case; Classify never changes either.
 Actor run_one_frame(Mode mode, int hp) {
     entt::registry registry;
     cactus::runtime::entt_backend::generated_init_project(registry);
     cactus::runtime::entt_backend::generated_load_project(registry);
-    const auto actor = registry.create();
-    registry.emplace<Actor>(actor, Actor{.mode = mode, .hp = hp});
     drive_frame(registry);
-    return registry.get<Actor>(actor);
+    for (const auto [entity, actor] : registry.view<Actor>().each()) {
+        if (actor.mode == mode && actor.hp == hp) {
+            return actor;
+        }
+    }
+    FAIL("the example declares no actor with this mode and hp");
+    return {};
 }
 
 }  // namespace

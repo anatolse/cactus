@@ -5,8 +5,8 @@ use std.collision.volume as vol
 
 # Each accelerated rule has a twin whose where: wraps the same test in
 # `== true`, which is not a recognized overlap predicate, so the twin runs the
-# plain product. The test fills the world with spheres and rotated boxes and
-# compares the twins' tuple logs.
+# plain product. The host fills the world with spheres and rotated boxes and
+# the test compares the twins' tuple logs.
 
 const:
     PROBE = 0.25
@@ -31,6 +31,59 @@ trait Recorder:
     var nearest_accelerated_count: int = 0
     var nearest_plain_hash: int = 0
     var nearest_plain_count: int = 0
+
+template Sphere(pos: vec3, radius: float, tag: int):
+    Actor:
+        pos = pos
+        radius = radius
+        tag = tag
+
+template Box(pos: vec3, size: vec3, rotation: quat, tag: int):
+    Solid:
+        pos = pos
+        size = size
+        rotation = rotation
+        tag = tag
+
+# A sphere that is also a box, so shared entities produce self tuples.
+template SphereBox(pos: vec3, radius: float, size: vec3, rotation: quat, tag: int):
+    use Sphere(pos = pos, radius = radius, tag = tag)
+    use Box(pos = pos, size = size, rotation = rotation, tag = tag)
+
+pub extern event SpherePlaced:
+    pos: vec3
+    radius: float
+    tag: int
+
+pub extern event BoxPlaced:
+    pos: vec3
+    size: vec3
+    rotation: quat
+    tag: int
+
+pub extern event SphereBoxPlaced:
+    pos: vec3
+    radius: float
+    size: vec3
+    rotation: quat
+    tag: int
+
+rule PlaceSphere:
+    on SpherePlaced:
+        spawn Sphere(pos = SpherePlaced.pos, radius = SpherePlaced.radius, tag = SpherePlaced.tag)
+
+rule PlaceBox:
+    on BoxPlaced:
+        spawn Box(pos = BoxPlaced.pos, size = BoxPlaced.size, rotation = BoxPlaced.rotation, tag = BoxPlaced.tag)
+
+rule PlaceSphereBox:
+    on SphereBoxPlaced:
+        spawn SphereBox(
+            pos = SphereBoxPlaced.pos,
+            radius = SphereBoxPlaced.radius,
+            size = SphereBoxPlaced.size,
+            rotation = SphereBoxPlaced.rotation,
+            tag = SphereBoxPlaced.tag)
 
 event AcceleratedHit:
     code: int

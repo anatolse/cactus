@@ -22,6 +22,18 @@ pub trait Actor:
     var bucket: int = 0
     var stamina: int = 0
 
+template Unit(mode: Mode = Mode.Idle, hp: int = FULL_HP):
+    Actor:
+        mode = mode
+        hp = hp
+
+entity Idler from Unit()
+entity Walker from Unit(mode = Mode.Walk)
+entity Runner from Unit(mode = Mode.Run)
+entity Fallen from Unit(hp = 0)
+entity Wounded from Unit(hp = 30)
+entity Steady from Unit(hp = 60)
+
 func stamina_cost(mode: Mode) int:
     var cost = 0
     match mode:

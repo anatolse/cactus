@@ -298,4 +298,44 @@ TEST_CASE("a successful restore request round-trips through the adapter and repo
     CHECK(outcome.slot == "slot1");
     CHECK(outcome.request_id == 9);
 }
+
+TEST_CASE("a record whose trait set no entity of its archetype can reach is rejected",
+          "[persistence][validation][restore][archetype-reachability]") {
+    World world;
+    auto snapshot = cactus::runtime::entt_backend::generated_capture_world_snapshot(world.registry);
+    REQUIRE(validate_document(schema, snapshot).empty());
+    const auto warrior = std::ranges::find(snapshot.entities, "persistence_references_runtime.Warrior",
+                                           &cactus::persistence::EntityRecord::archetype);
+    REQUIRE(warrior != snapshot.entities.end());
+    // Only a Prop ever carries Cosmetic.
+    warrior->traits.push_back(TraitRecord{.trait = "persistence_references_runtime.Cosmetic"});
+
+    const auto errors = validate_document(schema, snapshot);
+    const auto path   = "persistence_references_runtime.Warrior[" + std::to_string(warrior->id) + "]";
+    const auto illegal = std::ranges::find_if(
+        errors, [](const ValidationError& error) { return error.message.starts_with("illegal trait combination"); });
+    REQUIRE(illegal != errors.end());
+    CHECK(illegal->field_path == path);
+
+    const auto entities_before = world.registry.view<entt::entity>().size();
+    const auto outcome         = cactus::runtime::entt_backend::generated_restore_world(world.registry, snapshot);
+    CHECK_FALSE(outcome.ok);
+    CHECK(outcome.code == "invalid_data");
+    CHECK(world.registry.view<entt::entity>().size() == entities_before);
+}
+
+TEST_CASE("a record with a trait set its archetype can reach passes", "[persistence][validation][archetype-reachability]") {
+    World world;
+    auto snapshot      = cactus::runtime::entt_backend::generated_capture_world_snapshot(world.registry);
+    const auto warrior = std::ranges::find_if(snapshot.entities, [](const cactus::persistence::EntityRecord& record) {
+        return record.archetype == "persistence_references_runtime.Warrior" &&
+               find_trait(record, "persistence_references_runtime.Badge") == nullptr;
+    });
+    REQUIRE(warrior != snapshot.entities.end());
+    // Any Warrior can gain a Badge.
+    warrior->traits.push_back(TraitRecord{.trait = "persistence_references_runtime.Badge"});
+    CHECK(std::ranges::none_of(validate_document(schema, snapshot), [](const ValidationError& error) {
+        return error.message.starts_with("illegal trait combination");
+    }));
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

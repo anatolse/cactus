@@ -1,10 +1,13 @@
 module one_warning
 
-event tick:
+pub extern event tick:
     dt: float
 
 trait Enemy:
     var hp: int = 1
+
+entity Grunt:
+    Enemy
 
 rule P:
     pairs:

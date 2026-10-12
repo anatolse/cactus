@@ -4,6 +4,7 @@
 #include "common/render_pass_builtin_fields.hpp"
 #include "common/render_pass_intrinsics.hpp"
 #include "common/vector_binary_ops.hpp"
+#include "frontend/archetype_reachability.hpp"
 #include "frontend/execution_graph_scheduler.hpp"
 #include "frontend/symbol_identity.hpp"
 
@@ -25,12 +26,21 @@
 
 namespace cactus {
 
+bool module_name_is_stdlib(const std::string& module_name) {
+    return module_name == "std" || module_name.starts_with("std.");
+}
+
 namespace {
 
 constexpr const char* kStateSlotUseMessage = "a state slot can only be a `match` subject";
 
-bool module_name_is_stdlib(const std::string& module_name) {
-    return module_name == "std" || module_name.starts_with("std.");
+EntityTarget pair_binding_target(const HandlerContract& contract, const std::string& name) {
+    const auto& bindings = contract.pair_bindings;
+    const auto binding   = std::ranges::find(bindings, name, &RelationBinding::name);
+    return binding == bindings.end()
+               ? EntityTarget{.kind = EntityTargetKind::Unknown}
+               : EntityTarget{.kind          = EntityTargetKind::PairBinding,
+                              .binding_index = static_cast<std::size_t>(binding - bindings.begin())};
 }
 
 template <typename ResolvedDecl>
@@ -7235,8 +7245,9 @@ void SemanticAnalyzer::add_keep_effects(const RuleNode& rule,
     if (changed_traits(contract).contains(kept)) {
         errors_.error(handler.location, kept_trait_message(kept, rule.name, "its own handler"));
     }
+    const auto entity = pair_binding_target(contract, rule.keep->binding);
     for (const auto kind : {HandlerCommandKind::Add, HandlerCommandKind::Set, HandlerCommandKind::Remove}) {
-        add_contract_command(contract, kind, kept, declared_fields(find_resolved_trait(kept)));
+        add_contract_command(contract, kind, kept, entity, declared_fields(find_resolved_trait(kept)));
     }
 }
 
@@ -7352,6 +7363,9 @@ void SemanticAnalyzer::collect_extern_rule_dependency(const ExternRuleNode& rule
             record_write(contract, write, std::nullopt, nullptr, FieldWriteKind{});
         }
         contract.projects.insert(handler.resolved_projects.begin(), handler.resolved_projects.end());
+        for (const auto& projected : handler.resolved_projects) {
+            add_projection(contract, projected, EntityTarget{.kind = EntityTargetKind::Self});
+        }
         // An extern rule declares its body reads explicitly, so the only
         // inference left is over its order by: keys — walked with the shared
         // expression walker so a computed key folds every filter-alias read it
@@ -7384,7 +7398,13 @@ void SemanticAnalyzer::collect_extern_rule_dependency(const ExternRuleNode& rule
             const auto* declaration = command.kind == HandlerCommandKind::Add && command.resolved_target_id.has_value()
                                           ? find_resolved_trait(*command.resolved_target_id)
                                           : nullptr;
-            add_contract_command(contract, command.kind, command.resolved_target_id, declared_fields(declaration));
+            add_contract_command(contract,
+                                 command.kind,
+                                 command.resolved_target_id,
+                                 command.kind == HandlerCommandKind::Spawn
+                                     ? std::nullopt
+                                     : std::optional(EntityTarget{.kind = EntityTargetKind::Unknown}),
+                                 declared_fields(declaration));
         }
         contract.effects.insert(handler.resolved_effects.begin(), handler.resolved_effects.end());
         contract.effect_acts.insert(handler.resolved_effects.begin(), handler.resolved_effects.end());
@@ -7717,19 +7737,51 @@ FieldWriteKind write_kind(const HandlerContract& contract, const SymbolId& trait
     return found == fields->second.end() ? FieldWriteKind{} : found->second;
 }
 
+namespace {
+
+auto entity_target_key(const EntityTarget& target) {
+    return std::tuple(target.kind,
+                      target.binding_index,
+                      target.symbol.has_value() ? make_canonical_id(*target.symbol) : std::string{});
+}
+
+}  // namespace
+
+void add_projection(HandlerContract& contract, const SymbolId& trait, EntityTarget entity) {
+    auto& projections = contract.projections;
+    auto existing     = std::ranges::find(projections, trait, &InferredProjection::trait);
+    if (existing == projections.end()) {
+        projections.push_back(InferredProjection{.trait = trait});
+        existing = std::prev(projections.end());
+    }
+    insert_entity_target(existing->entities, std::move(entity));
+}
+
+void insert_entity_target(std::vector<EntityTarget>& targets, EntityTarget target) {
+    const auto position = std::ranges::lower_bound(targets, entity_target_key(target), {}, entity_target_key);
+    if (position == targets.end() || *position != target) {
+        targets.insert(position, std::move(target));
+    }
+}
+
 void SemanticAnalyzer::add_contract_command(HandlerContract& contract,
                                             HandlerCommandKind kind,
                                             std::optional<SymbolId> target,
+                                            std::optional<EntityTarget> entity,
                                             const FieldAccess& patched) {
-    const auto existing = std::ranges::find_if(contract.commands, [&](const InferredHandlerCommand& command) {
+    auto existing = std::ranges::find_if(contract.commands, [&](const InferredHandlerCommand& command) {
         return command.kind == kind && command.target == target;
     });
     const bool assigns = kind == HandlerCommandKind::Add || kind == HandlerCommandKind::Set;
     if (existing == contract.commands.end()) {
         contract.commands.push_back(InferredHandlerCommand{
             .kind = kind, .target = std::move(target), .patched = assigns ? std::optional(patched) : std::nullopt});
+        existing = std::prev(contract.commands.end());
     } else if (assigns) {
         merge_field_access(*existing->patched, patched);
+    }
+    if (entity.has_value()) {
+        insert_entity_target(existing->entities, std::move(*entity));
     }
 }
 
@@ -7737,6 +7789,14 @@ void SemanticAnalyzer::add_contract_call_effects(HandlerContract& contract,
                                                  const std::optional<SymbolId>& callee) const {
     if (!callee.has_value()) {
         return;
+    }
+    if (const auto callee_id = make_canonical_id(*callee); native_creation(callee_id) != nullptr) {
+        auto& spawns         = contract.native_spawns;
+        const auto canonical = [](const SymbolId& symbol) { return make_canonical_id(symbol); };
+        const auto position  = std::ranges::lower_bound(spawns, callee_id, {}, canonical);
+        if (position == spawns.end() || *position != *callee) {
+            spawns.insert(position, *callee);
+        }
     }
     const auto* function = find_resolved_func(*callee);
     if (function == nullptr || !function->is_extern) {
@@ -7818,7 +7878,7 @@ void SemanticAnalyzer::walk_expression_reads(  // NOLINT(readability-function-co
                     visit(*element, locals);
                 }
             } else if constexpr (std::is_same_v<E, SpawnExpr>) {
-                add_contract_command(contract, HandlerCommandKind::Spawn, node.resolved_template_id);
+                add_contract_command(contract, HandlerCommandKind::Spawn, node.resolved_template_id, std::nullopt);
                 for (const auto& argument : node.arguments.values) {
                     visit(*argument.value, locals);
                 }
@@ -7869,6 +7929,8 @@ struct SemanticAnalyzer::HandlerBodyVisitor {
     std::reference_wrapper<const std::function<bool(const ExprNode&, const LocalNames&)>> resolve_read;
     std::reference_wrapper<const std::function<void(const VarAssign&, const LocalNames&)>> handle_var_assign;
     std::reference_wrapper<const std::function<void(const SymbolId&)>> on_project_trait;
+    // Handler-wide: a name bound more than once maps to nullopt.
+    std::unordered_map<std::string, std::optional<SymbolId>>* spawned_locals;
 
     template <typename Node>
     void operator()(const Node& /*node*/) const {}
@@ -7876,9 +7938,53 @@ struct SemanticAnalyzer::HandlerBodyVisitor {
     void operator()(const LetStmt& node) const {
         visit_expr(*node.value, *locals);
         locals->insert(node.name);
+        const auto* spawn = std::get_if<SpawnExpr>(&node.value->expr);
+        bind_local(node.name, spawn != nullptr && !node.is_mutable ? spawn->resolved_template_id : std::nullopt);
+    }
+
+    // A local names one spawned template only while it has a single immutable binding.
+    void bind_local(const std::string& name, const std::optional<SymbolId>& spawned) const {
+        const auto [entry, inserted] = spawned_locals->try_emplace(name, spawned);
+        if (!inserted) {
+            entry->second.reset();
+        }
+    }
+
+    [[nodiscard]] static EntityTarget unknown_entity() {
+        return EntityTarget{.kind = EntityTargetKind::Unknown};
+    }
+
+    [[nodiscard]] EntityTarget entity_of(const std::optional<std::unique_ptr<ExprNode>>& target) const {
+        if (target.has_value()) {
+            return entity_of(**target);
+        }
+        return contract->domain_kind == HandlerDomainKind::Unary ? EntityTarget{.kind = EntityTargetKind::Self}
+                                                                  : unknown_entity();
+    }
+
+    [[nodiscard]] EntityTarget entity_of(const ExprNode& target) const {
+        if (std::holds_alternative<SelfExpr>(target.expr)) {
+            return entity_of(std::nullopt);
+        }
+        const auto* ident = std::get_if<IdentExpr>(&target.expr);
+        if (ident == nullptr) {
+            return unknown_entity();
+        }
+        if (ident->resolved_entity_id.has_value()) {
+            return EntityTarget{.kind = EntityTargetKind::Named, .symbol = ident->resolved_entity_id};
+        }
+        if (const auto local = spawned_locals->find(ident->name); local != spawned_locals->end()) {
+            return local->second.has_value() ? EntityTarget{.kind = EntityTargetKind::Spawned, .symbol = local->second}
+                                             : unknown_entity();
+        }
+        return contract->domain_kind == HandlerDomainKind::Pair ? pair_binding_target(*contract, ident->name)
+                                                                 : unknown_entity();
     }
 
     void operator()(const VarAssign& node) const {
+        if (spawned_locals->contains(node.name)) {
+            bind_local(node.name, std::nullopt);
+        }
         const auto form = classify_assignment(node);
         visit_expr(*form.walked, *locals);
         const auto target = assign_trait_target(node);
@@ -7905,7 +8011,7 @@ struct SemanticAnalyzer::HandlerBodyVisitor {
     }
 
     void operator()(const SpawnStmt& node) const {
-        add_contract_command(*contract, HandlerCommandKind::Spawn, node.resolved_template_id);
+        add_contract_command(*contract, HandlerCommandKind::Spawn, node.resolved_template_id, std::nullopt);
         for (const auto& argument : node.arguments.values) {
             visit_expr(*argument.value, *locals);
         }
@@ -7918,7 +8024,7 @@ struct SemanticAnalyzer::HandlerBodyVisitor {
     }
 
     void operator()(const DestroyStmt& node) const {
-        add_contract_command(*contract, HandlerCommandKind::Destroy, std::nullopt);
+        add_contract_command(*contract, HandlerCommandKind::Destroy, std::nullopt, entity_of(node.target_expr));
         if (node.target_expr.has_value()) {
             visit_expr(**node.target_expr, *locals);
         }
@@ -7928,6 +8034,7 @@ struct SemanticAnalyzer::HandlerBodyVisitor {
         add_contract_command(*contract,
                              HandlerCommandKind::Add,
                              node.resolved_trait_id,
+                             entity_of(node.target_expr),
                              declared_fields(node.resolved_trait_id.has_value()
                                                  ? analyzer->find_resolved_trait(*node.resolved_trait_id)
                                                  : nullptr));
@@ -7941,7 +8048,7 @@ struct SemanticAnalyzer::HandlerBodyVisitor {
     }
 
     void operator()(const RemoveTraitStmt& node) const {
-        add_contract_command(*contract, HandlerCommandKind::Remove, node.resolved_trait_id);
+        add_contract_command(*contract, HandlerCommandKind::Remove, node.resolved_trait_id, entity_of(node.target_expr));
         analyzer->record_state_writes(*contract, node.resolved_trait_id);
         if (node.target_expr.has_value()) {
             visit_expr(**node.target_expr, *locals);
@@ -7956,7 +8063,11 @@ struct SemanticAnalyzer::HandlerBodyVisitor {
         for (const auto& field : node.args) {
             add_field_access(patched, field.name, declaration);
         }
-        add_contract_command(*contract, HandlerCommandKind::Set, node.resolved_trait_id, patched);
+        add_contract_command(*contract,
+                             HandlerCommandKind::Set,
+                             node.resolved_trait_id,
+                             node.target_expr == nullptr ? unknown_entity() : entity_of(*node.target_expr),
+                             patched);
         if (node.target_expr != nullptr) {
             visit_expr(*node.target_expr, *locals);
         }
@@ -7968,6 +8079,7 @@ struct SemanticAnalyzer::HandlerBodyVisitor {
     void operator()(const ProjectTraitStmt& node) const {
         if (node.resolved_trait_id.has_value()) {
             on_project_trait(*node.resolved_trait_id);
+            add_projection(*contract, *node.resolved_trait_id, entity_of(node.target_expr));
         }
         for (const auto& field : node.args) {
             visit_expr(*field.value, *locals);
@@ -8001,6 +8113,7 @@ struct SemanticAnalyzer::HandlerBodyVisitor {
         visit_expr(*node.iterable, *locals);
         auto loop_locals = *locals;
         loop_locals.insert(node.var_name);
+        bind_local(node.var_name, std::nullopt);
         visit_stmts(node.body, std::move(loop_locals));
     }
 
@@ -8020,6 +8133,7 @@ struct SemanticAnalyzer::HandlerBodyVisitor {
             auto arm_locals = *locals;
             if (arm.alias.has_value()) {
                 arm_locals.insert(*arm.alias);
+                bind_local(*arm.alias, std::nullopt);
             }
             visit_stmts(arm.body, std::move(arm_locals));
         }
@@ -8051,6 +8165,7 @@ void SemanticAnalyzer::walk_handler_body(  // NOLINT(readability-function-cognit
             visit_child_overrides(child.children, locals);
         }
     };
+    std::unordered_map<std::string, std::optional<SymbolId>> spawned_locals;
     visit_stmts = [&](const std::vector<std::unique_ptr<StmtNode>>& stmts, LocalNames locals) {
         for (const auto& stmt : stmts) {
             std::visit(HandlerBodyVisitor{.analyzer              = this,
@@ -8061,7 +8176,8 @@ void SemanticAnalyzer::walk_handler_body(  // NOLINT(readability-function-cognit
                                           .visit_stmts           = visit_stmts,
                                           .resolve_read          = resolve_read,
                                           .handle_var_assign     = handle_var_assign,
-                                          .on_project_trait      = on_project_trait},
+                                          .on_project_trait      = on_project_trait,
+                                          .spawned_locals        = &spawned_locals},
                        stmt->stmt);
         }
     };

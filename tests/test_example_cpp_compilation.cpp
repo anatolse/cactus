@@ -492,7 +492,10 @@ TEST_CASE("integration: a form the backend cannot lower is a located error and w
             << "\n"
             << "rule TileFragment:\n"
             << "    on tile_pass.fragment as f:\n"
-            << "        f.frag_color = f.tint\n";
+            << "        f.frag_color = f.tint\n"
+            << "\n"
+            << "entity Floor:\n"
+            << "    Tile\n";
     }
 
     const auto result = run_command(repo_root(),

@@ -171,6 +171,14 @@ add_executable(test_semantic_keep test_semantic_keep.cpp)
 target_link_libraries(test_semantic_keep PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticKeepTests COMMAND test_semantic_keep)
 
+add_executable(test_semantic_command_targets test_semantic_command_targets.cpp)
+target_link_libraries(test_semantic_command_targets PRIVATE cactus_frontend Catch2::Catch2WithMain)
+add_test(NAME SemanticCommandTargetsTests COMMAND test_semantic_command_targets)
+
+add_executable(test_archetype_reachability test_archetype_reachability.cpp)
+target_link_libraries(test_archetype_reachability PRIVATE cactus_frontend Catch2::Catch2WithMain)
+add_test(NAME ArchetypeReachabilityTests COMMAND test_archetype_reachability)
+
 add_executable(test_semantic_states test_semantic_states.cpp)
 target_link_libraries(test_semantic_states PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticStatesTests COMMAND test_semantic_states)
@@ -566,6 +574,12 @@ cactus_add_headless_behavior_test(test_creation_order_iteration_headless_behavio
     CACTUS_SOURCE tests/fixtures/creation_order_iteration_runtime.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_creation_order_iteration_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_spawn_order_headless_behavior
+    CACTUS_SOURCE tests/fixtures/spawn_order_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_spawn_order_headless_behavior.cpp
 )
 
 cactus_add_headless_behavior_test(test_linearization_sample_headless_behavior

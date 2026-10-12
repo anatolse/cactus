@@ -406,6 +406,15 @@ void ModuleArtifact::write_symbol_vector(std::ostream& out, const std::vector<Sy
     }
 }
 
+void ModuleArtifact::write_entity_targets(std::ostream& out, const std::vector<EntityTarget>& targets) {
+    write_u32(out, static_cast<uint32_t>(targets.size()));
+    for (const auto& target : targets) {
+        write_u8(out, static_cast<uint8_t>(target.kind));
+        write_u64(out, static_cast<uint64_t>(target.binding_index));
+        write_optional_symbol_id(out, target.symbol);
+    }
+}
+
 void ModuleArtifact::write_field_access(std::ostream& out, const FieldAccess& access) {
     write_bool(out, access.all);
     write_u32(out, static_cast<uint32_t>(access.fields.size()));
@@ -535,6 +544,13 @@ void ModuleArtifact::write_contract(std::ostream& out, const HandlerContract& co
         if (command.patched.has_value()) {
             write_field_access(out, *command.patched);
         }
+        write_entity_targets(out, command.entities);
+    }
+    write_symbol_vector(out, contract.native_spawns);
+    write_u32(out, static_cast<uint32_t>(contract.projections.size()));
+    for (const auto& projection : contract.projections) {
+        write_symbol_id(out, projection.trait);
+        write_entity_targets(out, projection.entities);
     }
     write_string_set(out, contract.effects);
     write_string_set(out, contract.effect_acts);
@@ -1042,6 +1058,18 @@ std::vector<SymbolId> ModuleArtifact::read_symbol_vector(std::istream& in) {
     return values;
 }
 
+std::vector<EntityTarget> ModuleArtifact::read_entity_targets(std::istream& in) {
+    std::vector<EntityTarget> targets;
+    const auto count = read_u32(in);
+    for (uint32_t i = 0; i < count && in.good(); ++i) {
+        EntityTarget target{.kind = static_cast<EntityTargetKind>(read_u8(in))};
+        target.binding_index = static_cast<std::size_t>(read_u64(in));
+        target.symbol        = read_optional_symbol_id(in);
+        targets.push_back(std::move(target));
+    }
+    return targets;
+}
+
 FieldAccess ModuleArtifact::read_field_access(std::istream& in) {
     FieldAccess access;
     access.all       = read_bool(in);
@@ -1194,7 +1222,15 @@ HandlerContract ModuleArtifact::read_contract(std::istream& in) {
         if (read_bool(in)) {
             command.patched = read_field_access(in);
         }
+        command.entities = read_entity_targets(in);
         contract.commands.push_back(std::move(command));
+    }
+    contract.native_spawns      = read_symbol_vector(in);
+    const auto projection_count = read_u32(in);
+    for (uint32_t i = 0; i < projection_count && in.good(); ++i) {
+        InferredProjection projection{.trait = read_symbol_id(in)};
+        projection.entities = read_entity_targets(in);
+        contract.projections.push_back(std::move(projection));
     }
     contract.effects         = read_string_set(in);
     contract.effect_acts     = read_string_set(in);

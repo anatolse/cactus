@@ -3,7 +3,7 @@ module external_handler_linking
 pub extern event frame:
     dt: float
 
-event Reset:
+pub extern event Reset:
     value: int
 
 trait Position:

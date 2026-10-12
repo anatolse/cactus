@@ -1,6 +1,7 @@
 #include "common/codegen_error.hpp"
 #include "common/error_reporter.hpp"
 #include "common/template_metadata.hpp"
+#include "frontend/archetype_reachability.hpp"
 #include "frontend/lexer.hpp"
 #include "frontend/module_artifact.hpp"
 #include "frontend/module_resolver.hpp"
@@ -555,6 +556,9 @@ int main(int argc, char* argv[]) try {
     } else {
         cactus::SemanticAnalyzer analyzer(errors);
         decorated = analyzer.analyze(*root_prog);
+        if (!errors.has_errors()) {
+            cactus::derive_archetype_reachability(decorated, errors);
+        }
         print_errors(errors);
         if (errors.has_errors()) {
             return 1;

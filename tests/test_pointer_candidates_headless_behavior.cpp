@@ -53,6 +53,22 @@ entt::entity make_flat_box_target(entt::registry& registry, const Vector2 positi
     return entity;
 }
 
+// The fixture's Button, laid out as a 50x50 window at the origin.
+entt::entity declared_button(entt::registry& registry) {
+    const auto view = registry.view<pointer_candidates_runtime__PointerEventLog>();
+    REQUIRE(view.size() == 1);
+    const auto button = view.front();
+    registry.emplace<std_ui__ComputedLayout>(button,
+                                             std_ui__ComputedLayout{.position          = {.x = 0.0F, .y = 0.0F},
+                                                                    .size              = {.x = 50.0F, .y = 50.0F},
+                                                                    .effective_visible = true,
+                                                                    .effective_enabled = true,
+                                                                    .effective_opacity = 1.0F,
+                                                                    .clip_min          = {.x = 0.0F, .y = 0.0F},
+                                                                    .clip_max          = {.x = 800.0F, .y = 600.0F}});
+    return button;
+}
+
 }  // namespace
 
 TEST_CASE("std.pointer.top_target selects window candidates over world candidates", "[runtime][stdlib][pointer]") {
@@ -319,9 +335,7 @@ TEST_CASE("RoutePointer end-to-end: hover, capture, release-inside Click, and Po
     cactus::runtime::entt_backend::generated_load_project(registry);
     cactus_headless_test::dispatch_load_event(registry);
 
-    const auto target = make_window_target(registry, {.x = 0.0F, .y = 0.0F}, {.x = 50.0F, .y = 50.0F}, 0);
-    registry.emplace<std_pointer__PointerState>(target);
-    registry.emplace<pointer_candidates_runtime__PointerEventLog>(target);
+    const auto target = declared_button(registry);
 
     // Frame 1: pointer enters the target, no button activity yet.
     cactus_raylib_fake::set_mouse_position(Vector2{.x = 10.0F, .y = 10.0F});
@@ -377,9 +391,7 @@ TEST_CASE("RoutePointer end-to-end: release outside the target delivers PointerR
     cactus::runtime::entt_backend::generated_load_project(registry);
     cactus_headless_test::dispatch_load_event(registry);
 
-    const auto target = make_window_target(registry, {.x = 0.0F, .y = 0.0F}, {.x = 50.0F, .y = 50.0F}, 0);
-    registry.emplace<std_pointer__PointerState>(target);
-    registry.emplace<pointer_candidates_runtime__PointerEventLog>(target);
+    const auto target = declared_button(registry);
 
     cactus_raylib_fake::set_mouse_position(Vector2{.x = 10.0F, .y = 10.0F});
     cactus_raylib_fake::set_mouse_button_pressed_this_frame(0, true);

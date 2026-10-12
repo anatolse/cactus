@@ -1,6 +1,7 @@
 // NOLINTBEGIN(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)
 // -- Catch2 assertion macros intentionally expand through do-while and expression decomposition.
 #include "common/error_reporter.hpp"
+#include "frontend/archetype_reachability.hpp"
 #include "frontend/lexer.hpp"
 #include "frontend/parser.hpp"
 #include "frontend/semantic_analyzer.hpp"
@@ -23,7 +24,7 @@ struct Compilation {
     std::string code;
 };
 
-std::unique_ptr<Compilation> generate(const std::string& source) {
+std::unique_ptr<Compilation> generate(const std::string& source, bool derive_reachability = false) {
     auto unit = std::make_unique<Compilation>();
     Lexer lexer(source, "world.cactus", unit->errors);
     Parser parser(lexer.tokenize(), unit->errors);
@@ -32,6 +33,10 @@ std::unique_ptr<Compilation> generate(const std::string& source) {
     SemanticAnalyzer analyzer(unit->errors);
     unit->program = analyzer.analyze(unit->ast, ModuleImports{});
     REQUIRE_FALSE(unit->errors.has_errors());
+    if (derive_reachability) {
+        derive_archetype_reachability(unit->program, unit->errors);
+        REQUIRE_FALSE(unit->errors.has_errors());
+    }
     unit->code = CppEnttCodegen::generate(unit->program);
     return unit;
 }
@@ -174,5 +179,53 @@ entity Hud:
     const auto rebound = restore.find("::generated_rebind_named_slots(registry);");
     REQUIRE(rebound != std::string::npos);
     CHECK(publish < rebound);
+}
+TEST_CASE("the schema lists each node's reachable trait sets outside the fingerprint",
+          "[codegen-entt][persistence][restore][archetype-reachability]") {
+    const std::string base = R"(module world
+pub extern event frame:
+    dt: float
+phase tick:
+    from:
+        frame
+trait Health:
+    persist var current: int = 100
+trait Alerted
+state Mood:
+    Calm
+    Angry
+entity Boss:
+    Health
+    Mood.Calm
+)";
+    const auto plain   = generate(base, true);
+    const auto alerted = generate(base + R"(rule Alert:
+    each:
+        Health
+    on tick:
+        add Alerted
+)",
+                                  true);
+    CHECK(contains(plain->code, ".checks_trait_sets = true,"));
+    CHECK(contains(plain->code,
+                   "generated_unchecked_traits = {{\n    \"world.Mood\",\n    \"world.Mood.Angry\",\n    \"world.Mood.Calm\","));
+    CHECK(contains(plain->code, "generated_schema_world_Boss_reachable_0 = {{\n    \"world.Health\",\n}};"));
+    CHECK(contains(plain->code, ".reachable_trait_sets = generated_schema_world_Boss_reachable}"));
+    CHECK_FALSE(contains(plain->code, "generated_schema_world_Boss_reachable_1"));
+    CHECK(contains(alerted->code,
+                   "generated_schema_world_Boss_reachable_0 = {{\n    \"world.Alerted\",\n    \"world.Health\",\n}};"));
+    CHECK(contains(alerted->code, "generated_schema_world_Boss_reachable_1 = {{\n    \"world.Health\",\n}};"));
+
+    const auto fingerprint = [](const std::string& code) {
+        const auto at = code.find(".fingerprint = ");
+        REQUIRE(at != std::string::npos);
+        return code.substr(at, code.find(',', at) - at);
+    };
+    CHECK(fingerprint(plain->code) == fingerprint(alerted->code));
+}
+
+TEST_CASE("a schema without derived reachability checks no trait sets", "[codegen-entt][persistence][restore]") {
+    const auto unit = generate(kSource);
+    CHECK(contains(unit->code, ".checks_trait_sets = false,"));
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

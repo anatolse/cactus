@@ -89,6 +89,11 @@ extern rule SpriteRenderer:
         effects:
             graphics
 
+extern rule Footsteps:
+    on EntityMoved:
+        emits:
+            SoundRequested
+
 extern rule AudioOutput:
     on SoundRequested:
         effects:

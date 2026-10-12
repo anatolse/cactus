@@ -182,6 +182,35 @@ void detect_hierarchy_cycles(const Snapshot& snapshot, std::vector<ValidationErr
 
 }  // namespace
 
+void validate_trait_set(const SchemaDescriptor& schema,
+                        const ArchetypeDescriptor& archetype,
+                        const EntityRecord& record,
+                        const std::string& path,
+                        std::vector<ValidationError>& errors) {
+    if (!schema.checks_trait_sets) {
+        return;
+    }
+    std::vector<std::string_view> traits(archetype.baseline_traits.begin(), archetype.baseline_traits.end());
+    for (const auto& trait_record : record.traits) {
+        if (trait_record.present) {
+            traits.emplace_back(trait_record.trait);
+        } else {
+            std::erase(traits, std::string_view{trait_record.trait});
+        }
+    }
+    std::erase_if(traits, [&](std::string_view trait) { return std::ranges::binary_search(schema.unchecked_traits, trait); });
+    std::ranges::sort(traits);
+    const auto duplicates = std::ranges::unique(traits);
+    traits.erase(duplicates.begin(), duplicates.end());
+    const bool reachable = std::ranges::any_of(archetype.reachable_trait_sets, [&](std::span<const std::string_view> set) {
+        return std::ranges::equal(set, traits);
+    });
+    if (!reachable) {
+        errors.push_back({.field_path = path,
+                          .message    = "illegal trait combination: no entity of this archetype can carry these traits"});
+    }
+}
+
 std::vector<ValidationError> validate_document(const SchemaDescriptor& schema, const Snapshot& snapshot) {
     std::vector<ValidationError> errors;
     if (!schema_accepts(schema, snapshot)) {
@@ -226,6 +255,7 @@ std::vector<ValidationError> validate_document(const SchemaDescriptor& schema, c
             }
             validate_trait_fields(schema, *trait_desc, trait_record, trait_path, known_ids, errors);
         }
+        validate_trait_set(schema, *archetype_desc, record, base, errors);
     }
 
     detect_hierarchy_cycles(snapshot, errors);

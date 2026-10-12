@@ -219,6 +219,9 @@ struct ArchetypeDescriptor {
     std::string_view node;
     std::span<const std::string_view> baseline_traits;
     std::span<const std::string_view> parameters;
+    // Every trait set an entity of this node can reach, each sorted and without
+    // the schema's unchecked traits.
+    std::span<const std::span<const std::string_view>> reachable_trait_sets;
 };
 
 struct SchemaDescriptor {
@@ -230,6 +233,10 @@ struct SchemaDescriptor {
     std::span<const StructDescriptor> structs;
     std::span<const EnumDescriptor> enums;
     std::span<const ArchetypeDescriptor> archetypes;
+    // Set when the program's reachable trait sets are known; restore then
+    // rejects a record whose trait set is not one of its node's.
+    bool checks_trait_sets = false;
+    std::span<const std::string_view> unchecked_traits;  // sorted: free, state and Parent traits
 };
 
 [[nodiscard]] const TraitDescriptor* find_trait_descriptor(const SchemaDescriptor& schema, std::string_view trait);

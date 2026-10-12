@@ -17,7 +17,6 @@ using Stats   = named_entity_access__Stats;
 using Control = named_entity_access__Control;
 using Probe   = named_entity_access__Probe;
 using Enemy   = named_entity_access__Enemy;
-using Coin    = named_entity_access__Coin;
 using Label   = named_entity_access__Label;
 using Health  = named_entity_access__Health;
 using Rival   = named_entity_access__Rival;
@@ -150,12 +149,9 @@ TEST_CASE("accumulating into a named field over many entities is deterministic",
     World world;
     int expected = 0;
     for (int value = 1; value <= 100; ++value) {
-        const auto coin = world.registry.create();
-        world.registry.emplace<Coin>(coin, Coin{.value = value});
-        world.registry.emplace<cactus::runtime::entt_backend::CreationOrdinal>(
-            coin,
-            cactus::runtime::entt_backend::CreationOrdinal{
-                .value = cactus::runtime::entt_backend::generated_next_creation_ordinal()});
+        cactus::runtime::entt_backend::generated_inject_external_event(
+            named_entity_access__CoinDroppedEvent{.value = value});
+        cactus::runtime::entt_backend::generated_drain_external_events(world.registry);
         expected += value;
     }
     drive_frame(world.registry);

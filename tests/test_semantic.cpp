@@ -4703,8 +4703,10 @@ TEST_CASE("Contract fields: set stays a command with no field access", "[semanti
         "        set Health on aim.other:\n"
         "            hp = 5\n");
     const auto health = test_trait("Health");
-    const InferredHandlerCommand set_health{
-        .kind = HandlerCommandKind::Set, .target = health, .patched = fields_of({"hp"})};
+    const InferredHandlerCommand set_health{.kind     = HandlerCommandKind::Set,
+                                            .target   = health,
+                                            .patched  = fields_of({"hp"}),
+                                            .entities = {EntityTarget{.kind = EntityTargetKind::Unknown}}};
     CHECK(std::ranges::find(contract.commands, set_health) != contract.commands.end());
     CHECK_FALSE(contract.reads.contains(health));
     CHECK_FALSE(contract.writes.contains(health));

@@ -346,6 +346,8 @@ TEST_CASE("integration: imported input phase handlers preserve linked declaratio
         "        frame\n"
         "pub trait EditorNavState:\n"
         "    var moves: float\n"
+        "entity Navigator:\n"
+        "    EditorNavState\n"
         "rule EditorNav:\n"
         "    each:\n"
         "        EditorNavState\n"
@@ -388,6 +390,8 @@ TEST_CASE("integration: imported input phase handlers preserve linked declaratio
         "\n"
         "trait PlayerState:\n"
         "    var moves: float\n"
+        "entity Player:\n"
+        "    PlayerState\n"
         "rule GameplayInput:\n"
         "    each:\n"
         "        PlayerState\n"
@@ -724,6 +728,9 @@ static std::optional<DecoratedProgram> link_with_stdlib(const std::string& root_
     ErrorReporter link_errors;
     ProgramLinker linker(link_errors);
     auto merged = linker.link(artifact_paths);
+    for (const auto& diag : link_errors.diagnostics()) {
+        UNSCOPED_INFO(diag.message);
+    }
     REQUIRE_FALSE(link_errors.has_errors());
     REQUIRE(merged.has_value());
     merged->ast         = &merged_ast_out;
@@ -814,6 +821,7 @@ TEST_CASE("integration: a handler on a dotted cross-module event trigger resolve
     const std::string source =
         "module dotted_event_app\n"
         "use std.pointer as pointer\n"
+        "use std.ui as ui\n"
         "\n"
         "trait ClickCounter:\n"
         "    var count: int = 0\n"
@@ -861,11 +869,15 @@ TEST_CASE("integration: every merged-AST event has a linked resolved event", "[i
     const std::string source =
         "module event_lookup_app\n"
         "use std.pointer as pointer\n"
+        "use std.ui as ui\n"
         "\n"
         "event Turn:\n"
         "    rotation: quat\n"
         "\n"
         "trait Marker\n"
+        "\n"
+        "entity Spot:\n"
+        "    Marker\n"
         "\n"
         "rule Listen:\n"
         "    each:\n"
@@ -968,7 +980,7 @@ TEST_CASE("integration: proposal frame graph and contracted handlers lower end t
     REQUIRE_FALSE(errors.has_errors());
     REQUIRE(decorated.has_value());
     REQUIRE(decorated->execution_graph.phases.size() == 5);
-    REQUIRE(decorated->execution_graph.handlers.size() == 4);
+    REQUIRE(decorated->execution_graph.handlers.size() == 5);
 
     const auto handler = [](const std::string& rule, HandlerTriggerKind kind, const std::string& trigger) {
         return HandlerIdentity{
@@ -1041,6 +1053,14 @@ TEST_CASE("integration: collider queries lower to runtime kernels over program-b
         "    var hits: int = 0\n"
         "trait Wall\n"
         "event Scraped\n"
+        "entity Shot:\n"
+        "    Bullet\n"
+        "    tv.WorldTransform\n"
+        "entity Barrier:\n"
+        "    Wall\n"
+        "    tv.WorldTransform\n"
+        "    physics.Collider\n"
+        "    physics.BoxCollider\n"
         "rule MoveBullets:\n"
         "    pairs:\n"
         "        bullet:\n"

@@ -1,0 +1,41 @@
+module spawn_order_runtime
+
+use std.core
+
+# Two spawners feed a rule whose result depends on row order. `after:` fixes
+# their order, so the coin is always created first and the rule always picks it.
+
+trait Pickup:
+    var kind: int = 0
+
+trait Winner:
+    var kind: int = 0
+
+template Coin:
+    Pickup:
+        kind = 1
+
+template Gem:
+    Pickup:
+        kind = 2
+
+entity Board:
+    Winner
+
+rule SpawnCoins:
+    on load:
+        spawn Coin()
+
+rule SpawnGems:
+    after:
+        SpawnCoins
+    on load:
+        spawn Gem()
+
+rule PickFirst:
+    each:
+        Pickup as p
+    limit: 1
+
+    on tick:
+        Board[Winner].kind = p.kind

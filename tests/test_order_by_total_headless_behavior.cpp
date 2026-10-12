@@ -13,7 +13,6 @@
 
 namespace {
 
-using Score = order_by_total_runtime__Score;
 using Log   = order_by_total_runtime__Log;
 
 struct World {
@@ -24,14 +23,19 @@ struct World {
         cactus::runtime::entt_backend::generated_load_project(registry);
     }
 
-    entt::entity add(int id, float v) {
-        const auto entity = registry.create();
-        registry.emplace<Score>(entity, Score{.id = id, .v = v});
-        registry.emplace<cactus::runtime::entt_backend::CreationOrdinal>(
-            entity,
-            cactus::runtime::entt_backend::CreationOrdinal{
-                .value = cactus::runtime::entt_backend::generated_next_creation_ordinal()});
-        return entity;
+    void add(int id, float v) {
+        cactus::runtime::entt_backend::generated_inject_external_event(order_by_total_runtime__ScoredEvent{.id = id, .v = v});
+        cactus::runtime::entt_backend::generated_drain_external_events(registry);
+    }
+
+    entt::entity find(int id) {
+        for (const auto [entity, score] : registry.view<order_by_total_runtime__Score>().each()) {
+            if (score.id == id) {
+                return entity;
+            }
+        }
+        FAIL("no score with this id");
+        return entt::null;
     }
 
     const Log& run_frame() {
@@ -80,10 +84,10 @@ TEST_CASE("signed zero sort keys tie in creation order", "[runtime][codegen-entt
 TEST_CASE("equal sort keys follow creation order, not pool order", "[runtime][codegen-entt][rule-order-by]") {
     // Destroying the first entity moves the last one into its pool slot, so pool order is 3, 2.
     World world;
-    const auto removed = world.add(1, 5.0F);
+    world.add(1, 5.0F);
     world.add(2, 5.0F);
     world.add(3, 5.0F);
-    world.registry.destroy(removed);
+    world.registry.destroy(world.find(1));
     const auto& log = world.run_frame();
     CHECK(log.ascending == 23);
     CHECK(log.descending == 23);

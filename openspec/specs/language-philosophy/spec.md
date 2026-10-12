@@ -140,6 +140,18 @@ Three error classes SHALL be ruled out by construction in authored code, and no 
 - **WHEN** a combination of declarations has no defined runtime meaning
 - **THEN** the compiler reports a source-located error instead of accepting it and doing nothing at runtime
 
+#### Scenario: A rule that can never match is a compile error
+- **WHEN** a rule outside the stdlib names traits in `each:` that no entity can ever carry together, given every template, named entity, `add`, `remove` and spawn in the program
+- **THEN** the compiler reports an error at the rule instead of compiling a rule that never runs
+
+#### Scenario: A filter or trigger that can never act is a compile error
+- **WHEN** a rule outside the stdlib has a `without:` trait no matching entity can carry, or a trigger nothing in the program produces
+- **THEN** the compiler reports an error at that filter or trigger
+
+#### Scenario: Library code is judged by its own consistency
+- **WHEN** a stdlib rule is consistent on its own but the program never reaches it
+- **THEN** the program compiles and the rule is dropped, because importing a library is not a meaningless declaration
+
 #### Scenario: No authored construct manages memory
 - **WHEN** an author stores a struct, list or string in a trait field, local or event
 - **THEN** no authored statement allocates or frees it, and changing the copy never changes another value
@@ -374,3 +386,4 @@ The known gaps are:
 #### Scenario: A feature may not add a gap
 - **WHEN** a proposed feature would let the compiler accept a definition whose result depends on source position
 - **THEN** the proposal is revised so the compiler rejects it or gives it one defined meaning
+

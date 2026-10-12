@@ -1,9 +1,7 @@
 ## Purpose
 
 Define format-independent capture of live archetype instances, persistent values, construction data, and entity relationships into a typed snapshot document.
-
 ## Requirements
-
 ### Requirement: Explicit fields determine entity eligibility
 A live entity SHALL be captured if a trait in its originating archetype's declared trait set declares at least one persist field, or if a currently attached trait declares one. Construction overrides, marker traits, and `std.core.KeepOnLoad` SHALL NOT grant eligibility. Archetype eligibility SHALL survive removal of its persistence-bearing traits. No record SHALL be emitted for an ineligible entity.
 
@@ -174,7 +172,7 @@ Restore SHALL reproduce included parent relationships, including runtime reparen
 - **THEN** creation-order-based selection among restored entities retains its previous relative order
 
 ### Requirement: Documents are fully validated before the world changes
-Restore SHALL validate a decoded document before mutating the active world: canonical schema descriptor compatibility, known archetypes, traits, and fields, value kinds and ranges, construction completeness, unique document identities, legal trait combinations, absence of hierarchy cycles, resolvable references, and configured size and depth limits. Diagnostics SHALL accumulate and identify field paths rather than stopping at the first problem. Changed archetype defaults, renames, and field type changes SHALL fail compatibility unless an adapter explicitly migrated the document to the current descriptor.
+Restore SHALL validate a decoded document before mutating the active world: canonical schema descriptor compatibility, known archetypes, traits, and fields, value kinds and ranges, construction completeness, unique document identities, legal trait combinations (every record's trait set is a reachable trait set of its own archetype node in the running program; states, `Parent` and traits that any entity may carry or lack are not compared), absence of hierarchy cycles, resolvable references, and configured size and depth limits. Diagnostics SHALL accumulate and identify field paths rather than stopping at the first problem. Changed archetype defaults, renames, and field type changes SHALL fail compatibility unless an adapter explicitly migrated the document to the current descriptor.
 
 #### Scenario: Incompatible baseline is rejected
 - **WHEN** a document was captured against a different archetype default descriptor
@@ -183,6 +181,10 @@ Restore SHALL validate a decoded document before mutating the active world: cano
 #### Scenario: Malformed document is diagnosed by field path
 - **WHEN** a document carries a value of the wrong kind and a duplicate identity
 - **THEN** restore reports both with their field paths and leaves the world unchanged
+
+#### Scenario: Record with an unreachable trait set is rejected
+- **WHEN** an adapter rewrites a document so a record carries a trait set that is not a reachable archetype of the running program
+- **THEN** restore reports the record's path as an illegal trait combination and leaves the world unchanged
 
 ### Requirement: Restore publishes an atomic replacement without gameplay creation effects
 Successful restore SHALL replace the complete active ECS world, including previously live ephemeral entities and entities carrying `std.core.KeepOnLoad`, with the reconstructed snapshot. An empty compatible document SHALL produce an empty world. Reconstruction SHALL be staged: validation, allocation, and runtime resource preparation failures SHALL leave the previous world and its usable resources intact and SHALL release staged resources. No staged entity or resource SHALL be observable before publication. Ordinary spawn, destroy, load, and unload gameplay handlers SHALL NOT run as a consequence of replacement, while backend resource preparation and cleanup SHALL still occur. Completion SHALL be observable only after references, named bindings, and runtime resources are usable.
@@ -209,3 +211,4 @@ Publication SHALL reset runtime state that holds entity handles from the replace
 #### Scenario: Ephemeral content is rebuilt by gameplay, not resurrected
 - **WHEN** a restored world contains no camera because no camera archetype was eligible
 - **THEN** gameplay can rebuild it in response to the restore outcome event, and nothing from the replaced world persists implicitly
+

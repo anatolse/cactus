@@ -67,7 +67,7 @@ Host-injected external events (`pub extern event`, e.g. `frame`) originate outsi
 
 #### Scenario: A consumed trigger with no producer of any kind is a distinguishable graph state
 - **WHEN** a handler's trigger is neither `frame`-like extern, commit-synthesized, scheduler-boundary, nor the target of any handler's `emits`
-- **THEN** the graph can identify that the trigger has zero producer edges of any kind (this requirement defines the representation only; a validation pass that rejects this state is not part of this change)
+- **THEN** the graph can identify that the trigger has zero producer edges of any kind
 
 ### Requirement: Host external-event source producers
 The graph SHALL represent a host external-event source producer for every consumed event declared `pub extern`, attributing the event's injection to the embedding application rather than to any handler, commit step, or scheduler boundary. An event that is not declared external SHALL NOT receive a host external-event source producer.
@@ -350,3 +350,27 @@ When two handlers conflict and no meaningful orientation from "Contract conflict
 #### Scenario: Cross-module ambiguity is a link error
 - **WHEN** two modules that don't import each other each have a rule that assigns `Score.value` in `tick`
 - **THEN** linking the program fails with an unorientable-conflict error naming both handlers
+
+### Requirement: A trigger with no producer is a compile error
+After linking, the compiler SHALL report an error for every handler in a non-stdlib module whose trigger has no producer of any kind. Producers SHALL be counted only from reachable handlers and reachable archetypes: an `emits:` in an unreachable handler produces nothing, and `on added T` / `on removed T` has a commit-synthesized producer only when a reachable archetype can gain or lose `T`. The diagnostic SHALL name the handler and its trigger. A stdlib handler with no producer SHALL NOT be an error; it is recorded as unreachable, like a stdlib rule whose domain matches nothing.
+
+#### Scenario: Event nobody emits
+- **WHEN** a user rule declares `on Exploded` and no reachable handler emits `Exploded` and `Exploded` is not `extern`
+- **THEN** compilation fails with an error naming the handler and `Exploded`
+
+#### Scenario: Lifecycle trigger on a trait nothing gains
+- **WHEN** a user rule declares `on added Dying` and no reachable archetype can gain `Dying`
+- **THEN** compilation fails with an error naming the handler and `added Dying`
+
+#### Scenario: Extern event always has a producer
+- **WHEN** a user rule declares `on frame` and `frame` is `pub extern event`
+- **THEN** no missing-producer error is reported
+
+#### Scenario: Emitter that is itself dead does not count
+- **WHEN** the only handler emitting `Hit` is a stdlib handler recorded as unreachable, and a user rule declares `on Hit`
+- **THEN** compilation fails with a missing-producer error for the user handler
+
+#### Scenario: Unproduced stdlib trigger is not an error
+- **WHEN** a stdlib rule declares `on SaveRequested` and the program never emits `SaveRequested`
+- **THEN** compilation succeeds and the stdlib handler is recorded as unreachable
+

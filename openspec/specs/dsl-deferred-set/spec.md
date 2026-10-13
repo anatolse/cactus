@@ -26,7 +26,7 @@ The language SHALL support a `set` statement inside rule event handler bodies wi
 - **THEN** the compiler accepts it as an ordinary identifier
 
 ### Requirement: `set` statement validation
-The compiler SHALL reject a `set` statement when the trait is unknown, the trait declares no fields, a named field is not declared on the trait, a value's type does not match its field, the target expression is not of type `entity_id`, the statement appears outside a rule event handler body, or the program does not use the graph-driven phase scheduler.
+The compiler SHALL reject a `set` statement when the trait is unknown, the trait declares no fields, a named field is not declared on the trait, a named field is declared `let`, a value's type does not match its field, the target expression is not of type `entity_id`, the statement appears outside a rule event handler body, or the program does not use the graph-driven phase scheduler. A `set` that names a `let` field SHALL be reported with a diagnostic that names the trait and the field and suggests `add <Trait>:` or declaring the field `var`; every such field in the block SHALL be reported.
 
 #### Scenario: Unknown field is rejected
 - **WHEN** `set Health on target:` assigns `armor = 5` and `Health` declares no `armor` field
@@ -35,6 +35,14 @@ The compiler SHALL reject a `set` statement when the trait is unknown, the trait
 #### Scenario: Marker trait is rejected
 - **WHEN** `set Frozen on target:` names a trait declared without fields
 - **THEN** the compiler reports an error that `set` needs a trait with fields
+
+#### Scenario: Let field is rejected
+- **WHEN** `Health` declares `let maximum: int` and `set Health on target:` assigns `maximum = 900`
+- **THEN** the compiler reports an error naming `Health.maximum` that suggests `add Health:` or declaring `maximum` as `var`
+
+#### Scenario: Var fields beside a let field are accepted
+- **WHEN** `Health` declares `let maximum: int` and `var current: int`, and `set Health on target:` assigns only `current = 42`
+- **THEN** compilation succeeds
 
 #### Scenario: Non-entity target is rejected
 - **WHEN** `set Health on 5:` is written

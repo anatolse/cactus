@@ -1091,3 +1091,50 @@ The compiler SHALL record a diagnostic at most once for a given level, source lo
 #### Scenario: Same message at two locations is kept twice
 - **WHEN** two different lines each contain `let z = if a.hp: 1 else: 2`
 - **THEN** the semantic analyzer reports two errors, one per line
+
+### Requirement: A `let` trait field is written only when its trait value is made
+A trait field declared with `let` SHALL get its value only when a value of its trait is made: from the field default, an entity or template body, a template argument, a `spawn` override block, a `children:` override block, an `add T:` block (whether it attaches `T` or replaces a carried `T` whole), or a `project T:` block. The compiler SHALL reject every other write to a `let` trait field, in every handler form and through every target spelling: a bare implicit filter field, a filter alias, a lifecycle-trigger alias (`on added T as x`), a trait-match or state-match alias, a named entity access, and a pair-binding access `b[T].f` (including a provably-one `limit: … per` binding and a retained `reduce per` binding). Plain assignment, every compound assignment (`+=`, `-=`, `*=`, `/=`), and a member write into a `let` field of vector or struct type (`h.pos.x = 1.0`) SHALL all be rejected. The diagnostic SHALL name the trait and the field and suggest giving the value with `add <Trait>:` or declaring the field `var`. Reading a `let` field, selecting or excluding its trait, and reacting to its trait with lifecycle triggers SHALL be unaffected. Every write the compiler rejects SHALL be reported; one rejected write SHALL NOT hide later diagnostics.
+
+#### Scenario: Assignment through a filter alias is rejected
+- **WHEN** trait `Hp` declares `let max: int = 10` and a rule with `each: Hp as h` assigns `h.max = 5`
+- **THEN** compilation fails with a diagnostic naming `Hp.max` that suggests `add Hp:` or declaring `max` as `var`
+
+#### Scenario: Compound assignment is rejected
+- **WHEN** a handler writes `h.max += 1` on a `let` field `max`
+- **THEN** compilation fails with the same diagnostic
+
+#### Scenario: Implicit filter field write is rejected
+- **WHEN** a rule selects `Hp` without an alias and a handler assigns the bare field `max = 5`
+- **THEN** compilation fails with a diagnostic naming `Hp.max`
+
+#### Scenario: Member write into a let vector field is rejected
+- **WHEN** a trait declares `let anchor: vec2` and a handler writes `a.anchor.x = 1.0`
+- **THEN** compilation fails with a diagnostic naming the trait and `anchor`
+
+#### Scenario: Write through a retained reduce binding is rejected
+- **WHEN** a pair rule with `reduce per team:` writes `team[Team].cap = 3` and `cap` is a `let` field of `Team`
+- **THEN** compilation fails with a diagnostic naming `Team.cap`
+
+#### Scenario: Write through a named entity is rejected
+- **WHEN** a handler writes `Boss[Hp].max = 50` and `max` is a `let` field
+- **THEN** compilation fails with a diagnostic naming `Hp.max`
+
+#### Scenario: Write through a lifecycle alias is rejected
+- **WHEN** a handler `on added Hp as h` writes `h.max = 50`
+- **THEN** compilation fails with a diagnostic naming `Hp.max`
+
+#### Scenario: Write through a state-match alias is rejected
+- **WHEN** a state variant `Mode.Attacking` declares `let power: int` and a state-match arm `Mode.Attacking as a` writes `a.power = 2`
+- **THEN** compilation fails with a diagnostic naming `Mode.Attacking.power`
+
+#### Scenario: Values given when the trait value is made are accepted
+- **WHEN** a `let` field gets its value from an entity body, a template argument, a `spawn` override block, a `children:` override block, an `add Hp:` block on an entity that already carries `Hp`, and a `project` block
+- **THEN** compilation succeeds
+
+#### Scenario: Reading a let field is accepted
+- **WHEN** a handler reads `h.max` into a local and compares it in a `where:` predicate
+- **THEN** compilation succeeds
+
+#### Scenario: Every rejected write is reported
+- **WHEN** one handler writes two different `let` fields and a second handler writes a third
+- **THEN** compilation reports three diagnostics, one per write

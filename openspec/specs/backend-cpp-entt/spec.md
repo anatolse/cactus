@@ -1547,3 +1547,23 @@ The cpp-entt runtime SHALL create, reserve and destroy every entity of a registr
 #### Scenario: Generated code has no direct registry creation
 - **WHEN** the backend generates C++ for any example program
 - **THEN** the generated code creates and destroys entities only through the runtime allocator helpers
+
+### Requirement: Hierarchy strategy follows the hierarchy facts
+The cpp-entt backend SHALL choose its hierarchy propagation, recursive destroy and hierarchy query strategy from the linked program's hierarchy facts. Every strategy SHALL give bit-identical world state, the same destroy set, and the same query results. Every strategy SHALL visit each entity at most once per propagation pass, SHALL use no recursion whose depth grows with the hierarchy, and SHALL find an entity's children without scanning every `Parent` carrier. When the program has no reachable reparent source, the backend SHALL NOT emit the commit-time cycle check. When it has one, the commit SHALL apply the check of `hierarchy-forest` to every `add Parent` command, including extern command capabilities, in command order.
+
+#### Scenario: Program without reparent omits the cycle check
+- **WHEN** a program's `Parent` sources are all structural
+- **THEN** the generated commit contains no reparent cycle check
+
+#### Scenario: Program with reparent checks at commit
+- **WHEN** a program contains a reachable `add Parent` statement
+- **THEN** the generated commit checks each `add Parent` command against the current hierarchy before applying it
+
+#### Scenario: Strategies agree
+- **WHEN** the same world is propagated by each strategy the backend supports (the strategy forced through a test-only override)
+- **THEN** every `WorldTransform` field has the same bits under every strategy
+
+#### Scenario: Children found without a pool scan
+- **WHEN** a root with 3 children is destroyed in a world with 10000 other `Parent` carriers
+- **THEN** the cascade visits the root and its 3 children and no other `Parent` carrier
+

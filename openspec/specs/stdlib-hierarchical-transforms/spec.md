@@ -1,11 +1,9 @@
 ## Purpose
 
 Define stdlib support for entity transform hierarchies, including the `parent` trait, local/world transform traits for `flat` and `volume` profiles, parent-chain propagation and recursive descendant deletion via backend-bound extern rules, and scratch-storage allocator discipline.
-
 ## Requirements
-
 ### Requirement: hierarchy relationships are represented by a parent trait
-The stdlib SHALL provide a trait for parent-child relationships with a field `parent: entity_id`. An entity with no parent relationship applied SHALL be treated as a root entity.
+The stdlib SHALL provide a trait for parent-child relationships with a `let` field `parent: entity_id`. An entity with no parent relationship applied SHALL be treated as a root entity. The field SHALL change only when `Parent` is added, as specified by `hierarchy-forest`.
 
 #### Scenario: parent trait stores an entity reference
 - **WHEN** an entity applies `Parent`
@@ -14,6 +12,10 @@ The stdlib SHALL provide a trait for parent-child relationships with a field `pa
 #### Scenario: root entity omits parent trait
 - **WHEN** an entity does not apply `Parent`
 - **THEN** hierarchy rules treat it as a root entity
+
+#### Scenario: parent field is read-only in handlers
+- **WHEN** a handler assigns `Parent.parent` through any alias
+- **THEN** compilation fails with the `let` field diagnostic
 
 ### Requirement: flat hierarchy traits distinguish local and world transforms
 The `std.transform.flat` module SHALL provide `LocalTransform` and `WorldTransform` traits with fields `position: vec2`, `rotation: float`, and `scale: vec2`.
@@ -38,7 +40,7 @@ The `std.transform.volume` module SHALL provide `LocalTransform` and `WorldTrans
 - **THEN** rules and backends may read world-space `position`, `rotation`, and `scale` from it
 
 ### Requirement: stdlib extern rules propagate transforms through parent chains
-The stdlib SHALL provide external rules that derive `WorldTransform` from `LocalTransform` and optional `Parent` relationships. For root entities, `WorldTransform` SHALL be derived directly from `LocalTransform`. A child with `Parent` and `LocalTransform` whose parent has a live `WorldTransform` SHALL derive its `WorldTransform` from the parent's `WorldTransform` composed with its own `LocalTransform`, whether or not the parent carries `LocalTransform`. An entity with `WorldTransform` but no `LocalTransform` is a pose root: propagation SHALL NOT write its `WorldTransform`, and its descendants SHALL compose onto the value rules last wrote. Within the phase that runs propagation, rules that write a pose root's `WorldTransform` SHALL run before propagation. For `std.transform.volume.WorldTransform`, the parent and local rotations SHALL be composed using normalized quaternion composition, so `WorldTransform.rotation` remains unit-length across repeated propagation rather than accumulating floating-point drift.
+The stdlib SHALL provide external rules that derive `WorldTransform` from `LocalTransform` and optional `Parent` relationships. For root entities, `WorldTransform` SHALL be derived directly from `LocalTransform`. A child with `Parent` and `LocalTransform` whose parent has a live `WorldTransform` SHALL derive its `WorldTransform` from the parent's `WorldTransform` composed with its own `LocalTransform`, whether or not the parent carries `LocalTransform`. An entity with `WorldTransform` but no `LocalTransform` is a pose root: propagation SHALL NOT write its `WorldTransform`, and its descendants SHALL compose onto the value rules last wrote. Within the phase that runs propagation, rules that write a pose root's `WorldTransform` SHALL run before propagation. For `std.transform.volume.WorldTransform`, the parent and local rotations SHALL be composed using normalized quaternion composition, so `WorldTransform.rotation` remains unit-length across repeated propagation rather than accumulating floating-point drift. One propagation pass SHALL derive each entity's `WorldTransform` at most once, after its parent's, and SHALL complete for a hierarchy of any depth. Its results SHALL be bit-identical whichever traversal strategy the backend chooses.
 
 #### Scenario: root entity copies local to world
 - **WHEN** an entity has `LocalTransform` and `WorldTransform` but no live parent
@@ -69,12 +71,24 @@ The stdlib SHALL provide external rules that derive `WorldTransform` from `Local
 - **WHEN** an entity has `Parent.parent` set to a stale or missing entity
 - **THEN** propagation does not fail and derives `WorldTransform` from the entity's own `LocalTransform`
 
+#### Scenario: deep chain propagates
+- **WHEN** a chain of 100000 entities each has the previous one as parent, all with `LocalTransform` position `(1, 0, 0)` and `WorldTransform`
+- **THEN** propagation completes without exhausting the stack and the last entity's `WorldTransform.position.x` is `100000`
+
+#### Scenario: reparented subtree propagates from its new parent
+- **WHEN** a subtree is reparented by an `add Parent` committed before the propagation phase
+- **THEN** the subtree's `WorldTransform`s compose onto the new parent's `WorldTransform`
+
 ### Requirement: stdlib extern rules delete descendants recursively
-The stdlib SHALL provide an external rule or equivalent backend-recognized hierarchy behavior that recursively destroys all descendants of an entity when that entity is destroyed.
+The stdlib SHALL provide an external rule or equivalent backend-recognized hierarchy behavior that recursively destroys all descendants of an entity when that entity is destroyed. The cascade SHALL complete for a hierarchy of any depth, SHALL visit each descendant once, and SHALL visit siblings in creation order.
 
 #### Scenario: direct child is deleted with parent
 - **WHEN** a parent entity is destroyed and another entity references it through `Parent.parent`
 - **THEN** the child entity is destroyed as part of the same cascade
+
+#### Scenario: deep chain is deleted
+- **WHEN** the root of a chain of 100000 entities is destroyed
+- **THEN** every entity of the chain is destroyed without exhausting the stack
 
 ### Requirement: recognized hierarchy extern rules bind to backend-library implementations
 Recognized stdlib hierarchy extern rules SHALL bind to concrete backend-library implementations on supported backend/runtime paths rather than emitting incomplete inline project-local behavior. This requirement applies to hierarchy propagation and recursive descendant deletion behavior described by the stdlib transform and parent contracts.
@@ -112,3 +126,4 @@ When performance-critical generated runtime hierarchy behavior requires dynamic 
 #### Scenario: Invalid or missing entity falls back to zero
 - **WHEN** `world_position` is called with an entity that is invalid, or that lacks the corresponding `WorldTransform`
 - **THEN** the call returns the zero vector for that dimensionality
+

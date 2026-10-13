@@ -172,7 +172,7 @@ Restore SHALL reproduce included parent relationships, including runtime reparen
 - **THEN** creation-order-based selection among restored entities retains its previous relative order
 
 ### Requirement: Documents are fully validated before the world changes
-Restore SHALL validate a decoded document before mutating the active world: canonical schema descriptor compatibility, known archetypes, traits, and fields, value kinds and ranges, construction completeness, unique document identities, legal trait combinations (every record's trait set is a reachable trait set of its own archetype node in the running program; states, `Parent` and traits that any entity may carry or lack are not compared), absence of hierarchy cycles, resolvable references, and configured size and depth limits. Diagnostics SHALL accumulate and identify field paths rather than stopping at the first problem. Changed archetype defaults, renames, and field type changes SHALL fail compatibility unless an adapter explicitly migrated the document to the current descriptor.
+Restore SHALL validate a decoded document before mutating the active world: canonical schema descriptor compatibility, known archetypes, traits, and fields, value kinds and ranges, construction completeness, unique document identities, legal trait combinations (every record's trait set is a reachable trait set of its own archetype node in the running program; states, `Parent` and traits that any entity may carry or lack are not compared), absence of hierarchy cycles, resolvable references, and configured size and depth limits. When the running program has no reachable reparent source (`hierarchy-forest`), restore SHALL also require every included parent record to come before each of its children in recorded creation order. Diagnostics SHALL accumulate and identify field paths rather than stopping at the first problem. Changed archetype defaults, renames, and field type changes SHALL fail compatibility unless an adapter explicitly migrated the document to the current descriptor.
 
 #### Scenario: Incompatible baseline is rejected
 - **WHEN** a document was captured against a different archetype default descriptor
@@ -185,6 +185,14 @@ Restore SHALL validate a decoded document before mutating the active world: cano
 #### Scenario: Record with an unreachable trait set is rejected
 - **WHEN** an adapter rewrites a document so a record carries a trait set that is not a reachable archetype of the running program
 - **THEN** restore reports the record's path as an illegal trait combination and leaves the world unchanged
+
+#### Scenario: Child recorded before its parent is rejected when the program never reparents
+- **WHEN** the running program has no reachable reparent source and an adapter reorders a document so a child record precedes its parent's record
+- **THEN** restore reports the child's path as invalid data and leaves the world unchanged
+
+#### Scenario: Child recorded before its parent is accepted when the program reparents
+- **WHEN** the running program has a reachable reparent source and a document records a reparented entity before its new parent
+- **THEN** restore accepts the document and reproduces the parent link
 
 ### Requirement: Restore publishes an atomic replacement without gameplay creation effects
 Successful restore SHALL replace the complete active ECS world, including previously live ephemeral entities and entities carrying `std.core.KeepOnLoad`, with the reconstructed snapshot. An empty compatible document SHALL produce an empty world. Reconstruction SHALL be staged: validation, allocation, and runtime resource preparation failures SHALL leave the previous world and its usable resources intact and SHALL release staged resources. No staged entity or resource SHALL be observable before publication. Ordinary spawn, destroy, load, and unload gameplay handlers SHALL NOT run as a consequence of replacement, while backend resource preparation and cleanup SHALL still occur. Completion SHALL be observable only after references, named bindings, and runtime resources are usable.

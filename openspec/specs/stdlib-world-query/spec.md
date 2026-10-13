@@ -136,13 +136,6 @@ The `std.query` namespace SHALL provide `hierarchy_postorder() list[entity_id]` 
 - **WHEN** a matching forest contains root A, children B and C, and B's child D
 - **THEN** `query.hierarchy_postorder[Marker]()` returns D, B, C, A
 
-### Requirement: hierarchy snapshots are total in the presence of invalid relations
-Hierarchy queries SHALL terminate for every finite live registry state. Stale parent references SHALL be treated as missing parents. A cycle SHALL not recurse indefinitely or duplicate entities; each cycle member SHALL appear exactly once in deterministic creation order as a root-equivalent component, and the runtime SHALL make the invalid relation diagnosable.
-
-#### Scenario: Cyclic Parent relation terminates
-- **WHEN** runtime mutation creates a Parent cycle among three matching entities
-- **THEN** preorder and postorder queries return finite deterministic snapshots containing each entity once
-
 ### Requirement: Entity-listing queries use creation order
 `std.query.first[...]()` SHALL return the earliest-created live entity that matches its filter, or a stale `entity_id` when none matches. `std.query.all[...]()` SHALL return every live matching entity in stable creation order. Neither result SHALL depend on the backend's storage order, including after entities were destroyed.
 
@@ -153,3 +146,15 @@ Hierarchy queries SHALL terminate for every finite live registry state. Stale pa
 #### Scenario: All lists matches in creation order
 - **WHEN** the same entities exist as above
 - **THEN** `query.all[Enemy]()` returns B, C, D in that order
+
+### Requirement: Hierarchy snapshots handle any depth
+`hierarchy_preorder` and `hierarchy_postorder` SHALL visit each matching entity once and SHALL complete for a hierarchy of any depth. A stale parent SHALL be treated as a missing parent.
+
+#### Scenario: Deep chain snapshot
+- **WHEN** a chain of 100000 entities carrying `Node` each has the previous one as parent
+- **THEN** `query.hierarchy_preorder[Node]()` returns all 100000 entities root first, without exhausting the stack
+
+#### Scenario: Stale parent makes a root
+- **WHEN** a matching entity's parent was destroyed and its handle is stale
+- **THEN** the entity is a root of the snapshot
+

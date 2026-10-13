@@ -2209,103 +2209,259 @@ std::uint64_t generated_next_creation_ordinal() noexcept {
     return next++;
 }
 
-namespace {
+// ── Hierarchy (hierarchy-forest) ─────────────────────────────────────────────
 
-// Without `is_scope_root` every entity is in scope.
-class HierarchyResolver {
-public:
-    HierarchyResolver(entt::registry& registry,
-                      const HierarchyPropagation& propagation,
-                      const std::function<bool(entt::entity)>* is_scope_root)
-        : registry_{registry}, propagation_{propagation}, is_scope_root_{is_scope_root} {}
-
-    // Returns whether `entity` lies at or below a scope root.
-    bool resolve(entt::entity entity) {
-        if (!registry_.valid(entity)) {
-            return false;
-        }
-        if (is_scope_root_ != nullptr && (*is_scope_root_)(entity)) {
-            return true;
-        }
-        if (active_entities_.contains(entity) || !propagation_.has_local_world(entity)) {
-            return false;
-        }
-
-        active_entities_.insert(entity);
-        bool in_scope             = false;
-        const entt::entity parent = propagation_.get_parent(entity);
-        if (parent != entt::null && registry_.valid(parent) && propagation_.has_world(parent)) {
-            in_scope = resolve(parent);
-            if (is_scope_root_ == nullptr || in_scope) {
-                propagation_.accumulate_from_parent(parent, entity);
-            }
-        } else if (is_scope_root_ == nullptr) {
-            propagation_.copy_local(entity);
-        }
-        active_entities_.erase(entity);
-        return in_scope;
-    }
-
-private:
-    entt::registry& registry_;
-    const HierarchyPropagation& propagation_;
-    const std::function<bool(entt::entity)>* is_scope_root_;
-    std::pmr::monotonic_buffer_resource scratch_resource_;
-    std::pmr::unordered_set<entt::entity> active_entities_{&scratch_resource_};
-};
-
-}  // namespace
-
-void propagate_hierarchy(entt::registry& registry, const HierarchyPropagation& propagation) {
-    HierarchyResolver resolver{registry, propagation, nullptr};
-    for (const auto [entity] : registry.storage<entt::entity>().each()) {
-        resolver.resolve(entity);
-    }
-}
-
-void propagate_hierarchy_below(entt::registry& registry,
-                               const HierarchyPropagation& propagation,
-                               std::span<const entt::entity> candidates,
-                               const std::function<bool(entt::entity)>& is_scope_root) {
-    HierarchyResolver resolver{registry, propagation, &is_scope_root};
-    for (const auto entity : candidates) {
-        resolver.resolve(entity);
-    }
-}
-
-namespace {
-
-std::pmr::unordered_set<entt::entity>& destroying_entities_storage() noexcept try {
-    static std::pmr::unsynchronized_pool_resource destroying_resource;
-    static std::pmr::unordered_set<entt::entity> destroying_entities{&destroying_resource};
-    return destroying_entities;
-} catch (...) {
-    std::terminate();
-}
-
-}  // namespace
-
-void destroy_entity_recursive(
-    entt::registry& registry,
-    entt::entity entity,
-    const std::function<void(entt::entity, const std::function<void(entt::entity)>&)>& visit_children) {
-    auto& destroying_entities = destroying_entities_storage();
-    if (!registry.valid(entity) || destroying_entities.contains(entity)) {
+void HierarchyIndex::attach(entt::entity child, entt::entity parent, std::uint64_t ordinal) {
+    auto& node = nodes_[child];
+    if (node.carrier && node.parent == parent) {
         return;
     }
-
-    destroying_entities.insert(entity);
-    std::pmr::monotonic_buffer_resource child_resource;
-    std::pmr::vector<entt::entity> child_entities{&child_resource};
-    visit_children(entity, [&](entt::entity child) { child_entities.push_back(child); });
-    for (const auto child : child_entities) {
-        destroy_entity_recursive(registry, child, visit_children);
+    const bool was_carrier = node.carrier;
+    if (was_carrier) {
+        unlink(child, node);
     }
-    release_entity(registry, entity);
-    destroying_entities.erase(entity);
+    node.carrier = true;
+    node.ordinal = ordinal;
+    node.parent  = parent;
+    if (!node.listed) {
+        node.listed = true;
+        const std::pair entry{ordinal, child};
+        if (carriers_.empty() || carriers_.back() < entry) {
+            carriers_.push_back(entry);
+        } else {
+            carriers_.insert(std::ranges::lower_bound(carriers_, entry), entry);
+        }
+    } else if (!was_carrier) {
+        --stale_carriers_;
+    }
+    // A self-parent can come only from host code; it stays out of the child lists.
+    if (parent != entt::null && parent != child) {
+        link(child, node, parent);
+    }
 }
 
-void reset_pending_destruction_state() noexcept { destroying_entities_storage().clear(); }
+void HierarchyIndex::detach(entt::entity child) {
+    const auto found = nodes_.find(child);
+    if (found == nodes_.end() || !found->second.carrier) {
+        return;
+    }
+    auto& node = found->second;
+    unlink(child, node);
+    node.carrier = false;
+    node.parent  = entt::null;
+    ++stale_carriers_;
+    if (stale_carriers_ * 2 > carriers_.size()) {
+        compact();
+    }
+}
+
+void HierarchyIndex::clear() {
+    nodes_.clear();
+    carriers_.clear();
+    stale_carriers_ = 0;
+}
+
+void HierarchyIndex::link(entt::entity child, Node& node, entt::entity parent) {
+    auto& parent_node = nodes_[parent];
+    // Children made at spawn are the youngest, so the walk from the back stops at once.
+    auto after = parent_node.last_child;
+    while (after != entt::null && nodes_.at(after).ordinal > node.ordinal) {
+        after = nodes_.at(after).previous;
+    }
+    const auto before = after == entt::null ? parent_node.first_child : nodes_.at(after).next;
+    node.previous     = after;
+    node.next         = before;
+    (after == entt::null ? parent_node.first_child : nodes_.at(after).next)    = child;
+    (before == entt::null ? parent_node.last_child : nodes_.at(before).previous) = child;
+}
+
+void HierarchyIndex::unlink(entt::entity child, Node& node) {
+    if (node.parent == entt::null || node.parent == child) {
+        return;
+    }
+    const auto parent_found = nodes_.find(node.parent);
+    if (parent_found == nodes_.end()) {
+        return;
+    }
+    auto& parent_node = parent_found->second;
+    (node.previous == entt::null ? parent_node.first_child : nodes_.at(node.previous).next) = node.next;
+    (node.next == entt::null ? parent_node.last_child : nodes_.at(node.next).previous)      = node.previous;
+    node.previous = entt::null;
+    node.next     = entt::null;
+    forget_if_unused(node.parent);
+}
+
+void HierarchyIndex::forget_if_unused(entt::entity entity) {
+    const auto found = nodes_.find(entity);
+    if (found != nodes_.end() && !found->second.carrier && !found->second.listed &&
+        found->second.first_child == entt::null) {
+        nodes_.erase(found);
+    }
+}
+
+void HierarchyIndex::compact() {
+    std::erase_if(carriers_, [&](const std::pair<std::uint64_t, entt::entity>& entry) {
+        auto& node = nodes_.at(entry.second);
+        if (node.carrier) {
+            return false;
+        }
+        node.listed = false;
+        return true;
+    });
+    for (auto it = nodes_.begin(); it != nodes_.end();) {
+        const auto& node = it->second;
+        it = !node.carrier && !node.listed && node.first_child == entt::null ? nodes_.erase(it) : std::next(it);
+    }
+    stale_carriers_ = 0;
+}
+
+const HierarchyIndex::Node* HierarchyIndex::find_node(entt::entity entity) const {
+    const auto found = nodes_.find(entity);
+    return found != nodes_.end() ? &found->second : nullptr;
+}
+
+entt::entity HierarchyIndex::parent_of(entt::entity entity) const {
+    const auto* node = find_node(entity);
+    return node != nullptr && node->carrier ? node->parent : entt::entity{entt::null};
+}
+
+entt::entity HierarchyIndex::first_child(entt::entity entity) const {
+    const auto* node = find_node(entity);
+    return node != nullptr ? node->first_child : entt::entity{entt::null};
+}
+
+entt::entity HierarchyIndex::last_child(entt::entity entity) const {
+    const auto* node = find_node(entity);
+    return node != nullptr ? node->last_child : entt::entity{entt::null};
+}
+
+entt::entity HierarchyIndex::next_sibling(entt::entity entity) const {
+    const auto* node = find_node(entity);
+    return node != nullptr ? node->next : entt::entity{entt::null};
+}
+
+entt::entity HierarchyIndex::previous_sibling(entt::entity entity) const {
+    const auto* node = find_node(entity);
+    return node != nullptr ? node->previous : entt::entity{entt::null};
+}
+
+bool reparent_would_cycle(const HierarchyIndex& index, entt::entity entity, entt::entity parent) {
+    auto ancestor = parent;
+    for (std::size_t steps = 0; ancestor != entt::null && steps <= index.node_count(); ++steps) {
+        if (ancestor == entity) {
+            return true;
+        }
+        ancestor = index.parent_of(ancestor);
+    }
+    return false;
+}
+
+namespace {
+
+std::optional<HierarchyStrategy>& hierarchy_strategy_override() noexcept {
+    static std::optional<HierarchyStrategy> strategy;
+    return strategy;
+}
+
+// Whether `entity` composes onto its parent rather than standing as a root.
+bool composes_onto_parent(const entt::registry& registry,
+                          const HierarchyIndex& index,
+                          const HierarchyPropagation& propagation,
+                          entt::entity entity) {
+    const auto parent = index.parent_of(entity);
+    return parent != entt::null && registry.valid(parent) && propagation.has_world(parent);
+}
+
+// Composes every LocalTransform descendant of `start` onto it, parent first.
+void propagate_subtree(const HierarchyIndex& index,
+                       const HierarchyPropagation& propagation,
+                       entt::entity start,
+                       const std::function<bool(entt::entity)>* is_scope_root,
+                       std::vector<entt::entity>& stack) {
+    stack.push_back(start);
+    while (!stack.empty()) {
+        const auto parent = stack.back();
+        stack.pop_back();
+        index.for_each_child(parent, [&](entt::entity child) {
+            if (!propagation.has_local_world(child) || (is_scope_root != nullptr && (*is_scope_root)(child))) {
+                return;
+            }
+            propagation.accumulate_from_parent(parent, child);
+            stack.push_back(child);
+        });
+    }
+}
+
+}  // namespace
+
+void set_hierarchy_strategy_override(std::optional<HierarchyStrategy> strategy) noexcept {
+    hierarchy_strategy_override() = strategy;
+}
+
+void propagate_hierarchy(entt::registry& registry,
+                         const HierarchyIndex& index,
+                         const HierarchyPropagation& propagation,
+                         HierarchyStrategy strategy) {
+    strategy = hierarchy_strategy_override().value_or(strategy);
+    if (strategy == HierarchyStrategy::CreationSweep) {
+        for (const auto [entity] : registry.storage<entt::entity>().each()) {
+            if (propagation.has_local_world(entity) && !composes_onto_parent(registry, index, propagation, entity)) {
+                propagation.copy_local(entity);
+            }
+        }
+        index.for_each_carrier([&](entt::entity entity) {
+            if (propagation.has_local_world(entity) && composes_onto_parent(registry, index, propagation, entity)) {
+                propagation.accumulate_from_parent(index.parent_of(entity), entity);
+            }
+        });
+        return;
+    }
+    std::vector<entt::entity> stack;
+    for (const auto [entity] : registry.storage<entt::entity>().each()) {
+        if (!propagation.has_world(entity)) {
+            continue;
+        }
+        const bool local = propagation.has_local_world(entity);
+        if (local && composes_onto_parent(registry, index, propagation, entity)) {
+            continue;
+        }
+        if (local) {
+            propagation.copy_local(entity);
+        }
+        propagate_subtree(index, propagation, entity, nullptr, stack);
+    }
+}
+
+void propagate_hierarchy_below(const HierarchyIndex& index,
+                               const HierarchyPropagation& propagation,
+                               std::span<const entt::entity> scope_roots,
+                               const std::function<bool(entt::entity)>& is_scope_root) {
+    std::vector<entt::entity> stack;
+    for (const auto root : scope_roots) {
+        if (propagation.has_world(root)) {
+            propagate_subtree(index, propagation, root, &is_scope_root, stack);
+        }
+    }
+}
+
+void destroy_entity_recursive(entt::registry& registry, const HierarchyIndex& index, entt::entity entity) {
+    if (!registry.valid(entity)) {
+        return;
+    }
+    // Reversed, a preorder that takes the youngest child first is the postorder
+    // with siblings oldest first. The bound only matters for a host-made cycle.
+    std::vector<entt::entity> order;
+    std::vector<entt::entity> stack{entity};
+    while (!stack.empty() && order.size() <= index.node_count()) {
+        const auto next = stack.back();
+        stack.pop_back();
+        order.push_back(next);
+        index.for_each_child(next, [&](entt::entity child) { stack.push_back(child); });
+    }
+    for (const auto doomed : std::views::reverse(order)) {
+        release_entity(registry, doomed);
+    }
+}
 
 // ── Sweep-and-prune broad phase (spatial-broadphase-runtime capability) ────────
 

@@ -681,19 +681,6 @@ TEST_CASE("Runtime stdlib: allocation-free helper contracts stay constexpr and n
     CHECK(noexcept(stdlib::math::quat::multiply(stdlib::math::quat::identity(), stdlib::math::quat::identity())));
 }
 
-TEST_CASE("Runtime stdlib: backend hierarchy runtime sources enforce pmr allocator discipline",
-          "[runtime][hierarchy][pmr][review]") {
-    const auto entt_runtime = read_text_file(repo_root() / "src/backends/cpp-entt/runtime.cpp");
-
-    REQUIRE_FALSE(entt_runtime.empty());
-
-    CHECK(entt_runtime.contains("std::pmr::monotonic_buffer_resource scratch_resource"));
-    CHECK(entt_runtime.contains("std::pmr::unordered_set<entt::entity> active_entities"));
-    CHECK(entt_runtime.contains("std::pmr::unsynchronized_pool_resource destroying_resource"));
-    CHECK(entt_runtime.contains("std::pmr::unordered_set<entt::entity> destroying_entities"));
-    CHECK(entt_runtime.contains("std::pmr::vector<entt::entity> child_entities"));
-}
-
 TEST_CASE("Runtime stdlib: shared asset registry supports eager and lazy resolution", "[runtime][assets]") {
     auto& registry = shared_asset_registry();
     registry.clear();
@@ -1674,6 +1661,15 @@ struct HierarchyScopeRoot {};
 struct HierarchyFixture {
     entt::registry registry;
 
+    // Connected before any Parent exists, so siblings keep their creation order.
+    HierarchyFixture() {
+        (void)index();
+    }
+
+    entt_backend::HierarchyIndex& index() {
+        return entt_backend::hierarchy_index<HierarchyParent>(registry);
+    }
+
     entt::entity pose_root(Vector3 position) {
         const auto entity = registry.create();
         registry.emplace<HierarchyWorldTransform>(entity, HierarchyWorldTransform{.position = position});
@@ -1697,13 +1693,6 @@ struct HierarchyFixture {
             .has_local_world =
                 [this](entt::entity e) { return registry.all_of<HierarchyLocalTransform, HierarchyWorldTransform>(e); },
             .has_world = [this](entt::entity e) { return registry.all_of<HierarchyWorldTransform>(e); },
-            .get_parent =
-                [this](entt::entity e) {
-                    if (const auto* parent = registry.try_get<HierarchyParent>(e); parent != nullptr) {
-                        return parent->parent;
-                    }
-                    return entt::entity{entt::null};
-                },
             .copy_local =
                 [this](entt::entity e) {
                     const auto& local = registry.get<HierarchyLocalTransform>(e);
@@ -1733,11 +1722,16 @@ struct HierarchyFixture {
     }
 
     void propagate() {
-        entt_backend::propagate_hierarchy(registry, propagation());
+        for (const auto strategy :
+             {entt_backend::HierarchyStrategy::CreationSweep, entt_backend::HierarchyStrategy::DepthOrder}) {
+            entt_backend::propagate_hierarchy(registry, index(), propagation(), strategy);
+        }
     }
 
-    void propagate_below_scope_roots(std::span<const entt::entity> candidates) {
-        entt_backend::propagate_hierarchy_below(registry, propagation(), candidates, [this](entt::entity e) {
+    void propagate_below_scope_roots() {
+        const auto roots = registry.view<HierarchyScopeRoot>();
+        const std::vector<entt::entity> scope_roots(roots.begin(), roots.end());
+        entt_backend::propagate_hierarchy_below(index(), propagation(), scope_roots, [this](entt::entity e) {
             return registry.all_of<HierarchyScopeRoot>(e);
         });
     }
@@ -1825,8 +1819,7 @@ TEST_CASE("Runtime stdlib: propagate_hierarchy_below derives only subtrees under
         fixture.child(cart, HierarchyLocalTransform{.position = Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F}});
     const auto orphan = fixture.child(entt::null, HierarchyLocalTransform{.position = Vector3{.x = 7.0F}});
 
-    const std::array candidates{crest, load, hurtbox, orphan};
-    fixture.propagate_below_scope_roots(candidates);
+    fixture.propagate_below_scope_roots();
 
     check_position(fixture.world_position(body), Vector3{.x = 1.0F, .y = 2.0F, .z = 3.0F});
     check_position(fixture.world_position(hurtbox), Vector3{.x = 1.0F, .y = 3.0F, .z = 3.0F});

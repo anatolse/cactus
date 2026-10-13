@@ -1,0 +1,86 @@
+module hierarchy_reparent
+
+# A hand picks an item up with `add Parent`, so the item follows the hand.
+# Dropping it with `remove Parent` makes it a root again. A pick-up that would
+# make an entity its own ancestor does nothing.
+
+use std.core
+use std.transform.flat as tf
+
+trait Hand
+trait Item
+
+# Counts how often the item went from root to child.
+trait Pickups:
+    var count: int = 0
+
+template HandBody(x: float):
+    Hand
+    tf.LocalTransform:
+        position = vec2(x, 0.0)
+    tf.WorldTransform
+
+template Thing(x: float):
+    Item
+    Pickups
+    tf.LocalTransform:
+        position = vec2(x, 1.0)
+    tf.WorldTransform
+
+pub extern event MakeHand:
+    x: float
+
+pub extern event MakeItem:
+    x: float
+
+pub extern event PickUp:
+    item: entity_id
+    hand: entity_id
+
+pub extern event Drop:
+    item: entity_id
+
+pub extern event MoveHand:
+    hand: entity_id
+    x: float
+
+# Hangs `a` under `b`, then `b` under `a`, in one commit.
+pub extern event Swap:
+    a: entity_id
+    b: entity_id
+
+rule MakeHands:
+    on MakeHand:
+        spawn HandBody(x = MakeHand.x)
+
+rule MakeItems:
+    on MakeItem:
+        spawn Thing(x = MakeItem.x)
+
+rule PickUpItem:
+    on PickUp:
+        add Parent to PickUp.item:
+            parent = PickUp.hand
+
+rule DropItem:
+    on Drop:
+        remove Parent from Drop.item
+
+rule MoveHands:
+    on MoveHand:
+        set tf.LocalTransform on MoveHand.hand:
+            position = vec2(MoveHand.x, 0.0)
+
+rule SwapParents:
+    on Swap:
+        add Parent to Swap.a:
+            parent = Swap.b
+        add Parent to Swap.b:
+            parent = Swap.a
+
+rule CountPickups:
+    each:
+        Pickups as pickups
+
+    on added Parent:
+        pickups.count += 1

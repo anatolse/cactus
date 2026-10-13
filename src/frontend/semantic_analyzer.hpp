@@ -707,6 +707,28 @@ struct ReachabilityFacts {
     friend bool operator==(const ReachabilityFacts&, const ReachabilityFacts&) = default;
 };
 
+// How a `Parent` value comes to exist. Sorted by this order, then by site.
+enum class ParentSourceKind : std::uint8_t { Structural, Attached, Detach, Reparent };
+
+struct ParentSource {
+    ParentSourceKind kind = ParentSourceKind::Structural;
+    std::string site;  // canonical node string, or canonical handler id for Detach and Reparent
+
+    friend bool operator==(const ParentSource&, const ParentSource&)  = default;
+    friend auto operator<=>(const ParentSource&, const ParentSource&) = default;
+};
+
+struct HierarchyFacts {
+    std::vector<ParentSource> sources;  // reachable sources, sorted, unique
+    bool has_reparent = false;
+    // Greatest `children:` nesting depth when every source is Structural or
+    // Detach; otherwise a chain can grow without bound.
+    std::optional<std::uint32_t> depth_bound;
+    bool derived = false;  // the pass ran on this program
+
+    friend bool operator==(const HierarchyFacts&, const HierarchyFacts&) = default;
+};
+
 struct DecoratedProgram {
     std::string module_name;  // this program's explicit declaring module name
     // Map key: simple local declaration name. Each declaration still carries a non-empty
@@ -729,6 +751,7 @@ struct DecoratedProgram {
     std::vector<InferredHandlerContract> handler_contracts;
     ExecutionGraph execution_graph;
     ReachabilityFacts reachability;  // set on the whole program, never stored in module artifacts
+    HierarchyFacts hierarchy;        // likewise
     ModulePersistenceMetadata persistence;
     std::vector<ResolvedSourceModule> source_modules;
     StringPool string_pool;
@@ -1327,6 +1350,7 @@ private:
                                         const std::string& site_desc,
                                         const SourceLocation& site_loc);
     void validate_hierarchical_entities(ProgramNode& program);
+    void validate_declared_entity_parents(const ProgramNode& program);
     void validate_stmt_contexts(ProgramNode& program);
     void validate_trait_modifier_rules(ProgramNode& program);
     void validate_exclude_clause(const auto& node);

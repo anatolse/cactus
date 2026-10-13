@@ -310,12 +310,14 @@ std::string EnttRestoreEmitter::emit_world_restore(const DecoratedProgram& progr
     out << "    clear_projected_traits(registry);\n";
     out << "    registry = std::move(staged);\n";
     out << "    reset_pointer_router_state();\n";
-    out << "    reset_pending_destruction_state();\n";
     out << "    reset_editor_camera_rig_state();\n";
     // Resets the whole SchedulerState, not just .activation: per-phase
     // runtime state (fixed-step accumulators and catch-up counters) also
     // holds backlog that must not carry into the restored world.
     out << "    generated_reset_scheduler_state();\n";
+    if (parent_trait != nullptr) {
+        out << "    (void)" << EnttCodegenUtils::hierarchy_index_expr(program) << ";\n";
+    }
     // The staged registry never had storage signals connected. Restore fires
     // no lifecycle trigger itself (recording is off outside a commit).
     if (tracks_lifecycle) {

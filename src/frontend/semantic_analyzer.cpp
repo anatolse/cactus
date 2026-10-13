@@ -7,6 +7,7 @@
 #include "frontend/archetype_reachability.hpp"
 #include "frontend/delivery_cycles.hpp"
 #include "frontend/execution_graph_scheduler.hpp"
+#include "frontend/hierarchy_forest.hpp"
 #include "frontend/symbol_identity.hpp"
 
 #include <algorithm>
@@ -34,6 +35,25 @@ bool module_name_is_stdlib(const std::string& module_name) {
 namespace {
 
 constexpr const char* kStateSlotUseMessage = "a state slot can only be a `match` subject";
+
+// `self` or a plain name: the program text pins the entity it denotes at the command.
+std::optional<std::string> pinned_entity(const ExprNode& expr) {
+    if (std::holds_alternative<SelfExpr>(expr.expr)) {
+        return "self";
+    }
+    if (const auto* ident = std::get_if<IdentExpr>(&expr.expr)) {
+        return ident->name;
+    }
+    return std::nullopt;
+}
+
+bool adds_own_parent(const AddTraitStmt& add) {
+    const auto target =
+        add.target_expr.has_value() ? pinned_entity(**add.target_expr) : std::optional<std::string>{"self"};
+    const auto parent = std::ranges::find(add.args, "parent", &FieldAssignment::name);
+    return target.has_value() && parent != add.args.end() && parent->value != nullptr &&
+           pinned_entity(*parent->value) == target;
+}
 
 EntityTarget pair_binding_target(const HandlerContract& contract, const std::string& name) {
     const auto& bindings = contract.pair_bindings;
@@ -1227,6 +1247,7 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     // Phase 3: Dynamic ECS checks (dynamic-ecs-language change)
     validate_template_backed_entity_overrides(program);
     validate_hierarchical_entities(program);
+    validate_declared_entity_parents(program);
     validate_spawn_sites(program);
     validate_stmt_contexts(program);
     validate_trait_default_values(program);
@@ -6102,6 +6123,29 @@ struct SemanticAnalyzer::ExternalContractValidator {
         resolve_emits(handler);
         resolve_commands(handler);
         resolve_effects(handler);
+        reject_hierarchy_writes(handler);
+    }
+
+    // Only a checked `add Parent` command keeps the hierarchy a forest.
+    void reject_hierarchy_writes(const ExternHandlerNode& handler) const {
+        const auto reject = [&](const SourceLocation& location, std::string_view access, const SymbolId& trait) {
+            analyzer->errors_.error(location,
+                                    "extern rule '" + rule->name + "' handler 'on " + handler.trigger_name +
+                                        "' can't " + std::string(access) + " '" + trait.local_name +
+                                        "'; the hierarchy changes only at commit, so use an 'add " +
+                                        trait.local_name + "' command");
+        };
+        for (const auto& trait : handler.resolved_writes) {
+            if (is_hierarchy_trait(trait)) {
+                reject(handler.location, "write", trait);
+            }
+        }
+        for (const auto& command : handler.commands) {
+            if (command.kind == HandlerCommandKind::Set && command.resolved_target_id.has_value() &&
+                is_hierarchy_trait(*command.resolved_target_id)) {
+                reject(command.location, "set", *command.resolved_target_id);
+            }
+        }
     }
 };
 
@@ -6447,6 +6491,12 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
                                     locals,
                                     handler_event,
                                     pair_scope);
+        if (trait->symbol_id.has_value() && is_hierarchy_trait(*trait->symbol_id) && adds_own_parent(add)) {
+            errors_.error(add.location,
+                          "`add " + add.trait_name +
+                              "` names the same entity as target and parent; an entity can't be its own parent, "
+                              "so this command never acts");
+        }
     };
 
     auto validate_project =
@@ -11619,6 +11669,24 @@ void SemanticAnalyzer::validate_child_required_fields(const std::vector<ChildArc
                                        site_desc,
                                        site_loc);
     }
+}
+
+void SemanticAnalyzer::validate_declared_entity_parents(const ProgramNode& program) {
+    std::vector<const EntityNode*> entities;
+    for (const auto& declaration : program.declarations) {
+        if (const auto* entity = std::get_if<EntityNode>(&declaration)) {
+            entities.push_back(entity);
+        }
+    }
+    const auto cyclic = parent_first_order(entities).cyclic;
+    if (cyclic.empty()) {
+        return;
+    }
+    std::string names;
+    for (const auto* entity : cyclic) {
+        names += (names.empty() ? "" : ", ") + declared_entity_identity(*entity);
+    }
+    errors_.error(cyclic.front()->location, "declared entities form a Parent cycle: " + names);
 }
 
 // Load-time entities create their descendants at module load, so every

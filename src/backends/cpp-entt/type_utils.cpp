@@ -649,6 +649,19 @@ std::vector<const EntityNode*> EnttCodegenUtils::declared_entities(const Decorat
     return entities;
 }
 
+std::string EnttCodegenUtils::hierarchy_index_expr(const DecoratedProgram& program) {
+    return "cactus::runtime::entt_backend::hierarchy_index<" + trait_cpp_name("Parent", program) + ">(registry)";
+}
+
+bool EnttCodegenUtils::checks_reparent(const DecoratedProgram& program) {
+    return !program.hierarchy.derived || program.hierarchy.has_reparent;
+}
+
+std::string EnttCodegenUtils::hierarchy_strategy_cpp(const DecoratedProgram& program) {
+    return std::string("cactus::runtime::entt_backend::HierarchyStrategy::") +
+           (checks_reparent(program) ? "DepthOrder" : "CreationSweep");
+}
+
 std::string EnttCodegenUtils::trait_cpp_name(const SymbolId& symbol) {
     return canonical_to_cpp_name(symbol);
 }

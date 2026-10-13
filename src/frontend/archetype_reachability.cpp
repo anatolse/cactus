@@ -1,5 +1,7 @@
 #include "frontend/archetype_reachability.hpp"
 
+#include "frontend/hierarchy_forest.hpp"
+
 #include <algorithm>
 #include <cstdint>
 #include <map>
@@ -509,25 +511,11 @@ private:
                 native_functions_.emplace(make_canonical_id(function), function);
             }
         }
-        parent_trait_ = find_parent_trait();
+        parent_trait_ = find_hierarchy_trait(*program_);
         if (parent_trait_.has_value()) {
             traits_.collect(*parent_trait_);
         }
         traits_.finish(*program_);
-    }
-
-    [[nodiscard]] std::optional<SymbolId> find_parent_trait() const {
-        std::optional<SymbolId> local;
-        for (const auto& [_, trait] : program_->traits) {
-            if (trait.name != "Parent" || !trait.symbol_id.has_value()) {
-                continue;
-            }
-            if (trait.symbol_id->module.name == "std.core") {
-                return trait.symbol_id;
-            }
-            local = trait.symbol_id;
-        }
-        return local;
     }
 
     void build_origins() {
@@ -1173,6 +1161,7 @@ void derive_archetype_reachability(DecoratedProgram& program,
     analysis.run();
     analysis.report(errors);
     program.reachability = analysis.facts();
+    derive_hierarchy_facts(program);
 }
 
 }  // namespace cactus

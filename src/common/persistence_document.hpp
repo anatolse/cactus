@@ -237,6 +237,9 @@ struct SchemaDescriptor {
     // rejects a record whose trait set is not one of its node's.
     bool checks_trait_sets = false;
     std::span<const std::string_view> unchecked_traits;  // sorted: free, state and Parent traits
+    // Set when the program never reparents, so every parent was created before
+    // its children; restore then rejects a child recorded before its parent.
+    bool parents_first = false;
 };
 
 [[nodiscard]] const TraitDescriptor* find_trait_descriptor(const SchemaDescriptor& schema, std::string_view trait);

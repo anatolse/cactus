@@ -67,6 +67,13 @@ public:
     // `.r/.g/.b/.a` on a color: a byte field read as a normalized float.
     static bool is_color_component_member(const std::string& member);
     static std::vector<const EntityNode*> declared_entities(const DecoratedProgram& program);
+    // The program's hierarchy children index, as a C++ expression over `registry`.
+    static std::string hierarchy_index_expr(const DecoratedProgram& program);
+    // Whether a committed `add Parent` needs the cycle check: the program can
+    // reparent, or its hierarchy facts were never derived.
+    static bool checks_reparent(const DecoratedProgram& program);
+    // The propagation strategy the hierarchy facts allow.
+    static std::string hierarchy_strategy_cpp(const DecoratedProgram& program);
     static std::string trait_cpp_name(const SymbolId& symbol);
     static std::string struct_cpp_name(const SymbolId& symbol);
     static std::string enum_cpp_name(const SymbolId& symbol);

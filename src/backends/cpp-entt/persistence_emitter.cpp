@@ -489,6 +489,7 @@ std::string EnttPersistenceEmitter::emit_schema_descriptor(const DecoratedProgra
     out << "    .archetypes = generated_archetypes,\n";
     out << "    .checks_trait_sets = " << (program.reachability.derived ? "true" : "false") << ",\n";
     out << "    .unchecked_traits = generated_unchecked_traits,\n";
+    out << "    .parents_first = " << (EnttCodegenUtils::checks_reparent(program) ? "false" : "true") << ",\n";
     out << "};\n\n";
     out << "}  // namespace cactus::runtime::entt_backend\n\n";
     return out.str();

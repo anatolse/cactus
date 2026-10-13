@@ -2102,35 +2102,261 @@ private:
         previous_;
 };
 
+// ── Hierarchy (hierarchy-forest) ─────────────────────────────────────────────
+// The children of every entity, in creation order, kept current by the
+// program's Parent storage signals. Parent must change only through the
+// registry API (emplace, emplace_or_replace, replace, patch, remove): a direct
+// field write leaves the index stale.
+class HierarchyIndex {
+public:
+    void attach(entt::entity child, entt::entity parent, std::uint64_t ordinal);
+    void detach(entt::entity child);
+    void clear();
+
+    [[nodiscard]] entt::entity parent_of(entt::entity entity) const;
+    [[nodiscard]] entt::entity first_child(entt::entity entity) const;
+    [[nodiscard]] entt::entity last_child(entt::entity entity) const;
+    [[nodiscard]] entt::entity next_sibling(entt::entity entity) const;
+    [[nodiscard]] entt::entity previous_sibling(entt::entity entity) const;
+    [[nodiscard]] std::size_t node_count() const noexcept {
+        return nodes_.size();
+    }
+
+    // Calls `visit` with each Parent carrier, oldest first.
+    template <typename Visit>
+    void for_each_carrier(Visit&& visit) const {
+        for (const auto& [ordinal, entity] : carriers_) {
+            const auto* node = find_node(entity);
+            if (node != nullptr && node->carrier) {
+                visit(entity);
+            }
+        }
+    }
+
+    // Calls `visit` with each child of `entity`, oldest first.
+    template <typename Visit>
+    void for_each_child(entt::entity entity, Visit&& visit) const {
+        for (auto child = first_child(entity); child != entt::null; child = next_sibling(child)) {
+            ++child_visits_;
+            visit(child);
+        }
+    }
+
+    // Children yielded by for_each_child so far; tests use it to show no pool scan.
+    [[nodiscard]] std::size_t child_visits() const noexcept {
+        return child_visits_;
+    }
+
+private:
+    struct Node {
+        entt::entity parent{entt::null};
+        entt::entity first_child{entt::null};
+        entt::entity last_child{entt::null};
+        entt::entity previous{entt::null};
+        entt::entity next{entt::null};
+        std::uint64_t ordinal{};
+        bool carrier = false;
+        bool listed  = false;  // has an entry in carriers_
+    };
+
+    [[nodiscard]] const Node* find_node(entt::entity entity) const;
+    void link(entt::entity child, Node& node, entt::entity parent);
+    void unlink(entt::entity child, Node& node);
+    void forget_if_unused(entt::entity entity);
+    void compact();
+
+    std::unordered_map<entt::entity, Node> nodes_;
+    std::vector<std::pair<std::uint64_t, entt::entity>> carriers_;  // sorted; may hold stale entries
+    std::size_t stale_carriers_ = 0;
+    mutable std::size_t child_visits_ = 0;
+};
+
+[[nodiscard]] inline std::uint64_t hierarchy_ordinal(const entt::registry& registry, entt::entity entity) {
+    // Entities a host made without an ordinal sort after every generated one.
+    static std::uint64_t next_unordered = std::uint64_t{1} << 63U;
+    const auto* ordinal = registry.try_get<CreationOrdinal>(entity);
+    return ordinal != nullptr ? ordinal->value : next_unordered++;
+}
+
+template <typename ParentComponent>
+void on_hierarchy_parent_set(entt::registry& registry, entt::entity child) {
+    registry.ctx().get<HierarchyIndex>().attach(
+        child, registry.get<ParentComponent>(child).parent, hierarchy_ordinal(registry, child));
+}
+
+inline void on_hierarchy_parent_removed(entt::registry& registry, entt::entity child) {
+    registry.ctx().get<HierarchyIndex>().detach(child);
+}
+
+// The registry's index, connected to its ParentComponent storage and built
+// from the carriers already there on first use.
+template <typename ParentComponent>
+HierarchyIndex& hierarchy_index(entt::registry& registry) {
+    if (auto* index = registry.ctx().find<HierarchyIndex>(); index != nullptr) {
+        return *index;
+    }
+    auto& index = registry.ctx().emplace<HierarchyIndex>();
+    registry.on_construct<ParentComponent>().template connect<&on_hierarchy_parent_set<ParentComponent>>();
+    registry.on_update<ParentComponent>().template connect<&on_hierarchy_parent_set<ParentComponent>>();
+    registry.on_destroy<ParentComponent>().template connect<&on_hierarchy_parent_removed>();
+    std::vector<std::pair<std::uint64_t, entt::entity>> carriers;
+    for (const auto [entity, relation] : registry.view<ParentComponent>().each()) {
+        carriers.emplace_back(hierarchy_ordinal(registry, entity), entity);
+    }
+    std::ranges::sort(carriers);
+    for (const auto& [ordinal, entity] : carriers) {
+        index.attach(entity, registry.get<ParentComponent>(entity).parent, ordinal);
+    }
+    return index;
+}
+
+// True when `parent` is `entity` or one of its descendants, so making it the
+// parent would close a cycle. Bounded by the index size, so it ends on any state.
+[[nodiscard]] bool reparent_would_cycle(const HierarchyIndex& index, entt::entity entity, entt::entity parent);
+
+// Creation sweep: valid only when every parent is older than its children,
+// which holds when the program never reparents. Depth order: a preorder walk
+// from the roots, valid for any forest. Both give the same bits.
+enum class HierarchyStrategy : std::uint8_t { CreationSweep, DepthOrder };
+
+// Test-only: forces every propagate_hierarchy call to one strategy.
+void set_hierarchy_strategy_override(std::optional<HierarchyStrategy> strategy) noexcept;
+
 // An entity with WorldTransform but no LocalTransform is a pose root: it is
 // never written, and its children compose onto its current WorldTransform.
 struct HierarchyPropagation {
     std::function<bool(entt::entity)> has_local_world;
     std::function<bool(entt::entity)> has_world;
-    std::function<entt::entity(entt::entity)> get_parent;
     std::function<void(entt::entity)> copy_local;
     std::function<void(entt::entity, entt::entity)> accumulate_from_parent;
 };
 
-void propagate_hierarchy(entt::registry& registry, const HierarchyPropagation& propagation);
+void propagate_hierarchy(entt::registry& registry,
+                         const HierarchyIndex& index,
+                         const HierarchyPropagation& propagation,
+                         HierarchyStrategy strategy);
 
-// Derives only the candidates whose parent chain reaches a scope root; scope
-// roots themselves are never written.
-void propagate_hierarchy_below(entt::registry& registry,
+// Derives only the subtrees below the scope roots; scope roots themselves are
+// never written.
+void propagate_hierarchy_below(const HierarchyIndex& index,
                                const HierarchyPropagation& propagation,
-                               std::span<const entt::entity> candidates,
+                               std::span<const entt::entity> scope_roots,
                                const std::function<bool(entt::entity)>& is_scope_root);
 
-void destroy_entity_recursive(
-    entt::registry& registry,
-    entt::entity entity,
-    const std::function<void(entt::entity, const std::function<void(entt::entity)>&)>& visit_children);
+// Destroys `entity` and its descendants: children before their parent,
+// siblings in creation order.
+void destroy_entity_recursive(entt::registry& registry, const HierarchyIndex& index, entt::entity entity);
 
-// Clears the cascade re-entry guard destroy_entity_recursive keeps across
-// calls. Normally empty again by the time any top-level call returns; this
-// exists so world replacement can't leave it holding handles into a
-// replaced registry if an exception ever unwound through an active cascade.
-void reset_pending_destruction_state() noexcept;
+// The children of `of` that `matching` contains, oldest first.
+template <typename View>
+[[nodiscard]] std::vector<entt::entity> hierarchy_children(const entt::registry& registry,
+                                                           const HierarchyIndex& index,
+                                                           entt::entity of,
+                                                           const View& matching) {
+    std::vector<entt::entity> result;
+    if (!registry.valid(of)) {
+        return result;
+    }
+    index.for_each_child(of, [&](entt::entity child) {
+        if (matching.contains(child)) {
+            result.push_back(child);
+        }
+    });
+    return result;
+}
+
+// The entities `matching` contains whose parent is missing, stale or not
+// matching, oldest first.
+template <typename View>
+[[nodiscard]] std::vector<entt::entity> hierarchy_roots(const entt::registry& registry,
+                                                        const HierarchyIndex& index,
+                                                        const View& matching) {
+    std::vector<std::pair<std::uint64_t, entt::entity>> ordered;
+    for (const auto entity : matching) {
+        const auto parent = index.parent_of(entity);
+        if (parent == entt::null || !registry.valid(parent) || !matching.contains(parent)) {
+            ordered.emplace_back(registry.get<CreationOrdinal>(entity).value, entity);
+        }
+    }
+    std::ranges::sort(ordered);
+    std::vector<entt::entity> roots;
+    roots.reserve(ordered.size());
+    for (const auto& [ordinal, entity] : ordered) {
+        roots.push_back(entity);
+    }
+    return roots;
+}
+
+// Every entity `matching` contains, in hierarchy preorder or postorder. An
+// entity whose parent is missing, stale or not matching is a root; roots and
+// siblings come oldest first.
+template <typename View>
+[[nodiscard]] std::vector<entt::entity> hierarchy_order(const entt::registry& registry,
+                                                        const HierarchyIndex& index,
+                                                        const View& matching,
+                                                        bool postorder) {
+    std::vector<entt::entity> result;
+    std::vector<entt::entity> stack;
+    const auto push_matching = [&](entt::entity child) {
+        if (matching.contains(child)) {
+            stack.push_back(child);
+        }
+    };
+    for (const auto root : hierarchy_roots(registry, index, matching)) {
+        const auto tree_start = result.size();
+        stack.push_back(root);
+        while (!stack.empty()) {
+            const auto entity = stack.back();
+            stack.pop_back();
+            result.push_back(entity);
+            // Postorder is the reverse of a preorder that takes the youngest child first.
+            if (postorder) {
+                index.for_each_child(entity, push_matching);
+                continue;
+            }
+            for (auto child = index.last_child(entity); child != entt::null; child = index.previous_sibling(child)) {
+                push_matching(child);
+            }
+        }
+        if (postorder) {
+            std::reverse(result.begin() + static_cast<std::ptrdiff_t>(tree_start), result.end());
+        }
+    }
+    return result;
+}
+
+// The position of `requested` in a preorder over `matching` whose siblings are
+// sorted by `z_of`, then oldest first; 0 when `matching` doesn't contain it.
+template <typename View, typename ZIndex>
+[[nodiscard]] int hierarchy_stacking_order(const entt::registry& registry,
+                                           const HierarchyIndex& index,
+                                           const View& matching,
+                                           entt::entity requested,
+                                           const ZIndex& z_of) {
+    int position = 0;
+    std::vector<entt::entity> stack;
+    std::vector<entt::entity> siblings;
+    for (const auto root : hierarchy_roots(registry, index, matching)) {
+        stack.push_back(root);
+        while (!stack.empty()) {
+            const auto entity = stack.back();
+            stack.pop_back();
+            if (entity == requested) {
+                return position;
+            }
+            ++position;
+            siblings.clear();
+            index.for_each_child(entity, [&](entt::entity child) {
+                if (matching.contains(child)) {
+                    siblings.push_back(child);
+                }
+            });
+            std::ranges::stable_sort(siblings, {}, z_of);
+            stack.insert(stack.end(), siblings.rbegin(), siblings.rend());
+        }
+    }
+    return 0;
+}
 
 // ── Sweep-and-prune broad phase (spatial-broadphase-runtime capability) ────────
 // Runtime-owned, program-independent bipartite 2D/3D broad phase over

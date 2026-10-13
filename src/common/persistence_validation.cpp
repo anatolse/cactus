@@ -180,6 +180,20 @@ void detect_hierarchy_cycles(const Snapshot& snapshot, std::vector<ValidationErr
     }
 }
 
+// Without a reparent every parent was created first, and the creation sweep
+// relies on it.
+void require_parents_first(const Snapshot& snapshot,
+                           const std::unordered_set<DocumentId>& known_ids,
+                           std::vector<ValidationError>& errors) {
+    std::unordered_set<DocumentId> recorded;
+    for (const auto& record : snapshot.entities) {
+        if (record.parent.present && known_ids.contains(record.parent.id) && !recorded.contains(record.parent.id)) {
+            errors.push_back({.field_path = node_path(record), .message = "child recorded before its parent"});
+        }
+        recorded.insert(record.id);
+    }
+}
+
 }  // namespace
 
 void validate_trait_set(const SchemaDescriptor& schema,
@@ -259,6 +273,9 @@ std::vector<ValidationError> validate_document(const SchemaDescriptor& schema, c
     }
 
     detect_hierarchy_cycles(snapshot, errors);
+    if (schema.parents_first) {
+        require_parents_first(snapshot, known_ids, errors);
+    }
     return errors;
 }
 

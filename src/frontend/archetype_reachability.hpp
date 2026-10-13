@@ -26,6 +26,7 @@ struct ReachabilityOptions {
 
 // Computes which trait sets entities of the whole program can carry, stores
 // them in `program.reachability`, and reports declarations that can never act.
+// Then derives `program.hierarchy` from the reachable handlers.
 void derive_archetype_reachability(DecoratedProgram& program,
                                    ErrorReporter& errors,
                                    const ReachabilityOptions& options = {});

@@ -454,7 +454,13 @@ The four composition/creation constructs at a glance:
 | `entity Name from Template:` | one load-time instance of a template (whole tree if hierarchical) plus overrides | module/scene load |
 | `spawn Template:` | one runtime instance of a template (whole tree if hierarchical) plus overrides; evaluates to the root | handler execution |
 
-Hierarchy syntax creates parent-child **relations only**. It does not by itself imply transform propagation, rendering, or physics attachment: a child follows its parent's transform only when the child carries the transform traits (`LocalTransform`/`WorldTransform`) required by the active transform propagation system. Propagation runs in `late_tick` and composes such a child onto its parent's `WorldTransform`, whether or not the parent has a `LocalTransform`. An entity with `WorldTransform` and no `LocalTransform` is a *pose root*: rules write its world pose and propagation never overwrites it. Every other `late_tick` rule that writes `WorldTransform` runs before propagation, so a child reflects a pose root moved in the same `late_tick`. Destroying a root uses the existing `Parent`-based recursive destroy, so generated descendants are destroyed with it on backends that support the cascade.
+Hierarchy syntax creates parent-child **relations only**. It does not by itself imply transform propagation, rendering, or physics attachment: a child follows its parent's transform only when the child carries the transform traits (`LocalTransform`/`WorldTransform`) required by the active transform propagation system. Propagation runs in `late_tick` and composes such a child onto its parent's `WorldTransform`, whether or not the parent has a `LocalTransform`. An entity with `WorldTransform` and no `LocalTransform` is a *pose root*: rules write its world pose and propagation never overwrites it. Every other `late_tick` rule that writes `WorldTransform` runs before propagation, so a child reflects a pose root moved in the same `late_tick`. Destroying a root uses the existing `Parent`-based recursive destroy, so generated descendants are destroyed with it on backends that support the cascade. The cascade destroys children before their parent and siblings in creation order, and it handles a hierarchy of any depth.
+
+**The hierarchy is a forest.** Following `Parent.parent` from any entity ends, after finitely many steps, at an entity without `Parent` or at a stale handle. `std.core.Parent.parent` is a `let` field, so a field write or `set Parent` is a compile error; the parent changes only when `Parent` is added. Creating an entity with a parent (a `children:` node, a `Parent` entry in an entity or template body, or a `spawn` override), `remove Parent` and `destroy` can't close a cycle. Reparenting an existing entity is an `add Parent` command, checked at commit (§4.4). An `add Parent` whose target and `parent` value the program text pins to the same entity (`add Parent to self: parent = self`, or the same pair binding or local on both sides) is a compile error, because it can never act.
+
+When a declared entity's `Parent` entry names another declared entity, that entity is created first at load, whatever their declaration order; declared entities that don't name each other keep their order. A cycle among declared entities' `Parent` entries, including an entity that names itself, is a compile error that names every entity in the cycle.
+
+After linking, the compiler records what the program does with `Parent`: each reachable source is *structural* (`children:`), *attached* (a `Parent` entry in a body or spawn override), *detach* (`remove Parent`) or *reparent* (`add Parent`, including an extern `add Parent` command capability). With no reachable reparent, every parent is created before its children, so creation order is a topological order of the hierarchy. A backend may pick its propagation, destroy and query strategy from these facts; every strategy gives the same results.
 
 ### 3.8 Rules
 
@@ -983,6 +989,8 @@ An extern handler is **selectionless** when its owner has neither `each:` nor `w
 
 A `set Trait` command capability exposes a queue-only patch operation for that trait (the `set_stmt` semantics of §3.16). It grants no read or write access to the trait; a handler that also needs to read it must list it in `reads:` or `writes:`. For regular handlers, `set Trait` is inferred into `commands` and does not add the trait to `reads` or `writes`.
 
+An extern handler may not list `std.core.Parent` in `writes:` or as a `set` command capability; either is a compile error that points to the `add Parent` command capability. An `add Parent` capability is checked at commit like an authored `add Parent` (§4.4), so the hierarchy stays a forest (§3.7).
+
 ### 3.11 Events and Phases
 
 Events are typed gameplay messages.
@@ -1253,7 +1261,7 @@ if query.exists[Health, not Dead]():
     ...
 ```
 
-Every query call returns an immutable, finite snapshot taken once at the call site — not a live view. `children`/`hierarchy_preorder`/`hierarchy_postorder` order matching entities by stable creation ordinal (siblings and, for preorder/postorder, roots too); a missing, stale, or non-matching structural parent makes a matching node a traversal root instead of erroring. Runtime `Parent` cycles are traversed finitely and each matching entity appears at most once in a hierarchy traversal.
+Every query call returns an immutable, finite snapshot taken once at the call site — not a live view. `children`/`hierarchy_preorder`/`hierarchy_postorder` order matching entities by stable creation ordinal (siblings and, for preorder/postorder, roots too); a missing, stale, or non-matching structural parent makes a matching node a traversal root instead of erroring. Each matching entity appears exactly once in a hierarchy traversal, and a traversal handles a hierarchy of any depth.
 
 ### 3.16 Statements
 
@@ -1517,6 +1525,12 @@ For a state (§3.6.1):
 - `remove S` drops the whole state, with its current variant. `remove S.V` is a compile error that suggests `add` of another variant or `remove S`.
 - Once an entity is in a `final` variant, every later `add S.*` and `remove S` on it does nothing, including `add` of the same variant, within the round and after it. `set S.V on e:`, field writes and `destroy` still apply.
 - Conflicting transitions in one round resolve by command order (§5.3), except that a final variant is never left.
+
+For the hierarchy (§3.7):
+
+- `add Parent: parent = p` on an existing entity `e` reparents `e` when its command applies at the commit, in command order. Handlers earlier in the same activation still see the old parent.
+- When `p` is `e` or one of `e`'s descendants in the state at that command's position, the command does nothing: no field changes and no trigger fires. Of two commands in one round that together would form a cycle, the second does nothing.
+- Otherwise the ordinary `add` rules apply: a root that gains `Parent` fires `on added Parent`, and moving an entity that already carries `Parent` fires nothing. A stale `p` makes `e` a root that carries `Parent`.
 
 Rules react to these changes with lifecycle triggers:
 
@@ -2011,7 +2025,7 @@ A rejected restore leaves the world untouched — no partial replacement, and no
 
 - `adapter_unavailable` — no adapter is registered to read from
 - `io_failure` — the adapter's `read` reported failure (missing slot, corrupt storage, and similar)
-- `invalid_data` — the document is structurally unsound (unknown archetype/trait/field, a dangling or duplicate identity, a hierarchy cycle, a configured size/depth limit exceeded, or a record whose trait set is not a reachable archetype of its node (§5.0); states, `Parent` and traits that may be present anywhere are not compared)
+- `invalid_data` — the document is structurally unsound (unknown archetype/trait/field, a dangling or duplicate identity, a hierarchy cycle, a child recorded before its parent in a program that never reparents (§3.7), a configured size/depth limit exceeded, or a record whose trait set is not a reachable archetype of its node (§5.0); states, `Parent` and traits that may be present anywhere are not compared)
 - `incompatible_schema` — the document's schema descriptor does not match the running program's
 - `unsupported_value` — every field is structurally valid but some value cannot be represented (wrong kind, out of range, or an unknown enum variant)
 - `resource_preparation_failure` — the document is otherwise valid but names an asset or input declaration this build cannot resolve to a handle

@@ -7,10 +7,11 @@ module std.core
 # It is unrelated to `persist` fields, which decide what a save records.
 pub trait KeepOnLoad
 
-# Parent-child hierarchy relationship.
+# Parent-child hierarchy relationship. It is always a forest: `parent` changes
+# only through `add Parent`, which does nothing when it would form a cycle.
 # Entities without Parent are treated as hierarchy roots.
 pub trait Parent:
-    var parent: entity_id
+    let parent: entity_id
 
 # ── Standard Runtime Root and Phases ──────────────────────────────────────────
 

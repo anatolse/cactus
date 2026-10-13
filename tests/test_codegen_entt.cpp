@@ -2,6 +2,7 @@
 // -- Catch2 assertion macros intentionally expand through do-while and expression decomposition.
 #include "common/codegen_error.hpp"
 #include "common/error_reporter.hpp"
+#include "frontend/archetype_reachability.hpp"
 #include "frontend/lexer.hpp"
 #include "frontend/parser.hpp"
 #include "frontend/semantic_analyzer.hpp"
@@ -1104,7 +1105,8 @@ TEST_CASE("Codegen EnTT: hierarchy destroy helper delegates to runtime library",
         program);
 
     auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.contains("cactus::runtime::entt_backend::destroy_entity_recursive("));
+    CHECK(code.contains("cactus::runtime::entt_backend::destroy_entity_recursive(registry, "
+                        "cactus::runtime::entt_backend::hierarchy_index<Parent>(registry), entity);"));
 }
 
 TEST_CASE("Codegen EnTT: sprite and animation extern rules bind to asset runtime adapters", "[codegen-entt][assets]") {
@@ -2952,9 +2954,13 @@ TEST_CASE("Codegen EnTT: self lowers to current entity and destroy self uses rec
         "    dt: float\n"
         "trait Parent:\n"
         "    var parent: entity_id\n"
+        "trait Link:\n"
+        "    var target: entity_id\n"
         "rule Hierarchy:\n"
+        "    each:\n"
+        "        Link as link\n"
         "    on tick:\n"
-        "        add Parent:\n"
+        "        add Parent to link.target:\n"
         "            parent = self\n"
         "        destroy self\n",
         program);
@@ -2997,10 +3003,10 @@ TEST_CASE("Codegen EnTT: flat transform propagation extern rule is recognized", 
     auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.contains("cactus::runtime::entt_backend::propagate_hierarchy("));
     CHECK(code.contains("parent_world.position.x + local.position.x"));
-    CHECK(code.contains("if (auto* parent = registry.try_get<Parent>(entity)"));
+    CHECK(code.contains("cactus::runtime::entt_backend::hierarchy_index<Parent>(registry), PROPAGATION"));
 }
 
-TEST_CASE("Codegen EnTT: hierarchy propagation handles stale parents and cycles safely", "[codegen-entt][hierarchy]") {
+TEST_CASE("Codegen EnTT: hierarchy propagation callbacks test world and local presence", "[codegen-entt][hierarchy]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "module std.transform.flat\n"
@@ -3030,7 +3036,7 @@ TEST_CASE("Codegen EnTT: hierarchy propagation handles stale parents and cycles 
 
     auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.contains("cactus::runtime::entt_backend::propagate_hierarchy("));
-    CHECK(code.contains("return entt::entity{entt::null};"));
+    CHECK_FALSE(code.contains(".get_parent"));
     CHECK(code.contains("registry.all_of<LocalTransform, WorldTransform>(entity)"));
     CHECK(code.contains(".has_world = [&](entt::entity entity) { return registry.all_of<WorldTransform>(entity); }"));
 }
@@ -4516,8 +4522,7 @@ TEST_CASE("Codegen EnTT: query.all lowers to a creation-ordered snapshot", "[cod
     CHECK(code.contains("cactus::runtime::entt_backend::creation_ordered(registry, registry.view<Enemy>())"));
 }
 
-TEST_CASE("Codegen EnTT: query.children lowers to a stable filtered direct-child snapshot",
-          "[codegen-entt][query][hierarchy]") {
+TEST_CASE("Codegen EnTT: query.children lowers to the runtime children walk", "[codegen-entt][query][hierarchy]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "use std.query as query\n"
@@ -4534,26 +4539,17 @@ TEST_CASE("Codegen EnTT: query.children lowers to a stable filtered direct-child
         "        let snapshot = query.children[Node, not Hidden](of = parent)\n",
         program);
 
-    const auto code             = CppEnttCodegen::generate(decorated);
-    const auto requested_parent = extract_temp_name(code, "cactus_gen_requested_parent_");
-    REQUIRE_FALSE(requested_parent.empty());
-    CHECK(code.contains("const auto " + requested_parent + " = (Selection_comp.parent)"));
-    // The handler body lives in one shared lambda invoked from both the
-    // targeted-delivery and broadcast dispatch sites (dedupe-handler-
-    // dispatch-codegen), so the authored expression appears once in the
-    // generated function and is evaluated once per runtime invocation.
-    CHECK(count_occurrences(code, "const auto " + requested_parent + " = (Selection_comp.parent)") == 1);
-    CHECK(code.contains("if (!registry.valid(" + requested_parent + ")) return std::vector<entt::entity>{}"));
-    CHECK(code.contains("registry.view<Parent, Node>(entt::exclude<Hidden>)"));
-    CHECK(code.contains("registry.get<Parent>(e).parent == " + requested_parent));
-    CHECK(code.contains("registry.get<cactus::runtime::entt_backend::CreationOrdinal>(e).value"));
-    CHECK(code.contains("std::ranges::sort(ordered)"));
-    CHECK(code.contains("std::vector<entt::entity> result; result.reserve(ordered.size())"));
-    CHECK(code.contains("result.push_back(e)"));
+    const auto code = CppEnttCodegen::generate(decorated);
+    const std::string call =
+        "cactus::runtime::entt_backend::hierarchy_children(registry, "
+        "cactus::runtime::entt_backend::hierarchy_index<Parent>(registry), (Selection_comp.parent), "
+        "registry.view<Parent, Node>(entt::exclude<Hidden>))";
+    CHECK(code.contains(call));
+    // The handler body is shared by both dispatch sites, so the call appears once.
+    CHECK(count_occurrences(code, call) == 1);
 }
 
-TEST_CASE("Codegen EnTT: hierarchy traversals lower to stable filtered-forest snapshots with cycle containment",
-          "[codegen-entt][query][hierarchy]") {
+TEST_CASE("Codegen EnTT: hierarchy traversals lower to the runtime forest walk", "[codegen-entt][query][hierarchy]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "use std.query as query\n"
@@ -4567,37 +4563,13 @@ TEST_CASE("Codegen EnTT: hierarchy traversals lower to stable filtered-forest sn
         "        let postorder = query.hierarchy_postorder[Node, not Hidden]()\n",
         program);
 
-    const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(count_occurrences(code, "registry.view<Node>(entt::exclude<Hidden>)") >= 2);
-    CHECK(code.contains("std::ranges::sort(ordered)"));
-    CHECK(code.contains("std::unordered_set<entt::entity> matching"));
-    CHECK(code.contains("registry.try_get<Parent>(e)"));
-    CHECK(code.contains("registry.valid(relation->parent) && matching.contains(relation->parent)"));
-    CHECK(code.contains("else roots.push_back(e)"));
-    CHECK(code.contains("children[relation->parent].push_back(e)"));
-    CHECK(code.contains("if (!visited.insert(e).second) return"));
-    CHECK(code.contains("for (const auto root : roots) visit(visit, root)"));
-    CHECK(code.contains("for (const auto& [ordinal, e] : ordered) { (void)ordinal; visit(visit, e); }"));
-
-    const auto preorder_start = code.find("auto preorder = ");
-    REQUIRE(preorder_start != std::string::npos);
-    const auto preorder_end = code.find("auto postorder = ", preorder_start);
-    REQUIRE(preorder_end != std::string::npos);
-    const auto preorder          = code.substr(preorder_start, preorder_end - preorder_start);
-    const auto preorder_push     = preorder.find("result.push_back(e)");
-    const auto preorder_children = preorder.find("children.find(e)");
-    REQUIRE(preorder_push != std::string::npos);
-    REQUIRE(preorder_children != std::string::npos);
-    CHECK(preorder_push < preorder_children);
-
-    const auto postorder_end = code.find("return result; }();", preorder_end);
-    REQUIRE(postorder_end != std::string::npos);
-    const auto postorder          = code.substr(preorder_end, postorder_end - preorder_end);
-    const auto postorder_children = postorder.find("children.find(e)");
-    const auto postorder_push     = postorder.find("result.push_back(e)");
-    REQUIRE(postorder_children != std::string::npos);
-    REQUIRE(postorder_push != std::string::npos);
-    CHECK(postorder_children < postorder_push);
+    const auto code         = CppEnttCodegen::generate(decorated);
+    const std::string index = "cactus::runtime::entt_backend::hierarchy_index<Parent>(registry)";
+    CHECK(code.contains("cactus::runtime::entt_backend::hierarchy_order(registry, " + index +
+                        ", registry.view<Node>(entt::exclude<Hidden>), false)"));
+    CHECK(code.contains("cactus::runtime::entt_backend::hierarchy_order(registry, " + index +
+                        ", registry.view<Node>(entt::exclude<Hidden>), true)"));
+    CHECK_FALSE(code.contains("visited.insert"));
 }
 
 TEST_CASE("Codegen EnTT: query.parent lowers to Parent component try_get", "[codegen-entt][query]") {
@@ -4956,7 +4928,7 @@ TEST_CASE("Codegen EnTT: destroy cascade code coexists with hierarchical creatio
 
     // The existing Parent-based recursive destroy support keys off the Parent
     // trait, which hierarchical templates rely on unchanged.
-    CHECK(code.contains("registry.view<Parent>()"));
+    CHECK(code.contains("cactus::runtime::entt_backend::hierarchy_index<Parent>(registry), entity);"));
 }
 
 // ── 5.1: Key constant mapping and new extern declarations ───────────────────
@@ -9051,5 +9023,122 @@ TEST_CASE("Codegen EnTT: a handler that may move component storage flushes first
     const auto flush = dispatch.find("generated_accumulation__Pair__a().flush();");
     REQUIRE(flush != std::string::npos);
     CHECK(flush < dispatch.find("::poke_tick(registry, phase);"));
+}
+// ── Hierarchy facts select the strategy (hierarchy-forest) ─────────────────
+
+namespace {
+
+const std::string kHierarchyPrelude =
+    "extern event frame:\n"
+    "    dt: float\n"
+    "phase tick:\n"
+    "    from:\n"
+    "        frame\n"
+    "trait Parent:\n"
+    "    let parent: entity_id\n"
+    "trait Hand\n"
+    "trait Item\n"
+    "pub extern event Grab:\n"
+    "    item: entity_id\n"
+    "entity Root:\n"
+    "    Hand\n";
+
+// Runs the link-time passes a build runs, so the hierarchy facts are derived.
+std::string hierarchy_program(const std::string& body, ProgramNode& program) {
+    ErrorReporter errors;
+    Lexer lexer("module game\n" + kHierarchyPrelude + body, "game.cactus", errors);
+    Parser parser(lexer.tokenize(), errors);
+    program = parser.parse_program();
+    REQUIRE_FALSE(errors.has_errors());
+    SemanticAnalyzer analyzer(errors);
+    auto decorated = analyzer.analyze(program);
+    REQUIRE_FALSE(errors.has_errors());
+    derive_archetype_reachability(decorated, errors);
+    INFO((errors.diagnostics().empty() ? std::string{} : errors.diagnostics().front().message));
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(decorated.hierarchy.derived);
+    return CppEnttCodegen::generate(decorated);
+}
+
+const std::string kCycleCheck = "cactus::runtime::entt_backend::reparent_would_cycle(";
+
+}  // namespace
+
+TEST_CASE("Codegen EnTT: a program without a reparent emits no cycle check", "[codegen-entt][hierarchy]") {
+    ProgramNode program;
+    const auto code = hierarchy_program("template Arm:\n"
+                                        "    Hand\n"
+                                        "    children:\n"
+                                        "        entity Finger:\n"
+                                        "            Item\n"
+                                        "            children:\n"
+                                        "                entity Nail:\n"
+                                        "                    Item\n"
+                                        "rule Wave:\n"
+                                        "    each:\n"
+                                        "        Hand\n"
+                                        "    on tick:\n"
+                                        "        spawn Arm()\n"
+                                        "rule Drop:\n"
+                                        "    each:\n"
+                                        "        Item\n"
+                                        "    on tick:\n"
+                                        "        remove Parent\n",
+                                        program);
+    CHECK_FALSE(code.contains(kCycleCheck));
+    CHECK(code.contains("constexpr auto kCactusHierarchyStrategy = "
+                        "cactus::runtime::entt_backend::HierarchyStrategy::CreationSweep;"));
+    CHECK(code.contains("constexpr std::uint32_t kCactusHierarchyDepthBound = 2;"));
+}
+
+TEST_CASE("Codegen EnTT: an add Parent is checked at commit and selects depth order", "[codegen-entt][hierarchy]") {
+    ProgramNode program;
+    const auto code = hierarchy_program("rule PickUp:\n"
+                                        "    each:\n"
+                                        "        Hand\n"
+                                        "    on Grab:\n"
+                                        "        add Parent to Grab.item:\n"
+                                        "            parent = self\n",
+                                        program);
+    CHECK(count_occurrences(code, kCycleCheck) == 1);
+    const auto check  = code.find(kCycleCheck);
+    const auto commit = code.find("registry.emplace_or_replace<game__Parent>(", check);
+    REQUIRE(commit != std::string::npos);
+    CHECK(check < commit);
+    CHECK(code.contains("constexpr auto kCactusHierarchyStrategy = "
+                        "cactus::runtime::entt_backend::HierarchyStrategy::DepthOrder;"));
+    CHECK_FALSE(code.contains("kCactusHierarchyDepthBound"));
+}
+
+TEST_CASE("Codegen EnTT: an extern add Parent capability is checked at commit", "[codegen-entt][hierarchy]") {
+    ProgramNode program;
+    const auto code = hierarchy_program("extern rule HostRig:\n"
+                                        "    on tick:\n"
+                                        "        commands:\n"
+                                        "            add Parent\n",
+                                        program);
+    CHECK(code.contains("if (cactus::runtime::entt_backend::reparent_would_cycle("
+                        "cactus::runtime::entt_backend::hierarchy_index<game__Parent>(registry), target, value.parent)) "
+                        "{ return; }"));
+}
+
+TEST_CASE("Codegen EnTT: declared entities load parent first and connect the index", "[codegen-entt][hierarchy]") {
+    ProgramNode program;
+    const auto code = hierarchy_program("entity Sword:\n"
+                                        "    Item\n"
+                                        "    Parent:\n"
+                                        "        parent = Palm\n"
+                                        "entity Palm:\n"
+                                        "    Hand\n",
+                                        program);
+    const auto init = generated_function(code, "void generated_init_project(entt::registry& registry)");
+    const auto connect = init.find("cactus::runtime::entt_backend::hierarchy_index<game__Parent>(registry);");
+    const auto palm    = init.find("palm_at(registry");
+    const auto sword   = init.find("sword_at(registry");
+    REQUIRE(connect != std::string::npos);
+    REQUIRE(palm != std::string::npos);
+    REQUIRE(sword != std::string::npos);
+    CHECK(connect < palm);
+    CHECK(palm < sword);
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

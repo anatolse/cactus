@@ -7,12 +7,14 @@
 #define CACTUS_GENERATED_NO_MAIN
 #include CACTUS_HEADLESS_GENERATED_CPP
 
+#include "common/persistence_validation.hpp"
 #include "fake_raylib/headless_frame_driver.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
 #include <string>
+#include <utility>
 
 namespace {
 
@@ -108,5 +110,44 @@ TEST_CASE("restore preserves relative creation order among restored entities",
     REQUIRE(recaptured.entities.size() == 2);
     CHECK(recaptured.entities[0].archetype == "persistence_hierarchy_runtime.Leader");
     CHECK(recaptured.entities[1].archetype == "persistence_hierarchy_runtime.Leader/Follower");
+}
+
+TEST_CASE("a child recorded before its parent is rejected and the world is unchanged",
+          "[runtime][persistence][restore][hierarchy-forest]") {
+    World world;
+    auto& registry = world.registry;
+    auto snapshot  = capture(registry);
+    REQUIRE(snapshot.entities.size() == 2);
+    std::swap(snapshot.entities[0], snapshot.entities[1]);
+    const auto& child = snapshot.entities[0];
+    REQUIRE(child.archetype == "persistence_hierarchy_runtime.Leader/Follower");
+
+    const auto errors = cactus::persistence::validate_document(cactus::runtime::entt_backend::generated_schema, snapshot);
+    const auto child_path = child.archetype + "[" + std::to_string(child.id) + "]";
+    CHECK(std::ranges::any_of(errors, [&](const cactus::persistence::ValidationError& error) {
+        return error.field_path == child_path && error.message == "child recorded before its parent";
+    }));
+
+    const auto before  = capture(registry);
+    const auto outcome = cactus::runtime::entt_backend::generated_restore_world(registry, snapshot);
+    CHECK_FALSE(outcome.ok);
+    CHECK(outcome.code == "invalid_data");
+    const auto after = capture(registry);
+    REQUIRE(after.entities.size() == before.entities.size());
+    for (std::size_t index = 0; index < after.entities.size(); ++index) {
+        CHECK(after.entities[index].archetype == before.entities[index].archetype);
+        CHECK(after.entities[index].parent == before.entities[index].parent);
+    }
+}
+
+TEST_CASE("a program that reparents accepts a child recorded before its parent",
+          "[runtime][persistence][restore][hierarchy-forest]") {
+    World world;
+    auto snapshot = capture(world.registry);
+    REQUIRE(snapshot.entities.size() == 2);
+    std::swap(snapshot.entities[0], snapshot.entities[1]);
+    auto schema          = cactus::runtime::entt_backend::generated_schema;
+    schema.parents_first = false;
+    CHECK(cactus::persistence::validate_document(schema, snapshot).empty());
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

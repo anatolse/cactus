@@ -2,6 +2,7 @@
 #include "common/ast_expressions.hpp"
 #include "common/codegen_error.hpp"
 
+#include "frontend/hierarchy_forest.hpp"
 #include "frontend/symbol_identity.hpp"
 
 #include "backends/cpp-entt/accumulation_plan.hpp"
@@ -733,7 +734,6 @@ void emit_hierarchy_propagation(std::ostringstream& out,
     const std::string module = volume ? "std.transform.volume" : "std.transform.flat";
     const std::string lt     = EnttCodegenUtils::trait_cpp_name(module + ".LocalTransform", program);
     const std::string wt     = EnttCodegenUtils::trait_cpp_name(module + ".WorldTransform", program);
-    const std::string parent = EnttCodegenUtils::trait_cpp_name("Parent", program);
     const std::string vec    = volume ? "Vector3" : "Vector2";
     const auto per_axis      = [&](std::string_view op, std::string_view field) {
         std::ostringstream axes;
@@ -748,12 +748,6 @@ void emit_hierarchy_propagation(std::ostringstream& out,
     out << "            return registry.all_of<" << lt << ", " << wt << ">(entity);\n";
     out << "        },\n";
     out << "        .has_world = [&](entt::entity entity) { return registry.all_of<" << wt << ">(entity); },\n";
-    out << "        .get_parent = [&](entt::entity entity) {\n";
-    out << "            if (auto* parent = registry.try_get<" << parent << ">(entity); parent != nullptr) {\n";
-    out << "                return parent->parent;\n";
-    out << "            }\n";
-    out << "            return entt::entity{entt::null};\n";
-    out << "        },\n";
     out << "        .copy_local = [&](entt::entity entity) {\n";
     out << "            auto& local = registry.get<" << lt << ">(entity);\n";
     out << "            auto& world = registry.get<" << wt << ">(entity);\n";
@@ -2094,43 +2088,16 @@ static std::string lower_ecs_query_call(const QueryCallExpr& qcall,
         return "cactus::runtime::entt_backend::creation_ordered(registry, " + view + ")";
     }
     if (func_name == "children") {
-        const std::string of_expr          = find_named_arg_value(qcall.named_args, "of", emit_arg);
-        const std::string parent_cpp       = EnttCodegenUtils::trait_cpp_name("Parent", program);
-        const std::string child_view       = "registry.view" + build_view_suffix(qcall.filters, parent_cpp, &program);
-        const std::string requested_parent = gen_temp_name("requested_parent", qcall.location);
-        return "[&]{ const auto " + requested_parent + " = (" + of_expr + "); if (!registry.valid(" + requested_parent +
-               ")) return std::vector<entt::entity>{}; "
-               "std::vector<std::pair<std::uint64_t, entt::entity>> ordered; for (auto e : " +
-               child_view + ") { if (registry.get<" + parent_cpp + ">(e).parent == " + requested_parent +
-               ") ordered.emplace_back(registry.get<"
-               "cactus::runtime::entt_backend::CreationOrdinal>(e).value, e); } std::ranges::sort(ordered); "
-               "std::vector<entt::entity> result; result.reserve(ordered.size()); for (const auto& [ordinal, e] : "
-               "ordered) { (void)ordinal; result.push_back(e); } return result; }()";
+        const std::string of_expr    = find_named_arg_value(qcall.named_args, "of", emit_arg);
+        const std::string parent_cpp = EnttCodegenUtils::trait_cpp_name("Parent", program);
+        const std::string child_view = "registry.view" + build_view_suffix(qcall.filters, parent_cpp, &program);
+        return "cactus::runtime::entt_backend::hierarchy_children(registry, " +
+               EnttCodegenUtils::hierarchy_index_expr(program) + ", (" + of_expr + "), " + child_view + ")";
     }
     if (func_name == "hierarchy_preorder" || func_name == "hierarchy_postorder") {
-        const std::string parent_cpp = EnttCodegenUtils::trait_cpp_name("Parent", program);
-        const bool postorder         = func_name == "hierarchy_postorder";
-        return "[&]{ std::vector<std::pair<std::uint64_t, entt::entity>> ordered; for (auto e : " + view +
-               ") ordered.emplace_back(registry.get<"
-               "cactus::runtime::entt_backend::CreationOrdinal>(e).value, e); std::ranges::sort(ordered); "
-               "std::unordered_set<entt::entity> matching; matching.reserve(ordered.size()); for (const auto& "
-               "[ordinal, e] : ordered) { (void)ordinal; matching.insert(e); } "
-               "std::unordered_map<entt::entity, std::vector<entt::entity>> children; "
-               "std::vector<entt::entity> roots; roots.reserve(ordered.size()); for (const auto& [ordinal, e] : "
-               "ordered) { (void)ordinal; const auto* relation = registry.try_get<" +
-               parent_cpp +
-               ">(e); if (relation != nullptr && registry.valid(relation->parent) && "
-               "matching.contains(relation->parent)) "
-               "children[relation->parent].push_back(e); else roots.push_back(e); } "
-               "std::vector<entt::entity> result; result.reserve(ordered.size()); std::unordered_set<entt::entity> "
-               "visited; visited.reserve(ordered.size()); auto visit = [&](auto&& self, entt::entity e) -> void { if "
-               "(!visited.insert(e).second) return; " +
-               std::string(postorder ? "" : "result.push_back(e); ") +
-               "if (const auto it = children.find(e); it != children.end()) for (const auto child : it->second) "
-               "self(self, child); " +
-               std::string(postorder ? "result.push_back(e); " : "") +
-               "}; for (const auto root : roots) visit(visit, root); for (const auto& [ordinal, e] : ordered) { "
-               "(void)ordinal; visit(visit, e); } return result; }()";
+        return "cactus::runtime::entt_backend::hierarchy_order(registry, " +
+               EnttCodegenUtils::hierarchy_index_expr(program) + ", " + view + ", " +
+               (func_name == "hierarchy_postorder" ? "true" : "false") + ")";
     }
     if (func_name == "parent") {
         // of_expr is arbitrary rewritten DSL text (very plausibly the bare identifier `parent`,
@@ -2212,48 +2179,19 @@ static std::string lower_volume_spatial_query(const QueryCallExpr& qcall,
     return "/* unsupported std.physics.volume.query func: " + func_name + " */";
 }
 
-// Computes the sibling-local (z_index, creation_ordinal) stacking order used by
-// ComputedLayout.draw_order (design.md decision #7): the traversal is recomputed
-// natively per call rather than exposed as a generic sortable hierarchy query, so
-// std.query stays free of widget-specific z-index policy while the authored
-// ArrangeUi rule still assigns the result through an ordinary project statement.
+// The sibling-local (z_index, creation ordinal) stacking order behind
+// ComputedLayout.draw_order. It is a std.ui function, not a sortable std.query,
+// so std.query stays free of widget z-index policy.
 static std::string lower_ui_query_call(const QueryCallExpr& qcall,
                                        const std::string& func_name,
                                        const auto& emit_arg,
                                        const DecoratedProgram& program) {
     if (func_name == "stacking_order") {
-        const std::string of_expr    = find_named_arg_value(qcall.named_args, "of", emit_arg);
-        const std::string node_cpp   = EnttCodegenUtils::trait_cpp_name("std.ui.Node", program);
-        const std::string parent_cpp = EnttCodegenUtils::trait_cpp_name("Parent", program);
-        const std::string requested  = gen_temp_name("stacking_requested", qcall.location);
-        return "[&]{ const auto " + requested + " = (" + of_expr +
-               "); std::vector<std::pair<std::uint64_t, entt::entity>> creation_ordered; for (auto e : "
-               "registry.view<" +
-               node_cpp +
-               ">()) creation_ordered.emplace_back(registry.get<"
-               "cactus::runtime::entt_backend::CreationOrdinal>(e).value, e); "
-               "std::ranges::sort(creation_ordered); std::unordered_set<entt::entity> matching; "
-               "matching.reserve(creation_ordered.size()); for (const auto& [ordinal, e] : creation_ordered) { "
-               "(void)ordinal; matching.insert(e); } std::unordered_map<entt::entity, std::vector<entt::entity>> "
-               "children; std::vector<entt::entity> roots; roots.reserve(creation_ordered.size()); for (const auto& "
-               "[ordinal, e] : creation_ordered) { (void)ordinal; const auto* relation = registry.try_get<" +
-               parent_cpp +
-               ">(e); if (relation != nullptr && registry.valid(relation->parent) && "
-               "matching.contains(relation->parent)) children[relation->parent].push_back(e); else "
-               "roots.push_back(e); } for (auto& [parent_entity, kids] : children) { (void)parent_entity; "
-               "std::ranges::sort(kids, [&](entt::entity left, entt::entity right) { const auto left_z = "
-               "registry.get<" +
-               node_cpp + ">(left).z_index; const auto right_z = registry.get<" + node_cpp +
-               ">(right).z_index; if (left_z != right_z) return left_z < right_z; return "
-               "registry.get<cactus::runtime::entt_backend::CreationOrdinal>(left).value < "
-               "registry.get<cactus::runtime::entt_backend::CreationOrdinal>(right).value; }); } "
-               "std::vector<entt::entity> order; order.reserve(creation_ordered.size()); "
-               "std::unordered_set<entt::entity> visited; visited.reserve(creation_ordered.size()); auto visit = "
-               "[&](auto&& self, entt::entity e) -> void { if (!visited.insert(e).second) return; "
-               "order.push_back(e); if (const auto it = children.find(e); it != children.end()) for (const auto "
-               "child : it->second) self(self, child); }; for (const auto root : roots) visit(visit, root); int "
-               "index = 0; for (const auto e : order) { if (e == " +
-               requested + ") return index; ++index; } return 0; }()";
+        const std::string of_expr  = find_named_arg_value(qcall.named_args, "of", emit_arg);
+        const std::string node_cpp = EnttCodegenUtils::trait_cpp_name("std.ui.Node", program);
+        return "cactus::runtime::entt_backend::hierarchy_stacking_order(registry, " +
+               EnttCodegenUtils::hierarchy_index_expr(program) + ", registry.view<" + node_cpp + ">(), (" +
+               of_expr + "), [&](entt::entity e) { return registry.get<" + node_cpp + ">(e).z_index; })";
     }
     return "/* unsupported std.ui func: " + func_name + " */";
 }
@@ -3063,6 +3001,16 @@ static std::string emit_trait_write(const std::string& cpp,
     return write + ");\n";
 }
 
+// The `parent` value of an `add Parent` the commit must check for a cycle.
+static const FieldAssignment* reparent_value(const AddTraitStmt& add, const DecoratedProgram& program) {
+    if (!add.resolved_trait_id.has_value() || !is_hierarchy_trait(*add.resolved_trait_id) ||
+        !EnttCodegenUtils::checks_reparent(program)) {
+        return nullptr;
+    }
+    const auto parent = std::ranges::find(add.args, "parent", &FieldAssignment::name);
+    return parent == add.args.end() ? nullptr : &*parent;
+}
+
 static std::string emit_add_trait_stmt(const AddTraitStmt& s,
                                        int indent,
                                        const std::vector<std::string>& trait_names,
@@ -3104,6 +3052,11 @@ static std::string emit_add_trait_stmt(const AddTraitStmt& s,
         result << ind << "        cactus::runtime::entt_backend::StructuralCommand::Kind::Add,\n";
         result << ind << "        [=](entt::registry& registry) mutable {\n";
         result << ind << "            if (!registry.valid(" << target_name << ")) { return; }\n";
+        if (const auto* parent = reparent_value(s, program); parent != nullptr) {
+            result << ind << "            if (cactus::runtime::entt_backend::reparent_would_cycle("
+                   << EnttCodegenUtils::hierarchy_index_expr(program) << ", " << target_name << ", "
+                   << deferred_field_value_name(*parent) << ")) { return; }\n";
+        }
         result << ind << "            cancel_projected_" << cpp << "(" << target_name << ");\n";
         if (s.args.empty()) {
             result << ind << "            " << write_trait(target_name, "");
@@ -5076,7 +5029,9 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
             << "(entt::registry& registry) {\n";
         emit_hierarchy_propagation(
             out, program, flat_propagation ? TransformDimension::Flat : TransformDimension::Volume);
-        out << "    cactus::runtime::entt_backend::propagate_hierarchy(registry, PROPAGATION);\n";
+        out << "    cactus::runtime::entt_backend::propagate_hierarchy(\n";
+        out << "        registry, " << EnttCodegenUtils::hierarchy_index_expr(program) << ", PROPAGATION, "
+            << EnttCodegenUtils::hierarchy_strategy_cpp(program) << ");\n";
         out << "}\n\n";
 
         return out.str();
@@ -5085,15 +5040,15 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
     if (is_follow_bodies(sys)) {
         const std::string lt     = EnttCodegenUtils::trait_cpp_name("std.transform.volume.LocalTransform", program);
         const std::string wt     = EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program);
-        const std::string parent = EnttCodegenUtils::trait_cpp_name("Parent", program);
         const std::string body   = EnttCodegenUtils::trait_cpp_name("std.physics.volume.CharacterBody", program);
         out << "void " << system_function_name(program.module_name, sys.name, "tick")
             << "(entt::registry& registry) {\n";
         emit_hierarchy_propagation(out, program, TransformDimension::Volume);
-        out << "    auto children = registry.view<" << parent << ", " << lt << ", " << wt << ">();\n";
-        out << "    const std::vector<entt::entity> candidates(children.begin(), children.end());\n";
+        out << "    const auto bodies = cactus::runtime::entt_backend::creation_ordered(registry, registry.view<" << body
+            << ">());\n";
         out << "    cactus::runtime::entt_backend::propagate_hierarchy_below(\n";
-        out << "        registry, PROPAGATION, candidates, [&](entt::entity entity) { return registry.all_of<" << body
+        out << "        " << EnttCodegenUtils::hierarchy_index_expr(program)
+            << ", PROPAGATION, bodies, [&](entt::entity entity) { return registry.all_of<" << body
             << ">(entity); });\n";
         out << "}\n\n";
 
@@ -5511,19 +5466,19 @@ std::string EnttSystemEmitter::emit_entt_hierarchy_helpers(const DecoratedProgra
         return "";
     }
 
-    const std::string parent_cpp = EnttCodegenUtils::trait_cpp_name("Parent", program);
     std::ostringstream out;
+    // What the hierarchy facts prove; a constant depth bound allows per-level passes.
+    out << "[[maybe_unused]] constexpr auto kCactusHierarchyStrategy = "
+        << EnttCodegenUtils::hierarchy_strategy_cpp(program) << ";\n";
+    if (program.hierarchy.depth_bound.has_value()) {
+        out << "[[maybe_unused]] constexpr std::uint32_t kCactusHierarchyDepthBound = "
+            << *program.hierarchy.depth_bound << ";\n";
+    }
+    out << "\n";
     out << "[[maybe_unused]] static void cactus_destroy_entity_recursive(entt::registry& registry, entt::entity "
            "entity) {\n";
-    out << "    cactus::runtime::entt_backend::destroy_entity_recursive(\n";
-    out << "        registry, entity, [&](entt::entity parent, const auto& visitor) {\n";
-    out << "            auto parent_view = registry.view<" << parent_cpp << ">();\n";
-    out << "            parent_view.each([&](entt::entity child, const " << parent_cpp << "& rel) {\n";
-    out << "                if (rel.parent == parent) {\n";
-    out << "                    visitor(child);\n";
-    out << "                }\n";
-    out << "            });\n";
-    out << "        });\n";
+    out << "    cactus::runtime::entt_backend::destroy_entity_recursive(registry, "
+        << EnttCodegenUtils::hierarchy_index_expr(program) << ", entity);\n";
     out << "}\n\n";
     return out.str();
 }

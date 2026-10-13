@@ -28,6 +28,6 @@ pub extern func children(of: entity_id) list[entity_id]
 # or nonmatching parents make matching nodes traversal roots.
 pub extern func hierarchy_preorder() list[entity_id]
 
-# Matching live entities in deterministic hierarchy postorder. Runtime cycles
-# are traversed finitely and each matching entity appears at most once.
+# Matching live entities in deterministic hierarchy postorder. Missing, stale,
+# or nonmatching parents make matching nodes traversal roots.
 pub extern func hierarchy_postorder() list[entity_id]

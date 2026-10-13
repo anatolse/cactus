@@ -1648,9 +1648,13 @@ TEST_CASE("Semantic: exists forbidden in func body", "[semantic][entity-id]") {
 TEST_CASE("Semantic: self is entity_id in rule handler", "[semantic][hierarchy]") {
     CHECK_FALSE(analyze_has_errors(stdlib_events() + "trait Parent:\n"
                                                      "    var parent: entity_id\n"
+                                                     "trait Link:\n"
+                                                     "    var target: entity_id\n"
                                                      "rule Parenting:\n"
+                                                     "    each:\n"
+                                                     "        Link as link\n"
                                                      "    on tick:\n"
-                                                     "        add Parent:\n"
+                                                     "        add Parent to link.target:\n"
                                                      "            parent = self\n"
                                                      "        destroy self\n"));
 }

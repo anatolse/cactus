@@ -2,6 +2,7 @@
 #include "common/ast_expressions.hpp"
 
 #include "frontend/delivery_cycles.hpp"
+#include "frontend/hierarchy_forest.hpp"
 #include "frontend/symbol_identity.hpp"
 
 #include "backends/cpp-entt/accumulation_plan.hpp"
@@ -541,6 +542,10 @@ void emit_external_command_capability(std::ostringstream& out,
             out << "        generated_queue_structural_command(StructuralCommand::Kind::Add,\n";
             out << "            [target, value = std::move(value)](entt::registry& registry) mutable {\n";
             out << "                if (!registry.valid(target)) { return; }\n";
+            if (is_hierarchy_trait(*command.target) && EnttCodegenUtils::checks_reparent(program)) {
+                out << "                if (cactus::runtime::entt_backend::reparent_would_cycle("
+                    << EnttCodegenUtils::hierarchy_index_expr(program) << ", target, value.parent)) { return; }\n";
+            }
             out << "                ::cancel_projected_" << type << "(target);\n";
             out << "                registry.emplace_or_replace<" << type << ">(target, std::move(value));\n";
             if (EnttPersistenceEmitter::structural_site_tracks_construction(
@@ -3772,12 +3777,16 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                 }
             }
         }
+        if (EnttSystemEmitter::requires_entt_hierarchy_helpers(program)) {
+            out << "    (void)" << EnttCodegenUtils::hierarchy_index_expr(program) << ";\n";
+        }
         // Every handle first, so initializers can name any entity of the module.
         for (const auto* entity : EnttCodegenUtils::declared_entities(program)) {
             out << "    " << EnttCodegenUtils::named_slot_name(entity_symbol(*entity, program))
                 << " = cactus::runtime::entt_backend::create_entity(registry);\n";
         }
-        for (const auto* entity : EnttCodegenUtils::declared_entities(program)) {
+        // A parent is created before its children, so creation order stays a topological order.
+        for (const auto* entity : parent_first_order(EnttCodegenUtils::declared_entities(program)).order) {
             out << "    " << archetype_create_at_function_name(program.module_name, entity->name) << "(registry, "
                 << EnttCodegenUtils::named_slot_name(entity_symbol(*entity, program)) << ");\n";
         }

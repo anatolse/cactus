@@ -137,13 +137,11 @@ TEST_CASE("publication resets every enumerated holder of a replaced-world handle
     const auto publish_at            = body.find("registry = std::move(staged);");
     const auto clear_projected_at    = body.find("clear_projected_traits(registry);");
     const auto reset_pointer_at      = body.find("reset_pointer_router_state();");
-    const auto reset_destruction_at  = body.find("reset_pending_destruction_state();");
     const auto reset_editor_at       = body.find("reset_editor_camera_rig_state();");
     const auto reset_activation_at   = body.find("generated_reset_scheduler_state();");
     REQUIRE(publish_at != std::string::npos);
     REQUIRE(clear_projected_at != std::string::npos);
     REQUIRE(reset_pointer_at != std::string::npos);
-    REQUIRE(reset_destruction_at != std::string::npos);
     REQUIRE(reset_editor_at != std::string::npos);
     REQUIRE(reset_activation_at != std::string::npos);
 
@@ -153,7 +151,6 @@ TEST_CASE("publication resets every enumerated holder of a replaced-world handle
     // itself and are reset after.
     CHECK(clear_projected_at < publish_at);
     CHECK(publish_at < reset_pointer_at);
-    CHECK(publish_at < reset_destruction_at);
     CHECK(publish_at < reset_editor_at);
     CHECK(publish_at < reset_activation_at);
 }
@@ -227,5 +224,44 @@ entity Boss:
 TEST_CASE("a schema without derived reachability checks no trait sets", "[codegen-entt][persistence][restore]") {
     const auto unit = generate(kSource);
     CHECK(contains(unit->code, ".checks_trait_sets = false,"));
+}
+
+TEST_CASE("a schema requires parents first only when the program never reparents",
+          "[codegen-entt][persistence][restore][hierarchy-forest]") {
+    const std::string base = R"(module world
+
+pub extern event frame:
+    dt: float
+
+phase tick:
+    from:
+        frame
+
+trait Parent:
+    let parent: entity_id
+
+trait Health:
+    persist var current: int = 100
+
+pub extern event Grab:
+    item: entity_id
+
+entity Boss:
+    Health
+)";
+    const auto fixed  = generate(base, true);
+    const auto moving = generate(base + R"(
+rule Hold:
+    each:
+        Health
+
+    on Grab:
+        add Parent to Grab.item:
+            parent = self
+)",
+                                 true);
+    CHECK(contains(fixed->code, ".parents_first = true,"));
+    CHECK(contains(moving->code, ".parents_first = false,"));
+    CHECK(contains(generate(kSource)->code, ".parents_first = false,"));
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

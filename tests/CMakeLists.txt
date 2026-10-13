@@ -179,6 +179,14 @@ add_executable(test_archetype_reachability test_archetype_reachability.cpp)
 target_link_libraries(test_archetype_reachability PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME ArchetypeReachabilityTests COMMAND test_archetype_reachability)
 
+add_executable(test_hierarchy_forest test_hierarchy_forest.cpp)
+target_link_libraries(test_hierarchy_forest PRIVATE cactus_frontend Catch2::Catch2WithMain)
+target_compile_definitions(test_hierarchy_forest PRIVATE
+    CACTUS_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
+    CACTUS_TEST_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+)
+add_test(NAME HierarchyForestTests COMMAND test_hierarchy_forest)
+
 add_executable(test_delivery_cycles test_delivery_cycles.cpp)
 target_link_libraries(test_delivery_cycles PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME DeliveryCyclesTests COMMAND test_delivery_cycles)
@@ -293,6 +301,10 @@ add_test(NAME RuntimeEntityAllocatorTests COMMAND test_runtime_entity_allocator)
 add_executable(test_runtime_publication_reset test_runtime_publication_reset.cpp)
 target_link_libraries(test_runtime_publication_reset PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
 add_test(NAME RuntimePublicationResetTests COMMAND test_runtime_publication_reset)
+
+add_executable(test_runtime_hierarchy test_runtime_hierarchy.cpp)
+target_link_libraries(test_runtime_hierarchy PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
+add_test(NAME RuntimeHierarchyTests COMMAND test_runtime_hierarchy)
 
 add_executable(test_runtime_named_slots test_runtime_named_slots.cpp)
 target_link_libraries(test_runtime_named_slots PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
@@ -574,6 +586,12 @@ cactus_add_headless_behavior_test(test_transform_hierarchy_headless_behavior
     CACTUS_SOURCE examples/stdlib-fixtures/transform_hierarchy.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_transform_hierarchy_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_hierarchy_reparent_headless_behavior
+    CACTUS_SOURCE examples/stdlib-fixtures/hierarchy_reparent.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_hierarchy_reparent_headless_behavior.cpp
 )
 
 cactus_add_headless_behavior_test(test_team_score_reduce_headless_behavior

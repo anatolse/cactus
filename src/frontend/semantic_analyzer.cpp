@@ -3502,6 +3502,22 @@ std::unordered_map<std::string, const ResolvedTrait*> SemanticAnalyzer::build_fi
     return bindings;
 }
 
+std::vector<const ResolvedTrait*> SemanticAnalyzer::filter_trait_order(const FilterClause& filter) const {
+    std::vector<const ResolvedTrait*> traits;
+    const auto append = [&traits](const ResolvedTrait* trait) {
+        if (trait != nullptr && !std::ranges::contains(traits, trait)) {
+            traits.push_back(trait);
+        }
+    };
+    for (const auto& entry : filter.entries) {
+        append(find_resolved_trait(entry.resolved_trait_id, entry.qualified_name));
+    }
+    for (const auto& name : filter.trait_names) {
+        append(find_resolved_trait(name));
+    }
+    return traits;
+}
+
 void SemanticAnalyzer::bind_lifecycle_trigger_alias(
     const EventHandlerNode& handler,
     std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
@@ -6244,8 +6260,10 @@ void SemanticAnalyzer::validate_event_usage(  // NOLINT(readability-function-cog
                 bind_lifecycle_trigger_alias(handler, filter_bindings, local_bindings);
                 local_bindings.insert(aggregates.begin(), aggregates.end());
 
+                bare_field_traits_ = reduced ? std::vector<const ResolvedTrait*>{} : filter_trait_order(rule->filter);
                 validate_event_stmts(
                     handler.body, filter_bindings, local_bindings, handler_event, rule->name, pair_scope_ptr);
+                bare_field_traits_.clear();
             }
         }
     }
@@ -6516,6 +6534,11 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
         }
         validate_trait_field_values(
             *trait, set.args, "`set " + set.trait_name + "`", filter_bindings, locals, handler_event, pair_scope);
+        for (const auto& arg : set.args) {
+            if (const auto* field = find_field_in(trait->fields, arg.name); field != nullptr && field->is_let) {
+                report_let_field_write(arg.location, *trait, arg.name);
+            }
+        }
     };
 
     auto validate_destroy = [this, &filter_bindings, &locals, handler_event, pair_scope](const DestroyStmt& destroy) {
@@ -6554,8 +6577,10 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
             TypeInfo target_type = make_unknown_type();
             if (const auto target = assign_trait_target(*assign_stmt); target.has_value()) {
                 const auto& [access, fields] = *target;
-                target_rejected              = reject_trait_access_write(
-                    *assign_stmt, *access, filter_bindings, locals, handler_event, pair_scope);
+
+                target_rejected = reject_trait_access_write(
+                                      *assign_stmt, *access, filter_bindings, locals, handler_event, pair_scope) ||
+                                  reject_let_field_write(*assign_stmt, filter_bindings, locals);
                 if (!target_rejected) {
                     target_type = infer_trait_access_type(
                         *access, fields, assign_stmt->location, filter_bindings, locals, handler_event, pair_scope);
@@ -6576,7 +6601,8 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
                     }
                     target_rejected = true;
                 } else if (!target_rejected) {
-                    target_rejected = reject_local_assignment(*assign_stmt, filter_bindings, locals);
+                    target_rejected = reject_local_assignment(*assign_stmt, filter_bindings, locals) ||
+                                      reject_let_field_write(*assign_stmt, filter_bindings, locals);
                 }
 
                 // Rebuild the target as a member chain (`hp.health` for `hp.health -= 1.0`)
@@ -6766,6 +6792,63 @@ bool SemanticAnalyzer::reject_local_assignment(
     }
     errors_.error(stmt.location, "assignment to undeclared local '" + stmt.name + "'; declare it with `var`");
     return true;
+}
+
+std::optional<SemanticAnalyzer::WrittenTraitField> SemanticAnalyzer::written_trait_field(
+    const VarAssign& stmt,
+    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+    const std::unordered_map<std::string, TypeInfo>& locals) const {
+    const auto in = [](const ResolvedTrait* trait, const std::string& field) -> std::optional<WrittenTraitField> {
+        const auto* found = trait == nullptr ? nullptr : find_field_in(trait->fields, field);
+        if (found == nullptr) {
+            return std::nullopt;
+        }
+        return WrittenTraitField{.trait = trait, .field = found};
+    };
+    if (const auto target = assign_trait_target(stmt); target.has_value()) {
+        const auto& [access, fields] = *target;
+        if (!access->resolved_trait_id.has_value() || fields.empty()) {
+            return std::nullopt;
+        }
+        return in(find_resolved_trait(*access->resolved_trait_id), fields.front());
+    }
+    if (const auto local = locals.find(stmt.name); local != locals.end()) {
+        const auto& symbol = local->second.symbol_id;
+        if (stmt.path.empty() || !symbol.has_value() || symbol->kind != SymbolKind::Trait) {
+            return std::nullopt;
+        }
+        return in(find_resolved_trait(*symbol), stmt.path.front());
+    }
+    if (!stmt.path.empty()) {
+        const auto bound = filter_bindings.find(stmt.name);
+        return bound == filter_bindings.end() ? std::nullopt : in(bound->second, stmt.path.front());
+    }
+    for (const auto* trait : bare_field_traits_) {
+        if (auto written = in(trait, stmt.name); written.has_value()) {
+            return written;
+        }
+    }
+    return std::nullopt;
+}
+
+bool SemanticAnalyzer::reject_let_field_write(
+    const VarAssign& stmt,
+    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+    const std::unordered_map<std::string, TypeInfo>& locals) {
+    const auto written = written_trait_field(stmt, filter_bindings, locals);
+    if (!written.has_value() || !written->field->is_let) {
+        return false;
+    }
+    report_let_field_write(stmt.location, *written->trait, written->field->name);
+    return true;
+}
+
+void SemanticAnalyzer::report_let_field_write(const SourceLocation& location,
+                                              const ResolvedTrait& trait,
+                                              const std::string& field) {
+    errors_.error(location,
+                  "can't assign let field '" + trait.name + "." + field + "'; give it a value with 'add " +
+                      trait.name + ":' or declare it 'var'");
 }
 
 namespace {

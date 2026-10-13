@@ -187,6 +187,10 @@ add_executable(test_semantic_states test_semantic_states.cpp)
 target_link_libraries(test_semantic_states PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticStatesTests COMMAND test_semantic_states)
 
+add_executable(test_semantic_let_fields test_semantic_let_fields.cpp)
+target_link_libraries(test_semantic_let_fields PRIVATE cactus_frontend Catch2::Catch2WithMain)
+add_test(NAME SemanticLetFieldsTests COMMAND test_semantic_let_fields)
+
 # Unified name resolution tests (unified-name-resolution change)
 add_executable(test_name_resolution test_name_resolution.cpp)
 target_link_libraries(test_name_resolution PRIVATE cactus_frontend Catch2::Catch2WithMain)

@@ -1176,6 +1176,20 @@ private:
                                    const ResolvedStruct* handler_event,
                                    const PairScope* pair_scope);
     void report_pair_read_only(const VarAssign& stmt, const PairBindingScope* binding);
+    struct WrittenTraitField {
+        const ResolvedTrait* trait;
+        const ResolvedField* field;
+    };
+    // The trait field whose stored value an assignment changes, if the target lands in one.
+    std::optional<WrittenTraitField> written_trait_field(
+        const VarAssign& stmt,
+        const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+        const std::unordered_map<std::string, TypeInfo>& locals) const;
+    // Returns true when the assignment writes a `let` trait field.
+    bool reject_let_field_write(const VarAssign& stmt,
+                                const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                                const std::unordered_map<std::string, TypeInfo>& locals);
+    void report_let_field_write(const SourceLocation& location, const ResolvedTrait& trait, const std::string& field);
     // Returns true when the target writes a trait through an entity_id value.
     bool reject_entity_id_trait_write(const VarAssign& stmt,
                                       const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
@@ -1352,6 +1366,8 @@ private:
     /// and backward-compat trait_names into a name/alias -> ResolvedTrait map.
     [[nodiscard]] std::unordered_map<std::string, const ResolvedTrait*> build_filter_bindings(
         const FilterClause& filter) const;
+    // The filter's traits in `each:` order, the order codegen resolves a bare field name in.
+    [[nodiscard]] std::vector<const ResolvedTrait*> filter_trait_order(const FilterClause& filter) const;
     // `on added T as x` binds x like a filter alias; `on removed T as old` binds a read-only T value.
     void bind_lifecycle_trigger_alias(const EventHandlerNode& handler,
                                       std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
@@ -1908,6 +1924,9 @@ private:
 
     // Loop variables in scope, innermost last; they keep their own read-only diagnostic.
     std::vector<std::string> foreach_variables_;
+
+    // The current rule handler's filter traits; a bare field name writes the first that declares it.
+    std::vector<const ResolvedTrait*> bare_field_traits_;
 
     // Expressions are typed more than once; report each entity_id read once.
     mutable std::set<std::tuple<std::string, int, int>> reported_entity_id_reads_;

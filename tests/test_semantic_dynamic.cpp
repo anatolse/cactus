@@ -1450,6 +1450,50 @@ TEST_CASE("Semantic: set inside a func is rejected", "[semantic][deferred-set]")
     CHECK(err.find("`set` only allowed inside rule event handlers") != std::string::npos);
 }
 
+static std::vector<std::string> set_let_errors(const std::string& assignments) {
+    const std::string source = "module test\n" + STDLIB_EVENTS +
+                               "trait Armor:\n"
+                               "    let base: int = 1\n"
+                               "    let cap: int = 5\n"
+                               "    var bonus: int = 0\n"
+                               "rule Patch:\n"
+                               "    on tick:\n"
+                               "        set Armor on self:\n" +
+                               assignments;
+    ErrorReporter errors;
+    Lexer lexer(source, "test.cactus", errors);
+    Parser parser(lexer.tokenize(), errors);
+    auto program = parser.parse_program();
+    SemanticAnalyzer analyzer(errors);
+    analyzer.analyze(program);
+    std::vector<std::string> messages;
+    for (const auto& diagnostic : errors.diagnostics()) {
+        if (diagnostic.level == DiagnosticLevel::Error) {
+            messages.push_back(diagnostic.message);
+        }
+    }
+    return messages;
+}
+
+TEST_CASE("Semantic: set naming a let field is rejected", "[semantic][deferred-set][let-fields]") {
+    const auto errors = set_let_errors("            base = 2\n");
+    REQUIRE(errors.size() == 1);
+    CHECK(errors[0] == "can't assign let field 'Armor.base'; give it a value with 'add Armor:' or declare it 'var'");
+}
+
+TEST_CASE("Semantic: set reports every let field in its block", "[semantic][deferred-set][let-fields]") {
+    const auto errors = set_let_errors("            base = 2\n"
+                                       "            bonus = 1\n"
+                                       "            cap = 9\n");
+    REQUIRE(errors.size() == 2);
+    CHECK(errors[0].contains("'Armor.base'"));
+    CHECK(errors[1].contains("'Armor.cap'"));
+}
+
+TEST_CASE("Semantic: set of var fields beside a let field is accepted", "[semantic][deferred-set][let-fields]") {
+    CHECK(set_let_errors("            bonus = 1\n").empty());
+}
+
 TEST_CASE("Semantic: set on a pair binding is accepted", "[semantic][deferred-set]") {
     CHECK(first_error("trait Push:\n"
                       "    var amount: float = 0.0\n"

@@ -175,7 +175,7 @@ TEST_CASE("a set patch keeps an unmarked field's construction value and saves a 
     spawner.patch_target  = enemy;
     spawner.pending_patch = 1;
     drive_frame(registry, kStep);
-    REQUIRE(registry.get<world_persistence__Health>(enemy).maximum == 900);
+    REQUIRE(registry.get<world_persistence__Health>(enemy).regen == 9);
     REQUIRE(registry.get<world_persistence__Health>(enemy).current == 42);
 
     const auto snapshot = capture(registry);
@@ -183,7 +183,7 @@ TEST_CASE("a set patch keeps an unmarked field's construction value and saves a 
     REQUIRE(record != nullptr);
     const auto* health = trait_of(*record, "world_persistence.Health");
     REQUIRE(health != nullptr);
-    CHECK(int_field(health->construction, "maximum") == 700);
+    CHECK(int_field(health->construction, "regen") == 1);
     CHECK(int_field(health->persisted, "current") == 42);
 }
 

@@ -15,10 +15,11 @@ const:
 
 # ── Traits ────────────────────────────────────────────────────────────────────
 
-# `maximum` is rebuilt from the archetype baseline and the spawn arguments;
-# only `current` is written into the save file.
+# `maximum` and `regen` are rebuilt from the archetype baseline and the spawn
+# arguments; only `current` is written into the save file.
 pub trait Health:
     let maximum: int = 100
+    var regen: int = 1
     persist var current: int = 100
 
 # A particle carries no durable field, so no save ever mentions one — however
@@ -150,9 +151,9 @@ rule SpawnWorld:
                 tf.LocalTransform:
                     position = vec2(1.0, 2.0)
         # A deferred patch is a mutation, not construction: a save keeps the
-        # spawn-time `maximum` and records the patched `current`.
+        # spawn-time `regen` and records the patched `current`.
         if spawner.pending_patch > 0:
             spawner.pending_patch -= 1
             set Health on spawner.patch_target:
-                maximum = 900
+                regen = 9
                 current = 42

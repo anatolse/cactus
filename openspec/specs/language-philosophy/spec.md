@@ -397,16 +397,9 @@ The goal SHALL be that a definition the compiler cannot show to be correct does 
 - **THEN** it contains no declaration whose only purpose is to prove one of the four properties
 
 ### Requirement: Known correctness gaps are listed
-Every class of definition that the compiler accepts today although it may break one of the four properties SHALL be listed in this requirement, with the property it breaks. A change that makes the compiler reject a class, or makes the class correct by definition, SHALL remove its entry. A new feature SHALL NOT add an entry.
+Every class of definition that the compiler accepts today although it may break one of the four properties SHALL be listed in this requirement, with the property it breaks. A change that makes the compiler reject a class, or makes the class correct by definition, SHALL remove its entry. A new feature SHALL NOT add an entry. A class found later that was already accepted SHALL be added as soon as it is found, and that addition is not a new feature.
 
-The known gaps are:
-
-| Gap | Property |
-|---|---|
-| Creation order of entities spawned by two unordered handlers, where a later reader observes it | determinacy |
-| Unordered handlers that emit different events whose consumers conflict, so cascade queue order decides the result | determinacy |
-| Ties in spatial single-entity queries (`nearest`, `raycast`) follow storage order | determinacy |
-| A rule domain or `without:` trait that no reachable entity can match, and a trigger with no producer | non-vacuity |
+No class is known today. The order of every result that crosses the native boundary is declared and enforced as `native-result-ordering` requires, so a native function or emitter cannot leak storage order without a failing test.
 
 #### Scenario: Closing a gap removes its entry
 - **WHEN** a change makes the compiler reject conflicts that only declaration order orients
@@ -415,6 +408,10 @@ The known gaps are:
 #### Scenario: A feature may not add a gap
 - **WHEN** a proposed feature would let the compiler accept a definition whose result depends on source position
 - **THEN** the proposal is revised so the compiler rejects it or gives it one defined meaning
+
+#### Scenario: A discovered gap is listed
+- **WHEN** a review finds an accepted class of definitions whose result depends on storage order
+- **THEN** a row naming that class and the property it breaks is added until a change closes it
 
 ### Requirement: Delayed occurrences belong to the producing clock
 Every activation SHALL have a clock. A phase activation's clock is its phase: a non-periodic phase has one activation per batch, and a periodic phase has one activation per repetition. Every other activation — the load and unload boundaries, the startup arrival activation, and an activation of an event that no phase claims as its root — SHALL belong to the host clock.

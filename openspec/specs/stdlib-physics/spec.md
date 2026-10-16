@@ -346,3 +346,17 @@ An entity with `Collider` and a shape collider SHALL be solid when it also has `
 - **WHEN** a body moves into a trigger during `solve` and a keep rule in `group: physics.contacts` tests `physics.touching` against it
 - **THEN** the kept trait is added at the same `fixed_tick`'s commit
 
+### Requirement: 2D collider queries break ties by creation order
+`query_cast_nearest` SHALL return, among candidate contacts with exactly equal `distance`, the contact of the earliest-created collider entity. `query_overlap_deepest` SHALL return, among candidates with exactly equal overlap depth, the earliest-created one. `query_overlap_all` SHALL return its contacts in stable creation order of the hit entities. No result SHALL depend on collider shape kind or on the backend's storage order.
+
+#### Scenario: Cast onto two flush tiles hits the older tile
+- **WHEN** ground tiles T1 and T2, created in that order, sit flush at one height and a falling subject's cast reaches both at the same distance
+- **THEN** `query_cast_nearest` returns a contact whose entity is T1
+
+#### Scenario: Box and circle colliders tie by age, not by shape
+- **WHEN** a circle collider created first and a box collider created second overlap the subject with the same depth
+- **THEN** `query_overlap_deepest` returns the circle collider's contact
+
+#### Scenario: All-overlap contacts are in creation order
+- **WHEN** colliders A, B and C, created in that order, all overlap the subject
+- **THEN** `query_overlap_all` returns contacts for A, B, C in that order

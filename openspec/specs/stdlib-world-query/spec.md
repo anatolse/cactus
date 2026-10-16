@@ -158,3 +158,21 @@ The `std.query` namespace SHALL provide `hierarchy_postorder() list[entity_id]` 
 - **WHEN** a matching entity's parent was destroyed and its handle is stale
 - **THEN** the entity is a root of the snapshot
 
+### Requirement: Spatial queries break ties by creation order
+The spatial single-entity queries of `std.physics.flat.query` and `std.physics.volume.query` (`nearest`, `raycast`) SHALL return, among candidates with exactly equal distance, the earliest-created one. The spatial list queries (`overlap_box`, `overlap_circle`, `overlap_sphere`) SHALL return their matches in stable creation order. No result SHALL depend on the backend's storage order, including after entities were destroyed, re-added traits, or a world restore.
+
+#### Scenario: Nearest tie returns the oldest entity
+- **WHEN** enemies A and B are created in that order, both exactly 5.0 from `p`, and nothing else matches
+- **THEN** `query.nearest[Enemy](from = p)` returns A
+
+#### Scenario: Tie result survives storage churn
+- **WHEN** enemies A, B and C are equidistant from `p`, created in that order, and `Enemy` is removed from A and added back
+- **THEN** `query.nearest[Enemy](from = p)` returns A
+
+#### Scenario: Raycast tie returns the oldest entity
+- **WHEN** walls A and B, created in that order, are both first hit by a ray at the same distance
+- **THEN** `query.raycast[Wall](origin = o, dir = d, max_dist = 100.0)` returns A
+
+#### Scenario: Overlap list is in creation order
+- **WHEN** crates C1, C2 and C3 are created in that order, C1 is destroyed, C4 is created, and all live crates overlap a box
+- **THEN** `query.overlap_box[Crate](center = c, size = s)` returns C2, C3, C4

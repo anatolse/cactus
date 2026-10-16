@@ -301,7 +301,7 @@ Two handlers' writes to the same trait field SHALL commute when both have kind A
 Handlers eligible in the same activation SHALL also conflict through shared channels, using the same orientation rules as data conflicts and recording an edge that names the channel:
 
 - **Commands**: per canonical trait, `add` of a marker trait (a trait with no fields) commutes with another `add` of it, and `remove` commutes with `remove`. `destroy` commutes with every command. `spawn` commutes with every command. `add` of a trait with fields conflicts with another `add` of that trait. `add` and `remove` of one trait conflict. `set` of a trait conflicts with `add` or `remove` of that trait, and with another `set` of it when their patched fields overlap.
-- **Events**: two handlers that may emit the same event, or that issue commands which deliver the same `on added` or `on removed` trigger, conflict when some consumer of that event or trigger observes occurrence order. A consumer observes occurrence order when two of its executions do not commute under the data, command and effect rules above, or when it may emit an event that a consumer which observes occurrence order handles.
+- **Occurrences**: two handlers P1 and P2 conflict when there is a position (see "Occurrences are delivered in generations"), counted from the position at which P1 and P2 run, where a run reached from P1 and a run reached from P2 do not commute under the data, command and effect rules here. A run is *reached* from P through emitted events, through lifecycle triggers delivered by commands P issues, and transitively through the runs those reach. Two runs of one handler count as two runs. Runs reached through a delayed edge SHALL be treated as sharing one position with every other run reached through a delayed edge from P1 or P2, whatever activation they land in. Runs reached from one handler alone never conflict through this rule, because their order is that handler's production order.
 - **Effects**: two handlers that carry the same effect domain conflict when at least one of them acts on it. Two handlers that only observe a domain do not conflict through it.
 
 #### Scenario: Marker adds commute
@@ -328,6 +328,26 @@ Handlers eligible in the same activation SHALL also conflict through shared chan
 - **WHEN** handlers A and B both emit `Spoke` with no order between them and the consumer of `Spoke` runs `log.last = line`
 - **THEN** compilation fails with an unorientable-conflict error naming A, B, `Spoke` and the consumer
 
+#### Scenario: Different events with conflicting consumers need ordered producers
+- **WHEN** unordered handlers A and B emit `Hit` and `Heal` to the same entity, the `Hit` handler runs `h.hp = 0` and the `Heal` handler runs `h.hp = 10`
+- **THEN** compilation fails with an unorientable-conflict error naming A, B, `Hit`, `Heal` and both consumers
+
+#### Scenario: Consumers at different generations do not race
+- **WHEN** unordered handlers A and B emit `E1` and `E2`, the `E1` handler emits `E3`, the `E2` handler runs `h.hp = 10` and the `E3` handler runs `h.hp = 0`
+- **THEN** no edge connects A and B through these events, and the program compiles
+
+#### Scenario: Different lifecycle triggers with conflicting consumers need ordered producers
+- **WHEN** unordered handlers A and B run `add Burning` and `add Wet` on the same entity, the `on added Burning` handler runs `t.temp = 100.0` and the `on added Wet` handler runs `t.temp = 0.0`
+- **THEN** compilation fails with an unorientable-conflict error naming A, B, both triggers and both consumers
+
+#### Scenario: One producer's emissions never race with each other
+- **WHEN** one handler emits `Hit` and then `Heal`, the `Hit` handler runs `h.hp = 0` and the `Heal` handler runs `h.hp = 10`
+- **THEN** the program compiles and the `Heal` handler's write is the final value
+
+#### Scenario: A same-event chain still conflicts at its deeper generation
+- **WHEN** unordered handlers A and B both emit `Ping`, the `Ping` handler only emits `Pong`, and the `Pong` handler runs `log.last = line`
+- **THEN** compilation fails with an unorientable-conflict error naming A, B, the `Pong` handler and the path through `Ping` and `Pong`
+
 #### Scenario: Observing effect calls add no edge
 - **WHEN** two handlers of one activation both only call `input.pressed`, and nothing else conflicts
 - **THEN** no edge connects them
@@ -337,7 +357,7 @@ Handlers eligible in the same activation SHALL also conflict through shared chan
 - **THEN** compilation fails with an unorientable-conflict error naming both handlers and the `input` domain
 
 ### Requirement: Unorientable conflicts are compile errors
-When two handlers conflict and no meaningful orientation from "Contract conflict edges are oriented only by meaningful rules" orders them, compilation SHALL fail. The diagnostic SHALL be located at one of the two handlers and SHALL name both canonical handlers; for a data conflict, each overlapping field with both handlers' write kinds (or "read"); for a channel conflict, the commands, event and observing consumer, or effect domain. It SHALL suggest adding `after:` naming either handler to the other. The compiler SHALL report every unorientable conflict in the program, not only the first. A conflict that crosses modules SHALL be reported when the program is linked.
+When two handlers conflict and no meaningful orientation from "Contract conflict edges are oriented only by meaningful rules" orders them, compilation SHALL fail. The diagnostic SHALL be located at one of the two handlers and SHALL name both canonical handlers; for a data conflict, each overlapping field with both handlers' write kinds (or "read"); for a command or effect conflict, the commands or effect domain; for an occurrence conflict, the two reached runs that do not commute, and the events or lifecycle triggers through which each producer reaches its run. It SHALL suggest adding `after:` naming either handler to the other. The compiler SHALL report every unorientable conflict in the program, not only the first. A conflict that crosses modules SHALL be reported when the program is linked.
 
 #### Scenario: Diagnostic names both sides and both fixes
 - **WHEN** `Regen/on tick` assigns `h.hp = h.max_hp` and `Poison/on tick` runs `h.hp -= 1`, and nothing orders them
@@ -350,6 +370,10 @@ When two handlers conflict and no meaningful orientation from "Contract conflict
 #### Scenario: Cross-module ambiguity is a link error
 - **WHEN** two modules that don't import each other each have a rule that assigns `Score.value` in `tick`
 - **THEN** linking the program fails with an unorientable-conflict error naming both handlers
+
+#### Scenario: Occurrence conflict names the path to each run
+- **WHEN** unordered `A/on tick` and `B/on tick` emit `Hit` and `Heal`, whose handlers both assign `Health.hp`
+- **THEN** the error names `A/on tick` reaching the `Hit` handler through `Hit`, `B/on tick` reaching the `Heal` handler through `Heal`, `Health.hp` with kinds Assign and Assign, and suggests `after:` between A and B
 
 ### Requirement: A trigger with no producer is a compile error
 After linking, the compiler SHALL report an error for every handler in a non-stdlib module whose trigger has no producer of any kind. Producers SHALL be counted only from reachable handlers and reachable archetypes: an `emits:` in an unreachable handler produces nothing, and `on added T` / `on removed T` has a commit-synthesized producer only when a reachable archetype can gain or lose `T`. The diagnostic SHALL name the handler and its trigger. A stdlib handler with no producer SHALL NOT be an error; it is recorded as unreachable, like a stdlib rule whose domain matches nothing.
@@ -420,3 +444,16 @@ After delayed edges are removed, the delivery graph is acyclic. For every activa
 #### Scenario: A cycle adds no depth beyond one hop
 - **WHEN** a `fixed_tick` handler emits `Knock` and the `Knock` handler emits `Knock` to itself
 - **THEN** the recorded cascade depth for the `fixed_tick` activation is 2
+
+### Requirement: Occurrences are delivered in generations
+Within one activation, occurrences SHALL be delivered in generations. The handlers dispatched at the activation's start (phase handlers, the host event's handlers, or the arrival deliveries) form generation 0. Occurrences emitted by runs of generation d form generation d + 1. Every occurrence of generation d SHALL be delivered before any occurrence of generation d + 1. Within one generation, occurrences SHALL be delivered in the order they were produced. Delayed occurrences delivered at the start of an activation's cascade SHALL belong to generation 1 of that activation, ahead of the occurrences its generation 0 produces.
+
+Each commit round SHALL start a new cascade: its lifecycle deliveries form generation 0 of that round and are ordered as "Deterministic delivery order" in `dsl-trait-lifecycle-triggers` defines. A run's *position* is the pair (commit round, generation), with the activation's own cascade as round 0. Positions are ordered lexicographically. A run at an earlier position SHALL complete before any run at a later position starts.
+
+#### Scenario: Generations do not interleave
+- **WHEN** a `tick` handler emits `A` and then `B`, and the `A` handler emits `C`
+- **THEN** the `A` handler runs, then the `B` handler, then the `C` handler
+
+#### Scenario: Emission order inside one handler is kept
+- **WHEN** one handler emits `DrawDebugLine2D`, then `DrawDebugTriangle2D`, then `DrawDebugLine2D`
+- **THEN** the three renderer runs happen in that order

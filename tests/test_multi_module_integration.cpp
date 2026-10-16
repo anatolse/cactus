@@ -1326,6 +1326,9 @@ TEST_CASE("integration: where: rule contracts match the recorded baseline", "[in
     REQUIRE(baseline_file.good());
     std::ostringstream expected;
     expected << baseline_file.rdbuf();
-    CHECK(actual.str() == expected.str());
+    // A checkout may convert the baseline to CRLF.
+    auto expected_text = expected.str();
+    std::erase(expected_text, '\r');
+    CHECK(actual.str() == expected_text);
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

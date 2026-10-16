@@ -315,7 +315,7 @@ endfunction()
 function(cactus_add_headless_behavior_test TARGET_NAME)
     set(oneValueArgs CACTUS_SOURCE BACKEND TEST_SOURCE)
     cmake_parse_arguments(CACTUS_HEADLESS_TEST
-        "LINEARIZATION_HARNESS"
+        "LINEARIZATION_HARNESS;FORCE_ROW_STAGE"
         "${oneValueArgs}"
         ""
         ${ARGN}
@@ -334,6 +334,10 @@ function(cactus_add_headless_behavior_test TARGET_NAME)
     set_property(GLOBAL APPEND PROPERTY CACTUS_HEADLESS_FIXTURES "${TARGET_NAME}|${CACTUS_HEADLESS_TEST_CACTUS_SOURCE}")
     set(cactus_source "${CMAKE_SOURCE_DIR}/${CACTUS_HEADLESS_TEST_CACTUS_SOURCE}")
     set(generated_output "${CACTUS_GENERATED_EXAMPLES_DIR}/${TARGET_NAME}.headless.generated.cpp")
+    set(codegen_flags)
+    if(CACTUS_HEADLESS_TEST_FORCE_ROW_STAGE)
+        list(APPEND codegen_flags --force-row-stage)
+    endif()
 
     add_custom_command(
         OUTPUT "${generated_output}"
@@ -342,6 +346,7 @@ function(cactus_add_headless_behavior_test TARGET_NAME)
                 "$<SHELL_PATH:${cactus_source}>"
                 --backend "${CACTUS_HEADLESS_TEST_BACKEND}"
                 --output "$<SHELL_PATH:${generated_output}>"
+                ${codegen_flags}
         DEPENDS cactus "${cactus_source}"
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
         COMMENT "Generating headless behavioral test fixture for ${TARGET_NAME} (${CACTUS_HEADLESS_TEST_BACKEND})"
@@ -361,6 +366,9 @@ function(cactus_add_headless_behavior_test TARGET_NAME)
     )
     if(CACTUS_HEADLESS_TEST_LINEARIZATION_HARNESS)
         target_compile_definitions(${TARGET_NAME} PRIVATE CACTUS_LINEARIZATION_HARNESS)
+    endif()
+    if(CACTUS_HEADLESS_TEST_FORCE_ROW_STAGE)
+        target_compile_definitions(${TARGET_NAME} PRIVATE CACTUS_FORCE_ROW_STAGE)
     endif()
     set_property(TARGET ${TARGET_NAME} PROPERTY CXX_CLANG_TIDY "")
 

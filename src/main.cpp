@@ -35,6 +35,7 @@ static void print_usage(const char* program) {
               << "  --backend <cpp-entt>                Code generation backend (default: cpp-entt)\n"
               << "  --output <file>                      Output file (default: stdout)\n"
               << "  --module-path <dir>                  Additional module search directory (repeatable)\n"
+              << "  --force-row-stage                    Test only: evaluate every clause expression per row\n"
               << "  --help                               Show this help message\n";
 }
 
@@ -340,6 +341,7 @@ struct CliArgs {
     std::string backend = "cpp-entt";
     std::string output_file;
     std::vector<fs::path> module_paths;  // 6.1: --module-path flag
+    bool force_row_stage = false;
 };
 
 /// Parses argv into `out`. Returns an exit code if main() should return
@@ -373,6 +375,8 @@ static std::optional<int> parse_cli_args(int argc, char** argv, CliArgs& out) {
                 return 1;
             }
             out.module_paths.emplace_back(argv[++i]);
+        } else if (std::strcmp(argv[i], "--force-row-stage") == 0) {
+            out.force_row_stage = true;
         } else if (argv[i][0] == '-') {
             std::cerr << "error: unknown option '" << argv[i] << "'\n";
             return 1;
@@ -565,6 +569,11 @@ int main(int argc, char* argv[]) try {
         }
     }
     decorated.ast = merged_codegen_prog ? merged_codegen_prog.get() : root_prog.get();
+    if (args.force_row_stage) {
+        for (auto& handler : decorated.execution_graph.handlers) {
+            handler.contract.staging = {};
+        }
+    }
     std::string generated;
     if (!generate_cpp(decorated, generated) || !write_generated_output(generated, output_file, backend)) {
         return 1;

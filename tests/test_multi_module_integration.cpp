@@ -18,8 +18,10 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <optional>
 #include <sstream>
+#include <unordered_set>
 
 using namespace cactus;
 namespace fs = std::filesystem;
@@ -587,6 +589,7 @@ static ImportedSymbols pub_symbols_from(const std::string& module_name, const De
                                                  .every_seconds   = phase.every_seconds,
                                                  .max_repetitions = phase.max_repetitions};
     }
+    syms.consts = prog.consts;
     return syms;
 }
 
@@ -1039,7 +1042,6 @@ TEST_CASE("integration: proposal frame graph and contracted handlers lower end t
     CHECK(code.find("AudioOutput__on__runtime_phase_contracts__SoundRequested") != std::string::npos);
 }
 
-// NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)
 
 // ── Collider queries (add-volume-shape-queries) ─────────────────────────────
 
@@ -1180,3 +1182,150 @@ TEST_CASE("survey: delayed delivery edges of every example and fixture", "[.][de
         }
     }
 }
+
+static std::string describe_fields(const FieldAccess& access) {
+    if (access.all) {
+        return "*";
+    }
+    std::string text;
+    for (const auto& field : access.fields) {
+        text += (text.empty() ? "" : ",") + field;
+    }
+    return text;
+}
+
+static std::string describe_field_table(const std::unordered_map<SymbolId, FieldAccess>& table) {
+    std::vector<std::string> entries;
+    for (const auto& [trait, access] : table) {
+        entries.push_back(make_canonical_id(trait) + "{" + describe_fields(access) + "}");
+    }
+    std::ranges::sort(entries);
+    std::string text;
+    for (const auto& entry : entries) {
+        text += " " + entry;
+    }
+    return text;
+}
+
+static std::string describe_named_table(const NamedFieldTable& table) {
+    std::vector<std::string> entries;
+    for (const auto& [entity, traits] : table) {
+        entries.push_back(make_canonical_id(entity) + ":" + describe_field_table(traits));
+    }
+    std::ranges::sort(entries);
+    std::string text;
+    for (const auto& entry : entries) {
+        text += " [" + entry + "]";
+    }
+    return text;
+}
+
+static std::string describe_where_contract(const HandlerContract& contract) {
+    std::ostringstream out;
+    std::vector<std::string> reads;
+    for (const auto& trait : contract.reads) {
+        reads.push_back(make_canonical_id(trait));
+    }
+    std::ranges::sort(reads);
+    out << "    reads:";
+    for (const auto& read : reads) {
+        out << " " << read;
+    }
+    out << "\n    read_fields:" << describe_field_table(contract.read_fields) << "\n";
+    out << "    write_fields:" << describe_field_table(contract.write_fields) << "\n";
+    std::vector<std::string> kinds;
+    for (const auto& [trait, fields] : contract.write_kinds) {
+        for (const auto& [field, kind] : fields) {
+            kinds.push_back(make_canonical_id(trait) + "." + field + "=" + std::to_string(static_cast<int>(kind.kind)) +
+                            "/" + std::to_string(static_cast<int>(kind.op)));
+        }
+    }
+    std::ranges::sort(kinds);
+    out << "    write_kinds:";
+    for (const auto& kind : kinds) {
+        out << " " << kind;
+    }
+    std::vector<std::string> bound;
+    for (const auto& access : contract.bound_reads) {
+        bound.push_back(std::to_string(access.binding_index) + ":" + make_canonical_id(access.trait));
+    }
+    std::ranges::sort(bound);
+    out << "\n    bound_reads:";
+    for (const auto& entry : bound) {
+        out << " " << entry;
+    }
+    out << "\n    named_reads:" << describe_named_table(contract.named_reads) << "\n";
+    out << "    named_writes:" << describe_named_table(contract.named_writes) << "\n";
+    out << "    named_requirements:";
+    for (const auto& requirement : contract.named_requirements) {
+        out << " " << make_canonical_id(requirement.entity) << "/" << make_canonical_id(requirement.trait);
+    }
+    out << "\n    iteration_order: " << (contract.iteration_order == IterationOrder::Creation ? "creation" : "free")
+        << "\n";
+    return out.str();
+}
+
+// Contracts of every handler whose rule has `where:`, across examples and fixtures.
+// On an intended contract change, copy the actual file the test writes over the baseline.
+TEST_CASE("integration: where: rule contracts match the recorded baseline", "[integration][where-baseline]") {
+    const auto examples = stdlib_dir().parent_path() / "examples";
+    std::vector<fs::path> roots;
+    for (const auto& entry : fs::recursive_directory_iterator(examples)) {
+        const auto relative = fs::relative(entry.path(), examples).generic_string();
+        if (entry.path().extension() == ".cactus" && !relative.contains("build/")) {
+            roots.push_back(entry.path());
+        }
+    }
+    for (const auto& entry : fs::directory_iterator(CACTUS_TEST_FIXTURES_DIR)) {
+        if (entry.path().extension() == ".cactus") {
+            roots.push_back(entry.path());
+        }
+    }
+    std::ranges::sort(roots);
+    std::map<std::string, std::string> contracts;
+    for (const auto& root : roots) {
+        std::ifstream ifs(root);
+        std::ostringstream source;
+        source << ifs.rdbuf();
+        const auto text = source.str();
+        if (!text.contains("where:") && !text.contains("std.collision")) {
+            continue;
+        }
+        const auto start = text.find("module ") + 7;
+        const auto name  = text.substr(start, text.find_first_of("\r\n", start) - start);
+        ProgramNode merged_ast;
+        const auto program = link_with_stdlib(text, name, integration_build_dir() / "where_baseline", merged_ast,
+                                              root.parent_path());
+        REQUIRE(program.has_value());
+        std::unordered_set<SymbolId> where_rules;
+        for (const auto& decl : merged_ast.declarations) {
+            const auto* rule = std::get_if<RuleNode>(&decl);
+            if (rule != nullptr && rule->where_clause.has_value() && rule->resolved_rule_id.has_value()) {
+                where_rules.insert(*rule->resolved_rule_id);
+            }
+        }
+        for (const auto& handler : program->execution_graph.handlers) {
+            if (where_rules.contains(handler.identity.rule)) {
+                contracts.emplace(root.filename().generic_string() + " " + root.parent_path().filename().generic_string() +
+                                      " " + handler.identity.canonical_id(),
+                                  describe_where_contract(handler.contract));
+            }
+        }
+        std::error_code ec;
+        fs::remove_all(integration_build_dir() / "where_baseline", ec);
+    }
+    std::ostringstream actual;
+    for (const auto& [handler, contract] : contracts) {
+        actual << handler << "\n" << contract;
+    }
+    const auto baseline_path = fs::path(CACTUS_TEST_FIXTURES_DIR) / "where_contract_baseline.txt";
+    const auto actual_path = fs::temp_directory_path() / "where_contract_actual.txt";
+    std::ofstream(actual_path, std::ios::binary) << actual.str();
+    INFO("actual contracts written to " << actual_path.string());
+    std::ifstream baseline_file(baseline_path, std::ios::binary);
+    REQUIRE(baseline_file.good());
+    std::ostringstream expected;
+    expected << baseline_file.rdbuf();
+    CHECK(actual.str() == expected.str());
+}
+// NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

@@ -346,6 +346,24 @@ struct ReductionPlan {
     friend bool operator==(const ReductionPlan&, const ReductionPlan&) = default;
 };
 
+// The earliest point of a pass at which a clause expression's value is fixed.
+// Serialized by numeric value: append new stages, never reorder.
+enum class ClauseStage : std::uint8_t { Row, Activation, BindingLeft, BindingRight };
+
+// One stage per `where:` predicate, `order by:` key and reducer, indexed like
+// the rule's clauses. A missing entry is row stage.
+struct RuleStaging {
+    std::vector<ClauseStage> where;
+    std::vector<ClauseStage> order_by;
+    std::vector<ClauseStage> reducers;
+
+    friend bool operator==(const RuleStaging&, const RuleStaging&) = default;
+};
+
+[[nodiscard]] inline ClauseStage stage_at(const std::vector<ClauseStage>& stages, std::size_t index) {
+    return index < stages.size() ? stages[index] : ClauseStage::Row;
+}
+
 // Serialized by numeric value: append new kinds, never reorder.
 enum class WriteKind : std::uint8_t { Assign, Accum, Join, General };
 enum class JoinOp : std::uint8_t { Max, Min, Or, And };
@@ -384,6 +402,9 @@ using NamedFieldTable = std::unordered_map<SymbolId, std::unordered_map<SymbolId
 [[nodiscard]] const FieldAccess& field_access(const std::unordered_map<SymbolId, FieldAccess>& table, const SymbolId& trait);
 [[nodiscard]] std::optional<FieldAccess> overlapping_fields(const FieldAccess& left, const FieldAccess& right);
 void merge_field_access(FieldAccess& into, const FieldAccess& from);
+// Whether a pass's field writes touch any field a clause expression reads.
+[[nodiscard]] bool clause_reads_written(const std::unordered_map<SymbolId, FieldAccess>& reads,
+                                        const std::unordered_map<SymbolId, FieldAccess>& writes);
 
 struct HandlerContract {
     HandlerDomainKind domain_kind = HandlerDomainKind::Selectionless;
@@ -394,6 +415,7 @@ struct HandlerContract {
     // was found in the rule's `where:` clause (spatial-broadphase-runtime).
     std::optional<SpatialJoinPlan> spatial_join;
     std::optional<ReductionPlan> reduction;
+    RuleStaging staging;
 
     [[nodiscard]] bool is_selectionless() const {
         return domain_kind == HandlerDomainKind::Selectionless;
@@ -491,6 +513,8 @@ void finalize_write_kinds(HandlerContract& contract);
 struct InferredHandlerContract : HandlerContract {
     SymbolId rule;
     ResolvedHandlerTrigger trigger;
+    // Inference only: the fields each streaming `where:` predicate reads, for staging.
+    std::unordered_map<const ExprNode*, std::unordered_map<SymbolId, FieldAccess>> clause_reads;
 };
 
 enum class HandlerImplementationKind : std::uint8_t { Cactus, External };
@@ -972,15 +996,6 @@ private:
     void synthesize_state_traits(ProgramNode& program);
     void collect_types(ProgramNode& program);
     bool declare_module_scope_symbol(SymbolKind kind, const std::string& name, const SourceLocation& loc);
-
-    // dsl-where-clause: runs before type/trait resolution. Desugars each
-    // where:-bearing rule's predicate list into an equivalent
-    // `if not (pred_1 and pred_2 and ...): return` guard, cloned and
-    // prepended to every one of that rule's handler bodies. This is the only
-    // place where: is lowered — codegen and contract inference never learn
-    // it exists; they see an ordinary leading guard statement, identical to
-    // one an author could have written by hand (see design.md).
-    static void desugar_where_clauses(ProgramNode& program);
 
     // Phase 2: Resolve types in fields
     void resolve_all_types(ProgramNode& program);
@@ -1699,6 +1714,13 @@ private:
                                const LocalNames& locals,
                                HandlerContract& contract,
                                const std::function<bool(const ExprNode&, const LocalNames&)>& resolve_read) const;
+    // Folds every rule clause expression's reads into `contract`, and keeps the
+    // own reads of each `where:` predicate checked between invocations in
+    // `contract.clause_reads` for staging.
+    void walk_clause_reads(const RuleNode& rule,
+                           const LocalNames& locals,
+                           InferredHandlerContract& contract,
+                           const std::function<bool(const ExprNode&, const LocalNames&)>& resolve_read) const;
     // Records a resolved named or pair trait read; false when `access` is unresolved.
     bool record_trait_access_read(HandlerContract& contract,
                                   const TraitAccessExpr& access,

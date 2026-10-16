@@ -1386,25 +1386,50 @@ std::vector<std::string> emit_sort_key_extractors(std::ostringstream& out,
     return names;
 }
 
-// Lexicographic comparator body over already-emitted key extractors, using the
+// Stable-sorts the vector `rows` by keys evaluated once per row, using the
 // runtime's total key order: later keys break earlier ties, and `tie_break`
-// decides rows equal on every key.
-void emit_sort_comparator_body(std::ostringstream& out,
-                               const RuleNode& sys,
-                               const std::vector<std::string>& key_names,
-                               const std::string& lhs,
-                               const std::string& rhs,
-                               int indent,
-                               const std::string& tie_break = "false") {
+// (over row indices `cactus_lhs`/`cactus_rhs`) decides rows equal on every key.
+// `row_keys[i]` lowers key i for the row named `cactus_row`.
+void emit_keyed_sort(std::ostringstream& out,
+                     const RuleNode& sys,
+                     const std::string& rows,
+                     const std::vector<std::string>& row_keys,
+                     int indent,
+                     const std::string& tie_break = "false") {
     const std::string ind(static_cast<size_t>(indent) * 4, ' ');
-    for (std::size_t i = 0; i < key_names.size(); ++i) {
-        out << ind << "if (const int cactus_order = cactus::num::key_order(" << key_names[i] << "(" << lhs << "), "
-            << key_names[i] << "(" << rhs << "), " << (sys.order_by[i].descending ? "true" : "false") << ");\n";
-        out << ind << "    cactus_order != 0) {\n";
-        out << ind << "    return cactus_order < 0;\n";
-        out << ind << "}\n";
+    out << ind << "{\n";
+    for (std::size_t i = 0; i < row_keys.size(); ++i) {
+        const auto key_of = "cactus_key_of_" + std::to_string(i);
+        const auto keys   = "cactus_keys_" + std::to_string(i);
+        out << ind << "    auto " << key_of << " = [&](const auto& cactus_row) { return " << row_keys[i] << "; };\n";
+        out << ind << "    std::vector<std::decay_t<decltype(" << key_of << "(" << rows << ".front()))>> " << keys
+            << ";\n";
+        out << ind << "    " << keys << ".reserve(" << rows << ".size());\n";
+        out << ind << "    for (const auto& cactus_row : " << rows << ") {\n";
+        out << ind << "        " << keys << ".push_back(" << key_of << "(cactus_row));\n";
+        out << ind << "    }\n";
     }
-    out << ind << "return " << tie_break << ";\n";
+    out << ind << "    std::vector<std::size_t> cactus_order(" << rows << ".size());\n";
+    out << ind << "    for (std::size_t cactus_i = 0; cactus_i < cactus_order.size(); ++cactus_i) {\n";
+    out << ind << "        cactus_order[cactus_i] = cactus_i;\n";
+    out << ind << "    }\n";
+    out << ind << "    std::ranges::stable_sort(cactus_order, [&](std::size_t cactus_lhs, std::size_t cactus_rhs) {\n";
+    for (std::size_t i = 0; i < row_keys.size(); ++i) {
+        const auto keys = "cactus_keys_" + std::to_string(i);
+        out << ind << "        if (const int cactus_cmp = cactus::num::key_order(" << keys << "[cactus_lhs], " << keys
+            << "[cactus_rhs], " << (sys.order_by[i].descending ? "true" : "false") << ");\n";
+        out << ind << "            cactus_cmp != 0) {\n";
+        out << ind << "            return cactus_cmp < 0;\n";
+        out << ind << "        }\n";
+    }
+    out << ind << "        return " << tie_break << ";\n";
+    out << ind << "    });\n";
+    out << ind << "    auto cactus_sorted = " << rows << ";\n";
+    out << ind << "    for (std::size_t cactus_i = 0; cactus_i < cactus_order.size(); ++cactus_i) {\n";
+    out << ind << "        cactus_sorted[cactus_i] = " << rows << "[cactus_order[cactus_i]];\n";
+    out << ind << "    }\n";
+    out << ind << "    " << rows << " = std::move(cactus_sorted);\n";
+    out << ind << "}\n";
 }
 
 // Returns the anchor trait it sorted by (see primary_sort_trait), or empty
@@ -1459,17 +1484,20 @@ std::string emit_sort_call(std::ostringstream& out,
     out << ")) {\n";
     out << ind << "    " << snapshot_name << ".push_back(entity);\n";
     out << ind << "}\n";
-    out << ind << "std::ranges::stable_sort(" << snapshot_name << ", [&](entt::entity a, entt::entity b) {\n";
+    std::vector<std::string> row_keys;
+    row_keys.reserve(key_names.size());
+    for (const auto& key_name : key_names) {
+        row_keys.push_back(key_name + "(cactus_row)");
+    }
     // The snapshot is in pool order, so equal keys fall back to creation order.
-    emit_sort_comparator_body(out,
-                              sys,
-                              key_names,
-                              "a",
-                              "b",
-                              indent + 1,
-                              "registry.get<cactus::runtime::entt_backend::CreationOrdinal>(a).value < "
-                              "registry.get<cactus::runtime::entt_backend::CreationOrdinal>(b).value");
-    out << ind << "});\n";
+    emit_keyed_sort(out,
+                    sys,
+                    snapshot_name,
+                    row_keys,
+                    indent,
+                    "registry.get<cactus::runtime::entt_backend::CreationOrdinal>(" + snapshot_name +
+                        "[cactus_lhs]).value < registry.get<cactus::runtime::entt_backend::CreationOrdinal>(" +
+                        snapshot_name + "[cactus_rhs]).value");
     out << ind << "registry.storage<" << anchor << ">().sort_as(" << snapshot_name << ".begin(), " << snapshot_name
         << ".end());\n";
     return anchor;
@@ -3726,41 +3754,182 @@ static std::vector<std::string> emit_pair_sort_key_extractors(
     return names;
 }
 
-// The body of a retained `where:` filter lambda (dsl-rule-limit): `return
-// (pred0) && (pred1) && ...;`, each predicate lowered through `rewrite`.
-// Shared by the pair and unary where-filter lambdas below, which differ only
-// in how a single predicate gets rewritten (pair scope vs. filter traits).
-static void emit_where_predicate_conjunction(std::ostringstream& out,
-                                             const std::vector<std::unique_ptr<ExprNode>>& predicates,
-                                             const std::function<std::string(const ExprNode&)>& rewrite) {
-    out << "        return ";
-    for (std::size_t i = 0; i < predicates.size(); ++i) {
-        out << (i == 0 ? "" : " && ") << "(" << rewrite(*predicates[i]) << ")";
-    }
-    out << ";\n";
+// Without a contract every clause expression is row stage.
+static const RuleStaging& staging_of(const HandlerContract* contract) {
+    static const RuleStaging unstaged;
+    return contract == nullptr ? unstaged : contract->staging;
 }
 
-// One `[&](entt::entity <left>, entt::entity <right>) { return ...; }` guard
-// for a rule whose `where:` was retained rather than desugared into the body
-// (dsl-rule-limit): the predicates lower through the same pair-scope
-// expression emitter the sort keys use, conjoined in source order. Returns the
-// lambda's name, or empty when this rule has no retained `where:`.
-static std::string emit_pair_where_filter(std::ostringstream& out,
-                                          const RuleNode& sys,
-                                          const std::vector<PairBindingCodegen>& pair_binding_codegens,
-                                          const PairCodegenScope& pair_codegen_scope,
-                                          const DecoratedProgram& program) {
-    if (!sys.limit.has_value() || !sys.where_clause.has_value() || sys.where_clause->predicates.empty()) {
+// The `where:` predicates recorded at `stage`, in source order.
+static std::vector<const ExprNode*> where_at(const RuleNode& sys, const HandlerContract* contract, ClauseStage stage) {
+    std::vector<const ExprNode*> predicates;
+    if (!sys.where_clause.has_value()) {
+        return predicates;
+    }
+    const auto& stages = staging_of(contract).where;
+    for (std::size_t i = 0; i < sys.where_clause->predicates.size(); ++i) {
+        if (stage_at(stages, i) == stage) {
+            predicates.push_back(sys.where_clause->predicates[i].get());
+        }
+    }
+    return predicates;
+}
+
+static ClauseStage binding_stage(std::size_t binding_index) {
+    return binding_index == 0 ? ClauseStage::BindingLeft : ClauseStage::BindingRight;
+}
+
+static bool is_binding_stage(ClauseStage stage) {
+    return stage == ClauseStage::BindingLeft || stage == ClauseStage::BindingRight;
+}
+
+// `values[i]` = `call` evaluated for member i of one binding's snapshot, where
+// `call` reads the member as `cactus_member` and `prototype` names its type.
+static void emit_member_table(std::ostringstream& out,
+                              const std::string& values,
+                              const std::string& prototype,
+                              const std::string& call,
+                              const std::string& binding_name) {
+    out << "    std::vector<std::decay_t<decltype(" << prototype << ")>> " << values << ";\n";
+    out << "    " << values << ".reserve(" << binding_name << "_snapshot.size());\n";
+    out << "    for (const auto cactus_member : " << binding_name << "_snapshot) {\n";
+    out << "        " << values << ".push_back(" << call << ");\n";
+    out << "    }\n";
+}
+
+// `(pred0) && (pred1) && ...`, each predicate lowered through `rewrite`.
+static std::string where_conjunction(const std::vector<const ExprNode*>& predicates,
+                                     const std::function<std::string(const ExprNode&)>& rewrite) {
+    std::string conjunction;
+    for (std::size_t i = 0; i < predicates.size(); ++i) {
+        conjunction += (i == 0 ? "(" : " && (") + rewrite(*predicates[i]) + ")";
+    }
+    return conjunction;
+}
+
+static void emit_where_predicate_conjunction(std::ostringstream& out,
+                                             const std::vector<const ExprNode*>& predicates,
+                                             const std::function<std::string(const ExprNode&)>& rewrite) {
+    out << "        return " << where_conjunction(predicates, rewrite) << ";\n";
+}
+
+// Checks `predicates` at the start of an invocation, against live values.
+static void emit_where_guard(std::ostringstream& out,
+                             const std::vector<const ExprNode*>& predicates,
+                             const std::function<std::string(const ExprNode&)>& rewrite) {
+    if (predicates.empty()) {
+        return;
+    }
+    out << "        if (!(" << where_conjunction(predicates, rewrite) << ")) { return; }\n";
+}
+
+// The conjunction of the activation-stage predicates, or empty when there are none.
+static std::string activation_condition(const RuleNode& sys,
+                                        const HandlerContract* contract,
+                                        const DecoratedProgram& program) {
+    return where_conjunction(where_at(sys, contract, ClauseStage::Activation), [&](const ExprNode& predicate) {
+        return rewrite_expr(predicate, {}, program, {}, {}, nullptr, nullptr);
+    });
+}
+
+// An unreduced pass whose activation-stage predicates fail runs no invocation.
+static void emit_activation_gate(std::ostringstream& out,
+                                 const RuleNode& sys,
+                                 const HandlerContract* contract,
+                                 const DecoratedProgram& program) {
+    const auto condition = activation_condition(sys, contract, program);
+    if (condition.empty()) {
+        return;
+    }
+    out << "    if (!(" << condition << ")) {\n";
+    out << "        return;\n";
+    out << "    }\n";
+}
+
+// The snapshot position of each entity of one binding, for per-pass tables.
+static void emit_snapshot_positions(std::ostringstream& out, const std::string& name) {
+    out << "    const cactus::runtime::entt_backend::SnapshotPositions cactus_positions_" << name << "(" << name
+        << "_snapshot);\n";
+}
+
+// Drops the members of one binding's snapshot that fail its binding-stage
+// predicates, keeping snapshot order. Returns the member test's name, or empty.
+static std::string emit_binding_filter(std::ostringstream& out,
+                                       const RuleNode& sys,
+                                       const HandlerContract* contract,
+                                       std::size_t binding_index,
+                                       const PairCodegenScope& pair_codegen_scope,
+                                       const DecoratedProgram& program) {
+    const auto predicates = where_at(sys, contract, binding_stage(binding_index));
+    if (predicates.empty()) {
         return {};
     }
-    auto name = gen_temp_name("pair_where", sys.where_clause->location);
-    out << "    auto " << name << " = [&](entt::entity " << pair_binding_codegens[0].scope.binding_name
-        << ", entt::entity " << pair_binding_codegens[1].scope.binding_name << ") {\n";
-    emit_where_predicate_conjunction(out, sys.where_clause->predicates, [&](const ExprNode& predicate) {
+    const auto& name = pair_codegen_scope.bindings[binding_index].binding_name;
+    auto keep        = "cactus_keep_" + name;
+    out << "    auto " << keep << " = [&](entt::entity " << name << ") {\n";
+    emit_where_predicate_conjunction(out, predicates, [&](const ExprNode& predicate) {
+        return rewrite_expr(predicate, {}, program, {}, {}, &pair_codegen_scope);
+    });
+    out << "    };\n";
+    out << "    std::erase_if(" << name << "_snapshot, [&](entt::entity cactus_member) { return !" << keep
+        << "(cactus_member); });\n";
+    return keep;
+}
+
+// One `[&](entt::entity <left>, entt::entity <right>) { return ...; }` filter
+// for a limited rule's row predicates, checked at collection (dsl-rule-limit).
+// Returns the lambda's name, or empty when there are none.
+static std::string emit_pair_where_filter(std::ostringstream& out,
+                                          const std::vector<const ExprNode*>& predicates,
+                                          const PairCodegenScope& pair_codegen_scope,
+                                          const DecoratedProgram& program) {
+    if (predicates.empty()) {
+        return {};
+    }
+    auto name = gen_temp_name("pair_where", predicates.front()->location);
+    out << "    auto " << name << " = [&]([[maybe_unused]] entt::entity "
+        << pair_codegen_scope.bindings[0].binding_name << ", [[maybe_unused]] entt::entity "
+        << pair_codegen_scope.bindings[1].binding_name << ") {\n";
+    emit_where_predicate_conjunction(out, predicates, [&](const ExprNode& predicate) {
         return rewrite_expr(predicate, {}, program, {}, {}, &pair_codegen_scope);
     });
     out << "    };\n";
     return name;
+}
+
+// Sorts a pair pass's tuple buffer. A binding-stage key is computed once per
+// member of its binding, every other key once per buffered tuple.
+static void emit_pair_sort(std::ostringstream& out,
+                           const RuleNode& sys,
+                           const HandlerContract* contract,
+                           const std::string& tuple_buffer_name,
+                           const std::vector<PairBindingCodegen>& pair_binding_codegens,
+                           const PairCodegenScope& pair_codegen_scope,
+                           const DecoratedProgram& program) {
+    const auto key_names =
+        emit_pair_sort_key_extractors(out, sys, pair_binding_codegens, pair_codegen_scope, program);
+    std::vector<std::string> row_keys;
+    std::array<bool, 2> positioned{};
+    for (std::size_t i = 0; i < key_names.size(); ++i) {
+        const auto stage = stage_at(staging_of(contract).order_by, i);
+        if (!is_binding_stage(stage)) {
+            row_keys.push_back(key_names[i] + "(cactus_row.first, cactus_row.second)");
+            continue;
+        }
+        const bool left        = stage == ClauseStage::BindingLeft;
+        const auto& name       = pair_codegen_scope.bindings[left ? 0 : 1].binding_name;
+        const auto member_keys = "cactus_member_keys_" + std::to_string(i);
+        const auto call        = key_names[i] + (left ? "(cactus_member, entt::null)" : "(entt::null, cactus_member)");
+        emit_member_table(out, member_keys, key_names[i] + "(entt::null, entt::null)", call, name);
+        if (!std::exchange(positioned[left ? 0 : 1], true)) {
+            emit_snapshot_positions(out, name);
+        }
+        auto row_key = member_keys;
+        row_key += "[cactus_positions_" + name;
+        row_key += left ? ".find(cactus_row.first)]" : ".find(cactus_row.second)]";
+        row_keys.push_back(std::move(row_key));
+    }
+    emit_keyed_sort(out, sys, tuple_buffer_name, row_keys, 1);
 }
 
 // The expression a spatial plan's slots are paths into: the matched `where:`
@@ -3912,6 +4081,9 @@ static void emit_pair_handler_body(std::ostringstream& out,
     for (const auto& binding : pair_binding_codegens) {
         emit_pair_binding_snapshot(out, binding, 1);
     }
+    const std::array<std::string, 2> keeps{
+        emit_binding_filter(out, sys, contract, 0, pair_codegen_scope, program),
+        emit_binding_filter(out, sys, contract, 1, pair_codegen_scope, program)};
     const auto& left  = pair_binding_codegens[0];
     const auto& right = pair_binding_codegens[1];
     LexicalLocalBindings pair_locals;
@@ -3928,11 +4100,11 @@ static void emit_pair_handler_body(std::ostringstream& out,
     const auto pair_body =
         rewrite_stmt_block(handler.body, 5, {}, program, {}, false, {}, &pair_codegen_scope, pair_locals, pair_kinds);
     const auto pair_body_name = gen_temp_name("pair_body", handler.location);
+    const bool limited        = sys.limit.has_value();
     // dsl-rule-order-by on a pair domain: a pair pass has no backing component
     // pool for registry.sort<> to permute, so an ordered rule buffers its
-    // tuples and sorts the buffer instead, reusing emit_sort_comparator_body
-    // (the same lexicographic comparator the unary registry.sort<> path
-    // emits). Every dispatch site below then feeds the collector rather than
+    // tuples and sorts the buffer instead, with the same keyed sort the unary
+    // path uses. Every dispatch site below then feeds the collector rather than
     // invoking the body directly, and the sorted buffer is replayed once at
     // the end. A rule without `order by:` pays none of this and keeps
     // streaming exactly as before.
@@ -3940,7 +4112,6 @@ static void emit_pair_handler_body(std::ostringstream& out,
     // candidate sequence in order before it can decide which tuples occupy
     // slots, so a limited rule materializes even without `order by:`.
     const bool ordered           = !sys.order_by.empty();
-    const bool limited           = sys.limit.has_value();
     const bool buffered          = ordered || limited;
     const auto tuple_buffer_name = gen_temp_name("pair_tuples", handler.location);
     const auto dispatch_name     = buffered ? gen_temp_name("pair_collect", handler.location) : pair_body_name;
@@ -3950,14 +4121,21 @@ static void emit_pair_handler_body(std::ostringstream& out,
     // call site already binds the pair to locals named exactly left/right's
     // binding names, so the lambda's parameters are those same two names —
     // no per-site parameter mapping is needed.
-    out << "    auto " << pair_body_name << " = [&](entt::entity " << left.scope.binding_name << ", entt::entity "
-        << right.scope.binding_name << ") {\n";
+    const auto row_predicates = where_at(sys, contract, ClauseStage::Row);
+    out << "    auto " << pair_body_name << " = [&]([[maybe_unused]] entt::entity " << left.scope.binding_name
+        << ", [[maybe_unused]] entt::entity " << right.scope.binding_name << ") {\n";
+    if (!limited) {
+        emit_where_guard(out, row_predicates, [&](const ExprNode& predicate) {
+            return rewrite_expr(predicate, {}, program, {}, {}, &pair_codegen_scope);
+        });
+    }
     out << pair_body;
     out << "    };\n";
-    // The retained `where:` filter runs here, at collection, so a rejected
+    // A limited rule's row predicates run here, at collection, so a rejected
     // candidate never reaches the buffer and therefore can never occupy a
     // slot truncation would otherwise have given it (dsl-rule-limit).
-    const auto where_filter_name = emit_pair_where_filter(out, sys, pair_binding_codegens, pair_codegen_scope, program);
+    const auto where_filter_name =
+        limited ? emit_pair_where_filter(out, row_predicates, pair_codegen_scope, program) : std::string{};
     if (buffered) {
         out << "    std::vector<std::pair<entt::entity, entt::entity>> " << tuple_buffer_name << ";\n";
         out << "    auto " << dispatch_name << " = [&](entt::entity cactus_left, entt::entity cactus_right) {\n";
@@ -3985,7 +4163,7 @@ static void emit_pair_handler_body(std::ostringstream& out,
     for (std::size_t i = 0; i < left.cpp_types.size(); ++i) {
         out << (i == 0 ? "" : ", ") << left.cpp_types[i];
     }
-    out << ">(target)) {\n";
+    out << ">(target)" << (keeps[0].empty() ? "" : " && " + keeps[0] + "(target)") << ") {\n";
     out << "            auto " << left.scope.binding_name << " = target;\n";
     out << "            for (auto " << right.scope.binding_name << " : " << right.scope.binding_name
         << "_snapshot) {\n";
@@ -3996,7 +4174,7 @@ static void emit_pair_handler_body(std::ostringstream& out,
     for (std::size_t i = 0; i < right.cpp_types.size(); ++i) {
         out << (i == 0 ? "" : ", ") << right.cpp_types[i];
     }
-    out << ">(target)) {\n";
+    out << ">(target)" << (keeps[1].empty() ? "" : " && " + keeps[1] + "(target)") << ") {\n";
     out << "            for (auto " << left.scope.binding_name << " : " << left.scope.binding_name << "_snapshot) {\n";
     out << "                if (" << left.scope.binding_name << " == target) { continue; }\n";
     out << "                auto " << right.scope.binding_name << " = target;\n";
@@ -4026,15 +4204,9 @@ static void emit_pair_handler_body(std::ostringstream& out,
         return;
     }
     if (ordered) {
-        const auto key_names =
-            emit_pair_sort_key_extractors(out, sys, pair_binding_codegens, pair_codegen_scope, program);
-        // stable_sort, not sort: tuples with equal keys must keep the pass's own
-        // left-binding-major collection order (dsl-rule-order-by).
-        out << "    std::ranges::stable_sort(" << tuple_buffer_name
-            << ", [&](const auto& cactus_lhs, const auto& cactus_rhs) {\n";
-        emit_sort_comparator_body(
-            out, sys, key_names, "cactus_lhs.first, cactus_lhs.second", "cactus_rhs.first, cactus_rhs.second", 2);
-        out << "    });\n";
+        // Stable: tuples with equal keys keep the pass's own left-binding-major
+        // collection order (dsl-rule-order-by).
+        emit_pair_sort(out, sys, contract, tuple_buffer_name, pair_binding_codegens, pair_codegen_scope, program);
     }
     if (limited) {
         emit_pair_limit_replay(out, sys, tuple_buffer_name, pair_body_name, pair_codegen_scope, program);
@@ -4132,6 +4304,7 @@ static void emit_filtered_handler_body(std::ostringstream& out,
                                        const EventHandlerNode& handler,
                                        const HandlerDomainCodegen& domain,
                                        const DecoratedProgram& program,
+                                       const HandlerContract* contract,
                                        bool iterate_in_creation_order) {
     const auto& filter_bindings_list = domain.filter_bindings_list;
     const auto& filter_traits        = domain.filter_traits;
@@ -4160,18 +4333,24 @@ static void emit_filtered_handler_body(std::ostringstream& out,
     out << "        (void)entity;\n";
     emit_filter_alias_bindings(out, domain.filter, program, 2);
     out << domain.prelude;
+    const bool limited         = sys.limit.has_value();
+    const auto row_predicates  = where_at(sys, contract, ClauseStage::Row);
+    const auto rewrite_unary   = [&](const ExprNode& predicate) {
+        return rewrite_expr(predicate, filter_traits, program, {}, filter_cpp_overrides);
+    };
+    if (!limited) {
+        emit_where_guard(out, row_predicates, rewrite_unary);
+    }
     out << filtered_body;
     out << "    };\n";
-    // A limited rule keeps its `where:` unlowered (dsl-rule-limit), so the
-    // predicate becomes a second lambda of exactly the handler body's shape —
-    // same entity/component parameters, same filter-alias bindings — checked
-    // before a candidate can be counted toward the limit or delivered.
-    const bool limited            = sys.limit.has_value();
-    const bool has_retained_where = limited && sys.where_clause.has_value() &&
-                                    !sys.where_clause->predicates.empty();
+    // A limited rule checks its row predicates in a second lambda of exactly
+    // the handler body's shape — same entity/component parameters, same
+    // filter-alias bindings — before a candidate can be counted toward the
+    // limit or delivered (dsl-rule-limit).
+    const bool has_retained_where = limited && !row_predicates.empty();
     std::string where_filter_name;
     if (has_retained_where) {
-        where_filter_name = gen_temp_name("where_filter", sys.where_clause->location);
+        where_filter_name = gen_temp_name("where_filter", row_predicates.front()->location);
         out << "    auto " << where_filter_name << " = [&](entt::entity entity";
         for (const auto& cpp_name : data_cpp_types) {
             out << ", [[maybe_unused]] " << cpp_name << "& " << cpp_name << "_comp";
@@ -4179,9 +4358,7 @@ static void emit_filtered_handler_body(std::ostringstream& out,
         out << ") {\n";
         out << "        (void)entity;\n";
         emit_filter_alias_bindings(out, domain.filter, program, 2);
-        emit_where_predicate_conjunction(out, sys.where_clause->predicates, [&](const ExprNode& predicate) {
-            return rewrite_expr(predicate, filter_traits, program, {}, filter_cpp_overrides);
-        });
+        emit_where_predicate_conjunction(out, row_predicates, rewrite_unary);
         out << "    };\n";
     }
     const auto call_args = [&data_cpp_types](std::ostringstream& os) {
@@ -4270,7 +4447,8 @@ static void emit_lifecycle_handler_body(std::ostringstream& out,
                                         const RuleNode& sys,
                                         const EventHandlerNode& handler,
                                         const std::string& trigger_binding,
-                                        const DecoratedProgram& program) {
+                                        const DecoratedProgram& program,
+                                        const HandlerContract* contract) {
     const auto& trigger = *handler.resolved_trigger;
     FilterClause filter  = sys.filter;
     FilterClause exclude = sys.exclude;
@@ -4288,7 +4466,7 @@ static void emit_lifecycle_handler_body(std::ostringstream& out,
     if (trigger.kind == HandlerTriggerKind::TraitRemoved && handler.alias.has_value()) {
         domain.prelude = "        [[maybe_unused]] const auto& " + *handler.alias + " = " + trigger_binding + ".old;\n";
     }
-    emit_filtered_handler_body(out, sys, handler, domain, program, false);
+    emit_filtered_handler_body(out, sys, handler, domain, program, contract, false);
 }
 
 // Defensive fallback (should not occur for a well-formed contract lookup):
@@ -4530,9 +4708,12 @@ static void emit_reduced_dispatch(std::ostringstream& out,
             out << "    };\n";
             key_names.push_back(std::move(name));
         }
-        out << "    std::ranges::stable_sort(cactus_rows, [&](const auto& cactus_lhs, const auto& cactus_rhs) {\n";
-        emit_sort_comparator_body(out, sys, key_names, "cactus_lhs", "cactus_rhs", 2);
-        out << "    });\n";
+        std::vector<std::string> row_keys;
+        row_keys.reserve(key_names.size());
+        for (const auto& key_name : key_names) {
+            row_keys.push_back(key_name + "(cactus_row)");
+        }
+        emit_keyed_sort(out, sys, "cactus_rows", row_keys, 1);
     }
     if (sys.limit.has_value()) {
         out << "    {\n";
@@ -4589,12 +4770,6 @@ static bool rule_uses_collider_queries(const RuleNode& sys) {
         }
     }
     return found;
-}
-
-// The snapshot position of each entity of one binding, for per-pass tables.
-static void emit_snapshot_positions(std::ostringstream& out, const std::string& name) {
-    out << "    const cactus::runtime::entt_backend::SnapshotPositions cactus_positions_" << name << "(" << name
-        << "_snapshot);\n";
 }
 
 // Descriptors for every entity of one binding's snapshot, in snapshot order,
@@ -4703,10 +4878,177 @@ static void emit_reduced_pair_snapshots(std::ostringstream& out,
     }
 }
 
-// A reduced pair rule: snapshot both bindings, build one group per `per`
-// entity that passes the group filters, fold every accepted row (from the
-// broad phase when one applies) in snapshot order, then dispatch per group.
-// A targeted event keeps only the recipient's group.
+// Binding-stage reducer inputs, computed once per member of their binding.
+// Returns, per input expression, how the fold reads it for the current row:
+// through the group slot for the group binding, by snapshot position otherwise.
+static std::unordered_map<const ExprNode*, std::string> emit_member_inputs(std::ostringstream& out,
+                                                                          const ReduceClause& reduce,
+                                                                          const HandlerContract* contract,
+                                                                          const PairCodegenScope& fold_scope,
+                                                                          const DecoratedProgram& program) {
+    std::unordered_map<const ExprNode*, std::string> member_inputs;
+    for (std::size_t index = 0; index < reduce.reducers.size(); ++index) {
+        const auto& reducer = reduce.reducers[index];
+        const auto stage    = stage_at(staging_of(contract).reducers, index);
+        if (reducer.kind == ReducerKind::Count || !is_binding_stage(stage)) {
+            continue;
+        }
+        const auto& name = fold_scope.bindings[stage == ClauseStage::BindingLeft ? 0 : 1].binding_name;
+        auto slot        = std::string("[cactus_slot]");
+        if (reduce.per_binding != name) {
+            slot = "[cactus_positions_" + name;
+            slot += ".find(" + name + ")]";
+        }
+        for (const auto* expr : {reducer.input.get(), reducer.key.get()}) {
+            if (expr == nullptr) {
+                continue;
+            }
+            const auto values = "cactus_inputs_" + std::to_string(index) + (expr == reducer.key.get() ? "_key" : "");
+            out << "    auto " << values << "_of = [&](entt::entity " << name << ") { return "
+                << rewrite_expr(*expr, {}, program, {}, {}, &fold_scope) << "; };\n";
+            emit_member_table(out, values, values + "_of(entt::null)", values + "_of(cactus_member)", name);
+            member_inputs.emplace(expr, values + slot);
+        }
+    }
+    return member_inputs;
+}
+
+// Filters every binding but the group binding, which keeps every member so
+// its group filters decide which groups exist. Returns which were filtered.
+static std::array<bool, 2> emit_reduced_binding_filters(std::ostringstream& out,
+                                                        const RuleNode& sys,
+                                                        const ReduceClause& reduce,
+                                                        const HandlerContract* contract,
+                                                        const PairCodegenScope& pair_codegen_scope,
+                                                        const DecoratedProgram& program) {
+    std::array<bool, 2> filtered{};
+    for (std::size_t index = 0; index < filtered.size(); ++index) {
+        filtered[index] = reduce.per_binding != pair_codegen_scope.bindings[index].binding_name &&
+                          !emit_binding_filter(out, sys, contract, index, pair_codegen_scope, program).empty();
+    }
+    return filtered;
+}
+
+// Snapshot positions and collider descriptors the fold reads, built once per pass.
+static void emit_fold_tables(std::ostringstream& out,
+                             const RuleNode& sys,
+                             const ReduceClause& reduce,
+                             const HandlerContract* contract,
+                             PairCodegenScope& fold_scope) {
+    const bool uses_collider_queries = rule_uses_collider_queries(sys);
+    const auto& reducer_stages       = staging_of(contract).reducers;
+    for (std::size_t index = 0; index < fold_scope.bindings.size(); ++index) {
+        const auto& name         = fold_scope.bindings[index].binding_name;
+        const bool member_inputs = std::ranges::contains(reducer_stages, binding_stage(index));
+        if (uses_collider_queries || reduce.per_binding == name || member_inputs) {
+            emit_snapshot_positions(out, name);
+        }
+    }
+    if (!uses_collider_queries) {
+        return;
+    }
+    for (auto& binding : fold_scope.bindings) {
+        emit_collider_shape_cache(out, binding);
+        binding.collider_shapes_cached = true;
+    }
+}
+
+// One group per `per` entity that passes the group filters; a targeted event
+// keeps only the recipient's group.
+static void emit_group_table(std::ostringstream& out,
+                             const ReduceClause& reduce,
+                             const std::vector<std::unique_ptr<ExprNode>>& predicates,
+                             const std::function<std::string(const ExprNode&)>& rewrite) {
+    const auto& group = *reduce.per_binding;
+    out << "    std::vector<cactus_reduce_acc> cactus_groups(" << group << "_snapshot.size());\n";
+    out << "    std::vector<char> cactus_group_live(" << group << "_snapshot.size(), 0);\n";
+    out << "    for (std::size_t cactus_i = 0; cactus_i < " << group << "_snapshot.size(); ++cactus_i) {\n";
+    out << "        const auto " << group << " = " << group << "_snapshot[cactus_i];\n";
+    out << "        if (cactus_recipient.has_value() && *cactus_recipient != " << group << ") { continue; }\n";
+    for (const auto index : reduce.group_predicates) {
+        out << "        if (!(" << rewrite(*predicates[index]) << ")) { continue; }\n";
+    }
+    out << "        cactus_group_live[cactus_i] = 1;\n";
+    out << "    }\n";
+}
+
+// Folds one accepted row into its group's (or the total's) accumulator.
+static void emit_fold_lambda(std::ostringstream& out,
+                             const ReduceClause& reduce,
+                             bool keeps,
+                             const PairCodegenScope& fold_scope,
+                             const std::vector<const ExprNode*>& row_predicates,
+                             const std::function<std::string(const ExprNode&)>& rewrite) {
+    out << "    auto cactus_fold = [&]([[maybe_unused]] entt::entity " << fold_scope.bindings[0].binding_name
+        << ", [[maybe_unused]] entt::entity " << fold_scope.bindings[1].binding_name << ") {\n";
+    if (reduce.per_binding.has_value()) {
+        const auto& group = *reduce.per_binding;
+        out << "        const auto cactus_slot = cactus_positions_" << group << ".find(" << group << ");\n";
+        out << "        if (cactus_slot == cactus::runtime::entt_backend::SnapshotPositions::kAbsent || "
+               "cactus_group_live[cactus_slot] == 0) { return; }\n";
+        out << "        auto& cactus_acc = cactus_groups[cactus_slot];\n";
+    } else {
+        out << "        auto& cactus_acc = cactus_total;\n";
+    }
+    for (const auto* predicate : row_predicates) {
+        out << "        if (!(" << rewrite(*predicate) << ")) { return; }\n";
+    }
+    emit_reducer_folds(out, reduce, rewrite, "        ", keeps);
+    out << "    };\n";
+}
+
+// Feeds every row, from the broad phase when one applies, to the fold; a false
+// activation gate feeds none.
+static void emit_fold_dispatch(std::ostringstream& out,
+                               const RuleNode& sys,
+                               const HandlerContract* contract,
+                               bool gated,
+                               const std::vector<PairBindingCodegen>& pair_binding_codegens,
+                               const PairCodegenScope& fold_scope,
+                               const DecoratedProgram& program) {
+    if (gated) {
+        out << "    if (cactus_active) {\n";
+    }
+    const auto* spatial_root = spatial_join_root(sys, contract);
+    if (spatial_root != nullptr) {
+        emit_sap_pair_activation(
+            out, *contract->spatial_join, *spatial_root, pair_binding_codegens, fold_scope, program, "cactus_fold");
+    } else {
+        const auto& left  = fold_scope.bindings[0].binding_name;
+        const auto& right = fold_scope.bindings[1].binding_name;
+        out << "    for (auto " << left << " : " << left << "_snapshot) {\n";
+        out << "        for (auto " << right << " : " << right << "_snapshot) {\n";
+        out << "            cactus_fold(" << left << ", " << right << ");\n";
+        out << "        }\n";
+        out << "    }\n";
+    }
+    if (gated) {
+        out << "    }\n";
+    }
+}
+
+// The `where:` predicates the fold checks per row: not group filters, not the
+// gate, and not the binding filters that already ran.
+static std::vector<const ExprNode*> fold_row_predicates(const ReduceClause& reduce,
+                                                        const std::vector<std::unique_ptr<ExprNode>>& predicates,
+                                                        const HandlerContract* contract,
+                                                        const std::array<bool, 2>& filtered) {
+    std::vector<const ExprNode*> row_predicates;
+    for (std::size_t index = 0; index < predicates.size(); ++index) {
+        const auto stage = stage_at(staging_of(contract).where, index);
+        const bool filtered_out =
+            (stage == ClauseStage::BindingLeft && filtered[0]) || (stage == ClauseStage::BindingRight && filtered[1]);
+        if (!std::ranges::contains(reduce.group_predicates, index) && stage != ClauseStage::Activation &&
+            !filtered_out) {
+            row_predicates.push_back(predicates[index].get());
+        }
+    }
+    return row_predicates;
+}
+
+// A reduced pair rule: snapshot both bindings, filter every binding but the
+// group binding, build the groups, fold every accepted row in snapshot order,
+// then dispatch per group. A false activation gate folds no row.
 static void emit_reduced_pair_handler_body(std::ostringstream& out,
                                            const RuleNode& sys,
                                            const EventHandlerNode& handler,
@@ -4717,85 +5059,33 @@ static void emit_reduced_pair_handler_body(std::ostringstream& out,
     const auto& reduce = *sys.reduce;
     const bool keeps   = sys.keep.has_value();
     emit_reduced_pair_snapshots(out, reduce, pair_binding_codegens, keeps);
+    const auto filtered = emit_reduced_binding_filters(out, sys, reduce, contract, pair_codegen_scope, program);
+    const auto active   = activation_condition(sys, contract, program);
+    if (!active.empty()) {
+        out << "    const bool cactus_active = " << active << ";\n";
+    }
     emit_reduce_types(out, reduce, keeps);
-    // The fold reads one input snapshot, so each binding's collider
-    // descriptors are built once per pass.
-    auto fold_scope                 = pair_codegen_scope;
-    const bool uses_collider_queries = rule_uses_collider_queries(sys);
-    for (const auto& binding : pair_binding_codegens) {
-        const auto& name = binding.scope.binding_name;
-        if (uses_collider_queries || reduce.per_binding == name) {
-            emit_snapshot_positions(out, name);
-        }
-    }
-    if (uses_collider_queries) {
-        for (auto& binding : fold_scope.bindings) {
-            emit_collider_shape_cache(out, binding);
-            binding.collider_shapes_cached = true;
-        }
-    }
-    const auto rewrite = [&](const ExprNode& expr) {
-        return rewrite_expr(expr, {}, program, {}, {}, &fold_scope);
+    auto fold_scope = pair_codegen_scope;
+    emit_fold_tables(out, sys, reduce, contract, fold_scope);
+    const auto member_inputs = emit_member_inputs(out, reduce, contract, fold_scope, program);
+    const auto rewrite       = [&](const ExprNode& expr) {
+        const auto found = member_inputs.find(&expr);
+        return found != member_inputs.end() ? found->second : rewrite_expr(expr, {}, program, {}, {}, &fold_scope);
     };
-    const auto& left  = pair_binding_codegens[0].scope.binding_name;
-    const auto& right = pair_binding_codegens[1].scope.binding_name;
+
     static const std::vector<std::unique_ptr<ExprNode>> no_predicates;
     const auto& predicates = sys.where_clause.has_value() ? sys.where_clause->predicates : no_predicates;
-    const auto is_group_predicate = [&](std::size_t index) {
-        return std::ranges::find(reduce.group_predicates, index) != reduce.group_predicates.end();
-    };
-
     std::optional<PairCodegenScope> group_scope;
     if (reduce.per_binding.has_value()) {
-        const auto& group = *reduce.per_binding;
         group_scope.emplace();
-        group_scope->bindings.push_back(*pair_codegen_scope.find(group));
+        group_scope->bindings.push_back(*pair_codegen_scope.find(*reduce.per_binding));
         group_scope->bindings.front().writable = true;
-
-        out << "    std::vector<cactus_reduce_acc> cactus_groups(" << group << "_snapshot.size());\n";
-        out << "    std::vector<char> cactus_group_live(" << group << "_snapshot.size(), 0);\n";
-        out << "    for (std::size_t cactus_i = 0; cactus_i < " << group << "_snapshot.size(); ++cactus_i) {\n";
-        out << "        const auto " << group << " = " << group << "_snapshot[cactus_i];\n";
-        out << "        if (cactus_recipient.has_value() && *cactus_recipient != " << group << ") { continue; }\n";
-        for (const auto index : reduce.group_predicates) {
-            out << "        if (!(" << rewrite(*predicates[index]) << ")) { continue; }\n";
-        }
-        out << "        cactus_group_live[cactus_i] = 1;\n";
-        out << "    }\n";
+        emit_group_table(out, reduce, predicates, rewrite);
     } else {
         out << "    cactus_reduce_acc cactus_total{};\n";
     }
-
-    out << "    auto cactus_fold = [&]([[maybe_unused]] entt::entity " << left << ", [[maybe_unused]] entt::entity "
-        << right << ") {\n";
-    if (reduce.per_binding.has_value()) {
-        const auto& group = *reduce.per_binding;
-        out << "        const auto cactus_slot = cactus_positions_" << group << ".find(" << group << ");\n";
-        out << "        if (cactus_slot == cactus::runtime::entt_backend::SnapshotPositions::kAbsent || "
-               "cactus_group_live[cactus_slot] == 0) { return; }\n";
-        out << "        auto& cactus_acc = cactus_groups[cactus_slot];\n";
-    } else {
-        out << "        auto& cactus_acc = cactus_total;\n";
-    }
-    for (std::size_t index = 0; index < predicates.size(); ++index) {
-        if (!is_group_predicate(index)) {
-            out << "        if (!(" << rewrite(*predicates[index]) << ")) { return; }\n";
-        }
-    }
-    emit_reducer_folds(out, reduce, rewrite, "        ", keeps);
-    out << "    };\n";
-
-    const auto* spatial_root = spatial_join_root(sys, contract);
-    if (spatial_root != nullptr) {
-        emit_sap_pair_activation(
-            out, *contract->spatial_join, *spatial_root, pair_binding_codegens, fold_scope, program, "cactus_fold");
-    } else {
-        out << "    for (auto " << left << " : " << left << "_snapshot) {\n";
-        out << "        for (auto " << right << " : " << right << "_snapshot) {\n";
-        out << "            cactus_fold(" << left << ", " << right << ");\n";
-        out << "        }\n";
-        out << "    }\n";
-    }
+    emit_fold_lambda(out, reduce, keeps, fold_scope, fold_row_predicates(reduce, predicates, contract, filtered), rewrite);
+    emit_fold_dispatch(out, sys, contract, !active.empty(), pair_binding_codegens, fold_scope, program);
 
     if (reduce.per_binding.has_value()) {
         out << "    std::vector<cactus_reduce_row> cactus_rows;\n";
@@ -4817,16 +5107,19 @@ static void emit_reduced_pair_handler_body(std::ostringstream& out,
 }
 
 // A reduced unary rule is always global: fold the filter domain in creation
-// order into one row, then run the handler once.
+// order into one row, then run the handler once. A false activation gate
+// folds no row.
 static void emit_reduced_unary_handler_body(std::ostringstream& out,
                                             const RuleNode& sys,
                                             const EventHandlerNode& handler,
                                             const HandlerDomainCodegen& domain,
-                                            const DecoratedProgram& program) {
+                                            const DecoratedProgram& program,
+                                            const HandlerContract* contract) {
     const auto& reduce = *sys.reduce;
     emit_reduce_types(out, reduce, false);
     out << "    cactus_reduce_acc cactus_total{};\n";
-    out << "    {\n";
+    const auto active = activation_condition(sys, contract, program);
+    out << (active.empty() ? "    {\n" : "    if (" + active + ") {\n");
     emit_view_declaration(out, domain.filter_cpp_types, domain.exclude_cpp_types, 2);
     out << "        for (auto entity : cactus::runtime::entt_backend::creation_ordered(registry, view)) {\n";
     emit_component_bindings_from_entity(out, domain.filter_bindings_list, "entity", 3, program);
@@ -4835,10 +5128,8 @@ static void emit_reduced_unary_handler_body(std::ostringstream& out,
     const auto rewrite = [&](const ExprNode& expr) {
         return rewrite_expr(expr, domain.filter_traits, program, {}, domain.filter_cpp_overrides);
     };
-    if (sys.where_clause.has_value()) {
-        for (const auto& predicate : sys.where_clause->predicates) {
-            out << "            if (!(" << rewrite(*predicate) << ")) { continue; }\n";
-        }
+    for (const auto* predicate : where_at(sys, contract, ClauseStage::Row)) {
+        out << "            if (!(" << rewrite(*predicate) << ")) { continue; }\n";
     }
     emit_reducer_folds(out, reduce, rewrite, "            ", false);
     out << "        }\n";
@@ -4903,14 +5194,17 @@ std::string EnttSystemEmitter::emit_system(const RuleNode& sys, const DecoratedP
         out << "    (void)cactus_recipient;\n";
         emit_named_requirements(out, contract, program);
         emit_when_gate(out, sys, program);
+        if (!sys.reduce.has_value()) {
+            emit_activation_gate(out, sys, contract, program);
+        }
 
         if (sys.reduce.has_value() && is_pair_system) {
             emit_reduced_pair_handler_body(
                 out, sys, handler, pair_binding_codegens, pair_codegen_scope, program, contract);
         } else if (sys.reduce.has_value()) {
-            emit_reduced_unary_handler_body(out, sys, handler, domain, program);
+            emit_reduced_unary_handler_body(out, sys, handler, domain, program, contract);
         } else if (lifecycle) {
-            emit_lifecycle_handler_body(out, sys, handler, trigger_binding, program);
+            emit_lifecycle_handler_body(out, sys, handler, trigger_binding, program, contract);
         } else if (is_pair) {
             emit_pair_handler_body(out, sys, handler, pair_binding_codegens, pair_codegen_scope, program, contract);
         } else if (selectionless) {
@@ -4921,6 +5215,7 @@ std::string EnttSystemEmitter::emit_system(const RuleNode& sys, const DecoratedP
                                        handler,
                                        domain,
                                        program,
+                                       contract,
                                        contract != nullptr && contract->iteration_order == IterationOrder::Creation);
         } else {
             emit_fallback_handler_body(

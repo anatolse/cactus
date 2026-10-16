@@ -167,6 +167,10 @@ add_executable(test_semantic_reduce test_semantic_reduce.cpp)
 target_link_libraries(test_semantic_reduce PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticReduceTests COMMAND test_semantic_reduce)
 
+add_executable(test_semantic_staging test_semantic_staging.cpp)
+target_link_libraries(test_semantic_staging PRIVATE cactus_frontend Catch2::Catch2WithMain)
+add_test(NAME SemanticStagingTests COMMAND test_semantic_staging)
+
 add_executable(test_semantic_keep test_semantic_keep.cpp)
 target_link_libraries(test_semantic_keep PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticKeepTests COMMAND test_semantic_keep)
@@ -520,6 +524,19 @@ cactus_add_headless_behavior_test(test_pairs_order_by_headless_behavior
     CACTUS_SOURCE tests/fixtures/pairs_order_by_runtime.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_pairs_order_by_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_staged_predicates_headless_behavior
+    CACTUS_SOURCE examples/stdlib-fixtures/staged_predicates.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_staged_predicates_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_staged_predicates_row_headless_behavior
+    CACTUS_SOURCE examples/stdlib-fixtures/staged_predicates.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_staged_predicates_headless_behavior.cpp
+    FORCE_ROW_STAGE
 )
 
 cactus_add_headless_behavior_test(test_commit_notify_loop_headless_behavior

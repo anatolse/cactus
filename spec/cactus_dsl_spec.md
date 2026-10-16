@@ -7,6 +7,10 @@
 
 Cactus DSL is a declarative, data-oriented notation for interactive simulations that compiles to an engine backend. Games come first: entities, state, reactions, spawning, scene flow, and their timing. UI applications and tools, such as a game editor, are built from the same primitives. Language constructs describe data, relations, time and reactions, never genres or widgets; genre and UI vocabulary lives in stdlib modules.
 
+Rules describe how the world evolves. Render stages describe how that world becomes visible.
+
+The central thesis is that a small, analyzable notation can make complex systems concise to describe while supporting mathematical proofs of correctness and efficient implementation. The frontend exposes data, relations, state transitions and timing; the backend uses that structure to preserve behavior while optimizing execution. Language correctness, the correctness of an authored model, and compilation and resource-cost guarantees are separate obligations. Cost guarantees require explicit workload and execution assumptions. These are design goals, not a claim of completed formal verification; see the language philosophy's "Concise definitions support mathematical reasoning" requirement. This thesis adds no grammar or author annotations.
+
 The language is taught through a **gameplay-core profile** that is sufficient for authoring things like:
 
 - platformers: movement, gravity, jumping, collectibles, enemies, camera follow
@@ -687,7 +691,7 @@ rule DetectBallContact:
 
 **Evaluation order is unspecified.** Because every predicate is pure, the compiler is free to reorder, combine, inline, or otherwise replace the predicate list with an equivalent restriction; no observable short-circuit behavior is guaranteed.
 
-**`where:` evaluates once per pass, against the already-selected domain.** It runs once per entity or tuple, at the start of that entity's or tuple's handler invocation, against the membership `each:`/`without:`/`pairs:` already snapshotted for the pass. It can only shrink that membership — never add to it — and is not re-evaluated mid-pass as a result of mutations, projections, or buffered structural commands from earlier invocations in the same pass. On a pair rule, rejected tuples never begin their handler body invocation, and the tuples that do remain keep the same left-binding-major relative order described in §3.8.1.
+**`where:` evaluates once per pass, against the already-selected domain.** It runs once per entity or tuple, at the start of that entity's or tuple's handler invocation, against the membership `each:`/`without:`/`pairs:` already snapshotted for the pass. It can only shrink that membership — never add to it — and is not re-evaluated mid-pass as a result of mutations, projections, or buffered structural commands from earlier invocations in the same pass. On a pair rule, rejected tuples never begin their handler body invocation, and the tuples that do remain keep the same left-binding-major relative order described in §3.8.1. A predicate whose inputs no invocation of the pass can change gives the same result at any point of the pass, so it may be evaluated once per activation (when it reads no binding) or once per binding member (when it reads one pair binding) instead; the entities or tuples that run, and their order, are the same.
 
 `where:` and a leading `if`/`return` in the handler body are equally valid, freely interchangeable ways to reject an entity or tuple: `where: body != wall` and `if body == wall: return` (§3.8.1) admit the same tuples. `where:` exists to make that rejection declarative and analyzable — the reads it touches fold into the handler's contract with the same precision as an equivalent body read.
 

@@ -1197,11 +1197,6 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     // resolve their own `on ...:` trigger.
     recognize_render_pass_phases(program);
 
-    // dsl-where-clause: lower where: into leading handler-body guards before
-    // any pass resolves or inspects handler body shape (see
-    // desugar_where_clauses's doc comment).
-    desugar_where_clauses(program);
-
     // Phase 2: Resolve types in fields
     resolve_all_types(program);
     resolve_trait_references(program);
@@ -1531,53 +1526,6 @@ void SemanticAnalyzer::collect_types(ProgramNode& program) {
                 }
             },
             decl);
-    }
-}
-
-// ── dsl-where-clause: guard desugaring ──────────────────────────────────────
-
-// Codegen evaluates such a rule's where: itself, so it never becomes a body guard.
-static bool rule_keeps_where_unlowered(const RuleNode& rule) {
-    return rule.limit.has_value() || rule.reduce.has_value();
-}
-
-void SemanticAnalyzer::desugar_where_clauses(ProgramNode& program) {
-    for (auto& decl : program.declarations) {
-        auto* rule = std::get_if<RuleNode>(&decl);
-        if (rule == nullptr || !rule->where_clause.has_value() || rule->where_clause->predicates.empty()) {
-            continue;
-        }
-        // dsl-rule-limit: truncation assigns slots by position, so a
-        // where:-rejected candidate must never reach one — which a lazy body
-        // guard cannot prevent, since its early `return` is indistinguishable
-        // from any other. A limited or reduced rule keeps its predicates
-        // unlowered for codegen to evaluate as a pre-slot filter instead.
-        if (rule_keeps_where_unlowered(*rule)) {
-            continue;
-        }
-        const auto& predicates = rule->where_clause->predicates;
-        const auto& location   = rule->where_clause->location;
-
-        auto build_guard_condition = [&]() -> std::unique_ptr<ExprNode> {
-            auto combined = clone_expr(*predicates.front());
-            for (std::size_t i = 1; i < predicates.size(); ++i) {
-                BinaryExpr conjunction{
-                    .op = "and", .left = std::move(combined), .right = clone_expr(*predicates[i]), .location = location};
-                combined = std::make_unique<ExprNode>(ExprNode::Variant{std::move(conjunction)}, location);
-            }
-            UnaryExpr negated{.op = "not", .operand = std::move(combined), .location = location};
-            return std::make_unique<ExprNode>(ExprNode::Variant{std::move(negated)}, location);
-        };
-
-        for (auto& handler : rule->handlers) {
-            std::vector<std::unique_ptr<StmtNode>> guard_then;
-            guard_then.push_back(
-                std::make_unique<StmtNode>(StmtNode::Variant{ReturnStmt{.value = std::nullopt, .location = location}},
-                                           location));
-            IfStmt guard{.condition = build_guard_condition(), .then_body = std::move(guard_then), .location = location};
-            handler.body.insert(handler.body.begin(),
-                                std::make_unique<StmtNode>(StmtNode::Variant{std::move(guard)}, location));
-        }
     }
 }
 
@@ -5246,6 +5194,7 @@ void SemanticAnalyzer::validate_where_clauses(ProgramNode& program) {
         auto filter_bindings = build_filter_bindings(rule->filter);
         auto pair_scope       = rule->pairs.has_value() ? build_pair_scope(*rule->pairs) : PairScope{};
         const PairScope* pair_scope_ptr = rule->pairs.has_value() ? &pair_scope : nullptr;
+        const std::unordered_map<std::string, TypeInfo> self_context{{"__self_context", make_entity_id_type()}};
 
         for (auto& predicate : rule->where_clause->predicates) {
             // Purity first: an impure predicate is invalid regardless of its
@@ -5257,7 +5206,7 @@ void SemanticAnalyzer::validate_where_clauses(ProgramNode& program) {
             if (errors_.error_count() > error_count_before) {
                 continue;
             }
-            auto predicate_type = infer_expr_type(*predicate, filter_bindings, {}, nullptr, pair_scope_ptr);
+            auto predicate_type = infer_expr_type(*predicate, filter_bindings, self_context, nullptr, pair_scope_ptr);
             if (predicate_type.kind != TypeKind::Bool && predicate_type.kind != TypeKind::Unknown) {
                 errors_.error(predicate->location, "where: predicate must be of type 'bool'");
             }
@@ -7352,6 +7301,147 @@ void SemanticAnalyzer::collect_phase_plan(const PhaseNode& phase, std::size_t de
     }
 }
 
+namespace {
+
+// What a clause expression reads per pass: a pair binding, or anything else
+// that changes from row to row (the unary entity, an aggregate, an unknown name).
+struct StageRoots {
+    bool left  = false;
+    bool right = false;
+    bool row   = false;
+};
+
+void mark_stage_name(const std::string& name, const PairScope* pair_scope, StageRoots& roots) {
+    if (pair_scope == nullptr) {
+        roots.row = true;
+        return;
+    }
+    auto binding = pair_scope->find(name);
+    if (binding == pair_scope->end()) {
+        if (const auto alias = find_pair_alias(*pair_scope, name); alias.has_value()) {
+            binding = pair_scope->find(alias->first);
+        }
+    }
+    if (binding == pair_scope->end()) {
+        roots.row = true;
+        return;
+    }
+    (binding->second.index == 0 ? roots.left : roots.right) = true;
+}
+
+// Named entity fields, constants and enum members are fixed for the pass, so
+// they never root an expression; a callee is a function, not a value.
+void collect_stage_roots(const ExprNode& expr, const PairScope* pair_scope, StageRoots& roots) {
+    const auto visit = [&](const auto& child) { collect_stage_roots(*child, pair_scope, roots); };
+    const auto fields = [&](const auto& assignments) {
+        for (const auto& assignment : assignments) {
+            visit(assignment.value);
+        }
+    };
+    std::visit(
+        [&](const auto& node) {
+            using E = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<E, IdentExpr>) {
+                if (!node.resolved_entity_id.has_value() && !node.resolved_const_id.has_value()) {
+                    mark_stage_name(node.name, pair_scope, roots);
+                }
+            } else if constexpr (std::is_same_v<E, SelfExpr>) {
+                roots.row = true;
+            } else if constexpr (std::is_same_v<E, TraitAccessExpr>) {
+                if (node.pair_binding_index.has_value()) {
+                    (*node.pair_binding_index == 0 ? roots.left : roots.right) = true;
+                } else if (!node.resolved_entity_id.has_value()) {
+                    visit(node.object);
+                }
+            } else if constexpr (std::is_same_v<E, MemberExpr>) {
+                if (!node.resolved_entity_id.has_value() && !node.resolved_const_id.has_value() &&
+                    !node.resolved_enum_member.has_value() && !node.resolved_phase_dt.has_value()) {
+                    visit(node.object);
+                }
+            } else if constexpr (std::is_same_v<E, CallExpr>) {
+                std::ranges::for_each(node.args, visit);
+            } else {
+                expr_children::fixed(node, visit);
+                expr_children::lists(node, visit, fields);
+                expr_children::compounds(node, visit, fields);
+            }
+        },
+        expr.expr);
+}
+
+ClauseStage classify_stage(const ExprNode& expr, const PairScope* pair_scope) {
+    StageRoots roots;
+    collect_stage_roots(expr, pair_scope, roots);
+    if (roots.row || (roots.left && roots.right)) {
+        return ClauseStage::Row;
+    }
+    if (roots.left) {
+        return ClauseStage::BindingLeft;
+    }
+    return roots.right ? ClauseStage::BindingRight : ClauseStage::Activation;
+}
+
+// A lifted expression whose fields the pass writes is read live, at row stage.
+ClauseStage legal_stage(ClauseStage stage,
+                        const ExprNode& expr,
+                        const InferredHandlerContract& contract,
+                        const std::unordered_map<SymbolId, FieldAccess>& written) {
+    if (stage == ClauseStage::Row) {
+        return stage;
+    }
+    const auto reads = contract.clause_reads.find(&expr);
+    return reads != contract.clause_reads.end() && clause_reads_written(reads->second, written) ? ClauseStage::Row
+                                                                                                : stage;
+}
+
+}  // namespace
+
+// The latest stage among a reducer's input and key; a count never evaluates its input.
+static ClauseStage reducer_stage(const ReducerDecl& reducer, const PairScope* scope) {
+    auto stage = ClauseStage::Activation;
+    if (reducer.kind == ReducerKind::Count) {
+        return stage;
+    }
+    for (const auto* input : {reducer.input.get(), reducer.key.get()}) {
+        if (input == nullptr) {
+            continue;
+        }
+        const auto input_stage = classify_stage(*input, scope);
+        stage = stage == ClauseStage::Activation || stage == input_stage ? input_stage : ClauseStage::Row;
+    }
+    return stage;
+}
+
+// Only an unlimited, unreduced rule checks `where:` between invocations, so
+// only its predicates have clause reads to demote; every other clause
+// expression is evaluated before the pass's first invocation. Reduced sort
+// keys read aggregate rows, so they are only ever row stage or constant.
+static void stage_rule_clauses(const RuleNode& rule, const PairScope& pair_scope, InferredHandlerContract& contract) {
+    const auto* scope = rule.pairs.has_value() ? &pair_scope : nullptr;
+    std::unordered_map<SymbolId, FieldAccess> written;
+    for (const auto& trait : contract.writes) {
+        written.emplace(trait, field_access(contract.write_fields, trait));
+    }
+    const auto stage = [scope](const ExprNode& expr) { return classify_stage(expr, scope); };
+    auto& staging    = contract.staging;
+    if (rule.where_clause.has_value()) {
+        for (const auto& predicate : rule.where_clause->predicates) {
+            staging.where.push_back(legal_stage(stage(*predicate), *predicate, contract, written));
+        }
+    }
+    for (const auto& key : rule.order_by) {
+        const auto key_stage = stage(*key.expression);
+        staging.order_by.push_back(rule.reduce.has_value() && key_stage != ClauseStage::Activation ? ClauseStage::Row
+                                                                                                    : key_stage);
+    }
+    if (rule.reduce.has_value()) {
+        for (const auto& reducer : rule.reduce->reducers) {
+            staging.reducers.push_back(reducer_stage(reducer, scope));
+        }
+    }
+    contract.clause_reads.clear();
+}
+
 static std::optional<ReductionPlan> reduction_plan(const RuleNode& rule, const PairScope& pair_scope) {
     if (!rule.reduce.has_value()) {
         return std::nullopt;
@@ -7418,6 +7508,7 @@ void SemanticAnalyzer::collect_rule_dependency(const RuleNode& rule, std::size_t
             finalize_write_kinds(inferred);
             inferred.iteration_order =
                 derive_iteration_order(inferred, rule.limit.has_value() && rule.order_by.empty());
+            stage_rule_clauses(rule, pair_scope, inferred);
             result_.handler_contracts.push_back(inferred);
 
             HandlerNode node;
@@ -7720,6 +7811,14 @@ std::optional<FieldAccess> overlapping_fields(const FieldAccess& left, const Fie
     FieldAccess shared;
     std::ranges::set_intersection(left.fields, right.fields, std::inserter(shared.fields, shared.fields.end()));
     return shared.fields.empty() ? std::nullopt : std::optional(shared);
+}
+
+bool clause_reads_written(const std::unordered_map<SymbolId, FieldAccess>& reads,
+                          const std::unordered_map<SymbolId, FieldAccess>& writes) {
+    return std::ranges::any_of(reads, [&writes](const auto& read) {
+        const auto write = writes.find(read.first);
+        return write != writes.end() && overlapping_fields(read.second, write->second).has_value();
+    });
 }
 
 void merge_field_access(FieldAccess& into, const FieldAccess& from) {
@@ -8379,8 +8478,7 @@ void SemanticAnalyzer::record_state_writes(HandlerContract& contract, const std:
 }
 
 // Clause expressions the handler body walk never sees but whose binding reads
-// still belong in the contract. A limited or reduced rule keeps where: out of
-// the body.
+// still belong in the contract.
 static std::vector<const ExprNode*> rule_clause_read_roots(const RuleNode& rule) {
     std::vector<const ExprNode*> roots;
     roots.reserve(rule.order_by.size());
@@ -8398,12 +8496,33 @@ static std::vector<const ExprNode*> rule_clause_read_roots(const RuleNode& rule)
     if (rule.limit.has_value() && rule.limit->count != nullptr) {
         roots.push_back(rule.limit->count.get());
     }
-    if (rule_keeps_where_unlowered(rule) && rule.where_clause.has_value()) {
+    if (rule.where_clause.has_value()) {
         for (const auto& predicate : rule.where_clause->predicates) {
             roots.push_back(predicate.get());
         }
     }
     return roots;
+}
+
+void SemanticAnalyzer::walk_clause_reads(
+    const RuleNode& rule,
+    const LocalNames& locals,
+    InferredHandlerContract& contract,
+    const std::function<bool(const ExprNode&, const LocalNames&)>& resolve_read) const {
+    for (const auto* root : rule_clause_read_roots(rule)) {
+        walk_expression_reads(*root, locals, contract, resolve_read);
+    }
+    if (!rule.where_clause.has_value() || rule.limit.has_value() || rule.reduce.has_value()) {
+        return;
+    }
+    for (const auto& predicate : rule.where_clause->predicates) {
+        HandlerContract own;
+        walk_expression_reads(*predicate, locals, own, resolve_read);
+        auto& reads = contract.clause_reads[predicate.get()];
+        for (const auto& trait : own.reads) {
+            reads.emplace(trait, field_access(own.read_fields, trait));
+        }
+    }
 }
 
 InferredHandlerContract
@@ -8541,9 +8660,7 @@ SemanticAnalyzer::infer_regular_handler_contract(  // NOLINT(readability-functio
     };
 
     const auto aggregates = reducer_names(rule);
-    for (const auto* root : rule_clause_read_roots(rule)) {
-        walk_expression_reads(*root, aggregates, contract, resolve_read);
-    }
+    walk_clause_reads(rule, aggregates, contract, resolve_read);
     LocalNames handler_locals = aggregates;
     if (!trigger.is_lifecycle()) {
         handler_locals.insert(handler.event_name);
@@ -8645,9 +8762,7 @@ InferredHandlerContract SemanticAnalyzer::infer_pair_handler_contract(const Rule
     auto on_project_trait  = [&contract](const SymbolId& trait) { contract.projects.insert(trait); };
 
     const auto aggregates = reducer_names(rule);
-    for (const auto* root : rule_clause_read_roots(rule)) {
-        walk_expression_reads(*root, aggregates, contract, resolve_read);
-    }
+    walk_clause_reads(rule, aggregates, contract, resolve_read);
 
     LocalNames handler_locals = aggregates;
     handler_locals.insert(handler.event_name);

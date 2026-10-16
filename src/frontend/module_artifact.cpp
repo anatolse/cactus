@@ -587,6 +587,13 @@ void ModuleArtifact::write_contract(std::ostream& out, const HandlerContract& co
             write_u8(out, static_cast<uint8_t>(kind));
         }
     }
+
+    for (const auto* stages : {&contract.staging.where, &contract.staging.order_by, &contract.staging.reducers}) {
+        write_u32(out, static_cast<uint32_t>(stages->size()));
+        for (const auto stage : *stages) {
+            write_u8(out, static_cast<uint8_t>(stage));
+        }
+    }
 }
 
 void ModuleArtifact::write_handler_contracts(std::ostream& out, const std::vector<InferredHandlerContract>& contracts) {
@@ -1288,6 +1295,13 @@ HandlerContract ModuleArtifact::read_contract(std::istream& in) {
             kind = static_cast<ReducerKind>(read_u8(in));
         }
         contract.reduction = std::move(plan);
+    }
+
+    for (auto* stages : {&contract.staging.where, &contract.staging.order_by, &contract.staging.reducers}) {
+        stages->resize(read_u32(in));
+        for (auto& stage : *stages) {
+            stage = static_cast<ClauseStage>(read_u8(in));
+        }
     }
 
     return contract;

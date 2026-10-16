@@ -2840,10 +2840,9 @@ TEST_CASE("Codegen EnTT: rule order by emits registry sort for single key", "[co
             CHECK(code.contains("= [&](entt::entity entity) {"));
             CHECK(code.contains("return s.layer;"));
             CHECK(code.contains("cactus::num::key_order("));
-            CHECK(code.contains("(b), false);"));
+            CHECK(code.contains("cactus_keys_0[cactus_rhs], false);"));
             // Equal keys fall back to creation order, not the snapshot's pool order.
-            CHECK(code.contains("return registry.get<cactus::runtime::entt_backend::CreationOrdinal>(a).value < "
-                                "registry.get<cactus::runtime::entt_backend::CreationOrdinal>(b).value;"));
+            CHECK(code.contains("[cactus_lhs]).value < registry.get<cactus::runtime::entt_backend::CreationOrdinal>("));
         }
     }
 }
@@ -2876,8 +2875,8 @@ TEST_CASE("Codegen EnTT: rule order by emits multi-key comparator", "[codegen-en
             CHECK(code.contains("return s.layer;"));
             CHECK(code.contains("return p.pos.y;"));
             CHECK(code.contains("view.use<"));
-            const auto ascending  = code.find("(b), false);");
-            const auto descending = code.find("(b), true);");
+            const auto ascending  = code.find("cactus_keys_0[cactus_rhs], false);");
+            const auto descending = code.find("cactus_keys_1[cactus_rhs], true);");
             CHECK(ascending != std::string::npos);
             CHECK(descending != std::string::npos);
             CHECK(ascending < descending);
@@ -6299,7 +6298,7 @@ TEST_CASE(
             const auto pair_body_name = extract_temp_name(code, "cactus_gen_pair_body_");
             REQUIRE_FALSE(pair_body_name.empty());
 
-            const auto lambda_def = code.find("auto " + pair_body_name + " = [&](entt::entity a, entt::entity b) {");
+            const auto lambda_def = code.find("auto " + pair_body_name + " = [&]([[maybe_unused]] entt::entity a, [[maybe_unused]] entt::entity b) {");
             REQUIRE(lambda_def != std::string::npos);
             const auto return_stmt = code.find("return;", lambda_def);
             REQUIRE(return_stmt != std::string::npos);
@@ -6352,7 +6351,7 @@ TEST_CASE(
             auto code                 = EnttSystemEmitter::emit_system(*sys, decorated);
             const auto pair_body_name = extract_temp_name(code, "cactus_gen_pair_body_");
             REQUIRE_FALSE(pair_body_name.empty());
-            const auto lambda_def = code.find("auto " + pair_body_name + " = [&](entt::entity a, entt::entity b) {");
+            const auto lambda_def = code.find("auto " + pair_body_name + " = [&]([[maybe_unused]] entt::entity a, [[maybe_unused]] entt::entity b) {");
             REQUIRE(lambda_def != std::string::npos);
 
             const auto recipient_branch = code.find("if (cactus_recipient.has_value()) {");
@@ -7224,6 +7223,15 @@ TEST_CASE("Codegen EnTT: binary arithmetic mixing a range loop variable with a c
 // exactly, mirroring test_semantic.cpp's spatial-join recognition tests —
 // recognition only ever inspects resolved_callee_id's canonical identity,
 // never the declaring module's actual provenance.
+
+// The text of the first pair tuple-body lambda.
+static std::string pair_body_lambda(const std::string& code) {
+    const auto start = code.find("auto cactus_gen_pair_body_");
+    if (start == std::string::npos) {
+        return {};
+    }
+    return code.substr(start, code.find("\n    };\n", start) - start);
+}
 
 static std::string emit_named_rule(const std::string& source, const std::string& rule_name) {
     ProgramNode program;
@@ -8146,10 +8154,7 @@ TEST_CASE("Codegen EnTT: a pair binding under a non-provable limit keeps read-on
     CHECK(!code.contains("registry.get<Actor>(actor)"));
 }
 
-// Task 6.3's regression guard, checked directly rather than inferred: a rule
-// with `where:` but no `limit:` must still go through the full-desugar path,
-// so no separate predicate lambda appears and the body carries the guard.
-TEST_CASE("Codegen EnTT: a where: rule without a limit keeps the desugared body guard",
+TEST_CASE("Codegen EnTT: a row predicate of an unlimited pair rule guards the tuple body",
           "[codegen-entt][rule-limit][where-clause]") {
     const auto code = emit_named_rule(limit_traits() +
                                           "rule Ground:\n"
@@ -8159,13 +8164,171 @@ TEST_CASE("Codegen EnTT: a where: rule without a limit keeps the desugared body 
                                           "        surface:\n"
                                           "            Surface\n"
                                           "    where:\n"
-                                          "        actor[Actor].ground == 0\n"
+                                          "        actor[Actor].ground == surface[Surface].code\n"
                                           "    on tick:\n"
                                           "        let x = surface[Surface].code\n",
                                       "Ground");
 
     CHECK(!code.contains("cactus_gen_pair_where_"));
-    CHECK(code.contains("if (!("));
+    CHECK(pair_body_lambda(code).contains("if (!("));
+}
+
+// ── Clause staging ──────────────────────────────────────────────────────────
+
+static const std::string& staging_traits() {
+    static const std::string value = limit_traits() +
+                                     "trait Flag:\n"
+                                     "    var open: bool = true\n"
+                                     "entity Game:\n"
+                                     "    Flag\n";
+    return value;
+}
+
+static std::string pair_staging_rule(const std::string& clauses) {
+    return staging_traits() +
+           "rule Ground:\n"
+           "    pairs:\n"
+           "        actor:\n"
+           "            Actor\n"
+           "        surface:\n"
+           "            Surface\n" +
+           clauses +
+           "    on tick:\n"
+           "        let x = surface[Surface].code\n";
+}
+
+TEST_CASE("Codegen EnTT: an activation predicate gates the pass before its snapshots", "[codegen-entt][staging]") {
+    const auto code = emit_named_rule(pair_staging_rule("    where:\n"
+                                                        "        Game[Flag].open\n"),
+                                      "Ground");
+    const auto gate     = code.find("if (!(");
+    const auto snapshot = code.find("actor_snapshot");
+    REQUIRE(gate != std::string::npos);
+    REQUIRE(snapshot != std::string::npos);
+    CHECK(gate < snapshot);
+    CHECK(!pair_body_lambda(code).contains("if (!("));
+}
+
+TEST_CASE("Codegen EnTT: binding predicates filter snapshots and only row predicates reach the tuple body",
+          "[codegen-entt][staging]") {
+    const auto code = emit_named_rule(pair_staging_rule("    where:\n"
+                                                        "        actor[Actor].ground == 0\n"
+                                                        "        surface[Surface].code > 1\n"
+                                                        "        actor[Actor].ground < surface[Surface].code\n"),
+                                      "Ground");
+    const auto filter_actor   = code.find("std::erase_if(actor_snapshot");
+    const auto filter_surface = code.find("std::erase_if(surface_snapshot");
+    const auto product        = code.find("for (auto actor : actor_snapshot)");
+    REQUIRE(filter_actor != std::string::npos);
+    REQUIRE(filter_surface != std::string::npos);
+    CHECK(filter_actor < product);
+    CHECK(filter_surface < product);
+    const auto body = pair_body_lambda(code);
+    CHECK(body.contains("if (!("));
+    CHECK(!body.contains("== 0"));
+    CHECK(!body.contains("> 1"));
+    // A targeted recipient must pass its own binding's filter.
+    CHECK(code.contains("&& cactus_keep_actor(target)"));
+    CHECK(code.contains("&& cactus_keep_surface(target)"));
+}
+
+TEST_CASE("Codegen EnTT: a limited pair rule filters only row predicates at collection", "[codegen-entt][staging]") {
+    const auto code = emit_named_rule(pair_staging_rule("    where:\n"
+                                                        "        actor[Actor].ground == 0\n"
+                                                        "        actor[Actor].ground < surface[Surface].code\n"
+                                                        "    limit: 2\n"),
+                                      "Ground");
+    CHECK(code.contains("std::erase_if(actor_snapshot"));
+    const auto filter = code.find("cactus_gen_pair_where_");
+    REQUIRE(filter != std::string::npos);
+    const auto filter_body = code.substr(filter, code.find("};", filter) - filter);
+    CHECK(!filter_body.contains("== 0"));
+}
+
+TEST_CASE("Codegen EnTT: pair sort keys are computed once per row, binding keys once per member",
+          "[codegen-entt][staging][rule-order-by]") {
+    const auto code = emit_named_rule(pair_staging_rule("    order by:\n"
+                                                        "        surface[Surface].code desc\n"
+                                                        "        actor[Actor].ground - surface[Surface].code asc\n"),
+                                      "Ground");
+    // The binding key is filled from the surface snapshot, the row key from the buffer.
+    CHECK(code.contains("for (const auto cactus_member : surface_snapshot)"));
+    CHECK(code.contains("cactus_member_keys_0"));
+    CHECK(code.contains("cactus_keys_1.push_back("));
+    // The comparator reads the precomputed keys, never a key extractor.
+    const auto sort = code.find("std::ranges::stable_sort(cactus_order");
+    REQUIRE(sort != std::string::npos);
+    const auto comparator = code.substr(sort, code.find("});", sort) - sort);
+    CHECK(comparator.contains("cactus_keys_0[cactus_lhs]"));
+    CHECK(!comparator.contains("pair_sort_key"));
+}
+
+TEST_CASE("Codegen EnTT: unary sort keys are computed once per entity", "[codegen-entt][staging][rule-order-by]") {
+    const auto code = emit_named_rule(staging_traits() +
+                                          "rule Rank:\n"
+                                          "    each:\n"
+                                          "        Actor as a\n"
+                                          "    order by:\n"
+                                          "        a.ground desc\n"
+                                          "    on tick:\n"
+                                          "        let x = a.ground\n",
+                                      "Rank");
+    const auto sort = code.find("std::ranges::stable_sort(cactus_order");
+    REQUIRE(sort != std::string::npos);
+    const auto comparator = code.substr(sort, code.find("});", sort) - sort);
+    CHECK(comparator.contains("cactus_keys_0[cactus_lhs]"));
+    CHECK(!comparator.contains("sort_key"));
+}
+
+TEST_CASE("Codegen EnTT: a unary activation predicate gates the pass", "[codegen-entt][staging]") {
+    const auto code = emit_named_rule(staging_traits() +
+                                          "rule Rank:\n"
+                                          "    each:\n"
+                                          "        Actor as a\n"
+                                          "    where:\n"
+                                          "        Game[Flag].open\n"
+                                          "        a.ground > 0\n"
+                                          "    on tick:\n"
+                                          "        let x = a.ground\n",
+                                      "Rank");
+    const auto gate         = code.find("if (!(");
+    const auto handler_body = code.find("auto cactus_gen_handler_body_");
+    REQUIRE(gate != std::string::npos);
+    REQUIRE(handler_body != std::string::npos);
+    CHECK(gate < handler_body);
+    // The row predicate stays in the handler body.
+    CHECK(code.find("if (!(", handler_body) != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: a reduced pair rule stages gates, filters and reducer inputs", "[codegen-entt][staging]") {
+    const auto code = emit_named_rule(staging_traits() +
+                                          "rule Count:\n"
+                                          "    pairs:\n"
+                                          "        surface:\n"
+                                          "            Surface\n"
+                                          "        actor:\n"
+                                          "            Actor\n"
+                                          "    where:\n"
+                                          "        Game[Flag].open\n"
+                                          "        surface[Surface].code > 0\n"
+                                          "        actor[Actor].ground > 0\n"
+                                          "    reduce per surface:\n"
+                                          "        total = sum(actor[Actor].ground)\n"
+                                          "    on tick:\n"
+                                          "        surface[Surface].code = total\n",
+                                      "Count");
+    CHECK(code.contains("const bool cactus_active = "));
+    CHECK(code.contains("if (cactus_active) {"));
+    // The other binding is filtered; the group binding keeps every entity for its groups.
+    CHECK(code.contains("std::erase_if(actor_snapshot"));
+    CHECK(!code.contains("std::erase_if(surface_snapshot"));
+    // The input reads one binding, so it is computed once per member.
+    CHECK(code.contains("cactus_inputs_0"));
+    const auto fold = code.find("auto cactus_fold");
+    REQUIRE(fold != std::string::npos);
+    const auto fold_body = code.substr(fold, code.find("};", fold) - fold);
+    CHECK(fold_body.contains("cactus_inputs_0["));
+    CHECK(!fold_body.contains("ground > 0"));
 }
 
 // Recipient-targeted delivery is a separate runtime branch from the broadcast

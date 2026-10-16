@@ -1,0 +1,380 @@
+module staged_predicates
+
+# The test builds this fixture twice: with predicates lifted to their stage
+# and with every predicate evaluated per row. Both builds must record the
+# same tuples, in the same order, with the same aggregates.
+#
+# Each pair rule emits its own event with code = left tag * 10 + right tag,
+# and the recorder appends codes to that rule's sequence, so a sequence is an
+# order-sensitive fingerprint of the whole pass.
+
+use std.core
+
+trait Body:
+    var x: float = 0.0
+    var tag: int = 0
+
+trait Lava:
+    var active: bool = true
+    var heat: float = 0.0
+    var tag: int = 0
+    var hits: int = -1
+    var gated: int = -1
+
+trait Hot:
+    var count: int = 0
+
+trait Match:
+    var running: bool = true
+    var closed: bool = false
+    var keeping: bool = true
+
+trait Budget:
+    var left: int = 2
+
+trait Tally:
+    var cooled: int = 0
+
+trait Recorder:
+    var one_sided: int = 0
+    var join: int = 0
+    var gated: int = 0
+    var limited: int = 0
+    var ordered: int = 0
+    var global_closed: int = 0
+    var global_open: int = 0
+    var targeted: int = 0
+    var self_tuples: int = 0
+    var budget: int = 0
+    var unary_gated: int = 0
+
+event OneSidedVisited:
+    code: int
+
+event JoinVisited:
+    code: int
+
+event GatedVisited:
+    code: int
+
+event LimitedVisited:
+    code: int
+
+event OrderedVisited:
+    code: int
+
+event GlobalClosedVisited:
+    code: int
+
+event GlobalOpenVisited:
+    code: int
+
+event PokedVisited:
+    code: int
+
+event SelfVisited:
+    code: int
+
+event BudgetVisited:
+    code: int
+
+event UnaryGatedVisited:
+    code: int
+
+event Poke
+
+# Binding-stage predicates on both sides plus a true pass gate.
+rule OneSided:
+    pairs:
+        body:
+            Body
+        lava:
+            Lava
+    where:
+        lava[Lava].active
+        Game[Match].running
+        body[Body].x > 0.0
+
+    on tick:
+        emit OneSidedVisited:
+            code = body[Body].tag * 10 + lava[Lava].tag
+
+# A join predicate behind a one-sided filter.
+rule Join:
+    pairs:
+        body:
+            Body
+        lava:
+            Lava
+    where:
+        lava[Lava].active
+        body[Body].x < lava[Lava].heat
+
+    on tick:
+        emit JoinVisited:
+            code = body[Body].tag * 10 + lava[Lava].tag
+
+# A false pass gate runs nothing.
+rule Gated:
+    pairs:
+        body:
+            Body
+        lava:
+            Lava
+    where:
+        Game[Match].closed
+
+    on tick:
+        emit GatedVisited:
+            code = 1
+
+# Binding-stage keys and a limit over a filtered product.
+rule Limited:
+    pairs:
+        body:
+            Body
+        lava:
+            Lava
+    order by:
+        body[Body].x desc
+        lava[Lava].heat asc
+    where:
+        lava[Lava].active
+    limit: 3
+
+    on tick:
+        emit LimitedVisited:
+            code = body[Body].tag * 10 + lava[Lava].tag
+
+# Ordered without a limit: the row predicate still runs per tuple.
+rule Ordered:
+    pairs:
+        body:
+            Body
+        lava:
+            Lava
+    order by:
+        body[Body].x desc
+        lava[Lava].heat asc
+    where:
+        lava[Lava].active
+        body[Body].x < lava[Lava].heat
+
+    on tick:
+        emit OrderedVisited:
+            code = body[Body].tag * 10 + lava[Lava].tag
+
+# A false gate on a global reduction still runs the handler once, with identities.
+rule GlobalClosed:
+    pairs:
+        body:
+            Body
+        lava:
+            Lava
+    where:
+        Game[Match].closed
+    reduce:
+        n = count()
+        total = sum(body[Body].tag)
+
+    on tick:
+        emit GlobalClosedVisited:
+            code = n * 100 + total + 1
+
+rule GlobalOpen:
+    pairs:
+        body:
+            Body
+        lava:
+            Lava
+    where:
+        lava[Lava].active
+        body[Body].x > 0.0
+    reduce:
+        n = count()
+        total = sum(body[Body].tag)
+
+    on tick:
+        emit GlobalOpenVisited:
+            code = n * 100 + total
+
+# Group filter, other-binding filter, gate and join in one grouped reduction.
+rule PerLava:
+    pairs:
+        lava:
+            Lava
+        body:
+            Body
+    where:
+        lava[Lava].active
+        body[Body].x > 0.0
+        Game[Match].running
+        body[Body].x < lava[Lava].heat
+    reduce per lava:
+        n = count()
+        tags = sum(body[Body].tag)
+
+    on tick:
+        lava[Lava].hits = n * 100 + tags
+
+# A false gate on a grouped reduction keeps the groups, each with identities.
+rule PerLavaClosed:
+    pairs:
+        lava:
+            Lava
+        body:
+            Body
+    where:
+        Game[Match].closed
+        lava[Lava].active
+    reduce per lava:
+        n = count()
+
+    on tick:
+        lava[Lava].gated = n + 10
+
+group heat:
+    phase: tick
+
+rule KeepHot:
+    pairs:
+        lava:
+            Lava
+        body:
+            Body
+    group: heat
+    where:
+        Game[Match].keeping
+        body[Body].x > 0.0
+    reduce per lava:
+        n = count()
+    keep Hot on lava:
+        count = n
+
+rule Cool:
+    each:
+        Lava
+
+    on removed Hot:
+        Game[Tally].cooled += 1
+
+rule PokeAlpha:
+    on tick:
+        emit Poke to Alpha
+
+# A targeted pass keeps only tuples incident to the recipient.
+rule Poked:
+    pairs:
+        body:
+            Body
+        lava:
+            Lava
+    where:
+        lava[Lava].active
+
+    on Poke:
+        emit PokedVisited:
+            code = body[Body].tag * 10 + lava[Lava].tag
+
+# Self-tuples survive binding filters.
+rule SelfTuples:
+    pairs:
+        a:
+            Body
+        b:
+            Body
+    where:
+        a[Body].x > 0.0
+        b[Body].tag < 3
+
+    on tick:
+        emit SelfVisited:
+            code = a[Body].tag * 10 + b[Body].tag
+
+# The pass writes the named field its predicate reads, so each entity sees the live value.
+rule SpendBudget:
+    each:
+        Body as body
+
+    where:
+        Game[Budget].left > 0
+
+    on tick:
+        Game[Budget].left -= 1
+        emit BudgetVisited:
+            code = body.tag
+
+rule UnaryGated:
+    each:
+        Body
+
+    where:
+        Game[Match].closed
+
+    on tick:
+        emit UnaryGatedVisited:
+            code = 1
+
+rule Record:
+    each:
+        Recorder as r
+
+    on OneSidedVisited as v:
+        r.one_sided = r.one_sided * 100 + v.code
+
+    on JoinVisited as v:
+        r.join = r.join * 100 + v.code
+
+    on GatedVisited as v:
+        r.gated = r.gated * 100 + v.code
+
+    on LimitedVisited as v:
+        r.limited = r.limited * 100 + v.code
+
+    on OrderedVisited as v:
+        r.ordered = r.ordered * 100 + v.code
+
+    on GlobalClosedVisited as v:
+        r.global_closed = r.global_closed * 1000 + v.code
+
+    on GlobalOpenVisited as v:
+        r.global_open = r.global_open * 1000 + v.code
+
+    on PokedVisited as v:
+        r.targeted = r.targeted * 100 + v.code
+
+    on SelfVisited as v:
+        r.self_tuples = r.self_tuples * 100 + v.code
+
+    on BudgetVisited as v:
+        r.budget = r.budget * 10 + v.code
+
+    on UnaryGatedVisited as v:
+        r.unary_gated = r.unary_gated * 10 + v.code
+
+entity Game:
+    Match
+    Budget
+    Tally
+
+entity Log:
+    Recorder
+
+template Mover(x: float, tag: int):
+    Body:
+        x = x
+        tag = tag
+
+template Pool(heat: float, tag: int, active: bool = true):
+    Lava:
+        active = active
+        heat = heat
+        tag = tag
+
+entity Alpha from Mover(x = 1.0, tag = 1)
+entity Beta from Mover(x = -1.0, tag = 2)
+entity Gamma from Mover(x = 3.0, tag = 3)
+
+entity LavaOne from Pool(heat = 2.0, tag = 1)
+entity LavaTwo from Pool(heat = 5.0, tag = 2, active = false)
+entity LavaThree from Pool(heat = 0.5, tag = 3)

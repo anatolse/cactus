@@ -1,0 +1,530 @@
+bracketed_trait_access.cactus examples bracketed_trait_access.CountLanes/on std.core.tick
+    reads: bracketed_trait_access.Match bracketed_trait_access.Runner
+    read_fields: bracketed_trait_access.Match{score} bracketed_trait_access.Runner{lane}
+    write_fields: bracketed_trait_access.Match{score}
+    write_kinds: bracketed_trait_access.Match.score=1/0
+    bound_reads: 1:bracketed_trait_access.Runner
+    named_reads: [bracketed_trait_access.Game: bracketed_trait_access.Match{score}]
+    named_writes: [bracketed_trait_access.Game: bracketed_trait_access.Match{score}]
+    named_requirements: bracketed_trait_access.Game/bracketed_trait_access.Match
+    iteration_order: free
+bracketed_trait_access.cactus examples bracketed_trait_access.FindNextLane/on std.core.tick
+    reads: bracketed_trait_access.Runner
+    read_fields: bracketed_trait_access.Runner{lane,next_lane}
+    write_fields: bracketed_trait_access.Runner{next_lane}
+    write_kinds: bracketed_trait_access.Runner.next_lane=0/0
+    bound_reads: 0:bracketed_trait_access.Runner 1:bracketed_trait_access.Runner
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+character_body.cactus stdlib-fixtures character_body.Wade/on std.core.fixed_tick
+    reads: std.physics.volume.BoxCollider std.physics.volume.CapsuleCollider std.physics.volume.Collider std.physics.volume.SphereCollider std.transform.volume.WorldTransform
+    read_fields: std.physics.volume.BoxCollider{*} std.physics.volume.CapsuleCollider{*} std.physics.volume.Collider{layer,mask} std.physics.volume.SphereCollider{*} std.transform.volume.WorldTransform{position,rotation}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:std.physics.volume.BoxCollider 0:std.physics.volume.CapsuleCollider 0:std.physics.volume.Collider 0:std.physics.volume.SphereCollider 0:std.transform.volume.WorldTransform 1:std.physics.volume.BoxCollider 1:std.physics.volume.CapsuleCollider 1:std.physics.volume.Collider 1:std.physics.volume.SphereCollider 1:std.transform.volume.WorldTransform
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+collider_sweep_queries.cactus examples collider_sweep_queries.CountTouching/on std.core.fixed_tick
+    reads: collider_sweep_queries.Toucher std.physics.volume.BoxCollider std.physics.volume.CapsuleCollider std.physics.volume.Collider std.physics.volume.SphereCollider std.transform.volume.WorldTransform
+    read_fields: collider_sweep_queries.Toucher{touching} std.physics.volume.BoxCollider{*} std.physics.volume.CapsuleCollider{*} std.physics.volume.Collider{layer,mask} std.physics.volume.SphereCollider{*} std.transform.volume.WorldTransform{position,rotation}
+    write_fields: collider_sweep_queries.Toucher{touching}
+    write_kinds: collider_sweep_queries.Toucher.touching=0/0
+    bound_reads: 0:collider_sweep_queries.Toucher 0:std.physics.volume.BoxCollider 0:std.physics.volume.CapsuleCollider 0:std.physics.volume.Collider 0:std.physics.volume.SphereCollider 0:std.transform.volume.WorldTransform 1:std.physics.volume.BoxCollider 1:std.physics.volume.CapsuleCollider 1:std.physics.volume.Collider 1:std.physics.volume.SphereCollider 1:std.transform.volume.WorldTransform
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+collision_predicates_runtime.cactus fixtures collision_predicates_runtime.DetectOverlapWhere/on std.core.tick
+    reads: collision_predicates_runtime.Body
+    read_fields: collision_predicates_runtime.Body{position,radius}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:collision_predicates_runtime.Body 1:collision_predicates_runtime.Body
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+collision_predicates_runtime.cactus fixtures collision_predicates_runtime.DetectSphereBoxOverlapWhere/on std.core.tick
+    reads: collision_predicates_runtime.SeparationBox collision_predicates_runtime.SphereBoxCandidate
+    read_fields: collision_predicates_runtime.SeparationBox{position,rotation,size} collision_predicates_runtime.SphereBoxCandidate{position,radius}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:collision_predicates_runtime.SphereBoxCandidate 1:collision_predicates_runtime.SeparationBox
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+collision_predicates_runtime.cactus fixtures collision_predicates_runtime.DetectSphereBoxWhere/on std.core.tick
+    reads: collision_predicates_runtime.SeparationBox collision_predicates_runtime.SphereBoxCandidate
+    read_fields: collision_predicates_runtime.SeparationBox{position,rotation,size} collision_predicates_runtime.SphereBoxCandidate{position,radius}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:collision_predicates_runtime.SphereBoxCandidate 1:collision_predicates_runtime.SeparationBox
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+collision_predicates_runtime.cactus fixtures collision_predicates_runtime.DetectSphereSphereWhere/on std.core.tick
+    reads: collision_predicates_runtime.SeparationSphere collision_predicates_runtime.SphereSphereCandidate
+    read_fields: collision_predicates_runtime.SeparationSphere{position,radius} collision_predicates_runtime.SphereSphereCandidate{position,radius}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:collision_predicates_runtime.SphereSphereCandidate 1:collision_predicates_runtime.SeparationSphere
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+concise_rule_notation.cactus examples concise_rule_notation.BlockGlobalEmpty/on std.core.fixed_tick
+    reads: concise_rule_notation.BlockControl
+    read_fields: concise_rule_notation.BlockControl{empty}
+    write_fields: concise_rule_notation.BlockControl{empty}
+    write_kinds: concise_rule_notation.BlockControl.empty=0/0
+    bound_reads:
+    named_reads: [concise_rule_notation.BlockSettings: concise_rule_notation.BlockControl{empty}]
+    named_writes: [concise_rule_notation.BlockSettings: concise_rule_notation.BlockControl{empty}]
+    named_requirements: concise_rule_notation.BlockSettings/concise_rule_notation.BlockControl
+    iteration_order: creation
+concise_rule_notation.cactus examples concise_rule_notation.BlockKeep/on std.core.fixed_tick
+    reads: concise_rule_notation.BlockBody concise_rule_notation.BlockZone
+    read_fields: concise_rule_notation.BlockBody{x} concise_rule_notation.BlockZone{x}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:concise_rule_notation.BlockBody 1:concise_rule_notation.BlockZone
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+concise_rule_notation.cactus examples concise_rule_notation.BlockOrderedPairs/on std.core.fixed_tick
+    reads: concise_rule_notation.BlockBody concise_rule_notation.BlockZone
+    read_fields: concise_rule_notation.BlockBody{x} concise_rule_notation.BlockZone{id,x}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:concise_rule_notation.BlockBody 1:concise_rule_notation.BlockZone
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+concise_rule_notation.cactus examples concise_rule_notation.BlockRank/on std.core.fixed_tick
+    reads: concise_rule_notation.BlockBody concise_rule_notation.BlockZone
+    read_fields: concise_rule_notation.BlockBody{rank,x} concise_rule_notation.BlockZone{x}
+    write_fields: concise_rule_notation.BlockBody{rank}
+    write_kinds: concise_rule_notation.BlockBody.rank=0/0
+    bound_reads: 0:concise_rule_notation.BlockBody 1:concise_rule_notation.BlockZone
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+concise_rule_notation.cactus examples concise_rule_notation.BlockTotal/on std.core.fixed_tick
+    reads: concise_rule_notation.BlockBody concise_rule_notation.BlockZone
+    read_fields: concise_rule_notation.BlockBody{total,x} concise_rule_notation.BlockZone{x}
+    write_fields: concise_rule_notation.BlockBody{total}
+    write_kinds: concise_rule_notation.BlockBody.total=0/0
+    bound_reads: 0:concise_rule_notation.BlockBody 1:concise_rule_notation.BlockZone
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+concise_rule_notation.cactus examples concise_rule_notation.CompactGlobalEmpty/on std.core.fixed_tick
+    reads: concise_rule_notation.CompactControl
+    read_fields: concise_rule_notation.CompactControl{empty}
+    write_fields: concise_rule_notation.CompactControl{empty}
+    write_kinds: concise_rule_notation.CompactControl.empty=0/0
+    bound_reads:
+    named_reads: [concise_rule_notation.CompactSettings: concise_rule_notation.CompactControl{empty}]
+    named_writes: [concise_rule_notation.CompactSettings: concise_rule_notation.CompactControl{empty}]
+    named_requirements: concise_rule_notation.CompactSettings/concise_rule_notation.CompactControl
+    iteration_order: creation
+concise_rule_notation.cactus examples concise_rule_notation.CompactKeep/on std.core.fixed_tick
+    reads: concise_rule_notation.CompactBody concise_rule_notation.CompactZone
+    read_fields: concise_rule_notation.CompactBody{x} concise_rule_notation.CompactZone{x}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:concise_rule_notation.CompactBody 1:concise_rule_notation.CompactZone
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+concise_rule_notation.cactus examples concise_rule_notation.CompactOrderedPairs/on std.core.fixed_tick
+    reads: concise_rule_notation.CompactBody concise_rule_notation.CompactZone
+    read_fields: concise_rule_notation.CompactBody{x} concise_rule_notation.CompactZone{id,x}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:concise_rule_notation.CompactBody 1:concise_rule_notation.CompactZone
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+concise_rule_notation.cactus examples concise_rule_notation.CompactRank/on std.core.fixed_tick
+    reads: concise_rule_notation.CompactBody concise_rule_notation.CompactZone
+    read_fields: concise_rule_notation.CompactBody{rank,x} concise_rule_notation.CompactZone{x}
+    write_fields: concise_rule_notation.CompactBody{rank}
+    write_kinds: concise_rule_notation.CompactBody.rank=0/0
+    bound_reads: 0:concise_rule_notation.CompactBody 1:concise_rule_notation.CompactZone
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+concise_rule_notation.cactus examples concise_rule_notation.CompactTotal/on std.core.fixed_tick
+    reads: concise_rule_notation.CompactBody concise_rule_notation.CompactZone
+    read_fields: concise_rule_notation.CompactBody{total,x} concise_rule_notation.CompactZone{x}
+    write_fields: concise_rule_notation.CompactBody{total}
+    write_kinds: concise_rule_notation.CompactBody.total=0/0
+    bound_reads: 0:concise_rule_notation.CompactBody 1:concise_rule_notation.CompactZone
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+cross_domain_spatial_join_runtime.cactus fixtures cross_domain_spatial_join_runtime.DetectAccelerated/on std.core.tick
+    reads: cross_domain_spatial_join_runtime.Actor cross_domain_spatial_join_runtime.Solid
+    read_fields: cross_domain_spatial_join_runtime.Actor{pos,radius,tag} cross_domain_spatial_join_runtime.Solid{pos,rotation,size,tag}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:cross_domain_spatial_join_runtime.Actor 1:cross_domain_spatial_join_runtime.Solid
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+cross_domain_spatial_join_runtime.cactus fixtures cross_domain_spatial_join_runtime.DetectPlain/on std.core.tick
+    reads: cross_domain_spatial_join_runtime.Actor cross_domain_spatial_join_runtime.Solid
+    read_fields: cross_domain_spatial_join_runtime.Actor{pos,radius,tag} cross_domain_spatial_join_runtime.Solid{pos,rotation,size,tag}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:cross_domain_spatial_join_runtime.Actor 1:cross_domain_spatial_join_runtime.Solid
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+cross_domain_spatial_join_runtime.cactus fixtures cross_domain_spatial_join_runtime.NearestAccelerated/on std.core.tick
+    reads: cross_domain_spatial_join_runtime.Actor cross_domain_spatial_join_runtime.Solid
+    read_fields: cross_domain_spatial_join_runtime.Actor{pos,radius,tag} cross_domain_spatial_join_runtime.Solid{pos,rotation,size,tag}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:cross_domain_spatial_join_runtime.Actor 1:cross_domain_spatial_join_runtime.Solid
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+cross_domain_spatial_join_runtime.cactus fixtures cross_domain_spatial_join_runtime.NearestPlain/on std.core.tick
+    reads: cross_domain_spatial_join_runtime.Actor cross_domain_spatial_join_runtime.Solid
+    read_fields: cross_domain_spatial_join_runtime.Actor{pos,radius,tag} cross_domain_spatial_join_runtime.Solid{pos,rotation,size,tag}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:cross_domain_spatial_join_runtime.Actor 1:cross_domain_spatial_join_runtime.Solid
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+deferred_set.cactus examples deferred_set.Shove/on std.core.tick
+    reads: deferred_set.Push
+    read_fields: deferred_set.Push{amount}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:deferred_set.Push
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+deterministic_target_selection.cactus examples deterministic_target_selection.SelectTarget/on std.core.fixed_tick
+    reads: deterministic_target_selection.Enemy deterministic_target_selection.Position deterministic_target_selection.Target deterministic_target_selection.Tower
+    read_fields: deterministic_target_selection.Enemy{cloaked} deterministic_target_selection.Position{pos} deterministic_target_selection.Target{has_target,selected} deterministic_target_selection.Tower{range}
+    write_fields: deterministic_target_selection.Target{has_target,selected}
+    write_kinds: deterministic_target_selection.Target.has_target=2/2 deterministic_target_selection.Target.selected=0/0
+    bound_reads: 0:deterministic_target_selection.Position 0:deterministic_target_selection.Target 0:deterministic_target_selection.Tower 1:deterministic_target_selection.Enemy 1:deterministic_target_selection.Position
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+main.cactus bouncy-balls-3d main.DetectBallContact/on std.core.fixed_tick
+    reads: main.Ball main.SphereCollider std.transform.volume.WorldTransform
+    read_fields: main.Ball{velocity} main.SphereCollider{radius} std.transform.volume.WorldTransform{position}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:main.Ball 0:main.SphereCollider 0:std.transform.volume.WorldTransform 1:main.Ball 1:main.SphereCollider 1:std.transform.volume.WorldTransform
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+main.cactus bouncy-bubbles main.DetectBubbleContact/on std.core.tick
+    reads: main.Bubble main.CircleCollider std.transform.flat.WorldTransform
+    read_fields: main.Bubble{velocity} main.CircleCollider{radius} std.transform.flat.WorldTransform{position}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:main.Bubble 0:main.CircleCollider 0:std.transform.flat.WorldTransform 1:main.Bubble 1:main.CircleCollider 1:std.transform.flat.WorldTransform
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+main.cactus first-person-arena main.CatchPlayer/on std.core.fixed_tick
+    reads: std.physics.volume.BoxCollider std.physics.volume.CapsuleCollider std.physics.volume.Collider std.physics.volume.SphereCollider std.transform.volume.WorldTransform
+    read_fields: std.physics.volume.BoxCollider{*} std.physics.volume.CapsuleCollider{*} std.physics.volume.Collider{layer,mask} std.physics.volume.SphereCollider{*} std.transform.volume.WorldTransform{position,rotation}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:std.physics.volume.BoxCollider 0:std.physics.volume.CapsuleCollider 0:std.physics.volume.Collider 0:std.physics.volume.SphereCollider 0:std.transform.volume.WorldTransform 1:std.physics.volume.BoxCollider 1:std.physics.volume.CapsuleCollider 1:std.physics.volume.Collider 1:std.physics.volume.SphereCollider 1:std.transform.volume.WorldTransform
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+main.cactus first-person-arena main.SeekPlayer/on std.core.fixed_tick
+    reads: main.Enemy main.Match std.physics.volume.BoxCollider std.physics.volume.CharacterBody std.transform.volume.WorldTransform
+    read_fields: main.Enemy{facing_yaw,is_vaulting,kind} main.Match{over} std.physics.volume.BoxCollider{size} std.physics.volume.CharacterBody{grounded,velocity} std.transform.volume.WorldTransform{position,rotation}
+    write_fields: main.Enemy{facing_yaw,is_vaulting} std.physics.volume.CharacterBody{velocity} std.transform.volume.WorldTransform{rotation}
+    write_kinds: main.Enemy.facing_yaw=3/0 main.Enemy.is_vaulting=3/0 std.physics.volume.CharacterBody.velocity=0/0 std.transform.volume.WorldTransform.rotation=3/0
+    bound_reads: 0:main.Enemy 0:std.physics.volume.CharacterBody 0:std.transform.volume.WorldTransform 1:std.physics.volume.BoxCollider 1:std.transform.volume.WorldTransform
+    named_reads: [main.Game: main.Match{over}] [main.PlayerBody: std.transform.volume.WorldTransform{position}]
+    named_writes:
+    named_requirements: main.PlayerBody/std.transform.volume.WorldTransform main.Game/main.Match
+    iteration_order: free
+pair_handler_return_runtime.cactus fixtures pair_handler_return_runtime.DetectBallContactWhere/on std.core.tick
+    reads:
+    read_fields:
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+pairs_limit_runtime.cactus fixtures pairs_limit_runtime.GroundActor/on std.core.tick
+    reads: pairs_limit_runtime.Actor pairs_limit_runtime.Surface
+    read_fields: pairs_limit_runtime.Actor{ground,height} pairs_limit_runtime.Surface{code,top}
+    write_fields: pairs_limit_runtime.Actor{ground}
+    write_kinds: pairs_limit_runtime.Actor.ground=0/0
+    bound_reads: 0:pairs_limit_runtime.Actor 1:pairs_limit_runtime.Surface
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+pairs_order_by_runtime.cactus fixtures pairs_order_by_runtime.RankPairsByGap/on std.core.tick
+    reads: pairs_order_by_runtime.Ranked
+    read_fields: pairs_order_by_runtime.Ranked{score,tag}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:pairs_order_by_runtime.Ranked 1:pairs_order_by_runtime.Ranked
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+rule_keep.cactus examples rule_keep.RankPools/on std.core.fixed_tick
+    reads: rule_keep.Lava rule_keep.Walker
+    read_fields: rule_keep.Lava{heat,priority,radius,x} rule_keep.Walker{x}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:rule_keep.Walker 1:rule_keep.Lava
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+rule_keep.cactus examples rule_keep.TouchLava/on std.core.fixed_tick
+    reads: rule_keep.Control rule_keep.Lava rule_keep.Walker
+    read_fields: rule_keep.Control{frozen} rule_keep.Lava{heat,priority,radius,x} rule_keep.Walker{x}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:rule_keep.Walker 1:rule_keep.Lava
+    named_reads: [rule_keep.Settings: rule_keep.Control{frozen}]
+    named_writes:
+    named_requirements: rule_keep.Settings/rule_keep.Control
+    iteration_order: free
+rule_reductions.cactus examples rule_reductions.RankTeams/on std.core.tick
+    reads: rule_reductions.Board rule_reductions.Player rule_reductions.Team
+    read_fields: rule_reductions.Board{ranked} rule_reductions.Player{points,team} rule_reductions.Team{id}
+    write_fields: rule_reductions.Board{ranked}
+    write_kinds: rule_reductions.Board.ranked=3/0
+    bound_reads: 0:rule_reductions.Team 1:rule_reductions.Player
+    named_reads: [rule_reductions.Scoreboard: rule_reductions.Board{ranked}]
+    named_writes: [rule_reductions.Scoreboard: rule_reductions.Board{ranked}]
+    named_requirements: rule_reductions.Scoreboard/rule_reductions.Board
+    iteration_order: free
+rule_reductions.cactus examples rule_reductions.TeamTotals/on std.core.tick
+    reads: rule_reductions.Player rule_reductions.Team
+    read_fields: rule_reductions.Player{points,push,speed,star,team} rule_reductions.Team{activations,active,best,has_star,players,push,total}
+    write_fields: rule_reductions.Team{activations,best,has_star,players,push,total}
+    write_kinds: rule_reductions.Team.activations=1/0 rule_reductions.Team.best=0/0 rule_reductions.Team.has_star=0/0 rule_reductions.Team.players=0/0 rule_reductions.Team.push=0/0 rule_reductions.Team.total=0/0
+    bound_reads: 0:rule_reductions.Team 1:rule_reductions.Player
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+spatial_join_tuples_runtime.cactus fixtures spatial_join_tuples_runtime.DetectOverlap/on std.core.tick
+    reads: spatial_join_tuples_runtime.Body
+    read_fields: spatial_join_tuples_runtime.Body{pos,radius,tag}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:spatial_join_tuples_runtime.Body 1:spatial_join_tuples_runtime.Body
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+staged_predicates.cactus stdlib-fixtures staged_predicates.Gated/on std.core.tick
+    reads: staged_predicates.Match
+    read_fields: staged_predicates.Match{closed}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads: [staged_predicates.Game: staged_predicates.Match{closed}]
+    named_writes:
+    named_requirements: staged_predicates.Game/staged_predicates.Match
+    iteration_order: free
+staged_predicates.cactus stdlib-fixtures staged_predicates.GlobalClosed/on std.core.tick
+    reads: staged_predicates.Body staged_predicates.Match
+    read_fields: staged_predicates.Body{tag} staged_predicates.Match{closed}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:staged_predicates.Body
+    named_reads: [staged_predicates.Game: staged_predicates.Match{closed}]
+    named_writes:
+    named_requirements: staged_predicates.Game/staged_predicates.Match
+    iteration_order: free
+staged_predicates.cactus stdlib-fixtures staged_predicates.GlobalOpen/on std.core.tick
+    reads: staged_predicates.Body staged_predicates.Lava
+    read_fields: staged_predicates.Body{tag,x} staged_predicates.Lava{active}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:staged_predicates.Body 1:staged_predicates.Lava
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+staged_predicates.cactus stdlib-fixtures staged_predicates.Join/on std.core.tick
+    reads: staged_predicates.Body staged_predicates.Lava
+    read_fields: staged_predicates.Body{tag,x} staged_predicates.Lava{active,heat,tag}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:staged_predicates.Body 1:staged_predicates.Lava
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+staged_predicates.cactus stdlib-fixtures staged_predicates.KeepHot/on std.core.tick
+    reads: staged_predicates.Body staged_predicates.Match
+    read_fields: staged_predicates.Body{x} staged_predicates.Match{keeping}
+    write_fields:
+    write_kinds:
+    bound_reads: 1:staged_predicates.Body
+    named_reads: [staged_predicates.Game: staged_predicates.Match{keeping}]
+    named_writes:
+    named_requirements: staged_predicates.Game/staged_predicates.Match
+    iteration_order: free
+staged_predicates.cactus stdlib-fixtures staged_predicates.Limited/on std.core.tick
+    reads: staged_predicates.Body staged_predicates.Lava
+    read_fields: staged_predicates.Body{tag,x} staged_predicates.Lava{active,heat,tag}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:staged_predicates.Body 1:staged_predicates.Lava
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+staged_predicates.cactus stdlib-fixtures staged_predicates.OneSided/on std.core.tick
+    reads: staged_predicates.Body staged_predicates.Lava staged_predicates.Match
+    read_fields: staged_predicates.Body{tag,x} staged_predicates.Lava{active,tag} staged_predicates.Match{running}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:staged_predicates.Body 1:staged_predicates.Lava
+    named_reads: [staged_predicates.Game: staged_predicates.Match{running}]
+    named_writes:
+    named_requirements: staged_predicates.Game/staged_predicates.Match
+    iteration_order: free
+staged_predicates.cactus stdlib-fixtures staged_predicates.Ordered/on std.core.tick
+    reads: staged_predicates.Body staged_predicates.Lava
+    read_fields: staged_predicates.Body{tag,x} staged_predicates.Lava{active,heat,tag}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:staged_predicates.Body 1:staged_predicates.Lava
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+staged_predicates.cactus stdlib-fixtures staged_predicates.PerLava/on std.core.tick
+    reads: staged_predicates.Body staged_predicates.Lava staged_predicates.Match
+    read_fields: staged_predicates.Body{tag,x} staged_predicates.Lava{active,heat,hits} staged_predicates.Match{running}
+    write_fields: staged_predicates.Lava{hits}
+    write_kinds: staged_predicates.Lava.hits=0/0
+    bound_reads: 0:staged_predicates.Lava 1:staged_predicates.Body
+    named_reads: [staged_predicates.Game: staged_predicates.Match{running}]
+    named_writes:
+    named_requirements: staged_predicates.Game/staged_predicates.Match
+    iteration_order: free
+staged_predicates.cactus stdlib-fixtures staged_predicates.PerLavaClosed/on std.core.tick
+    reads: staged_predicates.Lava staged_predicates.Match
+    read_fields: staged_predicates.Lava{active,gated} staged_predicates.Match{closed}
+    write_fields: staged_predicates.Lava{gated}
+    write_kinds: staged_predicates.Lava.gated=0/0
+    bound_reads: 0:staged_predicates.Lava
+    named_reads: [staged_predicates.Game: staged_predicates.Match{closed}]
+    named_writes:
+    named_requirements: staged_predicates.Game/staged_predicates.Match
+    iteration_order: free
+staged_predicates.cactus stdlib-fixtures staged_predicates.Poked/on staged_predicates.Poke
+    reads: staged_predicates.Body staged_predicates.Lava
+    read_fields: staged_predicates.Body{tag} staged_predicates.Lava{active,tag}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:staged_predicates.Body 1:staged_predicates.Lava
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+staged_predicates.cactus stdlib-fixtures staged_predicates.SelfTuples/on std.core.tick
+    reads: staged_predicates.Body
+    read_fields: staged_predicates.Body{tag,x}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:staged_predicates.Body 1:staged_predicates.Body
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+staged_predicates.cactus stdlib-fixtures staged_predicates.SpendBudget/on std.core.tick
+    reads: staged_predicates.Body staged_predicates.Budget
+    read_fields: staged_predicates.Body{tag} staged_predicates.Budget{left}
+    write_fields: staged_predicates.Budget{left}
+    write_kinds: staged_predicates.Budget.left=3/0
+    bound_reads:
+    named_reads: [staged_predicates.Game: staged_predicates.Budget{left}]
+    named_writes: [staged_predicates.Game: staged_predicates.Budget{left}]
+    named_requirements: staged_predicates.Game/staged_predicates.Budget
+    iteration_order: creation
+staged_predicates.cactus stdlib-fixtures staged_predicates.UnaryGated/on std.core.tick
+    reads: staged_predicates.Match
+    read_fields: staged_predicates.Match{closed}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads: [staged_predicates.Game: staged_predicates.Match{closed}]
+    named_writes:
+    named_requirements: staged_predicates.Game/staged_predicates.Match
+    iteration_order: creation
+team_score_reduce_runtime.cactus fixtures team_score_reduce_runtime.RecountTeam/on team_score_reduce_runtime.Recount
+    reads: team_score_reduce_runtime.Member team_score_reduce_runtime.Team
+    read_fields: team_score_reduce_runtime.Member{team} team_score_reduce_runtime.Team{recount_members,recounts}
+    write_fields: team_score_reduce_runtime.Team{recount_members,recounts}
+    write_kinds: team_score_reduce_runtime.Team.recount_members=0/0 team_score_reduce_runtime.Team.recounts=1/0
+    bound_reads: 0:team_score_reduce_runtime.Team 1:team_score_reduce_runtime.Member
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+team_score_reduce_runtime.cactus fixtures team_score_reduce_runtime.RivalBonus/on std.core.tick
+    reads: team_score_reduce_runtime.Team
+    read_fields: team_score_reduce_runtime.Team{bonus,rival_bonus}
+    write_fields: team_score_reduce_runtime.Team{bonus,rival_bonus}
+    write_kinds: team_score_reduce_runtime.Team.bonus=3/0 team_score_reduce_runtime.Team.rival_bonus=0/0
+    bound_reads: 0:team_score_reduce_runtime.Team 1:team_score_reduce_runtime.Team
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+team_score_reduce_runtime.cactus fixtures team_score_reduce_runtime.TeamScore/on std.core.tick
+    reads: team_score_reduce_runtime.Member team_score_reduce_runtime.Team
+    read_fields: team_score_reduce_runtime.Member{points,team} team_score_reduce_runtime.Team{activations,members,score}
+    write_fields: team_score_reduce_runtime.Team{activations,members,score}
+    write_kinds: team_score_reduce_runtime.Team.activations=1/0 team_score_reduce_runtime.Team.members=0/0 team_score_reduce_runtime.Team.score=0/0
+    bound_reads: 0:team_score_reduce_runtime.Team 1:team_score_reduce_runtime.Member
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free

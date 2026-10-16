@@ -60,7 +60,7 @@ The compiler SHALL NOT guarantee an evaluation order or observable short-circuit
 - **THEN** the compiled program admits the same entities or tuples regardless of source order
 
 ### Requirement: `where:` evaluates once per pass, against the already-selected domain
-`where:` SHALL be evaluated once per entity or tuple, at the start of that entity's or tuple's handler invocation, against the domain membership already determined by `each:`/`without:`/`pairs:`. `where:` MAY only remove entities or tuples from that membership; it MUST NOT add any and MUST NOT be re-evaluated mid-pass as a result of mutations, projections, or buffered structural commands performed by earlier invocations in the same pass.
+`where:` SHALL be evaluated once per entity or tuple, at the start of that entity's or tuple's handler invocation, against the domain membership already determined by `each:`/`without:`/`pairs:`. `where:` MAY only remove entities or tuples from that membership; it MUST NOT add any and MUST NOT be re-evaluated mid-pass as a result of mutations, projections, or buffered structural commands performed by earlier invocations in the same pass. A predicate whose inputs no invocation of the pass can change (`expression-staging`) gives the same result at any point of the pass, so a backend MAY evaluate it once per activation or once per binding member, before any invocation; the entities or tuples that run, and their order, SHALL be the same as if it were evaluated at the start of each invocation.
 
 #### Scenario: Rejected entities do not run the handler body
 - **WHEN** an entity satisfies `each:` but not `where:`
@@ -69,6 +69,14 @@ The compiler SHALL NOT guarantee an evaluation order or observable short-circuit
 #### Scenario: where: cannot expand the pass
 - **WHEN** an earlier invocation in the same pass performs a mutation that would make another entity newly satisfy a `where:` predicate
 - **THEN** that other entity's membership for the current pass is unaffected
+
+#### Scenario: Lifted predicate admits the same tuples
+- **WHEN** a pair rule's `where:` has a predicate reading only one binding and a join predicate, and the pass is run with lifting and with every predicate evaluated per tuple
+- **THEN** both runs execute the same tuples in the same order, including self-tuples
+
+#### Scenario: Predicate whose input the pass writes sees live values
+- **WHEN** a unary rule's `where:` reads a named entity field that its handler writes, and an earlier invocation of the pass changes that field
+- **THEN** later invocations evaluate the predicate against the changed value
 
 ### Requirement: Unaccelerated linear-distance `where:` predicates produce a warning diagnostic
 When a pair rule's `where:` predicate calls the unaccelerated linear-distance function

@@ -1567,3 +1567,35 @@ The cpp-entt backend SHALL choose its hierarchy propagation, recursive destroy a
 - **WHEN** a root with 3 children is destroyed in a world with 10000 other `Parent` carriers
 - **THEN** the cascade visits the root and its 3 children and no other `Parent` carrier
 
+### Requirement: Rule passes evaluate clause expressions at their recorded stage
+The cpp-entt backend SHALL use the recorded stages (`expression-staging`) when it emits a rule pass:
+- it SHALL evaluate activation-stage `where:` predicates once per pass, before taking membership snapshots. When one is false, an unreduced pass SHALL run no invocation, and a reduced pass SHALL behave exactly as if every row (and, for a predicate the reduce clause treats as a group filter, every group) were rejected: a global reduction still runs its handler once with identity values, and `keep` still removes the kept trait from former carriers;
+- for a pair rule, it SHALL remove members that fail a binding-stage predicate from that binding's snapshot before forming tuples, so the product, the broad phase and the `limit:` candidates see only surviving members;
+- it SHALL evaluate row-stage predicates once per candidate tuple or entity;
+- it SHALL compute each `order by:` key at most once per row, and a binding-stage key or reducer input at most once per binding member.
+
+None of this SHALL change the rows that run, their order, `limit:` slots, `reduce per` groups (a group entity that fails only a row predicate still gets its group), aggregates, or the self-tuple and recipient-targeting rules.
+
+#### Scenario: Pass gate skips the pass
+- **WHEN** an unreduced pair rule's activation-stage predicate is false
+- **THEN** the generated pass takes no snapshot and runs no invocation
+
+#### Scenario: Pass gate on a global reduction
+- **WHEN** a globally reduced rule's activation-stage predicate is false
+- **THEN** its handler runs once with `count` 0 and every other aggregate at its identity
+
+#### Scenario: Pass gate on a keep rule
+- **WHEN** a keep rule's activation-stage predicate becomes false while three entities carry the kept trait
+- **THEN** all three lose it at the commit and `on removed` fires for each
+
+#### Scenario: One-sided predicate filters the snapshot
+- **WHEN** a pair rule has a binding-stage predicate on its right binding and 10 of 100 right members pass it
+- **THEN** the right-binding predicate is evaluated 100 times, and the row predicates are evaluated only over tuples whose right member is one of the 10
+
+#### Scenario: Sort key evaluated once per row
+- **WHEN** a pair rule with `order by:` buffers N tuples
+- **THEN** each key expression is evaluated N times, not once per comparison
+
+#### Scenario: Recipient-targeted pass keeps its rules
+- **WHEN** a targeted event reaches a pair rule with a binding-stage predicate on the binding that is not the recipient
+- **THEN** only tuples incident to the recipient run, filtered as they would be without staging

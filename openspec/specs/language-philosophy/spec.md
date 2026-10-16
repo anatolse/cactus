@@ -25,6 +25,32 @@ The primary authoring audience is a game designer, gameplay programmer, or tool 
 - **WHEN** a proposal is motivated by a UI application or editor rather than by a game
 - **THEN** it is evaluated as part of the language's mission, under the same criteria as a gameplay proposal
 
+### Requirement: Concise definitions support mathematical reasoning
+Cactus's central thesis SHALL be that a small, analyzable notation can make complex interactive systems easy to describe while supporting mathematical proofs of correctness and efficient implementation. The syntax and frontend SHALL expose data, relations, state transitions and timing clearly enough for the backend to derive optimizations without asking authors to describe engine machinery.
+
+This thesis distinguishes three obligations:
+1. **Language correctness:** establish the determinacy, totality, activation termination and non-vacuity properties defined below, with the scope and limits of each analysis stated explicitly.
+2. **Model correctness:** support reasoning about whether a system satisfies its intended domain properties. Defined execution alone does not establish conservation, numerical stability or gameplay intent; those properties and their assumptions must be supplied by the model or its specification.
+3. **Compilation and cost correctness:** preserve observable source behavior through lowering and optimization, and justify resource bounds under explicit workload and execution assumptions. A legal optimization and a measured speedup are different claims; neither alone proves a universal performance guarantee.
+
+These are design obligations, not a claim that the current compiler has mechanically proved them. Specifications and implementation reports SHALL distinguish intended guarantees, implemented checks, tested behavior and proved properties. Native operations and external inputs SHALL have explicit assumptions wherever a proof relies on them.
+
+Facts derivable from a definition SHALL remain compiler responsibilities. This thesis introduces no proof annotations, performance controls or new grammar. Any future author-facing verification facility requires its own language design.
+
+#### Scenario: An improvement is evaluated for authoring value
+- **WHEN** a language or frontend improvement is proposed
+- **THEN** its rationale explains what it does, why it is needed, which syntax or semantics it changes, and whether it makes equivalent system definitions more concise or easier to understand
+- **AND** any added author obligation is justified against what the compiler can derive
+
+#### Scenario: An optimization has a stated justification
+- **WHEN** an optimization is described as mathematically justified
+- **THEN** its justification states the assumptions and observable behavior it preserves
+- **AND** any claimed resource bound names its workload parameters and execution model
+
+#### Scenario: Defined arithmetic does not prove a domain law
+- **WHEN** a simulation uses total deterministic arithmetic
+- **THEN** conservation or numerical stability is claimed only with a separate argument under stated assumptions
+
 ### Requirement: Simplicity is defined against a gameplay-core profile
 The project's simplicity claims SHALL apply to a curated gameplay-core profile rather than to the union of every current, experimental, or deferred language idea.
 

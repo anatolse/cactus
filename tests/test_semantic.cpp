@@ -6929,7 +6929,9 @@ TEST_CASE("Channel conflicts: lifecycle triggers from unordered commands", "[sem
     const auto ordered = channel_edge(adders + log_consumer("added Stunned", "        log.last = 1\n"), "A", "B");
     REQUIRE(ordered != std::nullopt);
     CHECK(ordered->channel_provenance ==
-          std::vector<std::string>{"added test.Stunned observed by test.Consume/on added test.Stunned"});
+          std::vector<std::string>{"test.A/on test.tick via added test.Stunned reaches test.Consume/on added "
+                                   "test.Stunned; test.B/on test.tick via added test.Stunned reaches test.Consume/on "
+                                   "added test.Stunned: test.Log.last (Consume: Assign, Consume: Assign)"});
     CHECK(channel_edge(adders + log_consumer("added Stunned", "        log.total += 1\n"), "A", "B") == std::nullopt);
 }
 
@@ -6951,7 +6953,10 @@ TEST_CASE("Channel conflicts: event producers and observing consumers", "[semant
     SECTION("an Assign consumer needs ordered producers") {
         const auto edge = channel_edge(emitters("Spoke") + log_consumer("Spoke as s", "        log.last = s.line\n"), "A", "B");
         REQUIRE(edge != std::nullopt);
-        CHECK(edge->channel_provenance == std::vector<std::string>{"event test.Spoke observed by test.Consume/on test.Spoke"});
+        CHECK(edge->channel_provenance ==
+              std::vector<std::string>{"test.A/on test.tick via event test.Spoke reaches test.Consume/on test.Spoke; "
+                                       "test.B/on test.tick via event test.Spoke reaches test.Consume/on test.Spoke: "
+                                       "test.Log.last (Consume: Assign, Consume: Assign)"});
     }
     SECTION("an emit chain ending in an observing consumer") {
         CHECK(channel_edge(emitters("Relay") +
@@ -6974,6 +6979,149 @@ TEST_CASE("Channel conflicts: event producers and observing consumers", "[semant
                                "            line = r.line\n",
                            "A",
                            "B") == std::nullopt);
+    }
+}
+
+static std::string emit_rule(const std::string& name, const std::string& trigger, const std::vector<std::string>& events) {
+    std::string body;
+    for (const auto& event : events) {
+        body += "        emit " + event + ":\n            line = 1\n";
+    }
+    return "rule " + name + ":\n    on " + trigger + ":\n" + body;
+}
+
+static std::string hp_rule(const std::string& name, const std::string& trigger, const std::string& value) {
+    return "rule " + name + ":\n    each:\n        Health as h\n    on " + trigger + ":\n        h.hp = " + value + "\n";
+}
+
+static const std::string& occurrence_events() {
+    static const std::string value = "event Hit:\n    line: int\nevent Heal:\n    line: int\nevent Ping:\n    line: int\n"
+                                     "event Pong:\n    line: int\nevent E3:\n    line: int\n";
+    return value;
+}
+
+TEST_CASE("Channel conflicts: occurrences race per generation", "[semantic][handler-execution-graph][channels]") {
+    SECTION("different events with conflicting consumers") {
+        const auto messages = commuting_errors(occurrence_events() + emit_rule("A", "tick", {"Hit"}) +
+                                               emit_rule("B", "tick", {"Heal"}) + hp_rule("OnHit", "Hit", "0") +
+                                               hp_rule("OnHeal", "Heal", "10"));
+        REQUIRE(messages.size() == 1);
+        CHECK(messages[0] ==
+              "unorientable conflict between 'test.A/on test.tick' and 'test.B/on test.tick' on test.A/on test.tick via "
+              "event test.Hit reaches test.OnHit/on test.Hit; test.B/on test.tick via event test.Heal reaches "
+              "test.OnHeal/on test.Heal: test.Health.hp (OnHit: Assign, OnHeal: Assign); nothing orders them: add "
+              "'after: B/on tick' to the A/on tick handler, or 'after: A/on tick' to the B/on tick handler");
+    }
+    SECTION("an after: between the producers orders them") {
+        CHECK(commuting_errors(occurrence_events() + emit_rule("A", "tick", {"Hit"}) +
+                               "rule B:\n    after:\n        A\n    on tick:\n        emit Heal:\n            line = 1\n" +
+                               hp_rule("OnHit", "Hit", "0") + hp_rule("OnHeal", "Heal", "10"))
+                  .empty());
+    }
+    SECTION("different lifecycle triggers with conflicting consumers") {
+        const std::string traits = "trait Burning\ntrait Wet\n";
+        const auto consumer = [](const std::string& name, const std::string& trait, const std::string& value) {
+            return "rule " + name + ":\n    each:\n        T as t\n    on added " + trait + ":\n        t.x = " + value +
+                   "\n";
+        };
+        const auto messages = commuting_errors(traits + tick_rule("A", "Health as h", "        add Burning\n") +
+                                               tick_rule("B", "Health as h", "        add Wet\n") +
+                                               consumer("OnBurn", "Burning", "100.0") + consumer("OnWet", "Wet", "0.0"));
+        REQUIRE(messages.size() == 1);
+        CHECK(messages[0].contains("test.A/on test.tick via added test.Burning reaches test.OnBurn/on added test.Burning; "
+                                   "test.B/on test.tick via added test.Wet reaches test.OnWet/on added test.Wet: test.T.x"));
+    }
+    SECTION("consumers at different generations do not race") {
+        CHECK(commuting_errors(occurrence_events() + emit_rule("A", "tick", {"Hit"}) + emit_rule("B", "tick", {"Heal"}) +
+                               emit_rule("Mid", "Hit", {"E3"}) + hp_rule("OnHeal", "Heal", "10") +
+                               hp_rule("OnE3", "E3", "0"))
+                  .empty());
+    }
+    SECTION("one producer's emissions never race with each other") {
+        CHECK(commuting_errors(occurrence_events() + emit_rule("A", "tick", {"Hit", "Heal"}) +
+                               hp_rule("OnHit", "Hit", "0") + hp_rule("OnHeal", "Heal", "10"))
+                  .empty());
+    }
+    SECTION("a lifecycle delivery runs in the next round, not at the next generation") {
+        CHECK(commuting_errors(occurrence_events() + "trait Burning\n" +
+                               tick_rule("A", "Health as h", "        add Burning\n") + emit_rule("B", "tick", {"Hit"}) +
+                               "rule OnBurn:\n    each:\n        T as t\n    on added Burning:\n        t.x = 1.0\n"
+                               "rule OnHit:\n    each:\n        T as t\n    on Hit:\n        t.x = 2.0\n")
+                  .empty());
+    }
+    SECTION("lifecycle deliveries share a round whatever depth issued them") {
+        const auto messages = commuting_errors(
+            occurrence_events() + "trait Burning\ntrait Wet\n" + tick_rule("A", "Health as h", "        add Burning\n") +
+            emit_rule("B", "tick", {"Hit"}) + "rule Soak:\n    each:\n        Health as h\n    on Hit:\n        add Wet\n" +
+            "rule OnBurn:\n    each:\n        T as t\n    on added Burning:\n        t.x = 1.0\n"
+            "rule OnWet:\n    each:\n        T as t\n    on added Wet:\n        t.x = 2.0\n");
+        REQUIRE(messages.size() == 1);
+        CHECK(messages[0].contains("test.B/on test.tick via event test.Hit -> added test.Wet reaches "
+                                   "test.OnWet/on added test.Wet"));
+    }
+    SECTION("runs after a delayed edge share one bucket") {
+        const auto messages = commuting_errors(
+            occurrence_events() + "event Knock:\n    line: int\n" + emit_rule("A", "tick", {"Knock"}) +
+            emit_rule("B", "tick", {"Hit"}) + emit_rule("Tap", "Hit", {"Knock"}) +
+            "rule Echo:\n    each:\n        Log as log\n    on Knock as k:\n        log.last = k.line\n"
+            "        emit Knock:\n            line = k.line\n");
+        REQUIRE(messages.size() == 1);
+        CHECK(messages[0].contains("test.A/on test.tick via event test.Knock -> event test.Knock (delayed) reaches "
+                                   "test.Echo/on test.Knock; test.B/on test.tick via event test.Hit -> event test.Knock "
+                                   "-> event test.Knock (delayed) reaches test.Echo/on test.Knock: test.Log.last"));
+    }
+    SECTION("a same-event chain conflicts at its deeper generation") {
+        const auto messages = commuting_errors(occurrence_events() + emit_rule("A", "tick", {"Ping"}) +
+                                               emit_rule("B", "tick", {"Ping"}) + emit_rule("Forward", "Ping", {"Pong"}) +
+                                               log_consumer("Pong as s", "        log.last = s.line\n"));
+        REQUIRE(messages.size() == 1);
+        CHECK(messages[0].contains("test.A/on test.tick via event test.Ping -> event test.Pong reaches "
+                                   "test.Consume/on test.Pong; test.B/on test.tick via event test.Ping -> event test.Pong "
+                                   "reaches test.Consume/on test.Pong: test.Log.last"));
+    }
+}
+
+TEST_CASE("Channel conflicts: unordered save and restore requests race on the persistence boundary",
+          "[semantic][handler-execution-graph][channels][native-result-ordering]") {
+    // The requesting rules live in std.persistence itself, so its events need no qualifier.
+    const std::string persistence = "module std.persistence\n"
+                                    "pub extern event go\n"
+                                    "pub event SaveRequested:\n"
+                                    "    slot: string\n"
+                                    "    request_id: int\n"
+                                    "pub event RestoreRequested:\n"
+                                    "    slot: string\n"
+                                    "    request_id: int\n";
+    const auto request = [](const std::string& event) {
+        return "        emit " + event + ":\n            slot = \"s\"\n            request_id = 1\n";
+    };
+    const auto rule = [](const std::string& name, const std::string& body, const std::string& after = "") {
+        return "rule " + name + ":\n" + (after.empty() ? "" : "    after:\n        " + after + "\n") + "    on go:\n" +
+               body;
+    };
+
+    SECTION("two unordered save requests") {
+        const auto messages = analyze_error_messages(persistence + rule("A", request("SaveRequested")) +
+                                                     rule("B", request("SaveRequested")));
+        REQUIRE(messages.size() == 1);
+        CHECK(messages[0].contains("'std.persistence.A/on std.persistence.go' and 'std.persistence.B/on std.persistence.go'"));
+        CHECK(messages[0].contains("reaches std.persistence.Runtime/on std.persistence.SaveRequested"));
+        CHECK(messages[0].contains("effect persistence"));
+    }
+    SECTION("an unordered save and restore") {
+        const auto messages = analyze_error_messages(persistence + rule("A", request("SaveRequested")) +
+                                                     rule("B", request("RestoreRequested")));
+        REQUIRE(messages.size() == 1);
+        CHECK(messages[0].contains("reaches std.persistence.Runtime/on std.persistence.RestoreRequested"));
+    }
+    SECTION("ordered requests") {
+        CHECK(analyze_error_messages(persistence + rule("A", request("SaveRequested")) +
+                                     rule("B", request("RestoreRequested"), "A"))
+                  .empty());
+    }
+    SECTION("one rule's requests") {
+        CHECK(analyze_error_messages(persistence + rule("A", request("SaveRequested") + request("RestoreRequested")))
+                  .empty());
     }
 }
 
@@ -7009,8 +7157,8 @@ TEST_CASE("Unorientable conflicts: channels and effects are named", "[semantic][
                                                tick_rule("B", "", "        emit Spoke:\n            line = 2\n") +
                                                log_consumer("Spoke as s", "        log.last = s.line\n"));
         REQUIRE(messages.size() == 1);
-        CHECK(messages[0].contains("'test.A/on test.tick' and 'test.B/on test.tick' on event test.Spoke observed by "
-                                   "test.Consume/on test.Spoke;"));
+        CHECK(messages[0].contains("'test.A/on test.tick' and 'test.B/on test.tick' on test.A/on test.tick via event "
+                                   "test.Spoke reaches test.Consume/on test.Spoke;"));
     }
     SECTION("effects") {
         const auto messages = analyze_error_messages(stdlib_events() +

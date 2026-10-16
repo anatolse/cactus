@@ -1,13 +1,21 @@
 #include "frontend/execution_graph_scheduler.hpp"
 
+#include "frontend/delivery_cycles.hpp"
+#include "frontend/native_result_ordering.hpp"
+
 #include <algorithm>
 #include <cstdint>
+#include <deque>
 #include <format>
 #include <functional>
 #include <iterator>
+#include <map>
 #include <optional>
 #include <ranges>
+#include <set>
 #include <sstream>
+#include <string_view>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -152,107 +160,6 @@ bool executions_conflict(const HandlerContract& contract) {
     });
 }
 
-// The event and lifecycle triggers a handler's emits and commands deliver.
-std::vector<ResolvedHandlerTrigger> produced_triggers(const HandlerContract& contract) {
-    std::vector<ResolvedHandlerTrigger> triggers;
-    triggers.reserve(contract.emits.size() + contract.commands.size());
-    for (const auto& event : contract.emits) {
-        triggers.push_back(ResolvedHandlerTrigger{.kind = HandlerTriggerKind::Event, .symbol = event});
-    }
-    for (const auto& command : contract.commands) {
-        if (!command.target.has_value() ||
-            (command.kind != HandlerCommandKind::Add && command.kind != HandlerCommandKind::Remove)) {
-            continue;
-        }
-        const auto kind = command.kind == HandlerCommandKind::Add ? HandlerTriggerKind::TraitAdded
-                                                                  : HandlerTriggerKind::TraitRemoved;
-        triggers.push_back(ResolvedHandlerTrigger{.kind = kind, .symbol = *command.target});
-    }
-    return triggers;
-}
-
-// Per event or lifecycle trigger, the lowest-id consumer that observes occurrence order.
-class OrderObservers {
-public:
-    explicit OrderObservers(const ExecutionGraph& graph) {
-        produced_.reserve(graph.handlers.size());
-        for (const auto& handler : graph.handlers) {
-            produced_.push_back(produced_triggers(handler.contract));
-        }
-        const auto observes = observing_handlers(graph);
-        for (std::size_t index = 0; index < graph.handlers.size(); ++index) {
-            const auto& identity = graph.handlers[index].identity;
-            const bool consumer  = identity.trigger.kind != HandlerTriggerKind::Phase &&
-                                  identity.trigger.kind != HandlerTriggerKind::RenderStage;
-            if (!observes[index] || !consumer) {
-                continue;
-            }
-            auto id         = identity.canonical_id();
-            const auto key  = identity.trigger.debug_string();
-            const auto seen = observer_.find(key);
-            if (seen == observer_.end() || id < seen->second) {
-                observer_[key] = std::move(id);
-            }
-        }
-    }
-
-    // The triggers both handlers deliver that some consumer observes the order of.
-    [[nodiscard]] std::vector<std::string> conflicts(std::size_t left, std::size_t right) const {
-        std::vector<std::string> conflicts;
-        for (const auto& trigger : produced_[left]) {
-            if (!std::ranges::contains(produced_[right], trigger)) {
-                continue;
-            }
-            const auto key      = trigger.debug_string();
-            const auto observer = observer_.find(key);
-            if (observer == observer_.end()) {
-                continue;
-            }
-            auto text = key + " observed by " + observer->second;
-            if (!std::ranges::contains(conflicts, text)) {
-                conflicts.push_back(std::move(text));
-            }
-        }
-        return conflicts;
-    }
-
-private:
-    // Walks deliveries backwards from non-commuting handlers, so event cycles terminate.
-    [[nodiscard]] std::vector<bool> observing_handlers(const ExecutionGraph& graph) const {
-        const auto count = graph.handlers.size();
-        std::vector<std::vector<std::size_t>> producers(count);
-        for (std::size_t consumer = 0; consumer < count; ++consumer) {
-            for (std::size_t producer = 0; producer < count; ++producer) {
-                if (std::ranges::contains(produced_[producer], graph.handlers[consumer].identity.trigger)) {
-                    producers[consumer].push_back(producer);
-                }
-            }
-        }
-        std::vector<bool> observes(count, false);
-        std::vector<std::size_t> pending;
-        for (std::size_t index = 0; index < count; ++index) {
-            if (executions_conflict(graph.handlers[index].contract)) {
-                observes[index] = true;
-                pending.push_back(index);
-            }
-        }
-        while (!pending.empty()) {
-            const auto current = pending.back();
-            pending.pop_back();
-            for (const auto producer : producers[current]) {
-                if (!observes[producer]) {
-                    observes[producer] = true;
-                    pending.push_back(producer);
-                }
-            }
-        }
-        return observes;
-    }
-
-    std::vector<std::vector<ResolvedHandlerTrigger>> produced_;
-    std::unordered_map<std::string, std::string> observer_;
-};
-
 // The trait a transform propagation rule derives, which every other writer of
 // that trait in the same trigger must precede.
 std::optional<SymbolId> derived_trait(const HandlerNode& handler) {
@@ -346,15 +253,6 @@ private:
     std::vector<const std::string*> group_modules_;
 };
 
-// A conflict no meaningful rule orients; `first` has the smaller canonical id.
-struct UnorientableConflict {
-    const HandlerNode* first  = nullptr;
-    const HandlerNode* second = nullptr;
-    std::vector<FieldProvenance> fields;
-    std::vector<std::string> effects;
-    std::vector<std::string> channels;
-};
-
 std::string write_kind_name(const FieldWriteKind& kind) {
     switch (kind.kind) {
         case WriteKind::Assign:
@@ -389,6 +287,336 @@ std::string access_text(const HandlerNode& handler, const SymbolId& trait, const
     return writes ? write_kind_name(write_kind(contract, trait, *field)) : "read";
 }
 
+// The data, command and effect reasons two handlers' runs do not commute.
+struct PairConflict {
+    std::vector<FieldProvenance> fields;  // sorted by trait canonical id
+    bool left_writes_right = false;
+    bool right_writes_left = false;
+    std::vector<std::string> effects;   // sorted
+    std::vector<std::string> commands;  // sorted
+};
+
+PairConflict pair_conflict(const HandlerNode& left,
+                           const HandlerNode& right,
+                           const std::unordered_set<SymbolId>& left_produced,
+                           const std::unordered_set<SymbolId>& right_produced) {
+    PairConflict conflict;
+    const auto add_overlaps = [&](const HandlerNode& producer,
+                                  const HandlerNode& consumer,
+                                  const std::unordered_set<SymbolId>& produced) {
+        bool found_any = false;
+        for (const auto& trait : produced) {
+            const auto overlap = conflicting_overlap(producer, consumer, trait);
+            if (!overlap.has_value()) {
+                continue;
+            }
+            found_any           = true;
+            const auto existing = std::ranges::find(conflict.fields, trait, &FieldProvenance::trait);
+            if (existing == conflict.fields.end()) {
+                conflict.fields.push_back(FieldProvenance{.trait = trait, .access = *overlap});
+            } else {
+                merge_field_access(existing->access, *overlap);
+            }
+        }
+        return found_any;
+    };
+    conflict.left_writes_right = add_overlaps(left, right, left_produced);
+    conflict.right_writes_left = add_overlaps(right, left, right_produced);
+    std::ranges::sort(conflict.fields, {}, [](const FieldProvenance& entry) { return make_canonical_id(entry.trait); });
+    for (const auto& effect : left.contract.effects) {
+        const bool acts = left.contract.effect_acts.contains(effect) || right.contract.effect_acts.contains(effect);
+        if (acts && right.contract.effects.contains(effect)) {
+            conflict.effects.push_back(effect);
+        }
+    }
+    std::ranges::sort(conflict.effects);
+    conflict.commands = command_conflicts(left.contract, right.contract);
+    std::ranges::sort(conflict.commands);
+    return conflict;
+}
+
+std::vector<std::string> conflict_reasons(const HandlerNode& first,
+                                          const HandlerNode& second,
+                                          const std::vector<FieldProvenance>& fields,
+                                          const std::vector<std::string>& channels,
+                                          const std::vector<std::string>& effects) {
+    std::vector<std::string> reasons;
+    for (const auto& provenance : fields) {
+        const auto side = [&](const std::optional<std::string>& field) {
+            std::ostringstream text;
+            text << " (" << first.identity.rule.local_name << ": " << access_text(first, provenance.trait, field) << ", "
+                 << second.identity.rule.local_name << ": " << access_text(second, provenance.trait, field) << ")";
+            return std::move(text).str();
+        };
+        const auto trait = make_canonical_id(provenance.trait);
+        if (provenance.access.all) {
+            reasons.push_back(std::format("{} all fields{}", trait, side(std::nullopt)));
+            continue;
+        }
+        for (const auto& field : provenance.access.fields) {
+            reasons.push_back(std::format("{}.{}{}", trait, field, side(field)));
+        }
+    }
+    reasons.insert(reasons.end(), channels.begin(), channels.end());
+    for (const auto& effect : effects) {
+        reasons.push_back("effect " + effect);
+    }
+    return reasons;
+}
+
+std::string joined(const std::vector<std::string>& parts, std::string_view separator) {
+    std::string text;
+    for (const auto& part : parts) {
+        text += (text.empty() ? "" : std::string(separator)) + part;
+    }
+    return text;
+}
+
+// The program's handlers, indexed as in the graph, followed by the runtime's
+// own event consumers, which act on their effect in arrival order.
+class ConflictNodes {
+public:
+    ConflictNodes(const ExecutionGraph& graph, const std::vector<std::unordered_set<SymbolId>>& produced)
+        : produced_(&produced) {
+        for (const auto& handler : graph.handlers) {
+            nodes_.push_back(&handler);
+        }
+        for (const auto& consumer : native_consumers()) {
+            add_native_consumer(graph, consumer);
+        }
+    }
+
+    [[nodiscard]] std::size_t size() const {
+        return nodes_.size();
+    }
+    [[nodiscard]] const HandlerNode& node(std::size_t index) const {
+        return *nodes_[index];
+    }
+    // Native consumers produce no traits.
+    [[nodiscard]] const std::unordered_set<SymbolId>& produced(std::size_t index) const {
+        static const std::unordered_set<SymbolId> none;
+        return index < produced_->size() ? (*produced_)[index] : none;
+    }
+    // (producer, native consumer) for every emit of a runtime-consumed event.
+    [[nodiscard]] const std::vector<std::pair<std::size_t, std::size_t>>& native_flows() const {
+        return native_flows_;
+    }
+
+private:
+    void add_native_consumer(const ExecutionGraph& graph, const NativeConsumer& consumer) {
+        std::optional<std::size_t> index;
+        for (std::size_t producer = 0; producer < graph.handlers.size(); ++producer) {
+            const auto& emits = graph.handlers[producer].contract.emits;
+            const auto event  = std::ranges::find_if(
+                emits, [&](const SymbolId& emitted) { return make_canonical_id(emitted) == consumer.event; });
+            if (event == emits.end()) {
+                continue;
+            }
+            if (!index.has_value()) {
+                index = nodes_.size();
+                nodes_.push_back(&native_.emplace_back(native_node(*event, consumer)));
+            }
+            native_flows_.emplace_back(producer, *index);
+        }
+    }
+
+    static HandlerNode native_node(const SymbolId& event, const NativeConsumer& consumer) {
+        HandlerNode node{
+            .identity = HandlerIdentity{.rule    = make_symbol_id(SymbolKind::Rule, event.module.name, "Runtime"),
+                                        .trigger = ResolvedHandlerTrigger{.kind = HandlerTriggerKind::Event, .symbol = event}},
+            .implementation = HandlerImplementationKind::External};
+        node.contract.effects.emplace(consumer.effect);
+        node.contract.effect_acts.emplace(consumer.effect);
+        return node;
+    }
+
+    std::vector<const HandlerNode*> nodes_;
+    const std::vector<std::unordered_set<SymbolId>>* produced_;
+    std::deque<HandlerNode> native_;
+    std::vector<std::pair<std::size_t, std::size_t>> native_flows_;
+};
+
+// Why two runs do not commute, filled lazily per handler pair; empty when they commute.
+class RunConflicts {
+public:
+    explicit RunConflicts(const ConflictNodes& nodes) : nodes_(&nodes) {}
+
+    const std::string& reason(std::size_t left, std::size_t right) {
+        const auto key   = std::pair(std::min(left, right), std::max(left, right));
+        const auto found = cache_.find(key);
+        if (found != cache_.end()) {
+            return found->second;
+        }
+        return cache_.emplace(key, compute(key.first, key.second)).first->second;
+    }
+
+private:
+    [[nodiscard]] std::string compute(std::size_t left, std::size_t right) const {
+        const auto& first  = nodes_->node(left);
+        const auto& second = nodes_->node(right);
+        if (left == right && !executions_conflict(first.contract)) {
+            return {};
+        }
+        const auto conflict = pair_conflict(first, second, nodes_->produced(left), nodes_->produced(right));
+        auto reasons        = conflict_reasons(first, second, conflict.fields, conflict.commands, conflict.effects);
+        if (reasons.empty() && left == right) {
+            reasons.emplace_back("its runs do not commute");
+        }
+        return joined(reasons, ", ");
+    }
+
+    const ConflictNodes* nodes_;
+    std::map<std::pair<std::size_t, std::size_t>, std::string> cache_;
+};
+
+// A run's place relative to the producer that reaches it: commit rounds after
+// the producer's, then the cascade generation within that round.
+struct Position {
+    std::uint32_t round = 0;
+    std::uint32_t depth = 0;
+
+    friend auto operator<=>(const Position&, const Position&) = default;
+};
+
+// A handler run reached from a producer, with the shortest delivery path to it.
+// A delayed run has no position.
+struct ReachedRun {
+    std::size_t handler = 0;
+    Position position;
+    bool delayed = false;
+    std::vector<std::string> path;
+};
+
+// Which runs each handler's occurrences reach, and the occurrence races
+// between two co-eligible handlers.
+class OccurrenceReach {
+public:
+    OccurrenceReach(const ExecutionGraph& graph, const ConflictNodes& nodes, RunConflicts& conflicts)
+        : nodes_(&nodes),
+          conflicts_(&conflicts) {
+        std::unordered_map<HandlerIdentity, std::size_t, HandlerIdentityHash> index;
+        for (std::size_t handler = 0; handler < graph.handlers.size(); ++handler) {
+            index.emplace(graph.handlers[handler].identity, handler);
+        }
+        edges_.resize(nodes.size());
+        const auto add = [&](std::size_t from, std::size_t to, bool lifecycle, bool delayed) {
+            auto label    = nodes.node(to).identity.trigger.debug_string();
+            auto& targets = edges_[from];
+            const Edge edge{.to = to, .lifecycle = lifecycle, .delayed = delayed, .label = std::move(label)};
+            if (!std::ranges::contains(targets, edge)) {
+                targets.push_back(edge);
+            }
+        };
+        for (const auto& flow : graph.event_flows) {
+            add(index.at(flow.producer), index.at(flow.consumer), false, flow.delayed);
+        }
+        for (const auto& flow : graph.lifecycle_flows) {
+            add(index.at(flow.producer), index.at(flow.consumer), true, flow.delayed);
+        }
+        for (const auto& [producer, consumer] : nodes.native_flows()) {
+            add(producer, consumer, false, false);
+        }
+        for (auto& targets : edges_) {
+            std::ranges::sort(targets, {}, [&](const Edge& edge) {
+                return std::pair(edge.label, nodes.node(edge.to).identity.canonical_id());
+            });
+        }
+        reach_.resize(nodes.size());
+    }
+
+    // The shortest race between runs reached from `left` and from `right`, if any.
+    [[nodiscard]] std::optional<std::string> race(std::size_t left, std::size_t right) {
+        if (nodes_->node(right).identity.canonical_id() < nodes_->node(left).identity.canonical_id()) {
+            std::swap(left, right);
+        }
+        const auto& first  = reach(left);
+        const auto& second = reach(right);
+        std::optional<std::pair<std::size_t, std::string>> best;
+        for (const auto& one : first) {
+            for (const auto& other : second) {
+                const bool together = one.delayed == other.delayed && (one.delayed || one.position == other.position);
+                if (!together) {
+                    continue;
+                }
+                const auto& reason = conflicts_->reason(one.handler, other.handler);
+                if (reason.empty()) {
+                    continue;
+                }
+                auto candidate = std::pair(one.path.size() + other.path.size(),
+                                           describe(left, one) + "; " + describe(right, other) + ": " + reason);
+                if (!best.has_value() || candidate < *best) {
+                    best = std::move(candidate);
+                }
+            }
+        }
+        if (!best.has_value()) {
+            return std::nullopt;
+        }
+        return std::move(best->second);
+    }
+
+private:
+    struct Edge {
+        std::size_t to = 0;
+        bool lifecycle = false;
+        bool delayed   = false;
+        std::string label;
+
+        friend bool operator==(const Edge&, const Edge&) = default;
+    };
+
+    [[nodiscard]] std::string describe(std::size_t producer, const ReachedRun& run) const {
+        return nodes_->node(producer).identity.canonical_id() + " via " + joined(run.path, " -> ") + " reaches " +
+               nodes_->node(run.handler).identity.canonical_id();
+    }
+
+    // Breadth-first, so each run keeps its shortest path. Immediate edges form
+    // a DAG and delayed runs carry no position, so the search ends.
+    const std::vector<ReachedRun>& reach(std::size_t producer) {
+        auto& cached = reach_[producer];
+        if (cached.has_value()) {
+            return *cached;
+        }
+        std::vector<ReachedRun> runs;
+        std::set<std::tuple<std::size_t, bool, Position>> seen;
+        std::deque<ReachedRun> pending{ReachedRun{.handler = producer}};
+        while (!pending.empty()) {
+            const auto current = std::move(pending.front());
+            pending.pop_front();
+            for (const auto& edge : edges_[current.handler]) {
+                ReachedRun next{.handler = edge.to, .delayed = current.delayed || edge.delayed, .path = current.path};
+                if (!next.delayed) {
+                    next.position = edge.lifecycle ? Position{.round = current.position.round + 1, .depth = 0}
+                                                   : Position{.round = current.position.round,
+                                                              .depth = current.position.depth + 1};
+                }
+                next.path.push_back(edge.delayed ? edge.label + " (delayed)" : edge.label);
+                if (!seen.emplace(next.handler, next.delayed, next.position).second) {
+                    continue;
+                }
+                runs.push_back(next);
+                pending.push_back(std::move(next));
+            }
+        }
+        cached = std::move(runs);
+        return *cached;
+    }
+
+    const ConflictNodes* nodes_;
+    RunConflicts* conflicts_;
+    std::vector<std::vector<Edge>> edges_;
+    std::vector<std::optional<std::vector<ReachedRun>>> reach_;
+};
+
+// A conflict no meaningful rule orients; `first` has the smaller canonical id.
+struct UnorientableConflict {
+    const HandlerNode* first  = nullptr;
+    const HandlerNode* second = nullptr;
+    std::vector<FieldProvenance> fields;
+    std::vector<std::string> effects;
+    std::vector<std::string> channels;
+};
+
 // How `from`'s module names `handler` in an `after:` entry.
 std::string handler_reference(const HandlerNode& handler, const HandlerNode& from) {
     const auto& rule    = handler.identity.rule;
@@ -406,31 +634,7 @@ std::string handler_reference(const HandlerNode& handler, const HandlerNode& fro
 std::string unorientable_message(const UnorientableConflict& conflict) {
     const auto& first  = *conflict.first;
     const auto& second = *conflict.second;
-    std::vector<std::string> reasons;
-    for (const auto& provenance : conflict.fields) {
-        const auto side = [&](const std::optional<std::string>& field) {
-            std::ostringstream text;
-            text << " (" << first.identity.rule.local_name << ": " << access_text(first, provenance.trait, field) << ", "
-                 << second.identity.rule.local_name << ": " << access_text(second, provenance.trait, field) << ")";
-            return std::move(text).str();
-        };
-        const auto trait = make_canonical_id(provenance.trait);
-        if (provenance.access.all) {
-            reasons.push_back(std::format("{} all fields{}", trait, side(std::nullopt)));
-            continue;
-        }
-        for (const auto& field : provenance.access.fields) {
-            reasons.push_back(std::format("{}.{}{}", trait, field, side(field)));
-        }
-    }
-    reasons.insert(reasons.end(), conflict.channels.begin(), conflict.channels.end());
-    for (const auto& effect : conflict.effects) {
-        reasons.push_back("effect " + effect);
-    }
-    std::string listed;
-    for (const auto& reason : reasons) {
-        listed += (listed.empty() ? "" : ", ") + reason;
-    }
+    const auto listed  = joined(conflict_reasons(first, second, conflict.fields, conflict.channels, conflict.effects), ", ");
     return "unorientable conflict between '" + first.identity.canonical_id() + "' and '" +
            second.identity.canonical_id() + "' on " + listed + "; nothing orders them: add 'after: " +
            handler_reference(second, first) + "' to the " + handler_reference(first, second) +
@@ -443,7 +647,7 @@ std::string unorientable_message(const UnorientableConflict& conflict) {
 // The single consolidated home for what used to be two independently-duplicated
 // ~250-line scheduling algorithms; see design.md D1-D5.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-bool compute_handler_schedule(ExecutionGraph& graph, ErrorReporter& errors) {
+bool compute_handler_schedule(ExecutionGraph& graph, const TemplateTraitLookup& templates, ErrorReporter& errors) {
     std::unordered_map<HandlerIdentity, const HandlerNode*, HandlerIdentityHash> nodes;
     for (const auto& handler : graph.handlers) {
         nodes.emplace(handler.identity, &handler);
@@ -486,6 +690,8 @@ bool compute_handler_schedule(ExecutionGraph& graph, ErrorReporter& errors) {
         }
     }
 
+    classify_delivery_cycles(graph, templates);
+
     // ── Conflict-edge detection ──────────────────────────────────────────────
     // Contracts create serialization requirements only between handlers that
     // are co-eligible for the same canonical trigger. Detect the conflict
@@ -524,7 +730,9 @@ bool compute_handler_schedule(ExecutionGraph& graph, ErrorReporter& errors) {
     const auto produced_by_handler = precompute_produced_by_handler(graph.handlers);
 
     const PublicGroupOrder public_group_order(graph, produced_by_handler);
-    const OrderObservers order_observers(graph);
+    const ConflictNodes conflict_nodes(graph, produced_by_handler);
+    RunConflicts run_conflicts(conflict_nodes);
+    OccurrenceReach occurrence_reach(graph, conflict_nodes, run_conflicts);
     std::vector<UnorientableConflict> unorientable;
 
     struct Orientation {
@@ -566,51 +774,24 @@ bool compute_handler_schedule(ExecutionGraph& graph, ErrorReporter& errors) {
                 continue;
             }
 
-            std::vector<FieldProvenance> field_provenance;
-            const auto add_overlaps = [&](const HandlerNode& producer,
-                                          const HandlerNode& consumer,
-                                          const std::unordered_set<SymbolId>& produced) {
-                bool found_any = false;
-                for (const auto& trait : produced) {
-                    const auto overlap = conflicting_overlap(producer, consumer, trait);
-                    if (!overlap.has_value()) {
-                        continue;
-                    }
-                    found_any           = true;
-                    const auto existing = std::ranges::find(field_provenance, trait, &FieldProvenance::trait);
-                    if (existing == field_provenance.end()) {
-                        field_provenance.push_back(FieldProvenance{.trait = trait, .access = *overlap});
-                    } else {
-                        merge_field_access(existing->access, *overlap);
-                    }
-                }
-                return found_any;
-            };
-            const bool left_writes_right = add_overlaps(left, right, produced_by_handler[left_index]);
-            const bool right_writes_left = add_overlaps(right, left, produced_by_handler[right_index]);
-            std::ranges::sort(field_provenance, [](const FieldProvenance& a, const FieldProvenance& b) {
-                return make_canonical_id(a.trait) < make_canonical_id(b.trait);
-            });
+            auto conflict =
+                pair_conflict(left, right, produced_by_handler[left_index], produced_by_handler[right_index]);
+            auto field_provenance = std::move(conflict.fields);
             std::vector<SymbolId> trait_provenance;
             trait_provenance.reserve(field_provenance.size());
             std::ranges::transform(field_provenance, std::back_inserter(trait_provenance), &FieldProvenance::trait);
-
-            std::vector<std::string> effect_provenance;
-            for (const auto& effect : left.contract.effects) {
-                const bool acts = left.contract.effect_acts.contains(effect) || right.contract.effect_acts.contains(effect);
-                if (acts && right.contract.effects.contains(effect)) {
-                    effect_provenance.push_back(effect);
-                }
+            auto effect_provenance  = std::move(conflict.effects);
+            auto channel_provenance = std::move(conflict.commands);
+            if (auto race = occurrence_reach.race(left_index, right_index)) {
+                channel_provenance.push_back(std::move(*race));
             }
-            std::ranges::sort(effect_provenance);
-            auto channel_provenance = command_conflicts(left.contract, right.contract);
-            std::ranges::move(order_observers.conflicts(left_index, right_index), std::back_inserter(channel_provenance));
             std::ranges::sort(channel_provenance);
             if (trait_provenance.empty() && effect_provenance.empty() && channel_provenance.empty()) {
                 continue;
             }
 
-            const auto oriented = orient(left_index, right_index, left_writes_right, right_writes_left);
+            const auto oriented =
+                orient(left_index, right_index, conflict.left_writes_right, conflict.right_writes_left);
             if (!oriented.has_value()) {
                 const bool left_smaller = left.identity.canonical_id() < right.identity.canonical_id();
                 unorientable.push_back(UnorientableConflict{.first    = left_smaller ? &left : &right,

@@ -407,6 +407,10 @@ rule EditorGizmoRenderer2D:
         transform2d.WorldTransform as xform
         EditorSelected
 
+    # Draw layers, bottom to top: 3D gizmos, 2D gizmos, palette, HUD.
+    after:
+        EditorGizmoRenderer3D
+
     on render:
         if not is_editor_active():
             return
@@ -623,6 +627,7 @@ rule EditorTemplatePalette:
 
     after:
         EditorModeToggle
+        EditorGizmoRenderer2D
 
     # Runs in the input phase, before EditorSelection2D/3D and EditorPlace2D/3D
     # (see their after: EditorTemplatePalette), so a click that lands on a

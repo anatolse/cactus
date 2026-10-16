@@ -1,0 +1,98 @@
+module generations_runtime
+
+use std.core
+use std.debug as debug
+
+# Occurrences are delivered in generations: everything one generation emits
+# runs before anything the next generation emits. Each handler appends its
+# digit to a trace.
+
+trait Trace:
+    var digits: int = 0
+    var done: bool = false
+
+trait RoundTrace:
+    var digits: int = 0
+
+trait First
+trait Second
+
+entity Recorder:
+    Trace
+    RoundTrace
+    KeepOnLoad
+
+event A
+event B
+event C
+event Later
+
+rule Start:
+    each:
+        Trace as trace
+    on tick:
+        if trace.done:
+            return
+        trace.done = true
+        emit A to self
+        emit B to self
+        add First
+        add Second
+
+rule OnA:
+    each:
+        Trace as trace
+    on A:
+        trace.digits = trace.digits * 10 + 1
+        emit C to self
+
+rule OnB:
+    each:
+        Trace as trace
+    on B:
+        trace.digits = trace.digits * 10 + 2
+
+rule OnC:
+    each:
+        Trace as trace
+    on C:
+        trace.digits = trace.digits * 10 + 3
+
+# One commit round: both lifecycle deliveries run before the event the first emits.
+rule OnFirst:
+    each:
+        RoundTrace as trace
+    on added First:
+        trace.digits = trace.digits * 10 + 4
+        emit Later to Recorder
+
+rule OnSecond:
+    each:
+        RoundTrace as trace
+    on added Second:
+        trace.digits = trace.digits * 10 + 5
+
+rule OnLater:
+    each:
+        RoundTrace as trace
+    on Later:
+        trace.digits = trace.digits * 10 + 6
+
+# One handler's interleaved draw emits reach their renderers in emission order.
+rule Sketch:
+    on render:
+        emit debug.DrawDebugLine2D:
+            start = vec2(0.0, 0.0)
+            end = vec2(1.0, 0.0)
+            color = #FF0000FF
+            thickness = 1.0
+        emit debug.DrawDebugTriangle2D:
+            a = vec2(0.0, 0.0)
+            b = vec2(1.0, 0.0)
+            c = vec2(0.0, 1.0)
+            color = #00FF00FF
+        emit debug.DrawDebugLine2D:
+            start = vec2(0.0, 0.0)
+            end = vec2(0.0, 2.0)
+            color = #0000FFFF
+            thickness = 1.0

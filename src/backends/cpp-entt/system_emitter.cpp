@@ -2150,25 +2150,25 @@ static std::string lower_flat_spatial_query(const QueryCallExpr& qcall,
     const std::string position_of = "[&](entt::entity e) { return registry.get<" + wt + ">(e).position; }";
     if (func_name == "nearest") {
         const std::string from = find_named_arg_value(qcall.named_args, "from", emit_arg);
-        return "cactus::runtime::entt_backend::query_nearest(" + view + ", (" + from + "), " + position_of + ")";
+        return "cactus::runtime::entt_backend::query_nearest(registry, " + view + ", (" + from + "), " + position_of + ")";
     }
     if (func_name == "overlap_box") {
         const std::string center = find_named_arg_value(qcall.named_args, "center", emit_arg);
         const std::string size   = find_named_arg_value(qcall.named_args, "size", emit_arg);
-        return "cactus::runtime::entt_backend::query_overlap_box(" + view + ", (" + center + "), (" + size + "), " +
+        return "cactus::runtime::entt_backend::query_overlap_box(registry, " + view + ", (" + center + "), (" + size + "), " +
                position_of + ")";
     }
     if (func_name == "overlap_circle") {
         const std::string center = find_named_arg_value(qcall.named_args, "center", emit_arg);
         const std::string radius = find_named_arg_value(qcall.named_args, "radius", emit_arg);
-        return "cactus::runtime::entt_backend::query_overlap_circle(" + view + ", (" + center + "), (" + radius +
+        return "cactus::runtime::entt_backend::query_overlap_circle(registry, " + view + ", (" + center + "), (" + radius +
                "), " + position_of + ")";
     }
     if (func_name == "raycast") {
         const std::string origin   = find_named_arg_value(qcall.named_args, "origin", emit_arg);
         const std::string dir      = find_named_arg_value(qcall.named_args, "dir", emit_arg);
         const std::string max_dist = find_named_arg_value(qcall.named_args, "max_dist", emit_arg);
-        return "cactus::runtime::entt_backend::query_raycast(" + view + ", (" + origin + "), (" + dir + "), (" +
+        return "cactus::runtime::entt_backend::query_raycast(registry, " + view + ", (" + origin + "), (" + dir + "), (" +
                max_dist + "), " + position_of + ")";
     }
     return "/* unsupported std.physics.flat.query func: " + func_name + " */";
@@ -2183,25 +2183,25 @@ static std::string lower_volume_spatial_query(const QueryCallExpr& qcall,
     const std::string position_of = "[&](entt::entity e) { return registry.get<" + wt + ">(e).position; }";
     if (func_name == "nearest") {
         const std::string from = find_named_arg_value(qcall.named_args, "from", emit_arg);
-        return "cactus::runtime::entt_backend::query_nearest(" + view + ", (" + from + "), " + position_of + ")";
+        return "cactus::runtime::entt_backend::query_nearest(registry, " + view + ", (" + from + "), " + position_of + ")";
     }
     if (func_name == "overlap_box") {
         const std::string center = find_named_arg_value(qcall.named_args, "center", emit_arg);
         const std::string size   = find_named_arg_value(qcall.named_args, "size", emit_arg);
-        return "cactus::runtime::entt_backend::query_overlap_box(" + view + ", (" + center + "), (" + size + "), " +
+        return "cactus::runtime::entt_backend::query_overlap_box(registry, " + view + ", (" + center + "), (" + size + "), " +
                position_of + ")";
     }
     if (func_name == "overlap_sphere") {
         const std::string center = find_named_arg_value(qcall.named_args, "center", emit_arg);
         const std::string radius = find_named_arg_value(qcall.named_args, "radius", emit_arg);
-        return "cactus::runtime::entt_backend::query_overlap_sphere(" + view + ", (" + center + "), (" + radius +
+        return "cactus::runtime::entt_backend::query_overlap_sphere(registry, " + view + ", (" + center + "), (" + radius +
                "), " + position_of + ")";
     }
     if (func_name == "raycast") {
         const std::string origin   = find_named_arg_value(qcall.named_args, "origin", emit_arg);
         const std::string dir      = find_named_arg_value(qcall.named_args, "dir", emit_arg);
         const std::string max_dist = find_named_arg_value(qcall.named_args, "max_dist", emit_arg);
-        return "cactus::runtime::entt_backend::query_raycast(" + view + ", (" + origin + "), (" + dir + "), (" +
+        return "cactus::runtime::entt_backend::query_raycast(registry, " + view + ", (" + origin + "), (" + dir + "), (" +
                max_dist + "), " + position_of + ")";
     }
     return "/* unsupported std.physics.volume.query func: " + func_name + " */";
@@ -5406,9 +5406,11 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
         const std::string manim = EnttCodegenUtils::trait_cpp_name("ModelAnimator", program);
         out << "void " << system_function_name(program.module_name, sys.name, "tick")
             << "(entt::registry& registry) {\n";
+        // Playback emits events, so owners are visited oldest first, not in storage order.
+        const bool emits = EnttCodegenUtils::find_trait(program, "ModelPlayback") != nullptr;
         out << "    auto view = registry.view<" << mr << ", " << manim << ">();\n";
-        out << "    view.each([&](entt::entity entity, const " << mr << "& " << mr << "_comp, " << manim << "& "
-            << manim << "_comp) {\n";
+        out << "    const auto tick_owner = [&](entt::entity entity, const " << mr << "& " << mr << "_comp, " << manim
+            << "& " << manim << "_comp) {\n";
         out << "        (void)entity;\n";
         out << "        constexpr float kFixedDt = 1.0F / 60.0F;\n";
 
@@ -5421,7 +5423,7 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
         // interval advance, cap dedup) lives in tick_model_playback; this just
         // applies its result, the same division is_pointer_router below uses
         // for compute_pointer_frame_transitions.
-        if (EnttCodegenUtils::find_trait(program, "ModelPlayback") != nullptr) {
+        if (emits) {
             const std::string playback     = EnttCodegenUtils::trait_cpp_name("ModelPlayback", program);
             const std::string cue          = EnttCodegenUtils::trait_cpp_name("AnimationCue", program);
             const std::string parent_cpp   = EnttCodegenUtils::trait_cpp_name("Parent", program);
@@ -5464,7 +5466,14 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
         out << "                " << manim << "_comp.time += duration;\n";
         out << "            }\n";
         out << "        }\n";
-        out << "    });\n";
+        out << "    };\n";
+        if (emits) {
+            out << "    for (const auto entity : cactus::runtime::entt_backend::creation_ordered(registry, view)) {\n";
+            out << "        tick_owner(entity, view.get<" << mr << ">(entity), view.get<" << manim << ">(entity));\n";
+            out << "    }\n";
+        } else {
+            out << "    view.each(tick_owner);\n";
+        }
         out << "}\n\n";
         return out.str();
     }

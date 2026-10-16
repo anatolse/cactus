@@ -105,6 +105,22 @@ TEST_CASE("std.pointer.top_target follows reverse painter order among overlappin
     CHECK(cactus::runtime::entt_backend::pointer_top_target(registry) == front);
 }
 
+TEST_CASE("std.pointer.top_target gives a draw-order tie to the oldest window candidate",
+          "[runtime][stdlib][pointer][native-result-ordering]") {
+    cactus_raylib_fake::reset();
+
+    entt::registry registry;
+    cactus::runtime::entt_backend::generated_init_project(registry);
+    cactus::runtime::entt_backend::generated_load_project(registry);
+
+    const auto older = make_window_target(registry, {.x = 0.0F, .y = 0.0F}, {.x = 100.0F, .y = 100.0F}, 2);
+    make_window_target(registry, {.x = 0.0F, .y = 0.0F}, {.x = 100.0F, .y = 100.0F}, 2);
+
+    cactus_raylib_fake::set_mouse_position(Vector2{.x = 10.0F, .y = 10.0F});
+
+    CHECK(cactus::runtime::entt_backend::pointer_top_target(registry) == older);
+}
+
 TEST_CASE("std.pointer.top_target respects disabled-blocking and nonblocking pass-through",
           "[runtime][stdlib][pointer]") {
     cactus_raylib_fake::reset();

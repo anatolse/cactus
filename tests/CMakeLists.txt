@@ -163,6 +163,13 @@ target_compile_definitions(test_semantic_collider_queries PRIVATE
 )
 add_test(NAME SemanticColliderQueryTests COMMAND test_semantic_collider_queries)
 
+add_executable(test_native_result_ordering test_native_result_ordering.cpp)
+target_link_libraries(test_native_result_ordering PRIVATE cactus_frontend Catch2::Catch2WithMain)
+target_compile_definitions(test_native_result_ordering PRIVATE
+    CACTUS_TEST_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+)
+add_test(NAME NativeResultOrderingTests COMMAND test_native_result_ordering)
+
 add_executable(test_semantic_reduce test_semantic_reduce.cpp)
 target_link_libraries(test_semantic_reduce PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticReduceTests COMMAND test_semantic_reduce)
@@ -400,6 +407,18 @@ cactus_add_headless_behavior_test(test_model_animation_events_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_model_animation_events_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_animation_event_order_headless_behavior
+    CACTUS_SOURCE examples/stdlib-fixtures/animation_event_order.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_animation_event_order_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_editor_pick_2d_headless_behavior
+    CACTUS_SOURCE examples/editor-test/editor-test.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_editor_pick_2d_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_cursor_capture_headless_behavior
     CACTUS_SOURCE tests/fixtures/cursor_capture_runtime.cactus
     BACKEND cpp-entt
@@ -555,6 +574,24 @@ cactus_add_headless_behavior_test(test_delivery_clocks_headless_behavior
     CACTUS_SOURCE tests/fixtures/delivery_clocks_runtime.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_delivery_clocks_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_generations_headless_behavior
+    CACTUS_SOURCE tests/fixtures/generations_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_generations_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_spatial_query_ties_headless_behavior
+    CACTUS_SOURCE examples/stdlib-fixtures/spatial_query_ties.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_spatial_query_ties_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_flat_query_ties_headless_behavior
+    CACTUS_SOURCE examples/stdlib-fixtures/flat_query_ties.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_flat_query_ties_headless_behavior.cpp
 )
 
 cactus_add_headless_behavior_test(test_event_payload_reads_headless_behavior

@@ -62,10 +62,13 @@ pub struct QueryResult2D:
     contact: QueryContact2D
 
 # Cast the subject collider through delta and return the nearest matching hit.
+# An exact distance tie goes to the earliest-created collider, whatever its shape.
 pub extern func query_cast_nearest(subject: entity_id, delta: vec2, mask: int, exclude: entity_id) QueryResult2D
 
-# Return the deepest current overlap for the subject collider.
+# Return the deepest current overlap for the subject collider. An exact depth
+# tie goes to the earliest-created collider, whatever its shape.
 pub extern func query_overlap_deepest(subject: entity_id, mask: int, exclude: entity_id) QueryResult2D
 
-# Return all current overlaps for the subject collider.
+# Return all current overlaps for the subject collider, in creation order of
+# the hit colliders.
 pub extern func query_overlap_all(subject: entity_id, mask: int, exclude: entity_id) list[QueryContact2D]

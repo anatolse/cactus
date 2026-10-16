@@ -5,6 +5,7 @@
 #include "common/persistence_document.hpp"
 #include "common/persistence_validation.hpp"
 
+#include "backends/cpp-entt/creation_order.hpp"
 #include "backends/cpp-entt/raylib_io.hpp"
 #include "backends/cpp-entt/spatial_query.hpp"
 
@@ -647,47 +648,6 @@ void editor_apply_camera_3d(entt::registry& registry, Vector3 position, Quat rot
                                                Vector3 plane_normal) noexcept;
 
 // ── Per-entity creation ordering (dsl-pair-relations) ──────────────────────
-// Monotonic, non-reused per-entity creation order: pair handlers sort their
-// binding snapshots by this ordinal so tuple and emitted-event order is
-// deterministic and backend-independent. Assigned once at every entity's
-// creation site, never reassigned.
-struct CreationOrdinal {
-    std::uint64_t value{};
-};
-
-[[nodiscard]] std::uint64_t generated_next_creation_ordinal() noexcept;
-
-// The entities `range` yields, oldest first, whatever order storage holds them in.
-template <typename Range>
-[[nodiscard]] std::vector<entt::entity> creation_ordered(const entt::registry& registry, const Range& range) {
-    std::vector<std::pair<std::uint64_t, entt::entity>> ordered;
-    for (const auto entity : range) {
-        ordered.emplace_back(registry.get<CreationOrdinal>(entity).value, entity);
-    }
-    std::ranges::sort(ordered);
-    std::vector<entt::entity> result;
-    result.reserve(ordered.size());
-    for (const auto& [ordinal, entity] : ordered) {
-        result.push_back(entity);
-    }
-    return result;
-}
-
-// The oldest entity `range` yields, or null when it yields none.
-template <typename Range>
-[[nodiscard]] entt::entity oldest(const entt::registry& registry, const Range& range) {
-    entt::entity found = entt::null;
-    std::uint64_t found_ordinal{};
-    for (const auto entity : range) {
-        const auto ordinal = registry.get<CreationOrdinal>(entity).value;
-        if (found == entt::null || ordinal < found_ordinal) {
-            found         = entity;
-            found_ordinal = ordinal;
-        }
-    }
-    return found;
-}
-
 // ── World-persistence provenance ───────────────────────────────────────────
 // A saved record rebuilds an entity's unmarked state from the values evaluated
 // once when it was created, so participating creation sites keep a copy of what

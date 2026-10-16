@@ -3191,13 +3191,14 @@ TEST_CASE("Codegen EnTT: stdlib flat collider queries emit cast and overlap help
     CHECK(code.contains("if (delta.x == 0.0F && delta.y == 0.0F)"));
     CHECK(code.contains("if (!cactus_find_flat_collider(registry, subject_entity, subject))"));
     CHECK(code.contains("return cactus_empty_query_result();"));
-    CHECK(code.contains("if (!nearest.has_value() || contact->distance < nearest->distance)"));
+    CHECK(code.contains("cactus_flat_beats(registry, *contact, -contact->distance, nearest"));
     CHECK(code.contains("entry > exit || entry < 0.0F || entry > 1.0F"));
     CHECK(code.contains("const float distance = cactus_flat_length(delta) * std::max(0.0F, entry)"));
     CHECK(code.contains("normal.y = delta.y > 0.0F ? -1.0F : 1.0F"));
     CHECK(code.contains("QueryResult2D cactus_query_overlap_deepest(entt::registry& registry"));
     CHECK(code.contains("const float amount = std::abs(contact->overlap.x) + std::abs(contact->overlap.y)"));
-    CHECK(code.contains("if (!deepest.has_value() || amount > deepest_amount)"));
+    CHECK(code.contains("cactus_flat_beats(registry, *contact, amount, deepest, deepest_amount)"));
+    CHECK(code.contains("std::ranges::sort(contacts, {}, [&](const QueryContact2D& contact)"));
     CHECK(code.contains("std::vector<QueryContact2D> cactus_query_overlap_all(entt::registry& registry"));
     CHECK(code.contains("candidate.entity == exclude || !cactus_query_mask_allows(candidate, mask)"));
     CHECK(code.contains("contacts.push_back(*contact)"));
@@ -4286,6 +4287,8 @@ TEST_CASE("Codegen EnTT: volume-transform editor program registers pos3d spawn i
     CHECK(code.contains("model_bounds_box"));
     CHECK(code.contains("GetRayCollisionBox"));
     CHECK(code.contains("reg.view<WorldTransform, ModelRenderer>(entt::exclude<EditorLocked>)"));
+    // Exact distance ties go to the oldest model.
+    CHECK(code.contains("cactus::runtime::entt_backend::Closest closest(reg);"));
 }
 
 TEST_CASE("Codegen EnTT: flat-transform editor program keeps pos2d spawn impl and no raycast impl",

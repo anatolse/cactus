@@ -81,6 +81,7 @@ set(gated_sources
 set(runtime_sources
     "${SOURCE_DIR}/src/backends/cpp-entt/runtime.cpp"
     "${SOURCE_DIR}/src/backends/cpp-entt/runtime.hpp"
+    "${SOURCE_DIR}/src/backends/cpp-entt/creation_order.hpp"
     "${SOURCE_DIR}/src/backends/cpp-entt/raylib_io.hpp"
     "${SOURCE_DIR}/src/backends/cpp-entt/spatial_query.hpp"
     "${SOURCE_DIR}/src/common/cactus_runtime.cpp"

@@ -1,0 +1,60 @@
+module animation_event_order
+
+# Animation events from several owners in one tick arrive in the owners'
+# creation order, whatever order storage holds them in.
+
+use std.core
+use std.transform.volume as tv
+use std.render.models as models
+
+asset SharedModel: model = "../model-renderer/art/robot.glb"
+
+trait Owner:
+    var id: int = 0
+
+# Owner ids in the order their markers arrived, as digits.
+trait Arrivals:
+    var digits: int = 0
+
+entity Recorder:
+    Arrivals
+
+event Noted:
+    id: int
+
+# clip 3 is Robot_Jump; both owners cross the same cue in the same tick.
+template Jumper(id: int):
+    Owner:
+        id = id
+    tv.WorldTransform
+    models.ModelRenderer:
+        model = SharedModel
+    models.ModelAnimator:
+        clip = 3
+    models.ModelPlayback:
+        mode = models.PlaybackMode.Once
+    children:
+        entity Cue:
+            models.AnimationCue:
+                clip = 3
+                time = 0.05
+                name = "cue"
+
+entity First from Jumper(id = 1)
+
+entity Second from Jumper(id = 2)
+
+entity Third from Jumper(id = 3)
+
+rule NoteMarker:
+    each:
+        Owner as owner
+    on models.AnimationMarker:
+        emit Noted to Recorder:
+            id = owner.id
+
+rule RecordArrival:
+    each:
+        Arrivals as arrivals
+    on Noted as noted:
+        arrivals.digits = arrivals.digits * 10 + noted.id

@@ -60,6 +60,10 @@ rule DetectWallContact:
             SquareCollider
             tf.WorldTransform
 
+    # A wall bounce resolved last keeps the bubble moving out of the wall.
+    after:
+        DetectBubbleContact
+
     on tick:
         let bubble_pos = bubble[tf.WorldTransform].position
         let wall_pos = wall[tf.WorldTransform].position

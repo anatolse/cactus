@@ -1248,6 +1248,9 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     validate_trait_default_values(program);
     validate_trait_modifier_rules(program);
 
+    // Scheduling reads template trait sets for lifecycle deliveries.
+    build_persistence_metadata(program);
+
     // Phase 4: Build dependency graph
     build_dependency_graph(program);
     validate_kept_traits(program);
@@ -1255,9 +1258,7 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     // Phase 5: Validate after: clauses and cycle detection
     validate_after_clauses(program);
 
-    build_persistence_metadata(program);
     report_unsupported_persistence_fields(result_, errors_);
-    classify_delivery_cycles(result_.execution_graph, template_trait_lookup(result_.persistence));
 
     return std::move(result_);
 }
@@ -13407,7 +13408,7 @@ void SemanticAnalyzer::validate_after_clauses(ProgramNode& program) {
     // also performs the phase-barrier/event-flow construction that
     // build_dependency_graph used to do inline (see execution_graph_scheduler.hpp).
     expand_group_orderings(result_.execution_graph);
-    (void)compute_handler_schedule(result_.execution_graph, errors_);
+    (void)compute_handler_schedule(result_.execution_graph, template_trait_lookup(result_.persistence), errors_);
     validate_lifecycle_trigger_traits(result_.execution_graph, errors_);
 }
 

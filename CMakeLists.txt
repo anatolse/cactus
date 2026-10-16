@@ -169,6 +169,7 @@ add_library(cactus_frontend STATIC
     src/frontend/archetype_reachability.cpp
     src/frontend/hierarchy_forest.cpp
     src/frontend/delivery_cycles.cpp
+    src/frontend/native_result_ordering.cpp
 )
 target_include_directories(cactus_frontend PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(cactus_frontend PUBLIC cactus_common)

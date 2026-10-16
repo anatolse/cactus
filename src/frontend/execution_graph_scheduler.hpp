@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/error_reporter.hpp"
+#include "frontend/delivery_cycles.hpp"
 #include "frontend/semantic_analyzer.hpp"
 
 namespace cactus {
@@ -13,12 +14,14 @@ namespace cactus {
 // schedule_edges the caller has already inserted (from AST `after:` clauses
 // or from cross-module linking) — it does not know or care which. Computes:
 //   - phase-barrier and event-flow edges (from graph.phases/graph.handlers)
-//   - data/effect conflict edges between co-triggered handlers
+//   - lifecycle flows, delayed edges and activation depths (classify_delivery_cycles)
+//   - data/effect/channel conflict edges between co-triggered handlers,
+//     including occurrence races between the runs they reach
 //   - handler dependency cycles (each distinct cycle reported once)
 //   - per-activation topological dependency levels
 //
 // Returns false if any error was reported to `errors` during scheduling.
-bool compute_handler_schedule(ExecutionGraph& graph, ErrorReporter& errors);
+bool compute_handler_schedule(ExecutionGraph& graph, const TemplateTraitLookup& templates, ErrorReporter& errors);
 
 // Adds one ExplicitGroup edge per member handler for each of graph.group_orderings.
 // Run before compute_handler_schedule, on a module graph or on the linked program.

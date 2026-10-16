@@ -1531,6 +1531,41 @@ TEST_CASE("program_linker: a cross-module ambiguity is a link error", "[linker][
     fs::remove_all(linker_build_dir() / "cross_module_ambiguity", ec);
 }
 
+TEST_CASE("program_linker: a cross-module occurrence race is a link error",
+          "[linker][handler-execution-graph][unorientable]") {
+    ModuleSet modules(linker_build_dir() / "cross_module_occurrence_race");
+    modules.compile("std.core", {}, core_source() + "pub event Hit\npub event Heal\n");
+    modules.compile("hits",
+                    {"std.core"},
+                    "module hits\n"
+                    "use std.core\n"
+                    "entity Board:\n"
+                    "    Score\n"
+                    "rule OnHit:\n"
+                    "    each:\n"
+                    "        Score as s\n"
+                    "    on Hit:\n"
+                    "        s.value = 0\n"
+                    "rule OnHeal:\n"
+                    "    each:\n"
+                    "        Score as s\n"
+                    "    on Heal:\n"
+                    "        s.value = 10\n");
+    modules.compile("alpha", {"std.core"}, "module alpha\nuse std.core\nrule A:\n    on tick:\n        emit Hit\n");
+    modules.compile("beta", {"std.core"}, "module beta\nuse std.core\nrule B:\n    on tick:\n        emit Heal\n");
+
+    ErrorReporter errors;
+    const auto linked = modules.link(errors);
+    REQUIRE(errors.has_errors());
+    const auto& message = errors.diagnostics().front().message;
+    CHECK(message.contains("unorientable conflict between 'alpha.A/on std.core.tick' and 'beta.B/on std.core.tick' on "
+                           "alpha.A/on std.core.tick via event std.core.Hit reaches hits.OnHit/on std.core.Hit; "
+                           "beta.B/on std.core.tick via event std.core.Heal reaches hits.OnHeal/on std.core.Heal"));
+
+    std::error_code ec;
+    fs::remove_all(linker_build_dir() / "cross_module_occurrence_race", ec);
+}
+
 TEST_CASE("program_linker: moving a rule to another module keeps every edge direction",
           "[linker][handler-execution-graph][unorientable]") {
     const std::string rules = "entity Board:\n"

@@ -876,6 +876,7 @@ rule MoveBullets:
             physics.Solid
     after:
         SeekPlayer
+        time.AdvanceTimer
     reduce per bullet:
         first = first_hit(physics.sweep(bullet, bullet[Bullet].velocity * fixed_tick.dt, target))
 

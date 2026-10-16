@@ -1,0 +1,81 @@
+module flat_query_ties
+
+# 2D collider queries break exact ties by creation order, whatever the shape,
+# and list all overlaps oldest first.
+
+use std.core
+use std.transform.flat as tf
+use std.physics.flat as physics
+
+# A collider's place in the last all-overlaps list, counted from 1.
+trait Rank:
+    var place: int = 0
+
+trait Results:
+    var cast: entity_id
+    var deepest: entity_id
+
+entity Board:
+    Results
+
+template Body(x: float, y: float):
+    tf.LocalTransform:
+        position = vec2(x, y)
+    tf.WorldTransform
+    physics.Collider
+    Rank
+
+template Box(x: float, y: float, w: float, h: float):
+    use Body(x = x, y = y)
+    physics.BoxCollider:
+        size = vec2(w, h)
+
+template Circle(x: float, y: float, radius: float):
+    use Body(x = x, y = y)
+    physics.CircleCollider:
+        radius = radius
+
+pub extern event MakeBox:
+    x: float
+    y: float
+    w: float
+    h: float
+
+pub extern event MakeCircle:
+    x: float
+    y: float
+    radius: float
+
+pub extern event Probe:
+    caster: entity_id
+    sinker: entity_id
+    toucher: entity_id
+
+event Ranked:
+    place: int
+
+rule MakeColliders:
+    on MakeBox:
+        spawn Box(x = MakeBox.x, y = MakeBox.y, w = MakeBox.w, h = MakeBox.h)
+    on MakeCircle:
+        spawn Circle(x = MakeCircle.x, y = MakeCircle.y, radius = MakeCircle.radius)
+
+rule Measure:
+    each:
+        Results as r
+    on Probe:
+        let cast_hit = physics.query_cast_nearest(Probe.caster, vec2(0.0, 20.0), 1, Probe.caster)
+        r.cast = cast_hit.contact.other
+        let deep_hit = physics.query_overlap_deepest(Probe.sinker, 1, Probe.sinker)
+        r.deepest = deep_hit.contact.other
+        var place = 0
+        for contact in physics.query_overlap_all(Probe.toucher, 1, Probe.toucher):
+            place += 1
+            emit Ranked to contact.other:
+                place = place
+
+rule TakeRank:
+    each:
+        Rank as rank
+    on Ranked:
+        rank.place = Ranked.place

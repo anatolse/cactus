@@ -292,8 +292,7 @@ bool ProgramLinker::rebuild_execution_graph(DecoratedProgram& program, bool vali
     }
 
     expand_group_orderings(graph);
-    const bool schedule_ok = compute_handler_schedule(graph, errors_);
-    classify_delivery_cycles(graph, template_trait_lookup(program.persistence));
+    const bool schedule_ok = compute_handler_schedule(graph, template_trait_lookup(program.persistence), errors_);
     check_phase_lineage_cycles(graph.phases, errors_);
     validate_lifecycle_trigger_traits(graph, errors_);
 

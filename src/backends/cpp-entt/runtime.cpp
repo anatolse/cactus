@@ -3253,7 +3253,10 @@ void render_ui_primitive(const UiPrimitive& primitive) noexcept {
 
 void sort_window_pointer_candidates(std::vector<PointerCandidate>& candidates) noexcept {
     std::ranges::stable_sort(candidates, [](const PointerCandidate& left, const PointerCandidate& right) noexcept {
-        return left.draw_order > right.draw_order;
+        if (left.draw_order != right.draw_order) {
+            return left.draw_order > right.draw_order;
+        }
+        return left.creation_ordinal < right.creation_ordinal;
     });
 }
 
@@ -3268,7 +3271,10 @@ void sort_flat_world_pointer_candidates(std::vector<PointerCandidate>& candidate
 
 void sort_volume_world_pointer_candidates(std::vector<PointerCandidate>& candidates) noexcept {
     std::ranges::stable_sort(candidates, [](const PointerCandidate& left, const PointerCandidate& right) noexcept {
-        return left.distance < right.distance;
+        if (left.distance != right.distance) {
+            return left.distance < right.distance;
+        }
+        return left.creation_ordinal < right.creation_ordinal;
     });
 }
 

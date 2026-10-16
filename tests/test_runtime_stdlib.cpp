@@ -615,6 +615,24 @@ TEST_CASE("Runtime stdlib: pointer candidate sorting orders each domain determin
     CHECK(volume[2].entity == entt::entity{1});
 }
 
+TEST_CASE("Runtime stdlib: pointer candidate ties go to the oldest entity", "[runtime][stdlib][pointer]") {
+    using entt_backend::PointerCandidate;
+
+    std::vector<PointerCandidate> window{
+        PointerCandidate{.entity = entt::entity{1}, .draw_order = 3, .creation_ordinal = 8},
+        PointerCandidate{.entity = entt::entity{2}, .draw_order = 3, .creation_ordinal = 4},
+    };
+    entt_backend::sort_window_pointer_candidates(window);
+    CHECK(window[0].entity == entt::entity{2});
+
+    std::vector<PointerCandidate> volume{
+        PointerCandidate{.entity = entt::entity{1}, .distance = 2.0F, .creation_ordinal = 8},
+        PointerCandidate{.entity = entt::entity{2}, .distance = 2.0F, .creation_ordinal = 4},
+    };
+    entt_backend::sort_volume_world_pointer_candidates(volume);
+    CHECK(volume[0].entity == entt::entity{2});
+}
+
 TEST_CASE("Runtime stdlib: pointer target resolution respects front-to-back blocking", "[runtime][stdlib][pointer]") {
     using entt_backend::PointerCandidate;
     using entt_backend::resolve_pointer_target;
@@ -1509,65 +1527,89 @@ struct SpatialPos2 {
 struct SpatialPos3 {
     Vector3 position;
 };
+
+// Spatial queries order their results by creation, so test entities carry an ordinal.
+entt::entity create_ordered(entt::registry& registry) {
+    const auto entity = registry.create();
+    registry.emplace<entt_backend::CreationOrdinal>(entity, static_cast<std::uint64_t>(registry.storage<entt::entity>().size()));
+    return entity;
+}
 }  // namespace
 
 TEST_CASE("Runtime stdlib: query_nearest (2D) returns the closest entity and null on an empty view",
           "[runtime][stdlib][query][spatial]") {
     entt::registry registry;
-    const auto near_e = registry.create();
-    const auto mid_e  = registry.create();
-    const auto far_e  = registry.create();
+    const auto near_e = create_ordered(registry);
+    const auto mid_e  = create_ordered(registry);
+    const auto far_e  = create_ordered(registry);
     registry.emplace<SpatialPos2>(near_e, Vector2{.x = 1.0F, .y = 0.0F});
     registry.emplace<SpatialPos2>(mid_e, Vector2{.x = 5.0F, .y = 0.0F});
     registry.emplace<SpatialPos2>(far_e, Vector2{.x = 10.0F, .y = 0.0F});
 
     auto position_of = [&](entt::entity e) { return registry.get<SpatialPos2>(e).position; };
     auto view        = registry.view<SpatialPos2>();
-    CHECK(entt_backend::query_nearest(view, Vector2{.x = 0.0F, .y = 0.0F}, position_of) == near_e);
+    CHECK(entt_backend::query_nearest(registry, view, Vector2{.x = 0.0F, .y = 0.0F}, position_of) == near_e);
 
     entt::registry empty_registry;
     auto empty_view = empty_registry.view<SpatialPos2>();
-    CHECK(entt_backend::query_nearest(empty_view, Vector2{.x = 0.0F, .y = 0.0F}, position_of) ==
+    CHECK(entt_backend::query_nearest(empty_registry, empty_view, Vector2{.x = 0.0F, .y = 0.0F}, position_of) ==
           entt::entity{entt::null});
+}
+
+TEST_CASE("Runtime stdlib: Closest gives an exact distance tie to the oldest entity",
+          "[runtime][stdlib][query][spatial][native-result-ordering]") {
+    entt::registry registry;
+    const auto older = create_ordered(registry);
+    const auto newer = create_ordered(registry);
+    const auto far   = create_ordered(registry);
+
+    entt_backend::Closest closest(registry);
+    closest.offer(far, 3.0F);
+    closest.offer(newer, 2.0F);
+    closest.offer(older, 2.0F);
+    CHECK(closest.entity() == older);
+
+    entt_backend::Closest reversed(registry);
+    reversed.offer(older, 2.0F);
+    reversed.offer(newer, 2.0F);
+    CHECK(reversed.entity() == older);
 }
 
 TEST_CASE("Runtime stdlib: query_nearest (3D) accounts for the z axis", "[runtime][stdlib][query][spatial][3d]") {
     entt::registry registry;
-    const auto in_plane = registry.create();
-    const auto off_axis = registry.create();
+    const auto in_plane = create_ordered(registry);
+    const auto off_axis = create_ordered(registry);
     registry.emplace<SpatialPos3>(in_plane, Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F});
     registry.emplace<SpatialPos3>(off_axis, Vector3{.x = 0.0F, .y = 0.0F, .z = 5.0F});
 
     auto position_of = [&](entt::entity e) { return registry.get<SpatialPos3>(e).position; };
     auto view        = registry.view<SpatialPos3>();
-    CHECK(entt_backend::query_nearest(view, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, position_of) == in_plane);
+    CHECK(entt_backend::query_nearest(registry, view, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, position_of) == in_plane);
 }
 
 TEST_CASE("Runtime stdlib: query_overlap_box (2D/3D) matches only entities within the half-extents",
           "[runtime][stdlib][query][spatial]") {
     entt::registry registry;
-    const auto inside  = registry.create();
-    const auto outside = registry.create();
+    const auto inside  = create_ordered(registry);
+    const auto outside = create_ordered(registry);
     registry.emplace<SpatialPos2>(inside, Vector2{.x = 1.0F, .y = 1.0F});
     registry.emplace<SpatialPos2>(outside, Vector2{.x = 10.0F, .y = 10.0F});
 
     auto position_of = [&](entt::entity e) { return registry.get<SpatialPos2>(e).position; };
     auto view        = registry.view<SpatialPos2>();
-    const auto hits  = entt_backend::query_overlap_box(
-        view, Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 4.0F, .y = 4.0F}, position_of);
+    const auto hits  = entt_backend::query_overlap_box(registry, view, Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 4.0F, .y = 4.0F}, position_of);
     CHECK(hits.size() == 1);
     CHECK(std::ranges::find(hits, inside) != hits.end());
 
     entt::registry registry3d;
-    const auto inside3d  = registry3d.create();
-    const auto outside3d = registry3d.create();
+    const auto inside3d  = create_ordered(registry3d);
+    const auto outside3d = create_ordered(registry3d);
     registry3d.emplace<SpatialPos3>(inside3d, Vector3{.x = 1.0F, .y = 1.0F, .z = 1.0F});
     registry3d.emplace<SpatialPos3>(outside3d, Vector3{.x = 1.0F, .y = 1.0F, .z = 10.0F});
 
     auto position_of_3d = [&](entt::entity e) { return registry3d.get<SpatialPos3>(e).position; };
     auto view3d         = registry3d.view<SpatialPos3>();
-    const auto hits3d   = entt_backend::query_overlap_box(
-        view3d, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, Vector3{.x = 4.0F, .y = 4.0F, .z = 4.0F}, position_of_3d);
+    const auto hits3d   = entt_backend::query_overlap_box(registry3d, view3d, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, Vector3{.x = 4.0F, .y = 4.0F, .z = 4.0F}, position_of_3d);
     CHECK(hits3d.size() == 1);
     CHECK(std::ranges::find(hits3d, inside3d) != hits3d.end());
 }
@@ -1575,14 +1617,14 @@ TEST_CASE("Runtime stdlib: query_overlap_box (2D/3D) matches only entities withi
 TEST_CASE("Runtime stdlib: query_overlap_circle matches only entities within the radius",
           "[runtime][stdlib][query][spatial]") {
     entt::registry registry;
-    const auto inside  = registry.create();
-    const auto outside = registry.create();
+    const auto inside  = create_ordered(registry);
+    const auto outside = create_ordered(registry);
     registry.emplace<SpatialPos2>(inside, Vector2{.x = 1.0F, .y = 0.0F});
     registry.emplace<SpatialPos2>(outside, Vector2{.x = 10.0F, .y = 0.0F});
 
     auto position_of = [&](entt::entity e) { return registry.get<SpatialPos2>(e).position; };
     auto view        = registry.view<SpatialPos2>();
-    const auto hits  = entt_backend::query_overlap_circle(view, Vector2{.x = 0.0F, .y = 0.0F}, 2.0F, position_of);
+    const auto hits  = entt_backend::query_overlap_circle(registry, view, Vector2{.x = 0.0F, .y = 0.0F}, 2.0F, position_of);
     CHECK(hits.size() == 1);
     CHECK(std::ranges::find(hits, inside) != hits.end());
 }
@@ -1590,15 +1632,15 @@ TEST_CASE("Runtime stdlib: query_overlap_circle matches only entities within the
 TEST_CASE("Runtime stdlib: query_overlap_sphere matches only entities within the radius",
           "[runtime][stdlib][query][spatial][3d]") {
     entt::registry registry;
-    const auto inside  = registry.create();
-    const auto outside = registry.create();
+    const auto inside  = create_ordered(registry);
+    const auto outside = create_ordered(registry);
     registry.emplace<SpatialPos3>(inside, Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F});
     registry.emplace<SpatialPos3>(outside, Vector3{.x = 10.0F, .y = 0.0F, .z = 0.0F});
 
     auto position_of = [&](entt::entity e) { return registry.get<SpatialPos3>(e).position; };
     auto view        = registry.view<SpatialPos3>();
     const auto hits =
-        entt_backend::query_overlap_sphere(view, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, 2.0F, position_of);
+        entt_backend::query_overlap_sphere(registry, view, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, 2.0F, position_of);
     CHECK(hits.size() == 1);
     CHECK(std::ranges::find(hits, inside) != hits.end());
 }
@@ -1606,10 +1648,10 @@ TEST_CASE("Runtime stdlib: query_overlap_sphere matches only entities within the
 TEST_CASE("Runtime stdlib: query_raycast (2D) hits an entity within the perpendicular threshold and max_dist",
           "[runtime][stdlib][query][spatial]") {
     entt::registry registry;
-    const auto on_ray     = registry.create();
-    const auto off_ray    = registry.create();
-    const auto behind_ray = registry.create();
-    const auto too_far    = registry.create();
+    const auto on_ray     = create_ordered(registry);
+    const auto off_ray    = create_ordered(registry);
+    const auto behind_ray = create_ordered(registry);
+    const auto too_far    = create_ordered(registry);
     registry.emplace<SpatialPos2>(on_ray, Vector2{.x = 5.0F, .y = 0.0F});
     registry.emplace<SpatialPos2>(off_ray, Vector2{.x = 5.0F, .y = 5.0F});
     registry.emplace<SpatialPos2>(behind_ray, Vector2{.x = -5.0F, .y = 0.0F});
@@ -1617,23 +1659,21 @@ TEST_CASE("Runtime stdlib: query_raycast (2D) hits an entity within the perpendi
 
     auto position_of = [&](entt::entity e) { return registry.get<SpatialPos2>(e).position; };
     auto view        = registry.view<SpatialPos2>();
-    const auto hit   = entt_backend::query_raycast(
-        view, Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 1.0F, .y = 0.0F}, 20.0F, position_of);
+    const auto hit   = entt_backend::query_raycast(registry, view, Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 1.0F, .y = 0.0F}, 20.0F, position_of);
     CHECK(hit == on_ray);
 }
 
 TEST_CASE("Runtime stdlib: query_raycast (3D) hits an entity within the perpendicular threshold and max_dist",
           "[runtime][stdlib][query][spatial][3d]") {
     entt::registry registry;
-    const auto on_ray  = registry.create();
-    const auto off_ray = registry.create();
+    const auto on_ray  = create_ordered(registry);
+    const auto off_ray = create_ordered(registry);
     registry.emplace<SpatialPos3>(on_ray, Vector3{.x = 5.0F, .y = 0.0F, .z = 0.0F});
     registry.emplace<SpatialPos3>(off_ray, Vector3{.x = 5.0F, .y = 5.0F, .z = 5.0F});
 
     auto position_of = [&](entt::entity e) { return registry.get<SpatialPos3>(e).position; };
     auto view        = registry.view<SpatialPos3>();
-    const auto hit   = entt_backend::query_raycast(
-        view, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F}, 20.0F, position_of);
+    const auto hit   = entt_backend::query_raycast(registry, view, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F}, 20.0F, position_of);
     CHECK(hit == on_ray);
 }
 

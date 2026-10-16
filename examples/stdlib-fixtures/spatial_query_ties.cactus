@@ -1,0 +1,142 @@
+module spatial_query_ties
+
+# Spatial queries break exact distance ties by creation order, and list
+# queries return creation order, whatever order storage holds the entities in.
+
+use std.core
+use std.transform.flat as tf
+use std.transform.volume as tv
+use std.physics.flat.query as flat
+use std.physics.volume.query as volume
+
+trait Enemy
+trait Wall
+trait Crate
+
+# A crate's place in the last overlap list, counted from 1.
+trait Rank:
+    var place: int = 0
+
+# Saved with the world, so a crate can be recognized after a restore.
+trait Label:
+    persist var id: int = 0
+
+trait Results:
+    var nearest: entity_id
+    var ray: entity_id
+    var nearest_3d: entity_id
+    var ray_3d: entity_id
+
+entity Board:
+    Results
+    Label
+
+template Flat(x: float, y: float):
+    tf.LocalTransform:
+        position = vec2(x, y)
+    tf.WorldTransform
+
+template Volume(x: float, y: float, z: float):
+    tv.LocalTransform:
+        position = vec3(x, y, z)
+    tv.WorldTransform
+
+template FlatEnemy(x: float, y: float):
+    use Flat(x = x, y = y)
+    Enemy
+
+template FlatWall(x: float, y: float):
+    use Flat(x = x, y = y)
+    Wall
+
+template FlatCrate(x: float, y: float, id: int):
+    use Flat(x = x, y = y)
+    Crate
+    Rank
+    Label:
+        id = id
+
+template VolumeEnemy(x: float, y: float, z: float):
+    use Volume(x = x, y = y, z = z)
+    Enemy
+
+template VolumeWall(x: float, y: float, z: float):
+    use Volume(x = x, y = y, z = z)
+    Wall
+
+pub extern event MakeEnemy:
+    x: float
+    y: float
+
+pub extern event MakeWall:
+    x: float
+    y: float
+
+pub extern event MakeCrate:
+    x: float
+    y: float
+    id: int
+
+pub extern event MakeEnemy3D:
+    x: float
+    y: float
+    z: float
+
+pub extern event MakeWall3D:
+    x: float
+    y: float
+    z: float
+
+pub extern event Unmark:
+    target: entity_id
+
+pub extern event Remark:
+    target: entity_id
+
+pub extern event Discard:
+    target: entity_id
+
+pub extern event Probe
+
+event Ranked:
+    place: int
+
+rule MakeThings:
+    on MakeEnemy:
+        spawn FlatEnemy(x = MakeEnemy.x, y = MakeEnemy.y)
+    on MakeWall:
+        spawn FlatWall(x = MakeWall.x, y = MakeWall.y)
+    on MakeCrate:
+        spawn FlatCrate(x = MakeCrate.x, y = MakeCrate.y, id = MakeCrate.id)
+    on MakeEnemy3D:
+        spawn VolumeEnemy(x = MakeEnemy3D.x, y = MakeEnemy3D.y, z = MakeEnemy3D.z)
+    on MakeWall3D:
+        spawn VolumeWall(x = MakeWall3D.x, y = MakeWall3D.y, z = MakeWall3D.z)
+
+rule Churn:
+    on Unmark:
+        remove Enemy from Unmark.target
+    on Remark:
+        add Enemy to Remark.target
+    on Discard:
+        destroy Discard.target
+
+rule Measure:
+    each:
+        Results as r
+    on Probe:
+        r.nearest = flat.nearest[Enemy](from = vec2(0.0, 0.0))
+        r.ray = flat.raycast[Wall](origin = vec2(0.0, 0.0), dir = vec2(1.0, 0.0), max_dist = 100.0)
+        r.nearest_3d = volume.nearest[Enemy](from = vec3(0.0, 0.0, 0.0))
+        r.ray_3d = volume.raycast[Wall](origin = vec3(0.0, 0.0, 0.0), dir = vec3(1.0, 0.0, 0.0), max_dist = 100.0)
+        var place = 0
+        for crate in flat.overlap_box[Crate](center = vec2(0.0, 0.0), size = vec2(100.0, 100.0)):
+            place += 1
+            emit Ranked to crate:
+                place = place
+
+rule TakeRank:
+    each:
+        Rank as rank
+    on Ranked:
+        rank.place = Ranked.place

@@ -3,6 +3,7 @@
 
 #include "frontend/delivery_cycles.hpp"
 #include "frontend/hierarchy_forest.hpp"
+#include "frontend/native_result_ordering.hpp"
 #include "frontend/symbol_identity.hpp"
 
 #include "backends/cpp-entt/accumulation_plan.hpp"
@@ -1598,6 +1599,17 @@ void emit_phase_handler_dispatch(std::ostringstream& out,
     out << "}\n\n";
 }
 
+// The runtime queue a native consumer's occurrences join.
+std::string_view native_consumer_queue(std::string_view event) {
+    if (event == "std.persistence.SaveRequested") {
+        return "generated_queue_save_request";
+    }
+    if (event == "std.persistence.RestoreRequested") {
+        return "generated_queue_restore_request";
+    }
+    throw std::logic_error("cpp-entt backend: no runtime queue for native consumer '" + std::string(event) + "'");
+}
+
 void emit_event_handler_dispatch(std::ostringstream& out,
                                  const DecoratedProgram& program,
                                  const AccumulationPlan& accumulation,
@@ -1610,27 +1622,13 @@ void emit_event_handler_dispatch(std::ostringstream& out,
         << "std::optional<entt::entity> target) {\n";
     out << "    (void)occurrence;\n";
     out << "    (void)target;\n";
-    // std.persistence.SaveRequested is a runtime-owned effect domain
-    // (dsl-stdlib-persistence decision 6), not a gameplay handler target:
-    // every occurrence joins the request queue regardless of whether any
-    // rule also declares `on SaveRequested:`. This is a direct special
-    // case rather than an `extern rule ...: effects: persistence` in the
-    // style of std.debug's renderers, because that style is not actually
-    // a generic effects-keyed dispatch: `system_emitter.cpp`'s renderer
-    // table is a hardcoded (module, rule_name) lookup that still needs a
-    // native C++ handler registered by name for each entry. Routing
-    // through it here would trade this one dispatch-site branch for a
-    // second hardcoded table entry plus a native function — more
-    // machinery for the same outcome, not less.
-    if (event->symbol_id.has_value() && event->name == "SaveRequested" &&
-        event->symbol_id->module.name == "std.persistence") {
-        out << "    generated_queue_save_request(occurrence.slot, occurrence.request_id);\n";
-    }
-    // RestoreRequested is the same runtime-owned effect domain as
-    // SaveRequested above, sharing its request queue and boundary.
-    if (event->symbol_id.has_value() && event->name == "RestoreRequested" &&
-        event->symbol_id->module.name == "std.persistence") {
-        out << "    generated_queue_restore_request(occurrence.slot, occurrence.request_id);\n";
+    // A runtime-consumed event joins its runtime queue whether or not any
+    // rule also declares a handler for it.
+    if (event->symbol_id.has_value()) {
+        const auto canonical = make_canonical_id(*event->symbol_id);
+        if (std::ranges::contains(native_consumers(), canonical, &NativeConsumer::event)) {
+            out << "    " << native_consumer_queue(canonical) << "(occurrence.slot, occurrence.request_id);\n";
+        }
     }
     std::vector<DispatchCall> calls;
     for (const auto& identity : program.execution_graph.stable_topological_order) {
@@ -2962,6 +2960,19 @@ std::optional<QueryContact2D> cactus_flat_cast_contact(const FlatColliderRef& su
     return cactus_flat_contact(candidate.entity, normal, distance, Vector2{.x = 0.0F, .y = 0.0F});
 }
 
+// Whether a contact scoring `score` beats `best`; an exact tie goes to the older collider.
+bool cactus_flat_beats(const entt::registry& registry,
+                       const QueryContact2D& contact,
+                       float score,
+                       const std::optional<QueryContact2D>& best,
+                       float best_score) {
+    if (!best.has_value() || score > best_score) {
+        return true;
+    }
+    return score == best_score && cactus::runtime::entt_backend::creation_ordinal(registry, contact.other) <
+           cactus::runtime::entt_backend::creation_ordinal(registry, best->other);
+}
+
 }  // namespace
 
 QueryResult2D cactus_query_cast_nearest(entt::registry& registry,
@@ -2989,7 +3000,7 @@ QueryResult2D cactus_query_cast_nearest(entt::registry& registry,
         if (!contact.has_value()) {
             continue;
         }
-        if (!nearest.has_value() || contact->distance < nearest->distance) {
+        if (cactus_flat_beats(registry, *contact, -contact->distance, nearest, nearest ? -nearest->distance : 0.0F)) {
             nearest = *contact;
         }
     }
@@ -3018,7 +3029,7 @@ QueryResult2D cactus_query_overlap_deepest(entt::registry& registry,
             continue;
         }
         const float amount = std::abs(contact->overlap.x) + std::abs(contact->overlap.y);
-        if (!deepest.has_value() || amount > deepest_amount) {
+        if (cactus_flat_beats(registry, *contact, amount, deepest, deepest_amount)) {
             deepest = *contact;
             deepest_amount = amount;
         }
@@ -3046,6 +3057,9 @@ std::vector<QueryContact2D> cactus_query_overlap_all(entt::registry& registry,
             contacts.push_back(*contact);
         }
     }
+    std::ranges::sort(contacts, {}, [&](const QueryContact2D& contact) {
+        return cactus::runtime::entt_backend::creation_ordinal(registry, contact.other);
+    });
     return contacts;
 }
 
@@ -3805,6 +3819,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "        [](entt::registry& reg, Vector2 world_pos, int /*mask*/) -> entt::entity {\n";
         out << "            auto view = reg.view<" << wt2d_cpp << ", " << box_cpp << ">(entt::exclude<" << locked_cpp
             << ">);\n";
+        out << "            std::vector<entt::entity> hits;\n";
         out << "            for (auto entity : view) {\n";
         out << "                const auto& xform = reg.get<" << wt2d_cpp << ">(entity);\n";
         out << "                const auto& box   = reg.get<" << box_cpp << ">(entity);\n";
@@ -3812,9 +3827,9 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                "continue; }\n";
         out << "                if (world_pos.y < xform.position.y || world_pos.y > xform.position.y + box.size.y) { "
                "continue; }\n";
-        out << "                return entity;\n";
+        out << "                hits.push_back(entity);\n";
         out << "            }\n";
-        out << "            return entt::entity{entt::null};\n";
+        out << "            return cactus::runtime::entt_backend::oldest(reg, hits);\n";
         out << "        });\n";
     }
     if (uses_editor && (wt_usage.flat || wt_usage.volume)) {
@@ -3865,8 +3880,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         const std::string mr_cpp = EnttCodegenUtils::trait_cpp_name("ModelRenderer", program);
         out << "    cactus::runtime::entt_backend::register_editor_raycast_impl(\n";
         out << "        [](entt::registry& reg, Ray ray, int /*mask*/) -> entt::entity {\n";
-        out << "            entt::entity nearest = entt::null;\n";
-        out << "            float nearest_distance = 0.0F;\n";
+        out << "            cactus::runtime::entt_backend::Closest closest(reg);\n";
         out << "            auto view = reg.view<" << wt3d_cpp << ", " << mr_cpp << ">(entt::exclude<" << locked_cpp
             << ">);\n";
         out << "            for (auto entity : view) {\n";
@@ -3885,12 +3899,9 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "                                  .y = xform.position.y + (box.max.y * xform.scale.y),\n";
         out << "                                  .z = xform.position.z + (box.max.z * xform.scale.z)};\n";
         out << "                const RayCollision hit = GetRayCollisionBox(ray, box);\n";
-        out << "                if (hit.hit && (nearest == entt::null || hit.distance < nearest_distance)) {\n";
-        out << "                    nearest          = entity;\n";
-        out << "                    nearest_distance = hit.distance;\n";
-        out << "                }\n";
+        out << "                if (hit.hit) { closest.offer(entity, hit.distance); }\n";
         out << "            }\n";
-        out << "            return nearest;\n";
+        out << "            return closest.entity();\n";
         out << "        });\n";
     }
     if (uses_editor) {
@@ -4113,7 +4124,9 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
             out << "                __result.push_back(cactus::runtime::entt_backend::PointerCandidate{\n";
             out << "                    .entity = entity, .enabled = target.enabled, .blocks_lower = "
                    "target.blocks_lower,\n";
-            out << "                    .priority = target.priority, .draw_order = layout.draw_order});\n";
+            out << "                    .priority = target.priority, .draw_order = layout.draw_order,\n";
+            out << "                    .creation_ordinal = "
+                   "cactus::runtime::entt_backend::creation_ordinal(reg, entity)});\n";
             out << "            }\n";
             out << "            cactus::runtime::entt_backend::sort_window_pointer_candidates(__result);\n";
             out << "            return __result;\n";
@@ -4145,7 +4158,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                 out << "                        .entity = entity, .enabled = target.enabled,\n";
                 out << "                        .blocks_lower = target.blocks_lower, .priority = target.priority,\n";
                 out << "                        .creation_ordinal = "
-                       "reg.get<cactus::runtime::entt_backend::CreationOrdinal>(entity).value});\n";
+                       "cactus::runtime::entt_backend::creation_ordinal(reg, entity)});\n";
                 out << "                }\n";
                 out << "            }\n";
             }
@@ -4165,7 +4178,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                 out << "                        .entity = entity, .enabled = target.enabled,\n";
                 out << "                        .blocks_lower = target.blocks_lower, .priority = target.priority,\n";
                 out << "                        .creation_ordinal = "
-                       "reg.get<cactus::runtime::entt_backend::CreationOrdinal>(entity).value});\n";
+                       "cactus::runtime::entt_backend::creation_ordinal(reg, entity)});\n";
                 out << "                }\n";
                 out << "            }\n";
             }
@@ -4201,7 +4214,9 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                 out << "                    __result.push_back(cactus::runtime::entt_backend::PointerCandidate{\n";
                 out << "                        .entity = entity, .enabled = target.enabled,\n";
                 out << "                        .blocks_lower = target.blocks_lower, .priority = target.priority,\n";
-                out << "                        .distance = __hit.distance});\n";
+                out << "                        .distance = __hit.distance,\n";
+                out << "                        .creation_ordinal = "
+                       "cactus::runtime::entt_backend::creation_ordinal(reg, entity)});\n";
                 out << "                }\n";
                 out << "            }\n";
             }
@@ -4221,7 +4236,9 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                 out << "                    __result.push_back(cactus::runtime::entt_backend::PointerCandidate{\n";
                 out << "                        .entity = entity, .enabled = target.enabled,\n";
                 out << "                        .blocks_lower = target.blocks_lower, .priority = target.priority,\n";
-                out << "                        .distance = __hit.distance});\n";
+                out << "                        .distance = __hit.distance,\n";
+                out << "                        .creation_ordinal = "
+                       "cactus::runtime::entt_backend::creation_ordinal(reg, entity)});\n";
                 out << "                }\n";
                 out << "            }\n";
             }

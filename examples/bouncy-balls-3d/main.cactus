@@ -89,6 +89,10 @@ rule DetectWallContact:
             BoxCollider
             tv.WorldTransform
 
+    # A wall bounce resolved last keeps the ball moving out of the wall.
+    after:
+        DetectBallContact
+
     on fixed_tick:
         let ball_pos = ball[tv.WorldTransform].position
         let wall_pos = wall[tv.WorldTransform].position

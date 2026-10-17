@@ -952,6 +952,13 @@ bool is_format_supported_type(TypeKind kind) {
 
 const std::vector<ChildOverrideNode> kNoChildOverrides;
 
+// The value of a body that is exactly one `return <value>`, the only func shape GLSL inlining handles.
+const ExprNode* single_return_value(const std::vector<std::unique_ptr<StmtNode>>& body) {
+    const auto* ret =
+        body.size() == 1 && body.front() != nullptr ? std::get_if<ReturnStmt>(&body.front()->stmt) : nullptr;
+    return ret != nullptr && ret->value.has_value() ? ret->value->get() : nullptr;
+}
+
 std::optional<std::unordered_set<std::string>> known_stdlib_effect_summary(const SymbolId& symbol) {
     if (symbol.kind != SymbolKind::Func) {
         return std::nullopt;
@@ -1203,6 +1210,7 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     resolve_trait_references(program);
     resolve_declaration_const_refs(program);
     order_and_type_constants(program);
+    refine_glsl_portability(program);
     collect_template_parameters(program);
 
     // Phase 3: Semantic checks
@@ -1590,6 +1598,7 @@ void SemanticAnalyzer::resolve_declaration_types(T& node) {
         if (node.return_type.has_value()) {
             rf.return_type = resolve_type_ref(*node.return_type);
         }
+        rf.glsl_inlinable        = !node.is_extern && single_return_value(node.body) != nullptr;
         result_.funcs[node.name] = std::move(rf);
     }
 }
@@ -2199,6 +2208,9 @@ void SemanticAnalyzer::check_const_strings_statement(const S& s) {
         for (const auto& arm : s.arms) {
             check_const_strings_stmts(arm.body);
         }
+    } else if constexpr (std::is_same_v<S, ForeachStmt>) {
+        check_const_strings_expr(*s.iterable, false);
+        check_const_strings_stmts(s.body);
     }
 }
 
@@ -2270,9 +2282,7 @@ void SemanticAnalyzer::check_func_purity(ProgramNode& program) {
             if (fn->is_extern) {
                 continue;
             }
-            for (auto& stmt : fn->body) {
-                check_func_purity_stmt(*stmt, fn->name);
-            }
+            check_func_purity_stmts(fn->body, fn->name);
         }
     }
 }
@@ -2291,30 +2301,32 @@ void SemanticAnalyzer::check_statement_purity(const S& s, const std::string& fun
         }
     } else if constexpr (std::is_same_v<S, IfStmt>) {
         check_func_purity_expr(*s.condition, func_name);
-        for (auto& inner : s.then_body) {
-            check_func_purity_stmt(*inner, func_name);
-        }
+        check_func_purity_stmts(s.then_body, func_name);
         for (auto& branch : s.else_if_branches) {
             check_func_purity_expr(*branch.condition, func_name);
-            for (auto& inner : branch.body) {
-                check_func_purity_stmt(*inner, func_name);
-            }
+            check_func_purity_stmts(branch.body, func_name);
         }
-        for (auto& inner : s.else_body) {
-            check_func_purity_stmt(*inner, func_name);
-        }
+        check_func_purity_stmts(s.else_body, func_name);
     } else if constexpr (std::is_same_v<S, MatchStmt>) {
         check_func_purity_expr(*s.subject, func_name);
         for (auto& arm : s.arms) {
-            for (auto& inner : arm.body) {
-                check_func_purity_stmt(*inner, func_name);
-            }
+            check_func_purity_stmts(arm.body, func_name);
         }
+    } else if constexpr (std::is_same_v<S, ForeachStmt>) {
+        check_func_purity_expr(*s.iterable, func_name);
+        check_func_purity_stmts(s.body, func_name);
     }
 }
 
 void SemanticAnalyzer::check_func_purity_stmt(const StmtNode& stmt, const std::string& func_name) {
     std::visit([this, &func_name](auto& s) { check_statement_purity(s, func_name); }, stmt.stmt);
+}
+
+void SemanticAnalyzer::check_func_purity_stmts(const std::vector<std::unique_ptr<StmtNode>>& stmts,
+                                               const std::string& func_name) {
+    for (const auto& stmt : stmts) {
+        check_func_purity_stmt(*stmt, func_name);
+    }
 }
 
 // The recursive deny-list traversal shared by check_func_purity_expr,
@@ -2350,6 +2362,12 @@ void SemanticAnalyzer::check_func_purity_expr(const ExprNode& expr, const std::s
         [this, &func_name](const CallExpr& e) {
             if (auto* ident = std::get_if<IdentExpr>(&e.callee->expr); ident != nullptr && ident->name == "exists") {
                 errors_.error(e.location, "`exists()` requires world access; only allowed inside rule event handlers");
+            }
+            const auto* callee = e.resolved_callee_id.has_value() ? find_resolved_func(*e.resolved_callee_id) : nullptr;
+            if (callee != nullptr && (!callee->effect_summary.has_value() || !callee->effect_summary->empty())) {
+                errors_.error(e.location,
+                              "func '" + func_name + "' cannot call '" + callee->name +
+                                  "': its effects are not proven pure (funcs must be pure)");
             }
             if (auto* ident = std::get_if<IdentExpr>(&e.callee->expr)) {
                 // Use canonical IDs so same simple names across modules don't
@@ -2843,7 +2861,10 @@ bool SemanticAnalyzer::call_is_glsl_translatable(const CallExpr& call) const {
         return true;
     }
     const auto* func = call.resolved_callee_id.has_value() ? find_resolved_func(*call.resolved_callee_id) : nullptr;
-    return func != nullptr && (!func->is_extern || is_render_pass_portable_glsl_intrinsic(*call.resolved_callee_id));
+    if (func == nullptr) {
+        return false;
+    }
+    return func->is_extern ? is_render_pass_portable_glsl_intrinsic(*call.resolved_callee_id) : func->glsl_inlinable;
 }
 
 void SemanticAnalyzer::check_stage_constant(const SymbolId& symbol,
@@ -2938,6 +2959,40 @@ void SemanticAnalyzer::order_and_type_constants(ProgramNode& program) {
         assign_canonical_identity(resolved, *assignment->resolved_const_id);
         result_.consts[assignment->name] = std::move(resolved);
         result_.const_order.push_back(*assignment->resolved_const_id);
+    }
+}
+
+// Func inlinability and constant portability can depend on each other, so both only narrow until stable.
+void SemanticAnalyzer::refine_glsl_portability(const ProgramNode& program) {
+    const auto narrow_func = [this](const FuncNode& func) {
+        const auto found = result_.funcs.find(func.name);
+        if (found == result_.funcs.end() || !found->second.glsl_inlinable) {
+            return false;
+        }
+        const auto* value            = single_return_value(func.body);
+        const auto& type             = found->second.return_type;
+        found->second.glsl_inlinable = type.has_value() && const_is_glsl_portable(*value, *type);
+        return !found->second.glsl_inlinable;
+    };
+    const auto narrow_const = [this](const ConstAssignment& assignment) {
+        const auto found = result_.consts.find(assignment.name);
+        if (found == result_.consts.end() || !found->second.glsl_portable) {
+            return false;
+        }
+        found->second.glsl_portable = const_is_glsl_portable(*assignment.value, found->second.type);
+        return !found->second.glsl_portable;
+    };
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (const auto& decl : program.declarations) {
+            if (const auto* func = std::get_if<FuncNode>(&decl)) {
+                changed = narrow_func(*func) || changed;
+            } else if (const auto* block = std::get_if<ConstBlockNode>(&decl)) {
+                for (const auto& assignment : block->assignments) {
+                    changed = narrow_const(assignment) || changed;
+                }
+            }
+        }
     }
 }
 
@@ -4778,20 +4833,34 @@ void SemanticAnalyzer::validate_render_pass_stage_handler_shape(const RuleNode& 
     }
 }
 
-void SemanticAnalyzer::validate_render_stage_call(const CallExpr& node, const SourceLocation& location) const {
+void SemanticAnalyzer::validate_render_stage_call(const CallExpr& node,
+                                                  const SourceLocation& location,
+                                                  const char* stage_desc) const {
     const auto* callee_ident = std::get_if<IdentExpr>(&node.callee->expr);
     const bool is_vector_ctor =
         callee_ident != nullptr &&
         (callee_ident->name == "vec2" || callee_ident->name == "vec3" || callee_ident->name == "color");
-    if (!is_vector_ctor) {
-        auto callee_symbol = resolve_callee_symbol(*node.callee);
-        const auto* func   = callee_symbol.has_value() ? find_resolved_func(*callee_symbol) : nullptr;
-        if (func != nullptr && func->is_extern && !is_render_pass_portable_glsl_intrinsic(*callee_symbol)) {
-            errors_.error(location,
-                          "extern func '" + make_canonical_id(*callee_symbol) +
-                              "' has no registered portable GLSL translation for a render-pass "
-                              "stage handler");
-        }
+    const auto resolved = is_vector_ctor ? std::nullopt : resolve_callee_symbol(*node.callee);
+    if (!resolved.has_value()) {
+        return;
+    }
+    const auto& symbol = *resolved;
+    const auto* func   = find_resolved_func(symbol);
+    if (func == nullptr) {
+        return;
+    }
+    if (func->is_extern && !is_render_pass_portable_glsl_intrinsic(symbol)) {
+        errors_.error(location,
+                      "extern func '" + make_canonical_id(symbol) +
+                          "' has no registered portable GLSL translation for a render-pass "
+                          "stage handler");
+    } else if (!func->is_extern && !func->glsl_inlinable) {
+        const auto name = symbol.module == current_module_id_ ? symbol.local_name : make_canonical_id(symbol);
+        errors_.error(location,
+                      std::format("func '{}' cannot run in a render-pass {}-stage handler: its body must be a single "
+                                  "`return` of GLSL-translatable operations",
+                                  name,
+                                  stage_desc));
     }
 }
 
@@ -4817,7 +4886,7 @@ void SemanticAnalyzer::validate_render_stage_expression(const E& node,
     } else if constexpr (std::is_same_v<E, UnaryExpr>) {
         visit_expr(*node.operand);
     } else if constexpr (std::is_same_v<E, CallExpr>) {
-        validate_render_stage_call(node, expr.location);
+        validate_render_stage_call(node, expr.location, stage_desc);
         for (const auto& arg : node.args) {
             visit_expr(*arg);
         }
@@ -6123,6 +6192,36 @@ void SemanticAnalyzer::validate_external_handler_contracts(ProgramNode& program)
 
 // ── Phase 3f: Event Usage Validation ────────────────────────────────────────
 
+namespace {
+
+bool block_always_returns(const std::vector<std::unique_ptr<StmtNode>>& stmts);
+
+// A loop may run zero times, so it never guarantees a return.
+bool always_returns(const StmtNode& stmt) {
+    if (std::holds_alternative<ReturnStmt>(stmt.stmt)) {
+        return true;
+    }
+    if (const auto* branch = std::get_if<IfStmt>(&stmt.stmt)) {
+        return !branch->else_body.empty() && block_always_returns(branch->then_body) &&
+               block_always_returns(branch->else_body) &&
+               std::ranges::all_of(branch->else_if_branches,
+                                   [](const ElseIfBranch& else_if) { return block_always_returns(else_if.body); });
+    }
+    if (const auto* match = std::get_if<MatchStmt>(&stmt.stmt)) {
+        const bool exhaustive =
+            match->kind != MatchKind::Trait || std::ranges::any_of(match->arms, &MatchStmtArm::is_wildcard);
+        return exhaustive && !match->arms.empty() &&
+               std::ranges::all_of(match->arms, [](const MatchStmtArm& arm) { return block_always_returns(arm.body); });
+    }
+    return false;
+}
+
+bool block_always_returns(const std::vector<std::unique_ptr<StmtNode>>& stmts) {
+    return std::ranges::any_of(stmts, [](const auto& stmt) { return stmt != nullptr && always_returns(*stmt); });
+}
+
+}  // namespace
+
 void SemanticAnalyzer::validate_event_usage(  // NOLINT(readability-function-cognitive-complexity)
     ProgramNode& program) {
     for (auto& decl : program.declarations) {
@@ -6134,6 +6233,9 @@ void SemanticAnalyzer::validate_event_usage(  // NOLINT(readability-function-cog
                 }
             }
             validate_event_stmts(func->body, {}, params, nullptr, "");
+            if (func->return_type.has_value() && !block_always_returns(func->body)) {
+                errors_.error(func->location, "func '" + func->name + "' does not return a value on every path");
+            }
         }
         if (auto* rule = std::get_if<ExternRuleNode>(&decl)) {
             for (const auto& handler : rule->handlers) {
@@ -12768,7 +12870,7 @@ void SemanticAnalyzer::validate_context_stmts(  // NOLINT(readability-function-c
                 if constexpr (std::is_same_v<S, SpawnStmt> || std::is_same_v<S, DestroyStmt> ||
                               std::is_same_v<S, LoadStmt> || std::is_same_v<S, AddTraitStmt> ||
                               std::is_same_v<S, RemoveTraitStmt> || std::is_same_v<S, ProjectTraitStmt> ||
-                              std::is_same_v<S, SetTraitStmt> || std::is_same_v<S, ForeachStmt>) {
+                              std::is_same_v<S, SetTraitStmt>) {
                     if (!in_rule_handler) {
                         // Determine which keyword is used
                         std::string kw;
@@ -12784,8 +12886,6 @@ void SemanticAnalyzer::validate_context_stmts(  // NOLINT(readability-function-c
                             kw = "project";
                         } else if constexpr (std::is_same_v<S, SetTraitStmt>) {
                             kw = "set";
-                        } else if constexpr (std::is_same_v<S, ForeachStmt>) {
-                            kw = "for";
                         } else {
                             kw = "remove";
                         }
@@ -12859,10 +12959,6 @@ void SemanticAnalyzer::validate_context_stmts(  // NOLINT(readability-function-c
                             validate_self_expr(*arg.value, arg.location);
                         }
                     }
-                    if constexpr (std::is_same_v<S, ForeachStmt>) {
-                        validate_self_expr(*s.iterable, s.location);
-                        validate_context_stmts(s.body, context_name, in_rule_handler);
-                    }
                     if constexpr (std::is_same_v<S, DestroyStmt>) {
                         require_optional_entity_id_target(s.target_expr,
                                                           s.location,
@@ -12871,6 +12967,9 @@ void SemanticAnalyzer::validate_context_stmts(  // NOLINT(readability-function-c
                                                           self_context_locals,
                                                           nullptr);
                     }
+                } else if constexpr (std::is_same_v<S, ForeachStmt>) {
+                    validate_self_expr(*s.iterable, s.location);
+                    validate_context_stmts(s.body, context_name, in_rule_handler);
                 } else if constexpr (std::is_same_v<S, MatchStmt>) {
                     validate_self_expr(*s.subject, s.location);
                     for (const auto& arm : s.arms) {

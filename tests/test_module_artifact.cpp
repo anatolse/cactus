@@ -446,6 +446,37 @@ TEST_CASE("ModuleArtifact: extern func round-trips through save/load", "[artifac
     fs::remove_all(build_dir, ec);
 }
 
+TEST_CASE("ModuleArtifact: whether a func can be inlined into GLSL round-trips", "[artifact][function-loops]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    DecoratedProgram prog = make_test_program();
+    ResolvedFunc doubled;
+    doubled.name           = "doubled";
+    doubled.is_pub         = true;
+    doubled.glsl_inlinable = true;
+    doubled.return_type    = make_float_type();
+    prog.funcs["doubled"]  = doubled;
+    ResolvedFunc looped;
+    looped.name          = "looped";
+    looped.is_pub        = true;
+    looped.return_type   = make_float_type();
+    prog.funcs["looped"] = looped;
+
+    REQUIRE(artifact.save(prog, "shapes", build_dir));
+    std::string name;
+    auto loaded = artifact.load(build_dir / "shapes.cmod", name);
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(loaded.has_value());
+    CHECK(loaded->funcs.at("doubled").glsl_inlinable);
+    CHECK_FALSE(loaded->funcs.at("looped").glsl_inlinable);
+
+    fs::remove_all(build_dir, ec);
+}
+
 TEST_CASE("ModuleArtifact: extract_pub_symbols returns pub extern funcs only", "[artifact][extern-func]") {
     auto build_dir = test_build_dir();
     std::error_code ec;
@@ -887,7 +918,7 @@ TEST_CASE("ModuleArtifact: runtime declarations and handler graph round-trip", "
 }
 
 TEST_CASE("ModuleArtifact: artifact from before shape-generic spatial plans is rejected", "[artifact][spatial-join]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 35);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 36);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1281,7 +1312,7 @@ TEST_CASE("ModuleArtifact: set command capabilities round-trip", "[artifact][def
     CHECK(loaded->handler_contracts.front().commands == commands);
     REQUIRE(loaded->execution_graph.handlers.size() == 1);
     CHECK(loaded->execution_graph.handlers.front().contract.commands == commands);
-    CHECK(ModuleArtifact::CURRENT_VERSION == 35);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 36);
 
     fs::remove_all(build_dir, ec);
 }
@@ -1805,7 +1836,7 @@ TEST_CASE("ModuleArtifact: every schedule edge reason round-trips", "[artifact][
 }
 
 TEST_CASE("ModuleArtifact: artifact from before field-level contracts is rejected", "[artifact][handler-contracts]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 35);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 36);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2032,7 +2063,7 @@ TEST_CASE("ModuleArtifact: unknown trigger kind is rejected", "[artifact][trait-
 }
 
 TEST_CASE("ModuleArtifact: artifact from before lifecycle triggers is rejected", "[artifact][trait-lifecycle]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 35);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 36);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2161,7 +2192,7 @@ TEST_CASE("ModuleArtifact: unknown group ordering direction is malformed", "[art
 }
 
 TEST_CASE("ModuleArtifact: artifact from before rule groups is rejected", "[artifact][rule-groups]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 35);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 36);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2186,7 +2217,7 @@ TEST_CASE("ModuleArtifact: artifact from before rule groups is rejected", "[arti
 }
 
 TEST_CASE("ModuleArtifact: artifact from before named-entity access is rejected", "[artifact][named-entity]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 35);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 36);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2545,7 +2576,7 @@ TEST_CASE("ModuleArtifact: a trait access expression round-trips", "[artifact][t
 }
 
 TEST_CASE("ModuleArtifact: artifact from before bracketed trait access is rejected", "[artifact][trait-access]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 35);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 36);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);

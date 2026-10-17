@@ -6919,7 +6919,8 @@ TEST_CASE("Codegen EnTT: range() lowers to a zero-allocation ascending/descendin
         // No unconditional trailing branch: a step of 0 falls through both
         // arms and executes the loop body zero times.
         CHECK(!code.contains("} else {\n"));
-        CHECK(code.contains("for (int k = "));
+        CHECK(code.contains("for (std::int64_t cactus_gen_range_index_"));
+        CHECK(code.contains("[[maybe_unused]] const int k = static_cast<int>(cactus_gen_range_index_"));
     }
 }
 
@@ -6942,10 +6943,13 @@ TEST_CASE("Codegen EnTT: range() descending iteration counts down", "[codegen-en
         if (sys == nullptr || sys->name != "CountDown") {
             continue;
         }
-        auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-        CHECK(code.contains("k < "));
-        CHECK(code.contains("k > "));
-        CHECK(code.contains("k += "));
+        auto code             = EnttSystemEmitter::emit_system(*sys, decorated);
+        const auto index_name = extract_temp_name(code, "cactus_gen_range_index_");
+        const auto step_name  = extract_temp_name(code, "cactus_gen_range_step_");
+        REQUIRE_FALSE(index_name.empty());
+        CHECK(code.contains(index_name + " < "));
+        CHECK(code.contains(index_name + " > "));
+        CHECK(code.contains(index_name + " += " + step_name));
     }
 }
 
@@ -7056,6 +7060,87 @@ TEST_CASE("Codegen EnTT: range() with a non-literal step has no unconditional fa
         const auto own_closes = code.substr(increment_pos, brace_pos + 1 - increment_pos);
         CHECK(!own_closes.contains("else"));
     }
+}
+
+static std::string emit_test_func(const std::string& source, const std::string& name) {
+    ProgramNode program;
+    auto decorated = full_pipeline(source, program);
+    for (const auto& decl : program.declarations) {
+        const auto* func = std::get_if<FuncNode>(&decl);
+        if (func != nullptr && func->name == name) {
+            return EnttSystemEmitter::emit_func(*func, decorated);
+        }
+    }
+    FAIL("func '" << name << "' not found");
+    return {};
+}
+
+TEST_CASE("Codegen EnTT: a func range loop evaluates its bounds once without allocating",
+          "[codegen-entt][range][function-loops]") {
+    const auto code = emit_test_func(
+        "func count(n: int) int:\n"
+        "    var total = 0\n"
+        "    for i in range(111 + n, 222 + n, 333 + n):\n"
+        "        total += i\n"
+        "    return total\n",
+        "count");
+    CHECK(!code.contains("std::vector"));
+    CHECK(!code.contains("foreach_snapshot_"));
+    CHECK(count_occurrences(code, "111") == 1);
+    CHECK(count_occurrences(code, "222") == 1);
+    CHECK(count_occurrences(code, "333") == 1);
+    CHECK(code.contains("const int i = static_cast<int>(cactus_gen_range_index_"));
+}
+
+TEST_CASE("Codegen EnTT: a func range loop counts in int64 in both directions",
+          "[codegen-entt][range][function-loops]") {
+    const auto code = emit_test_func(
+        "func count(a: int, b: int, s: int) int:\n"
+        "    var n = 0\n"
+        "    for i in range(a, b, s):\n"
+        "        n += 1\n"
+        "    return n\n",
+        "count");
+    const auto step_name  = extract_temp_name(code, "cactus_gen_range_step_");
+    const auto index_name = extract_temp_name(code, "cactus_gen_range_index_");
+    REQUIRE_FALSE(step_name.empty());
+    REQUIRE_FALSE(index_name.empty());
+    CHECK(code.contains("if (" + step_name + " > 0) {"));
+    CHECK(code.contains("} else if (" + step_name + " < 0) {"));
+    CHECK(!code.contains("} else {\n"));
+    CHECK(count_occurrences(code, "for (std::int64_t " + index_name + " = ") == 2);
+    CHECK(count_occurrences(code, index_name + " += " + step_name + ")") == 2);
+    CHECK(!code.contains("i += "));
+}
+
+TEST_CASE("Codegen EnTT: a func range loop with an omitted step steps by one",
+          "[codegen-entt][range][function-loops]") {
+    const auto code = emit_test_func(
+        "func count(n: int) int:\n"
+        "    var c = 0\n"
+        "    for i in range(0, n):\n"
+        "        c += 1\n"
+        "    return c\n",
+        "count");
+    const auto step_name = extract_temp_name(code, "cactus_gen_range_step_");
+    REQUIRE_FALSE(step_name.empty());
+    CHECK(code.contains("const int " + step_name + " = 1;"));
+}
+
+TEST_CASE("Codegen EnTT: a func list loop iterates a once-evaluated snapshot and returns from the function",
+          "[codegen-entt][function-loops]") {
+    const auto code = emit_test_func(
+        "func first_over(values: list[int], limit: int) int:\n"
+        "    for v in values:\n"
+        "        if v > limit:\n"
+        "            return v\n"
+        "    return -1\n",
+        "first_over");
+    const auto snapshot = extract_temp_name(code, "foreach_snapshot_");
+    REQUIRE_FALSE(snapshot.empty());
+    CHECK(count_occurrences(code, "values") == 2);
+    CHECK(code.contains("for ([[maybe_unused]] const auto& v : " + snapshot + ")"));
+    CHECK(code.contains("return v;"));
 }
 
 TEST_CASE("Codegen EnTT: vec2/vec3 int arguments are wrapped in static_cast<float> (generic call fallback)",

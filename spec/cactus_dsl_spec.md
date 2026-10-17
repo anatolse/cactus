@@ -175,7 +175,7 @@ const:
 - **Types.** `NAME: type = expression` declares the constant's type, and the value must match it. Without a type, the constant has its value's type. A value whose type cannot be inferred, such as an empty list, needs a type.
 - **Module scope.** A constant belongs to the module that declares it. That module reads it by its bare name; other modules read it through their import alias (`math.PI`, `units.ROBOT`). Every constant is visible to importers, two modules may use the same name, and a bare name never reaches another module's constant.
 - **Tables.** A constant may hold a struct or a `list[T]`. Handlers read struct fields with `.field` and iterate a list constant with bounded `for`. Constants are immutable; reading one into a local copies it.
-- **Render passes.** A render-pass stage handler (§3.11.1) may read a constant only when its type is `int`, `float`, `bool`, `vec2`, `vec3`, or `color` and its value, including every constant it reads, uses only GLSL-translatable operations. Any other constant is a compile error naming it.
+- **Render passes.** A render-pass stage handler (§3.11.1) may read a constant only when its type is `int`, `float`, `bool`, `vec2`, `vec3`, or `color` and its value, including every constant and `func` it reads, uses only GLSL-translatable operations. Any other constant is a compile error naming it.
 
 ### 3.4 Structs
 
@@ -1062,7 +1062,7 @@ A render pass is a phase that draws instanced quads with its own vertex and frag
 
 The fragment stage's `uv` and `tint` are the vertex stage's `uv_out` and `tint_out`, interpolated across the quad.
 
-**Statement subset.** A stage handler body is translated to GLSL, so it accepts only: `let`/`var` locals; assignment and compound assignment to locals and to the stage's writable built-in fields; `if`/`else`; and calls to `func` or to an `extern func` that has a GLSL translation. `spawn`, `destroy`, `add`, `remove`, `set`, `project`, `emit`, `load`, `return`, trait `match`, world queries, and `for` are rejected. A vertex handler may read the traits its `each:` selects but not write them. Operators and operand types are the same as in any other handler (§3.15).
+**Statement subset.** A stage handler body is translated to GLSL, so it accepts only: `let`/`var` locals; assignment and compound assignment to locals and to the stage's writable built-in fields; `if`/`else`; and calls to a `func` whose body is a single `return` of GLSL-translatable operations (§3.12) or to an `extern func` that has a GLSL translation. `spawn`, `destroy`, `add`, `remove`, `set`, `project`, `emit`, `load`, `return`, trait `match`, world queries, and `for` are rejected. A vertex handler may read the traits its `each:` selects but not write them. Operators and operand types are the same as in any other handler (§3.15).
 
 **Independent instances.** Each matching entity is drawn with its own trait values. One instance's values never leak into another instance's quad in the same draw.
 
@@ -1099,6 +1099,12 @@ rule SquareFragment:
 ### 3.12 Functions
 
 Regular `func` declarations are pure. `extern func` declarations are runtime/backend-provided.
+
+A `func` body may use `let`/`var` locals, assignment to its locals and parameters, `if`, value `match`, bounded `for` over a list or a `range` (§3.16), and `return`. Parameters are copies, so assigning one never changes the caller's value. A body cannot read or change world state: `self`, trait access, world queries, `exists()`, `emit`, `spawn`, `destroy`, `add`, `remove`, `set`, `project` and `load` are errors. It may call only functions proven pure: other `func`s and `extern func`s with an empty effect summary, such as `std.math`; a call to any other `extern func` is an error. A `func` cannot call itself, directly or through other functions, even inside a loop.
+
+A `func` with a return type must return a value on every path. An `if` returns on every path only when it has an `else` and every branch returns; a value `match` returns when every arm returns. A loop never counts, because it may run zero times, so a `func` that returns inside a loop also needs a `return` after it. Bounded loops always finish, but a large bound can still be expensive.
+
+A render-pass stage handler (§3.11.1) can call a `func` only when its body is a single `return` of GLSL-translatable operations; a `func` with locals, statements or loops is rejected at the call, even when it is reached through another `func` or a constant.
 
 ```ebnf
 func_decl        = [ "pub" ] "func" IDENTIFIER
@@ -1372,7 +1378,7 @@ Render-pass stage handler bodies accept only a fixed subset of these statements,
 
 Field values and the target expression of `add`, `spawn` override blocks (including `children:` overrides), and `set` are evaluated exactly once, in source order, when the statement runs — the same as `emit` payloads — even though the command applies later at the activation commit. Later writes in the same activation, and calls to extern functions that read world state, do not change the values the command applies.
 
-Bounded foreach is allowed only inside rule event handlers. The iterable expression is evaluated once before the loop and must have type `list[T]`; the loop variable is a read-only binding scoped to the loop body. Cactus still does not support `while`, numeric/indexed `for`, `break`, or `continue`.
+Bounded foreach is allowed inside rule event handlers and `func` bodies (§3.12). The iterable expression is evaluated once before the loop and must have type `list[T]` or be a direct `range(begin, end, step = 1)` call; the loop variable is a read-only binding scoped to the loop body. A list loop iterates a snapshot of the list. A range loop evaluates its `int` bounds and step once, counts from `begin` toward `end` (excluding `end`), and runs zero times when the step is `0` or points away from `end`; it never steps past the `int` limits, so `range(2147483640, 2147483647, 4)` runs twice. `range` is valid only as a loop iterable and builds no list. `return` inside a loop leaves the whole handler or function, not one iteration. Cactus still does not support `while`, numeric/indexed `for`, `break`, or `continue`.
 
 `project` mirrors `add` field-initialization syntax but writes to a frame-local projected trait overlay instead of durable ECS component storage. If no `to` target is provided, the target is `self`. Projected traits are coalesced by `(entity, trait)`, visible to later `each:` / `without:` matching during the same rendered frame, and cleared at the frame boundary after render processing. Use:
 

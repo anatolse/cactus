@@ -3344,7 +3344,7 @@ static std::string emit_project_trait_stmt(const ProjectTraitStmt& s,
 // {...}` shape (no unconditional trailing branch) makes a runtime step of 0
 // total: it falls through both arms and the loop body runs zero times,
 // regardless of begin/end, rather than hanging or needing a separate
-// zero-step check.
+// zero-step check. The index counts in int64, so the step past the last value cannot overflow `int`.
 static std::string emit_range_foreach_stmt(const ForeachStmt& s,
                                            const CallExpr& range_call,
                                            int indent,
@@ -3378,13 +3378,16 @@ static std::string emit_range_foreach_stmt(const ForeachStmt& s,
     result += ind1 + "const int " + end_name + " = " + end_text + ";\n";
     result += ind1 + "const int " + step_name + " = " + step_text + ";\n";
 
+    const auto index_name = gen_temp_name("range_index", s.location);
+    const std::string ind3(static_cast<size_t>(indent + 3) * 4, ' ');
     const auto emit_direction = [&](const std::string& compare_op) {
         auto range_locals = clone_or_empty(lexical_locals);
         auto range_kinds  = clone_or_empty(local_kinds);
         range_locals.insert(s.var_name);
         range_kinds[s.var_name] = NumericKind::Int;
-        std::string branch      = ind2 + "for (int " + s.var_name + " = " + begin_name + "; " + s.var_name + " " +
-                                  compare_op + " " + end_name + "; " + s.var_name + " += " + step_name + ") {\n";
+        std::string branch = ind2 + "for (std::int64_t " + index_name + " = " + begin_name + "; " + index_name + " " +
+                             compare_op + " " + end_name + "; " + index_name + " += " + step_name + ") {\n";
+        branch += ind3 + "[[maybe_unused]] const int " + s.var_name + " = static_cast<int>(" + index_name + ");\n";
         branch += rewrite_stmt_block(s.body,
                                      indent + 3,
                                      trait_names,

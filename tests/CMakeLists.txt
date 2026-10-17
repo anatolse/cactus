@@ -210,6 +210,10 @@ add_executable(test_semantic_let_fields test_semantic_let_fields.cpp)
 target_link_libraries(test_semantic_let_fields PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticLetFieldsTests COMMAND test_semantic_let_fields)
 
+add_executable(test_semantic_function_loops test_semantic_function_loops.cpp)
+target_link_libraries(test_semantic_function_loops PRIVATE cactus_frontend Catch2::Catch2WithMain)
+add_test(NAME SemanticFunctionLoopsTests COMMAND test_semantic_function_loops)
+
 # Unified name resolution tests (unified-name-resolution change)
 add_executable(test_name_resolution test_name_resolution.cpp)
 target_link_libraries(test_name_resolution PRIVATE cactus_frontend Catch2::Catch2WithMain)
@@ -489,6 +493,12 @@ cactus_add_headless_behavior_test(test_lexical_local_mutation_headless_behavior
     CACTUS_SOURCE tests/fixtures/lexical_local_mutation_runtime.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_lexical_local_mutation_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_function_loops_headless_behavior
+    CACTUS_SOURCE tests/fixtures/function_loops_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_function_loops_headless_behavior.cpp
 )
 
 cactus_add_headless_behavior_test(test_standard_ui_layout_headless_behavior

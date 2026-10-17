@@ -638,6 +638,90 @@ TEST_CASE("Render-pass constants: an imported non-portable constant is rejected"
     CHECK(rejected.has("cannot read constant 'tables.PAIR'"));
 }
 
+TEST_CASE("Render-pass funcs: a func with a loop is rejected at the stage call",
+          "[semantic][render-passes][function-loops]") {
+    auto analysis = analyze(
+        "func spread(n: int) float:\n"
+        "    var total = 0.0\n"
+        "    for i in range(0, n):\n"
+        "        total += 1.0\n"
+        "    return total\n" +
+            render_pass_program("", "spread(3)"),
+        render_pass_imports());
+    INFO(describe(analysis));
+    const auto found = std::ranges::find_if(analysis.diagnostics, [](const Diagnostic& d) {
+        return d.message.contains("func 'spread' cannot run in a render-pass vertex-stage handler");
+    });
+    REQUIRE(found != analysis.diagnostics.end());
+    CHECK(found->location.line > 6);
+}
+
+TEST_CASE("Render-pass funcs: a loop reached through another func is rejected",
+          "[semantic][render-passes][function-loops]") {
+    auto analysis = analyze(
+        "func spread(n: int) float:\n"
+        "    var total = 0.0\n"
+        "    for i in range(0, n):\n"
+        "        total += 1.0\n"
+        "    return total\n"
+        "func outer(n: int) float:\n"
+        "    return spread(n) * 2.0\n" +
+            render_pass_program("", "outer(3)"),
+        render_pass_imports());
+    INFO(describe(analysis));
+    CHECK(analysis.has("func 'outer' cannot run in a render-pass vertex-stage handler"));
+}
+
+TEST_CASE("Render-pass funcs: a single-return func reading a portable constant is accepted",
+          "[semantic][render-passes][function-loops]") {
+    auto analysis = analyze(
+        "func scaled(v: float) float:\n"
+        "    return v * SCALE\n" +
+            render_pass_program("const:\n"
+                                "    SCALE = 2.0\n"
+                                "    SIZE = scaled(3.0)\n",
+                                "SIZE"),
+        render_pass_imports());
+    INFO(describe(analysis));
+    CHECK(analysis.clean());
+}
+
+TEST_CASE("Render-pass funcs: a constant computed by a loop is not GLSL-portable",
+          "[semantic][const][render-passes][function-loops]") {
+    auto analysis = analyze(
+        "func spread(n: int) float:\n"
+        "    var total = 0.0\n"
+        "    for i in range(0, n):\n"
+        "        total += 1.0\n"
+        "    return total\n" +
+            render_pass_program("const:\n"
+                                "    SIZE = spread(3)\n",
+                                "SIZE"),
+        render_pass_imports());
+    INFO(describe(analysis));
+    CHECK(analysis.has("render-pass vertex-stage handler cannot read constant 'SIZE'"));
+}
+
+TEST_CASE("Render-pass funcs: an imported func keeps whether a stage handler can inline it",
+          "[semantic][render-passes][function-loops]") {
+    auto imports = render_pass_imports();
+    imports.add("shapes",
+                compile_dependency("shapes",
+                                   "pub func doubled(v: float) float:\n"
+                                   "    return v * 2.0\n"
+                                   "pub func spread(n: int) float:\n"
+                                   "    var total = 0.0\n"
+                                   "    for i in range(0, n):\n"
+                                   "        total += 1.0\n"
+                                   "    return total\n"));
+    auto accepted = analyze("use shapes\n" + render_pass_program("", "shapes.doubled(3.0)"), imports);
+    INFO(describe(accepted));
+    CHECK(accepted.clean());
+    auto rejected = analyze("use shapes\n" + render_pass_program("", "shapes.spread(3)"), imports);
+    INFO(describe(rejected));
+    CHECK(rejected.has("func 'shapes.spread' cannot run in a render-pass vertex-stage handler"));
+}
+
 // ── Trait field defaults ────────────────────────────────────────────────────
 
 TEST_CASE("Trait defaults: a default may read a constant", "[semantic][const]") {

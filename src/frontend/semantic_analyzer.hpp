@@ -69,6 +69,7 @@ struct ResolvedFunc : CanonicalIdentity {
     std::optional<std::unordered_set<std::string>> effect_summary;
     std::vector<ResolvedParam> params;
     std::optional<TypeInfo> return_type;
+    bool glsl_inlinable = false;  // a render-pass stage handler may inline its single `return`
 };
 
 struct ResolvedTrait : CanonicalIdentity {
@@ -1018,6 +1019,7 @@ private:
     void check_const_strings_expr(const ExprNode& expr, bool in_const);
     void check_func_purity(ProgramNode& program);
     void check_func_purity_stmt(const StmtNode& stmt, const std::string& func_name);
+    void check_func_purity_stmts(const std::vector<std::unique_ptr<StmtNode>>& stmts, const std::string& func_name);
     void check_func_purity_expr(const ExprNode& expr, const std::string& func_name);
     void check_no_recursion(ProgramNode& program);
     void check_persist(ProgramNode& program);
@@ -1647,6 +1649,7 @@ private:
     std::vector<std::string> const_dependencies(const ConstAssignment& assignment) const;
     std::vector<ConstAssignment*> order_constants(ProgramNode& program);
     void order_and_type_constants(ProgramNode& program);
+    void refine_glsl_portability(const ProgramNode& program);
     TypeInfo constant_type(const ConstAssignment& assignment);
     bool validate_const_expression(const ExprNode& expr, const std::string& context, bool whole_value);
     bool reject_const(const SourceLocation& location, const std::string& context, const std::string& reason);
@@ -2008,7 +2011,7 @@ private:
                                   const std::function<void(ExprNode&)>& resolve_expr,
                                   const ResolveTrait& resolve_trait_entry,
                                   const ResolveChildren& resolve_child_overrides);
-    void validate_render_stage_call(const CallExpr& node, const SourceLocation& location) const;
+    void validate_render_stage_call(const CallExpr& node, const SourceLocation& location, const char* stage_desc) const;
     void validate_render_stage_assignment(const VarAssign& node,
                                           const std::string& alias,
                                           const std::unordered_set<std::string>& filter_alias_names,

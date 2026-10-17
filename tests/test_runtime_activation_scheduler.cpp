@@ -611,6 +611,96 @@ TEST_CASE("Lifecycle: a delivery splits into immediate and delayed consumers by 
     }
 }
 
+namespace {
+
+void queue_add_dying(LifecycleHarness& h, entt::entity entity, std::uint32_t component) {
+    h.activation.current_component = component;
+    h.queue(StructuralCommand::Kind::Add, [entity](entt::registry& reg) { reg.emplace_or_replace<Dying>(entity); });
+}
+
+void queue_remove_dying(LifecycleHarness& h, entt::entity entity, std::uint32_t component) {
+    h.activation.current_component = component;
+    h.queue(StructuralCommand::Kind::Remove, [entity](entt::registry& reg) { reg.remove<Dying>(entity); });
+}
+
+}  // namespace
+
+TEST_CASE("Lifecycle: a change with several causes is immediate when any cause is off the consumers' cycle",
+          "[runtime][activation][trait-lifecycle]") {
+    LifecycleHarness h;
+    const auto entity = h.registry.create();
+
+    SECTION("the cycle's command first") {
+        queue_add_dying(h, entity, 0U);
+        queue_add_dying(h, entity, 4U);
+    }
+    SECTION("the other command first") {
+        queue_add_dying(h, entity, 4U);
+        queue_add_dying(h, entity, 0U);
+    }
+    SECTION("a cause on no cycle") {
+        queue_add_dying(h, entity, 0U);
+        queue_add_dying(h, entity, kNoComponent);
+    }
+    h.commit([](const Delivery&) {}, CycleZeroRoutes{});
+
+    REQUIRE(h.deliveries.size() == 1);
+    CHECK(h.deliveries[0].kind == "added Dying");
+    CHECK(h.deliveries[0].route == DeliveryRoute::All);
+    CHECK(h.clock.empty());
+}
+
+TEST_CASE("Lifecycle: a change whose causes all share the consumers' cycle is delayed",
+          "[runtime][activation][trait-lifecycle]") {
+    LifecycleHarness h;
+    const auto entity = h.registry.create();
+    queue_add_dying(h, entity, 0U);
+    queue_add_dying(h, entity, 0U);
+    h.commit([](const Delivery&) {}, CycleZeroRoutes{});
+
+    CHECK(h.deliveries.empty());
+    REQUIRE(h.clock.size() == 1);
+    CHECK(h.clock.front().route == DeliveryRoute::DelayedOnly);
+    CHECK(h.clock.front().component == 0U);
+}
+
+TEST_CASE("Lifecycle: only commands in the net change's direction decide its route",
+          "[runtime][activation][trait-lifecycle]") {
+    LifecycleHarness h;
+    const auto entity = h.registry.create();
+
+    SECTION("add, remove, add: the remove's cycle is ignored") {
+        queue_add_dying(h, entity, 0U);
+        queue_remove_dying(h, entity, 4U);
+        queue_add_dying(h, entity, 0U);
+        h.commit([](const Delivery&) {}, CycleZeroRoutes{});
+
+        CHECK(h.deliveries.empty());
+        REQUIRE(h.clock.size() == 1);
+        CHECK(std::holds_alternative<TraitAdded<Dying>>(h.clock.front().occurrence));
+    }
+    SECTION("remove, add, remove: the add's cycle is ignored") {
+        h.registry.emplace<Dying>(entity);
+        queue_remove_dying(h, entity, 0U);
+        queue_add_dying(h, entity, 4U);
+        queue_remove_dying(h, entity, 0U);
+        h.commit([](const Delivery&) {}, CycleZeroRoutes{});
+
+        CHECK(h.deliveries.empty());
+        REQUIRE(h.clock.size() == 1);
+        CHECK(std::holds_alternative<TraitRemoved<Dying>>(h.clock.front().occurrence));
+    }
+    SECTION("a set after the add is not a cause") {
+        queue_add_dying(h, entity, 0U);
+        h.activation.current_component = 4U;
+        h.queue(StructuralCommand::Kind::Set, [entity](entt::registry& reg) { reg.patch<Dying>(entity); });
+        h.commit([](const Delivery&) {}, CycleZeroRoutes{});
+
+        CHECK(h.deliveries.empty());
+        CHECK(h.clock.size() == 1);
+    }
+}
+
 TEST_CASE("Lifecycle: a delayed added delivery is skipped when the trait is gone",
           "[runtime][activation][trait-lifecycle]") {
     LifecycleHarness h;

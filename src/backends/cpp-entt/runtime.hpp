@@ -1685,6 +1685,24 @@ struct LifecycleRound {
     std::uint64_t next_sequence{};
     std::uint64_t command{};  // the command being applied, in queue order
     std::uint32_t component = kNoComponent;  // that command's producer cycle
+    bool adds{};  // a replace by this command re-adds the trait
+};
+
+// The delivery cycle shared by every cause of a change, or kNoComponent once two differ.
+class CommonCycle {
+public:
+    void fold(std::uint32_t cause) {
+        component_ = !seen_ || component_ == cause ? cause : kNoComponent;
+        seen_      = true;
+    }
+
+    [[nodiscard]] std::uint32_t component() const {
+        return component_;
+    }
+
+private:
+    bool seen_                = false;
+    std::uint32_t component_ = kNoComponent;
 };
 
 // Which consumers of one lifecycle trigger a producer cycle reaches now and which by delay.
@@ -1716,13 +1734,15 @@ struct LifecycleDelivery {
 // Watches one trait's storage signals and keeps, per entity, the first change
 // seen this round: a construct means T was absent before the round, a destroy
 // means it was present (EnTT fires on_destroy before removal, so the snapshot
-// is still readable there).
+// is still readable there). Every adding and every removing command of the
+// round folds its cycle in, so a net change's route does not depend on order.
 template <typename T>
 class LifecycleTracker {
 public:
     void connect(entt::registry& registry, LifecycleRound& round) {
         round_ = &round;
         registry.on_construct<T>().template connect<&LifecycleTracker::on_construct>(*this);
+        registry.on_update<T>().template connect<&LifecycleTracker::on_update>(*this);
         registry.on_destroy<T>().template connect<&LifecycleTracker::on_destroy>(*this);
     }
 
@@ -1736,7 +1756,7 @@ public:
             if (!change.present_before && present_after) {
                 out.push_back({.command     = change.command,
                                .sequence    = change.sequence,
-                               .component   = change.component,
+                               .component   = change.added_by.component(),
                                .trait_index = trait_index,
                                .added       = true,
                                .occurrence  = TraitAdded<T>{},
@@ -1744,7 +1764,7 @@ public:
             } else if (change.present_before && !present_after && valid) {
                 out.push_back({.command     = change.command,
                                .sequence    = change.sequence,
-                               .component   = change.component,
+                               .component   = change.removed_by.component(),
                                .trait_index = trait_index,
                                .occurrence  = TraitRemoved<T>{.old = std::move(change.snapshot)},
                                .target      = entity});
@@ -1757,33 +1777,48 @@ private:
     struct Change {
         std::uint64_t command{};
         std::uint64_t sequence{};
-        std::uint32_t component = kNoComponent;
+        CommonCycle added_by;
+        CommonCycle removed_by;
         bool present_before{};
         T snapshot{};
     };
 
-    void on_construct([[maybe_unused]] entt::registry& registry, entt::entity entity) {
-        record(entity, false, T{});
+    void on_construct(entt::registry& registry, entt::entity entity) {
+        if (round_->recording) {
+            touch(registry, entity, false).added_by.fold(round_->component);
+        }
+    }
+
+    // A replace changes nothing on its own; it only adds a cause to a change already seen.
+    void on_update([[maybe_unused]] entt::registry& registry, entt::entity entity) {
+        if (!round_->recording || !round_->adds) {
+            return;
+        }
+        if (const auto it = changes_.find(entity); it != changes_.end()) {
+            it->second.added_by.fold(round_->component);
+        }
     }
 
     void on_destroy(entt::registry& registry, entt::entity entity) {
-        if constexpr (std::is_empty_v<T>) {
-            record(entity, true, T{});
-        } else {
-            record(entity, true, registry.get<T>(entity));
+        if (round_->recording) {
+            touch(registry, entity, true).removed_by.fold(round_->component);
         }
     }
 
-    void record(entt::entity entity, bool present_before, T snapshot) {
-        if (!round_->recording || changes_.contains(entity)) {
-            return;
+    Change& touch(const entt::registry& registry, entt::entity entity, bool present_before) {
+        const auto [it, inserted] = changes_.try_emplace(entity);
+        if (!inserted) {
+            return it->second;
         }
-        changes_.emplace(entity,
-                         Change{.command        = round_->command,
-                                .sequence       = round_->next_sequence++,
-                                .component      = round_->component,
-                                .present_before = present_before,
-                                .snapshot       = std::move(snapshot)});
+        it->second.command        = round_->command;
+        it->second.sequence       = round_->next_sequence++;
+        it->second.present_before = present_before;
+        if constexpr (!std::is_empty_v<T>) {
+            if (present_before) {
+                it->second.snapshot = registry.get<T>(entity);
+            }
+        }
+        return it->second;
     }
 
     LifecycleRound* round_ = nullptr;
@@ -1811,9 +1846,10 @@ public:
         round_.recording = recording;
     }
 
-    void begin_command(std::uint32_t component) {
+    void begin_command(StructuralCommand::Kind kind, std::uint32_t component) {
         ++round_.command;
         round_.component = component;
+        round_.adds      = kind == StructuralCommand::Kind::Add || kind == StructuralCommand::Kind::Spawn;
     }
 
     // Emits this round's net changes, splitting each by `routes` into the
@@ -1929,7 +1965,7 @@ void commit_activation(ActivationRuntime<Occurrence>& activation,
         activation.commands.clear();
         lifecycle.set_recording(true);
         for (auto& command : commands) {
-            lifecycle.begin_command(command.component);
+            lifecycle.begin_command(command.kind, command.component);
             command.apply(registry);
         }
         lifecycle.set_recording(false);

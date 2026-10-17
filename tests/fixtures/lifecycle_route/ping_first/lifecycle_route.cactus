@@ -1,0 +1,44 @@
+module lifecycle_route
+
+use std.core
+
+# Loop and React form a cycle, Other reaches React directly. Both add Mark to
+# Target in one round; the route must not depend on which rule is declared first.
+
+trait Mark
+trait Body:
+    var runs: int = 0
+
+entity Target:
+    Body
+    KeepOnLoad
+
+event Ping
+event Pong
+
+rule SendPing:
+    on tick:
+        emit Ping to Target
+
+rule SendPong:
+    on tick:
+        emit Pong to Target
+
+rule Loop:
+    each:
+        Body
+    on Ping:
+        add Mark
+
+rule Other:
+    each:
+        Body
+    on Pong:
+        add Mark
+
+rule React:
+    each:
+        Body as b
+    on added Mark:
+        b.runs += 1
+        emit Ping to Target

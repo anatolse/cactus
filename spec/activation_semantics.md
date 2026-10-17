@@ -395,13 +395,15 @@ the round (`dsl-trait-lifecycle-triggers`: "Net-change firing per commit round",
 Order the changes by the first command that touched each `(e, T)`, then by the first
 touch of `e` inside that command, then removals before additions, then canonical
 trait order ("Deterministic delivery order"). For each change form
-`o = ⟨added T or removed T, e, src⟩` and split it by R6.
-
-*Open point.* Several commands from different handlers can cause one net change. The
-normative text does not say which handler's delivery edges the delivery travels along.
-The backend uses the producer of the first command that touched `(e, T)` (Code:
-`LifecycleTrackers::deliver`). With that choice the model's `src` depends on command
-order; §10 F1 shows that this order can be one the definition does not determine.
+`o = ⟨added T or removed T, e, S⟩`, where `S` is the set of its causes: the handlers
+that issued a command in the round adding `T` to `e` (for an addition) or removing it
+(for a removal). Split it by R6, where `S → c` is immediate when some `p ∈ S` has
+`p → c` immediate, and delayed when every `p ∈ S` has `p → c` delayed
+(`dsl-trait-lifecycle-triggers`: "Lifecycle cycles are delayed"). The split depends on
+`S` only, not on the order of `K`. An edge `p → c` is delayed exactly when `p` and `c`
+share a delivery cycle, so the backend folds the cycles of `S` into one common cycle, or
+none once two differ, and gives that to the route table (Code: `CommonCycle`,
+`LifecycleTracker`).
 
 Finally set `K := ε` and `r := r + 1`. The deliveries just queued are generation 0 of
 round `r`; R5 continues the cascade. Commands that round's handlers issue form the next
@@ -581,10 +583,10 @@ entries those runs produce for the next position are permuted in the same way. T
 induction continues at the next position. Delayed entries move to `Δ` in a permuted
 order and are covered because C3 also demands that the delayed runs commute.
 
-C3 assumes that the runs reached from `h` and `k` are fixed by `h` and `k` alone. The
-net-change rule of R8 breaks that: when commands of both cause one net change, one
-delivery happens, and its `src` and so its route depend on which command came first.
-§10 F1 is a program where this changes the result.
+C3 assumes that the runs reached from `h` and `k` are fixed by `h` and `k` alone. When
+commands of both cause one net change, R8 makes one delivery. Its route is fixed by the
+set of causes, not by which command came first, and it is a run that `h` or `k` reaches
+on its own, so the swap keeps it (§10 F1, resolved).
 
 **Global step (Model).** If every two handlers of `D` that `≺_D` does not order
 commute, then all linearizations of `(D, ≺_D)` from one configuration end in
@@ -610,7 +612,7 @@ equivalence.
 co-eligible handlers that do not commute (`handler-execution-graph`: "An activation
 denotes a trace"). Its rules implement C1 to C4 and the spawn-order check. Showing that
 they imply local commutation for every accepted program is not done here. §10 lists
-two accepted classes where the obligation fails (F1, F2).
+one accepted class where the obligation fails (F2); F1 was another and is resolved.
 
 ### 7.4 Non-vacuity boundary
 
@@ -851,8 +853,10 @@ Each case has two handlers `A` and `B` that write no common field.
 3. **Consumers at different generations.** If the `Hit` consumer only emits `E3` and
    the `E3` consumer assigns `hp`, that run is at generation 2, after the `Heal`
    consumer in every order. Accepted, correctly.
-4. **One net change from both.** §10 F1: accepted, but the result depends on the order
-   of `A` and `B`.
+4. **One net change from both.** §10 F1: accepted, and its route is fixed by the set of
+   causes, so the result does not depend on the order of `A` and `B`. Tested:
+   `test_lifecycle_route_ping_first_headless_behavior`,
+   `test_lifecycle_route_pong_first_headless_behavior`.
 
 ### 8.7 A stale recipient, and an accumulation read in between
 
@@ -934,7 +938,7 @@ The backend gives the same values (Tested: `test_accumulation_per_cell_headless_
 | R5 revalidation | dsl-trait-lifecycle-triggers: "Lifecycle cycles are delayed" | `lifecycle_change_holds` (`runtime.hpp`) | Tested: `test_runtime_activation_scheduler` "Lifecycle: a delayed added delivery is skipped when the trait is gone" |
 | R6 split, delayed edges | handler-execution-graph: "Every event cycle passes through a delay" | `classify_delivery_cycles`, `mark_delayed_edges` (`delivery_cycles.cpp`); `route_admits`, `DeliveryRoute` (`runtime.hpp`); `DeliveryPlan` (`cpp_entt_codegen.cpp`) | Tested: `test_delivery_cycles`, `test_runtime_activation_scheduler` "route_admits splits consumers by the producer's cycle", codegen "[delivery-cycles]" |
 | Generations | handler-execution-graph: "Occurrences are delivered in generations" | FIFO `event_queue` in `drain_event_cascade` | Tested: `test_generations_headless_behavior` |
-| R7, R8 commit rounds | dsl-trait-lifecycle-triggers: "Net-change firing per commit round", "Deterministic delivery order", "Destroyed entities fire no lifecycle trigger"; DSL §5.3 | `commit_activation`, `LifecycleTrackers::deliver`, `LifecycleTracker::collect` (`runtime.hpp`) | Tested: `test_runtime_activation_scheduler` "Lifecycle: …", `test_trait_lifecycle_headless_behavior`; producer attribution: Code, F1 |
+| R7, R8 commit rounds | dsl-trait-lifecycle-triggers: "Net-change firing per commit round", "Deterministic delivery order", "Destroyed entities fire no lifecycle trigger"; DSL §5.3 | `commit_activation`, `LifecycleTrackers::deliver`, `LifecycleTracker::collect` (`runtime.hpp`) | Tested: `test_runtime_activation_scheduler` "Lifecycle: …", `test_trait_lifecycle_headless_behavior`; causes of a net change: `test_runtime_activation_scheduler` "Lifecycle: a change with several causes …", "… whose causes all share …", "only commands in the net change's direction …", `test_lifecycle_route_*_first_headless_behavior` (F1) |
 | R8 command table | DSL §4.4, §5.3; dsl-deferred-set: "`set` ordering against other commands" | `StructuralCommand`, generated command lambdas | Tested: `test_deferred_set_headless_behavior`, `test_runtime_activation_scheduler` "commit_activation with no lifecycle trackers applies queued commands exactly once" |
 | R10 phase clock | philosophy: "Delayed occurrences belong to the producing clock" | `deliver_delayed_events`, `emit_phase_batch` | Tested: `test_delivery_clocks_headless_behavior`, `test_runtime_activation_scheduler` "delayed occurrences keep production order and recipient" |
 | R11 host clock | same | `emit_host_clock_entry_points` (`generated_drain_external_events`) | Tested: `test_delivery_clocks_headless_behavior` (load chain), `test_commit_notify_loop_headless_behavior`, codegen "a deferred internal event runs as its own activation with its target" |
@@ -950,7 +954,7 @@ The backend gives the same values (Tested: `test_accumulation_per_cell_headless_
 | Trace 8.3 | phase-activation-model: "Activation commit boundary" | — | Tested: codegen commit test. `exists` on a reserved handle before commit: Code (`reserve_entity`); Missing test |
 | Trace 8.4 | as R6, R10 | — | Tested: `test_delivery_clocks_headless_behavior` |
 | Trace 8.5 | as R8, R5 | — | Tested (see trace) |
-| Trace 8.6 | as §7.3 | — | Cases 1 to 3 Tested; case 4 Probe (F1) |
+| Trace 8.6 | as §7.3 | — | Tested (see trace) |
 | Trace 8.7 | as R5, R4 | — | Stale drop Tested. Stale drop after a commit round: Probe, Missing test. Accumulation scope: Tested (`test_accumulation_per_cell_headless_behavior`) |
 
 Every test named above was run on the current tree while writing this document and
@@ -965,7 +969,10 @@ passed: `test_delivery_cycles`, `test_runtime_activation_scheduler`,
 the named codegen cases, and `test_archetype_reachability` `[spawn-order]`.
 `flush-accumulation-per-cell` added `test_accumulation_per_cell_headless_behavior`,
 `test_accumulation_storage_move_headless_behavior` and the `test_runtime_stdlib`
-"accumulated deltas: …" cases.
+"accumulated deltas: …" cases. `route-merged-lifecycle-changes` added
+`test_lifecycle_route_ping_first_headless_behavior`,
+`test_lifecycle_route_pong_first_headless_behavior` and three
+`test_runtime_activation_scheduler` "Lifecycle: …" cases.
 
 ## 10. Findings
 
@@ -973,6 +980,7 @@ Each finding states the gap, a minimal witness, the evidence, the claim it limit
 options to resolve it, and their impact. A finding that needs a behavior change needs
 its own proposal. `list-activation-semantics-gaps` listed F1 and F2 as known gaps and
 resolved F4 and F5. `flush-accumulation-per-cell` resolved F3.
+`route-merged-lifecycle-changes` resolved F1.
 
 ### F1. One net lifecycle change from two producers takes the first producer's route
 
@@ -1051,8 +1059,13 @@ not change behavior"); §7.3 C3; "An activation denotes a trace".
    unorientable conflict. Syntax: none. Behavior: rejects programs like the witness;
    authors add one `after:`. Authoring: one ordering line where needed.
 
-**Follow-up.** A separate change. Listed in "Known correctness gaps are listed" until
-that change closes it.
+**Resolved.** `route-merged-lifecycle-changes` took option 1. A net change's route comes
+from every handler whose command in the round moved `T` in the change's direction (R8),
+so the witness gives `runs = 1` after the first frame in both orders. Tested:
+`test_lifecycle_route_ping_first_headless_behavior`,
+`test_lifecycle_route_pong_first_headless_behavior`, `test_runtime_activation_scheduler`
+"Lifecycle: a change with several causes is immediate when any cause is off the
+consumers' cycle".
 
 ### F2. Native world reads are not ordered against field writers
 
@@ -1193,4 +1206,5 @@ start of the activation or of a commit round".
 
 `language-philosophy` ("Known correctness gaps are listed") says that an accepted class
 that may break a correctness property, once found, is listed until a change closes it.
-F1 and F2 are such classes (determinacy), and that requirement lists both.
+F1 and F2 were such classes (determinacy). F1 is resolved, and that requirement lists
+F2.

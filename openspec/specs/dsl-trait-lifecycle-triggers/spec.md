@@ -140,6 +140,8 @@ canonical-identity order. The same program and inputs SHALL produce the same del
 ### Requirement: Lifecycle cycles are delayed
 Commands issued by lifecycle trigger handlers SHALL join the next commit round of the same activation. A lifecycle delivery along an immediate lifecycle edge SHALL run after the commit round that caused it, in the same activation. A lifecycle delivery along a delayed lifecycle edge (one inside an event or lifecycle cycle, as defined in `handler-execution-graph`) SHALL run in the next activation of the producing clock, while the command that caused it SHALL still commit in the activation that issued it. When a delayed delivery runs, the handler SHALL run only if the entity is still valid, still matches the rule's `each:`, `without:` and `when:`, and, for `on added T`, still carries `T`, or, for `on removed T`, still lacks `T`. The `on removed T as old` snapshot SHALL be the value taken when the trait was removed.
 
+A net change can have several causing handlers: for a net addition of `T` to an entity, every handler that issued a command in that round adding `T` to it (an `add T`, a `spawn` of a template carrying `T`, or a state transition into `T`); for a net removal, every handler that issued a command in that round removing `T` from it. For each handler consuming the trigger, the delivery SHALL travel along an immediate edge when at least one causing handler has an immediate lifecycle edge to that consumer, and along a delayed edge only when every causing handler's edge to it is delayed. The route SHALL NOT depend on the order of the round's commands.
+
 #### Scenario: Chained state changes commit in later rounds
 - **WHEN** an `on added Dying` handler issues `add Fading`, and a rule declares `on added Fading`, and neither handler can reach the other again
 - **THEN** `Fading` is added in the next round of the same activation and its trigger runs after that round
@@ -159,6 +161,18 @@ Commands issued by lifecycle trigger handlers SHALL join the next commit round o
 #### Scenario: Delayed removed delivery keeps its snapshot
 - **WHEN** a delayed `on removed Burning as old` delivery is pending for an entity that had `Burning { intensity = 3.0 }`
 - **THEN** `old.intensity` reads `3.0` when the handler runs in the later activation
+
+#### Scenario: One immediate cause makes the delivery immediate
+- **WHEN** in one round handler `Loop`, on a delivery cycle with the `on added Mark` handler `React`, and handler `Other`, off that cycle, both `add Mark` to one entity that lacked it
+- **THEN** `React` runs for that entity after the round, in the same activation, whichever of the two commands came first
+
+#### Scenario: Declaration order does not change the route
+- **WHEN** two unordered `tick` rules emit the events that lead `Loop` and `Other` to `add Mark` on one entity, and the program is compiled once with the rules in one order and once in the other
+- **THEN** after the first frame the `on added Mark` handler has run once in both programs
+
+#### Scenario: Only delayed causes delay the delivery
+- **WHEN** the only handlers that add `Mark` to an entity in a round are on a delivery cycle with the `on added Mark` handler
+- **THEN** that handler runs for the entity in the next activation of the clock, as before
 
 ### Requirement: Lifecycle trigger restrictions
 The compiler SHALL reject `on added` / `on removed` when `T` is a projected trait, and in a

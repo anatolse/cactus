@@ -1,0 +1,27 @@
+module accumulation_commit_round
+
+use std.core
+
+# A commit round ends an accumulation interval: the `tick` delta is rounded
+# before the `on added` delta of the first commit round is applied.
+
+trait Pool:
+    var level: float = 100000000.0
+
+trait Mark
+
+entity Tank:
+    Pool
+
+rule Fill:
+    each:
+        Pool as p
+    on tick:
+        p.level += 1.0
+        add Mark to self
+
+rule Drain:
+    each:
+        Pool as p
+    on added Mark:
+        p.level -= 100000000.0

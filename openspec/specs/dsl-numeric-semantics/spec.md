@@ -107,7 +107,7 @@ Integer `/` and `%` in a render-pass stage handler SHALL follow the floor-divisi
 - **THEN** the result is `-4`
 
 ### Requirement: Float accumulation into one field is exact
-Within one activation, take the Accum writes (`+=`, `-=`) to one `float` field of one entity that run between two consecutive non-Accum accesses of that field, or between such an access and the activation's start or commit. They may come from several handlers, several rows of one handler, several event occurrences, or several statements of one handler execution. Each such write contributes a delta: `e` for `+=` and `-e` for `-=`. The field's value after them SHALL be its value before them plus all their deltas, summed exactly and rounded once to binary32, with the edge rules of a float `sum` reduction (NaN, infinities, overflow and the sign of an exact zero). The result SHALL NOT depend on the order of the writes. `vec2` and `vec3` fields, and Accum writes to one of their components, SHALL follow this rule per component. `int` Accum writes wrap and need no merge, because wrapping addition does not depend on order.
+Within one activation, take the Accum writes (`+=`, `-=`) to one `float` field of one entity that run between two consecutive non-Accum accesses of that field, or between such an access and the start of the activation or of a commit round. They may come from several handlers, several rows of one handler, several event occurrences, or several statements of one handler execution. Each such write contributes a delta: `e` for `+=` and `-e` for `-=`. The field's value after them SHALL be its value before them plus all their deltas, summed exactly and rounded once to binary32, with the edge rules of a float `sum` reduction (NaN, infinities, overflow and the sign of an exact zero). The result SHALL NOT depend on the order of the writes. `vec2` and `vec3` fields, and Accum writes to one of their components, SHALL follow this rule per component. `int` Accum writes wrap and need no merge, because wrapping addition does not depend on order.
 
 #### Scenario: Two handlers add to one float in either order
 - **WHEN** a named entity's `Tally.total` is `1.0e8`, and in one activation handler A runs `Game[Tally].total += 1.0` and handler B runs `Game[Tally].total -= 1.0e8`, with no order between them
@@ -124,6 +124,10 @@ Within one activation, take the Accum writes (`+=`, `-=`) to one `float` field o
 #### Scenario: A lone accumulation is unchanged
 - **WHEN** only one handler Accum-writes `Body.x` once per row on its own entity
 - **THEN** the result equals `round(x + e)`, as for a plain `+=`
+
+#### Scenario: A commit round ends the interval
+- **WHEN** a `tick` handler runs `p.level += 1.0` on an entity whose `Pool.level` is `1.0e8`, and an `on added Mark` handler that runs in the activation's first commit round runs `p.level -= 1.0e8` on the same entity
+- **THEN** the two deltas are rounded separately: after the activation `Pool.level` is `0.0`
 
 ### Requirement: Float min and max are commutative
 `math.min` and `math.max` on `float` SHALL be commutative, associative and idempotent: NaN in either argument SHALL give NaN, `math.max(-0.0, 0.0)` and `math.max(0.0, -0.0)` SHALL both be `0.0`, and `math.min(-0.0, 0.0)` and `math.min(0.0, -0.0)` SHALL both be `-0.0`.

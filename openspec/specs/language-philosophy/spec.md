@@ -401,7 +401,12 @@ The goal SHALL be that a definition the compiler cannot show to be correct does 
 ### Requirement: Known correctness gaps are listed
 Every class of definition that the compiler accepts today although it may break one of the four properties SHALL be listed in this requirement, with the property it breaks. A change that makes the compiler reject a class, or makes the class correct by definition, SHALL remove its entry. A new feature SHALL NOT add an entry. A class found later that was already accepted SHALL be added as soon as it is found, and that addition is not a new feature.
 
-No class is known today. The order of every result that crosses the native boundary is declared and enforced as `native-result-ordering` requires, so a native function or emitter cannot leak storage order without a failing test.
+| Class | Property |
+|---|---|
+| Two handlers with no order between them cause one net `on added T` / `on removed T` change on one entity in one commit round, one of them on a delivery cycle with the trigger's handler and the other not. The delivery runs now or in the clock's next activation depending on which command ran first. | Determinacy |
+| A handler calls a `std.transform` or `std.query` function that reads trait fields natively, and another handler of the same activation writes those fields, with no order between them. | Determinacy |
+
+The order of every result that crosses the native boundary is declared and enforced as `native-result-ordering` requires, so a native function or emitter cannot leak storage order without a failing test.
 
 #### Scenario: Closing a gap removes its entry
 - **WHEN** a change makes the compiler reject conflicts that only declaration order orients
@@ -414,6 +419,14 @@ No class is known today. The order of every result that crosses the native bound
 #### Scenario: A discovered gap is listed
 - **WHEN** a review finds an accepted class of definitions whose result depends on storage order
 - **THEN** a row naming that class and the property it breaks is added until a change closes it
+
+#### Scenario: Merged lifecycle routes are listed
+- **WHEN** a program declares two unordered `tick` rules whose events lead to `add Mark` on one entity, one through a handler on a cycle with the `on added Mark` handler and one through a handler off it
+- **THEN** this requirement lists that class as a determinacy gap until a change gives the delivery one route
+
+#### Scenario: Unordered native world reads are listed
+- **WHEN** one `tick` rule writes `WorldTransform.position` and another, with no order between them, reads it through `transform.world_position`
+- **THEN** this requirement lists that class as a determinacy gap until a change orders such reads
 
 ### Requirement: Delayed occurrences belong to the producing clock
 Every activation SHALL have a clock. A phase activation's clock is its phase: a non-periodic phase has one activation per batch, and a periodic phase has one activation per repetition. Every other activation — the load and unload boundaries, the startup arrival activation, and an activation of an event that no phase claims as its root — SHALL belong to the host clock.

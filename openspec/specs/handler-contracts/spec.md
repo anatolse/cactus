@@ -322,3 +322,24 @@ Every effect domain use recorded in a handler contract SHALL be either an observ
 #### Scenario: Extern rule effects act
 - **WHEN** an `extern rule` handler lists `graphics` under `effects:`
 - **THEN** its contract carries the `graphics` domain as an action
+
+### Requirement: Native stdlib reads are part of the caller's contract
+Every stdlib extern function whose native implementation reads trait fields SHALL have a field-read summary: the canonical traits and fields it may read. A call to such a function, from a handler body or from a rule clause the handler's contract folds in, SHALL add every field of its summary to the handler's contract as a read, with the same precision as a body read of that field. Scheduling and exact accumulation SHALL treat these reads like any other read. Authors SHALL NOT declare these reads.
+
+The repository SHALL contain an automated test that enumerates the stdlib extern functions that observe the `world` effect domain and fails when one has no field-read summary. A function that reads no trait field SHALL have an empty summary, stated explicitly.
+
+#### Scenario: A native read is recorded like a body read
+- **WHEN** a handler calls `transform.world_position(Mover)` from `std.transform.flat`
+- **THEN** its contract records a read of `WorldTransform.position` of `std.transform.flat`
+
+#### Scenario: The writer runs before a native reader
+- **WHEN** one `tick` rule writes `t.position.x` through a `WorldTransform as t` alias, and another reads `transform.world_position(Mover).x`, with no explicit order
+- **THEN** the graph orders the writer first as writer before reader, and the reader sees the written value whichever rule is declared first
+
+#### Scenario: A two-way native conflict needs an explicit order
+- **WHEN** handler A writes `WorldTransform.position` and reads `Seen.x`, handler B writes `Seen.x` from `transform.world_position(Mover).x`, and nothing orders them
+- **THEN** compilation fails with an unorientable-conflict error naming both handlers
+
+#### Scenario: An unsummarized world native fails the guard test
+- **WHEN** a contributor adds a stdlib extern function in `std.query` and gives it no field-read summary
+- **THEN** the guard test fails and names that function

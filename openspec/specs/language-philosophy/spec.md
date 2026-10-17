@@ -35,6 +35,8 @@ This thesis distinguishes three obligations:
 
 These are design obligations, not a claim that the current compiler has mechanically proved them. Specifications and implementation reports SHALL distinguish intended guarantees, implemented checks, tested behavior and proved properties. Native operations and external inputs SHALL have explicit assumptions wherever a proof relies on them.
 
+`spec/activation_semantics.md` is an explanatory model of one activation for a stated fragment: its state, transition rules, scoped arguments for termination and order independence, and open findings. It defines no requirement.
+
 Facts derivable from a definition SHALL remain compiler responsibilities. This thesis introduces no proof annotations, performance controls or new grammar. Any future author-facing verification facility requires its own language design.
 
 #### Scenario: An improvement is evaluated for authoring value

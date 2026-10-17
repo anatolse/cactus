@@ -213,8 +213,10 @@ These describe the compiler data the rules consume. Each is labeled.
   edges").
 - **S2 (Open).** Contracts are sound: every field a handler's execution reads or
   writes, every event it emits, every command it issues and every effect it uses is in
-  its contract with the right kind. §10 F2 is a counterexample for reads made inside
-  native functions.
+  its contract with the right kind. For stdlib natives that observe `world`, each call
+  adds the fields of its read summary to the caller's contract (§10 F2, resolved). A
+  guard test fails when such a native has no summary; that each summary is complete is
+  checked by review of the native code only.
 - **S3 (Code).** A spawn whose template the compiler cannot resolve is recorded as
   adding every watched trait, so the lifecycle edges cover it (`delivery_cycles.cpp`:
   `build_lifecycle_flows`).
@@ -612,7 +614,8 @@ equivalence.
 co-eligible handlers that do not commute (`handler-execution-graph`: "An activation
 denotes a trace"). Its rules implement C1 to C4 and the spawn-order check. Showing that
 they imply local commutation for every accepted program is not done here. §10 lists
-one accepted class where the obligation fails (F2); F1 was another and is resolved.
+no open accepted class where the obligation fails; F1 and F2 were such classes and are
+resolved.
 
 ### 7.4 Non-vacuity boundary
 
@@ -946,6 +949,7 @@ The backend gives the same values (Tested: `test_accumulation_per_cell_headless_
 | Startup arrival | dsl-trait-lifecycle-triggers: "Load-time entities fire added before load" | `LifecycleTrackers::deliver_arrivals` | Tested: `test_runtime_activation_scheduler` "Lifecycle: arrivals follow creation order, then trait order" |
 | §7.2 depth `H` | handler-execution-graph: "Activation cascade depth is static" | `record_activation_depths` | Tested: `test_delivery_cycles` depth cases |
 | §7.3 C1 | handler-execution-graph: "Contract conflict edges are oriented only by meaningful rules", "Commuting writes add no edge" | `pair_conflict`, `conflict_reasons` | Tested: `test_semantic` "Commuting writes: …" |
+| S2 native reads | handler-contracts: "Native stdlib reads are part of the caller's contract" | `native_field_reads` (`native_field_reads.cpp`), `add_contract_call_effects` (`semantic_analyzer.cpp`) | Tested: `test_semantic` "Native field reads: …", `test_native_result_ordering` "Native field reads: …", `test_native_field_reads_headless_behavior`, `test_native_field_reads_swapped_headless_behavior`, codegen "a native read of a buffered field flushes it on entry" (F2) |
 | §7.3 C2, C3, C4 | handler-execution-graph: "Channel conflicts", "Unorientable conflicts are compile errors" | `command_conflicts`, `OccurrenceReach`, `RunConflicts`, `ConflictNodes` | Tested: `test_semantic` "Channel conflicts: …", "Unorientable conflicts: …"; `test_program_linker` "a cross-module occurrence race is a link error" |
 | §7.3 spawn order | archetype-reachability: "Observable spawn order must be defined" | `archetype_reachability.cpp` | Tested: `test_archetype_reachability` "[spawn-order]" |
 | §7.4 structural liveness | archetype-reachability; handler-execution-graph: "A trigger with no producer is a compile error" | `archetype_reachability.cpp` | Tested: `test_archetype_reachability` |
@@ -972,7 +976,11 @@ the named codegen cases, and `test_archetype_reachability` `[spawn-order]`.
 "accumulated deltas: …" cases. `route-merged-lifecycle-changes` added
 `test_lifecycle_route_ping_first_headless_behavior`,
 `test_lifecycle_route_pong_first_headless_behavior` and three
-`test_runtime_activation_scheduler` "Lifecycle: …" cases.
+`test_runtime_activation_scheduler` "Lifecycle: …" cases. `declare-native-field-reads`
+added `test_native_field_reads_headless_behavior`,
+`test_native_field_reads_swapped_headless_behavior`, the `test_semantic` and
+`test_native_result_ordering` "Native field reads: …" cases and the codegen case "a
+native read of a buffered field flushes it on entry".
 
 ## 10. Findings
 
@@ -980,7 +988,7 @@ Each finding states the gap, a minimal witness, the evidence, the claim it limit
 options to resolve it, and their impact. A finding that needs a behavior change needs
 its own proposal. `list-activation-semantics-gaps` listed F1 and F2 as known gaps and
 resolved F4 and F5. `flush-accumulation-per-cell` resolved F3.
-`route-merged-lifecycle-changes` resolved F1.
+`route-merged-lifecycle-changes` resolved F1. `declare-native-field-reads` resolved F2.
 
 ### F1. One net lifecycle change from two producers takes the first producer's route
 
@@ -1122,8 +1130,17 @@ flush (Code: `AccumulationPlan`).
 2. Make the `world` domain conflict with every write of a trait the native may read.
    Syntax: none. Behavior: coarser; more edges. Authoring: none.
 
-**Follow-up.** A separate change. Listed in "Known correctness gaps are listed" until
-that change closes it.
+**Resolved.** `declare-native-field-reads` took option 1. Each stdlib native that
+observes `world` has a field-read summary; `world_position` reads
+`WorldTransform.position` of its module, and the `std.query` functions read no field
+(their filters test membership, and `Parent.parent` is `let`). A call adds the summary
+to the caller's contract as reads with no AST site, so the reader runs after the writer
+and flushes buffered deltas on entry. The witness gives `seen.x = 1.0` after the first
+frame in both orders. Tested: `test_native_field_reads_headless_behavior`,
+`test_native_field_reads_swapped_headless_behavior`, `test_semantic` "Native field
+reads: …", codegen "a native read of a buffered field flushes it on entry"; guard:
+`test_native_result_ordering` "Native field reads: every world native declares its
+reads".
 
 ### F3. The backend flushes a whole field's deltas when one entity's cell is read
 
@@ -1206,5 +1223,5 @@ start of the activation or of a commit round".
 
 `language-philosophy` ("Known correctness gaps are listed") says that an accepted class
 that may break a correctness property, once found, is listed until a change closes it.
-F1 and F2 were such classes (determinacy). F1 is resolved, and that requirement lists
-F2.
+F1 and F2 were such classes (determinacy). Both are resolved, and that requirement lists
+no row for either.

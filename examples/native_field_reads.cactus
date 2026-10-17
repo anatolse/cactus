@@ -1,0 +1,28 @@
+module native_field_reads
+
+use std.core
+use std.transform.flat as transform
+
+# `world_position` reads WorldTransform.position natively. The compiler counts
+# that as a read, so Move runs before Look whatever their declaration order.
+
+trait Seen:
+    var x: float = 0.0
+
+entity Mover:
+    transform.WorldTransform
+
+entity Watcher:
+    Seen
+
+rule Move:
+    each:
+        transform.WorldTransform as t
+    on tick:
+        t.position.x = t.position.x + 1.0
+
+rule Look:
+    each:
+        Seen as seen
+    on tick:
+        seen.x = transform.world_position(Mover).x

@@ -3,6 +3,7 @@
 #include "common/error_reporter.hpp"
 #include "frontend/ast.hpp"
 #include "frontend/lexer.hpp"
+#include "frontend/native_field_reads.hpp"
 #include "frontend/native_result_ordering.hpp"
 #include "frontend/parser.hpp"
 
@@ -14,6 +15,7 @@
 #include <map>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -112,7 +114,56 @@ private:
     std::map<std::string, const StructNode*> structs_;
 };
 
+// The canonical ids of every stdlib extern function that observes `world`
+// with no field-read summary.
+std::vector<std::string> unsummarized_world_natives(const std::vector<ParsedModule>& modules) {
+    std::vector<std::string> missing;
+    for (const auto& module : modules) {
+        if (!stdlib_module_observes_world(module.name)) {
+            continue;
+        }
+        for (const auto& declaration : module.program.declarations) {
+            const auto* func = std::get_if<FuncNode>(&declaration);
+            if (func == nullptr || !func->is_extern) {
+                continue;
+            }
+            if (auto canonical = module.name + "." + func->name; native_field_reads(canonical) == nullptr) {
+                missing.push_back(std::move(canonical));
+            }
+        }
+    }
+    return missing;
+}
+
 }  // namespace
+
+TEST_CASE("Native field reads: every world native declares its reads", "[native-field-reads]") {
+    const auto modules = parse_stdlib();
+    REQUIRE(modules.size() > 10);
+    CHECK(unsummarized_world_natives(modules).empty());
+}
+
+TEST_CASE("Native field reads: an unsummarized world native is named", "[native-field-reads]") {
+    std::vector<ParsedModule> modules;
+    modules.push_back(parse_module("module std.query\n"
+                                   "pub extern func exists() bool\n"
+                                   "pub extern func newest() entity_id\n",
+                                   "query.cactus"));
+    modules.push_back(parse_module("module std.fake\n"
+                                   "pub extern func probe() float\n",
+                                   "fake.cactus"));
+    CHECK(unsummarized_world_natives(modules) == std::vector<std::string>{"std.query.newest"});
+}
+
+TEST_CASE("Native field reads: declared summaries", "[native-field-reads]") {
+    const std::vector<NativeFieldRead> flat{
+        {.module = "std.transform.flat", .trait = "WorldTransform", .field = "position"}};
+    REQUIRE(native_field_reads("std.transform.flat.world_position") != nullptr);
+    CHECK(*native_field_reads("std.transform.flat.world_position") == flat);
+    REQUIRE(native_field_reads("std.query.children") != nullptr);
+    CHECK(native_field_reads("std.query.children")->empty());
+    CHECK(native_field_reads("std.math.vec3.length") == nullptr);
+}
 
 TEST_CASE("Native result ordering: every ordered stdlib native declares its order", "[native-result-ordering]") {
     const auto modules = parse_stdlib();

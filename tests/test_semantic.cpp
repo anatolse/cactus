@@ -7234,4 +7234,72 @@ TEST_CASE("Unorientable conflicts: a trigger from another module is suggested in
     REQUIRE(errors.diagnostics().size() == 1);
     CHECK(errors.diagnostics().front().message.contains("'after: B/on added other.Stunned'"));
 }
+
+// ── Native field reads (handler-contracts) ──────────────────────────────────
+
+static std::string native_read_source(const std::string& rules) {
+    return "module std.transform.flat\n" + stdlib_events() +
+           "pub trait WorldTransform:\n"
+           "    var position: vec2 = vec2(0.0, 0.0)\n"
+           "    var rotation: float = 0.0\n"
+           "pub trait Seen:\n"
+           "    var x: float = 0.0\n"
+           "pub extern func world_position(of: entity_id) vec2\n"
+           "entity Mover:\n"
+           "    WorldTransform\n" +
+           rules;
+}
+
+static const std::string& native_move_rule() {
+    static const std::string value = "rule Move:\n"
+                                     "    each:\n"
+                                     "        WorldTransform as t\n"
+                                     "    on tick:\n"
+                                     "        t.position.x = t.position.x + 1.0\n";
+    return value;
+}
+
+static const std::string& native_look_rule() {
+    static const std::string value = "rule Look:\n"
+                                     "    each:\n"
+                                     "        Seen as seen\n"
+                                     "    on tick:\n"
+                                     "        seen.x = world_position(Mover).x\n";
+    return value;
+}
+
+TEST_CASE("Native field reads: a world_position call reads WorldTransform.position",
+          "[semantic][handler-contracts][native-field-reads]") {
+    const auto program = analyze(native_read_source(native_look_rule()));
+    const auto world   = make_symbol_id(SymbolKind::Trait, "std.transform.flat", "WorldTransform");
+    REQUIRE(program.handler_contracts.size() == 1);
+    const auto& contract = program.handler_contracts[0];
+    CHECK(contract.reads.contains(world));
+    REQUIRE(contract.read_fields.contains(world));
+    CHECK_FALSE(contract.read_fields.at(world).all);
+    CHECK(contract.read_fields.at(world).fields == std::set<std::string>{"position"});
+}
+
+TEST_CASE("Native field reads: the writer runs before a native reader in either declaration order",
+          "[semantic][handler-execution-graph][native-field-reads]") {
+    for (const auto& rules : {native_move_rule() + native_look_rule(), native_look_rule() + native_move_rule()}) {
+        const auto program = analyze(native_read_source(rules));
+        CHECK(has_reason(edges_from(program, "Move", "Look"), ScheduleEdgeOrientation::WriterBeforeReader));
+        CHECK(edges_from(program, "Look", "Move").empty());
+    }
+}
+
+TEST_CASE("Native field reads: a two-way native conflict needs an explicit order",
+          "[semantic][handler-execution-graph][unorientable][native-field-reads]") {
+    const auto messages = analyze_error_messages(native_read_source("rule A:\n"
+                                                                    "    each:\n"
+                                                                    "        WorldTransform as t\n"
+                                                                    "        Seen as seen\n"
+                                                                    "    on tick:\n"
+                                                                    "        t.position.x = seen.x\n" +
+                                                                    native_look_rule()));
+    REQUIRE(messages.size() == 1);
+    CHECK(messages[0].starts_with("unorientable conflict between 'std.transform.flat.A/on std.transform.flat.tick' "
+                                  "and 'std.transform.flat.Look/on std.transform.flat.tick'"));
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

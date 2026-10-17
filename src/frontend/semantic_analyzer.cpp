@@ -8,6 +8,7 @@
 #include "frontend/delivery_cycles.hpp"
 #include "frontend/execution_graph_scheduler.hpp"
 #include "frontend/hierarchy_forest.hpp"
+#include "frontend/native_field_reads.hpp"
 #include "frontend/symbol_identity.hpp"
 
 #include <algorithm>
@@ -977,7 +978,7 @@ std::optional<std::unordered_set<std::string>> known_stdlib_effect_summary(const
     if (module == "std.physics" || module.starts_with("std.physics.")) {
         return std::unordered_set<std::string>{"physics"};
     }
-    if (module == "std.query" || module == "std.transform" || module.starts_with("std.transform.")) {
+    if (stdlib_module_observes_world(module)) {
         return std::unordered_set<std::string>{"world"};
     }
     return std::nullopt;
@@ -8040,7 +8041,8 @@ void SemanticAnalyzer::add_contract_call_effects(HandlerContract& contract,
     if (!callee.has_value()) {
         return;
     }
-    if (const auto callee_id = make_canonical_id(*callee); native_creation(callee_id) != nullptr) {
+    const auto callee_id = make_canonical_id(*callee);
+    if (native_creation(callee_id) != nullptr) {
         auto& spawns         = contract.native_spawns;
         const auto canonical = [](const SymbolId& symbol) { return make_canonical_id(symbol); };
         const auto position  = std::ranges::lower_bound(spawns, callee_id, {}, canonical);
@@ -8058,6 +8060,12 @@ void SemanticAnalyzer::add_contract_call_effects(HandlerContract& contract,
         return;
     }
     contract.effects.insert(function->effect_summary->begin(), function->effect_summary->end());
+    if (const auto* reads = native_field_reads(callee_id); reads != nullptr) {
+        for (const auto& read : *reads) {
+            const auto trait = make_symbol_id(SymbolKind::Trait, std::string(read.module), std::string(read.trait));
+            record_read(contract, trait, std::string(read.field), find_resolved_trait(trait), nullptr);
+        }
+    }
     if (stdlib_function_acts(*callee)) {
         contract.effect_acts.insert(function->effect_summary->begin(), function->effect_summary->end());
     }

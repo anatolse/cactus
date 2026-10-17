@@ -704,6 +704,18 @@ cactus_add_headless_behavior_test(test_exact_accumulation_swapped_headless_behav
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_exact_accumulation_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_native_field_reads_headless_behavior
+    CACTUS_SOURCE examples/native_field_reads.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_native_field_reads_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_native_field_reads_swapped_headless_behavior
+    CACTUS_SOURCE tests/fixtures/native_field_reads_swapped/native_field_reads.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_native_field_reads_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_accumulation_commit_round_headless_behavior
     CACTUS_SOURCE tests/fixtures/accumulation_commit_round.cactus
     BACKEND cpp-entt

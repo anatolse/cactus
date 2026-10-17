@@ -9286,6 +9286,41 @@ TEST_CASE("Codegen EnTT: an extern handler that reads a buffered field flushes i
     CHECK(count_occurrences(dispatch, "generated_accumulation__Pool__level().flush();") == 1);
 }
 
+TEST_CASE("Codegen EnTT: a native read of a buffered field flushes it on entry",
+          "[codegen-entt][write-kinds][native-field-reads]") {
+    ProgramNode program;
+    auto decorated   = full_pipeline("module std.transform.flat\n" + lifecycle_program_prefix() +
+                                         "pub trait WorldTransform:\n"
+                                         "    var position: vec2 = vec2(0.0, 0.0)\n"
+                                         "trait Seen:\n"
+                                         "    var x: float = 0.0\n"
+                                         "pub extern func world_position(of: entity_id) vec2\n"
+                                         "entity Mover:\n"
+                                         "    WorldTransform\n"
+                                         "rule PushA:\n"
+                                         "    each:\n"
+                                         "        WorldTransform as t\n"
+                                         "    on tick:\n"
+                                         "        t.position.x += 1.0\n"
+                                         "rule PushB:\n"
+                                         "    each:\n"
+                                         "        WorldTransform as t\n"
+                                         "    on tick:\n"
+                                         "        t.position.x += 2.0\n"
+                                         "rule Look:\n"
+                                         "    each:\n"
+                                         "        Seen as s\n"
+                                         "    on tick:\n"
+                                         "        s.x = world_position(Mover).x\n",
+                                     program);
+    const auto code     = CppEnttCodegen::generate(decorated);
+    const auto dispatch = without_linearization_harness(generated_function(
+        code, "void generated_dispatch_phase_std_transform_flat__tick(entt::registry& registry"));
+    const auto flush = dispatch.find("generated_accumulation__WorldTransform__position().flush();");
+    REQUIRE(flush != std::string::npos);
+    CHECK(flush < dispatch.find("::look_tick(registry, phase);"));
+}
+
 TEST_CASE("Codegen EnTT: a handler that may move component storage rebases after", "[codegen-entt][write-kinds]") {
     ProgramNode program;
     auto decorated   = full_pipeline(lifecycle_program_prefix() +

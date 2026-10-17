@@ -9083,6 +9083,11 @@ static std::string accumulation_codegen() {
                                        "        Pair as p\n"
                                        "    on tick:\n"
                                        "        p.a -= vec2(2.0, 1.0)\n"
+                                       "rule PushC:\n"
+                                       "    each:\n"
+                                       "        Pair as p\n"
+                                       "    on tick:\n"
+                                       "        p.a.y += 3.0\n"
                                        "rule Bump:\n"
                                        "    each:\n"
                                        "        Body as b\n"
@@ -9109,31 +9114,121 @@ TEST_CASE("Codegen EnTT: accumulations that can meet are buffered", "[codegen-en
     const auto code = accumulation_codegen();
     // Many rows add to one named entity.
     const auto count = generated_function(code, "void count_tick(entt::registry& registry");
-    CHECK(count.contains("generated_accumulation__Tally__total().add(named_ref__test__Game__Tally.total, 1.0F);"));
-    // Two handlers add to one field, one through a component.
+    CHECK(count.contains("generated_accumulation__Tally__total().add(generated_named_slots().test__Game, "
+                         "named_ref__test__Game__Tally.total, 1.0F);"));
+    // Several handlers add to one field, some through a component.
     const auto push_a = generated_function(code, "void push_a_tick(entt::registry& registry");
-    CHECK(push_a.contains("generated_accumulation__Pair__a().add(p.a.x, 1.0F);"));
+    CHECK(push_a.contains("generated_accumulation__Pair__a().add(entity, p.a.x, 1.0F);"));
     const auto push_b = generated_function(code, "void push_b_tick(entt::registry& registry");
-    CHECK(push_b.contains("generated_accumulation__Pair__a().subtract(p.a, "));
+    CHECK(push_b.contains("generated_accumulation__Pair__a().subtract(entity, p.a, "));
+    const auto push_c = generated_function(code, "void push_c_tick(entt::registry& registry");
+    CHECK(push_c.contains("generated_accumulation__Pair__a().add(entity, p.a.y, 3.0F, 1);"));
     // Several occurrences of one event add to one field.
     const auto bump = generated_function(code, "void bump_Hit(entt::registry& registry");
-    CHECK(bump.contains("generated_accumulation__Body__y().add(b.y, 1.0F);"));
+    CHECK(bump.contains("generated_accumulation__Body__y().add(entity, b.y, 1.0F);"));
 }
 
-TEST_CASE("Codegen EnTT: a reader of a buffered field flushes it on entry", "[codegen-entt][write-kinds]") {
-    const auto code     = accumulation_codegen();
+TEST_CASE("Codegen EnTT: a reader of a buffered field settles only the cells it reads", "[codegen-entt][write-kinds]") {
+    const auto code  = accumulation_codegen();
+    const auto watch = generated_function(code, "void watch_tick(entt::registry& registry");
+    CHECK(watch.contains("generated_accumulation__Pair__a().settle(p.a).x"));
+    CHECK(watch.contains("generated_accumulation__Tally__total().settle(named_ref__test__Game__Tally.total)"));
     const auto dispatch = without_linearization_harness(
         generated_function(code, "void generated_dispatch_phase_test__tick(entt::registry& registry"));
-    const auto flush_pair  = dispatch.find("generated_accumulation__Pair__a().flush();");
-    const auto flush_tally = dispatch.find("generated_accumulation__Tally__total().flush();");
-    const auto watch       = dispatch.find("::watch_tick(registry, phase);");
-    REQUIRE(watch != std::string::npos);
-    REQUIRE(flush_pair != std::string::npos);
-    REQUIRE(flush_tally != std::string::npos);
-    CHECK(flush_pair < watch);
-    CHECK(flush_tally < watch);
-    // Writers that only accumulate don't flush.
-    CHECK(count_occurrences(dispatch, "generated_accumulation__Pair__a().flush();") == 1);
+    CHECK(!dispatch.contains(".flush();"));
+}
+
+TEST_CASE("Codegen EnTT: an accumulation through a pair binding keys its cell by that entity", "[codegen-entt][write-kinds]") {
+    ProgramNode program;
+    auto decorated   = full_pipeline(lifecycle_program_prefix() +
+                                         "trait Actor:\n"
+                                         "    var height: float = 0.0\n"
+                                         "    var lift: float = 0.0\n"
+                                         "trait Surface:\n"
+                                         "    var top: float = 0.0\n"
+                                         "rule Lift:\n"
+                                         "    pairs:\n"
+                                         "        actor: Actor\n"
+                                         "        surface: Surface\n"
+                                         "    where:\n"
+                                         "        surface[Surface].top <= actor[Actor].height\n"
+                                         "    limit: 1 per actor\n"
+                                         "    on tick:\n"
+                                         "        actor[Actor].lift += 1.0\n"
+                                         "rule Sink:\n"
+                                         "    each:\n"
+                                         "        Actor as a\n"
+                                         "    on tick:\n"
+                                         "        a.lift -= 2.0\n",
+                                     program);
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.contains("::generated_accumulation__Actor__lift().add(actor, registry.get<Actor>(actor).lift, 1.0F);"));
+}
+
+TEST_CASE("Codegen EnTT: a non-accumulating write of a buffered field settles its cell first", "[codegen-entt][write-kinds]") {
+    ProgramNode program;
+    auto decorated   = full_pipeline(lifecycle_program_prefix() +
+                                         "trait Pool:\n"
+                                         "    var level: float = 0.0\n"
+                                         "rule Fill:\n"
+                                         "    each:\n"
+                                         "        Pool as p\n"
+                                         "    on tick:\n"
+                                         "        p.level += 1.0\n"
+                                         "rule Drain:\n"
+                                         "    each:\n"
+                                         "        Pool as p\n"
+                                         "    on tick:\n"
+                                         "        p.level += 2.0\n"
+                                         "rule Reset:\n"
+                                         "    each:\n"
+                                         "        Pool as p\n"
+                                         "    after:\n"
+                                         "        Fill\n"
+                                         "        Drain\n"
+                                         "    on tick:\n"
+                                         "        p.level *= 0.5\n",
+                                     program);
+    const auto code  = CppEnttCodegen::generate(decorated);
+    const auto reset = generated_function(code, "void reset_tick(entt::registry& registry");
+    CHECK(reset.contains("::generated_accumulation__Pool__level().settle(p.level) *= 0.5F;"));
+}
+
+TEST_CASE("Codegen EnTT: an access with no settle site flushes on entry", "[codegen-entt][write-kinds]") {
+    ProgramNode program;
+    auto decorated   = full_pipeline(lifecycle_program_prefix() +
+                                         "trait Pool:\n"
+                                         "    var level: float = 0.0\n"
+                                         "trait Seen:\n"
+                                         "    var level: float = 0.0\n"
+                                         "entity Tank:\n"
+                                         "    Pool\n"
+                                         "    Seen\n"
+                                         "rule Fill:\n"
+                                         "    each:\n"
+                                         "        Pool as p\n"
+                                         "    on tick:\n"
+                                         "        p.level += 1.0\n"
+                                         "rule Drain:\n"
+                                         "    each:\n"
+                                         "        Pool as p\n"
+                                         "    on tick:\n"
+                                         "        p.level -= 2.0\n"
+                                         "rule Peek:\n"
+                                         "    each:\n"
+                                         "        Seen as s\n"
+                                         "    on tick:\n"
+                                         "        match Tank:\n"
+                                         "            Pool as pool =>\n"
+                                         "                s.level = pool.level\n",
+                                     program);
+    const auto code     = CppEnttCodegen::generate(decorated);
+    const auto dispatch = without_linearization_harness(
+        generated_function(code, "void generated_dispatch_phase_test__tick(entt::registry& registry"));
+    const auto flush = dispatch.find("generated_accumulation__Pool__level().flush();");
+    REQUIRE(flush != std::string::npos);
+    CHECK(flush < dispatch.find("::peek_tick(registry, phase);"));
+    CHECK(count_occurrences(dispatch, ".flush();") == 1);
 }
 
 TEST_CASE("Codegen EnTT: the commit flushes every buffered field first", "[codegen-entt][write-kinds]") {
@@ -9163,7 +9258,35 @@ TEST_CASE("Codegen EnTT: a program without buffered accumulation emits no tables
     CHECK(!code.contains("generated_accumulation"));
     CHECK(!code.contains("generated_flush_accumulations"));
 }
-TEST_CASE("Codegen EnTT: a handler that may move component storage flushes first", "[codegen-entt][write-kinds]") {
+TEST_CASE("Codegen EnTT: an extern handler that reads a buffered field flushes it on entry", "[codegen-entt][write-kinds]") {
+    ProgramNode program;
+    auto decorated   = full_pipeline(lifecycle_program_prefix() +
+                                         "trait Pool:\n"
+                                         "    var level: float = 0.0\n"
+                                         "rule Fill:\n"
+                                         "    each:\n"
+                                         "        Pool as p\n"
+                                         "    on tick:\n"
+                                         "        p.level += 1.0\n"
+                                         "rule Drain:\n"
+                                         "    each:\n"
+                                         "        Pool as p\n"
+                                         "    on tick:\n"
+                                         "        p.level -= 2.0\n"
+                                         "extern rule Gauge:\n"
+                                         "    each:\n"
+                                         "        Pool\n"
+                                         "    on tick:\n"
+                                         "        reads:\n"
+                                         "            Pool\n",
+                                     program);
+    const auto code     = CppEnttCodegen::generate(decorated);
+    const auto dispatch = without_linearization_harness(
+        generated_function(code, "void generated_dispatch_phase_test__tick(entt::registry& registry"));
+    CHECK(count_occurrences(dispatch, "generated_accumulation__Pool__level().flush();") == 1);
+}
+
+TEST_CASE("Codegen EnTT: a handler that may move component storage rebases after", "[codegen-entt][write-kinds]") {
     ProgramNode program;
     auto decorated   = full_pipeline(lifecycle_program_prefix() +
                                          "trait Pair:\n"
@@ -9186,9 +9309,15 @@ TEST_CASE("Codegen EnTT: a handler that may move component storage flushes first
     const auto code     = CppEnttCodegen::generate(decorated);
     const auto dispatch = without_linearization_harness(
         generated_function(code, "void generated_dispatch_phase_test__tick(entt::registry& registry"));
-    const auto flush = dispatch.find("generated_accumulation__Pair__a().flush();");
-    REQUIRE(flush != std::string::npos);
-    CHECK(flush < dispatch.find("::poke_tick(registry, phase);"));
+    CHECK(!dispatch.contains(".flush();"));
+    const auto poke = dispatch.find("::poke_tick(registry, phase);");
+    REQUIRE(poke != std::string::npos);
+    CHECK(dispatch.find("::generated_rebase_accumulations(registry);", poke) != std::string::npos);
+    CHECK(count_occurrences(dispatch, "::generated_rebase_accumulations(registry);") == 1);
+    const auto rebase = generated_function(code, "inline void generated_rebase_accumulations(entt::registry& registry)");
+    CHECK(rebase.contains("generated_accumulation__Pair__a().rebase("));
+    CHECK(rebase.contains("registry.try_get<Pair>(entity)"));
+    CHECK(rebase.contains("cactus::runtime::accumulation_cell(trait->a, component)"));
 }
 // ── Hierarchy facts select the strategy (hierarchy-forest) ─────────────────
 

@@ -1492,7 +1492,7 @@ void emit_dispatch_calls(std::ostringstream& out,
                          const std::vector<DispatchCall>& calls,
                          bool routed = false) {
     const auto text = [&](const DispatchCall& call) {
-        auto body = accumulation.entry_flushes(call.identity) + call.text;
+        auto body = accumulation.entry_flushes(call.identity) + call.text + accumulation.exit_rebase(call.identity);
         if (!delivery.cyclic()) {
             return body;
         }
@@ -2313,21 +2313,34 @@ SymbolId entity_symbol(const EntityNode& entity, const DecoratedProgram& program
     return resolved_or_local_symbol(SymbolKind::Entity, entity.resolved_entity_id, program.module_name, entity.name);
 }
 
-std::string emit_accumulation_tables(const AccumulationPlan& accumulation) {
+std::string emit_accumulation_tables(const AccumulationPlan& accumulation, const DecoratedProgram& program) {
     if (accumulation.empty()) {
         return {};
     }
     std::ostringstream out;
     out << "// ── Exact Float Accumulation ───────────────────────────────────────\n\n";
     for (const auto& table : accumulation.tables()) {
-        out << "inline cactus::runtime::AccumulatedDeltas& " << table << "() {\n";
-        out << "    static cactus::runtime::AccumulatedDeltas deltas;\n";
+        out << "inline cactus::runtime::AccumulatedDeltas<entt::entity>& " << table << "() {\n";
+        out << "    static cactus::runtime::AccumulatedDeltas<entt::entity> deltas;\n";
         out << "    return deltas;\n";
         out << "}\n\n";
     }
     out << "inline void generated_flush_accumulations() {\n";
     for (const auto& table : accumulation.tables()) {
         out << "    " << table << "().flush();\n";
+    }
+    out << "}\n\n";
+    out << "[[maybe_unused]] inline void generated_rebase_accumulations(entt::registry& registry) {\n";
+    for (std::size_t index = 0; index < accumulation.tables().size(); ++index) {
+        const auto& field = accumulation.fields()[index];
+        const auto trait  = EnttCodegenUtils::trait_cpp_name(field.trait, field.trait.local_name, program);
+        out << "    " << accumulation.tables()[index]
+            << "().rebase([&](entt::entity entity, std::uint8_t component) -> float* {\n";
+        out << "        auto* const trait = registry.valid(entity) ? registry.try_get<" << trait
+            << ">(entity) : nullptr;\n";
+        out << "        return trait == nullptr ? nullptr : cactus::runtime::accumulation_cell(trait->" << *field.field
+            << ", component);\n";
+        out << "    });\n";
     }
     out << "}\n\n";
     return out.str();
@@ -3345,6 +3358,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     std::ostringstream out;
     // Before any system is emitted: it marks the statements that buffer.
     const AccumulationPlan accumulation(program);
+    const AccumulationScope accumulation_scope(accumulation);
     const DeliveryPlan delivery(program);
 
     const bool uses_flat     = module_uses_camera_flat(program);
@@ -3513,7 +3527,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
 
     out << emit_collider_query_helpers(program);
     out << emit_named_slots(program);
-    out << emit_accumulation_tables(accumulation);
+    out << emit_accumulation_tables(accumulation, program);
     out << EnttPersistenceEmitter::emit_schema_descriptor(program);
     out << EnttPersistenceEmitter::emit_archetype_node_table(program);
     out << EnttPersistenceEmitter::emit_missing_provenance_probe(program);

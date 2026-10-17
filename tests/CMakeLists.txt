@@ -710,6 +710,18 @@ cactus_add_headless_behavior_test(test_accumulation_commit_round_headless_behavi
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_accumulation_commit_round_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_accumulation_per_cell_headless_behavior
+    CACTUS_SOURCE tests/fixtures/accumulation_per_cell/accumulation_per_cell.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_accumulation_per_cell_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_accumulation_storage_move_headless_behavior
+    CACTUS_SOURCE tests/fixtures/accumulation_storage_move/accumulation_storage_move.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_accumulation_storage_move_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_deterministic_target_selection_headless_behavior
     CACTUS_SOURCE examples/deterministic_target_selection.cactus
     BACKEND cpp-entt

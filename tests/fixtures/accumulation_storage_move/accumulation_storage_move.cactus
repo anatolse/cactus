@@ -1,0 +1,38 @@
+module accumulation_storage_move
+
+use std.core
+
+# A handler that acts on the external domain, between two Accum writes to one
+# cell, does not end that cell's accumulation interval. The native destroys
+# Spare, which moves Tank's Pool in storage.
+
+trait Pool:
+    var level: float = 100000000.0
+
+entity Spare:
+    Pool
+
+entity Tank:
+    Pool
+
+extern func touch_world()
+
+rule Fill:
+    each:
+        Pool as p
+    on tick:
+        p.level += 1.0
+
+rule Touch:
+    after:
+        Fill
+    on tick:
+        touch_world()
+
+rule Drain:
+    each:
+        Pool as p
+    after:
+        Touch
+    on tick:
+        p.level -= 100000000.0

@@ -319,7 +319,11 @@ when a cascade ends, before commands apply. So the deltas between two non-Accum
 accesses of one cell, or between such an access and the start of the activation or of
 a commit round, are summed exactly and rounded once. This is the normative meaning
 (`dsl-numeric-semantics`: "Float accumulation into one field is exact"). The backend
-flushes a coarser set; see §10 F3.
+settles a cell just before each non-Accum access of it in a handler body or clause, so
+an access that does not run settles nothing. Some accesses have no site of their own:
+an extern handler, a projection, a spatial join or reduction, a whole-trait read and a
+trait-match arm. For these the backend flushes the whole field when the handler starts
+(Code: `AccumulationPlan`), which can round other entities' deltas early.
 
 ### 6.5 Delivery
 
@@ -913,7 +917,8 @@ Pool, `after: Look`) runs `p.level -= 1.0e8`.
 | `First.level` | `A = ⦃1.0⦄`; Look's read flushes: `rnd(1.0e8 + 1) = 1.0e8`; then `A = ⦃−1.0e8⦄`; final flush | `0.0`; Look saw `1.0e8` |
 | `Second.level` | no non-Accum access between the writes: `A = ⦃1.0, −1.0e8⦄`; one flush: `rnd(1.0e8 + 1 − 1.0e8)` | `1.0` |
 
-The backend gives `Second.level = 0.0` (Probe; §10 F3).
+The backend gives the same values (Tested: `test_accumulation_per_cell_headless_behavior`;
+§10 F3).
 
 ## 9. Correspondence
 
@@ -924,7 +929,7 @@ The backend gives `Second.level = 0.0` (Probe; §10 F3).
 | R3 live reads, writes | phase-activation-model: "Activation commit boundary"; handler-contracts: "Field writes carry a write kind" | generated handler bodies | Tested: `test_semantic` "[write-kinds]"; values in 8.1: Code |
 | R3 deferred command values | dsl-deferred-set: "`set` values are evaluated when the statement runs" | `queue_structural_command` (`runtime.hpp`) | Tested: `test_deferred_set_headless_behavior` |
 | R3 fresh spawn identity | dsl-entity-id-total-semantics: "A stale handle stays stale for the life of its world" | `reserve_entity`, `create_reserved` (`runtime.hpp`) | Tested: `test_entity_handle_reuse_headless_behavior`, `test_runtime_entity_allocator` |
-| R4 flush | dsl-numeric-semantics: "Float accumulation into one field is exact" | `AccumulationPlan` (`accumulation_plan.cpp`), `generated_flush_accumulations` | Tested: `test_exact_accumulation_headless_behavior`, codegen "[write-kinds]"; scope differs: Probe, F3 |
+| R4 flush | dsl-numeric-semantics: "Float accumulation into one field is exact" | `AccumulationPlan` (`accumulation_plan.cpp`), `AccumulatedDeltas` (`cactus_runtime.hpp`), `generated_flush_accumulations` | Tested: `test_exact_accumulation_headless_behavior`, `test_accumulation_per_cell_headless_behavior`, `test_accumulation_storage_move_headless_behavior`, `test_runtime_stdlib` "accumulated deltas: …", codegen "[write-kinds]"; accesses with no site: Code (§6.4) |
 | R5 stale drop | targeted-event-delivery: "Targeted delivery obeys total entity semantics" | `deliverable`, `drain_event_cascade` (`runtime.hpp`) | Tested: `test_runtime_activation_scheduler`, codegen stale-recipient test |
 | R5 revalidation | dsl-trait-lifecycle-triggers: "Lifecycle cycles are delayed" | `lifecycle_change_holds` (`runtime.hpp`) | Tested: `test_runtime_activation_scheduler` "Lifecycle: a delayed added delivery is skipped when the trait is gone" |
 | R6 split, delayed edges | handler-execution-graph: "Every event cycle passes through a delay" | `classify_delivery_cycles`, `mark_delayed_edges` (`delivery_cycles.cpp`); `route_admits`, `DeliveryRoute` (`runtime.hpp`); `DeliveryPlan` (`cpp_entt_codegen.cpp`) | Tested: `test_delivery_cycles`, `test_runtime_activation_scheduler` "route_admits splits consumers by the producer's cycle", codegen "[delivery-cycles]" |
@@ -946,7 +951,7 @@ The backend gives `Second.level = 0.0` (Probe; §10 F3).
 | Trace 8.4 | as R6, R10 | — | Tested: `test_delivery_clocks_headless_behavior` |
 | Trace 8.5 | as R8, R5 | — | Tested (see trace) |
 | Trace 8.6 | as §7.3 | — | Cases 1 to 3 Tested; case 4 Probe (F1) |
-| Trace 8.7 | as R5, R4 | — | Stale drop Tested. Stale drop after a commit round: Probe, Missing test. Accumulation scope: Probe (F3) |
+| Trace 8.7 | as R5, R4 | — | Stale drop Tested. Stale drop after a commit round: Probe, Missing test. Accumulation scope: Tested (`test_accumulation_per_cell_headless_behavior`) |
 
 Every test named above was run on the current tree while writing this document and
 passed: `test_delivery_cycles`, `test_runtime_activation_scheduler`,
@@ -958,13 +963,16 @@ passed: `test_delivery_cycles`, `test_runtime_activation_scheduler`,
 `[handler-execution-graph]`, `[write-kinds]`, `[channels]`, `[unorientable]`,
 `test_codegen_entt` tags `[delivery-cycles]`, `[trait-lifecycle]`, `[write-kinds]` and
 the named codegen cases, and `test_archetype_reachability` `[spawn-order]`.
+`flush-accumulation-per-cell` added `test_accumulation_per_cell_headless_behavior`,
+`test_accumulation_storage_move_headless_behavior` and the `test_runtime_stdlib`
+"accumulated deltas: …" cases.
 
 ## 10. Findings
 
 Each finding states the gap, a minimal witness, the evidence, the claim it limits,
 options to resolve it, and their impact. A finding that needs a behavior change needs
 its own proposal. `list-activation-semantics-gaps` listed F1 and F2 as known gaps and
-resolved F4 and F5.
+resolved F4 and F5. `flush-accumulation-per-cell` resolved F3.
 
 ### F1. One net lifecycle change from two producers takes the first producer's route
 
@@ -1131,6 +1139,13 @@ the schedule.
 
 **Follow-up.** A separate change. Not a known-gaps row: no correctness property is
 broken.
+
+**Resolved.** `flush-accumulation-per-cell` took option 1, at the access site instead of
+on handler entry: generated code settles one cell just before each non-Accum access of
+it. Pending deltas are keyed by entity, so a handler that may move component storage
+re-resolves them instead of flushing. The witness gives `1.0`
+(Tested: `test_accumulation_per_cell_headless_behavior`). Accesses with no site of
+their own still flush the whole field on handler entry (§6.4).
 
 ### F4. "Midway through an activation" and commit rounds
 

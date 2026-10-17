@@ -7,11 +7,13 @@
 #include <array>
 #include <bit>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <limits>
 #include <numbers>
 #include <optional>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -557,57 +559,176 @@ private:
 
 }  // namespace reduce
 
-// flush() sets each target to round(old + exact sum of its deltas), independent of write order.
-// Keyed by address: durable component storage doesn't move before the activation commits.
+// Holds the pending float deltas of one trait field, one cell per entity and component.
+// settle() and flush() set a cell to round(old + exact sum of its deltas), independent of write order.
+template <typename Entity>
 class AccumulatedDeltas {
 public:
-    void add(float& target, float delta) {
-        deltas_.push_back(Delta{.target = &target, .value = delta});
+    void add(Entity entity, float& target, float delta, std::uint8_t component = 0) {
+        deltas_.push_back(Delta{.target = &target, .value = delta, .entity = entity, .component = component});
     }
-    void subtract(float& target, float delta) {
-        deltas_.push_back(Delta{.target = &target, .value = -delta});
+    void subtract(Entity entity, float& target, float delta, std::uint8_t component = 0) {
+        add(entity, target, -delta, component);
     }
-    void add(Vector2& target, Vector2 delta) {
-        add(target.x, delta.x);
-        add(target.y, delta.y);
+    void add(Entity entity, Vector2& target, Vector2 delta) {
+        add(entity, target.x, delta.x, 0);
+        add(entity, target.y, delta.y, 1);
     }
-    void subtract(Vector2& target, Vector2 delta) {
-        subtract(target.x, delta.x);
-        subtract(target.y, delta.y);
+    void subtract(Entity entity, Vector2& target, Vector2 delta) {
+        subtract(entity, target.x, delta.x, 0);
+        subtract(entity, target.y, delta.y, 1);
     }
-    void add(Vector3& target, Vector3 delta) {
-        add(target.x, delta.x);
-        add(target.y, delta.y);
-        add(target.z, delta.z);
+    void add(Entity entity, Vector3& target, Vector3 delta) {
+        add(entity, target.x, delta.x, 0);
+        add(entity, target.y, delta.y, 1);
+        add(entity, target.z, delta.z, 2);
     }
-    void subtract(Vector3& target, Vector3 delta) {
-        subtract(target.x, delta.x);
-        subtract(target.y, delta.y);
-        subtract(target.z, delta.z);
+    void subtract(Entity entity, Vector3& target, Vector3 delta) {
+        subtract(entity, target.x, delta.x, 0);
+        subtract(entity, target.y, delta.y, 1);
+        subtract(entity, target.z, delta.z, 2);
+    }
+
+    // Applies the pending deltas of `target` only, before a non-accumulating access of it.
+    float& settle(float& target) {
+        if (!deltas_.empty()) {
+            settle_cell(target);
+        }
+        return target;
+    }
+    Vector2& settle(Vector2& target) {
+        if (!deltas_.empty()) {
+            settle_cell(target.x);
+            settle_cell(target.y);
+        }
+        return target;
+    }
+    Vector3& settle(Vector3& target) {
+        if (!deltas_.empty()) {
+            settle_cell(target.x);
+            settle_cell(target.y);
+            settle_cell(target.z);
+        }
+        return target;
     }
 
     void flush() {
-        std::ranges::sort(deltas_, std::ranges::less{}, &Delta::target);
+        if (deltas_.empty()) {
+            return;
+        }
+        sort_pending();
         for (auto delta = deltas_.begin(); delta != deltas_.end();) {
-            float* const target = delta->target;
-            reduce::Sum<float> sum;
-            sum.add(*target);
-            for (; delta != deltas_.end() && delta->target == target; ++delta) {
-                sum.add(delta->value);
-            }
-            *target = sum.value();
+            const auto end = std::ranges::find_if_not(
+                delta, deltas_.end(), [target = delta->target](const Delta& next) { return next.target == target; });
+            apply({delta, end});
+            delta = end;
         }
         deltas_.clear();
+        sorted_ = 0;
+    }
+
+    // After component storage may have moved: `resolve(entity, component)` gives the cell's
+    // new address, or null when the entity no longer has the trait, which drops its deltas.
+    template <typename Resolve>
+    void rebase(const Resolve& resolve) {
+        std::erase_if(deltas_, [&](Delta& delta) {
+            delta.target = delta.applied ? nullptr : resolve(delta.entity, delta.component);
+            return delta.target == nullptr;
+        });
+        sorted_ = 0;
     }
 
 private:
     struct Delta {
-        float* target;
-        float value;
+        float* target = nullptr;
+        float value   = 0.0F;
+        Entity entity{};
+        std::uint8_t component = 0;
+        bool applied           = false;
     };
+
+    void sort_pending() {
+        if (sorted_ == deltas_.size()) {
+            return;
+        }
+        const auto middle = deltas_.begin() + static_cast<std::ptrdiff_t>(sorted_);
+        std::ranges::sort(middle, deltas_.end(), std::ranges::less{}, &Delta::target);
+        std::ranges::inplace_merge(deltas_, middle, std::ranges::less{}, &Delta::target);
+        sorted_ = deltas_.size();
+    }
+
+    void settle_cell(float& target) {
+        sort_pending();
+        const auto cell = find_cell(&target);
+        cell_begin_     = static_cast<std::size_t>(cell.begin() - deltas_.begin());
+        cell_end_       = static_cast<std::size_t>(cell.end() - deltas_.begin());
+        apply(cell);
+    }
+
+    // Readers walk rows in storage order, so the next cell is usually beside the last one.
+    std::ranges::subrange<typename std::vector<Delta>::iterator> find_cell(const float* target) {
+        const auto holds = [&](std::size_t index) {
+            return index < deltas_.size() && deltas_[index].target == target;
+        };
+        std::size_t first = cell_end_;
+        if (!holds(first)) {
+            first = cell_begin_ - 1;
+            if (cell_begin_ == 0 || !holds(first)) {
+                return std::ranges::equal_range(deltas_, target, {}, &Delta::target);
+            }
+        }
+        while (first > 0 && holds(first - 1)) {
+            --first;
+        }
+        auto last = first + 1;
+        while (holds(last)) {
+            ++last;
+        }
+        return {deltas_.begin() + static_cast<std::ptrdiff_t>(first),
+                deltas_.begin() + static_cast<std::ptrdiff_t>(last)};
+    }
+
+    // Settled entries stay in place until the next flush or rebase, so the sorted prefix holds.
+    static void apply(std::ranges::subrange<typename std::vector<Delta>::iterator> cell) {
+        if (std::ranges::all_of(cell, &Delta::applied)) {
+            return;
+        }
+        float* const target = cell.begin()->target;
+        reduce::Sum<float> sum;
+        sum.add(*target);
+        for (auto& delta : cell) {
+            if (!delta.applied) {
+                sum.add(delta.value);
+                delta.applied = true;
+            }
+        }
+        *target = sum.value();
+    }
+
     // A flat list reused across activations: no hashing or allocation per write.
     std::vector<Delta> deltas_;
+    std::size_t sorted_     = 0;
+    std::size_t cell_begin_ = 0;  // the last settled cell, a hint for find_cell
+    std::size_t cell_end_   = 0;
 };
+
+// The address of one component of an accumulated field, for AccumulatedDeltas::rebase.
+[[nodiscard]] inline float* accumulation_cell(float& field, std::uint8_t /*component*/) noexcept {
+    return &field;
+}
+[[nodiscard]] inline float* accumulation_cell(Vector2& field, std::uint8_t component) noexcept {
+    return component == 0U ? &field.x : &field.y;
+}
+[[nodiscard]] inline float* accumulation_cell(Vector3& field, std::uint8_t component) noexcept {
+    switch (component) {
+        case 0U:
+            return &field.x;
+        case 1U:
+            return &field.y;
+        default:
+            return &field.z;
+    }
+}
 
 namespace stdlib::math {
 

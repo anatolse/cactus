@@ -286,6 +286,14 @@ struct ListExpr {
     SourceLocation location;
 };
 
+// A trait field an expression or statement accesses; no field means the whole trait.
+struct TraitFieldRef {
+    SymbolId trait;
+    std::optional<std::string> field;
+
+    friend bool operator==(const TraitFieldRef&, const TraitFieldRef&) = default;
+};
+
 struct ExprNode {
     using Variant = std::variant<LiteralExpr,
                                  IdentExpr,
@@ -302,6 +310,7 @@ struct ExprNode {
                                  TraitAccessExpr>;
     Variant expr;
     SourceLocation location;
+    mutable std::optional<TraitFieldRef> field_read;  // set by semantic analysis: this node reads one trait field
 
     ExprNode() = default;
     explicit ExprNode(Variant v, SourceLocation loc)
@@ -360,6 +369,7 @@ struct VarAssign {
     mutable ArithmeticOperands operands = ArithmeticOperands::Unchecked;  // set by semantic analysis
     // Set by semantic analysis when the handler's write kind for the target stays Accum.
     mutable std::optional<AccumulationTarget> accumulation;
+    mutable std::optional<TraitFieldRef> field_write;  // set by semantic analysis: a write of one field, not Accum
 };
 
 // `vec2(...)`, `vec3(...)`, `color(...)`, or `quat(...)`.
@@ -664,6 +674,8 @@ struct EventHandlerNode {
     std::vector<HandlerReferenceNode> after_handlers;  // exact handler references from a leading after: block
     std::vector<std::unique_ptr<StmtNode>> body;
     SourceLocation location;
+    // Set by semantic analysis: field accesses with no field_read or field_write site in the AST.
+    mutable std::vector<TraitFieldRef> untracked_accesses;
 
     [[nodiscard]] bool has_lifecycle_trigger() const {
         return resolved_trigger.has_value() && resolved_trigger->is_lifecycle();

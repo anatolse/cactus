@@ -2349,9 +2349,9 @@ static std::string lower_trait_field_path(const TraitAccessExpr& access,
     return base;
 }
 
-static std::string rewrite_expr(  // NOLINT(readability-function-cognitive-complexity) -- still 250 after table-driving
-                                  // the input/camera/transform builtin dispatch (task 5.4); this is the full
-                                  // expression-rewrite dispatch, dozens of unrelated arms remain
+static std::string rewrite_expr_node(  // NOLINT(readability-function-cognitive-complexity) -- still 250 after
+                                       // table-driving the input/camera/transform builtin dispatch (task 5.4);
+                                       // this is the full expression-rewrite dispatch, dozens of unrelated arms remain
     const ExprNode& expr,
     const std::vector<std::string>& trait_names,
     const DecoratedProgram& program,
@@ -2700,6 +2700,63 @@ static std::string rewrite_expr(  // NOLINT(readability-function-cognitive-compl
             }
         },
         expr.expr);
+}
+
+// A non-accumulating access of a buffered field first applies that cell's pending deltas.
+static std::string settled_access(const std::optional<TraitFieldRef>& access,
+                                  std::string lowered,
+                                  const DecoratedProgram& program) {
+    const auto* plan = AccumulationScope::active();
+    if (!access.has_value() || plan == nullptr || !plan->buffered(*access)) {
+        return lowered;
+    }
+    return "::" + AccumulationPlan::table_name(access->trait, *access->field, program) + "().settle(" + lowered + ")";
+}
+
+static std::string rewrite_expr(const ExprNode& expr,
+                                const std::vector<std::string>& trait_names,
+                                const DecoratedProgram& program,
+                                const std::unordered_set<std::string>& pointer_aliases,
+                                const std::unordered_map<std::string, std::string>& cpp_overrides,
+                                const PairCodegenScope* pair_scope,
+                                const LocalNumericKinds* local_kinds) {
+    return settled_access(
+        expr.field_read,
+        rewrite_expr_node(expr, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds),
+        program);
+}
+
+// The entity an accumulating assignment adds to: a named or pair-bound trait's owner, else the row.
+static std::string accumulation_entity(const VarAssign& assign,
+                                       const std::vector<std::string>& trait_names,
+                                       const DecoratedProgram& program,
+                                       const PairCodegenScope* pair_scope) {
+    const ExprNode* cursor = assign.target.get();
+    while (cursor != nullptr) {
+        if (const auto* access = std::get_if<TraitAccessExpr>(&cursor->expr)) {
+            return access->resolved_entity_id.has_value()
+                       ? EnttCodegenUtils::named_slot_name(*access->resolved_entity_id)
+                       : rewrite_expr(*access->object, trait_names, program, {}, {}, pair_scope);
+        }
+        const auto* member = std::get_if<MemberExpr>(&cursor->expr);
+        cursor             = member == nullptr ? nullptr : member->object.get();
+    }
+    return "entity";
+}
+
+// `, 1` or `, 2` when the assignment targets the y or z component of a vector field.
+static std::string accumulation_component(const VarAssign& assign, const AccumulationTarget& target) {
+    std::string last = assign.path.empty() ? assign.name : assign.path.back();
+    if (const auto* member = assign.target == nullptr ? nullptr : std::get_if<MemberExpr>(&assign.target->expr)) {
+        last = member->member;
+    }
+    if (last == target.field) {
+        return {};
+    }
+    if (last == "y") {
+        return ", 1";
+    }
+    return last == "z" ? ", 2" : std::string{};
 }
 
 // ── Rewrite statement: replace field[i] = with comp.field = ─────────────────
@@ -3421,12 +3478,15 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                     }
                 }
                 if (s.accumulation.has_value() && s.accumulation->buffered) {
-                    return ind + "::" + AccumulationPlan::table_name(*s.accumulation, program) + "()." +
-                           (s.op == "-=" ? "subtract(" : "add(") + lhs + ", " +
+                    return ind + "::" +
+                           AccumulationPlan::table_name(s.accumulation->trait, s.accumulation->field, program) + "()." +
+                           (s.op == "-=" ? "subtract(" : "add(") +
+                           accumulation_entity(s, trait_names, program, pair_scope) + ", " + lhs + ", " +
                            rewrite_expr(
                                *s.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds) +
-                           ");\n";
+                           accumulation_component(s, *s.accumulation) + ");\n";
                 }
+                lhs = settled_access(s.field_write, std::move(lhs), program);
                 if (const auto* call = std::get_if<CallExpr>(&s.value->expr)) {
                     if (const auto* ident = std::get_if<IdentExpr>(&call->callee->expr);
                         ident != nullptr && ident->name == "vec2" && call->args.size() == 2) {

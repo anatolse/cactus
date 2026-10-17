@@ -430,9 +430,11 @@ struct HandlerContract {
     // Kinds of the named fields in `write_fields`; read through write_kind().
     std::unordered_map<SymbolId, std::map<std::string, FieldWriteKind>> write_kinds;
     // Inference only: reads other than a write's own read of its target, and the
-    // `+=`/`-=` statements seen. finalize_write_kinds() uses and clears both.
+    // field assignments seen. finalize_write_kinds() uses and clears both.
     std::unordered_map<SymbolId, FieldAccess> observed_reads;
-    std::vector<std::pair<const VarAssign*, AccumulationTarget>> accumulation_sites;
+    std::vector<std::pair<const VarAssign*, AccumulationTarget>> assignment_sites;
+    // Inference only: field accesses with no field_read or field_write site in the AST.
+    std::vector<TraitFieldRef> untracked_accesses;
     std::unordered_set<SymbolId> projects;  // projected (transient) trait outputs
     std::vector<InferredProjection> projections;  // `projects` with their targets, first-use order
     // Named-entity access (`Game.Match.over`); every entry is also in reads/writes above.
@@ -465,10 +467,12 @@ struct HandlerContract {
 // field tables stay in step. `field` covers all fields when it is nullopt or
 // names no field of `declaration` (null when the trait is not resolvable).
 // A write also records the same read, which doesn't count against its kind.
+// A read of one field at `site` tags it; any other read is untracked.
 void record_read(HandlerContract& contract,
                  const SymbolId& trait,
                  const std::optional<std::string>& field,
-                 const ResolvedTrait* declaration);
+                 const ResolvedTrait* declaration,
+                 const ExprNode* site = nullptr);
 void record_write(HandlerContract& contract,
                   const SymbolId& trait,
                   const std::optional<std::string>& field,
@@ -479,23 +483,23 @@ void record_write(HandlerContract& contract,
 void record_named_read(HandlerContract& contract,
                        const NamedTraitRef& ref,
                        const std::optional<std::string>& field,
-                       const ResolvedTrait* declaration);
+                       const ResolvedTrait* declaration,
+                       const ExprNode* site = nullptr);
 void record_named_write(HandlerContract& contract,
                         const NamedTraitRef& ref,
                         const std::optional<std::string>& field,
                         const ResolvedTrait* declaration,
                         FieldWriteKind kind);
-// Notes `assign` as accumulating into `trait.field` when `kind` is Accum.
-void record_accumulation(HandlerContract& contract,
-                         const VarAssign& assign,
-                         const SymbolId& trait,
-                         const std::optional<std::string>& field,
-                         FieldWriteKind kind,
-                         bool own_row);
+// Notes `assign` as a write of `trait.field`; finalize_write_kinds() tags it.
+void record_assignment(HandlerContract& contract,
+                       const VarAssign& assign,
+                       const SymbolId& trait,
+                       const std::optional<std::string>& field,
+                       bool own_row);
 // Records that the contract projects `trait` onto `entity`.
 void add_projection(HandlerContract& contract, const SymbolId& trait, EntityTarget entity);
-// A field read outside its own updates becomes General; a statement keeps its
-// AccumulationTarget only while its field stays Accum.
+// A field read outside its own updates becomes General; an assignment keeps its
+// AccumulationTarget only while its field stays Accum, and otherwise gets a field_write.
 void finalize_write_kinds(HandlerContract& contract);
 // General for a field the contract doesn't write by name.
 [[nodiscard]] FieldWriteKind write_kind(const HandlerContract& contract, const SymbolId& trait, const std::string& field);
@@ -1724,7 +1728,8 @@ private:
     // Records a resolved named or pair trait read; false when `access` is unresolved.
     bool record_trait_access_read(HandlerContract& contract,
                                   const TraitAccessExpr& access,
-                                  const std::vector<std::string>& fields) const;
+                                  const std::vector<std::string>& fields,
+                                  const ExprNode& site) const;
 
     // The two contract mutations walk_expression_reads and walk_handler_body's
     // statement half both perform, shared so a `spawn`/`destroy` reached

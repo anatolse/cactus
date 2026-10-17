@@ -2451,26 +2451,32 @@ TEST_CASE("math: min and max order signed zeros the same both ways", "[runtime][
     CHECK_FALSE(std::signbit(stdlib::math::min(0.0F, 0.0F)));
 }
 
+namespace {
+
+using Deltas = AccumulatedDeltas<std::uint32_t>;
+
+}  // namespace
+
 TEST_CASE("accumulated deltas: a flush adds every delta exactly, in any order", "[runtime][numeric-semantics][write-kinds]") {
     float total = 1.0e8F;
-    AccumulatedDeltas deltas;
-    deltas.add(total, 1.0F);
-    deltas.subtract(total, 1.0e8F);
+    Deltas deltas;
+    deltas.add(1U, total, 1.0F);
+    deltas.subtract(1U, total, 1.0e8F);
     CHECK(total == 1.0e8F);
     deltas.flush();
     CHECK(total == 1.0F);
 
     float other = 1.0e8F;
-    deltas.subtract(other, 1.0e8F);
-    deltas.add(other, 1.0F);
+    deltas.subtract(2U, other, 1.0e8F);
+    deltas.add(2U, other, 1.0F);
     deltas.flush();
     CHECK(other == 1.0F);
 }
 
 TEST_CASE("accumulated deltas: a flush empties the table", "[runtime][numeric-semantics][write-kinds]") {
     float value = 2.0F;
-    AccumulatedDeltas deltas;
-    deltas.add(value, 0.5F);
+    Deltas deltas;
+    deltas.add(1U, value, 0.5F);
     deltas.flush();
     deltas.flush();
     CHECK(value == 2.5F);
@@ -2479,13 +2485,13 @@ TEST_CASE("accumulated deltas: a flush empties the table", "[runtime][numeric-se
 TEST_CASE("accumulated deltas: vector deltas touch only their components", "[runtime][numeric-semantics][write-kinds]") {
     Vector2 offset{.x = 1.0e8F, .y = -0.0F};
     Vector3 position{.x = 0.0F, .y = 0.0F, .z = 3.0F};
-    AccumulatedDeltas deltas;
-    deltas.add(offset.x, 1.0F);
-    deltas.subtract(offset.x, 1.0e8F);
-    deltas.add(position, Vector3{.x = 0.25F, .y = 0.5F, .z = 0.0F});
-    deltas.subtract(position, Vector3{.x = 0.0F, .y = 0.5F, .z = 1.0F});
-    deltas.add(offset, Vector2{.x = 0.0F, .y = 0.0F});
-    deltas.subtract(offset, Vector2{.x = 0.0F, .y = 0.0F});
+    Deltas deltas;
+    deltas.add(1U, offset.x, 1.0F);
+    deltas.subtract(1U, offset.x, 1.0e8F);
+    deltas.add(2U, position, Vector3{.x = 0.25F, .y = 0.5F, .z = 0.0F});
+    deltas.subtract(2U, position, Vector3{.x = 0.0F, .y = 0.5F, .z = 1.0F});
+    deltas.add(1U, offset, Vector2{.x = 0.0F, .y = 0.0F});
+    deltas.subtract(1U, offset, Vector2{.x = 0.0F, .y = 0.0F});
     deltas.flush();
     CHECK(offset.x == 1.0F);
     CHECK(offset.y == 0.0F);
@@ -2497,15 +2503,145 @@ TEST_CASE("accumulated deltas: vector deltas touch only their components", "[run
 
 TEST_CASE("accumulated deltas: a lone delta equals a plain add", "[runtime][numeric-semantics][write-kinds]") {
     float value = 0.0F;
-    AccumulatedDeltas deltas;
-    deltas.add(value, 0.1F);
+    Deltas deltas;
+    deltas.add(1U, value, 0.1F);
     deltas.flush();
     CHECK(value == 0.0F + 0.1F);
 
     float negative_zero = -0.0F;
-    deltas.add(negative_zero, -0.0F);
+    deltas.add(1U, negative_zero, -0.0F);
     deltas.flush();
     CHECK(std::signbit(negative_zero));
+}
+
+TEST_CASE("accumulated deltas: settling one cell leaves the others pending", "[runtime][numeric-semantics][write-kinds]") {
+    float first  = 1.0e8F;
+    float second = 1.0e8F;
+    Deltas deltas;
+    deltas.add(1U, first, 1.0F);
+    deltas.add(2U, second, 1.0F);
+    CHECK(deltas.settle(first) == 1.0e8F);
+    CHECK(second == 1.0e8F);
+    deltas.subtract(1U, first, 1.0e8F);
+    deltas.subtract(2U, second, 1.0e8F);
+    deltas.flush();
+    CHECK(first == 0.0F);
+    CHECK(second == 1.0F);
+}
+
+TEST_CASE("accumulated deltas: settling a cell twice applies its deltas once", "[runtime][numeric-semantics][write-kinds]") {
+    float value = 1.0F;
+    float other = 0.0F;
+    Deltas deltas;
+    deltas.add(1U, value, 0.5F);
+    deltas.add(2U, other, 0.25F);
+    CHECK(deltas.settle(value) == 1.5F);
+    CHECK(deltas.settle(value) == 1.5F);
+    deltas.add(1U, value, 0.5F);
+    CHECK(deltas.settle(value) == 2.0F);
+    deltas.flush();
+    CHECK(value == 2.0F);
+    CHECK(other == 0.25F);
+}
+
+TEST_CASE("accumulated deltas: settling an empty table changes nothing", "[runtime][numeric-semantics][write-kinds]") {
+    float value = -0.0F;
+    Deltas deltas;
+    CHECK(&deltas.settle(value) == &value);
+    CHECK(std::signbit(value));
+    deltas.add(1U, value, 1.0F);
+    deltas.flush();
+    float untouched = 3.0F;
+    CHECK(deltas.settle(untouched) == 3.0F);
+}
+
+TEST_CASE("accumulated deltas: settling a vector settles each component", "[runtime][numeric-semantics][write-kinds]") {
+    Vector3 position{.x = 1.0e8F, .y = 1.0e8F, .z = 0.0F};
+    Vector2 offset{.x = 1.0e8F, .y = 0.0F};
+    Deltas deltas;
+    deltas.add(1U, position, Vector3{.x = 1.0F, .y = 1.0F, .z = 1.0F});
+    deltas.add(1U, offset.x, 1.0F);
+    deltas.add(1U, offset.y, 1.0F, 1U);
+    CHECK(deltas.settle(position).z == 1.0F);
+    CHECK(position.x == 1.0e8F);
+    CHECK(deltas.settle(offset).y == 1.0F);
+    deltas.subtract(1U, position, Vector3{.x = 1.0e8F, .y = 0.0F, .z = 0.0F});
+    deltas.subtract(1U, offset.x, 1.0e8F);
+    deltas.flush();
+    CHECK(position.x == 0.0F);
+    CHECK(offset.x == 0.0F);
+}
+
+TEST_CASE("accumulated deltas: cells settle in any order", "[runtime][numeric-semantics][write-kinds]") {
+    std::array<float, 6> cells{};
+    Deltas deltas;
+    const auto fill = [&] {
+        for (std::size_t index = 0; index < cells.size(); ++index) {
+            cells[index] = 0.0F;
+            deltas.add(static_cast<std::uint32_t>(index), cells[index], 1.0F);
+            deltas.add(static_cast<std::uint32_t>(index), cells[index], static_cast<float>(index));
+        }
+    };
+    const auto expect_settled = [&] {
+        for (std::size_t index = 0; index < cells.size(); ++index) {
+            CHECK(cells[index] == 1.0F + static_cast<float>(index));
+        }
+    };
+    fill();
+    for (auto& cell : cells) {
+        deltas.settle(cell);
+    }
+    expect_settled();
+    deltas.flush();
+    expect_settled();
+
+    fill();
+    for (auto cell = cells.rbegin(); cell != cells.rend(); ++cell) {
+        deltas.settle(*cell);
+    }
+    expect_settled();
+    deltas.flush();
+
+    fill();
+    for (const std::size_t index : {3U, 0U, 5U, 1U, 4U, 2U}) {
+        deltas.settle(cells[index]);
+    }
+    expect_settled();
+    deltas.flush();
+    expect_settled();
+}
+
+TEST_CASE("accumulated deltas: a rebase follows each entity to its new cell", "[runtime][numeric-semantics][write-kinds]") {
+    std::array<Vector2, 2> before{Vector2{.x = 1.0e8F, .y = 1.0e8F}, Vector2{.x = 1.0e8F, .y = 1.0e8F}};
+    std::array<Vector2, 2> after = before;
+    Deltas deltas;
+    deltas.add(7U, before[0].y, 1.0F, 1U);
+    deltas.add(9U, before[1], Vector2{.x = 1.0F, .y = 0.0F});
+    deltas.rebase([&](std::uint32_t entity, std::uint8_t component) -> float* {
+        auto& moved = entity == 7U ? after[1] : after[0];
+        return component == 0U ? &moved.x : &moved.y;
+    });
+    deltas.subtract(7U, after[1].y, 1.0e8F, 1U);
+    deltas.subtract(9U, after[0].x, 1.0e8F);
+    deltas.flush();
+    CHECK(after[1].y == 1.0F);
+    CHECK(after[0].x == 1.0F);
+    CHECK(before[0].y == 1.0e8F);
+    CHECK(before[1].x == 1.0e8F);
+}
+
+TEST_CASE("accumulated deltas: a rebase drops the deltas of an entity without the trait", "[runtime][numeric-semantics][write-kinds]") {
+    float gone = 1.0F;
+    float kept = 1.0F;
+    Deltas deltas;
+    deltas.add(1U, gone, 1.0F);
+    deltas.add(2U, kept, 1.0F);
+    CHECK(deltas.settle(kept) == 2.0F);
+    deltas.add(2U, kept, 1.0F);
+    deltas.rebase([&](std::uint32_t entity, std::uint8_t) -> float* { return entity == 2U ? &kept : nullptr; });
+    deltas.flush();
+    CHECK(gone == 1.0F);
+    CHECK(kept == 3.0F);
 }
 
 TEST_CASE("math: a multiply-add rounds the product before adding", "[runtime][stdlib][math][numeric-semantics]") {

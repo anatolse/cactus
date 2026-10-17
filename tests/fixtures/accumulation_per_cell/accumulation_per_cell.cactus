@@ -1,0 +1,72 @@
+module accumulation_per_cell
+
+use std.core
+
+# One entity's read ends only that entity's accumulation interval; a read
+# that does not run ends none.
+
+trait Pool:
+    var level: float = 100000000.0
+
+trait Seen:
+    var level: float = 0.0
+
+trait Gauge:
+    var level: float = 100000000.0
+
+trait Probe:
+    var level: float = -1.0
+
+entity First:
+    Pool
+    Seen
+
+entity Second:
+    Pool
+
+entity Meter:
+    Gauge
+    Probe
+
+rule AddOne:
+    each:
+        Pool as p
+    on tick:
+        p.level += 1.0
+
+# Reads only First's level, after AddOne.
+rule Look:
+    each:
+        Seen as seen
+    on tick:
+        seen.level = First[Pool].level
+
+rule TakeLarge:
+    each:
+        Pool as p
+    after:
+        Look
+    on tick:
+        p.level -= 100000000.0
+
+rule Raise:
+    each:
+        Gauge as g
+    on tick:
+        g.level += 1.0
+
+# The condition is false, so the read of Meter's level never runs.
+rule GuardedLook:
+    each:
+        Probe as probe
+    on tick:
+        if probe.level > 0.0:
+            probe.level = Meter[Gauge].level
+
+rule Lower:
+    each:
+        Gauge as g
+    after:
+        GuardedLook
+    on tick:
+        g.level -= 100000000.0

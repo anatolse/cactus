@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <map>
 #include <ranges>
+#include <utility>
 
 namespace cactus {
 
@@ -103,14 +104,27 @@ bool may_move_storage(const HandlerContract& contract) {
     return contract.effect_acts.contains("editor") || contract.effect_acts.contains("external");
 }
 
-}  // namespace
-
-AccumulationPlan::AccumulationPlan(const DecoratedProgram& program) {
-    if (program.ast == nullptr) {
-        return;
+// Whether some access of the field in `handler` has no settle call at its site.
+bool needs_entry_flush(const HandlerNode& handler,
+                       const AccumulationTarget& target,
+                       const std::vector<TraitFieldRef>* untracked) {
+    const auto& contract = handler.contract;
+    if (handler.implementation == HandlerImplementationKind::External || untracked == nullptr ||
+        may_move_storage(contract) || contract.projects.contains(target.trait) || contract.spatial_join.has_value() ||
+        contract.reduction.has_value()) {
+        return true;
     }
-    FieldWriterTable fields;
-    for (const auto& declaration : program.ast->declarations) {
+    return std::ranges::any_of(*untracked, [&](const TraitFieldRef& access) {
+        return access.trait == target.trait && (!access.field.has_value() || *access.field == target.field);
+    });
+}
+
+using HandlerNodes = std::unordered_map<HandlerIdentity, const EventHandlerNode*, HandlerIdentityHash>;
+
+// Every Cactus handler by identity, with its accumulating statements collected into `fields`.
+HandlerNodes collect_handlers(const ProgramNode& ast, FieldWriterTable& fields) {
+    HandlerNodes handlers;
+    for (const auto& declaration : ast.declarations) {
         const auto* rule = std::get_if<RuleNode>(&declaration);
         if (rule == nullptr || !rule->resolved_rule_id.has_value()) {
             continue;
@@ -119,10 +133,33 @@ AccumulationPlan::AccumulationPlan(const DecoratedProgram& program) {
             if (handler.resolved_trigger.has_value()) {
                 const HandlerIdentity identity{.rule = *rule->resolved_rule_id, .trigger = *handler.resolved_trigger};
                 collect_sites(handler.body, identity, false, fields);
+                handlers.emplace(identity, &handler);
             }
         }
     }
-    for (auto& [key, writers] : fields) {
+    return handlers;
+}
+
+// Null for a handler with no Cactus body.
+const std::vector<TraitFieldRef>* untracked_accesses(const HandlerNodes& handlers, const HandlerIdentity& identity) {
+    const auto found = handlers.find(identity);
+    return found == handlers.end() ? nullptr : &found->second->untracked_accesses;
+}
+
+const AccumulationPlan*& active_plan() {
+    thread_local const AccumulationPlan* active = nullptr;
+    return active;
+}
+
+}  // namespace
+
+AccumulationPlan::AccumulationPlan(const DecoratedProgram& program) {
+    if (program.ast == nullptr) {
+        return;
+    }
+    FieldWriterTable fields;
+    const auto handler_nodes = collect_handlers(*program.ast, fields);
+    for (auto& writers : fields | std::views::values) {
         const bool buffered = holds_floats(writers.target, program) && !deltas_never_meet(writers);
         for (const auto* statement : writers.statements) {
             if (statement->accumulation.has_value()) {
@@ -132,15 +169,28 @@ AccumulationPlan::AccumulationPlan(const DecoratedProgram& program) {
         if (!buffered) {
             continue;
         }
-        const auto table = table_name(writers.target, program);
+        const auto table = table_name(writers.target.trait, writers.target.field, program);
         tables_.push_back(table);
+        fields_.push_back(TraitFieldRef{.trait = writers.target.trait, .field = writers.target.field});
         for (const auto& handler : program.execution_graph.handlers) {
-            if (touches_directly(handler.contract, writers.target) || may_move_storage(handler.contract)) {
+            if (touches_directly(handler.contract, writers.target) &&
+                needs_entry_flush(handler, writers.target, untracked_accesses(handler_nodes, handler.identity))) {
                 entry_flushes_[handler.identity].push_back(table);
             }
         }
     }
-    std::ranges::sort(tables_);
+    if (tables_.empty()) {
+        return;
+    }
+    for (const auto& handler : program.execution_graph.handlers) {
+        if (may_move_storage(handler.contract)) {
+            rebases_.insert(handler.identity);
+        }
+    }
+}
+
+bool AccumulationPlan::buffered(const TraitFieldRef& access) const {
+    return access.field.has_value() && std::ranges::find(fields_, access) != fields_.end();
 }
 
 std::string AccumulationPlan::entry_flushes(const HandlerIdentity& handler) const {
@@ -155,9 +205,26 @@ std::string AccumulationPlan::entry_flushes(const HandlerIdentity& handler) cons
     return text;
 }
 
-std::string AccumulationPlan::table_name(const AccumulationTarget& target, const DecoratedProgram& program) {
-    return "generated_accumulation__" +
-           EnttCodegenUtils::trait_cpp_name(target.trait, target.trait.local_name, program) + "__" + target.field;
+std::string AccumulationPlan::exit_rebase(const HandlerIdentity& handler) const {
+    return rebases_.contains(handler) ? "    ::generated_rebase_accumulations(registry);\n" : std::string{};
+}
+
+std::string AccumulationPlan::table_name(const SymbolId& trait,
+                                         const std::string& field,
+                                         const DecoratedProgram& program) {
+    return "generated_accumulation__" + EnttCodegenUtils::trait_cpp_name(trait, trait.local_name, program) + "__" +
+           field;
+}
+
+AccumulationScope::AccumulationScope(const AccumulationPlan& plan)
+    : previous_(std::exchange(active_plan(), &plan)) {}
+
+AccumulationScope::~AccumulationScope() {
+    active_plan() = previous_;
+}
+
+const AccumulationPlan* AccumulationScope::active() {
+    return active_plan();
 }
 
 }  // namespace cactus

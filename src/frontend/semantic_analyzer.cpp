@@ -7510,6 +7510,7 @@ void SemanticAnalyzer::collect_rule_dependency(const RuleNode& rule, std::size_t
             inferred.iteration_order =
                 derive_iteration_order(inferred, rule.limit.has_value() && rule.order_by.empty());
             stage_rule_clauses(rule, pair_scope, inferred);
+            handler.untracked_accesses = std::exchange(inferred.untracked_accesses, {});
             result_.handler_contracts.push_back(inferred);
 
             HandlerNode node;
@@ -7886,9 +7887,15 @@ bool writes_commute(const FieldWriteKind& left, const FieldWriteKind& right) {
 void record_read(HandlerContract& contract,
                  const SymbolId& trait,
                  const std::optional<std::string>& field,
-                 const ResolvedTrait* declaration) {
+                 const ResolvedTrait* declaration,
+                 const ExprNode* site) {
     record_unobserved_read(contract, trait, field, declaration);
     add_field_access(contract.observed_reads[trait], field, declaration);
+    if (site != nullptr && field.has_value()) {
+        site->field_read = TraitFieldRef{.trait = trait, .field = field};
+    } else {
+        contract.untracked_accesses.push_back(TraitFieldRef{.trait = trait, .field = field});
+    }
 }
 
 void record_write(HandlerContract& contract,
@@ -7897,6 +7904,9 @@ void record_write(HandlerContract& contract,
                   const ResolvedTrait* declaration,
                   FieldWriteKind kind) {
     record_unobserved_read(contract, trait, field, declaration);
+    if (!field.has_value()) {
+        contract.untracked_accesses.push_back(TraitFieldRef{.trait = trait, .field = std::nullopt});
+    }
     contract.writes.insert(trait);
     auto& access = contract.write_fields[trait];
     add_field_access(access, field, declaration);
@@ -7916,9 +7926,10 @@ void record_write(HandlerContract& contract,
 void record_named_read(HandlerContract& contract,
                        const NamedTraitRef& ref,
                        const std::optional<std::string>& field,
-                       const ResolvedTrait* declaration) {
+                       const ResolvedTrait* declaration,
+                       const ExprNode* site) {
     record_named_requirement(contract, ref, field, declaration);
-    record_read(contract, ref.trait, field, declaration);
+    record_read(contract, ref.trait, field, declaration, site);
 }
 
 void record_named_write(HandlerContract& contract,
@@ -7931,14 +7942,13 @@ void record_named_write(HandlerContract& contract,
     record_write(contract, ref.trait, field, declaration, kind);
 }
 
-void record_accumulation(HandlerContract& contract,
-                         const VarAssign& assign,
-                         const SymbolId& trait,
-                         const std::optional<std::string>& field,
-                         FieldWriteKind kind,
-                         bool own_row) {
-    if (kind.kind == WriteKind::Accum && field.has_value()) {
-        contract.accumulation_sites.emplace_back(
+void record_assignment(HandlerContract& contract,
+                       const VarAssign& assign,
+                       const SymbolId& trait,
+                       const std::optional<std::string>& field,
+                       bool own_row) {
+    if (field.has_value()) {
+        contract.assignment_sites.emplace_back(
             &assign, AccumulationTarget{.trait = trait, .field = *field, .own_row = own_row});
     }
 }
@@ -7956,11 +7966,16 @@ void finalize_write_kinds(HandlerContract& contract) {
         }
     }
     contract.observed_reads.clear();
-    for (auto& [assign, target] : contract.accumulation_sites) {
-        const bool accum      = write_kind(contract, target.trait, target.field).kind == WriteKind::Accum;
-        assign->accumulation = accum ? std::optional(std::move(target)) : std::nullopt;
+    for (auto& [assign, target] : contract.assignment_sites) {
+        if (write_kind(contract, target.trait, target.field).kind == WriteKind::Accum) {
+            assign->accumulation = std::move(target);
+            assign->field_write.reset();
+        } else {
+            assign->field_write = TraitFieldRef{.trait = target.trait, .field = target.field};
+            assign->accumulation.reset();
+        }
     }
-    contract.accumulation_sites.clear();
+    contract.assignment_sites.clear();
 }
 
 FieldWriteKind write_kind(const HandlerContract& contract, const SymbolId& trait, const std::string& field) {
@@ -8056,7 +8071,7 @@ void SemanticAnalyzer::walk_expression_reads(  // NOLINT(readability-function-co
     HandlerContract& contract,
     const std::function<bool(const ExprNode&, const LocalNames&)>& resolve_read) const {
     if (const auto path = trait_field_path(expr);
-        path.has_value() && record_trait_access_read(contract, *path->first, path->second)) {
+        path.has_value() && record_trait_access_read(contract, *path->first, path->second, expr)) {
         return;
     }
     if (const auto* access = std::get_if<TraitAccessExpr>(&expr.expr)) {
@@ -8135,20 +8150,21 @@ void SemanticAnalyzer::walk_expression_reads(  // NOLINT(readability-function-co
 
 bool SemanticAnalyzer::record_trait_access_read(HandlerContract& contract,
                                                 const TraitAccessExpr& access,
-                                                const std::vector<std::string>& fields) const {
+                                                const std::vector<std::string>& fields,
+                                                const ExprNode& site) const {
     if (!access.resolved_trait_id.has_value()) {
         return false;
     }
     const auto* declaration = find_resolved_trait(*access.resolved_trait_id);
     if (const auto named = access.named_ref(); named.has_value()) {
-        record_named_read(contract, *named, segment_at(fields, 0), declaration);
+        record_named_read(contract, *named, segment_at(fields, 0), declaration, &site);
         return true;
     }
     if (!access.pair_binding_index.has_value()) {
         return false;
     }
     add_bound_read(contract, *access.pair_binding_index, *access.resolved_trait_id);
-    record_read(contract, *access.resolved_trait_id, segment_at(fields, 0), declaration);
+    record_read(contract, *access.resolved_trait_id, segment_at(fields, 0), declaration, &site);
     return true;
 }
 
@@ -8227,7 +8243,7 @@ struct SemanticAnalyzer::HandlerBodyVisitor {
         if (named.has_value()) {
             const auto field = segment_at(target->second, 0);
             record_named_write(*contract, *named, field, analyzer->find_resolved_trait(named->trait), form.kind);
-            record_accumulation(*contract, node, named->trait, field, form.kind, false);
+            record_assignment(*contract, node, named->trait, field, false);
         } else {
             handle_var_assign(node, *locals);
         }
@@ -8446,7 +8462,7 @@ bool SemanticAnalyzer::walk_state_arm(const MatchStmt& match,
         const auto* member = std::get_if<MemberExpr>(&expr.expr);
         const auto* owner  = member == nullptr ? nullptr : std::get_if<IdentExpr>(&member->object->expr);
         if (owner != nullptr && owner->name == alias) {
-            record_read(contract, variant, member->member, declaration);
+            record_read(contract, variant, member->member, declaration, &expr);
             return true;
         }
         return resolve_read(expr, names);
@@ -8456,7 +8472,7 @@ bool SemanticAnalyzer::walk_state_arm(const MatchStmt& match,
             const auto kind  = classify_assignment(assign).kind;
             const auto field = segment_at(assign.path, 0);
             record_write(contract, variant, field, declaration, kind);
-            record_accumulation(contract, assign, variant, field, kind, true);
+            record_assignment(contract, assign, variant, field, true);
             return;
         }
         handle_var_assign(assign, names);
@@ -8589,8 +8605,9 @@ SemanticAnalyzer::infer_regular_handler_contract(  // NOLINT(readability-functio
         }
         return match;
     };
-    auto add_read = [this, &contract](const SymbolId& symbol, const std::optional<std::string>& field) {
-        record_read(contract, symbol, field, find_resolved_trait(symbol));
+    auto add_read = [this, &contract](
+                        const SymbolId& symbol, const std::optional<std::string>& field, const ExprNode& site) {
+        record_read(contract, symbol, field, find_resolved_trait(symbol), &site);
     };
     auto add_write = [this, &contract](
                          const SymbolId& symbol, const std::optional<std::string>& field, FieldWriteKind kind) {
@@ -8600,7 +8617,7 @@ SemanticAnalyzer::infer_regular_handler_contract(  // NOLINT(readability-functio
                               const VarAssign& node, const SymbolId& symbol, const std::optional<std::string>& field) {
         const auto kind = classify_assignment(node).kind;
         add_write(symbol, field, kind);
-        record_accumulation(contract, node, symbol, field, kind, true);
+        record_assignment(contract, node, symbol, field, true);
     };
 
     auto resolve_read = [&](const ExprNode& expr, const LocalNames& locals) -> bool {
@@ -8609,16 +8626,16 @@ SemanticAnalyzer::infer_regular_handler_contract(  // NOLINT(readability-functio
                 return true;
             }
             if (auto alias = aliases.find(ident->name); alias != aliases.end()) {
-                add_read(alias->second, std::nullopt);
+                add_read(alias->second, std::nullopt, expr);
             } else if (auto trait = trait_for_field(ident->name); trait.has_value()) {
-                add_read(*trait, ident->name);
+                add_read(*trait, ident->name, expr);
             }
             return true;
         }
         if (const auto* member = std::get_if<MemberExpr>(&expr.expr)) {
             if (const auto* owner = std::get_if<IdentExpr>(&member->object->expr);
                 owner != nullptr && aliases.contains(owner->name)) {
-                add_read(aliases.at(owner->name), member->member);
+                add_read(aliases.at(owner->name), member->member, expr);
                 return true;
             }
         }
@@ -8716,7 +8733,7 @@ void SemanticAnalyzer::record_pair_binding_write(const VarAssign& node,
     const auto kind  = classify_assignment(node).kind;
     const auto field = segment_at(target->second, 0);
     record_write(contract, trait, field, find_resolved_trait(trait), kind);
-    record_accumulation(contract, node, trait, field, kind, true);
+    record_assignment(contract, node, trait, field, true);
 }
 
 InferredHandlerContract SemanticAnalyzer::infer_pair_handler_contract(const RuleNode& rule,

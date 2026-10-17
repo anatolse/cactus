@@ -213,7 +213,7 @@ The Cactus authoring surface SHALL be divided into two tiers:
 
 **Tier 1 — Declarative**: assets, inputs, trait declarations, unit/template declarations, rule declarations, event declarations, module structure, and other structural gameplay description.
 
-**Tier 2 — Restricted imperative**: behavior inside handlers only, including field mutation, conditionals, event emission, spawn/destroy, trait add/remove, projected trait facts, bounded list iteration, and pure function calls.
+**Tier 2 — Restricted imperative**: world-changing behavior inside handlers, including field mutation, conditionals, event emission, spawn/destroy, trait add/remove, projected trait facts, bounded iteration and pure function calls. Pure functions also support local value computation, conditionals and finite list/range iteration; they cannot access or mutate world state or perform effects.
 
 The following SHALL be explicitly out of scope for the authoring tier:
 - general loops (`while`, numeric/indexed `for`, and other open-ended loop forms),
@@ -222,7 +222,7 @@ The following SHALL be explicitly out of scope for the authoring tier:
 - direct memory management,
 - unsafe operations.
 
-Bounded `for item in list_expr:` iteration is permitted as a restricted handler construct because it iterates a finite list snapshot and does not introduce open-ended control flow.
+Bounded `for item in list_expr:` and direct `for i in range(...):` iteration are permitted in handlers and pure functions. They capture a finite iteration domain once and do not introduce open-ended control flow. Function iterations permit only local value computation. Finite termination does not imply that every chosen bound has low execution cost.
 
 #### Scenario: General loop construct rejected
 - **WHEN** a `while` statement or numeric/indexed `for` loop appears in author code
@@ -235,6 +235,10 @@ Bounded `for item in list_expr:` iteration is permitted as a restricted handler 
 #### Scenario: Func recursion rejected
 - **WHEN** a `func` body calls itself directly
 - **THEN** the compiler SHALL report that recursive calls are not allowed in pure `func` bodies
+
+#### Scenario: Pure function computes a finite sample
+- **WHEN** a pure function evaluates a bounded set of noise candidates using local accumulators
+- **THEN** the computation is accepted without granting world access, effects, recursion or open-ended loops
 
 ### Requirement: The author/backend split
 The following concerns SHALL be treated as backend or stdlib responsibilities rather than authored gameplay code:

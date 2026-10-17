@@ -758,15 +758,23 @@ The semantic analyzer SHALL validate foreach statements by requiring the iterabl
 - **THEN** the semantic analyzer reports that foreach loop variables are read-only
 
 ### Requirement: Semantic analyzer restricts foreach context
-Bounded foreach statements SHALL be valid in rule event handlers and rejected in pure `func` bodies for v1.
+Bounded foreach statements SHALL be valid in rule event handlers and pure func bodies. List and direct range iterables SHALL retain their existing type, snapshot and total-range rules. Within a pure func, iterable expressions and bodies SHALL obey ordinary function purity: only local value mutation is permitted, and world reads, effects and structural commands remain rejected. Loop bindings SHALL remain read-only.
 
 #### Scenario: Foreach in handler accepted
-- **WHEN** a rule event handler iterates a list value with `for item in items:`
+- **WHEN** a rule event handler iterates a list value with for item in items
 - **THEN** the semantic analyzer accepts the statement subject to ordinary type checks
 
+#### Scenario: Foreach in pure func accepted
+- **WHEN** a pure func iterates a finite list parameter and updates a local accumulator
+- **THEN** the semantic analyzer accepts the loop and local mutation
+
+#### Scenario: Range in pure func accepted
+- **WHEN** a pure func iterates a direct range with pure integer bounds
+- **THEN** the semantic analyzer accepts the loop with the existing finite range semantics
+
 #### Scenario: Foreach in pure func rejected
-- **WHEN** a user `func` body contains `for item in items:`
-- **THEN** the semantic analyzer reports that bounded foreach is only allowed in handler/world-aware contexts
+- **WHEN** a function loop contains an event emission, structural command, world read or call whose effect summary is not proven pure
+- **THEN** the semantic analyzer rejects the effect even when nested inside conditionals or other loops
 
 ### Requirement: Semantic analyzer validates project statements
 The semantic analyzer SHALL validate `project` statements similarly to `add` statements: the trait name must resolve to a declared trait, field assignments must refer to fields on that trait, field values must type-check, and any `to` target expression must have type `entity_id`. If no target is supplied, the statement targets `self` and therefore requires a current entity context.
@@ -1138,3 +1146,26 @@ A trait field declared with `let` SHALL get its value only when a value of its t
 #### Scenario: Every rejected write is reported
 - **WHEN** one handler writes two different `let` fields and a second handler writes a third
 - **THEN** compilation reports three diagnostics, one per write
+
+### Requirement: Function loop analysis preserves purity and return guarantees
+Function validation SHALL traverse loop iterable expressions and bodies for type checks, mutation rules, purity and direct/indirect recursion. A function requiring a result SHALL NOT satisfy its return obligation solely through a loop that can execute zero times. Loop syntax SHALL NOT grant mutable access to arguments or external values, general recursion, or new render-stage constructs.
+
+#### Scenario: Zero-iteration return path
+- **WHEN** a value-returning func returns only inside a loop whose range may be empty
+- **THEN** the analyzer reports a missing return path
+
+#### Scenario: Fall-through return path
+- **WHEN** a value-returning func can reach the end of its body, such as through an `if` without `else`
+- **THEN** the analyzer reports a missing return path, whether or not the func contains a loop
+
+#### Scenario: Call not proven pure
+- **WHEN** a func body, inside or outside a loop, calls an extern func whose effect summary is unknown or not empty
+- **THEN** the analyzer rejects the call at its source location
+
+#### Scenario: Recursive call hidden in a loop
+- **WHEN** a function loop calls another function that calls the first
+- **THEN** the normal indirect recursion diagnostic is reported
+
+#### Scenario: Unsupported render-stage use stays explicit
+- **WHEN** a render-stage expression transitively invokes a function construct unsupported by that stage
+- **THEN** the compiler rejects that use with a source-located diagnostic instead of silently changing execution semantics

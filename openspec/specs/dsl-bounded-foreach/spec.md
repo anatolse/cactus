@@ -4,7 +4,7 @@ Define the bounded foreach statement for finite snapshot iteration in handler co
 ## Requirements
 
 ### Requirement: Bounded foreach iterates finite list snapshots
-The DSL SHALL support a bounded foreach statement inside rule event handlers for iterating over finite `list[T]` values.
+The DSL SHALL support a bounded foreach statement inside rule event handlers and pure function bodies for iterating over finite `list[T]` values.
 
 The iterable expression SHALL be evaluated exactly once before iteration begins. The resulting list value SHALL be treated as an immutable snapshot for the duration of the loop. The loop variable SHALL be a read-only binding scoped to the loop body.
 
@@ -92,3 +92,34 @@ Unlike other bounded-foreach iterable forms, which snapshot a `list[T]` value, t
 #### Scenario: No list snapshot is constructed for range()
 - **WHEN** the `cpp-entt` backend compiles `for k in range(0, PARTICLE_COUNT):`
 - **THEN** the generated code does not construct a `std::vector` or other heap-backed container to represent the range
+
+### Requirement: Pure functions support bounded value iteration
+Pure func bodies SHALL accept the existing finite list and direct range forms. The loop SHALL evaluate its iterable or bounds once before execution, bind a read-only loop variable and allow mutation only of function-local values. It SHALL preserve existing empty-range, zero-step, direction and overflow behavior. return inside a loop SHALL exit the entire function. No new keyword, general loop, break, continue or recursion is introduced.
+
+#### Scenario: Local numeric reduction
+- **WHEN** a pure function iterates a finite list of floats and sums into a local var
+- **THEN** it returns a value computed without external mutation
+
+#### Scenario: Bounded neighbourhood evaluation
+- **WHEN** a pure function loops over a fixed finite range of candidate indices
+- **THEN** it can retain the nearest two results in local value variables without native algorithm code
+
+#### Scenario: Bounds captured once
+- **WHEN** a local used in range bounds changes inside the loop
+- **THEN** the iteration count still follows the values captured at loop entry
+
+#### Scenario: Zero step is finite
+- **WHEN** a pure function loops over range with step zero
+- **THEN** no iterations execute and evaluation continues after the loop
+
+#### Scenario: Return exits the function
+- **WHEN** a return executes inside nested function loops
+- **THEN** it exits that function invocation and no later iteration runs
+
+#### Scenario: Range stops at the integer limit
+- **WHEN** a range's next step would pass the `int` limit, as in `range(2147483640, 2147483647, 4)`
+- **THEN** the loop ends after its last in-range value instead of wrapping around, in handlers and functions alike
+
+#### Scenario: Range allocation remains unchanged
+- **WHEN** a pure function uses direct range iteration
+- **THEN** generated code does not allocate a list to represent that range

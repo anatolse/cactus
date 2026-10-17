@@ -129,6 +129,14 @@ Within one activation, take the Accum writes (`+=`, `-=`) to one `float` field o
 - **WHEN** a `tick` handler runs `p.level += 1.0` on an entity whose `Pool.level` is `1.0e8`, and an `on added Mark` handler that runs in the activation's first commit round runs `p.level -= 1.0e8` on the same entity
 - **THEN** the two deltas are rounded separately: after the activation `Pool.level` is `0.0`
 
+#### Scenario: A read of another entity does not end the interval
+- **WHEN** entities `First` and `Second` both have `Pool.level = 1.0e8`, handler A runs `p.level += 1.0` on each, handler C then reads only `First[Pool].level`, and handler B, ordered after C, runs `p.level -= 1.0e8` on each
+- **THEN** C reads `1.0e8`, and after the activation `First`'s level is `0.0` and `Second`'s level is `1.0`
+
+#### Scenario: A guarded read that does not run does not end the interval
+- **WHEN** handler C reads `Second`'s `Pool.level` only inside an `if` whose condition is false, between two Accum writes to that field
+- **THEN** the two deltas are summed exactly and rounded once
+
 ### Requirement: Float min and max are commutative
 `math.min` and `math.max` on `float` SHALL be commutative, associative and idempotent: NaN in either argument SHALL give NaN, `math.max(-0.0, 0.0)` and `math.max(0.0, -0.0)` SHALL both be `0.0`, and `math.min(-0.0, 0.0)` and `math.min(0.0, -0.0)` SHALL both be `-0.0`.
 

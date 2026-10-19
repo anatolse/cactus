@@ -124,3 +124,24 @@ std.collision.volume SHALL export pub func sphere_sphere_separation(a_position: 
 - **WHEN** a pair rule's `where:` clause calls `collision.sphere_box_overlap(...)`
 - **THEN** the call is accepted as a pure `where:` predicate
 
+### Requirement: Ray box intersection has a pure Cactus implementation
+std.collision.volume SHALL provide a pure ray/axis-aligned-box function over plain origin, direction, maximum distance, box centre and box size values. It SHALL return a plain result containing hit, world-space distance, point and normal. It SHALL be implemented as ordinary Cactus funcs, reuse shared scalar/vector helpers, and remain independent of physics traits and world access.
+
+Finite nonzero directions SHALL be normalized. Box dimensions SHALL use their absolute magnitudes; a zero dimension, invalid numeric input or nonpositive distance limit SHALL return an explicit miss. A ray starting strictly inside a box SHALL hit at distance zero with zero normal. Entry-face ties SHALL resolve X, then Y, then Z. Contact exactly at the maximum distance SHALL count as a hit. On a face, a ray entering the box SHALL hit at zero with that face's normal, while a ray leaving it SHALL miss; parallel grazing faces SHALL use a documented consistent inclusion rule. A companion `ray_hits_box` with the same arguments SHALL return whether `ray_box` hits, so a pair rule can state the exact test in `where:`.
+
+#### Scenario: Exact surface hit
+- **WHEN** a ray intersects a box face within its maximum distance
+- **THEN** the returned point lies on that face and the normal points outward
+
+#### Scenario: Ray misses the geometry
+- **WHEN** a ray passes near the box centre but outside the box
+- **THEN** the result is a miss regardless of centre proximity
+
+#### Scenario: Invalid geometry is total
+- **WHEN** the ray has a zero direction or the box has a zero dimension
+- **THEN** the function returns a miss without a world read, exception or undefined arithmetic
+
+#### Scenario: Geometry used by a rule
+- **WHEN** a rule calls the function with geometry from its selected traits
+- **THEN** the function is usable in pure predicates and reducer input expressions
+- **AND** no ray-test-specific native function is needed for its reference behavior

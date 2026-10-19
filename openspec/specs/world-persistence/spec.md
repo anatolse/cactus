@@ -220,3 +220,16 @@ Publication SHALL reset runtime state that holds entity handles from the replace
 - **WHEN** a restored world contains no camera because no camera archetype was eligible
 - **THEN** gameplay can rebuild it in response to the restore outcome event, and nothing from the replaced world persists implicitly
 
+### Requirement: Unset asset handles round-trip as unset
+A recorded asset-reference field that holds no asset SHALL be captured as the empty declaration name, which no declaration can have, and SHALL restore as an unset handle instead of failing resource preparation.
+
+#### Scenario: Air cells keep no texture
+- **WHEN** a save contains cells whose persistent `texture_id` field was never assigned
+- **THEN** the restore succeeds and those fields are unset again
+
+### Requirement: Documents hold large worlds
+Restore SHALL accept documents of up to 4,194,304 entity records, a limit separate from the per-collection limit on list values. A world whose every voxel cell is an entity SHALL save and restore within that limit.
+
+#### Scenario: A full voxel world restores
+- **WHEN** a world with 196,608 persistent cell entities is saved and loaded
+- **THEN** the restore succeeds and every cell comes back

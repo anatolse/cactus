@@ -62,3 +62,27 @@ A registered model asset's path SHALL resolve successfully at materialization ti
 #### Scenario: Genuinely missing model still fails, once
 - **WHEN** a registered model's path does not exist under any directory the runtime is willing to try
 - **THEN** materialization fails and is recorded as failed exactly as an unresolvable path already behaves today, without retrying the search on every frame
+
+### Requirement: Standalone textures materialize from their registered files
+Registered texture assets SHALL load image content from their declared files when first needed with an available graphics context, sharing a single resource per asset across consumers. Registration SHALL not require a graphics context. Image dimensions SHALL be available to UI measurement from decoded metadata without forcing GPU upload. Texture paths SHALL resolve independently of the executable's current working directory using the shared asset path rules.
+
+#### Scenario: Use a real palette image
+- **WHEN** a texture asset references a valid non-white PNG and is used by an image widget and a block surface
+- **THEN** both consumers display that image and share the loaded asset
+- **AND** UI intrinsic measurement reflects its actual dimensions
+
+#### Scenario: Launch from the binary directory
+- **WHEN** the executable starts outside the source asset directory
+- **THEN** registered textures still resolve through the asset root rules
+
+### Requirement: Texture failure and lifetime are explicit
+Missing, unreadable or invalid texture files SHALL produce one diagnostic per failed asset and a documented checkerboard fallback. Fallback dimensions SHALL be stable and shared by rendering and UI measurement. Failed assets SHALL not be retried each frame. Shared textures SHALL be released exactly once after their consumers and before graphics shutdown. Model-owned embedded textures SHALL retain their existing ownership.
+
+#### Scenario: Missing texture does not masquerade as a valid material
+- **WHEN** a declared texture file cannot be loaded
+- **THEN** the consumer shows the documented checkerboard and one diagnostic
+- **AND** repeated frames do not repeat file I/O
+
+#### Scenario: Several consumers shut down
+- **WHEN** UI and voxel surfaces share a texture and the project shuts down
+- **THEN** the texture is released once without a leak or double unload

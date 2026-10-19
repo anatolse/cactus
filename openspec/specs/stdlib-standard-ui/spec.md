@@ -165,3 +165,14 @@ The standard graph SHALL measure and arrange UI in the input phase before generi
 #### Scenario: Tick animation is visible the same frame
 - **WHEN** a tick animation changes Visual presentation
 - **THEN** the later layout/render path uses the updated presentation during that frame's render
+
+### Requirement: Standard UI presents above world content once per frame
+Standard UI SHALL paint in window space after every viewport has drawn its world content for the frame, so world geometry never covers it. When several viewports draw the same frame, each Standard UI primitive SHALL be painted once. Debug overlay drawing is outside this requirement.
+
+#### Scenario: A first-person HUD over terrain
+- **WHEN** a 3D viewport fills the window and a Standard UI toolbar overlaps its terrain
+- **THEN** the toolbar paints after the terrain geometry
+
+#### Scenario: Two viewports draw one frame
+- **WHEN** two viewports are active in a frame that renders a Standard UI panel
+- **THEN** the panel is painted once

@@ -182,7 +182,7 @@ acceleration.
 - **THEN** the predicate is evaluated as an ordinary (non-accelerated) predicate, with no compile error
 
 ### Requirement: Unaccelerated pair rules produce a warning diagnostic
-When a pair rule has no broad-phase-eligible predicate in its `where:` clause and no broad-phase-eligible collider aggregate (`first_hit` over a sweep, or `sum` over a push-out) in its `reduce:` clause, including a pair rule with neither clause, the compiler SHALL emit one warning diagnostic located at the rule's `pairs:` clause: `pair rule '<Rule>' is not accelerated: no recognized overlap predicate in where:, so every (<left>, <right>) tuple is checked`, where `<left>` and `<right>` are the binding names. When the existing linear-distance warning fires for one of the rule's predicates, it SHALL replace this warning, so the rule gets one warning. These warnings SHALL NOT be errors and SHALL NOT change compilation output.
+When a pair rule has no broad-phase-eligible predicate in its `where:` clause, no broad-phase-eligible collider aggregate (`first_hit` over a sweep, or `sum` over a push-out) in its `reduce:` clause, and no equality join, including a pair rule with neither clause, the compiler SHALL emit one warning diagnostic located at the rule's `pairs:` clause: `pair rule '<Rule>' is not accelerated: no recognized overlap predicate in where:, so every (<left>, <right>) tuple is checked`, where `<left>` and `<right>` are the binding names. When the existing linear-distance warning fires for one of the rule's predicates, it SHALL replace this warning, so the rule gets one warning. These warnings SHALL NOT be errors and SHALL NOT change compilation output.
 
 #### Scenario: Pair rule without where: is flagged
 - **WHEN** a pair rule `ComposePose` with bindings `rig` and `body` has no `where:` clause and no `reduce:` clause
@@ -202,6 +202,10 @@ When a pair rule has no broad-phase-eligible predicate in its `where:` clause an
 
 #### Scenario: Push-out sum rule is not flagged
 - **WHEN** a pair rule has no `where:` clause and a broad-phase-eligible `sum(physics.push_out(...))` aggregate
+- **THEN** no unaccelerated pair rule warning is emitted for that rule
+
+#### Scenario: Equality join rule is not flagged
+- **WHEN** a pair rule reduces per one binding and its `where:` equates a `let` field of the other binding with a value of the group binding
 - **THEN** no unaccelerated pair rule warning is emitted for that rule
 
 #### Scenario: Linear-distance warning replaces the generic warning
@@ -260,3 +264,64 @@ A regular rule SHALL accept inline `where: predicate, predicate` as equivalent t
 #### Scenario: Inline predicates retain purity and type errors
 - **WHEN** an inline predicate is non-boolean or calls an effectful function
 - **THEN** compilation rejects that predicate at its own source location
+
+### Requirement: Two unrotated boxes are broad-phase eligible
+A pair rule's `where:` predicate SHALL be eligible for broad-phase acceleration when it is a direct, unwrapped call to `std.collision.volume.boxes_overlap(a_center, a_size, b_center, b_size)`, resolved by canonical identity, whose `a_*` arguments reference exactly one pair binding and whose `b_*` arguments reference exactly the other, under the same argument rules as the other recognized overlap functions. `boxes_overlap` SHALL hold exactly when the two boxes share interior volume. The bound SHALL be each box's extent.
+
+#### Scenario: A region selects the cells it covers
+- **WHEN** a pair rule's `where:` calls `collision.boxes_overlap(region[Region].center, region[Region].size, cell[tv.WorldTransform].position, cell[physics.BoxCollider].size)`
+- **THEN** the predicate is recognized as broad-phase eligible
+- **AND** cells that only touch the region's faces are not selected
+
+### Requirement: A ray segment against an unrotated box is broad-phase eligible
+A pair rule's `where:` predicate SHALL be eligible for broad-phase acceleration when it is a direct, unwrapped call to `std.collision.volume.ray_hits_box(origin, direction, max_distance, box_center, box_size)`, resolved by canonical identity, where the ray arguments (`origin`, `direction`, `max_distance`) reference exactly one pair binding between them, the box arguments (`box_center`, `box_size`) reference exactly the other, and each argument follows the same purity and single-binding rules as the other recognized overlap functions. The bound SHALL come from the call itself: the segment from `origin` along `direction` for `max_distance`, and the box's extent. A segment that `ray_box` rejects outright SHALL bound nothing. Recognition SHALL NOT change which tuples satisfy the rule or their order.
+
+#### Scenario: Ray probe against cells is eligible
+- **WHEN** a pair rule's `where:` calls `collision.ray_hits_box(probe[RayProbe].origin, probe[RayProbe].direction, probe[RayProbe].max_distance, cell[tv.WorldTransform].position, cell[physics.BoxCollider].size)`
+- **THEN** the predicate is recognized as broad-phase eligible and no unaccelerated pair rule warning is emitted
+
+#### Scenario: A ray argument reading the box binding is not eligible
+- **WHEN** the call's `direction` argument reads the binding that supplies the box
+- **THEN** the predicate is evaluated as an ordinary predicate, with no compile error
+
+### Requirement: Equality joins on values a member never changes are indexed
+A pair rule that reduces per one binding SHALL be recognized as an equality join when the operands of the top-level `and` chains of its `where:` predicates include at least one `==` comparison whose one side is either the other (indexed) binding itself or a `let` field of type `int`, `bool`, enum or `entity_id` read through that binding, and whose other side reads nothing of the indexed binding. A conforming backend MAY then look up, for each group entity, only the indexed members whose values equal the group's values. Every predicate SHALL still be evaluated for each looked-up row, rows SHALL fold in the same order as the full product, and the result SHALL be the same as without the index.
+
+#### Scenario: Coordinate lookup uses the equality join
+- **WHEN** a rule reduces per `probe` with `where: cell[Cell].volume == probe[CellProbe].volume and cell[Cell].x == probe[CellProbe].x`, and `Cell.volume` and `Cell.x` are `let` fields
+- **THEN** the rule is an equality join on those two values and no unaccelerated pair rule warning is emitted
+
+#### Scenario: Entity identity is a join key
+- **WHEN** a rule reduces per `probe` with `where: cell == probe[RayProbe].cell`
+- **THEN** the rule is an equality join on the cell's identity
+
+#### Scenario: Mutable fields are not join keys
+- **WHEN** the only equality compares a `var` field of the indexed binding
+- **THEN** the rule is not an equality join and the unaccelerated pair rule warning is emitted
+
+### Requirement: Pair-binding indexes persist across passes without changing results
+A conforming backend MAY keep one binding of a pair pass in an index that survives between passes, when that pass has a recognized spatial bound or an equality join: the non-group binding of a reduced pass, or the right binding of a plain pass, whose left snapshot is then walked in order so tuples keep the full product's order. Such an index SHALL be brought up to date with every committed membership change of the binding before a pass reads it, SHALL be rebuilt after a world is initialized or replaced by a restore, and SHALL recompute each pass the bounds of every member a handler may write after construction. A member counts as possibly written when it carries every trait a writing handler selects, or is a named entity a handler writes, judged from the whole program's handler contracts; native writers with unknown targets count as writing every carrier of the trait. Indexes SHALL NOT change which rows run, the aggregate values, or the order of handler effects, and the compiler SHALL offer a test-only switch that disables them so both paths can be compared. Indexes observe only the program's own writes and committed structural changes; a host that writes trait fields from native code SHALL advance the runtime's index epoch afterwards, which rebuilds every index before its next use.
+
+#### Scenario: Static cells are indexed once
+- **WHEN** a character body's solver passes run against many solid cells whose transforms and colliders no handler writes
+- **THEN** each pass looks up only the cells near the body instead of rebuilding a broad phase over every cell
+
+#### Scenario: A moving solid stays exact
+- **WHEN** another character body, whose transform the solver writes, is a member of the same binding
+- **THEN** its bounds are recomputed every pass and it collides exactly as without an index
+
+#### Scenario: A region edit looks up only the cells it covers
+- **WHEN** an event-triggered plain pair rule matches a dragged region against every cell of a large volume
+- **THEN** the pass looks up the cells inside the region in the persistent index instead of building a broad phase over every cell
+
+#### Scenario: Digging updates the index
+- **WHEN** an edit removes `Solid` from a cell and the next pass runs
+- **THEN** that pass no longer offers the cell as a candidate
+
+#### Scenario: A host write is announced
+- **WHEN** a custom host moves an entity by writing its transform directly and then advances the index epoch
+- **THEN** the next pass sees the entity at its new place
+
+#### Scenario: Indexed and unindexed builds agree
+- **WHEN** the same program and inputs run once with indexes and once with the test-only switch disabling them
+- **THEN** every observable result is identical

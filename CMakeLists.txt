@@ -147,6 +147,7 @@ target_compile_options(cactus_runtime_common PUBLIC -ffp-contract=off)
 
 add_library(cactus_runtime_cpp_entt STATIC
     src/backends/cpp-entt/runtime.cpp
+    src/backends/cpp-entt/voxel_surfaces.cpp
     src/backends/cpp-entt/persistence_file_adapter.cpp
 )
 target_include_directories(cactus_runtime_cpp_entt PUBLIC
@@ -181,6 +182,7 @@ add_library(cactus_backend_cpp_entt STATIC
     src/backends/cpp-entt/component_emitter.cpp
     src/backends/cpp-entt/type_utils.cpp
     src/backends/cpp-entt/system_emitter.cpp
+    src/backends/cpp-entt/trait_writers.cpp
     src/backends/cpp-entt/event_emitter.cpp
     src/backends/cpp-entt/render_pass_emitter.cpp
     src/backends/cpp-entt/persistence_emitter.cpp
@@ -223,6 +225,16 @@ endforeach()
 set(CACTUS_GENERATED_EXAMPLES_DIR "${CMAKE_BINARY_DIR}/generated_examples")
 file(MAKE_DIRECTORY "${CACTUS_GENERATED_EXAMPLES_DIR}")
 
+# The .cactus files a generated program reads: the entry's sibling modules and
+# the whole stdlib.
+file(GLOB_RECURSE CACTUS_STDLIB_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/stdlib/*.cactus")
+function(cactus_dsl_inputs OUT_VAR ENTRY_SOURCE)
+    get_filename_component(entry_dir "${ENTRY_SOURCE}" DIRECTORY)
+    file(GLOB sibling_sources CONFIGURE_DEPENDS "${entry_dir}/*.cactus")
+    list(SORT sibling_sources)
+    set(${OUT_VAR} ${sibling_sources} ${CACTUS_STDLIB_SOURCES} PARENT_SCOPE)
+endfunction()
+
 function(cactus_add_example TARGET_NAME)
     set(options EXCLUDE_FROM_ALL)
     set(oneValueArgs SOURCE BACKEND OUTPUT)
@@ -245,11 +257,7 @@ function(cactus_add_example TARGET_NAME)
     endif()
 
     set(example_source "${CMAKE_CURRENT_SOURCE_DIR}/${CACTUS_EXAMPLE_SOURCE}")
-    get_filename_component(example_source_dir "${example_source}" DIRECTORY)
-    file(GLOB cactus_example_cactus_sources CONFIGURE_DEPENDS
-        "${example_source_dir}/*.cactus"
-    )
-    list(SORT cactus_example_cactus_sources)
+    cactus_dsl_inputs(cactus_example_cactus_sources "${example_source}")
     set(generated_output "${CACTUS_EXAMPLE_OUTPUT}")
 
     add_custom_command(
@@ -317,7 +325,7 @@ endfunction()
 function(cactus_add_headless_behavior_test TARGET_NAME)
     set(oneValueArgs CACTUS_SOURCE BACKEND TEST_SOURCE)
     cmake_parse_arguments(CACTUS_HEADLESS_TEST
-        "LINEARIZATION_HARNESS;FORCE_ROW_STAGE"
+        "LINEARIZATION_HARNESS;FORCE_ROW_STAGE;NO_INDEXED_JOINS"
         "${oneValueArgs}"
         ""
         ${ARGN}
@@ -335,10 +343,14 @@ function(cactus_add_headless_behavior_test TARGET_NAME)
 
     set_property(GLOBAL APPEND PROPERTY CACTUS_HEADLESS_FIXTURES "${TARGET_NAME}|${CACTUS_HEADLESS_TEST_CACTUS_SOURCE}")
     set(cactus_source "${CMAKE_SOURCE_DIR}/${CACTUS_HEADLESS_TEST_CACTUS_SOURCE}")
+    cactus_dsl_inputs(cactus_inputs "${cactus_source}")
     set(generated_output "${CACTUS_GENERATED_EXAMPLES_DIR}/${TARGET_NAME}.headless.generated.cpp")
     set(codegen_flags)
     if(CACTUS_HEADLESS_TEST_FORCE_ROW_STAGE)
         list(APPEND codegen_flags --force-row-stage)
+    endif()
+    if(CACTUS_HEADLESS_TEST_NO_INDEXED_JOINS)
+        list(APPEND codegen_flags --no-indexed-joins)
     endif()
 
     add_custom_command(
@@ -349,7 +361,7 @@ function(cactus_add_headless_behavior_test TARGET_NAME)
                 --backend "${CACTUS_HEADLESS_TEST_BACKEND}"
                 --output "$<SHELL_PATH:${generated_output}>"
                 ${codegen_flags}
-        DEPENDS cactus "${cactus_source}"
+        DEPENDS cactus ${cactus_inputs}
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
         COMMENT "Generating headless behavioral test fixture for ${TARGET_NAME} (${CACTUS_HEADLESS_TEST_BACKEND})"
         VERBATIM
@@ -419,6 +431,7 @@ function(cactus_add_persistence_roundtrip_subprocess TARGET_NAME)
     endif()
 
     set(cactus_source "${CMAKE_SOURCE_DIR}/${CACTUS_ROUNDTRIP_CACTUS_SOURCE}")
+    cactus_dsl_inputs(cactus_inputs "${cactus_source}")
     set(generated_output "${CACTUS_GENERATED_EXAMPLES_DIR}/${TARGET_NAME}.headless.generated.cpp")
 
     add_custom_command(
@@ -428,7 +441,7 @@ function(cactus_add_persistence_roundtrip_subprocess TARGET_NAME)
                 "$<SHELL_PATH:${cactus_source}>"
                 --backend "${CACTUS_ROUNDTRIP_BACKEND}"
                 --output "$<SHELL_PATH:${generated_output}>"
-        DEPENDS cactus "${cactus_source}"
+        DEPENDS cactus ${cactus_inputs}
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
         COMMENT "Generating headless fixture for ${TARGET_NAME} (${CACTUS_ROUNDTRIP_BACKEND})"
         VERBATIM
@@ -488,6 +501,7 @@ function(cactus_add_render_pass_visual_test TARGET_NAME)
     endif()
 
     set(cactus_source "${CMAKE_SOURCE_DIR}/${CACTUS_VISUAL_TEST_CACTUS_SOURCE}")
+    cactus_dsl_inputs(cactus_inputs "${cactus_source}")
     set(generated_output "${CACTUS_GENERATED_EXAMPLES_DIR}/${TARGET_NAME}.visual.generated.cpp")
 
     add_custom_command(
@@ -497,7 +511,7 @@ function(cactus_add_render_pass_visual_test TARGET_NAME)
                 "$<SHELL_PATH:${cactus_source}>"
                 --backend "${CACTUS_VISUAL_TEST_BACKEND}"
                 --output "$<SHELL_PATH:${generated_output}>"
-        DEPENDS cactus "${cactus_source}"
+        DEPENDS cactus ${cactus_inputs}
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
         COMMENT "Generating render-pass visual test fixture for ${TARGET_NAME} (${CACTUS_VISUAL_TEST_BACKEND})"
         VERBATIM
@@ -549,6 +563,7 @@ set(MESH_RENDERER_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/mesh-renderer.
 set(MODEL_RENDERER_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/model-renderer.generated.cpp")
 set(MODEL_ANIMATION_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/model-animation.generated.cpp")
 set(FIRST_PERSON_ARENA_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/first-person-arena.generated.cpp")
+set(ROBOT_SANDBOX_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/robot-sandbox.generated.cpp")
 set(PLATFORMER_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/platformer.generated.cpp")
 set(WAVING_LABEL_2D_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/waving-label-2d.generated.cpp")
 set(WAVING_LABEL_3D_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/waving-label-3d.generated.cpp")
@@ -647,6 +662,12 @@ cactus_add_example(example_first_person_arena_generated
     SOURCE "examples/first-person-arena/main.cactus"
     BACKEND "cpp-entt"
     OUTPUT "${FIRST_PERSON_ARENA_GENERATED_CPP}"
+)
+
+cactus_add_example(example_robot_sandbox_generated
+    SOURCE "examples/robot-sandbox/main.cactus"
+    BACKEND "cpp-entt"
+    OUTPUT "${ROBOT_SANDBOX_GENERATED_CPP}"
 )
 
 cactus_add_example(example_platformer_generated
@@ -750,3 +771,4 @@ if(CACTUS_ENABLE_COVERAGE)
     )
     add_dependencies(coverage_check cactus ${cactus_test_executables})
 endif()
+

@@ -1,0 +1,27 @@
+module app_quit
+
+# A button handler stands in for a menu's Exit click. It asks to quit on the
+# second frame and asks again on the third, and keeps running after each
+# request.
+
+use std.core
+use std.app as app
+
+pub trait ExitButton:
+    var frames: int = 0
+    var after_request: int = 0
+
+pub entity Exit:
+    ExitButton
+
+rule ClickExit:
+    each:
+        ExitButton as button
+
+    on tick:
+        button.frames += 1
+        if button.frames < 2:
+            return
+        emit app.QuitRequested
+        emit app.QuitRequested
+        button.after_request += 1

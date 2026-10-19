@@ -1,0 +1,350 @@
+module flow
+
+# The session's screens and what each request does:
+#
+#   Start --New--> Generating --> Playing <--> Paused --Save--> Saving
+#     |                             ^            |
+#     +--Load--> Loading -----------+            +--Load--> Loading
+#     +--Options    Options <------ Paused
+#     +--Exit       Exit (with unsaved changes) --> ConfirmExit
+#
+# Only Playing simulates. A save or load first shows its busy message for a
+# frame, then submits the request, so the player sees it before storage
+# blocks.
+
+use std.core
+use std.input as inp
+use std.query as query
+use std.math as math
+use std.text as text
+use std.app as app
+use std.persistence as storage
+use std.voxel.volume as voxel
+use std.render.models as models
+use std.ui as ui
+use game
+use world
+use robot
+use editing
+use sky
+use hud
+
+input PauseKey: button
+    key = inp.Key.Escape
+
+const:
+    STATUS_SECONDS = 4.0
+    START_MINUTE = 480.0
+    GENERATING = "Generating world"
+    SAVING = "Saving..."
+    SAVED = "Game saved"
+    LOADING = "Loading..."
+    LOADED = "Game loaded"
+
+# The player's robot: the robot itself plus its editing state.
+template PlayerRobot(position: vec3, model_scale: float, terrain: entity_id):
+    use robot.RobotTemplate(position = position, model_scale = model_scale, terrain = terrain)
+    editing.Editor
+
+func clamp_int(value: int, lo: int, hi: int) int:
+    if value < lo:
+        return lo
+    if value > hi:
+        return hi
+    return value
+
+rule ShowMenus:
+    on load:
+        spawn hud.HudTemplate()
+        spawn hud.MenuCameraTemplate()
+
+# ── New game ─────────────────────────────────────────────────────────────────
+
+rule StartNewGame:
+    each:
+        world.WorldConfig as config
+    when:
+        game.Game[game.Session].mode == game.Mode.Start
+        not game.Game[game.Session].busy
+
+    on game.NewGameRequested:
+        let seed = game.Game[game.Session].next_seed
+        let spawn_x = config.size_x / 2
+        let spawn_z = config.size_z / 2
+        game.Game[game.Session].next_seed += 1
+        world.Generator[world.Generation].seed = seed
+        world.Generator[world.Generation].min_y = config.min_y
+        world.Generator[world.Generation].max_y = config.max_y
+        world.Generator[world.Generation].spawn_x = spawn_x
+        world.Generator[world.Generation].spawn_z = spawn_z
+        world.Generator[world.Generation].spawn_floor = clamp_int(world.surface_height(spawn_x, spawn_z, seed), config.min_y + 2, config.max_y - 5)
+        spawn world.Terrain(size_x = config.size_x, min_y = config.min_y, max_y = config.max_y, size_z = config.size_z, batch = config.batch)
+        game.Game[game.Session].mode = game.Mode.Generating
+        game.Game[game.Session].status = GENERATING
+        game.Game[game.Session].status_time = 0.0
+        game.Game[game.Session].progress = 0.0
+        game.Game[game.Session].day = 1
+        game.Game[game.Session].minute = START_MINUTE
+        game.Game[game.Session].layer = world.Generator[world.Generation].spawn_floor
+        game.Game[game.Session].view_target = vec3(spawn_x + 0.5, 0.0, spawn_z + 0.5)
+        game.Game[game.Session].dirty = true
+
+rule WatchGeneration:
+    each:
+        voxel.Volume as volume
+    when:
+        game.Game[game.Session].mode == game.Mode.Generating
+
+    on tick:
+        let total = (volume.max_x - volume.min_x + 1) * (volume.max_y - volume.min_y + 1) * (volume.max_z - volume.min_z + 1)
+        game.Game[game.Session].progress = volume.cells_built * 1.0 / total
+        if volume.cells_built < total:
+            return
+        # One more frame lets the last cells' materials commit.
+        game.Game[game.Session].settle += 1
+        if game.Game[game.Session].settle < 2:
+            return
+        game.Game[game.Session].settle = 0
+        let start = robot.spawn_position(world.Generator[world.Generation].spawn_x, world.Generator[world.Generation].spawn_z, world.Generator[world.Generation].spawn_floor)
+        let scale = robot.model_scale(models.bounds_size(robot.RobotModel))
+        let terrain = query.first[voxel.Volume]()
+        spawn PlayerRobot(position = start, model_scale = scale, terrain = terrain)
+        emit game.WorldReady:
+            fresh = true
+
+# Cameras and sky for a new or restored world; the HUD already exists.
+rule BuildWorldViews:
+    on game.WorldReady:
+        spawn robot.FirstPersonCamera()
+        spawn robot.StrategyCamera()
+        spawn sky.SunDiscTemplate()
+        spawn sky.MoonDiscTemplate()
+        spawn sky.SunLightTemplate()
+        spawn sky.MoonLightTemplate()
+        game.Game[game.Session].mode = game.Mode.Playing
+
+# ── Pause, options and view ──────────────────────────────────────────────────
+
+rule PauseKeys:
+    after:
+        editing.Select
+        ui.RoutePointer
+
+    on input:
+        if not input.pressed(PauseKey):
+            return
+        let mode = game.Game[game.Session].mode
+        if mode == game.Mode.Playing:
+            emit game.PauseRequested
+        if mode == game.Mode.Paused:
+            emit game.ContinueRequested
+        if mode == game.Mode.Options:
+            emit game.OptionsClosed
+        if mode == game.Mode.ConfirmExit:
+            emit game.ExitCancelled
+
+rule Pause:
+    when:
+        game.Game[game.Session].mode == game.Mode.Playing
+
+    on game.PauseRequested:
+        game.Game[game.Session].mode = game.Mode.Paused
+
+rule Continue:
+    when:
+        game.Game[game.Session].mode == game.Mode.Paused
+
+    on game.ContinueRequested:
+        game.Game[game.Session].mode = game.Mode.Playing
+
+rule OpenOptions:
+    when:
+        not game.Game[game.Session].busy
+
+    on game.OptionsRequested:
+        game.Game[game.Session].return_mode = game.Game[game.Session].mode
+        game.Game[game.Session].mode = game.Mode.Options
+
+rule CloseOptions:
+    when:
+        game.Game[game.Session].mode == game.Mode.Options
+
+    on game.OptionsClosed:
+        game.Game[game.Session].mode = game.Game[game.Session].return_mode
+
+rule ChangeOption:
+    on game.OptionChanged as change:
+        game.Game[game.Session].sensitivity = math.clamp(game.Game[game.Session].sensitivity + change.sensitivity_step * 0.0005, 0.0005, 0.01)
+        game.Game[game.Session].pan_speed = math.clamp(game.Game[game.Session].pan_speed + change.pan_step * 2.0, 2.0, 40.0)
+        if change.invert:
+            game.Game[game.Session].invert_y = not game.Game[game.Session].invert_y
+
+rule ToggleView:
+    on game.ToggleViewRequested:
+        game.Game[game.Session].camera = if game.Game[game.Session].camera == game.View.FirstPerson: game.View.Strategy else: game.View.FirstPerson
+
+# The mouse is captured exactly while first-person play owns it.
+rule CursorFollowsMode:
+    after:
+        robot.PanStrategy
+
+    on tick:
+        let wanted = game.Game[game.Session].mode == game.Mode.Playing and game.Game[game.Session].camera == game.View.FirstPerson
+        if wanted == game.Game[game.Session].cursor_captured:
+            return
+        game.Game[game.Session].cursor_captured = wanted
+        inp.set_cursor_captured(wanted)
+
+rule StepSpeed:
+    on game.SpeedStepRequested as step:
+        game.Game[game.Session].speed = clamp_int(game.Game[game.Session].speed + step.step, 0, game.FASTEST_SPEED)
+
+rule ChooseMaterial:
+    on game.MaterialChosen as choice:
+        game.Game[game.Session].material = choice.material
+
+rule ChooseEditKind:
+    on game.EditKindChosen as choice:
+        game.Game[game.Session].edit_kind = choice.kind
+
+rule StepLayer:
+    on game.LayerStepRequested as step:
+        game.Game[game.Session].layer = clamp_int(game.Game[game.Session].layer + step.step, world.Generator[world.Generation].min_y + 1, world.Generator[world.Generation].max_y)
+
+rule StepHeight:
+    on game.HeightStepRequested as step:
+        game.Game[game.Session].height = clamp_int(game.Game[game.Session].height + step.step, 1, 16)
+
+rule ToggleCutaway:
+    on game.CutawayToggled:
+        game.Game[game.Session].cutaway = not game.Game[game.Session].cutaway
+
+rule AgeStatus:
+    on tick:
+        game.Game[game.Session].status_time += tick.dt
+        if game.Game[game.Session].status_time > STATUS_SECONDS and game.Game[game.Session].mode == game.Mode.Playing:
+            game.Game[game.Session].status = ""
+
+# ── Save and load ────────────────────────────────────────────────────────────
+
+rule RequestSave:
+    when:
+        game.Game[game.Session].mode == game.Mode.Paused
+        not game.Game[game.Session].busy
+
+    on game.SaveGameRequested:
+        game.Game[game.Session].busy = true
+        game.Game[game.Session].return_mode = game.Mode.Paused
+        game.Game[game.Session].mode = game.Mode.Saving
+        game.Game[game.Session].status = SAVING
+        game.Game[game.Session].status_time = 0.0
+        game.Game[game.Session].submit_in = 2
+
+rule RequestLoad:
+    when:
+        not game.Game[game.Session].busy
+
+    on game.LoadGameRequested:
+        let mode = game.Game[game.Session].mode
+        if mode != game.Mode.Start and mode != game.Mode.Paused:
+            return
+        game.Game[game.Session].busy = true
+        game.Game[game.Session].return_mode = mode
+        game.Game[game.Session].mode = game.Mode.Loading
+        game.Game[game.Session].status = LOADING
+        game.Game[game.Session].status_time = 0.0
+        game.Game[game.Session].submit_in = 2
+
+# The busy screen has been drawn once; hand the request to storage.
+rule SubmitStorage:
+    after:
+        WatchGeneration
+    when:
+        game.Game[game.Session].busy
+
+    on tick:
+        if game.Game[game.Session].submit_in <= 0:
+            return
+        game.Game[game.Session].submit_in -= 1
+        if game.Game[game.Session].submit_in > 0:
+            return
+        let id = game.Game[game.Session].next_request
+        game.Game[game.Session].next_request += 1
+        if game.Game[game.Session].mode == game.Mode.Saving:
+            emit game.CheckpointRequested
+            emit storage.SaveRequested:
+                slot = game.SAVE_SLOT
+                request_id = id
+        if game.Game[game.Session].mode == game.Mode.Loading:
+            emit storage.RestoreRequested:
+                slot = game.SAVE_SLOT
+                request_id = id
+
+rule SaveDone:
+    on storage.SaveCompleted:
+        game.Game[game.Session].busy = false
+        game.Game[game.Session].dirty = false
+        game.Game[game.Session].mode = game.Mode.Paused
+        game.Game[game.Session].status = SAVED
+        game.Game[game.Session].status_time = 0.0
+        if game.Game[game.Session].quit_after_save:
+            emit app.QuitRequested
+
+rule SaveFailed:
+    on storage.SaveFailed as failure:
+        game.Game[game.Session].busy = false
+        game.Game[game.Session].quit_after_save = false
+        game.Game[game.Session].mode = game.Mode.Paused
+        game.Game[game.Session].status = text.format("Save failed: {}", failure.message)
+        game.Game[game.Session].status_time = 0.0
+
+# The restored Game keeps its saved fields; everything else starts fresh.
+rule LoadDone:
+    on storage.RestoreCompleted:
+        game.Game[game.Session].status = LOADED
+        game.Game[game.Session].status_time = 0.0
+        spawn hud.HudTemplate()
+        emit game.WorldReady:
+            fresh = false
+
+rule LoadFailed:
+    on storage.RestoreFailed as failure:
+        game.Game[game.Session].busy = false
+        game.Game[game.Session].mode = game.Game[game.Session].return_mode
+        game.Game[game.Session].status = text.format("Load failed: {}", failure.message)
+        game.Game[game.Session].status_time = 0.0
+
+# ── Exit ─────────────────────────────────────────────────────────────────────
+
+rule Exit:
+    when:
+        not game.Game[game.Session].busy
+
+    on game.ExitRequested:
+        if game.Game[game.Session].dirty and query.exists[voxel.Volume]():
+            game.Game[game.Session].return_mode = game.Game[game.Session].mode
+            game.Game[game.Session].mode = game.Mode.ConfirmExit
+            return
+        emit app.QuitRequested
+
+rule ConfirmExit:
+    when:
+        game.Game[game.Session].mode == game.Mode.ConfirmExit
+
+    on game.ExitConfirmed as choice:
+        if not choice.save:
+            emit app.QuitRequested
+            return
+        game.Game[game.Session].quit_after_save = true
+        game.Game[game.Session].busy = true
+        game.Game[game.Session].mode = game.Mode.Saving
+        game.Game[game.Session].status = SAVING
+        game.Game[game.Session].status_time = 0.0
+        game.Game[game.Session].submit_in = 2
+
+rule CancelExit:
+    when:
+        game.Game[game.Session].mode == game.Mode.ConfirmExit
+
+    on game.ExitCancelled:
+        game.Game[game.Session].mode = game.Game[game.Session].return_mode

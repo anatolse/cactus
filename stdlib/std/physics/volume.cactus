@@ -23,6 +23,8 @@ use std.transform.volume as tv
 # lift:                stdlib-owned: how far the step-up raised the body this tick
 # drop:                stdlib-owned: how far below the body the snap looks for ground
 # ground_offset:       stdlib-owned: height of the body's center above its last ground contact
+# paused:              when true, solve leaves every field and the pose unchanged; the
+#                      body still blocks others, which take the whole overlap correction
 pub trait CharacterBody:
     var velocity: vec3 = vec3(0.0, 0.0, 0.0)
     var gravity: float = 9.81
@@ -35,6 +37,7 @@ pub trait CharacterBody:
     var lift: float = 0.0
     var drop: float = 0.0
     var ground_offset: float = 0.0
+    var paused: bool = false
 
 # Shared 3D collision participation/filtering data. An entity with Collider
 # also needs exactly one shape trait: BoxCollider, SphereCollider or
@@ -96,7 +99,7 @@ pub extern func touching(a: entity_id, b: entity_id) bool
 
 # Shortest move that takes a's collider out of b's, zero when apart. a's mask
 # filters b's layer. Two character bodies that collide with each other each
-# get half.
+# get half, unless b is paused: then a gets all of it.
 pub extern func push_out(a: entity_id, b: entity_id) vec3
 
 # ── Character controller ──────────────────────────────────────────────────────
@@ -120,14 +123,18 @@ pub group contacts:
 func walkable(normal: vec3, max_slope: float) bool:
     return normal.y >= math.cos(math.radians(max_slope))
 
+func clip(v: vec3, normal: vec3) vec3:
+    return v - normal * math.min(0.0, v3.dot(v, normal))
+
 # Removes the part of `v` that moves into the surface `hit` touched. A surface
-# the body can't stand on never adds upward speed.
+# the body can't stand on never adds upward speed: it stops the body like a
+# wall first, so a body pressed against an edge still rises or falls past it.
 func slide_along(v: vec3, hit: SweepHit, max_slope: float) vec3:
-    let clipped = v - hit.normal * math.min(0.0, v3.dot(v, hit.normal))
-    let rise = math.max(v.y, 0.0)
-    if walkable(hit.surface, max_slope) or clipped.y <= rise:
+    let clipped = clip(v, hit.normal)
+    if walkable(hit.surface, max_slope) or clipped.y <= math.max(v.y, 0.0):
         return clipped
-    return vec3(clipped.x, rise, clipped.z)
+    let wall = clip(v, v3.normalize(vec3(hit.normal.x, 0.0, hit.normal.z)))
+    return clip(wall, hit.normal)
 
 rule Integrate:
     each:
@@ -135,6 +142,8 @@ rule Integrate:
         Collider
         tv.WorldTransform
     group: solve
+    where:
+        not body.paused
 
     on core.fixed_tick as step:
         let supported = body.grounded and body.velocity.y <= 0.0
@@ -163,6 +172,8 @@ rule Lift:
     group: solve
     after:
         Integrate
+    where:
+        not body[CharacterBody].paused
     reduce per body:
         hit = first_hit(sweep(body, vec3(0.0, body[CharacterBody].lift, 0.0), other))
 
@@ -183,6 +194,8 @@ rule Slide1:
     group: solve
     after:
         Lift
+    where:
+        not body[CharacterBody].paused
     reduce per body:
         hit = first_hit(sweep(body, body[CharacterBody].motion, other))
 
@@ -208,6 +221,8 @@ rule Slide2:
     group: solve
     after:
         Slide1
+    where:
+        not body[CharacterBody].paused
     reduce per body:
         hit = first_hit(sweep(body, body[CharacterBody].motion, other))
 
@@ -233,6 +248,8 @@ rule Slide3:
     group: solve
     after:
         Slide2
+    where:
+        not body[CharacterBody].paused
     reduce per body:
         hit = first_hit(sweep(body, body[CharacterBody].motion, other))
 
@@ -261,6 +278,8 @@ rule Snap:
     group: solve
     after:
         Slide3
+    where:
+        not body[CharacterBody].paused
     reduce per body:
         hit = first_hit(sweep(body, vec3(0.0, (body[CharacterBody].lift + body[CharacterBody].drop) * -1.0, 0.0), other))
 
@@ -294,6 +313,8 @@ rule Depenetrate:
     group: solve
     after:
         Snap
+    where:
+        not body[CharacterBody].paused
     reduce per body:
         push = sum(push_out(body, other))
 

@@ -267,6 +267,8 @@ public:
     void register_model(AssetHandle handle, std::string asset_id, int runtime_id, bool materialized = true);
 
     void set_lazy_resolver(AssetKind kind, LazyResolver resolver);
+    // The declared id (a path for file assets) registered for `runtime_id`, or empty.
+    [[nodiscard]] std::string asset_id_for_runtime(AssetKind kind, int runtime_id) const;
     [[nodiscard]] AssetResolution resolve(AssetKind kind, AssetHandle handle);
 
     [[nodiscard]] std::size_t missing_count() const noexcept {

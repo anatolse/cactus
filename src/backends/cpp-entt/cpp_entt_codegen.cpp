@@ -837,10 +837,12 @@ void emit_viewport_phase_dispatch(std::ostringstream& out,
         out << indent << "            set_active_camera_3d(__translate_camera_3d(__vp_ent, __cam, registry));\n";
         out << indent << "        }\n";
     }
+    out << indent << "        cactus::runtime::entt_backend::set_active_viewport_entity(__vp_ent);\n";
     out << indent << "        generated_dispatch_phase_" << phase_name << "(registry, phase);\n";
     out << indent << "        flush_viewport_3d();\n";
     out << indent << "        cactus::runtime::raylib::EndScissorMode();\n";
     out << indent << "    }\n";
+    out << indent << "    cactus::runtime::entt_backend::set_active_viewport_entity(entt::null);\n";
     out << indent << "}\n";
 }
 
@@ -1899,8 +1901,9 @@ std::string emit_collider_query_helpers(const DecoratedProgram& program) {
     const auto body_cpp = EnttCodegenUtils::trait_cpp_name(physics_trait("CharacterBody"));
     out << "[[maybe_unused]] inline Vector3 cactus_collider_push_out(entt::registry& registry, const " << shape
         << "& a_shape, const " << shape << "& b_shape, entt::entity a, entt::entity b) {\n";
-    out << "    const bool both_bodies = registry.all_of<" << body_cpp << ">(a) && registry.all_of<" << body_cpp
-        << ">(b);\n";
+    out << "    const auto* b_body = registry.try_get<" << body_cpp << ">(b);\n";
+    out << "    const bool both_bodies = registry.all_of<" << body_cpp
+        << ">(a) && b_body != nullptr && !b_body->paused;\n";
     out << "    return " << ns << "push_out(a_shape, b_shape, a == b, both_bodies);\n";
     out << "}\n\n";
     return out.str();
@@ -2564,6 +2567,16 @@ bool creation_takes_parameters(const std::vector<InitializerSlot>& slots) {
     return std::ranges::any_of(slots, [](const auto& slot) { return slot.value == nullptr; });
 }
 
+// Slot values that own memory travel by const reference.
+bool owns_memory(const TypeInfo& type) {
+    return type.kind == TypeKind::String || type.kind == TypeKind::List || type.kind == TypeKind::Struct;
+}
+
+std::string slot_parameter_type(const TypeInfo& type) {
+    const auto cpp = EnttCodegenUtils::value_type_to_cpp(type);
+    return owns_memory(type) ? "const " + cpp + "&" : cpp;
+}
+
 // For hierarchical archetypes, emit per-node helpers plus a canonical
 // create_<archetype> wrapper that expands the override-free tree and returns
 // the root entity (D9). Flat archetypes generate the same code as before.
@@ -2579,7 +2592,7 @@ std::string emit_planned_creation_functions(const std::string& name,
     std::string all_parameters;
     std::string all_arguments;
     for (const auto& slot : slots) {
-        const auto declaration = ", [[maybe_unused]] " + EnttCodegenUtils::type_to_cpp(slot.type) + " " + initializer_slot_name(slot.index);
+        const auto declaration = ", [[maybe_unused]] " + slot_parameter_type(slot.type) + " " + initializer_slot_name(slot.index);
         const auto argument = ", " + initializer_slot_name(slot.index);
         all_parameters += declaration;
         all_arguments += argument;
@@ -2608,7 +2621,8 @@ std::string emit_planned_creation_functions(const std::string& name,
     out << "entt::entity " << create_at << "(entt::registry& registry, entt::entity hint" << parameters << ") {\n";
     for (const auto& slot : slots) {
         if (slot.value != nullptr) {
-            out << "    [[maybe_unused]] const " << EnttCodegenUtils::type_to_cpp(slot.type) << " " << initializer_slot_name(slot.index)
+            out << "    [[maybe_unused]] const " << EnttCodegenUtils::value_type_to_cpp(slot.type)
+                << (owns_memory(slot.type) ? "& " : " ") << initializer_slot_name(slot.index)
                 << " = " << EnttCodegenUtils::emit_expr(*slot.value, program) << ";\n";
         }
     }
@@ -3339,10 +3353,14 @@ std::string emit_backend_main(const DecoratedProgram& program) {
         out << "        cactus::runtime::entt_backend::generated_render_project(registry, dispatcher);\n";
     }
     out << "        EndDrawing();\n";
+    out << "        if (cactus::runtime::entt_backend::quit_requested()) {\n";
+    out << "            break;\n";
+    out << "        }\n";
     out << "    }\n\n";
     if (has_unload_handler) {
         emit_boundary_activation(*unload_event);
     }
+    out << "    cactus::runtime::entt_backend::release_render_resources();\n";
     out << "    CloseWindow();\n";
     out << "    return 0;\n";
     out << "} catch (...) {\n";
@@ -3793,6 +3811,8 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     const bool tracks_lifecycle = EnttCodegenUtils::tracks_lifecycle(program);
     out << "void generated_init_project(entt::registry& registry) {\n";
     out << "    (void)registry;\n";
+    out << "    cactus::runtime::entt_backend::reset_quit_request();\n";
+    out << "    cactus::runtime::entt_backend::advance_binding_index_epoch();\n";
     if (tracks_lifecycle) {
         out << "    generated_connect_lifecycle_trackers(registry);\n";
     }
@@ -4204,7 +4224,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
             out << "        [](entt::registry& reg, Vector2 pointer_screen_pos) -> "
                    "std::vector<cactus::runtime::entt_backend::PointerCandidate> {\n";
             out << "            std::vector<cactus::runtime::entt_backend::PointerCandidate> __result;\n";
-            out << "            const Ray __ray = GetScreenToWorldRay(\n";
+            out << "            const Ray __ray = cactus::runtime::entt_backend::screen_to_world_ray(\n";
             out << "                pointer_screen_pos, cactus::runtime::entt_backend::get_active_camera_3d());\n";
             if (has_volume_box) {
                 const std::string box3d_cpp =

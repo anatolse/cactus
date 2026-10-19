@@ -1759,6 +1759,47 @@ TEST_CASE("Codegen EnTT: on load handler runs via a one-shot boot activation bef
     check_boundary_activation_order(code);
 }
 
+TEST_CASE("Codegen EnTT: the main loop leaves after a frame that requested quit, then unloads once",
+          "[codegen-entt][stdlib-application-lifecycle]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "pub extern event frame:\n"
+        "    dt: float\n"
+        "phase tick:\n"
+        "    from:\n"
+        "        frame\n"
+        "pub event unload\n"
+        "trait Pos:\n"
+        "    var x: float = 0.0\n"
+        "entity Thing:\n"
+        "    Pos\n"
+        "rule Move:\n"
+        "    each:\n"
+        "        Pos\n"
+        "    on tick:\n"
+        "        x = x + tick.dt\n"
+        "    on unload:\n"
+        "        x = 0.0\n",
+        program);
+
+    const auto code       = CppEnttCodegen::generate(decorated);
+    const auto main_start = code.find("int main() try {");
+    REQUIRE(main_start != std::string::npos);
+    const auto main_fn = code.substr(main_start, code.find("#endif  // CACTUS_GENERATED_NO_MAIN", main_start) - main_start);
+
+    const auto end_drawing = main_fn.find("EndDrawing();");
+    const auto quit_check  = main_fn.find("if (cactus::runtime::entt_backend::quit_requested()) {");
+    const auto unload      = main_fn.find("generated_run_boundary_activation(registry, unloadEvent{});");
+    const auto close       = main_fn.find("CloseWindow();");
+    REQUIRE(end_drawing != std::string::npos);
+    REQUIRE(quit_check != std::string::npos);
+    REQUIRE(unload != std::string::npos);
+    CHECK(end_drawing < quit_check);
+    CHECK(quit_check < unload);
+    CHECK(unload < close);
+    CHECK(count_occurrences(main_fn, "unloadEvent{}") == 1);
+}
+
 TEST_CASE("Codegen EnTT: programs without a load handler emit no boot activation",
           "[codegen-entt][dsl-scene-loading][dynamic-model-spawning][graph-driven-lifecycle-events]") {
     ProgramNode program;
@@ -7321,9 +7362,12 @@ static std::string pair_body_lambda(const std::string& code) {
     return code.substr(start, code.find("\n    };\n", start) - start);
 }
 
-static std::string emit_named_rule(const std::string& source, const std::string& rule_name) {
+static std::string emit_named_rule(const std::string& source,
+                                   const std::string& rule_name,
+                                   bool index_pair_joins = true) {
     ProgramNode program;
-    auto decorated = full_pipeline(source, program);
+    auto decorated             = full_pipeline(source, program);
+    decorated.index_pair_joins = index_pair_joins;
     for (auto& decl : program.declarations) {
         auto* sys = std::get_if<RuleNode>(&decl);
         if (sys != nullptr && sys->name == rule_name) {
@@ -7598,7 +7642,8 @@ static const std::string& volume_join_traits() {
 static std::string emit_sphere_box_rule(const std::string& bindings, const std::string& predicate) {
     return emit_named_rule("module std.collision.volume\n" + volume_join_traits() + "rule Detect:\n    pairs:\n" +
                                bindings + "    where:\n        " + predicate + "\n    on tick:\n        let x = 1\n",
-                           "Detect");
+                           "Detect",
+                           false);
 }
 
 TEST_CASE("Codegen EnTT: sphere-box pair rule builds sphere and box proxies from both snapshots",
@@ -7641,6 +7686,183 @@ TEST_CASE("Codegen EnTT: a shape on the right binding builds right-side proxies"
                                            "wall[Solid].position, wall[Solid].size, wall[Solid].rotation)");
     CHECK(code.contains("sphere_proxy(actor, __sap_i, cactus::runtime::entt_backend::SapSide::Right, "));
     CHECK(code.contains("box_proxy(wall, __sap_i, cactus::runtime::entt_backend::SapSide::Left, "));
+}
+
+// ── Persistent binding indexes ──────────────────────────────────────────────
+
+static std::string indexed_join_source(const std::string& extra, const std::string& box_size = "wall[Solid].size") {
+    return "module std.collision.volume\n" + volume_join_traits() +
+           "trait Tuning:\n"
+           "    var margin: float = 0.0\n"
+           "trait Moving\n"
+           "trait Hits:\n"
+           "    var count: int = 0\n"
+           "entity Game:\n"
+           "    Tuning\n"
+           "    Solid\n"
+           "rule Detect:\n"
+           "    pairs:\n"
+           "        actor:\n"
+           "            Body\n"
+           "            Hits\n"
+           "        wall:\n"
+           "            Solid\n"
+           "    where:\n"
+           "        sphere_box_overlap(actor[Body].position, actor[Body].radius, wall[Solid].position, " +
+           box_size +
+           ", wall[Solid].rotation)\n"
+           "    reduce per actor:\n"
+           "        hits = count()\n"
+           "    on tick:\n"
+           "        actor[Hits].count = hits\n" +
+           extra;
+}
+
+static std::string emit_indexed_join(const std::string& source, bool index_pair_joins = true) {
+    ProgramNode program;
+    auto decorated             = full_pipeline(source, program);
+    decorated.index_pair_joins = index_pair_joins;
+    for (auto& decl : program.declarations) {
+        auto* sys = std::get_if<RuleNode>(&decl);
+        if (sys != nullptr && sys->name == "Detect") {
+            return EnttSystemEmitter::emit_system(*sys, decorated);
+        }
+    }
+    FAIL("rule 'Detect' not found");
+    return {};
+}
+
+TEST_CASE("Codegen EnTT: a reduced spatial pass keeps an unwritten binding in a persistent index",
+          "[codegen-entt][spatial-join][binding-index]") {
+    const auto code = emit_indexed_join(indexed_join_source(""));
+    CHECK(code.contains("auto& cactus_index_wall = cactus::runtime::entt_backend::shared_binding_index<cactus::runtime::entt_backend::SpatialBindingIndex3D, "));
+    CHECK(code.contains("cactus::runtime::entt_backend::watch_binding_traits<"));
+    CHECK(code.contains("cactus_found.is_static = !(false);"));
+    CHECK(code.contains("box_proxy(wall, 0, cactus::runtime::entt_backend::SapSide::Right"));
+    CHECK(code.contains("cactus_index_wall.candidates("));
+    CHECK(code.contains(", cactus_dynamic, cactus_candidates);"));
+    CHECK_FALSE(code.contains("wall_snapshot"));
+    CHECK_FALSE(code.contains("SapBroadPhase3D"));
+}
+
+// The reduced Detect rule as a plain pass: one handler call per overlapping tuple.
+static std::string plain_join_source() {
+    auto source           = indexed_join_source("");
+    const std::string old = "    reduce per actor:\n        hits = count()\n    on tick:\n        actor[Hits].count = hits\n";
+    const auto at         = source.find(old);
+    REQUIRE(at != std::string::npos);
+    return source.replace(at, old.size(), "    on tick:\n        let x = 1\n");
+}
+
+TEST_CASE("Codegen EnTT: a plain spatial pass walks its left binding against an indexed right binding",
+          "[codegen-entt][spatial-join][binding-index]") {
+    const auto code = emit_indexed_join(plain_join_source());
+    CHECK(code.contains("auto& cactus_index_wall = cactus::runtime::entt_backend::shared_binding_index<cactus::runtime::entt_backend::SpatialBindingIndex3D, "));
+    CHECK(code.contains("for (const auto actor : actor_snapshot) {"));
+    CHECK(code.contains("cactus_index_wall.candidates("));
+    CHECK(code.contains(", cactus_dynamic, cactus_candidates);"));
+    CHECK_FALSE(code.contains("SapBroadPhase3D"));
+
+    const auto unindexed = emit_indexed_join(plain_join_source(), false);
+    CHECK(unindexed.contains("SapBroadPhase3D"));
+    CHECK_FALSE(unindexed.contains("cactus_index_wall"));
+}
+
+TEST_CASE("Codegen EnTT: an indexed plain pass filters its indexed binding and finds every tuple before running any",
+          "[codegen-entt][spatial-join][binding-index]") {
+    auto source           = plain_join_source();
+    const std::string old = "    where:\n";
+    const auto at         = source.find(old);
+    REQUIRE(at != std::string::npos);
+    source.insert(at + old.size(), "        wall[Solid].size.x > 0.5\n");
+    const auto code = emit_indexed_join(source);
+    REQUIRE(code.contains("cactus_index_wall.candidates("));
+    CHECK(code.contains("if (cactus_keep_wall(wall)) { cactus_indexed_tuples.emplace_back(actor, wall); }"));
+    const auto collected = code.find("cactus_indexed_tuples.emplace_back(actor, wall)");
+    const auto replayed  = code.find("for (const auto& [cactus_left, cactus_right] : cactus_indexed_tuples) {");
+    REQUIRE(replayed != std::string::npos);
+    CHECK(collected < replayed);
+}
+
+TEST_CASE("Codegen EnTT: members a handler may move are dynamic in the index",
+          "[codegen-entt][spatial-join][binding-index]") {
+    const auto code = emit_indexed_join(indexed_join_source("rule Slide:\n"
+                                                            "    each:\n"
+                                                            "        Moving\n"
+                                                            "        Solid as solid\n"
+                                                            "    on tick:\n"
+                                                            "        solid.position.x += 1.0\n"
+                                                            "rule Grow:\n"
+                                                            "    on tick:\n"
+                                                            "        Game[Solid].size.x += 1.0\n"));
+    CHECK(code.contains("auto& cactus_index_wall = "));
+    CHECK(code.contains("registry.all_of<Moving, Solid>(wall)"));
+    CHECK(code.contains("wall == generated_named_slots()."));
+    CHECK(code.contains("cactus_index_wall.bound_dynamic("));
+}
+
+TEST_CASE("Codegen EnTT: no index when every member may move, a slot reads a named entity, or indexing is off",
+          "[codegen-entt][spatial-join][binding-index]") {
+    const auto all_written = emit_indexed_join(indexed_join_source("rule Drift:\n"
+                                                                   "    each:\n"
+                                                                   "        Solid as solid\n"
+                                                                   "    on tick:\n"
+                                                                   "        solid.position.x += 1.0\n"));
+    CHECK_FALSE(all_written.contains("SpatialBindingIndex3D"));
+    CHECK(all_written.contains("SapBroadPhase3D"));
+
+    const auto named_slot = emit_indexed_join(indexed_join_source("", "wall[Solid].size * Game[Tuning].margin"));
+    CHECK_FALSE(named_slot.contains("SpatialBindingIndex3D"));
+
+    const auto disabled = emit_indexed_join(indexed_join_source(""), false);
+    CHECK_FALSE(disabled.contains("SpatialBindingIndex3D"));
+    CHECK(disabled.contains("SapBroadPhase3D"));
+}
+
+static std::string equality_join_source(const std::string& field_kind) {
+    return "trait Cell:\n"
+           "    " + field_kind + " x: int\n"
+           "    let owner: entity_id\n"
+           "trait Probe:\n"
+           "    var x: int = 0\n"
+           "    var owner: entity_id\n"
+           "    var found: int = 0\n"
+           "event tick:\n"
+           "    dt: float\n"
+           "rule Detect:\n"
+           "    pairs:\n"
+           "        probe:\n"
+           "            Probe\n"
+           "        cell:\n"
+           "            Cell\n"
+           "    where:\n"
+           "        probe[Probe].found >= 0 and cell[Cell].x == probe[Probe].x and probe[Probe].owner == cell[Cell].owner\n"
+           "    reduce per probe:\n"
+           "        matches = count()\n"
+           "    on tick:\n"
+           "        probe[Probe].found = matches\n";
+}
+
+TEST_CASE("Codegen EnTT: an equality join on let fields uses a keyed index",
+          "[codegen-entt][equality-join][binding-index]") {
+    const auto code = emit_indexed_join(equality_join_source("let"));
+    CHECK(code.contains("auto& cactus_index_cell = cactus::runtime::entt_backend::shared_binding_index<cactus::runtime::entt_backend::EqualityBindingIndex<2>, "));
+    CHECK(code.contains("cactus_index_cell.find("));
+    CHECK(code.contains("equality_key_part("));
+    CHECK_FALSE(code.contains("cell_snapshot"));
+
+    const auto var_field = emit_indexed_join(equality_join_source("var"));
+    CHECK(var_field.contains("EqualityBindingIndex<1>"));
+
+    CHECK_FALSE(emit_indexed_join(equality_join_source("let"), false).contains("EqualityBindingIndex"));
+}
+
+TEST_CASE("Codegen EnTT: initializing a project starts a new binding-index epoch",
+          "[codegen-entt][binding-index]") {
+    ProgramNode program;
+    auto decorated = full_pipeline("trait Pos:\n    var x: float = 0.0\nentity Thing:\n    Pos\n", program);
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(generated_function(code, "void generated_init_project").contains("advance_binding_index_epoch();"));
 }
 
 // dsl-render-passes: a stage handler's `let`-bound local is an ordinary
@@ -8155,7 +8377,9 @@ TEST_CASE("Codegen EnTT: a grouped reduction folds broad-phase rows and writes i
     CHECK(groups < fold);
     CHECK(fold < sap);
     CHECK(sap < rows);
-    CHECK(code.find("cactus_fold(__sap_proxies[__sap_pair.left].entity", sap) != std::string::npos);
+    // Nothing writes the walls, so a persistent index supplies each actor's rows.
+    CHECK(code.find("cactus_index_wall.candidates(", sap) != std::string::npos);
+    CHECK(code.find("cactus_fold(actor, wall);", sap) != std::string::npos);
     // The group filter runs once per actor, not per row.
     const auto group_filter = code.find("registry.get<const Body>(actor).radius > 0.0");
     CHECK(group_filter < fold);
@@ -9129,6 +9353,63 @@ TEST_CASE("Codegen EnTT: int operators in call arguments, emit payloads and temp
     CHECK(code.contains("cactus::num::mod(c.d, 4)"));
     CHECK(code.contains("cactus::num::div(__cactus_template_slot_0, 3)"));
     CHECK(code.contains("cactus::num::neg(__cactus_template_slot_0)"));
+}
+
+TEST_CASE("Codegen EnTT: string template arguments pass by const reference, ints by value",
+          "[codegen-entt][templates]") {
+    ProgramNode program;
+    auto decorated  = full_pipeline("trait Label:\n"
+                                    "    var text: string = \"\"\n"
+                                    "    var size: int = 0\n"
+                                    "template Tag(text: string, size: int):\n"
+                                    "    Label:\n"
+                                    "        text = text\n"
+                                    "        size = size\n"
+                                    "entity A from Tag(text = \"a\", size = 2)\n",
+                                    program);
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.contains("const std::string& __cactus_template_slot_0"));
+    CHECK(code.contains("int __cactus_template_slot_1"));
+    CHECK_FALSE(code.contains("] std::string __cactus_template_slot_0"));
+}
+
+TEST_CASE("Codegen EnTT: a string slot bound from an outer template argument is not copied",
+          "[codegen-entt][templates]") {
+    ProgramNode program;
+    auto decorated  = full_pipeline("trait Label:\n"
+                                    "    var text: string = \"\"\n"
+                                    "template Inner(text: string):\n"
+                                    "    Label:\n"
+                                    "        text = text\n"
+                                    "template Outer(text: string):\n"
+                                    "    use Inner(text = text)\n"
+                                    "entity A from Outer(text = \"a\")\n",
+                                    program);
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.contains("[[maybe_unused]] const std::string& __cactus_template_slot_1 = __cactus_template_slot_0;"));
+    CHECK_FALSE(code.contains("const std::string __cactus_template_slot_"));
+}
+
+TEST_CASE("Codegen EnTT: the int side of mixed int and float arithmetic is cast to float",
+          "[codegen-entt][numeric-semantics]") {
+    ProgramNode program;
+    auto decorated  = full_pipeline(arithmetic_traits() +
+                                    "entity A:\n"
+                                    "    Cell\n"
+                                    "rule R:\n"
+                                    "    each:\n"
+                                    "        Cell as c\n"
+                                    "    on tick:\n"
+                                    "        c.f = c.n + 0.5\n"
+                                    "        c.f = 2.0 * c.n\n"
+                                    "        c.f += c.n\n"
+                                    "        c.f = c.f * 2.0\n",
+                                    program);
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.contains("(static_cast<float>(c.n) + 0.5F)"));
+    CHECK(code.contains("(2.0F * static_cast<float>(c.n))"));
+    CHECK(code.contains("c.f += static_cast<float>(c.n)"));
+    CHECK(code.contains("(c.f * 2.0F)"));
 }
 
 // ── Exact float accumulation (dsl-numeric-semantics) ───────────────────────

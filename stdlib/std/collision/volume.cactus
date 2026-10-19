@@ -104,3 +104,92 @@ pub func sphere_box_separation(sphere_position: vec3, sphere_radius: float, box_
     if local_position.z < 0.0:
         return quat.rotate(box_rotation, vec3(0.0, 0.0, (z_distance + safe_radius) * -1.0))
     return quat.rotate(box_rotation, vec3(0.0, 0.0, z_distance + safe_radius))
+
+# ── Ray / axis-aligned box ────────────────────────────────────────────────────
+
+# Where a ray first meets a box. A miss has hit = false and zeros elsewhere.
+# distance: world distance from the ray origin to point
+# normal:   outward normal of the face the ray enters through; zero when the
+#           ray starts inside the closed box
+pub struct RayHit:
+    hit: bool
+    distance: float
+    point: vec3
+    normal: vec3
+
+const:
+    # Beyond any distance a caller can ask for.
+    SLAB_FAR = 1000000000000.0
+
+func finite(v: float) bool:
+    return v - v == 0.0
+
+func finite3(v: vec3) bool:
+    return finite(v.x) and finite(v.y) and finite(v.z)
+
+func ray_miss() RayHit:
+    return RayHit(hit = false, distance = 0.0, point = vec3(0.0, 0.0, 0.0), normal = vec3(0.0, 0.0, 0.0))
+
+# Entry and exit distances of a ray along one slab. A ray parallel to the slab
+# is inside it for every distance when its origin lies in the closed slab,
+# faces included, and outside it for every distance otherwise.
+func slab_enter(origin: float, direction: float, lo: float, hi: float) float:
+    if direction == 0.0:
+        return if origin >= lo and origin <= hi: -SLAB_FAR else: SLAB_FAR
+    return math.min((lo - origin) / direction, (hi - origin) / direction)
+
+func slab_exit(origin: float, direction: float, lo: float, hi: float) float:
+    if direction == 0.0:
+        return if origin >= lo and origin <= hi: SLAB_FAR else: -SLAB_FAR
+    return math.max((lo - origin) / direction, (hi - origin) / direction)
+
+func face_normal(direction: float) float:
+    return if direction > 0.0: -1.0 else: 1.0
+
+# The first point where a ray from origin along direction, at most
+# max_distance long, meets the box at box_center with full extent box_size.
+# direction need not be unit length; box_size uses magnitudes. A zero
+# direction, a zero box extent, a nonpositive limit or any non-finite input
+# misses. A ray starting inside the closed box hits at distance 0 with zero
+# normal, except that one starting on a face and entering through it gets
+# that face's normal; one leaving through the face it starts on misses.
+# Contact exactly at max_distance hits. Entry ties pick X, then Y, then Z.
+pub func ray_box(origin: vec3, direction: vec3, max_distance: float, box_center: vec3, box_size: vec3) RayHit:
+    if not finite3(origin) or not finite3(direction) or not finite3(box_center) or not finite3(box_size):
+        return ray_miss()
+    let length = v3m.length(direction)
+    if not (max_distance > 0.0) or not (length > 0.0) or not finite(length):
+        return ray_miss()
+    let half = box_half_size(box_size)
+    if half.x <= 0.0 or half.y <= 0.0 or half.z <= 0.0:
+        return ray_miss()
+    let d = direction / length
+    let lo = box_center - half
+    let hi = box_center + half
+    let enter_x = slab_enter(origin.x, d.x, lo.x, hi.x)
+    let enter_y = slab_enter(origin.y, d.y, lo.y, hi.y)
+    let enter_z = slab_enter(origin.z, d.z, lo.z, hi.z)
+    let enter = math.max(enter_x, math.max(enter_y, enter_z))
+    let exit = math.min(slab_exit(origin.x, d.x, lo.x, hi.x), math.min(slab_exit(origin.y, d.y, lo.y, hi.y), slab_exit(origin.z, d.z, lo.z, hi.z)))
+    if enter > exit or exit <= 0.0 or enter > max_distance:
+        return ray_miss()
+    if enter < 0.0:
+        return RayHit(hit = true, distance = 0.0, point = origin, normal = vec3(0.0, 0.0, 0.0))
+    var normal = vec3(0.0, 0.0, face_normal(d.z))
+    if enter_y == enter:
+        normal = vec3(0.0, face_normal(d.y), 0.0)
+    if enter_x == enter:
+        normal = vec3(face_normal(d.x), 0.0, 0.0)
+    return RayHit(hit = true, distance = enter, point = origin + d * enter, normal = normal)
+
+# Whether two unrotated boxes share interior volume; boxes that only touch do
+# not. Sizes use magnitudes.
+pub func boxes_overlap(a_center: vec3, a_size: vec3, b_center: vec3, b_size: vec3) bool:
+    let reach = (box_half_size(a_size) + box_half_size(b_size))
+    let gap = a_center - b_center
+    return math.abs(gap.x) < reach.x and math.abs(gap.y) < reach.y and math.abs(gap.z) < reach.z
+
+# Whether ray_box with the same arguments hits. A pair rule that writes this
+# exact test in `where:` gets a broad phase derived from it.
+pub func ray_hits_box(origin: vec3, direction: vec3, max_distance: float, box_center: vec3, box_size: vec3) bool:
+    return ray_box(origin, direction, max_distance, box_center, box_size).hit

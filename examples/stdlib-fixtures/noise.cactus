@@ -1,0 +1,40 @@
+module noise
+
+# Samples every std.noise function once from a rule, so the headless test can
+# compare the rule's results with direct calls to the compiled functions.
+
+use std.core
+use std.noise as noise
+
+const:
+    SEED = 1337
+
+pub trait Samples:
+    var perlin2: float = 0.0
+    var perlin3: float = 0.0
+    var perlin_nan: float = 1.0
+    var perlin_infinite: float = 1.0
+    var perlin_far: float = 1.0
+    var voronoi2: noise.VoronoiSample = noise.VoronoiSample(valid = false, nearest = 0.0, second = 0.0, x = 0, y = 0, z = 0)
+    var voronoi3: noise.VoronoiSample = noise.VoronoiSample(valid = false, nearest = 0.0, second = 0.0, x = 0, y = 0, z = 0)
+    var voronoi_nan: noise.VoronoiSample = noise.VoronoiSample(valid = true, nearest = 1.0, second = 1.0, x = 1, y = 1, z = 1)
+    var feature: vec3 = vec3(0.0, 0.0, 0.0)
+
+pub entity Probe:
+    Samples
+
+rule Sample:
+    each:
+        Samples as s
+
+    on tick:
+        let nan = 0.0 / 0.0
+        s.perlin2 = noise.perlin2(vec2(3.7, -12.25), SEED)
+        s.perlin3 = noise.perlin3(vec3(3.7, -12.25, 0.4), SEED)
+        s.perlin_nan = noise.perlin2(vec2(nan, 1.5), SEED)
+        s.perlin_infinite = noise.perlin3(vec3(1.0 / 0.0, 0.5, 0.5), SEED)
+        s.perlin_far = noise.perlin3(vec3(0.5, 1000001.0, 0.5), SEED)
+        s.voronoi2 = noise.voronoi2(vec2(3.7, -12.25), SEED)
+        s.voronoi3 = noise.voronoi3(vec3(3.7, -12.25, 0.4), SEED)
+        s.voronoi_nan = noise.voronoi3(vec3(0.5, nan, 0.5), SEED)
+        s.feature = noise.feature3(2, -3, 4, SEED)

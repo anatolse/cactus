@@ -20,6 +20,8 @@
 #include <iostream>
 #include <map>
 #include <optional>
+#include <regex>
+#include <set>
 #include <sstream>
 #include <unordered_set>
 
@@ -1116,12 +1118,13 @@ TEST_CASE("integration: collider queries lower to runtime kernels over program-b
     SECTION("a binding naming one shape trait builds that kind directly") {
         CHECK(code.find("cactus_collider_touching(cactus_collider_shape_of(registry, bullet), "
                         "cactus_collider_shape_of_BoxCollider(registry, wall), bullet, wall)") != std::string::npos);
-        CHECK(code.find("cactus::runtime::entt_backend::collider_proxy(wall, __sap_i, ") != std::string::npos);
+        CHECK(code.find("cactus::runtime::entt_backend::collider_proxy(wall, 0, ") != std::string::npos);
     }
-    SECTION("sweep lowers to the runtime kernel over cached shapes") {
+    SECTION("sweep lowers to the runtime kernel over cached group shapes and indexed targets") {
         CHECK(code.find("cactus_collider_sweep(cactus_shape_of_bullet(bullet), ") != std::string::npos);
-        CHECK(code.find("cactus_shape_of_target(target), bullet, target)") != std::string::npos);
-        CHECK(code.find("cactus::runtime::entt_backend::collider_proxy(bullet, __sap_i, ") != std::string::npos);
+        CHECK(code.find("cactus_collider_shape_of(registry, target), bullet, target)") != std::string::npos);
+        CHECK(code.find("cactus::runtime::entt_backend::collider_proxy(bullet, 0, ") != std::string::npos);
+        CHECK(code.find("cactus_index_target.candidates(") != std::string::npos);
     }
     SECTION("first_hit folds with strict < from the miss identity") {
         CHECK(code.find("std_physics_volume__SweepHit first = cactus_collider_sweep_miss();") != std::string::npos);
@@ -1132,17 +1135,37 @@ TEST_CASE("integration: collider queries lower to runtime kernels over program-b
     fs::remove_all(build_dir, ec);
 }
 
+// Every example program: each .cactus file outside build/ that no sibling
+// file imports, since an imported module is a library of its example.
+static std::vector<fs::path> example_program_roots(const fs::path& examples) {
+    std::vector<fs::path> files;
+    std::set<fs::path> imported;
+    const std::regex use_line(R"(^use ([A-Za-z_][A-Za-z0-9_]*)\s*$)");
+    for (const auto& entry : fs::recursive_directory_iterator(examples)) {
+        const auto relative = fs::relative(entry.path(), examples).generic_string();
+        if (entry.path().extension() != ".cactus" || relative.contains("build/")) {
+            continue;
+        }
+        files.push_back(entry.path());
+        std::ifstream ifs(entry.path());
+        for (std::string line; std::getline(ifs, line);) {
+            if (!line.empty() && line.back() == '\r') {
+                line.pop_back();
+            }
+            if (std::smatch match; std::regex_match(line, match, use_line)) {
+                imported.insert(entry.path().parent_path() / (match[1].str() + ".cactus"));
+            }
+        }
+    }
+    std::erase_if(files, [&](const fs::path& file) { return imported.contains(file); });
+    return files;
+}
+
 // Lists every delayed delivery edge of each example and fixture program. Run by hand with
 // `test_multi_module_integration "[delivery-survey]"` when cycle rules change.
 TEST_CASE("survey: delayed delivery edges of every example and fixture", "[.][delivery-survey]") {
     const auto examples = stdlib_dir().parent_path() / "examples";
-    std::vector<fs::path> roots;
-    for (const auto& entry : fs::recursive_directory_iterator(examples)) {
-        const auto relative = fs::relative(entry.path(), examples).generic_string();
-        if (entry.path().extension() == ".cactus" && !relative.contains("build/")) {
-            roots.push_back(entry.path());
-        }
-    }
+    auto roots = example_program_roots(examples);
     for (const auto& entry : fs::directory_iterator(CACTUS_TEST_FIXTURES_DIR)) {
         if (entry.path().extension() == ".cactus") {
             roots.push_back(entry.path());
@@ -1269,13 +1292,7 @@ static std::string describe_where_contract(const HandlerContract& contract) {
 // On an intended contract change, copy the actual file the test writes over the baseline.
 TEST_CASE("integration: where: rule contracts match the recorded baseline", "[integration][where-baseline]") {
     const auto examples = stdlib_dir().parent_path() / "examples";
-    std::vector<fs::path> roots;
-    for (const auto& entry : fs::recursive_directory_iterator(examples)) {
-        const auto relative = fs::relative(entry.path(), examples).generic_string();
-        if (entry.path().extension() == ".cactus" && !relative.contains("build/")) {
-            roots.push_back(entry.path());
-        }
-    }
+    auto roots = example_program_roots(examples);
     for (const auto& entry : fs::directory_iterator(CACTUS_TEST_FIXTURES_DIR)) {
         if (entry.path().extension() == ".cactus") {
             roots.push_back(entry.path());

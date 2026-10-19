@@ -1,6 +1,7 @@
 module std.render.sprites
 
 use std.render.layers as layers
+use std.transform.flat as tf
 
 # ── 2D Sprite Rendering Traits ────────────────────────────────────────────────
 # Passive traits — the backend reads these and renders automatically.
@@ -41,13 +42,13 @@ pub trait Canvas2D:
 
 extern rule SpriteRenderer:
     each:
-        std.transform.flat.WorldTransform
+        tf.WorldTransform
         Renderer
     group: layers.sprites
 
     on render:
         reads:
-            std.transform.flat.WorldTransform
+            tf.WorldTransform
             Renderer
         effects:
             graphics

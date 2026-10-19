@@ -36,6 +36,7 @@ static void print_usage(const char* program) {
               << "  --output <file>                      Output file (default: stdout)\n"
               << "  --module-path <dir>                  Additional module search directory (repeatable)\n"
               << "  --force-row-stage                    Test only: evaluate every clause expression per row\n"
+              << "  --no-indexed-joins                   Test only: rebuild every pair pass from full snapshots\n"
               << "  --help                               Show this help message\n";
 }
 
@@ -102,6 +103,7 @@ static cactus::ImportedSymbols extract_pub_symbols(const std::string& module_nam
     cactus::ImportedSymbols syms;
     syms.module_name = module_name;
     syms.entities    = prog.pub_entities;
+    syms.assets      = prog.pub_assets;
     for (const auto& [name, trait] : prog.traits) {
         if (!trait.is_pub) {
             continue;
@@ -342,7 +344,21 @@ struct CliArgs {
     std::string output_file;
     std::vector<fs::path> module_paths;  // 6.1: --module-path flag
     bool force_row_stage = false;
+    bool no_indexed_joins = false;
 };
+
+// Sets the flag an option without a value names; false for any other argument.
+static bool set_switch(const char* arg, CliArgs& out) {
+    if (std::strcmp(arg, "--force-row-stage") == 0) {
+        out.force_row_stage = true;
+        return true;
+    }
+    if (std::strcmp(arg, "--no-indexed-joins") == 0) {
+        out.no_indexed_joins = true;
+        return true;
+    }
+    return false;
+}
 
 /// Parses argv into `out`. Returns an exit code if main() should return
 /// immediately (0 for --help, 1 for a usage error), or nullopt to continue.
@@ -352,16 +368,15 @@ static std::optional<int> parse_cli_args(int argc, char** argv, CliArgs& out) {
             print_usage(argv[0]);
             return 0;
         }
+        if (set_switch(argv[i], out)) {
+            continue;
+        }
         if (std::strcmp(argv[i], "--backend") == 0) {
             if (i + 1 >= argc) {
                 std::cerr << "error: --backend requires an argument\n";
                 return 1;
             }
             out.backend = argv[++i];
-            if (out.backend != "cpp-entt") {
-                std::cerr << "error: unknown backend '" << out.backend << "' (use cpp-entt)\n";
-                return 1;
-            }
         } else if (std::strcmp(argv[i], "--output") == 0 || std::strcmp(argv[i], "-o") == 0) {
             if (i + 1 >= argc) {
                 std::cerr << "error: --output requires an argument\n";
@@ -375,8 +390,6 @@ static std::optional<int> parse_cli_args(int argc, char** argv, CliArgs& out) {
                 return 1;
             }
             out.module_paths.emplace_back(argv[++i]);
-        } else if (std::strcmp(argv[i], "--force-row-stage") == 0) {
-            out.force_row_stage = true;
         } else if (argv[i][0] == '-') {
             std::cerr << "error: unknown option '" << argv[i] << "'\n";
             return 1;
@@ -385,6 +398,10 @@ static std::optional<int> parse_cli_args(int argc, char** argv, CliArgs& out) {
         }
     }
 
+    if (out.backend != "cpp-entt") {
+        std::cerr << "error: unknown backend '" << out.backend << "' (use cpp-entt)\n";
+        return 1;
+    }
     if (out.input_file.empty()) {
         std::cerr << "error: no input file specified\n";
         return 1;
@@ -574,6 +591,7 @@ int main(int argc, char* argv[]) try {
             handler.contract.staging = {};
         }
     }
+    decorated.index_pair_joins = !args.no_indexed_joins;
     std::string generated;
     if (!generate_cpp(decorated, generated) || !write_generated_output(generated, output_file, backend)) {
         return 1;

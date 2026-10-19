@@ -14,12 +14,14 @@ namespace {
 // C++ text resolving an AssetRef/InputRef's declaration name back to this
 // build's numeric handle via `lookup_function`, recording a resource-
 // preparation failure on `ids` (checked once after reconstruction, before
-// publication) when this build declares no such name.
+// publication) when this build declares no such name. An unset handle
+// captures as the empty name, which no declaration can have, and restores
+// unset.
 std::string resource_handle_expression(const char* lookup_function,
                                        const char* handle_type,
                                        const std::string& access) {
-    return std::string("[&]() { const auto name = (") + access + ").as_declaration(); const auto handle = " +
-           "cactus::runtime::entt_backend::" + lookup_function +
+    return std::string("[&]() { const auto name = (") + access + ").as_declaration(); if (name.empty()) { return " +
+           handle_type + "{0}; } const auto handle = " + "cactus::runtime::entt_backend::" + lookup_function +
            "(name); if (!handle.has_value()) { ids.mark_resource_unresolved(name); return " + handle_type +
            "{0}; } return *handle; }()";
 }
@@ -309,6 +311,7 @@ std::string EnttRestoreEmitter::emit_world_restore(const DecoratedProgram& progr
     // only holders below need no registry and can clear in any order.
     out << "    clear_projected_traits(registry);\n";
     out << "    registry = std::move(staged);\n";
+    out << "    advance_binding_index_epoch();\n";
     out << "    reset_pointer_router_state();\n";
     out << "    reset_editor_camera_rig_state();\n";
     // Resets the whole SchedulerState, not just .activation: per-phase

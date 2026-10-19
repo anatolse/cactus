@@ -134,6 +134,18 @@ TEST_CASE("an eligible archetype retains its construction values at creation",
     CHECK(contains(unit->code, "\"world.Boss\""));
 }
 
+TEST_CASE("each trait with fields captures in its own function", "[codegen-entt][persistence][provenance]") {
+    const auto unit    = generate(kDeclarations);
+    const auto capture = function_body(unit->code, "generated_capture_traits");
+    const auto health  = function_body(unit->code, "generated_capture_trait_world__Health");
+
+    CHECK(contains(capture, "generated_capture_trait_world__Health(registry, entity, ids, record);"));
+    CHECK_FALSE(contains(capture, "Construction<world__Health>"));
+    CHECK(contains(health, "registry.try_get<Construction<world__Health>>(entity)"));
+    CHECK(contains(health, "\"maximum\""));
+    CHECK(contains(health, "\"current\""));
+}
+
 TEST_CASE("the nullary archetype factory routes through the provenance-retaining path",
           "[codegen-entt][persistence][provenance]") {
     const auto unit = generate(kDeclarations);

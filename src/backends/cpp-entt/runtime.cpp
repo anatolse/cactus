@@ -5,6 +5,7 @@
 #include <raylib.h>
 
 #include <algorithm>
+#include <map>
 #include <array>
 #include <cmath>
 #include <cstring>
@@ -176,6 +177,12 @@ struct TextureResourceEntry {
     Texture2D texture{};
     bool loaded{false};
     bool owned{false};
+    // Read from disk once: the decoded image waits here for GPU upload, and
+    // its size answers UI measurement without a graphics context.
+    bool probed{false};
+    Image image{};
+    int width{0};
+    int height{0};
 };
 
 struct MeshResourceEntry {
@@ -253,6 +260,20 @@ std::vector<TextSubmission3D>& text_3d_queue() noexcept {
     return queue;
 }
 
+// Window-space UI, drawn after every viewport so world content never covers
+// it. Each active viewport's render pass repeats the same UI, so a frame keeps
+// only the first viewport's primitives.
+struct UiQueue {
+    bool started{false};
+    entt::entity viewport{entt::null};
+    std::vector<UiPrimitive> primitives;
+};
+
+UiQueue& ui_queue() noexcept {
+    static UiQueue queue;
+    return queue;
+}
+
 std::vector<ScreenLabelSubmission>& screen_label_queue() noexcept {
     static std::vector<ScreenLabelSubmission> queue;
     return queue;
@@ -297,7 +318,7 @@ std::unordered_map<int, ModelResourceEntry>& models() noexcept try {
 // paths resolve on disk, discovered once per process and reused for the rest
 // of its lifetime (design.md Decision 2). Cleared alongside the rest of the
 // model store so headless tests get a clean slate between cases.
-std::optional<std::filesystem::path>& cached_model_asset_root() noexcept {
+std::optional<std::filesystem::path>& cached_asset_root() noexcept {
     static std::optional<std::filesystem::path> root;
     return root;
 }
@@ -884,9 +905,14 @@ namespace {
 void clear_texture_store() noexcept {
     for (auto& [runtime_id, entry] : textures()) {
         (void)runtime_id;
+        if (entry.image.data != nullptr) {
+            UnloadImage(entry.image);
+        }
+#ifndef CACTUS_RAYLIB_FAKE
         if (entry.loaded && entry.owned && cactus::runtime::raylib::IsWindowReady()) {
             UnloadTexture(entry.texture);
         }
+#endif
     }
     textures().clear();
 }
@@ -905,6 +931,8 @@ void clear_material_store() noexcept {
     for (auto& [runtime_id, entry] : materials()) {
         (void)runtime_id;
         if (entry.loaded && entry.owned && cactus::runtime::raylib::IsWindowReady()) {
+            // The lit shader is shared; clear_lighting_shader frees it once.
+            entry.material.shader = Shader{.id = rlGetShaderIdDefault(), .locs = rlGetShaderLocsDefault()};
             UnloadMaterial(entry.material);
         }
     }
@@ -917,37 +945,77 @@ void clear_model_store() noexcept {
         if (entry.animations != nullptr) {
             UnloadModelAnimations(entry.animations, entry.animation_count);
         }
+#ifndef CACTUS_RAYLIB_FAKE
         if (entry.loaded && cactus::runtime::raylib::IsWindowReady()) {
             UnloadModel(entry.model);
         }
+#endif
     }
     models().clear();
     diagnosed_missing_model_handles().clear();
     diagnosed_invalid_clips().clear();
-    cached_model_asset_root().reset();
+    cached_asset_root().reset();
+}
+
+std::string resolve_asset_path(const std::string& registered_path);
+
+// A missing or undecodable texture shows this magenta-and-black checkerboard,
+// with these dimensions for both drawing and UI measurement.
+constexpr int kTextureFallbackSize   = 32;
+constexpr int kTextureFallbackSquare = 8;
+
+// Decodes a registered texture's file once, or settles on the fallback with
+// one diagnostic. Needs no graphics context.
+TextureResourceEntry& probe_texture(const int runtime_id) {
+    auto& entry = textures()[runtime_id];
+    if (entry.probed) {
+        return entry;
+    }
+    entry.probed            = true;
+    const std::string path  = shared_asset_registry().asset_id_for_runtime(AssetKind::Texture, runtime_id);
+    const std::string found = resolve_asset_path(path);
+    if (!path.empty() && FileExists(found.c_str())) {
+        ++render_debug_state_storage().texture_file_loads;
+        entry.image = LoadImage(found.c_str());
+    }
+    if (entry.image.data == nullptr || entry.image.width <= 0 || entry.image.height <= 0) {
+        render_debug_state_storage().texture_diagnostics.push_back("texture file missing or unreadable: " + path);
+        note_missing_asset();
+        if (entry.image.data != nullptr) {
+            UnloadImage(entry.image);
+        }
+        entry.image = GenImageChecked(
+            kTextureFallbackSize, kTextureFallbackSize, kTextureFallbackSquare, kTextureFallbackSquare, MAGENTA, BLACK);
+    }
+    entry.width  = entry.image.width;
+    entry.height = entry.image.height;
+    return entry;
 }
 
 Texture2D* ensure_texture_resource(const int runtime_id) {
     if (runtime_id < 0) {
         return nullptr;
     }
-    auto& entry = textures()[runtime_id];
+    auto& entry = probe_texture(runtime_id);
     if (!entry.loaded) {
         if (!cactus::runtime::raylib::IsWindowReady()) {
             return nullptr;
         }
 #ifdef CACTUS_RAYLIB_FAKE
-        // GenImageColor/LoadTextureFromImage/UnloadImage need a real GL context
-        // to create GPU resources; headless behavioral tests never create one
-        // (see ensure_mesh_resource's identical guard above). The fake's
-        // DrawTexturePro only records its Texture2D argument by value, so a
-        // zeroed placeholder is sufficient once the window is (fake-)ready.
-        entry.texture = Texture2D{};
+        // Headless tests have no GL context to upload into; the fake's
+        // DrawTexturePro records the Texture2D by value, so a handle that
+        // carries the decoded size is enough.
+        entry.texture = Texture2D{.id      = static_cast<unsigned int>(runtime_id) + 1U,
+                                  .width   = entry.width,
+                                  .height  = entry.height,
+                                  .mipmaps = 1,
+                                  .format  = entry.image.format};
 #else
-        Image image   = GenImageColor(1, 1, WHITE);
-        entry.texture = LoadTextureFromImage(image);
-        UnloadImage(image);
+        entry.texture = LoadTextureFromImage(entry.image);
+        SetTextureWrap(entry.texture, TEXTURE_WRAP_REPEAT);
 #endif
+        UnloadImage(entry.image);
+        entry.image  = Image{};
         entry.loaded = true;
         entry.owned  = true;
     }
@@ -1041,9 +1109,9 @@ Model fake_model_resource() noexcept {
 // then the executable's own directory and a bounded chain of its ancestors
 // (design.md Decision 2). Returns nullopt if nothing resolves, leaving the
 // caller to fail exactly as it does today.
-constexpr int kModelRootSearchMaxAncestors = 8;
+constexpr int kAssetRootSearchMaxAncestors = 8;
 
-std::optional<std::filesystem::path> discover_model_asset_root(const std::string& registered_path) {
+std::optional<std::filesystem::path> discover_asset_root(const std::string& registered_path) {
     namespace fs = std::filesystem;
     std::error_code ec;
 
@@ -1053,7 +1121,7 @@ std::optional<std::filesystem::path> discover_model_asset_root(const std::string
     }
 
     fs::path candidate = fs::path(GetApplicationDirectory());
-    for (int depth = 0; depth <= kModelRootSearchMaxAncestors; ++depth) {
+    for (int depth = 0; depth <= kAssetRootSearchMaxAncestors; ++depth) {
         ec.clear();
         if (fs::exists(candidate / registered_path, ec)) {
             return candidate;
@@ -1071,13 +1139,13 @@ std::optional<std::filesystem::path> discover_model_asset_root(const std::string
 // open, discovering (and caching) the root directory on first use. Falls
 // back to the registered path unchanged when no root has been found yet, so
 // the caller's existing FileExists-fails-once bookkeeping still applies.
-std::string resolve_model_path(const std::string& registered_path) {
+std::string resolve_asset_path(const std::string& registered_path) {
     if (registered_path.empty()) {
         return registered_path;
     }
-    auto& cached = cached_model_asset_root();
+    auto& cached = cached_asset_root();
     if (!cached.has_value()) {
-        cached = discover_model_asset_root(registered_path);
+        cached = discover_asset_root(registered_path);
     }
     if (!cached.has_value()) {
         return registered_path;
@@ -1103,7 +1171,7 @@ Model* ensure_model_resource(const int runtime_id) {
     if (entry.loaded) {
         return &entry.model;
     }
-    const std::string resolved_path = resolve_model_path(entry.path);
+    const std::string resolved_path = resolve_asset_path(entry.path);
     if (entry.path.empty() || !FileExists(resolved_path.c_str())) {
         entry.failed = true;
         record_model_load_failure("model file missing: " + entry.path);
@@ -1160,7 +1228,7 @@ void ensure_model_animations(ModelResourceEntry& entry) {
         return;
     }
     entry.animations_load_attempted = true;
-    const std::string resolved_path = resolve_model_path(entry.path);
+    const std::string resolved_path = resolve_asset_path(entry.path);
     if (entry.path.empty() || !FileExists(resolved_path.c_str())) {
         return;
     }
@@ -1238,6 +1306,205 @@ Matrix mesh_transform_matrix(const MeshSubmission& submission) noexcept {
     const Matrix rotation    = QuaternionToMatrix(submission.rotation);
     const Matrix translation = MatrixTranslate(submission.position.x, submission.position.y, submission.position.z);
     return MatrixMultiply(MatrixMultiply(scale, rotation), translation);
+}
+
+// ── Voxel volumes ────────────────────────────────────────────────────────────
+// One cache per Volume entity: its surface grid and, per chunk, one mesh per
+// texture, kept until the chunk changes. A cutaway view keeps a second mesh set
+// for the chunks its ceiling crosses.
+
+struct VoxelChunkMesh {
+    std::uint32_t texture = 0;
+    Mesh mesh{};
+    int faces = 0;
+};
+
+struct VoxelChunkCache {
+    bool built = false;
+    std::optional<int> ceiling;
+    std::vector<VoxelChunkMesh> meshes;
+};
+
+struct VoxelVolumeRender {
+    VoxelSurfaceGrid grid;
+    std::uint64_t synced_frame = 0;
+    std::vector<VoxelChunkCache> full;
+    std::vector<VoxelChunkCache> cut;
+};
+
+struct VoxelSubmission {
+    entt::entity volume{entt::null};
+    std::optional<int> ceiling;
+};
+
+std::unordered_map<entt::entity, VoxelVolumeRender>& voxel_volumes() noexcept try {
+    static std::unordered_map<entt::entity, VoxelVolumeRender> volumes;
+    return volumes;
+} catch (...) {
+    std::terminate();
+}
+
+std::vector<VoxelSubmission>& voxel_queue() noexcept try {
+    static std::vector<VoxelSubmission> queue;
+    return queue;
+} catch (...) {
+    std::terminate();
+}
+
+std::unordered_map<std::uint32_t, Material>& voxel_materials() noexcept try {
+    static std::unordered_map<std::uint32_t, Material> materials;
+    return materials;
+} catch (...) {
+    std::terminate();
+}
+
+std::uint64_t& render_frame_counter() noexcept {
+    static std::uint64_t frame = 1;
+    return frame;
+}
+
+std::uint64_t& voxel_epoch() noexcept {
+    static std::uint64_t epoch = 0;
+    return epoch;
+}
+
+entt::entity& active_viewport_storage() noexcept {
+    static entt::entity viewport{entt::null};
+    return viewport;
+}
+
+Mesh upload_voxel_mesh(const VoxelMeshData& data) {
+    Mesh mesh{};
+    mesh.vertexCount   = static_cast<int>(data.positions.size() / 3);
+    mesh.triangleCount = mesh.vertexCount / 3;
+    const auto copy    = [](const std::vector<float>& values) {
+        auto* target = static_cast<float*>(MemAlloc(static_cast<unsigned int>(values.size() * sizeof(float))));
+        std::ranges::copy(values, target);
+        return target;
+    };
+    mesh.vertices  = copy(data.positions);
+    mesh.normals   = copy(data.normals);
+    mesh.texcoords = copy(data.texcoords);
+#ifndef CACTUS_RAYLIB_FAKE
+    UploadMesh(&mesh, false);
+#endif
+    return mesh;
+}
+
+void release_voxel_meshes(VoxelChunkCache& cache) noexcept {
+    for (auto& chunk_mesh : cache.meshes) {
+#ifdef CACTUS_RAYLIB_FAKE
+        MemFree(chunk_mesh.mesh.vertices);
+        MemFree(chunk_mesh.mesh.normals);
+        MemFree(chunk_mesh.mesh.texcoords);
+#else
+        UnloadMesh(chunk_mesh.mesh);
+#endif
+    }
+    cache.meshes.clear();
+    cache.built = false;
+}
+
+void release_voxel_volume(VoxelVolumeRender& volume) noexcept {
+    for (auto& cache : volume.full) {
+        release_voxel_meshes(cache);
+    }
+    for (auto& cache : volume.cut) {
+        release_voxel_meshes(cache);
+    }
+}
+
+void clear_voxel_store() noexcept {
+    for (auto& [entity, volume] : voxel_volumes()) {
+        (void)entity;
+        release_voxel_volume(volume);
+    }
+    voxel_volumes().clear();
+    voxel_queue().clear();
+    // The maps belong to these materials; their textures and shader are shared.
+    for (auto& [texture, material] : voxel_materials()) {
+        (void)texture;
+        MemFree(material.maps);
+    }
+    voxel_materials().clear();
+}
+
+void build_voxel_chunk(const VoxelSurfaceGrid& grid, int chunk, std::optional<int> ceiling, VoxelChunkCache& cache) {
+    release_voxel_meshes(cache);
+    std::map<std::uint32_t, std::vector<VoxelFaceQuad>> by_texture;
+    for (auto& face : grid.chunk_faces(chunk, ceiling)) {
+        by_texture[face.texture].push_back(face);
+    }
+    for (const auto& [texture, faces] : by_texture) {
+        cache.meshes.push_back(VoxelChunkMesh{.texture = texture,
+                                              .mesh    = upload_voxel_mesh(build_voxel_mesh(grid.desc(), faces)),
+                                              .faces   = static_cast<int>(faces.size())});
+    }
+    cache.built   = true;
+    cache.ceiling = ceiling;
+    ++render_debug_state_storage().voxel_chunk_builds;
+}
+
+Material& voxel_material(std::uint32_t texture) {
+    auto [found, created] = voxel_materials().try_emplace(texture);
+    Material& material    = found->second;
+    if (created) {
+        material = LoadMaterialDefault();
+        const auto resolved = shared_asset_registry().resolve(AssetKind::Texture, texture);
+        if (resolved.ready()) {
+            if (const Texture2D* image = ensure_texture_resource(resolved.runtime_id); image != nullptr) {
+                material.maps[MATERIAL_MAP_DIFFUSE].texture = *image;
+            }
+        }
+        material.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+    }
+    if (Shader* shader = ensure_lighting_shader(); shader != nullptr) {
+        material.shader = *shader;
+    }
+    return material;
+}
+
+void draw_voxel_volume(VoxelVolumeRender& volume, std::optional<int> ceiling) {
+    auto& debug = render_debug_state_storage();
+    for (int chunk = 0; chunk < volume.grid.chunk_count(); ++chunk) {
+        const auto view = volume.grid.chunk_view(chunk, ceiling);
+        if (view == VoxelChunkView::Hidden) {
+            continue;
+        }
+        const bool cut          = view == VoxelChunkView::Cut;
+        auto& cache             = cut ? volume.cut[static_cast<std::size_t>(chunk)]
+                                      : volume.full[static_cast<std::size_t>(chunk)];
+        const auto wanted       = cut ? ceiling : std::nullopt;
+        if (!cache.built || cache.ceiling != wanted) {
+            build_voxel_chunk(volume.grid, chunk, wanted, cache);
+        }
+        for (const auto& chunk_mesh : cache.meshes) {
+            cactus::runtime::raylib::DrawMesh(chunk_mesh.mesh, voxel_material(chunk_mesh.texture), MatrixIdentity());
+            ++debug.voxel_draw_calls;
+            debug.voxel_faces_drawn += chunk_mesh.faces;
+        }
+    }
+}
+
+void flush_voxel_queue() noexcept try {
+    if (voxel_queue().empty() || !cactus::runtime::raylib::IsWindowReady()) {
+        voxel_queue().clear();
+        return;
+    }
+    render_debug_state_storage().used_default_3d_camera = true;
+    const Camera3D camera                                = get_active_camera_3d();
+    apply_lights(camera);
+    cactus::runtime::raylib::BeginMode3D(camera);
+    for (const auto& submission : voxel_queue()) {
+        const auto found = voxel_volumes().find(submission.volume);
+        if (found != voxel_volumes().end()) {
+            draw_voxel_volume(found->second, submission.ceiling);
+        }
+    }
+    cactus::runtime::raylib::EndMode3D();
+    voxel_queue().clear();
+} catch (...) {
+    std::terminate();
 }
 
 void flush_mesh_queue() noexcept try {
@@ -1618,6 +1885,10 @@ RuntimeBinding bind_runtime(GeneratedProjectInfo project) noexcept {
     return RuntimeBinding{project};
 }
 
+void release_render_resources() noexcept {
+    reset_render_debug_state();
+}
+
 void reset_render_debug_state() noexcept {
     render_debug_state_storage() = {};
     sprite_queue().clear();
@@ -1636,6 +1907,8 @@ void reset_render_debug_state() noexcept {
         }
     }
     text_label_3d_cache().clear();
+    ui_queue() = UiQueue{};
+    clear_voxel_store();
     clear_texture_store();
     clear_mesh_store();
     clear_material_store();
@@ -1649,6 +1922,18 @@ const RenderDebugState& render_debug_state() noexcept {
 }
 
 void begin_render_frame() noexcept {
+    ++render_frame_counter();
+    active_viewport_storage() = entt::null;
+    render_debug_state_storage().voxel_faces_drawn = 0;
+    render_debug_state_storage().voxel_draw_calls  = 0;
+    // A volume not drawn last frame was destroyed or replaced.
+    std::erase_if(voxel_volumes(), [](auto& entry) {
+        const bool stale = entry.second.synced_frame + 2 < render_frame_counter();
+        if (stale) {
+            release_voxel_volume(entry.second);
+        }
+        return stale;
+    });
     sprite_queue().clear();
     mesh_queue().clear();
     model_queue().clear();
@@ -1669,6 +1954,7 @@ void begin_render_frame() noexcept {
 }
 
 static void flush_viewport_queues() noexcept {
+    flush_voxel_queue();
     flush_mesh_queue();
     flush_model_queue();
     flush_text_3d_queue();
@@ -1683,12 +1969,65 @@ static void flush_viewport_queues() noexcept {
     text_2d_queue().clear();
 }
 
+void draw_ui_primitive(const UiPrimitive& primitive) noexcept;
+
 void end_render_frame() noexcept {
     flush_viewport_queues();
+    for (const auto& primitive : ui_queue().primitives) {
+        draw_ui_primitive(primitive);
+    }
+    ui_queue() = UiQueue{};
     // Screen labels are window-global: drawn last, after all viewport/world
     // rendering, so they overlay every view (never flushed per viewport).
     flush_screen_label_queue();
     screen_label_queue().clear();
+}
+
+VoxelSurfaceGrid* voxel_volume_begin(entt::entity volume, const VoxelVolumeDesc& desc) noexcept try {
+    if (voxel_epoch() != binding_index_epoch()) {
+        clear_voxel_store();
+        voxel_epoch() = binding_index_epoch();
+    }
+    auto& render = voxel_volumes()[volume];
+    if (render.synced_frame == render_frame_counter()) {
+        return nullptr;
+    }
+    render.synced_frame = render_frame_counter();
+    render.grid.begin(desc);
+    return &render.grid;
+} catch (...) {
+    std::terminate();
+}
+
+void voxel_volume_end(entt::entity volume) noexcept try {
+    auto& render = voxel_volumes()[volume];
+    render.grid.end();
+    const auto chunks = static_cast<std::size_t>(render.grid.chunk_count());
+    if (render.full.size() != chunks) {
+        release_voxel_volume(render);
+        render.full.assign(chunks, VoxelChunkCache{});
+        render.cut.assign(chunks, VoxelChunkCache{});
+    }
+    for (const int chunk : render.grid.take_dirty_chunks()) {
+        render.full[static_cast<std::size_t>(chunk)].built = false;
+        render.cut[static_cast<std::size_t>(chunk)].built  = false;
+    }
+} catch (...) {
+    std::terminate();
+}
+
+void submit_voxel_volume(entt::entity volume, std::optional<int> ceiling) noexcept try {
+    voxel_queue().push_back(VoxelSubmission{.volume = volume, .ceiling = ceiling});
+} catch (...) {
+    std::terminate();
+}
+
+void set_active_viewport_entity(entt::entity viewport) noexcept {
+    active_viewport_storage() = viewport;
+}
+
+entt::entity active_viewport_entity() noexcept {
+    return active_viewport_storage();
 }
 
 void flush_viewport_3d() noexcept {
@@ -2512,6 +2851,38 @@ ProxyAabb3D box_proxy(
     return ProxyAabb3D{.entity = entity, .ordinal = ordinal, .side = side, .min = min, .max = max};
 }
 
+ProxyAabb3D
+aligned_box_proxy(entt::entity entity, std::uint64_t ordinal, SapSide side, Vector3 center, Vector3 size) noexcept {
+    const auto [min, max] =
+        bounds_around(center, Vector3{.x = std::abs(size.x) / 2, .y = std::abs(size.y) / 2, .z = std::abs(size.z) / 2});
+    return ProxyAabb3D{.entity = entity, .ordinal = ordinal, .side = side, .min = min, .max = max};
+}
+
+ProxyAabb3D segment_proxy(entt::entity entity,
+                          std::uint64_t ordinal,
+                          SapSide side,
+                          Vector3 origin,
+                          Vector3 direction,
+                          float max_distance) noexcept {
+    const float length = Vector3Length(direction);
+    const bool usable  = std::isfinite(origin.x) && std::isfinite(origin.y) && std::isfinite(origin.z) &&
+                        std::isfinite(length) && length > 0.0F && std::isfinite(max_distance) && max_distance > 0.0F;
+    if (!usable) {
+        constexpr float kInf = std::numeric_limits<float>::infinity();
+        return ProxyAabb3D{.entity  = entity,
+                           .ordinal = ordinal,
+                           .side    = side,
+                           .min     = Vector3{.x = kInf, .y = kInf, .z = kInf},
+                           .max     = Vector3{.x = -kInf, .y = -kInf, .z = -kInf}};
+    }
+    const Vector3 end = Vector3Add(origin, Vector3Scale(direction, max_distance / length));
+    return ProxyAabb3D{.entity  = entity,
+                       .ordinal = ordinal,
+                       .side    = side,
+                       .min     = Vector3Min(origin, end),
+                       .max     = Vector3Max(origin, end)};
+}
+
 std::optional<ProxyAabb3D> collider_proxy(entt::entity entity,
                                           std::uint64_t ordinal,
                                           SapSide side,
@@ -2627,12 +2998,13 @@ template <std::size_t N>
     std::vector<SapCandidatePair> result;
     std::array<std::vector<std::size_t>, 2> active;
     for (const auto current : order) {
-        const float current_min = bounds[current].min[axis_index];
-        for (auto& side_active : active) {
-            std::erase_if(side_active, [&](std::size_t idx) { return bounds[idx].max[axis_index] < current_min; });
-        }
+        const float current_min    = bounds[current].min[axis_index];
         const bool current_is_left = bounds[current].side == SapSide::Left;
-        for (const auto other : active[current_is_left ? 1 : 0]) {
+        // Only the opposite side is scanned, so only it needs pruning; pruning both
+        // on every insert is quadratic when one side is large and dense.
+        auto& opposite = active[current_is_left ? 1 : 0];
+        std::erase_if(opposite, [&](std::size_t idx) { return bounds[idx].max[axis_index] < current_min; });
+        for (const auto other : opposite) {
             if (sap_bounds_overlap(bounds[current], bounds[other])) {
                 result.push_back(current_is_left ? SapCandidatePair{.left = current, .right = other}
                                                  : SapCandidatePair{.left = other, .right = current});
@@ -2673,6 +3045,172 @@ std::optional<std::size_t> sap_small_domain_threshold_override_for_testing() noe
 
 void set_sap_small_domain_threshold_override_for_testing(std::optional<std::size_t> threshold) noexcept {
     sap_small_domain_threshold_override() = threshold;
+}
+
+namespace {
+std::uint64_t& binding_index_epoch_storage() noexcept {
+    static std::uint64_t epoch = 1;
+    return epoch;
+}
+
+// A member covering more grid cells than this is kept aside instead.
+constexpr std::int64_t kGridCellsPerMemberLimit = 64;
+
+[[nodiscard]] bool finite_bounds(Vector3 min, Vector3 max) noexcept {
+    return std::isfinite(min.x) && std::isfinite(min.y) && std::isfinite(min.z) && std::isfinite(max.x) &&
+           std::isfinite(max.y) && std::isfinite(max.z);
+}
+
+// Grid coordinates covering [lo, hi] on one axis, clamped far inside int32.
+[[nodiscard]] std::pair<std::int64_t, std::int64_t> grid_span(float lo, float hi, float cell_size) noexcept {
+    constexpr float kFar = 1.0e9F;
+    return {static_cast<std::int64_t>(std::floor(std::clamp(lo / cell_size, -kFar, kFar))),
+            static_cast<std::int64_t>(std::floor(std::clamp(hi / cell_size, -kFar, kFar)))};
+}
+}  // namespace
+
+std::uint64_t binding_index_epoch() noexcept {
+    return binding_index_epoch_storage();
+}
+
+void advance_binding_index_epoch() noexcept {
+    ++binding_index_epoch_storage();
+}
+
+std::size_t StaticProxyGrid3D::CellKeyHash::operator()(const CellKey& key) const noexcept {
+    auto hash = static_cast<std::uint64_t>(static_cast<std::uint32_t>(key.x)) * 73856093ULL;
+    hash ^= static_cast<std::uint64_t>(static_cast<std::uint32_t>(key.y)) * 19349663ULL;
+    hash ^= static_cast<std::uint64_t>(static_cast<std::uint32_t>(key.z)) * 83492791ULL;
+    return static_cast<std::size_t>(hash);
+}
+
+void StaticProxyGrid3D::clear(float cell_size) {
+    cell_size_ = std::isfinite(cell_size) && cell_size > 1e-3F ? cell_size : 1.0F;
+    members_.clear();
+    cells_.clear();
+    aside_.clear();
+}
+
+std::optional<std::array<StaticProxyGrid3D::CellKey, 2>> StaticProxyGrid3D::cell_range(Vector3 min,
+                                                                                    Vector3 max) const noexcept {
+    if (!finite_bounds(min, max)) {
+        return std::nullopt;
+    }
+    const auto [x0, x1] = grid_span(min.x, max.x, cell_size_);
+    const auto [y0, y1] = grid_span(min.y, max.y, cell_size_);
+    const auto [z0, z1] = grid_span(min.z, max.z, cell_size_);
+    // Each span can reach 2e9, so the product is taken in double to avoid overflow.
+    const double cells = static_cast<double>(x1 - x0 + 1) * static_cast<double>(y1 - y0 + 1) *
+                         static_cast<double>(z1 - z0 + 1);
+    if (x1 < x0 || y1 < y0 || z1 < z0 || cells > static_cast<double>(kGridCellsPerMemberLimit)) {
+        return std::nullopt;
+    }
+    return std::array<CellKey, 2>{
+        CellKey{.x = static_cast<std::int32_t>(x0), .y = static_cast<std::int32_t>(y0), .z = static_cast<std::int32_t>(z0)},
+        CellKey{.x = static_cast<std::int32_t>(x1), .y = static_cast<std::int32_t>(y1), .z = static_cast<std::int32_t>(z1)}};
+}
+
+template <typename Visit>
+void StaticProxyGrid3D::for_each_cell(const std::array<CellKey, 2>& range, const Visit& visit) {
+    for (auto x = range[0].x; x <= range[1].x; ++x) {
+        for (auto y = range[0].y; y <= range[1].y; ++y) {
+            for (auto z = range[0].z; z <= range[1].z; ++z) {
+                visit(CellKey{.x = x, .y = y, .z = z});
+            }
+        }
+    }
+}
+
+void StaticProxyGrid3D::insert(entt::entity entity, std::uint64_t ordinal, Vector3 min, Vector3 max) {
+    remove(entity);
+    const auto range = cell_range(min, max);
+    members_.emplace(entity, Member{.ordinal = ordinal, .min = min, .max = max, .aside = !range.has_value()});
+    if (!range.has_value()) {
+        aside_.push_back(entity);
+        return;
+    }
+    for_each_cell(*range, [&](const CellKey& key) { cells_[key].push_back(entity); });
+}
+
+void StaticProxyGrid3D::remove(entt::entity entity) {
+    const auto found = members_.find(entity);
+    if (found == members_.end()) {
+        return;
+    }
+    const Member member = found->second;
+    members_.erase(found);
+    if (member.aside) {
+        std::erase(aside_, entity);
+        return;
+    }
+    for_each_cell(*cell_range(member.min, member.max), [&](const CellKey& key) {
+        const auto cell = cells_.find(key);
+        if (cell == cells_.end()) {
+            return;
+        }
+        std::erase(cell->second, entity);
+        if (cell->second.empty()) {
+            cells_.erase(cell);
+        }
+    });
+}
+
+void StaticProxyGrid3D::offer(entt::entity entity, Vector3 min, Vector3 max, std::vector<OrderedEntity>& out) const {
+    const Member& member = members_.at(entity);
+    if (!finite_bounds(min, max) || !finite_bounds(member.min, member.max) ||
+        proxy_bounds_overlap(min, max, member.min, member.max)) {
+        out.emplace_back(member.ordinal, entity);
+    }
+}
+
+void StaticProxyGrid3D::scan_members(Vector3 min,
+                                     Vector3 max,
+                                     bool test_overlap,
+                                     std::vector<OrderedEntity>& out) const {
+    for (const auto& [entity, member] : members_) {
+        if (!member.aside && (!test_overlap || proxy_bounds_overlap(min, max, member.min, member.max))) {
+            out.emplace_back(member.ordinal, entity);
+        }
+    }
+}
+
+void StaticProxyGrid3D::scan_cells(Vector3 min, Vector3 max, std::vector<OrderedEntity>& out) const {
+    const auto [x0, x1] = grid_span(min.x, max.x, cell_size_);
+    const auto [y0, y1] = grid_span(min.y, max.y, cell_size_);
+    const auto [z0, z1] = grid_span(min.z, max.z, cell_size_);
+    const double covered = static_cast<double>(x1 - x0 + 1) * static_cast<double>(y1 - y0 + 1) *
+                           static_cast<double>(z1 - z0 + 1);
+    // A query wider than the membership is cheaper as one pass over it.
+    if (covered > static_cast<double>(members_.size())) {
+        scan_members(min, max, true, out);
+        return;
+    }
+    const std::array<CellKey, 2> range{
+        CellKey{.x = static_cast<std::int32_t>(x0), .y = static_cast<std::int32_t>(y0), .z = static_cast<std::int32_t>(z0)},
+        CellKey{.x = static_cast<std::int32_t>(x1), .y = static_cast<std::int32_t>(y1), .z = static_cast<std::int32_t>(z1)}};
+    for_each_cell(range, [&](const CellKey& key) {
+        const auto cell = cells_.find(key);
+        if (cell == cells_.end()) {
+            return;
+        }
+        for (const auto entity : cell->second) {
+            offer(entity, min, max, out);
+        }
+    });
+}
+
+void StaticProxyGrid3D::query(Vector3 min, Vector3 max, std::vector<OrderedEntity>& out) const {
+    const auto first_new = static_cast<std::ptrdiff_t>(out.size());
+    for (const auto entity : aside_) {
+        offer(entity, min, max, out);
+    }
+    if (finite_bounds(min, max)) {
+        scan_cells(min, max, out);
+    } else {
+        scan_members(min, max, false, out);
+    }
+    std::sort(out.begin() + first_new, out.end());
+    out.erase(std::unique(out.begin() + first_new, out.end()), out.end());
 }
 
 void SapBroadPhase2D::sync(std::span<const ProxyAabb2D> proxies) {
@@ -2772,6 +3310,14 @@ void set_active_camera_3d(Camera3D cam) noexcept {
 
 Camera3D get_active_camera_3d() noexcept {
     return active_camera_3d_storage();
+}
+
+// raylib's GetScreenToWorldRay reads its own window size, which the headless fake never sets.
+Ray screen_to_world_ray(const Vector2 screen, const Camera3D& camera) noexcept {
+    return GetScreenToWorldRayEx(screen,
+                                 camera,
+                                 cactus::runtime::raylib::GetScreenWidth(),
+                                 cactus::runtime::raylib::GetScreenHeight());
 }
 
 void draw_shape_rectangle(const Vector2 position,
@@ -2909,7 +3455,7 @@ entt::entity editor_hit_test_2d(entt::registry& registry, Vector2 screen_pos, in
 
 entt::entity editor_raycast_3d(entt::registry& registry, Vector2 screen_pos, int mask) noexcept {
     if (raycast_impl_storage()) {
-        const Ray ray = GetScreenToWorldRay(screen_pos, get_active_camera_3d());
+        const Ray ray = screen_to_world_ray(screen_pos, get_active_camera_3d());
         return raycast_impl_storage()(registry, ray, mask);
     }
     return entt::entity{entt::null};
@@ -3043,17 +3589,17 @@ Vector2 ui_text_size(const std::string& value, const int font_size) noexcept {
     return cactus::runtime::raylib::MeasureTextEx(GetFontDefault(), value.c_str(), safe_font_size, 1.0F);
 }
 
-// Real per-asset pixel dimensions are not yet tracked anywhere in the asset
-// pipeline (texture registration only stores a path; ensure_texture_resource
-// above materializes every handle as the same GPU placeholder) — a resolved
-// handle reports a documented placeholder icon size rather than probing GPU
-// state, matching the rest of the placeholder asset pipeline's fidelity.
-Vector2 ui_texture_size(const AssetHandle texture) noexcept {
+// The decoded file's size, or the fallback checkerboard's for a texture that
+// failed to load; zero for an unregistered handle.
+Vector2 ui_texture_size(const AssetHandle texture) noexcept try {
     const auto resolved = shared_asset_registry().resolve(AssetKind::Texture, texture);
     if (!resolved.ready()) {
         return Vector2{.x = 0.0F, .y = 0.0F};
     }
-    return Vector2{.x = 32.0F, .y = 32.0F};
+    const auto& entry = probe_texture(resolved.runtime_id);
+    return Vector2{.x = static_cast<float>(entry.width), .y = static_cast<float>(entry.height)};
+} catch (...) {
+    std::terminate();
 }
 
 namespace {
@@ -3188,7 +3734,20 @@ void draw_ui_image(const UiPrimitive& primitive, const Rectangle bounds, const f
 
 }  // namespace
 
-void render_ui_primitive(const UiPrimitive& primitive) noexcept {
+void render_ui_primitive(const UiPrimitive& primitive) noexcept try {
+    auto& queue = ui_queue();
+    if (!queue.started) {
+        queue.started  = true;
+        queue.viewport = active_viewport_storage();
+    }
+    if (queue.viewport == active_viewport_storage()) {
+        queue.primitives.push_back(primitive);
+    }
+} catch (...) {
+    std::terminate();
+}
+
+void draw_ui_primitive(const UiPrimitive& primitive) noexcept {
     if (!primitive.effective_visible) {
         return;
     }
@@ -3374,7 +3933,7 @@ std::optional<Vector3> editor_ray_plane_intersect(const Ray ray,
 }
 
 Vector3 editor_plane_project_3d(Vector2 screen, Vector3 plane_origin, Vector3 plane_normal) noexcept {
-    const Ray ray = GetScreenToWorldRay(screen, get_active_camera_3d());
+    const Ray ray = screen_to_world_ray(screen, get_active_camera_3d());
     return editor_ray_plane_intersect(ray, plane_origin, plane_normal).value_or(plane_origin);
 }
 
@@ -3385,9 +3944,9 @@ Vector3 editor_mouse_delta_3d() noexcept {
     const Vector2 cursor = cactus::runtime::raylib::GetMousePosition();
     const Vector2 delta  = cactus::runtime::raylib::GetMouseDelta();
     const Vector2 previous{.x = cursor.x - delta.x, .y = cursor.y - delta.y};
-    const auto current_hit = editor_ray_plane_intersect(GetScreenToWorldRay(cursor, cam), kGroundOrigin, kGroundNormal);
+    const auto current_hit = editor_ray_plane_intersect(screen_to_world_ray(cursor, cam), kGroundOrigin, kGroundNormal);
     const auto previous_hit =
-        editor_ray_plane_intersect(GetScreenToWorldRay(previous, cam), kGroundOrigin, kGroundNormal);
+        editor_ray_plane_intersect(screen_to_world_ray(previous, cam), kGroundOrigin, kGroundNormal);
     if (!current_hit || !previous_hit) {
         return Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};
     }
@@ -3400,9 +3959,9 @@ Vector3 screen_delta_on_plane_3d(const Vector2 screen,
                                  const Vector3 plane_normal) noexcept {
     const Camera3D cam = get_active_camera_3d();
     const Vector2 previous{.x = screen.x - delta.x, .y = screen.y - delta.y};
-    const auto current_hit = editor_ray_plane_intersect(GetScreenToWorldRay(screen, cam), plane_origin, plane_normal);
+    const auto current_hit = editor_ray_plane_intersect(screen_to_world_ray(screen, cam), plane_origin, plane_normal);
     const auto previous_hit =
-        editor_ray_plane_intersect(GetScreenToWorldRay(previous, cam), plane_origin, plane_normal);
+        editor_ray_plane_intersect(screen_to_world_ray(previous, cam), plane_origin, plane_normal);
     if (!current_hit || !previous_hit) {
         return Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};
     }
@@ -3509,6 +4068,23 @@ float editor_wheel_delta() noexcept {
 Vector2 editor_mouse_delta_screen() noexcept {
     return cactus::runtime::raylib::GetMouseDelta();
 }
+namespace {
+bool& quit_request_storage() noexcept {
+    static bool requested = false;
+    return requested;
+}
+}  // namespace
+
+void request_quit() noexcept {
+    quit_request_storage() = true;
+}
+bool quit_requested() noexcept {
+    return quit_request_storage();
+}
+void reset_quit_request() noexcept {
+    quit_request_storage() = false;
+}
+
 void set_cursor_captured(const bool captured) noexcept {
     if (captured) {
         cactus::runtime::raylib::DisableCursor();

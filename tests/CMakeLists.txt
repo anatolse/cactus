@@ -31,6 +31,7 @@ set_property(TARGET cactus_raylib_fake PROPERTY CXX_CLANG_TIDY "")
 # never linked into a real example.
 add_library(cactus_runtime_cpp_entt_headless_fake STATIC EXCLUDE_FROM_ALL
     ${CMAKE_SOURCE_DIR}/src/backends/cpp-entt/runtime.cpp
+    ${CMAKE_SOURCE_DIR}/src/backends/cpp-entt/voxel_surfaces.cpp
     ${CMAKE_SOURCE_DIR}/src/backends/cpp-entt/persistence_file_adapter.cpp
 )
 target_include_directories(cactus_runtime_cpp_entt_headless_fake PUBLIC
@@ -299,6 +300,14 @@ add_test(NAME RuntimeStdlibTests COMMAND test_runtime_stdlib)
 add_executable(test_runtime_sap_broadphase test_runtime_sap_broadphase.cpp)
 target_link_libraries(test_runtime_sap_broadphase PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
 add_test(NAME RuntimeSapBroadphaseTests COMMAND test_runtime_sap_broadphase)
+
+add_executable(test_runtime_voxel_surfaces test_runtime_voxel_surfaces.cpp)
+target_link_libraries(test_runtime_voxel_surfaces PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
+add_test(NAME RuntimeVoxelSurfacesTests COMMAND test_runtime_voxel_surfaces)
+
+add_executable(test_runtime_binding_index test_runtime_binding_index.cpp)
+target_link_libraries(test_runtime_binding_index PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
+add_test(NAME RuntimeBindingIndexTests COMMAND test_runtime_binding_index)
 
 add_executable(test_runtime_collider_physics test_runtime_collider_physics.cpp)
 target_link_libraries(test_runtime_collider_physics PRIVATE cactus_runtime_common Catch2::Catch2WithMain)
@@ -646,6 +655,58 @@ cactus_add_headless_behavior_test(test_character_body_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_character_body_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_app_quit_headless_behavior
+    CACTUS_SOURCE examples/stdlib-fixtures/app_quit.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_app_quit_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_voxel_volume_headless_behavior
+    CACTUS_SOURCE examples/stdlib-fixtures/voxel_volume.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_voxel_volume_headless_behavior.cpp
+)
+
+# The same fixtures with every pair pass rebuilt from full snapshots: the
+# persistent binding indexes must not change any observable result.
+cactus_add_headless_behavior_test(test_voxel_volume_unindexed_headless_behavior
+    CACTUS_SOURCE examples/stdlib-fixtures/voxel_volume.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_voxel_volume_headless_behavior.cpp
+    NO_INDEXED_JOINS
+)
+
+cactus_add_headless_behavior_test(test_character_body_unindexed_headless_behavior
+    CACTUS_SOURCE examples/stdlib-fixtures/character_body.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_character_body_headless_behavior.cpp
+    NO_INDEXED_JOINS
+)
+
+cactus_add_headless_behavior_test(test_texture_assets_headless_behavior
+    CACTUS_SOURCE examples/stdlib-fixtures/texture_assets.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_texture_assets_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_voxel_rendering_headless_behavior
+    CACTUS_SOURCE examples/stdlib-fixtures/voxel_rendering.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_voxel_rendering_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_robot_sandbox_headless_behavior
+    CACTUS_SOURCE examples/robot-sandbox/small_world.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_robot_sandbox_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_noise_headless_behavior
+    CACTUS_SOURCE examples/stdlib-fixtures/noise.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_noise_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_transform_hierarchy_headless_behavior
     CACTUS_SOURCE examples/stdlib-fixtures/transform_hierarchy.cactus
     BACKEND cpp-entt
@@ -899,6 +960,10 @@ target_compile_definitions(test_example_cpp_compilation PRIVATE
     CACTUS_EXAMPLE_FIRST_PERSON_ARENA_SOURCE="examples/first-person-arena/main.cactus"
     CACTUS_EXAMPLE_FIRST_PERSON_ARENA_GENERATED_CPP="${FIRST_PERSON_ARENA_GENERATED_CPP}"
     CACTUS_EXAMPLE_FIRST_PERSON_ARENA_TARGET="example_first_person_arena_generated"
+
+    CACTUS_EXAMPLE_ROBOT_SANDBOX_SOURCE="examples/robot-sandbox/main.cactus"
+    CACTUS_EXAMPLE_ROBOT_SANDBOX_GENERATED_CPP="${ROBOT_SANDBOX_GENERATED_CPP}"
+    CACTUS_EXAMPLE_ROBOT_SANDBOX_TARGET="example_robot_sandbox_generated"
 
     CACTUS_EXAMPLE_PAIR_CONTACT_SOURCE="examples/pair-contact/main.cactus"
     CACTUS_EXAMPLE_PAIR_CONTACT_GENERATED_CPP="${PAIR_CONTACT_GENERATED_CPP}"

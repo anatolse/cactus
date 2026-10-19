@@ -1,0 +1,90 @@
+module small_world
+
+# The robot sandbox on a 16 x 12 x 16 world, for headless tests. Everything
+# but the world size comes from the same modules as main.cactus.
+
+use std.core
+use game
+use world
+use robot
+use editing
+use sky
+use hud
+use flow
+
+entity Settings:
+    world.WorldConfig:
+        size_x = 16
+        min_y = -4
+        max_y = 7
+        size_z = 16
+        batch = 1024
+
+# Test hooks: each flag sends one request on the next tick, as a button would.
+# The persisted step keeps the tester alive through a load.
+pub trait Script:
+    var new_game: bool = false
+    var pause: bool = false
+    var resume: bool = false
+    var save: bool = false
+    var restore: bool = false
+    var exit: bool = false
+    var exit_save: bool = false
+    var exit_discard: bool = false
+    var toggle_view: bool = false
+    var recover: bool = false
+    var commit_region: bool = false
+    persist var speed_step: int = 0
+
+pub entity Tester:
+    Script
+
+rule RunScript:
+    each:
+        Script as script
+    after:
+        flow.PauseKeys
+        editing.Select
+        editing.PlaceBlock
+        robot.ViewKeys
+
+    on input:
+        if script.new_game:
+            emit game.NewGameRequested
+        if script.pause:
+            emit game.PauseRequested
+        if script.resume:
+            emit game.ContinueRequested
+        if script.save:
+            emit game.SaveGameRequested
+        if script.restore:
+            emit game.LoadGameRequested
+        if script.exit:
+            emit game.ExitRequested
+        if script.exit_save:
+            emit game.ExitConfirmed:
+                save = true
+        if script.exit_discard:
+            emit game.ExitConfirmed:
+                save = false
+        if script.toggle_view:
+            emit game.ToggleViewRequested
+        if script.recover:
+            emit game.RecoverRequested
+        if script.commit_region:
+            emit editing.RegionCommitted
+        if script.speed_step != 0:
+            emit game.SpeedStepRequested:
+                step = script.speed_step
+        script.new_game = false
+        script.pause = false
+        script.resume = false
+        script.save = false
+        script.restore = false
+        script.exit = false
+        script.exit_save = false
+        script.exit_discard = false
+        script.toggle_view = false
+        script.recover = false
+        script.commit_region = false
+        script.speed_step = 0

@@ -1,0 +1,59 @@
+module voxel_rendering
+
+# One small volume seen by two cameras side by side. The right camera cuts the
+# volume away above layer -1.
+#   Terrain: 4 x 3 x 4 cells, y in -1..1. Layer -1 is stone; cells with y = 0
+#            and x < 2 are wood.
+
+use std.core
+use std.math.quat as quat
+use std.transform.volume as tv
+use std.physics.volume as physics
+use std.camera.volume as camera
+use std.camera.viewport as viewport
+use std.render.meshes as meshes
+use std.voxel.volume as voxel
+
+asset Stone: texture = "../platformer/assets/tiles/ground.png"
+asset Wood: texture = "../platformer/assets/tiles/platform.png"
+
+pub entity Terrain:
+    voxel.Volume:
+        min_y = -1
+        max_x = 3
+        max_y = 1
+        max_z = 3
+    voxel.VolumeRenderer
+
+template View(x: float):
+    tv.WorldTransform:
+        position = vec3(2.0, 6.0, 9.0)
+        rotation = quat.from_euler(-0.6, 0.0, 0.0)
+    camera.Camera
+    viewport.Viewport:
+        x = x
+        width = 0.5
+
+pub entity FullView from View(x = 0.0)
+
+pub entity CutView:
+    use View(x = 0.5)
+    voxel.Cutaway:
+        volume = Terrain
+        top = -1
+
+pub entity Sun:
+    meshes.DirectionalLight:
+        direction = vec3(-0.3, -1.0, -0.2)
+
+rule GenerateTerrain:
+    each:
+        voxel.Cell as cell
+
+    on added voxel.Cell:
+        if cell.y == -1:
+            cell.texture = Stone
+            add physics.Solid
+        if cell.y == 0 and cell.x < 2:
+            cell.texture = Wood
+            add physics.Solid

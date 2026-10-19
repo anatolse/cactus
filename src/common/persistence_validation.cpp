@@ -231,7 +231,7 @@ std::vector<ValidationError> validate_document(const SchemaDescriptor& schema, c
         errors.push_back({.field_path = "$schema", .message = "document schema descriptor is incompatible with this program"});
         return errors;
     }
-    if (snapshot.entities.size() > kMaxPersistenceCollectionSize) {
+    if (snapshot.entities.size() > kMaxPersistenceEntityCount) {
         errors.push_back({.field_path = "$document", .message = "entity count exceeds the configured limit"});
     }
 

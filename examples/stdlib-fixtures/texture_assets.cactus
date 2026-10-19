@@ -1,0 +1,37 @@
+module texture_assets
+
+# A real PNG and a missing file, each drawn by a sprite and measured by UI.
+
+use std.core
+use std.ui as ui
+use std.transform.flat as tf
+use std.render.sprites as sprites
+
+asset Ground: texture = "../platformer/assets/tiles/ground.png"
+asset Missing: texture = "../platformer/assets/tiles/does_not_exist.png"
+
+pub trait Measured:
+    var ground: vec2 = vec2(0.0, 0.0)
+    var missing: vec2 = vec2(0.0, 0.0)
+
+pub entity Measures:
+    Measured
+
+template Sprite(texture: texture_id, x: float):
+    tf.WorldTransform:
+        position = vec2(x, 0.0)
+    sprites.Renderer:
+        texture = texture
+        size = vec2(64.0, 32.0)
+
+pub entity GroundSprite from Sprite(texture = Ground, x = 0.0)
+pub entity SecondGroundSprite from Sprite(texture = Ground, x = 100.0)
+pub entity MissingSprite from Sprite(texture = Missing, x = 200.0)
+
+rule Measure:
+    each:
+        Measured as m
+
+    on tick:
+        m.ground = ui.texture_size(Ground)
+        m.missing = ui.texture_size(Missing)

@@ -27,7 +27,7 @@ namespace cactus {
 /// deserialization. Callers that need the AST must re-parse from source.
 class ModuleArtifact {
 public:
-    static constexpr uint8_t CURRENT_VERSION = 36;
+    static constexpr uint8_t CURRENT_VERSION = 39;
     static constexpr const char* MAGIC       = "CMOD";
 
     explicit ModuleArtifact(ErrorReporter& errors);
@@ -112,6 +112,8 @@ private:
     static void write_string_vector(std::ostream& out, const std::vector<std::string>& values);
     static void write_dep_graph(std::ostream& out, const std::vector<RuleDependency>& graph);
     static void write_contract(std::ostream& out, const HandlerContract& contract);
+    static void write_expr_path(std::ostream& out, const ExprPath& path);
+    static void write_equality_join(std::ostream& out, const std::optional<EqualityJoinPlan>& join);
     static void write_handler_contracts(std::ostream& out, const std::vector<InferredHandlerContract>& contracts);
     void write_execution_graph(std::ostream& out, const ExecutionGraph& graph);
     static void write_group_facts(std::ostream& out, const ExecutionGraph& graph);
@@ -154,6 +156,8 @@ private:
     static std::vector<std::string> read_string_vector(std::istream& in);
     static std::vector<RuleDependency> read_dep_graph(std::istream& in);
     static HandlerContract read_contract(std::istream& in);
+    static ExprPath read_expr_path(std::istream& in);
+    static std::optional<EqualityJoinPlan> read_equality_join(std::istream& in);
     static std::vector<InferredHandlerContract> read_handler_contracts(std::istream& in);
     ExecutionGraph read_execution_graph(std::istream& in);
     static void read_group_facts(std::istream& in, ExecutionGraph& graph);

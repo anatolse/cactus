@@ -5,9 +5,11 @@
 #include "common/persistence_document.hpp"
 #include "common/persistence_validation.hpp"
 
+#include "backends/cpp-entt/binding_index.hpp"
 #include "backends/cpp-entt/creation_order.hpp"
 #include "backends/cpp-entt/raylib_io.hpp"
 #include "backends/cpp-entt/spatial_query.hpp"
+#include "backends/cpp-entt/voxel_surfaces.hpp"
 
 #include <entt/entt.hpp>
 
@@ -37,6 +39,12 @@ int cactus_input_button_mouse(std::uint8_t button) noexcept;
 float cactus_input_axis_value(std::uint8_t action) noexcept;
 void set_cursor_captured(bool captured) noexcept;
 
+// std.app quit state: set by a QuitRequested handler, read by the generated
+// main loop or a custom host, and cleared on generated_init_project.
+void request_quit() noexcept;
+[[nodiscard]] bool quit_requested() noexcept;
+void reset_quit_request() noexcept;
+
 // ── Frame-local consumed input (editor input override) ────────────────────────
 // Consumption is keyed by physical raylib key / mouse button code, not by
 // declared action, so consuming an editor control also hides same-key gameplay
@@ -52,6 +60,7 @@ void set_active_camera_2d(Camera2D cam) noexcept;
 [[nodiscard]] Camera2D get_active_camera_2d() noexcept;
 void set_active_camera_3d(Camera3D cam) noexcept;
 [[nodiscard]] Camera3D get_active_camera_3d() noexcept;
+[[nodiscard]] Ray screen_to_world_ray(Vector2 screen, const Camera3D& camera) noexcept;
 
 // ── Shape rendering (std.render.shapes ShapeRenderer) ──────────────────────────
 // origin is the offset from position to the shape's un-rotated reference
@@ -129,6 +138,14 @@ struct RenderDebugState {
     // Missing/failed model and invalid-animation-clip diagnostics, recorded at
     // most once per model asset (or per (asset, clip) pair).
     std::vector<std::string> model_diagnostics;
+    // Missing or undecodable standalone textures, at most one per asset.
+    std::vector<std::string> texture_diagnostics;
+    // Texture files read from disk; each asset is read at most once.
+    int texture_file_loads{0};
+    // Voxel faces and draw calls this frame, and chunk meshes built so far.
+    int voxel_faces_drawn{0};
+    int voxel_draw_calls{0};
+    int voxel_chunk_builds{0};
 };
 
 struct ProjectConfig {
@@ -140,6 +157,67 @@ struct ProjectConfig {
 
 [[nodiscard]] RuntimeBinding bind_runtime(GeneratedProjectInfo project) noexcept;
 void reset_render_debug_state() noexcept;
+// ── Voxel volumes (std.voxel.volume) ────────────────────────────────────────
+// render_voxel_volumes gets the volume's grid from voxel_volume_begin
+// when this frame's cells still need observing (null otherwise), notes every
+// solid cell of the volume on it with EarlierCell, and calls voxel_volume_end.
+// submit_voxel_volume then draws the volume in the current viewport, hiding
+// cells above `ceiling`.
+[[nodiscard]] VoxelSurfaceGrid* voxel_volume_begin(entt::entity volume, const VoxelVolumeDesc& desc) noexcept;
+void voxel_volume_end(entt::entity volume) noexcept;
+
+// Whether the cell entity `key` was created before `other`; consulted only for
+// duplicate cells.
+struct EarlierCell {
+    const entt::registry* registry = nullptr;
+
+    [[nodiscard]] bool operator()(std::uint64_t key, std::uint64_t other) const {
+        const auto entity_of = [](std::uint64_t value) {
+            return static_cast<entt::entity>(static_cast<entt::id_type>(value));
+        };
+        return creation_ordinal(*registry, entity_of(key)) < creation_ordinal(*registry, entity_of(other));
+    }
+};
+void submit_voxel_volume(entt::entity volume, std::optional<int> ceiling) noexcept;
+// The viewport entity whose camera is rendering, or null outside a viewport.
+void set_active_viewport_entity(entt::entity viewport) noexcept;
+[[nodiscard]] entt::entity active_viewport_entity() noexcept;
+
+template <typename Volume, typename Renderer, typename Cell, typename Cutaway, typename Solid, auto Valid>
+void render_voxel_volumes(entt::registry& registry) {
+    for (const auto [volume_entity, volume, renderer] : registry.view<Volume, Renderer>().each()) {
+        if (!renderer.visible || volume.issue != Valid) {
+            continue;
+        }
+        const VoxelVolumeDesc desc{.origin    = volume.origin,
+                                   .cell_size = volume.cell_size,
+                                   .min       = {volume.min_x, volume.min_y, volume.min_z},
+                                   .max       = {volume.max_x, volume.max_y, volume.max_z}};
+        if (auto* grid = voxel_volume_begin(volume_entity, desc)) {
+            const EarlierCell earlier{.registry = &registry};
+            // Walks the cells in storage order, which keeps the scan sequential.
+            const auto& solid = registry.storage<Solid>();
+            for (const auto [cell_entity, cell] : registry.view<Cell>().each()) {
+                if (cell.volume == volume_entity && solid.contains(cell_entity)) {
+                    grid->note_solid(cell.x, cell.y, cell.z, cell.texture,
+                                     static_cast<std::uint64_t>(entt::to_integral(cell_entity)), earlier);
+                }
+            }
+            voxel_volume_end(volume_entity);
+        }
+        std::optional<int> ceiling;
+        const auto viewer = active_viewport_entity();
+        if (const auto* cut = registry.valid(viewer) ? registry.try_get<Cutaway>(viewer) : nullptr;
+            cut != nullptr && cut->enabled && cut->volume == volume_entity) {
+            ceiling = cut->top;
+        }
+        submit_voxel_volume(volume_entity, ceiling);
+    }
+}
+
+// Unloads every shared texture, mesh, material and model once. The generated
+// entry point calls it after unload and before closing the window.
+void release_render_resources() noexcept;
 [[nodiscard]] const RenderDebugState& render_debug_state() noexcept;
 void begin_render_frame() noexcept;
 void end_render_frame() noexcept;
@@ -2386,6 +2464,18 @@ circle_proxy(entt::entity entity, std::uint64_t ordinal, SapSide side, Vector2 c
 sphere_proxy(entt::entity entity, std::uint64_t ordinal, SapSide side, Vector3 center, float radius) noexcept;
 [[nodiscard]] ProxyAabb3D box_proxy(
     entt::entity entity, std::uint64_t ordinal, SapSide side, Vector3 center, Vector3 size, Quat rotation) noexcept;
+// An unrotated box: center plus or minus half the size's magnitudes.
+[[nodiscard]] ProxyAabb3D
+aligned_box_proxy(entt::entity entity, std::uint64_t ordinal, SapSide side, Vector3 center, Vector3 size) noexcept;
+// The segment from origin along direction for max_distance. A segment
+// std.collision.volume.ray_box would reject outright (no length, no direction
+// or a non-finite value) gets empty bounds, which overlap nothing.
+[[nodiscard]] ProxyAabb3D segment_proxy(entt::entity entity,
+                                        std::uint64_t ordinal,
+                                        SapSide side,
+                                        Vector3 origin,
+                                        Vector3 direction,
+                                        float max_distance) noexcept;
 
 // Where each entity sits in a pass snapshot. Spawned entities take indices near
 // the top of the index space, so a table sized by entity index would be huge.

@@ -543,8 +543,17 @@ void mark_operands(ArithmeticOperands& operands, const TypeInfo& left, const Typ
     if (left.kind == TypeKind::Unknown || right.kind == TypeKind::Unknown) {
         return;
     }
-    operands = left.kind == TypeKind::Int && right.kind == TypeKind::Int ? ArithmeticOperands::Int
-                                                                         : ArithmeticOperands::Other;
+    const bool left_int  = left.kind == TypeKind::Int;
+    const bool right_int = right.kind == TypeKind::Int;
+    if (left_int && right_int) {
+        operands = ArithmeticOperands::Int;
+    } else if (left_int) {
+        operands = ArithmeticOperands::IntFloat;
+    } else if (right_int) {
+        operands = ArithmeticOperands::FloatInt;
+    } else {
+        operands = ArithmeticOperands::Other;
+    }
 }
 
 std::unique_ptr<ExprNode> clone_expr(const ExprNode& expr) {
@@ -585,7 +594,10 @@ std::unique_ptr<ExprNode> clone_expr(const ExprNode& expr) {
                                 .resolved_enum_member = e.resolved_enum_member,
                                 .location             = e.location,
                                 .resolved_entity_id   = e.resolved_entity_id,
-                                .resolved_const_id    = e.resolved_const_id};
+                                .resolved_const_id    = e.resolved_const_id,
+                                .resolved_phase_dt    = e.resolved_phase_dt,
+                                .resolved_asset_id    = e.resolved_asset_id,
+                                .resolved_asset_type  = e.resolved_asset_type};
                 return std::make_unique<ExprNode>(ExprNode::Variant{std::move(copy)}, expr.location);
             } else if constexpr (std::is_same_v<E, TraitAccessExpr>) {
                 TraitAccessExpr copy{.object             = clone_expr(*e.object),
@@ -977,6 +989,9 @@ std::optional<std::unordered_set<std::string>> known_stdlib_effect_summary(const
     if (module == "std.editor") {
         return std::unordered_set<std::string>{"editor"};
     }
+    if (module == "std.app") {
+        return std::unordered_set<std::string>{"app"};
+    }
     // Collider queries read only their bindings, which the contract records.
     if (module == kPhysicsVolumeModule &&
         (symbol.local_name == "sweep" || symbol.local_name == "touching" || symbol.local_name == "push_out")) {
@@ -1008,6 +1023,7 @@ bool stdlib_function_acts(const SymbolId& function) {
     static const std::unordered_set<std::string> acting{
         "std.input.consume",
         "std.input.set_cursor_captured",
+        "std.app.request_quit",
         "std.editor.spawn_template",
         "std.editor.camera_enter",
         "std.editor.camera_exit",
@@ -1465,6 +1481,9 @@ void SemanticAnalyzer::collect_types(ProgramNode& program) {
                     declare_module_scope_symbol(SymbolKind::Asset, node.name, node.location);
                     TypeKind tk                  = asset_kind_to_type_kind(node.asset_kind);
                     asset_decl_types_[node.name] = tk;
+                    if (node.is_pub) {
+                        result_.pub_assets[node.name] = tk;
+                    }
                 } else if constexpr (std::is_same_v<T, InputDeclNode>) {
                     // Register input name → InputButton or InputAxis (task 6.4)
                     declare_module_scope_symbol(SymbolKind::Input, node.name, node.location);
@@ -2674,11 +2693,31 @@ bool SemanticAnalyzer::resolve_const_member(MemberExpr& member, const std::unord
         return false;
     }
     const auto resolved = resolve_name(*chain);
-    if (!resolved.has_value() || !resolved->member_segments.empty() || resolved->symbol.kind != SymbolKind::Const) {
+    if (!resolved.has_value() || !resolved->member_segments.empty()) {
+        return false;
+    }
+    if (resolved->symbol.kind == SymbolKind::Asset) {
+        return resolve_asset_member(member, resolved->symbol);
+    }
+    if (resolved->symbol.kind != SymbolKind::Const) {
         return false;
     }
     member.resolved_const_id = resolved->symbol;
     return true;
+}
+
+bool SemanticAnalyzer::resolve_asset_member(MemberExpr& member, const SymbolId& asset) const {
+    for (const auto& [qualifier, syms] : imports_.modules) {
+        if (syms.module_name != asset.module.name) {
+            continue;
+        }
+        if (const auto found = syms.assets.find(asset.local_name); found != syms.assets.end()) {
+            member.resolved_asset_id   = asset;
+            member.resolved_asset_type = found->second;
+            return true;
+        }
+    }
+    return false;
 }
 
 bool SemanticAnalyzer::phase_is_periodic(const SymbolId& phase) const {
@@ -7589,8 +7628,10 @@ void SemanticAnalyzer::collect_rule_dependency(const RuleNode& rule, std::size_t
     const auto pair_scope = rule.pairs.has_value() ? build_pair_scope(rule) : PairScope{};
     // Rule-level, not per-handler: every handler on this rule shares the same
     // `pairs:`/`where:` domain, so eligibility is identical for each of them.
+    const auto equality_join = rule.pairs.has_value() ? recognize_equality_join(rule, pair_scope) : std::nullopt;
     const auto spatial_join =
-        rule.pairs.has_value() ? recognize_spatial_join(rule, pair_scope, errors_) : std::nullopt;
+        rule.pairs.has_value() ? recognize_spatial_join(rule, pair_scope, errors_, !equality_join.has_value())
+                               : std::nullopt;
     for (std::size_t handler_index = 0; handler_index < rule.handlers.size(); ++handler_index) {
         const auto& handler = rule.handlers[handler_index];
         collect_rule_deps(handler.body, dep);
@@ -7605,7 +7646,8 @@ void SemanticAnalyzer::collect_rule_dependency(const RuleNode& rule, std::size_t
 
             auto inferred = rule.pairs.has_value() ? infer_pair_handler_contract(rule, handler, pair_scope)
                                                    : infer_regular_handler_contract(rule, handler);
-            inferred.spatial_join = spatial_join;
+            inferred.spatial_join  = spatial_join;
+            inferred.equality_join = spatial_join.has_value() ? std::nullopt : equality_join;
             inferred.reduction    = reduction_plan(rule, pair_scope);
             fold_when_clause_named_reads(rule, inferred);
             add_keep_effects(rule, handler, inferred);
@@ -8937,8 +8979,8 @@ struct OverlapPredicateSpec {
     std::array<OverlapShapeSpec, 2> shapes;
 };
 
-const std::array<OverlapPredicateSpec, 3>& recognized_overlap_predicates() {
-    static const std::array<OverlapPredicateSpec, 3> specs{{
+const std::array<OverlapPredicateSpec, 5>& recognized_overlap_predicates() {
+    static const std::array<OverlapPredicateSpec, 5> specs{{
         {.canonical = "std.collision.flat.circles_overlap",
          .dimension = SpatialJoinDimension::Flat2D,
          .arity     = 4,
@@ -8954,6 +8996,16 @@ const std::array<OverlapPredicateSpec, 3>& recognized_overlap_predicates() {
          .arity     = 5,
          .shapes    = {{{.kind = SpatialShapeKind::Sphere, .args = {0, 1}},
                         {.kind = SpatialShapeKind::Box, .args = {2, 3, 4}}}}},
+        {.canonical = "std.collision.volume.ray_hits_box",
+         .dimension = SpatialJoinDimension::Volume3D,
+         .arity     = 5,
+         .shapes    = {{{.kind = SpatialShapeKind::RaySegment, .args = {0, 1, 2}},
+                        {.kind = SpatialShapeKind::AlignedBox, .args = {3, 4}}}}},
+        {.canonical = "std.collision.volume.boxes_overlap",
+         .dimension = SpatialJoinDimension::Volume3D,
+         .arity     = 4,
+         .shapes    = {{{.kind = SpatialShapeKind::AlignedBox, .args = {0, 1}},
+                        {.kind = SpatialShapeKind::AlignedBox, .args = {2, 3}}}}},
     }};
     return specs;
 }
@@ -9438,9 +9490,139 @@ bool SemanticAnalyzer::check_unaccelerated_distance_predicate(const ExprNode& pr
     return true;
 }
 
+namespace {
+
+// Whether `expr` reads `binding`: by name, by bracket access or through one of
+// its aliases.
+bool reads_pair_binding(const ExprNode& expr, const PairScope& pair_scope, std::size_t binding) {
+    bool read = false;
+    visit_expression(expr, [&](const ExprNode& node) {
+        if (const auto* access = std::get_if<TraitAccessExpr>(&node.expr); access != nullptr) {
+            read = read || access->pair_binding_index == binding;
+        }
+        const auto* ident = std::get_if<IdentExpr>(&node.expr);
+        if (ident == nullptr) {
+            return;
+        }
+        if (const auto scope = pair_scope.find(ident->name); scope != pair_scope.end()) {
+            read = read || scope->second.index == binding;
+        }
+        if (const auto alias = find_pair_alias(pair_scope, ident->name); alias.has_value()) {
+            read = read || pair_scope.at(alias->first).index == binding;
+        }
+    });
+    return read;
+}
+
+// Paths to the operands of `expr`'s top-level `and` chain.
+void collect_conjunct_paths(const ExprNode& expr, ExprPath& path, std::vector<ExprPath>& out) {
+    if (const auto* binary = std::get_if<BinaryExpr>(&expr.expr); binary != nullptr && binary->op == "and") {
+        for (std::uint8_t side = 0; side < 2; ++side) {
+            path.push_back(side);
+            collect_conjunct_paths(side == 0 ? *binary->left : *binary->right, path, out);
+            path.pop_back();
+        }
+        return;
+    }
+    out.push_back(path);
+}
+
+}  // namespace
+
+bool SemanticAnalyzer::immutable_member_value(const ExprNode& expr,
+                                              std::size_t binding,
+                                              const std::string& binding_name,
+                                              const PairScope& pair_scope) const {
+    if (const auto* ident = std::get_if<IdentExpr>(&expr.expr); ident != nullptr) {
+        return ident->name == binding_name;
+    }
+    const auto* member = std::get_if<MemberExpr>(&expr.expr);
+    if (member == nullptr || member->object == nullptr) {
+        return false;
+    }
+    std::optional<SymbolId> trait;
+    if (const auto* access = std::get_if<TraitAccessExpr>(&member->object->expr);
+        access != nullptr && access->pair_binding_index == binding) {
+        trait = access->resolved_trait_id;
+    } else if (const auto* alias = std::get_if<IdentExpr>(&member->object->expr); alias != nullptr) {
+        if (const auto found = find_pair_alias(pair_scope, alias->name);
+            found.has_value() && found->first == binding_name) {
+            const auto& scope = pair_scope.at(found->first);
+            if (const auto key = scope.trait_by_access_key.find(found->second); key != scope.trait_by_access_key.end()) {
+                trait = key->second;
+            }
+        }
+    }
+    const auto* declaration = trait.has_value() ? find_resolved_trait(*trait) : nullptr;
+    if (declaration == nullptr) {
+        return false;
+    }
+    const auto field = std::ranges::find(declaration->fields, member->member, &ResolvedField::name);
+    if (field == declaration->fields.end() || !field->is_let) {
+        return false;
+    }
+    const auto kind = field->type.kind;
+    return kind == TypeKind::Int || kind == TypeKind::Bool || kind == TypeKind::Enum || kind == TypeKind::EntityId;
+}
+
+std::optional<EqualityJoinKey> SemanticAnalyzer::equality_key(const BinaryExpr& equality,
+                                                              const ExprPath& conjunct,
+                                                              std::size_t predicate_index,
+                                                              std::size_t indexed_binding,
+                                                              const std::string& indexed_name,
+                                                              const PairScope& pair_scope) const {
+    for (std::uint8_t side = 0; side < 2; ++side) {
+        const auto& member = side == 0 ? *equality.left : *equality.right;
+        const auto& query  = side == 0 ? *equality.right : *equality.left;
+        if (!immutable_member_value(member, indexed_binding, indexed_name, pair_scope) ||
+            reads_pair_binding(query, pair_scope, indexed_binding)) {
+            continue;
+        }
+        auto member_path = conjunct;
+        auto query_path  = conjunct;
+        member_path.push_back(side);
+        query_path.push_back(static_cast<std::uint8_t>(1 - side));
+        return EqualityJoinKey{
+            .predicate_index = predicate_index, .member = std::move(member_path), .query = std::move(query_path)};
+    }
+    return std::nullopt;
+}
+
+std::optional<EqualityJoinPlan> SemanticAnalyzer::recognize_equality_join(const RuleNode& rule,
+                                                                          const PairScope& pair_scope) const {
+    const auto reduction = reduction_plan(rule, pair_scope);
+    if (!rule.pairs.has_value() || rule.pairs->bindings.size() != 2 || !reduction.has_value() ||
+        !reduction->group_binding.has_value() || !rule.where_clause.has_value()) {
+        return std::nullopt;
+    }
+    EqualityJoinPlan plan;
+    plan.indexed_binding      = 1 - *reduction->group_binding;
+    const auto& indexed_name  = rule.pairs->bindings[plan.indexed_binding].name;
+    const auto& predicates    = rule.where_clause->predicates;
+    for (std::size_t index = 0; index < predicates.size(); ++index) {
+        std::vector<ExprPath> conjuncts;
+        ExprPath path;
+        collect_conjunct_paths(*predicates[index], path, conjuncts);
+        for (auto& conjunct : conjuncts) {
+            const auto* equality = std::get_if<BinaryExpr>(&resolve_expr_path(*predicates[index], conjunct)->expr);
+            if (equality == nullptr || equality->op != "==") {
+                continue;
+            }
+            if (auto key = equality_key(*equality, conjunct, index, plan.indexed_binding, indexed_name, pair_scope)) {
+                plan.keys.push_back(std::move(*key));
+            }
+        }
+    }
+    if (plan.keys.empty()) {
+        return std::nullopt;
+    }
+    return plan;
+}
+
 std::optional<SpatialJoinPlan> SemanticAnalyzer::recognize_spatial_join(const RuleNode& rule,
                                                                         const PairScope& pair_scope,
-                                                                        ErrorReporter& errors) {
+                                                                        ErrorReporter& errors,
+                                                                        bool warn_unaccelerated) {
     if (!rule.pairs.has_value() || rule.pairs->bindings.size() != 2) {
         return std::nullopt;
     }
@@ -9474,7 +9656,7 @@ std::optional<SpatialJoinPlan> SemanticAnalyzer::recognize_spatial_join(const Ru
     if (auto swept = recognize_collider_reduce(rule, pair_scope); swept.has_value()) {
         return swept;
     }
-    if (!linear_distance_warned) {
+    if (!linear_distance_warned && warn_unaccelerated) {
         const auto& bindings = rule.pairs->bindings;
         errors.warning(rule.pairs->location,
                        "pair rule '" + rule.name +
@@ -10244,6 +10426,9 @@ std::optional<SymbolId> SemanticAnalyzer::lookup_imported_symbol(const ImportedS
     if (auto const_it = syms.consts.find(name); const_it != syms.consts.end()) {
         return resolved_decl_symbol(const_it->second, SymbolKind::Const, syms.module_name, name);
     }
+    if (syms.assets.contains(name)) {
+        return make_symbol_id(SymbolKind::Asset, syms.module_name, name);
+    }
     if (auto group_it = syms.groups.find(name); group_it != syms.groups.end() && group_it->second.is_pub) {
         return group_it->second.group;
     }
@@ -10914,6 +11099,27 @@ void SemanticAnalyzer::validate_text_format_calls(  // NOLINT(readability-functi
     }
 }
 
+static std::optional<TypeInfo> asset_handle_type(TypeKind kind) {
+    switch (kind) {
+        case TypeKind::MeshId:
+            return make_mesh_id_type();
+        case TypeKind::ModelId:
+            return make_model_id_type();
+        case TypeKind::TextureId:
+            return make_texture_id_type();
+        case TypeKind::SoundId:
+            return make_sound_id_type();
+        case TypeKind::MusicId:
+            return make_music_id_type();
+        case TypeKind::FontId:
+            return make_font_id_type();
+        case TypeKind::MaterialId:
+            return make_material_id_type();
+        default:
+            return std::nullopt;
+    }
+}
+
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TypeInfo SemanticAnalyzer::infer_ident_expr_type(
     const IdentExpr& ident,
@@ -10962,23 +11168,8 @@ TypeInfo SemanticAnalyzer::infer_ident_expr_type(
         return find_const_type(*ident.resolved_const_id);
     }
     if (auto asset_it = asset_decl_types_.find(ident.name); asset_it != asset_decl_types_.end()) {
-        switch (asset_it->second) {
-            case TypeKind::MeshId:
-                return make_mesh_id_type();
-            case TypeKind::ModelId:
-                return make_model_id_type();
-            case TypeKind::TextureId:
-                return make_texture_id_type();
-            case TypeKind::SoundId:
-                return make_sound_id_type();
-            case TypeKind::MusicId:
-                return make_music_id_type();
-            case TypeKind::FontId:
-                return make_font_id_type();
-            case TypeKind::MaterialId:
-                return make_material_id_type();
-            default:
-                break;
+        if (auto type = asset_handle_type(asset_it->second); type.has_value()) {
+            return *type;
         }
     }
     if (auto input_it = input_decl_types_.find(ident.name); input_it != input_decl_types_.end()) {
@@ -11205,6 +11396,9 @@ TypeInfo SemanticAnalyzer::infer_member_expr_type(
     }
     if (member.resolved_phase_dt.has_value()) {
         return make_float_type();
+    }
+    if (member.resolved_asset_type.has_value()) {
+        return asset_handle_type(*member.resolved_asset_type).value_or(make_unknown_type());
     }
     if (const auto path = trait_field_path(member); path.has_value()) {
         return infer_trait_access_type(

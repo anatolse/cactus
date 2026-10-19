@@ -129,6 +129,15 @@ void AssetRegistry::register_model(const AssetHandle handle,
     register_asset(AssetKind::Model, handle, std::move(asset_id), runtime_id, materialized);
 }
 
+std::string AssetRegistry::asset_id_for_runtime(const AssetKind kind, const int runtime_id) const {
+    for (const auto& [handle, record] : map_for(kind)) {
+        if (record.runtime_id == runtime_id) {
+            return record.asset_id;
+        }
+    }
+    return {};
+}
+
 void AssetRegistry::set_lazy_resolver(const AssetKind kind, LazyResolver resolver) {
     resolver_for(kind) = std::move(resolver);
 }

@@ -188,7 +188,8 @@ struct SelfExpr {
 
 // What semantic analysis proved about an arithmetic operator's operands. Backends lower
 // `Unchecked` like `Int` but must let the target language pick the operation by type.
-enum class ArithmeticOperands : std::uint8_t { Unchecked, Int, Other };
+// IntFloat: an int left operand with a non-int right one; FloatInt: the reverse.
+enum class ArithmeticOperands : std::uint8_t { Unchecked, Int, Other, IntFloat, FloatInt };
 
 struct BinaryExpr {
     std::string op;  // "+", "-", "*", "/", "%", "==", "!=", "<", ">", "<=", ">=", "and", "or"
@@ -239,6 +240,9 @@ struct MemberExpr {
     std::optional<SymbolId> resolved_const_id;
     // Set by semantic analysis on `<phase>.dt` read outside that phase's handlers.
     std::optional<SymbolId> resolved_phase_dt;
+    // Set by semantic analysis on a module-qualified asset (`world.Stone`) and its handle type.
+    std::optional<SymbolId> resolved_asset_id;
+    std::optional<TypeKind> resolved_asset_type;
 };
 
 // `object[Trait]`: a trait reached through a named entity or a pair binding.

@@ -1,0 +1,23 @@
+module main
+
+# A robot explores, digs and builds in a seeded block world. See README.md for
+# the controls and how the modules divide the game.
+
+use std.core
+use game
+use world
+use robot
+use editing
+use sky
+use hud
+use flow
+
+const:
+    WINDOW_WIDTH = 1280
+    WINDOW_HEIGHT = 720
+    WINDOW_TITLE = "Robot Sandbox"
+    TARGET_FPS = 60
+
+# The default world: 64 x 48 x 64 cells, y from -16 to 31.
+entity Settings:
+    world.WorldConfig

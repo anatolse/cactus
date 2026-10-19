@@ -164,6 +164,25 @@ TEST_CASE("a list past the configured collection size limit is reported", "[pers
     }));
 }
 
+TEST_CASE("a document with more records than the list limit is not rejected for its size",
+          "[persistence][validation]") {
+    auto snapshot = valid_snapshot();
+    REQUIRE_FALSE(snapshot.entities.empty());
+    auto next_id = std::ranges::max(snapshot.entities, {}, &cactus::persistence::EntityRecord::id).id;
+    const auto seed = snapshot.entities.back();
+    while (snapshot.entities.size() <= cactus::persistence::kMaxPersistenceCollectionSize + 1000) {
+        auto copy   = seed;
+        copy.id     = ++next_id;
+        copy.parent = cactus::persistence::EntityRef{};
+        snapshot.entities.push_back(std::move(copy));
+    }
+
+    const auto errors = validate_document(schema, snapshot);
+    CHECK_FALSE(std::ranges::any_of(errors, [](const ValidationError& error) {
+        return error.message == "entity count exceeds the configured limit";
+    }));
+}
+
 TEST_CASE("multiple problems are all reported together with field paths, not just the first",
           "[persistence][validation]") {
     auto snapshot = valid_snapshot();

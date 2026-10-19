@@ -3397,7 +3397,12 @@ static const std::string& volume_overlap_header() {
         "    return a_radius + b_radius >= 0.0\n"
         "pub func sphere_box_overlap(sphere_position: vec3, sphere_radius: float, box_position: vec3, box_size: vec3, "
         "box_rotation: quat) bool:\n"
-        "    return sphere_radius >= 0.0\n";
+        "    return sphere_radius >= 0.0\n"
+        "pub func ray_hits_box(origin: vec3, direction: vec3, max_distance: float, box_center: vec3, box_size: vec3) "
+        "bool:\n"
+        "    return max_distance > 0.0\n"
+        "pub func boxes_overlap(a_center: vec3, a_size: vec3, b_center: vec3, b_size: vec3) bool:\n"
+        "    return a_size.x > 0.0\n";
     return value;
 }
 
@@ -3432,6 +3437,39 @@ TEST_CASE("Semantic: sphere_box_overlap with the sphere on the left binding is e
     CHECK(plan->right.binding_index == 1);
     CHECK(plan->right.kind == SpatialShapeKind::Box);
     CHECK(plan->right.slots == std::vector<ExprPath>{{2}, {3}, {4}});
+}
+
+TEST_CASE("Semantic: ray_hits_box bounds a ray segment against an unrotated box",
+          "[semantic][where-clause][spatial-join]") {
+    const auto plan = volume_overlap_plan(
+        "ray_hits_box(actor[Body].position, actor[Body].position * 2.0, actor[Body].radius, wall[Solid].position, "
+        "wall[Solid].size)");
+    REQUIRE(plan.has_value());
+    CHECK(plan->dimension == SpatialJoinDimension::Volume3D);
+    CHECK(plan->left.binding_index == 0);
+    CHECK(plan->left.kind == SpatialShapeKind::RaySegment);
+    CHECK(plan->left.slots == std::vector<ExprPath>{{0}, {1}, {2}});
+    CHECK(plan->right.binding_index == 1);
+    CHECK(plan->right.kind == SpatialShapeKind::AlignedBox);
+    CHECK(plan->right.slots == std::vector<ExprPath>{{3}, {4}});
+}
+
+TEST_CASE("Semantic: boxes_overlap bounds two unrotated boxes", "[semantic][where-clause][spatial-join]") {
+    const auto plan = volume_overlap_plan("boxes_overlap(wall[Solid].position, wall[Solid].size, actor[Body].position, "
+                                          "vec3(actor[Body].radius, 1.0, 1.0))");
+    REQUIRE(plan.has_value());
+    CHECK(plan->left.binding_index == 1);
+    CHECK(plan->left.kind == SpatialShapeKind::AlignedBox);
+    CHECK(plan->right.binding_index == 0);
+    CHECK(plan->right.kind == SpatialShapeKind::AlignedBox);
+    CHECK(plan->right.slots == std::vector<ExprPath>{{2}, {3}});
+}
+
+TEST_CASE("Semantic: ray_hits_box mixing both bindings in one shape is not eligible",
+          "[semantic][where-clause][spatial-join]") {
+    CHECK_FALSE(volume_overlap_plan("ray_hits_box(actor[Body].position, wall[Solid].position, actor[Body].radius, "
+                                    "wall[Solid].position, wall[Solid].size)")
+                    .has_value());
 }
 
 TEST_CASE("Semantic: sphere_box_overlap with the box on the left binding is eligible",
@@ -3837,6 +3875,67 @@ static int line_of(const std::string& source, const std::string& text) {
     const auto offset = source.find(text);
     REQUIRE(offset != std::string::npos);
     return static_cast<int>(std::count(source.begin(), source.begin() + static_cast<std::ptrdiff_t>(offset), '\n')) + 1;
+}
+
+static std::string equality_join_rule(const std::string& cell_x, const std::string& predicate) {
+    return stdlib_events() +
+           "trait Cell:\n"
+           "    " + cell_x + " x: int\n"
+           "    let owner: entity_id\n"
+           "    var weight: float = 1.0\n"
+           "trait Probe:\n"
+           "    var x: int = 0\n"
+           "    var owner: entity_id\n"
+           "    var found: int = 0\n"
+           "rule Detect:\n"
+           "    pairs:\n"
+           "        probe:\n"
+           "            Probe\n"
+           "        cell:\n"
+           "            Cell as c\n"
+           "    where:\n"
+           "        " + predicate + "\n"
+           "    reduce per probe:\n"
+           "        matches = count()\n"
+           "    on tick:\n"
+           "        probe[Probe].found = matches\n";
+}
+
+TEST_CASE("Semantic: equalities on let fields and the member itself form an equality join",
+          "[semantic][where-clause][equality-join][diagnostics]") {
+    auto [result, diagnostics] = analyze_with_diagnostics(equality_join_rule(
+        "let", "probe[Probe].found >= 0 and cell[Cell].x == probe[Probe].x + 1 and probe[Probe].owner == c.owner"));
+    REQUIRE(result.handler_contracts.size() == 1);
+    const auto& plan = result.handler_contracts[0].equality_join;
+    REQUIRE(plan.has_value());
+    CHECK(plan->indexed_binding == 1);
+    REQUIRE(plan->keys.size() == 2);
+    CHECK(plan->keys[0].member == ExprPath{0, 1, 0});
+    CHECK(plan->keys[0].query == ExprPath{0, 1, 1});
+    CHECK(plan->keys[1].member == ExprPath{1, 1});
+    CHECK(plan->keys[1].query == ExprPath{1, 0});
+    CHECK(count_warnings(diagnostics) == 0);
+
+    auto [identity, identity_diagnostics] = analyze_with_diagnostics(equality_join_rule("let", "cell == probe[Probe].owner"));
+    REQUIRE(identity.handler_contracts[0].equality_join.has_value());
+    CHECK(identity.handler_contracts[0].equality_join->keys.front().member == ExprPath{0});
+}
+
+TEST_CASE("Semantic: var fields, cross reads and missing reductions form no equality join",
+          "[semantic][where-clause][equality-join][diagnostics]") {
+    auto [var_field, var_diagnostics] = analyze_with_diagnostics(equality_join_rule("var", "cell[Cell].x == probe[Probe].x"));
+    CHECK_FALSE(var_field.handler_contracts[0].equality_join.has_value());
+    CHECK(has_warning_containing(var_diagnostics, unaccelerated_pair_warning("Detect", "probe", "cell")));
+
+    auto [both, both_diagnostics] =
+        analyze_with_diagnostics(equality_join_rule("let", "cell[Cell].x == probe[Probe].x + c.x or c.weight > 2.0"));
+    CHECK_FALSE(both.handler_contracts[0].equality_join.has_value());
+
+    auto [self_read, self_diagnostics] = analyze_with_diagnostics(equality_join_rule("let", "cell[Cell].x == c.x"));
+    CHECK_FALSE(self_read.handler_contracts[0].equality_join.has_value());
+
+    auto [weight, weight_diagnostics] = analyze_with_diagnostics(equality_join_rule("let", "c.weight == 1.0"));
+    CHECK_FALSE(weight.handler_contracts[0].equality_join.has_value());
 }
 
 TEST_CASE("Semantic: linear 2D distance-vs-radius-sum where: predicate is flagged with a warning",

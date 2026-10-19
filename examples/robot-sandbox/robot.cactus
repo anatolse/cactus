@@ -1,0 +1,404 @@
+module robot
+
+# The robot and the two ways to watch it. First person drives the robot with
+# a captured mouse; the strategy view floats above the world with a free
+# pointer, pans and zooms, and leaves the robot to its physics. Both cameras
+# always exist; the session's camera choice decides which viewport draws.
+
+use std.core
+use std.input as inp
+use std.query as query
+use std.math as math
+use std.math.vec3 as v3
+use std.math.quat as quat
+use std.transform.volume as tv
+use std.physics.volume as physics
+use std.camera.volume as camera
+use std.camera.viewport as viewport
+use std.render.models as models
+use std.render.meshes as meshes
+use std.voxel.volume as voxel
+use std.ui as ui
+use game
+use world
+
+pub asset RobotModel: model = "../model-renderer/art/robot.glb"
+
+const:
+    ROBOT_RADIUS = 0.35
+    ROBOT_HEIGHT = 1.6
+    HALF_HEIGHT = ROBOT_HEIGHT * 0.5
+    EYE_HEIGHT = 0.55
+    WALK_SPEED = 4.0
+    GRAVITY = 20.0
+    JUMP_SPEED = 7.6
+    STEP_HEIGHT = 0.45
+    REACH = 6.0
+    PITCH_LIMIT = 1.45
+    STRATEGY_PITCH = -0.95
+    MIN_ZOOM = 8.0
+    MAX_ZOOM = 70.0
+    DEFAULT_ZOOM = 30.0
+    ZOOM_STEP = 3.0
+    SKY_COLOR = #6FA8DCFF
+    ROBOT_LAYER = 2
+    BODY_MASK = 3
+
+input MoveForward: button
+    key = inp.Key.W
+
+input MoveBackward: button
+    key = inp.Key.S
+
+input MoveLeft: button
+    key = inp.Key.A
+
+input MoveRight: button
+    key = inp.Key.D
+
+input Jump: button
+    key = inp.Key.Space
+
+input ToggleView: button
+    key = inp.Key.Tab
+
+input CenterView: button
+    key = inp.Key.C
+
+input Recover: button
+    key = inp.Key.R
+
+# The robot's look and the last saved checkpoint of everything a save needs
+# that is not a persistent field elsewhere. The checkpoint is written only
+# while saving and applied only after loading.
+pub trait Robot:
+    var yaw: float = 0.0
+    var pitch: float = 0.0
+    persist var saved_position: vec3 = vec3(0.0, 0.0, 0.0)
+    persist var saved_velocity: vec3 = vec3(0.0, 0.0, 0.0)
+    persist var saved_yaw: float = 0.0
+    persist var saved_pitch: float = 0.0
+
+pub trait FirstPersonView
+
+pub trait StrategyView:
+    var target: vec3 = vec3(0.0, 0.0, 0.0)
+    var zoom: float = DEFAULT_ZOOM
+
+pub trait RobotVisual
+
+# `terrain` is the volume the robot's ray probe looks into; its cell result
+# means nothing until the probe hits.
+pub template RobotTemplate(position: vec3, model_scale: float, terrain: entity_id):
+    tv.WorldTransform:
+        position = position
+    physics.Collider:
+        layer = ROBOT_LAYER
+        mask = BODY_MASK
+    physics.CapsuleCollider:
+        radius = ROBOT_RADIUS
+        height = ROBOT_HEIGHT
+    physics.CharacterBody:
+        gravity = GRAVITY
+        step_height = STEP_HEIGHT
+    physics.Solid
+    Robot
+    voxel.RayProbe:
+        volume = terrain
+        cell = terrain
+        max_distance = REACH
+    children:
+        entity Visual:
+            tv.LocalTransform:
+                position = vec3(0.0, -HALF_HEIGHT, 0.0)
+                rotation = quat.from_euler(0.0, math.PI, 0.0)
+                scale = vec3(model_scale, model_scale, model_scale)
+            tv.WorldTransform
+            models.ModelRenderer:
+                model = RobotModel
+            RobotVisual
+        entity Lamp:
+            tv.LocalTransform:
+                position = vec3(0.0, 0.5, 0.0)
+            tv.WorldTransform
+            meshes.PointLight:
+                color = #FFE2B0FF
+                intensity = 1.4
+                range = 9.0
+
+template ViewCamera(active: bool, fov: float):
+    tv.WorldTransform
+    camera.Camera:
+        fov_y = fov
+        near = 0.05
+        far = 250.0
+    viewport.Viewport:
+        clear_color = SKY_COLOR
+        active = active
+
+pub template FirstPersonCamera:
+    use ViewCamera(active = true, fov = 70.0)
+    FirstPersonView
+
+pub template StrategyCamera:
+    use ViewCamera(active = false, fov = 55.0)
+    StrategyView
+    voxel.Cutaway:
+        enabled = false
+
+# The model scale that makes a model of this size as tall as the capsule.
+pub func model_scale(bounds: vec3) float:
+    return if bounds.y > 0.0: ROBOT_HEIGHT / bounds.y else: 1.0
+
+pub func spawn_position(spawn_x: int, spawn_z: int, spawn_floor: int) vec3:
+    return vec3(spawn_x + 0.5, spawn_floor + 1.0 + HALF_HEIGHT + 0.02, spawn_z + 0.5)
+
+func look_rotation(yaw: float, pitch: float) quat:
+    return quat.compose(quat.from_euler(0.0, yaw, 0.0), quat.from_euler(pitch, 0.0, 0.0))
+
+func eye_of(position: vec3) vec3:
+    return position + vec3(0.0, EYE_HEIGHT, 0.0)
+
+# Bodies stand still while a menu, generation or storage owns the game.
+rule PauseBodies:
+    each:
+        physics.CharacterBody as body
+
+    on input:
+        body.paused = game.Game[game.Session].mode != game.Mode.Playing
+
+rule Look:
+    each:
+        Robot as robot
+        tv.WorldTransform as transform
+    after:
+        ui.RoutePointer
+    when:
+        game.Game[game.Session].mode == game.Mode.Playing
+        game.Game[game.Session].camera == game.View.FirstPerson
+
+    on input:
+        let delta = inp.mouse_delta()
+        let sensitivity = game.Game[game.Session].sensitivity
+        let vertical = if game.Game[game.Session].invert_y: -delta.y else: delta.y
+        robot.yaw = robot.yaw - delta.x * sensitivity
+        robot.pitch = math.clamp(robot.pitch - vertical * sensitivity, -PITCH_LIMIT, PITCH_LIMIT)
+        transform.rotation = quat.from_euler(0.0, robot.yaw, 0.0)
+
+rule Walk:
+    each:
+        Robot
+        tv.WorldTransform as transform
+        physics.CharacterBody as body
+    when:
+        game.Game[game.Session].mode == game.Mode.Playing
+
+    on fixed_tick:
+        var move = vec3(0.0, 0.0, 0.0)
+        let walking = game.Game[game.Session].camera == game.View.FirstPerson
+        let forward = quat.forward(transform.rotation)
+        let right = quat.right(transform.rotation)
+        if walking and input.down(MoveForward):
+            move += vec3(forward.x, 0.0, forward.z)
+        if walking and input.down(MoveBackward):
+            move -= vec3(forward.x, 0.0, forward.z)
+        if walking and input.down(MoveRight):
+            move += vec3(right.x, 0.0, right.z)
+        if walking and input.down(MoveLeft):
+            move -= vec3(right.x, 0.0, right.z)
+        if v3.length(move) > 0.0:
+            move = v3.normalize(move) * WALK_SPEED
+        body.velocity.x = move.x
+        body.velocity.z = move.z
+
+rule JumpUp:
+    each:
+        Robot
+        physics.CharacterBody as body
+    after:
+        ui.RoutePointer
+    when:
+        game.Game[game.Session].mode == game.Mode.Playing
+        game.Game[game.Session].camera == game.View.FirstPerson
+
+    on input:
+        if body.grounded and input.pressed(Jump):
+            body.velocity.y = JUMP_SPEED
+
+# The probe follows the eye every frame; it is off outside first-person play.
+rule AimProbe:
+    each:
+        Robot as robot
+        tv.WorldTransform as transform
+        voxel.RayProbe as probe
+    before:
+        voxel.probes
+
+    on input:
+        probe.volume = query.first[voxel.Volume]()
+        probe.enabled = game.Game[game.Session].mode == game.Mode.Playing and game.Game[game.Session].camera == game.View.FirstPerson
+        probe.origin = eye_of(transform.position)
+        probe.direction = quat.forward(look_rotation(robot.yaw, robot.pitch))
+
+rule ViewKeys:
+    after:
+        ui.RoutePointer
+    when:
+        game.Game[game.Session].mode == game.Mode.Playing
+
+    on input:
+        if input.pressed(ToggleView):
+            emit game.ToggleViewRequested
+        if input.pressed(Recover):
+            emit game.RecoverRequested
+
+rule ShowFirstPerson:
+    each:
+        FirstPersonView
+        viewport.Viewport as vp
+
+    on tick:
+        vp.active = game.Game[game.Session].camera == game.View.FirstPerson
+
+# The robot's own body would fill the first-person view.
+rule HideBodyInFirstPerson:
+    each:
+        RobotVisual
+        models.ModelRenderer as renderer
+
+    on tick:
+        renderer.visible = game.Game[game.Session].camera != game.View.FirstPerson
+
+rule ShowStrategy:
+    each:
+        StrategyView
+        viewport.Viewport as vp
+        voxel.Cutaway as cut
+    after:
+        ShowFirstPerson
+
+    on tick:
+        vp.active = game.Game[game.Session].camera == game.View.Strategy
+        cut.volume = query.first[voxel.Volume]()
+        cut.enabled = game.Game[game.Session].cutaway
+        cut.top = game.Game[game.Session].layer
+
+rule PanStrategy:
+    each:
+        StrategyView as overview
+    after:
+        ui.RoutePointer
+    when:
+        game.Game[game.Session].mode == game.Mode.Playing
+        game.Game[game.Session].camera == game.View.Strategy
+
+    on tick:
+        var pan = vec3(0.0, 0.0, 0.0)
+        if input.down(MoveForward):
+            pan.z -= 1.0
+        if input.down(MoveBackward):
+            pan.z += 1.0
+        if input.down(MoveLeft):
+            pan.x -= 1.0
+        if input.down(MoveRight):
+            pan.x += 1.0
+        overview.target += pan * game.Game[game.Session].pan_speed * tick.dt
+        overview.zoom = math.clamp(overview.zoom - inp.wheel_delta() * ZOOM_STEP, MIN_ZOOM, MAX_ZOOM)
+
+rule CenterOnRobot:
+    pairs:
+        cam:
+            StrategyView
+        body:
+            Robot
+            tv.WorldTransform
+    after:
+        ui.RoutePointer
+    limit: 1 per cam
+    when:
+        game.Game[game.Session].mode == game.Mode.Playing
+
+    on input:
+        if input.pressed(CenterView):
+            cam[StrategyView].target = body[tv.WorldTransform].position
+
+rule ComposeFirstPerson:
+    pairs:
+        cam:
+            FirstPersonView
+            tv.WorldTransform
+        body:
+            Robot
+            tv.WorldTransform
+    limit: 1 per cam
+
+    on late_tick:
+        cam[tv.WorldTransform].position = eye_of(body[tv.WorldTransform].position)
+        cam[tv.WorldTransform].rotation = look_rotation(body[Robot].yaw, body[Robot].pitch)
+
+# A new strategy camera starts where the last saved one looked.
+rule PlaceStrategyCamera:
+    each:
+        StrategyView as overview
+
+    on added StrategyView:
+        overview.target = game.Game[game.Session].view_target
+        overview.zoom = game.Game[game.Session].view_zoom
+
+rule ComposeStrategy:
+    each:
+        StrategyView as overview
+        tv.WorldTransform as transform
+    after:
+        ComposeFirstPerson
+
+    on late_tick:
+        transform.position = overview.target + vec3(0.0, math.sin(-STRATEGY_PITCH), math.cos(STRATEGY_PITCH)) * overview.zoom
+        transform.rotation = quat.from_euler(STRATEGY_PITCH, 0.0, 0.0)
+
+# Back to the spawn point, standing still; editing reopens the pocket.
+rule ReturnToSpawn:
+    each:
+        Robot as robot
+        tv.WorldTransform as transform
+        physics.CharacterBody as body
+
+    on game.RecoverRequested:
+        transform.position = spawn_position(world.Generator[world.Generation].spawn_x, world.Generator[world.Generation].spawn_z, world.Generator[world.Generation].spawn_floor)
+        body.velocity = vec3(0.0, 0.0, 0.0)
+
+rule SaveRobotCheckpoint:
+    each:
+        Robot as robot
+        tv.WorldTransform as transform
+        physics.CharacterBody as body
+
+    on game.CheckpointRequested:
+        robot.saved_position = transform.position
+        robot.saved_velocity = body.velocity
+        robot.saved_yaw = robot.yaw
+        robot.saved_pitch = robot.pitch
+
+rule SaveViewCheckpoint:
+    each:
+        StrategyView as overview
+
+    on game.CheckpointRequested:
+        game.Game[game.Session].view_target = overview.target
+        game.Game[game.Session].view_zoom = overview.zoom
+
+# Runs before resumed physics: the restore's own activation applies it.
+rule ApplyRobotCheckpoint:
+    each:
+        Robot as robot
+        tv.WorldTransform as transform
+        physics.CharacterBody as body
+
+    on game.WorldReady as ready:
+        if ready.fresh:
+            return
+        transform.position = robot.saved_position
+        transform.rotation = quat.from_euler(0.0, robot.saved_yaw, 0.0)
+        body.velocity = robot.saved_velocity
+        robot.yaw = robot.saved_yaw
+        robot.pitch = robot.saved_pitch

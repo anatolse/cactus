@@ -1881,9 +1881,14 @@ ViewNode Parser::parse_view() {
             break;
         }
         auto error_count_before = errors_.error_count();
+        const auto start        = current_;
         auto element            = parse_view_element();
         if (errors_.error_count() > error_count_before) {
             synchronize();
+            // synchronize() stops at a synchronization point without consuming it.
+            if (current_ == start) {
+                advance();
+            }
             continue;
         }
         node.elements.push_back(std::move(element));
@@ -1910,6 +1915,7 @@ ViewElement Parser::parse_view_element() {
             break;
         }
         auto error_count_before = errors_.error_count();
+        const auto start        = current_;
 
         // Check if this is a nested element (identifier followed by colon then newline)
         // or a property (identifier = expression)
@@ -1954,6 +1960,9 @@ ViewElement Parser::parse_view_element() {
 
         if (errors_.error_count() > error_count_before) {
             synchronize();
+            if (current_ == start) {
+                advance();
+            }
             continue;
         }
     }

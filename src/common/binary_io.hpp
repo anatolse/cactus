@@ -8,9 +8,9 @@
 #include <type_traits>
 
 // Little-endian binary I/O primitives shared by every binary format this
-// compiler/runtime reads or writes on disk (the module-artifact .cmod
-// serializer and the example persistence file adapter) — one wire-format
-// vocabulary instead of independently re-derived copies that could drift.
+// compiler reads or writes on disk through streams (the module-artifact .cmod
+// serializer) — one wire-format vocabulary instead of independently
+// re-derived copies that could drift.
 
 namespace cactus::binary_io {
 

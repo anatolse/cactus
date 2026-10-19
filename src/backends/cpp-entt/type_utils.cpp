@@ -279,11 +279,25 @@ static std::string total_int_helper(std::string_view op) {
     return "cactus::num::mod";
 }
 
+// Unchecked operands come from passes that typed no scope; they keep the int helpers.
+static bool int_operands(ArithmeticOperands operands) {
+    return operands == ArithmeticOperands::Int || operands == ArithmeticOperands::Unchecked;
+}
+
+static std::string as_float(const std::string& value) {
+    return "static_cast<float>(" + value + ")";
+}
+
 std::string EnttCodegenUtils::emit_binary(const BinaryExpr& binary, const std::string& left, const std::string& right) {
-    if (is_arithmetic_operator(binary.op) && binary.operands != ArithmeticOperands::Other) {
+    if (!is_arithmetic_operator(binary.op)) {
+        return "(" + left + " " + cpp_operator(binary.op) + " " + right + ")";
+    }
+    if (int_operands(binary.operands)) {
         return total_int_helper(binary.op) + "(" + left + ", " + right + ")";
     }
-    return "(" + left + " " + cpp_operator(binary.op) + " " + right + ")";
+    const auto& lhs = binary.operands == ArithmeticOperands::IntFloat ? as_float(left) : left;
+    const auto& rhs = binary.operands == ArithmeticOperands::FloatInt ? as_float(right) : right;
+    return "(" + lhs + " " + cpp_operator(binary.op) + " " + rhs + ")";
 }
 
 std::string EnttCodegenUtils::emit_unary(const UnaryExpr& unary, const std::string& operand) {
@@ -293,7 +307,7 @@ std::string EnttCodegenUtils::emit_unary(const UnaryExpr& unary, const std::stri
         literal->value == "2147483648") {
         return "(-2147483647 - 1)";
     }
-    if (unary.op == "-" && literal == nullptr && unary.operands != ArithmeticOperands::Other) {
+    if (unary.op == "-" && literal == nullptr && int_operands(unary.operands)) {
         return "cactus::num::neg(" + operand + ")";
     }
     return cpp_operator(unary.op) + operand;
@@ -302,9 +316,12 @@ std::string EnttCodegenUtils::emit_unary(const UnaryExpr& unary, const std::stri
 std::string EnttCodegenUtils::emit_compound_assignment(const VarAssign& assign,
                                                        const std::string& target,
                                                        const std::string& value) {
-    if (assign.op != "=" && assign.operands != ArithmeticOperands::Other) {
+    if (assign.op != "=" && int_operands(assign.operands)) {
         return target + " = " + total_int_helper(std::string_view(assign.op).substr(0, 1)) + "(" + target + ", " +
                value + ")";
+    }
+    if (assign.op != "=" && assign.operands == ArithmeticOperands::FloatInt) {
+        return target + " " + assign.op + " " + as_float(value);
     }
     return target + " " + assign.op + " " + value;
 }
@@ -379,6 +396,9 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const ProgramNode*
                 }
                 if (e.resolved_const_id.has_value()) {
                     return symbol_cpp_name(*e.resolved_const_id);
+                }
+                if (e.resolved_asset_id.has_value()) {
+                    return e.resolved_asset_id->local_name;
                 }
                 if (e.resolved_phase_dt.has_value()) {
                     return phase_dt_cpp_name(*e.resolved_phase_dt);
@@ -556,6 +576,9 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const DecoratedPro
                 }
                 if (e.resolved_const_id.has_value()) {
                     return symbol_cpp_name(*e.resolved_const_id);
+                }
+                if (e.resolved_asset_id.has_value()) {
+                    return e.resolved_asset_id->local_name;
                 }
                 if (e.resolved_phase_dt.has_value()) {
                     return phase_dt_cpp_name(*e.resolved_phase_dt);

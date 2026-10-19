@@ -552,6 +552,16 @@ TEST_CASE("Parser: malformed foreach block reports errors", "[parser]") {
     CHECK(errors.has_errors());
 }
 
+TEST_CASE("Parser: a view element that starts at a synchronization point still terminates", "[parser]") {
+    auto errors = parse_expect_errors(
+        "view Panel():\n"
+        "    rule Inner:\n"
+        "        on tick:\n"
+        "            emit Thing\n"
+        "    view.target += 1\n");
+    CHECK(errors.has_errors());
+}
+
 TEST_CASE("Parser: event declaration", "[parser]") {
     auto prog = parse(
         "event Damage:\n"

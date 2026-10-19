@@ -782,9 +782,51 @@ SupportedFieldCounts count_supported_fields(const DecoratedProgram& program, con
     return counts;
 }
 
+// One capture function per trait with fields keeps each generated function
+// small however many traits a program persists.
+void emit_trait_capture(std::ostringstream& out, const DecoratedProgram& program, const PersistableTrait& trait) {
+    const auto counts = count_supported_fields(program, *trait.declaration);
+    out << "inline void generated_capture_trait_" << trait.cpp_name << "(const entt::registry& registry,\n";
+    out << "                                     entt::entity entity,\n";
+    out << "                                     DocumentIdMap& ids,\n";
+    out << "                                     cactus::persistence::EntityRecord& record) {\n";
+    out << "    (void)ids;\n";
+    out << "    const auto* live = registry.try_get<" << trait.cpp_name << ">(entity);\n";
+    out << "    if (live == nullptr) {\n";
+    out << "        return;\n";
+    out << "    }\n";
+    out << "    cactus::persistence::TraitRecord attached{.trait = \"" << trait.canonical << "\"};\n";
+    if (counts.construction > 0) {
+        out << "    attached.construction.reserve(" << counts.construction << ");\n";
+    }
+    if (counts.persisted > 0) {
+        out << "    attached.persisted.reserve(" << counts.persisted << ");\n";
+    }
+    out << "    if (const auto* built = registry.try_get<Construction<" << trait.cpp_name << ">>(entity)) {\n";
+    out << "        (void)built;\n";
+    for (const auto& field : trait.declaration->fields) {
+        if (!field.is_persist) {
+            emit_field_capture(out, program, field, "built->value.", "attached.construction", "        ");
+        }
+    }
+    out << "    }\n";
+    for (const auto& field : trait.declaration->fields) {
+        if (field.is_persist) {
+            emit_field_capture(out, program, field, "live->", "attached.persisted", "    ");
+        }
+    }
+    out << "    record.traits.push_back(std::move(attached));\n";
+    out << "}\n\n";
+}
+
 void emit_attached_traits(std::ostringstream& out,
                           const DecoratedProgram& program,
                           const std::vector<PersistableTrait>& traits) {
+    for (const auto& trait : traits) {
+        if (!trait.declaration->fields.empty()) {
+            emit_trait_capture(out, program, trait);
+        }
+    }
     out << "inline void generated_capture_traits(const entt::registry& registry,\n";
     out << "                                     entt::entity entity,\n";
     out << "                                     DocumentIdMap& ids,\n";
@@ -798,33 +840,7 @@ void emit_attached_traits(std::ostringstream& out,
                 << trait.canonical << "\"});\n";
             out << "        }\n";
         } else {
-            const auto counts = count_supported_fields(program, *trait.declaration);
-            out << "        if (const auto* live = registry.try_get<" << trait.cpp_name << ">(entity)) {\n";
-            out << "            (void)live;\n";
-            out << "            cactus::persistence::TraitRecord attached{.trait = \"" << trait.canonical << "\"};\n";
-            if (counts.construction > 0) {
-                out << "            attached.construction.reserve(" << counts.construction << ");\n";
-            }
-            if (counts.persisted > 0) {
-                out << "            attached.persisted.reserve(" << counts.persisted << ");\n";
-            }
-            out << "            if (const auto* built = registry.try_get<Construction<" << trait.cpp_name
-                << ">>(entity)) {\n";
-            out << "                (void)built;\n";
-            for (const auto& field : trait.declaration->fields) {
-                if (!field.is_persist) {
-                    emit_field_capture(out, program, field, "built->value.", "attached.construction",
-                                       "                ");
-                }
-            }
-            out << "            }\n";
-            for (const auto& field : trait.declaration->fields) {
-                if (field.is_persist) {
-                    emit_field_capture(out, program, field, "live->", "attached.persisted", "            ");
-                }
-            }
-            out << "            record.traits.push_back(std::move(attached));\n";
-            out << "        }\n";
+            out << "        generated_capture_trait_" << trait.cpp_name << "(registry, entity, ids, record);\n";
         }
         out << "    }\n";
     }

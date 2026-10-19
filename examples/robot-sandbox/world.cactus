@@ -1,0 +1,137 @@
+module world
+
+# The block world: one std.voxel.volume Volume whose cells get their material
+# from a seeded recipe when the volume creates them. A save keeps the cells
+# themselves, so loading never regenerates terrain.
+#
+# Generator version 1, for each cell (x, y, z) with seed s:
+#   surface(x, z) = 6 + round(9 * perlin2((x, z) / 24, s) + 3 * perlin2((x, z) / 9, s + 1))
+#   the bottom layer is protected stone bedrock;
+#   above the surface is air;
+#   below it, a cell is air inside a cave: perlin3((x, y, z) / 10, s + 2) > 0.42,
+#     at least 3 cells under the surface and above the layer over bedrock;
+#   the top layer is soil, the next two soil or stone, deeper cells stone,
+#   with iron where voronoi3((x, y, z) / 6, s + 3) is within 0.32 of a feature
+#   whose cell coordinates sum to a multiple of 4;
+#   around the spawn column a 3 x 3 x 3 pocket is air over a stone floor.
+
+use std.core
+use std.math as math
+use std.noise as noise
+use std.physics.volume as physics
+use std.voxel.volume as voxel
+use game
+
+pub asset WoodTexture: texture = "art/wood.png"
+pub asset StoneTexture: texture = "art/stone.png"
+pub asset IronTexture: texture = "art/iron.png"
+pub asset SoilTexture: texture = "art/soil.png"
+
+const:
+    GENERATOR_VERSION = 1
+    POCKET_HEIGHT = 3
+
+pub enum Ground:
+    Air
+    Soil
+    Stone
+    Iron
+
+# How big a world New Game makes. Entry modules declare one entity with it.
+pub trait WorldConfig:
+    var size_x: int = 64
+    var min_y: int = -16
+    var max_y: int = 31
+    var size_z: int = 64
+    var batch: int = 6144
+
+# The recipe of the current world, saved with it.
+pub trait Generation:
+    persist var seed: int = 7
+    persist var version: int = GENERATOR_VERSION
+    persist var min_y: int = -16
+    persist var max_y: int = 31
+    persist var spawn_x: int = 32
+    persist var spawn_z: int = 32
+    persist var spawn_floor: int = 6
+
+pub entity Generator:
+    Generation
+
+# A bedrock cell: never dug.
+pub trait Bedrock
+
+# The volume of the current world.
+pub template Terrain(size_x: int, min_y: int, max_y: int, size_z: int, batch: int):
+    voxel.Volume:
+        min_y = min_y
+        max_x = size_x - 1
+        max_y = max_y
+        max_z = size_z - 1
+        batch = batch
+    voxel.VolumeRenderer
+
+pub func surface_height(x: int, z: int, seed: int) int:
+    let p = vec2(x * 1.0, z * 1.0)
+    return 6 + math.round(9.0 * noise.perlin2(p / 24.0, seed) + 3.0 * noise.perlin2(p / 9.0, seed + 1))
+
+func near_spawn(x: int, z: int, spawn_x: int, spawn_z: int) bool:
+    return math.abs(1.0 * (x - spawn_x)) <= 1.0 and math.abs(1.0 * (z - spawn_z)) <= 1.0
+
+func in_pocket(x: int, y: int, z: int, spawn_x: int, spawn_z: int, floor: int) bool:
+    return near_spawn(x, z, spawn_x, spawn_z) and y > floor and y <= floor + POCKET_HEIGHT
+
+func quarter(sum: int) bool:
+    return sum % 4 == 0
+
+func is_iron(x: int, y: int, z: int, seed: int) bool:
+    let sample = noise.voronoi3(vec3(x * 1.0, y * 1.0, z * 1.0) / 6.0, seed + 3)
+    return sample.valid and sample.nearest < 0.32 and quarter(sample.x + sample.y + sample.z)
+
+# The generated ground at a cell, for a world with this recipe.
+pub func ground_at(x: int, y: int, z: int, seed: int, min_y: int, spawn_x: int, spawn_z: int, spawn_floor: int) Ground:
+    if y == min_y:
+        return Ground.Stone
+    if in_pocket(x, y, z, spawn_x, spawn_z, spawn_floor):
+        return Ground.Air
+    if near_spawn(x, z, spawn_x, spawn_z) and y == spawn_floor:
+        return Ground.Stone
+    let surface = surface_height(x, z, seed)
+    if y > surface:
+        return Ground.Air
+    let cave = noise.perlin3(vec3(x * 1.0, y * 1.0, z * 1.0) / 10.0, seed + 2) > 0.42
+    if cave and y < surface - 2 and y > min_y + 1:
+        return Ground.Air
+    if y == surface:
+        return Ground.Soil
+    if y >= surface - 2:
+        return if noise.perlin2(vec2(x * 1.0, z * 1.0) / 5.0, seed + 4) > 0.0: Ground.Soil else: Ground.Stone
+    if is_iron(x, y, z, seed):
+        return Ground.Iron
+    return Ground.Stone
+
+pub func material_texture(material: game.Material) texture_id:
+    return match material:
+        game.Material.Wood => WoodTexture
+        game.Material.Stone => StoneTexture
+        _ => IronTexture
+
+func ground_texture(ground: Ground) texture_id:
+    return match ground:
+        Ground.Soil => SoilTexture
+        Ground.Iron => IronTexture
+        _ => StoneTexture
+
+rule GenerateCell:
+    each:
+        voxel.Cell as cell
+
+    on added voxel.Cell:
+        let min_y = Generator[Generation].min_y
+        let ground = ground_at(cell.x, cell.y, cell.z, Generator[Generation].seed, min_y, Generator[Generation].spawn_x, Generator[Generation].spawn_z, Generator[Generation].spawn_floor)
+        if ground == Ground.Air:
+            return
+        cell.texture = ground_texture(ground)
+        add physics.Solid
+        if cell.y == min_y:
+            add Bedrock

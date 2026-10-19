@@ -298,8 +298,10 @@ enum class ColliderQueryKind : std::uint8_t { Sweep, Touching, PushOut };
 enum class SpatialJoinDimension : std::uint8_t { Flat2D, Volume3D };
 
 // Collider shapes come from the entity's own collider; a SweptCollider also
-// covers its motion over the sweep's delta.
-enum class SpatialShapeKind : std::uint8_t { Sphere, Box, Collider, SweptCollider };
+// covers its motion over the sweep's delta. A RaySegment is an origin, a
+// direction and a length; an AlignedBox an unrotated centre and size.
+// Serialized by numeric value: append new kinds, never reorder.
+enum class SpatialShapeKind : std::uint8_t { Sphere, Box, Collider, SweptCollider, RaySegment, AlignedBox };
 
 // Where the recognized query sits: a `where:` predicate or a `reduce:` aggregate.
 enum class SpatialJoinSource : std::uint8_t { Where, Reduce };
@@ -336,6 +338,27 @@ struct SpatialJoinPlan {
     SpatialJoinSource source             = SpatialJoinSource::Where;
 
     friend bool operator==(const SpatialJoinPlan&, const SpatialJoinPlan&) = default;
+};
+
+// One key of an equality join, as paths from `where_clause->predicates[predicate_index]`:
+// `member` is the indexed binding itself or one of its `let` fields of a type
+// compared by value, and `query` reads nothing of the indexed binding.
+struct EqualityJoinKey {
+    std::size_t predicate_index = 0;
+    ExprPath member;
+    ExprPath query;
+
+    friend bool operator==(const EqualityJoinKey&, const EqualityJoinKey&) = default;
+};
+
+// Set when a pair rule that reduces per one binding equates, inside the `and`
+// chains of its `where:` predicates, values the other binding's members never
+// change with values computed per group. Every key must hold for a row.
+struct EqualityJoinPlan {
+    std::size_t indexed_binding = 0;
+    std::vector<EqualityJoinKey> keys;
+
+    friend bool operator==(const EqualityJoinPlan&, const EqualityJoinPlan&) = default;
 };
 
 // Set when a rule declares `reduce:`: the handler runs once per group of the
@@ -415,6 +438,8 @@ struct HandlerContract {
     // Pair domain only: set when a recognized, SAP-eligible spatial predicate
     // was found in the rule's `where:` clause (spatial-broadphase-runtime).
     std::optional<SpatialJoinPlan> spatial_join;
+    // Pair domain only, and only without a spatial join.
+    std::optional<EqualityJoinPlan> equality_join;
     std::optional<ReductionPlan> reduction;
     RuleStaging staging;
 
@@ -780,6 +805,10 @@ struct DecoratedProgram {
     std::vector<InferredHandlerContract> handler_contracts;
     ExecutionGraph execution_graph;
     ReachabilityFacts reachability;  // set on the whole program, never stored in module artifacts
+    std::map<std::string, TypeKind> pub_assets;  // this module's pub assets and their handle types
+    // Codegen may keep pair-binding indexes across passes; tests turn it off to
+    // compare against the full product.
+    bool index_pair_joins = true;
     HierarchyFacts hierarchy;        // likewise
     ModulePersistenceMetadata persistence;
     std::vector<ResolvedSourceModule> source_modules;
@@ -861,6 +890,7 @@ struct ImportedSymbols {
     std::unordered_map<std::string, ImportedTemplate> template_symbols;  // pub templates with canonical identity
     std::unordered_map<std::string, ImportedEntity> entities;            // pub entities with their traits
     std::unordered_map<std::string, ResolvedConst> consts;               // every constant of the module
+    std::map<std::string, TypeKind> assets;                              // pub assets and their handle types
     std::unordered_map<std::string, GroupDeclaration> groups;            // every group; lookup honors is_pub
 };
 
@@ -1569,7 +1599,22 @@ private:
     // unaccelerated pair rule warning at the `pairs:` clause.
     [[nodiscard]] static std::optional<SpatialJoinPlan> recognize_spatial_join(const RuleNode& rule,
                                                                                const PairScope& pair_scope,
-                                                                               ErrorReporter& errors);
+                                                                               ErrorReporter& errors,
+                                                                               bool warn_unaccelerated = true);
+    // A reduced pair rule's equality join, when its `where:` has one.
+    [[nodiscard]] std::optional<EqualityJoinPlan> recognize_equality_join(const RuleNode& rule,
+                                                                          const PairScope& pair_scope) const;
+    [[nodiscard]] bool immutable_member_value(const ExprNode& expr,
+                                              std::size_t binding,
+                                              const std::string& binding_name,
+                                              const PairScope& pair_scope) const;
+    // The key one `==` conjunct gives the indexed binding, if either side is its let field.
+    [[nodiscard]] std::optional<EqualityJoinKey> equality_key(const BinaryExpr& equality,
+                                                              const ExprPath& conjunct,
+                                                              std::size_t predicate_index,
+                                                              std::size_t indexed_binding,
+                                                              const std::string& indexed_name,
+                                                              const PairScope& pair_scope) const;
 
     // A pair-binding trait path: its binding plus the trait identity and fields.
     struct SpatialJoinResolvedArg {
@@ -1637,6 +1682,7 @@ private:
     void validate_trait_default_values(ProgramNode& program);
     bool resolve_const_ident(IdentExpr& ident) const;
     bool resolve_const_member(MemberExpr& member, const std::unordered_set<std::string>& shadowed) const;
+    bool resolve_asset_member(MemberExpr& member, const SymbolId& asset) const;
     bool resolve_phase_dt(MemberExpr& member, const std::unordered_set<std::string>& shadowed) const;
     [[nodiscard]] bool phase_is_periodic(const SymbolId& phase) const;
     void resolve_declaration_const_refs(ProgramNode& program);

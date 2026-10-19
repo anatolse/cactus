@@ -1,0 +1,483 @@
+module hud
+
+# Menus and the in-game HUD, built from std.ui entities. Each panel names the
+# screen it belongs to and shows itself while the session is on that screen;
+# each button names the request it sends. The toolbar sits at the bottom with
+# the material palette, the dig/build switch and the layer controls; the clock
+# sits at the top right.
+
+use std.core
+use std.math as math
+use std.query as query
+use std.text as text
+use std.transform.volume as tv
+use std.camera.volume as camera
+use std.camera.viewport as viewport
+use std.ui as ui
+use std.pointer as pointer
+use game
+use world
+use editing
+use robot
+
+const:
+    MENU_BACKGROUND = #1C2230E6
+    BUTTON_COLOR = #3A4560FF
+    SELECTED_COLOR = #C08A2EFF
+    MENU_WIDTH = 240.0
+    BUTTON_HEIGHT = 34.0
+    TOOL_SIZE = 64.0
+    SWATCH_SIZE = 40.0
+    TITLE = "Robot Sandbox"
+    PAUSED = "Paused"
+    OPTIONS = "Options"
+    UNSAVED = "Unsaved changes"
+
+pub enum Screen:
+    StartMenu
+    PauseMenu
+    OptionsMenu
+    ConfirmMenu
+    Busy
+    Status
+    Clock
+    Toolbar
+    Preview
+    Crosshair
+
+pub enum Action:
+    NewGame
+    Load
+    Options
+    Exit
+    Continue
+    Save
+    OptionsBack
+    SensitivityDown
+    SensitivityUp
+    InvertY
+    PanDown
+    PanUp
+    SaveAndExit
+    ExitWithoutSaving
+    CancelExit
+    Wood
+    Stone
+    Iron
+    Dig
+    Build
+    LayerDown
+    LayerUp
+    HeightDown
+    HeightUp
+    Cutaway
+    SwitchView
+    Recover
+    SpeedDown
+    SpeedUp
+
+pub enum LabelKind:
+    Busy
+    Status
+    Clock
+    Layer
+    Height
+    Preview
+    Sensitivity
+    InvertY
+    PanSpeed
+
+pub trait OnScreen:
+    var screen: Screen
+
+pub trait ActionButton:
+    var action: Action
+
+pub trait Label:
+    var kind: LabelKind
+
+pub trait MenuView
+
+template Anchored(min: vec2, max: vec2, pivot: vec2, offset: vec2 = vec2(0.0, 0.0)):
+    ui.Node
+    ui.Anchors:
+        min = min
+        max = max
+        pivot = pivot
+        offset = offset
+
+template Panel(screen: Screen, axis: ui.Axis, min: vec2, max: vec2, pivot: vec2, offset: vec2 = vec2(0.0, 0.0)):
+    use Anchored(min = min, max = max, pivot = pivot, offset = offset)
+    ui.Panel:
+        background = MENU_BACKGROUND
+    ui.Stack:
+        axis = axis
+        gap = 8.0
+        align = ui.Align.Center
+        padding = vec2(16.0, 12.0)
+    OnScreen:
+        screen = screen
+
+template Menu(screen: Screen):
+    use Panel(screen = screen, axis = ui.Axis.Vertical, min = vec2(0.5, 0.5), max = vec2(0.5, 0.5), pivot = vec2(0.5, 0.5))
+    ui.Stack:
+        align = ui.Align.Stretch
+    ui.PreferredSize:
+        min_size = vec2(MENU_WIDTH, 0.0)
+
+template Heading(value: string):
+    ui.Node
+    ui.Text:
+        value = value
+        font_size = 24
+        align = ui.TextAlign.Center
+
+template LiveText(kind: LabelKind, size: int):
+    ui.Node
+    ui.Text:
+        font_size = size
+    Label:
+        kind = kind
+
+template ScreenText(screen: Screen, kind: LabelKind, size: int, min: vec2, pivot: vec2, offset: vec2):
+    use Anchored(min = min, max = min, pivot = pivot, offset = offset)
+    use LiveText(kind = kind, size = size)
+    ui.Text:
+        align = ui.TextAlign.Center
+    OnScreen:
+        screen = screen
+
+template Pressable(label: string, action: Action, width: float):
+    ui.Node
+    ui.Button:
+        label = label
+        normal_color = BUTTON_COLOR
+    ui.PreferredSize:
+        min_size = vec2(width, BUTTON_HEIGHT)
+    pointer.PointerTarget
+    pointer.PointerState
+    ActionButton:
+        action = action
+
+template MenuButton(label: string, action: Action):
+    use Pressable(label = label, action = action, width = MENU_WIDTH - 32.0)
+
+template ToolButton(label: string, action: Action):
+    use Pressable(label = label, action = action, width = TOOL_SIZE)
+
+template SmallButton(label: string, action: Action):
+    use Pressable(label = label, action = action, width = 30.0)
+
+template Swatch(texture: texture_id, label: string, action: Action):
+    ui.Node
+    ui.Stack:
+        axis = ui.Axis.Vertical
+        gap = 2.0
+        align = ui.Align.Center
+    children:
+        entity Picture:
+            ui.Node
+            ui.Image:
+                texture = texture
+                fit = ui.ImageFit.Stretch
+            ui.PreferredSize:
+                min_size = vec2(SWATCH_SIZE, SWATCH_SIZE)
+        entity Choose from ToolButton(label = label, action = action)
+
+template Row:
+    ui.Node
+    ui.Stack:
+        axis = ui.Axis.Horizontal
+        gap = 6.0
+        align = ui.Align.Center
+
+# A value with buttons that step it down and up.
+template Stepper(kind: LabelKind, down: Action, up: Action):
+    use Row()
+    children:
+        entity Less from SmallButton(label = "-", action = down)
+        entity Value from LiveText(kind = kind, size = 16)
+        entity More from SmallButton(label = "+", action = up)
+
+template StartMenu:
+    use Menu(screen = Screen.StartMenu)
+    children:
+        entity Title from Heading(value = TITLE)
+        entity NewGame from MenuButton(label = "New Game", action = Action.NewGame)
+        entity Load from MenuButton(label = "Load", action = Action.Load)
+        entity Options from MenuButton(label = "Options", action = Action.Options)
+        entity Exit from MenuButton(label = "Exit", action = Action.Exit)
+
+template PauseMenu:
+    use Menu(screen = Screen.PauseMenu)
+    children:
+        entity Title from Heading(value = PAUSED)
+        entity Continue from MenuButton(label = "Continue", action = Action.Continue)
+        entity Save from MenuButton(label = "Save", action = Action.Save)
+        entity Load from MenuButton(label = "Load", action = Action.Load)
+        entity Options from MenuButton(label = "Options", action = Action.Options)
+        entity Exit from MenuButton(label = "Exit", action = Action.Exit)
+
+template OptionsMenu:
+    use Menu(screen = Screen.OptionsMenu)
+    children:
+        entity Title from Heading(value = OPTIONS)
+        entity Sensitivity from Stepper(kind = LabelKind.Sensitivity, down = Action.SensitivityDown, up = Action.SensitivityUp)
+        entity Invert:
+            use Row()
+            children:
+                entity Toggle from SmallButton(label = "Y", action = Action.InvertY)
+                entity Value from LiveText(kind = LabelKind.InvertY, size = 16)
+        entity Pan from Stepper(kind = LabelKind.PanSpeed, down = Action.PanDown, up = Action.PanUp)
+        entity Back from MenuButton(label = "Back", action = Action.OptionsBack)
+
+template ConfirmMenu:
+    use Menu(screen = Screen.ConfirmMenu)
+    children:
+        entity Title from Heading(value = UNSAVED)
+        entity SaveAndExit from MenuButton(label = "Save and exit", action = Action.SaveAndExit)
+        entity Discard from MenuButton(label = "Exit without saving", action = Action.ExitWithoutSaving)
+        entity Cancel from MenuButton(label = "Cancel", action = Action.CancelExit)
+
+template ClockBar:
+    use Panel(screen = Screen.Clock, axis = ui.Axis.Horizontal, min = vec2(1.0, 0.0), max = vec2(1.0, 0.0), pivot = vec2(1.0, 0.0), offset = vec2(-12.0, 12.0))
+    children:
+        entity Time from LiveText(kind = LabelKind.Clock, size = 20)
+        entity Slower from SmallButton(label = "-", action = Action.SpeedDown)
+        entity Faster from SmallButton(label = "+", action = Action.SpeedUp)
+
+template Toolbar:
+    use Panel(screen = Screen.Toolbar, axis = ui.Axis.Horizontal, min = vec2(0.5, 1.0), max = vec2(0.5, 1.0), pivot = vec2(0.5, 1.0), offset = vec2(0.0, -10.0))
+    ui.Stack:
+        align = ui.Align.End
+    children:
+        entity Wood from Swatch(texture = world.WoodTexture, label = "Wood", action = Action.Wood)
+        entity Stone from Swatch(texture = world.StoneTexture, label = "Stone", action = Action.Stone)
+        entity Iron from Swatch(texture = world.IronTexture, label = "Iron", action = Action.Iron)
+        entity Dig from ToolButton(label = "Dig", action = Action.Dig)
+        entity Build from ToolButton(label = "Build", action = Action.Build)
+        entity Layer from Stepper(kind = LabelKind.Layer, down = Action.LayerDown, up = Action.LayerUp)
+        entity Height from Stepper(kind = LabelKind.Height, down = Action.HeightDown, up = Action.HeightUp)
+        entity Cut from ToolButton(label = "Cut", action = Action.Cutaway)
+        entity View from ToolButton(label = "View", action = Action.SwitchView)
+        entity Home from ToolButton(label = "Home", action = Action.Recover)
+
+pub template MenuCameraTemplate:
+    tv.WorldTransform
+    camera.Camera
+    viewport.Viewport:
+        clear_color = #10141EFF
+    MenuView
+
+pub template HudTemplate:
+    use Anchored(min = vec2(0.0, 0.0), max = vec2(1.0, 1.0), pivot = vec2(0.0, 0.0))
+    children:
+        entity Start from StartMenu()
+        entity Pause from PauseMenu()
+        entity Settings from OptionsMenu()
+        entity Confirm from ConfirmMenu()
+        entity Busy from ScreenText(screen = Screen.Busy, kind = LabelKind.Busy, size = 28, min = vec2(0.5, 0.35), pivot = vec2(0.5, 0.5), offset = vec2(0.0, 0.0))
+        entity Status from ScreenText(screen = Screen.Status, kind = LabelKind.Status, size = 18, min = vec2(0.0, 0.0), pivot = vec2(0.0, 0.0), offset = vec2(16.0, 12.0))
+        entity Clock from ClockBar()
+        entity Tools from Toolbar()
+        entity Preview from ScreenText(screen = Screen.Preview, kind = LabelKind.Preview, size = 18, min = vec2(0.5, 1.0), pivot = vec2(0.5, 1.0), offset = vec2(0.0, -110.0))
+        entity Crosshair:
+            use Anchored(min = vec2(0.5, 0.5), max = vec2(0.5, 0.5), pivot = vec2(0.5, 0.5))
+            ui.Text:
+                value = "+"
+                font_size = 28
+                align = ui.TextAlign.Center
+            OnScreen:
+                screen = Screen.Crosshair
+
+pub func shows(screen: Screen, mode: game.Mode, camera_view: game.View) bool:
+    let playing = mode == game.Mode.Playing
+    return match screen:
+        Screen.StartMenu => mode == game.Mode.Start
+        Screen.PauseMenu => mode == game.Mode.Paused
+        Screen.OptionsMenu => mode == game.Mode.Options
+        Screen.ConfirmMenu => mode == game.Mode.ConfirmExit
+        Screen.Busy => mode == game.Mode.Generating or mode == game.Mode.Saving or mode == game.Mode.Loading
+        Screen.Status => true
+        Screen.Clock => playing or mode == game.Mode.Paused
+        Screen.Toolbar => playing
+        Screen.Preview => playing and camera_view == game.View.Strategy
+        Screen.Crosshair => playing and camera_view == game.View.FirstPerson
+
+pub func selected(action: Action, material: game.Material, kind: game.EditKind, cutaway: bool) bool:
+    return match action:
+        Action.Wood => material == game.Material.Wood
+        Action.Stone => material == game.Material.Stone
+        Action.Iron => material == game.Material.Iron
+        Action.Dig => kind == game.EditKind.Dig
+        Action.Build => kind == game.EditKind.Build
+        Action.Cutaway => cutaway
+        _ => false
+
+# The menu camera draws the menus while no world view exists.
+rule ShowMenuCamera:
+    each:
+        MenuView
+        viewport.Viewport as vp
+    after:
+        robot.ShowFirstPerson
+        robot.ShowStrategy
+
+    on tick:
+        vp.active = not query.exists[robot.FirstPersonView]()
+
+rule ShowScreens:
+    each:
+        OnScreen as on_screen
+        ui.Node as node
+
+    on tick:
+        node.visible = shows(on_screen.screen, game.Game[game.Session].mode, game.Game[game.Session].camera)
+
+rule HighlightChoices:
+    each:
+        ActionButton as button
+        ui.Button as look
+
+    on tick:
+        look.normal_color = if selected(button.action, game.Game[game.Session].material, game.Game[game.Session].edit_kind, game.Game[game.Session].cutaway): SELECTED_COLOR else: BUTTON_COLOR
+
+rule DisableWhileBusy:
+    each:
+        ActionButton
+        ui.Node as node
+
+    on tick:
+        node.enabled = not game.Game[game.Session].busy
+
+rule PressButton:
+    each:
+        ActionButton as button
+
+    on pointer.Click:
+        match button.action:
+            Action.NewGame =>
+                emit game.NewGameRequested
+            Action.Load =>
+                emit game.LoadGameRequested
+            Action.Options =>
+                emit game.OptionsRequested
+            Action.Exit =>
+                emit game.ExitRequested
+            Action.Continue =>
+                emit game.ContinueRequested
+            Action.Save =>
+                emit game.SaveGameRequested
+            Action.OptionsBack =>
+                emit game.OptionsClosed
+            Action.SensitivityDown =>
+                emit game.OptionChanged:
+                    sensitivity_step = -1
+                    invert = false
+                    pan_step = 0
+            Action.SensitivityUp =>
+                emit game.OptionChanged:
+                    sensitivity_step = 1
+                    invert = false
+                    pan_step = 0
+            Action.InvertY =>
+                emit game.OptionChanged:
+                    sensitivity_step = 0
+                    invert = true
+                    pan_step = 0
+            Action.PanDown =>
+                emit game.OptionChanged:
+                    sensitivity_step = 0
+                    invert = false
+                    pan_step = -1
+            Action.PanUp =>
+                emit game.OptionChanged:
+                    sensitivity_step = 0
+                    invert = false
+                    pan_step = 1
+            Action.SaveAndExit =>
+                emit game.ExitConfirmed:
+                    save = true
+            Action.ExitWithoutSaving =>
+                emit game.ExitConfirmed:
+                    save = false
+            Action.CancelExit =>
+                emit game.ExitCancelled
+            Action.Wood =>
+                emit game.MaterialChosen:
+                    material = game.Material.Wood
+            Action.Stone =>
+                emit game.MaterialChosen:
+                    material = game.Material.Stone
+            Action.Iron =>
+                emit game.MaterialChosen:
+                    material = game.Material.Iron
+            Action.Dig =>
+                emit game.EditKindChosen:
+                    kind = game.EditKind.Dig
+            Action.Build =>
+                emit game.EditKindChosen:
+                    kind = game.EditKind.Build
+            Action.LayerDown =>
+                emit game.LayerStepRequested:
+                    step = -1
+            Action.LayerUp =>
+                emit game.LayerStepRequested:
+                    step = 1
+            Action.HeightDown =>
+                emit game.HeightStepRequested:
+                    step = -1
+            Action.HeightUp =>
+                emit game.HeightStepRequested:
+                    step = 1
+            Action.Cutaway =>
+                emit game.CutawayToggled
+            Action.SwitchView =>
+                emit game.ToggleViewRequested
+            Action.Recover =>
+                emit game.RecoverRequested
+            Action.SpeedDown =>
+                emit game.SpeedStepRequested:
+                    step = -1
+            Action.SpeedUp =>
+                emit game.SpeedStepRequested:
+                    step = 1
+
+func two_digits_minute(minute: float) int:
+    return math.floor(minute) % 60
+
+rule UpdateLabels:
+    each:
+        Label as label
+        ui.Text as shown
+
+    on tick:
+        let session_minute = game.Game[game.Session].minute
+        let hour = math.floor(session_minute / 60.0)
+        let minute = two_digits_minute(session_minute)
+        let speed = game.speed_value(game.Game[game.Session].speed)
+        match label.kind:
+            LabelKind.Busy =>
+                if game.Game[game.Session].mode == game.Mode.Generating:
+                    shown.value = text.format("Generating world {}%", math.round(game.Game[game.Session].progress * 100.0))
+                else:
+                    shown.value = game.Game[game.Session].status
+            LabelKind.Status =>
+                shown.value = game.Game[game.Session].status
+            LabelKind.Clock =>
+                if minute < 10:
+                    shown.value = text.format("Day {}  {}:0{}  {}x", game.Game[game.Session].day, hour, minute, speed)
+                else:
+                    shown.value = text.format("Day {}  {}:{}  {}x", game.Game[game.Session].day, hour, minute, speed)
+            LabelKind.Layer =>
+                shown.value = text.format("Layer {}", game.Game[game.Session].layer)
+            LabelKind.Height =>
+                shown.value = text.format("Depth {}", game.Game[game.Session].height)
+            LabelKind.Preview =>
+                shown.value = game.Game[game.Session].preview
+            LabelKind.Sensitivity =>
+                shown.value = text.format("Look {}", game.Game[game.Session].sensitivity)
+            LabelKind.InvertY =>
+                shown.value = if game.Game[game.Session].invert_y: "Invert Y: 1" else: "Invert Y: 0"
+            LabelKind.PanSpeed =>
+                shown.value = text.format("Pan {}", game.Game[game.Session].pan_speed)

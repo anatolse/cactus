@@ -1,0 +1,126 @@
+module game
+
+# Shared session state and requests. Every other module of the robot sandbox
+# reads the named Game entity and emits the requests below; the flow module
+# decides what each request does.
+
+use std.core
+
+const:
+    SAVE_SLOT = "robot-sandbox"
+    # Calendar speeds are indexed 0..5 (0x, 0.5x, 1x, 2x, 4x, 8x); 1x is the default.
+    DEFAULT_SPEED = 2
+    FASTEST_SPEED = 5
+
+pub enum Mode:
+    Start
+    Generating
+    Playing
+    Paused
+    Saving
+    Loading
+    Options
+    ConfirmExit
+
+pub enum View:
+    FirstPerson
+    Strategy
+
+pub enum Material:
+    Wood
+    Stone
+    Iron
+
+pub enum EditKind:
+    Dig
+    Build
+
+# The session. Fields marked persist travel with a save; the rest describe
+# this run only.
+# mode:          which screen owns input; only Playing simulates
+# return_mode:   the screen Options or a save or load returns to
+# busy:          a save or load is in progress, so menus ignore new requests
+# dirty:         the world changed since the last save or load
+# quit_after_save: a successful save ends the application
+# status:        the last message shown to the player
+pub trait Session:
+    var mode: Mode = Mode.Start
+    var busy: bool = false
+    var dirty: bool = false
+    var quit_after_save: bool = false
+    var next_request: int = 1
+    var status: string = ""
+    var status_time: float = 0.0
+    var preview: string = ""
+    var progress: float = 0.0
+    var settle: int = 0
+    var submit_in: int = 0
+    var return_mode: Mode = Mode.Start
+    var cursor_captured: bool = false
+    persist var next_seed: int = 7
+    persist var camera: View = View.FirstPerson
+    persist var material: Material = Material.Wood
+    persist var edit_kind: EditKind = EditKind.Dig
+    persist var layer: int = 0
+    persist var height: int = 1
+    persist var cutaway: bool = false
+    persist var sensitivity: float = 0.0025
+    persist var invert_y: bool = false
+    persist var pan_speed: float = 12.0
+    persist var day: int = 1
+    persist var minute: float = 480.0
+    persist var speed: int = DEFAULT_SPEED
+    persist var view_target: vec3 = vec3(32.0, 0.0, 32.0)
+    persist var view_zoom: float = 30.0
+
+pub entity Game:
+    Session
+
+# Requests from menus, buttons and keys.
+pub event NewGameRequested
+pub event ContinueRequested
+pub event PauseRequested
+pub event SaveGameRequested
+pub event LoadGameRequested
+pub event OptionsRequested
+pub event OptionsClosed
+pub event ExitRequested
+pub event ExitConfirmed:
+    save: bool
+pub event ExitCancelled
+pub event ToggleViewRequested
+pub event RecoverRequested
+pub event SpeedStepRequested:
+    step: int
+pub event MaterialChosen:
+    material: Material
+pub event EditKindChosen:
+    kind: EditKind
+pub event CutawayToggled
+
+pub event LayerStepRequested:
+    step: int
+pub event HeightStepRequested:
+    step: int
+pub event OptionChanged:
+    sensitivity_step: int
+    invert: bool
+    pan_step: int
+
+# Copy the live robot and camera state into saved fields, just before a save.
+pub event CheckpointRequested
+
+# A finished world: generation done or a save restored. Builds the robot's
+# views, the HUD and the sky.
+pub event WorldReady:
+    fresh: bool
+
+# Game minutes per real second at a speed index.
+pub func speed_value(index: int) float:
+    return match index:
+        0 => 0.0
+        1 => 0.5
+        3 => 2.0
+        4 => 4.0
+        5 => 8.0
+        _ => 1.0

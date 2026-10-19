@@ -1,0 +1,374 @@
+module editing
+
+# Digging and building. Each edit reaches a cell as an event, and the cell's
+# own traits decide whether it applies: DigCell only reaches solid cells that
+# are not bedrock, and BuildCell only reaches air cells, which also refuse to
+# fill space the robot stands in. First person edits the struck cell or the
+# cell in front of the struck face; the strategy view edits a dragged region
+# of the current layers.
+
+use std.core
+use std.input as inp
+use std.math as math
+use std.text as text
+use std.transform.volume as tv
+use std.physics.volume as physics
+use std.collision.volume as collision
+use std.camera.volume as camera
+use std.voxel.volume as voxel
+use std.debug as debug
+use std.ui as ui
+use game
+use world
+use robot
+
+const:
+    ROBOT_BOX = vec3(robot.ROBOT_RADIUS * 2.0, robot.ROBOT_HEIGHT, robot.ROBOT_RADIUS * 2.0)
+    DIG_COLOR = #FF5A4AFF
+    BUILD_COLOR = #6BE06BFF
+    BLOCKED_COLOR = #FFD34AFF
+    TARGET_COLOR = #FFFFFFFF
+    WOOD_NAME = "wood"
+    STONE_NAME = "stone"
+    IRON_NAME = "iron"
+
+input DigButton: button
+    mouse = inp.MouseButton.Left
+
+input PlaceButton: button
+    mouse = inp.MouseButton.Right
+
+input CancelKey: button
+    key = inp.Key.Escape
+
+# On the robot: edit requests and the strategy-view selection.
+# start_*/end_*: the dragged corners, in cell coordinates on the current layer
+# total/solid/bedrock/robot_*: what the selection covers now
+pub trait Editor:
+    var build_pending: bool = false
+    var target_x: int = 0
+    var target_y: int = 0
+    var target_z: int = 0
+    var dragging: bool = false
+    var start_x: int = 0
+    var start_z: int = 0
+    var end_x: int = 0
+    var end_z: int = 0
+    var total: int = 0
+    var solid: int = 0
+    var bedrock: int = 0
+    var robot_cells: int = 0
+    var robot_solid: int = 0
+
+event DigCell
+
+event BuildCell:
+    texture: texture_id
+    robot_center: vec3
+
+# A released selection.
+pub event RegionCommitted
+
+pub func material_name(material: game.Material) string:
+    return match material:
+        game.Material.Wood => WOOD_NAME
+        game.Material.Stone => STONE_NAME
+        _ => IRON_NAME
+
+# The selection's lowest layer: the height reaches down from the current layer.
+func bottom_layer(layer: int, height: int) int:
+    return layer - height + 1
+
+func low(a: int, b: int) int:
+    return if a < b: a else: b
+
+func span(a: int, b: int) int:
+    return if a < b: b - a + 1 else: a - b + 1
+
+pub func region_center(start_x: int, start_z: int, end_x: int, end_z: int, bottom: int, top: int) vec3:
+    return vec3(low(start_x, end_x) + span(start_x, end_x) * 0.5, bottom + (top - bottom + 1) * 0.5, low(start_z, end_z) + span(start_z, end_z) * 0.5)
+
+pub func region_size(start_x: int, start_z: int, end_x: int, end_z: int, bottom: int, top: int) vec3:
+    return vec3(span(start_x, end_x) * 1.0, (top - bottom + 1) * 1.0, span(start_z, end_z) * 1.0)
+
+# Cells a release would change: air cells clear of the robot when building,
+# solid cells above bedrock when digging.
+pub func eligible_cells(kind: game.EditKind, total: int, solid: int, bedrock: int, robot_cells: int, robot_solid: int) int:
+    if kind == game.EditKind.Dig:
+        return solid - bedrock
+    return total - solid - (robot_cells - robot_solid)
+
+rule Dig:
+    each:
+        voxel.Cell
+        physics.Solid
+    without:
+        world.Bedrock
+
+    on DigCell:
+        remove physics.Solid
+        game.Game[game.Session].dirty = true
+
+rule Build:
+    each:
+        voxel.Cell as cell
+        tv.WorldTransform as place
+        physics.BoxCollider as box
+    without:
+        physics.Solid
+
+    on BuildCell as request:
+        if collision.boxes_overlap(place.position, box.size, request.robot_center, ROBOT_BOX):
+            return
+        cell.texture = request.texture
+        add physics.Solid
+        game.Game[game.Session].dirty = true
+
+rule SingleEdits:
+    each:
+        Editor as editor
+        voxel.RayProbe as probe
+    after:
+        voxel.probes
+        ui.RoutePointer
+        robot.Look
+        robot.ViewKeys
+    when:
+        game.Game[game.Session].mode == game.Mode.Playing
+        game.Game[game.Session].camera == game.View.FirstPerson
+
+    on input:
+        if not probe.hit:
+            return
+        if input.pressed(DigButton):
+            emit DigCell to probe.cell
+        if input.pressed(PlaceButton) and probe.has_adjacent:
+            editor.build_pending = true
+            editor.target_x = probe.adjacent_x
+            editor.target_y = probe.adjacent_y
+            editor.target_z = probe.adjacent_z
+
+# The cell in front of the struck face, found in the same frame.
+rule PlaceBlock:
+    pairs:
+        editor:
+            Editor
+            tv.WorldTransform
+        cell:
+            voxel.Cell
+    after:
+        SingleEdits
+        robot.ViewKeys
+    where:
+        editor[Editor].build_pending and cell[voxel.Cell].x == editor[Editor].target_x and cell[voxel.Cell].y == editor[Editor].target_y and cell[voxel.Cell].z == editor[Editor].target_z
+    reduce per editor:
+        found = count()
+        target = best(cell, by = 0.0)
+
+    on input:
+        if editor[Editor].build_pending and found > 0:
+            emit BuildCell to target:
+                texture = world.material_texture(game.Game[game.Session].material)
+                robot_center = editor[tv.WorldTransform].position
+        editor[Editor].build_pending = false
+
+rule Select:
+    each:
+        Editor as editor
+    after:
+        ui.RoutePointer
+        robot.Look
+        robot.ViewKeys
+    when:
+        game.Game[game.Session].mode == game.Mode.Playing
+        game.Game[game.Session].camera == game.View.Strategy
+
+    on input:
+        if editor.dragging and input.pressed(CancelKey):
+            editor.dragging = false
+            inp.consume(CancelKey)
+            return
+        let hit = camera.screen_to_plane(inp.mouse_position(), vec3(0.0, game.Game[game.Session].layer + 1.0, 0.0), vec3(0.0, 1.0, 0.0))
+        if input.pressed(DigButton):
+            editor.dragging = true
+            editor.start_x = math.floor(hit.x)
+            editor.start_z = math.floor(hit.z)
+        if not editor.dragging:
+            return
+        editor.end_x = math.floor(hit.x)
+        editor.end_z = math.floor(hit.z)
+        if input.released(DigButton):
+            editor.dragging = false
+            emit RegionCommitted
+
+rule CountRegion:
+    pairs:
+        editor:
+            Editor
+            tv.WorldTransform
+        cell:
+            voxel.Cell
+            tv.WorldTransform
+            physics.BoxCollider
+    after:
+        Select
+    where:
+        editor[Editor].dragging
+        collision.boxes_overlap(region_center(editor[Editor].start_x, editor[Editor].start_z, editor[Editor].end_x, editor[Editor].end_z, bottom_layer(game.Game[game.Session].layer, game.Game[game.Session].height), game.Game[game.Session].layer), region_size(editor[Editor].start_x, editor[Editor].start_z, editor[Editor].end_x, editor[Editor].end_z, bottom_layer(game.Game[game.Session].layer, game.Game[game.Session].height), game.Game[game.Session].layer), cell[tv.WorldTransform].position, cell[physics.BoxCollider].size)
+    reduce per editor:
+        total = count()
+        robot_cells = sum(if collision.boxes_overlap(cell[tv.WorldTransform].position, cell[physics.BoxCollider].size, editor[tv.WorldTransform].position, ROBOT_BOX): 1 else: 0)
+
+    on input:
+        editor[Editor].total = total
+        editor[Editor].robot_cells = robot_cells
+
+rule CountSolidRegion:
+    pairs:
+        editor:
+            Editor
+            tv.WorldTransform
+        cell:
+            voxel.Cell
+            physics.Solid
+            tv.WorldTransform
+            physics.BoxCollider
+    after:
+        Select
+    where:
+        editor[Editor].dragging
+        collision.boxes_overlap(region_center(editor[Editor].start_x, editor[Editor].start_z, editor[Editor].end_x, editor[Editor].end_z, bottom_layer(game.Game[game.Session].layer, game.Game[game.Session].height), game.Game[game.Session].layer), region_size(editor[Editor].start_x, editor[Editor].start_z, editor[Editor].end_x, editor[Editor].end_z, bottom_layer(game.Game[game.Session].layer, game.Game[game.Session].height), game.Game[game.Session].layer), cell[tv.WorldTransform].position, cell[physics.BoxCollider].size)
+    reduce per editor:
+        solid = count()
+        robot_solid = sum(if collision.boxes_overlap(cell[tv.WorldTransform].position, cell[physics.BoxCollider].size, editor[tv.WorldTransform].position, ROBOT_BOX): 1 else: 0)
+
+    on input:
+        editor[Editor].solid = solid
+        editor[Editor].robot_solid = robot_solid
+
+rule CountBedrockRegion:
+    pairs:
+        editor:
+            Editor
+        cell:
+            voxel.Cell
+            world.Bedrock
+            tv.WorldTransform
+            physics.BoxCollider
+    after:
+        Select
+    where:
+        editor[Editor].dragging
+        collision.boxes_overlap(region_center(editor[Editor].start_x, editor[Editor].start_z, editor[Editor].end_x, editor[Editor].end_z, bottom_layer(game.Game[game.Session].layer, game.Game[game.Session].height), game.Game[game.Session].layer), region_size(editor[Editor].start_x, editor[Editor].start_z, editor[Editor].end_x, editor[Editor].end_z, bottom_layer(game.Game[game.Session].layer, game.Game[game.Session].height), game.Game[game.Session].layer), cell[tv.WorldTransform].position, cell[physics.BoxCollider].size)
+    reduce per editor:
+        bedrock = count()
+
+    on input:
+        editor[Editor].bedrock = bedrock
+
+# What a release would do, shown while dragging.
+rule DescribeSelection:
+    each:
+        Editor as editor
+    after:
+        CountRegion
+        CountSolidRegion
+        CountBedrockRegion
+    when:
+        game.Game[game.Session].camera == game.View.Strategy
+
+    on input:
+        if not editor.dragging:
+            game.Game[game.Session].preview = ""
+            return
+        let kind = game.Game[game.Session].edit_kind
+        let eligible = eligible_cells(kind, editor.total, editor.solid, editor.bedrock, editor.robot_cells, editor.robot_solid)
+        let skipped = editor.total - eligible
+        if kind == game.EditKind.Dig:
+            game.Game[game.Session].preview = text.format("Dig {} cells, layers {}..{}, {} skipped", eligible, bottom_layer(game.Game[game.Session].layer, game.Game[game.Session].height), game.Game[game.Session].layer, skipped)
+            return
+        game.Game[game.Session].preview = text.format("Build {} {} cells, layers {}..{}, {} skipped", eligible, material_name(game.Game[game.Session].material), bottom_layer(game.Game[game.Session].layer, game.Game[game.Session].height), game.Game[game.Session].layer, skipped)
+
+rule CommitRegion:
+    pairs:
+        editor:
+            Editor
+            tv.WorldTransform
+        cell:
+            voxel.Cell
+            tv.WorldTransform
+            physics.BoxCollider
+    where:
+        collision.boxes_overlap(region_center(editor[Editor].start_x, editor[Editor].start_z, editor[Editor].end_x, editor[Editor].end_z, bottom_layer(game.Game[game.Session].layer, game.Game[game.Session].height), game.Game[game.Session].layer), region_size(editor[Editor].start_x, editor[Editor].start_z, editor[Editor].end_x, editor[Editor].end_z, bottom_layer(game.Game[game.Session].layer, game.Game[game.Session].height), game.Game[game.Session].layer), cell[tv.WorldTransform].position, cell[physics.BoxCollider].size)
+
+    on RegionCommitted:
+        if game.Game[game.Session].edit_kind == game.EditKind.Dig:
+            emit DigCell to cell
+            return
+        emit BuildCell to cell:
+            texture = world.material_texture(game.Game[game.Session].material)
+            robot_center = editor[tv.WorldTransform].position
+
+rule ReportCommit:
+    each:
+        Editor as editor
+
+    on RegionCommitted:
+        let eligible = eligible_cells(game.Game[game.Session].edit_kind, editor.total, editor.solid, editor.bedrock, editor.robot_cells, editor.robot_solid)
+        game.Game[game.Session].status = text.format("Changed {} cells, skipped {}", eligible, editor.total - eligible)
+        game.Game[game.Session].status_time = 0.0
+        game.Game[game.Session].preview = ""
+
+# The spawn pocket opens again, over a stone floor, when the robot recovers.
+rule RepairPocket:
+    pairs:
+        recipe:
+            world.Generation
+        cell:
+            voxel.Cell
+            tv.WorldTransform
+            physics.BoxCollider
+    where:
+        collision.boxes_overlap(vec3(recipe[world.Generation].spawn_x + 0.5, recipe[world.Generation].spawn_floor + 2.0, recipe[world.Generation].spawn_z + 0.5), vec3(3.0, 3.0 + 2.0, 3.0), cell[tv.WorldTransform].position, cell[physics.BoxCollider].size)
+
+    on game.RecoverRequested:
+        if cell[voxel.Cell].y > recipe[world.Generation].spawn_floor:
+            emit DigCell to cell
+            return
+        emit BuildCell to cell:
+            texture = world.StoneTexture
+            robot_center = vec3(0.0, -1000.0, 0.0)
+
+rule DrawSelection:
+    each:
+        Editor as editor
+    after:
+        DrawTarget
+    when:
+        game.Game[game.Session].camera == game.View.Strategy
+
+    on render:
+        if not editor.dragging:
+            return
+        let kind = game.Game[game.Session].edit_kind
+        let eligible = eligible_cells(kind, editor.total, editor.solid, editor.bedrock, editor.robot_cells, editor.robot_solid)
+        let base = if kind == game.EditKind.Dig: DIG_COLOR else: BUILD_COLOR
+        emit debug.DrawDebugWireBox3D:
+            center = region_center(editor.start_x, editor.start_z, editor.end_x, editor.end_z, bottom_layer(game.Game[game.Session].layer, game.Game[game.Session].height), game.Game[game.Session].layer)
+            size = region_size(editor.start_x, editor.start_z, editor.end_x, editor.end_z, bottom_layer(game.Game[game.Session].layer, game.Game[game.Session].height), game.Game[game.Session].layer)
+            color = if eligible < editor.total: BLOCKED_COLOR else: base
+
+rule DrawTarget:
+    each:
+        voxel.RayProbe as probe
+    when:
+        game.Game[game.Session].mode == game.Mode.Playing
+        game.Game[game.Session].camera == game.View.FirstPerson
+
+    on render:
+        if not probe.hit:
+            return
+        emit debug.DrawDebugWireBox3D:
+            center = vec3(probe.x + 0.5, probe.y + 0.5, probe.z + 0.5)
+            size = vec3(1.02, 1.02, 1.02)
+            color = TARGET_COLOR

@@ -12,6 +12,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
+
 namespace {
 
 using CreationOrdinal = cactus::runtime::entt_backend::CreationOrdinal;
@@ -74,6 +76,7 @@ TEST_CASE("Standard UI render draws Panel/Image/Button/Text primitives in the st
             .value = "shown over button", .font_size = 12, .color = YELLOW, .align = std_ui__TextAlign::Center});
 
     standard_ui_layout_runtime__render_ui_tick(registry);
+    cactus::runtime::entt_backend::end_render_frame();
 
     const auto& log = cactus_raylib_fake::call_log();
     // background (Panel, red) -> button fill (green) -> text (Text wins over
@@ -120,6 +123,7 @@ TEST_CASE("Standard UI render paints in ComputedLayout draw_order, not creation 
     registry.emplace<std_ui__Panel>(second_created, std_ui__Panel{.background = BLUE});
 
     standard_ui_layout_runtime__render_ui_tick(registry);
+    cactus::runtime::entt_backend::end_render_frame();
 
     const auto& log = cactus_raylib_fake::call_log();
     CHECK(cactus_raylib_fake::occurs_before(
@@ -132,6 +136,34 @@ TEST_CASE("Standard UI render paints in ComputedLayout draw_order, not creation 
             const auto* rect = std::get_if<cactus_raylib_fake::RecordedDrawRectangleRec>(&c);
             return rect != nullptr && cactus_raylib_fake::colors_equal(rect->color, RED);
         }));
+}
+
+TEST_CASE("Standard UI paints once per frame, after every viewport", "[runtime][stdlib][ui][render]") {
+    cactus_raylib_fake::reset();
+
+    entt::registry registry;
+    cactus::runtime::entt_backend::generated_init_project(registry);
+    cactus::runtime::entt_backend::generated_load_project(registry);
+
+    const auto entity = create_node(registry);
+    registry.emplace<std_ui__ComputedLayout>(entity, make_layout(0));
+    registry.emplace<std_ui__Panel>(entity, std_ui__Panel{.background = RED});
+
+    cactus::runtime::entt_backend::begin_render_frame();
+    for (const auto viewport : {registry.create(), registry.create()}) {
+        cactus::runtime::entt_backend::set_active_viewport_entity(viewport);
+        standard_ui_layout_runtime__render_ui_tick(registry);
+    }
+    cactus::runtime::entt_backend::set_active_viewport_entity(entt::null);
+    CHECK(cactus_raylib_fake::call_log().empty());
+    cactus::runtime::entt_backend::end_render_frame();
+
+    const auto& log = cactus_raylib_fake::call_log();
+    const auto panels = std::ranges::count_if(log, [](const cactus_raylib_fake::RecordedCall& c) {
+        const auto* rect = std::get_if<cactus_raylib_fake::RecordedDrawRectangleRec>(&c);
+        return rect != nullptr && cactus_raylib_fake::colors_equal(rect->color, RED);
+    });
+    CHECK(panels == 1);
 }
 
 TEST_CASE("Standard UI render skips invisible and fully-clipped entities, and tints by effective opacity",
@@ -159,6 +191,7 @@ TEST_CASE("Standard UI render skips invisible and fully-clipped entities, and ti
                                     std_ui__Panel{.background = Color{.r = 10, .g = 20, .b = 30, .a = 255}});
 
     standard_ui_layout_runtime__render_ui_tick(registry);
+    cactus::runtime::entt_backend::end_render_frame();
 
     const auto& log = cactus_raylib_fake::call_log();
     CHECK(cactus_raylib_fake::find_call<cactus_raylib_fake::RecordedDrawRectangleRec>(
@@ -200,6 +233,7 @@ TEST_CASE("Standard UI render slices FrameAnimation frames from a resolved textu
         entity, std_ui__FrameAnimation{.frame_count = 4, .fps = 0.0F, .frame = 2, .elapsed = 0.0F, .playing = false});
 
     standard_ui_layout_runtime__render_ui_tick(registry);
+    cactus::runtime::entt_backend::end_render_frame();
 
     const auto& log  = cactus_raylib_fake::call_log();
     const auto* draw = cactus_raylib_fake::find_call<cactus_raylib_fake::RecordedDrawTexturePro>(log);
@@ -242,6 +276,7 @@ TEST_CASE("Standard UI Button presentation follows disabled > pressed > hovered 
                                                     std_pointer__PointerState{.hovered = hovered, .pressed = pressed});
 
         standard_ui_layout_runtime__render_ui_tick(registry);
+        cactus::runtime::entt_backend::end_render_frame();
 
         const auto* draw =
             cactus_raylib_fake::find_call<cactus_raylib_fake::RecordedDrawRectangleRec>(cactus_raylib_fake::call_log());
@@ -268,6 +303,7 @@ TEST_CASE("Standard UI RenderUi coexists with the legacy DrawScreenRect compatib
     registry.emplace<std_ui__Panel>(entity, std_ui__Panel{.background = RED});
 
     standard_ui_layout_runtime__render_ui_tick(registry);
+    cactus::runtime::entt_backend::end_render_frame();
 
     const std_ui__DrawScreenRectEvent legacy_event{.position  = {.x = 100.0F, .y = 100.0F},
                                                    .size      = {.x = 30.0F, .y = 30.0F},

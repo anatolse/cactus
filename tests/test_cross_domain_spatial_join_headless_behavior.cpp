@@ -73,15 +73,18 @@ const Recorder& recorder(entt::registry& registry) {
 
 }  // namespace
 
-TEST_CASE("Accelerated rules are compiled to the bipartite broad phase", "[runtime][codegen-entt][spatial-join]") {
+TEST_CASE("Accelerated rules are compiled to a broad phase or a persistent index",
+          "[runtime][codegen-entt][spatial-join]") {
     std::ifstream generated(CACTUS_HEADLESS_GENERATED_CPP);
     const std::string code{std::istreambuf_iterator<char>(generated), std::istreambuf_iterator<char>()};
-    std::size_t broad_phases = 0;
-    for (auto at = code.find("SapBroadPhase3D __sap;"); at != std::string::npos;
-         at      = code.find("SapBroadPhase3D __sap;", at + 1)) {
-        ++broad_phases;
-    }
-    CHECK(broad_phases == 2);
+    const auto occurrences = [&code](const std::string& needle) {
+        std::size_t count = 0;
+        for (auto at = code.find(needle); at != std::string::npos; at = code.find(needle, at + 1)) {
+            ++count;
+        }
+        return count;
+    };
+    CHECK(occurrences("SapBroadPhase3D __sap;") + occurrences(".candidates(") == 2);
 }
 
 TEST_CASE("A cross-domain sphere-box pass executes the same tuples as the unaccelerated pass",

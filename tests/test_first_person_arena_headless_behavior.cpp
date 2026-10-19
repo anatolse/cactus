@@ -580,6 +580,12 @@ entt::entity fire_bullet(entt::registry& registry) {
     return *bullets.begin();
 }
 
+// A host that writes trait fields itself, as these tests do, tells the runtime
+// so its persistent pair indexes see the new values.
+void moved_by_host() {
+    cactus::runtime::entt_backend::advance_binding_index_epoch();
+}
+
 // An enemy without a CharacterBody doesn't move, so it stays where a test puts it.
 entt::entity still_enemy(entt::registry& registry) {
     const auto enemy = isolate_single_enemy(registry);
@@ -629,12 +635,14 @@ TEST_CASE("first-person arena headless: a dying enemy can't catch the player",
     const auto bullet      = fire_bullet(registry);
     const auto bullet_from = registry.get<std_transform_volume__WorldTransform>(bullet).position;
     enemy_transform.position = Vector3{.x = bullet_from.x, .y = 0.9F, .z = bullet_from.z - 3.0F};
+    moved_by_host();
     for (int frame = 0; frame < 20 && !registry.all_of<main__EnemyLife__Dying>(enemy); ++frame) {
         cactus_headless_test::drive_frame(registry, kFrameDt);
     }
     REQUIRE(registry.all_of<main__EnemyLife__Dying>(enemy));
 
     enemy_transform.position = registry.get<std_transform_volume__WorldTransform>(player).position;
+    moved_by_host();
     drive_frames(registry, 20);
     CHECK_FALSE(registry.all_of<main__Caught>(player));
     CHECK_FALSE(match_state(registry).over);
@@ -651,6 +659,7 @@ TEST_CASE("first-person arena headless: a dying enemy hit again keeps its death 
     const auto bullet_from = registry.get<std_transform_volume__WorldTransform>(bullet).position;
     registry.get<std_transform_volume__WorldTransform>(enemy).position =
         Vector3{.x = bullet_from.x, .y = 0.9F, .z = bullet_from.z - 3.0F};
+    moved_by_host();
     for (int frame = 0; frame < 20 && !registry.all_of<main__EnemyLife__Dying>(enemy); ++frame) {
         cactus_headless_test::drive_frame(registry, kFrameDt);
     }
@@ -688,6 +697,7 @@ TEST_CASE("first-person arena headless: bullets hit an enemy's body, not its hur
     const auto bullet_from = registry.get<std_transform_volume__WorldTransform>(bullet).position;
     // Past the body's reach but inside the hurtbox's.
     enemy_transform.position = Vector3{.x = bullet_from.x + 0.52F, .y = 0.9F, .z = bullet_from.z - 2.0F};
+    moved_by_host();
     drive_frames(registry, 12);
     CHECK_FALSE(registry.all_of<main__EnemyLife__Dying>(enemy));
     REQUIRE(registry.valid(bullet));

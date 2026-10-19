@@ -15,17 +15,26 @@ pub group models:
     after:
         meshes
 
+# Block volumes and other generated surfaces.
+pub group volumes:
+    phase: core.render
+    after:
+        meshes
+        models
+
 pub group shapes:
     phase: core.render
     after:
         meshes
         models
+        volumes
 
 pub group sprites:
     phase: core.render
     after:
         meshes
         models
+        volumes
         shapes
 
 pub group text:
@@ -33,6 +42,7 @@ pub group text:
     after:
         meshes
         models
+        volumes
         shapes
         sprites
 
@@ -41,6 +51,7 @@ pub group ui:
     after:
         meshes
         models
+        volumes
         shapes
         sprites
         text
@@ -50,6 +61,7 @@ pub group editor:
     after:
         meshes
         models
+        volumes
         shapes
         sprites
         text

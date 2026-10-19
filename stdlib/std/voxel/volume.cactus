@@ -1,0 +1,311 @@
+module std.voxel.volume
+
+use std.core as core
+use std.math as math
+use std.math.vec3 as v3
+use std.transform.volume as tv
+use std.physics.volume as physics
+use std.collision.volume as collision
+use std.render.layers as layers
+
+# ── Editable block volumes ───────────────────────────────────────────────────
+# A Volume is a fixed, axis-aligned grid of cubic cells. Every cell is an
+# ordinary entity with Cell, a WorldTransform at its centre and a box collider.
+# physics.Solid on a cell means filled; a cell without it is air. Digging
+# removes Solid, building sets Cell.texture and adds Solid. Saves record each
+# cell, its texture and its Solid membership.
+#
+# The volume creates its own cells, `batch` per tick in linear order (z
+# fastest, then y, then x), so a large volume fills over several frames and
+# `cells_built` reports progress. React to `on added Cell` to choose each new
+# cell's material. Cells, transforms and the volume's geometry never change
+# after construction.
+#
+# A volume needs a finite origin, a positive finite cell size, max >= min on
+# every axis, and fewer than 2^24 cells. An invalid volume creates no cells and
+# reports why in `issue`.
+
+const:
+    MAX_CELLS = 16777216.0
+
+# Why a volume creates no cells.
+pub enum VolumeIssue:
+    Valid
+    OriginNotFinite
+    BadCellSize
+    EmptyBounds
+    TooManyCells
+
+# origin:      world position of the minimum corner of cell (0, 0, 0)
+# cell_size:   edge length of every cell, in world units
+# min_*/max_*: inclusive integer cell bounds
+# batch:       cells created per tick while the volume fills
+# cells_built: cells created so far
+# issue:       why the volume is invalid, or Valid
+# duplicate_found: a CellProbe met two live cells with one coordinate
+pub trait Volume:
+    persist var origin: vec3 = vec3(0.0, 0.0, 0.0)
+    persist var cell_size: float = 1.0
+    persist var min_x: int = 0
+    persist var min_y: int = 0
+    persist var min_z: int = 0
+    persist var max_x: int = 0
+    persist var max_y: int = 0
+    persist var max_z: int = 0
+    persist var cells_built: int = 0
+    var batch: int = 4096
+    var issue: VolumeIssue = VolumeIssue.Valid
+    var duplicate_found: bool = false
+
+# One cell of `volume` at integer coordinate (x, y, z). texture is drawn on
+# its exposed faces while it is Solid.
+pub trait Cell:
+    let volume: entity_id
+    let x: int
+    let y: int
+    let z: int
+    persist var texture: texture_id
+
+# A unit cell of a volume; the volume spawns these itself.
+pub template CellTemplate(volume: entity_id, x: int, y: int, z: int, center: vec3, size: float):
+    Cell:
+        volume = volume
+        x = x
+        y = y
+        z = z
+    tv.WorldTransform:
+        position = center
+    physics.Collider
+    physics.BoxCollider:
+        size = vec3(size, size, size)
+
+func extent(lo: int, hi: int) int:
+    return hi - lo + 1
+
+# In float, so bounds far apart cannot wrap around.
+func float_extent(lo: int, hi: int) float:
+    return 1.0 * hi - lo + 1.0
+
+func finite(v: float) bool:
+    return v - v == 0.0
+
+# Why a volume with this configuration creates no cells, or Valid.
+pub func volume_issue(origin: vec3, cell_size: float, min_x: int, min_y: int, min_z: int, max_x: int, max_y: int, max_z: int) VolumeIssue:
+    if not finite(origin.x) or not finite(origin.y) or not finite(origin.z):
+        return VolumeIssue.OriginNotFinite
+    if not (cell_size > 0.0) or not finite(cell_size):
+        return VolumeIssue.BadCellSize
+    if max_x < min_x or max_y < min_y or max_z < min_z:
+        return VolumeIssue.EmptyBounds
+    let cells = float_extent(min_x, max_x) * float_extent(min_y, max_y) * float_extent(min_z, max_z)
+    if cells >= MAX_CELLS:
+        return VolumeIssue.TooManyCells
+    return VolumeIssue.Valid
+
+# World centre of cell (x, y, z) of a volume with this origin and cell size.
+pub func cell_center(origin: vec3, cell_size: float, x: int, y: int, z: int) vec3:
+    return origin + vec3(x + 0.5, y + 0.5, z + 0.5) * cell_size
+
+pub group fill:
+    phase: core.tick
+
+rule CheckVolume:
+    each:
+        Volume as v
+
+    on added Volume:
+        v.issue = volume_issue(v.origin, v.cell_size, v.min_x, v.min_y, v.min_z, v.max_x, v.max_y, v.max_z)
+
+rule FillVolume:
+    each:
+        Volume as v
+    group: fill
+    where:
+        v.issue == VolumeIssue.Valid
+
+    on core.tick:
+        let size_y = extent(v.min_y, v.max_y)
+        let size_z = extent(v.min_z, v.max_z)
+        let total = extent(v.min_x, v.max_x) * size_y * size_z
+        if v.cells_built >= total:
+            return
+        let step = if v.batch > 0: v.batch else: 1
+        let end = if total - v.cells_built < step: total else: v.cells_built + step
+        for i in range(v.cells_built, end):
+            let x = v.min_x + i / (size_y * size_z)
+            let y = v.min_y + (i / size_z) % size_y
+            let z = v.min_z + i % size_z
+            spawn CellTemplate(volume = self, x = x, y = y, z = z, center = cell_center(v.origin, v.cell_size, x, y, z), size = v.cell_size)
+        v.cells_built = end
+
+# ── Probes ───────────────────────────────────────────────────────────────────
+# Probes answer "which cell is at this coordinate" and "which solid cell does
+# this ray hit first" with ordinary pair rules in the input phase. A rule that
+# writes a probe's inputs runs before them; a rule that reads the results runs
+# after them. Results describe the cells committed before this input pass: an
+# edit made from a result shows up in the next input pass.
+
+pub group probes:
+    phase: core.input
+
+# Finds the cell of `volume` at (x, y, z), solid or air. found is false and
+# cell is a stale handle when there is none, or the probe is disabled. With
+# duplicate cells the earliest-created one wins, and the volume is told.
+pub trait CellProbe:
+    var volume: entity_id
+    var enabled: bool = true
+    var x: int = 0
+    var y: int = 0
+    var z: int = 0
+    var found: bool = false
+    var cell: entity_id
+
+# Casts a ray against the solid cells of `volume`. On a hit, cell/x/y/z name
+# the struck cell, point lies on its surface, normal is the outward face
+# normal, and adjacent_* is the neighbouring coordinate across that face, the
+# place to build. A ray that starts inside a solid cell hits it at distance 0
+# with zero normal and has_adjacent = false. A miss, a disabled probe, an
+# invalid ray or a nonpositive max_distance give hit = false.
+pub trait RayProbe:
+    var volume: entity_id
+    var enabled: bool = true
+    var origin: vec3 = vec3(0.0, 0.0, 0.0)
+    var direction: vec3 = vec3(0.0, 0.0, -1.0)
+    var max_distance: float = 6.0
+    var hit: bool = false
+    var cell: entity_id
+    var x: int = 0
+    var y: int = 0
+    var z: int = 0
+    var distance: float = 0.0
+    var point: vec3 = vec3(0.0, 0.0, 0.0)
+    var normal: vec3 = vec3(0.0, 0.0, 0.0)
+    var has_adjacent: bool = false
+    var adjacent_x: int = 0
+    var adjacent_y: int = 0
+    var adjacent_z: int = 0
+
+# A CellProbe met more than one live cell at a coordinate.
+event DuplicateCell
+
+rule ResolveCellProbes:
+    pairs:
+        probe:
+            CellProbe
+        cell:
+            Cell
+    group: probes
+    where:
+        probe[CellProbe].enabled and cell[Cell].volume == probe[CellProbe].volume and cell[Cell].x == probe[CellProbe].x and cell[Cell].y == probe[CellProbe].y and cell[Cell].z == probe[CellProbe].z
+    reduce per probe:
+        matches = count()
+        earliest = best(cell, by = 0.0)
+
+    on core.input:
+        probe[CellProbe].found = matches > 0
+        probe[CellProbe].cell = earliest
+        if matches > 1:
+            emit DuplicateCell to probe[CellProbe].volume
+
+rule ReportDuplicateCell:
+    each:
+        Volume as v
+
+    on DuplicateCell:
+        v.duplicate_found = true
+
+# A ray hit on one cell as a sweep result, so first_hit keeps the nearest.
+func ray_cell_hit(cell: entity_id, ray: collision.RayHit, max_distance: float) physics.SweepHit:
+    return physics.SweepHit(
+        hit = ray.hit,
+        other = cell,
+        t = if ray.hit: ray.distance / max_distance else: 1.0,
+        point = ray.point,
+        normal = ray.normal,
+        surface = ray.normal,
+    )
+
+rule ResolveRayProbes:
+    pairs:
+        probe:
+            RayProbe
+        cell:
+            Cell
+            physics.Solid
+            tv.WorldTransform
+            physics.BoxCollider
+    group: probes
+    where:
+        probe[RayProbe].enabled and cell[Cell].volume == probe[RayProbe].volume
+        collision.ray_hits_box(probe[RayProbe].origin, probe[RayProbe].direction, probe[RayProbe].max_distance, cell[tv.WorldTransform].position, cell[physics.BoxCollider].size)
+    reduce per probe:
+        nearest = first_hit(ray_cell_hit(cell, collision.ray_box(probe[RayProbe].origin, probe[RayProbe].direction, probe[RayProbe].max_distance, cell[tv.WorldTransform].position, cell[physics.BoxCollider].size), probe[RayProbe].max_distance))
+
+    on core.input:
+        probe[RayProbe].hit = nearest.hit
+        probe[RayProbe].cell = nearest.other
+        probe[RayProbe].distance = nearest.t * probe[RayProbe].max_distance
+        probe[RayProbe].point = nearest.point
+        probe[RayProbe].normal = nearest.normal
+        probe[RayProbe].has_adjacent = nearest.hit and v3.length(nearest.normal) > 0.0
+        if not nearest.hit:
+            probe[RayProbe].distance = 0.0
+
+# Copies the struck cell's coordinates into its probe, or zeros on a miss.
+# Runs inside `probes`, so a consumer after the group sees them in the same
+# pass. At most one cell matches, so each max is that cell's value.
+rule LocateRayCell:
+    pairs:
+        probe:
+            RayProbe
+        cell:
+            Cell
+    group: probes
+    after:
+        ResolveRayProbes
+    where:
+        cell == probe[RayProbe].cell
+    reduce per probe:
+        x = max(cell[Cell].x, default = 0)
+        y = max(cell[Cell].y, default = 0)
+        z = max(cell[Cell].z, default = 0)
+
+    on core.input:
+        probe[RayProbe].x = x
+        probe[RayProbe].y = y
+        probe[RayProbe].z = z
+        probe[RayProbe].adjacent_x = x + math.round(probe[RayProbe].normal.x)
+        probe[RayProbe].adjacent_y = y + math.round(probe[RayProbe].normal.y)
+        probe[RayProbe].adjacent_z = z + math.round(probe[RayProbe].normal.z)
+
+# ── Rendering ────────────────────────────────────────────────────────────────
+# A volume with VolumeRenderer draws the exposed faces of its solid cells, each
+# with its cell's texture repeated once per cell face, under the scene's lights.
+# The renderer follows committed Solid changes and texture writes by itself and
+# rebuilds only the parts of the surface that changed.
+pub trait VolumeRenderer:
+    var visible: bool = true
+
+# On a camera's viewport entity: that camera hides the cells of `volume` above
+# layer `top` and shows the cut surface. Collision, probes and saves still see
+# every cell, and other cameras show the whole volume.
+pub trait Cutaway:
+    var volume: entity_id
+    var enabled: bool = true
+    var top: int = 0
+
+extern rule RenderVolumes:
+    each:
+        Volume
+        VolumeRenderer
+    group: layers.volumes
+
+    on core.render:
+        reads:
+            Volume
+            VolumeRenderer
+            Cell
+            physics.Solid
+            Cutaway
+        effects:
+            graphics

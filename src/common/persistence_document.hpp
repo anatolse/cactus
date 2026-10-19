@@ -161,6 +161,8 @@ struct EntityRecord {
 // mechanism exists yet for authors to raise or lower them.
 inline constexpr std::size_t kMaxPersistenceCollectionSize = 4096;
 inline constexpr std::size_t kMaxPersistenceNestingDepth   = 32;
+// A whole world's entity records; large enough for every cell of a big voxel world.
+inline constexpr std::size_t kMaxPersistenceEntityCount = std::size_t{1} << 22;
 
 struct Snapshot {
     std::uint32_t schema_revision     = kPersistenceSchemaRevision;

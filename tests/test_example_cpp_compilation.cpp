@@ -159,6 +159,13 @@ std::vector<ExampleCase> curated_examples() {
             .compile_target = CACTUS_EXAMPLE_FIRST_PERSON_ARENA_TARGET,
         },
         ExampleCase{
+            .name           = "robot-sandbox",
+            .source_file    = repo_root() / CACTUS_EXAMPLE_ROBOT_SANDBOX_SOURCE,
+            .backend        = "cpp-entt",
+            .generated_cpp  = {CACTUS_EXAMPLE_ROBOT_SANDBOX_GENERATED_CPP},
+            .compile_target = CACTUS_EXAMPLE_ROBOT_SANDBOX_TARGET,
+        },
+        ExampleCase{
             .name           = "pair-contact",
             .source_file    = repo_root() / CACTUS_EXAMPLE_PAIR_CONTACT_SOURCE,
             .backend        = "cpp-entt",

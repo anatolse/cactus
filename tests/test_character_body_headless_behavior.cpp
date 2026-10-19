@@ -309,6 +309,16 @@ TEST_CASE("a step taller than step_height blocks the body", "[runtime][codegen-e
     CHECK(world.body(stepper).grounded);
 }
 
+TEST_CASE("a body pressed against a tall block jumps onto it instead of hanging on its edge",
+          "[runtime][codegen-entt][stdlib-character-body]") {
+    World world;
+    const auto jumper = slots().character_body__EdgeJumper;
+    world.tick(120);
+    CHECK(world.position(jumper).y == near(1.8F, 1e-3));
+    CHECK(world.position(jumper).x > 420.35F);
+    CHECK(world.body(jumper).grounded);
+}
+
 TEST_CASE("a grounded body walks down stairs without falling", "[runtime][codegen-entt][stdlib-character-body]") {
     World world;
     const auto walker = slots().character_body__StairWalker;
@@ -402,6 +412,86 @@ TEST_CASE("a non-body pose root's subtree waits for late_tick", "[runtime][codeg
     CHECK(world.seen(load).x == near(441.0F, 1e-5));
     CHECK(world.position(load).x == near(442.0F, 1e-5));
     CHECK(world.position(load).y == near(21.0F, 1e-5));
+}
+
+// ── Pausing ─────────────────────────────────────────────────────────────────
+
+namespace {
+
+void check_same_body(const Body& now, const Body& before) {
+    CHECK(now.velocity.x == before.velocity.x);
+    CHECK(now.velocity.y == before.velocity.y);
+    CHECK(now.velocity.z == before.velocity.z);
+    CHECK(now.grounded == before.grounded);
+    CHECK(now.ground_normal.y == before.ground_normal.y);
+    CHECK(now.time_since_grounded == before.time_since_grounded);
+    CHECK(now.motion.x == before.motion.x);
+    CHECK(now.lift == before.lift);
+    CHECK(now.drop == before.drop);
+    CHECK(now.ground_offset == before.ground_offset);
+}
+
+void check_same_position(const Vector3& now, const Vector3& before) {
+    CHECK(now.x == before.x);
+    CHECK(now.y == before.y);
+    CHECK(now.z == before.z);
+}
+
+}  // namespace
+
+TEST_CASE("a paused body in midair keeps its pose and solver state", "[runtime][codegen-entt][stdlib-character-body]") {
+    World world;
+    const auto faller        = slots().character_body__PausedFaller;
+    const Body before        = world.body(faller);
+    const Vector3 at         = world.position(faller);
+    world.tick(10);
+    check_same_body(world.body(faller), before);
+    check_same_position(world.position(faller), at);
+    CHECK(world.body(faller).velocity.y == near(-3.0F, 1e-6));
+}
+
+TEST_CASE("a paused grounded body keeps its grounding and scratch fields", "[runtime][codegen-entt][stdlib-character-body]") {
+    World world;
+    const auto stander = slots().character_body__PausedStander;
+    const Body before  = world.body(stander);
+    const Vector3 at   = world.position(stander);
+    world.tick(5);
+    check_same_body(world.body(stander), before);
+    check_same_position(world.position(stander), at);
+    CHECK(world.body(stander).grounded);
+}
+
+TEST_CASE("a resumed body continues from its retained velocity without catch-up",
+          "[runtime][codegen-entt][stdlib-character-body]") {
+    World world;
+    const auto faller = slots().character_body__PausedFaller;
+    world.tick(30);
+    world.body(faller).paused = false;
+    world.tick();
+    const float velocity = -3.0F - (9.81F * kDt);
+    CHECK(world.body(faller).velocity.y == near(velocity, 1e-5));
+    CHECK(world.position(faller).y == near(8.0F + (velocity * kDt), 1e-5));
+}
+
+TEST_CASE("an active body takes the whole correction from a paused body", "[runtime][codegen-entt][stdlib-character-body]") {
+    World world;
+    const auto active  = slots().character_body__ActivePusher;
+    const auto blocker = slots().character_body__PausedBlocker;
+    const Vector3 blocker_at = world.position(blocker);
+    world.tick();
+    CHECK(world.position(active).x == near(39.8F, 1e-3));
+    check_same_position(world.position(blocker), blocker_at);
+    CHECK(world.gap(active, blocker) > -1e-3F);
+}
+
+TEST_CASE("two paused bodies stay overlapped until resumed", "[runtime][codegen-entt][stdlib-character-body]") {
+    World world;
+    const auto left  = slots().character_body__PausedPairLeft;
+    const auto right = slots().character_body__PausedPairRight;
+    world.tick(3);
+    CHECK(world.position(left).x == 60.0F);
+    CHECK(world.position(right).x == near(60.6F, 1e-6));
+    CHECK(world.gap(left, right) == near(-0.2F, 1e-4));
 }
 
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

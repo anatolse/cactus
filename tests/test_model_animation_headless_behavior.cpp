@@ -93,4 +93,22 @@ TEST_CASE("model-animation headless: window-space HUD content is recorded after 
               cactus_raylib_fake::is_call<cactus_raylib_fake::RecordedEndMode3D>(),
               cactus_raylib_fake::is_call<cactus_raylib_fake::RecordedDrawTextEx>()}));
 }
+TEST_CASE("model-animation headless: releasing render resources after a model draw lets a new world draw it again",
+          "[example-behavior][model-animation]") {
+    cactus_raylib_fake::reset();
+    cactus_raylib_fake::set_window_ready(true);
+
+    {
+        entt::registry registry;
+        cactus_headless_test::drive_one_frame(registry, kDt);
+        REQUIRE(cactus::runtime::entt_backend::render_debug_state().drawn_models > 0);
+    }
+    cactus::runtime::entt_backend::release_render_resources();
+
+    cactus_raylib_fake::reset();
+    cactus_raylib_fake::set_window_ready(true);
+    entt::registry registry;
+    cactus_headless_test::drive_one_frame(registry, kDt);
+    CHECK(cactus::runtime::entt_backend::render_debug_state().drawn_models > 0);
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

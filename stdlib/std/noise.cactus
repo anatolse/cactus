@@ -1,0 +1,201 @@
+module std.noise
+
+use std.math as math
+
+# ── Seeded spatial noise, algorithm version 1 ────────────────────────────────
+# Every function is pure: a sample depends only on its point, its seed and this
+# version. Nothing reads the world or advances a std.random generator.
+#
+# Domain: each coordinate must be finite and within [-1000000, 1000000]. Any
+# other input gives a Perlin value of 0.0 or an invalid Voronoi sample.
+#
+# Hashing: mix(h) multiplies by 73244475 with 32-bit wrapping, then adds
+# h / 65536 (floor division), twice. A lattice cell hashes as
+# mix(mix(mix(seed) + x) + y) in 2D and mix(hash2 + z) in 3D. Every compiler
+# gets the same integers. A hash is not a unique identity: cells may collide.
+#
+# Perlin: improved fade 6t^5 - 15t^4 + 10t^3. 2D picks hash % 8 of eight unit
+# gradients (axes, then diagonals) and scales by sqrt(2); 3D picks hash % 12 of
+# the twelve cube-edge gradients. Both clamp to [-1, 1] and are 0.0 on lattice
+# points.
+#
+# Voronoi: each lattice cell holds one feature point at cell + 0.05 + 0.9 * u,
+# with u in [0, 1) per axis from the cell hash. The search covers the 5 cells
+# per axis around the point's cell. That window always holds both nearest
+# features: the point's own feature and the adjacent one on its nearer side
+# along x are both closer than sqrt(1.45^2 + 2 * 0.95^2) < 1.98, while every
+# feature outside the window is at least 2.05 away. Distances are Euclidean
+# and not normalized. Equal distances keep the lexicographically smallest
+# feature cell (x, then y, then z).
+#
+# Reference samples. Integers match exactly; floats agree within 1e-5:
+#   mix(1)                                = -127396752
+#   hash3(2, -3, 4, 1337)                 = -1554478858
+#   perlin2(vec2(3.7, -12.25), 1337)      = 0.4119584
+#   perlin3(vec3(3.7, -12.25, 0.4), 1337) = 0.0644828
+#   perlin2(vec2(0.5, 0.5), 0)            = 0.3535534
+#   perlin3(vec3(0.25, 0.5, 0.75), 0)     = 0.5013394
+
+const:
+    HASH_MULTIPLIER = 73244475
+    HASH_SHIFT = 65536
+    DOMAIN_LIMIT = 1000000.0
+    DIAGONAL = 0.70710678
+    PERLIN2_SCALE = 1.41421356
+    FEATURE_MARGIN = 0.05
+    FEATURE_SPAN = 0.9
+    SEARCH_RADIUS = 2
+
+# A Voronoi sample. x/y/z name the nearest feature's lattice cell; voronoi2
+# leaves z at 0. nearest <= second are distances to the two closest features.
+pub struct VoronoiSample:
+    valid: bool
+    nearest: float
+    second: float
+    x: int
+    y: int
+    z: int
+
+func mix(h: int) int:
+    var x = h * HASH_MULTIPLIER
+    x += x / HASH_SHIFT
+    x *= HASH_MULTIPLIER
+    x += x / HASH_SHIFT
+    return x
+
+func hash2(x: int, y: int, seed: int) int:
+    return mix(mix(mix(seed) + x) + y)
+
+func hash3(x: int, y: int, z: int, seed: int) int:
+    return mix(hash2(x, y, seed) + z)
+
+func supported(v: float) bool:
+    return math.abs(v) <= DOMAIN_LIMIT
+
+func fade(t: float) float:
+    return t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
+
+func grad2(h: int, x: float, y: float) float:
+    return match h % 8:
+        0 => x
+        1 => -x
+        2 => y
+        3 => -y
+        4 => (x + y) * DIAGONAL
+        5 => (y - x) * DIAGONAL
+        6 => (x - y) * DIAGONAL
+        _ => (-x - y) * DIAGONAL
+
+func grad3(h: int, x: float, y: float, z: float) float:
+    return match h % 12:
+        0 => x + y
+        1 => y - x
+        2 => x - y
+        3 => -x - y
+        4 => x + z
+        5 => z - x
+        6 => x - z
+        7 => -x - z
+        8 => y + z
+        9 => z - y
+        10 => y - z
+        _ => -y - z
+
+# Signed gradient noise in [-1, 1], continuous everywhere in the domain.
+pub func perlin2(point: vec2, seed: int) float:
+    if not supported(point.x) or not supported(point.y):
+        return 0.0
+    let ix = math.floor(point.x)
+    let iy = math.floor(point.y)
+    let fx = point.x - ix
+    let fy = point.y - iy
+    let u = fade(fx)
+    let bottom = math.lerp(grad2(hash2(ix, iy, seed), fx, fy), grad2(hash2(ix + 1, iy, seed), fx - 1.0, fy), u)
+    let top = math.lerp(grad2(hash2(ix, iy + 1, seed), fx, fy - 1.0), grad2(hash2(ix + 1, iy + 1, seed), fx - 1.0, fy - 1.0), u)
+    return math.clamp(math.lerp(bottom, top, fade(fy)) * PERLIN2_SCALE, -1.0, 1.0)
+
+# Signed gradient noise in [-1, 1], continuous everywhere in the domain.
+pub func perlin3(point: vec3, seed: int) float:
+    if not supported(point.x) or not supported(point.y) or not supported(point.z):
+        return 0.0
+    let ix = math.floor(point.x)
+    let iy = math.floor(point.y)
+    let iz = math.floor(point.z)
+    let fx = point.x - ix
+    let fy = point.y - iy
+    let fz = point.z - iz
+    let u = fade(fx)
+    let v = fade(fy)
+    let x00 = math.lerp(grad3(hash3(ix, iy, iz, seed), fx, fy, fz), grad3(hash3(ix + 1, iy, iz, seed), fx - 1.0, fy, fz), u)
+    let x10 = math.lerp(grad3(hash3(ix, iy + 1, iz, seed), fx, fy - 1.0, fz), grad3(hash3(ix + 1, iy + 1, iz, seed), fx - 1.0, fy - 1.0, fz), u)
+    let x01 = math.lerp(grad3(hash3(ix, iy, iz + 1, seed), fx, fy, fz - 1.0), grad3(hash3(ix + 1, iy, iz + 1, seed), fx - 1.0, fy, fz - 1.0), u)
+    let x11 = math.lerp(grad3(hash3(ix, iy + 1, iz + 1, seed), fx, fy - 1.0, fz - 1.0), grad3(hash3(ix + 1, iy + 1, iz + 1, seed), fx - 1.0, fy - 1.0, fz - 1.0), u)
+    let near = math.lerp(x00, x10, v)
+    let far = math.lerp(x01, x11, v)
+    return math.clamp(math.lerp(near, far, fade(fz)), -1.0, 1.0)
+
+func feature_offset(h: int) float:
+    return FEATURE_MARGIN + FEATURE_SPAN * ((h / 256) % 65536) / 65536.0
+
+# The feature point of 2D lattice cell (x, y).
+pub func feature2(x: int, y: int, seed: int) vec2:
+    let h = hash2(x, y, seed)
+    return vec2(x + feature_offset(h), y + feature_offset(mix(h + 1)))
+
+# The feature point of 3D lattice cell (x, y, z).
+pub func feature3(x: int, y: int, z: int, seed: int) vec3:
+    let h = hash3(x, y, z, seed)
+    return vec3(x + feature_offset(h), y + feature_offset(mix(h + 1)), z + feature_offset(mix(h + 2)))
+
+func invalid_sample() VoronoiSample:
+    return VoronoiSample(valid = false, nearest = 0.0, second = 0.0, x = 0, y = 0, z = 0)
+
+# Cellular noise: the nearest feature's cell and the two closest distances.
+pub func voronoi2(point: vec2, seed: int) VoronoiSample:
+    if not supported(point.x) or not supported(point.y):
+        return invalid_sample()
+    let cx = math.floor(point.x)
+    let cy = math.floor(point.y)
+    var first = 1000000.0
+    var second = 1000000.0
+    var best_x = 0
+    var best_y = 0
+    for x in range(cx - SEARCH_RADIUS, cx + SEARCH_RADIUS + 1):
+        for y in range(cy - SEARCH_RADIUS, cy + SEARCH_RADIUS + 1):
+            let delta = feature2(x, y, seed) - point
+            let d = delta.x * delta.x + delta.y * delta.y
+            if d < first:
+                second = first
+                first = d
+                best_x = x
+                best_y = y
+            else if d < second:
+                second = d
+    return VoronoiSample(valid = true, nearest = math.sqrt(first), second = math.sqrt(second), x = best_x, y = best_y, z = 0)
+
+# Cellular noise: the nearest feature's cell and the two closest distances.
+pub func voronoi3(point: vec3, seed: int) VoronoiSample:
+    if not supported(point.x) or not supported(point.y) or not supported(point.z):
+        return invalid_sample()
+    let cx = math.floor(point.x)
+    let cy = math.floor(point.y)
+    let cz = math.floor(point.z)
+    var first = 1000000.0
+    var second = 1000000.0
+    var best_x = 0
+    var best_y = 0
+    var best_z = 0
+    for x in range(cx - SEARCH_RADIUS, cx + SEARCH_RADIUS + 1):
+        for y in range(cy - SEARCH_RADIUS, cy + SEARCH_RADIUS + 1):
+            for z in range(cz - SEARCH_RADIUS, cz + SEARCH_RADIUS + 1):
+                let delta = feature3(x, y, z, seed) - point
+                let d = delta.x * delta.x + delta.y * delta.y + delta.z * delta.z
+                if d < first:
+                    second = first
+                    first = d
+                    best_x = x
+                    best_y = y
+                    best_z = z
+                else if d < second:
+                    second = d
+    return VoronoiSample(valid = true, nearest = math.sqrt(first), second = math.sqrt(second), x = best_x, y = best_y, z = best_z)

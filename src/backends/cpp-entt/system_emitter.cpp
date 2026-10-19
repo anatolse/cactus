@@ -7,6 +7,7 @@
 
 #include "backends/cpp-entt/accumulation_plan.hpp"
 #include "backends/cpp-entt/persistence_emitter.hpp"
+#include "backends/cpp-entt/trait_writers.hpp"
 #include "backends/cpp-entt/type_utils.hpp"
 
 #include <algorithm>
@@ -84,6 +85,9 @@ std::string stdlib_runtime_prefix(const SymbolId& func_id) {
         return "cactus::runtime::entt_backend";
     }
     if (module_name == "std.pointer") {
+        return "cactus::runtime::entt_backend";
+    }
+    if (module_name == "std.app") {
         return "cactus::runtime::entt_backend";
     }
     return {};
@@ -797,6 +801,10 @@ bool is_model_render(const ExternRuleNode& sys) {
 
 bool is_model_animation(const ExternRuleNode& sys) {
     return symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.render.models", "ModelAnimation");
+}
+
+bool is_voxel_volume_renderer(const ExternRuleNode& sys) {
+    return symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.voxel.volume", "RenderVolumes");
 }
 
 bool is_billboard_renderer(const ExternRuleNode& sys) {
@@ -1896,7 +1904,7 @@ static std::string emit_hierarchical_spawn_expansion(const SymbolId& template_id
     for (const auto& slot : template_node.initializers) {
         arguments += ", " + initializer_slot_name(slot.index);
         if (slot.value != nullptr) {
-            out << "    [[maybe_unused]] const " << EnttCodegenUtils::type_to_cpp(slot.type) << " "
+            out << "    [[maybe_unused]] const " << EnttCodegenUtils::value_type_to_cpp(slot.type) << " "
                 << initializer_slot_name(slot.index) << " = "
                 << rewrite_expr(*slot.value, trait_names, program, pointer_aliases, {}, pair_scope) << ";\n";
         }
@@ -1966,7 +1974,7 @@ static std::string emit_template_bindings(std::ostringstream& out,
                                           const std::unordered_set<std::string>& pointer_aliases,
                                           const PairCodegenScope* pair_scope) {
     for (const auto& binding : arguments.bindings) {
-        out << indent << "const " << EnttCodegenUtils::type_to_cpp(binding.type) << " "
+        out << indent << "const " << EnttCodegenUtils::value_type_to_cpp(binding.type) << " "
             << initializer_slot_name(binding.index) << " = "
             << rewrite_expr(*binding.value, trait_names, program, pointer_aliases, {}, pair_scope) << ";\n";
     }
@@ -2415,28 +2423,11 @@ static std::string rewrite_expr_node(  // NOLINT(readability-function-cognitive-
                 }
                 return e.name;
             } else if constexpr (std::is_same_v<E, BinaryExpr>) {
-                std::string left_text = rewrite_expr(
-                    *e.left, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds);
-                std::string right_text = rewrite_expr(
-                    *e.right, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds);
-                // Cactus's type checker allows mixed int/float arithmetic freely,
-                // but the emitted C++ must not — an unwrapped int operand next to
-                // a float one trips clang-tidy's bugprone-narrowing-conversions.
-                // Only cast when BOTH sides positively resolve to differing
-                // numeric kinds; an Unknown side never triggers a cast, so an
-                // all-int computation the inference merely failed to fully
-                // resolve is never silently turned into float arithmetic.
-                static const std::unordered_set<std::string> kArithmeticOps{"+", "-", "*", "/", "%"};
-                if (kArithmeticOps.contains(e.op)) {
-                    const auto left_kind  = infer_numeric_kind(*e.left, trait_names, program, local_kinds);
-                    const auto right_kind = infer_numeric_kind(*e.right, trait_names, program, local_kinds);
-                    if (left_kind == NumericKind::Int && right_kind == NumericKind::Float) {
-                        left_text = "static_cast<float>(" + left_text + ")";
-                    } else if (right_kind == NumericKind::Int && left_kind == NumericKind::Float) {
-                        right_text = "static_cast<float>(" + right_text + ")";
-                    }
-                }
-                return EnttCodegenUtils::emit_binary(e, left_text, right_text);
+                return EnttCodegenUtils::emit_binary(
+                    e,
+                    rewrite_expr(*e.left, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds),
+                    rewrite_expr(
+                        *e.right, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds));
             } else if constexpr (std::is_same_v<E, UnaryExpr>) {
                 return EnttCodegenUtils::emit_unary(
                     e,
@@ -2633,6 +2624,9 @@ static std::string rewrite_expr_node(  // NOLINT(readability-function-cognitive-
                 }
                 if (e.resolved_const_id.has_value()) {
                     return EnttCodegenUtils::symbol_cpp_name(*e.resolved_const_id);
+                }
+                if (e.resolved_asset_id.has_value()) {
+                    return e.resolved_asset_id->local_name;
                 }
                 // Three-level access module.EnumName.Variant: emit CanonicalEnum::Variant.
                 if (const auto* enum_member = std::get_if<MemberExpr>(&e.object->expr)) {
@@ -3747,11 +3741,11 @@ static std::string rewrite_stmt_block(const std::vector<std::unique_ptr<StmtNode
 
 static std::string func_signature(const FuncNode& func, const ResolvedFunc& resolved) {
     std::string signature =
-        (resolved.return_type.has_value() ? EnttCodegenUtils::type_to_cpp(*resolved.return_type) : "void") + " " +
+        (resolved.return_type.has_value() ? EnttCodegenUtils::value_type_to_cpp(*resolved.return_type) : "void") + " " +
         canonical_to_cpp_name(*func.resolved_func_id) + "(";
     for (std::size_t index = 0; index < resolved.params.size(); ++index) {
         signature += index != 0U ? ", " : "";
-        signature += EnttCodegenUtils::type_to_cpp(resolved.params[index].type) + " " + resolved.params[index].name;
+        signature += EnttCodegenUtils::value_type_to_cpp(resolved.params[index].type) + " " + resolved.params[index].name;
     }
     return signature + ")";
 }
@@ -4016,11 +4010,57 @@ static const char* sap_proxy_function(SpatialShapeKind kind, SpatialJoinDimensio
     if (kind == SpatialShapeKind::Box) {
         return "box_proxy";
     }
+    if (kind == SpatialShapeKind::AlignedBox) {
+        return "aligned_box_proxy";
+    }
+    if (kind == SpatialShapeKind::RaySegment) {
+        return "segment_proxy";
+    }
     if (is_collider_shape(kind)) {
         return "collider_proxy";
     }
     return dimension == SpatialJoinDimension::Flat2D ? "circle_proxy" : "sphere_proxy";
 }
+
+// C++ for one binding's broad-phase proxy, built from that binding's shape
+// slots in `predicate`. A collider proxy is an std::optional (no descriptor, no
+// proxy); every other kind is a plain ProxyAabb.
+struct ProxyExpression {
+    std::string code;
+    bool optional = false;
+};
+
+static ProxyExpression sap_proxy_expression(const SpatialShape& shape,
+                                            SpatialJoinDimension dimension,
+                                            const std::string& binding_name,
+                                            const std::string& ordinal,
+                                            const ExprNode& predicate,
+                                            const PairCodegenScope& pair_codegen_scope,
+                                            const DecoratedProgram& program) {
+    const std::string ns = "cactus::runtime::entt_backend::";
+    const bool collider  = is_collider_shape(shape.kind);
+    std::ostringstream proxy;
+    proxy << ns << sap_proxy_function(shape.kind, dimension) << "(" << binding_name << ", " << ordinal << ", " << ns
+          << "SapSide::" << (shape.binding_index == 0 ? "Left" : "Right");
+    if (collider) {
+        proxy << ", " << collider_shape_cpp(*pair_codegen_scope.find(binding_name), binding_name);
+    }
+    for (const auto& slot : shape.slots) {
+        proxy << ", " << rewrite_expr(*resolve_expr_path(predicate, slot), {}, program, {}, {}, &pair_codegen_scope);
+    }
+    proxy << ")";
+    return ProxyExpression{.code = proxy.str(), .optional = collider};
+}
+
+static bool emit_indexed_pair_activation_if_planned(std::ostringstream& out,
+                                                    const RuleNode& sys,
+                                                    const HandlerContract* contract,
+                                                    const ExprNode& predicate,
+                                                    const std::vector<PairBindingCodegen>& pair_binding_codegens,
+                                                    const PairCodegenScope& pair_codegen_scope,
+                                                    const DecoratedProgram& program,
+                                                    const std::array<std::string, 2>& keeps,
+                                                    const std::string& dispatch_name);
 
 // SAP-eligible pair-rule activation: builds one
 // proxy per entity of each binding's snapshot from that binding's shape slots,
@@ -4048,23 +4088,14 @@ static void emit_sap_pair_activation(std::ostringstream& out,
         out << "            for (std::size_t __sap_i = 0; __sap_i < " << binding_name
             << "_snapshot.size(); ++__sap_i) {\n";
         out << "                const auto " << binding_name << " = " << binding_name << "_snapshot[__sap_i];\n";
-        const bool collider = is_collider_shape(shape->kind);
-        std::ostringstream proxy;
-        proxy << ns << sap_proxy_function(shape->kind, plan.dimension) << "(" << binding_name << ", __sap_i, " << ns
-              << "SapSide::" << (shape->binding_index == 0 ? "Left" : "Right");
-        if (collider) {
-            proxy << ", " << collider_shape_cpp(*pair_codegen_scope.find(binding_name), binding_name);
-        }
-        for (const auto& slot : shape->slots) {
-            proxy << ", " << rewrite_expr(*resolve_expr_path(predicate, slot), {}, program, {}, {}, &pair_codegen_scope);
-        }
-        proxy << ")";
-        if (collider) {
-            out << "                if (const auto __sap_proxy = " << proxy.str() << ") {\n";
+        const auto proxy =
+            sap_proxy_expression(*shape, plan.dimension, binding_name, "__sap_i", predicate, pair_codegen_scope, program);
+        if (proxy.optional) {
+            out << "                if (const auto __sap_proxy = " << proxy.code << ") {\n";
             out << "                    __sap_proxies.push_back(*__sap_proxy);\n";
             out << "                }\n";
         } else {
-            out << "                __sap_proxies.push_back(" << proxy.str() << ");\n";
+            out << "                __sap_proxies.push_back(" << proxy.code << ");\n";
         }
         out << "            }\n";
     }
@@ -4246,7 +4277,16 @@ static void emit_pair_handler_body(std::ostringstream& out,
     out << "        }\n";
     out << "    } else {\n";
     const auto* spatial_root = spatial_join_root(sys, contract);
-    if (spatial_root != nullptr) {
+    if (spatial_root == nullptr) {
+        out << "        for (auto " << left.scope.binding_name << " : " << left.scope.binding_name << "_snapshot) {\n";
+        out << "            for (auto " << right.scope.binding_name << " : " << right.scope.binding_name
+            << "_snapshot) {\n";
+        emit_tuple_invocation();
+        out << "            }\n";
+        out << "        }\n";
+    } else if (!emit_indexed_pair_activation_if_planned(
+                   out, sys, contract, *spatial_root, pair_binding_codegens, pair_codegen_scope, program, keeps,
+                   dispatch_name)) {
         emit_sap_pair_activation(out,
                                  *contract->spatial_join,
                                  *spatial_root,
@@ -4254,13 +4294,6 @@ static void emit_pair_handler_body(std::ostringstream& out,
                                  pair_codegen_scope,
                                  program,
                                  dispatch_name);
-    } else {
-        out << "        for (auto " << left.scope.binding_name << " : " << left.scope.binding_name << "_snapshot) {\n";
-        out << "            for (auto " << right.scope.binding_name << " : " << right.scope.binding_name
-            << "_snapshot) {\n";
-        emit_tuple_invocation();
-        out << "            }\n";
-        out << "        }\n";
     }
     out << "    }\n";
     if (!buffered) {
@@ -4924,7 +4957,8 @@ static void emit_keep_commands(std::ostringstream& out,
 static void emit_reduced_pair_snapshots(std::ostringstream& out,
                                         const ReduceClause& reduce,
                                         const std::vector<PairBindingCodegen>& pair_binding_codegens,
-                                        bool keeps) {
+                                        bool keeps,
+                                        const std::optional<std::string>& indexed) {
     const auto is_group = [&](const PairBindingCodegen& binding) {
         return reduce.per_binding == binding.scope.binding_name;
     };
@@ -4937,7 +4971,9 @@ static void emit_reduced_pair_snapshots(std::ostringstream& out,
         }
     }
     for (const auto& binding : pair_binding_codegens | std::views::filter(std::not_fn(is_group))) {
-        emit_pair_binding_snapshot(out, binding, 1);
+        if (binding.scope.binding_name != indexed) {
+            emit_pair_binding_snapshot(out, binding, 1);
+        }
     }
 }
 
@@ -4948,7 +4984,8 @@ static std::unordered_map<const ExprNode*, std::string> emit_member_inputs(std::
                                                                           const ReduceClause& reduce,
                                                                           const HandlerContract* contract,
                                                                           const PairCodegenScope& fold_scope,
-                                                                          const DecoratedProgram& program) {
+                                                                          const DecoratedProgram& program,
+                                                                          const std::optional<std::string>& indexed) {
     std::unordered_map<const ExprNode*, std::string> member_inputs;
     for (std::size_t index = 0; index < reduce.reducers.size(); ++index) {
         const auto& reducer = reduce.reducers[index];
@@ -4957,7 +4994,10 @@ static std::unordered_map<const ExprNode*, std::string> emit_member_inputs(std::
             continue;
         }
         const auto& name = fold_scope.bindings[stage == ClauseStage::BindingLeft ? 0 : 1].binding_name;
-        auto slot        = std::string("[cactus_slot]");
+        if (name == indexed) {
+            continue;
+        }
+        auto slot = std::string("[cactus_slot]");
         if (reduce.per_binding != name) {
             slot = "[cactus_positions_" + name;
             slot += ".find(" + name + ")]";
@@ -4983,10 +5023,12 @@ static std::array<bool, 2> emit_reduced_binding_filters(std::ostringstream& out,
                                                         const ReduceClause& reduce,
                                                         const HandlerContract* contract,
                                                         const PairCodegenScope& pair_codegen_scope,
-                                                        const DecoratedProgram& program) {
+                                                        const DecoratedProgram& program,
+                                                        const std::optional<std::string>& indexed) {
     std::array<bool, 2> filtered{};
     for (std::size_t index = 0; index < filtered.size(); ++index) {
-        filtered[index] = reduce.per_binding != pair_codegen_scope.bindings[index].binding_name &&
+        const auto& name = pair_codegen_scope.bindings[index].binding_name;
+        filtered[index]  = reduce.per_binding != name && name != indexed &&
                           !emit_binding_filter(out, sys, contract, index, pair_codegen_scope, program).empty();
     }
     return filtered;
@@ -4997,11 +5039,15 @@ static void emit_fold_tables(std::ostringstream& out,
                              const RuleNode& sys,
                              const ReduceClause& reduce,
                              const HandlerContract* contract,
-                             PairCodegenScope& fold_scope) {
+                             PairCodegenScope& fold_scope,
+                             const std::optional<std::string>& indexed) {
     const bool uses_collider_queries = rule_uses_collider_queries(sys);
     const auto& reducer_stages       = staging_of(contract).reducers;
     for (std::size_t index = 0; index < fold_scope.bindings.size(); ++index) {
-        const auto& name         = fold_scope.bindings[index].binding_name;
+        const auto& name = fold_scope.bindings[index].binding_name;
+        if (name == indexed) {
+            continue;
+        }
         const bool member_inputs = std::ranges::contains(reducer_stages, binding_stage(index));
         if (uses_collider_queries || reduce.per_binding == name || member_inputs) {
             emit_snapshot_positions(out, name);
@@ -5011,8 +5057,10 @@ static void emit_fold_tables(std::ostringstream& out,
         return;
     }
     for (auto& binding : fold_scope.bindings) {
-        emit_collider_shape_cache(out, binding);
-        binding.collider_shapes_cached = true;
+        if (binding.binding_name != indexed) {
+            emit_collider_shape_cache(out, binding);
+            binding.collider_shapes_cached = true;
+        }
     }
 }
 
@@ -5090,6 +5138,488 @@ static void emit_fold_dispatch(std::ostringstream& out,
     }
 }
 
+// ── Indexed folds ────────────────────────────────────────────────────────────
+// A reduced pair pass whose spatial plan bounds the non-group binding by its
+// own fixed values keeps that binding in a SpatialBindingIndex3D across passes.
+// Each group entity then looks up the members its bounds overlap, oldest first,
+// so every group folds the same rows in the same order as the full product.
+
+struct IndexedFoldPlan {
+    std::size_t indexed = 0;  // the binding kept in the index
+    const SpatialShape* indexed_shape = nullptr;
+    const SpatialShape* query_shape   = nullptr;
+    std::vector<SymbolId> watched;  // traits whose construction or destruction can change a member
+    TraitWriters writers;
+};
+
+// Whether `expr` depends on nothing but constants and the values `binding` reads
+// from its own entity.
+static bool fixed_for_member(const ExprNode& expr, std::size_t binding, const std::unordered_set<std::string>& names) {
+    const auto fixed = [&](const std::unique_ptr<ExprNode>& child) {
+        return child != nullptr && fixed_for_member(*child, binding, names);
+    };
+    return std::visit(
+        [&](const auto& node) -> bool {
+            using E = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<E, LiteralExpr>) {
+                return true;
+            } else if constexpr (std::is_same_v<E, IdentExpr>) {
+                return node.resolved_const_id.has_value() || names.contains(node.name);
+            } else if constexpr (std::is_same_v<E, MemberExpr>) {
+                if (node.resolved_const_id.has_value() || node.resolved_enum_member.has_value()) {
+                    return true;
+                }
+                return !node.resolved_entity_id.has_value() && !node.resolved_phase_dt.has_value() && fixed(node.object);
+            } else if constexpr (std::is_same_v<E, TraitAccessExpr>) {
+                return node.pair_binding_index == binding;
+            } else if constexpr (std::is_same_v<E, BinaryExpr>) {
+                return fixed(node.left) && fixed(node.right);
+            } else if constexpr (std::is_same_v<E, UnaryExpr>) {
+                return fixed(node.operand);
+            } else if constexpr (std::is_same_v<E, CallExpr>) {
+                return (node.resolved_callee_id.has_value() || node.resolved_struct_id.has_value()) &&
+                       std::ranges::all_of(node.args, fixed);
+            } else {
+                return false;
+            }
+        },
+        expr.expr);
+}
+
+static std::vector<SymbolId> collider_proxy_traits() {
+    const ModuleId physics{.name = std::string(kPhysicsVolumeModule)};
+    std::vector<SymbolId> traits{
+        make_symbol_id(SymbolKind::Trait, ModuleId{.name = std::string(kTransformVolumeModule)}, "WorldTransform"),
+        make_symbol_id(SymbolKind::Trait, physics, "Collider")};
+    for (const auto shape : kColliderShapeTraits) {
+        traits.push_back(make_symbol_id(SymbolKind::Trait, physics, std::string(shape)));
+    }
+    return traits;
+}
+
+static void add_unique(std::vector<SymbolId>& into, const SymbolId& trait) {
+    if (!std::ranges::contains(into, trait)) {
+        into.push_back(trait);
+    }
+}
+
+// The traits a slot expression reads through `binding`, by bracket access or
+// through one of `aliases` (alias name -> trait).
+static void collect_slot_traits(const ExprNode& expr,
+                                std::size_t binding,
+                                const std::unordered_map<std::string, SymbolId>& aliases,
+                                std::vector<SymbolId>& traits) {
+    visit_expression(expr, [&](const ExprNode& node) {
+        if (const auto* access = std::get_if<TraitAccessExpr>(&node.expr);
+            access != nullptr && access->pair_binding_index == binding && access->resolved_trait_id.has_value()) {
+            add_unique(traits, *access->resolved_trait_id);
+        }
+        if (const auto* ident = std::get_if<IdentExpr>(&node.expr); ident != nullptr) {
+            if (const auto found = aliases.find(ident->name); found != aliases.end()) {
+                add_unique(traits, found->second);
+            }
+        }
+    });
+}
+
+// A spatial pair pass whose plan bounds the binding other than `group` by its
+// own fixed values can keep that binding in a SpatialBindingIndex3D.
+static std::optional<IndexedFoldPlan> indexed_join_plan(const RuleNode& sys,
+                                                        const HandlerContract* contract,
+                                                        const DecoratedProgram& program,
+                                                        std::size_t group) {
+    if (!program.index_pair_joins || contract == nullptr || !contract->spatial_join.has_value() ||
+        !sys.pairs.has_value() || contract->pair_bindings.size() != 2) {
+        return std::nullopt;
+    }
+    const auto& join = *contract->spatial_join;
+    if (join.dimension != SpatialJoinDimension::Volume3D) {
+        return std::nullopt;
+    }
+    IndexedFoldPlan plan;
+    plan.indexed       = 1 - group;
+    plan.indexed_shape = join.left.binding_index == plan.indexed ? &join.left : &join.right;
+    plan.query_shape   = join.left.binding_index == plan.indexed ? &join.right : &join.left;
+    if (plan.indexed_shape->binding_index != plan.indexed || plan.query_shape->binding_index != group ||
+        plan.indexed_shape->kind == SpatialShapeKind::SweptCollider) {
+        return std::nullopt;
+    }
+
+    const auto& binding_node = sys.pairs->bindings[plan.indexed];
+    std::unordered_set<std::string> names{binding_node.name};
+    std::unordered_map<std::string, SymbolId> aliases;
+    for (const auto& entry : binding_node.traits) {
+        if (entry.alias.has_value() && entry.resolved_trait_id.has_value()) {
+            names.insert(*entry.alias);
+            aliases.emplace(*entry.alias, *entry.resolved_trait_id);
+        }
+    }
+    std::vector<SymbolId> proxy_traits;
+    if (is_collider_shape(plan.indexed_shape->kind)) {
+        proxy_traits = collider_proxy_traits();
+    }
+    const auto* root = spatial_join_root(sys, contract);
+    for (const auto& slot : plan.indexed_shape->slots) {
+        const auto* argument = root == nullptr ? nullptr : resolve_expr_path(*root, slot);
+        if (argument == nullptr || !fixed_for_member(*argument, plan.indexed, names)) {
+            return std::nullopt;
+        }
+        collect_slot_traits(*argument, plan.indexed, aliases, proxy_traits);
+    }
+    plan.writers         = trait_writers(program, proxy_traits);
+    const auto& required = contract->pair_bindings[plan.indexed].required_traits;
+    const auto covers_all = [&](const std::vector<SymbolId>& set) {
+        return std::ranges::all_of(set, [&](const SymbolId& trait) { return std::ranges::contains(required, trait); });
+    };
+    if (std::ranges::any_of(plan.writers.target_sets, covers_all)) {
+        return std::nullopt;
+    }
+    plan.watched = required;
+    for (const auto& trait : proxy_traits) {
+        add_unique(plan.watched, trait);
+    }
+    for (const auto& set : plan.writers.target_sets) {
+        for (const auto& trait : set) {
+            add_unique(plan.watched, trait);
+        }
+    }
+    std::ranges::sort(plan.watched, std::less{}, [](const SymbolId& trait) { return make_canonical_id(trait); });
+    return plan;
+}
+
+static std::optional<IndexedFoldPlan> indexed_fold_plan(const RuleNode& sys,
+                                                        const HandlerContract* contract,
+                                                        const DecoratedProgram& program) {
+    if (contract == nullptr || !contract->reduction.has_value() || !contract->reduction->group_binding.has_value()) {
+        return std::nullopt;
+    }
+    return indexed_join_plan(sys, contract, program, *contract->reduction->group_binding);
+}
+
+// A plain pair pass indexes its right binding, so walking the left snapshot and
+// each left member's candidates oldest first keeps the full product's order.
+static std::optional<IndexedFoldPlan> indexed_pair_plan(const RuleNode& sys,
+                                                        const HandlerContract* contract,
+                                                        const DecoratedProgram& program) {
+    if (sys.reduce.has_value()) {
+        return std::nullopt;
+    }
+    return indexed_join_plan(sys, contract, program, 0);
+}
+
+static std::string cpp_trait_list(const std::vector<SymbolId>& traits, const DecoratedProgram& program) {
+    std::vector<std::string> names;
+    names.reserve(traits.size());
+    for (const auto& trait : traits) {
+        names.push_back(EnttCodegenUtils::trait_cpp_name(trait, trait.local_name, program));
+    }
+    return join_strings(names, ", ");
+}
+
+// Whether a member's bounds may change after construction: it carries every
+// trait of some writer's target set, or it is a named entity a handler writes.
+static std::string member_may_change(const TraitWriters& writers,
+                                     const std::string& entity,
+                                     const DecoratedProgram& program) {
+    std::vector<std::string> tests;
+    tests.reserve(writers.target_sets.size() + writers.named_entities.size());
+    for (const auto& set : writers.target_sets) {
+        tests.push_back("registry.all_of<" + cpp_trait_list(set, program) + ">(" + entity + ")");
+    }
+    for (const auto& named : writers.named_entities) {
+        tests.push_back(entity + " == " + EnttCodegenUtils::named_slot_name(named));
+    }
+    return tests.empty() ? "false" : join_strings(tests, " || ");
+}
+
+// A stable 64-bit hash, so a program's generated keys never vary between runs.
+static std::uint64_t stable_hash(std::string_view text) {
+    std::uint64_t hash = 1469598103934665603ULL;
+    for (const char c : text) {
+        hash = (hash ^ static_cast<unsigned char>(c)) * 1099511628211ULL;
+    }
+    return hash;
+}
+
+// Declares `index` as the shared instance for the sync code that follows it.
+static void emit_shared_index(std::ostringstream& out,
+                              const std::string& index_type,
+                              const std::string& index,
+                              const std::string& sync) {
+    out << "    auto& " << index << " = cactus::runtime::entt_backend::shared_binding_index<" << index_type << ", "
+        << stable_hash(index_type + sync) << "ULL>();\n";
+    out << sync;
+}
+
+// Rebuilds `index` from every current member when it was built for another
+// world; the catch_up call that follows then reclassifies the marked entities.
+static void emit_index_refresh(std::ostringstream& out,
+                               const std::string& index,
+                               const std::string& reset_args,
+                               const std::string& watched,
+                               const std::string& member_types) {
+    out << "    if (" << index << ".tracker().stale(registry)) {\n";
+    out << "        " << index << ".reset(registry" << reset_args << ");\n";
+    out << "        cactus::runtime::entt_backend::watch_binding_traits<" << watched << ">(registry, " << index
+        << ".tracker());\n";
+    out << "        for (const auto cactus_member : registry.view<" << member_types << ">()) {\n";
+    out << "            " << index << ".tracker().mark(cactus_member);\n";
+    out << "        }\n";
+    out << "    }\n";
+}
+
+static void emit_binding_index_sync(std::ostringstream& out,
+                                    const IndexedFoldPlan& plan,
+                                    const ExprNode& predicate,
+                                    const PairBindingCodegen& binding,
+                                    const PairCodegenScope& pair_codegen_scope,
+                                    const DecoratedProgram& program) {
+    const std::string ns    = "cactus::runtime::entt_backend::";
+    const auto& name        = binding.scope.binding_name;
+    const auto index        = "cactus_index_" + name;
+    const auto member_types = join_strings(binding.cpp_types, ", ");
+    PairCodegenScope scope  = pair_codegen_scope;
+    for (auto& entry : scope.bindings) {
+        entry.collider_shapes_cached = false;
+    }
+    const auto proxy = sap_proxy_expression(*plan.indexed_shape, SpatialJoinDimension::Volume3D, name, "0", predicate,
+                                            scope, program);
+    std::ostringstream sync;
+    emit_index_refresh(sync, index, ", 2.0F", cpp_trait_list(plan.watched, program), member_types);
+    sync << "    " << index << ".catch_up(registry, [&](entt::entity " << name << ") {\n";
+    sync << "        " << ns << "SpatialBindingIndex3D::Classified cactus_found;\n";
+    sync << "        if (!registry.all_of<" << member_types << ">(" << name << ")) {\n";
+    sync << "            return cactus_found;\n";
+    sync << "        }\n";
+    sync << "        cactus_found.member    = true;\n";
+    sync << "        cactus_found.is_static = !(" << member_may_change(plan.writers, name, program) << ");\n";
+    sync << "        const auto cactus_proxy = " << proxy.code << ";\n";
+    if (proxy.optional) {
+        sync << "        if (cactus_proxy.has_value()) {\n";
+        sync << "            cactus_found.bounds = std::pair{cactus_proxy->min, cactus_proxy->max};\n";
+        sync << "        }\n";
+    } else {
+        sync << "        cactus_found.bounds = std::pair{cactus_proxy.min, cactus_proxy.max};\n";
+    }
+    sync << "        return cactus_found;\n";
+    sync << "    });\n";
+    emit_shared_index(out, ns + "SpatialBindingIndex3D", index, sync.str());
+}
+
+// Emits a walk over every group entity bound by `group_loop` (which opens the
+// loop at `indent`), calling `call` for each member whose bounds overlap the
+// group's, oldest first: static members from the index, dynamic members bounded
+// afresh this pass.
+static void emit_indexed_candidates(std::ostringstream& out,
+                                    const IndexedFoldPlan& plan,
+                                    const ExprNode& predicate,
+                                    const std::vector<PairBindingCodegen>& pair_binding_codegens,
+                                    const PairCodegenScope& scope,
+                                    const DecoratedProgram& program,
+                                    const std::string& indent,
+                                    const std::string& group_loop,
+                                    const std::string& call) {
+    const std::string index_type = "cactus::runtime::entt_backend::SpatialBindingIndex3D";
+    const auto& member           = pair_binding_codegens[plan.indexed].scope.binding_name;
+    const auto& group            = pair_binding_codegens[1 - plan.indexed].scope.binding_name;
+    const auto index             = "cactus_index_" + member;
+    const auto member_proxy =
+        sap_proxy_expression(*plan.indexed_shape, SpatialJoinDimension::Volume3D, member, "0", predicate, scope, program);
+    const auto query_proxy =
+        sap_proxy_expression(*plan.query_shape, SpatialJoinDimension::Volume3D, group, "0", predicate, scope, program);
+    const auto bounds_of = [](const ProxyExpression& proxy, const std::string& value) {
+        return proxy.optional ? value + "->" : value + ".";
+    };
+    const auto body = indent + "    ";
+    out << indent << "std::vector<" << index_type << "::BoundedMember> cactus_dynamic;\n";
+    out << indent << index << ".bound_dynamic([&](entt::entity " << member << ") -> std::optional<" << index_type
+        << "::Bounds> {\n";
+    out << body << "const auto cactus_proxy = " << member_proxy.code << ";\n";
+    if (member_proxy.optional) {
+        out << body << "if (!cactus_proxy.has_value()) { return std::nullopt; }\n";
+    }
+    out << body << "return std::pair{" << bounds_of(member_proxy, "cactus_proxy") << "min, "
+        << bounds_of(member_proxy, "cactus_proxy") << "max};\n";
+    out << indent << "}, cactus_dynamic);\n";
+    out << indent << "std::vector<cactus::runtime::entt_backend::OrderedEntity> cactus_candidates;\n";
+    out << group_loop;
+    out << body << "const auto cactus_query = " << query_proxy.code << ";\n";
+    if (query_proxy.optional) {
+        out << body << "if (!cactus_query.has_value()) { continue; }\n";
+    }
+    out << body << index << ".candidates(" << bounds_of(query_proxy, "cactus_query") << "min, "
+        << bounds_of(query_proxy, "cactus_query") << "max, cactus_dynamic, cactus_candidates);\n";
+    out << body << "for (const auto& [cactus_ordinal, " << member << "] : cactus_candidates) {\n";
+    out << body << "    " << call << ";\n";
+    out << body << "}\n";
+    out << indent << "}\n";
+}
+
+static void emit_indexed_fold_dispatch(std::ostringstream& out,
+                                       const IndexedFoldPlan& plan,
+                                       const ExprNode& predicate,
+                                       bool gated,
+                                       const std::vector<PairBindingCodegen>& pair_binding_codegens,
+                                       const PairCodegenScope& fold_scope,
+                                       const DecoratedProgram& program) {
+    const auto& member = pair_binding_codegens[plan.indexed].scope.binding_name;
+    const auto& group  = pair_binding_codegens[1 - plan.indexed].scope.binding_name;
+    if (gated) {
+        out << "    if (cactus_active) {\n";
+    }
+    const std::string group_loop = "    for (std::size_t cactus_i = 0; cactus_i < " + group +
+                                   "_snapshot.size(); ++cactus_i) {\n" +
+                                   "        if (cactus_group_live[cactus_i] == 0) { continue; }\n" +
+                                   "        const auto " + group + " = " + group + "_snapshot[cactus_i];\n";
+    const auto call = "cactus_fold(" + (plan.indexed == 0 ? member + ", " + group : group + ", " + member) + ")";
+    emit_indexed_candidates(out, plan, predicate, pair_binding_codegens, fold_scope, program, "    ", group_loop, call);
+    if (gated) {
+        out << "    }\n";
+    }
+}
+
+// Invokes `dispatch_name` for every candidate tuple of an indexed plain pair
+// pass, in (left, right) snapshot order like the broad-phase activation. Like
+// it, every candidate is found, and the indexed binding's own filter applied,
+// before the first tuple runs.
+static void emit_indexed_pair_activation(std::ostringstream& out,
+                                         const IndexedFoldPlan& plan,
+                                         const ExprNode& predicate,
+                                         const std::vector<PairBindingCodegen>& pair_binding_codegens,
+                                         const PairCodegenScope& pair_codegen_scope,
+                                         const DecoratedProgram& program,
+                                         const std::string& member_keep,
+                                         const std::string& dispatch_name) {
+    const auto& member = pair_binding_codegens[plan.indexed].scope.binding_name;
+    const auto& group  = pair_binding_codegens[1 - plan.indexed].scope.binding_name;
+    out << "        {\n";
+    emit_binding_index_sync(out, plan, predicate, pair_binding_codegens[plan.indexed], pair_codegen_scope, program);
+    out << "        std::vector<std::pair<entt::entity, entt::entity>> cactus_indexed_tuples;\n";
+    const auto collect = "cactus_indexed_tuples.emplace_back(" + group + ", " + member + ")";
+    emit_indexed_candidates(out, plan, predicate, pair_binding_codegens, pair_codegen_scope, program, "        ",
+                            "        for (const auto " + group + " : " + group + "_snapshot) {\n",
+                            member_keep.empty() ? collect : "if (" + member_keep + "(" + member + ")) { " + collect + "; }");
+    out << "        for (const auto& [cactus_left, cactus_right] : cactus_indexed_tuples) {\n";
+    out << "            " << dispatch_name << "(cactus_left, cactus_right);\n";
+    out << "        }\n";
+    out << "        }\n";
+}
+
+// Emits the indexed activation when the pass has an index plan.
+static bool emit_indexed_pair_activation_if_planned(std::ostringstream& out,
+                                                    const RuleNode& sys,
+                                                    const HandlerContract* contract,
+                                                    const ExprNode& predicate,
+                                                    const std::vector<PairBindingCodegen>& pair_binding_codegens,
+                                                    const PairCodegenScope& pair_codegen_scope,
+                                                    const DecoratedProgram& program,
+                                                    const std::array<std::string, 2>& keeps,
+                                                    const std::string& dispatch_name) {
+    const auto plan = indexed_pair_plan(sys, contract, program);
+    if (!plan.has_value()) {
+        return false;
+    }
+    emit_indexed_pair_activation(out, *plan, predicate, pair_binding_codegens, pair_codegen_scope, program,
+                                 keeps.at(plan->indexed), dispatch_name);
+    return true;
+}
+
+// ── Equality-indexed folds ───────────────────────────────────────────────────
+// A reduced pair pass with an equality join keeps the non-group members in an
+// EqualityBindingIndex keyed by values they never change. Each group entity
+// folds exactly the members with its key, oldest first; the fold still checks
+// every predicate.
+
+struct EqualityKeyPart {
+    const ExprNode* member = nullptr;
+    const ExprNode* query  = nullptr;
+};
+
+struct EqualityFoldPlan {
+    std::size_t indexed = 0;
+    std::vector<EqualityKeyPart> parts;
+};
+
+static std::optional<EqualityFoldPlan> equality_fold_plan(const RuleNode& sys,
+                                                          const HandlerContract* contract,
+                                                          const DecoratedProgram& program) {
+    if (!program.index_pair_joins || contract == nullptr || !contract->equality_join.has_value() ||
+        !sys.where_clause.has_value()) {
+        return std::nullopt;
+    }
+    EqualityFoldPlan plan;
+    plan.indexed = contract->equality_join->indexed_binding;
+    for (const auto& key : contract->equality_join->keys) {
+        const auto& root = *sys.where_clause->predicates.at(key.predicate_index);
+        plan.parts.push_back(
+            EqualityKeyPart{.member = resolve_expr_path(root, key.member), .query = resolve_expr_path(root, key.query)});
+    }
+    if (std::ranges::any_of(plan.parts, [](const EqualityKeyPart& part) {
+            return part.member == nullptr || part.query == nullptr;
+        })) {
+        return std::nullopt;
+    }
+    return plan;
+}
+
+static std::string equality_key(const std::vector<EqualityKeyPart>& parts,
+                                bool member_side,
+                                const PairCodegenScope& scope,
+                                const DecoratedProgram& program) {
+    std::string key = "cactus::runtime::entt_backend::EqualityBindingIndex<" + std::to_string(parts.size()) + ">::Key{";
+    for (std::size_t i = 0; i < parts.size(); ++i) {
+        const auto& expr = member_side ? *parts[i].member : *parts[i].query;
+        key += (i == 0 ? "" : ", ") + std::string("cactus::runtime::entt_backend::equality_key_part(") +
+               rewrite_expr(expr, {}, program, {}, {}, &scope) + ")";
+    }
+    return key + "}";
+}
+
+static void emit_equality_index_sync(std::ostringstream& out,
+                                     const EqualityFoldPlan& plan,
+                                     const PairBindingCodegen& binding,
+                                     const PairCodegenScope& pair_codegen_scope,
+                                     const DecoratedProgram& program) {
+    const auto& name        = binding.scope.binding_name;
+    const auto index        = "cactus_index_" + name;
+    const auto index_type   = "cactus::runtime::entt_backend::EqualityBindingIndex<" + std::to_string(plan.parts.size()) + ">";
+    const auto member_types = join_strings(binding.cpp_types, ", ");
+    std::ostringstream sync;
+    emit_index_refresh(sync, index, "", member_types, member_types);
+    sync << "    " << index << ".catch_up(registry, [&](entt::entity " << name << ") -> std::optional<" << index_type
+         << "::Key> {\n";
+    sync << "        if (!registry.all_of<" << member_types << ">(" << name << ")) {\n";
+    sync << "            return std::nullopt;\n";
+    sync << "        }\n";
+    sync << "        return " << equality_key(plan.parts, true, pair_codegen_scope, program) << ";\n";
+    sync << "    });\n";
+    emit_shared_index(out, index_type, index, sync.str());
+}
+
+static void emit_equality_fold_dispatch(std::ostringstream& out,
+                                        const EqualityFoldPlan& plan,
+                                        bool gated,
+                                        const std::vector<PairBindingCodegen>& pair_binding_codegens,
+                                        const PairCodegenScope& fold_scope,
+                                        const DecoratedProgram& program) {
+    const auto& member = pair_binding_codegens[plan.indexed].scope.binding_name;
+    const auto& group  = pair_binding_codegens[1 - plan.indexed].scope.binding_name;
+    if (gated) {
+        out << "    if (cactus_active) {\n";
+    }
+    out << "    for (std::size_t cactus_i = 0; cactus_i < " << group << "_snapshot.size(); ++cactus_i) {\n";
+    out << "        if (cactus_group_live[cactus_i] == 0) { continue; }\n";
+    out << "        const auto " << group << " = " << group << "_snapshot[cactus_i];\n";
+    out << "        for (const auto& [cactus_ordinal, " << member << "] : cactus_index_" << member << ".find("
+        << equality_key(plan.parts, false, fold_scope, program) << ")) {\n";
+    out << "            cactus_fold(" << (plan.indexed == 0 ? member + ", " + group : group + ", " + member) << ");\n";
+    out << "        }\n";
+    out << "    }\n";
+    if (gated) {
+        out << "    }\n";
+    }
+}
+
 // The `where:` predicates the fold checks per row: not group filters, not the
 // gate, and not the binding filters that already ran.
 static std::vector<const ExprNode*> fold_row_predicates(const ReduceClause& reduce,
@@ -5121,16 +5651,31 @@ static void emit_reduced_pair_handler_body(std::ostringstream& out,
                                            const HandlerContract* contract) {
     const auto& reduce = *sys.reduce;
     const bool keeps   = sys.keep.has_value();
-    emit_reduced_pair_snapshots(out, reduce, pair_binding_codegens, keeps);
-    const auto filtered = emit_reduced_binding_filters(out, sys, reduce, contract, pair_codegen_scope, program);
+    const auto index   = indexed_fold_plan(sys, contract, program);
+    const auto equality = equality_fold_plan(sys, contract, program);
+    std::optional<std::string> indexed;
+    if (index.has_value()) {
+        indexed = pair_binding_codegens[index->indexed].scope.binding_name;
+    } else if (equality.has_value()) {
+        indexed = pair_binding_codegens[equality->indexed].scope.binding_name;
+    }
+    emit_reduced_pair_snapshots(out, reduce, pair_binding_codegens, keeps, indexed);
+    if (index.has_value()) {
+        emit_binding_index_sync(out, *index, *spatial_join_root(sys, contract), pair_binding_codegens[index->indexed],
+                                pair_codegen_scope, program);
+    } else if (equality.has_value()) {
+        emit_equality_index_sync(out, *equality, pair_binding_codegens[equality->indexed], pair_codegen_scope, program);
+    }
+    const auto filtered =
+        emit_reduced_binding_filters(out, sys, reduce, contract, pair_codegen_scope, program, indexed);
     const auto active   = activation_condition(sys, contract, program);
     if (!active.empty()) {
         out << "    const bool cactus_active = " << active << ";\n";
     }
     emit_reduce_types(out, reduce, keeps);
     auto fold_scope = pair_codegen_scope;
-    emit_fold_tables(out, sys, reduce, contract, fold_scope);
-    const auto member_inputs = emit_member_inputs(out, reduce, contract, fold_scope, program);
+    emit_fold_tables(out, sys, reduce, contract, fold_scope, indexed);
+    const auto member_inputs = emit_member_inputs(out, reduce, contract, fold_scope, program, indexed);
     const auto rewrite       = [&](const ExprNode& expr) {
         const auto found = member_inputs.find(&expr);
         return found != member_inputs.end() ? found->second : rewrite_expr(expr, {}, program, {}, {}, &fold_scope);
@@ -5148,7 +5693,14 @@ static void emit_reduced_pair_handler_body(std::ostringstream& out,
         out << "    cactus_reduce_acc cactus_total{};\n";
     }
     emit_fold_lambda(out, reduce, keeps, fold_scope, fold_row_predicates(reduce, predicates, contract, filtered), rewrite);
-    emit_fold_dispatch(out, sys, contract, !active.empty(), pair_binding_codegens, fold_scope, program);
+    if (index.has_value()) {
+        emit_indexed_fold_dispatch(out, *index, *spatial_join_root(sys, contract), !active.empty(),
+                                   pair_binding_codegens, fold_scope, program);
+    } else if (equality.has_value()) {
+        emit_equality_fold_dispatch(out, *equality, !active.empty(), pair_binding_codegens, fold_scope, program);
+    } else {
+        emit_fold_dispatch(out, sys, contract, !active.empty(), pair_binding_codegens, fold_scope, program);
+    }
 
     if (reduce.per_binding.has_value()) {
         out << "    std::vector<cactus_reduce_row> cactus_rows;\n";
@@ -5392,6 +5944,21 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
             << EnttCodegenUtils::hierarchy_strategy_cpp(program) << ");\n";
         out << "}\n\n";
 
+        return out.str();
+    }
+
+    if (is_voxel_volume_renderer(sys)) {
+        const std::string ns       = "cactus::runtime::entt_backend::";
+        const std::string volume   = EnttCodegenUtils::trait_cpp_name("std.voxel.volume.Volume", program);
+        const std::string renderer = EnttCodegenUtils::trait_cpp_name("std.voxel.volume.VolumeRenderer", program);
+        const std::string cell     = EnttCodegenUtils::trait_cpp_name("std.voxel.volume.Cell", program);
+        const std::string cutaway  = EnttCodegenUtils::trait_cpp_name("std.voxel.volume.Cutaway", program);
+        const std::string solid    = EnttCodegenUtils::trait_cpp_name("std.physics.volume.Solid", program);
+        const std::string issue    = EnttCodegenUtils::enum_cpp_name("std.voxel.volume.VolumeIssue", program);
+        out << "void " << system_function_name(program.module_name, sys.name, "tick") << "(entt::registry& registry) {\n";
+        out << "    " << ns << "render_voxel_volumes<" << volume << ", " << renderer << ", " << cell << ", " << cutaway
+            << ", " << solid << ", " << issue << "::Valid>(registry);\n";
+        out << "}\n\n";
         return out.str();
     }
 

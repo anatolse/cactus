@@ -28,12 +28,152 @@ character_body.cactus stdlib-fixtures character_body.Wade/on std.core.fixed_tick
     named_writes:
     named_requirements:
     iteration_order: free
+character_body.cactus stdlib-fixtures std.physics.volume.Depenetrate/on std.core.fixed_tick
+    reads: std.physics.volume.BoxCollider std.physics.volume.CapsuleCollider std.physics.volume.CharacterBody std.physics.volume.Collider std.physics.volume.SphereCollider std.transform.volume.WorldTransform
+    read_fields: std.physics.volume.BoxCollider{*} std.physics.volume.CapsuleCollider{*} std.physics.volume.CharacterBody{*} std.physics.volume.Collider{layer,mask} std.physics.volume.SphereCollider{*} std.transform.volume.WorldTransform{position,rotation}
+    write_fields: std.transform.volume.WorldTransform{position}
+    write_kinds: std.transform.volume.WorldTransform.position=3/0
+    bound_reads: 0:std.physics.volume.BoxCollider 0:std.physics.volume.CapsuleCollider 0:std.physics.volume.CharacterBody 0:std.physics.volume.Collider 0:std.physics.volume.SphereCollider 0:std.transform.volume.WorldTransform 1:std.physics.volume.BoxCollider 1:std.physics.volume.CapsuleCollider 1:std.physics.volume.CharacterBody 1:std.physics.volume.Collider 1:std.physics.volume.SphereCollider 1:std.transform.volume.WorldTransform
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+character_body.cactus stdlib-fixtures std.physics.volume.Integrate/on std.core.fixed_tick
+    reads: std.physics.volume.CharacterBody
+    read_fields: std.physics.volume.CharacterBody{drop,gravity,ground_normal,grounded,lift,motion,paused,step_height,velocity}
+    write_fields: std.physics.volume.CharacterBody{drop,ground_normal,grounded,lift,motion,velocity}
+    write_kinds: std.physics.volume.CharacterBody.drop=0/0 std.physics.volume.CharacterBody.ground_normal=0/0 std.physics.volume.CharacterBody.grounded=3/0 std.physics.volume.CharacterBody.lift=0/0 std.physics.volume.CharacterBody.motion=3/0 std.physics.volume.CharacterBody.velocity=3/0
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+character_body.cactus stdlib-fixtures std.physics.volume.Lift/on std.core.fixed_tick
+    reads: std.physics.volume.BoxCollider std.physics.volume.CapsuleCollider std.physics.volume.CharacterBody std.physics.volume.Collider std.physics.volume.SphereCollider std.transform.volume.WorldTransform
+    read_fields: std.physics.volume.BoxCollider{*} std.physics.volume.CapsuleCollider{*} std.physics.volume.CharacterBody{lift,paused} std.physics.volume.Collider{layer,mask} std.physics.volume.SphereCollider{*} std.transform.volume.WorldTransform{position,rotation}
+    write_fields: std.physics.volume.CharacterBody{lift} std.transform.volume.WorldTransform{position}
+    write_kinds: std.physics.volume.CharacterBody.lift=3/0 std.transform.volume.WorldTransform.position=3/0
+    bound_reads: 0:std.physics.volume.BoxCollider 0:std.physics.volume.CapsuleCollider 0:std.physics.volume.CharacterBody 0:std.physics.volume.Collider 0:std.physics.volume.SphereCollider 0:std.transform.volume.WorldTransform 1:std.physics.volume.BoxCollider 1:std.physics.volume.CapsuleCollider 1:std.physics.volume.Collider 1:std.physics.volume.SphereCollider 1:std.transform.volume.WorldTransform
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+character_body.cactus stdlib-fixtures std.physics.volume.Slide1/on std.core.fixed_tick
+    reads: std.physics.volume.BoxCollider std.physics.volume.CapsuleCollider std.physics.volume.CharacterBody std.physics.volume.Collider std.physics.volume.SphereCollider std.transform.volume.WorldTransform
+    read_fields: std.physics.volume.BoxCollider{*} std.physics.volume.CapsuleCollider{*} std.physics.volume.CharacterBody{ground_normal,ground_offset,grounded,max_slope,motion,paused,velocity} std.physics.volume.Collider{layer,mask} std.physics.volume.SphereCollider{*} std.transform.volume.WorldTransform{position,rotation}
+    write_fields: std.physics.volume.CharacterBody{ground_normal,ground_offset,grounded,motion,velocity} std.transform.volume.WorldTransform{position}
+    write_kinds: std.physics.volume.CharacterBody.ground_normal=0/0 std.physics.volume.CharacterBody.ground_offset=0/0 std.physics.volume.CharacterBody.grounded=2/2 std.physics.volume.CharacterBody.motion=3/0 std.physics.volume.CharacterBody.velocity=3/0 std.transform.volume.WorldTransform.position=3/0
+    bound_reads: 0:std.physics.volume.BoxCollider 0:std.physics.volume.CapsuleCollider 0:std.physics.volume.CharacterBody 0:std.physics.volume.Collider 0:std.physics.volume.SphereCollider 0:std.transform.volume.WorldTransform 1:std.physics.volume.BoxCollider 1:std.physics.volume.CapsuleCollider 1:std.physics.volume.Collider 1:std.physics.volume.SphereCollider 1:std.transform.volume.WorldTransform
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+character_body.cactus stdlib-fixtures std.physics.volume.Slide2/on std.core.fixed_tick
+    reads: std.physics.volume.BoxCollider std.physics.volume.CapsuleCollider std.physics.volume.CharacterBody std.physics.volume.Collider std.physics.volume.SphereCollider std.transform.volume.WorldTransform
+    read_fields: std.physics.volume.BoxCollider{*} std.physics.volume.CapsuleCollider{*} std.physics.volume.CharacterBody{ground_normal,ground_offset,grounded,max_slope,motion,paused,velocity} std.physics.volume.Collider{layer,mask} std.physics.volume.SphereCollider{*} std.transform.volume.WorldTransform{position,rotation}
+    write_fields: std.physics.volume.CharacterBody{ground_normal,ground_offset,grounded,motion,velocity} std.transform.volume.WorldTransform{position}
+    write_kinds: std.physics.volume.CharacterBody.ground_normal=0/0 std.physics.volume.CharacterBody.ground_offset=0/0 std.physics.volume.CharacterBody.grounded=2/2 std.physics.volume.CharacterBody.motion=3/0 std.physics.volume.CharacterBody.velocity=3/0 std.transform.volume.WorldTransform.position=3/0
+    bound_reads: 0:std.physics.volume.BoxCollider 0:std.physics.volume.CapsuleCollider 0:std.physics.volume.CharacterBody 0:std.physics.volume.Collider 0:std.physics.volume.SphereCollider 0:std.transform.volume.WorldTransform 1:std.physics.volume.BoxCollider 1:std.physics.volume.CapsuleCollider 1:std.physics.volume.Collider 1:std.physics.volume.SphereCollider 1:std.transform.volume.WorldTransform
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+character_body.cactus stdlib-fixtures std.physics.volume.Slide3/on std.core.fixed_tick
+    reads: std.physics.volume.BoxCollider std.physics.volume.CapsuleCollider std.physics.volume.CharacterBody std.physics.volume.Collider std.physics.volume.SphereCollider std.transform.volume.WorldTransform
+    read_fields: std.physics.volume.BoxCollider{*} std.physics.volume.CapsuleCollider{*} std.physics.volume.CharacterBody{ground_normal,ground_offset,grounded,max_slope,motion,paused,velocity} std.physics.volume.Collider{layer,mask} std.physics.volume.SphereCollider{*} std.transform.volume.WorldTransform{position,rotation}
+    write_fields: std.physics.volume.CharacterBody{ground_normal,ground_offset,grounded,motion,velocity} std.transform.volume.WorldTransform{position}
+    write_kinds: std.physics.volume.CharacterBody.ground_normal=0/0 std.physics.volume.CharacterBody.ground_offset=0/0 std.physics.volume.CharacterBody.grounded=2/2 std.physics.volume.CharacterBody.motion=3/0 std.physics.volume.CharacterBody.velocity=3/0 std.transform.volume.WorldTransform.position=3/0
+    bound_reads: 0:std.physics.volume.BoxCollider 0:std.physics.volume.CapsuleCollider 0:std.physics.volume.CharacterBody 0:std.physics.volume.Collider 0:std.physics.volume.SphereCollider 0:std.transform.volume.WorldTransform 1:std.physics.volume.BoxCollider 1:std.physics.volume.CapsuleCollider 1:std.physics.volume.Collider 1:std.physics.volume.SphereCollider 1:std.transform.volume.WorldTransform
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+character_body.cactus stdlib-fixtures std.physics.volume.Snap/on std.core.fixed_tick
+    reads: std.physics.volume.BoxCollider std.physics.volume.CapsuleCollider std.physics.volume.CharacterBody std.physics.volume.Collider std.physics.volume.SphereCollider std.transform.volume.WorldTransform
+    read_fields: std.physics.volume.BoxCollider{*} std.physics.volume.CapsuleCollider{*} std.physics.volume.CharacterBody{drop,ground_normal,ground_offset,grounded,lift,max_slope,paused,step_height,time_since_grounded,velocity} std.physics.volume.Collider{layer,mask} std.physics.volume.SphereCollider{*} std.transform.volume.WorldTransform{position,rotation}
+    write_fields: std.physics.volume.CharacterBody{ground_normal,ground_offset,grounded,time_since_grounded,velocity} std.transform.volume.WorldTransform{position}
+    write_kinds: std.physics.volume.CharacterBody.ground_normal=0/0 std.physics.volume.CharacterBody.ground_offset=3/0 std.physics.volume.CharacterBody.grounded=3/0 std.physics.volume.CharacterBody.time_since_grounded=3/0 std.physics.volume.CharacterBody.velocity=0/0 std.transform.volume.WorldTransform.position=3/0
+    bound_reads: 0:std.physics.volume.BoxCollider 0:std.physics.volume.CapsuleCollider 0:std.physics.volume.CharacterBody 0:std.physics.volume.Collider 0:std.physics.volume.SphereCollider 0:std.transform.volume.WorldTransform 1:std.physics.volume.BoxCollider 1:std.physics.volume.CapsuleCollider 1:std.physics.volume.Collider 1:std.physics.volume.SphereCollider 1:std.transform.volume.WorldTransform
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
 collider_sweep_queries.cactus examples collider_sweep_queries.CountTouching/on std.core.fixed_tick
     reads: collider_sweep_queries.Toucher std.physics.volume.BoxCollider std.physics.volume.CapsuleCollider std.physics.volume.Collider std.physics.volume.SphereCollider std.transform.volume.WorldTransform
     read_fields: collider_sweep_queries.Toucher{touching} std.physics.volume.BoxCollider{*} std.physics.volume.CapsuleCollider{*} std.physics.volume.Collider{layer,mask} std.physics.volume.SphereCollider{*} std.transform.volume.WorldTransform{position,rotation}
     write_fields: collider_sweep_queries.Toucher{touching}
     write_kinds: collider_sweep_queries.Toucher.touching=0/0
     bound_reads: 0:collider_sweep_queries.Toucher 0:std.physics.volume.BoxCollider 0:std.physics.volume.CapsuleCollider 0:std.physics.volume.Collider 0:std.physics.volume.SphereCollider 0:std.transform.volume.WorldTransform 1:std.physics.volume.BoxCollider 1:std.physics.volume.CapsuleCollider 1:std.physics.volume.Collider 1:std.physics.volume.SphereCollider 1:std.transform.volume.WorldTransform
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+collider_sweep_queries.cactus examples std.physics.volume.Depenetrate/on std.core.fixed_tick
+    reads: std.physics.volume.BoxCollider std.physics.volume.CapsuleCollider std.physics.volume.CharacterBody std.physics.volume.Collider std.physics.volume.SphereCollider std.transform.volume.WorldTransform
+    read_fields: std.physics.volume.BoxCollider{*} std.physics.volume.CapsuleCollider{*} std.physics.volume.CharacterBody{*} std.physics.volume.Collider{layer,mask} std.physics.volume.SphereCollider{*} std.transform.volume.WorldTransform{position,rotation}
+    write_fields: std.transform.volume.WorldTransform{position}
+    write_kinds: std.transform.volume.WorldTransform.position=3/0
+    bound_reads: 0:std.physics.volume.BoxCollider 0:std.physics.volume.CapsuleCollider 0:std.physics.volume.CharacterBody 0:std.physics.volume.Collider 0:std.physics.volume.SphereCollider 0:std.transform.volume.WorldTransform 1:std.physics.volume.BoxCollider 1:std.physics.volume.CapsuleCollider 1:std.physics.volume.CharacterBody 1:std.physics.volume.Collider 1:std.physics.volume.SphereCollider 1:std.transform.volume.WorldTransform
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+collider_sweep_queries.cactus examples std.physics.volume.Integrate/on std.core.fixed_tick
+    reads: std.physics.volume.CharacterBody
+    read_fields: std.physics.volume.CharacterBody{drop,gravity,ground_normal,grounded,lift,motion,paused,step_height,velocity}
+    write_fields: std.physics.volume.CharacterBody{drop,ground_normal,grounded,lift,motion,velocity}
+    write_kinds: std.physics.volume.CharacterBody.drop=0/0 std.physics.volume.CharacterBody.ground_normal=0/0 std.physics.volume.CharacterBody.grounded=3/0 std.physics.volume.CharacterBody.lift=0/0 std.physics.volume.CharacterBody.motion=3/0 std.physics.volume.CharacterBody.velocity=3/0
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+collider_sweep_queries.cactus examples std.physics.volume.Lift/on std.core.fixed_tick
+    reads: std.physics.volume.BoxCollider std.physics.volume.CapsuleCollider std.physics.volume.CharacterBody std.physics.volume.Collider std.physics.volume.SphereCollider std.transform.volume.WorldTransform
+    read_fields: std.physics.volume.BoxCollider{*} std.physics.volume.CapsuleCollider{*} std.physics.volume.CharacterBody{lift,paused} std.physics.volume.Collider{layer,mask} std.physics.volume.SphereCollider{*} std.transform.volume.WorldTransform{position,rotation}
+    write_fields: std.physics.volume.CharacterBody{lift} std.transform.volume.WorldTransform{position}
+    write_kinds: std.physics.volume.CharacterBody.lift=3/0 std.transform.volume.WorldTransform.position=3/0
+    bound_reads: 0:std.physics.volume.BoxCollider 0:std.physics.volume.CapsuleCollider 0:std.physics.volume.CharacterBody 0:std.physics.volume.Collider 0:std.physics.volume.SphereCollider 0:std.transform.volume.WorldTransform 1:std.physics.volume.BoxCollider 1:std.physics.volume.CapsuleCollider 1:std.physics.volume.Collider 1:std.physics.volume.SphereCollider 1:std.transform.volume.WorldTransform
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+collider_sweep_queries.cactus examples std.physics.volume.Slide1/on std.core.fixed_tick
+    reads: std.physics.volume.BoxCollider std.physics.volume.CapsuleCollider std.physics.volume.CharacterBody std.physics.volume.Collider std.physics.volume.SphereCollider std.transform.volume.WorldTransform
+    read_fields: std.physics.volume.BoxCollider{*} std.physics.volume.CapsuleCollider{*} std.physics.volume.CharacterBody{ground_normal,ground_offset,grounded,max_slope,motion,paused,velocity} std.physics.volume.Collider{layer,mask} std.physics.volume.SphereCollider{*} std.transform.volume.WorldTransform{position,rotation}
+    write_fields: std.physics.volume.CharacterBody{ground_normal,ground_offset,grounded,motion,velocity} std.transform.volume.WorldTransform{position}
+    write_kinds: std.physics.volume.CharacterBody.ground_normal=0/0 std.physics.volume.CharacterBody.ground_offset=0/0 std.physics.volume.CharacterBody.grounded=2/2 std.physics.volume.CharacterBody.motion=3/0 std.physics.volume.CharacterBody.velocity=3/0 std.transform.volume.WorldTransform.position=3/0
+    bound_reads: 0:std.physics.volume.BoxCollider 0:std.physics.volume.CapsuleCollider 0:std.physics.volume.CharacterBody 0:std.physics.volume.Collider 0:std.physics.volume.SphereCollider 0:std.transform.volume.WorldTransform 1:std.physics.volume.BoxCollider 1:std.physics.volume.CapsuleCollider 1:std.physics.volume.Collider 1:std.physics.volume.SphereCollider 1:std.transform.volume.WorldTransform
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+collider_sweep_queries.cactus examples std.physics.volume.Slide2/on std.core.fixed_tick
+    reads: std.physics.volume.BoxCollider std.physics.volume.CapsuleCollider std.physics.volume.CharacterBody std.physics.volume.Collider std.physics.volume.SphereCollider std.transform.volume.WorldTransform
+    read_fields: std.physics.volume.BoxCollider{*} std.physics.volume.CapsuleCollider{*} std.physics.volume.CharacterBody{ground_normal,ground_offset,grounded,max_slope,motion,paused,velocity} std.physics.volume.Collider{layer,mask} std.physics.volume.SphereCollider{*} std.transform.volume.WorldTransform{position,rotation}
+    write_fields: std.physics.volume.CharacterBody{ground_normal,ground_offset,grounded,motion,velocity} std.transform.volume.WorldTransform{position}
+    write_kinds: std.physics.volume.CharacterBody.ground_normal=0/0 std.physics.volume.CharacterBody.ground_offset=0/0 std.physics.volume.CharacterBody.grounded=2/2 std.physics.volume.CharacterBody.motion=3/0 std.physics.volume.CharacterBody.velocity=3/0 std.transform.volume.WorldTransform.position=3/0
+    bound_reads: 0:std.physics.volume.BoxCollider 0:std.physics.volume.CapsuleCollider 0:std.physics.volume.CharacterBody 0:std.physics.volume.Collider 0:std.physics.volume.SphereCollider 0:std.transform.volume.WorldTransform 1:std.physics.volume.BoxCollider 1:std.physics.volume.CapsuleCollider 1:std.physics.volume.Collider 1:std.physics.volume.SphereCollider 1:std.transform.volume.WorldTransform
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+collider_sweep_queries.cactus examples std.physics.volume.Slide3/on std.core.fixed_tick
+    reads: std.physics.volume.BoxCollider std.physics.volume.CapsuleCollider std.physics.volume.CharacterBody std.physics.volume.Collider std.physics.volume.SphereCollider std.transform.volume.WorldTransform
+    read_fields: std.physics.volume.BoxCollider{*} std.physics.volume.CapsuleCollider{*} std.physics.volume.CharacterBody{ground_normal,ground_offset,grounded,max_slope,motion,paused,velocity} std.physics.volume.Collider{layer,mask} std.physics.volume.SphereCollider{*} std.transform.volume.WorldTransform{position,rotation}
+    write_fields: std.physics.volume.CharacterBody{ground_normal,ground_offset,grounded,motion,velocity} std.transform.volume.WorldTransform{position}
+    write_kinds: std.physics.volume.CharacterBody.ground_normal=0/0 std.physics.volume.CharacterBody.ground_offset=0/0 std.physics.volume.CharacterBody.grounded=2/2 std.physics.volume.CharacterBody.motion=3/0 std.physics.volume.CharacterBody.velocity=3/0 std.transform.volume.WorldTransform.position=3/0
+    bound_reads: 0:std.physics.volume.BoxCollider 0:std.physics.volume.CapsuleCollider 0:std.physics.volume.CharacterBody 0:std.physics.volume.Collider 0:std.physics.volume.SphereCollider 0:std.transform.volume.WorldTransform 1:std.physics.volume.BoxCollider 1:std.physics.volume.CapsuleCollider 1:std.physics.volume.Collider 1:std.physics.volume.SphereCollider 1:std.transform.volume.WorldTransform
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+collider_sweep_queries.cactus examples std.physics.volume.Snap/on std.core.fixed_tick
+    reads: std.physics.volume.BoxCollider std.physics.volume.CapsuleCollider std.physics.volume.CharacterBody std.physics.volume.Collider std.physics.volume.SphereCollider std.transform.volume.WorldTransform
+    read_fields: std.physics.volume.BoxCollider{*} std.physics.volume.CapsuleCollider{*} std.physics.volume.CharacterBody{drop,ground_normal,ground_offset,grounded,lift,max_slope,paused,step_height,time_since_grounded,velocity} std.physics.volume.Collider{layer,mask} std.physics.volume.SphereCollider{*} std.transform.volume.WorldTransform{position,rotation}
+    write_fields: std.physics.volume.CharacterBody{ground_normal,ground_offset,grounded,time_since_grounded,velocity} std.transform.volume.WorldTransform{position}
+    write_kinds: std.physics.volume.CharacterBody.ground_normal=0/0 std.physics.volume.CharacterBody.ground_offset=3/0 std.physics.volume.CharacterBody.grounded=3/0 std.physics.volume.CharacterBody.time_since_grounded=3/0 std.physics.volume.CharacterBody.velocity=0/0 std.transform.volume.WorldTransform.position=3/0
+    bound_reads: 0:std.physics.volume.BoxCollider 0:std.physics.volume.CapsuleCollider 0:std.physics.volume.CharacterBody 0:std.physics.volume.Collider 0:std.physics.volume.SphereCollider 0:std.transform.volume.WorldTransform 1:std.physics.volume.BoxCollider 1:std.physics.volume.CapsuleCollider 1:std.physics.volume.Collider 1:std.physics.volume.SphereCollider 1:std.transform.volume.WorldTransform
     named_reads:
     named_writes:
     named_requirements:
@@ -277,6 +417,76 @@ main.cactus first-person-arena main.SeekPlayer/on std.core.fixed_tick
     named_reads: [main.Game: main.Match{over}] [main.PlayerBody: std.transform.volume.WorldTransform{position}]
     named_writes:
     named_requirements: main.PlayerBody/std.transform.volume.WorldTransform main.Game/main.Match
+    iteration_order: free
+main.cactus first-person-arena std.physics.volume.Depenetrate/on std.core.fixed_tick
+    reads: std.physics.volume.BoxCollider std.physics.volume.CapsuleCollider std.physics.volume.CharacterBody std.physics.volume.Collider std.physics.volume.SphereCollider std.transform.volume.WorldTransform
+    read_fields: std.physics.volume.BoxCollider{*} std.physics.volume.CapsuleCollider{*} std.physics.volume.CharacterBody{*} std.physics.volume.Collider{layer,mask} std.physics.volume.SphereCollider{*} std.transform.volume.WorldTransform{position,rotation}
+    write_fields: std.transform.volume.WorldTransform{position}
+    write_kinds: std.transform.volume.WorldTransform.position=3/0
+    bound_reads: 0:std.physics.volume.BoxCollider 0:std.physics.volume.CapsuleCollider 0:std.physics.volume.CharacterBody 0:std.physics.volume.Collider 0:std.physics.volume.SphereCollider 0:std.transform.volume.WorldTransform 1:std.physics.volume.BoxCollider 1:std.physics.volume.CapsuleCollider 1:std.physics.volume.CharacterBody 1:std.physics.volume.Collider 1:std.physics.volume.SphereCollider 1:std.transform.volume.WorldTransform
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+main.cactus first-person-arena std.physics.volume.Integrate/on std.core.fixed_tick
+    reads: std.physics.volume.CharacterBody
+    read_fields: std.physics.volume.CharacterBody{drop,gravity,ground_normal,grounded,lift,motion,paused,step_height,velocity}
+    write_fields: std.physics.volume.CharacterBody{drop,ground_normal,grounded,lift,motion,velocity}
+    write_kinds: std.physics.volume.CharacterBody.drop=0/0 std.physics.volume.CharacterBody.ground_normal=0/0 std.physics.volume.CharacterBody.grounded=3/0 std.physics.volume.CharacterBody.lift=0/0 std.physics.volume.CharacterBody.motion=3/0 std.physics.volume.CharacterBody.velocity=3/0
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+main.cactus first-person-arena std.physics.volume.Lift/on std.core.fixed_tick
+    reads: std.physics.volume.BoxCollider std.physics.volume.CapsuleCollider std.physics.volume.CharacterBody std.physics.volume.Collider std.physics.volume.SphereCollider std.transform.volume.WorldTransform
+    read_fields: std.physics.volume.BoxCollider{*} std.physics.volume.CapsuleCollider{*} std.physics.volume.CharacterBody{lift,paused} std.physics.volume.Collider{layer,mask} std.physics.volume.SphereCollider{*} std.transform.volume.WorldTransform{position,rotation}
+    write_fields: std.physics.volume.CharacterBody{lift} std.transform.volume.WorldTransform{position}
+    write_kinds: std.physics.volume.CharacterBody.lift=3/0 std.transform.volume.WorldTransform.position=3/0
+    bound_reads: 0:std.physics.volume.BoxCollider 0:std.physics.volume.CapsuleCollider 0:std.physics.volume.CharacterBody 0:std.physics.volume.Collider 0:std.physics.volume.SphereCollider 0:std.transform.volume.WorldTransform 1:std.physics.volume.BoxCollider 1:std.physics.volume.CapsuleCollider 1:std.physics.volume.Collider 1:std.physics.volume.SphereCollider 1:std.transform.volume.WorldTransform
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+main.cactus first-person-arena std.physics.volume.Slide1/on std.core.fixed_tick
+    reads: std.physics.volume.BoxCollider std.physics.volume.CapsuleCollider std.physics.volume.CharacterBody std.physics.volume.Collider std.physics.volume.SphereCollider std.transform.volume.WorldTransform
+    read_fields: std.physics.volume.BoxCollider{*} std.physics.volume.CapsuleCollider{*} std.physics.volume.CharacterBody{ground_normal,ground_offset,grounded,max_slope,motion,paused,velocity} std.physics.volume.Collider{layer,mask} std.physics.volume.SphereCollider{*} std.transform.volume.WorldTransform{position,rotation}
+    write_fields: std.physics.volume.CharacterBody{ground_normal,ground_offset,grounded,motion,velocity} std.transform.volume.WorldTransform{position}
+    write_kinds: std.physics.volume.CharacterBody.ground_normal=0/0 std.physics.volume.CharacterBody.ground_offset=0/0 std.physics.volume.CharacterBody.grounded=2/2 std.physics.volume.CharacterBody.motion=3/0 std.physics.volume.CharacterBody.velocity=3/0 std.transform.volume.WorldTransform.position=3/0
+    bound_reads: 0:std.physics.volume.BoxCollider 0:std.physics.volume.CapsuleCollider 0:std.physics.volume.CharacterBody 0:std.physics.volume.Collider 0:std.physics.volume.SphereCollider 0:std.transform.volume.WorldTransform 1:std.physics.volume.BoxCollider 1:std.physics.volume.CapsuleCollider 1:std.physics.volume.Collider 1:std.physics.volume.SphereCollider 1:std.transform.volume.WorldTransform
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+main.cactus first-person-arena std.physics.volume.Slide2/on std.core.fixed_tick
+    reads: std.physics.volume.BoxCollider std.physics.volume.CapsuleCollider std.physics.volume.CharacterBody std.physics.volume.Collider std.physics.volume.SphereCollider std.transform.volume.WorldTransform
+    read_fields: std.physics.volume.BoxCollider{*} std.physics.volume.CapsuleCollider{*} std.physics.volume.CharacterBody{ground_normal,ground_offset,grounded,max_slope,motion,paused,velocity} std.physics.volume.Collider{layer,mask} std.physics.volume.SphereCollider{*} std.transform.volume.WorldTransform{position,rotation}
+    write_fields: std.physics.volume.CharacterBody{ground_normal,ground_offset,grounded,motion,velocity} std.transform.volume.WorldTransform{position}
+    write_kinds: std.physics.volume.CharacterBody.ground_normal=0/0 std.physics.volume.CharacterBody.ground_offset=0/0 std.physics.volume.CharacterBody.grounded=2/2 std.physics.volume.CharacterBody.motion=3/0 std.physics.volume.CharacterBody.velocity=3/0 std.transform.volume.WorldTransform.position=3/0
+    bound_reads: 0:std.physics.volume.BoxCollider 0:std.physics.volume.CapsuleCollider 0:std.physics.volume.CharacterBody 0:std.physics.volume.Collider 0:std.physics.volume.SphereCollider 0:std.transform.volume.WorldTransform 1:std.physics.volume.BoxCollider 1:std.physics.volume.CapsuleCollider 1:std.physics.volume.Collider 1:std.physics.volume.SphereCollider 1:std.transform.volume.WorldTransform
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+main.cactus first-person-arena std.physics.volume.Slide3/on std.core.fixed_tick
+    reads: std.physics.volume.BoxCollider std.physics.volume.CapsuleCollider std.physics.volume.CharacterBody std.physics.volume.Collider std.physics.volume.SphereCollider std.transform.volume.WorldTransform
+    read_fields: std.physics.volume.BoxCollider{*} std.physics.volume.CapsuleCollider{*} std.physics.volume.CharacterBody{ground_normal,ground_offset,grounded,max_slope,motion,paused,velocity} std.physics.volume.Collider{layer,mask} std.physics.volume.SphereCollider{*} std.transform.volume.WorldTransform{position,rotation}
+    write_fields: std.physics.volume.CharacterBody{ground_normal,ground_offset,grounded,motion,velocity} std.transform.volume.WorldTransform{position}
+    write_kinds: std.physics.volume.CharacterBody.ground_normal=0/0 std.physics.volume.CharacterBody.ground_offset=0/0 std.physics.volume.CharacterBody.grounded=2/2 std.physics.volume.CharacterBody.motion=3/0 std.physics.volume.CharacterBody.velocity=3/0 std.transform.volume.WorldTransform.position=3/0
+    bound_reads: 0:std.physics.volume.BoxCollider 0:std.physics.volume.CapsuleCollider 0:std.physics.volume.CharacterBody 0:std.physics.volume.Collider 0:std.physics.volume.SphereCollider 0:std.transform.volume.WorldTransform 1:std.physics.volume.BoxCollider 1:std.physics.volume.CapsuleCollider 1:std.physics.volume.Collider 1:std.physics.volume.SphereCollider 1:std.transform.volume.WorldTransform
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+main.cactus first-person-arena std.physics.volume.Snap/on std.core.fixed_tick
+    reads: std.physics.volume.BoxCollider std.physics.volume.CapsuleCollider std.physics.volume.CharacterBody std.physics.volume.Collider std.physics.volume.SphereCollider std.transform.volume.WorldTransform
+    read_fields: std.physics.volume.BoxCollider{*} std.physics.volume.CapsuleCollider{*} std.physics.volume.CharacterBody{drop,ground_normal,ground_offset,grounded,lift,max_slope,paused,step_height,time_since_grounded,velocity} std.physics.volume.Collider{layer,mask} std.physics.volume.SphereCollider{*} std.transform.volume.WorldTransform{position,rotation}
+    write_fields: std.physics.volume.CharacterBody{ground_normal,ground_offset,grounded,time_since_grounded,velocity} std.transform.volume.WorldTransform{position}
+    write_kinds: std.physics.volume.CharacterBody.ground_normal=0/0 std.physics.volume.CharacterBody.ground_offset=3/0 std.physics.volume.CharacterBody.grounded=3/0 std.physics.volume.CharacterBody.time_since_grounded=3/0 std.physics.volume.CharacterBody.velocity=0/0 std.transform.volume.WorldTransform.position=3/0
+    bound_reads: 0:std.physics.volume.BoxCollider 0:std.physics.volume.CapsuleCollider 0:std.physics.volume.CharacterBody 0:std.physics.volume.Collider 0:std.physics.volume.SphereCollider 0:std.transform.volume.WorldTransform 1:std.physics.volume.BoxCollider 1:std.physics.volume.CapsuleCollider 1:std.physics.volume.Collider 1:std.physics.volume.SphereCollider 1:std.transform.volume.WorldTransform
+    named_reads:
+    named_writes:
+    named_requirements:
     iteration_order: free
 pair_handler_return_runtime.cactus fixtures pair_handler_return_runtime.DetectBallContactWhere/on std.core.tick
     reads:

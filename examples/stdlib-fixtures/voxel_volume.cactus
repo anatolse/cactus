@@ -1,0 +1,149 @@
+module voxel_volume
+
+# Small volumes for std.voxel.volume's headless test.
+#   Terrain: 4 x 3 x 4 cells from (10, 0, 0), y in -1..1. Layer y = -1 is stone,
+#            cells with y = 0 and x < 2 are wood, the rest is air.
+#   Fine:    4 x 1 x 2 half-metre cells at negative coordinates, all solid.
+#   Broken:  a zero cell size, so it creates no cells.
+# StrayCell duplicates Terrain's (2, 1, 2) and is created before the volume's
+# own cells.
+
+use std.core
+use std.physics.volume as physics
+use std.voxel.volume as voxel
+use std.persistence as storage
+
+asset Stone: texture = "../platformer/assets/tiles/ground.png"
+asset Wood: texture = "../platformer/assets/tiles/platform.png"
+
+pub entity Terrain:
+    voxel.Volume:
+        origin = vec3(10.0, 0.0, 0.0)
+        min_y = -1
+        max_x = 3
+        max_y = 1
+        max_z = 3
+        batch = 16
+
+pub entity Fine:
+    voxel.Volume:
+        origin = vec3(-5.0, 0.0, 20.0)
+        cell_size = 0.5
+        min_x = -2
+        max_x = 1
+        min_z = -1
+        batch = 100
+
+pub entity Broken:
+    voxel.Volume:
+        cell_size = 0.0
+        max_x = 3
+
+pub entity StrayCell:
+    voxel.Cell:
+        volume = Terrain
+        x = 2
+        y = 1
+        z = 2
+
+pub entity Picker:
+    voxel.CellProbe:
+        volume = Terrain
+
+pub entity Eye:
+    voxel.RayProbe:
+        volume = Terrain
+
+pub entity FineEye:
+    voxel.RayProbe:
+        volume = Fine
+
+# Digs whatever its ray probe hits while armed, and records the coordinate it
+# saw, which shows the probe ran first.
+pub trait Digger:
+    var armed: bool = false
+    var saw_x: int = -100
+    var saw_y: int = -100
+    var saw_z: int = -100
+
+pub entity Shovel:
+    Digger
+    voxel.RayProbe:
+        volume = Terrain
+
+event Dig
+
+# Saves or restores slot "voxels" when the test sets a flag.
+pub trait StorageControl:
+    var save: bool = false
+    var restore: bool = false
+    var saved: bool = false
+    var restored: bool = false
+    var failure: string = ""
+
+pub entity Storage:
+    StorageControl
+
+rule DriveStorage:
+    each:
+        StorageControl as control
+
+    on tick:
+        if control.save:
+            control.save = false
+            emit storage.SaveRequested:
+                slot = "voxels"
+                request_id = 1
+        if control.restore:
+            control.restore = false
+            emit storage.RestoreRequested:
+                slot = "voxels"
+                request_id = 2
+
+    on storage.SaveCompleted:
+        control.saved = true
+
+    on storage.SaveFailed as failed:
+        control.failure = failed.message
+
+    on storage.RestoreFailed as failed:
+        control.failure = failed.message
+
+rule GenerateTerrain:
+    each:
+        voxel.Cell as cell
+
+    on added voxel.Cell:
+        if cell.volume == Terrain and cell.y == -1:
+            cell.texture = Stone
+            add physics.Solid
+        if cell.volume == Terrain and cell.y == 0 and cell.x < 2:
+            cell.texture = Wood
+            add physics.Solid
+        if cell.volume == Fine:
+            cell.texture = Stone
+            add physics.Solid
+
+rule DigWithShovel:
+    each:
+        Digger as digger
+        voxel.RayProbe as probe
+    after:
+        voxel.probes
+
+    on input:
+        if not digger.armed or not probe.hit:
+            return
+        digger.saw_x = probe.x
+        digger.saw_y = probe.y
+        digger.saw_z = probe.z
+        digger.armed = false
+        emit Dig to probe.cell
+
+rule RemoveDugCell:
+    each:
+        voxel.Cell
+        physics.Solid
+
+    on Dig:
+        remove physics.Solid

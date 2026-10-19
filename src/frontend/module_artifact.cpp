@@ -509,6 +509,28 @@ void ModuleArtifact::write_dep_graph(std::ostream& out, const std::vector<RuleDe
     }
 }
 
+void ModuleArtifact::write_expr_path(std::ostream& out, const ExprPath& path) {
+    write_u32(out, static_cast<uint32_t>(path.size()));
+    for (const auto step : path) {
+        write_u8(out, step);
+    }
+}
+
+void ModuleArtifact::write_equality_join(std::ostream& out, const std::optional<EqualityJoinPlan>& join) {
+    write_bool(out, join.has_value());
+    if (!join.has_value()) {
+        return;
+    }
+    const auto& plan = *join;
+    write_u64(out, static_cast<uint64_t>(plan.indexed_binding));
+    write_u32(out, static_cast<uint32_t>(plan.keys.size()));
+    for (const auto& key : plan.keys) {
+        write_u64(out, static_cast<uint64_t>(key.predicate_index));
+        write_expr_path(out, key.member);
+        write_expr_path(out, key.query);
+    }
+}
+
 void ModuleArtifact::write_contract(std::ostream& out, const HandlerContract& contract) {
     write_u8(out, static_cast<uint8_t>(contract.domain_kind));
     write_symbol_vector(out, contract.selection);
@@ -565,10 +587,7 @@ void ModuleArtifact::write_contract(std::ostream& out, const HandlerContract& co
             write_u8(out, static_cast<uint8_t>(shape.kind));
             write_u32(out, static_cast<uint32_t>(shape.slots.size()));
             for (const auto& slot : shape.slots) {
-                write_u32(out, static_cast<uint32_t>(slot.size()));
-                for (const auto step : slot) {
-                    write_u8(out, step);
-                }
+                write_expr_path(out, slot);
             }
         };
         write_u8(out, static_cast<uint8_t>(plan.dimension));
@@ -577,6 +596,8 @@ void ModuleArtifact::write_contract(std::ostream& out, const HandlerContract& co
         write_u64(out, static_cast<uint64_t>(plan.matched_predicate_index));
         write_u8(out, static_cast<uint8_t>(plan.source));
     }
+
+    write_equality_join(out, contract.equality_join);
 
     write_bool(out, contract.reduction.has_value());
     if (contract.reduction.has_value()) {
@@ -1202,6 +1223,29 @@ std::vector<RuleDependency> ModuleArtifact::read_dep_graph(std::istream& in) {
     return graph;
 }
 
+ExprPath ModuleArtifact::read_expr_path(std::istream& in) {
+    ExprPath path(read_u32(in));
+    for (auto& step : path) {
+        step = read_u8(in);
+    }
+    return path;
+}
+
+std::optional<EqualityJoinPlan> ModuleArtifact::read_equality_join(std::istream& in) {
+    if (!read_bool(in)) {
+        return std::nullopt;
+    }
+    EqualityJoinPlan plan;
+    plan.indexed_binding = static_cast<std::size_t>(read_u64(in));
+    plan.keys.resize(read_u32(in));
+    for (auto& key : plan.keys) {
+        key.predicate_index = static_cast<std::size_t>(read_u64(in));
+        key.member          = read_expr_path(in);
+        key.query           = read_expr_path(in);
+    }
+    return plan;
+}
+
 HandlerContract ModuleArtifact::read_contract(std::istream& in) {
     HandlerContract contract;
     contract.domain_kind = static_cast<HandlerDomainKind>(read_u8(in));
@@ -1271,10 +1315,7 @@ HandlerContract ModuleArtifact::read_contract(std::istream& in) {
             const auto slot_count = read_u32(in);
             shape.slots.resize(slot_count);
             for (auto& slot : shape.slots) {
-                slot.resize(read_u32(in));
-                for (auto& step : slot) {
-                    step = read_u8(in);
-                }
+                slot = read_expr_path(in);
             }
             return shape;
         };
@@ -1286,6 +1327,8 @@ HandlerContract ModuleArtifact::read_contract(std::istream& in) {
         plan.source                  = static_cast<SpatialJoinSource>(read_u8(in));
         contract.spatial_join        = std::move(plan);
     }
+
+    contract.equality_join = read_equality_join(in);
 
     if (read_bool(in)) {
         ReductionPlan plan;
@@ -1558,6 +1601,11 @@ bool ModuleArtifact::save(const DecoratedProgram& program,
     write_template_metadata(out, program);
     write_persistence_metadata(out, program.persistence);
     write_consts(out, program);
+    write_u32(out, static_cast<uint32_t>(program.pub_assets.size()));
+    for (const auto& [name, kind] : program.pub_assets) {
+        write_str(out, name);
+        write_u8(out, static_cast<uint8_t>(kind));
+    }
 
     return out.good();
 }
@@ -1609,6 +1657,11 @@ std::optional<DecoratedProgram> ModuleArtifact::load(const fs::path& path, std::
     read_template_metadata(in, program);
     program.persistence       = read_persistence_metadata(in);
     read_consts(in, program);
+    const auto asset_count = read_u32(in);
+    for (uint32_t i = 0; i < asset_count && in.good(); ++i) {
+        auto name                = read_str(in);
+        program.pub_assets[name] = static_cast<TypeKind>(read_u8(in));
+    }
     program.ast               = nullptr;  // not serialized
 
     if (!in.good()) {
@@ -1654,6 +1707,7 @@ std::optional<ImportedSymbols> ModuleArtifact::extract_pub_symbols(const fs::pat
     ImportedSymbols symbols;
     symbols.module_name = module_name;
     symbols.consts      = program->consts;
+    symbols.assets      = program->pub_assets;
 
     export_declarations<true>(program->traits, symbols.traits, SymbolKind::Trait, module_name);
     symbols.states = program->states;
@@ -1828,6 +1882,9 @@ void ModuleArtifact::write_expression(std::ostream& out, const ExprNode& express
             write_optional_symbol_id(out, node.resolved_entity_id);
             write_optional_symbol_id(out, node.resolved_const_id);
             write_optional_symbol_id(out, node.resolved_phase_dt);
+            write_optional_symbol_id(out, node.resolved_asset_id);
+            write_bool(out, node.resolved_asset_type.has_value());
+            write_u8(out, static_cast<uint8_t>(node.resolved_asset_type.value_or(TypeKind::Unknown)));
         } else if constexpr (std::is_same_v<Node, IfExpr>) {
             write_expression(out, *node.condition);
             write_expression(out, *node.then_expr);
@@ -1930,6 +1987,12 @@ std::unique_ptr<ExprNode> ModuleArtifact::read_expression(std::istream& in) {
             node.resolved_entity_id = read_optional_symbol_id(in);
             node.resolved_const_id = read_optional_symbol_id(in);
             node.resolved_phase_dt = read_optional_symbol_id(in);
+            node.resolved_asset_id = read_optional_symbol_id(in);
+            const bool has_asset_type = read_bool(in);
+            const auto asset_type     = static_cast<TypeKind>(read_u8(in));
+            if (has_asset_type) {
+                node.resolved_asset_type = asset_type;
+            }
             return wrap(std::move(node));
         }
         case 7: {

@@ -1,0 +1,131 @@
+module sky
+
+# The calendar and the sky. One game minute passes per real second at 1x;
+# the speed buttons scale only the calendar, never movement or physics. The
+# sun rises in the east (+X) at 06:00, crosses the sky and sets in the west at
+# 18:00; the moon takes the opposite half of the day. Both are lit discs far
+# from the world, each driving a directional light that fades through the
+# horizon.
+
+use std.core
+use std.math as math
+use std.math.vec3 as v3
+use std.transform.volume as tv
+use std.render.meshes as meshes
+use std.camera.viewport as viewport
+use game
+use robot
+
+asset SphereMesh: mesh = "models/sphere.mesh"
+asset GlowMaterial: material = "materials/glow.mat"
+
+const:
+    MINUTES_PER_DAY = 1440.0
+    SUNRISE = 360.0
+    SKY_DISTANCE = 180.0
+    SKY_CENTER = vec3(32.0, 0.0, 32.0)
+    DISC_SIZE = 14.0
+    # A slight tilt toward -Z keeps the discs off the exact east-west line.
+    TILT = 0.35
+
+# The sun (night = false) or the moon (night = true): a disc, a light, or both.
+pub trait SkyBody:
+    var night: bool = false
+
+template Disc(tint: color, night: bool):
+    tv.WorldTransform:
+        scale = vec3(DISC_SIZE, DISC_SIZE, DISC_SIZE)
+    meshes.Renderer:
+        mesh = SphereMesh
+        material = GlowMaterial
+        color = tint
+        cast_shadow = false
+    SkyBody:
+        night = night
+
+template Light(tint: color, night: bool):
+    meshes.DirectionalLight:
+        color = tint
+        intensity = 0.0
+    SkyBody:
+        night = night
+
+pub template SunDiscTemplate:
+    use Disc(tint = #FFE066FF, night = false)
+
+pub template MoonDiscTemplate:
+    use Disc(tint = #D8DEF0FF, night = true)
+
+pub template SunLightTemplate:
+    use Light(tint = #FFF2D8FF, night = false)
+
+pub template MoonLightTemplate:
+    use Light(tint = #8FA2D8FF, night = true)
+
+# Unit direction from the world toward a sky body.
+func body_direction(minute: float, night: bool) vec3:
+    return if night: sun_direction(minute) * -1.0 else: sun_direction(minute)
+
+# The day, minute-of-day and whole days added after `minutes` more minutes.
+pub func days_after(minute: float, minutes: float) int:
+    return math.floor((minute + minutes) / MINUTES_PER_DAY)
+
+pub func minute_after(minute: float, minutes: float) float:
+    let total = minute + minutes
+    return total - days_after(minute, minutes) * MINUTES_PER_DAY
+
+# Unit direction from the world toward the sun at a minute of the day: east at
+# sunrise, overhead at noon, west at sunset, under the world at midnight.
+pub func sun_direction(minute: float) vec3:
+    let angle = (minute - SUNRISE) / MINUTES_PER_DAY * math.PI * 2.0
+    return v3.normalize(vec3(math.cos(angle), math.sin(angle), -TILT))
+
+# How strongly a body lights the world: 0 below the horizon, rising smoothly
+# to 1 a little above it.
+pub func horizon_fade(direction: vec3) float:
+    let t = math.clamp(direction.y * 4.0 + 0.15, 0.0, 1.0)
+    return t * t * (3.0 - 2.0 * t)
+
+rule AdvanceCalendar:
+    when:
+        game.Game[game.Session].mode == game.Mode.Playing
+
+    on tick:
+        let minutes = tick.dt * game.speed_value(game.Game[game.Session].speed)
+        game.Game[game.Session].day += days_after(game.Game[game.Session].minute, minutes)
+        game.Game[game.Session].minute = minute_after(game.Game[game.Session].minute, minutes)
+
+rule PlaceSkyBodies:
+    each:
+        SkyBody as body
+        tv.WorldTransform as transform
+    after:
+        robot.ComposeFirstPerson
+        robot.ComposeStrategy
+
+    on late_tick:
+        transform.position = SKY_CENTER + body_direction(game.Game[game.Session].minute, body.night) * SKY_DISTANCE
+
+rule LightBySky:
+    each:
+        SkyBody as body
+        meshes.DirectionalLight as light
+
+    on late_tick:
+        let toward = body_direction(game.Game[game.Session].minute, body.night)
+        let strength = if body.night: 0.3 else: 1.0
+        light.direction = toward * -1.0
+        light.intensity = strength * horizon_fade(toward)
+
+rule TintSky:
+    each:
+        viewport.Viewport as vp
+
+    on late_tick:
+        let day = horizon_fade(sun_direction(game.Game[game.Session].minute))
+        vp.clear_color = color(
+            math.lerp(0.043, 0.435, day),
+            math.lerp(0.063, 0.659, day),
+            math.lerp(0.149, 0.863, day),
+            1.0,
+        )

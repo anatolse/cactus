@@ -171,6 +171,22 @@ entity SplitRight from Body(position = vec3(320.3, 10.0, 0.0)):
     physics.CharacterBody:
         gravity = 0.0
 
+# Pressed against a block too tall to step onto, it jumps and lands on top.
+# These sizes and speeds make the jump meet the block's edge while still rising.
+entity EdgeJumper:
+    use GroundedBody(position = vec3(419.65, 0.8, 0.0))
+    physics.CapsuleCollider:
+        radius = 0.35
+        height = 1.6
+    physics.CharacterBody:
+        gravity = 20.0
+        step_height = 0.45
+    Driven:
+        speed = 4.0
+    Jumper:
+        speed = 7.6
+entity JumpBlock from Block(position = vec3(425.0, 0.5, 0.0), size = vec3(10.0, 1.0, 4.0))
+
 entity WalkerLeft from GroundedBody(position = vec3(338.0, 1.0, 0.0), velocity = vec3(2.0, 0.0, 0.0))
 entity WalkerRight from GroundedBody(position = vec3(342.0, 1.0, 0.0), velocity = vec3(-2.0, 0.0, 0.0))
 
@@ -227,6 +243,29 @@ entity Cart:
             tv.LocalTransform:
                 position = vec3(0.0, 1.0, 0.0)
             tv.WorldTransform
+
+# Paused bodies sit on their own row, z = 12, clear of the scenarios above.
+template PausedBody(position: vec3, velocity: vec3 = vec3(0.0, 0.0, 0.0)):
+    use Body(position = position, velocity = velocity)
+    physics.CharacterBody:
+        paused = true
+
+entity PausedFaller from PausedBody(position = vec3(0.0, 8.0, 12.0), velocity = vec3(0.0, -3.0, 0.0))
+
+entity PausedStander from PausedBody(position = vec3(20.0, 1.0, 12.0), velocity = vec3(1.0, 0.0, 0.0)):
+    physics.CharacterBody:
+        grounded = true
+        time_since_grounded = 0.25
+        motion = vec3(0.5, 0.0, 0.0)
+        lift = 0.1
+        drop = 0.2
+        ground_offset = 1.0
+
+entity ActivePusher from Body(position = vec3(40.0, 10.0, 12.0))
+entity PausedBlocker from PausedBody(position = vec3(40.6, 10.0, 12.0))
+
+entity PausedPairLeft from PausedBody(position = vec3(60.0, 10.0, 12.0))
+entity PausedPairRight from PausedBody(position = vec3(60.6, 10.0, 12.0))
 
 rule CountTicks:
     each:

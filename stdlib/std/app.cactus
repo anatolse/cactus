@@ -1,0 +1,14 @@
+module std.app
+
+# Asks the application to shut down. The handler that emits it, and the rest
+# of its activation, finish normally. The generated main loop then ends after
+# the current frame and runs `unload` once; repeated requests count as one.
+# Custom hosts read and clear the request through the runtime instead of
+# exiting.
+pub event QuitRequested
+
+extern func request_quit()
+
+rule Quit:
+    on QuitRequested:
+        request_quit()

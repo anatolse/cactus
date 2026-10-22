@@ -287,8 +287,8 @@ function(cactus_add_example TARGET_NAME)
         ${CACTUS_EXAMPLE_EXTRA_SOURCES}
     )
     set_source_files_properties("${generated_output}" PROPERTIES GENERATED TRUE)
-    set_property(TARGET ${TARGET_NAME} PROPERTY CXX_STANDARD 20)
-    target_compile_features(${TARGET_NAME} PRIVATE cxx_std_20)
+    set_property(TARGET ${TARGET_NAME} PROPERTY CXX_STANDARD 23)
+    target_compile_features(${TARGET_NAME} PRIVATE cxx_std_23)
     target_include_directories(${TARGET_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
     set_property(TARGET ${TARGET_NAME} PROPERTY CXX_CLANG_TIDY "")
 
@@ -372,8 +372,8 @@ function(cactus_add_headless_behavior_test TARGET_NAME)
         "${CACTUS_HEADLESS_TEST_TEST_SOURCE}"
         "${generated_output}"
     )
-    set_property(TARGET ${TARGET_NAME} PROPERTY CXX_STANDARD 20)
-    target_compile_features(${TARGET_NAME} PRIVATE cxx_std_20)
+    set_property(TARGET ${TARGET_NAME} PROPERTY CXX_STANDARD 23)
+    target_compile_features(${TARGET_NAME} PRIVATE cxx_std_23)
     target_include_directories(${TARGET_NAME} PRIVATE "${CMAKE_SOURCE_DIR}/src")
     target_compile_definitions(${TARGET_NAME} PRIVATE
         CACTUS_HEADLESS_GENERATED_CPP="${generated_output}"
@@ -452,8 +452,8 @@ function(cactus_add_persistence_roundtrip_subprocess TARGET_NAME)
         "${CACTUS_ROUNDTRIP_MAIN_SOURCE}"
         "${generated_output}"
     )
-    set_property(TARGET ${TARGET_NAME} PROPERTY CXX_STANDARD 20)
-    target_compile_features(${TARGET_NAME} PRIVATE cxx_std_20)
+    set_property(TARGET ${TARGET_NAME} PROPERTY CXX_STANDARD 23)
+    target_compile_features(${TARGET_NAME} PRIVATE cxx_std_23)
     target_include_directories(${TARGET_NAME} PRIVATE "${CMAKE_SOURCE_DIR}/src")
     target_compile_definitions(${TARGET_NAME} PRIVATE
         CACTUS_HEADLESS_GENERATED_CPP="${generated_output}"
@@ -522,8 +522,8 @@ function(cactus_add_render_pass_visual_test TARGET_NAME)
         "${CACTUS_VISUAL_TEST_TEST_SOURCE}"
         "${generated_output}"
     )
-    set_property(TARGET ${TARGET_NAME} PROPERTY CXX_STANDARD 20)
-    target_compile_features(${TARGET_NAME} PRIVATE cxx_std_20)
+    set_property(TARGET ${TARGET_NAME} PROPERTY CXX_STANDARD 23)
+    target_compile_features(${TARGET_NAME} PRIVATE cxx_std_23)
     target_include_directories(${TARGET_NAME} PRIVATE "${CMAKE_SOURCE_DIR}/src")
 
     # TakeScreenshot()/ExportImage save relative to raylib's own
@@ -599,8 +599,8 @@ foreach(target_name IN ITEMS
         tests/example_manual_generated_main.cpp
         "${EXTERNAL_HANDLER_LINK_GENERATED_CPP}"
     )
-    set_property(TARGET ${target_name} PROPERTY CXX_STANDARD 20)
-    target_compile_features(${target_name} PRIVATE cxx_std_20)
+    set_property(TARGET ${target_name} PROPERTY CXX_STANDARD 23)
+    target_compile_features(${target_name} PRIVATE cxx_std_23)
     target_include_directories(${target_name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
     target_compile_definitions(${target_name} PRIVATE
         CACTUS_EXTERNAL_HANDLER_GENERATED_CPP="${EXTERNAL_HANDLER_LINK_GENERATED_CPP}"

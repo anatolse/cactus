@@ -27,3 +27,5 @@ CheckOptions:
     value: 'NULL'
   - key: readability-braces-around-statements.ShortStatementLines
     value: 0
+  - key: modernize-use-std-numbers.DiffThreshold
+    value: 0.000001

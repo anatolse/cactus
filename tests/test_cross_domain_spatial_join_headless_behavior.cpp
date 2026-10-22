@@ -87,7 +87,7 @@ TEST_CASE("Accelerated rules are compiled to a broad phase or a persistent index
         }
         return count;
     };
-    CHECK(occurrences("SapBroadPhase3D __sap;") + occurrences(".candidates(") == 2);
+    CHECK(occurrences("SapBroadPhase3D cactus_gen_sap;") + occurrences(".candidates(") == 2);
 }
 
 TEST_CASE("A cross-domain sphere-box pass executes the same tuples as the unaccelerated pass",

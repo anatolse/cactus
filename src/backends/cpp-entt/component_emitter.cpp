@@ -41,12 +41,13 @@ std::string EnttComponentEmitter::emit_component(const ResolvedTrait& trait, con
         // (e.g. `rand.seeded(0)`), which only the DecoratedProgram overload of
         // emit_expr resolves to its runtime namespace.
         const auto rendered = EnttCodegenUtils::emit_expr(*default_expr, program);
-        // A declared `= ""` default renders identically to std::string's own
+        // A declared `= ""` or `= []` default renders identically to the type's own
         // default construction; spelling it out trips clang-tidy's
-        // readability-redundant-string-init on generated output.
-        const bool is_redundant_empty_string = field.type.kind == TypeKind::String && rendered == "\"\"";
+        // redundant-init checks on generated output.
+        const bool is_redundant_empty_string = (field.type.kind == TypeKind::String && rendered == "\"\"") ||
+                                               (field.type.kind == TypeKind::List && rendered == "{}");
         if (is_redundant_empty_string) {
-            out << "{};\n";
+            out << ";\n";
         } else {
             out << " = " << rendered << ";\n";
         }

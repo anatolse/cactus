@@ -97,7 +97,7 @@ void visit_expression(Expression& expression, const Visitor& visitor) {
 }
 
 inline std::string initializer_slot_name(std::size_t index) {
-    return "__cactus_template_slot_" + std::to_string(index);
+    return "cactus_gen_slot_" + std::to_string(index);
 }
 
 inline void offset_initializer_slots(ExprNode& expression, std::size_t offset) {

@@ -283,13 +283,14 @@ std::string clang_tidy_command(const ExampleCase& example) {
     if (const auto db_dir = compilation_database_dir()) {
         command << " -p " << quote(*db_dir);
     } else {
-        command << " --extra-arg=-std=c++20";
+        command << " --extra-arg=-std=c++23";
         command << " --extra-arg=-I" << quote(repo_root() / "src");
         command << " --extra-arg=-I" << quote(build_root() / "_deps" / "entt-src" / "src");
         command << " --extra-arg=-I" << quote(build_root() / "_deps" / "raylib-src" / "src");
     }
 
     command << " --header-filter=" << quote(example.generated_cpp.string()) << " --warnings-as-errors=*"
+            << " --checks=-readability-function-cognitive-complexity"
             << " --extra-arg=-Wno-deprecated-literal-operator";
     return command.str();
 }

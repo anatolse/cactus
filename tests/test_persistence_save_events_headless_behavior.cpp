@@ -26,7 +26,7 @@ struct World {
     entt::registry registry;
 
     World() {
-        cactus::runtime::entt_backend::generated_scheduler_state().stdlib.core.fixed_tick = {};
+        std::get<cactus_gen::stdlib::core::FixedTickPhase>(cactus::runtime::entt_backend::generated_scheduler_state().phases) = {};
         init_and_load(registry);
     }
 };

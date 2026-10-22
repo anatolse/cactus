@@ -139,6 +139,11 @@ func max_scalar(left: float, right: float) float:
         return right
     return left
 
+func max_int(left: int, right: int) int:
+    if right > left:
+        return right
+    return left
+
 func max_size(left: vec2, right: vec2) vec2:
     return vec2(max_scalar(left.x, right.x), max_scalar(left.y, right.y))
 
@@ -209,12 +214,10 @@ rule MeasureUi:
                             DesiredSize as desired =>
                                 if stack.axis == Axis.Horizontal:
                                     cursor += desired.size.x
-                                    if desired.size.y > cross:
-                                        cross = desired.size.y
+                                    cross = max_scalar(cross, desired.size.y)
                                 else:
                                     cursor += desired.size.y
-                                    if desired.size.x > cross:
-                                        cross = desired.size.x
+                                    cross = max_scalar(cross, desired.size.x)
                                 child_count += 1
                     if child_count > 1:
                         cursor += nonnegative(stack.gap) * (child_count - 1)
@@ -245,24 +248,18 @@ rule MeasureUi:
                                         column = placement.column
                                     if placement.row >= 0:
                                         row = placement.row
-                            if column < 0:
-                                column = 0
-                            if row < 0:
-                                row = 0
+                            column = max_int(column, 0)
+                            row = max_int(row, 0)
                             let column_end = column + column_span
                             let row_end = row + row_span
-                            if column_end > occupied_columns:
-                                occupied_columns = column_end
-                            if row_end > occupied_rows:
-                                occupied_rows = row_end
+                            occupied_columns = max_int(occupied_columns, column_end)
+                            occupied_rows = max_int(occupied_rows, row_end)
                             match child:
                                 DesiredSize as desired =>
                                     let needed_cell_width = (nonnegative(desired.size.x) - safe_gap.x * (column_span - 1)) / column_span
                                     let needed_cell_height = (nonnegative(desired.size.y) - safe_gap.y * (row_span - 1)) / row_span
-                                    if needed_cell_width > cell.x:
-                                        cell.x = needed_cell_width
-                                    if needed_cell_height > cell.y:
-                                        cell.y = needed_cell_height
+                                    cell.x = max_scalar(cell.x, needed_cell_width)
+                                    cell.y = max_scalar(cell.y, needed_cell_height)
                             automatic_index += 1
                         var content = vec2(cell.x * occupied_columns, cell.y * occupied_rows)
                         if occupied_columns > 1:
@@ -348,24 +345,18 @@ rule MeasureUi:
                                         column = placement.column
                                     if placement.row >= 0:
                                         row = placement.row
-                            if column < 0:
-                                column = 0
-                            if row < 0:
-                                row = 0
+                            column = max_int(column, 0)
+                            row = max_int(row, 0)
                             let column_end = column + column_span
                             let row_end = row + row_span
-                            if column_end > occupied_columns:
-                                occupied_columns = column_end
-                            if row_end > occupied_rows:
-                                occupied_rows = row_end
+                            occupied_columns = max_int(occupied_columns, column_end)
+                            occupied_rows = max_int(occupied_rows, row_end)
                             match child:
                                 DesiredSize as desired =>
                                     let needed_cell_width = (nonnegative(desired.size.x) - safe_gap.x * (column_span - 1)) / column_span
                                     let needed_cell_height = (nonnegative(desired.size.y) - safe_gap.y * (row_span - 1)) / row_span
-                                    if needed_cell_width > cell.x:
-                                        cell.x = needed_cell_width
-                                    if needed_cell_height > cell.y:
-                                        cell.y = needed_cell_height
+                                    cell.x = max_scalar(cell.x, needed_cell_width)
+                                    cell.y = max_scalar(cell.y, needed_cell_height)
                             automatic_index += 1
                         var content = vec2(cell.x * occupied_columns, cell.y * occupied_rows)
                         if occupied_columns > 1:

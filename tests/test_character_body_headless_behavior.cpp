@@ -70,8 +70,8 @@ struct World {
     }
     // Signed gap between two colliders; negative when they overlap.
     float gap(entt::entity a, entt::entity b) {
-        const auto a_shape = cactus_collider_shape_of(registry, a);
-        const auto b_shape = cactus_collider_shape_of(registry, b);
+        const auto a_shape = cactus_gen::detail::cactus_collider_shape_of(registry, a);
+        const auto b_shape = cactus_gen::detail::cactus_collider_shape_of(registry, b);
         REQUIRE(a_shape.has_value());
         REQUIRE(b_shape.has_value());
         return cactus::runtime::physics::separation(*a_shape, *b_shape).distance;

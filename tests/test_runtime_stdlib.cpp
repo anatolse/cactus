@@ -256,6 +256,22 @@ TEST_CASE("Runtime stdlib: color_from_components clamps out-of-range channel inp
     CHECK(clamped.a == 255);
 }
 
+TEST_CASE("Runtime stdlib: vector and color constructors are usable in constant expressions",
+          "[runtime][stdlib][vector-expressions]") {
+    static_assert(vec2(1.0F, 2.0F).y == 2.0F);
+    static_assert(vec2(3.0F).x == 3.0F);
+    static_assert(vec3(1.0F, 2.0F, 3.0F).z == 3.0F);
+    static_assert(vec3(4.0F).y == 4.0F);
+    static_assert(cactus::runtime::stdlib::math::quat::identity().w == 1.0F);
+    static_assert(color_from_components(1.5F, 0.5F, -0.2F, 1.0F).r == 255);
+    static_assert(color_from_components(1.5F, 0.5F, -0.2F, 1.0F).g == 128);
+    static_assert(color_from_components(1.5F, 0.5F, -0.2F, 1.0F).b == 0);
+    static_assert(noexcept(vec2(0.0F, 0.0F)) && noexcept(vec3(0.0F)));
+    CHECK(color_from_components(0.25F, 0.75F, 0.1F, 0.0F).r == std::lround(0.25F * 255.0F));
+    CHECK(color_from_components(0.25F, 0.75F, 0.1F, 0.0F).g == std::lround(0.75F * 255.0F));
+    CHECK(color_from_components(0.25F, 0.75F, 0.1F, 0.0F).b == std::lround(0.1F * 255.0F));
+}
+
 TEST_CASE("Runtime stdlib: color operator matrix add/subtract/scale/divide/component-multiply are reachable",
           "[runtime][stdlib][vector-expressions]") {
     // Byte-quantized round-tripping (float -> [0,255] channel -> float) loses

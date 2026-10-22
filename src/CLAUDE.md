@@ -1,8 +1,8 @@
 # Compiler C++ authoring rules (`src/common`, `src/frontend`, `src/backends`)
 
-Built as C++23. Does **not** apply to the cpp-entt backend's generated output or the 3
-targets that compile it (examples, 2 test-runners) — those stay on C++20 and have
-clang-tidy disabled independently.
+Built as C++23. The authoring rules below are for the compiler's own source. The
+cpp-entt backend's generated output also builds as C++23 and must pass the same
+`.clang-tidy` (see "Generated code" below).
 
 ## Hard constraints
 
@@ -97,11 +97,16 @@ general C++23 feature survey.
   compile pass rather than short-circuiting on the first error — keep using
   `ErrorReporter` for anything that reports to the user.
 
-## Generated code performance
+## Generated code
 
-Generated output (the cpp-entt backend's emitted code and the 3 targets that compile
-it) stays exempt from lint/style rules — unchanged. But the backend's codegen
-*strategy* is judged on the runtime speed of the code it emits above all else.
+Generated output builds as C++23 and is checked with the repository `.clang-tidy`, with
+no `NOLINTBEGIN` wrapper. Treat a tidy finding on generated code as a bug in the
+emitter and fix the emitted text; don't suppress it. The curated example test excludes
+only `readability-function-cognitive-complexity`, on its command line. Generated code
+is not yet clang-format clean.
+
+The backend's codegen *strategy* is judged on the runtime speed of the code it emits
+above all else.
 Priority order when a change trades one against another: generated-code runtime speed
 first, compiler-developer velocity second, the compiler's own compile time a distant
 third.

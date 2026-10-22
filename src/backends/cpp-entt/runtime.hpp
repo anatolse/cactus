@@ -2065,6 +2065,9 @@ void commit_activation(ActivationRuntime<Occurrence>& activation,
 template <typename Component>
 class ProjectedTraitTracker {
 public:
+    // Generated code holds trackers as globals; an allocation failure this early terminates anyway.
+    ProjectedTraitTracker() noexcept = default;
+
     // Records the entity's pre-projection state exactly once per frame — a
     // repeated call for an already-tracked entity is a no-op, so a later
     // `clear` restores the value that existed before the *first* projection

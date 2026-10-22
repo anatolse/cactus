@@ -5,8 +5,12 @@
 #include "frontend/symbol_identity.hpp"
 
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <cctype>
+#include <charconv>
 #include <cstdint>
+#include <numbers>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
@@ -248,7 +252,15 @@ std::string EnttCodegenUtils::value_type_to_cpp(const TypeInfo& type) {
 }
 
 std::string EnttCodegenUtils::value_initializer(const TypeInfo& type) {
-    return type.kind == TypeKind::EntityId ? "{entt::null}" : "{}";
+    switch (type.kind) {
+        case TypeKind::EntityId:
+            return "{entt::null}";
+        case TypeKind::String:
+        case TypeKind::List:
+            return "";
+        default:
+            return "{}";
+    }
 }
 
 std::string EnttCodegenUtils::type_to_cpp(const TypeInfo& type) {
@@ -424,7 +436,7 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const ProgramNode*
                     }
                 }
                 if (e.kind == LiteralExpr::Kind::Float) {
-                    return e.value + "F";
+                    return float_literal_cpp(e.value);
                 }
                 return e.value;
             } else if constexpr (std::is_same_v<E, IdentExpr>) {
@@ -647,7 +659,7 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const DecoratedPro
                     return *std::move(named);
                 }
                 if (e.resolved_const_id.has_value()) {
-                    return symbol_cpp_name(*e.resolved_const_id);
+                    return const_reference_cpp(program, *e.resolved_const_id);
                 }
                 if (e.resolved_asset_id.has_value()) {
                     return e.resolved_asset_id->local_name;
@@ -678,6 +690,11 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const DecoratedPro
                 return emit_if_ternary(e, emit);
             } else if constexpr (std::is_same_v<E, MatchExpr>) {
                 return emit_match_ternary(e, emit);
+            } else if constexpr (std::is_same_v<E, IdentExpr>) {
+                if (!e.template_slot.has_value() && !e.resolved_entity_id.has_value() && e.resolved_const_id.has_value()) {
+                    return const_reference_cpp(program, *e.resolved_const_id);
+                }
+                return emit_expr(expr, program.ast);
             } else {
                 return emit_expr(expr, program.ast);
             }
@@ -966,6 +983,165 @@ const ResolvedConst* EnttCodegenUtils::find_const(const DecoratedProgram& progra
         }
     }
     return nullptr;
+}
+
+const ExprNode* EnttCodegenUtils::find_const_initializer(const ProgramNode& ast, const SymbolId& symbol) {
+    for (const auto& decl : ast.declarations) {
+        const auto* block = std::get_if<ConstBlockNode>(&decl);
+        if (block == nullptr) {
+            continue;
+        }
+        for (const auto& assignment : block->assignments) {
+            if (assignment.resolved_const_id == symbol) {
+                return assignment.value.get();
+            }
+        }
+    }
+    return nullptr;
+}
+
+namespace {
+
+bool is_literal_type(const TypeInfo& type, const DecoratedProgram& program, bool in_struct) {
+    switch (type.kind) {
+        case TypeKind::Int:
+        case TypeKind::Float:
+        case TypeKind::Bool:
+        case TypeKind::Vec2:
+        case TypeKind::Vec3:
+        case TypeKind::Quat:
+        case TypeKind::Color:
+        case TypeKind::Enum:
+            return true;
+        case TypeKind::String:
+            return !in_struct;
+        case TypeKind::Struct: {
+            const auto* resolved =
+                type.symbol_id.has_value() ? EnttCodegenUtils::find_struct(program, *type.symbol_id) : nullptr;
+            return resolved != nullptr && std::ranges::all_of(resolved->fields, [&](const ResolvedField& field) {
+                       return is_literal_type(field.type, program, true);
+                   });
+        }
+        default:
+            return false;
+    }
+}
+
+bool is_constant_expression(const ExprNode& expr, const DecoratedProgram& program) {
+    const auto constant = [&](const std::unique_ptr<ExprNode>& child) {
+        return child != nullptr && is_constant_expression(*child, program);
+    };
+    return std::visit(
+        [&](const auto& e) -> bool {
+            using E = std::decay_t<decltype(e)>;
+            if constexpr (std::is_same_v<E, LiteralExpr>) {
+                return true;
+            } else if constexpr (std::is_same_v<E, IdentExpr>) {
+                return e.resolved_const_id.has_value() && EnttCodegenUtils::is_constexpr_const(program, *e.resolved_const_id);
+            } else if constexpr (std::is_same_v<E, MemberExpr>) {
+                if (e.resolved_const_id.has_value()) {
+                    return EnttCodegenUtils::is_constexpr_const(program, *e.resolved_const_id);
+                }
+                return e.resolved_enum_member.has_value() || e.resolved_phase_dt.has_value();
+            } else if constexpr (std::is_same_v<E, BinaryExpr>) {
+                return constant(e.left) && constant(e.right);
+            } else if constexpr (std::is_same_v<E, UnaryExpr>) {
+                return constant(e.operand);
+            } else if constexpr (std::is_same_v<E, CallExpr>) {
+                const auto* callee = std::get_if<IdentExpr>(&e.callee->expr);
+                const bool constructor =
+                    e.resolved_struct_id.has_value() ||
+                    (callee != nullptr && !e.resolved_callee_id.has_value() &&
+                     (callee->name == "vec2" || callee->name == "vec3" || callee->name == "color"));
+                return constructor && std::ranges::all_of(e.args, constant);
+            } else {
+                return false;
+            }
+        },
+        expr.expr);
+}
+
+}  // namespace
+
+bool EnttCodegenUtils::is_constexpr_const(const DecoratedProgram& program, const SymbolId& symbol) {
+    const auto* constant    = find_const(program, symbol);
+    const auto* initializer = program.ast != nullptr ? find_const_initializer(*program.ast, symbol) : nullptr;
+    if (constant == nullptr || initializer == nullptr || !is_literal_type(constant->type, program, false)) {
+        return false;
+    }
+    if (constant->type.kind != TypeKind::String) {
+        return is_constant_expression(*initializer, program);
+    }
+    // A view needs a literal it can point at for the whole run.
+    if (const auto* literal = std::get_if<LiteralExpr>(&initializer->expr)) {
+        return literal->kind == LiteralExpr::Kind::String;
+    }
+    const auto* alias = named_const(*initializer);
+    return alias != nullptr && is_constexpr_const(program, *alias);
+}
+
+const SymbolId* EnttCodegenUtils::named_const(const ExprNode& expr) {
+    const std::optional<SymbolId>* resolved = nullptr;
+    if (const auto* ident = std::get_if<IdentExpr>(&expr.expr)) {
+        resolved = &ident->resolved_const_id;
+    } else if (const auto* member = std::get_if<MemberExpr>(&expr.expr)) {
+        resolved = &member->resolved_const_id;
+    }
+    return resolved != nullptr && resolved->has_value() ? &**resolved : nullptr;
+}
+
+std::string EnttCodegenUtils::float_literal_cpp(const std::string& value) {
+    struct NamedConstant {
+        float value;
+        std::string_view name;
+    };
+    static constexpr std::array<NamedConstant, 13> kNumbers = {{
+        {.value = std::numbers::e_v<float>, .name = "e_v"},
+        {.value = std::numbers::log2e_v<float>, .name = "log2e_v"},
+        {.value = std::numbers::log10e_v<float>, .name = "log10e_v"},
+        {.value = std::numbers::pi_v<float>, .name = "pi_v"},
+        {.value = std::numbers::inv_pi_v<float>, .name = "inv_pi_v"},
+        {.value = std::numbers::inv_sqrtpi_v<float>, .name = "inv_sqrtpi_v"},
+        {.value = std::numbers::ln2_v<float>, .name = "ln2_v"},
+        {.value = std::numbers::ln10_v<float>, .name = "ln10_v"},
+        {.value = std::numbers::sqrt2_v<float>, .name = "sqrt2_v"},
+        {.value = std::numbers::sqrt3_v<float>, .name = "sqrt3_v"},
+        {.value = std::numbers::inv_sqrt3_v<float>, .name = "inv_sqrt3_v"},
+        {.value = std::numbers::egamma_v<float>, .name = "egamma_v"},
+        {.value = std::numbers::phi_v<float>, .name = "phi_v"},
+    }};
+    float parsed = 0.0F;
+    const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), parsed);
+    if (error == std::errc{} && end == value.data() + value.size()) {
+        const auto bits  = std::bit_cast<std::uint32_t>(parsed);
+        const auto match = std::ranges::find_if(
+            kNumbers, [&](const NamedConstant& constant) { return std::bit_cast<std::uint32_t>(constant.value) == bits; });
+        if (match != kNumbers.end()) {
+            return "std::numbers::" + std::string(match->name) + "<float>";
+        }
+    }
+    return value + "F";
+}
+
+bool EnttCodegenUtils::is_trivially_copyable(const TypeInfo& type, const DecoratedProgram& program) {
+    if (type.kind == TypeKind::String || type.kind == TypeKind::List) {
+        return false;
+    }
+    if (type.kind != TypeKind::Struct) {
+        return true;
+    }
+    const auto* resolved = type.symbol_id.has_value() ? find_struct(program, *type.symbol_id) : nullptr;
+    return resolved != nullptr && std::ranges::all_of(resolved->fields, [&](const ResolvedField& field) {
+               return is_trivially_copyable(field.type, program);
+           });
+}
+
+std::string EnttCodegenUtils::const_reference_cpp(const DecoratedProgram& program, const SymbolId& symbol) {
+    const auto* constant = find_const(program, symbol);
+    if (constant != nullptr && constant->type.kind == TypeKind::String && is_constexpr_const(program, symbol)) {
+        return "std::string{" + symbol_cpp_name(symbol) + "}";
+    }
+    return symbol_cpp_name(symbol);
 }
 
 bool EnttCodegenUtils::has_effects(const ExprNode& expr, const DecoratedProgram& program) {

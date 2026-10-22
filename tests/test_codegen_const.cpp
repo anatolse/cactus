@@ -59,8 +59,8 @@ TEST_CASE("Codegen constants: module-qualified names in dependency order", "[cod
         "const:\n"
         "    HALF = LATER * 0.5\n"
         "    LATER = 2.0\n");
-    const auto later = generated.at("inline const float LATER = 2.0F;");
-    const auto half  = generated.at("inline const float HALF = (::cactus_gen::test::LATER * 0.5F);");
+    const auto later = generated.at("inline constexpr float LATER = 2.0F;");
+    const auto half  = generated.at("inline constexpr float HALF = (::cactus_gen::test::LATER * 0.5F);");
     CHECK(later < half);
 }
 
@@ -71,10 +71,10 @@ TEST_CASE("Codegen constants: vector, struct, and list constants", "[codegen-ent
                                     "    ROBOT = UnitDef(health = 3, speed = 4.0)\n"
                                     "    WAVES: list[UnitDef] = [ROBOT, UnitDef(speed = 2.5, health = 6)]\n"
                                     "    NONE: list[UnitDef] = []\n");
-    CHECK(generated.has("inline const Vector2 ORIGIN = vec2(1.0F, 2.0F);"));
+    CHECK(generated.has("inline constexpr Vector2 ORIGIN = vec2(1.0F, 2.0F);"));
     const auto unit  = generated.at("struct UnitDef");
     const auto robot = generated.at(
-        "inline const ::cactus_gen::test::UnitDef ROBOT = ::cactus_gen::test::UnitDef{.speed = 4.0F, .health = 3};");
+        "inline constexpr ::cactus_gen::test::UnitDef ROBOT = ::cactus_gen::test::UnitDef{.speed = 4.0F, .health = 3};");
     CHECK(unit < robot);
     CHECK(
         generated.has("inline const std::vector<::cactus_gen::test::UnitDef> WAVES = {::cactus_gen::test::ROBOT, "
@@ -99,7 +99,7 @@ TEST_CASE("Codegen constants: trait defaults may read constants", "[codegen-entt
         "    MOVE_SPEED = 6.0\n"
         "trait Mover:\n"
         "    var speed: float = MOVE_SPEED * 0.5\n");
-    const auto constant = generated.at("inline const float MOVE_SPEED");
+    const auto constant = generated.at("inline constexpr float MOVE_SPEED");
     const auto mover    = generated.at("struct Mover");
     CHECK(constant < mover);
     CHECK(generated.has("(::cactus_gen::test::MOVE_SPEED * 0.5F)"));
@@ -130,9 +130,10 @@ TEST_CASE("Codegen constants: window configuration reads constants by symbol", "
         "const:\n"
         "    WINDOW_WIDTH = 640 * 2\n"
         "    WINDOW_TITLE = \"Tables\"\n");
-    CHECK(generated.has("inline const int WINDOW_WIDTH = cactus::num::mul(640, 2);"));
+    CHECK(generated.has("inline constexpr int WINDOW_WIDTH = cactus::num::mul(640, 2);"));
     CHECK(generated.has(".window_width = ::cactus_gen::test::WINDOW_WIDTH"));
-    CHECK(generated.has(".window_title = ::cactus_gen::test::WINDOW_TITLE"));
+    CHECK(generated.has(".window_title = \"Tables\""));
+    CHECK(generated.has("inline constexpr std::string_view WINDOW_TITLE = \"Tables\";"));
 }
 
 TEST_CASE("Codegen struct construction: designated initializers in field order", "[codegen-entt][struct-construction]") {

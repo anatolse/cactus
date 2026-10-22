@@ -898,37 +898,37 @@ void emit_viewport_phase_dispatch(std::ostringstream& out,
         return;
     }
     out << indent << "{\n";
-    out << indent << "    const int __sw = cactus::runtime::raylib::GetScreenWidth();\n";
-    out << indent << "    const int __sh = cactus::runtime::raylib::GetScreenHeight();\n";
-    out << indent << "    static std::vector<std::pair<int,entt::entity>> __vps;\n";
-    out << indent << "    __vps.clear();\n";
-    out << indent << "    for (const auto& [__vp_e, __vp] : registry.view<" << render_vp_cpp << ">().each()) {\n";
-    out << indent << "        if (__vp.active) { __vps.emplace_back(__vp.depth, __vp_e); }\n";
+    out << indent << "    const int cactus_gen_sw = cactus::runtime::raylib::GetScreenWidth();\n";
+    out << indent << "    const int cactus_gen_sh = cactus::runtime::raylib::GetScreenHeight();\n";
+    out << indent << "    static std::vector<std::pair<int,entt::entity>> cactus_gen_vps;\n";
+    out << indent << "    cactus_gen_vps.clear();\n";
+    out << indent << "    for (const auto& [cactus_gen_vp_e, cactus_gen_vp] : registry.view<" << render_vp_cpp << ">().each()) {\n";
+    out << indent << "        if (cactus_gen_vp.active) { cactus_gen_vps.emplace_back(cactus_gen_vp.depth, cactus_gen_vp_e); }\n";
     out << indent << "    }\n";
-    out << indent << "    std::ranges::sort(__vps);\n";
-    out << indent << "    for (auto& [__depth, __vp_ent] : __vps) {\n";
-    out << indent << "        (void)__depth;\n";
-    out << indent << "        const auto& __vp = registry.get<" << render_vp_cpp << ">(__vp_ent);\n";
+    out << indent << "    std::ranges::sort(cactus_gen_vps);\n";
+    out << indent << "    for (auto& [cactus_gen_depth, cactus_gen_vp_ent] : cactus_gen_vps) {\n";
+    out << indent << "        (void)cactus_gen_depth;\n";
+    out << indent << "        const auto& cactus_gen_vp = registry.get<" << render_vp_cpp << ">(cactus_gen_vp_ent);\n";
     out << indent << "        cactus::runtime::raylib::BeginScissorMode(\n";
-    out << indent << "            static_cast<int>(__vp.x * static_cast<float>(__sw)),\n";
-    out << indent << "            static_cast<int>(__vp.y * static_cast<float>(__sh)),\n";
-    out << indent << "            static_cast<int>(__vp.width * static_cast<float>(__sw)),\n";
-    out << indent << "            static_cast<int>(__vp.height * static_cast<float>(__sh)));\n";
-    out << indent << "        if (__vp.clear) { cactus::runtime::raylib::ClearBackground(__vp.clear_color); }\n";
+    out << indent << "            static_cast<int>(cactus_gen_vp.x * static_cast<float>(cactus_gen_sw)),\n";
+    out << indent << "            static_cast<int>(cactus_gen_vp.y * static_cast<float>(cactus_gen_sh)),\n";
+    out << indent << "            static_cast<int>(cactus_gen_vp.width * static_cast<float>(cactus_gen_sw)),\n";
+    out << indent << "            static_cast<int>(cactus_gen_vp.height * static_cast<float>(cactus_gen_sh)));\n";
+    out << indent << "        if (cactus_gen_vp.clear) { cactus::runtime::raylib::ClearBackground(cactus_gen_vp.clear_color); }\n";
     if (render_emit_2d_helper) {
-        out << indent << "        if (registry.all_of<" << render_cam2d_cpp << ">(__vp_ent)) {\n";
-        out << indent << "            const auto& __cam = registry.get<" << render_cam2d_cpp << ">(__vp_ent);\n";
-        out << indent << "            set_active_camera_2d(__translate_camera_2d(__cam, __sw, __sh));\n";
+        out << indent << "        if (registry.all_of<" << render_cam2d_cpp << ">(cactus_gen_vp_ent)) {\n";
+        out << indent << "            const auto& cactus_gen_cam = registry.get<" << render_cam2d_cpp << ">(cactus_gen_vp_ent);\n";
+        out << indent << "            set_active_camera_2d(cactus_gen_translate_camera_2d(cactus_gen_cam, cactus_gen_sw, cactus_gen_sh));\n";
         out << indent << "        }\n";
     }
     if (render_emit_3d_helper) {
         out << indent << (render_emit_2d_helper ? "        else if (registry.all_of<" : "        if (registry.all_of<")
-            << render_cam3d_cpp << ">(__vp_ent)) {\n";
-        out << indent << "            const auto& __cam = registry.get<" << render_cam3d_cpp << ">(__vp_ent);\n";
-        out << indent << "            set_active_camera_3d(__translate_camera_3d(__vp_ent, __cam, registry));\n";
+            << render_cam3d_cpp << ">(cactus_gen_vp_ent)) {\n";
+        out << indent << "            const auto& cactus_gen_cam = registry.get<" << render_cam3d_cpp << ">(cactus_gen_vp_ent);\n";
+        out << indent << "            set_active_camera_3d(cactus_gen_translate_camera_3d(cactus_gen_vp_ent, cactus_gen_cam, registry));\n";
         out << indent << "        }\n";
     }
-    out << indent << "        cactus::runtime::entt_backend::set_active_viewport_entity(__vp_ent);\n";
+    out << indent << "        cactus::runtime::entt_backend::set_active_viewport_entity(cactus_gen_vp_ent);\n";
     out << indent << "        generated_dispatch_phase(registry, phase);\n";
     out << indent << "        flush_viewport_3d();\n";
     out << indent << "        cactus::runtime::raylib::EndScissorMode();\n";
@@ -945,6 +945,22 @@ std::string phase_state(const std::string& phase_type) {
 // The delayed queue of a phase's clock, keyed by the phase type.
 std::string phase_delayed_queue(const std::string& phase_type) {
     return "std::get<PhaseDelayedQueue<" + phase_type + ">>(scheduler.delayed)";
+}
+
+bool is_trivially_copyable(const ResolvedEvent& event, const DecoratedProgram& program) {
+    return std::ranges::all_of(event.fields, [&](const ResolvedField& field) {
+        return EnttCodegenUtils::is_trivially_copyable(field.type, program);
+    });
+}
+
+void emit_external_event_injector(std::ostringstream& out, const ResolvedEvent& event, const DecoratedProgram& program) {
+    const bool copy = is_trivially_copyable(event, program);
+    out << "void generated_inject_external_event(" << event_runtime_cpp_type(program, *event.symbol_id)
+        << " occurrence) {\n";
+    out << "    generated_scheduler_state().activation.root_event_queue.push_back(\n";
+    out << "        QueuedEvent<EventOccurrence>{.occurrence = " << (copy ? "occurrence" : "std::move(occurrence)")
+        << "});\n";
+    out << "}\n\n";
 }
 
 std::string phase_batch_tag(const std::string& phase_type) {
@@ -1008,9 +1024,9 @@ void emit_phase_batch(std::ostringstream& out,
         out << indent << "generated_commit_activation(registry);\n";
         out << indent << "scheduler.activation.active = false;\n";
     };
-    out << "void generated_dispatch_phase(entt::registry&, const " << phase_type << "&);\n\n";
+    out << "void generated_dispatch_phase(entt::registry& registry, const " << phase_type << "& phase);\n\n";
     out << "void generated_run_phase_batch(entt::registry& registry, const " << root_type << "& root_event, "
-        << phase_batch_tag(phase_type) << ") {\n";
+        << "[[maybe_unused]] " << phase_batch_tag(phase_type) << " tag) {\n";
     out << "    auto& scheduler = generated_scheduler_state();\n";
     out << "    auto& phase = " << phase_state(phase_type) << ";\n";
     if (!phase->every_seconds.has_value()) {
@@ -1035,7 +1051,7 @@ void emit_phase_batch(std::ostringstream& out,
     emit_activation("        ");
     out << "    }\n";
     out << "    phase.accumulator -= static_cast<double>(due) * interval;\n";
-    out << "    if (phase.accumulator < 0.0) { phase.accumulator = 0.0; }\n";
+    out << "    phase.accumulator = std::max(phase.accumulator, 0.0);\n";
     out << "    if (phase.accumulator >= interval) { phase.accumulator = std::fmod(phase.accumulator, "
            "interval); }\n";
     out << "    phase.alpha = phase.accumulator / interval;\n";
@@ -1099,7 +1115,7 @@ void emit_render_phase_dispatch(std::ostringstream& out,
                                 const std::string& indent) {
     // Mirrors the same flag/name computation CppEnttCodegen::generate() uses
     // for the legacy per-viewport render loop and edit-mode HUD overlay (see
-    // the early __translate_camera_2d/3d helper emission there) — these are
+    // the early cactus_gen_translate_camera_2d/3d helper emission there) — these are
     // pure functions of `program`, so recomputing them here is safe and keeps
     // this function self-contained rather than threading extra parameters
     // through every call site.
@@ -1157,7 +1173,7 @@ void emit_stable_handler_table(std::ostringstream& out, const DecoratedProgram& 
     for (const auto& identity : program.execution_graph.stable_topological_order) {
         const auto found = std::ranges::find_if(program.execution_graph.handlers,
                                                 [&](const auto& handler) { return handler.identity == identity; });
-        out << "    {\"" << identity.canonical_id() << "\", "
+        out << "    {.canonical_id = \"" << identity.canonical_id() << "\", .selectionless = "
             << (found != program.execution_graph.handlers.end() && found->contract.is_selectionless() ? "true"
                                                                                                       : "false")
             << "},\n";
@@ -1267,7 +1283,7 @@ void emit_scheduler_state_struct(std::ostringstream& out,
 
 // The load/unload boundary helper and the external-event drain, which runs
 // host-clock delays as activations of their own.
-void emit_host_clock_entry_points(std::ostringstream& out, const DeliveryPlan& delivery) {
+void emit_host_clock_entry_points(std::ostringstream& out, const DeliveryPlan& delivery, const DecoratedProgram& program) {
     // The load and unload boundaries: one host-clock activation each.
     out << "template <typename Occurrence>\n";
     out << "void generated_run_boundary_activation(entt::registry& registry, const Occurrence& occurrence) {\n";
@@ -1293,7 +1309,9 @@ void emit_host_clock_entry_points(std::ostringstream& out, const DeliveryPlan& d
         out << "    generated_scheduler_state().delayed_host.clear();\n";
     }
     out << "    while (!queue.empty()) {\n";
-    out << "        auto queued = std::move(queue.front());\n";
+    const bool copy = std::ranges::all_of(sorted_events(program),
+                                          [&](const auto* event) { return is_trivially_copyable(*event, program); });
+    out << "        auto queued = " << (copy ? "queue.front()" : "std::move(queue.front())") << ";\n";
     out << "        queue.pop_front();\n";
     out << "        std::visit([&](const auto& occurrence) { generated_process_root_event(registry, occurrence, queued.target); },\n";
     out << "                   queued.occurrence);\n";
@@ -1442,15 +1460,11 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program,
     out << "}\n\n";
 
     for (const auto* event : external_events) {
-        const auto type = event_runtime_cpp_type(program, *event->symbol_id);
-        out << "void generated_inject_external_event(" << type << " occurrence) {\n";
-        out << "    generated_scheduler_state().activation.root_event_queue.push_back(\n";
-        out << "        QueuedEvent<EventOccurrence>{.occurrence = std::move(occurrence)});\n";
-        out << "}\n\n";
+        emit_external_event_injector(out, *event, program);
     }
 
     out << "template <typename Occurrence>\n";
-    out << "void generated_dispatch_event(entt::registry&, const Occurrence&) {}\n\n";
+    out << "void generated_dispatch_event([[maybe_unused]] entt::registry& registry, [[maybe_unused]] const Occurrence& occurrence) {}\n\n";
 
     emit_stable_handler_table(out, program);
 
@@ -1474,8 +1488,8 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program,
     // The per-event generated_dispatch_event overloads are defined later in
     // the file but called by the root-event processors below.
     for (const auto& type : occurrence_types) {
-        out << "void generated_dispatch_event(entt::registry&, const " << type
-            << "&, std::optional<entt::entity> = std::nullopt);\n";
+        out << "void generated_dispatch_event(entt::registry& registry, const " << type
+            << "& occurrence, std::optional<entt::entity> target = std::nullopt);\n";
     }
     out << "\n";
 
@@ -1515,7 +1529,7 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program,
     // below resolves regardless of definition order in the file.
     out << "void generated_process_persistence_boundary(entt::registry& registry);\n\n";
 
-    emit_host_clock_entry_points(out, delivery);
+    emit_host_clock_entry_points(out, delivery, program);
     out << "}  // namespace cactus::runtime::entt_backend\n\n";
     return out.str();
 }
@@ -1876,6 +1890,12 @@ std::string emit_projected_trait_registry_helpers(const DecoratedProgram& progra
     return out.str();
 }
 
+// A view constant copies another view, not the `std::string` a read of it produces.
+std::string constant_initializer_cpp(const ExprNode& value, bool view, const DecoratedProgram& program) {
+    const auto* alias = view ? EnttCodegenUtils::named_const(value) : nullptr;
+    return alias != nullptr ? EnttCodegenUtils::symbol_cpp_name(*alias) : EnttCodegenUtils::emit_expr(value, program);
+}
+
 // Authored funcs are declared first so a constant may call one; constants then
 // follow in dependency order, so each initializer reads only constants above it.
 std::string emit_module_constants(const DecoratedProgram& program) {
@@ -1909,10 +1929,13 @@ std::string emit_module_constants(const DecoratedProgram& program) {
         if (value == values.end() || constant == nullptr) {
             continue;
         }
+        const bool compile_time = EnttCodegenUtils::is_constexpr_const(program, symbol);
+        const bool view         = compile_time && constant->type.kind == TypeKind::String;
+        const auto type         = view ? std::string("std::string_view") : EnttCodegenUtils::type_to_cpp(constant->type);
         out << namespace_block(cpp_namespace_path(symbol.module),
-                               "inline const " + EnttCodegenUtils::type_to_cpp(constant->type) + " " +
-                                   cpp_decl_name(symbol) + " = " +
-                                   EnttCodegenUtils::emit_expr(*value->second, program) + ";\n");
+                               std::string(compile_time ? "inline constexpr " : "inline const ") + type + " " +
+                                   cpp_decl_name(symbol) + " = " + constant_initializer_cpp(*value->second, view, program) +
+                                   ";\n");
     }
     out << "\n";
     return out.str();
@@ -2005,15 +2028,33 @@ std::string emit_collider_query_helpers(const DecoratedProgram& program) {
 }
 
 // The root module is linked last, so its window constant wins over an imported one.
-std::optional<std::string> window_constant(const DecoratedProgram& program,
-                                           const std::string& name,
-                                           const std::string& suffix = {}) {
+std::optional<SymbolId> window_constant_symbol(const DecoratedProgram& program, const std::string& name) {
     const auto found = std::ranges::find_if(program.const_order | std::views::reverse,
                                             [&](const SymbolId& symbol) { return symbol.local_name == name; });
     if (found == (program.const_order | std::views::reverse).end()) {
         return std::nullopt;
     }
-    return EnttCodegenUtils::symbol_cpp_name(*found) + suffix;
+    return *found;
+}
+
+std::optional<std::string> window_constant(const DecoratedProgram& program, const std::string& name) {
+    return window_constant_symbol(program, name).transform(&EnttCodegenUtils::symbol_cpp_name);
+}
+
+// A view title is spelled as the literal it views: `.data()` of a view is not known to be null-terminated.
+std::string window_title(const DecoratedProgram& program) {
+    const auto symbol = window_constant_symbol(program, "WINDOW_TITLE");
+    if (!symbol.has_value()) {
+        return "\"Cactus Game\"";
+    }
+    if (!EnttCodegenUtils::is_constexpr_const(program, *symbol)) {
+        return EnttCodegenUtils::symbol_cpp_name(*symbol) + ".c_str()";
+    }
+    const auto* value = EnttCodegenUtils::find_const_initializer(*program.ast, *symbol);
+    while (!std::holds_alternative<LiteralExpr>(value->expr)) {
+        value = EnttCodegenUtils::find_const_initializer(*program.ast, *EnttCodegenUtils::named_const(*value));
+    }
+    return EnttCodegenUtils::emit_expr(*value, program);
 }
 
 std::string upper_copy(std::string value) {
@@ -2168,6 +2209,70 @@ std::optional<std::string> raylib_mouse_constant(const ExprNode& expr) {
                              "' lacks a resolved std.input binding; semantic analysis must reject this program");
 }
 
+// Each button's `prop` binding as a raylib constant, in declaration order; `fallback` when unbound.
+std::vector<std::string> button_bindings(const DecoratedProgram& program,
+                                         const std::string& prop_key,
+                                         const std::string& fallback,
+                                         const auto& to_raylib) {
+    std::vector<std::string> bindings;
+    for (const auto& decl : program.ast->declarations) {
+        const auto* input = std::get_if<InputDeclNode>(&decl);
+        if (input == nullptr || input->input_kind != InputKind::Button) {
+            continue;
+        }
+        std::string binding = fallback;
+        for (const auto& prop : input->props) {
+            if (prop.key != prop_key) {
+                continue;
+            }
+            const auto constant = to_raylib(*prop.value);
+            if (!constant.has_value()) {
+                fail_unresolved_input_binding(input->name, prop.key);
+            }
+            binding = *constant;
+        }
+        bindings.push_back(std::move(binding));
+    }
+    return bindings;
+}
+
+// One case-label list per distinct binding; buttons bound to the fallback share the default.
+void emit_button_binding_switch(std::ostringstream& out,
+                                const DecoratedProgram& program,
+                                const std::string& name,
+                                const std::string& prop_key,
+                                const std::string& fallback,
+                                const auto& to_raylib) {
+    const auto bindings = button_bindings(program, prop_key, fallback, to_raylib);
+    std::vector<std::string> distinct;
+    for (const auto& binding : bindings) {
+        if (binding != fallback && std::ranges::find(distinct, binding) == distinct.end()) {
+            distinct.push_back(binding);
+        }
+    }
+    if (distinct.empty()) {
+        out << "int " << name << "([[maybe_unused]] std::uint8_t button) noexcept {\n";
+        out << "    return " << fallback << ";\n";
+        out << "}\n";
+        return;
+    }
+    out << "int " << name << "(std::uint8_t button) noexcept {\n";
+    out << "    switch (button) {\n";
+    for (const auto& value : distinct) {
+        for (std::size_t index = 0; index < bindings.size(); ++index) {
+            if (bindings[index] == value) {
+                out << "        case static_cast<::cactus_gen::detail::InputButton>(" << index << "):\n";
+            }
+        }
+        out << "            return " << value << ";\n";
+    }
+    out << "        default:\n";
+    out << "            break;\n";
+    out << "    }\n";
+    out << "    return " << fallback << ";\n";
+    out << "}\n";
+}
+
 // Emits InputButton/InputAxis constants, their cactus_input_button_key/mouse
 // and cactus_input_axis_value lookup functions, and the InputEvent facade
 // struct, for whichever of axis/button input kinds the program declares.
@@ -2202,60 +2307,8 @@ std::string emit_input_constants(const DecoratedProgram& program) {
         out << "}  // namespace cactus_gen::detail\n\n";
 
         out << "namespace cactus::runtime::entt_backend {\n";
-        out << "int cactus_input_button_key(std::uint8_t button) noexcept {\n";
-        out << "    switch (button) {\n";
-        button_index = 0;
-        for (const auto& decl : program.ast->declarations) {
-            if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
-                if (input->input_kind != InputKind::Button) {
-                    continue;
-                }
-                std::string key = "0";
-                for (const auto& prop : input->props) {
-                    if (prop.key == "key") {
-                        if (auto maybe_key = raylib_key_constant(*prop.value)) {
-                            key = *maybe_key;
-                        } else {
-                            fail_unresolved_input_binding(input->name, prop.key);
-                        }
-                    }
-                }
-                out << "        case static_cast<::cactus_gen::detail::InputButton>("
-                    << static_cast<int>(button_index++) << "): return " << key << ";\n";
-            }
-        }
-        out << "        default:\n";
-        out << "            break;\n";
-        out << "    }\n";
-        out << "    return 0;\n";
-        out << "}\n";
-        out << "int cactus_input_button_mouse(std::uint8_t button) noexcept {\n";
-        out << "    switch (button) {\n";
-        button_index = 0;
-        for (const auto& decl : program.ast->declarations) {
-            if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
-                if (input->input_kind != InputKind::Button) {
-                    continue;
-                }
-                std::string mouse = "-1";
-                for (const auto& prop : input->props) {
-                    if (prop.key == "mouse") {
-                        if (auto maybe_mouse = raylib_mouse_constant(*prop.value)) {
-                            mouse = *maybe_mouse;
-                        } else {
-                            fail_unresolved_input_binding(input->name, prop.key);
-                        }
-                    }
-                }
-                out << "        case static_cast<::cactus_gen::detail::InputButton>("
-                    << static_cast<int>(button_index++) << "): return " << mouse << ";\n";
-            }
-        }
-        out << "        default:\n";
-        out << "            break;\n";
-        out << "    }\n";
-        out << "    return -1;\n";
-        out << "}\n";
+        emit_button_binding_switch(out, program, "cactus_input_button_key", "key", "0", raylib_key_constant);
+        emit_button_binding_switch(out, program, "cactus_input_button_mouse", "mouse", "-1", raylib_mouse_constant);
         out << "}  // namespace cactus::runtime::entt_backend\n\n";
     }
 
@@ -2359,7 +2412,7 @@ std::string emit_input_constants(const DecoratedProgram& program) {
     return out.str();
 }
 
-// Emits the __translate_camera_2d/3d helpers (raylib-facing camera struct
+// Emits the cactus_gen_translate_camera_2d/3d helpers (raylib-facing camera struct
 // conversion), once, gated on whichever of the 2D/3D rigs the program uses.
 std::string emit_camera_translate_helpers(bool emit_2d_helper,
                                           bool emit_3d_helper,
@@ -2372,18 +2425,18 @@ std::string emit_camera_translate_helpers(bool emit_2d_helper,
     }
     out << "namespace {\n";
     if (emit_2d_helper) {
-        out << "Camera2D __translate_camera_2d(const " << cam2d_cpp << "& cam, int sw, int sh) noexcept {\n";
+        out << "Camera2D cactus_gen_translate_camera_2d(const " << cam2d_cpp << "& cam, int sw, int sh) noexcept {\n";
         out << "    Camera2D cam2d{};\n";
         out << "    cam2d.target   = cam.offset;\n";
         out << "    cam2d.zoom     = cam.zoom;\n";
-        out << "    cam2d.rotation = cam.rotation * (180.0F / 3.14159265F);\n";
+        out << "    cam2d.rotation = cam.rotation * (180.0F / std::numbers::pi_v<float>);\n";
         out << "    cam2d.offset   = {.x = static_cast<float>(sw) * 0.5F,\n";
         out << "                      .y = static_cast<float>(sh) * 0.5F};\n";
         out << "    return cam2d;\n";
         out << "}\n";
     }
     if (emit_3d_helper) {
-        out << "Camera3D __translate_camera_3d(entt::entity entity, const " << cam3d_cpp
+        out << "Camera3D cactus_gen_translate_camera_3d(entt::entity entity, const " << cam3d_cpp
             << "& cam, entt::registry& registry) {\n";
         out << "    Camera3D cam3d{};\n";
         out << "    cam3d.fovy       = cam.fov_y;\n";
@@ -2521,7 +2574,7 @@ std::string emit_named_slots(const DecoratedProgram& program) {
         const auto symbol = entity_symbol(*entity, program);
         const auto origin = EnttPersistenceEmitter::archetype_origin_index(program, symbol);
         if (origin.has_value()) {
-            origins += (origins.empty() ? "{" : ", {") + std::to_string(*origin) + ", &" +
+            origins += (origins.empty() ? "{.node = " : ", {.node = ") + std::to_string(*origin) + ", .slot = &" +
                        EnttCodegenUtils::named_slot_name(symbol) + "}";
         } else {
             out << "    " << EnttCodegenUtils::named_slot_name(symbol) << " = entt::null;\n";
@@ -3296,7 +3349,7 @@ std::string emit_persistence_boundary_processor(const DecoratedProgram& program)
     }
     if (!program_uses_persistence(program)) {
         return "namespace cactus::runtime::entt_backend {\n\n"
-              "inline void generated_process_persistence_boundary(entt::registry&) {}\n\n"
+              "inline void generated_process_persistence_boundary([[maybe_unused]] entt::registry& registry) {}\n\n"
               "}  // namespace cactus::runtime::entt_backend\n\n";
     }
     const auto* save_completed    = find_std_persistence_event(program, "SaveCompleted");
@@ -3520,7 +3573,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     // deterministic even when std.editor links both flat and volume variants.
     const WorldTransformUsage wt_usage = EnttCodegenUtils::world_transform_usage(program);
     // Camera-rig classification, computed once and reused everywhere it's
-    // needed below (the early __translate_camera_2d/3d helper emission and
+    // needed below (the early cactus_gen_translate_camera_2d/3d helper emission and
     // the legacy generated_render_project viewport loop): the 2D rig stores
     // only EditorCamera2D + Camera + Viewport, so it exists for any
     // flat-camera program that is not 3D (including transforms-free UI
@@ -3535,14 +3588,6 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
 
     // Header
     out << "// Generated by Cactus DSL Compiler (cpp-entt backend)\n\n";
-    out << "// NOLINTBEGIN(modernize-use-std-numbers,readability-function-cognitive-complexity,"
-           "bugprone-branch-clone,bugprone-reserved-identifier,bugprone-throwing-static-initialization,"
-           "cppcoreguidelines-init-variables,cppcoreguidelines-pro-type-member-init,"
-           "readability-redundant-member-init,readability-simplify-boolean-expr,"
-           "readability-braces-around-statements,readability-isolate-declaration,"
-           "readability-math-missing-parentheses,readability-qualified-auto,readability-redundant-parentheses,"
-           "performance-move-const-arg,readability-named-parameter,modernize-use-designated-initializers,"
-           "readability-use-std-min-max)\n";
     out << "// Generated C++ mirrors authored DSL constants, declarations, and system control flow.\n\n";
     out << "#include \"common/float_mode.hpp\"\n\n";
     out << "#include \"backends/cpp-entt/runtime.hpp\"\n";
@@ -3612,7 +3657,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                     emitted_asset_constants = true;
                 }
                 out << "constexpr cactus::runtime::AssetHandle " << asset->name << " = " << next_asset_handle++
-                    << "U; // NOLINT(readability-identifier-naming)\n";
+                    << "U;\n";
             }
         }
         if (emitted_asset_constants) {
@@ -3808,41 +3853,41 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "// ── Template Registry ───────────────────────────────────────────────\n\n";
         out << "namespace cactus_gen::detail {\n";
         out << "using TemplateFactory = entt::entity(*)(entt::registry&);\n";
-        out << "static const std::unordered_map<std::string, TemplateFactory> cactus_template_registry = {\n";
-        for (const auto& decl : program.ast->declarations) {
-            if (const auto* tmpl = std::get_if<TemplateNode>(&decl)) {
-                if (tmpl->is_pub) {
-                    out << "    {\"" << tmpl->name << "\", "
-                        << archetype_create_function_name(program.module_name, tmpl->name).ref() << "},\n";
-                }
-            }
-        }
-        out << "};\n\n";
-
-        // Declaration-ordered companion to cactus_template_registry: the map's iteration
-        // order is not guaranteed to match source order, so template_names()/template_index()
-        // (editor-template-registry) need an explicit ordered list instead.
-        out << "static const std::vector<std::string> cactus_template_registry_order = {\n";
-        for (const auto& decl : program.ast->declarations) {
-            if (const auto* tmpl = std::get_if<TemplateNode>(&decl)) {
-                if (tmpl->is_pub) {
-                    out << "    \"" << tmpl->name << "\",\n";
-                }
-            }
-        }
+        out << "struct TemplateEntry {\n";
+        out << "    std::string_view name;\n";
+        out << "    TemplateFactory create;\n";
         out << "};\n";
+        // Declaration order is template_names()/template_index() order (editor-template-registry).
+        out << "inline constexpr std::array<TemplateEntry, " << pub_template_count
+            << "> cactus_template_registry = {{\n";
+        for (const auto& decl : program.ast->declarations) {
+            if (const auto* tmpl = std::get_if<TemplateNode>(&decl); tmpl != nullptr && tmpl->is_pub) {
+                out << "    {.name = \"" << tmpl->name << "\", .create = &"
+                    << archetype_create_function_name(program.module_name, tmpl->name).ref() << "},\n";
+            }
+        }
+        out << "}};\n";
         out << "}  // namespace cactus_gen::detail\n\n";
         out << "namespace cactus::runtime::entt_backend {\n";
         // Not noexcept: returns std::vector<std::string> by value, which allocates and could
         // (in principle, on OOM) throw — clang-tidy's bugprone-exception-escape correctly flags
         // a noexcept function that isn't actually exception-safe.
-        out << "std::vector<std::string> editor_template_names() { return "
-               "::cactus_gen::detail::cactus_template_registry_order; }\n";
+        out << "std::vector<std::string> editor_template_names() {\n";
+        out << "    std::vector<std::string> names;\n";
+        out << "    names.reserve(::cactus_gen::detail::cactus_template_registry.size());\n";
+        out << "    for (const auto& entry : ::cactus_gen::detail::cactus_template_registry) {\n";
+        out << "        names.emplace_back(entry.name);\n";
+        out << "    }\n";
+        out << "    return names;\n";
+        out << "}\n";
         out << "int editor_template_index(const std::string& name) noexcept {\n";
-        out << "    const auto& order = ::cactus_gen::detail::cactus_template_registry_order;\n";
-        out << "    const auto it = std::ranges::find(order, name);\n";
-        out << "    if (it == order.end()) { return -1; }\n";
-        out << "    return static_cast<int>(std::distance(order.begin(), it));\n";
+        out << "    const auto& order = ::cactus_gen::detail::cactus_template_registry;\n";
+        out << "    for (std::size_t index = 0; index < order.size(); ++index) {\n";
+        out << "        if (order[index].name == name) {\n";
+        out << "            return static_cast<int>(index);\n";
+        out << "        }\n";
+        out << "    }\n";
+        out << "    return -1;\n";
         out << "}\n";
         out << "}  // namespace cactus::runtime::entt_backend\n\n";
 
@@ -3938,7 +3983,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     // Main game loop — extract window constants from const block if available
     const auto win_width  = window_constant(program, "WINDOW_WIDTH").value_or("800");
     const auto win_height = window_constant(program, "WINDOW_HEIGHT").value_or("600");
-    const auto win_title  = window_constant(program, "WINDOW_TITLE", ".c_str()").value_or("\"Cactus Game\"");
+    const auto win_title  = window_title(program);
     const auto win_fps    = window_constant(program, "TARGET_FPS").value_or("60");
 
     out << "// ── Runtime Glue ────────────────────────────────────────────────────\n\n";
@@ -4020,10 +4065,10 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "    cactus::runtime::entt_backend::register_editor_spawn_impl(\n";
         out << "        [](entt::registry& reg, const std::string& name, " << pos_arg2d << ", " << pos_arg3d
             << ") -> entt::entity {\n";
-        out << "            const auto& templates = ::cactus_gen::detail::cactus_template_registry;\n";
-        out << "            auto it = templates.find(name);\n";
-        out << "            if (it == templates.end()) { return entt::entity{entt::null}; }\n";
-        out << "            auto entity = it->second(reg);\n";
+        out << "            const int index = cactus::runtime::entt_backend::editor_template_index(name);\n";
+        out << "            if (index < 0) { return entt::entity{entt::null}; }\n";
+        out << "            auto entity = "
+               "::cactus_gen::detail::cactus_template_registry[static_cast<std::size_t>(index)].create(reg);\n";
         // The editor places an entity at a runtime-chosen position, the same
         // kind of per-entity override an authored `spawn Template: Field:
         // value:` gets from emit_spawn_overrides — so this site must retain
@@ -4114,106 +4159,106 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         } else {
             if (rig_is_2d) {
                 out << "            if (!use_3d) {\n";
-                out << "                auto __cam2d = cactus::runtime::entt_backend::get_active_camera_2d();\n";
-                out << "                if (__cam2d.zoom == 0.0F) {\n";
-                out << "                    for (const auto& [__e, __vp, __cam] : reg.view<" << vp_cpp_rig << ", "
+                out << "                auto cactus_gen_cam2d = cactus::runtime::entt_backend::get_active_camera_2d();\n";
+                out << "                if (cactus_gen_cam2d.zoom == 0.0F) {\n";
+                out << "                    for (const auto& [cactus_gen_e, cactus_gen_vp, cactus_gen_cam] : reg.view<" << vp_cpp_rig << ", "
                     << cam2d_cpp << ">().each()) {\n";
-                out << "                        if (__vp.active) {\n";
-                out << "                            __cam2d.target = __cam.offset;\n";
-                out << "                            __cam2d.zoom = (__cam.zoom == 0.0F) ? 1.0F : __cam.zoom;\n";
+                out << "                        if (cactus_gen_vp.active) {\n";
+                out << "                            cactus_gen_cam2d.target = cactus_gen_cam.offset;\n";
+                out << "                            cactus_gen_cam2d.zoom = (cactus_gen_cam.zoom == 0.0F) ? 1.0F : cactus_gen_cam.zoom;\n";
                 out << "                            break;\n";
                 out << "                        }\n";
                 out << "                    }\n";
                 out << "                }\n";
-                out << "                if (__cam2d.zoom == 0.0F) { __cam2d.zoom = 1.0F; }\n";
-                out << "                std::vector<entt::entity> __saved;\n";
-                out << "                for (auto __ent : reg.view<" << vp_cpp_rig << ">()) {\n";
-                out << "                    if (auto* __vp = reg.try_get<" << vp_cpp_rig
-                    << ">(__ent); __vp != nullptr && __vp->active) {\n";
-                out << "                        __saved.push_back(__ent); __vp->active = false;\n";
+                out << "                if (cactus_gen_cam2d.zoom == 0.0F) { cactus_gen_cam2d.zoom = 1.0F; }\n";
+                out << "                std::vector<entt::entity> cactus_gen_saved;\n";
+                out << "                for (auto cactus_gen_ent : reg.view<" << vp_cpp_rig << ">()) {\n";
+                out << "                    if (auto* cactus_gen_vp = reg.try_get<" << vp_cpp_rig
+                    << ">(cactus_gen_ent); cactus_gen_vp != nullptr && cactus_gen_vp->active) {\n";
+                out << "                        cactus_gen_saved.push_back(cactus_gen_ent); cactus_gen_vp->active = false;\n";
                 out << "                    }\n";
                 out << "                }\n";
                 out << "                "
-                       "cactus::runtime::entt_backend::set_editor_saved_viewports(std::move(__saved));\n";
-                out << "                auto __rig = cactus::runtime::entt_backend::create_entity(reg);\n";
+                       "cactus::runtime::entt_backend::set_editor_saved_viewports(std::move(cactus_gen_saved));\n";
+                out << "                auto cactus_gen_rig = cactus::runtime::entt_backend::create_entity(reg);\n";
                 // The editor camera rig is created outside the archetype/spawn choke point in
                 // emit_archetype_trait_initializers, so it must independently receive a creation
                 // ordinal: any pairs: rule binding on a trait this rig also carries (e.g.
                 // Viewport) would otherwise match it in emit_pair_binding_snapshot's view and
                 // read a CreationOrdinal component that was never emplaced (UB).
-                out << "                reg.emplace<cactus::runtime::entt_backend::CreationOrdinal>(__rig, "
+                out << "                reg.emplace<cactus::runtime::entt_backend::CreationOrdinal>(cactus_gen_rig, "
                        "cactus::runtime::entt_backend::CreationOrdinal{.value = "
                        "cactus::runtime::entt_backend::generated_next_creation_ordinal()});\n";
-                out << "                reg.emplace<" << ec2d_cpp_rig << ">(__rig, " << ec2d_cpp_rig
-                    << "{.view_center = __cam2d.target, .zoom = __cam2d.zoom, .pan_speed = 1.0F, .zoom_speed = 0.1F, "
+                out << "                reg.emplace<" << ec2d_cpp_rig << ">(cactus_gen_rig, " << ec2d_cpp_rig
+                    << "{.view_center = cactus_gen_cam2d.target, .zoom = cactus_gen_cam2d.zoom, .pan_speed = 1.0F, .zoom_speed = 0.1F, "
                        ".min_zoom = 0.05F, .max_zoom = 20.0F});\n";
-                out << "                reg.emplace<" << cam2d_cpp << ">(__rig, " << cam2d_cpp
-                    << "{.zoom = __cam2d.zoom, .offset = __cam2d.target});\n";
-                out << "                reg.emplace<" << vp_cpp_rig << ">(__rig);\n";
-                out << "                return __rig;\n";
+                out << "                reg.emplace<" << cam2d_cpp << ">(cactus_gen_rig, " << cam2d_cpp
+                    << "{.zoom = cactus_gen_cam2d.zoom, .offset = cactus_gen_cam2d.target});\n";
+                out << "                reg.emplace<" << vp_cpp_rig << ">(cactus_gen_rig);\n";
+                out << "                return cactus_gen_rig;\n";
                 out << "            }\n";
             }
             if (rig_is_3d) {
                 out << "            if (use_3d) {\n";
-                out << "                auto __cam3d = cactus::runtime::entt_backend::get_active_camera_3d();\n";
-                out << "                if (__cam3d.fovy == 0.0F) {\n";
-                out << "                    for (const auto& [__e, __vp, __cam, __wt] : reg.view<" << vp_cpp_rig << ", "
+                out << "                auto cactus_gen_cam3d = cactus::runtime::entt_backend::get_active_camera_3d();\n";
+                out << "                if (cactus_gen_cam3d.fovy == 0.0F) {\n";
+                out << "                    for (const auto& [cactus_gen_e, cactus_gen_vp, cactus_gen_cam, cactus_gen_wt] : reg.view<" << vp_cpp_rig << ", "
                     << cam3d_cpp << ", " << wt3d_cpp << ">().each()) {\n";
-                out << "                        if (__vp.active) {\n";
-                out << "                            __cam3d.fovy = __cam.fov_y;\n";
-                out << "                            __cam3d.position = __wt.position;\n";
-                out << "                            const Vector3 __fwd = "
-                       "cactus::runtime::stdlib::math::quat::forward(__wt.rotation);\n";
-                out << "                            __cam3d.target = {.x = __wt.position.x + __fwd.x, .y = "
-                       "__wt.position.y + __fwd.y, .z = __wt.position.z + __fwd.z};\n";
+                out << "                        if (cactus_gen_vp.active) {\n";
+                out << "                            cactus_gen_cam3d.fovy = cactus_gen_cam.fov_y;\n";
+                out << "                            cactus_gen_cam3d.position = cactus_gen_wt.position;\n";
+                out << "                            const Vector3 cactus_gen_fwd = "
+                       "cactus::runtime::stdlib::math::quat::forward(cactus_gen_wt.rotation);\n";
+                out << "                            cactus_gen_cam3d.target = {.x = cactus_gen_wt.position.x + cactus_gen_fwd.x, .y = "
+                       "cactus_gen_wt.position.y + cactus_gen_fwd.y, .z = cactus_gen_wt.position.z + cactus_gen_fwd.z};\n";
                 out << "                            break;\n";
                 out << "                        }\n";
                 out << "                    }\n";
                 out << "                }\n";
-                out << "                if (__cam3d.fovy == 0.0F) {\n";
-                out << "                    __cam3d.fovy = 60.0F;\n";
-                out << "                    __cam3d.position = Vector3{.x = 0.0F, .y = 5.0F, .z = 10.0F};\n";
-                out << "                    __cam3d.target = Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};\n";
+                out << "                if (cactus_gen_cam3d.fovy == 0.0F) {\n";
+                out << "                    cactus_gen_cam3d.fovy = 60.0F;\n";
+                out << "                    cactus_gen_cam3d.position = Vector3{.x = 0.0F, .y = 5.0F, .z = 10.0F};\n";
+                out << "                    cactus_gen_cam3d.target = Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};\n";
                 out << "                }\n";
-                out << "                const Vector3 __pos = __cam3d.position;\n";
-                out << "                const Vector3 __tgt = __cam3d.target;\n";
-                out << "                const float __dx = __pos.x - __tgt.x;\n";
-                out << "                const float __dy = __pos.y - __tgt.y;\n";
-                out << "                const float __dz = __pos.z - __tgt.z;\n";
-                out << "                const float __dist = cactus::runtime::stdlib::math::vec3::length(Vector3{.x = "
-                       "__dx, .y = __dy, .z = __dz});\n";
-                out << "                const float __distance = (__dist < 0.1F) ? 0.1F : __dist;\n";
-                out << "                const float __sin_pitch = std::clamp(__dy / __distance, -1.0F, 1.0F);\n";
-                out << "                const float __pitch = cactus::runtime::stdlib::math::atan2(__sin_pitch, "
-                       "std::sqrt(1.0F - (__sin_pitch * __sin_pitch)));\n";
-                out << "                const float __yaw = cactus::runtime::stdlib::math::atan2(-__dx, -__dz);\n";
-                out << "                const Quat __rot = cactus::runtime::stdlib::math::quat::from_euler(__pitch, "
-                       "__yaw, 0.0F);\n";
-                out << "                std::vector<entt::entity> __saved;\n";
-                out << "                for (auto __ent : reg.view<" << vp_cpp_rig << ">()) {\n";
-                out << "                    if (auto* __vp = reg.try_get<" << vp_cpp_rig
-                    << ">(__ent); __vp != nullptr && __vp->active) {\n";
-                out << "                        __saved.push_back(__ent); __vp->active = false;\n";
+                out << "                const Vector3 cactus_gen_pos = cactus_gen_cam3d.position;\n";
+                out << "                const Vector3 cactus_gen_tgt = cactus_gen_cam3d.target;\n";
+                out << "                const float cactus_gen_dx = cactus_gen_pos.x - cactus_gen_tgt.x;\n";
+                out << "                const float cactus_gen_dy = cactus_gen_pos.y - cactus_gen_tgt.y;\n";
+                out << "                const float cactus_gen_dz = cactus_gen_pos.z - cactus_gen_tgt.z;\n";
+                out << "                const float cactus_gen_dist = cactus::runtime::stdlib::math::vec3::length(Vector3{.x = "
+                       "cactus_gen_dx, .y = cactus_gen_dy, .z = cactus_gen_dz});\n";
+                out << "                const float cactus_gen_distance = (cactus_gen_dist < 0.1F) ? 0.1F : cactus_gen_dist;\n";
+                out << "                const float cactus_gen_sin_pitch = std::clamp(cactus_gen_dy / cactus_gen_distance, -1.0F, 1.0F);\n";
+                out << "                const float cactus_gen_pitch = cactus::runtime::stdlib::math::atan2(cactus_gen_sin_pitch, "
+                       "std::sqrt(1.0F - (cactus_gen_sin_pitch * cactus_gen_sin_pitch)));\n";
+                out << "                const float cactus_gen_yaw = cactus::runtime::stdlib::math::atan2(-cactus_gen_dx, -cactus_gen_dz);\n";
+                out << "                const Quat cactus_gen_rot = cactus::runtime::stdlib::math::quat::from_euler(cactus_gen_pitch, "
+                       "cactus_gen_yaw, 0.0F);\n";
+                out << "                std::vector<entt::entity> cactus_gen_saved;\n";
+                out << "                for (auto cactus_gen_ent : reg.view<" << vp_cpp_rig << ">()) {\n";
+                out << "                    if (auto* cactus_gen_vp = reg.try_get<" << vp_cpp_rig
+                    << ">(cactus_gen_ent); cactus_gen_vp != nullptr && cactus_gen_vp->active) {\n";
+                out << "                        cactus_gen_saved.push_back(cactus_gen_ent); cactus_gen_vp->active = false;\n";
                 out << "                    }\n";
                 out << "                }\n";
                 out << "                "
-                       "cactus::runtime::entt_backend::set_editor_saved_viewports(std::move(__saved));\n";
-                out << "                auto __rig = cactus::runtime::entt_backend::create_entity(reg);\n";
+                       "cactus::runtime::entt_backend::set_editor_saved_viewports(std::move(cactus_gen_saved));\n";
+                out << "                auto cactus_gen_rig = cactus::runtime::entt_backend::create_entity(reg);\n";
                 // See the matching comment in the 2D branch above: this rig is created outside
                 // the archetype/spawn choke point and must independently receive an ordinal.
-                out << "                reg.emplace<cactus::runtime::entt_backend::CreationOrdinal>(__rig, "
+                out << "                reg.emplace<cactus::runtime::entt_backend::CreationOrdinal>(cactus_gen_rig, "
                        "cactus::runtime::entt_backend::CreationOrdinal{.value = "
                        "cactus::runtime::entt_backend::generated_next_creation_ordinal()});\n";
-                out << "                reg.emplace<" << ec3d_cpp_rig << ">(__rig, " << ec3d_cpp_rig
-                    << "{.focus = __tgt, .yaw = __yaw, .pitch = __pitch, .distance = __distance, .orbit_speed = "
+                out << "                reg.emplace<" << ec3d_cpp_rig << ">(cactus_gen_rig, " << ec3d_cpp_rig
+                    << "{.focus = cactus_gen_tgt, .yaw = cactus_gen_yaw, .pitch = cactus_gen_pitch, .distance = cactus_gen_distance, .orbit_speed = "
                        "0.005F, .pan_speed = 0.002F, .zoom_speed = 0.1F, .min_pitch = -1.5F, .max_pitch = 1.5F, "
                        ".min_distance = 0.1F, .max_distance = 1000.0F});\n";
-                out << "                reg.emplace<" << cam3d_cpp << ">(__rig, " << cam3d_cpp
-                    << "{.fov_y = __cam3d.fovy, .near = 0.1F, .far = 1000.0F});\n";
-                out << "                reg.emplace<" << vp_cpp_rig << ">(__rig);\n";
-                out << "                reg.emplace<" << wt3d_cpp << ">(__rig, " << wt3d_cpp
-                    << "{.position = __pos, .rotation = __rot, .scale = Vector3{.x = 1.0F, .y = 1.0F, .z = 1.0F}});\n";
-                out << "                return __rig;\n";
+                out << "                reg.emplace<" << cam3d_cpp << ">(cactus_gen_rig, " << cam3d_cpp
+                    << "{.fov_y = cactus_gen_cam3d.fovy, .near = 0.1F, .far = 1000.0F});\n";
+                out << "                reg.emplace<" << vp_cpp_rig << ">(cactus_gen_rig);\n";
+                out << "                reg.emplace<" << wt3d_cpp << ">(cactus_gen_rig, " << wt3d_cpp
+                    << "{.position = cactus_gen_pos, .rotation = cactus_gen_rot, .scale = Vector3{.x = 1.0F, .y = 1.0F, .z = 1.0F}});\n";
+                out << "                return cactus_gen_rig;\n";
                 out << "            }\n";
             }
             out << "            return entt::entity{entt::null};\n";
@@ -4222,9 +4267,9 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "    cactus::runtime::entt_backend::register_editor_camera_exit_impl(\n";
         out << "        [](entt::registry& reg, entt::entity rig) {\n";
         out << "            cactus::runtime::entt_backend::release_entity(reg, rig);\n";
-        out << "            for (auto __saved_ent : cactus::runtime::entt_backend::editor_saved_viewports()) {\n";
-        out << "                if (auto* __vp = reg.try_get<" << vp_cpp_rig
-            << ">(__saved_ent)) { __vp->active = true; }\n";
+        out << "            for (auto cactus_gen_saved_ent : cactus::runtime::entt_backend::editor_saved_viewports()) {\n";
+        out << "                if (auto* cactus_gen_vp = reg.try_get<" << vp_cpp_rig
+            << ">(cactus_gen_saved_ent)) { cactus_gen_vp->active = true; }\n";
         out << "            }\n";
         out << "            cactus::runtime::entt_backend::set_editor_saved_viewports({});\n";
         out << "        });\n";
@@ -4232,18 +4277,18 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     if (uses_editor && rig_is_2d && uses_viewport) {
         out << "    cactus::runtime::entt_backend::register_editor_apply_camera_2d_impl(\n";
         out << "        [](entt::registry& reg, entt::entity rig, Vector2 view_center, float zoom) {\n";
-        out << "            if (auto* __cam = reg.try_get<" << cam2d_cpp << ">(rig)) {\n";
-        out << "                __cam->zoom = zoom;\n";
-        out << "                __cam->offset = view_center;\n";
+        out << "            if (auto* cactus_gen_cam = reg.try_get<" << cam2d_cpp << ">(rig)) {\n";
+        out << "                cactus_gen_cam->zoom = zoom;\n";
+        out << "                cactus_gen_cam->offset = view_center;\n";
         out << "            }\n";
         out << "        });\n";
     }
     if (wt_usage.flat) {
         out << "    cactus::runtime::entt_backend::register_editor_entity_position_2d_impl(\n";
-        out << "        [](entt::registry& reg, entt::entity __eid) -> Vector2 {\n";
-        out << "            if (reg.valid(__eid)) {\n";
-        out << "                if (const auto* __wt = reg.try_get<" << wt2d_cpp << ">(__eid)) {\n";
-        out << "                    return Vector2{.x = __wt->position.x, .y = __wt->position.y};\n";
+        out << "        [](entt::registry& reg, entt::entity cactus_gen_eid) -> Vector2 {\n";
+        out << "            if (reg.valid(cactus_gen_eid)) {\n";
+        out << "                if (const auto* cactus_gen_wt = reg.try_get<" << wt2d_cpp << ">(cactus_gen_eid)) {\n";
+        out << "                    return Vector2{.x = cactus_gen_wt->position.x, .y = cactus_gen_wt->position.y};\n";
         out << "                }\n";
         out << "            }\n";
         out << "            return Vector2{.x = 0.0F, .y = 0.0F};\n";
@@ -4252,18 +4297,18 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     if (uses_editor && rig_is_3d && uses_viewport) {
         out << "    cactus::runtime::entt_backend::register_editor_apply_camera_3d_impl(\n";
         out << "        [](entt::registry& reg, entt::entity rig, Vector3 position, Quat rotation) {\n";
-        out << "            if (auto* __wt = reg.try_get<" << wt3d_cpp << ">(rig)) {\n";
-        out << "                __wt->position = position;\n";
-        out << "                __wt->rotation = rotation;\n";
+        out << "            if (auto* cactus_gen_wt = reg.try_get<" << wt3d_cpp << ">(rig)) {\n";
+        out << "                cactus_gen_wt->position = position;\n";
+        out << "                cactus_gen_wt->rotation = rotation;\n";
         out << "            }\n";
         out << "        });\n";
     }
     if (rig_is_3d) {
         out << "    cactus::runtime::entt_backend::register_editor_entity_position_3d_impl(\n";
-        out << "        [](entt::registry& reg, entt::entity __eid) -> Vector3 {\n";
-        out << "            if (reg.valid(__eid)) {\n";
-        out << "                if (const auto* __wt = reg.try_get<" << wt3d_cpp << ">(__eid)) {\n";
-        out << "                    return __wt->position;\n";
+        out << "        [](entt::registry& reg, entt::entity cactus_gen_eid) -> Vector3 {\n";
+        out << "            if (reg.valid(cactus_gen_eid)) {\n";
+        out << "                if (const auto* cactus_gen_wt = reg.try_get<" << wt3d_cpp << ">(cactus_gen_eid)) {\n";
+        out << "                    return cactus_gen_wt->position;\n";
         out << "                }\n";
         out << "            }\n";
         out << "            return Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};\n";
@@ -4283,27 +4328,27 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
             out << "    cactus::runtime::entt_backend::register_pointer_window_candidates_impl(\n";
             out << "        [](entt::registry& reg, Vector2 pointer_pos) -> "
                    "std::vector<cactus::runtime::entt_backend::PointerCandidate> {\n";
-            out << "            std::vector<cactus::runtime::entt_backend::PointerCandidate> __result;\n";
+            out << "            std::vector<cactus::runtime::entt_backend::PointerCandidate> cactus_gen_result;\n";
             out << "            auto view = reg.view<" << cl_cpp << ", " << ptarget_cpp << ">();\n";
             out << "            for (auto entity : view) {\n";
             out << "                const auto& layout = view.get<" << cl_cpp << ">(entity);\n";
             out << "                const auto& target = view.get<" << ptarget_cpp << ">(entity);\n";
             out << "                if (!layout.effective_visible) { continue; }\n";
-            out << "                const Vector2 __max = Vector2{.x = layout.position.x + layout.size.x,\n";
+            out << "                const Vector2 cactus_gen_max = Vector2{.x = layout.position.x + layout.size.x,\n";
             out << "                                              .y = layout.position.y + layout.size.y};\n";
             out << "                if (!cactus::runtime::entt_backend::point_in_rect(pointer_pos, layout.position, "
-                   "__max)) { continue; }\n";
+                   "cactus_gen_max)) { continue; }\n";
             out << "                if (!cactus::runtime::entt_backend::point_in_rect(\n";
             out << "                        pointer_pos, layout.clip_min, layout.clip_max)) { continue; }\n";
-            out << "                __result.push_back(cactus::runtime::entt_backend::PointerCandidate{\n";
+            out << "                cactus_gen_result.push_back(cactus::runtime::entt_backend::PointerCandidate{\n";
             out << "                    .entity = entity, .enabled = target.enabled, .blocks_lower = "
                    "target.blocks_lower,\n";
             out << "                    .priority = target.priority, .draw_order = layout.draw_order,\n";
             out << "                    .creation_ordinal = "
                    "cactus::runtime::entt_backend::creation_ordinal(reg, entity)});\n";
             out << "            }\n";
-            out << "            cactus::runtime::entt_backend::sort_window_pointer_candidates(__result);\n";
-            out << "            return __result;\n";
+            out << "            cactus::runtime::entt_backend::sort_window_pointer_candidates(cactus_gen_result);\n";
+            out << "            return cactus_gen_result;\n";
             out << "        });\n";
         }
         const bool has_flat_box      = EnttCodegenUtils::has_trait(program, "std.physics.flat.BoxCollider");
@@ -4314,8 +4359,8 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
             out << "    cactus::runtime::entt_backend::register_pointer_world_candidates_impl(\n";
             out << "        [](entt::registry& reg, Vector2 pointer_screen_pos) -> "
                    "std::vector<cactus::runtime::entt_backend::PointerCandidate> {\n";
-            out << "            std::vector<cactus::runtime::entt_backend::PointerCandidate> __result;\n";
-            out << "            const Vector2 __world_pos = "
+            out << "            std::vector<cactus::runtime::entt_backend::PointerCandidate> cactus_gen_result;\n";
+            out << "            const Vector2 cactus_gen_world_pos = "
                    "cactus::runtime::entt_backend::editor_screen_to_world_2d(pointer_screen_pos);\n";
             if (has_flat_box) {
                 const std::string box_cpp = EnttCodegenUtils::trait_cpp_name("std.physics.flat.BoxCollider", program);
@@ -4327,8 +4372,8 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                 out << "                    const auto& target = view.get<" << ptarget_cpp << ">(entity);\n";
                 out << "                    const auto& box    = view.get<" << box_cpp << ">(entity);\n";
                 out << "                    if (!cactus::runtime::entt_backend::point_in_flat_box(\n";
-                out << "                            __world_pos, xform.position, box.size)) { continue; }\n";
-                out << "                    __result.push_back(cactus::runtime::entt_backend::PointerCandidate{\n";
+                out << "                            cactus_gen_world_pos, xform.position, box.size)) { continue; }\n";
+                out << "                    cactus_gen_result.push_back(cactus::runtime::entt_backend::PointerCandidate{\n";
                 out << "                        .entity = entity, .enabled = target.enabled,\n";
                 out << "                        .blocks_lower = target.blocks_lower, .priority = target.priority,\n";
                 out << "                        .creation_ordinal = "
@@ -4347,8 +4392,8 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                 out << "                    const auto& target = view.get<" << ptarget_cpp << ">(entity);\n";
                 out << "                    const auto& circle = view.get<" << circle_cpp << ">(entity);\n";
                 out << "                    if (!cactus::runtime::entt_backend::point_in_flat_circle(\n";
-                out << "                            __world_pos, xform.position, circle.radius)) { continue; }\n";
-                out << "                    __result.push_back(cactus::runtime::entt_backend::PointerCandidate{\n";
+                out << "                            cactus_gen_world_pos, xform.position, circle.radius)) { continue; }\n";
+                out << "                    cactus_gen_result.push_back(cactus::runtime::entt_backend::PointerCandidate{\n";
                 out << "                        .entity = entity, .enabled = target.enabled,\n";
                 out << "                        .blocks_lower = target.blocks_lower, .priority = target.priority,\n";
                 out << "                        .creation_ordinal = "
@@ -4356,15 +4401,15 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                 out << "                }\n";
                 out << "            }\n";
             }
-            out << "            cactus::runtime::entt_backend::sort_flat_world_pointer_candidates(__result);\n";
-            out << "            return __result;\n";
+            out << "            cactus::runtime::entt_backend::sort_flat_world_pointer_candidates(cactus_gen_result);\n";
+            out << "            return cactus_gen_result;\n";
             out << "        });\n";
         } else if (wt_usage.volume && (has_volume_box || has_volume_sphere)) {
             out << "    cactus::runtime::entt_backend::register_pointer_world_candidates_impl(\n";
             out << "        [](entt::registry& reg, Vector2 pointer_screen_pos) -> "
                    "std::vector<cactus::runtime::entt_backend::PointerCandidate> {\n";
-            out << "            std::vector<cactus::runtime::entt_backend::PointerCandidate> __result;\n";
-            out << "            const Ray __ray = cactus::runtime::entt_backend::screen_to_world_ray(\n";
+            out << "            std::vector<cactus::runtime::entt_backend::PointerCandidate> cactus_gen_result;\n";
+            out << "            const Ray cactus_gen_ray = cactus::runtime::entt_backend::screen_to_world_ray(\n";
             out << "                pointer_screen_pos, cactus::runtime::entt_backend::get_active_camera_3d());\n";
             if (has_volume_box) {
                 const std::string box3d_cpp =
@@ -4376,19 +4421,19 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                 out << "                    const auto& xform  = view.get<" << wt3d_cpp << ">(entity);\n";
                 out << "                    const auto& target = view.get<" << ptarget_cpp << ">(entity);\n";
                 out << "                    const auto& box    = view.get<" << box3d_cpp << ">(entity);\n";
-                out << "                    const BoundingBox __bbox{\n";
+                out << "                    const BoundingBox cactus_gen_bbox{\n";
                 out << "                        .min = Vector3{.x = xform.position.x - (box.size.x * 0.5F),\n";
                 out << "                                       .y = xform.position.y - (box.size.y * 0.5F),\n";
                 out << "                                       .z = xform.position.z - (box.size.z * 0.5F)},\n";
                 out << "                        .max = Vector3{.x = xform.position.x + (box.size.x * 0.5F),\n";
                 out << "                                       .y = xform.position.y + (box.size.y * 0.5F),\n";
                 out << "                                       .z = xform.position.z + (box.size.z * 0.5F)}};\n";
-                out << "                    const RayCollision __hit = GetRayCollisionBox(__ray, __bbox);\n";
-                out << "                    if (!__hit.hit || __hit.distance <= 0.0F) { continue; }\n";
-                out << "                    __result.push_back(cactus::runtime::entt_backend::PointerCandidate{\n";
+                out << "                    const RayCollision cactus_gen_hit = GetRayCollisionBox(cactus_gen_ray, cactus_gen_bbox);\n";
+                out << "                    if (!cactus_gen_hit.hit || cactus_gen_hit.distance <= 0.0F) { continue; }\n";
+                out << "                    cactus_gen_result.push_back(cactus::runtime::entt_backend::PointerCandidate{\n";
                 out << "                        .entity = entity, .enabled = target.enabled,\n";
                 out << "                        .blocks_lower = target.blocks_lower, .priority = target.priority,\n";
-                out << "                        .distance = __hit.distance,\n";
+                out << "                        .distance = cactus_gen_hit.distance,\n";
                 out << "                        .creation_ordinal = "
                        "cactus::runtime::entt_backend::creation_ordinal(reg, entity)});\n";
                 out << "                }\n";
@@ -4404,20 +4449,20 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                 out << "                    const auto& xform  = view.get<" << wt3d_cpp << ">(entity);\n";
                 out << "                    const auto& target = view.get<" << ptarget_cpp << ">(entity);\n";
                 out << "                    const auto& sphere = view.get<" << sphere_cpp << ">(entity);\n";
-                out << "                    const RayCollision __hit =\n";
-                out << "                        GetRayCollisionSphere(__ray, xform.position, sphere.radius);\n";
-                out << "                    if (!__hit.hit || __hit.distance <= 0.0F) { continue; }\n";
-                out << "                    __result.push_back(cactus::runtime::entt_backend::PointerCandidate{\n";
+                out << "                    const RayCollision cactus_gen_hit =\n";
+                out << "                        GetRayCollisionSphere(cactus_gen_ray, xform.position, sphere.radius);\n";
+                out << "                    if (!cactus_gen_hit.hit || cactus_gen_hit.distance <= 0.0F) { continue; }\n";
+                out << "                    cactus_gen_result.push_back(cactus::runtime::entt_backend::PointerCandidate{\n";
                 out << "                        .entity = entity, .enabled = target.enabled,\n";
                 out << "                        .blocks_lower = target.blocks_lower, .priority = target.priority,\n";
-                out << "                        .distance = __hit.distance,\n";
+                out << "                        .distance = cactus_gen_hit.distance,\n";
                 out << "                        .creation_ordinal = "
                        "cactus::runtime::entt_backend::creation_ordinal(reg, entity)});\n";
                 out << "                }\n";
                 out << "            }\n";
             }
-            out << "            cactus::runtime::entt_backend::sort_volume_world_pointer_candidates(__result);\n";
-            out << "            return __result;\n";
+            out << "            cactus::runtime::entt_backend::sort_volume_world_pointer_candidates(cactus_gen_result);\n";
+            out << "            return cactus_gen_result;\n";
             out << "        });\n";
         }
     }
@@ -4457,7 +4502,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
 
     // vp_cpp names the Viewport trait; emit_2d_helper/emit_3d_helper (computed
     // once, above) drive which branches of the viewport loop below reference
-    // the __translate_camera_2d/3d functions emitted early.
+    // the cactus_gen_translate_camera_2d/3d functions emitted early.
     const std::string vp_cpp = EnttCodegenUtils::trait_cpp_name("Viewport", program);
 
     out << "void generated_render_project(entt::registry& registry, entt::dispatcher& dispatcher) {\n";
@@ -4469,41 +4514,41 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
 
     if (uses_viewport) {
         out << "    {\n";
-        out << "        const int __sw = cactus::runtime::raylib::GetScreenWidth();\n";
-        out << "        const int __sh = cactus::runtime::raylib::GetScreenHeight();\n";
-        out << "        static std::vector<std::pair<int,entt::entity>> __vps;\n";
-        out << "        __vps.clear();\n";
-        out << "        for (const auto& [__vp_e, __vp] : registry.view<" << vp_cpp << ">().each()) {\n";
-        out << "            if (__vp.active) { __vps.emplace_back(__vp.depth, __vp_e); }\n";
+        out << "        const int cactus_gen_sw = cactus::runtime::raylib::GetScreenWidth();\n";
+        out << "        const int cactus_gen_sh = cactus::runtime::raylib::GetScreenHeight();\n";
+        out << "        static std::vector<std::pair<int,entt::entity>> cactus_gen_vps;\n";
+        out << "        cactus_gen_vps.clear();\n";
+        out << "        for (const auto& [cactus_gen_vp_e, cactus_gen_vp] : registry.view<" << vp_cpp << ">().each()) {\n";
+        out << "            if (cactus_gen_vp.active) { cactus_gen_vps.emplace_back(cactus_gen_vp.depth, cactus_gen_vp_e); }\n";
         out << "        }\n";
-        out << "        std::ranges::sort(__vps);\n";
-        out << "        for (auto& [__depth, __vp_ent] : __vps) {\n";
-        out << "            (void)__depth;\n";
-        out << "            const auto& __vp = registry.get<" << vp_cpp << ">(__vp_ent);\n";
+        out << "        std::ranges::sort(cactus_gen_vps);\n";
+        out << "        for (auto& [cactus_gen_depth, cactus_gen_vp_ent] : cactus_gen_vps) {\n";
+        out << "            (void)cactus_gen_depth;\n";
+        out << "            const auto& cactus_gen_vp = registry.get<" << vp_cpp << ">(cactus_gen_vp_ent);\n";
         out << "            cactus::runtime::raylib::BeginScissorMode(\n";
-        out << "                static_cast<int>(__vp.x * static_cast<float>(__sw)),\n";
-        out << "                static_cast<int>(__vp.y * static_cast<float>(__sh)),\n";
-        out << "                static_cast<int>(__vp.width * static_cast<float>(__sw)),\n";
-        out << "                static_cast<int>(__vp.height * static_cast<float>(__sh)));\n";
-        out << "            if (__vp.clear) { cactus::runtime::raylib::ClearBackground(__vp.clear_color); }\n";
+        out << "                static_cast<int>(cactus_gen_vp.x * static_cast<float>(cactus_gen_sw)),\n";
+        out << "                static_cast<int>(cactus_gen_vp.y * static_cast<float>(cactus_gen_sh)),\n";
+        out << "                static_cast<int>(cactus_gen_vp.width * static_cast<float>(cactus_gen_sw)),\n";
+        out << "                static_cast<int>(cactus_gen_vp.height * static_cast<float>(cactus_gen_sh)));\n";
+        out << "            if (cactus_gen_vp.clear) { cactus::runtime::raylib::ClearBackground(cactus_gen_vp.clear_color); }\n";
         // Camera helper selection keys on the viewport entity's resolved camera
         // component type (flat vs volume Camera), not a shared bare Camera token.
         if (emit_2d_helper) {
-            out << "            if (registry.all_of<" << cam2d_cpp << ">(__vp_ent)) {\n";
-            out << "                const auto& __cam = registry.get<" << cam2d_cpp << ">(__vp_ent);\n";
+            out << "            if (registry.all_of<" << cam2d_cpp << ">(cactus_gen_vp_ent)) {\n";
+            out << "                const auto& cactus_gen_cam = registry.get<" << cam2d_cpp << ">(cactus_gen_vp_ent);\n";
             out << "                cactus::runtime::entt_backend::set_active_camera_2d(\n";
-            out << "                    __translate_camera_2d(__cam, __sw, __sh));\n";
+            out << "                    cactus_gen_translate_camera_2d(cactus_gen_cam, cactus_gen_sw, cactus_gen_sh));\n";
             out << "            }\n";
         }
         if (emit_3d_helper) {
             if (emit_2d_helper) {
-                out << "            else if (registry.all_of<" << cam3d_cpp << ">(__vp_ent)) {\n";
+                out << "            else if (registry.all_of<" << cam3d_cpp << ">(cactus_gen_vp_ent)) {\n";
             } else {
-                out << "            if (registry.all_of<" << cam3d_cpp << ">(__vp_ent)) {\n";
+                out << "            if (registry.all_of<" << cam3d_cpp << ">(cactus_gen_vp_ent)) {\n";
             }
-            out << "                const auto& __cam = registry.get<" << cam3d_cpp << ">(__vp_ent);\n";
+            out << "                const auto& cactus_gen_cam = registry.get<" << cam3d_cpp << ">(cactus_gen_vp_ent);\n";
             out << "                cactus::runtime::entt_backend::set_active_camera_3d(\n";
-            out << "                    __translate_camera_3d(__vp_ent, __cam, registry));\n";
+            out << "                    cactus_gen_translate_camera_3d(cactus_gen_vp_ent, cactus_gen_cam, registry));\n";
             out << "            }\n";
         }
         // Draw this viewport's queued world content now (inside its scissor +
@@ -4530,15 +4575,6 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << "\n}  // namespace cactus::runtime::entt_backend\n";
 
     out << emit_backend_main(program);
-
-    out << "\n// NOLINTEND(modernize-use-std-numbers,readability-function-cognitive-complexity,"
-           "bugprone-branch-clone,bugprone-reserved-identifier,bugprone-throwing-static-initialization,"
-           "cppcoreguidelines-init-variables,cppcoreguidelines-pro-type-member-init,"
-           "readability-redundant-member-init,readability-simplify-boolean-expr,"
-           "readability-braces-around-statements,readability-isolate-declaration,"
-           "readability-math-missing-parentheses,readability-qualified-auto,readability-redundant-parentheses,"
-           "performance-move-const-arg,readability-named-parameter,modernize-use-designated-initializers,"
-           "readability-use-std-min-max)\n";
 
     return out.str();
 }

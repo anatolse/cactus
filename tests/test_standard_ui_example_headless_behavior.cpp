@@ -77,8 +77,8 @@ struct SceneLayout {
 // clear_projected_traits would otherwise erase ComputedLayout again.
 SceneLayout measure_scene(entt::registry& registry) {
     const cactus_gen::stdlib::core::InputPhase phase{};
-    cactus_gen::main::measure_ui_std_core::input(registry, phase);
-    cactus_gen::main::arrange_ui_std_core::input(registry, phase);
+    cactus_gen::detail::main::measure_ui_on(registry, phase);
+    cactus_gen::detail::main::arrange_ui_on(registry, phase);
 
     const auto center_panel   = find_center_panel(registry);
     const auto click_button   = find_click_button(registry);

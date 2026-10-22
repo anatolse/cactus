@@ -42,7 +42,8 @@ public:
     static std::string type_to_cpp(const TypeInfo& type);
     // Stored-value type: entity ids use the live registry entity type.
     static std::string value_type_to_cpp(const TypeInfo& type);
-    // Member initializer for a field with no declared default; an unset entity id is stale.
+    // Member initializer for a field with no declared default; an unset entity id is stale, and a
+    // class type with its own default constructor gets none.
     static std::string value_initializer(const TypeInfo& type);
     static std::string emit_enum(const ResolvedEnum& e);
     static std::string emit_expr(const ExprNode& expr, const ProgramNode* ast = nullptr);
@@ -137,6 +138,17 @@ public:
     static const ResolvedStruct* find_struct(const DecoratedProgram& program, const SymbolId& symbol);
     static const ResolvedFunc*   find_func(const DecoratedProgram& program, const SymbolId& symbol);
     static const ResolvedConst*  find_const(const DecoratedProgram& program, const SymbolId& symbol);
+    static const ExprNode*       find_const_initializer(const ProgramNode& ast, const SymbolId& symbol);
+    // Emitted `inline constexpr` (strings as `std::string_view`); other constants stay `inline const`.
+    static bool is_constexpr_const(const DecoratedProgram& program, const SymbolId& symbol);
+    // The constant `expr` reads when it is a bare constant name, else null.
+    static const SymbolId* named_const(const ExprNode& expr);
+    // A float literal, by `std::numbers` name when its float value is exactly that constant's.
+    static std::string float_literal_cpp(const std::string& value);
+    // Holds no string or list, so moving a value of it is a plain copy.
+    static bool is_trivially_copyable(const TypeInfo& type, const DecoratedProgram& program);
+    // A `std::string_view` constant read as a `string` value is copied into one at the read.
+    static std::string const_reference_cpp(const DecoratedProgram& program, const SymbolId& symbol);
     static const ResolvedState* find_state(const DecoratedProgram& program, const SymbolId& state);
 
     struct StateVariant {

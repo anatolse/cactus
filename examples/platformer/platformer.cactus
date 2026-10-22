@@ -377,7 +377,4 @@ rule Collect:
         shapes.Shape
 
     on tick:
-        if not collected:
-            visible = true
-        else:
-            visible = false
+        visible = not collected

@@ -30,7 +30,7 @@ struct World {
     entt::registry registry;
 
     World() {
-        cactus::runtime::entt_backend::generated_scheduler_state().stdlib.core.fixed_tick = {};
+        std::get<cactus_gen::stdlib::core::FixedTickPhase>(cactus::runtime::entt_backend::generated_scheduler_state().phases) = {};
         init_and_load(registry);
     }
 };
@@ -729,14 +729,14 @@ TEST_CASE("a successful restore discards old queued events and fixed-step catch-
     scheduler.activation.root_event_queue.push_back(
         cactus::runtime::entt_backend::QueuedEvent<cactus::runtime::entt_backend::EventOccurrence>{
             .occurrence = cactus_gen::stdlib::core::unloadEvent{}});
-    scheduler.stdlib.core.fixed_tick.accumulator = 10.0;
+    std::get<cactus_gen::stdlib::core::FixedTickPhase>(scheduler.phases).accumulator = 10.0;
     REQUIRE_FALSE(scheduler.activation.root_event_queue.empty());
 
     const auto outcome = cactus::runtime::entt_backend::generated_restore_world(registry, snapshot);
     REQUIRE(outcome.ok);
 
     CHECK(scheduler.activation.root_event_queue.empty());
-    CHECK(scheduler.stdlib.core.fixed_tick.accumulator == 0.0);
+    CHECK(std::get<cactus_gen::stdlib::core::FixedTickPhase>(scheduler.phases).accumulator == 0.0);
 }
 
 TEST_CASE("a failed restore preserves old-world scheduler work untouched",
@@ -751,13 +751,13 @@ TEST_CASE("a failed restore preserves old-world scheduler work untouched",
     scheduler.activation.root_event_queue.push_back(
         cactus::runtime::entt_backend::QueuedEvent<cactus::runtime::entt_backend::EventOccurrence>{
             .occurrence = cactus_gen::stdlib::core::unloadEvent{}});
-    scheduler.stdlib.core.fixed_tick.accumulator = 10.0;
+    std::get<cactus_gen::stdlib::core::FixedTickPhase>(scheduler.phases).accumulator = 10.0;
 
     const auto outcome = cactus::runtime::entt_backend::generated_restore_world(registry, incompatible);
     REQUIRE_FALSE(outcome.ok);
 
     CHECK(scheduler.activation.root_event_queue.size() == 1);
-    CHECK(scheduler.stdlib.core.fixed_tick.accumulator == 10.0);
+    CHECK(std::get<cactus_gen::stdlib::core::FixedTickPhase>(scheduler.phases).accumulator == 10.0);
 }
 
 TEST_CASE("a save and a restore accepted at the same boundary are both processed",

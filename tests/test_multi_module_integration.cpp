@@ -435,7 +435,7 @@ TEST_CASE("integration: imported input phase handlers preserve linked declaratio
     // Step 4: Graph dispatch uses the canonical phase identity and stable linked
     // declaration order: dependency handler first, root handler second.
     const auto dispatch_start =
-        code.find("void generated_dispatch_phase(entt::registry& registry, const ::cactus_gen::editorlib::InputPhase&");
+        code.find("void generated_dispatch_phase(entt::registry& registry, const ::cactus_gen::editorlib::InputPhase& phase) {");
     REQUIRE(dispatch_start != std::string::npos);
     const auto dispatch_end = code.find("\n}\n", dispatch_start);
     REQUIRE(dispatch_end != std::string::npos);

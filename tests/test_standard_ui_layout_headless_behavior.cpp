@@ -250,13 +250,13 @@ TEST_CASE("Standard UI measures bottom-up and arranges top-down across edge-case
     set_parent(registry, reorder_tie_b, reorder_root);
 
     const cactus_gen::stdlib::core::InputPhase input_measure_phase{};
-    cactus_gen::standard_ui_layout_runtime::measure_ui_std_core::input(registry, input_measure_phase);
+    cactus_gen::detail::standard_ui_layout_runtime::measure_ui_on(registry, input_measure_phase);
     CHECK(registry.get<cactus_gen::stdlib::ui::DesiredSize>(grid).size.x == 62.0F);
     CHECK(registry.get<cactus_gen::stdlib::ui::DesiredSize>(grid).size.y == 42.0F);
 
     const cactus_gen::stdlib::core::LateTickPhase measure_phase{};
-    cactus_gen::standard_ui_layout_runtime::measure_ui_std_core::late_tick(registry, measure_phase);
-    cactus_gen::standard_ui_layout_runtime::arrange_ui_std_core::input(registry, input_measure_phase);
+    cactus_gen::detail::standard_ui_layout_runtime::measure_ui_on(registry, measure_phase);
+    cactus_gen::detail::standard_ui_layout_runtime::arrange_ui_on(registry, input_measure_phase);
 
     CHECK(registry.get<cactus_gen::stdlib::ui::DesiredSize>(text).size.x == 15.0F);
     CHECK(registry.get<cactus_gen::stdlib::ui::DesiredSize>(text).size.y == 10.0F);

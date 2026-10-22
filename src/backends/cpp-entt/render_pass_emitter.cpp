@@ -198,21 +198,6 @@ std::string hex_color_literal_to_glsl(const std::string& raw_hex) {
     return "vec4(" + channel(0) + ", " + channel(2) + ", " + channel(4) + ", " + channel(6) + ")";
 }
 
-const ExprNode* find_const_initializer(const ProgramNode& ast, const SymbolId& symbol) {
-    for (const auto& decl : ast.declarations) {
-        const auto* block = std::get_if<ConstBlockNode>(&decl);
-        if (block == nullptr) {
-            continue;
-        }
-        for (const auto& assignment : block->assignments) {
-            if (assignment.resolved_const_id == symbol) {
-                return assignment.value.get();
-            }
-        }
-    }
-    return nullptr;
-}
-
 const FuncNode* find_func_decl(const ProgramNode& ast, const SymbolId& symbol) {
     for (const auto& decl : ast.declarations) {
         const auto* func = std::get_if<FuncNode>(&decl);
@@ -331,7 +316,7 @@ TranslatedExpr translate_filter_trait_access(const SymbolId& trait_symbol,
 
 TranslatedExpr translate_member(const MemberExpr& member, GlslCtx& ctx) {
     if (member.resolved_const_id.has_value()) {
-        if (const auto* initializer = find_const_initializer(*ctx.ast, *member.resolved_const_id)) {
+        if (const auto* initializer = EnttCodegenUtils::find_const_initializer(*ctx.ast, *member.resolved_const_id)) {
             return translate_expr(*initializer, ctx);
         }
     }
@@ -426,7 +411,7 @@ TranslatedExpr translate_ident(const IdentExpr& ident, GlslCtx& ctx) {
         return {.text = local_reference(ident.name, ctx), .type = local_it->second};
     }
     if (ident.resolved_const_id.has_value()) {
-        if (const auto* initializer = find_const_initializer(*ctx.ast, *ident.resolved_const_id)) {
+        if (const auto* initializer = EnttCodegenUtils::find_const_initializer(*ctx.ast, *ident.resolved_const_id)) {
             return translate_expr(*initializer, ctx);
         }
     }

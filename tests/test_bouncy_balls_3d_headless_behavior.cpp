@@ -371,12 +371,12 @@ TEST_CASE("example-bouncy-balls-3d: total pair-handler activation time benchmark
 
         cactus::runtime::entt_backend::set_sap_small_domain_threshold_override_for_testing(kForcedBruteForceThreshold);
         BENCHMARK("brute-force total activation, N=" + std::to_string(count)) {
-            cactus_gen::main::detect_ball_contact_fixed_tick(registry, trigger);
+            cactus_gen::detail::main::detect_ball_contact_on(registry, trigger);
         };
 
         cactus::runtime::entt_backend::set_sap_small_domain_threshold_override_for_testing(kForcedSapThreshold);
         BENCHMARK("SAP total activation, N=" + std::to_string(count)) {
-            cactus_gen::main::detect_ball_contact_fixed_tick(registry, trigger);
+            cactus_gen::detail::main::detect_ball_contact_on(registry, trigger);
         };
 
         cactus::runtime::entt_backend::set_sap_small_domain_threshold_override_for_testing(std::nullopt);

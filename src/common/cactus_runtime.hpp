@@ -34,18 +34,18 @@
 // per-program codegen text (cpp_entt_codegen.cpp); identical for every
 // generated program, so it belongs here instead. Same signatures, same
 // behavior as the codegen text they replace.
-[[nodiscard]] inline Vector2 vec2(float x, float y) {
+[[nodiscard]] constexpr Vector2 vec2(float x, float y) noexcept {
     return Vector2{.x = x, .y = y};
 }
-[[nodiscard]] inline Vector3 vec3(float x, float y, float z) {
+[[nodiscard]] constexpr Vector3 vec3(float x, float y, float z) noexcept {
     return Vector3{.x = x, .y = y, .z = z};
 }
 // Scalar splat constructors (dsl-vector-expressions): vec2(s) == vec2(s, s),
 // vec3(s) == vec3(s, s, s).
-[[nodiscard]] inline Vector2 vec2(float s) {
+[[nodiscard]] constexpr Vector2 vec2(float s) noexcept {
     return vec2(s, s);
 }
-[[nodiscard]] inline Vector3 vec3(float s) {
+[[nodiscard]] constexpr Vector3 vec3(float s) noexcept {
     return vec3(s, s, s);
 }
 
@@ -63,11 +63,17 @@
 // `color` component access/constructor/operator matrix (dsl-vector-expressions
 // "color"): declared here (not cactus::runtime) for the same ordinary-lookup
 // reason as vec2/vec3 above — Color is a plain raylib C struct with no
-// namespace, and generated call/operator text is unqualified. Defined out of
-// line in cactus_runtime.cpp (also at global scope there) since, unlike
-// vec2/vec3's trivial aggregate-literal constructors, it does real clamp/
-// quantize work worth keeping in exactly one compiled place.
-[[nodiscard]] Color color_from_components(float r, float g, float b, float a) noexcept;
+// namespace, and generated call/operator text is unqualified. constexpr so
+// color constants get constant initialization.
+[[nodiscard]] constexpr Color color_from_components(float r, float g, float b, float a) noexcept {
+    // Rounds half away from zero like std::lround, which is not constexpr here; v - whole is exact.
+    auto channel = [](const float v) {
+        const float scaled = std::clamp(v, 0.0F, 1.0F) * 255.0F;
+        const auto whole   = static_cast<int>(scaled);
+        return static_cast<unsigned char>(scaled - static_cast<float>(whole) >= 0.5F ? whole + 1 : whole);
+    };
+    return Color{.r = channel(r), .g = channel(g), .b = channel(b), .a = channel(a)};
+}
 
 // Generated code wraps a conditional nested in another conditional in this call: the inner one
 // stays lazy, and generated code passes the nested-conditional lint.

@@ -30,7 +30,7 @@ struct World {
         // The scheduler is a process-wide singleton, so a leftover fixed-step
         // accumulator from an earlier TEST_CASE would change how many steps
         // this one's frames perform. Every assertion below counts steps.
-        cactus::runtime::entt_backend::generated_scheduler_state().stdlib.core.fixed_tick = {};
+        std::get<cactus_gen::stdlib::core::FixedTickPhase>(cactus::runtime::entt_backend::generated_scheduler_state().phases) = {};
         cactus_headless_test::init_and_load(registry);
     }
 };

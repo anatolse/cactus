@@ -80,7 +80,7 @@ TEST_CASE("AnimateUiFrames advances frame deterministically and leaves paused/in
     const cactus_gen::stdlib::core::TickPhase tick_phase{.dt = 1.0F / 60.0F};
     // 10 fps: one whole frame every 0.1s. 0.25s of ticks -> floor(0.25 * 10) = 2 frames advanced.
     for (int i = 0; i < 15; ++i) {
-        cactus_gen::standard_ui_layout_runtime::animate_ui_frames_std_core::tick(registry, tick_phase);
+        cactus_gen::detail::standard_ui_layout_runtime::animate_ui_frames_on(registry, tick_phase);
     }
 
     CHECK(registry.get<cactus_gen::stdlib::ui::FrameAnimation>(playing).frame == 2);
@@ -104,7 +104,7 @@ TEST_CASE("AnimateUiFrames wraps frame modulo the clamped frame count", "[runtim
     const cactus_gen::stdlib::core::TickPhase tick_phase{.dt = 1.0F / 60.0F};
     // 0.7s at 10fps -> 7 whole frames elapsed; 7 % 3 == 1.
     for (int i = 0; i < 42; ++i) {
-        cactus_gen::standard_ui_layout_runtime::animate_ui_frames_std_core::tick(registry, tick_phase);
+        cactus_gen::detail::standard_ui_layout_runtime::animate_ui_frames_on(registry, tick_phase);
     }
 
     CHECK(registry.get<cactus_gen::stdlib::ui::FrameAnimation>(entity).frame == 1);
@@ -169,7 +169,7 @@ TEST_CASE("AnimateUiBump's StartBump and tick handlers are independently trigger
     // touches scale -- proving it does not implicitly fold in StartBump's
     // reset behavior.
     const cactus_gen::stdlib::core::TickPhase tick_phase{.dt = 1.0F / 60.0F};
-    cactus_gen::standard_ui_layout_runtime::animate_ui_bump_std_core::tick(registry, tick_phase);
+    cactus_gen::detail::standard_ui_layout_runtime::animate_ui_bump_on(registry, tick_phase);
     CHECK_FALSE(registry.get<cactus_gen::stdlib::ui::BumpAnimation>(entity).playing);
     CHECK(registry.get<cactus_gen::stdlib::ui::Visual>(entity).scale.x == 1.0F);
 
@@ -224,17 +224,17 @@ TEST_CASE("A tick-phase bump changes render presentation the same frame without 
     // cleanup, which would remove ComputedLayout before this test could read
     // it back.
     const cactus_gen::stdlib::core::InputPhase input_phase{};
-    cactus_gen::standard_ui_layout_runtime::measure_ui_std_core::input(registry, input_phase);
-    cactus_gen::standard_ui_layout_runtime::arrange_ui_std_core::input(registry, input_phase);
+    cactus_gen::detail::standard_ui_layout_runtime::measure_ui_on(registry, input_phase);
+    cactus_gen::detail::standard_ui_layout_runtime::arrange_ui_on(registry, input_phase);
 
     const cactus_gen::stdlib::core::TickPhase tick_phase{.dt = 1.0F / 60.0F};
-    cactus_gen::standard_ui_layout_runtime::animate_ui_bump_std_core::tick(registry, tick_phase);
+    cactus_gen::detail::standard_ui_layout_runtime::animate_ui_bump_on(registry, tick_phase);
 
     const cactus_gen::stdlib::core::LateTickPhase late_tick_phase{};
-    cactus_gen::standard_ui_layout_runtime::measure_ui_std_core::late_tick(registry, late_tick_phase);
-    cactus_gen::standard_ui_layout_runtime::arrange_ui_std_core::late_tick(registry, late_tick_phase);
+    cactus_gen::detail::standard_ui_layout_runtime::measure_ui_on(registry, late_tick_phase);
+    cactus_gen::detail::standard_ui_layout_runtime::arrange_ui_on(registry, late_tick_phase);
 
-    cactus_gen::standard_ui_layout_runtime::render_ui_tick(registry);
+    cactus_gen::detail::standard_ui_layout_runtime::render_ui_tick(registry);
     cactus::runtime::entt_backend::end_render_frame();
 
     // Logical/hit bounds come from PreferredSize alone; Visual.scale never

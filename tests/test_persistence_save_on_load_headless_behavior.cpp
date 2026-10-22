@@ -27,7 +27,7 @@ entt::entity entity_with(entt::registry& registry) {
 TEST_CASE("a SaveRequested emitted from on-load is processed at that same load boundary, not deferred to a frame",
           "[runtime][persistence][scheduling][headless]") {
     entt::registry registry;
-    cactus::runtime::entt_backend::generated_scheduler_state().stdlib.core.fixed_tick = {};
+    std::get<cactus_gen::stdlib::core::FixedTickPhase>(cactus::runtime::entt_backend::generated_scheduler_state().phases) = {};
 
     // init_and_load runs module init, load-time setup, and the `on load:`
     // activation — nothing here drives a frame.

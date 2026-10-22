@@ -934,9 +934,9 @@ const std::vector<DebugDrawRendererSpec>& debug_draw_renderer_specs() {
          .rule_name      = "DrawDebugRectOutline2DRenderer",
          .mode_begin     = kBeginMode2D,
          .mode_end       = kEndMode2D,
-         .draw_call_body = "    const Rectangle __rect{.x = occurrence.position.x, .y = occurrence.position.y,\n"
+         .draw_call_body = "    const Rectangle cactus_gen_rect{.x = occurrence.position.x, .y = occurrence.position.y,\n"
                            "                          .width = occurrence.size.x, .height = occurrence.size.y};\n"
-                           "    cactus::runtime::raylib::DrawRectangleLinesEx(__rect, occurrence.thickness, "
+                           "    cactus::runtime::raylib::DrawRectangleLinesEx(cactus_gen_rect, occurrence.thickness, "
                            "occurrence.color);\n"},
         {.module_name = "std.debug",
          .rule_name   = "DrawDebugLine3DRenderer",
@@ -970,12 +970,12 @@ const std::vector<DebugDrawRendererSpec>& debug_draw_renderer_specs() {
          .rule_name      = "DrawScreenRectRenderer",
          .mode_begin     = "",
          .mode_end       = "",
-         .draw_call_body = "    const Rectangle __rect{.x = occurrence.position.x, .y = occurrence.position.y,\n"
+         .draw_call_body = "    const Rectangle cactus_gen_rect{.x = occurrence.position.x, .y = occurrence.position.y,\n"
                            "                          .width = occurrence.size.x, .height = occurrence.size.y};\n"
                            "    if (occurrence.filled) {\n"
-                           "        cactus::runtime::raylib::DrawRectangleRec(__rect, occurrence.color);\n"
+                           "        cactus::runtime::raylib::DrawRectangleRec(cactus_gen_rect, occurrence.color);\n"
                            "    } else {\n"
-                           "        cactus::runtime::raylib::DrawRectangleLinesEx(__rect, occurrence.thickness, "
+                           "        cactus::runtime::raylib::DrawRectangleLinesEx(cactus_gen_rect, occurrence.thickness, "
                            "occurrence.color);\n"
                            "    }\n"},
     };
@@ -989,7 +989,7 @@ std::string foreach_temp_name(const ForeachStmt& stmt) {
 
 // Generates a compiler-internal temporary name that cannot collide with a user-visible DSL
 // identifier spliced into the same or an enclosing C++ scope. Reserved double-underscore
-// prefixes (e.g. "__target") are avoided because they are reserved for the implementation by
+// prefixes (e.g. "cactus_gen_target") are avoided because they are reserved for the implementation by
 // the C++ standard in any scope; a bare unprefixed name (e.g. "target", "existing") is avoided
 // because generated code frequently splices a raw, unqualified DSL identifier into the same
 // block, and a name like `target` or `existing` is a completely ordinary thing for a DSL author
@@ -1747,7 +1747,7 @@ static std::string emit_spawn_overrides(const std::string& entity_name,
         const std::string existing_name = gen_temp_name("existing", override_entry.location);
         const std::string value_name    = gen_temp_name("override_value", override_entry.location);
         out << ind << "{\n";
-        out << ind << "    auto " << existing_name << " = registry.try_get<" << cpp_name << ">(" << entity_name
+        out << ind << "    auto* " << existing_name << " = registry.try_get<" << cpp_name << ">(" << entity_name
             << ");\n";
         out << ind << "    auto " << value_name << " = " << existing_name << " ? *" << existing_name << " : "
             << cpp_name << "{};\n";
@@ -2112,7 +2112,7 @@ static std::string lower_ecs_query_call(const QueryCallExpr& qcall,
         const std::string parent_cpp = EnttCodegenUtils::trait_cpp_name("Parent", program);
         const std::string child_view = "registry.view" + build_view_suffix(qcall.filters, parent_cpp, &program);
         return "cactus::runtime::entt_backend::hierarchy_children(registry, " +
-               EnttCodegenUtils::hierarchy_index_expr(program) + ", (" + of_expr + "), " + child_view + ")";
+               EnttCodegenUtils::hierarchy_index_expr(program) + ", " + of_expr + ", " + child_view + ")";
     }
     if (func_name == "hierarchy_preorder" || func_name == "hierarchy_postorder") {
         return "cactus::runtime::entt_backend::hierarchy_order(registry, " +
@@ -2128,7 +2128,7 @@ static std::string lower_ecs_query_call(const QueryCallExpr& qcall,
         const std::string parent_cpp  = EnttCodegenUtils::trait_cpp_name("Parent", program);
         const std::string parent_comp = gen_temp_name("parent_component", qcall.location);
         return "[&]{ if (auto* " + parent_comp + " = registry.try_get<" + parent_cpp + ">(" + of_expr + "); " +
-               parent_comp + " != nullptr) return " + parent_comp + "->parent; return entt::entity{entt::null}; }()";
+               parent_comp + " != nullptr) { return " + parent_comp + "->parent; } return entt::entity{entt::null}; }()";
     }
     return "/* unsupported std.query func: " + func_name + " */";
 }
@@ -2142,26 +2142,26 @@ static std::string lower_flat_spatial_query(const QueryCallExpr& qcall,
     const std::string position_of = "[&](entt::entity e) { return registry.get<" + wt + ">(e).position; }";
     if (func_name == "nearest") {
         const std::string from = find_named_arg_value(qcall.named_args, "from", emit_arg);
-        return "cactus::runtime::entt_backend::query_nearest(registry, " + view + ", (" + from + "), " + position_of + ")";
+        return "cactus::runtime::entt_backend::query_nearest(registry, " + view + ", " + from + ", " + position_of + ")";
     }
     if (func_name == "overlap_box") {
         const std::string center = find_named_arg_value(qcall.named_args, "center", emit_arg);
         const std::string size   = find_named_arg_value(qcall.named_args, "size", emit_arg);
-        return "cactus::runtime::entt_backend::query_overlap_box(registry, " + view + ", (" + center + "), (" + size + "), " +
+        return "cactus::runtime::entt_backend::query_overlap_box(registry, " + view + ", " + center + ", " + size + ", " +
                position_of + ")";
     }
     if (func_name == "overlap_circle") {
         const std::string center = find_named_arg_value(qcall.named_args, "center", emit_arg);
         const std::string radius = find_named_arg_value(qcall.named_args, "radius", emit_arg);
-        return "cactus::runtime::entt_backend::query_overlap_circle(registry, " + view + ", (" + center + "), (" + radius +
-               "), " + position_of + ")";
+        return "cactus::runtime::entt_backend::query_overlap_circle(registry, " + view + ", " + center + ", " + radius +
+               ", " + position_of + ")";
     }
     if (func_name == "raycast") {
         const std::string origin   = find_named_arg_value(qcall.named_args, "origin", emit_arg);
         const std::string dir      = find_named_arg_value(qcall.named_args, "dir", emit_arg);
         const std::string max_dist = find_named_arg_value(qcall.named_args, "max_dist", emit_arg);
-        return "cactus::runtime::entt_backend::query_raycast(registry, " + view + ", (" + origin + "), (" + dir + "), (" +
-               max_dist + "), " + position_of + ")";
+        return "cactus::runtime::entt_backend::query_raycast(registry, " + view + ", " + origin + ", " + dir + ", " +
+               max_dist + ", " + position_of + ")";
     }
     return "/* unsupported std.physics.flat.query func: " + func_name + " */";
 }
@@ -2175,26 +2175,26 @@ static std::string lower_volume_spatial_query(const QueryCallExpr& qcall,
     const std::string position_of = "[&](entt::entity e) { return registry.get<" + wt + ">(e).position; }";
     if (func_name == "nearest") {
         const std::string from = find_named_arg_value(qcall.named_args, "from", emit_arg);
-        return "cactus::runtime::entt_backend::query_nearest(registry, " + view + ", (" + from + "), " + position_of + ")";
+        return "cactus::runtime::entt_backend::query_nearest(registry, " + view + ", " + from + ", " + position_of + ")";
     }
     if (func_name == "overlap_box") {
         const std::string center = find_named_arg_value(qcall.named_args, "center", emit_arg);
         const std::string size   = find_named_arg_value(qcall.named_args, "size", emit_arg);
-        return "cactus::runtime::entt_backend::query_overlap_box(registry, " + view + ", (" + center + "), (" + size + "), " +
+        return "cactus::runtime::entt_backend::query_overlap_box(registry, " + view + ", " + center + ", " + size + ", " +
                position_of + ")";
     }
     if (func_name == "overlap_sphere") {
         const std::string center = find_named_arg_value(qcall.named_args, "center", emit_arg);
         const std::string radius = find_named_arg_value(qcall.named_args, "radius", emit_arg);
-        return "cactus::runtime::entt_backend::query_overlap_sphere(registry, " + view + ", (" + center + "), (" + radius +
-               "), " + position_of + ")";
+        return "cactus::runtime::entt_backend::query_overlap_sphere(registry, " + view + ", " + center + ", " + radius +
+               ", " + position_of + ")";
     }
     if (func_name == "raycast") {
         const std::string origin   = find_named_arg_value(qcall.named_args, "origin", emit_arg);
         const std::string dir      = find_named_arg_value(qcall.named_args, "dir", emit_arg);
         const std::string max_dist = find_named_arg_value(qcall.named_args, "max_dist", emit_arg);
-        return "cactus::runtime::entt_backend::query_raycast(registry, " + view + ", (" + origin + "), (" + dir + "), (" +
-               max_dist + "), " + position_of + ")";
+        return "cactus::runtime::entt_backend::query_raycast(registry, " + view + ", " + origin + ", " + dir + ", " +
+               max_dist + ", " + position_of + ")";
     }
     return "/* unsupported std.physics.volume.query func: " + func_name + " */";
 }
@@ -2210,8 +2210,8 @@ static std::string lower_ui_query_call(const QueryCallExpr& qcall,
         const std::string of_expr  = find_named_arg_value(qcall.named_args, "of", emit_arg);
         const std::string node_cpp = EnttCodegenUtils::trait_cpp_name("std.ui.Node", program);
         return "cactus::runtime::entt_backend::hierarchy_stacking_order(registry, " +
-               EnttCodegenUtils::hierarchy_index_expr(program) + ", registry.view<" + node_cpp + ">(), (" +
-               of_expr + "), [&](entt::entity e) { return registry.get<" + node_cpp + ">(e).z_index; })";
+               EnttCodegenUtils::hierarchy_index_expr(program) + ", registry.view<" + node_cpp + ">(), " +
+               of_expr + ", [&](entt::entity e) { return registry.get<" + node_cpp + ">(e).z_index; })";
     }
     return "/* unsupported std.ui func: " + func_name + " */";
 }
@@ -2361,7 +2361,7 @@ static std::string rewrite_expr_node(  // NOLINT(readability-function-cognitive-
                     return "\"" + e.value + "\"";
                 }
                 if (e.kind == LiteralExpr::Kind::Float) {
-                    return e.value + "F";
+                    return EnttCodegenUtils::float_literal_cpp(e.value);
                 }
                 if (e.kind == LiteralExpr::Kind::HexColor) {
                     std::string hex = e.value;
@@ -2387,7 +2387,7 @@ static std::string rewrite_expr_node(  // NOLINT(readability-function-cognitive-
                     return EnttCodegenUtils::named_slot_name(*e.resolved_entity_id);
                 }
                 if (e.resolved_const_id.has_value()) {
-                    return EnttCodegenUtils::symbol_cpp_name(*e.resolved_const_id);
+                    return EnttCodegenUtils::const_reference_cpp(program, *e.resolved_const_id);
                 }
                 if (auto lowered = lowered_trigger_reference(expr)) {
                     return *std::move(lowered);
@@ -2607,7 +2607,7 @@ static std::string rewrite_expr_node(  // NOLINT(readability-function-cognitive-
                     return *std::move(named);
                 }
                 if (e.resolved_const_id.has_value()) {
-                    return EnttCodegenUtils::symbol_cpp_name(*e.resolved_const_id);
+                    return EnttCodegenUtils::const_reference_cpp(program, *e.resolved_const_id);
                 }
                 if (e.resolved_asset_id.has_value()) {
                     return e.resolved_asset_id->local_name;
@@ -3125,7 +3125,7 @@ static std::string emit_add_trait_stmt(const AddTraitStmt& s,
         if (s.args.empty()) {
             result << ind << "            " << write_trait(target_name, "");
         } else {
-            result << ind << "            auto " << existing_name << " = registry.try_get<" << cpp << ">("
+            result << ind << "            auto* " << existing_name << " = registry.try_get<" << cpp << ">("
                    << target_name << ");\n";
             result << ind << "            auto " << value_name << " = " << existing_name << " ? *" << existing_name
                    << " : " << cpp << "{};\n";
@@ -3157,7 +3157,7 @@ static std::string emit_add_trait_stmt(const AddTraitStmt& s,
     result << ind << (GUARDED ? "    " : "") << "{\n";
     result << ind << (GUARDED ? "        " : "    ") << "::cactus_gen::detail::cancel_projected<" << cpp << ">("
            << target << ");\n";
-    result << ind << (GUARDED ? "        " : "    ") << "auto " << existing_name << " = registry.try_get<" << cpp
+    result << ind << (GUARDED ? "        " : "    ") << "auto* " << existing_name << " = registry.try_get<" << cpp
            << ">(" << target << ");\n";
     result << ind << (GUARDED ? "        " : "    ") << "auto " << value_name << " = " << existing_name << " ? *"
            << existing_name << " : " << cpp << "{};\n";
@@ -3849,12 +3849,54 @@ static void emit_member_table(std::ostringstream& out,
     out << "    }\n";
 }
 
-// `(pred0) && (pred1) && ...`, each predicate lowered through `rewrite`.
+static std::size_t matching_paren(std::string_view cpp, std::size_t open) {
+    int depth = 0;
+    for (std::size_t i = open; i < cpp.size(); ++i) {
+        const char c = cpp[i];
+        if (c == '"' || c == '\'') {
+            for (++i; i < cpp.size() && cpp[i] != c; ++i) {
+                i += cpp[i] == '\\' ? 1 : 0;
+            }
+        } else if (c == '(') {
+            ++depth;
+        } else if (c == ')' && --depth == 0) {
+            return i;
+        }
+    }
+    return std::string_view::npos;
+}
+
+static bool is_name(std::string_view cpp) {
+    return !cpp.empty() && std::ranges::all_of(cpp, [](const char c) {
+        return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_' || c == '.' || c == ':';
+    });
+}
+
+// Parenthesizes `cpp` only when it is not already one primary expression, so an operand of
+// `&&` never gets a redundant pair.
+static std::string as_operand(const std::string& cpp) {
+    const bool parenthesized = cpp.starts_with('(') && matching_paren(cpp, 0) == cpp.size() - 1;
+    return parenthesized || is_name(cpp) ? cpp : "(" + cpp + ")";
+}
+
+// An `if` condition that holds when `condition` does not. A compound condition is named first:
+// negating it in place reads as a De Morgan candidate to clang-tidy.
+static std::string rejects(const std::string& condition) {
+    if (is_name(condition)) {
+        return "!" + condition;
+    }
+    return "const bool cactus_admitted = " + condition + "; !cactus_admitted";
+}
+
+// `pred0 && pred1 && ...`, each predicate lowered through `rewrite`.
 static std::string where_conjunction(const std::vector<const ExprNode*>& predicates,
                                      const std::function<std::string(const ExprNode&)>& rewrite) {
+    if (predicates.size() == 1) {
+        return rewrite(*predicates.front());
+    }
     std::string conjunction;
     for (std::size_t i = 0; i < predicates.size(); ++i) {
-        conjunction += (i == 0 ? "(" : " && (") + rewrite(*predicates[i]) + ")";
+        conjunction += (i == 0 ? "" : " && ") + as_operand(rewrite(*predicates[i]));
     }
     return conjunction;
 }
@@ -3872,16 +3914,21 @@ static void emit_where_guard(std::ostringstream& out,
     if (predicates.empty()) {
         return;
     }
-    out << "        if (!(" << where_conjunction(predicates, rewrite) << ")) { return; }\n";
+    out << "        if (" << rejects(where_conjunction(predicates, rewrite)) << ") { return; }\n";
+}
+
+// The conjunction of `predicates`, lowered outside any entity binding.
+static std::string unbound_conjunction(const std::vector<const ExprNode*>& predicates, const DecoratedProgram& program) {
+    return where_conjunction(predicates, [&](const ExprNode& predicate) {
+        return rewrite_expr(predicate, {}, program, {}, {}, nullptr, nullptr);
+    });
 }
 
 // The conjunction of the activation-stage predicates, or empty when there are none.
 static std::string activation_condition(const RuleNode& sys,
                                         const HandlerContract* contract,
                                         const DecoratedProgram& program) {
-    return where_conjunction(where_at(sys, contract, ClauseStage::Activation), [&](const ExprNode& predicate) {
-        return rewrite_expr(predicate, {}, program, {}, {}, nullptr, nullptr);
-    });
+    return unbound_conjunction(where_at(sys, contract, ClauseStage::Activation), program);
 }
 
 // An unreduced pass whose activation-stage predicates fail runs no invocation.
@@ -3893,7 +3940,7 @@ static void emit_activation_gate(std::ostringstream& out,
     if (condition.empty()) {
         return;
     }
-    out << "    if (!(" << condition << ")) {\n";
+    out << "    if (" << rejects(condition) << ") {\n";
     out << "        return;\n";
     out << "    }\n";
 }
@@ -4075,30 +4122,30 @@ static void emit_sap_pair_activation(std::ostringstream& out,
     const auto& right_name = pair_binding_codegens[1].scope.binding_name;
 
     out << "        {\n";
-    out << "            std::vector<" << ns << (flat ? "ProxyAabb2D" : "ProxyAabb3D") << "> __sap_proxies;\n";
-    out << "            __sap_proxies.reserve(" << left_name << "_snapshot.size() + " << right_name
+    out << "            std::vector<" << ns << (flat ? "ProxyAabb2D" : "ProxyAabb3D") << "> cactus_gen_sap_proxies;\n";
+    out << "            cactus_gen_sap_proxies.reserve(" << left_name << "_snapshot.size() + " << right_name
         << "_snapshot.size());\n";
     for (const auto* shape : {&plan.left, &plan.right}) {
         const auto& binding_name = pair_binding_codegens[shape->binding_index].scope.binding_name;
-        out << "            for (std::size_t __sap_i = 0; __sap_i < " << binding_name
-            << "_snapshot.size(); ++__sap_i) {\n";
-        out << "                const auto " << binding_name << " = " << binding_name << "_snapshot[__sap_i];\n";
+        out << "            for (std::size_t cactus_gen_sap_i = 0; cactus_gen_sap_i < " << binding_name
+            << "_snapshot.size(); ++cactus_gen_sap_i) {\n";
+        out << "                const auto " << binding_name << " = " << binding_name << "_snapshot[cactus_gen_sap_i];\n";
         const auto proxy =
-            sap_proxy_expression(*shape, plan.dimension, binding_name, "__sap_i", predicate, pair_codegen_scope, program);
+            sap_proxy_expression(*shape, plan.dimension, binding_name, "cactus_gen_sap_i", predicate, pair_codegen_scope, program);
         if (proxy.optional) {
-            out << "                if (const auto __sap_proxy = " << proxy.code << ") {\n";
-            out << "                    __sap_proxies.push_back(*__sap_proxy);\n";
+            out << "                if (const auto cactus_gen_sap_proxy = " << proxy.code << ") {\n";
+            out << "                    cactus_gen_sap_proxies.push_back(*cactus_gen_sap_proxy);\n";
             out << "                }\n";
         } else {
-            out << "                __sap_proxies.push_back(" << proxy.code << ");\n";
+            out << "                cactus_gen_sap_proxies.push_back(" << proxy.code << ");\n";
         }
         out << "            }\n";
     }
-    out << "            " << ns << (flat ? "SapBroadPhase2D" : "SapBroadPhase3D") << " __sap;\n";
-    out << "            __sap.sync(__sap_proxies);\n";
-    out << "            for (const auto& __sap_pair : __sap.candidate_pairs()) {\n";
+    out << "            " << ns << (flat ? "SapBroadPhase2D" : "SapBroadPhase3D") << " cactus_gen_sap;\n";
+    out << "            cactus_gen_sap.sync(cactus_gen_sap_proxies);\n";
+    out << "            for (const auto& cactus_gen_sap_pair : cactus_gen_sap.candidate_pairs()) {\n";
     out << "                " << pair_body_name
-        << "(__sap_proxies[__sap_pair.left].entity, __sap_proxies[__sap_pair.right].entity);\n";
+        << "(cactus_gen_sap_proxies[cactus_gen_sap_pair.left].entity, cactus_gen_sap_proxies[cactus_gen_sap_pair.right].entity);\n";
     out << "            }\n";
     out << "        }\n";
 }
@@ -4621,11 +4668,11 @@ static void emit_when_gate(std::ostringstream& out, const RuleNode& sys, const D
     if (!sys.when_clause.has_value() || sys.when_clause->predicates.empty()) {
         return;
     }
-    std::string gate;
+    std::vector<const ExprNode*> predicates;
     for (const auto& predicate : sys.when_clause->predicates) {
-        gate += (gate.empty() ? "!(" : " || !(") + rewrite_expr(*predicate, {}, program, {}, {}, nullptr, nullptr) + ")";
+        predicates.push_back(predicate.get());
     }
-    out << "    if (" << gate << ") {\n";
+    out << "    if (" << rejects(unbound_conjunction(predicates, program)) << ") {\n";
     out << "        return;\n";
     out << "    }\n";
 }
@@ -5072,7 +5119,7 @@ static void emit_group_table(std::ostringstream& out,
     out << "        const auto " << group << " = " << group << "_snapshot[cactus_i];\n";
     out << "        if (cactus_recipient.has_value() && *cactus_recipient != " << group << ") { continue; }\n";
     for (const auto index : reduce.group_predicates) {
-        out << "        if (!(" << rewrite(*predicates[index]) << ")) { continue; }\n";
+        out << "        if (" << rejects(rewrite(*predicates[index])) << ") { continue; }\n";
     }
     out << "        cactus_group_live[cactus_i] = 1;\n";
     out << "    }\n";
@@ -5097,7 +5144,7 @@ static void emit_fold_lambda(std::ostringstream& out,
         out << "        auto& cactus_acc = cactus_total;\n";
     }
     for (const auto* predicate : row_predicates) {
-        out << "        if (!(" << rewrite(*predicate) << ")) { return; }\n";
+        out << "        if (" << rejects(rewrite(*predicate)) << ") { return; }\n";
     }
     emit_reducer_folds(out, reduce, rewrite, "        ", keeps);
     out << "    };\n";
@@ -5739,7 +5786,7 @@ static void emit_reduced_unary_handler_body(std::ostringstream& out,
         return rewrite_expr(expr, domain.filter_traits, program, {}, domain.filter_cpp_overrides);
     };
     for (const auto* predicate : where_at(sys, contract, ClauseStage::Row)) {
-        out << "            if (!(" << rewrite(*predicate) << ")) { continue; }\n";
+        out << "            if (" << rejects(rewrite(*predicate)) << ") { continue; }\n";
     }
     emit_reducer_folds(out, reduce, rewrite, "            ", false);
     out << "        }\n";
@@ -6213,13 +6260,13 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
     if (is_debug_grid_3d(sys)) {
         // Filter-gated existence check (no per-entity data needed) — same
         // existence-scan shape the now-removed hardcoded GizmoRenderer2D/3D
-        // bodies used for their __editor_active check.
+        // bodies used for their cactus_gen_editor_active check.
         const std::string cam3d = EnttCodegenUtils::trait_cpp_name("EditorCamera3D", program);
         out << tick_signature;
-        out << "    bool __has_3d_rig = false;\n";
-        out << "    auto __cam3d_view = registry.view<" << cam3d << ">();\n";
-        out << "    for (auto __e : __cam3d_view) { (void)__e; __has_3d_rig = true; break; }\n";
-        out << "    if (!__has_3d_rig) { return; }\n";
+        out << "    bool cactus_gen_has_3d_rig = false;\n";
+        out << "    auto cactus_gen_cam3d_view = registry.view<" << cam3d << ">();\n";
+        out << "    for (auto cactus_gen_e : cactus_gen_cam3d_view) { (void)cactus_gen_e; cactus_gen_has_3d_rig = true; break; }\n";
+        out << "    if (!cactus_gen_has_3d_rig) { return; }\n";
         out << "    " << kBeginMode3D << "\n";
         out << "    cactus::runtime::raylib::DrawGrid(20, 1.0F);\n";
         out << "    " << kEndMode3D << "\n";
@@ -6254,62 +6301,62 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
         const std::string pstate_cpp = EnttCodegenUtils::trait_cpp_name("std.pointer.PointerState", program);
 
         out << tick_signature;
-        out << "    std::vector<entt::entity> __ui_paint_order;\n";
-        out << "    for (auto __e : registry.view<" << cl_cpp << ">()) { __ui_paint_order.push_back(__e); }\n";
-        out << "    std::ranges::sort(__ui_paint_order, [&](entt::entity __a, entt::entity __b) {\n";
-        out << "        return registry.get<" << cl_cpp << ">(__a).draw_order < registry.get<" << cl_cpp
-            << ">(__b).draw_order;\n";
+        out << "    std::vector<entt::entity> cactus_gen_ui_paint_order;\n";
+        out << "    for (auto cactus_gen_e : registry.view<" << cl_cpp << ">()) { cactus_gen_ui_paint_order.push_back(cactus_gen_e); }\n";
+        out << "    std::ranges::sort(cactus_gen_ui_paint_order, [&](entt::entity cactus_gen_a, entt::entity cactus_gen_b) {\n";
+        out << "        return registry.get<" << cl_cpp << ">(cactus_gen_a).draw_order < registry.get<" << cl_cpp
+            << ">(cactus_gen_b).draw_order;\n";
         out << "    });\n";
-        out << "    for (auto __e : __ui_paint_order) {\n";
-        out << "        const auto& __cl = registry.get<" << cl_cpp << ">(__e);\n";
-        out << "        cactus::runtime::entt_backend::UiPrimitive __prim{};\n";
-        out << "        __prim.position = __cl.position;\n";
-        out << "        __prim.size = __cl.size;\n";
-        out << "        __prim.effective_visible = __cl.effective_visible;\n";
-        out << "        __prim.effective_enabled = __cl.effective_enabled;\n";
-        out << "        __prim.effective_opacity = __cl.effective_opacity;\n";
-        out << "        __prim.clip_min = __cl.clip_min;\n";
-        out << "        __prim.clip_max = __cl.clip_max;\n";
-        out << "        if (const auto* __visual = registry.try_get<" << visual_cpp
-            << ">(__e)) { __prim.visual_scale = __visual->scale; }\n";
-        out << "        if (const auto* __panel = registry.try_get<" << panel_cpp << ">(__e)) {\n";
-        out << "            __prim.has_panel = true;\n";
-        out << "            __prim.panel_background = __panel->background;\n";
-        out << "            __prim.panel_border_color = __panel->border_color;\n";
-        out << "            __prim.panel_border_width = __panel->border_width;\n";
+        out << "    for (auto cactus_gen_e : cactus_gen_ui_paint_order) {\n";
+        out << "        const auto& cactus_gen_cl = registry.get<" << cl_cpp << ">(cactus_gen_e);\n";
+        out << "        cactus::runtime::entt_backend::UiPrimitive cactus_gen_prim{};\n";
+        out << "        cactus_gen_prim.position = cactus_gen_cl.position;\n";
+        out << "        cactus_gen_prim.size = cactus_gen_cl.size;\n";
+        out << "        cactus_gen_prim.effective_visible = cactus_gen_cl.effective_visible;\n";
+        out << "        cactus_gen_prim.effective_enabled = cactus_gen_cl.effective_enabled;\n";
+        out << "        cactus_gen_prim.effective_opacity = cactus_gen_cl.effective_opacity;\n";
+        out << "        cactus_gen_prim.clip_min = cactus_gen_cl.clip_min;\n";
+        out << "        cactus_gen_prim.clip_max = cactus_gen_cl.clip_max;\n";
+        out << "        if (const auto* cactus_gen_visual = registry.try_get<" << visual_cpp
+            << ">(cactus_gen_e)) { cactus_gen_prim.visual_scale = cactus_gen_visual->scale; }\n";
+        out << "        if (const auto* cactus_gen_panel = registry.try_get<" << panel_cpp << ">(cactus_gen_e)) {\n";
+        out << "            cactus_gen_prim.has_panel = true;\n";
+        out << "            cactus_gen_prim.panel_background = cactus_gen_panel->background;\n";
+        out << "            cactus_gen_prim.panel_border_color = cactus_gen_panel->border_color;\n";
+        out << "            cactus_gen_prim.panel_border_width = cactus_gen_panel->border_width;\n";
         out << "        }\n";
-        out << "        if (const auto* __text = registry.try_get<" << text_cpp << ">(__e)) {\n";
-        out << "            __prim.has_text = true;\n";
-        out << "            __prim.text_value = __text->value;\n";
-        out << "            __prim.text_font_size = __text->font_size;\n";
-        out << "            __prim.text_color = __text->color;\n";
-        out << "            __prim.text_align = static_cast<int>(__text->align);\n";
+        out << "        if (const auto* cactus_gen_text = registry.try_get<" << text_cpp << ">(cactus_gen_e)) {\n";
+        out << "            cactus_gen_prim.has_text = true;\n";
+        out << "            cactus_gen_prim.text_value = cactus_gen_text->value;\n";
+        out << "            cactus_gen_prim.text_font_size = cactus_gen_text->font_size;\n";
+        out << "            cactus_gen_prim.text_color = cactus_gen_text->color;\n";
+        out << "            cactus_gen_prim.text_align = static_cast<int>(cactus_gen_text->align);\n";
         out << "        }\n";
-        out << "        if (const auto* __image = registry.try_get<" << image_cpp << ">(__e)) {\n";
-        out << "            __prim.has_image = true;\n";
-        out << "            __prim.image_texture = __image->texture;\n";
-        out << "            __prim.image_tint = __image->tint;\n";
-        out << "            __prim.image_fit = static_cast<int>(__image->fit);\n";
+        out << "        if (const auto* cactus_gen_image = registry.try_get<" << image_cpp << ">(cactus_gen_e)) {\n";
+        out << "            cactus_gen_prim.has_image = true;\n";
+        out << "            cactus_gen_prim.image_texture = cactus_gen_image->texture;\n";
+        out << "            cactus_gen_prim.image_tint = cactus_gen_image->tint;\n";
+        out << "            cactus_gen_prim.image_fit = static_cast<int>(cactus_gen_image->fit);\n";
         out << "        }\n";
-        out << "        if (const auto* __anim = registry.try_get<" << anim_cpp << ">(__e)) {\n";
-        out << "            __prim.has_frame_animation = true;\n";
-        out << "            __prim.frame_count = __anim->frame_count;\n";
-        out << "            __prim.frame = __anim->frame;\n";
+        out << "        if (const auto* cactus_gen_anim = registry.try_get<" << anim_cpp << ">(cactus_gen_e)) {\n";
+        out << "            cactus_gen_prim.has_frame_animation = true;\n";
+        out << "            cactus_gen_prim.frame_count = cactus_gen_anim->frame_count;\n";
+        out << "            cactus_gen_prim.frame = cactus_gen_anim->frame;\n";
         out << "        }\n";
-        out << "        if (const auto* __button = registry.try_get<" << button_cpp << ">(__e)) {\n";
-        out << "            __prim.has_button = true;\n";
-        out << "            __prim.button_label = __button->label;\n";
-        out << "            __prim.button_normal_color = __button->normal_color;\n";
-        out << "            __prim.button_hover_color = __button->hover_color;\n";
-        out << "            __prim.button_pressed_color = __button->pressed_color;\n";
-        out << "            __prim.button_disabled_color = __button->disabled_color;\n";
-        out << "            __prim.button_text_color = __button->text_color;\n";
+        out << "        if (const auto* cactus_gen_button = registry.try_get<" << button_cpp << ">(cactus_gen_e)) {\n";
+        out << "            cactus_gen_prim.has_button = true;\n";
+        out << "            cactus_gen_prim.button_label = cactus_gen_button->label;\n";
+        out << "            cactus_gen_prim.button_normal_color = cactus_gen_button->normal_color;\n";
+        out << "            cactus_gen_prim.button_hover_color = cactus_gen_button->hover_color;\n";
+        out << "            cactus_gen_prim.button_pressed_color = cactus_gen_button->pressed_color;\n";
+        out << "            cactus_gen_prim.button_disabled_color = cactus_gen_button->disabled_color;\n";
+        out << "            cactus_gen_prim.button_text_color = cactus_gen_button->text_color;\n";
         out << "        }\n";
-        out << "        if (const auto* __pstate = registry.try_get<" << pstate_cpp << ">(__e)) {\n";
-        out << "            __prim.pointer_hovered = __pstate->hovered;\n";
-        out << "            __prim.pointer_pressed = __pstate->pressed;\n";
+        out << "        if (const auto* cactus_gen_pstate = registry.try_get<" << pstate_cpp << ">(cactus_gen_e)) {\n";
+        out << "            cactus_gen_prim.pointer_hovered = cactus_gen_pstate->hovered;\n";
+        out << "            cactus_gen_prim.pointer_pressed = cactus_gen_pstate->pressed;\n";
         out << "        }\n";
-        out << "        cactus::runtime::entt_backend::render_ui_primitive(__prim);\n";
+        out << "        cactus::runtime::entt_backend::render_ui_primitive(cactus_gen_prim);\n";
         out << "    }\n";
         out << "}\n\n";
         return out.str();
@@ -6331,39 +6378,39 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
         const std::string click_evt   = event_cpp_type("Click", program);
 
         out << tick_signature;
-        out << "    const auto __t = cactus::runtime::entt_backend::compute_pointer_frame_transitions(registry);\n";
-        out << "    const Vector2 __pos = cactus::runtime::entt_backend::mouse_position();\n";
-        out << "    if (__t.hover_changed) {\n";
-        out << "        if (registry.valid(__t.leave_target)) {\n";
-        out << "            if (auto* __ps = registry.try_get<" << pstate_cpp
-            << ">(__t.leave_target)) { __ps->hovered = false; }\n";
+        out << "    const auto cactus_gen_t = cactus::runtime::entt_backend::compute_pointer_frame_transitions(registry);\n";
+        out << "    const Vector2 cactus_gen_pos = cactus::runtime::entt_backend::mouse_position();\n";
+        out << "    if (cactus_gen_t.hover_changed) {\n";
+        out << "        if (registry.valid(cactus_gen_t.leave_target)) {\n";
+        out << "            if (auto* cactus_gen_ps = registry.try_get<" << pstate_cpp
+            << ">(cactus_gen_t.leave_target)) { cactus_gen_ps->hovered = false; }\n";
         out << "            cactus::runtime::entt_backend::generated_emit_targeted_event(\n";
-        out << "                " << leave_evt << "{.position = __pos}, __t.leave_target);\n";
+        out << "                " << leave_evt << "{.position = cactus_gen_pos}, cactus_gen_t.leave_target);\n";
         out << "        }\n";
-        out << "        if (registry.valid(__t.enter_target)) {\n";
-        out << "            if (auto* __ps = registry.try_get<" << pstate_cpp
-            << ">(__t.enter_target)) { __ps->hovered = true; }\n";
+        out << "        if (registry.valid(cactus_gen_t.enter_target)) {\n";
+        out << "            if (auto* cactus_gen_ps = registry.try_get<" << pstate_cpp
+            << ">(cactus_gen_t.enter_target)) { cactus_gen_ps->hovered = true; }\n";
         out << "            cactus::runtime::entt_backend::generated_emit_targeted_event(\n";
-        out << "                " << enter_evt << "{.position = __pos}, __t.enter_target);\n";
+        out << "                " << enter_evt << "{.position = cactus_gen_pos}, cactus_gen_t.enter_target);\n";
         out << "        }\n";
         out << "    }\n";
-        out << "    if (__t.press_occurred && registry.valid(__t.press_target)) {\n";
-        out << "        if (auto* __ps = registry.try_get<" << pstate_cpp
-            << ">(__t.press_target)) { __ps->pressed = true; }\n";
+        out << "    if (cactus_gen_t.press_occurred && registry.valid(cactus_gen_t.press_target)) {\n";
+        out << "        if (auto* cactus_gen_ps = registry.try_get<" << pstate_cpp
+            << ">(cactus_gen_t.press_target)) { cactus_gen_ps->pressed = true; }\n";
         out << "        cactus::runtime::entt_backend::generated_emit_targeted_event(\n";
-        out << "            " << press_evt << "{.position = __pos}, __t.press_target);\n";
+        out << "            " << press_evt << "{.position = cactus_gen_pos}, cactus_gen_t.press_target);\n";
         out << "    }\n";
-        out << "    if (__t.release_occurred && registry.valid(__t.release_target)) {\n";
-        out << "        if (auto* __ps = registry.try_get<" << pstate_cpp
-            << ">(__t.release_target)) { __ps->pressed = false; }\n";
+        out << "    if (cactus_gen_t.release_occurred && registry.valid(cactus_gen_t.release_target)) {\n";
+        out << "        if (auto* cactus_gen_ps = registry.try_get<" << pstate_cpp
+            << ">(cactus_gen_t.release_target)) { cactus_gen_ps->pressed = false; }\n";
         out << "        cactus::runtime::entt_backend::generated_emit_targeted_event(\n";
-        out << "            " << release_evt << "{.position = __pos}, __t.release_target);\n";
-        out << "        if (__t.release_is_click) {\n";
+        out << "            " << release_evt << "{.position = cactus_gen_pos}, cactus_gen_t.release_target);\n";
+        out << "        if (cactus_gen_t.release_is_click) {\n";
         out << "            cactus::runtime::entt_backend::generated_emit_targeted_event(\n";
-        out << "                " << click_evt << "{.position = __pos}, __t.release_target);\n";
+        out << "                " << click_evt << "{.position = cactus_gen_pos}, cactus_gen_t.release_target);\n";
         out << "        }\n";
         out << "    }\n";
-        out << "    if (__t.should_consume_primary) {\n";
+        out << "    if (cactus_gen_t.should_consume_primary) {\n";
         out << "        cactus::runtime::entt_backend::mark_input_mouse_consumed(MOUSE_BUTTON_LEFT);\n";
         out << "    }\n";
         out << "}\n\n";

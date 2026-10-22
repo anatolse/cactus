@@ -2,19 +2,19 @@
 Define the required behavior of the EnTT-based C++ backend, including registry-oriented code generation, event integration, and correctness expectations for generated output.
 ## Requirements
 ### Requirement: EnTT component struct generation
-The backend SHALL generate EnTT-compatible component structs for each resolved trait. Empty traits SHALL generate empty tag structs. The generated C++ type name SHALL be derived from the trait's resolved symbol identity and SHALL be deterministic and collision-free for distinct trait symbols.
+The backend SHALL generate EnTT-compatible component structs for each resolved trait. Empty traits SHALL generate empty tag structs. The generated C++ type SHALL be declared in the C++ namespace that mirrors the trait's module (see "Generated program names mirror module namespaces") and SHALL be named after the trait, so distinct trait symbols always produce distinct qualified C++ types.
 
 #### Scenario: Trait becomes component
 - **WHEN** the resolved semantic program contains trait symbol `game.components.Position` with fields `var x: float` and `var y: float`
-- **THEN** the backend generates a collision-free C++ component struct derived from `game.components.Position`, such as `game_components__Position`, with fields `float x; float y;`
+- **THEN** the backend generates the component struct `cactus_gen::game::components::Position` with fields `float x; float y;`
 
 #### Scenario: Empty trait becomes tag
 - **WHEN** the resolved semantic program contains marker trait symbol `game.state.Alive`
-- **THEN** the backend generates an empty tag component struct using the C++ name derived from `game.state.Alive`
+- **THEN** the backend generates the empty tag component struct `cactus_gen::game::state::Alive`
 
 #### Scenario: Same local trait name from different modules produces different C++ types
 - **WHEN** traits `std.transform.flat.WorldTransform` and `std.transform.volume.WorldTransform` are both present
-- **THEN** the backend generates two distinct C++ component type names
+- **THEN** the backend generates `cactus_gen::stdlib::transform::flat::WorldTransform` and `cactus_gen::stdlib::transform::volume::WorldTransform`
 
 ### Requirement: Code generation consumes resolved symbol identities
 The cpp-entt backend SHALL consume resolved typed symbol identities for all module-scope declarations and references. It MUST NOT perform semantic name resolution by scanning `UseNode` declarations, resolving aliases, interpreting unique unqualified imports, or falling back from source-spelled strings to declaration maps.
@@ -942,9 +942,9 @@ be used as emission gates.
 #### Scenario: Emitted impl lambdas reference resolved component names
 - **WHEN** the hit-test, spawn, or raycast impl registration is emitted for a linked
   program
-- **THEN** the lambda bodies reference the resolved C++ component type names (e.g.
-  `std_transform_flat__WorldTransform`) rather than bare simple names, and the generated
-  translation unit compiles
+- **THEN** the lambda bodies reference the namespace-qualified C++ component types (e.g.
+  `cactus_gen::stdlib::transform::flat::WorldTransform`) rather than bare simple names, and the
+  generated translation unit compiles
 
 ### Requirement: Editor rig dimensionality derives from root-program transform usage
 The cpp-entt backend SHALL derive the editor camera rig dimensionality (2D, 3D, or both)
@@ -1032,12 +1032,12 @@ For each declared phase field with a resolved initializer binding, the backend S
 This requirement does not apply to synthesized periodic-phase fields (`dt`, `alpha` on a phase with `every:`), which the backend already populates via accumulator/catch-up bookkeeping.
 
 #### Scenario: Root-event-bound field is assigned before dispatch
-- **WHEN** `phase tick` declares `dt: float = frame.dt`
-- **THEN** `generated_run_phase_batch_std_core__tick` assigns `phase.dt` from `root_event.dt` before calling `generated_dispatch_phase_std_core__tick`
+- **WHEN** `phase tick` in `std.core` declares `dt: float = frame.dt`
+- **THEN** the `std.core.tick` runtime batch function assigns `phase.dt` from `root_event.dt` before calling the `std.core.tick` phase dispatch function
 
 #### Scenario: Upstream-phase-bound field is assigned before dispatch
-- **WHEN** `phase render` declares `alpha: float = fixed_tick.alpha`
-- **THEN** `generated_run_phase_batch_std_core__render` assigns `phase.alpha` from the persisted `std_core__fixed_tick` runtime state's `alpha` field before calling `generated_dispatch_phase_std_core__render`
+- **WHEN** `phase render` in `std.core` declares `alpha: float = fixed_tick.alpha`
+- **THEN** the `std.core.render` runtime batch function assigns `phase.alpha` from the persisted `cactus_gen::stdlib::core::FixedTickPhase` runtime state's `alpha` field before calling the `std.core.render` phase dispatch function
 
 #### Scenario: Synthesized periodic fields are unaffected
 - **WHEN** `phase fixed_tick` declares `every: 1.0 / 60.0`
@@ -1599,3 +1599,38 @@ None of this SHALL change the rows that run, their order, `limit:` slots, `reduc
 #### Scenario: Recipient-targeted pass keeps its rules
 - **WHEN** a targeted event reaches a pair rule with a binding-stage predicate on the binding that is not the recipient
 - **THEN** only tuples incident to the recipient run, filtered as they would be without staging
+
+### Requirement: Generated program names mirror module namespaces
+Every C++ type the backend generates for a module-scope declaration (trait, struct, enum, event, phase) SHALL be declared in a namespace under the single root `cactus_gen` whose path mirrors the declaring module's dotted path. Modules under `std` SHALL map to `cactus_gen::stdlib`. Traits, structs and enums SHALL use the declared name. Events SHALL use the declared name followed by `Event`. Phases SHALL use the declared name converted to PascalCase followed by `Phase`. A declared name that is a C++ keyword SHALL get a trailing `_`.
+
+#### Scenario: User module trait
+- **WHEN** module `robot` declares `trait Robot`
+- **THEN** the generated type is `cactus_gen::robot::Robot`
+
+#### Scenario: Stdlib module type
+- **WHEN** the program uses `std.camera.volume.Camera`
+- **THEN** the generated type is `cactus_gen::stdlib::camera::volume::Camera`, and the generated file defines no `Camera` macro and does not `#undef PI`
+
+#### Scenario: Event and phase suffixes
+- **WHEN** module `game` declares `event Reset` and `std.core` declares `phase fixed_tick`
+- **THEN** the generated types are `cactus_gen::game::ResetEvent` and `cactus_gen::stdlib::core::FixedTickPhase`
+
+#### Scenario: Keyword name
+- **WHEN** a module declares a trait field or enum variant named `default`
+- **THEN** the generated member is named `default_`
+
+### Requirement: Codegen helpers live in a detail namespace
+Functions, variables and types the backend invents (systems, handler bodies, dispatch, creation functions, capture/restore, projected-trait trackers, named-entity slots) SHALL be declared under `cactus_gen::detail` or in the runtime library, never in a module namespace, so they cannot collide with authored names.
+
+#### Scenario: Authored name equal to a helper name
+- **WHEN** module `game` declares a trait named `projected_Session`, and trait `Session` is projected
+- **THEN** the generated output compiles, and the trait type and the projection helper are distinct entities
+
+### Requirement: Generated output contains no module-mangled identifiers
+No identifier in generated cpp-entt output SHALL contain `__` after its first two characters, so no
+name joins a module path and a local name with `__`. Leading-`__` codegen locals are outside this
+requirement.
+
+#### Scenario: Robot sandbox output
+- **WHEN** C++ is generated for `examples/robot-sandbox/main.cactus`
+- **THEN** no identifier token in the output contains `__` after its first two characters

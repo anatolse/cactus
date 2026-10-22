@@ -74,3 +74,13 @@ Generated project output SHALL declare one canonical user-library callback ABI p
 - **WHEN** a trait moves from reads to writes in an external handler contract
 - **THEN** the generated callback declaration changes from immutable to mutable trait access
 
+### Requirement: Native handler callbacks are trigger-typed overloads in the rule's namespace
+For each external handler of an `extern rule R` declared in module `M`, generated output SHALL declare a function `on` in namespace `cactus_gen::<M path>::R` (with `std` mapped to `stdlib`). Its first parameter SHALL be a const reference to the trigger's generated type, and the remaining parameters SHALL follow the per-handler ABI: entity context when applicable, const reads, mutable writes, then a const reference to a capabilities object specific to that handler. Handlers of one rule with different triggers SHALL be distinct overloads. Trait-targeted capabilities (`set`, `add`, `remove`, `project`) SHALL be member templates keyed by trait type (for example `set<Heading>(entity, value)`), and SHALL accept only the traits the handler contract allows. Emitted events SHALL be `emit` overloads keyed by event type.
+
+#### Scenario: Two triggers, two overloads
+- **WHEN** `extern rule NativeMovement` in module `external_handler_linking` handles `fixed_tick` and `Reset`
+- **THEN** generated output declares `cactus_gen::external_handler_linking::NativeMovement::on(const cactus_gen::stdlib::core::FixedTickPhase&, …)` and `on(const cactus_gen::external_handler_linking::ResetEvent&, …)`, and a library that defines only one of them fails to link with an error naming the other
+
+#### Scenario: Capability command is typed
+- **WHEN** the `fixed_tick` handler's contract allows `set Heading`
+- **THEN** the handler can call `capabilities.set<Heading>(entity, {.angle = 1.0F})`, and calling `capabilities.set<Velocity>(…)` for a trait the contract does not allow fails to compile

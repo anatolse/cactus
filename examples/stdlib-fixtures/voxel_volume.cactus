@@ -73,6 +73,32 @@ pub entity Shovel:
 
 event Dig
 
+# Copies the coordinates of the cell its handle names, or -1 when the handle
+# names no live cell. The test sets the handle.
+pub trait CellLookup:
+    var target: entity_id
+    var x: int = 0
+    var z: int = 0
+
+pub entity Lookup:
+    CellLookup
+
+rule LookUpCell:
+    pairs:
+        lookup:
+            CellLookup
+        cell:
+            voxel.Cell
+    where:
+        cell == lookup[CellLookup].target
+    reduce per lookup:
+        x = max(cell[voxel.Cell].x, default = -1)
+        z = max(cell[voxel.Cell].z, default = -1)
+
+    on tick:
+        lookup[CellLookup].x = x
+        lookup[CellLookup].z = z
+
 # Saves or restores slot "voxels" when the test sets a flag.
 pub trait StorageControl:
     var save: bool = false

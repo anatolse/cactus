@@ -745,7 +745,8 @@ struct ArchetypeOrigin {
 
 // ── Named entities ───────────────────────────────────────────────────────
 
-// A handler that reaches `slot`'s traits by name runs a pass only while this holds.
+// A handler that reaches `slot`'s traits by name runs a pass only while this
+// holds; an identity join folds the entity a group names only while it holds.
 template <typename... Traits>
 [[nodiscard]] bool named_alive(const entt::registry& registry, entt::entity slot) {
     return registry.valid(slot) && registry.all_of<Traits...>(slot);

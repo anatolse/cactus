@@ -5570,7 +5570,8 @@ static bool emit_indexed_pair_activation_if_planned(std::ostringstream& out,
 // A reduced pair pass with an equality join keeps the non-group members in an
 // EqualityBindingIndex keyed by values they never change. Each group entity
 // folds exactly the members with its key, oldest first; the fold still checks
-// every predicate.
+// every predicate. An identity key needs no index: the registry already finds
+// the one member a group names.
 
 struct EqualityKeyPart {
     const ExprNode* member = nullptr;
@@ -5580,6 +5581,7 @@ struct EqualityKeyPart {
 struct EqualityFoldPlan {
     std::size_t indexed = 0;
     std::vector<EqualityKeyPart> parts;
+    const ExprNode* identity = nullptr;
 };
 
 static std::optional<EqualityFoldPlan> equality_fold_plan(const RuleNode& sys,
@@ -5600,6 +5602,14 @@ static std::optional<EqualityFoldPlan> equality_fold_plan(const RuleNode& sys,
             return part.member == nullptr || part.query == nullptr;
         })) {
         return std::nullopt;
+    }
+    const auto& indexed_name = sys.pairs->bindings.at(plan.indexed).name;
+    const auto identity      = std::ranges::find_if(plan.parts, [&](const EqualityKeyPart& part) {
+        const auto* ident = std::get_if<IdentExpr>(&part.member->expr);
+        return ident != nullptr && ident->name == indexed_name;
+    });
+    if (identity != plan.parts.end()) {
+        plan.identity = identity->query;
     }
     return plan;
 }
@@ -5652,8 +5662,15 @@ static void emit_equality_fold_dispatch(std::ostringstream& out,
     out << "    for (std::size_t cactus_i = 0; cactus_i < " << group << "_snapshot.size(); ++cactus_i) {\n";
     out << "        if (cactus_group_live[cactus_i] == 0) { continue; }\n";
     out << "        const auto " << group << " = " << group << "_snapshot[cactus_i];\n";
-    out << "        for (const auto& [cactus_ordinal, " << member << "] : cactus_index_" << member << ".find("
-        << equality_key(plan.parts, false, fold_scope, program) << ")) {\n";
+    if (plan.identity != nullptr) {
+        out << "        const entt::entity " << member << " = "
+            << rewrite_expr(*plan.identity, {}, program, {}, {}, &fold_scope) << ";\n";
+        out << "        if (cactus::runtime::entt_backend::named_alive<"
+            << join_strings(pair_binding_codegens[plan.indexed].cpp_types, ", ") << ">(registry, " << member << ")) {\n";
+    } else {
+        out << "        for (const auto& [cactus_ordinal, " << member << "] : cactus_index_" << member << ".find("
+            << equality_key(plan.parts, false, fold_scope, program) << ")) {\n";
+    }
     out << "            cactus_fold(" << (plan.indexed == 0 ? member + ", " + group : group + ", " + member) << ");\n";
     out << "        }\n";
     out << "    }\n";
@@ -5705,7 +5722,7 @@ static void emit_reduced_pair_handler_body(std::ostringstream& out,
     if (index.has_value()) {
         emit_binding_index_sync(out, *index, *spatial_join_root(sys, contract), pair_binding_codegens[index->indexed],
                                 pair_codegen_scope, program);
-    } else if (equality.has_value()) {
+    } else if (equality.has_value() && equality->identity == nullptr) {
         emit_equality_index_sync(out, *equality, pair_binding_codegens[equality->indexed], pair_codegen_scope, program);
     }
     const auto filtered =

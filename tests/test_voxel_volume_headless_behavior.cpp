@@ -304,6 +304,31 @@ TEST_CASE("a ray probe names the struck cell, face and adjacent coordinate", "[r
     CHECK(ray.adjacent_z == 1);
 }
 
+TEST_CASE("an identity join folds only a live cell its handle names", "[runtime][codegen-entt][stdlib-voxel-volume]") {
+    World world;
+    world.fill();
+    const auto terrain = slots().voxel_volume.Terrain;
+    auto& lookup       = world.registry.get<cactus_gen::voxel_volume::CellLookup>(slots().voxel_volume.Lookup);
+    const auto air     = world.cell_at(terrain, 3, 0, 2);
+    lookup.target      = air;
+    world.frame();
+    CHECK(lookup.x == 3);
+    CHECK(lookup.z == 2);
+
+    lookup.target = terrain;
+    world.frame();
+    CHECK(lookup.x == -1);
+    CHECK(lookup.z == -1);
+
+    lookup.target = air;
+    world.frame();
+    REQUIRE(lookup.x == 3);
+    world.registry.destroy(air);
+    world.frame();
+    CHECK(lookup.x == -1);
+    CHECK(lookup.z == -1);
+}
+
 TEST_CASE("a ray probe places against a positive-X face", "[runtime][codegen-entt][stdlib-voxel-volume]") {
     World world;
     world.fill();

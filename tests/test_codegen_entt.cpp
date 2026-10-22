@@ -7976,6 +7976,57 @@ TEST_CASE("Codegen EnTT: an equality join on let fields uses a keyed index",
     CHECK_FALSE(emit_indexed_join(equality_join_source("let"), false).contains("EqualityBindingIndex"));
 }
 
+static std::string identity_join_source(const std::string& extra_key) {
+    return "trait Cell:\n"
+           "    let x: int\n"
+           "trait Probe:\n"
+           "    var x: int = 0\n"
+           "    var target: entity_id\n"
+           "    var found: int = 0\n"
+           "event tick:\n"
+           "    dt: float\n"
+           "rule Detect:\n"
+           "    pairs:\n"
+           "        probe:\n"
+           "            Probe\n"
+           "        cell:\n"
+           "            Cell\n"
+           "    where:\n"
+           "        cell == probe[Probe].target" + extra_key + "\n"
+           "    reduce per probe:\n"
+           "        matches = count()\n"
+           "    on tick:\n"
+           "        probe[Probe].found = matches\n";
+}
+
+TEST_CASE("Codegen EnTT: an identity join looks the entity up directly and keeps no index",
+          "[codegen-entt][equality-join][binding-index]") {
+    const auto code = emit_indexed_join(identity_join_source(""));
+    CHECK_FALSE(code.contains("EqualityBindingIndex"));
+    CHECK_FALSE(code.contains("watch_binding_traits"));
+    CHECK_FALSE(code.contains("cactus_index_cell"));
+    CHECK_FALSE(code.contains("cell_snapshot"));
+    const auto member = code.find("named_alive<::cactus_gen::Cell>(registry, cell)");
+    const auto fold   = code.find("cactus_fold(probe, cell);");
+    REQUIRE(member != std::string::npos);
+    REQUIRE(fold != std::string::npos);
+    CHECK(member < fold);
+
+    const auto unindexed = emit_indexed_join(identity_join_source(""), false);
+    CHECK(unindexed.contains("cell_snapshot"));
+    CHECK_FALSE(unindexed.contains("named_alive<"));
+}
+
+TEST_CASE("Codegen EnTT: an identity key decides the plan and the fold still checks the other keys",
+          "[codegen-entt][equality-join][binding-index]") {
+    const auto code = emit_indexed_join(identity_join_source(" and cell[Cell].x == probe[Probe].x"));
+    CHECK_FALSE(code.contains("EqualityBindingIndex"));
+    CHECK(code.contains("named_alive<::cactus_gen::Cell>(registry, cell)"));
+    const auto lambda = code.find("auto cactus_fold = [&]");
+    REQUIRE(lambda != std::string::npos);
+    CHECK(code.find(".x == ", lambda) != std::string::npos);
+}
+
 TEST_CASE("Codegen EnTT: initializing a project starts a new binding-index epoch",
           "[codegen-entt][binding-index]") {
     ProgramNode program;

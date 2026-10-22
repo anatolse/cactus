@@ -285,7 +285,7 @@ A pair rule's `where:` predicate SHALL be eligible for broad-phase acceleration 
 - **THEN** the predicate is evaluated as an ordinary predicate, with no compile error
 
 ### Requirement: Equality joins on values a member never changes are indexed
-A pair rule that reduces per one binding SHALL be recognized as an equality join when the operands of the top-level `and` chains of its `where:` predicates include at least one `==` comparison whose one side is either the other (indexed) binding itself or a `let` field of type `int`, `bool`, enum or `entity_id` read through that binding, and whose other side reads nothing of the indexed binding. A conforming backend MAY then look up, for each group entity, only the indexed members whose values equal the group's values. Every predicate SHALL still be evaluated for each looked-up row, rows SHALL fold in the same order as the full product, and the result SHALL be the same as without the index.
+A pair rule that reduces per one binding SHALL be recognized as an equality join when the operands of the top-level `and` chains of its `where:` predicates include at least one `==` comparison whose one side is either the other (indexed) binding itself or a `let` field of type `int`, `bool`, enum or `entity_id` read through that binding, and whose other side reads nothing of the indexed binding. A conforming backend MAY then look up, for each group entity, only the indexed members whose values equal the group's values. When one of the keys is the indexed binding itself, the backend SHALL look that entity up directly for each group and SHALL NOT keep a persistent index of the binding's members; an entity that is not alive or does not carry the binding's traits yields no row. Every predicate SHALL still be evaluated for each looked-up row, rows SHALL fold in the same order as the full product, and the result SHALL be the same as without the index.
 
 #### Scenario: Coordinate lookup uses the equality join
 - **WHEN** a rule reduces per `probe` with `where: cell[Cell].volume == probe[CellProbe].volume and cell[Cell].x == probe[CellProbe].x`, and `Cell.volume` and `Cell.x` are `let` fields
@@ -294,6 +294,14 @@ A pair rule that reduces per one binding SHALL be recognized as an equality join
 #### Scenario: Entity identity is a join key
 - **WHEN** a rule reduces per `probe` with `where: cell == probe[RayProbe].cell`
 - **THEN** the rule is an equality join on the cell's identity
+
+#### Scenario: An identity join keeps no index
+- **WHEN** a rule reduces per `probe` with `where: cell == probe[RayProbe].cell` over many cells
+- **THEN** each pass checks only the entity each probe names, and no persistent index of the cells exists
+
+#### Scenario: An identity join on a handle without the binding's traits
+- **WHEN** a probe's handle names a live entity that lacks `Cell`, or an entity that was destroyed
+- **THEN** that probe folds no row and its reductions take their defaults
 
 #### Scenario: Mutable fields are not join keys
 - **WHEN** the only equality compares a `var` field of the indexed binding

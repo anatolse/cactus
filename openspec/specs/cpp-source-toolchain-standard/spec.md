@@ -38,9 +38,13 @@ A `CLAUDE.md` file SHALL exist at the repository root and SHALL describe, for `s
 - **WHEN** `CLAUDE.md` recommends a specific C++23 idiom (e.g. `std::unreachable()`, deducing `this`, `std::expected`)
 - **THEN** that idiom SHALL have been confirmed to compile under both the `msvc` and `clang` presets before being included
 
-### Requirement: Generated-code compilation targets remain on C++20
-The 3 targets that compile generated cpp-entt backend output (examples and test-runners) SHALL continue to target C++20 independently of the compiler source's standard.
+### Requirement: Generated-code compilation targets build as C++23
+Every target that compiles generated cpp-entt backend output (the example targets, the external-handler fixture targets, and the headless test runners) SHALL target C++23, the same standard as the compiler's own source.
 
-#### Scenario: Generated-code targets are unaffected by the compiler-source standard bump
-- **WHEN** the compiler source's `CMAKE_CXX_STANDARD` is changed to 23
-- **THEN** the `target_compile_features(... cxx_std_20)` calls on the example and test-runner targets SHALL remain unchanged at `cxx_std_20`
+#### Scenario: Example targets request C++23
+- **WHEN** the top-level `CMakeLists.txt` configures a target that compiles generated cpp-entt output
+- **THEN** that target's C++ standard SHALL be 23 and no such target SHALL request `cxx_std_20`
+
+#### Scenario: Tidy fallback flags use C++23
+- **WHEN** the example compilation test runs clang-tidy on generated output without a compilation database
+- **THEN** it SHALL pass `-std=c++23` to clang-tidy

@@ -175,7 +175,7 @@ The backend SHALL generate a working typed world capture entry point from persis
 
 #### Scenario: Generated integration remains C++20
 - **WHEN** a generated project links a custom persistence adapter
-- **THEN** its public generated API and runtime integration compile under the existing C++20 generated-code target
+- **THEN** its public generated API and runtime integration compile under the C++23 generated-code target
 
 ### Requirement: Raylib integration in generated code
 The backend SHALL support a standard runtime-driven game loop for EnTT projects, with EnTT registry and dispatcher initialized before frame execution. The default compiled-project integration SHALL be realized through generated project output that embeds a backend-generated `main()` and links against the standard Cactus EnTT backend/runtime library.
@@ -200,15 +200,15 @@ The cpp-entt backend SHALL support standard executable builds by emitting a back
 - **THEN** it owns creation of `entt::registry` and `entt::dispatcher` and passes them to the generated setup, init, update, and render hooks
 
 ### Requirement: Compilable C++20 output with EnTT
-The backend SHALL produce valid C++20 generated project glue that compiles and links successfully with EnTT v3.x headers, Raylib, and the standard Cactus EnTT backend/runtime library.
+The backend SHALL produce valid C++23 generated project glue that compiles and links successfully with EnTT v3.x headers, Raylib, and the standard Cactus EnTT backend/runtime library.
 
 #### Scenario: Generated EnTT project links successfully
 - **WHEN** the backend generates C++ from a supported example or authored project
-- **THEN** the generated project-specific C++ compiles without errors and links successfully when combined with the standard Cactus EnTT backend/runtime library and required dependencies
+- **THEN** the generated project-specific C++ compiles as C++23 without errors and links successfully when combined with the standard Cactus EnTT backend/runtime library and required dependencies
 
 #### Scenario: Curated example compilation coverage validates linked EnTT projects
 - **WHEN** automated example-compilation integration coverage runs for an example configured for the EnTT backend path
-- **THEN** the generated C++ project glue compiles successfully and links against the project's configured EnTT-enabled toolchain and the standard Cactus EnTT backend/runtime library
+- **THEN** the generated C++ project glue compiles successfully as C++23 and links against the project's configured EnTT-enabled toolchain and the standard Cactus EnTT backend/runtime library
 
 ### Requirement: EnTT backend provides complete stdlib extern function coverage
 The cpp-entt backend and its linked runtime/library SHALL provide concrete implementations or binding paths for stdlib-declared extern functions that are part of the supported stdlib surface and are not blocked by missing language/runtime features, including scalar math, vec2/vec3 helpers, quaternion helpers, and input query functions.
@@ -1353,7 +1353,7 @@ nodes scheduled in that phase resolve to the same underlying function.
   since the duplicate call was idempotent
 
 ### Requirement: Generated restore entry points and staged construction
-The backend SHALL generate a typed restore entry point that reconstructs recorded nodes from the same schema its capture path produces. Node initialization SHALL be reusable independently of whole-tree template spawn, so a single recorded child can be created without its siblings. Reconstruction SHALL build a staged registry and staged runtime resources, publish them atomically into the live world, and retire the replaced world's resources through backend cleanup without dispatching authored destroy handlers. Generated restore integration SHALL compile under the existing C++20 generated-code target.
+The backend SHALL generate a typed restore entry point that reconstructs recorded nodes from the same schema its capture path produces. Node initialization SHALL be reusable independently of whole-tree template spawn, so a single recorded child can be created without its siblings. Reconstruction SHALL build a staged registry and staged runtime resources, publish them atomically into the live world, and retire the replaced world's resources through backend cleanup without dispatching authored destroy handlers. Generated restore integration SHALL compile under the C++23 generated-code target.
 
 #### Scenario: Single recorded child is created without siblings
 - **WHEN** a document contains one child of a hierarchical archetype whose other children were destroyed
@@ -1634,3 +1634,32 @@ requirement.
 #### Scenario: Robot sandbox output
 - **WHEN** C++ is generated for `examples/robot-sandbox/main.cactus`
 - **THEN** no identifier token in the output contains `__` after its first two characters
+
+### Requirement: Generated output carries no file-wide lint suppression
+Generated cpp-entt output SHALL NOT contain a `NOLINTBEGIN`/`NOLINTEND` region. Any remaining line-scoped `NOLINT` in generated output SHALL name a single check and SHALL be limited to constructs a later change is scheduled to remove.
+
+#### Scenario: Generated file has no suppression region
+- **WHEN** the backend generates C++ for any supported program
+- **THEN** the output contains no `NOLINTBEGIN` and no `NOLINTEND` text
+
+### Requirement: Generated output uses no reserved identifiers
+Every identifier the backend emits (template slot parameters, temporaries, helper functions, locals) SHALL avoid names reserved to the C++ implementation: no identifier SHALL contain a double underscore, and no identifier SHALL start with an underscore followed by an uppercase letter.
+
+#### Scenario: Template creation parameters are not reserved
+- **WHEN** a template with construction slots is generated
+- **THEN** its creation function parameters and the matching call-site temporaries use names that contain no `__`
+
+#### Scenario: Robot sandbox output passes the reserved-identifier check
+- **WHEN** clang-tidy runs `bugprone-reserved-identifier` on the generated robot sandbox C++
+- **THEN** it reports no diagnostics
+
+### Requirement: Generated constants have constant initialization
+A module-level authored constant whose type and initializer C++ can evaluate at compile time SHALL be emitted with constant initialization: scalar, vector, quaternion, color, enum, and string-literal constants, and struct constants whose fields are all of those non-string kinds, built from literals, other such constants, vector and color constructors, and struct construction. String constants SHALL be emitted as compile-time string views. Other constants (lists, structs holding strings, and initializers that call a function) SHALL remain immutable globals initialized before any handler runs.
+
+#### Scenario: String constant is a compile-time view
+- **WHEN** a module declares `TITLE = "Robot Sandbox"` in its `const:` block
+- **THEN** the generated constant is a `constexpr std::string_view`, and uses of it that need a `std::string` construct one at the use site
+
+#### Scenario: No throwing static initialization
+- **WHEN** clang-tidy runs `bugprone-throwing-static-initialization` on generated output of a curated example
+- **THEN** it reports no diagnostics

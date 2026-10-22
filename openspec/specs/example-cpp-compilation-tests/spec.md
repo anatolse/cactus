@@ -192,3 +192,18 @@ Automated example-compilation integration coverage SHALL include the first-perso
 - **THEN** it invokes the compiler and verifies generated C++ exists
 - **AND** it builds the registered example target
 - **AND** it performs the standard clang-format and clang-tidy validation
+
+### Requirement: Curated tidy validation runs on unsuppressed generated output
+The curated example compilation coverage SHALL run clang-tidy with the repository `.clang-tidy` on generated output that contains no suppression wrapper. Until generated-function complexity is bounded by a later change, the coverage command SHALL exclude only `readability-function-cognitive-complexity`, on the command line; the repository `.clang-tidy` SHALL NOT be changed to exclude it.
+
+#### Scenario: Robot sandbox is tidy-clean
+- **WHEN** the curated coverage runs the `robot-sandbox` case
+- **THEN** clang-tidy with the repository config, minus only the cognitive-complexity check, reports no diagnostics on its generated C++
+
+#### Scenario: Every curated example is tidy-clean
+- **WHEN** the curated coverage runs any curated case
+- **THEN** clang-tidy with the repository config, minus only the cognitive-complexity check, reports no diagnostics on its generated C++
+
+#### Scenario: Exclusion lives only in the test command
+- **WHEN** `.clang-tidy` is inspected
+- **THEN** `readability-function-cognitive-complexity` is still enabled there

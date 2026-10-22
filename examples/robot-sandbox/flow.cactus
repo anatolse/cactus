@@ -71,7 +71,6 @@ rule StartNewGame:
         let seed = game.Game[game.Session].next_seed
         let spawn_x = config.size_x / 2
         let spawn_z = config.size_z / 2
-        game.Game[game.Session].next_seed += 1
         world.Generator[world.Generation].seed = seed
         world.Generator[world.Generation].min_y = config.min_y
         world.Generator[world.Generation].max_y = config.max_y
@@ -301,6 +300,7 @@ rule SaveFailed:
 # The restored Game keeps its saved fields; everything else starts fresh.
 rule LoadDone:
     on storage.RestoreCompleted:
+        game.Game[game.Session].busy = false
         game.Game[game.Session].status = LOADED
         game.Game[game.Session].status_time = 0.0
         spawn hud.HudTemplate()

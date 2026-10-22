@@ -208,6 +208,19 @@ TEST_CASE("the sandbox starts on the start menu with no world", "[runtime][codeg
     }
 }
 
+TEST_CASE("the start menu keeps its own backdrop colour and not the sky colour", "[runtime][codegen-entt][robot-sandbox]") {
+    World world;
+    world.frame(5);
+    const auto view =
+        world.registry.view<cactus_gen::hud::MenuView, cactus_gen::stdlib::camera::viewport::Viewport>();
+    REQUIRE(view.size_hint() == 1);
+    const auto backdrop = view.get<cactus_gen::stdlib::camera::viewport::Viewport>(*view.begin()).clear_color;
+    CHECK(static_cast<int>(backdrop.r) == 0x10);
+    CHECK(static_cast<int>(backdrop.g) == 0x14);
+    CHECK(static_cast<int>(backdrop.b) == 0x1E);
+    CHECK(static_cast<int>(backdrop.a) == 0xFF);
+}
+
 TEST_CASE("a new game generates the whole world before play and drops the robot into the spawn pocket",
           "[runtime][codegen-entt][robot-sandbox]") {
     World world;
@@ -759,6 +772,48 @@ TEST_CASE("recovering puts the robot back in a reopened spawn pocket", "[runtime
     CHECK(world.registry.get<Body>(robot).grounded);
 }
 
+TEST_CASE("recovering leaves the cells above the pocket and under its floor alone",
+          "[runtime][codegen-entt][robot-sandbox]") {
+    World world;
+    world.new_game();
+    const auto& recipe = world.recipe();
+    const int floor    = recipe.spawn_floor;
+    const int x0       = recipe.spawn_x - 1;
+    const int z0       = recipe.spawn_z - 1;
+    const int x1       = recipe.spawn_x + 1;
+    const int z1       = recipe.spawn_z + 1;
+    world.session().height    = 1;
+    world.session().edit_kind = cactus_gen::game::EditKind::Build;
+    world.session().layer     = floor + 4;
+    world.commit_region(x0, z0, x1, z1);
+    world.session().layer = floor + 1;
+    world.commit_region(x1, z0, x1, z1);
+    world.session().edit_kind = cactus_gen::game::EditKind::Dig;
+    world.session().layer     = floor - 1;
+    world.commit_region(x0, z0, x1, z1);
+    for (int x = x0; x <= x1; ++x) {
+        for (int z = z0; z <= z1; ++z) {
+            REQUIRE(world.solid(x, floor + 4, z));
+            REQUIRE_FALSE(world.solid(x, floor - 1, z));
+        }
+    }
+    REQUIRE(world.solid(x1, floor + 1, recipe.spawn_z));
+
+    backend::advance_binding_index_epoch();
+    world.script().recover = true;
+    world.frame(2);
+    for (int x = x0; x <= x1; ++x) {
+        for (int z = z0; z <= z1; ++z) {
+            CHECK(world.solid(x, floor, z));
+            for (int dy = 1; dy <= 3; ++dy) {
+                CHECK_FALSE(world.solid(x, floor + dy, z));
+            }
+            CHECK(world.solid(x, floor + 4, z));
+            CHECK_FALSE(world.solid(x, floor - 1, z));
+        }
+    }
+}
+
 TEST_CASE("the HUD draws over the world in first person", "[runtime][codegen-entt][robot-sandbox]") {
     World world;
     world.new_game();
@@ -848,6 +903,26 @@ TEST_CASE("the sun lights noon from above and the moon lights midnight", "[runti
     CHECK(light(false).intensity > 0.0F);
     CHECK(light(false).intensity < 1.0F);
     CHECK(light(false).direction.x < -0.8F);
+}
+
+TEST_CASE("the sun and moon circle the small world's horizontal centre", "[runtime][codegen-entt][robot-sandbox]") {
+    World world;
+    world.new_game();
+    world.session().speed = 0;
+    for (const float minute : {0.0F, 360.0F, 600.0F, 720.0F, 1100.0F}) {
+        world.session().minute = minute;
+        world.frame();
+        std::optional<Vector3> sun;
+        std::optional<Vector3> moon;
+        for (const auto [entity, body, place] :
+             world.registry.view<cactus_gen::sky::SkyBody, RobotTransform>().each()) {
+            (body.night ? moon : sun) = place.position;
+        }
+        REQUIRE(sun.has_value());
+        REQUIRE(moon.has_value());
+        CHECK((sun->x + moon->x) / 2.0F == Catch::Approx(8.0F).margin(1e-3));
+        CHECK((sun->z + moon->z) / 2.0F == Catch::Approx(8.0F).margin(1e-3));
+    }
 }
 
 // ── Save, load and exit ─────────────────────────────────────────────────────
@@ -943,6 +1018,42 @@ TEST_CASE("loading from the start menu, twice, restores the save each time with 
         world.script().pause = true;
         world.frame();
     }
+}
+
+// A regression guard: restore already resets the non-persistent busy flag.
+TEST_CASE("after a load the session is not busy and a later save is carried out",
+          "[runtime][codegen-entt][robot-sandbox][persistence]") {
+    cactus_test::InMemoryPersistenceAdapter memory;
+    cactus_test::ScopedPersistenceAdapter scoped(memory.as_adapter());
+    World world;
+    world.new_game();
+    world.script().pause = true;
+    world.frame();
+    world.script().save = true;
+    world.frame(6);
+    REQUIRE(world.session().status == "Game saved");
+    world.script().restore = true;
+    world.frame(6);
+    REQUIRE(world.session().status == "Game loaded");
+    CHECK_FALSE(world.session().busy);
+
+    world.session().dirty = true;
+    world.script().pause  = true;
+    world.frame();
+    world.script().save = true;
+    world.frame(6);
+    CHECK(world.session().mode == Mode::Paused);
+    CHECK(world.session().status == "Game saved");
+    CHECK_FALSE(world.session().dirty);
+    CHECK_FALSE(world.session().busy);
+}
+
+TEST_CASE("a new game leaves the next seed unchanged", "[runtime][codegen-entt][robot-sandbox]") {
+    World world;
+    const int seed = world.session().next_seed;
+    world.new_game();
+    CHECK(world.recipe().seed == seed);
+    CHECK(world.session().next_seed == seed);
 }
 
 TEST_CASE("loading without a save reports the failure and keeps the start menu",

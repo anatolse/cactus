@@ -329,7 +329,7 @@ rule RepairPocket:
             tv.WorldTransform
             physics.BoxCollider
     where:
-        collision.boxes_overlap(vec3(recipe[world.Generation].spawn_x + 0.5, recipe[world.Generation].spawn_floor + 2.0, recipe[world.Generation].spawn_z + 0.5), vec3(3.0, 3.0 + 2.0, 3.0), cell[tv.WorldTransform].position, cell[physics.BoxCollider].size)
+        collision.boxes_overlap(vec3(recipe[world.Generation].spawn_x + 0.5, recipe[world.Generation].spawn_floor + (world.POCKET_HEIGHT + 1) * 0.5, recipe[world.Generation].spawn_z + 0.5), vec3(3.0, world.POCKET_HEIGHT + 1.0, 3.0), cell[tv.WorldTransform].position, cell[physics.BoxCollider].size)
 
     on game.RecoverRequested:
         if cell[voxel.Cell].y > recipe[world.Generation].spawn_floor:

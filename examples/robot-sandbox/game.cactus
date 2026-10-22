@@ -70,7 +70,7 @@ pub trait Session:
     persist var day: int = 1
     persist var minute: float = 480.0
     persist var speed: int = DEFAULT_SPEED
-    persist var view_target: vec3 = vec3(32.0, 0.0, 32.0)
+    persist var view_target: vec3
     persist var view_zoom: float = 30.0
 
 pub entity Game:

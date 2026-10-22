@@ -40,7 +40,6 @@ const:
     MAX_ZOOM = 70.0
     DEFAULT_ZOOM = 30.0
     ZOOM_STEP = 3.0
-    SKY_COLOR = #6FA8DCFF
     ROBOT_LAYER = 2
     BODY_MASK = 3
 
@@ -78,6 +77,9 @@ pub trait Robot:
     persist var saved_velocity: vec3 = vec3(0.0, 0.0, 0.0)
     persist var saved_yaw: float = 0.0
     persist var saved_pitch: float = 0.0
+
+# A camera that looks at the world, whose backdrop is the sky.
+pub trait WorldView
 
 pub trait FirstPersonView
 
@@ -133,8 +135,8 @@ template ViewCamera(active: bool, fov: float):
         near = 0.05
         far = 250.0
     viewport.Viewport:
-        clear_color = SKY_COLOR
         active = active
+    WorldView
 
 pub template FirstPersonCamera:
     use ViewCamera(active = true, fov = 70.0)

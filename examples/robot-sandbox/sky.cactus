@@ -13,6 +13,7 @@ use std.math.vec3 as v3
 use std.transform.volume as tv
 use std.render.meshes as meshes
 use std.camera.viewport as viewport
+use std.voxel.volume as voxel
 use game
 use robot
 
@@ -23,7 +24,6 @@ const:
     MINUTES_PER_DAY = 1440.0
     SUNRISE = 360.0
     SKY_DISTANCE = 180.0
-    SKY_CENTER = vec3(32.0, 0.0, 32.0)
     DISC_SIZE = 14.0
     # A slight tilt toward -Z keeps the discs off the exact east-west line.
     TILT = 0.35
@@ -95,16 +95,26 @@ rule AdvanceCalendar:
         game.Game[game.Session].day += days_after(game.Game[game.Session].minute, minutes)
         game.Game[game.Session].minute = minute_after(game.Game[game.Session].minute, minutes)
 
+# The middle of a volume's x/z extent, at height 0.
+func horizontal_middle(origin: vec3, cell_size: float, min_x: int, min_z: int, max_x: int, max_z: int) vec3:
+    let middle = (voxel.cell_center(origin, cell_size, min_x, 0, min_z) + voxel.cell_center(origin, cell_size, max_x, 0, max_z)) * 0.5
+    return vec3(middle.x, 0.0, middle.z)
+
 rule PlaceSkyBodies:
-    each:
-        SkyBody as body
-        tv.WorldTransform as transform
+    pairs:
+        body:
+            SkyBody
+            tv.WorldTransform
+        terrain:
+            voxel.Volume
     after:
         robot.ComposeFirstPerson
         robot.ComposeStrategy
+    limit: 1 per body
 
     on late_tick:
-        transform.position = SKY_CENTER + body_direction(game.Game[game.Session].minute, body.night) * SKY_DISTANCE
+        let center = horizontal_middle(terrain[voxel.Volume].origin, terrain[voxel.Volume].cell_size, terrain[voxel.Volume].min_x, terrain[voxel.Volume].min_z, terrain[voxel.Volume].max_x, terrain[voxel.Volume].max_z)
+        body[tv.WorldTransform].position = center + body_direction(game.Game[game.Session].minute, body[SkyBody].night) * SKY_DISTANCE
 
 rule LightBySky:
     each:
@@ -119,6 +129,7 @@ rule LightBySky:
 
 rule TintSky:
     each:
+        robot.WorldView
         viewport.Viewport as vp
 
     on late_tick:

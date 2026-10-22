@@ -12,10 +12,10 @@
 
 namespace {
 
-using Pool  = accumulation_per_cell__Pool;
-using Seen  = accumulation_per_cell__Seen;
-using Gauge = accumulation_per_cell__Gauge;
-using Probe = accumulation_per_cell__Probe;
+using Pool  = cactus_gen::accumulation_per_cell::Pool;
+using Seen  = cactus_gen::accumulation_per_cell::Seen;
+using Gauge = cactus_gen::accumulation_per_cell::Gauge;
+using Probe = cactus_gen::accumulation_per_cell::Probe;
 
 struct OneFrame {
     entt::registry registry;
@@ -35,8 +35,8 @@ struct OneFrame {
 
 TEST_CASE("a read of another entity does not end the interval", "[runtime][codegen-entt][write-kinds]") {
     OneFrame world;
-    const auto first  = generated_named_slots().accumulation_per_cell__First;
-    const auto second = generated_named_slots().accumulation_per_cell__Second;
+    const auto first  = cactus_gen::detail::generated_named_slots().accumulation_per_cell.First;
+    const auto second = cactus_gen::detail::generated_named_slots().accumulation_per_cell.Second;
     CHECK(world.of<Seen>(first).level == 1.0e8F);
     CHECK(world.of<Pool>(first).level == 0.0F);
     CHECK(world.of<Pool>(second).level == 1.0F);
@@ -44,7 +44,7 @@ TEST_CASE("a read of another entity does not end the interval", "[runtime][codeg
 
 TEST_CASE("a guarded read that does not run does not end the interval", "[runtime][codegen-entt][write-kinds]") {
     OneFrame world;
-    const auto meter = generated_named_slots().accumulation_per_cell__Meter;
+    const auto meter = cactus_gen::detail::generated_named_slots().accumulation_per_cell.Meter;
     CHECK(world.of<Probe>(meter).level == -1.0F);
     CHECK(world.of<Gauge>(meter).level == 1.0F);
 }

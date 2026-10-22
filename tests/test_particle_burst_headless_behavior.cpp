@@ -45,7 +45,7 @@ void release_click() {
 
 std::size_t particle_count(entt::registry& registry) {
     std::size_t count = 0;
-    for (auto entity : registry.view<particle_burst__Particle>()) {
+    for (auto entity : registry.view<cactus_gen::particle_burst::Particle>()) {
         (void)entity;
         ++count;
     }
@@ -71,11 +71,12 @@ TEST_CASE("particle-burst headless: a click spawns PARTICLE_COUNT particles at t
     // gravity contribution (~GRAVITY*dt), not simulation drift this test
     // should otherwise be sensitive to.
     REQUIRE(particle_count(registry) == static_cast<std::size_t>(kParticleCount));
-    for (auto entity : registry.view<particle_burst__Particle, std_transform_flat__WorldTransform>()) {
-        const auto& transform = registry.get<std_transform_flat__WorldTransform>(entity);
+    for (auto entity :
+         registry.view<cactus_gen::particle_burst::Particle, cactus_gen::stdlib::transform::flat::WorldTransform>()) {
+        const auto& transform = registry.get<cactus_gen::stdlib::transform::flat::WorldTransform>(entity);
         CHECK(cactus_raylib_fake::approx_equal(transform.position, kClickPosition, 10.0F));
 
-        const auto& particle = registry.get<particle_burst__Particle>(entity);
+        const auto& particle = registry.get<cactus_gen::particle_burst::Particle>(entity);
         const float speed_sq = (particle.velocity.x * particle.velocity.x) + (particle.velocity.y * particle.velocity.y);
         CHECK(std::sqrt(speed_sq) == Catch::Approx(kParticleSpeed).margin(10.0));
     }
@@ -104,8 +105,8 @@ TEST_CASE("particle-burst headless: gravity pulls particles downward and they di
     REQUIRE(particle_count(registry) == static_cast<std::size_t>(kParticleCount));
 
     float initial_velocity_y = 0.0F;
-    for (auto entity : registry.view<particle_burst__Particle>()) {
-        initial_velocity_y = registry.get<particle_burst__Particle>(entity).velocity.y;
+    for (auto entity : registry.view<cactus_gen::particle_burst::Particle>()) {
+        initial_velocity_y = registry.get<cactus_gen::particle_burst::Particle>(entity).velocity.y;
         break;
     }
 
@@ -116,8 +117,8 @@ TEST_CASE("particle-burst headless: gravity pulls particles downward and they di
         cactus_headless_test::drive_frame(registry, kDt);
     }
     REQUIRE(particle_count(registry) == static_cast<std::size_t>(kParticleCount));
-    for (auto entity : registry.view<particle_burst__Particle>()) {
-        CHECK(registry.get<particle_burst__Particle>(entity).velocity.y > initial_velocity_y);
+    for (auto entity : registry.view<cactus_gen::particle_burst::Particle>()) {
+        CHECK(registry.get<cactus_gen::particle_burst::Particle>(entity).velocity.y > initial_velocity_y);
     }
 
     // Enough additional simulated time that every particle's 0.9s lifetime

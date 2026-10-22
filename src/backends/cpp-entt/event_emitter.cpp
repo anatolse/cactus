@@ -8,20 +8,20 @@
 
 namespace cactus {
 
-std::string EnttEventEmitter::emit_event(const ResolvedEvent& event, const std::string& cpp_name) {
+std::string EnttEventEmitter::emit_event(const ResolvedEvent& event, const std::string& module_name) {
     std::ostringstream out;
-    out << "struct " << cpp_name << " {\n";
+    out << "struct " << cpp_decl_name(SymbolKind::Event, event.name) << " {\n";
     for (const auto& field : event.fields) {
-        out << "    " << EnttCodegenUtils::value_type_to_cpp(field.type) << " " << field.name
+        out << "    " << EnttCodegenUtils::value_type_to_cpp(field.type) << " " << cpp_escaped(field.name)
             << EnttCodegenUtils::value_initializer(field.type) << ";\n";
     }
     out << "};\n";
-    return out.str();
+    return namespace_block(cpp_namespace_path(module_name), out.str());
 }
 
 std::string EnttEventEmitter::emit_sink_connection(const EventNode& event, const DecoratedProgram& program) {
     const std::string& mod     = event.module_name.empty() ? program.module_name : event.module_name;
-    const std::string cpp_name = canonical_to_cpp_name(mod, event.name) + "Event";
+    const std::string cpp_name = cpp_type_ref(SymbolKind::Event, mod, event.name);
     std::ostringstream out;
     out << "// dispatcher.sink<" << cpp_name << ">().connect<&on_" << event.name << ">();\n";
     return out.str();

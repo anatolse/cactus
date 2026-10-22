@@ -12,16 +12,16 @@
 
 namespace {
 
-using Match   = named_entity_access__Match;
-using Stats   = named_entity_access__Stats;
-using Control = named_entity_access__Control;
-using Probe   = named_entity_access__Probe;
-using Enemy   = named_entity_access__Enemy;
-using Label   = named_entity_access__Label;
-using Health  = named_entity_access__Health;
-using Rival   = named_entity_access__Rival;
-using Link    = named_entity_access__Link;
-using Tag     = named_entity_access__Tag;
+using Match   = cactus_gen::named_entity_access::Match;
+using Stats   = cactus_gen::named_entity_access::Stats;
+using Control = cactus_gen::named_entity_access::Control;
+using Probe   = cactus_gen::named_entity_access::Probe;
+using Enemy   = cactus_gen::named_entity_access::Enemy;
+using Label   = cactus_gen::named_entity_access::Label;
+using Health  = cactus_gen::named_entity_access::Health;
+using Rival   = cactus_gen::named_entity_access::Rival;
+using Link    = cactus_gen::named_entity_access::Link;
+using Tag     = cactus_gen::named_entity_access::Tag;
 
 using cactus_headless_test::drive_frame;
 
@@ -150,7 +150,7 @@ TEST_CASE("accumulating into a named field over many entities is deterministic",
     int expected = 0;
     for (int value = 1; value <= 100; ++value) {
         cactus::runtime::entt_backend::generated_inject_external_event(
-            named_entity_access__CoinDroppedEvent{.value = value});
+            cactus_gen::named_entity_access::CoinDroppedEvent{.value = value});
         cactus::runtime::entt_backend::generated_drain_external_events(world.registry);
         expected += value;
     }

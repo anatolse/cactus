@@ -15,9 +15,9 @@
 
 namespace {
 
-using Item      = creation_order_iteration_runtime__Item;
-using Offspring = creation_order_iteration_runtime__Offspring;
-using Log       = creation_order_iteration_runtime__Log;
+using Item      = cactus_gen::creation_order_iteration_runtime::Item;
+using Offspring = cactus_gen::creation_order_iteration_runtime::Offspring;
+using Log       = cactus_gen::creation_order_iteration_runtime::Log;
 using cactus::runtime::entt_backend::CreationOrdinal;
 
 // Items A..D get ids 1..4. A leaves before D arrives, so EnTT's swap-and-pop
@@ -31,7 +31,7 @@ struct World {
         arrive(1);
         arrive(2);
         arrive(3);
-        inject(creation_order_iteration_runtime__ItemLeftEvent{.id = 1});
+        inject(cactus_gen::creation_order_iteration_runtime::ItemLeftEvent{.id = 1});
         arrive(4);
     }
 
@@ -41,11 +41,12 @@ struct World {
     }
 
     void arrive(int id) {
-        inject(creation_order_iteration_runtime__ItemArrivedEvent{.id = id});
+        inject(cactus_gen::creation_order_iteration_runtime::ItemArrivedEvent{.id = id});
     }
 
     const Log& run_frame() {
-        cactus::runtime::entt_backend::generated_inject_external_event(std_core__frameEvent{.dt = 1.0F / 60.0F});
+        cactus::runtime::entt_backend::generated_inject_external_event(
+            cactus_gen::stdlib::core::frameEvent{.dt = 1.0F / 60.0F});
         cactus::runtime::entt_backend::generated_drain_external_events(registry);
         const auto view = registry.view<Log>();
         REQUIRE(view.begin() != view.end());

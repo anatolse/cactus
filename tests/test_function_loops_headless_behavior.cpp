@@ -12,17 +12,18 @@
 namespace {
 
 void drive_frame(entt::registry& registry) {
-    cactus::runtime::entt_backend::generated_inject_external_event(std_core__frameEvent{.dt = 1.0F / 60.0F});
+    cactus::runtime::entt_backend::generated_inject_external_event(
+        cactus_gen::stdlib::core::frameEvent{.dt = 1.0F / 60.0F});
     cactus::runtime::entt_backend::generated_drain_external_events(registry);
 }
 
-const function_loops_runtime__Results& computed_results(entt::registry& registry) {
+const cactus_gen::function_loops_runtime::Results& computed_results(entt::registry& registry) {
     cactus::runtime::entt_backend::generated_init_project(registry);
     cactus::runtime::entt_backend::generated_load_project(registry);
     drive_frame(registry);
-    const auto view = registry.view<function_loops_runtime__Results>();
+    const auto view = registry.view<cactus_gen::function_loops_runtime::Results>();
     REQUIRE(view.begin() != view.end());
-    return registry.get<function_loops_runtime__Results>(*view.begin());
+    return registry.get<cactus_gen::function_loops_runtime::Results>(*view.begin());
 }
 
 }  // namespace

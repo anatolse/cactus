@@ -26,7 +26,7 @@ struct World {
     entt::registry registry;
 
     World() {
-        cactus::runtime::entt_backend::generated_scheduler_state().std_core__fixed_tick = {};
+        cactus::runtime::entt_backend::generated_scheduler_state().stdlib.core.fixed_tick = {};
         init_and_load(registry);
     }
 };
@@ -50,8 +50,8 @@ TEST_CASE("an ordinary SaveRequested is emitted from a rule handler",
     World world;
     auto& registry = world.registry;
 
-    auto& status = registry.get<persistence_save_events__SaveStatus>(
-        entity_with<persistence_save_events__SaveStatus>(registry));
+    auto& status = registry.get<cactus_gen::persistence_save_events::SaveStatus>(
+        entity_with<cactus_gen::persistence_save_events::SaveStatus>(registry));
     status.resubmitted      = true;  // isolate this test from the resubmit behavior
     status.pending_requests = 1;
 
@@ -66,11 +66,10 @@ TEST_CASE("an injected SaveCompleted reaches its rule handler with the correlate
     World world;
     auto& registry = world.registry;
 
-    inject_and_drain(registry,
-                     std_persistence__SaveCompletedEvent{.slot = "slot1", .request_id = 42});
+    inject_and_drain(registry, cactus_gen::stdlib::persistence::SaveCompletedEvent{.slot = "slot1", .request_id = 42});
 
-    auto& status = registry.get<persistence_save_events__SaveStatus>(
-        entity_with<persistence_save_events__SaveStatus>(registry));
+    auto& status = registry.get<cactus_gen::persistence_save_events::SaveStatus>(
+        entity_with<cactus_gen::persistence_save_events::SaveStatus>(registry));
     CHECK(status.completed_count == 1);
     CHECK(status.last_completed_slot == "slot1");
     CHECK(status.last_completed_id == 42);
@@ -81,12 +80,12 @@ TEST_CASE("an injected SaveFailed reaches its rule handler with slot, id, code, 
     World world;
     auto& registry = world.registry;
 
-    auto& status = registry.get<persistence_save_events__SaveStatus>(
-        entity_with<persistence_save_events__SaveStatus>(registry));
+    auto& status = registry.get<cactus_gen::persistence_save_events::SaveStatus>(
+        entity_with<cactus_gen::persistence_save_events::SaveStatus>(registry));
     status.resubmitted = true;  // isolate this test from the resubmit behavior
 
     inject_and_drain(registry,
-                     std_persistence__SaveFailedEvent{
+                     cactus_gen::stdlib::persistence::SaveFailedEvent{
                          .slot = "slot1", .request_id = 7, .code = "io_error", .message = "disk full"});
 
     CHECK(status.failed_count == 1);
@@ -101,13 +100,11 @@ TEST_CASE("repeated request IDs each produce their own correlated outcome",
     World world;
     auto& registry = world.registry;
 
-    inject_and_drain(registry,
-                     std_persistence__SaveCompletedEvent{.slot = "a", .request_id = 1});
-    inject_and_drain(registry,
-                     std_persistence__SaveCompletedEvent{.slot = "b", .request_id = 1});
+    inject_and_drain(registry, cactus_gen::stdlib::persistence::SaveCompletedEvent{.slot = "a", .request_id = 1});
+    inject_and_drain(registry, cactus_gen::stdlib::persistence::SaveCompletedEvent{.slot = "b", .request_id = 1});
 
-    auto& status = registry.get<persistence_save_events__SaveStatus>(
-        entity_with<persistence_save_events__SaveStatus>(registry));
+    auto& status = registry.get<cactus_gen::persistence_save_events::SaveStatus>(
+        entity_with<cactus_gen::persistence_save_events::SaveStatus>(registry));
     CHECK(status.completed_count == 2);
     CHECK(status.last_completed_slot == "b");
 }
@@ -117,8 +114,8 @@ TEST_CASE("a SaveRequested reaches SaveFailed with adapter_unavailable when no a
     World world;
     auto& registry = world.registry;
 
-    auto& status = registry.get<persistence_save_events__SaveStatus>(
-        entity_with<persistence_save_events__SaveStatus>(registry));
+    auto& status = registry.get<cactus_gen::persistence_save_events::SaveStatus>(
+        entity_with<cactus_gen::persistence_save_events::SaveStatus>(registry));
     status.resubmitted     = true;  // isolate this test from the resubmit behavior
     status.pending_requests = 1;
 
@@ -136,8 +133,8 @@ TEST_CASE("both requests emitted within one activation are processed as a single
     World world;
     auto& registry = world.registry;
 
-    auto& status = registry.get<persistence_save_events__SaveStatus>(
-        entity_with<persistence_save_events__SaveStatus>(registry));
+    auto& status = registry.get<cactus_gen::persistence_save_events::SaveStatus>(
+        entity_with<cactus_gen::persistence_save_events::SaveStatus>(registry));
     status.resubmitted   = true;  // isolate this test from the resubmit behavior
     status.pending_burst = 1;
 
@@ -154,8 +151,8 @@ TEST_CASE("both requests in a batch are written before either outcome is deliver
     World world;
     auto& registry = world.registry;
 
-    auto& status = registry.get<persistence_save_events__SaveStatus>(
-        entity_with<persistence_save_events__SaveStatus>(registry));
+    auto& status = registry.get<cactus_gen::persistence_save_events::SaveStatus>(
+        entity_with<cactus_gen::persistence_save_events::SaveStatus>(registry));
     status.resubmitted   = true;  // isolate this test from the resubmit behavior
     status.pending_burst = 1;
 
@@ -185,8 +182,8 @@ TEST_CASE("a write that throws produces an io_failure outcome instead of wedging
     World world;
     auto& registry = world.registry;
 
-    auto& status = registry.get<persistence_save_events__SaveStatus>(
-        entity_with<persistence_save_events__SaveStatus>(registry));
+    auto& status = registry.get<cactus_gen::persistence_save_events::SaveStatus>(
+        entity_with<cactus_gen::persistence_save_events::SaveStatus>(registry));
     status.resubmitted = true;  // isolate this test from the resubmit behavior
 
     // A non-compliant adapter: the ABI is a host-supplied std::function, so
@@ -219,8 +216,8 @@ TEST_CASE("a request emitted from an outcome handler is deferred to a later boun
     World world;
     auto& registry = world.registry;
 
-    auto& status = registry.get<persistence_save_events__SaveStatus>(
-        entity_with<persistence_save_events__SaveStatus>(registry));
+    auto& status = registry.get<cactus_gen::persistence_save_events::SaveStatus>(
+        entity_with<cactus_gen::persistence_save_events::SaveStatus>(registry));
     status.pending_requests = 1;
 
     drive_frame(registry, kStep);
@@ -239,8 +236,8 @@ TEST_CASE("a restore after a completed save is a correlated no-op with nothing p
     World world;
     auto& registry = world.registry;
 
-    const auto tracker = entity_with<persistence_save_events__SaveStatus>(registry);
-    auto& status       = registry.get<persistence_save_events__SaveStatus>(tracker);
+    const auto tracker        = entity_with<cactus_gen::persistence_save_events::SaveStatus>(registry);
+    auto& status              = registry.get<cactus_gen::persistence_save_events::SaveStatus>(tracker);
     status.restore_after_save = true;
     status.pending_requests   = 1;
 
@@ -256,8 +253,8 @@ TEST_CASE("a restore after a completed save is a correlated no-op with nothing p
     CHECK(status.restore_failed_count == 0);
     // The world was not replaced: the same tracker entity, and still only one.
     CHECK(registry.valid(tracker));
-    CHECK(&registry.get<persistence_save_events__SaveStatus>(tracker) == &status);
-    CHECK(registry.view<persistence_save_events__SaveStatus>().size() == 1);
+    CHECK(&registry.get<cactus_gen::persistence_save_events::SaveStatus>(tracker) == &status);
+    CHECK(registry.view<cactus_gen::persistence_save_events::SaveStatus>().size() == 1);
 }
 
 TEST_CASE("a restore with nothing persistable fails as adapter_unavailable when no adapter is registered",
@@ -265,8 +262,8 @@ TEST_CASE("a restore with nothing persistable fails as adapter_unavailable when 
     World world;
     auto& registry = world.registry;
 
-    auto& status = registry.get<persistence_save_events__SaveStatus>(
-        entity_with<persistence_save_events__SaveStatus>(registry));
+    auto& status = registry.get<cactus_gen::persistence_save_events::SaveStatus>(
+        entity_with<cactus_gen::persistence_save_events::SaveStatus>(registry));
     status.pending_restores = 1;
 
     drive_frame(registry, kStep);

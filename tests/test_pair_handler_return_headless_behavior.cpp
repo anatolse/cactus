@@ -14,7 +14,8 @@
 namespace {
 
 void drive_frame(entt::registry& registry) {
-    cactus::runtime::entt_backend::generated_inject_external_event(std_core__frameEvent{.dt = 1.0F / 60.0F});
+    cactus::runtime::entt_backend::generated_inject_external_event(
+        cactus_gen::stdlib::core::frameEvent{.dt = 1.0F / 60.0F});
     cactus::runtime::entt_backend::generated_drain_external_events(registry);
 }
 
@@ -34,13 +35,13 @@ TEST_CASE("pair handler return ends only the current tuple, not the remaining pa
 
     drive_frame(registry);
 
-    const auto view = registry.view<pair_handler_return_runtime__Ball>();
+    const auto view        = registry.view<cactus_gen::pair_handler_return_runtime::Ball>();
     std::size_t ball_count = 0;
     for (auto entity : view) {
         ++ball_count;
         // Each ball is `a` in exactly 2 of the 6 non-self directed tuples
         // among 3 balls.
-        CHECK(registry.get<pair_handler_return_runtime__Ball>(entity).hits == 2);
+        CHECK(registry.get<cactus_gen::pair_handler_return_runtime::Ball>(entity).hits == 2);
     }
     REQUIRE(ball_count == 3);
 }
@@ -59,11 +60,11 @@ TEST_CASE("where: a != b produces the same self-pair-rejection and per-tuple-onl
 
     drive_frame(registry);
 
-    const auto view = registry.view<pair_handler_return_runtime__Ball>();
+    const auto view        = registry.view<cactus_gen::pair_handler_return_runtime::Ball>();
     std::size_t ball_count = 0;
     for (auto entity : view) {
         ++ball_count;
-        CHECK(registry.get<pair_handler_return_runtime__Ball>(entity).hits_where == 2);
+        CHECK(registry.get<cactus_gen::pair_handler_return_runtime::Ball>(entity).hits_where == 2);
     }
     REQUIRE(ball_count == 3);
 }

@@ -13,7 +13,7 @@
 namespace {
 
 void run_frame(entt::registry& registry, float dt) {
-    cactus::runtime::entt_backend::generated_inject_external_event(std_core__frameEvent{.dt = dt});
+    cactus::runtime::entt_backend::generated_inject_external_event(cactus_gen::stdlib::core::frameEvent{.dt = dt});
     cactus::runtime::entt_backend::generated_drain_external_events(registry);
 }
 
@@ -36,9 +36,9 @@ TEST_CASE("a later fixed_tick rule sees an earlier rule's WorldTransform write",
     entt::registry registry;
     start(registry);
     run_frame(registry, 2.0F / 60.0F);
-    const auto probe     = only_entity<collider_sweep_queries__Probe>(registry);
-    const auto& position = registry.get<std_transform_volume__WorldTransform>(probe).position;
-    const auto& seen     = registry.get<collider_sweep_queries__Probe>(probe);
+    const auto probe     = only_entity<cactus_gen::collider_sweep_queries::Probe>(registry);
+    const auto& position = registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(probe).position;
+    const auto& seen     = registry.get<cactus_gen::collider_sweep_queries::Probe>(probe);
     REQUIRE(position.x >= 1.0F);
     CHECK(seen.seen_x == position.x);
     CHECK(seen.pair_seen_x == position.x);
@@ -48,14 +48,14 @@ TEST_CASE("a periodic phase's dt is a constant in reduce: and const", "[runtime]
     entt::registry registry;
     start(registry);
     run_frame(registry, 2.0F / 60.0F);
-    const auto probe = only_entity<collider_sweep_queries__Probe>(registry);
-    CHECK(registry.get<collider_sweep_queries__Probe>(probe).step_seen == Catch::Approx(1.5F));
+    const auto probe = only_entity<cactus_gen::collider_sweep_queries::Probe>(registry);
+    CHECK(registry.get<cactus_gen::collider_sweep_queries::Probe>(probe).step_seen == Catch::Approx(1.5F));
 }
 
 namespace {
 
-using Shot   = collider_sweep_queries__Shot;
-using Struck = collider_sweep_queries__Struck;
+using Shot   = cactus_gen::collider_sweep_queries::Shot;
+using Struck = cactus_gen::collider_sweep_queries::Struck;
 
 constexpr float kStep = 600.0F / 60.0F;
 
@@ -78,7 +78,7 @@ struct ShotWorld {
 };
 
 const auto& slots() {
-    return generated_named_slots();
+    return cactus_gen::detail::generated_named_slots();
 }
 
 // A shot of radius 0.1 starting at x = 0 touches a target face at x = 4.5.
@@ -89,9 +89,9 @@ constexpr float kContactT = 4.4F / kStep;
 TEST_CASE("a sweep keeps the first hit across box, sphere and capsule targets",
           "[runtime][codegen-entt][stdlib-physics][rule-reduce]") {
     ShotWorld world;
-    for (const auto entity : {slots().collider_sweep_queries__ShotBox,
-                              slots().collider_sweep_queries__ShotSphere,
-                              slots().collider_sweep_queries__ShotCapsule}) {
+    for (const auto entity : {slots().collider_sweep_queries.ShotBox,
+                              slots().collider_sweep_queries.ShotSphere,
+                              slots().collider_sweep_queries.ShotCapsule}) {
         const auto& shot = world.shot(entity);
         CHECK(shot.hit);
         CHECK(shot.t == Catch::Approx(kContactT).margin(1e-4));
@@ -99,16 +99,16 @@ TEST_CASE("a sweep keeps the first hit across box, sphere and capsule targets",
         CHECK(shot.normal.x == Catch::Approx(-1.0F).margin(1e-3));
     }
     // The nearer box wins over the far one; each target got exactly its shot.
-    CHECK(world.struck(slots().collider_sweep_queries__BoxTarget).by_shot == 1);
-    CHECK(world.struck(slots().collider_sweep_queries__FarBox).by_shot == 0);
-    CHECK(world.struck(slots().collider_sweep_queries__SphereTarget).by_shot == 1);
-    CHECK(world.struck(slots().collider_sweep_queries__CapsuleTarget).by_shot == 1);
+    CHECK(world.struck(slots().collider_sweep_queries.BoxTarget).by_shot == 1);
+    CHECK(world.struck(slots().collider_sweep_queries.FarBox).by_shot == 0);
+    CHECK(world.struck(slots().collider_sweep_queries.SphereTarget).by_shot == 1);
+    CHECK(world.struck(slots().collider_sweep_queries.CapsuleTarget).by_shot == 1);
 }
 
 TEST_CASE("a shot with nothing in its path gets one activation with the miss value",
           "[runtime][codegen-entt][stdlib-physics][rule-reduce]") {
     ShotWorld world;
-    const auto& shot = world.shot(slots().collider_sweep_queries__ShotMiss);
+    const auto& shot = world.shot(slots().collider_sweep_queries.ShotMiss);
     CHECK_FALSE(shot.hit);
     CHECK(shot.t == 1.0F);
     CHECK(shot.point.x == 0.0F);
@@ -117,27 +117,27 @@ TEST_CASE("a shot with nothing in its path gets one activation with the miss val
 
 TEST_CASE("sweeps honor the mask and never hit their own collider", "[runtime][codegen-entt][stdlib-physics]") {
     ShotWorld world;
-    CHECK_FALSE(world.shot(slots().collider_sweep_queries__ShotMasked).hit);
-    CHECK_FALSE(world.shot(slots().collider_sweep_queries__ShotSelf).hit);
+    CHECK_FALSE(world.shot(slots().collider_sweep_queries.ShotMasked).hit);
+    CHECK_FALSE(world.shot(slots().collider_sweep_queries.ShotSelf).hit);
 }
 
 TEST_CASE("equal hits resolve by creation order", "[runtime][codegen-entt][stdlib-physics][rule-reduce]") {
     ShotWorld world;
-    CHECK(world.shot(slots().collider_sweep_queries__ShotTie).hit);
-    CHECK(world.struck(slots().collider_sweep_queries__TieFirst).by_shot == 1);
-    CHECK(world.struck(slots().collider_sweep_queries__TieSecond).by_shot == 0);
+    CHECK(world.shot(slots().collider_sweep_queries.ShotTie).hit);
+    CHECK(world.struck(slots().collider_sweep_queries.TieFirst).by_shot == 1);
+    CHECK(world.struck(slots().collider_sweep_queries.TieSecond).by_shot == 0);
 }
 
 TEST_CASE("a sweep starting inside a box and moving out misses", "[runtime][codegen-entt][stdlib-physics]") {
     ShotWorld world;
-    CHECK_FALSE(world.shot(slots().collider_sweep_queries__ShotEscape).hit);
-    CHECK(world.struck(slots().collider_sweep_queries__EscapeBox).by_shot == 0);
+    CHECK_FALSE(world.shot(slots().collider_sweep_queries.ShotEscape).hit);
+    CHECK(world.struck(slots().collider_sweep_queries.EscapeBox).by_shot == 0);
 }
 
 TEST_CASE("touching counts only overlapping colliders the mask selects", "[runtime][codegen-entt][stdlib-physics]") {
     ShotWorld world;
-    const auto toucher = only_entity<collider_sweep_queries__Toucher>(world.registry);
-    CHECK(world.registry.get<collider_sweep_queries__Toucher>(toucher).touching == 1);
+    const auto toucher = only_entity<cactus_gen::collider_sweep_queries::Toucher>(world.registry);
+    CHECK(world.registry.get<cactus_gen::collider_sweep_queries::Toucher>(toucher).touching == 1);
 }
 
 TEST_CASE("accelerated and unaccelerated sweeps agree", "[runtime][codegen-entt][stdlib-physics][spatial-join]") {
@@ -155,7 +155,7 @@ TEST_CASE("accelerated and unaccelerated sweeps agree", "[runtime][codegen-entt]
 
 namespace {
 
-using Pusher = collider_sweep_queries__Pusher;
+using Pusher = cactus_gen::collider_sweep_queries::Pusher;
 
 void check_push(const Vector3& actual, Vector3 expected) {
     CHECK(actual.x == Catch::Approx(expected.x).margin(1e-3));
@@ -167,20 +167,20 @@ void check_push(const Vector3& actual, Vector3 expected) {
 
 TEST_CASE("push_out moves a sphere out of a box", "[runtime][codegen-entt][stdlib-physics][rule-reduce]") {
     ShotWorld world;
-    check_push(world.registry.get<Pusher>(slots().collider_sweep_queries__PushSphere).push, {-0.2F, 0.0F, 0.0F});
+    check_push(world.registry.get<Pusher>(slots().collider_sweep_queries.PushSphere).push, {-0.2F, 0.0F, 0.0F});
 }
 
 TEST_CASE("two character bodies that collide with each other split the push",
           "[runtime][codegen-entt][stdlib-physics][rule-reduce]") {
     ShotWorld world;
-    check_push(world.registry.get<Pusher>(slots().collider_sweep_queries__PushLeft).push, {-0.1F, 0.0F, 0.0F});
-    check_push(world.registry.get<Pusher>(slots().collider_sweep_queries__PushRight).push, {0.1F, 0.0F, 0.0F});
+    check_push(world.registry.get<Pusher>(slots().collider_sweep_queries.PushLeft).push, {-0.1F, 0.0F, 0.0F});
+    check_push(world.registry.get<Pusher>(slots().collider_sweep_queries.PushRight).push, {0.1F, 0.0F, 0.0F});
 }
 
 TEST_CASE("a one-sided character body takes the whole push", "[runtime][codegen-entt][stdlib-physics][rule-reduce]") {
     ShotWorld world;
-    check_push(world.registry.get<Pusher>(slots().collider_sweep_queries__PushSeer).push, {-0.2F, 0.0F, 0.0F});
-    check_push(world.registry.get<Pusher>(slots().collider_sweep_queries__PushBlind).push, {0.0F, 0.0F, 0.0F});
+    check_push(world.registry.get<Pusher>(slots().collider_sweep_queries.PushSeer).push, {-0.2F, 0.0F, 0.0F});
+    check_push(world.registry.get<Pusher>(slots().collider_sweep_queries.PushBlind).push, {0.0F, 0.0F, 0.0F});
 }
 
 TEST_CASE("accelerated and unaccelerated push-outs agree", "[runtime][codegen-entt][stdlib-physics][spatial-join]") {

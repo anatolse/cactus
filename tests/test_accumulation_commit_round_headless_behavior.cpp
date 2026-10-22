@@ -10,7 +10,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-using Pool = accumulation_commit_round__Pool;
+using Pool = cactus_gen::accumulation_commit_round::Pool;
 
 TEST_CASE("a commit round ends the accumulation interval", "[runtime][codegen-entt][write-kinds]") {
     entt::registry registry;

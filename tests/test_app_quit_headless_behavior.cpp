@@ -22,12 +22,13 @@ struct World {
     }
 
     void frame() {
-        backend::generated_inject_external_event(std_core__frameEvent{.dt = 1.0F / 60.0F});
+        backend::generated_inject_external_event(cactus_gen::stdlib::core::frameEvent{.dt = 1.0F / 60.0F});
         backend::generated_drain_external_events(registry);
     }
 
-    const app_quit__ExitButton& button() {
-        return registry.get<app_quit__ExitButton>(generated_named_slots().app_quit__Exit);
+    const cactus_gen::app_quit::ExitButton& button() {
+        return registry.get<cactus_gen::app_quit::ExitButton>(
+            cactus_gen::detail::generated_named_slots().app_quit.Exit);
     }
 };
 

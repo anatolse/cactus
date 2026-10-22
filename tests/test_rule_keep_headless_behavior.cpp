@@ -14,12 +14,12 @@
 
 namespace {
 
-using Walker  = rule_keep__Walker;
-using InLava  = rule_keep__InLava;
-using Lava    = rule_keep__Lava;
-using Ranked  = rule_keep__Ranked;
-using Tally   = rule_keep__Tally;
-using Control = rule_keep__Control;
+using Walker  = cactus_gen::rule_keep::Walker;
+using InLava  = cactus_gen::rule_keep::InLava;
+using Lava    = cactus_gen::rule_keep::Lava;
+using Ranked  = cactus_gen::rule_keep::Ranked;
+using Tally   = cactus_gen::rule_keep::Tally;
+using Control = cactus_gen::rule_keep::Control;
 
 constexpr float kDt = 1.0F / 60.0F;
 
@@ -39,10 +39,10 @@ struct World {
         }
     }
     int ticks() {
-        return registry.get<Tally>(generated_named_slots().rule_keep__Clock).ticks;
+        return registry.get<Tally>(cactus_gen::detail::generated_named_slots().rule_keep.Clock).ticks;
     }
     int total_exits() {
-        return registry.get<Tally>(generated_named_slots().rule_keep__Clock).exits;
+        return registry.get<Tally>(cactus_gen::detail::generated_named_slots().rule_keep.Clock).exits;
     }
     Walker& walker(entt::entity entity) {
         return registry.get<Walker>(entity);
@@ -59,11 +59,11 @@ struct World {
 TEST_CASE("keep adds, patches and removes a trait as its group gains and loses rows", "[runtime][rule-keep]") {
     World world;
     auto& registry    = world.registry;
-    const auto& slots = generated_named_slots();
-    const auto hiker  = slots.rule_keep__Hiker;
-    const auto camper = slots.rule_keep__Camper;
-    const auto loner  = slots.rule_keep__Loner;
-    const auto judge  = slots.rule_keep__Judge;
+    const auto& slots = cactus_gen::detail::generated_named_slots();
+    const auto hiker  = slots.rule_keep.Hiker;
+    const auto camper = slots.rule_keep.Camper;
+    const auto loner  = slots.rule_keep.Loner;
+    const auto judge  = slots.rule_keep.Judge;
 
     {  // nothing is kept before the first run
         CHECK_FALSE(world.in_lava(hiker));
@@ -74,25 +74,25 @@ TEST_CASE("keep adds, patches and removes a trait as its group gains and loses r
         REQUIRE(world.in_lava(hiker));
         CHECK(registry.get<InLava>(hiker).zones == 1);
         CHECK(registry.get<InLava>(hiker).heat == 2.0F);
-        CHECK(registry.get<InLava>(hiker).hottest == slots.rule_keep__PoolA);
+        CHECK(registry.get<InLava>(hiker).hottest == slots.rule_keep.PoolA);
         CHECK(world.walker(hiker).enters == 1);
-        CHECK_FALSE(world.in_lava(slots.rule_keep__Loner));
+        CHECK_FALSE(world.in_lava(slots.rule_keep.Loner));
         world.tick(2);
         CHECK(world.walker(hiker).enters == 1);
         CHECK(world.walker(hiker).exits == 0);
     }
 
     {  // best: the highest key wins, the earlier row wins a tie, an empty group is stale
-        CHECK(registry.get<Ranked>(hiker).top == slots.rule_keep__PoolA);
-        CHECK(registry.get<Ranked>(judge).top == slots.rule_keep__PoolD);
-        CHECK(registry.get<Ranked>(judge).hot == slots.rule_keep__PoolD);
+        CHECK(registry.get<Ranked>(hiker).top == slots.rule_keep.PoolA);
+        CHECK(registry.get<Ranked>(judge).top == slots.rule_keep.PoolD);
+        CHECK(registry.get<Ranked>(judge).hot == slots.rule_keep.PoolD);
         CHECK_FALSE(registry.valid(registry.get<Ranked>(loner).top));
     }
 
     {  // best skips a NaN key
-        registry.get<Lava>(slots.rule_keep__PoolD).heat = std::numeric_limits<float>::quiet_NaN();
+        registry.get<Lava>(slots.rule_keep.PoolD).heat = std::numeric_limits<float>::quiet_NaN();
         world.tick();
-        CHECK(registry.get<Ranked>(judge).hot == slots.rule_keep__PoolE);
+        CHECK(registry.get<Ranked>(judge).hot == slots.rule_keep.PoolE);
     }
 
     {  // overlapping zones patch the fields and fire nothing
@@ -100,7 +100,7 @@ TEST_CASE("keep adds, patches and removes a trait as its group gains and loses r
         world.tick();
         CHECK(registry.get<InLava>(hiker).zones == 2);
         CHECK(registry.get<InLava>(hiker).heat == 5.0F);
-        CHECK(registry.get<InLava>(hiker).hottest == slots.rule_keep__PoolB);
+        CHECK(registry.get<InLava>(hiker).hottest == slots.rule_keep.PoolB);
         world.walker(hiker).x = 2.0F;
         world.tick();
         CHECK(registry.get<InLava>(hiker).zones == 1);
@@ -118,14 +118,14 @@ TEST_CASE("keep adds, patches and removes a trait as its group gains and loses r
 
     {  // the only zone is destroyed
         REQUIRE(world.in_lava(camper));
-        registry.destroy(slots.rule_keep__PoolC);
+        registry.destroy(slots.rule_keep.PoolC);
         world.tick();
         CHECK_FALSE(world.in_lava(camper));
         CHECK(world.walker(camper).exits == 1);
     }
 
     {  // the kept entity leaves the per binding
-        const auto deserter = slots.rule_keep__Deserter;
+        const auto deserter = slots.rule_keep.Deserter;
         REQUIRE(world.in_lava(deserter));
         registry.remove<Walker>(deserter);
         world.tick();
@@ -133,7 +133,7 @@ TEST_CASE("keep adds, patches and removes a trait as its group gains and loses r
     }
 
     {  // a destroyed kept entity fires nothing
-        const auto doomed = slots.rule_keep__Doomed;
+        const auto doomed = slots.rule_keep.Doomed;
         REQUIRE(world.in_lava(doomed));
         const int exits = world.total_exits();
         registry.destroy(doomed);
@@ -146,11 +146,11 @@ TEST_CASE("keep adds, patches and removes a trait as its group gains and loses r
         world.tick();
         REQUIRE(world.in_lava(hiker));
         CHECK(world.walker(hiker).enters == 2);
-        registry.get<Control>(slots.rule_keep__Settings).frozen = true;
+        registry.get<Control>(slots.rule_keep.Settings).frozen = true;
         world.walker(hiker).x = 5.0F;
         world.tick();
         CHECK(world.in_lava(hiker));
-        registry.get<Control>(slots.rule_keep__Settings).frozen = false;
+        registry.get<Control>(slots.rule_keep.Settings).frozen = false;
         world.tick();
         CHECK_FALSE(world.in_lava(hiker));
         CHECK(world.walker(hiker).exits == 2);

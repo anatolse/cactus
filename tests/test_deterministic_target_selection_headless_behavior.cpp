@@ -12,8 +12,8 @@
 
 namespace {
 
-using Target = deterministic_target_selection__Target;
-using Enemy  = deterministic_target_selection__Enemy;
+using Target = cactus_gen::deterministic_target_selection::Target;
+using Enemy  = cactus_gen::deterministic_target_selection::Enemy;
 
 const Target& target_of(entt::registry& registry, entt::entity tower) {
     return registry.get<Target>(tower);
@@ -30,18 +30,18 @@ int hits_of(entt::registry& registry, entt::entity enemy) {
 TEST_CASE("reset, select and consume keep each tower's target current", "[runtime][codegen-entt][rule-limit]") {
     entt::registry registry;
     cactus_headless_test::init_and_load(registry);
-    const auto& slots = generated_named_slots();
+    const auto& slots = cactus_gen::detail::generated_named_slots();
 
-    const auto near_tower  = slots.deterministic_target_selection__NearTower;
-    const auto shadow      = slots.deterministic_target_selection__Shadow;
-    const auto near        = slots.deterministic_target_selection__Near;
-    const auto far         = slots.deterministic_target_selection__Far;
-    const auto tie_tower   = slots.deterministic_target_selection__TieTower;
-    const auto tie_first   = slots.deterministic_target_selection__TieFirst;
-    const auto tie_second  = slots.deterministic_target_selection__TieSecond;
-    const auto lone_tower  = slots.deterministic_target_selection__LoneTower;
-    const auto lone        = slots.deterministic_target_selection__Lone;
-    const auto empty_tower = slots.deterministic_target_selection__EmptyTower;
+    const auto near_tower  = slots.deterministic_target_selection.NearTower;
+    const auto shadow      = slots.deterministic_target_selection.Shadow;
+    const auto near        = slots.deterministic_target_selection.Near;
+    const auto far         = slots.deterministic_target_selection.Far;
+    const auto tie_tower   = slots.deterministic_target_selection.TieTower;
+    const auto tie_first   = slots.deterministic_target_selection.TieFirst;
+    const auto tie_second  = slots.deterministic_target_selection.TieSecond;
+    const auto lone_tower  = slots.deterministic_target_selection.LoneTower;
+    const auto lone        = slots.deterministic_target_selection.Lone;
+    const auto empty_tower = slots.deterministic_target_selection.EmptyTower;
 
     cactus_headless_test::drive_frame(registry);
 

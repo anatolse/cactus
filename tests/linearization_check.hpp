@@ -30,7 +30,7 @@ std::vector<std::uint64_t> linearization_digests(std::optional<std::uint64_t> se
         backend::generated_load_project(registry);
         setup(registry);
         for (int frame = 0; frame < frames; ++frame) {
-            backend::generated_inject_external_event(std_core__frameEvent{.dt = 1.0F / 60.0F});
+            backend::generated_inject_external_event(cactus_gen::stdlib::core::frameEvent{.dt = 1.0F / 60.0F});
             backend::generated_drain_external_events(registry);
             digests.push_back(backend::generated_world_digest(registry));
         }

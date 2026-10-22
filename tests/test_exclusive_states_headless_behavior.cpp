@@ -15,15 +15,15 @@
 
 namespace {
 
-using Mode      = exclusive_states__EnemyMode;
-using Idle      = exclusive_states__EnemyMode__Idle;
-using Chasing   = exclusive_states__EnemyMode__Chasing;
-using Attacking = exclusive_states__EnemyMode__Attacking;
-using Dying     = exclusive_states__EnemyMode__Dying;
-using Orders    = exclusive_states__Orders;
-using Order     = exclusive_states__Order;
-using Log       = exclusive_states__Log;
-using Watcher   = exclusive_states__Watcher;
+using Mode      = cactus_gen::exclusive_states::EnemyMode;
+using Idle      = cactus_gen::exclusive_states::EnemyMode::Idle;
+using Chasing   = cactus_gen::exclusive_states::EnemyMode::Chasing;
+using Attacking = cactus_gen::exclusive_states::EnemyMode::Attacking;
+using Dying     = cactus_gen::exclusive_states::EnemyMode::Dying;
+using Orders    = cactus_gen::exclusive_states::Orders;
+using Order     = cactus_gen::exclusive_states::Order;
+using Log       = cactus_gen::exclusive_states::Log;
+using Watcher   = cactus_gen::exclusive_states::Watcher;
 
 // A carrier holds exactly the variant its slot names; a non-carrier holds none.
 void require_one_variant(const entt::registry& registry, entt::entity entity) {
@@ -60,8 +60,8 @@ struct World {
 
     World() {
         cactus_headless_test::init_and_load(registry);
-        const auto& slots = generated_named_slots();
-        watched = {slots.exclusive_states__Grunt, slots.exclusive_states__Boss, slots.exclusive_states__Drifter};
+        const auto& slots = cactus_gen::detail::generated_named_slots();
+        watched           = {slots.exclusive_states.Grunt, slots.exclusive_states.Boss, slots.exclusive_states.Drifter};
         check_invariant();
     }
 
@@ -96,12 +96,12 @@ struct World {
 TEST_CASE("exclusive states keep one variant per carrier through every transition", "[runtime][exclusive-states]") {
     World world;
     auto& registry     = world.registry;
-    const auto& slots  = generated_named_slots();
-    const auto grunt   = slots.exclusive_states__Grunt;
-    const auto boss    = slots.exclusive_states__Boss;
-    const auto drifter = slots.exclusive_states__Drifter;
-    const auto player  = slots.exclusive_states__Player;
-    const auto lookout = slots.exclusive_states__Lookout;
+    const auto& slots  = cactus_gen::detail::generated_named_slots();
+    const auto grunt   = slots.exclusive_states.Grunt;
+    const auto boss    = slots.exclusive_states.Boss;
+    const auto drifter = slots.exclusive_states.Drifter;
+    const auto player  = slots.exclusive_states.Player;
+    const auto lookout = slots.exclusive_states.Lookout;
 
     {  // a bare state starts in the first variant
         REQUIRE(registry.all_of<Idle>(grunt));
@@ -237,17 +237,18 @@ TEST_CASE("exclusive states keep one variant per carrier through every transitio
 TEST_CASE("exclusive states above index 63 preserve final variants", "[runtime][exclusive-states]") {
     World world;
     auto& registry    = world.registry;
-    const auto entity = generated_named_slots().exclusive_states__WideCarrier;
-    REQUIRE(registry.get<exclusive_states__WideMode>(entity).index == 63);
-    CHECK_FALSE(cactus::runtime::entt_backend::state_is_final(exclusive_states__WideMode{.index = 0}));
-    CHECK_FALSE(cactus::runtime::entt_backend::state_is_final(registry.get<exclusive_states__WideMode>(entity)));
+    const auto entity = cactus_gen::detail::generated_named_slots().exclusive_states.WideCarrier;
+    REQUIRE(registry.get<cactus_gen::exclusive_states::WideMode>(entity).index == 63);
+    CHECK_FALSE(cactus::runtime::entt_backend::state_is_final(cactus_gen::exclusive_states::WideMode{.index = 0}));
+    CHECK_FALSE(
+        cactus::runtime::entt_backend::state_is_final(registry.get<cactus_gen::exclusive_states::WideMode>(entity)));
     world.frame();
-    REQUIRE(registry.all_of<exclusive_states__WideMode__Done>(entity));
-    CHECK_FALSE(registry.all_of<exclusive_states__WideMode__V63>(entity));
-    CHECK_FALSE(registry.all_of<exclusive_states__WideMode__V0>(entity));
-    CHECK(registry.get<exclusive_states__WideMode>(entity).index == 64);
+    REQUIRE(registry.all_of<cactus_gen::exclusive_states::WideMode::Done>(entity));
+    CHECK_FALSE(registry.all_of<cactus_gen::exclusive_states::WideMode::V63>(entity));
+    CHECK_FALSE(registry.all_of<cactus_gen::exclusive_states::WideMode::V0>(entity));
+    CHECK(registry.get<cactus_gen::exclusive_states::WideMode>(entity).index == 64);
     world.frame();
-    REQUIRE(registry.all_of<exclusive_states__WideMode__Done>(entity));
-    CHECK(registry.get<exclusive_states__WideMode__Done>(entity).elapsed == 0.4F);
+    REQUIRE(registry.all_of<cactus_gen::exclusive_states::WideMode::Done>(entity));
+    CHECK(registry.get<cactus_gen::exclusive_states::WideMode::Done>(entity).elapsed == 0.4F);
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

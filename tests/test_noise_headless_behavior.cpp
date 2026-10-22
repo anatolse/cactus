@@ -158,7 +158,7 @@ Nearest reference_voronoi3(Vector3 p, int seed) {
     for (int x = cx - 4; x <= cx + 4; ++x) {
         for (int y = cy - 4; y <= cy + 4; ++y) {
             for (int z = cz - 4; z <= cz + 4; ++z) {
-                const Vector3 f = std_noise__feature3(x, y, z, seed);
+                const Vector3 f = cactus_gen::stdlib::noise::feature3(x, y, z, seed);
                 const float d = std::sqrt(((f.x - p.x) * (f.x - p.x)) + ((f.y - p.y) * (f.y - p.y)) + ((f.z - p.z) * (f.z - p.z)));
                 if (d < best.first) {
                     best.second = best.first;
@@ -181,7 +181,7 @@ Nearest reference_voronoi2(Vector2 p, int seed) {
     const int cy = static_cast<int>(std::floor(p.y));
     for (int x = cx - 4; x <= cx + 4; ++x) {
         for (int y = cy - 4; y <= cy + 4; ++y) {
-            const Vector2 f = std_noise__feature2(x, y, seed);
+            const Vector2 f = cactus_gen::stdlib::noise::feature2(x, y, seed);
             const float d = std::sqrt(((f.x - p.x) * (f.x - p.x)) + ((f.y - p.y) * (f.y - p.y)));
             if (d < best.first) {
                 best.second = best.first;
@@ -202,12 +202,13 @@ Vector3 sample_point(int i) {
     return Vector3{(t * 0.731F) - 40.0F, (t * -0.417F) + 13.0F, (t * 0.293F) - 7.5F};
 }
 
-const noise__Samples& rule_samples(entt::registry& registry) {
+const cactus_gen::noise::Samples& rule_samples(entt::registry& registry) {
     cactus::runtime::entt_backend::generated_init_project(registry);
     cactus::runtime::entt_backend::generated_load_project(registry);
-    cactus::runtime::entt_backend::generated_inject_external_event(std_core__frameEvent{.dt = 1.0F / 60.0F});
+    cactus::runtime::entt_backend::generated_inject_external_event(
+        cactus_gen::stdlib::core::frameEvent{.dt = 1.0F / 60.0F});
     cactus::runtime::entt_backend::generated_drain_external_events(registry);
-    return registry.get<noise__Samples>(generated_named_slots().noise__Probe);
+    return registry.get<cactus_gen::noise::Samples>(cactus_gen::detail::generated_named_slots().noise.Probe);
 }
 
 }  // namespace
@@ -217,19 +218,24 @@ const noise__Samples& rule_samples(entt::registry& registry) {
 TEST_CASE("perlin samples follow the documented recipe", "[runtime][codegen-entt][stdlib-noise]") {
     for (int i = 0; i < 400; ++i) {
         const Vector3 p = sample_point(i);
-        CHECK(std_noise__perlin2(Vector2{p.x, p.y}, kSeed) == Catch::Approx(reference::perlin2(p.x, p.y, kSeed)).margin(kTolerance));
-        CHECK(std_noise__perlin3(p, kSeed) == Catch::Approx(reference::perlin3(p.x, p.y, p.z, kSeed)).margin(kTolerance));
+        CHECK(cactus_gen::stdlib::noise::perlin2(Vector2{p.x, p.y}, kSeed) ==
+              Catch::Approx(reference::perlin2(p.x, p.y, kSeed)).margin(kTolerance));
+        CHECK(cactus_gen::stdlib::noise::perlin3(p, kSeed) ==
+              Catch::Approx(reference::perlin3(p.x, p.y, p.z, kSeed)).margin(kTolerance));
     }
 }
 
 TEST_CASE("perlin reference samples are pinned", "[runtime][codegen-entt][stdlib-noise]") {
-    CHECK(std_noise__mix(1) == -127396752);
-    CHECK(std_noise__hash3(2, -3, 4, kSeed) == -1554478858);
-    CHECK(reference::hash2(0, 0, 0) == std_noise__hash2(0, 0, 0));
-    CHECK(std_noise__perlin2(Vector2{3.7F, -12.25F}, kSeed) == Catch::Approx(0.4119584).margin(kTolerance));
-    CHECK(std_noise__perlin3(Vector3{3.7F, -12.25F, 0.4F}, kSeed) == Catch::Approx(0.0644828).margin(kTolerance));
-    CHECK(std_noise__perlin2(Vector2{0.5F, 0.5F}, 0) == Catch::Approx(0.3535534).margin(kTolerance));
-    CHECK(std_noise__perlin3(Vector3{0.25F, 0.5F, 0.75F}, 0) == Catch::Approx(0.5013394).margin(kTolerance));
+    CHECK(cactus_gen::stdlib::noise::mix(1) == -127396752);
+    CHECK(cactus_gen::stdlib::noise::hash3(2, -3, 4, kSeed) == -1554478858);
+    CHECK(reference::hash2(0, 0, 0) == cactus_gen::stdlib::noise::hash2(0, 0, 0));
+    CHECK(cactus_gen::stdlib::noise::perlin2(Vector2{3.7F, -12.25F}, kSeed) ==
+          Catch::Approx(0.4119584).margin(kTolerance));
+    CHECK(cactus_gen::stdlib::noise::perlin3(Vector3{3.7F, -12.25F, 0.4F}, kSeed) ==
+          Catch::Approx(0.0644828).margin(kTolerance));
+    CHECK(cactus_gen::stdlib::noise::perlin2(Vector2{0.5F, 0.5F}, 0) == Catch::Approx(0.3535534).margin(kTolerance));
+    CHECK(cactus_gen::stdlib::noise::perlin3(Vector3{0.25F, 0.5F, 0.75F}, 0) ==
+          Catch::Approx(0.5013394).margin(kTolerance));
 }
 
 TEST_CASE("perlin values are normalized, varied and zero on lattice points", "[runtime][codegen-entt][stdlib-noise]") {
@@ -237,8 +243,8 @@ TEST_CASE("perlin values are normalized, varied and zero on lattice points", "[r
     float highest = 0.0F;
     for (int i = 0; i < 2000; ++i) {
         const Vector3 p = sample_point(i);
-        const float v2 = std_noise__perlin2(Vector2{p.x, p.y}, kSeed);
-        const float v3 = std_noise__perlin3(p, kSeed);
+        const float v2  = cactus_gen::stdlib::noise::perlin2(Vector2{p.x, p.y}, kSeed);
+        const float v3  = cactus_gen::stdlib::noise::perlin3(p, kSeed);
         CHECK(v2 >= -1.0F);
         CHECK(v2 <= 1.0F);
         CHECK(v3 >= -1.0F);
@@ -248,19 +254,19 @@ TEST_CASE("perlin values are normalized, varied and zero on lattice points", "[r
     }
     CHECK(lowest < -0.4F);
     CHECK(highest > 0.4F);
-    CHECK(std_noise__perlin2(Vector2{5.0F, -2.0F}, kSeed) == 0.0F);
-    CHECK(std_noise__perlin3(Vector3{5.0F, -2.0F, 9.0F}, kSeed) == 0.0F);
+    CHECK(cactus_gen::stdlib::noise::perlin2(Vector2{5.0F, -2.0F}, kSeed) == 0.0F);
+    CHECK(cactus_gen::stdlib::noise::perlin3(Vector3{5.0F, -2.0F, 9.0F}, kSeed) == 0.0F);
 }
 
 TEST_CASE("perlin is continuous across lattice boundaries", "[runtime][codegen-entt][stdlib-noise]") {
     constexpr float kEpsilon = 1e-4F;
     for (int i = -3; i <= 3; ++i) {
         const auto edge = static_cast<float>(i);
-        const float below = std_noise__perlin3(Vector3{edge - kEpsilon, 0.37F, 0.61F}, kSeed);
-        const float above = std_noise__perlin3(Vector3{edge + kEpsilon, 0.37F, 0.61F}, kSeed);
+        const float below = cactus_gen::stdlib::noise::perlin3(Vector3{edge - kEpsilon, 0.37F, 0.61F}, kSeed);
+        const float above = cactus_gen::stdlib::noise::perlin3(Vector3{edge + kEpsilon, 0.37F, 0.61F}, kSeed);
         CHECK(std::abs(below - above) < 0.01F);
-        const float left = std_noise__perlin2(Vector2{0.37F, edge - kEpsilon}, kSeed);
-        const float right = std_noise__perlin2(Vector2{0.37F, edge + kEpsilon}, kSeed);
+        const float left  = cactus_gen::stdlib::noise::perlin2(Vector2{0.37F, edge - kEpsilon}, kSeed);
+        const float right = cactus_gen::stdlib::noise::perlin2(Vector2{0.37F, edge + kEpsilon}, kSeed);
         CHECK(std::abs(left - right) < 0.01F);
     }
 }
@@ -268,13 +274,14 @@ TEST_CASE("perlin is continuous across lattice boundaries", "[runtime][codegen-e
 TEST_CASE("perlin depends on the seed but not on sampling order", "[runtime][codegen-entt][stdlib-noise]") {
     std::array<float, 64> forward{};
     for (int i = 0; i < 64; ++i) {
-        forward.at(static_cast<std::size_t>(i)) = std_noise__perlin3(sample_point(i), kSeed);
+        forward.at(static_cast<std::size_t>(i)) = cactus_gen::stdlib::noise::perlin3(sample_point(i), kSeed);
     }
     int differing = 0;
     for (int i = 63; i >= 0; --i) {
         const Vector3 p = sample_point(i);
-        CHECK(std_noise__perlin3(p, kSeed) == forward.at(static_cast<std::size_t>(i)));
-        if (std::abs(std_noise__perlin3(p, kSeed + 1) - forward.at(static_cast<std::size_t>(i))) > 1e-3F) {
+        CHECK(cactus_gen::stdlib::noise::perlin3(p, kSeed) == forward.at(static_cast<std::size_t>(i)));
+        if (std::abs(cactus_gen::stdlib::noise::perlin3(p, kSeed + 1) - forward.at(static_cast<std::size_t>(i))) >
+            1e-3F) {
             ++differing;
         }
     }
@@ -284,11 +291,12 @@ TEST_CASE("perlin depends on the seed but not on sampling order", "[runtime][cod
 TEST_CASE("perlin returns zero for unsupported coordinates", "[runtime][codegen-entt][stdlib-noise]") {
     const float nan = std::numeric_limits<float>::quiet_NaN();
     const float inf = std::numeric_limits<float>::infinity();
-    CHECK(std_noise__perlin2(Vector2{nan, 0.5F}, kSeed) == 0.0F);
-    CHECK(std_noise__perlin2(Vector2{0.5F, -inf}, kSeed) == 0.0F);
-    CHECK(std_noise__perlin3(Vector3{0.5F, 0.5F, 1000001.0F}, kSeed) == 0.0F);
-    CHECK(std_noise__perlin3(Vector3{-1000001.0F, 0.5F, 0.5F}, kSeed) == 0.0F);
-    CHECK(std_noise__perlin3(Vector3{999999.5F, -999999.5F, 0.5F}, kSeed) == Catch::Approx(reference::perlin3(999999.5F, -999999.5F, 0.5F, kSeed)).margin(kTolerance));
+    CHECK(cactus_gen::stdlib::noise::perlin2(Vector2{nan, 0.5F}, kSeed) == 0.0F);
+    CHECK(cactus_gen::stdlib::noise::perlin2(Vector2{0.5F, -inf}, kSeed) == 0.0F);
+    CHECK(cactus_gen::stdlib::noise::perlin3(Vector3{0.5F, 0.5F, 1000001.0F}, kSeed) == 0.0F);
+    CHECK(cactus_gen::stdlib::noise::perlin3(Vector3{-1000001.0F, 0.5F, 0.5F}, kSeed) == 0.0F);
+    CHECK(cactus_gen::stdlib::noise::perlin3(Vector3{999999.5F, -999999.5F, 0.5F}, kSeed) ==
+          Catch::Approx(reference::perlin3(999999.5F, -999999.5F, 0.5F, kSeed)).margin(kTolerance));
 }
 
 // ── Voronoi ─────────────────────────────────────────────────────────────────
@@ -296,7 +304,7 @@ TEST_CASE("perlin returns zero for unsupported coordinates", "[runtime][codegen-
 TEST_CASE("voronoi agrees with a wider reference search", "[runtime][codegen-entt][stdlib-noise]") {
     for (int i = 0; i < 300; ++i) {
         const Vector3 p = sample_point(i);
-        const auto sample = std_noise__voronoi3(p, kSeed);
+        const auto sample      = cactus_gen::stdlib::noise::voronoi3(p, kSeed);
         const Nearest expected = reference_voronoi3(p, kSeed);
         REQUIRE(sample.valid);
         CHECK(sample.x == expected.x);
@@ -306,7 +314,7 @@ TEST_CASE("voronoi agrees with a wider reference search", "[runtime][codegen-ent
         CHECK(sample.second == Catch::Approx(expected.second).margin(kTolerance));
         CHECK(sample.nearest <= sample.second);
 
-        const auto flat = std_noise__voronoi2(Vector2{p.x, p.y}, kSeed);
+        const auto flat             = cactus_gen::stdlib::noise::voronoi2(Vector2{p.x, p.y}, kSeed);
         const Nearest expected_flat = reference_voronoi2(Vector2{p.x, p.y}, kSeed);
         REQUIRE(flat.valid);
         CHECK(flat.x == expected_flat.x);
@@ -320,12 +328,12 @@ TEST_CASE("voronoi agrees with a wider reference search", "[runtime][codegen-ent
 TEST_CASE("voronoi feature points stay inside their documented cell band", "[runtime][codegen-entt][stdlib-noise]") {
     for (int x = -6; x <= 6; ++x) {
         for (int y = -6; y <= 6; ++y) {
-            const Vector3 f = std_noise__feature3(x, y, x - y, kSeed);
+            const Vector3 f = cactus_gen::stdlib::noise::feature3(x, y, x - y, kSeed);
             CHECK(f.x - static_cast<float>(x) >= 0.05F);
             CHECK(f.x - static_cast<float>(x) < 0.95F);
             CHECK(f.y - static_cast<float>(y) >= 0.05F);
             CHECK(f.z - static_cast<float>(x - y) < 0.95F);
-            const Vector2 g = std_noise__feature2(x, y, kSeed);
+            const Vector2 g = cactus_gen::stdlib::noise::feature2(x, y, kSeed);
             CHECK(g.x - static_cast<float>(x) >= 0.05F);
             CHECK(g.y - static_cast<float>(y) < 0.95F);
         }
@@ -335,37 +343,37 @@ TEST_CASE("voronoi feature points stay inside their documented cell band", "[run
 TEST_CASE("voronoi distances are not normalized", "[runtime][codegen-entt][stdlib-noise]") {
     float widest = 0.0F;
     for (int i = 0; i < 500; ++i) {
-        widest = std::max(widest, std_noise__voronoi3(sample_point(i), kSeed).second);
+        widest = std::max(widest, cactus_gen::stdlib::noise::voronoi3(sample_point(i), kSeed).second);
     }
     CHECK(widest > 1.0F);
 }
 
 TEST_CASE("voronoi ties choose the lexicographically smallest feature cell", "[runtime][codegen-entt][stdlib-noise]") {
-    const Vector2 a = std_noise__feature2(0, 0, kSeed);
-    const Vector2 b = std_noise__feature2(1, 0, kSeed);
+    const Vector2 a = cactus_gen::stdlib::noise::feature2(0, 0, kSeed);
+    const Vector2 b = cactus_gen::stdlib::noise::feature2(1, 0, kSeed);
     // The perpendicular bisector's midpoint is equidistant from both features;
     // only take the sample if no other feature is nearer.
     const Vector2 midpoint{(a.x + b.x) * 0.5F, (a.y + b.y) * 0.5F};
-    const auto sample = std_noise__voronoi2(midpoint, kSeed);
+    const auto sample      = cactus_gen::stdlib::noise::voronoi2(midpoint, kSeed);
     const Nearest expected = reference_voronoi2(midpoint, kSeed);
     if (expected.x == 0 || expected.x == 1) {
         if (std::abs(sample.nearest - sample.second) < 1e-6F) {
             CHECK(sample.x == 0);
         }
     }
-    CHECK(std_noise__voronoi2(midpoint, kSeed).x == sample.x);
+    CHECK(cactus_gen::stdlib::noise::voronoi2(midpoint, kSeed).x == sample.x);
 }
 
 TEST_CASE("voronoi reports invalid samples for unsupported coordinates", "[runtime][codegen-entt][stdlib-noise]") {
     const float nan = std::numeric_limits<float>::quiet_NaN();
-    const auto invalid = std_noise__voronoi3(Vector3{0.5F, nan, 0.5F}, kSeed);
+    const auto invalid = cactus_gen::stdlib::noise::voronoi3(Vector3{0.5F, nan, 0.5F}, kSeed);
     CHECK_FALSE(invalid.valid);
     CHECK(invalid.nearest == 0.0F);
     CHECK(invalid.second == 0.0F);
     CHECK(invalid.x == 0);
     CHECK(invalid.y == 0);
     CHECK(invalid.z == 0);
-    CHECK_FALSE(std_noise__voronoi2(Vector2{2000000.0F, 0.0F}, kSeed).valid);
+    CHECK_FALSE(cactus_gen::stdlib::noise::voronoi2(Vector2{2000000.0F, 0.0F}, kSeed).valid);
 }
 
 // ── Through ordinary rules ──────────────────────────────────────────────────
@@ -373,15 +381,15 @@ TEST_CASE("voronoi reports invalid samples for unsupported coordinates", "[runti
 TEST_CASE("a rule samples noise with the same results as direct calls", "[runtime][codegen-entt][stdlib-noise]") {
     entt::registry registry;
     const auto& samples = rule_samples(registry);
-    CHECK(samples.perlin2 == std_noise__perlin2(Vector2{3.7F, -12.25F}, kSeed));
-    CHECK(samples.perlin3 == std_noise__perlin3(Vector3{3.7F, -12.25F, 0.4F}, kSeed));
+    CHECK(samples.perlin2 == cactus_gen::stdlib::noise::perlin2(Vector2{3.7F, -12.25F}, kSeed));
+    CHECK(samples.perlin3 == cactus_gen::stdlib::noise::perlin3(Vector3{3.7F, -12.25F, 0.4F}, kSeed));
     CHECK(samples.perlin_nan == 0.0F);
     CHECK(samples.perlin_infinite == 0.0F);
     CHECK(samples.perlin_far == 0.0F);
     CHECK(samples.voronoi2.valid);
     CHECK(samples.voronoi3.valid);
-    CHECK(samples.voronoi3.x == std_noise__voronoi3(Vector3{3.7F, -12.25F, 0.4F}, kSeed).x);
+    CHECK(samples.voronoi3.x == cactus_gen::stdlib::noise::voronoi3(Vector3{3.7F, -12.25F, 0.4F}, kSeed).x);
     CHECK_FALSE(samples.voronoi_nan.valid);
-    CHECK(samples.feature.x == std_noise__feature3(2, -3, 4, kSeed).x);
+    CHECK(samples.feature.x == cactus_gen::stdlib::noise::feature3(2, -3, 4, kSeed).x);
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

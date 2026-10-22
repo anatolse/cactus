@@ -32,8 +32,8 @@ TEST_CASE("deferred field blocks take their values when the statement runs",
     cactus_headless_test::init_and_load(registry);
     cactus_headless_test::drive_frame(registry);
 
-    check_statement_time<deferred_field_evaluation__AddResult>(registry);
-    check_statement_time<deferred_field_evaluation__SpawnResult>(registry);
-    check_statement_time<deferred_field_evaluation__FamilyResult>(registry);
-    check_statement_time<deferred_field_evaluation__ChildResult>(registry);
+    check_statement_time<cactus_gen::deferred_field_evaluation::AddResult>(registry);
+    check_statement_time<cactus_gen::deferred_field_evaluation::SpawnResult>(registry);
+    check_statement_time<cactus_gen::deferred_field_evaluation::FamilyResult>(registry);
+    check_statement_time<cactus_gen::deferred_field_evaluation::ChildResult>(registry);
 }

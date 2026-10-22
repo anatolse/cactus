@@ -12,7 +12,8 @@
 namespace {
 
 void drive_frame(entt::registry& registry) {
-    cactus::runtime::entt_backend::generated_inject_external_event(std_core__frameEvent{.dt = 1.0F / 60.0F});
+    cactus::runtime::entt_backend::generated_inject_external_event(
+        cactus_gen::stdlib::core::frameEvent{.dt = 1.0F / 60.0F});
     cactus::runtime::entt_backend::generated_drain_external_events(registry);
 }
 
@@ -40,11 +41,11 @@ TEST_CASE("SAP-eligible pair rule visits every tuple (self-pairs included) in le
 
     drive_frame(registry);
 
-    const auto view = registry.view<spatial_join_tuples_runtime__Recorder>();
+    const auto view            = registry.view<cactus_gen::spatial_join_tuples_runtime::Recorder>();
     std::size_t recorder_count = 0;
     for (auto entity : view) {
         ++recorder_count;
-        CHECK(registry.get<spatial_join_tuples_runtime__Recorder>(entity).sequence == 12345678);
+        CHECK(registry.get<cactus_gen::spatial_join_tuples_runtime::Recorder>(entity).sequence == 12345678);
     }
     REQUIRE(recorder_count == 1);
 }

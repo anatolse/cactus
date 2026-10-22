@@ -13,8 +13,8 @@
 
 namespace {
 
-using Body     = rule_groups__Body;
-using Observed = rule_groups__Observed;
+using Body     = cactus_gen::rule_groups::Body;
+using Observed = cactus_gen::rule_groups::Observed;
 
 }  // namespace
 
@@ -23,7 +23,7 @@ using Observed = rule_groups__Observed;
 TEST_CASE("rules ordered against a group run before and after its member", "[runtime][codegen-entt][rule-groups]") {
     entt::registry registry;
     cactus_headless_test::init_and_load(registry);
-    const auto ball = generated_named_slots().rule_groups__Ball;
+    const auto ball = cactus_gen::detail::generated_named_slots().rule_groups.Ball;
 
     for (int frame = 1; frame <= 3; ++frame) {
         cactus_headless_test::drive_frame(registry);
@@ -36,6 +36,6 @@ TEST_CASE("rules ordered against a group run before and after its member", "[run
         CHECK(registry.get<Observed>(ball).seen == Catch::Approx(body.velocity));
     }
 
-    cactus_headless_test::dispatch_boundary_event(registry, std_core__unloadEvent{});
+    cactus_headless_test::dispatch_boundary_event(registry, cactus_gen::stdlib::core::unloadEvent{});
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

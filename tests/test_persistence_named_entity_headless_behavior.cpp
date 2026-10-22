@@ -14,8 +14,8 @@
 
 namespace {
 
-using Match = named_entity_access__Match;
-using Probe = named_entity_access__Probe;
+using Match = cactus_gen::named_entity_access::Match;
+using Probe = cactus_gen::named_entity_access::Probe;
 
 using cactus_headless_test::drive_frame;
 using cactus_headless_test::init_and_load;

@@ -13,7 +13,7 @@
 
 namespace {
 
-using World    = std_transform_volume__WorldTransform;
+using World    = cactus_gen::stdlib::transform::volume::WorldTransform;
 namespace quat = cactus::runtime::stdlib::math::quat;
 
 Catch::Approx near(float value) {
@@ -63,8 +63,11 @@ TEST_CASE("a child composes onto a pose root", "[runtime][codegen-entt][stdlib-h
     auto& registry = loaded.registry;
     cactus_headless_test::drive_frame(registry);
 
-    check_position(world_of(registry, only<transform_hierarchy__Feet>(registry)), 5.0F, -1.0F, 0.0F);
-    check_position(world_of(registry, generated_named_slots().transform_hierarchy__StillRoot), 5.0F, 0.0F, 0.0F);
+    check_position(world_of(registry, only<cactus_gen::transform_hierarchy::Feet>(registry)), 5.0F, -1.0F, 0.0F);
+    check_position(world_of(registry, cactus_gen::detail::generated_named_slots().transform_hierarchy.StillRoot),
+                   5.0F,
+                   0.0F,
+                   0.0F);
 }
 
 TEST_CASE("a child without LocalTransform is not propagated",
@@ -73,7 +76,7 @@ TEST_CASE("a child without LocalTransform is not propagated",
     auto& registry = loaded.registry;
     cactus_headless_test::drive_frame(registry);
 
-    check_position(world_of(registry, only<transform_hierarchy__Badge>(registry)), 9.0F, 9.0F, 9.0F);
+    check_position(world_of(registry, only<cactus_gen::transform_hierarchy::Badge>(registry)), 9.0F, 9.0F, 9.0F);
 }
 
 TEST_CASE("nested children compose through a pose root", "[runtime][codegen-entt][stdlib-hierarchical-transforms]") {
@@ -85,15 +88,15 @@ TEST_CASE("nested children compose through a pose root", "[runtime][codegen-entt
     const Quat arm_rotation    = quat::compose(root_rotation, quat::from_euler(0.9F, 0.0F, 0.0F));
     const Quat finger_rotation = quat::compose(arm_rotation, quat::from_euler(0.0F, 0.0F, 1.1F));
 
-    const auto& arm    = world_of(registry, only<transform_hierarchy__Arm>(registry));
-    const auto& finger = world_of(registry, only<transform_hierarchy__Finger>(registry));
+    const auto& arm    = world_of(registry, only<cactus_gen::transform_hierarchy::Arm>(registry));
+    const auto& finger = world_of(registry, only<cactus_gen::transform_hierarchy::Finger>(registry));
     check_position(arm, 1.0F, 2.0F, 0.0F);
     check_position(finger, 1.0F, 3.0F, 0.0F);
     check_rotation(arm.rotation, arm_rotation);
     check_rotation(finger.rotation, finger_rotation);
     CHECK(length_squared(finger.rotation) == Catch::Approx(1.0F));
 
-    const auto& root = world_of(registry, generated_named_slots().transform_hierarchy__TurnedRoot);
+    const auto& root = world_of(registry, cactus_gen::detail::generated_named_slots().transform_hierarchy.TurnedRoot);
     check_rotation(root.rotation, root_rotation);
 }
 
@@ -101,10 +104,10 @@ TEST_CASE("a child of a stale parent derives from its own LocalTransform",
           "[runtime][codegen-entt][stdlib-hierarchical-transforms]") {
     Loaded loaded;
     auto& registry = loaded.registry;
-    registry.destroy(generated_named_slots().transform_hierarchy__StillRoot);
+    registry.destroy(cactus_gen::detail::generated_named_slots().transform_hierarchy.StillRoot);
     cactus_headless_test::drive_frame(registry);
 
-    check_position(world_of(registry, only<transform_hierarchy__Feet>(registry)), 0.0F, -1.0F, 0.0F);
+    check_position(world_of(registry, only<cactus_gen::transform_hierarchy::Feet>(registry)), 0.0F, -1.0F, 0.0F);
 }
 
 TEST_CASE("a pose root moved in late_tick carries its child the same late_tick",
@@ -114,8 +117,11 @@ TEST_CASE("a pose root moved in late_tick carries its child the same late_tick",
     for (int frame = 1; frame <= 3; ++frame) {
         cactus_headless_test::drive_frame(registry);
         const float root_x = -10.0F + static_cast<float>(frame);
-        check_position(world_of(registry, generated_named_slots().transform_hierarchy__MovingRoot), root_x, 0.0F, 0.0F);
-        check_position(world_of(registry, only<transform_hierarchy__Rider>(registry)), root_x, 3.0F, 0.0F);
+        check_position(world_of(registry, cactus_gen::detail::generated_named_slots().transform_hierarchy.MovingRoot),
+                       root_x,
+                       0.0F,
+                       0.0F);
+        check_position(world_of(registry, only<cactus_gen::transform_hierarchy::Rider>(registry)), root_x, 3.0F, 0.0F);
     }
 }
 

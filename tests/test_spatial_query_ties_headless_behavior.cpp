@@ -14,7 +14,7 @@
 
 namespace {
 
-using Results = spatial_query_ties__Results;
+using Results = cactus_gen::spatial_query_ties::Results;
 using cactus::runtime::entt_backend::CreationOrdinal;
 
 struct World {
@@ -43,44 +43,44 @@ struct World {
     }
 
     entt::entity enemy(float x, float y) {
-        inject(spatial_query_ties__MakeEnemyEvent{.x = x, .y = y});
+        inject(cactus_gen::spatial_query_ties::MakeEnemyEvent{.x = x, .y = y});
         return newest();
     }
 
     entt::entity wall(float x, float y) {
-        inject(spatial_query_ties__MakeWallEvent{.x = x, .y = y});
+        inject(cactus_gen::spatial_query_ties::MakeWallEvent{.x = x, .y = y});
         return newest();
     }
 
     entt::entity crate(float x, float y, int id) {
-        inject(spatial_query_ties__MakeCrateEvent{.x = x, .y = y, .id = id});
+        inject(cactus_gen::spatial_query_ties::MakeCrateEvent{.x = x, .y = y, .id = id});
         return newest();
     }
 
     entt::entity enemy_3d(float x, float y, float z) {
-        inject(spatial_query_ties__MakeEnemy3DEvent{.x = x, .y = y, .z = z});
+        inject(cactus_gen::spatial_query_ties::MakeEnemy3DEvent{.x = x, .y = y, .z = z});
         return newest();
     }
 
     entt::entity wall_3d(float x, float y, float z) {
-        inject(spatial_query_ties__MakeWall3DEvent{.x = x, .y = y, .z = z});
+        inject(cactus_gen::spatial_query_ties::MakeWall3DEvent{.x = x, .y = y, .z = z});
         return newest();
     }
 
     // Transforms propagate in tick, so a frame runs before the probe.
     const Results& probe() {
-        inject(std_core__frameEvent{.dt = 1.0F / 60.0F});
-        inject(spatial_query_ties__ProbeEvent{});
-        return registry.get<Results>(generated_named_slots().spatial_query_ties__Board);
+        inject(cactus_gen::stdlib::core::frameEvent{.dt = 1.0F / 60.0F});
+        inject(cactus_gen::spatial_query_ties::ProbeEvent{});
+        return registry.get<Results>(cactus_gen::detail::generated_named_slots().spatial_query_ties.Board);
     }
 
     [[nodiscard]] int place(entt::entity crate) const {
-        return registry.get<spatial_query_ties__Rank>(crate).place;
+        return registry.get<cactus_gen::spatial_query_ties::Rank>(crate).place;
     }
 
     // The place of the crate labelled `id`.
     [[nodiscard]] int place_of(int id) const {
-        for (const auto [crate, label] : registry.view<spatial_query_ties__Label>().each()) {
+        for (const auto [crate, label] : registry.view<cactus_gen::spatial_query_ties::Label>().each()) {
             if (label.id == id) {
                 return place(crate);
             }
@@ -121,13 +121,13 @@ TEST_CASE("spatial queries break ties and order lists by creation", "[runtime][s
 
     // Removing and adding a trait back moves storage, not creation order.
     for (const auto churned : {b, a}) {
-        world.inject(spatial_query_ties__UnmarkEvent{.target = churned});
-        world.inject(spatial_query_ties__RemarkEvent{.target = churned});
+        world.inject(cactus_gen::spatial_query_ties::UnmarkEvent{.target = churned});
+        world.inject(cactus_gen::spatial_query_ties::RemarkEvent{.target = churned});
     }
     CHECK(world.probe().nearest == a);
 
     // A destroy and a new crate keep the list in creation order.
-    world.inject(spatial_query_ties__DiscardEvent{.target = c1});
+    world.inject(cactus_gen::spatial_query_ties::DiscardEvent{.target = c1});
     const auto c4 = world.crate(4.0F, 4.0F, 4);
     world.probe();
     CHECK(world.place(c2) == 1);

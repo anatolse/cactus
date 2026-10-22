@@ -592,7 +592,9 @@ set_source_files_properties("${EXTERNAL_HANDLER_LINK_GENERATED_CPP}" PROPERTIES 
 
 foreach(target_name IN ITEMS
         example_external_handler_user_library
-        example_external_handler_missing_implementations)
+        example_external_handler_missing_implementations
+        example_external_handler_partial_implementations
+        example_external_handler_disallowed_set)
     add_executable(${target_name} EXCLUDE_FROM_ALL
         tests/example_manual_generated_main.cpp
         "${EXTERNAL_HANDLER_LINK_GENERATED_CPP}"
@@ -608,6 +610,12 @@ foreach(target_name IN ITEMS
 endforeach()
 target_compile_definitions(example_external_handler_missing_implementations PRIVATE
     CACTUS_EXTERNAL_HANDLER_MISSING_IMPLEMENTATIONS
+)
+target_compile_definitions(example_external_handler_partial_implementations PRIVATE
+    CACTUS_EXTERNAL_HANDLER_PARTIAL_IMPLEMENTATIONS
+)
+target_compile_definitions(example_external_handler_disallowed_set PRIVATE
+    CACTUS_EXTERNAL_HANDLER_DISALLOWED_SET
 )
 
 cactus_add_example(example_blue_square_generated

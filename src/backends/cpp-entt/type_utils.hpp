@@ -6,6 +6,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace cactus {
@@ -17,6 +18,24 @@ struct WorldTransformUsage {
     bool flat   = false;
     bool volume = false;
 };
+
+// A name the backend invents, declared under `cactus_gen::detail` plus a mirrored module path.
+struct DetailName {
+    std::string ns;
+    std::string name;
+    [[nodiscard]] std::string ref() const {
+        return "::" + ns + "::" + name;
+    }
+};
+
+// `body` declared inside namespace `ns`.
+std::string namespace_block(const std::string& ns, const std::string& body);
+// "cactus_gen::detail" plus the module's mirrored namespace path.
+std::string detail_namespace_path(const std::string& module_name);
+DetailName detail_name(const std::string& module_name, const std::string& name);
+std::string join_strings(const std::vector<std::string>& items, std::string_view separator);
+// The local a generated function binds a component to: `::cactus_gen::game::Session` -> `game_session_comp`.
+std::string component_local(const std::string& type_ref);
 
 class EnttCodegenUtils {
 public:
@@ -54,6 +73,7 @@ public:
     // resolved SymbolIds are lowered directly without alias/module lookup.
     static std::string symbol_cpp_name(const SymbolId& symbol);
     // The generated constant holding a periodic phase's fixed `dt`.
+    static DetailName phase_dt_name(const SymbolId& phase);
     static std::string phase_dt_cpp_name(const SymbolId& phase);
     // The generated function building a collider descriptor from `shape_trait`,
     // or from whichever shape trait the entity has when none is given.
@@ -61,9 +81,11 @@ public:
     // Named entities: the global handle slot, and the per-pass reference a
     // handler hoists for one of its traits.
     static std::string named_slot_name(const SymbolId& entity);
-    static std::string named_trait_ref_name(const NamedTraitRef& ref, const DecoratedProgram& program);
+    // The slot's member path in GeneratedNamedSlots: the mirrored module path, then the entity.
+    static std::vector<std::string> named_slot_path(const SymbolId& entity);
+    static std::string named_trait_ref_name(const NamedTraitRef& ref);
     // The slot or hoisted reference a resolved named member chain lowers to.
-    static std::optional<std::string> named_member_cpp(const MemberExpr& member, const DecoratedProgram& program);
+    static std::optional<std::string> named_member_cpp(const MemberExpr& member);
     // `.r/.g/.b/.a` on a color: a byte field read as a normalized float.
     static bool is_color_component_member(const std::string& member);
     static std::vector<const EntityNode*> declared_entities(const DecoratedProgram& program);
@@ -100,8 +122,6 @@ public:
     static std::vector<SymbolId> watched_lifecycle_traits(const DecoratedProgram& program);
     // Whether generated code tracks trait lifecycle (graph-driven programs with a trigger only).
     static bool tracks_lifecycle(const DecoratedProgram& program);
-    // The generated handler function's name suffix, e.g. `tick`, `combat__Hit`, `added_Dying`.
-    static std::string handler_function_suffix(const EventHandlerNode& handler, const DecoratedProgram& program);
     static std::string struct_cpp_name(const std::string& source_name, const DecoratedProgram& program);
     static std::string enum_cpp_name(const std::string& source_name, const DecoratedProgram& program);
 
@@ -154,13 +174,19 @@ public:
                                                     const std::string& field_name);
 };
 
-// Canonical C++ name for a generated system handler function.
-// Used by both cpp_entt_codegen.cpp and system_emitter.cpp; kept here to avoid
-// having two identical copies in anonymous namespaces.
-std::string system_function_name(const std::string& module_name,
-                                 const std::string& system_name,
-                                 const std::string& suffix);
-std::string system_function_name(const SymbolId& system_id, const std::string& suffix);
+// A generated rule function. Cactus handlers are the overloads `<rule>_on`, keyed by trigger type.
+DetailName system_function_name(const std::string& module_name,
+                                const std::string& system_name,
+                                const std::string& suffix);
+// Creation functions of a template or entity, and the per-node helpers of a hierarchical one.
+DetailName archetype_create_function_name(const std::string& module_name, const std::string& archetype_name);
+DetailName archetype_create_at_function_name(const std::string& module_name, const std::string& archetype_name);
+DetailName archetype_node_create_function_name(const std::string& module_name,
+                                               const std::string& archetype_name,
+                                               const std::vector<std::string>& role_path);
+DetailName archetype_node_create_at_function_name(const std::string& module_name,
+                                                  const std::string& archetype_name,
+                                                  const std::vector<std::string>& role_path);
 std::string event_cpp_type_name(const SymbolId& event_id);
 
 }  // namespace cactus

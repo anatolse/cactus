@@ -16,9 +16,9 @@
 
 namespace {
 
-using Offspring        = commit_notify_loop_runtime__Offspring;
-using Door             = commit_notify_loop_runtime__Door;
-using Knock            = commit_notify_loop_runtime__KnockEvent;
+using Offspring        = cactus_gen::commit_notify_loop_runtime::Offspring;
+using Door             = cactus_gen::commit_notify_loop_runtime::Door;
+using Knock            = cactus_gen::commit_notify_loop_runtime::KnockEvent;
 using OffspringArrived = cactus::runtime::entt_backend::TraitAdded<Offspring>;
 
 std::size_t offspring_count(entt::registry& registry) {
@@ -44,9 +44,9 @@ TEST_CASE("self-feeding spawns and targeted chains advance one hop per host acti
           "[runtime][commit-notify-loop]") {
     entt::registry registry;
     cactus_headless_test::init_and_load(registry);
-    const auto& slots = generated_named_slots();
-    const auto front  = slots.commit_notify_loop_runtime__Front;
-    const auto back   = slots.commit_notify_loop_runtime__Back;
+    const auto& slots = cactus_gen::detail::generated_named_slots();
+    const auto front  = slots.commit_notify_loop_runtime.Front;
+    const auto back   = slots.commit_notify_loop_runtime.Back;
 
     // Load: Seed's spawn and the first knock reach their consumers at once;
     // the consumers' own follow-ups are on a cycle, so they wait.

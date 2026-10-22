@@ -1,12 +1,17 @@
 #pragma once
 
+#include <algorithm>
+#include <array>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <type_traits>
+#include <vector>
 
 namespace cactus {
 
@@ -170,48 +175,259 @@ struct SymbolIdHash {
     return canonical_string(symbol);
 }
 
-// Deterministic C++ identifier derived from a canonical module/local identity.
-// "std.transform.flat.WorldTransform" -> "std_transform_flat__WorldTransform"
-// Empty module_name: just the local name (test/legacy unqualified scenario).
-// A state variant's dotted local name (`Mode.Idle`) becomes `Mode__Idle`.
-[[nodiscard]] inline std::string cpp_identifier(const std::string& module_name, const std::string& local_name) {
-    std::string result;
-    result.reserve(module_name.size() + 2 + local_name.size());
-    if (!module_name.empty()) {
-        for (char c : module_name) {
-            result += (c == '.') ? '_' : c;
-        }
-        result += "__";
+// Names generated C++ cannot declare as-is: C++23 keywords, raylib.h macros, and the
+// names the backend spells unqualified inside module namespaces.
+inline constexpr auto kCppReservedNames = std::to_array<std::string_view>({
+    "alignas",
+    "alignof",
+    "and",
+    "and_eq",
+    "asm",
+    "auto",
+    "bitand",
+    "bitor",
+    "bool",
+    "break",
+    "case",
+    "catch",
+    "char",
+    "char8_t",
+    "char16_t",
+    "char32_t",
+    "class",
+    "compl",
+    "concept",
+    "const",
+    "consteval",
+    "constexpr",
+    "constinit",
+    "const_cast",
+    "continue",
+    "co_await",
+    "co_return",
+    "co_yield",
+    "decltype",
+    "default",
+    "delete",
+    "do",
+    "double",
+    "dynamic_cast",
+    "else",
+    "enum",
+    "explicit",
+    "export",
+    "extern",
+    "false",
+    "float",
+    "for",
+    "friend",
+    "goto",
+    "if",
+    "inline",
+    "int",
+    "long",
+    "mutable",
+    "namespace",
+    "new",
+    "noexcept",
+    "not",
+    "not_eq",
+    "nullptr",
+    "operator",
+    "or",
+    "or_eq",
+    "private",
+    "protected",
+    "public",
+    "register",
+    "reinterpret_cast",
+    "requires",
+    "return",
+    "short",
+    "signed",
+    "sizeof",
+    "static",
+    "static_assert",
+    "static_cast",
+    "struct",
+    "switch",
+    "template",
+    "this",
+    "thread_local",
+    "throw",
+    "true",
+    "try",
+    "typedef",
+    "typeid",
+    "typename",
+    "union",
+    "unsigned",
+    "using",
+    "virtual",
+    "void",
+    "volatile",
+    "wchar_t",
+    "while",
+    "xor",
+    "xor_eq",
+    // raylib.h macros
+    "RAYLIB_H",
+    "RAYLIB_VERSION_MAJOR",
+    "RAYLIB_VERSION_MINOR",
+    "RAYLIB_VERSION_PATCH",
+    "RAYLIB_VERSION",
+    "RLAPI",
+    "PI",
+    "DEG2RAD",
+    "RAD2DEG",
+    "RL_MALLOC",
+    "RL_CALLOC",
+    "RL_REALLOC",
+    "RL_FREE",
+    "CLITERAL",
+    "RL_COLOR_TYPE",
+    "RL_RECTANGLE_TYPE",
+    "RL_VECTOR2_TYPE",
+    "RL_VECTOR3_TYPE",
+    "RL_VECTOR4_TYPE",
+    "RL_QUATERNION_TYPE",
+    "RL_MATRIX_TYPE",
+    "LIGHTGRAY",
+    "GRAY",
+    "DARKGRAY",
+    "YELLOW",
+    "GOLD",
+    "ORANGE",
+    "PINK",
+    "RED",
+    "MAROON",
+    "GREEN",
+    "LIME",
+    "DARKGREEN",
+    "SKYBLUE",
+    "BLUE",
+    "DARKBLUE",
+    "PURPLE",
+    "VIOLET",
+    "DARKPURPLE",
+    "BEIGE",
+    "BROWN",
+    "DARKBROWN",
+    "WHITE",
+    "BLACK",
+    "BLANK",
+    "MAGENTA",
+    "RAYWHITE",
+    "RL_BOOL_TYPE",
+    "MOUSE_LEFT_BUTTON",
+    "MOUSE_RIGHT_BUTTON",
+    "MOUSE_MIDDLE_BUTTON",
+    "MATERIAL_MAP_DIFFUSE",
+    "MATERIAL_MAP_SPECULAR",
+    "SHADER_LOC_MAP_DIFFUSE",
+    "SHADER_LOC_MAP_SPECULAR",
+    "GetMouseRay",
+    "__declspec",
+    // spelled unqualified by generated code
+    "std",
+    "entt",
+    "cactus",
+    "cactus_gen",
+    "Vector2",
+    "Vector3",
+    "Quat",
+    "Color",
+});
+
+[[nodiscard]] inline std::string cpp_escaped(std::string name) {
+    if (std::ranges::find(kCppReservedNames, name) != kCppReservedNames.end()) {
+        name += '_';
     }
-    for (char c : local_name) {
-        if (c == '.') {
-            result += "__";
+    return name;
+}
+
+// "std.camera.volume" -> {"stdlib", "camera", "volume"}. A user top-level module never
+// lands on `stdlib` or `detail`, which the backend reserves.
+[[nodiscard]] inline std::vector<std::string> cpp_namespace_segments(const std::string& module_name) {
+    std::vector<std::string> segments;
+    for (std::size_t begin = 0; !module_name.empty() && begin <= module_name.size();) {
+        const auto end = std::min(module_name.find('.', begin), module_name.size());
+        auto segment   = module_name.substr(begin, end - begin);
+        if (segments.empty() && segment == "std") {
+            segment = "stdlib";
+        } else if (segments.empty() && (segment == "stdlib" || segment == "detail")) {
+            segment += '_';
         } else {
-            result += c;
+            segment = cpp_escaped(std::move(segment));
         }
+        segments.push_back(std::move(segment));
+        begin = end + 1;
+    }
+    return segments;
+}
+
+// "std.camera.volume" -> "cactus_gen::stdlib::camera::volume".
+[[nodiscard]] inline std::string cpp_namespace_path(const std::string& module_name) {
+    std::string result = "cactus_gen";
+    for (const auto& segment : cpp_namespace_segments(module_name)) {
+        result += "::" + segment;
     }
     return result;
 }
 
-[[nodiscard]] inline std::string cpp_identifier(const ModuleId& module, const std::string& local_name) {
-    return cpp_identifier(module.name, local_name);
+[[nodiscard]] inline std::string cpp_namespace_path(const ModuleId& module) {
+    return cpp_namespace_path(module.name);
 }
 
-[[nodiscard]] inline std::string cpp_identifier(const SymbolId& symbol) {
-    return cpp_identifier(symbol.module, symbol.local_name);
+namespace detail {
+
+[[nodiscard]] inline std::string pascal_case(const std::string& name) {
+    std::string result;
+    bool upper = true;
+    for (const char c : name) {
+        if (c == '_') {
+            upper = true;
+            continue;
+        }
+        result += upper ? static_cast<char>(std::toupper(static_cast<unsigned char>(c))) : c;
+        upper = false;
+    }
+    return result;
 }
 
-// Backward-compatible name used throughout the existing cpp-entt backend.
-[[nodiscard]] inline std::string canonical_to_cpp_name(const std::string& module_name, const std::string& local_name) {
-    return cpp_identifier(module_name, local_name);
+}  // namespace detail
+
+// The name a module-scope declaration gets inside its module namespace. A state variant
+// `S.V` is the nested type `S::V` of its slot.
+[[nodiscard]] inline std::string cpp_decl_name(SymbolKind kind, const std::string& local_name) {
+    switch (kind) {
+        case SymbolKind::Event:
+            return local_name + "Event";
+        case SymbolKind::Phase:
+            return detail::pascal_case(local_name) + "Phase";
+        default:
+            break;
+    }
+    const auto dot = local_name.find('.');
+    if (dot == std::string::npos) {
+        return cpp_escaped(local_name);
+    }
+    return cpp_escaped(local_name.substr(0, dot)) + "::" + cpp_escaped(local_name.substr(dot + 1));
 }
 
-[[nodiscard]] inline std::string canonical_to_cpp_name(const ModuleId& module, const std::string& local_name) {
-    return cpp_identifier(module, local_name);
+[[nodiscard]] inline std::string cpp_decl_name(const SymbolId& symbol) {
+    return cpp_decl_name(symbol.kind, symbol.local_name);
 }
 
-[[nodiscard]] inline std::string canonical_to_cpp_name(const SymbolId& symbol) {
-    return cpp_identifier(symbol);
+// Fully qualified, so it resolves the same wherever it is emitted.
+[[nodiscard]] inline std::string cpp_type_ref(SymbolKind kind,
+                                              const std::string& module_name,
+                                              const std::string& local_name) {
+    return "::" + cpp_namespace_path(module_name) + "::" + cpp_decl_name(kind, local_name);
+}
+
+[[nodiscard]] inline std::string cpp_type_ref(const SymbolId& symbol) {
+    return cpp_type_ref(symbol.kind, symbol.module.name, symbol.local_name);
 }
 
 }  // namespace cactus

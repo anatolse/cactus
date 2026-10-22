@@ -45,15 +45,15 @@ constexpr int kWindowHeight = 540;
 // (ClickButton), so it doubles as a stable handle onto it — the example
 // spawns its tree at module load and returns no other reference to it.
 entt::entity find_click_button(entt::registry& registry) {
-    const auto view = registry.view<main__ClickCounter>();
+    const auto view = registry.view<cactus_gen::main::ClickCounter>();
     REQUIRE(view.begin() != view.end());
     return *view.begin();
 }
 
 entt::entity find_center_panel(entt::registry& registry) {
-    const auto view = registry.view<std_ui__PreferredSize>();
+    const auto view = registry.view<cactus_gen::stdlib::ui::PreferredSize>();
     for (const auto entity : view) {
-        const auto& preferred = view.get<std_ui__PreferredSize>(entity);
+        const auto& preferred = view.get<cactus_gen::stdlib::ui::PreferredSize>(entity);
         if (preferred.min_size.x == 360.0F && preferred.min_size.y == 240.0F) {
             return entity;
         }
@@ -76,14 +76,14 @@ struct SceneLayout {
 // comment) and snapshots the two entities this test cares about before
 // clear_projected_traits would otherwise erase ComputedLayout again.
 SceneLayout measure_scene(entt::registry& registry) {
-    const cactus::runtime::entt_backend::std_core__inputPhaseRuntimeState phase{};
-    main__measure_ui_std_core__input(registry, phase);
-    main__arrange_ui_std_core__input(registry, phase);
+    const cactus_gen::stdlib::core::InputPhase phase{};
+    cactus_gen::main::measure_ui_std_core::input(registry, phase);
+    cactus_gen::main::arrange_ui_std_core::input(registry, phase);
 
     const auto center_panel   = find_center_panel(registry);
     const auto click_button   = find_click_button(registry);
-    const auto& panel_layout  = registry.get<std_ui__ComputedLayout>(center_panel);
-    const auto& button_layout = registry.get<std_ui__ComputedLayout>(click_button);
+    const auto& panel_layout  = registry.get<cactus_gen::stdlib::ui::ComputedLayout>(center_panel);
+    const auto& button_layout = registry.get<cactus_gen::stdlib::ui::ComputedLayout>(click_button);
     return SceneLayout{.center_panel = {.position = panel_layout.position, .size = panel_layout.size},
                        .click_button = {.position = button_layout.position, .size = button_layout.size}};
 }
@@ -136,14 +136,14 @@ TEST_CASE("standard-ui example: layout, top-hit agreement, capture, Click delive
     CHECK(cactus::runtime::entt_backend::pointer_top_target(registry) == click_button);
 
     // ── Capture, Click delivery, gameplay event emission ────────────────
-    REQUIRE(registry.get<main__ClickCounter>(click_button).count == 0);
-    REQUIRE_FALSE(registry.get<std_ui__BumpAnimation>(click_button).playing);
+    REQUIRE(registry.get<cactus_gen::main::ClickCounter>(click_button).count == 0);
+    REQUIRE_FALSE(registry.get<cactus_gen::stdlib::ui::BumpAnimation>(click_button).playing);
 
     // Press: primary capture engages on the button.
     cactus_raylib_fake::set_mouse_button_pressed_this_frame(0, true);
     cactus_headless_test::drive_frame(registry);
     cactus_raylib_fake::set_mouse_button_pressed_this_frame(0, false);
-    CHECK(registry.get<std_pointer__PointerState>(click_button).pressed);
+    CHECK(registry.get<cactus_gen::stdlib::pointer::PointerState>(click_button).pressed);
 
     // Release over the same target: Click is delivered to the real
     // ClickButtonGameplay rule (an ordinary `each: ClickCounter` handler
@@ -154,10 +154,10 @@ TEST_CASE("standard-ui example: layout, top-hit agreement, capture, Click delive
     // (`on pointer.Click:`) to work at all.
     cactus_raylib_fake::set_mouse_button_released_this_frame(0, true);
     cactus_headless_test::drive_frame(registry);
-    CHECK_FALSE(registry.get<std_pointer__PointerState>(click_button).pressed);
-    CHECK(registry.get<main__ClickCounter>(click_button).count == 1);
+    CHECK_FALSE(registry.get<cactus_gen::stdlib::pointer::PointerState>(click_button).pressed);
+    CHECK(registry.get<cactus_gen::main::ClickCounter>(click_button).count == 1);
 
-    const auto& bump_after_click = registry.get<std_ui__BumpAnimation>(click_button);
+    const auto& bump_after_click = registry.get<cactus_gen::stdlib::ui::BumpAnimation>(click_button);
     CHECK(bump_after_click.playing);
     CHECK(bump_after_click.elapsed < bump_after_click.duration);
 
@@ -168,8 +168,8 @@ TEST_CASE("standard-ui example: layout, top-hit agreement, capture, Click delive
     for (int i = 0; i < 3; ++i) {
         cactus_headless_test::drive_frame(registry);
     }
-    const float elapsed_before_restart = registry.get<std_ui__BumpAnimation>(click_button).elapsed;
-    REQUIRE(elapsed_before_restart < registry.get<std_ui__BumpAnimation>(click_button).duration);
+    const float elapsed_before_restart = registry.get<cactus_gen::stdlib::ui::BumpAnimation>(click_button).elapsed;
+    REQUIRE(elapsed_before_restart < registry.get<cactus_gen::stdlib::ui::BumpAnimation>(click_button).duration);
 
     cactus_raylib_fake::set_mouse_button_pressed_this_frame(0, true);
     cactus_headless_test::drive_frame(registry);
@@ -177,10 +177,10 @@ TEST_CASE("standard-ui example: layout, top-hit agreement, capture, Click delive
     cactus_raylib_fake::set_mouse_button_released_this_frame(0, true);
     cactus_headless_test::drive_frame(registry);
 
-    const auto& bump_after_restart = registry.get<std_ui__BumpAnimation>(click_button);
+    const auto& bump_after_restart = registry.get<cactus_gen::stdlib::ui::BumpAnimation>(click_button);
     CHECK(bump_after_restart.playing);
     CHECK(bump_after_restart.elapsed < elapsed_before_restart);
-    CHECK(registry.get<main__ClickCounter>(click_button).count == 2);
+    CHECK(registry.get<cactus_gen::main::ClickCounter>(click_button).count == 2);
 }
 
 TEST_CASE("standard-ui example: capture persists off-target, so releasing outside ClickButton cancels the Click",
@@ -204,7 +204,7 @@ TEST_CASE("standard-ui example: capture persists off-target, so releasing outsid
     cactus_raylib_fake::set_mouse_button_pressed_this_frame(0, true);
     cactus_headless_test::drive_frame(registry);
     cactus_raylib_fake::set_mouse_button_pressed_this_frame(0, false);
-    REQUIRE(registry.get<std_pointer__PointerState>(click_button).pressed);
+    REQUIRE(registry.get<cactus_gen::stdlib::pointer::PointerState>(click_button).pressed);
 
     // Move off the button entirely before releasing: still a captured
     // release (PointerState clears), but not a valid Click.
@@ -212,9 +212,9 @@ TEST_CASE("standard-ui example: capture persists off-target, so releasing outsid
     cactus_raylib_fake::set_mouse_button_released_this_frame(0, true);
     cactus_headless_test::drive_frame(registry);
 
-    CHECK_FALSE(registry.get<std_pointer__PointerState>(click_button).pressed);
-    CHECK(registry.get<main__ClickCounter>(click_button).count == 0);
-    CHECK_FALSE(registry.get<std_ui__BumpAnimation>(click_button).playing);
+    CHECK_FALSE(registry.get<cactus_gen::stdlib::pointer::PointerState>(click_button).pressed);
+    CHECK(registry.get<cactus_gen::main::ClickCounter>(click_button).count == 0);
+    CHECK_FALSE(registry.get<cactus_gen::stdlib::ui::BumpAnimation>(click_button).playing);
 }
 
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

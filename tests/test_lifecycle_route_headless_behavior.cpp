@@ -15,8 +15,8 @@ TEST_CASE("a lifecycle change with an immediate cause runs in the first frame in
     entt::registry registry;
     cactus_headless_test::drive_one_frame(registry, 1.0F / 60.0F);
 
-    const auto target = generated_named_slots().lifecycle_route__Target;
+    const auto target = cactus_gen::detail::generated_named_slots().lifecycle_route.Target;
     REQUIRE(registry.valid(target));
-    CHECK(registry.get<lifecycle_route__Body>(target).runs == 1);
+    CHECK(registry.get<cactus_gen::lifecycle_route::Body>(target).runs == 1);
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

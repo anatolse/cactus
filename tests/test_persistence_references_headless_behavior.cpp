@@ -18,8 +18,8 @@ namespace {
 
 using cactus_headless_test::init_and_load;
 
-using Rival  = persistence_references_runtime__Rival;
-using Roster = persistence_references_runtime__Roster;
+using Rival  = cactus_gen::persistence_references_runtime::Rival;
+using Roster = cactus_gen::persistence_references_runtime::Roster;
 
 struct World {
     entt::registry registry;

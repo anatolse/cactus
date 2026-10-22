@@ -18,9 +18,9 @@ TEST_CASE("cursor capture headless: capture, repeat, and release are observable 
 
     entt::registry registry;
     cactus_headless_test::drive_one_frame(registry, 1.0F / 60.0F);
-    const auto sequences = registry.view<cursor_capture_runtime__CursorSequence>();
+    const auto sequences = registry.view<cactus_gen::cursor_capture_runtime::CursorSequence>();
     REQUIRE(sequences.size() == 1);
-    const auto& sequence = registry.get<cursor_capture_runtime__CursorSequence>(*sequences.begin());
+    const auto& sequence = registry.get<cactus_gen::cursor_capture_runtime::CursorSequence>(*sequences.begin());
     CHECK(sequence.observed_delta.x == 4.0F);
     CHECK(sequence.observed_delta.y == -3.0F);
     CHECK(cactus_raylib_fake::cursor_captured());

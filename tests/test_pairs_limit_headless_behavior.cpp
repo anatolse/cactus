@@ -12,7 +12,8 @@
 namespace {
 
 void drive_frame(entt::registry& registry) {
-    cactus::runtime::entt_backend::generated_inject_external_event(std_core__frameEvent{.dt = 1.0F / 60.0F});
+    cactus::runtime::entt_backend::generated_inject_external_event(
+        cactus_gen::stdlib::core::frameEvent{.dt = 1.0F / 60.0F});
     cactus::runtime::entt_backend::generated_drain_external_events(registry);
 }
 
@@ -22,16 +23,16 @@ void run_one_frame(entt::registry& registry) {
     drive_frame(registry);
 }
 
-const pairs_limit_runtime__Recorder& recorder_of(entt::registry& registry) {
-    const auto view = registry.view<pairs_limit_runtime__Recorder>();
+const cactus_gen::pairs_limit_runtime::Recorder& recorder_of(entt::registry& registry) {
+    const auto view = registry.view<cactus_gen::pairs_limit_runtime::Recorder>();
     REQUIRE(view.begin() != view.end());
-    return registry.get<pairs_limit_runtime__Recorder>(*view.begin());
+    return registry.get<cactus_gen::pairs_limit_runtime::Recorder>(*view.begin());
 }
 
-const pairs_limit_runtime__Actor& actor_of(entt::registry& registry) {
-    const auto view = registry.view<pairs_limit_runtime__Actor>();
+const cactus_gen::pairs_limit_runtime::Actor& actor_of(entt::registry& registry) {
+    const auto view = registry.view<cactus_gen::pairs_limit_runtime::Actor>();
     REQUIRE(view.begin() != view.end());
-    return registry.get<pairs_limit_runtime__Actor>(*view.begin());
+    return registry.get<cactus_gen::pairs_limit_runtime::Actor>(*view.begin());
 }
 
 }  // namespace

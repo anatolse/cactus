@@ -1,6 +1,7 @@
 #include "backends/cpp-entt/cpp_entt_codegen.hpp"
-#include "common/ast_expressions.hpp"
 
+#include "common/ast_expressions.hpp"
+#include "common/codegen_error.hpp"
 #include "frontend/delivery_cycles.hpp"
 #include "frontend/hierarchy_forest.hpp"
 #include "frontend/native_result_ordering.hpp"
@@ -20,6 +21,7 @@
 #include <cctype>
 #include <cstdint>
 #include <filesystem>
+#include <format>
 #include <iomanip>
 #include <limits>
 #include <map>
@@ -36,7 +38,6 @@ namespace cactus {
 namespace {
 
 std::string snake_case(const std::string& value);
-std::string archetype_create_at_function_name(const std::string& module_name, const std::string& archetype_name);
 const ResolvedEvent* find_external_frame_event(const DecoratedProgram& program);
 const ResolvedEvent* find_std_core_event(const DecoratedProgram& program,
                                          std::string_view name,
@@ -82,13 +83,16 @@ bool has_extern_funcs(const DecoratedProgram& program) {
     return std::ranges::any_of(program.funcs, [](const auto& entry) { return entry.second.is_extern; });
 }
 
+const std::string& ast_event_module(const EventNode& node, const DecoratedProgram& program) {
+    return node.module_name.empty() ? program.module_name : node.module_name;
+}
+
 std::string ast_event_cpp_name(const EventNode& node, const DecoratedProgram& program) {
-    const auto& module = node.module_name.empty() ? program.module_name : node.module_name;
-    return canonical_to_cpp_name(module, node.name) + "Event";
+    return cpp_type_ref(SymbolKind::Event, ast_event_module(node, program), node.name);
 }
 
 std::string resolved_event_cpp_name(const ResolvedEvent& event) {
-    return canonical_to_cpp_name(event.module_name, event.name) + "Event";
+    return cpp_type_ref(SymbolKind::Event, event.module_name, event.name);
 }
 
 template <typename Map>
@@ -122,13 +126,13 @@ std::string emit_event_structs(const DecoratedProgram& program) {
             if (found == by_canonical_id.end()) {
                 throw std::runtime_error("cpp-entt event '" + node->name + "' has no resolved event declaration");
             }
-            out << EnttEventEmitter::emit_event(*found->second, ast_event_cpp_name(*node, program)) << "\n";
+            out << EnttEventEmitter::emit_event(*found->second, ast_event_module(*node, program)) << "\n";
         }
         return out.str();
     }
 
     for (const auto* event : sorted_by_canonical_id(program.events)) {
-        out << EnttEventEmitter::emit_event(*event, resolved_event_cpp_name(*event)) << "\n";
+        out << EnttEventEmitter::emit_event(*event, event->module_name) << "\n";
     }
     return out.str();
 }
@@ -155,12 +159,16 @@ std::string handler_trigger_cpp_type(const DecoratedProgram& program, const Reso
     if (trigger.kind == HandlerTriggerKind::Event) {
         return event_runtime_cpp_type(program, trigger.symbol);
     }
-    return "cactus::runtime::entt_backend::" + canonical_to_cpp_name(trigger.symbol) + "PhaseRuntimeState";
+    return cpp_type_ref(trigger.symbol);
+}
+
+// The namespace a user library defines an extern rule's `on` overloads in.
+std::string external_rule_namespace(const SymbolId& rule) {
+    return cpp_namespace_path(rule.module) + "::" + cpp_escaped(rule.local_name);
 }
 
 std::string external_handler_callback_name(const HandlerIdentity& identity) {
-    return "cactus_external__" + canonical_to_cpp_name(identity.rule) + "__on__" +
-           canonical_to_cpp_name(identity.trigger.symbol);
+    return "::" + external_rule_namespace(identity.rule) + "::on";
 }
 
 std::vector<SymbolId> sorted_symbols(const std::unordered_set<SymbolId>& symbols) {
@@ -178,7 +186,7 @@ std::string emit_world_digest(const DecoratedProgram& program) {
     out << "namespace cactus::runtime::entt_backend {\n";
     for (const auto* declaration : sorted_by_canonical_id(program.structs)) {
         out << "inline void digest_value(WorldDigest& digest, const "
-            << canonical_to_cpp_name(declaration->module_name, declaration->name) << "& value) {\n";
+            << cpp_type_ref(SymbolKind::Struct, declaration->module_name, declaration->name) << "& value) {\n";
         out << "    (void)digest;\n";
         for (const auto& field : declaration->fields) {
             out << "    digest.add(value." << field.name << ");\n";
@@ -192,7 +200,7 @@ std::string emit_world_digest(const DecoratedProgram& program) {
     out << "        digest.add(entt::to_integral(entity));\n";
     for (std::size_t index = 0; index < traits.size(); ++index) {
         const auto& trait = *traits[index];
-        const auto cpp    = canonical_to_cpp_name(trait.module_name, trait.name);
+        const auto cpp    = cpp_type_ref(SymbolKind::Trait, trait.module_name, trait.name);
         if (trait.fields.empty() && !trait.is_state_slot()) {
             out << "        if (registry.all_of<" << cpp << ">(entity)) {\n";
             out << "            digest.add(std::uint64_t{" << index << "});\n";
@@ -223,29 +231,16 @@ std::vector<std::string> sorted_strings(const std::unordered_set<std::string>& s
     return result;
 }
 
-std::string external_handler_capability_name(const HandlerIdentity& identity) {
-    return "Capabilities__" + canonical_to_cpp_name(identity.rule) + "__on__" +
-           canonical_to_cpp_name(identity.trigger.symbol);
-}
-
-std::string external_handler_command_method_name(const InferredHandlerCommand& command) {
-    std::string name = "command_" + std::string(handler_command_kind_name(command.kind));
-    if (command.target.has_value()) {
-        name += "_" + canonical_to_cpp_name(*command.target);
-    }
-    return name;
+std::string external_handler_capability_name(const DecoratedProgram& program, const HandlerIdentity& identity) {
+    return "::" + external_rule_namespace(identity.rule) + "::Capabilities<" +
+           handler_trigger_cpp_type(program, identity.trigger) + ">";
 }
 
 std::string external_handler_effect_method_name(const std::string& effect) {
     std::string name = "effect_";
     for (const char character : effect) {
-        if (character == '.') {
-            name += "__";
-        } else if (std::isalnum(static_cast<unsigned char>(character)) != 0 || character == '_') {
-            name += character;
-        } else {
-            name += '_';
-        }
+        const bool kept = std::isalnum(static_cast<unsigned char>(character)) != 0 || character == '_';
+        name += kept ? character : '_';
     }
     return name;
 }
@@ -293,8 +288,7 @@ std::optional<std::string> cactus_handler_callee(const DecoratedProgram& program
             return candidate.resolved_trigger.has_value() && *candidate.resolved_trigger == identity.trigger;
         });
         if (handler != rule->handlers.end()) {
-            return system_function_name(
-                program.module_name, rule->name, EnttCodegenUtils::handler_function_suffix(*handler, program));
+            return system_function_name(program.module_name, rule->name, "on").ref();
         }
     }
     return std::nullopt;
@@ -405,6 +399,61 @@ bool has_user_external_handler(const DecoratedProgram& program, const ExternRule
     });
 }
 
+// `requires (std::same_as<T, A> || ...)` over the traits a command may target.
+std::string trait_constraint(const std::vector<SymbolId>& traits) {
+    std::string constraint = "    template <class T>\n        requires(";
+    for (std::size_t index = 0; index < traits.size(); ++index) {
+        constraint += std::string(index == 0 ? "" : " || ") + "std::same_as<T, " +
+                      EnttCodegenUtils::trait_cpp_name(traits[index]) + ">";
+    }
+    return constraint + ")\n";
+}
+
+// Per-trait statements inside a member template, each under `if constexpr (std::same_as<T, X>)`.
+std::string per_trait_statements(const std::vector<SymbolId>& traits,
+                                 const std::function<std::string(const SymbolId&, const std::string&)>& body,
+                                 const std::string& indent) {
+    std::string result;
+    for (const auto& trait : traits) {
+        const auto type       = EnttCodegenUtils::trait_cpp_name(trait);
+        const auto statements = body(trait, type);
+        if (statements.empty()) {
+            continue;
+        }
+        result.append(indent).append("if constexpr (std::same_as<T, ").append(type).append(">) {\n");
+        result.append(statements).append(indent).append("}\n");
+    }
+    return result;
+}
+
+std::vector<SymbolId> command_targets(const HandlerNode& node, HandlerCommandKind kind) {
+    std::unordered_set<SymbolId> targets;
+    for (const auto& command : node.contract.commands) {
+        if (command.kind == kind && command.target.has_value()) {
+            targets.insert(*command.target);
+        }
+    }
+    return sorted_symbols(targets);
+}
+
+bool has_command(const HandlerNode& node, HandlerCommandKind kind) {
+    return std::ranges::any_of(node.contract.commands, [kind](const auto& command) { return command.kind == kind; });
+}
+
+const TemplateNode& external_spawn_template(const DecoratedProgram& program, const SymbolId& target) {
+    const auto* template_node = find_template(program, target);
+    if (template_node == nullptr) {
+        throw std::runtime_error("cpp-entt cannot lower external spawn capability for missing template '" +
+                                 make_canonical_id(target) + "'");
+    }
+    if (creation_takes_parameters(template_node->initializers)) {
+        throw std::runtime_error("cpp-entt cannot lower external spawn capability for parameterized template '" +
+                                 make_canonical_id(target) +
+                                 "': an external handler has no place to supply template arguments");
+    }
+    return *template_node;
+}
+
 std::string emit_external_command_forward_declarations(const DecoratedProgram& program) {
     if (program.execution_graph.phases.empty()) {
         return {};
@@ -415,30 +464,17 @@ std::string emit_external_command_forward_declarations(const DecoratedProgram& p
         if (!is_user_external_handler(program, node)) {
             continue;
         }
-        for (const auto& command : node.contract.commands) {
-            if (command.kind != HandlerCommandKind::Spawn || !command.target.has_value()) {
-                continue;
-            }
-            const auto* template_node = find_template(program, *command.target);
-            if (template_node == nullptr) {
-                throw std::runtime_error("cpp-entt cannot lower external spawn capability for missing template '" +
-                                         make_canonical_id(*command.target) + "'");
-            }
-            if (creation_takes_parameters(template_node->initializers)) {
-                throw std::runtime_error(
-                    "cpp-entt cannot lower external spawn capability for parameterized template '" +
-                    make_canonical_id(*command.target) +
-                    "': an external handler has no place to supply template arguments");
-            }
-            declarations.insert("entt::entity " +
-                                archetype_create_at_function_name(program.module_name, template_node->name) +
-                                "(entt::registry& registry, entt::entity hint);");
+        for (const auto& target : command_targets(node, HandlerCommandKind::Spawn)) {
+            const auto factory =
+                archetype_create_at_function_name(program.module_name, external_spawn_template(program, target).name);
+            declarations.insert(namespace_block(
+                factory.ns, "entt::entity " + factory.name + "(entt::registry& registry, entt::entity hint);\n"));
         }
     }
     if (EnttCodegenUtils::find_trait(program, "Parent") != nullptr) {
-        declarations.insert(
-            "[[maybe_unused]] static void cactus_destroy_entity_recursive("
-            "entt::registry& registry, entt::entity entity);");
+        declarations.insert(namespace_block("cactus_gen::detail",
+                                            "[[maybe_unused]] static void cactus_destroy_entity_recursive("
+                                            "entt::registry& registry, entt::entity entity);\n"));
     }
     if (declarations.empty()) {
         return {};
@@ -449,186 +485,253 @@ std::string emit_external_command_forward_declarations(const DecoratedProgram& p
     std::ostringstream out;
     out << "// ── External Command Target Declarations ─────────────────────────────\n\n";
     for (const auto& declaration : ordered) {
-        out << declaration << "\n";
+        out << declaration;
     }
     out << "\n";
     return out.str();
 }
 
-// Optional fields keep the capability queue-only: the callback names values
-// to write and never sees the current ones.
-void emit_external_set_capability(std::ostringstream& out,
-                                  const DecoratedProgram& program,
-                                  const InferredHandlerCommand& command,
-                                  const std::string& method_name) {
-    if (!command.target.has_value()) {
-        throw std::runtime_error("cpp-entt received an external set capability without a target");
+// The patch a `set<T>` command carries: optional fields keep the capability queue-only, so the
+// callback names values to write and never sees the current ones.
+std::string emit_external_set_patches(const DecoratedProgram& program) {
+    std::unordered_set<SymbolId> targets;
+    for (const auto& node : program.execution_graph.handlers) {
+        if (is_user_external_handler(program, node)) {
+            std::ranges::copy(command_targets(node, HandlerCommandKind::Set), std::inserter(targets, targets.end()));
+        }
     }
-    const auto type            = EnttCodegenUtils::trait_cpp_name(*command.target);
-    const auto canonical_id    = make_canonical_id(*command.target);
-    const auto* resolved_trait = EnttCodegenUtils::find_trait(program, canonical_id);
-    if (resolved_trait == nullptr) {
-        throw std::runtime_error("cpp-entt cannot lower external set capability for missing trait '" + canonical_id +
-                                 "'");
+    if (targets.empty()) {
+        return {};
     }
-    const auto patch_type = type + "_patch";
-    out << "    struct " << patch_type << " {\n";
-    for (const auto& field : resolved_trait->fields) {
-        out << "        std::optional<decltype(" << type << "::" << field.name << ")> " << field.name << ";\n";
+    std::ostringstream out;
+    out << "template <class T>\n";
+    out << "struct SetPatch;\n\n";
+    for (const auto& target : sorted_symbols(targets)) {
+        const auto type            = EnttCodegenUtils::trait_cpp_name(target);
+        const auto* resolved_trait = EnttCodegenUtils::find_trait(program, make_canonical_id(target));
+        if (resolved_trait == nullptr) {
+            throw std::runtime_error("cpp-entt cannot lower external set capability for missing trait '" +
+                                     make_canonical_id(target) + "'");
+        }
+        out << "template <>\n";
+        out << "struct SetPatch<" << type << "> {\n";
+        for (const auto& field : resolved_trait->fields) {
+            const auto member = cpp_escaped(field.name);
+            out << "    std::optional<decltype(" << type << "::" << member << ")> " << member << ";\n";
+        }
+        out << "    void apply(" << type << "& value) const {\n";
+        for (const auto& field : resolved_trait->fields) {
+            const auto member = cpp_escaped(field.name);
+            out << "        if (" << member << ") { value." << member << " = *" << member << "; }\n";
+        }
+        out << "    }\n";
+        out << "};\n\n";
     }
-    out << "    };\n";
-    out << "    void " << method_name << "(entt::entity target, " << patch_type << " patch) const {\n";
-    out << "        generated_queue_structural_command(StructuralCommand::Kind::Set,\n";
-    out << "            [target, patch = std::move(patch)](entt::registry& registry) {\n";
-    out << "                auto* value = ::durable_" << type << "(registry, target);\n";
-    out << "                if (value == nullptr) { return; }\n";
-    for (const auto& field : resolved_trait->fields) {
-        out << "                if (patch." << field.name << ") { value->" << field.name << " = *patch." << field.name
-            << "; }\n";
+    return namespace_block("cactus_gen::detail", out.str());
+}
+
+void emit_external_project_capability(std::ostringstream& out,
+                                      const DecoratedProgram& program,
+                                      const HandlerNode& node) {
+    const auto traits = sorted_symbols(node.contract.projects);
+    if (traits.empty()) {
+        return;
+    }
+    for (const auto& trait : traits) {
+        if (EnttCodegenUtils::find_trait(program, make_canonical_id(trait)) == nullptr) {
+            throw std::runtime_error("cpp-entt cannot lower external project capability for missing trait '" +
+                                     make_canonical_id(trait) + "'");
+        }
+    }
+    out << trait_constraint(traits);
+    out << "    [[nodiscard]] auto project(entt::entity target) const {\n";
+    out << "        if constexpr (std::is_empty_v<T>) {\n";
+    out << "            if (!registry.valid(target)) { return false; }\n";
+    out << "            ::cactus_gen::detail::project<T>(registry, target);\n";
+    out << "            return true;\n";
+    out << "        } else {\n";
+    out << "            if (!registry.valid(target)) { return static_cast<T*>(nullptr); }\n";
+    out << "            return &::cactus_gen::detail::project<T>(registry, target);\n";
+    out << "        }\n";
+    out << "    }\n";
+}
+
+void emit_external_spawn_capability(std::ostringstream& out, const DecoratedProgram& program, const HandlerNode& node) {
+    for (const auto& target : command_targets(node, HandlerCommandKind::Spawn)) {
+        const auto& template_node = external_spawn_template(program, target);
+        const auto factory        = archetype_create_at_function_name(program.module_name, template_node.name);
+        out << "    [[nodiscard]] entt::entity spawn_" << snake_case(template_node.name) << "() const {\n";
+        out << "        const auto entity = ::cactus::runtime::entt_backend::generated_reserve_entity(registry);\n";
+        out << "        ::cactus::runtime::entt_backend::generated_queue_structural_command(\n";
+        out << "            ::cactus::runtime::entt_backend::StructuralCommand::Kind::Spawn,\n";
+        out << "            [entity](entt::registry& registry) { (void)" << factory.ref()
+            << "(registry, entity); });\n";
+        out << "        return entity;\n";
+        out << "    }\n";
+    }
+}
+
+void emit_external_destroy_capability(std::ostringstream& out,
+                                      const DecoratedProgram& program,
+                                      const HandlerNode& node) {
+    if (!has_command(node, HandlerCommandKind::Destroy)) {
+        return;
+    }
+    out << "    void destroy(entt::entity target) const {\n";
+    out << "        ::cactus::runtime::entt_backend::generated_queue_structural_command(\n";
+    out << "            ::cactus::runtime::entt_backend::StructuralCommand::Kind::Destroy,\n";
+    out << "            [target](entt::registry& registry) {\n";
+    out << "                if (!registry.valid(target)) { return; }\n";
+    if (EnttCodegenUtils::find_trait(program, "Parent") != nullptr) {
+        out << "                ::cactus_gen::detail::cactus_destroy_entity_recursive(registry, target);\n";
+    } else {
+        out << "                cactus::runtime::entt_backend::release_entity(registry, target);\n";
     }
     out << "            });\n";
     out << "    }\n";
 }
 
-void emit_external_command_capability(std::ostringstream& out,
-                                      const DecoratedProgram& program,
-                                      const auto& command,
-                                      const std::string& method_name) {
-    switch (command.kind) {
-        case HandlerCommandKind::Spawn: {
-            if (!command.target.has_value()) {
-                throw std::runtime_error("cpp-entt received an external spawn capability without a target");
+void emit_external_add_capability(std::ostringstream& out, const DecoratedProgram& program, const HandlerNode& node) {
+    const auto traits = command_targets(node, HandlerCommandKind::Add);
+    if (traits.empty()) {
+        return;
+    }
+    out << trait_constraint(traits);
+    out << "    void add(entt::entity target, T value = {}) const {\n";
+    out << "        ::cactus::runtime::entt_backend::generated_queue_structural_command(\n";
+    out << "            ::cactus::runtime::entt_backend::StructuralCommand::Kind::Add,\n";
+    out << "            [target, value = std::move(value)](entt::registry& registry) mutable {\n";
+    out << "                if (!registry.valid(target)) { return; }\n";
+    out << per_trait_statements(
+        traits,
+        [&](const SymbolId& trait, const std::string&) -> std::string {
+            if (!is_hierarchy_trait(trait) || !EnttCodegenUtils::checks_reparent(program)) {
+                return {};
             }
-            const auto* template_node = find_template(program, *command.target);
-            if (template_node == nullptr) {
-                throw std::runtime_error("cpp-entt cannot lower external spawn capability for missing template '" +
-                                         make_canonical_id(*command.target) + "'");
+            return "                    if (cactus::runtime::entt_backend::reparent_would_cycle(" +
+                   EnttCodegenUtils::hierarchy_index_expr(program) + ", target, value.parent)) { return; }\n";
+        },
+        "                ");
+    out << "                ::cactus_gen::detail::cancel_projected<T>(target);\n";
+    out << "                registry.emplace_or_replace<T>(target, std::move(value));\n";
+    out << per_trait_statements(
+        traits,
+        [&](const SymbolId& trait, const std::string& type) -> std::string {
+            if (!EnttPersistenceEmitter::structural_site_tracks_construction(program, trait, trait.local_name)) {
+                return {};
             }
-            if (creation_takes_parameters(template_node->initializers)) {
-                throw std::runtime_error(
-                    "cpp-entt cannot lower external spawn capability for parameterized template '" +
-                    make_canonical_id(*command.target) +
-                    "': an external handler has no place to supply template arguments");
+            return EnttPersistenceEmitter::emit_retain_construction(type, "target", "                    ");
+        },
+        "                ");
+    out << "            });\n";
+    out << "    }\n";
+}
+
+void emit_external_remove_capability(std::ostringstream& out,
+                                     const DecoratedProgram& program,
+                                     const HandlerNode& node) {
+    const auto traits = command_targets(node, HandlerCommandKind::Remove);
+    if (traits.empty()) {
+        return;
+    }
+    out << trait_constraint(traits);
+    out << "    void remove(entt::entity target) const {\n";
+    out << "        ::cactus::runtime::entt_backend::generated_queue_structural_command(\n";
+    out << "            ::cactus::runtime::entt_backend::StructuralCommand::Kind::Remove,\n";
+    out << "            [target](entt::registry& registry) {\n";
+    out << "                if (!registry.valid(target)) { return; }\n";
+    out << "                ::cactus_gen::detail::cancel_projected<T>(target);\n";
+    out << "                if (registry.all_of<T>(target)) { registry.remove<T>(target); }\n";
+    out << per_trait_statements(
+        traits,
+        [&](const SymbolId& trait, const std::string& type) -> std::string {
+            if (!EnttPersistenceEmitter::structural_site_tracks_construction(program, trait, trait.local_name)) {
+                return {};
             }
-            const auto factory = archetype_create_at_function_name(program.module_name, template_node->name);
-            out << "    [[nodiscard]] entt::entity " << method_name << "() const {\n";
-            out << "        const auto entity = generated_reserve_entity(registry);\n";
-            out << "        generated_queue_structural_command(StructuralCommand::Kind::Spawn,\n";
-            out << "            [entity](entt::registry& registry) { (void)::" << factory
-                << "(registry, entity); });\n";
-            out << "        return entity;\n";
-            out << "    }\n";
-            break;
+            return EnttPersistenceEmitter::emit_discard_construction(type, "target", "                    ");
+        },
+        "                ");
+    out << "            });\n";
+    out << "    }\n";
+}
+
+void emit_external_set_capability(std::ostringstream& out, const HandlerNode& node) {
+    const auto traits = command_targets(node, HandlerCommandKind::Set);
+    if (traits.empty()) {
+        return;
+    }
+    out << trait_constraint(traits);
+    out << "    void set(entt::entity target, ::cactus_gen::detail::SetPatch<T> patch) const {\n";
+    out << "        ::cactus::runtime::entt_backend::generated_queue_structural_command(\n";
+    out << "            ::cactus::runtime::entt_backend::StructuralCommand::Kind::Set,\n";
+    out << "            [target, patch = std::move(patch)](entt::registry& registry) {\n";
+    out << "                auto* value = ::cactus_gen::detail::durable<T>(registry, target);\n";
+    out << "                if (value == nullptr) { return; }\n";
+    out << "                patch.apply(*value);\n";
+    out << "            });\n";
+    out << "    }\n";
+}
+
+// Effect names are dotted strings with no type to key on; two that flatten alike are an authoring error.
+void emit_external_effect_capability(std::ostringstream& out,
+                                     const DecoratedProgram& program,
+                                     const HandlerNode& node) {
+    std::unordered_map<std::string, std::string> effect_by_method;
+    for (const auto& effect : sorted_strings(node.contract.effects)) {
+        const auto method               = external_handler_effect_method_name(effect);
+        const auto [existing, inserted] = effect_by_method.emplace(method, effect);
+        if (!inserted) {
+            const auto* rule = find_external_rule(program, node.identity.rule);
+            throw CodegenError(rule != nullptr ? rule->location : SourceLocation{},
+                               std::format("effects '{}' and '{}' both lower to the capability method '{}'; "
+                                           "rename one of them",
+                                           existing->second,
+                                           effect,
+                                           method));
         }
-        case HandlerCommandKind::Destroy: {
-            out << "    void " << method_name << "(entt::entity target) const {\n";
-            out << "        generated_queue_structural_command(StructuralCommand::Kind::Destroy,\n";
-            out << "            [target](entt::registry& registry) {\n";
-            out << "                if (!registry.valid(target)) { return; }\n";
-            if (EnttCodegenUtils::find_trait(program, "Parent") != nullptr) {
-                out << "                ::cactus_destroy_entity_recursive(registry, target);\n";
-            } else {
-                out << "                cactus::runtime::entt_backend::release_entity(registry, target);\n";
-            }
-            out << "            });\n";
-            out << "    }\n";
-            break;
-        }
-        case HandlerCommandKind::Add: {
-            if (!command.target.has_value()) {
-                throw std::runtime_error("cpp-entt received an external add capability without a target");
-            }
-            const auto type = EnttCodegenUtils::trait_cpp_name(*command.target);
-            out << "    void " << method_name << "(entt::entity target, " << type << " value = {}) const {\n";
-            out << "        generated_queue_structural_command(StructuralCommand::Kind::Add,\n";
-            out << "            [target, value = std::move(value)](entt::registry& registry) mutable {\n";
-            out << "                if (!registry.valid(target)) { return; }\n";
-            if (is_hierarchy_trait(*command.target) && EnttCodegenUtils::checks_reparent(program)) {
-                out << "                if (cactus::runtime::entt_backend::reparent_would_cycle("
-                    << EnttCodegenUtils::hierarchy_index_expr(program) << ", target, value.parent)) { return; }\n";
-            }
-            out << "                ::cancel_projected_" << type << "(target);\n";
-            out << "                registry.emplace_or_replace<" << type << ">(target, std::move(value));\n";
-            if (EnttPersistenceEmitter::structural_site_tracks_construction(
-                    program, command.target, command.target->local_name)) {
-                out << EnttPersistenceEmitter::emit_retain_construction(type, "target", "                ");
-            }
-            out << "            });\n";
-            out << "    }\n";
-            break;
-        }
-        case HandlerCommandKind::Remove: {
-            if (!command.target.has_value()) {
-                throw std::runtime_error("cpp-entt received an external remove capability without a target");
-            }
-            const auto type = EnttCodegenUtils::trait_cpp_name(*command.target);
-            out << "    void " << method_name << "(entt::entity target) const {\n";
-            out << "        generated_queue_structural_command(StructuralCommand::Kind::Remove,\n";
-            out << "            [target](entt::registry& registry) {\n";
-            out << "                if (!registry.valid(target)) { return; }\n";
-            out << "                ::cancel_projected_" << type << "(target);\n";
-            out << "                if (registry.all_of<" << type << ">(target)) { registry.remove<" << type
-                << ">(target); }\n";
-            if (EnttPersistenceEmitter::structural_site_tracks_construction(
-                    program, command.target, command.target->local_name)) {
-                out << EnttPersistenceEmitter::emit_discard_construction(type, "target", "                ");
-            }
-            out << "            });\n";
-            out << "    }\n";
-            break;
-        }
-        case HandlerCommandKind::Set:
-            emit_external_set_capability(out, program, command, method_name);
-            break;
+        out << "    [[nodiscard]] ::cactus::runtime::entt_backend::EffectService " << method << "() const noexcept {\n";
+        out << "        return ::cactus::runtime::entt_backend::EffectService{.domain = \"" << effect << "\"};\n";
+        out << "    }\n";
     }
 }
 
 void emit_external_capability(std::ostringstream& out, const DecoratedProgram& program, const HandlerNode& node) {
-    const auto capability_name = external_handler_capability_name(node.identity);
-    out << "struct " << capability_name << " {\n";
+    out << "template <>\n";
+    out << "struct Capabilities<" << handler_trigger_cpp_type(program, node.identity.trigger) << "> {\n";
     out << "    entt::registry& registry;\n";
-    for (const auto& trait : sorted_symbols(node.contract.projects)) {
-        const auto type            = EnttCodegenUtils::trait_cpp_name(trait);
-        const auto* resolved_trait = EnttCodegenUtils::find_trait(program, make_canonical_id(trait));
-        if (resolved_trait == nullptr) {
-            throw std::runtime_error("cpp-entt cannot lower external project capability for missing trait '" +
-                                     make_canonical_id(trait) + "'");
-        }
-        if (resolved_trait->fields.empty()) {
-            out << "    [[nodiscard]] bool project_" << type << "(entt::entity target) const {\n";
-            out << "        if (!registry.valid(target)) { return false; }\n";
-            out << "        ::project_" << type << "(registry, target);\n";
-            out << "        return true;\n";
-            out << "    }\n";
-        } else {
-            out << "    [[nodiscard]] " << type << "* project_" << type << "(entt::entity target) const {\n";
-            out << "        if (!registry.valid(target)) { return nullptr; }\n";
-            out << "        return &::project_" << type << "(registry, target);\n";
-            out << "    }\n";
-        }
-    }
+    emit_external_project_capability(out, program, node);
     for (const auto& event : sorted_symbols(node.contract.emits)) {
-        const auto event_name = canonical_to_cpp_name(event);
-        const auto event_type = event_runtime_cpp_type(program, event);
-        out << "    void emit_" << event_name << "(" << event_type << " occurrence) const {\n";
-        out << "        generated_emit_event(std::move(occurrence));\n";
+        out << "    void emit(" << event_runtime_cpp_type(program, event) << " occurrence) const {\n";
+        out << "        ::cactus::runtime::entt_backend::generated_emit_event(std::move(occurrence));\n";
         out << "    }\n";
     }
-    std::unordered_set<std::string> emitted_commands;
-    for (const auto& command : node.contract.commands) {
-        const auto method_name = external_handler_command_method_name(command);
-        if (!emitted_commands.insert(method_name).second) {
-            continue;
-        }
-        emit_external_command_capability(out, program, command, method_name);
-    }
-    for (const auto& effect : sorted_strings(node.contract.effects)) {
-        out << "    [[nodiscard]] EffectService " << external_handler_effect_method_name(effect)
-            << "() const noexcept {\n";
-        out << "        return EffectService{.domain = \"" << effect << "\"};\n";
-        out << "    }\n";
-    }
+    emit_external_spawn_capability(out, program, node);
+    emit_external_destroy_capability(out, program, node);
+    emit_external_add_capability(out, program, node);
+    emit_external_remove_capability(out, program, node);
+    emit_external_set_capability(out, node);
+    emit_external_effect_capability(out, program, node);
     out << "};\n\n";
+}
+
+// The `on` overload a user library defines for one handler; only the trigger is named.
+void emit_external_callback_declaration(std::ostringstream& out,
+                                        const DecoratedProgram& program,
+                                        const HandlerNode& node) {
+    const auto trigger_type = handler_trigger_cpp_type(program, node.identity.trigger);
+    out << "void on(const " << trigger_type << "& trigger";
+    if (!node.contract.is_selectionless()) {
+        out << ", entt::entity entity";
+    }
+    for (const auto& trait : sorted_symbols(node.contract.reads)) {
+        if (!node.contract.writes.contains(trait)) {
+            out << ", const " << EnttCodegenUtils::trait_cpp_name(trait) << "&";
+        }
+    }
+    for (const auto& trait : sorted_symbols(node.contract.writes)) {
+        out << ", " << EnttCodegenUtils::trait_cpp_name(trait) << "&";
+    }
+    out << ", const Capabilities<" << trigger_type << ">& capabilities);\n\n";
 }
 
 std::string emit_graph_external_handler_abi(const DecoratedProgram& program) {
@@ -642,38 +745,26 @@ std::string emit_graph_external_handler_abi(const DecoratedProgram& program) {
     out << "struct EffectService {\n";
     out << "    std::string_view domain;\n";
     out << "};\n\n";
-    for (const auto& node : program.execution_graph.handlers) {
-        if (!is_user_external_handler(program, node)) {
-            continue;
-        }
-        emit_external_capability(out, program, node);
-    }
     out << "}  // namespace cactus::runtime::entt_backend\n\n";
+    out << emit_external_set_patches(program);
 
+    std::vector<SymbolId> rules;
     for (const auto& node : program.execution_graph.handlers) {
-        if (!is_user_external_handler(program, node)) {
-            continue;
+        if (is_user_external_handler(program, node) && !std::ranges::contains(rules, node.identity.rule)) {
+            rules.push_back(node.identity.rule);
         }
-        const auto trigger_type = handler_trigger_cpp_type(program, node.identity.trigger);
-        out << "void " << external_handler_callback_name(node.identity) << "(const " << trigger_type << "& trigger";
-        if (!node.contract.is_selectionless()) {
-            out << ", entt::entity entity";
-        }
-        const auto reads  = sorted_symbols(node.contract.reads);
-        const auto writes = sorted_symbols(node.contract.writes);
-        for (const auto& trait : reads) {
-            if (node.contract.writes.contains(trait)) {
-                continue;
+    }
+    for (const auto& rule : rules) {
+        std::ostringstream body;
+        body << "template <class Trigger>\n";
+        body << "struct Capabilities;\n\n";
+        for (const auto& node : program.execution_graph.handlers) {
+            if (node.identity.rule == rule && is_user_external_handler(program, node)) {
+                emit_external_capability(body, program, node);
+                emit_external_callback_declaration(body, program, node);
             }
-            const auto type = EnttCodegenUtils::trait_cpp_name(trait);
-            out << ", const " << type << "& read_" << type;
         }
-        for (const auto& trait : writes) {
-            const auto type = EnttCodegenUtils::trait_cpp_name(trait);
-            out << ", " << type << "& write_" << type;
-        }
-        out << ", const cactus::runtime::entt_backend::" << external_handler_capability_name(node.identity)
-            << "& capabilities);\n\n";
+        out << namespace_block(external_rule_namespace(rule), body.str()) << "\n";
     }
     return out.str();
 }
@@ -684,6 +775,7 @@ std::string emit_graph_external_handler_abi(const DecoratedProgram& program) {
 // broadcasting across the full matching view (targeted-event-delivery). Empty
 // means no recipient concept applies at this call site (phase dispatch).
 void emit_external_handler_call(std::ostringstream& out,
+                                const DecoratedProgram& program,
                                 const HandlerNode& node,
                                 std::string_view trigger,
                                 std::string_view indent,
@@ -701,7 +793,7 @@ void emit_external_handler_call(std::ostringstream& out,
     });
 
     const auto emit_callback = [&](std::string_view callback_indent) {
-        out << callback_indent << "::" << external_handler_callback_name(node.identity) << "(" << trigger;
+        out << callback_indent << external_handler_callback_name(node.identity) << "(" << trigger;
         if (!node.contract.is_selectionless()) {
             out << ", entity";
         }
@@ -714,7 +806,7 @@ void emit_external_handler_call(std::ostringstream& out,
         for (const auto& trait : writes) {
             out << ", registry.get<" << EnttCodegenUtils::trait_cpp_name(trait) << ">(entity)";
         }
-        out << ", " << external_handler_capability_name(node.identity) << "{registry});\n";
+        out << ", " << external_handler_capability_name(program, node.identity) << "{registry});\n";
     };
 
     if (node.contract.is_selectionless()) {
@@ -795,7 +887,6 @@ std::vector<const PhasePlan*> phase_activation_order(const DecoratedProgram& pro
 
 void emit_viewport_phase_dispatch(std::ostringstream& out,
                                   const std::string& indent,
-                                  const std::string& phase_name,
                                   bool render_uses_viewport,
                                   bool render_emit_2d_helper,
                                   bool render_emit_3d_helper,
@@ -803,7 +894,7 @@ void emit_viewport_phase_dispatch(std::ostringstream& out,
                                   const std::string& render_cam2d_cpp,
                                   const std::string& render_cam3d_cpp) {
     if (!render_uses_viewport || (!render_emit_2d_helper && !render_emit_3d_helper)) {
-        out << indent << "generated_dispatch_phase_" << phase_name << "(registry, phase);\n";
+        out << indent << "generated_dispatch_phase(registry, phase);\n";
         return;
     }
     out << indent << "{\n";
@@ -838,7 +929,7 @@ void emit_viewport_phase_dispatch(std::ostringstream& out,
         out << indent << "        }\n";
     }
     out << indent << "        cactus::runtime::entt_backend::set_active_viewport_entity(__vp_ent);\n";
-    out << indent << "        generated_dispatch_phase_" << phase_name << "(registry, phase);\n";
+    out << indent << "        generated_dispatch_phase(registry, phase);\n";
     out << indent << "        flush_viewport_3d();\n";
     out << indent << "        cactus::runtime::raylib::EndScissorMode();\n";
     out << indent << "    }\n";
@@ -846,9 +937,18 @@ void emit_viewport_phase_dispatch(std::ostringstream& out,
     out << indent << "}\n";
 }
 
-// The delayed queue of a phase's clock, named after the phase.
-std::string phase_delayed_queue(const std::string& phase_name) {
-    return "delayed_" + phase_name;
+// A phase's runtime state in the scheduler, keyed by its type.
+std::string phase_state(const std::string& phase_type) {
+    return "std::get<" + phase_type + ">(scheduler.phases)";
+}
+
+// The delayed queue of a phase's clock, keyed by the phase type.
+std::string phase_delayed_queue(const std::string& phase_type) {
+    return "std::get<PhaseDelayedQueue<" + phase_type + ">>(scheduler.delayed)";
+}
+
+std::string phase_batch_tag(const std::string& phase_type) {
+    return "std::type_identity<" + phase_type + ">";
 }
 
 // Copies the phase's root-bound and upstream-bound fields into its runtime state.
@@ -865,8 +965,8 @@ void emit_phase_field_bindings(std::ostringstream& out, const auto* phase) {
             out << "    phase." << field.name << " = static_cast<" << field_type << ">(root_event." << binding.member
                 << ");\n";
         } else {
-            out << "    phase." << field.name << " = static_cast<" << field_type << ">(scheduler."
-                << canonical_to_cpp_name(binding.source) << "." << binding.member << ");\n";
+            out << "    phase." << field.name << " = static_cast<" << field_type << ">("
+                << phase_state(cpp_type_ref(binding.source)) << "." << binding.member << ");\n";
         }
     }
     if (!used_root_event) {
@@ -883,7 +983,7 @@ void emit_phase_batch(std::ostringstream& out,
     if (!phase->runtime_root.has_value()) {
         return;
     }
-    const auto phase_name            = canonical_to_cpp_name(phase->phase);
+    const auto phase_type            = cpp_type_ref(phase->phase);
     const auto root_type             = event_runtime_cpp_type(program, *phase->runtime_root);
     const bool is_render_phase_batch = phase == render_phase;
     const bool delays                = delivery.phase_delays(phase->phase);
@@ -892,14 +992,14 @@ void emit_phase_batch(std::ostringstream& out,
         out << indent << "scheduler.activation.active = true;\n";
         if (delivery.cyclic()) {
             out << indent << "scheduler.activation.current_delayed = "
-                << (delays ? "&scheduler." + phase_delayed_queue(phase_name) : std::string("nullptr")) << ";\n";
+                << (delays ? "&" + phase_delayed_queue(phase_type) : std::string("nullptr")) << ";\n";
         }
         if (is_render_phase_batch) {
             out << indent << "begin_render_frame();\n";
-            emit_render_phase_dispatch(indent, phase_name);
+            emit_render_phase_dispatch(indent);
             out << indent << "end_render_frame();\n";
         } else {
-            out << indent << "generated_dispatch_phase_" << phase_name << "(registry, phase);\n";
+            out << indent << "generated_dispatch_phase(registry, phase);\n";
         }
         if (delays) {
             out << indent << "deliver_delayed_events(scheduler.activation);\n";
@@ -908,12 +1008,11 @@ void emit_phase_batch(std::ostringstream& out,
         out << indent << "generated_commit_activation(registry);\n";
         out << indent << "scheduler.activation.active = false;\n";
     };
-    out << "void generated_dispatch_phase_" << phase_name << "(entt::registry&, const " << phase_name
-        << "PhaseRuntimeState&);\n\n";
-    out << "void generated_run_phase_batch_" << phase_name << "(entt::registry& registry, const " << root_type
-        << "& root_event) {\n";
+    out << "void generated_dispatch_phase(entt::registry&, const " << phase_type << "&);\n\n";
+    out << "void generated_run_phase_batch(entt::registry& registry, const " << root_type << "& root_event, "
+        << phase_batch_tag(phase_type) << ") {\n";
     out << "    auto& scheduler = generated_scheduler_state();\n";
-    out << "    auto& phase = scheduler." << phase_name << ";\n";
+    out << "    auto& phase = " << phase_state(phase_type) << ";\n";
     if (!phase->every_seconds.has_value()) {
         emit_phase_field_bindings(out, phase);
         emit_activation("    ");
@@ -965,12 +1064,12 @@ void emit_root_event_processor(std::ostringstream& out,
     for (const auto* phase : phase_order) {
         if (phase->runtime_root.has_value() && *phase->runtime_root == *event->symbol_id) {
             routed_to_phase = true;
-            out << "    generated_run_phase_batch_" << canonical_to_cpp_name(phase->phase)
-                << "(registry, root_event);\n";
+            out << "    generated_run_phase_batch(registry, root_event, " << phase_batch_tag(cpp_type_ref(phase->phase))
+                << "{});\n";
             // Projected-trait cleanup fires once per frame, immediately
             // after the render phase batch completes.
             if (is_frame_root && phase == render_phase) {
-                out << "    clear_projected_traits(registry);\n";
+                out << "    ::cactus_gen::detail::clear_projected_traits(registry);\n";
             }
         }
     }
@@ -997,8 +1096,7 @@ std::vector<const ResolvedEvent*> sorted_events(const DecoratedProgram& program)
 void emit_render_phase_dispatch(std::ostringstream& out,
                                 const DecoratedProgram& program,
                                 const auto* render_phase,
-                                const std::string& indent,
-                                const std::string& phase_name) {
+                                const std::string& indent) {
     // Mirrors the same flag/name computation CppEnttCodegen::generate() uses
     // for the legacy per-viewport render loop and edit-mode HUD overlay (see
     // the early __translate_camera_2d/3d helper emission there) — these are
@@ -1020,7 +1118,6 @@ void emit_render_phase_dispatch(std::ostringstream& out,
 
     emit_viewport_phase_dispatch(out,
                                  indent,
-                                 phase_name,
                                  render_uses_viewport,
                                  render_emit_2d_helper,
                                  render_emit_3d_helper,
@@ -1031,21 +1128,22 @@ void emit_render_phase_dispatch(std::ostringstream& out,
 
 void emit_phase_runtime_states(std::ostringstream& out, const DecoratedProgram& program) {
     for (const auto& phase : program.execution_graph.phases) {
-        const auto phase_name = canonical_to_cpp_name(phase.phase);
-        out << "struct " << phase_name << "PhaseRuntimeState {\n";
+        std::ostringstream body;
+        body << "struct " << cpp_decl_name(phase.phase) << " {\n";
         if (phase.every_seconds.has_value()) {
-            out << "    double accumulator{};\n";
-            out << "    double alpha{};\n";
+            body << "    double accumulator{};\n";
+            body << "    double alpha{};\n";
         }
-        out << "    std::uint64_t completed_batches{};\n";
+        body << "    std::uint64_t completed_batches{};\n";
         for (const auto& field : phase.fields) {
             if (field.is_completion_only) {
                 continue;
             }
-            out << "    " << EnttCodegenUtils::value_type_to_cpp(field.type) << " " << field.name
-                << EnttCodegenUtils::value_initializer(field.type) << ";\n";
+            body << "    " << EnttCodegenUtils::value_type_to_cpp(field.type) << " " << field.name
+                 << EnttCodegenUtils::value_initializer(field.type) << ";\n";
         }
-        out << "};\n\n";
+        body << "};\n";
+        out << namespace_block(cpp_namespace_path(phase.phase.module), body.str()) << "\n";
     }
 }
 
@@ -1139,16 +1237,27 @@ void emit_lifecycle_routes(std::ostringstream& out, const DecoratedProgram& prog
     out << "};\n\n";
 }
 
-// Per-phase runtime state, plus one delayed queue per clock that can delay.
-void emit_scheduler_state_struct(std::ostringstream& out, const DecoratedProgram& program, const DeliveryPlan& delivery) {
+// Per-phase runtime state, plus one delayed queue per clock that can delay, each keyed by phase type.
+void emit_scheduler_state_struct(std::ostringstream& out,
+                                 const DecoratedProgram& program,
+                                 const DeliveryPlan& delivery) {
+    std::vector<std::string> phases;
+    std::vector<std::string> delayed;
+    for (const auto& phase : program.execution_graph.phases) {
+        phases.push_back(cpp_type_ref(phase.phase));
+        if (delivery.phase_delays(phase.phase)) {
+            delayed.push_back("PhaseDelayedQueue<" + phases.back() + ">");
+        }
+    }
+    if (!delayed.empty()) {
+        out << "template <class Phase>\n";
+        out << "struct PhaseDelayedQueue : DelayedQueue<EventOccurrence> {};\n\n";
+    }
     out << "struct SchedulerState {\n";
     out << "    ActivationRuntime<EventOccurrence> activation;\n";
-    for (const auto& phase : program.execution_graph.phases) {
-        const auto phase_name = canonical_to_cpp_name(phase.phase);
-        out << "    " << phase_name << "PhaseRuntimeState " << phase_name << ";\n";
-        if (delivery.phase_delays(phase.phase)) {
-            out << "    DelayedQueue<EventOccurrence> " << phase_delayed_queue(phase_name) << ";\n";
-        }
+    out << "    std::tuple<" << join_strings(phases, ", ") << "> phases;\n";
+    if (!delayed.empty()) {
+        out << "    std::tuple<" << join_strings(delayed, ", ") << "> delayed;\n";
     }
     if (delivery.cyclic()) {
         out << "    DelayedQueue<EventOccurrence> delayed_host;\n";
@@ -1240,6 +1349,7 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program,
 
     std::ostringstream out;
     out << "// ── Graph Activation Runtime State ──────────────────────────────────\n\n";
+    emit_phase_runtime_states(out, program);
     out << "namespace cactus::runtime::entt_backend {\n\n";
     // QueuedEvent<Occurrence> and ActivationRuntime<Occurrence> are
     // runtime-hosted (backends/cpp-entt/runtime.hpp) — EventOccurrence
@@ -1255,8 +1365,6 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program,
         out << ">;\n";
     }
     out << "\n";
-
-    emit_phase_runtime_states(out, program);
 
     emit_scheduler_state_struct(out, program, delivery);
     out << "SchedulerState& generated_scheduler_state() {\n";
@@ -1354,8 +1462,8 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program,
     // legacy generated_render_project's per-viewport loop (see
     // CppEnttCodegen::generate()). Without std.camera.viewport, it's a plain
     // single call, relying on the runtime's static default camera.
-    const auto emit_render_dispatch = [&](const std::string& indent, const std::string& phase_name) {
-        emit_render_phase_dispatch(out, program, render_phase, indent, phase_name);
+    const auto emit_render_dispatch = [&](const std::string& indent) {
+        emit_render_phase_dispatch(out, program, render_phase, indent);
     };
 
     const auto phase_order = phase_activation_order(program);
@@ -1449,8 +1557,8 @@ bool emit_phase_handler_call(std::ostringstream& out,
         return false;
     }
     if (is_user_external_handler(program, *graph_node)) {
-        if (emitted_callees.insert(external_handler_callback_name(graph_node->identity)).second) {
-            emit_external_handler_call(out, *graph_node, "phase", "    ");
+        if (emitted_callees.insert(make_canonical_id(graph_node->identity.rule)).second) {
+            emit_external_handler_call(out, program, *graph_node, "phase", "    ");
         }
         return true;
     }
@@ -1459,9 +1567,9 @@ bool emit_phase_handler_call(std::ostringstream& out,
         if (rule == nullptr || !rule->is_stdlib) {
             return false;
         }
-        const auto callee = system_function_name(program.module_name, rule->name, "tick");
+        const auto callee = system_function_name(program.module_name, rule->name, "tick").ref();
         if (emitted_callees.insert(callee).second) {
-            out << "    ::" << callee << "(registry);\n";
+            out << "    " << callee << "(registry);\n";
         }
         return true;
     }
@@ -1473,7 +1581,7 @@ bool emit_phase_handler_call(std::ostringstream& out,
         return false;
     }
     if (emitted_callees.insert(*callee).second) {
-        out << "    ::" << *callee << "(registry, phase);\n";
+        out << "    " << *callee << "(registry, phase);\n";
     }
     return true;
 }
@@ -1575,9 +1683,8 @@ void emit_phase_handler_dispatch(std::ostringstream& out,
                                  const AccumulationPlan& accumulation,
                                  const DeliveryPlan& delivery,
                                  const auto& phase) {
-    const auto phase_name = canonical_to_cpp_name(phase.phase);
-    out << "void generated_dispatch_phase_" << phase_name << "(entt::registry& registry, const " << phase_name
-        << "PhaseRuntimeState& phase) {\n";
+    out << "void generated_dispatch_phase(entt::registry& registry, const " << cpp_type_ref(phase.phase)
+        << "& phase) {\n";
     out << "    (void)phase;\n";
 
     // dsl-render-passes: a render-pass phase's derived vertex/fragment
@@ -1644,7 +1751,7 @@ void emit_event_handler_dispatch(std::ostringstream& out,
         }
         std::ostringstream call;
         if (is_user_external_handler(program, *graph_node)) {
-            emit_external_handler_call(call, *graph_node, "occurrence", "    ", "target");
+            emit_external_handler_call(call, program, *graph_node, "occurrence", "    ", "target");
             calls.push_back(DispatchCall{.identity = identity, .text = std::move(call).str()});
             continue;
         }
@@ -1655,7 +1762,7 @@ void emit_event_handler_dispatch(std::ostringstream& out,
                 // renderers) have no filter view to iterate, so their generated body takes the
                 // occurrence directly instead of the (registry)-only shape phase-triggered
                 // filter/view extern rules use — see emit_event_renderer_body in system_emitter.cpp.
-                call << "    ::" << system_function_name(program.module_name, rule->name, "tick")
+                call << "    " << system_function_name(program.module_name, rule->name, "tick").ref()
                      << "(registry, occurrence);\n";
                 calls.push_back(DispatchCall{.identity = identity, .text = std::move(call).str()});
             }
@@ -1665,7 +1772,7 @@ void emit_event_handler_dispatch(std::ostringstream& out,
             continue;
         }
         if (const auto callee = cactus_handler_callee(program, identity)) {
-            call << "    ::" << *callee << "(registry, occurrence, target);\n";
+            call << "    " << *callee << "(registry, occurrence, target);\n";
             calls.push_back(DispatchCall{.identity = identity, .text = std::move(call).str()});
         }
     }
@@ -1708,7 +1815,7 @@ std::string emit_graph_handler_dispatch(const DecoratedProgram& program,
             }
             if (const auto callee = cactus_handler_callee(program, identity)) {
                 calls.push_back(
-                    DispatchCall{.identity = identity, .text = "    ::" + *callee + "(registry, occurrence, target);\n"});
+                    DispatchCall{.identity = identity, .text = "    " + *callee + "(registry, occurrence, target);\n"});
             }
         }
         emit_dispatch_calls(out, program, accumulation, delivery, calls, delivery.delayed(trigger) != nullptr);
@@ -1742,45 +1849,30 @@ std::string emit_graph_handler_dispatch(const DecoratedProgram& program,
 std::string emit_projected_trait_registry_helpers(const DecoratedProgram& program) {
     std::ostringstream out;
     out << "// ── Projected Trait Registry Tracking ────────────────────────────────\n\n";
-    out << "namespace {\n\n";
-    for (const auto& [name, trait] : program.traits) {
-        const std::string cpp_name = canonical_to_cpp_name(trait.module_name, trait.name);
-        // Tracking storage/logic is runtime-hosted (ProjectedTraitTracker,
-        // backends/cpp-entt/runtime.hpp) — one instantiation per projected
-        // trait type, replacing the former per-type remember/project/cancel/
-        // clear quartet emitted as inline text. The instantiated variable
-        // keeps the pre-existing `projected_<cpp_name>` name and these thin
-        // wrappers keep the pre-existing `project_<cpp_name>`/
-        // `cancel_projected_<cpp_name>` call-site names so system_emitter.cpp
-        // needs no changes.
-        out << "cactus::runtime::entt_backend::ProjectedTraitTracker<" << cpp_name << "> projected_" << cpp_name
-            << ";  // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)\n\n";
-        if (trait.fields.empty()) {
-            out << "[[maybe_unused]] void project_" << cpp_name
-                << "(entt::registry& registry, entt::entity entity) {\n";
-            out << "    projected_" << cpp_name << ".project(registry, entity);\n";
-            out << "}\n\n";
-        } else {
-            out << "[[maybe_unused]] " << cpp_name << "& project_" << cpp_name
-                << "(entt::registry& registry, entt::entity entity) {\n";
-            out << "    return projected_" << cpp_name << ".project(registry, entity);\n";
-            out << "}\n\n";
-            out << "[[maybe_unused]] " << cpp_name << "* durable_" << cpp_name
-                << "(entt::registry& registry, entt::entity entity) {\n";
-            out << "    return projected_" << cpp_name << ".durable_value(registry, entity);\n";
-            out << "}\n\n";
-        }
-        out << "[[maybe_unused]] void cancel_projected_" << cpp_name << "(entt::entity entity) {\n";
-        out << "    projected_" << cpp_name << ".cancel(entity);\n";
-        out << "}\n\n";
-    }
+    out << "namespace cactus_gen::detail {\n\n";
+    // Tracking storage and logic are runtime-hosted (ProjectedTraitTracker); one tracker per trait type.
+    out << "template <class T>\n";
+    out << "cactus::runtime::entt_backend::ProjectedTraitTracker<T> projected;  // "
+           "NOLINT(cppcoreguidelines-avoid-non-const-global-variables)\n\n";
+    out << "template <class T>\n";
+    out << "[[maybe_unused]] decltype(auto) project(entt::registry& registry, entt::entity entity) {\n";
+    out << "    return projected<T>.project(registry, entity);\n";
+    out << "}\n\n";
+    out << "template <class T>\n";
+    out << "[[maybe_unused]] T* durable(entt::registry& registry, entt::entity entity) {\n";
+    out << "    return projected<T>.durable_value(registry, entity);\n";
+    out << "}\n\n";
+    out << "template <class T>\n";
+    out << "[[maybe_unused]] void cancel_projected(entt::entity entity) {\n";
+    out << "    projected<T>.cancel(entity);\n";
+    out << "}\n\n";
     out << "void clear_projected_traits(entt::registry& registry) {\n";
     for (const auto& [name, trait] : program.traits) {
-        const std::string cpp_name = canonical_to_cpp_name(trait.module_name, trait.name);
-        out << "    projected_" << cpp_name << ".clear(registry);\n";
+        out << "    projected<" << cpp_type_ref(SymbolKind::Trait, trait.module_name, trait.name)
+            << ">.clear(registry);\n";
     }
     out << "}\n\n";
-    out << "}  // namespace\n\n";
+    out << "}  // namespace cactus_gen::detail\n\n";
     return out.str();
 }
 
@@ -1793,8 +1885,10 @@ std::string emit_module_constants(const DecoratedProgram& program) {
     std::ostringstream out;
     for (const auto& phase : program.execution_graph.phases) {
         if (phase.every_seconds.has_value()) {
-            out << "inline constexpr float " << EnttCodegenUtils::phase_dt_cpp_name(phase.phase)
-                << " = static_cast<float>(" << cpp_double_literal(*phase.every_seconds) << ");\n";
+            const auto name = EnttCodegenUtils::phase_dt_name(phase.phase);
+            out << namespace_block(name.ns,
+                                   "inline constexpr float " + name.name + " = static_cast<float>(" +
+                                       cpp_double_literal(*phase.every_seconds) + ");\n");
         }
     }
     std::unordered_map<SymbolId, const ExprNode*> values;
@@ -1815,9 +1909,10 @@ std::string emit_module_constants(const DecoratedProgram& program) {
         if (value == values.end() || constant == nullptr) {
             continue;
         }
-        out << "inline const " << EnttCodegenUtils::type_to_cpp(constant->type) << " "
-            << EnttCodegenUtils::symbol_cpp_name(symbol) << " = " << EnttCodegenUtils::emit_expr(*value->second, program)
-            << ";\n";
+        out << namespace_block(cpp_namespace_path(symbol.module),
+                               "inline const " + EnttCodegenUtils::type_to_cpp(constant->type) + " " +
+                                   cpp_decl_name(symbol) + " = " +
+                                   EnttCodegenUtils::emit_expr(*value->second, program) + ";\n");
     }
     out << "\n";
     return out.str();
@@ -2092,6 +2187,7 @@ std::string emit_input_constants(const DecoratedProgram& program) {
     }
 
     if (has_button_input) {
+        out << "namespace cactus_gen::detail {\n";
         out << "using InputButton = std::uint8_t;\n";
         std::uint8_t button_index = 0;
         for (const auto& decl : program.ast->declarations) {
@@ -2103,7 +2199,7 @@ std::string emit_input_constants(const DecoratedProgram& program) {
                     << " = static_cast<InputButton>(" << static_cast<int>(button_index++) << ");\n";
             }
         }
-        out << "\n";
+        out << "}  // namespace cactus_gen::detail\n\n";
 
         out << "namespace cactus::runtime::entt_backend {\n";
         out << "int cactus_input_button_key(std::uint8_t button) noexcept {\n";
@@ -2124,8 +2220,8 @@ std::string emit_input_constants(const DecoratedProgram& program) {
                         }
                     }
                 }
-                out << "        case static_cast<InputButton>(" << static_cast<int>(button_index++) << "): return "
-                    << key << ";\n";
+                out << "        case static_cast<::cactus_gen::detail::InputButton>("
+                    << static_cast<int>(button_index++) << "): return " << key << ";\n";
             }
         }
         out << "        default:\n";
@@ -2151,8 +2247,8 @@ std::string emit_input_constants(const DecoratedProgram& program) {
                         }
                     }
                 }
-                out << "        case static_cast<InputButton>(" << static_cast<int>(button_index++) << "): return "
-                    << mouse << ";\n";
+                out << "        case static_cast<::cactus_gen::detail::InputButton>("
+                    << static_cast<int>(button_index++) << "): return " << mouse << ";\n";
             }
         }
         out << "        default:\n";
@@ -2164,6 +2260,7 @@ std::string emit_input_constants(const DecoratedProgram& program) {
     }
 
     if (has_axis_input) {
+        out << "namespace cactus_gen::detail {\n";
         out << "using InputAxis = std::uint8_t;\n";
         out << "enum class InputAxisTag : std::uint8_t { ";
         bool first = true;
@@ -2187,7 +2284,7 @@ std::string emit_input_constants(const DecoratedProgram& program) {
                     << " = static_cast<InputAxis>(InputAxisTag::" << input->name << ");\n";
             }
         }
-        out << "\n";
+        out << "}  // namespace cactus_gen::detail\n\n";
 
         out << "namespace cactus::runtime::entt_backend {\n";
         out << "float cactus_input_axis_value(std::uint8_t action) noexcept {\n";
@@ -2224,7 +2321,8 @@ std::string emit_input_constants(const DecoratedProgram& program) {
                         }
                     }
                 }
-                out << "        case static_cast<InputAxis>(InputAxisTag::" << input->name << "):\n";
+                out << "        case static_cast<::cactus_gen::detail::InputAxis>(::cactus_gen::detail::InputAxisTag::"
+                    << input->name << "):\n";
                 out << "            return " << positive << " - " << negative << ";\n";
             }
         }
@@ -2236,6 +2334,7 @@ std::string emit_input_constants(const DecoratedProgram& program) {
     }
 
     if (has_axis_input || has_button_input) {
+        out << "namespace cactus_gen::detail {\n";
         out << "struct InputEvent {\n";
         if (has_axis_input) {
             out << "    [[nodiscard]] static float axis(InputAxis action) {\n";
@@ -2253,7 +2352,8 @@ std::string emit_input_constants(const DecoratedProgram& program) {
             out << "        return cactus::runtime::entt_backend::released(action);\n";
             out << "    }\n";
         }
-        out << "};\n\n";
+        out << "};\n";
+        out << "}  // namespace cactus_gen::detail\n\n";
     }
 
     return out.str();
@@ -2322,12 +2422,31 @@ std::string emit_accumulation_tables(const AccumulationPlan& accumulation, const
     }
     std::ostringstream out;
     out << "// ── Exact Float Accumulation ───────────────────────────────────────\n\n";
-    for (const auto& table : accumulation.tables()) {
-        out << "inline cactus::runtime::AccumulatedDeltas<entt::entity>& " << table << "() {\n";
-        out << "    static cactus::runtime::AccumulatedDeltas<entt::entity> deltas;\n";
-        out << "    return deltas;\n";
-        out << "}\n\n";
+    // One specialization per trait, one table per buffered field.
+    std::vector<std::pair<std::string, std::vector<std::string>>> tables_by_trait;
+    for (const auto& field : accumulation.fields()) {
+        const auto trait = EnttCodegenUtils::trait_cpp_name(field.trait, field.trait.local_name, program);
+        auto found       = std::ranges::find(tables_by_trait, trait, &decltype(tables_by_trait)::value_type::first);
+        if (found == tables_by_trait.end()) {
+            found = tables_by_trait.insert(tables_by_trait.end(), {trait, {}});
+        }
+        found->second.push_back(cpp_escaped(*field.field));
     }
+    std::ostringstream tables;
+    tables << "template <class T>\n";
+    tables << "struct accumulation;\n\n";
+    for (const auto& [trait, fields] : tables_by_trait) {
+        tables << "template <>\n";
+        tables << "struct accumulation<" << trait << "> {\n";
+        for (const auto& field : fields) {
+            tables << "    static cactus::runtime::AccumulatedDeltas<entt::entity>& " << field << "() {\n";
+            tables << "        static cactus::runtime::AccumulatedDeltas<entt::entity> deltas;\n";
+            tables << "        return deltas;\n";
+            tables << "    }\n";
+        }
+        tables << "};\n\n";
+    }
+    out << namespace_block("cactus_gen::detail", tables.str()) << "\n";
     out << "inline void generated_flush_accumulations() {\n";
     for (const auto& table : accumulation.tables()) {
         out << "    " << table << "().flush();\n";
@@ -2349,6 +2468,31 @@ std::string emit_accumulation_tables(const AccumulationPlan& accumulation, const
     return out.str();
 }
 
+// Named-slot members nest by module path, in declaration order.
+struct NamedSlotTree {
+    std::vector<std::pair<std::string, NamedSlotTree>> children;
+
+    NamedSlotTree& child(const std::string& name) {
+        const auto found = std::ranges::find(children, name, &std::pair<std::string, NamedSlotTree>::first);
+        if (found != children.end()) {
+            return found->second;
+        }
+        return children.emplace_back(name, NamedSlotTree{}).second;
+    }
+};
+
+void emit_named_slot_members(std::ostringstream& out, const NamedSlotTree& tree, const std::string& indent) {
+    for (const auto& [name, node] : tree.children) {
+        if (node.children.empty()) {
+            out << indent << "entt::entity " << name << " = entt::null;\n";
+            continue;
+        }
+        out << indent << "struct {\n";
+        emit_named_slot_members(out, node, indent + "    ");
+        out << indent << "} " << name << ";\n";
+    }
+}
+
 // A slot follows the restored record whose archetype origin is its declaration,
 // and is stale when the document has none.
 std::string emit_named_slots(const DecoratedProgram& program) {
@@ -2357,11 +2501,15 @@ std::string emit_named_slots(const DecoratedProgram& program) {
         return {};
     }
     std::ostringstream out;
-    out << "// ── Named Entities ─────────────────────────────────────────────────\n\n";
-    out << "struct GeneratedNamedSlots {\n";
+    NamedSlotTree tree;
     for (const auto* entity : entities) {
-        out << "    entt::entity " << canonical_to_cpp_name(entity_symbol(*entity, program)) << " = entt::null;\n";
+        auto* node = &tree;
+        for (const auto& segment : EnttCodegenUtils::named_slot_path(entity_symbol(*entity, program))) {
+            node = &node->child(segment);
+        }
     }
+    out << "struct GeneratedNamedSlots {\n";
+    emit_named_slot_members(out, tree, "    ");
     out << "};\n\n";
     out << "inline GeneratedNamedSlots& generated_named_slots() {\n";
     out << "    static GeneratedNamedSlots slots;\n";
@@ -2382,16 +2530,9 @@ std::string emit_named_slots(const DecoratedProgram& program) {
     if (!origins.empty()) {
         out << "    cactus::runtime::entt_backend::rebind_named_slots(registry, {" << origins << "});\n";
     }
-    out << "}\n\n";
-    return out.str();
-}
-
-std::string archetype_create_function_name(const std::string& module_name, const std::string& archetype_name) {
-    return "create_" + canonical_to_cpp_name(module_name, snake_case(archetype_name));
-}
-
-std::string archetype_create_at_function_name(const std::string& module_name, const std::string& archetype_name) {
-    return archetype_create_function_name(module_name, archetype_name) + "_at";
+    out << "}\n";
+    return "// ── Named Entities ─────────────────────────────────────────────────\n\n" +
+           namespace_block("cactus_gen::detail", out.str()) + "\n";
 }
 
 void emit_archetype_trait_initializers(std::ostringstream& out,
@@ -2448,7 +2589,7 @@ void emit_archetype_trait_initializers(std::ostringstream& out,
         }
         out << ind << "    " << pad_to_width("auto component", widest) << " = " << cpp_name << "{};\n";
         for (const auto& assignment : trait.assignments) {
-            out << ind << "    " << pad_to_width("component." + assignment.name, widest) << " = "
+            out << ind << "    " << pad_to_width("component." + cpp_escaped(assignment.name), widest) << " = "
                 << EnttCodegenUtils::emit_expr(*assignment.value, program) << ";\n";
         }
         out << ind << "    ";
@@ -2471,7 +2612,7 @@ std::string emit_archetype_creation_function(const std::string& archetype_name,
     std::ostringstream out;
     const auto at_name     = archetype_create_at_function_name(program.module_name, archetype_name);
     const auto create_name = archetype_create_function_name(program.module_name, archetype_name);
-    out << "entt::entity " << at_name << "(entt::registry& registry, entt::entity hint) {\n";
+    out << "entt::entity " << at_name.name << "(entt::registry& registry, entt::entity hint) {\n";
     out << "    auto entity = cactus::runtime::entt_backend::adopt_or_create(registry, hint);\n";
     emit_archetype_trait_initializers(
         out, traits, program, "entity", 1, EnttPersistenceEmitter::archetype_origin_index(program, archetype));
@@ -2480,32 +2621,13 @@ std::string emit_archetype_creation_function(const std::string& archetype_name,
     // Delegates rather than re-running emit_archetype_trait_initializers: the
     // hinted function above already performs every field initialization; the
     // only thing this one adds is an arbitrary (non-hinted) entity.
-    out << "entt::entity " << create_name << "(entt::registry& registry) {\n";
-    out << "    return " << at_name << "(registry, cactus::runtime::entt_backend::create_entity(registry));\n";
+    out << "entt::entity " << create_name.name << "(entt::registry& registry) {\n";
+    out << "    return " << at_name.name << "(registry, cactus::runtime::entt_backend::create_entity(registry));\n";
     out << "}\n\n";
-    return out.str();
+    return namespace_block(create_name.ns, out.str()) + "\n";
 }
 
 // ── Hierarchical archetype creation (dsl-hierarchical-entity-templates) ──────
-
-// Internal per-node creation helper name: create_<archetype>__node for the
-// root, create_<archetype>__node__<role path> for descendants. These are not
-// registered in the editor template palette.
-std::string archetype_node_create_function_name(const std::string& module_name,
-                                                const std::string& archetype_name,
-                                                const std::vector<std::string>& role_path) {
-    std::string name = "create_" + canonical_to_cpp_name(module_name, snake_case(archetype_name)) + "__node";
-    for (const auto& role : role_path) {
-        name += "__" + snake_case(role);
-    }
-    return name;
-}
-
-std::string archetype_node_create_at_function_name(const std::string& module_name,
-                                                   const std::string& archetype_name,
-                                                   const std::vector<std::string>& role_path) {
-    return archetype_node_create_function_name(module_name, archetype_name, role_path) + "_at";
-}
 
 void emit_archetype_node_helpers(std::ostringstream& out,
                                  const std::string& archetype_name,
@@ -2516,19 +2638,20 @@ void emit_archetype_node_helpers(std::ostringstream& out,
                                  const std::string& parameters = {}) {
     for (const auto& child : children) {
         role_path.push_back(child.role);
-        out << "static entt::entity "
-            << archetype_node_create_function_name(program.module_name, archetype_name, role_path)
-            << "(entt::registry& registry" << parameters << ") {\n";
-        out << "    auto entity = cactus::runtime::entt_backend::create_entity(registry);\n";
+        const auto name = archetype_node_create_function_name(program.module_name, archetype_name, role_path);
+        std::ostringstream body;
+        body << "static entt::entity " << name.name << "(entt::registry& registry" << parameters << ") {\n";
+        body << "    auto entity = cactus::runtime::entt_backend::create_entity(registry);\n";
         emit_archetype_trait_initializers(
-            out,
+            body,
             child.traits,
             program,
             "entity",
             1,
             EnttPersistenceEmitter::archetype_origin_index(program, archetype, role_path));
-        out << "    return entity;\n";
-        out << "}\n\n";
+        body << "    return entity;\n";
+        body << "}\n";
+        out << namespace_block(name.ns, body.str()) << "\n";
         emit_archetype_node_helpers(out, archetype_name, archetype, child.children, program, role_path, parameters);
         role_path.pop_back();
     }
@@ -2551,7 +2674,8 @@ void emit_child_creation_sequence(std::ostringstream& out,
         const std::string var = var_prefix + "_" + std::to_string(index);
         role_path.push_back(child.role);
         out << "    auto " << var << " = "
-            << archetype_node_create_function_name(module_name, archetype_name, role_path) << "(registry" << arguments << ");\n";
+            << archetype_node_create_function_name(module_name, archetype_name, role_path).ref() << "(registry"
+            << arguments << ");\n";
         const std::string parent_cpp = EnttCodegenUtils::trait_cpp_name("Parent", program);
         out << "    registry.emplace_or_replace<" << parent_cpp << ">(" << var << ", " << parent_cpp
             << "{.parent = " << parent_var << "});\n";
@@ -2607,31 +2731,37 @@ std::string emit_planned_creation_functions(const std::string& name,
     std::vector<std::string> role_path;
     const auto node_at     = archetype_node_create_at_function_name(program.module_name, name, role_path);
     const auto node_create = archetype_node_create_function_name(program.module_name, name, role_path);
-    out << "static entt::entity " << node_at << "(entt::registry& registry, entt::entity hint" << all_parameters
-        << ") {\n";
-    out << "    auto entity = cactus::runtime::entt_backend::adopt_or_create(registry, hint);\n";
+    std::ostringstream nodes;
+    nodes << "static entt::entity " << node_at.name << "(entt::registry& registry, entt::entity hint" << all_parameters
+          << ") {\n";
+    nodes << "    auto entity = cactus::runtime::entt_backend::adopt_or_create(registry, hint);\n";
     emit_archetype_trait_initializers(
-        out, traits, program, "entity", 1, EnttPersistenceEmitter::archetype_origin_index(program, archetype));
-    out << "    return entity;\n}\n";
-    out << "[[maybe_unused]] static entt::entity " << node_create << "(entt::registry& registry" << all_parameters
-        << ") {\n";
-    out << "    return " << node_at << "(registry, cactus::runtime::entt_backend::create_entity(registry)"
-        << all_arguments << ");\n}\n";
+        nodes, traits, program, "entity", 1, EnttPersistenceEmitter::archetype_origin_index(program, archetype));
+    nodes << "    return entity;\n}\n";
+    nodes << "[[maybe_unused]] static entt::entity " << node_create.name << "(entt::registry& registry"
+          << all_parameters << ") {\n";
+    nodes << "    return " << node_at.name << "(registry, cactus::runtime::entt_backend::create_entity(registry)"
+          << all_arguments << ");\n}\n";
+    out << namespace_block(node_at.ns, nodes.str());
     emit_archetype_node_helpers(out, name, archetype, children, program, role_path, all_parameters);
-    out << "entt::entity " << create_at << "(entt::registry& registry, entt::entity hint" << parameters << ") {\n";
+    std::ostringstream creators;
+    creators << "entt::entity " << create_at.name << "(entt::registry& registry, entt::entity hint" << parameters
+             << ") {\n";
     for (const auto& slot : slots) {
         if (slot.value != nullptr) {
-            out << "    [[maybe_unused]] const " << EnttCodegenUtils::value_type_to_cpp(slot.type)
-                << (owns_memory(slot.type) ? "& " : " ") << initializer_slot_name(slot.index)
-                << " = " << EnttCodegenUtils::emit_expr(*slot.value, program) << ";\n";
+            creators << "    [[maybe_unused]] const " << EnttCodegenUtils::value_type_to_cpp(slot.type)
+                     << (owns_memory(slot.type) ? "& " : " ") << initializer_slot_name(slot.index) << " = "
+                     << EnttCodegenUtils::emit_expr(*slot.value, program) << ";\n";
         }
     }
-    out << "    auto entity = " << node_at << "(registry, hint" << all_arguments << ");\n";
-    emit_child_creation_sequence(out, program.module_name, name, children, "entity", "child", role_path, program, all_arguments);
-    out << "    return entity;\n}\n";
-    out << "entt::entity " << create << "(entt::registry& registry" << parameters << ") {\n";
-    out << "    return " << create_at << "(registry, cactus::runtime::entt_backend::create_entity(registry)"
-        << arguments << ");\n}\n\n";
+    creators << "    auto entity = " << node_at.ref() << "(registry, hint" << all_arguments << ");\n";
+    emit_child_creation_sequence(
+        creators, program.module_name, name, children, "entity", "child", role_path, program, all_arguments);
+    creators << "    return entity;\n}\n";
+    creators << "entt::entity " << create.name << "(entt::registry& registry" << parameters << ") {\n";
+    creators << "    return " << create_at.name << "(registry, cactus::runtime::entt_backend::create_entity(registry)"
+             << arguments << ");\n}\n";
+    out << namespace_block(create.ns, creators.str()) << "\n";
     return out.str();
 }
 
@@ -2653,37 +2783,39 @@ std::string emit_archetype_creation_functions(const std::string& archetype_name,
 
     const auto node_at_name = archetype_node_create_at_function_name(program.module_name, archetype_name, role_path);
     const auto node_name    = archetype_node_create_function_name(program.module_name, archetype_name, role_path);
-    out << "static entt::entity " << node_at_name << "(entt::registry& registry, entt::entity hint) {\n";
-    out << "    auto entity = cactus::runtime::entt_backend::adopt_or_create(registry, hint);\n";
+    std::ostringstream nodes;
+    nodes << "static entt::entity " << node_at_name.name << "(entt::registry& registry, entt::entity hint) {\n";
+    nodes << "    auto entity = cactus::runtime::entt_backend::adopt_or_create(registry, hint);\n";
     emit_archetype_trait_initializers(
-        out, traits, program, "entity", 1, EnttPersistenceEmitter::archetype_origin_index(program, archetype));
-    out << "    return entity;\n";
-    out << "}\n\n";
+        nodes, traits, program, "entity", 1, EnttPersistenceEmitter::archetype_origin_index(program, archetype));
+    nodes << "    return entity;\n";
+    nodes << "}\n\n";
     // Delegates rather than re-running emit_archetype_trait_initializers, same
     // as the flat-archetype path in emit_archetype_creation_function.
-    out << "static entt::entity " << node_name << "(entt::registry& registry) {\n";
-    out << "    return " << node_at_name << "(registry, cactus::runtime::entt_backend::create_entity(registry));\n";
-    out << "}\n\n";
+    nodes << "static entt::entity " << node_name.name << "(entt::registry& registry) {\n";
+    nodes << "    return " << node_at_name.name
+          << "(registry, cactus::runtime::entt_backend::create_entity(registry));\n";
+    nodes << "}\n\n";
+    out << namespace_block(node_name.ns, nodes.str()) << "\n";
     emit_archetype_node_helpers(out, archetype_name, archetype, children, program, role_path);
 
-    out << "entt::entity " << archetype_create_function_name(program.module_name, archetype_name)
-        << "(entt::registry& registry) {\n";
-    out << "    auto entity = " << archetype_node_create_function_name(program.module_name, archetype_name, role_path)
-        << "(registry);\n";
+    const auto create    = archetype_create_function_name(program.module_name, archetype_name);
+    const auto create_at = archetype_create_at_function_name(program.module_name, archetype_name);
+    std::ostringstream creators;
+    creators << "entt::entity " << create.name << "(entt::registry& registry) {\n";
+    creators << "    auto entity = " << node_name.ref() << "(registry);\n";
     emit_child_creation_sequence(
-        out, program.module_name, archetype_name, children, "entity", "child", role_path, program);
-    out << "    return entity;\n";
-    out << "}\n\n";
+        creators, program.module_name, archetype_name, children, "entity", "child", role_path, program);
+    creators << "    return entity;\n";
+    creators << "}\n\n";
 
-    out << "entt::entity " << archetype_create_at_function_name(program.module_name, archetype_name)
-        << "(entt::registry& registry, entt::entity hint) {\n";
-    out << "    auto entity = "
-        << archetype_node_create_at_function_name(program.module_name, archetype_name, role_path)
-        << "(registry, hint);\n";
+    creators << "entt::entity " << create_at.name << "(entt::registry& registry, entt::entity hint) {\n";
+    creators << "    auto entity = " << node_at_name.ref() << "(registry, hint);\n";
     emit_child_creation_sequence(
-        out, program.module_name, archetype_name, children, "entity", "child", role_path, program);
-    out << "    return entity;\n";
-    out << "}\n\n";
+        creators, program.module_name, archetype_name, children, "entity", "child", role_path, program);
+    creators << "    return entity;\n";
+    creators << "}\n";
+    out << namespace_block(create.ns, creators.str()) << "\n";
     return out.str();
 }
 
@@ -3424,26 +3556,11 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << "#include <entt/entt.hpp>\n";
     out << "#include <raylib.h>\n";
     out << "\n";
-    out << "#ifdef PI\n";
-    out << "#undef PI\n";
-    out << "#endif\n";
-    // raylib defines `typedef Camera3D Camera;` which conflicts with the Camera DSL
-    // component struct. Redirect the token so struct Camera resolves to its canonical C++ name.
-    // Use Camera3D directly for any raylib 3D-camera uses.
-    if (uses_flat || uses_volume) {
-        // When both camera modules are in the merged traits map (e.g. via std.editor
-        // which transitively imports both), disambiguate by WorldTransform dimensionality:
-        // 3D programs use volume camera, 2D programs use flat camera.
-        const std::string camera_cpp = (uses_volume && wt_usage.volume)
-                                           ? EnttCodegenUtils::trait_cpp_name("std.camera.volume.Camera", program)
-                                           : EnttCodegenUtils::trait_cpp_name("std.camera.flat.Camera", program);
-        out << "// Suppress raylib Camera typedef; DSL Camera struct takes this name\n";
-        out << "#define Camera " << camera_cpp << "\n";
-    }
     out << "\n";
     out << "#include <algorithm>\n";
     out << "#include <array>\n";
     out << "#include <cmath>\n";
+    out << "#include <concepts>\n";
     out << "#include <cstdint>\n";
     if (!program.execution_graph.phases.empty()) {
         out << "#include <deque>\n";
@@ -3457,6 +3574,8 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << "#include <unordered_set>\n";
     if (!program.execution_graph.phases.empty()) {
         out << "#include <stdexcept>\n";
+        out << "#include <tuple>\n";
+        out << "#include <type_traits>\n";
         out << "#include <utility>\n";
         out << "#include <variant>\n";
     }
@@ -3514,10 +3633,11 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     // the component fields and ECS views that use the canonical names (std_random__Rng, etc.).
     const bool uses_random = program_uses_module(program, "std.random");
     if (uses_random) {
-        out << "using std_random__Rng        = cactus::runtime::stdlib::random::Rng;\n";
-        out << "using std_random__Uniform    = cactus::runtime::stdlib::random::Uniform;\n";
-        out << "using std_random__UniformInt = cactus::runtime::stdlib::random::UniformInt;\n";
-        out << "using std_random__Normal     = cactus::runtime::stdlib::random::Normal;\n";
+        out << namespace_block(cpp_namespace_path("std.random"),
+                               "using Rng        = cactus::runtime::stdlib::random::Rng;\n"
+                               "using Uniform    = cactus::runtime::stdlib::random::Uniform;\n"
+                               "using UniformInt = cactus::runtime::stdlib::random::UniformInt;\n"
+                               "using Normal     = cactus::runtime::stdlib::random::Normal;\n");
         out << "\n";
     }
 
@@ -3534,8 +3654,15 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
 
     // Component structs (from traits)
     // stdlib::random trait types are exposed via 'using' aliases above — suppress their generated structs.
+    // A state slot declares its variants as nested types, so slots come first.
     for (const auto& [name, t] : program.traits) {
-        if (uses_random && t.module_name == "std.random" && kRandomRuntimeTypes.contains(t.name)) {
+        if (t.is_state_slot()) {
+            out << EnttComponentEmitter::emit_component(t, program) << "\n";
+        }
+    }
+    for (const auto& [name, t] : program.traits) {
+        if (t.is_state_slot() ||
+            (uses_random && t.module_name == "std.random" && kRandomRuntimeTypes.contains(t.name))) {
             continue;
         }
         out << EnttComponentEmitter::emit_component(t, program) << "\n";
@@ -3543,7 +3670,9 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << EnttComponentEmitter::emit_state_helpers(program);
     out << emit_world_digest(program);
 
-    out << emit_collider_query_helpers(program);
+    if (const auto collider_helpers = emit_collider_query_helpers(program); !collider_helpers.empty()) {
+        out << namespace_block("cactus_gen::detail", collider_helpers) << "\n";
+    }
     out << emit_named_slots(program);
     out << emit_accumulation_tables(accumulation, program);
     out << EnttPersistenceEmitter::emit_schema_descriptor(program);
@@ -3591,26 +3720,30 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
 
     // Persist serialization stubs
     out << "// ── Persist Serialization ────────────────────────────────────────────\n\n";
+    std::ostringstream persist_stubs;
     for (const auto& [name, t] : program.traits) {
         if (trait_declares_persist_field(t)) {
-            const std::string cpp_name = canonical_to_cpp_name(t.module_name, t.name);
-            out << "void save_" << cpp_name << "(const " << cpp_name << "& comp) {\n";
-            out << "    (void)comp;\n";
+            const std::string cpp_name = cpp_type_ref(SymbolKind::Trait, t.module_name, t.name);
+            persist_stubs << "void persist_save(const " << cpp_name << "& comp) {\n";
+            persist_stubs << "    (void)comp;\n";
             for (const auto& f : t.fields) {
                 if (f.is_persist) {
-                    out << "    // serialize comp." << f.name << "\n";
+                    persist_stubs << "    // serialize comp." << f.name << "\n";
                 }
             }
-            out << "}\n\n";
-            out << "void load_" << cpp_name << "(" << cpp_name << "& comp) {\n";
-            out << "    (void)comp;\n";
+            persist_stubs << "}\n\n";
+            persist_stubs << "void persist_load(" << cpp_name << "& comp) {\n";
+            persist_stubs << "    (void)comp;\n";
             for (const auto& f : t.fields) {
                 if (f.is_persist) {
-                    out << "    // deserialize into comp." << f.name << "\n";
+                    persist_stubs << "    // deserialize into comp." << f.name << "\n";
                 }
             }
-            out << "}\n\n";
+            persist_stubs << "}\n\n";
         }
+    }
+    if (!persist_stubs.view().empty()) {
+        out << namespace_block("cactus_gen::detail", persist_stubs.str()) << "\n";
     }
 
     // Entity creation from flattened templates and entities (inline and template-backed)
@@ -3673,13 +3806,14 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         }
 
         out << "// ── Template Registry ───────────────────────────────────────────────\n\n";
+        out << "namespace cactus_gen::detail {\n";
         out << "using TemplateFactory = entt::entity(*)(entt::registry&);\n";
         out << "static const std::unordered_map<std::string, TemplateFactory> cactus_template_registry = {\n";
         for (const auto& decl : program.ast->declarations) {
             if (const auto* tmpl = std::get_if<TemplateNode>(&decl)) {
                 if (tmpl->is_pub) {
                     out << "    {\"" << tmpl->name << "\", "
-                        << archetype_create_function_name(program.module_name, tmpl->name) << "},\n";
+                        << archetype_create_function_name(program.module_name, tmpl->name).ref() << "},\n";
                 }
             }
         }
@@ -3696,16 +3830,19 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                 }
             }
         }
-        out << "};\n\n";
+        out << "};\n";
+        out << "}  // namespace cactus_gen::detail\n\n";
         out << "namespace cactus::runtime::entt_backend {\n";
         // Not noexcept: returns std::vector<std::string> by value, which allocates and could
         // (in principle, on OOM) throw — clang-tidy's bugprone-exception-escape correctly flags
         // a noexcept function that isn't actually exception-safe.
-        out << "std::vector<std::string> editor_template_names() { return cactus_template_registry_order; }\n";
+        out << "std::vector<std::string> editor_template_names() { return "
+               "::cactus_gen::detail::cactus_template_registry_order; }\n";
         out << "int editor_template_index(const std::string& name) noexcept {\n";
-        out << "    const auto it = std::ranges::find(cactus_template_registry_order, name);\n";
-        out << "    if (it == cactus_template_registry_order.end()) { return -1; }\n";
-        out << "    return static_cast<int>(std::distance(cactus_template_registry_order.begin(), it));\n";
+        out << "    const auto& order = ::cactus_gen::detail::cactus_template_registry_order;\n";
+        out << "    const auto it = std::ranges::find(order, name);\n";
+        out << "    if (it == order.end()) { return -1; }\n";
+        out << "    return static_cast<int>(std::distance(order.begin(), it));\n";
         out << "}\n";
         out << "}  // namespace cactus::runtime::entt_backend\n\n";
 
@@ -3766,11 +3903,13 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "// ── Systems ─────────────────────────────────────────────────────────\n\n";
         for (auto& decl : program.ast->declarations) {
             if (auto* rule = std::get_if<RuleNode>(&decl)) {
-                out << EnttSystemEmitter::emit_system(*rule, program);
+                out << namespace_block(detail_namespace_path(program.module_name),
+                                       EnttSystemEmitter::emit_system(*rule, program));
             }
             if (auto* rule = std::get_if<ExternRuleNode>(&decl); rule != nullptr) {
                 if (has_compiler_owned_external_handler(program, *rule)) {
-                    out << EnttSystemEmitter::emit_extern_system(*rule, program);
+                    out << namespace_block(detail_namespace_path(program.module_name),
+                                           EnttSystemEmitter::emit_extern_system(*rule, program));
                 } else if (program.execution_graph.phases.empty() && has_user_external_handler(program, *rule)) {
                     throw std::runtime_error("cpp-entt user external rule '" +
                                              make_canonical_id(*rule->resolved_rule_id) +
@@ -3835,7 +3974,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         }
         // A parent is created before its children, so creation order stays a topological order.
         for (const auto* entity : parent_first_order(EnttCodegenUtils::declared_entities(program)).order) {
-            out << "    " << archetype_create_at_function_name(program.module_name, entity->name) << "(registry, "
+            out << "    " << archetype_create_at_function_name(program.module_name, entity->name).ref() << "(registry, "
                 << EnttCodegenUtils::named_slot_name(entity_symbol(*entity, program)) << ");\n";
         }
     }
@@ -3881,8 +4020,9 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "    cactus::runtime::entt_backend::register_editor_spawn_impl(\n";
         out << "        [](entt::registry& reg, const std::string& name, " << pos_arg2d << ", " << pos_arg3d
             << ") -> entt::entity {\n";
-        out << "            auto it = cactus_template_registry.find(name);\n";
-        out << "            if (it == cactus_template_registry.end()) { return entt::entity{entt::null}; }\n";
+        out << "            const auto& templates = ::cactus_gen::detail::cactus_template_registry;\n";
+        out << "            auto it = templates.find(name);\n";
+        out << "            if (it == templates.end()) { return entt::entity{entt::null}; }\n";
         out << "            auto entity = it->second(reg);\n";
         // The editor places an entity at a runtime-chosen position, the same
         // kind of per-entity override an authored `spawn Template: Field:
@@ -4385,7 +4525,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     // change the scope of, consistent with task 2.2's scoping of the new
     // debug-draw/screen-ui event dispatch to graph-driven only).
 
-    out << "    clear_projected_traits(registry);\n";
+    out << "    ::cactus_gen::detail::clear_projected_traits(registry);\n";
     out << "}\n";
     out << "\n}  // namespace cactus::runtime::entt_backend\n";
 

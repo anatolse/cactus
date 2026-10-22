@@ -42,10 +42,10 @@ TEST_CASE("model tint headless: default, static, and animated submissions retain
     entt::registry registry;
     cactus_headless_test::drive_one_frame(registry, 1.0F / 60.0F);
 
-    const auto renderers = registry.view<std_render_models__ModelRenderer>();
+    const auto renderers = registry.view<cactus_gen::stdlib::render::models::ModelRenderer>();
     REQUIRE(renderers.size() == 3);
     const bool has_default_white = std::ranges::any_of(renderers, [&](const auto entity) {
-        return same_color(registry.get<std_render_models__ModelRenderer>(entity).color, WHITE);
+        return same_color(registry.get<cactus_gen::stdlib::render::models::ModelRenderer>(entity).color, WHITE);
     });
     CHECK(has_default_white);
 

@@ -35,15 +35,15 @@ std::string draw_shapes() {
 TEST_CASE("occurrences are delivered in generations", "[runtime][generations]") {
     entt::registry registry;
     cactus_headless_test::init_and_load(registry);
-    const auto recorder = generated_named_slots().generations_runtime__Recorder;
+    const auto recorder = cactus_gen::detail::generated_named_slots().generations_runtime.Recorder;
 
     cactus_raylib_fake::reset();
     cactus_headless_test::drive_frame(registry, 1.0F / 60.0F);
 
     // tick emits A then B, and A's handler emits C: A, B, then C.
-    CHECK(registry.get<generations_runtime__Trace>(recorder).digits == 123);
+    CHECK(registry.get<cactus_gen::generations_runtime::Trace>(recorder).digits == 123);
     // Both lifecycle deliveries of the round run before the event the first emits.
-    CHECK(registry.get<generations_runtime__RoundTrace>(recorder).digits == 456);
+    CHECK(registry.get<cactus_gen::generations_runtime::RoundTrace>(recorder).digits == 456);
     // One handler's interleaved draw emits render in emission order.
     CHECK(draw_shapes() == "LTL");
 }

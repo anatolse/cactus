@@ -17,10 +17,11 @@
 
 namespace {
 
-using Recorder = cross_domain_spatial_join_runtime__Recorder;
+using Recorder = cactus_gen::cross_domain_spatial_join_runtime::Recorder;
 
 void drive_frame(entt::registry& registry) {
-    cactus::runtime::entt_backend::generated_inject_external_event(std_core__frameEvent{.dt = 1.0F / 60.0F});
+    cactus::runtime::entt_backend::generated_inject_external_event(
+        cactus_gen::stdlib::core::frameEvent{.dt = 1.0F / 60.0F});
     cactus::runtime::entt_backend::generated_drain_external_events(registry);
 }
 
@@ -48,19 +49,21 @@ void populate_scene(entt::registry& registry, std::uint32_t seed) {
         const auto center = random_vec3(position);
         const auto size   = radius(rng);
         if (tag % 5 != 0) {
-            place(registry, cross_domain_spatial_join_runtime__SpherePlacedEvent{.pos = center, .radius = size, .tag = tag});
+            place(registry,
+                  cactus_gen::cross_domain_spatial_join_runtime::SpherePlacedEvent{
+                      .pos = center, .radius = size, .tag = tag});
             continue;
         }
         const auto extent_vec = random_vec3(extent);
         place(registry,
-              cross_domain_spatial_join_runtime__SphereBoxPlacedEvent{
+              cactus_gen::cross_domain_spatial_join_runtime::SphereBoxPlacedEvent{
                   .pos = center, .radius = size, .size = extent_vec, .rotation = random_rotation(), .tag = tag});
     }
     for (int tag = 301; tag <= 540; ++tag) {
         const auto center     = random_vec3(position);
         const auto extent_vec = random_vec3(extent);
         place(registry,
-              cross_domain_spatial_join_runtime__BoxPlacedEvent{
+              cactus_gen::cross_domain_spatial_join_runtime::BoxPlacedEvent{
                   .pos = center, .size = extent_vec, .rotation = random_rotation(), .tag = tag});
     }
 }
@@ -114,11 +117,11 @@ TEST_CASE("A sphere touching only the rotated corner of a box is not missed", "[
     const auto rotation = cactus::runtime::stdlib::math::quat::from_axis_angle(
         Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F}, std::numbers::pi_v<float> / 4);
     place(registry,
-          cross_domain_spatial_join_runtime__BoxPlacedEvent{
+          cactus_gen::cross_domain_spatial_join_runtime::BoxPlacedEvent{
               .pos = Vector3{}, .size = Vector3{.x = 2.0F, .y = 2.0F, .z = 2.0F}, .rotation = rotation, .tag = 7});
     // The rotated corner reaches x = sqrt(2); the unrotated box would end at x = 1.
     place(registry,
-          cross_domain_spatial_join_runtime__SpherePlacedEvent{
+          cactus_gen::cross_domain_spatial_join_runtime::SpherePlacedEvent{
               .pos = Vector3{.x = 1.55F, .y = 0.0F, .z = 0.0F}, .radius = 0.2F, .tag = 1});
 
     drive_frame(registry);

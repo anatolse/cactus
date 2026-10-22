@@ -330,15 +330,19 @@ std::string upper_copy(std::string value) {
     return value;
 }
 
-std::string archetype_create_function_name(const SymbolId& template_id, const DecoratedProgram& program) {
-    const bool is_local       = program.pub_templates.contains(template_id.local_name) ||
-                                program.non_pub_templates.contains(template_id.local_name);
-    const std::string& module = is_local ? program.module_name : template_id.module.name;
-    return "create_" + canonical_to_cpp_name(module, snake_case(template_id.local_name));
+const std::string& template_creation_module(const SymbolId& template_id, const DecoratedProgram& program) {
+    const bool is_local = program.pub_templates.contains(template_id.local_name) ||
+                          program.non_pub_templates.contains(template_id.local_name);
+    return is_local ? program.module_name : template_id.module.name;
 }
 
-std::string archetype_create_at_function_name(const SymbolId& template_id, const DecoratedProgram& program) {
-    return archetype_create_function_name(template_id, program) + "_at";
+std::string template_create_ref(const SymbolId& template_id, const DecoratedProgram& program) {
+    return archetype_create_function_name(template_creation_module(template_id, program), template_id.local_name).ref();
+}
+
+std::string template_create_at_ref(const SymbolId& template_id, const DecoratedProgram& program) {
+    return archetype_create_at_function_name(template_creation_module(template_id, program), template_id.local_name)
+        .ref();
 }
 
 std::string event_cpp_type(const std::string& event_name, const DecoratedProgram& program) {
@@ -347,12 +351,12 @@ std::string event_cpp_type(const std::string& event_name, const DecoratedProgram
             if (const auto* ev = std::get_if<EventNode>(&decl)) {
                 if (ev->name == event_name) {
                     const std::string& mod = ev->module_name.empty() ? program.module_name : ev->module_name;
-                    return canonical_to_cpp_name(mod, event_name) + "Event";
+                    return cpp_type_ref(SymbolKind::Event, mod, event_name);
                 }
             }
         }
     }
-    return event_name + "Event";
+    return cpp_type_ref(SymbolKind::Event, program.module_name, event_name);
 }
 
 std::string event_cpp_type(const SymbolId& event_id, const DecoratedProgram& program) {
@@ -361,7 +365,7 @@ std::string event_cpp_type(const SymbolId& event_id, const DecoratedProgram& pro
             if (const auto* event = std::get_if<EventNode>(&decl);
                 event != nullptr && event->resolved_event_id.has_value() && *event->resolved_event_id == event_id) {
                 const auto& module = event->module_name.empty() ? program.module_name : event->module_name;
-                return canonical_to_cpp_name(module, event->name) + "Event";
+                return cpp_type_ref(SymbolKind::Event, module, event->name);
             }
         }
     }
@@ -369,7 +373,7 @@ std::string event_cpp_type(const SymbolId& event_id, const DecoratedProgram& pro
     const auto canonical = make_canonical_id(event_id);
     for (const auto& [_, event] : program.events) {
         if ((event.symbol_id.has_value() && *event.symbol_id == event_id) || event.canonical_id == canonical) {
-            return canonical_to_cpp_name(event.module_name, event.name) + "Event";
+            return cpp_type_ref(SymbolKind::Event, event.module_name, event.name);
         }
     }
     return event_cpp_type_name(event_id);
@@ -377,8 +381,7 @@ std::string event_cpp_type(const SymbolId& event_id, const DecoratedProgram& pro
 
 std::string handler_trigger_cpp_type(const EventHandlerNode& handler, const DecoratedProgram& program) {
     if (handler.resolved_trigger.has_value() && handler.resolved_trigger->kind == HandlerTriggerKind::Phase) {
-        return "cactus::runtime::entt_backend::" + canonical_to_cpp_name(handler.resolved_trigger->symbol) +
-               "PhaseRuntimeState";
+        return cpp_type_ref(handler.resolved_trigger->symbol);
     }
     if (!handler.resolved_trigger.has_value()) {
         return event_cpp_type(handler.event_name, program);
@@ -389,23 +392,16 @@ std::string handler_trigger_cpp_type(const EventHandlerNode& handler, const Deco
     return event_cpp_type(handler.resolved_trigger->symbol, program);
 }
 
-std::string join_strings(const std::vector<std::string>& items, std::string_view separator) {
-    std::string joined;
-    for (const auto& item : items) {
-        if (!joined.empty()) {
-            joined += separator;
-        }
-        joined += item;
-    }
-    return joined;
-}
-
 // A lifecycle trigger's alias names the trait (or its snapshot), never the occurrence itself.
-std::string handler_trigger_binding(const EventHandlerNode& handler, const DecoratedProgram& program) {
+std::string handler_trigger_binding(const EventHandlerNode& handler) {
     if (handler.has_lifecycle_trigger()) {
         return "cactus_trigger";
     }
-    return handler.alias.value_or(snake_case(EnttCodegenUtils::handler_function_suffix(handler, program)));
+    // A dotted trigger has no single-identifier spelling of its own.
+    if (handler.alias.has_value() || handler.event_name.contains('.')) {
+        return handler.alias.value_or("cactus_trigger");
+    }
+    return snake_case(handler.event_name);
 }
 
 // Scoped, not a parameter: rewrite_expr's recursive calls pass only partial context.
@@ -587,7 +583,7 @@ std::vector<FilterBinding> filter_bindings(const FilterClause& filter, const Dec
             result.push_back(FilterBinding{.trait_name    = trait_name,
                                            .lookup_name   = lookup_name,
                                            .cpp_type_name = cpp_type_name,
-                                           .binding_name  = cpp_type_name + "_comp"});
+                                           .binding_name  = component_local(cpp_type_name)});
         }
         if (entry.alias.has_value()) {
             result.push_back(FilterBinding{.trait_name    = trait_name,
@@ -602,7 +598,7 @@ std::vector<FilterBinding> filter_bindings(const FilterClause& filter, const Dec
             result.push_back(FilterBinding{.trait_name    = trait_name,
                                            .lookup_name   = trait_name,
                                            .cpp_type_name = cpp_type_name,
-                                           .binding_name  = cpp_type_name + "_comp"});
+                                           .binding_name  = component_local(cpp_type_name)});
         }
     }
     return result;
@@ -880,8 +876,8 @@ std::string emit_event_renderer_body(const ExternRuleNode& sys,
     const auto& handler   = sys.handlers.front();
     const auto event_type = event_cpp_type(handler.resolved_trigger->symbol, program);
     std::ostringstream out;
-    out << "void " << system_function_name(program.module_name, sys.name, "tick") << "(entt::registry& registry, const "
-        << event_type << "& occurrence) {\n";
+    out << "void " << system_function_name(program.module_name, sys.name, "tick").name
+        << "(entt::registry& registry, const " << event_type << "& occurrence) {\n";
     out << "    (void)registry;\n";
     if (!mode_begin.empty()) {
         out << "    " << mode_begin << "\n";
@@ -1057,7 +1053,7 @@ void emit_component_bindings_from_entity(std::ostringstream& out,
                                          const DecoratedProgram& program) {
     const std::string ind(static_cast<size_t>(indent) * 4, ' ');
     for (const auto& cpp_name : filter_bindings_with_data_cpp_types(bindings, program)) {
-        out << ind << "[[maybe_unused]] auto& " << cpp_name << "_comp = registry.get<" << cpp_name << ">("
+        out << ind << "[[maybe_unused]] auto& " << component_local(cpp_name) << " = registry.get<" << cpp_name << ">("
             << entity_name << ");\n";
     }
 }
@@ -1068,10 +1064,11 @@ void emit_filter_alias_bindings(std::ostringstream& out,
                                 int indent) {
     const std::string ind(static_cast<size_t>(indent) * 4, ' ');
     for (const auto& binding : filter_bindings(filter, program)) {
-        if (binding.binding_name == binding.cpp_type_name + "_comp") {
+        if (binding.binding_name == component_local(binding.cpp_type_name)) {
             continue;
         }
-        out << ind << "[[maybe_unused]] auto& " << binding.binding_name << " = " << binding.cpp_type_name << "_comp;\n";
+        out << ind << "[[maybe_unused]] auto& " << binding.binding_name << " = "
+            << component_local(binding.cpp_type_name) << ";\n";
     }
 }
 
@@ -1117,7 +1114,7 @@ void emit_view_each_header(std::ostringstream& out,
     const std::string ind(static_cast<size_t>(indent) * 4, ' ');
     out << ind << "view.each([&](entt::entity entity";
     for (const auto& cpp_name : filter_bindings_with_data_cpp_types(bindings, program)) {
-        out << ", [[maybe_unused]] " << cpp_name << "& " << cpp_name << "_comp";
+        out << ", [[maybe_unused]] " << cpp_name << "& " << component_local(cpp_name);
     }
     out << ") {\n";
 }
@@ -1578,19 +1575,21 @@ const std::array<BuiltinMemberCallSpec, 14>& builtin_member_call_specs() {
         {.object_name        = "input",
          .member_name        = "axis",
          .required_arg_count = std::nullopt,
-         .call_body          = [](const std::string& args) { return "InputEvent::axis(" + args + ")"; }},
+         .call_body = [](const std::string& args) { return "::cactus_gen::detail::InputEvent::axis(" + args + ")"; }},
         {.object_name        = "input",
          .member_name        = "pressed",
          .required_arg_count = std::nullopt,
-         .call_body          = [](const std::string& args) { return "InputEvent::pressed(" + args + ")"; }},
+         .call_body =
+             [](const std::string& args) { return "::cactus_gen::detail::InputEvent::pressed(" + args + ")"; }},
         {.object_name        = "input",
          .member_name        = "down",
          .required_arg_count = std::nullopt,
-         .call_body          = [](const std::string& args) { return "InputEvent::down(" + args + ")"; }},
+         .call_body = [](const std::string& args) { return "::cactus_gen::detail::InputEvent::down(" + args + ")"; }},
         {.object_name        = "input",
          .member_name        = "released",
          .required_arg_count = std::nullopt,
-         .call_body          = [](const std::string& args) { return "InputEvent::released(" + args + ")"; }},
+         .call_body =
+             [](const std::string& args) { return "::cactus_gen::detail::InputEvent::released(" + args + ")"; }},
         {.object_name        = "input",
          .member_name        = "mouse_delta",
          .required_arg_count = 0,
@@ -1771,23 +1770,6 @@ static std::string emit_spawn_overrides(const std::string& entity_name,
 
 // ── Hierarchical spawn expansion (dsl-hierarchical-entity-templates D9) ─────
 
-// Per-node creation helper names — must match the names generated by cpp_entt_codegen.cpp.
-static std::string archetype_node_create_function_name(const std::string& module_name,
-                                                       const std::string& archetype_name,
-                                                       const std::vector<std::string>& role_path) {
-    std::string name = "create_" + canonical_to_cpp_name(module_name, snake_case(archetype_name)) + "__node";
-    for (const auto& role : role_path) {
-        name += "__" + snake_case(role);
-    }
-    return name;
-}
-
-static std::string archetype_node_create_at_function_name(const std::string& module_name,
-                                                          const std::string& archetype_name,
-                                                          const std::vector<std::string>& role_path) {
-    return archetype_node_create_function_name(module_name, archetype_name, role_path) + "_at";
-}
-
 static const TemplateNode* find_template_node(const DecoratedProgram& program,
                                                                      const SymbolId& template_id) {
     if (program.ast == nullptr) {
@@ -1827,7 +1809,8 @@ static void emit_spawn_child_expansion(std::ostringstream& out,
         const std::string var = var_prefix + "_" + std::to_string(index);
         role_path.push_back(child.role);
         out << "    auto " << var << " = "
-            << archetype_node_create_function_name(template_module, template_local_name, role_path) << "(registry" << arguments << ");\n";
+            << archetype_node_create_function_name(template_module, template_local_name, role_path).ref() << "(registry"
+            << arguments << ");\n";
         {
             const std::string parent_cpp = EnttCodegenUtils::trait_cpp_name("Parent", program);
             out << "    registry.emplace_or_replace<" << parent_cpp << ">(" << var << ", " << parent_cpp
@@ -1935,12 +1918,13 @@ static std::string emit_hierarchical_spawn_expansion(const SymbolId& template_id
         out << "        cactus::runtime::entt_backend::StructuralCommand::Kind::Spawn,\n";
         out << "        [=](entt::registry& registry) mutable {\n";
         out << "            auto " << committed_name << " = "
-            << archetype_node_create_at_function_name(tmpl_module, tmpl_local, role_path) << "(registry, "
+            << archetype_node_create_at_function_name(tmpl_module, tmpl_local, role_path).ref() << "(registry, "
             << spawned_name << arguments << ");\n";
         out << overrides(committed_name, 3);
     } else {
         out << "    auto " << spawned_name << " = "
-            << archetype_node_create_function_name(tmpl_module, tmpl_local, role_path) << "(registry" << arguments << ");\n";
+            << archetype_node_create_function_name(tmpl_module, tmpl_local, role_path).ref() << "(registry" << arguments
+            << ");\n";
         out << overrides(spawned_name, 1);
     }
     emit_spawn_child_expansion(out,
@@ -2040,13 +2024,13 @@ static std::string emit_spawn_expression(const SpawnExpr& spawn,
         out << "    cactus::runtime::entt_backend::generated_queue_structural_command(\n";
         out << "        cactus::runtime::entt_backend::StructuralCommand::Kind::Spawn,\n";
         out << "        [=](entt::registry& registry) mutable {\n";
-        out << "            " << archetype_create_at_function_name(tmpl_id, program) << "(registry, " << spawned_name
-            << arguments << ");\n";
+        out << "            " << template_create_at_ref(tmpl_id, program) << "(registry, " << spawned_name << arguments
+            << ");\n";
         out << overrides(3);
         out << "        });\n";
     } else {
-        out << "    auto " << spawned_name << " = " << archetype_create_function_name(tmpl_id, program)
-            << "(registry" << arguments << ");\n";
+        out << "    auto " << spawned_name << " = " << template_create_ref(tmpl_id, program) << "(registry" << arguments
+            << ");\n";
         out << overrides(1);
     }
     out << "    return " << spawned_name << ";\n";
@@ -2334,7 +2318,7 @@ static std::string lower_trait_field_path(const TraitAccessExpr& access,
     const auto& trait_id = *access.resolved_trait_id;
     std::string base;
     if (const auto named = access.named_ref(); named.has_value()) {
-        base = EnttCodegenUtils::named_trait_ref_name(*named, program);
+        base = EnttCodegenUtils::named_trait_ref_name(*named);
     } else {
         const auto* ident   = std::get_if<IdentExpr>(&access.object->expr);
         const auto* binding = ident != nullptr && pair_scope != nullptr ? pair_scope->find(ident->name) : nullptr;
@@ -2352,7 +2336,7 @@ static std::string lower_trait_field_path(const TraitAccessExpr& access,
         }
     }
     for (const auto& field : fields) {
-        base += "." + field;
+        base += "." + cpp_escaped(field);
     }
     return base;
 }
@@ -2409,7 +2393,7 @@ static std::string rewrite_expr_node(  // NOLINT(readability-function-cognitive-
                     return *std::move(lowered);
                 }
                 if (is_input_action_name(program, e.name)) {
-                    return input_action_constant_name(e.name);
+                    return "::cactus_gen::detail::" + input_action_constant_name(e.name);
                 }
                 // If it's a known trait field, qualify it with the canonical variable name
                 if (known_fields.contains(e.name)) {
@@ -2418,7 +2402,7 @@ static std::string rewrite_expr_node(  // NOLINT(readability-function-cognitive-
                         const auto ovr = cpp_overrides.find(comp);
                         const auto& cpp =
                             ovr != cpp_overrides.end() ? ovr->second : EnttCodegenUtils::trait_cpp_name(comp, program);
-                        return cpp + "_comp." + e.name;
+                        return component_local(cpp) + "." + cpp_escaped(e.name);
                     }
                 }
                 return e.name;
@@ -2470,7 +2454,7 @@ static std::string rewrite_expr_node(  // NOLINT(readability-function-cognitive-
                     }
                     if (const auto* func = EnttCodegenUtils::find_func(program, *e.resolved_callee_id);
                         func != nullptr && !func->is_extern) {
-                        return canonical_to_cpp_name(*e.resolved_callee_id) + "(" +
+                        return cpp_type_ref(*e.resolved_callee_id) + "(" +
                                join_rewritten_args(e.args,
                                                    trait_names,
                                                    program,
@@ -2515,7 +2499,7 @@ static std::string rewrite_expr_node(  // NOLINT(readability-function-cognitive-
                     // Bare DSL input-state builtins: fallback when no module resolved.
                     if (ident->name == "axis" || ident->name == "pressed" || ident->name == "down" ||
                         ident->name == "released") {
-                        return "InputEvent::" + ident->name + "(" +
+                        return "::cactus_gen::detail::InputEvent::" + ident->name + "(" +
                                join_rewritten_args(e.args,
                                                    trait_names,
                                                    program,
@@ -2614,12 +2598,12 @@ static std::string rewrite_expr_node(  // NOLINT(readability-function-cognitive-
                     return *std::move(lowered);
                 }
                 if (auto lowered = lowered_trigger_reference(*e.object)) {
-                    return *std::move(lowered) + "." + e.member;
+                    return *std::move(lowered) + "." + cpp_escaped(e.member);
                 }
                 if (const auto path = trait_field_path(e); path.has_value()) {
                     return lower_trait_field_path(*path->first, path->second, program, pair_scope);
                 }
-                if (auto named = EnttCodegenUtils::named_member_cpp(e, program)) {
+                if (auto named = EnttCodegenUtils::named_member_cpp(e)) {
                     return *std::move(named);
                 }
                 if (e.resolved_const_id.has_value()) {
@@ -2632,13 +2616,14 @@ static std::string rewrite_expr_node(  // NOLINT(readability-function-cognitive-
                 if (const auto* enum_member = std::get_if<MemberExpr>(&e.object->expr)) {
                     if (std::get_if<IdentExpr>(&enum_member->object->expr) != nullptr &&
                         EnttCodegenUtils::find_enum(program, enum_member->member) != nullptr) {
-                        return EnttCodegenUtils::enum_cpp_name(enum_member->member, program) + "::" + e.member;
+                        return EnttCodegenUtils::enum_cpp_name(enum_member->member, program) +
+                               "::" + cpp_escaped(e.member);
                     }
                 }
                 if (auto* ident = std::get_if<IdentExpr>(&e.object->expr)) {
                     // Enum names — use :: notation with canonical C++ name
                     if (EnttCodegenUtils::find_enum(program, ident->name) != nullptr) {
-                        return EnttCodegenUtils::enum_cpp_name(ident->name, program) + "::" + e.member;
+                        return EnttCodegenUtils::enum_cpp_name(ident->name, program) + "::" + cpp_escaped(e.member);
                     }
                 }
                 if (auto* ident = std::get_if<IdentExpr>(&e.object->expr)) {
@@ -2704,7 +2689,7 @@ static std::string settled_access(const std::optional<TraitFieldRef>& access,
     if (!access.has_value() || plan == nullptr || !plan->buffered(*access)) {
         return lowered;
     }
-    return "::" + AccumulationPlan::table_name(access->trait, *access->field, program) + "().settle(" + lowered + ")";
+    return AccumulationPlan::table_name(access->trait, *access->field, program) + "().settle(" + lowered + ")";
 }
 
 static std::string rewrite_expr(const ExprNode& expr,
@@ -3051,13 +3036,13 @@ static std::string emit_spawn_stmt(const SpawnStmt& s,
         result << ind << "    cactus::runtime::entt_backend::generated_queue_structural_command(\n";
         result << ind << "        cactus::runtime::entt_backend::StructuralCommand::Kind::Spawn,\n";
         result << ind << "        [=](entt::registry& registry) mutable {\n";
-        result << ind << "            " << archetype_create_at_function_name(tmpl_id, program) << "(registry, "
-               << spawned_name << arguments << ");\n";
+        result << ind << "            " << template_create_at_ref(tmpl_id, program) << "(registry, " << spawned_name
+               << arguments << ");\n";
         result << overrides(indent + 3);
         result << ind << "        });\n";
     } else {
-        result << ind << "    auto " << spawned_name << " = " << archetype_create_function_name(tmpl_id, program)
-               << "(registry" << arguments << ");\n";
+        result << ind << "    auto " << spawned_name << " = " << template_create_ref(tmpl_id, program) << "(registry"
+               << arguments << ");\n";
         result << overrides(indent + 1);
     }
     result << ind << "}\n";
@@ -3136,7 +3121,7 @@ static std::string emit_add_trait_stmt(const AddTraitStmt& s,
                    << EnttCodegenUtils::hierarchy_index_expr(program) << ", " << target_name << ", "
                    << deferred_field_value_name(*parent) << ")) { return; }\n";
         }
-        result << ind << "            cancel_projected_" << cpp << "(" << target_name << ");\n";
+        result << ind << "            ::cactus_gen::detail::cancel_projected<" << cpp << ">(" << target_name << ");\n";
         if (s.args.empty()) {
             result << ind << "            " << write_trait(target_name, "");
         } else {
@@ -3145,7 +3130,7 @@ static std::string emit_add_trait_stmt(const AddTraitStmt& s,
             result << ind << "            auto " << value_name << " = " << existing_name << " ? *" << existing_name
                    << " : " << cpp << "{};\n";
             for (const auto& arg : s.args) {
-                result << ind << "            " << value_name << "." << arg.name << " = "
+                result << ind << "            " << value_name << "." << cpp_escaped(arg.name) << " = "
                        << deferred_field_value_name(arg) << ";\n";
             }
             result << ind << "            " << write_trait(target_name, value_name);
@@ -3157,11 +3142,12 @@ static std::string emit_add_trait_stmt(const AddTraitStmt& s,
     }
     if (s.args.empty()) {
         if (GUARDED) {
-            return ind + "if (registry.valid(" + target + ")) {\n" + ind + "    cancel_projected_" + cpp + "(" +
-                   target + ");\n" + ind + "    " + write_trait(target, "") +
-                   retain_line(target, ind + "    ") + ind + "}\n";
+            return ind + "if (registry.valid(" + target + ")) {\n" + ind +
+                   "    ::cactus_gen::detail::cancel_projected<" + cpp + ">(" + target + ");\n" + ind + "    " +
+                   write_trait(target, "") + retain_line(target, ind + "    ") + ind + "}\n";
         }
-        return ind + "cancel_projected_" + cpp + "(" + target + ");\n" + ind + write_trait(target, "") + retain_line(target, ind);
+        return ind + "::cactus_gen::detail::cancel_projected<" + cpp + ">(" + target + ");\n" + ind +
+               write_trait(target, "") + retain_line(target, ind);
     }
 
     std::ostringstream result;
@@ -3169,13 +3155,14 @@ static std::string emit_add_trait_stmt(const AddTraitStmt& s,
         result << ind << "if (registry.valid(" << target << ")) {\n";
     }
     result << ind << (GUARDED ? "    " : "") << "{\n";
-    result << ind << (GUARDED ? "        " : "    ") << "cancel_projected_" << cpp << "(" << target << ");\n";
+    result << ind << (GUARDED ? "        " : "    ") << "::cactus_gen::detail::cancel_projected<" << cpp << ">("
+           << target << ");\n";
     result << ind << (GUARDED ? "        " : "    ") << "auto " << existing_name << " = registry.try_get<" << cpp
            << ">(" << target << ");\n";
     result << ind << (GUARDED ? "        " : "    ") << "auto " << value_name << " = " << existing_name << " ? *"
            << existing_name << " : " << cpp << "{};\n";
     for (const auto& arg : s.args) {
-        result << ind << (GUARDED ? "        " : "    ") << value_name << "." << arg.name << " = "
+        result << ind << (GUARDED ? "        " : "    ") << value_name << "." << cpp_escaped(arg.name) << " = "
                << rewrite_expr(*arg.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) << ";\n";
     }
     result << ind << (GUARDED ? "        " : "    ") << write_trait(target, value_name);
@@ -3239,21 +3226,21 @@ static std::string emit_remove_trait_stmt(const RemoveTraitStmt& s,
                "    cactus::runtime::entt_backend::generated_queue_structural_command(\n" + ind +
                "        cactus::runtime::entt_backend::StructuralCommand::Kind::Remove,\n" + ind +
                "        [=](entt::registry& registry) {\n" + ind + "            if (!registry.valid(" + target_name +
-               ")) { return; }\n" + ind + "            cancel_projected_" + cpp + "(" + target_name + ");\n" + ind +
-               "            if (registry.all_of<" + cpp + ">(" + target_name + ")) {\n" + ind +
-               "                registry.remove<" + cpp + ">(" + target_name + ");\n" +
+               ")) { return; }\n" + ind + "            ::cactus_gen::detail::cancel_projected<" + cpp + ">(" +
+               target_name + ");\n" + ind + "            if (registry.all_of<" + cpp + ">(" + target_name + ")) {\n" +
+               ind + "                registry.remove<" + cpp + ">(" + target_name + ");\n" +
                discard_line(target_name, ind + "                ") + ind + "            }\n" + ind + "        });\n" +
                ind + "}\n";
     }
     if (s.target_expr.has_value()) {
-        return ind + "if (registry.valid(" + target + ")) {\n" + ind + "    cancel_projected_" + cpp + "(" + target +
-               ");\n" + ind + "    if (registry.all_of<" + cpp + ">(" + target + ")) {\n" + ind +
+        return ind + "if (registry.valid(" + target + ")) {\n" + ind + "    ::cactus_gen::detail::cancel_projected<" +
+               cpp + ">(" + target + ");\n" + ind + "    if (registry.all_of<" + cpp + ">(" + target + ")) {\n" + ind +
                "        registry.remove<" + cpp + ">(" + target + ");\n" + discard_line(target, ind + "        ") +
                ind + "    }\n" + ind + "}\n";
     }
-    return ind + "cancel_projected_" + cpp + "(" + target + ");\n" + ind + "if (registry.all_of<" + cpp + ">(" +
-           target + ")) {\n" + ind + "    registry.remove<" + cpp + ">(" + target + ");\n" +
-           discard_line(target, ind + "    ") + ind + "}\n";
+    return ind + "::cactus_gen::detail::cancel_projected<" + cpp + ">(" + target + ");\n" + ind +
+           "if (registry.all_of<" + cpp + ">(" + target + ")) {\n" + ind + "    registry.remove<" + cpp + ">(" +
+           target + ");\n" + discard_line(target, ind + "    ") + ind + "}\n";
 }
 
 // A pure patch: no attach, no projection cancel, no construction baseline.
@@ -3280,8 +3267,8 @@ static std::string emit_set_trait_stmt(const SetTraitStmt& s,
     result << ind << "    cactus::runtime::entt_backend::generated_queue_structural_command(\n";
     result << ind << "        cactus::runtime::entt_backend::StructuralCommand::Kind::Set,\n";
     result << ind << "        [=](entt::registry& registry) {\n";
-    result << ind << "            auto* " << value_name << " = durable_" << cpp << "(registry, " << target_name
-           << ");\n";
+    result << ind << "            auto* " << value_name << " = ::cactus_gen::detail::durable<" << cpp << ">(registry, "
+           << target_name << ");\n";
     result << ind << "            if (" << value_name << " == nullptr) { return; }\n";
     for (const auto& arg : s.args) {
         result << ind << "            " << value_name << "->" << arg.name << " = " << deferred_field_value_name(arg)
@@ -3314,13 +3301,13 @@ static std::string emit_project_trait_stmt(const ProjectTraitStmt& s,
     std::ostringstream result;
     result << ind << "if (registry.valid(" << target << ")) {\n";
     if (is_marker) {
-        result << ind << "    project_" << cpp << "(registry, " << target << ");\n";
+        result << ind << "    ::cactus_gen::detail::project<" << cpp << ">(registry, " << target << ");\n";
     } else {
         const std::string projected_name = gen_temp_name("projected", s.location);
-        result << ind << "    [[maybe_unused]] auto& " << projected_name << " = project_" << cpp << "(registry, "
-               << target << ");\n";
+        result << ind << "    [[maybe_unused]] auto& " << projected_name << " = ::cactus_gen::detail::project<" << cpp
+               << ">(registry, " << target << ");\n";
         for (const auto& arg : s.args) {
-            result << ind << "    " << projected_name << "." << arg.name << " = "
+            result << ind << "    " << projected_name << "." << cpp_escaped(arg.name) << " = "
                    << rewrite_expr(*arg.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
                    << ";\n";
         }
@@ -3471,16 +3458,20 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                         const auto ovr = cpp_overrides.find(comp);
                         const auto& cpp =
                             ovr != cpp_overrides.end() ? ovr->second : EnttCodegenUtils::trait_cpp_name(comp, program);
-                        lhs = cpp + "_comp." + s.name;
+                        lhs = component_local(cpp) + "." + cpp_escaped(s.name);
                     }
                 }
                 if (s.accumulation.has_value() && s.accumulation->buffered) {
-                    return ind + "::" +
-                           AccumulationPlan::table_name(s.accumulation->trait, s.accumulation->field, program) + "()." +
-                           (s.op == "-=" ? "subtract(" : "add(") +
+                    return ind + AccumulationPlan::table_name(s.accumulation->trait, s.accumulation->field, program) +
+                           "()." + (s.op == "-=" ? "subtract(" : "add(") +
                            accumulation_entity(s, trait_names, program, pair_scope) + ", " + lhs + ", " +
-                           rewrite_expr(
-                               *s.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds) +
+                           rewrite_expr(*s.value,
+                                        trait_names,
+                                        program,
+                                        pointer_aliases,
+                                        cpp_overrides,
+                                        pair_scope,
+                                        local_kinds) +
                            accumulation_component(s, *s.accumulation) + ");\n";
                 }
                 lhs = settled_access(s.field_write, std::move(lhs), program);
@@ -3545,16 +3536,18 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                            "    cactus::runtime::entt_backend::generated_queue_structural_command(\n" + ind +
                            "        cactus::runtime::entt_backend::StructuralCommand::Kind::Destroy,\n" + ind +
                            "        [=](entt::registry& registry) {\n" + ind + "            if (registry.valid(" +
-                           target_name + ")) {\n" + ind + "                cactus_destroy_entity_recursive(registry, " +
+                           target_name + ")) {\n" + ind +
+                           "                ::cactus_gen::detail::cactus_destroy_entity_recursive(registry, " +
                            target_name + ");\n" + ind + "            }\n" + ind + "        });\n" + ind + "}\n";
                 }
                 if (s.target_expr.has_value()) {
                     std::string target = rewrite_expr(
                         **s.target_expr, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds);
                     return ind + "if (registry.valid(" + target + ")) {\n" + ind +
-                           "    cactus_destroy_entity_recursive(registry, " + target + ");\n" + ind + "}\n";
+                           "    ::cactus_gen::detail::cactus_destroy_entity_recursive(registry, " + target + ");\n" +
+                           ind + "}\n";
                 }
-                return ind + "cactus_destroy_entity_recursive(registry, entity);\n";
+                return ind + "::cactus_gen::detail::cactus_destroy_entity_recursive(registry, entity);\n";
             } else if constexpr (std::is_same_v<S, ReturnStmt>) {
                 if (s.value) {
                     return ind + "return " +
@@ -3742,7 +3735,7 @@ static std::string rewrite_stmt_block(const std::vector<std::unique_ptr<StmtNode
 static std::string func_signature(const FuncNode& func, const ResolvedFunc& resolved) {
     std::string signature =
         (resolved.return_type.has_value() ? EnttCodegenUtils::value_type_to_cpp(*resolved.return_type) : "void") + " " +
-        canonical_to_cpp_name(*func.resolved_func_id) + "(";
+        cpp_decl_name(*func.resolved_func_id) + "(";
     for (std::size_t index = 0; index < resolved.params.size(); ++index) {
         signature += index != 0U ? ", " : "";
         signature += EnttCodegenUtils::value_type_to_cpp(resolved.params[index].type) + " " + resolved.params[index].name;
@@ -3756,7 +3749,9 @@ std::string EnttSystemEmitter::emit_func_declaration(const FuncNode& func, const
         return {};
     }
     const auto* resolved = EnttCodegenUtils::find_func(program, *func.resolved_func_id);
-    return resolved == nullptr ? std::string{} : func_signature(func, *resolved) + ";\n";
+    return resolved == nullptr ? std::string{}
+                               : namespace_block(cpp_namespace_path(func.resolved_func_id->module),
+                                                 func_signature(func, *resolved) + ";\n");
 }
 
 std::string EnttSystemEmitter::emit_func(const FuncNode& func, const DecoratedProgram& program) {
@@ -3785,7 +3780,7 @@ std::string EnttSystemEmitter::emit_func(const FuncNode& func, const DecoratedPr
     }
     out << rewrite_stmt_block(func.body, 1, {}, program, {}, false, {}, nullptr, locals, param_kinds);
     out << "}\n\n";
-    return out.str();
+    return namespace_block(cpp_namespace_path(func.resolved_func_id->module), out.str()) + "\n";
 }
 
 // One `[&](entt::entity <left>, entt::entity <right>) { ... }` extractor per
@@ -4423,7 +4418,7 @@ static void emit_filtered_handler_body(std::ostringstream& out,
     // call site.
     out << "    auto " << handler_body_name << " = [&](entt::entity entity";
     for (const auto& cpp_name : data_cpp_types) {
-        out << ", [[maybe_unused]] " << cpp_name << "& " << cpp_name << "_comp";
+        out << ", [[maybe_unused]] " << cpp_name << "& " << component_local(cpp_name);
     }
     out << ") {\n";
     out << "        (void)entity;\n";
@@ -4449,7 +4444,7 @@ static void emit_filtered_handler_body(std::ostringstream& out,
         where_filter_name = gen_temp_name("where_filter", row_predicates.front()->location);
         out << "    auto " << where_filter_name << " = [&](entt::entity entity";
         for (const auto& cpp_name : data_cpp_types) {
-            out << ", [[maybe_unused]] " << cpp_name << "& " << cpp_name << "_comp";
+            out << ", [[maybe_unused]] " << cpp_name << "& " << component_local(cpp_name);
         }
         out << ") {\n";
         out << "        (void)entity;\n";
@@ -4459,7 +4454,7 @@ static void emit_filtered_handler_body(std::ostringstream& out,
     }
     const auto call_args = [&data_cpp_types](std::ostringstream& os) {
         for (const auto& cpp_name : data_cpp_types) {
-            os << ", " << cpp_name << "_comp";
+            os << ", " << component_local(cpp_name);
         }
     };
     // Computed once, ahead of the recipient/broadcast split, so a targeted
@@ -4616,7 +4611,7 @@ static void emit_named_requirements(std::ostringstream& out,
     }
     for (const auto& requirement : contract->named_requirements) {
         const NamedTraitRef ref{.entity = requirement.entity, .trait = requirement.trait};
-        out << "    [[maybe_unused]] auto& " << EnttCodegenUtils::named_trait_ref_name(ref, program) << " = registry.get<"
+        out << "    [[maybe_unused]] auto& " << EnttCodegenUtils::named_trait_ref_name(ref) << " = registry.get<"
             << EnttCodegenUtils::trait_cpp_name(requirement.trait, requirement.trait.local_name, program) << ">("
             << EnttCodegenUtils::named_slot_name(requirement.entity) << ");\n";
     }
@@ -5790,14 +5785,11 @@ std::string EnttSystemEmitter::emit_system(const RuleNode& sys, const DecoratedP
         const bool is_pair = is_pair_system && contract != nullptr && contract->domain_kind == HandlerDomainKind::Pair;
         const bool selectionless   = !is_pair && contract != nullptr && contract->is_selectionless();
         const bool lifecycle       = handler.has_lifecycle_trigger();
-        const auto trigger_binding = handler_trigger_binding(handler, program);
+        const auto trigger_binding = handler_trigger_binding(handler);
         const HandlerTriggerSpelling trigger{.spelling = lifecycle ? "" : handler.event_name,
                                              .binding  = trigger_binding};
         const HandlerTriggerScope trigger_scope(trigger);
-        out << "void "
-            << system_function_name(
-                   program.module_name, sys.name, EnttCodegenUtils::handler_function_suffix(handler, program))
-            << "(entt::registry& registry";
+        out << "void " << system_function_name(program.module_name, sys.name, "on").name << "(entt::registry& registry";
         out << ", const " << handler_trigger_cpp_type(handler, program) << "& " << trigger_binding;
         // Recipient is meaningful only for event-triggered handlers dispatched
         // through generated_dispatch_event; phase dispatch always calls with
@@ -5903,10 +5895,11 @@ std::string emit_single_view_renderer_body(const ExternRuleNode& sys,
                                            const SingleViewRendererSpec& spec) {
     const std::string transform     = EnttCodegenUtils::trait_cpp_name(spec.transform_trait, program);
     const std::string data          = EnttCodegenUtils::trait_cpp_name(spec.data_trait, program);
-    const std::string transform_var = transform + "_comp";
-    const std::string data_var      = data + "_comp";
+    const std::string transform_var = component_local(transform);
+    const std::string data_var      = component_local(data);
     std::ostringstream out;
-    out << "void " << system_function_name(program.module_name, sys.name, "tick") << "(entt::registry& registry) {\n";
+    out << "void " << system_function_name(program.module_name, sys.name, "tick").name
+        << "(entt::registry& registry) {\n";
     out << "    auto view = registry.view<" << transform << ", " << data << ">();\n";
     out << "    view.each([&](entt::entity entity, const " << transform << "& " << transform_var << ", const " << data
         << "& " << data_var << ") {\n";
@@ -5925,18 +5918,19 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
                                         // further in scope here
     const ExternRuleNode& sys,
     const DecoratedProgram& program) {
-    std::ostringstream out;
-
     for (const auto& spec : single_view_renderer_specs()) {
         if (spec.matches(sys)) {
             return emit_single_view_renderer_body(sys, program, spec);
         }
     }
 
+    std::ostringstream out;
+    const auto tick_signature =
+        "void " + system_function_name(program.module_name, sys.name, "tick").name + "(entt::registry& registry) {\n";
+
     const bool flat_propagation = is_flat_transform_propagation(sys, program);
     if (flat_propagation || is_volume_transform_propagation(sys, program)) {
-        out << "void " << system_function_name(program.module_name, sys.name, "tick")
-            << "(entt::registry& registry) {\n";
+        out << tick_signature;
         emit_hierarchy_propagation(
             out, program, flat_propagation ? TransformDimension::Flat : TransformDimension::Volume);
         out << "    cactus::runtime::entt_backend::propagate_hierarchy(\n";
@@ -5955,7 +5949,7 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
         const std::string cutaway  = EnttCodegenUtils::trait_cpp_name("std.voxel.volume.Cutaway", program);
         const std::string solid    = EnttCodegenUtils::trait_cpp_name("std.physics.volume.Solid", program);
         const std::string issue    = EnttCodegenUtils::enum_cpp_name("std.voxel.volume.VolumeIssue", program);
-        out << "void " << system_function_name(program.module_name, sys.name, "tick") << "(entt::registry& registry) {\n";
+        out << tick_signature;
         out << "    " << ns << "render_voxel_volumes<" << volume << ", " << renderer << ", " << cell << ", " << cutaway
             << ", " << solid << ", " << issue << "::Valid>(registry);\n";
         out << "}\n\n";
@@ -5963,14 +5957,13 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
     }
 
     if (is_follow_bodies(sys)) {
-        const std::string lt     = EnttCodegenUtils::trait_cpp_name("std.transform.volume.LocalTransform", program);
-        const std::string wt     = EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program);
-        const std::string body   = EnttCodegenUtils::trait_cpp_name("std.physics.volume.CharacterBody", program);
-        out << "void " << system_function_name(program.module_name, sys.name, "tick")
-            << "(entt::registry& registry) {\n";
+        const std::string lt   = EnttCodegenUtils::trait_cpp_name("std.transform.volume.LocalTransform", program);
+        const std::string wt   = EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program);
+        const std::string body = EnttCodegenUtils::trait_cpp_name("std.physics.volume.CharacterBody", program);
+        out << tick_signature;
         emit_hierarchy_propagation(out, program, TransformDimension::Volume);
-        out << "    const auto bodies = cactus::runtime::entt_backend::creation_ordered(registry, registry.view<" << body
-            << ">());\n";
+        out << "    const auto bodies = cactus::runtime::entt_backend::creation_ordered(registry, registry.view<"
+            << body << ">());\n";
         out << "    cactus::runtime::entt_backend::propagate_hierarchy_below(\n";
         out << "        " << EnttCodegenUtils::hierarchy_index_expr(program)
             << ", PROPAGATION, bodies, [&](entt::entity entity) { return registry.all_of<" << body
@@ -5984,29 +5977,30 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
         const std::string wt         = EnttCodegenUtils::trait_cpp_name("std.transform.flat.WorldTransform", program);
         const std::string shape      = EnttCodegenUtils::trait_cpp_name("Shape", program);
         const std::string shape_type = EnttCodegenUtils::enum_cpp_name("ShapeType", program);
-        out << "void " << system_function_name(program.module_name, sys.name, "tick")
-            << "(entt::registry& registry) {\n";
+        const auto wt_var            = component_local(wt);
+        const auto shape_var         = component_local(shape);
+        out << tick_signature;
         out << "    auto view = registry.view<" << wt << ", " << shape << ">();\n";
         out << "    cactus::runtime::raylib::BeginMode2D(cactus::runtime::entt_backend::get_active_camera_2d());\n";
-        out << "    view.each([&](entt::entity entity, const " << wt << "& " << wt << "_comp, const " << shape << "& "
-            << shape << "_comp) {\n";
+        out << "    view.each([&](entt::entity entity, const " << wt << "& " << wt_var << ", const " << shape << "& "
+            << shape_var << ") {\n";
         out << "        (void)entity;\n";
-        out << "        if (!" << shape << "_comp.visible) {\n";
+        out << "        if (!" << shape_var << ".visible) {\n";
         out << "            return;\n";
         out << "        }\n";
-        out << "        switch (" << shape << "_comp.type) {\n";
+        out << "        switch (" << shape_var << ".type) {\n";
         out << "            case " << shape_type << "::Rectangle:\n";
-        out << "                cactus::runtime::entt_backend::draw_shape_rectangle(" << wt << "_comp.position,\n";
-        out << "                               " << shape << "_comp.size,\n";
-        out << "                               " << shape << "_comp.origin,\n";
-        out << "                               " << wt << "_comp.rotation,\n";
-        out << "                               " << shape << "_comp.color);\n";
+        out << "                cactus::runtime::entt_backend::draw_shape_rectangle(" << wt_var << ".position,\n";
+        out << "                               " << shape_var << ".size,\n";
+        out << "                               " << shape_var << ".origin,\n";
+        out << "                               " << wt_var << ".rotation,\n";
+        out << "                               " << shape_var << ".color);\n";
         out << "                break;\n";
         out << "            case " << shape_type << "::Circle:\n";
-        out << "                cactus::runtime::entt_backend::draw_shape_circle(" << wt << "_comp.position,\n";
-        out << "                            " << shape << "_comp.size.x,\n";
-        out << "                            " << shape << "_comp.origin,\n";
-        out << "                            " << shape << "_comp.color);\n";
+        out << "                cactus::runtime::entt_backend::draw_shape_circle(" << wt_var << ".position,\n";
+        out << "                            " << shape_var << ".size.x,\n";
+        out << "                            " << shape_var << ".origin,\n";
+        out << "                            " << shape_var << ".color);\n";
         out << "                break;\n";
         out << "        }\n";
         out << "    });\n";
@@ -6017,15 +6011,15 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
 
     if (is_sprite_animation(sys)) {
         const std::string anim = EnttCodegenUtils::trait_cpp_name("AnimatedSprite", program);
-        out << "void " << system_function_name(program.module_name, sys.name, "tick")
-            << "(entt::registry& registry) {\n";
+        const auto anim_var    = component_local(anim);
+        out << tick_signature;
         out << "    auto view = registry.view<" << anim << ">();\n";
-        out << "    view.each([&](entt::entity entity, " << anim << "& " << anim << "_comp) {\n";
+        out << "    view.each([&](entt::entity entity, " << anim << "& " << anim_var << ") {\n";
         out << "        (void)entity;\n";
         out << "        constexpr float kFixedDt = 1.0F / 60.0F;\n";
-        out << "        cactus::runtime::entt_backend::advance_animated_sprite(" << anim << "_comp.texture, " << anim
-            << "_comp.frame, " << anim << "_comp.frame_count, " << anim << "_comp.fps, " << anim
-            << "_comp.playing, kFixedDt);\n";
+        out << "        cactus::runtime::entt_backend::advance_animated_sprite(" << anim_var << ".texture, " << anim_var
+            << ".frame, " << anim_var << ".frame_count, " << anim_var << ".fps, " << anim_var
+            << ".playing, kFixedDt);\n";
         out << "    });\n";
         out << "}\n\n";
         return out.str();
@@ -6034,13 +6028,14 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
     if (is_model_animation(sys)) {
         const std::string mr    = EnttCodegenUtils::trait_cpp_name("ModelRenderer", program);
         const std::string manim = EnttCodegenUtils::trait_cpp_name("ModelAnimator", program);
-        out << "void " << system_function_name(program.module_name, sys.name, "tick")
-            << "(entt::registry& registry) {\n";
+        const auto mr_var       = component_local(mr);
+        const auto manim_var    = component_local(manim);
+        out << tick_signature;
         // Playback emits events, so owners are visited oldest first, not in storage order.
         const bool emits = EnttCodegenUtils::find_trait(program, "ModelPlayback") != nullptr;
         out << "    auto view = registry.view<" << mr << ", " << manim << ">();\n";
-        out << "    const auto tick_owner = [&](entt::entity entity, const " << mr << "& " << mr << "_comp, " << manim
-            << "& " << manim << "_comp) {\n";
+        out << "    const auto tick_owner = [&](entt::entity entity, const " << mr << "& " << mr_var << ", " << manim
+            << "& " << manim_var << ") {\n";
         out << "        (void)entity;\n";
         out << "        constexpr float kFixedDt = 1.0F / 60.0F;\n";
 
@@ -6065,35 +6060,35 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
             out << "        if (const auto* playback = registry.try_get<" << playback << ">(entity)) {\n";
             out << "            const auto result = " << ns << "tick_model_playback<" << parent_cpp << ", " << cue
                 << ">(\n";
-            out << "                registry, entity, " << mr << "_comp.model, " << manim << "_comp.clip, "
-                << "playback->revision, " << manim << "_comp.time,\n";
-            out << "                kFixedDt * " << manim << "_comp.speed, " << manim
-                << "_comp.playing, playback->mode == " << mode_cpp << "::Once);\n";
-            out << "            " << manim << "_comp.time    = result.new_time;\n";
-            out << "            " << manim << "_comp.playing = result.new_playing;\n";
+            out << "                registry, entity, " << mr_var << ".model, " << manim_var << ".clip, "
+                << "playback->revision, " << manim_var << ".time,\n";
+            out << "                kFixedDt * " << manim_var << ".speed, " << manim_var
+                << ".playing, playback->mode == " << mode_cpp << "::Once);\n";
+            out << "            " << manim_var << ".time    = result.new_time;\n";
+            out << "            " << manim_var << ".playing = result.new_playing;\n";
             out << "            for (const auto& crossed_name : result.crossed_cue_names) {\n";
             out << "                " << ns << "generated_emit_targeted_event(\n";
-            out << "                    " << marker_evt << "{.clip = " << manim
-                << "_comp.clip, .name = crossed_name}, entity);\n";
+            out << "                    " << marker_evt << "{.clip = " << manim_var
+                << ".clip, .name = crossed_name}, entity);\n";
             out << "            }\n";
             out << "            if (result.completed) {\n";
             out << "                " << ns << "generated_emit_targeted_event(\n";
-            out << "                    " << finished_evt << "{.clip = " << manim << "_comp.clip}, entity);\n";
+            out << "                    " << finished_evt << "{.clip = " << manim_var << ".clip}, entity);\n";
             out << "            }\n";
             out << "            return;\n";
             out << "        }\n";
         }
 
-        out << "        if (!" << manim << "_comp.playing) {\n";
+        out << "        if (!" << manim_var << ".playing) {\n";
         out << "            return;\n";
         out << "        }\n";
-        out << "        " << manim << "_comp.time += kFixedDt * " << manim << "_comp.speed;\n";
-        out << "        const float duration = cactus::runtime::entt_backend::model_animation_duration(" << mr
-            << "_comp.model, " << manim << "_comp.clip);\n";
+        out << "        " << manim_var << ".time += kFixedDt * " << manim_var << ".speed;\n";
+        out << "        const float duration = cactus::runtime::entt_backend::model_animation_duration(" << mr_var
+            << ".model, " << manim_var << ".clip);\n";
         out << "        if (duration > 0.0F) {\n";
-        out << "            " << manim << "_comp.time = std::fmod(" << manim << "_comp.time, duration);\n";
-        out << "            if (" << manim << "_comp.time < 0.0F) {\n";
-        out << "                " << manim << "_comp.time += duration;\n";
+        out << "            " << manim_var << ".time = std::fmod(" << manim_var << ".time, duration);\n";
+        out << "            if (" << manim_var << ".time < 0.0F) {\n";
+        out << "                " << manim_var << ".time += duration;\n";
         out << "            }\n";
         out << "        }\n";
         out << "    };\n";
@@ -6112,23 +6107,24 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
         const std::string wt    = EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program);
         const std::string mr    = EnttCodegenUtils::trait_cpp_name("ModelRenderer", program);
         const std::string manim = EnttCodegenUtils::trait_cpp_name("ModelAnimator", program);
-        out << "void " << system_function_name(program.module_name, sys.name, "tick")
-            << "(entt::registry& registry) {\n";
+        const auto wt_var       = component_local(wt);
+        const auto mr_var       = component_local(mr);
+        out << tick_signature;
         out << "    auto view = registry.view<" << wt << ", " << mr << ">();\n";
-        out << "    view.each([&](entt::entity entity, const " << wt << "& " << wt << "_comp, const " << mr << "& "
-            << mr << "_comp) {\n";
+        out << "    view.each([&](entt::entity entity, const " << wt << "& " << wt_var << ", const " << mr << "& "
+            << mr_var << ") {\n";
         out << "        (void)entity;\n";
         if (EnttCodegenUtils::find_trait(program, "ModelAnimator") != nullptr) {
             out << "        if (const auto* animator = registry.try_get<" << manim << ">(entity)) {\n";
-            out << "            cactus::runtime::entt_backend::submit_model(" << wt << "_comp.position, " << wt
-                << "_comp.rotation, " << wt << "_comp.scale, " << mr << "_comp.model, " << mr << "_comp.visible, " << mr
-                << "_comp.cast_shadow, animator->clip, animator->time, " << mr << "_comp.color);\n";
+            out << "            cactus::runtime::entt_backend::submit_model(" << wt_var << ".position, " << wt_var
+                << ".rotation, " << wt_var << ".scale, " << mr_var << ".model, " << mr_var << ".visible, " << mr_var
+                << ".cast_shadow, animator->clip, animator->time, " << mr_var << ".color);\n";
             out << "            return;\n";
             out << "        }\n";
         }
-        out << "        cactus::runtime::entt_backend::submit_model(" << wt << "_comp.position, " << wt
-            << "_comp.rotation, " << wt << "_comp.scale, " << mr << "_comp.model, " << mr << "_comp.visible, " << mr
-            << "_comp.cast_shadow, " << mr << "_comp.color);\n";
+        out << "        cactus::runtime::entt_backend::submit_model(" << wt_var << ".position, " << wt_var
+            << ".rotation, " << wt_var << ".scale, " << mr_var << ".model, " << mr_var << ".visible, " << mr_var
+            << ".cast_shadow, " << mr_var << ".color);\n";
         out << "    });\n";
         out << "}\n\n";
         return out.str();
@@ -6136,13 +6132,13 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
 
     if (is_directional_light_render(sys)) {
         const std::string dl = EnttCodegenUtils::trait_cpp_name("DirectionalLight", program);
-        out << "void " << system_function_name(program.module_name, sys.name, "tick")
-            << "(entt::registry& registry) {\n";
+        const auto dl_var    = component_local(dl);
+        out << tick_signature;
         out << "    auto view = registry.view<" << dl << ">();\n";
-        out << "    view.each([&](entt::entity entity, const " << dl << "& " << dl << "_comp) {\n";
+        out << "    view.each([&](entt::entity entity, const " << dl << "& " << dl_var << ") {\n";
         out << "        (void)entity;\n";
-        out << "        cactus::runtime::entt_backend::register_directional_light(" << dl << "_comp.direction, " << dl
-            << "_comp.color, " << dl << "_comp.intensity, " << dl << "_comp.enabled);\n";
+        out << "        cactus::runtime::entt_backend::register_directional_light(" << dl_var << ".direction, "
+            << dl_var << ".color, " << dl_var << ".intensity, " << dl_var << ".enabled);\n";
         out << "    });\n";
         out << "}\n\n";
         return out.str();
@@ -6151,16 +6147,17 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
     if (is_any_text_renderer_2d(sys)) {
         const std::string wt = EnttCodegenUtils::trait_cpp_name("std.transform.flat.WorldTransform", program);
         const std::string tl = EnttCodegenUtils::trait_cpp_name("TextLabel", program);
-        out << "void " << system_function_name(program.module_name, sys.name, "tick")
-            << "(entt::registry& registry) {\n";
+        const auto wt_var    = component_local(wt);
+        const auto tl_var    = component_local(tl);
+        out << tick_signature;
         if (!world_transform_is_volume(program)) {
             out << "    auto view = registry.view<" << wt << ", " << tl << ">();\n";
-            out << "    view.each([&](entt::entity entity, const " << wt << "& " << wt << "_comp, const " << tl << "& "
-                << tl << "_comp) {\n";
+            out << "    view.each([&](entt::entity entity, const " << wt << "& " << wt_var << ", const " << tl << "& "
+                << tl_var << ") {\n";
             out << "        (void)entity;\n";
-            out << "        cactus::runtime::entt_backend::submit_text_2d(" << wt << "_comp.position, " << wt
-                << "_comp.rotation, " << tl << "_comp.font_size, " << tl << "_comp.color, " << tl << "_comp.text, "
-                << tl << "_comp.visible);\n";
+            out << "        cactus::runtime::entt_backend::submit_text_2d(" << wt_var << ".position, " << wt_var
+                << ".rotation, " << tl_var << ".font_size, " << tl_var << ".color, " << tl_var << ".text, " << tl_var
+                << ".visible);\n";
             out << "    });\n";
         } else {
             out << "    (void)registry;\n";
@@ -6172,15 +6169,16 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
     if (is_any_text_renderer_3d(sys)) {
         const std::string wt = EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program);
         const std::string tl = EnttCodegenUtils::trait_cpp_name("TextLabel", program);
-        out << "void " << system_function_name(program.module_name, sys.name, "tick")
-            << "(entt::registry& registry) {\n";
+        const auto wt_var    = component_local(wt);
+        const auto tl_var    = component_local(tl);
+        out << tick_signature;
         if (world_transform_is_volume(program)) {
             out << "    auto view = registry.view<" << wt << ", " << tl << ">();\n";
-            out << "    view.each([&](entt::entity entity, const " << wt << "& " << wt << "_comp, const " << tl << "& "
-                << tl << "_comp) {\n";
-            out << "        cactus::runtime::entt_backend::submit_text_3d(static_cast<uint32_t>(entity), " << wt
-                << "_comp.position, " << wt << "_comp.rotation, " << wt << "_comp.scale, " << tl << "_comp.font_size, "
-                << tl << "_comp.color, " << tl << "_comp.text, " << tl << "_comp.visible);\n";
+            out << "    view.each([&](entt::entity entity, const " << wt << "& " << wt_var << ", const " << tl << "& "
+                << tl_var << ") {\n";
+            out << "        cactus::runtime::entt_backend::submit_text_3d(static_cast<uint32_t>(entity), " << wt_var
+                << ".position, " << wt_var << ".rotation, " << wt_var << ".scale, " << tl_var << ".font_size, "
+                << tl_var << ".color, " << tl_var << ".text, " << tl_var << ".visible);\n";
             out << "    });\n";
         } else {
             out << "    (void)registry;\n";
@@ -6193,13 +6191,13 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
         // Window-space HUD text: no WorldTransform and no flavor gating — the
         // same emission serves flat and volume programs (dsl-model-animation D5).
         const std::string sl = EnttCodegenUtils::trait_cpp_name("ScreenLabel", program);
-        out << "void " << system_function_name(program.module_name, sys.name, "tick")
-            << "(entt::registry& registry) {\n";
+        const auto sl_var    = component_local(sl);
+        out << tick_signature;
         out << "    auto view = registry.view<" << sl << ">();\n";
-        out << "    view.each([&](entt::entity entity, const " << sl << "& " << sl << "_comp) {\n";
+        out << "    view.each([&](entt::entity entity, const " << sl << "& " << sl_var << ") {\n";
         out << "        (void)entity;\n";
-        out << "        cactus::runtime::entt_backend::submit_screen_label(" << sl << "_comp.position, " << sl
-            << "_comp.font_size, " << sl << "_comp.color, " << sl << "_comp.text, " << sl << "_comp.visible);\n";
+        out << "        cactus::runtime::entt_backend::submit_screen_label(" << sl_var << ".position, " << sl_var
+            << ".font_size, " << sl_var << ".color, " << sl_var << ".text, " << sl_var << ".visible);\n";
         out << "    });\n";
         out << "}\n\n";
         return out.str();
@@ -6217,8 +6215,7 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
         // existence-scan shape the now-removed hardcoded GizmoRenderer2D/3D
         // bodies used for their __editor_active check.
         const std::string cam3d = EnttCodegenUtils::trait_cpp_name("EditorCamera3D", program);
-        out << "void " << system_function_name(program.module_name, sys.name, "tick")
-            << "(entt::registry& registry) {\n";
+        out << tick_signature;
         out << "    bool __has_3d_rig = false;\n";
         out << "    auto __cam3d_view = registry.view<" << cam3d << ">();\n";
         out << "    for (auto __e : __cam3d_view) { (void)__e; __has_3d_rig = true; break; }\n";
@@ -6232,8 +6229,7 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
 
     if (is_editor_extern_system(sys)) {
         // EditorPropertyPanel — unimplemented stub.
-        out << "void " << system_function_name(program.module_name, sys.name, "tick")
-            << "(entt::registry& registry) {\n";
+        out << tick_signature;
         out << "    (void)registry;\n";
         out << "}\n\n";
         return out.str();
@@ -6257,8 +6253,7 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
         const std::string anim_cpp   = EnttCodegenUtils::trait_cpp_name("FrameAnimation", program);
         const std::string pstate_cpp = EnttCodegenUtils::trait_cpp_name("std.pointer.PointerState", program);
 
-        out << "void " << system_function_name(program.module_name, sys.name, "tick")
-            << "(entt::registry& registry) {\n";
+        out << tick_signature;
         out << "    std::vector<entt::entity> __ui_paint_order;\n";
         out << "    for (auto __e : registry.view<" << cl_cpp << ">()) { __ui_paint_order.push_back(__e); }\n";
         out << "    std::ranges::sort(__ui_paint_order, [&](entt::entity __a, entt::entity __b) {\n";
@@ -6335,8 +6330,7 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
         const std::string release_evt = event_cpp_type("PointerRelease", program);
         const std::string click_evt   = event_cpp_type("Click", program);
 
-        out << "void " << system_function_name(program.module_name, sys.name, "tick")
-            << "(entt::registry& registry) {\n";
+        out << tick_signature;
         out << "    const auto __t = cactus::runtime::entt_backend::compute_pointer_frame_transitions(registry);\n";
         out << "    const Vector2 __pos = cactus::runtime::entt_backend::mouse_position();\n";
         out << "    if (__t.hover_changed) {\n";
@@ -6401,6 +6395,7 @@ std::string EnttSystemEmitter::emit_entt_hierarchy_helpers(const DecoratedProgra
     }
 
     std::ostringstream out;
+    out << "namespace cactus_gen::detail {\n";
     // What the hierarchy facts prove; a constant depth bound allows per-level passes.
     out << "[[maybe_unused]] constexpr auto kCactusHierarchyStrategy = "
         << EnttCodegenUtils::hierarchy_strategy_cpp(program) << ";\n";
@@ -6413,7 +6408,8 @@ std::string EnttSystemEmitter::emit_entt_hierarchy_helpers(const DecoratedProgra
            "entity) {\n";
     out << "    cactus::runtime::entt_backend::destroy_entity_recursive(registry, "
         << EnttCodegenUtils::hierarchy_index_expr(program) << ", entity);\n";
-    out << "}\n\n";
+    out << "}\n";
+    out << "}  // namespace cactus_gen::detail\n\n";
     return out.str();
 }
 

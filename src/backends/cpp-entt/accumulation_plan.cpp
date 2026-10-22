@@ -200,7 +200,7 @@ std::string AccumulationPlan::entry_flushes(const HandlerIdentity& handler) cons
     }
     std::string text;
     for (const auto& table : found->second) {
-        text += "    ::" + table + "().flush();\n";
+        text += "    " + table + "().flush();\n";
     }
     return text;
 }
@@ -212,8 +212,8 @@ std::string AccumulationPlan::exit_rebase(const HandlerIdentity& handler) const 
 std::string AccumulationPlan::table_name(const SymbolId& trait,
                                          const std::string& field,
                                          const DecoratedProgram& program) {
-    return "generated_accumulation__" + EnttCodegenUtils::trait_cpp_name(trait, trait.local_name, program) + "__" +
-           field;
+    return "::cactus_gen::detail::accumulation<" + EnttCodegenUtils::trait_cpp_name(trait, trait.local_name, program) +
+           ">::" + cpp_escaped(field);
 }
 
 AccumulationScope::AccumulationScope(const AccumulationPlan& plan)

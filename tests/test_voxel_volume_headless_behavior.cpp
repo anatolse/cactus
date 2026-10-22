@@ -18,15 +18,15 @@ namespace {
 
 namespace backend = cactus::runtime::entt_backend;
 
-using Cell      = std_voxel_volume__Cell;
-using Volume    = std_voxel_volume__Volume;
-using CellProbe = std_voxel_volume__CellProbe;
-using RayProbe  = std_voxel_volume__RayProbe;
-using Solid     = std_physics_volume__Solid;
-using RayHit    = std_collision_volume__RayHit;
+using Cell      = cactus_gen::stdlib::voxel::volume::Cell;
+using Volume    = cactus_gen::stdlib::voxel::volume::Volume;
+using CellProbe = cactus_gen::stdlib::voxel::volume::CellProbe;
+using RayProbe  = cactus_gen::stdlib::voxel::volume::RayProbe;
+using Solid     = cactus_gen::stdlib::physics::volume::Solid;
+using RayHit    = cactus_gen::stdlib::collision::volume::RayHit;
 
 const auto& slots() {
-    return generated_named_slots();
+    return cactus_gen::detail::generated_named_slots();
 }
 
 struct World {
@@ -39,7 +39,7 @@ struct World {
 
     void frame(int count = 1) {
         for (int i = 0; i < count; ++i) {
-            backend::generated_inject_external_event(std_core__frameEvent{.dt = 1.0F / 60.0F});
+            backend::generated_inject_external_event(cactus_gen::stdlib::core::frameEvent{.dt = 1.0F / 60.0F});
             backend::generated_drain_external_events(registry);
         }
     }
@@ -89,7 +89,7 @@ Catch::Approx near(float value) {
 }
 
 RayHit cast(Vector3 origin, Vector3 direction, float max_distance, Vector3 center, Vector3 size) {
-    return std_collision_volume__ray_box(origin, direction, max_distance, center, size);
+    return cactus_gen::stdlib::collision::volume::ray_box(origin, direction, max_distance, center, size);
 }
 
 constexpr Vector3 kCenter{.x = 0.0F, .y = 0.0F, .z = 0.0F};
@@ -189,7 +189,7 @@ TEST_CASE("ray_box is total for invalid geometry", "[runtime][codegen-entt][stdl
 
 TEST_CASE("a volume fills in batches with one cell per coordinate", "[runtime][codegen-entt][stdlib-voxel-volume]") {
     World world;
-    const auto terrain = slots().voxel_volume__Terrain;
+    const auto terrain = slots().voxel_volume.Terrain;
     world.frame();
     CHECK(world.registry.get<Volume>(terrain).cells_built == 16);
     world.fill();
@@ -204,18 +204,18 @@ TEST_CASE("a volume fills in batches with one cell per coordinate", "[runtime][c
         }
     }
     const auto cell = world.cell_at(terrain, 2, -1, 3);
-    const auto& place = world.registry.get<std_transform_volume__WorldTransform>(cell);
+    const auto& place = world.registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(cell);
     CHECK(place.position.x == near(12.5F));
     CHECK(place.position.y == near(-0.5F));
     CHECK(place.position.z == near(3.5F));
-    CHECK(world.registry.get<std_physics_volume__BoxCollider>(cell).size.x == near(1.0F));
+    CHECK(world.registry.get<cactus_gen::stdlib::physics::volume::BoxCollider>(cell).size.x == near(1.0F));
 }
 
 TEST_CASE("air cells exist without Solid and materials follow on added Cell",
           "[runtime][codegen-entt][stdlib-voxel-volume]") {
     World world;
     world.fill();
-    const auto terrain = slots().voxel_volume__Terrain;
+    const auto terrain = slots().voxel_volume.Terrain;
     const auto stone   = world.cell_at(terrain, 1, -1, 1);
     const auto wood    = world.cell_at(terrain, 1, 0, 1);
     const auto air     = world.cell_at(terrain, 3, 0, 1);
@@ -229,24 +229,26 @@ TEST_CASE("air cells exist without Solid and materials follow on added Cell",
 TEST_CASE("an invalid volume creates no cells and reports why", "[runtime][codegen-entt][stdlib-voxel-volume]") {
     World world;
     world.fill();
-    const auto broken = slots().voxel_volume__Broken;
+    const auto broken = slots().voxel_volume.Broken;
     CHECK(world.cell_count(broken) == 0);
-    CHECK(world.registry.get<Volume>(broken).issue == std_voxel_volume__VolumeIssue::BadCellSize);
-    CHECK(world.registry.get<Volume>(slots().voxel_volume__Terrain).issue == std_voxel_volume__VolumeIssue::Valid);
+    CHECK(world.registry.get<Volume>(broken).issue == cactus_gen::stdlib::voxel::volume::VolumeIssue::BadCellSize);
+    CHECK(world.registry.get<Volume>(slots().voxel_volume.Terrain).issue ==
+          cactus_gen::stdlib::voxel::volume::VolumeIssue::Valid);
 }
 
 TEST_CASE("bounds too far apart for an int extent are too many cells", "[runtime][codegen-entt][stdlib-voxel-volume]") {
     const Vector3 origin{.x = 0.0F, .y = 0.0F, .z = 0.0F};
-    CHECK(std_voxel_volume__volume_issue(origin, 1.0F, -2147483647 - 1, 0, 0, 2147483647, 0, 0) ==
-          std_voxel_volume__VolumeIssue::TooManyCells);
-    CHECK(std_voxel_volume__volume_issue(origin, 1.0F, 0, 0, 0, 3, 2, 3) == std_voxel_volume__VolumeIssue::Valid);
+    CHECK(cactus_gen::stdlib::voxel::volume::volume_issue(origin, 1.0F, -2147483647 - 1, 0, 0, 2147483647, 0, 0) ==
+          cactus_gen::stdlib::voxel::volume::VolumeIssue::TooManyCells);
+    CHECK(cactus_gen::stdlib::voxel::volume::volume_issue(origin, 1.0F, 0, 0, 0, 3, 2, 3) ==
+          cactus_gen::stdlib::voxel::volume::VolumeIssue::Valid);
 }
 
 TEST_CASE("cell probes find air and solid cells, or nothing", "[runtime][codegen-entt][stdlib-voxel-volume]") {
     World world;
     world.fill();
-    const auto terrain = slots().voxel_volume__Terrain;
-    auto& probe        = world.registry.get<CellProbe>(slots().voxel_volume__Picker);
+    const auto terrain = slots().voxel_volume.Terrain;
+    auto& probe        = world.registry.get<CellProbe>(slots().voxel_volume.Picker);
     probe.x = 3;
     probe.y = 1;
     probe.z = 2;
@@ -268,14 +270,14 @@ TEST_CASE("cell probes find air and solid cells, or nothing", "[runtime][codegen
 TEST_CASE("a duplicate cell is reported and the earliest one is chosen", "[runtime][codegen-entt][stdlib-voxel-volume]") {
     World world;
     world.fill();
-    const auto terrain = slots().voxel_volume__Terrain;
-    auto& probe        = world.registry.get<CellProbe>(slots().voxel_volume__Picker);
+    const auto terrain = slots().voxel_volume.Terrain;
+    auto& probe        = world.registry.get<CellProbe>(slots().voxel_volume.Picker);
     probe.x = 2;
     probe.y = 1;
     probe.z = 2;
     CHECK_FALSE(world.registry.get<Volume>(terrain).duplicate_found);
     world.frame();
-    CHECK(probe.cell == slots().voxel_volume__StrayCell);
+    CHECK(probe.cell == slots().voxel_volume.StrayCell);
     CHECK(world.registry.get<Volume>(terrain).duplicate_found);
 }
 
@@ -284,8 +286,8 @@ TEST_CASE("a duplicate cell is reported and the earliest one is chosen", "[runti
 TEST_CASE("a ray probe names the struck cell, face and adjacent coordinate", "[runtime][codegen-entt][stdlib-voxel-volume]") {
     World world;
     world.fill();
-    const auto terrain = slots().voxel_volume__Terrain;
-    const auto eye     = slots().voxel_volume__Eye;
+    const auto terrain = slots().voxel_volume.Terrain;
+    const auto eye     = slots().voxel_volume.Eye;
     world.aim(eye, Vector3{.x = 11.5F, .y = 3.0F, .z = 1.5F}, Vector3{.x = 0.0F, .y = -1.0F, .z = 0.0F});
     world.frame();
     const auto& ray = world.eye(eye);
@@ -305,7 +307,7 @@ TEST_CASE("a ray probe names the struck cell, face and adjacent coordinate", "[r
 TEST_CASE("a ray probe places against a positive-X face", "[runtime][codegen-entt][stdlib-voxel-volume]") {
     World world;
     world.fill();
-    const auto eye = slots().voxel_volume__Eye;
+    const auto eye = slots().voxel_volume.Eye;
     world.aim(eye, Vector3{.x = 13.9F, .y = 0.5F, .z = 2.5F}, Vector3{.x = -1.0F, .y = 0.0F, .z = 0.0F});
     world.frame();
     const auto& ray = world.eye(eye);
@@ -319,7 +321,7 @@ TEST_CASE("a ray probe places against a positive-X face", "[runtime][codegen-ent
 TEST_CASE("a ray near a cell centre but outside it is not a hit", "[runtime][codegen-entt][stdlib-voxel-volume]") {
     World world;
     world.fill();
-    const auto eye = slots().voxel_volume__Eye;
+    const auto eye = slots().voxel_volume.Eye;
     // Over the air at x = 3 (the solid wood ends at x = 2), skimming 0.01
     // above the wood top, then too short to reach the stone.
     world.aim(eye, Vector3{.x = 9.0F, .y = 1.01F, .z = 1.5F}, Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F}, 10.0F);
@@ -330,7 +332,7 @@ TEST_CASE("a ray near a cell centre but outside it is not a hit", "[runtime][cod
 TEST_CASE("a miss replaces an earlier hit", "[runtime][codegen-entt][stdlib-voxel-volume]") {
     World world;
     world.fill();
-    const auto eye = slots().voxel_volume__Eye;
+    const auto eye = slots().voxel_volume.Eye;
     world.aim(eye, Vector3{.x = 11.5F, .y = 3.0F, .z = 1.5F}, Vector3{.x = 0.0F, .y = -1.0F, .z = 0.0F});
     world.frame();
     REQUIRE(world.eye(eye).hit);
@@ -352,7 +354,7 @@ TEST_CASE("a ray from inside a solid cell hits it at zero with no adjacent cell"
           "[runtime][codegen-entt][stdlib-voxel-volume]") {
     World world;
     world.fill();
-    const auto eye = slots().voxel_volume__Eye;
+    const auto eye = slots().voxel_volume.Eye;
     world.aim(eye, Vector3{.x = 10.5F, .y = -0.5F, .z = 0.5F}, Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F});
     world.frame();
     const auto& ray = world.eye(eye);
@@ -366,7 +368,7 @@ TEST_CASE("a ray from inside a solid cell hits it at zero with no adjacent cell"
 TEST_CASE("ray probes handle negative coordinates and scaled cells", "[runtime][codegen-entt][stdlib-voxel-volume]") {
     World world;
     world.fill();
-    const auto eye = slots().voxel_volume__FineEye;
+    const auto eye = slots().voxel_volume.FineEye;
     // Fine's cell (-2, 0, -1) spans x [-6, -5.5], y [0, 0.5], z [19.5, 20].
     world.aim(eye, Vector3{.x = -5.75F, .y = 2.0F, .z = 19.75F}, Vector3{.x = 0.0F, .y = -3.0F, .z = 0.0F});
     world.frame();
@@ -383,12 +385,12 @@ TEST_CASE("a consumer after the probes sees this pass's result, and the dig show
           "[runtime][codegen-entt][stdlib-voxel-volume]") {
     World world;
     world.fill();
-    const auto terrain = slots().voxel_volume__Terrain;
-    const auto shovel  = slots().voxel_volume__Shovel;
+    const auto terrain = slots().voxel_volume.Terrain;
+    const auto shovel  = slots().voxel_volume.Shovel;
     world.aim(shovel, Vector3{.x = 11.5F, .y = 3.0F, .z = 1.5F}, Vector3{.x = 0.0F, .y = -1.0F, .z = 0.0F});
-    world.registry.get<voxel_volume__Digger>(shovel).armed = true;
+    world.registry.get<cactus_gen::voxel_volume::Digger>(shovel).armed = true;
     world.frame();
-    const auto& digger = world.registry.get<voxel_volume__Digger>(shovel);
+    const auto& digger = world.registry.get<cactus_gen::voxel_volume::Digger>(shovel);
     CHECK(digger.saw_x == 1);
     CHECK(digger.saw_y == 0);
     CHECK(digger.saw_z == 1);
@@ -403,8 +405,8 @@ TEST_CASE("a consumer after the probes sees this pass's result, and the dig show
 TEST_CASE("destroyed cells drop out of later probe passes", "[runtime][codegen-entt][stdlib-voxel-volume]") {
     World world;
     world.fill();
-    const auto terrain = slots().voxel_volume__Terrain;
-    const auto eye     = slots().voxel_volume__Eye;
+    const auto terrain = slots().voxel_volume.Terrain;
+    const auto eye     = slots().voxel_volume.Eye;
     world.registry.destroy(world.cell_at(terrain, 1, 0, 1));
     world.aim(eye, Vector3{.x = 11.5F, .y = 3.0F, .z = 1.5F}, Vector3{.x = 0.0F, .y = -1.0F, .z = 0.0F});
     world.frame();
@@ -420,23 +422,23 @@ TEST_CASE("a restore brings back saved occupancy and textures without refilling"
     World world;
     world.fill();
     auto& registry     = world.registry;
-    const auto terrain = slots().voxel_volume__Terrain;
+    const auto terrain = slots().voxel_volume.Terrain;
     registry.remove<Solid>(world.cell_at(terrain, 1, 0, 1));
     registry.get<Cell>(world.cell_at(terrain, 0, 0, 0)).texture = Stone;
-    registry.get<voxel_volume__StorageControl>(slots().voxel_volume__Storage).save = true;
+    registry.get<cactus_gen::voxel_volume::StorageControl>(slots().voxel_volume.Storage).save = true;
     world.frame(2);
-    REQUIRE(registry.get<voxel_volume__StorageControl>(slots().voxel_volume__Storage).failure.empty());
-    REQUIRE(registry.get<voxel_volume__StorageControl>(slots().voxel_volume__Storage).saved);
+    REQUIRE(registry.get<cactus_gen::voxel_volume::StorageControl>(slots().voxel_volume.Storage).failure.empty());
+    REQUIRE(registry.get<cactus_gen::voxel_volume::StorageControl>(slots().voxel_volume.Storage).saved);
 
     registry.emplace<Solid>(world.cell_at(terrain, 1, 0, 1));
     registry.emplace<Solid>(world.cell_at(terrain, 3, 1, 3));
     registry.get<Cell>(world.cell_at(terrain, 0, 0, 0)).texture = Wood;
-    registry.get<voxel_volume__StorageControl>(slots().voxel_volume__Storage).restore = true;
-    const auto storage = slots().voxel_volume__Storage;
+    registry.get<cactus_gen::voxel_volume::StorageControl>(slots().voxel_volume.Storage).restore = true;
+    const auto storage = slots().voxel_volume.Storage;
     world.frame(3);
-    if (registry.valid(storage) && registry.all_of<voxel_volume__StorageControl>(storage)) {
-        INFO(registry.get<voxel_volume__StorageControl>(storage).failure);
-        CHECK(registry.get<voxel_volume__StorageControl>(storage).failure.empty());
+    if (registry.valid(storage) && registry.all_of<cactus_gen::voxel_volume::StorageControl>(storage)) {
+        INFO(registry.get<cactus_gen::voxel_volume::StorageControl>(storage).failure);
+        CHECK(registry.get<cactus_gen::voxel_volume::StorageControl>(storage).failure.empty());
     }
 
     entt::entity restored = entt::null;

@@ -27,14 +27,14 @@ entt::entity entity_with(entt::registry& registry) {
 TEST_CASE("a SaveRequested emitted from on-load is processed at that same load boundary, not deferred to a frame",
           "[runtime][persistence][scheduling][headless]") {
     entt::registry registry;
-    cactus::runtime::entt_backend::generated_scheduler_state().std_core__fixed_tick = {};
+    cactus::runtime::entt_backend::generated_scheduler_state().stdlib.core.fixed_tick = {};
 
     // init_and_load runs module init, load-time setup, and the `on load:`
     // activation — nothing here drives a frame.
     init_and_load(registry);
 
-    auto& status = registry.get<persistence_save_on_load__SaveStatus>(
-        entity_with<persistence_save_on_load__SaveStatus>(registry));
+    auto& status = registry.get<cactus_gen::persistence_save_on_load::SaveStatus>(
+        entity_with<cactus_gen::persistence_save_on_load::SaveStatus>(registry));
     CHECK(status.requests_sent == 1);
     // Scene transitions obey the same boundary ordering as any other
     // activation: the outcome must already have arrived, without a frame

@@ -15,13 +15,13 @@ TEST_CASE("parameterized templates reuse runtime values across descendants", "[r
     cactus_headless_test::dispatch_load_event(registry);
     int roots = 0;
     int children = 0;
-    for (const auto entity : registry.view<parameterized_templates__Data>()) {
-        const auto& data = registry.get<parameterized_templates__Data>(entity);
-        if (registry.all_of<std_core__Parent>(entity)) {
+    for (const auto entity : registry.view<cactus_gen::parameterized_templates::Data>()) {
+        const auto& data = registry.get<cactus_gen::parameterized_templates::Data>(entity);
+        if (registry.all_of<cactus_gen::stdlib::core::Parent>(entity)) {
             ++children;
-            const auto parent = registry.get<std_core__Parent>(entity).parent;
+            const auto parent = registry.get<cactus_gen::stdlib::core::Parent>(entity).parent;
             REQUIRE(registry.valid(parent));
-            CHECK(data.value == registry.get<parameterized_templates__Data>(parent).value);
+            CHECK(data.value == registry.get<cactus_gen::parameterized_templates::Data>(parent).value);
             CHECK(data.derived == (data.value == 11 ? 88 : data.value * 2));
         } else {
             ++roots;

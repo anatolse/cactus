@@ -14,7 +14,7 @@
 
 namespace {
 
-using Results = flat_query_ties__Results;
+using Results = cactus_gen::flat_query_ties::Results;
 using cactus::runtime::entt_backend::CreationOrdinal;
 
 struct World {
@@ -42,17 +42,17 @@ struct World {
     }
 
     entt::entity box(float x, float y, float w, float h) {
-        inject(flat_query_ties__MakeBoxEvent{.x = x, .y = y, .w = w, .h = h});
+        inject(cactus_gen::flat_query_ties::MakeBoxEvent{.x = x, .y = y, .w = w, .h = h});
         return newest();
     }
 
     entt::entity circle(float x, float y, float radius) {
-        inject(flat_query_ties__MakeCircleEvent{.x = x, .y = y, .radius = radius});
+        inject(cactus_gen::flat_query_ties::MakeCircleEvent{.x = x, .y = y, .radius = radius});
         return newest();
     }
 
     [[nodiscard]] int place(entt::entity collider) const {
-        return registry.get<flat_query_ties__Rank>(collider).place;
+        return registry.get<cactus_gen::flat_query_ties::Rank>(collider).place;
     }
 };
 
@@ -79,10 +79,11 @@ TEST_CASE("flat collider queries break ties by creation order", "[runtime][physi
     const auto third  = world.box(201.0F, 0.0F, 2.0F, 2.0F);
     const auto toucher = world.box(200.0F, 0.0F, 2.0F, 2.0F);
 
-    world.inject(std_core__frameEvent{.dt = 1.0F / 60.0F});
-    world.inject(flat_query_ties__ProbeEvent{.caster = caster, .sinker = sinker, .toucher = toucher});
+    world.inject(cactus_gen::stdlib::core::frameEvent{.dt = 1.0F / 60.0F});
+    world.inject(cactus_gen::flat_query_ties::ProbeEvent{.caster = caster, .sinker = sinker, .toucher = toucher});
 
-    const auto& results = world.registry.get<Results>(generated_named_slots().flat_query_ties__Board);
+    const auto& results =
+        world.registry.get<Results>(cactus_gen::detail::generated_named_slots().flat_query_ties.Board);
     CHECK(results.cast == older_tile);
     CHECK(results.deepest == older_circle);
     CHECK(world.place(first) == 1);

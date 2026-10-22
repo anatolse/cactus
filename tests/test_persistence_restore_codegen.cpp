@@ -169,8 +169,8 @@ entity Hud:
 )");
     const auto rebind = function_body(unit->code, "void generated_rebind_named_slots");
     CHECK(contains(rebind, "cactus::runtime::entt_backend::rebind_named_slots(registry, {{"));
-    CHECK(contains(rebind, ", &generated_named_slots().world__Game}});"));
-    CHECK(contains(rebind, "generated_named_slots().world__Hud = entt::null;"));
+    CHECK(contains(rebind, ", &::cactus_gen::detail::generated_named_slots().world.Game}});"));
+    CHECK(contains(rebind, "::cactus_gen::detail::generated_named_slots().world.Hud = entt::null;"));
     const auto restore = function_body(unit->code, "generated_restore_world");
     const auto publish = restore.find("registry = std::move(staged);");
     const auto rebound = restore.find("::generated_rebind_named_slots(registry);");

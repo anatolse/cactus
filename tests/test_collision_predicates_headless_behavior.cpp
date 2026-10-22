@@ -16,7 +16,8 @@
 namespace {
 
 void drive_frame(entt::registry& registry) {
-    cactus::runtime::entt_backend::generated_inject_external_event(std_core__frameEvent{.dt = 1.0F / 60.0F});
+    cactus::runtime::entt_backend::generated_inject_external_event(
+        cactus_gen::stdlib::core::frameEvent{.dt = 1.0F / 60.0F});
     cactus::runtime::entt_backend::generated_drain_external_events(registry);
 }
 
@@ -30,9 +31,9 @@ TEST_CASE("stdlib-collision: circles_overlap and spheres_overlap distinguish ove
 
     drive_frame(registry);
 
-    const auto view = registry.view<collision_predicates_runtime__Probe>();
+    const auto view = registry.view<cactus_gen::collision_predicates_runtime::Probe>();
     REQUIRE(view.size() == 1);
-    const auto& probe = registry.get<collision_predicates_runtime__Probe>(*view.begin());
+    const auto& probe = registry.get<cactus_gen::collision_predicates_runtime::Probe>(*view.begin());
 
     CHECK(probe.circle_overlap);
     CHECK_FALSE(probe.circle_touch);
@@ -56,10 +57,10 @@ TEST_CASE("dsl-where-clause: spheres_overlap is usable as an ordinary pure where
 
     drive_frame(registry);
 
-    const auto view = registry.view<collision_predicates_runtime__Body>();
+    const auto view = registry.view<cactus_gen::collision_predicates_runtime::Body>();
     REQUIRE(view.size() == 3);
     for (auto entity : view) {
-        const auto& body = registry.get<collision_predicates_runtime__Body>(entity);
+        const auto& body = registry.get<cactus_gen::collision_predicates_runtime::Body>(entity);
         if (body.position.x > 5.0F) {
             CHECK(body.overlap_hits == 0);  // BodyFar
         } else {
@@ -76,9 +77,9 @@ TEST_CASE("stdlib-collision: sphere_box_separation handles contact, penetration,
 
     drive_frame(registry);
 
-    const auto view = registry.view<collision_predicates_runtime__Probe>();
+    const auto view = registry.view<cactus_gen::collision_predicates_runtime::Probe>();
     REQUIRE(view.size() == 1);
-    const auto& probe = registry.get<collision_predicates_runtime__Probe>(*view.begin());
+    const auto& probe = registry.get<cactus_gen::collision_predicates_runtime::Probe>(*view.begin());
 
     CHECK(probe.sphere_box_separate.x == Catch::Approx(0.0F));
     CHECK(probe.sphere_box_separate.y == Catch::Approx(0.0F));
@@ -105,9 +106,9 @@ TEST_CASE("stdlib-collision: sphere_box_separation remains usable in a pure wher
 
     drive_frame(registry);
 
-    const auto view = registry.view<collision_predicates_runtime__SphereBoxCandidate>();
+    const auto view = registry.view<cactus_gen::collision_predicates_runtime::SphereBoxCandidate>();
     REQUIRE(view.size() == 1);
-    CHECK(registry.get<collision_predicates_runtime__SphereBoxCandidate>(*view.begin()).accepted);
+    CHECK(registry.get<cactus_gen::collision_predicates_runtime::SphereBoxCandidate>(*view.begin()).accepted);
 }
 
 TEST_CASE("stdlib-collision: sphere_sphere_separation handles contact, penetration, and coincident centers",
@@ -118,9 +119,9 @@ TEST_CASE("stdlib-collision: sphere_sphere_separation handles contact, penetrati
 
     drive_frame(registry);
 
-    const auto view = registry.view<collision_predicates_runtime__Probe>();
+    const auto view = registry.view<cactus_gen::collision_predicates_runtime::Probe>();
     REQUIRE(view.size() == 1);
-    const auto& probe = registry.get<collision_predicates_runtime__Probe>(*view.begin());
+    const auto& probe = registry.get<cactus_gen::collision_predicates_runtime::Probe>(*view.begin());
 
     CHECK(probe.sphere_sphere_separate.x == Catch::Approx(0.0F));
     CHECK(probe.sphere_sphere_separate.y == Catch::Approx(0.0F));
@@ -148,9 +149,9 @@ TEST_CASE("stdlib-collision: sphere_sphere_separation remains usable in a pure w
 
     drive_frame(registry);
 
-    const auto view = registry.view<collision_predicates_runtime__SphereSphereCandidate>();
+    const auto view = registry.view<cactus_gen::collision_predicates_runtime::SphereSphereCandidate>();
     REQUIRE(view.size() == 1);
-    CHECK(registry.get<collision_predicates_runtime__SphereSphereCandidate>(*view.begin()).accepted);
+    CHECK(registry.get<cactus_gen::collision_predicates_runtime::SphereSphereCandidate>(*view.begin()).accepted);
 }
 TEST_CASE("stdlib-collision: sphere_box_overlap distinguishes overlap, touch, separation, inside and rotation",
           "[runtime][codegen-entt][stdlib-collision]") {
@@ -160,9 +161,9 @@ TEST_CASE("stdlib-collision: sphere_box_overlap distinguishes overlap, touch, se
 
     drive_frame(registry);
 
-    const auto view = registry.view<collision_predicates_runtime__Probe>();
+    const auto view = registry.view<cactus_gen::collision_predicates_runtime::Probe>();
     REQUIRE(view.size() == 1);
-    const auto& probe = registry.get<collision_predicates_runtime__Probe>(*view.begin());
+    const auto& probe = registry.get<cactus_gen::collision_predicates_runtime::Probe>(*view.begin());
 
     CHECK(probe.box_overlap_overlap);
     CHECK_FALSE(probe.box_overlap_touch);
@@ -185,9 +186,10 @@ TEST_CASE("stdlib-collision: sphere_box_overlap agrees with sphere_box_separatio
         const Vector3 box{coord(rng), coord(rng), coord(rng)};
         const Vector3 size{extent(rng), extent(rng), extent(rng)};
         const Quat rotation = cactus::runtime::stdlib::math::quat::from_axis_angle(Vector3{coord(rng), coord(rng), coord(rng)}, angle(rng));
-        const Vector3 separation = std_collision_volume__sphere_box_separation(sphere, r, box, size, rotation);
+        const Vector3 separation =
+            cactus_gen::stdlib::collision::volume::sphere_box_separation(sphere, r, box, size, rotation);
         const bool separated = separation.x != 0.0F || separation.y != 0.0F || separation.z != 0.0F;
-        const bool overlap = std_collision_volume__sphere_box_overlap(sphere, r, box, size, rotation);
+        const bool overlap = cactus_gen::stdlib::collision::volume::sphere_box_overlap(sphere, r, box, size, rotation);
         CHECK(overlap == separated);
         overlaps += overlap ? 1 : 0;
     }
@@ -201,9 +203,9 @@ TEST_CASE("stdlib-collision: sphere_box_overlap is usable as a where: predicate"
 
     drive_frame(registry);
 
-    const auto view = registry.view<collision_predicates_runtime__SphereBoxCandidate>();
+    const auto view = registry.view<cactus_gen::collision_predicates_runtime::SphereBoxCandidate>();
     REQUIRE(view.size() == 1);
-    CHECK(registry.get<collision_predicates_runtime__SphereBoxCandidate>(*view.begin()).overlap_accepted);
+    CHECK(registry.get<cactus_gen::collision_predicates_runtime::SphereBoxCandidate>(*view.begin()).overlap_accepted);
 }
 
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

@@ -5,7 +5,7 @@
 // tests/test_blue_square_headless_behavior.cpp for the required include
 // order) so generated_init_project/generated_load_project/
 // generated_inject_external_event/generated_drain_external_events and
-// std_core__frameEvent/std_core__loadEvent — emitted identically into every
+// cactus_gen::stdlib::core::frameEvent/cactus_gen::stdlib::core::loadEvent — emitted identically into every
 // curated example's generated .cpp by the std.core module — are visible.
 
 namespace cactus_headless_test {
@@ -25,13 +25,13 @@ void dispatch_boundary_event(entt::registry& registry, const Occurrence& occurre
 }
 
 inline void dispatch_load_event(entt::registry& registry) {
-    dispatch_boundary_event(registry, std_core__loadEvent{});
+    dispatch_boundary_event(registry, cactus_gen::stdlib::core::loadEvent{});
 }
 
 // Runs `on unload` handlers (e.g. std.core's SceneCleanup), as a scene
 // transition does before the next load.
 inline void dispatch_unload_event(entt::registry& registry) {
-    dispatch_boundary_event(registry, std_core__unloadEvent{});
+    dispatch_boundary_event(registry, cactus_gen::stdlib::core::unloadEvent{});
 }
 
 // Brings a fresh registry up to the state a generated main() reaches just
@@ -48,7 +48,7 @@ inline void init_and_load(entt::registry& registry) {
 // this repeatedly on the same registry would re-run init/load each time.
 inline void drive_one_frame(entt::registry& registry, float dt) {
     init_and_load(registry);
-    cactus::runtime::entt_backend::generated_inject_external_event(std_core__frameEvent{.dt = dt});
+    cactus::runtime::entt_backend::generated_inject_external_event(cactus_gen::stdlib::core::frameEvent{.dt = dt});
     cactus::runtime::entt_backend::generated_drain_external_events(registry);
 }
 
@@ -60,7 +60,7 @@ inline void drive_one_frame(entt::registry& registry, float dt) {
 inline void drive_frames(entt::registry& registry, float dt, int frame_count) {
     init_and_load(registry);
     for (int frame = 0; frame < frame_count; ++frame) {
-        cactus::runtime::entt_backend::generated_inject_external_event(std_core__frameEvent{.dt = dt});
+        cactus::runtime::entt_backend::generated_inject_external_event(cactus_gen::stdlib::core::frameEvent{.dt = dt});
         cactus::runtime::entt_backend::generated_drain_external_events(registry);
     }
 }
@@ -69,7 +69,7 @@ inline void drive_frames(entt::registry& registry, float dt, int frame_count) {
 // drive_one_frame/drive_frames, does not re-run init/load) — for tests that
 // need to interleave other events or state changes between frames.
 inline void drive_frame(entt::registry& registry, float dt = 1.0F / 60.0F) {
-    cactus::runtime::entt_backend::generated_inject_external_event(std_core__frameEvent{.dt = dt});
+    cactus::runtime::entt_backend::generated_inject_external_event(cactus_gen::stdlib::core::frameEvent{.dt = dt});
     cactus::runtime::entt_backend::generated_drain_external_events(registry);
 }
 

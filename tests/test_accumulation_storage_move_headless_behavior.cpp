@@ -14,7 +14,7 @@ void touch_world();
 
 namespace {
 
-using Pool = accumulation_storage_move__Pool;
+using Pool = cactus_gen::accumulation_storage_move::Pool;
 
 entt::registry* world = nullptr;  // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
 
@@ -22,7 +22,7 @@ entt::registry* world = nullptr;  // NOLINT(cppcoreguidelines-avoid-non-const-gl
 
 // Destroying Spare swaps Tank's Pool into Spare's slot.
 void touch_world() {
-    world->destroy(generated_named_slots().accumulation_storage_move__Spare);
+    world->destroy(cactus_gen::detail::generated_named_slots().accumulation_storage_move.Spare);
 }
 
 TEST_CASE("a storage-moving handler does not end the interval", "[runtime][codegen-entt][write-kinds]") {
@@ -32,7 +32,7 @@ TEST_CASE("a storage-moving handler does not end the interval", "[runtime][codeg
     world = nullptr;
 
     REQUIRE(registry.view<Pool>().size() == 1);
-    const auto tank = generated_named_slots().accumulation_storage_move__Tank;
+    const auto tank = cactus_gen::detail::generated_named_slots().accumulation_storage_move.Tank;
     REQUIRE(registry.valid(tank));
     // One merged interval gives 1.0; rounding 1.0e8 + 1.0 first loses the 1.0.
     CHECK(registry.get<Pool>(tank).level == 1.0F);

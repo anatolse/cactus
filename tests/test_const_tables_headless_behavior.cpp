@@ -13,8 +13,8 @@
 
 namespace {
 
-using Readings = const_tables__Readings;
-using Roster   = const_tables__Roster;
+using Readings = cactus_gen::const_tables::Readings;
+using Roster   = cactus_gen::const_tables::Roster;
 
 template <typename Trait>
 entt::entity only_entity(entt::registry& registry) {
@@ -82,8 +82,8 @@ TEST_CASE("const expressions and const tables hold their values at runtime", "[r
     }
 
     SECTION("a trait default may read a constant") {
-        CHECK(registry.get<const_tables__Mover>(only_entity<const_tables__Mover>(registry)).speed ==
-              Catch::Approx(3.0F));
+        CHECK(registry.get<cactus_gen::const_tables::Mover>(only_entity<cactus_gen::const_tables::Mover>(registry))
+                  .speed == Catch::Approx(3.0F));
     }
 
     SECTION("a trait default may construct a struct") {

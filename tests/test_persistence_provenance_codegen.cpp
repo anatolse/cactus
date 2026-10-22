@@ -124,12 +124,13 @@ template Particle:
 TEST_CASE("an eligible archetype retains its construction values at creation",
           "[codegen-entt][persistence][provenance]") {
     const auto unit = generate(kDeclarations);
-    const auto boss = function_body(unit->code, "create_world__boss_at");
+    const auto boss = function_body(unit->code, "create_boss_at");
 
     CHECK(contains(boss, kOrigin));
-    CHECK(contains(boss, retain("world__Health")));
+    CHECK(contains(boss, retain("::cactus_gen::world::Health")));
     // The copy has to follow the emplace it copies, or it records a default.
-    CHECK(boss.find("registry.emplace<world__Health>") < boss.find(retain("world__Health")));
+    CHECK(boss.find("registry.emplace<::cactus_gen::world::Health>") <
+          boss.find(retain("::cactus_gen::world::Health")));
     CHECK(contains(unit->code, "generated_archetype_nodes"));
     CHECK(contains(unit->code, "\"world.Boss\""));
 }
@@ -137,11 +138,11 @@ TEST_CASE("an eligible archetype retains its construction values at creation",
 TEST_CASE("each trait with fields captures in its own function", "[codegen-entt][persistence][provenance]") {
     const auto unit    = generate(kDeclarations);
     const auto capture = function_body(unit->code, "generated_capture_traits");
-    const auto health  = function_body(unit->code, "generated_capture_trait_world__Health");
+    const auto health  = function_body(unit->code, "generated_capture_trait<::cactus_gen::world::Health>");
 
-    CHECK(contains(capture, "generated_capture_trait_world__Health(registry, entity, ids, record);"));
-    CHECK_FALSE(contains(capture, "Construction<world__Health>"));
-    CHECK(contains(health, "registry.try_get<Construction<world__Health>>(entity)"));
+    CHECK(contains(capture, "generated_capture_trait<::cactus_gen::world::Health>(registry, entity, ids, record);"));
+    CHECK_FALSE(contains(capture, "Construction<::cactus_gen::world::Health>"));
+    CHECK(contains(health, "registry.try_get<Construction<::cactus_gen::world::Health>>(entity)"));
     CHECK(contains(health, "\"maximum\""));
     CHECK(contains(health, "\"current\""));
 }
@@ -152,16 +153,16 @@ TEST_CASE("the nullary archetype factory routes through the provenance-retaining
 
     // create_<X> is what load-time setup and the editor template palette call;
     // it delegates rather than being a second creation site to keep in step.
-    CHECK(contains(function_body(unit->code, "create_world__boss"), "create_world__boss_at(registry"));
+    CHECK(contains(function_body(unit->code, "create_boss"), "create_boss_at(registry"));
 }
 
 TEST_CASE("never-eligible archetypes emit no construction metadata without an add path",
           "[codegen-entt][persistence][provenance]") {
     const auto unit     = generate(kDeclarations);
-    const auto particle = function_body(unit->code, "create_world__particle_at");
+    const auto particle = function_body(unit->code, "create_particle_at");
 
     CHECK_FALSE(contains(particle, "ArchetypeOrigin"));
-    CHECK_FALSE(contains(particle, retain("world__Sparkle")));
+    CHECK_FALSE(contains(particle, retain("::cactus_gen::world::Sparkle")));
     CHECK_FALSE(contains(unit->code, "\"world.Particle\""));
 }
 
@@ -176,10 +177,10 @@ rule Promote:
         if sparkle.lifetime > 0.0:
             add Health
 )");
-    const auto particle = function_body(unit->code, "create_world__particle_at");
+    const auto particle = function_body(unit->code, "create_particle_at");
 
     CHECK(contains(particle, kOrigin));
-    CHECK(contains(particle, retain("world__Sparkle")));
+    CHECK(contains(particle, retain("::cactus_gen::world::Sparkle")));
     CHECK(contains(unit->code, "\"world.Particle\""));
 }
 
@@ -217,8 +218,8 @@ rule Stun:
 
     CHECK_FALSE(contains(unit->code, "generated_archetype_nodes"));
     CHECK_FALSE(contains(unit->code, "ArchetypeOrigin"));
-    CHECK_FALSE(contains(unit->code, retain("world__Stunned")));
-    CHECK_FALSE(contains(unit->code, discard("world__Stunned")));
+    CHECK_FALSE(contains(unit->code, retain("::cactus_gen::world::Stunned")));
+    CHECK_FALSE(contains(unit->code, discard("::cactus_gen::world::Stunned")));
 }
 
 TEST_CASE("adding a trait with no persist field leaves the bound down",
@@ -234,10 +235,10 @@ rule Stun:
         if sparkle.lifetime > 0.0:
             add Stunned
 )");
-    const auto particle = function_body(unit->code, "create_world__particle_at");
+    const auto particle = function_body(unit->code, "create_particle_at");
 
     CHECK_FALSE(contains(particle, "ArchetypeOrigin"));
-    CHECK_FALSE(contains(particle, retain("world__Sparkle")));
+    CHECK_FALSE(contains(particle, retain("::cactus_gen::world::Sparkle")));
 }
 
 // ── Construction data through every creation path ───────────────────────────
@@ -255,11 +256,12 @@ template Enemy(maximum: int):
         maximum = maximum
         current = maximum
 )");
-    const auto node = function_body(unit->code, "create_world__enemy__node_at");
+    const auto node = function_body(unit->code, "enemy_nodes {\nstatic entt::entity create_node_at");
 
     CHECK(contains(node, kOrigin));
-    CHECK(contains(node, retain("world__Health")));
-    CHECK(node.find("registry.emplace<world__Health>") < node.find(retain("world__Health")));
+    CHECK(contains(node, retain("::cactus_gen::world::Health")));
+    CHECK(node.find("registry.emplace<::cactus_gen::world::Health>") <
+          node.find(retain("::cactus_gen::world::Health")));
 }
 
 TEST_CASE("hierarchical nodes carry their own canonical archetype origin",
@@ -281,8 +283,8 @@ template Tank:
         entity turret:
             Turret
 )");
-    const auto root  = function_body(unit->code, "create_world__tank__node_at");
-    const auto child = function_body(unit->code, "create_world__tank__node__turret");
+    const auto root  = function_body(unit->code, "tank_nodes {\nstatic entt::entity create_node_at");
+    const auto child = function_body(unit->code, "tank_nodes {\nstatic entt::entity create_node_turret");
 
     CHECK(contains(root, kOrigin));
     CHECK(contains(child, kOrigin));
@@ -290,7 +292,7 @@ template Tank:
     CHECK(root.substr(root.find(kOrigin)) != child.substr(child.find(kOrigin)));
     CHECK(contains(unit->code, "\"world.Tank\""));
     CHECK(contains(unit->code, "\"world.Tank/turret\""));
-    CHECK(contains(child, retain("world__Turret")));
+    CHECK(contains(child, retain("::cactus_gen::world::Turret")));
 }
 
 TEST_CASE("a child node with no durable field of its own carries no provenance",
@@ -313,8 +315,8 @@ template Tank:
             Turret
 )");
 
-    CHECK(contains(function_body(unit->code, "create_world__tank__node_at"), kOrigin));
-    CHECK_FALSE(contains(function_body(unit->code, "create_world__tank__node__turret"), kOrigin));
+    CHECK(contains(function_body(unit->code, "tank_nodes {\nstatic entt::entity create_node_at"), kOrigin));
+    CHECK_FALSE(contains(function_body(unit->code, "tank_nodes {\nstatic entt::entity create_node_turret"), kOrigin));
     CHECK_FALSE(contains(unit->code, "\"world.Tank/turret\""));
 }
 
@@ -346,11 +348,12 @@ rule SpawnWave:
                 Health:
                     maximum = 700
 )");
-    const auto handler = function_body(unit->code, "world__spawn_wave_Step");
+    const auto handler = function_body(unit->code, "spawn_wave_on");
 
-    REQUIRE(contains(handler, "emplace_or_replace<world__Health>"));
-    CHECK(contains(handler, retain("world__Health")));
-    CHECK(handler.rfind("emplace_or_replace<world__Health>") < handler.rfind(retain("world__Health")));
+    REQUIRE(contains(handler, "emplace_or_replace<::cactus_gen::world::Health>"));
+    CHECK(contains(handler, retain("::cactus_gen::world::Health")));
+    CHECK(handler.rfind("emplace_or_replace<::cactus_gen::world::Health>") <
+          handler.rfind(retain("::cactus_gen::world::Health")));
 }
 
 TEST_CASE("a runtime add records the trait's new incarnation", "[codegen-entt][persistence][provenance]") {
@@ -377,10 +380,11 @@ rule Promote:
             add Health:
                 current = 5
 )");
-    const auto handler = function_body(unit->code, "world__promote_Step");
+    const auto handler = function_body(unit->code, "promote_on");
 
-    CHECK(contains(handler, retain("world__Health")));
-    CHECK(handler.find("emplace_or_replace<world__Health>") < handler.find(retain("world__Health")));
+    CHECK(contains(handler, retain("::cactus_gen::world::Health")));
+    CHECK(handler.find("emplace_or_replace<::cactus_gen::world::Health>") <
+          handler.find(retain("::cactus_gen::world::Health")));
 }
 
 TEST_CASE("native spawn and add capabilities maintain the same provenance",
@@ -418,15 +422,16 @@ extern rule Native:
 
     // The native spawn goes through the archetype factory, so it inherits that
     // path's provenance rather than needing a second one.
-    CHECK(contains(unit->code, "::create_world__ember_at(registry, entity)"));
-    CHECK(contains(function_body(unit->code, "create_world__ember_at"), kOrigin));
+    CHECK(contains(unit->code, "::cactus_gen::detail::world::create_ember_at(registry, entity)"));
+    CHECK(contains(function_body(unit->code, "create_ember_at"), kOrigin));
 
-    const auto add_command = function_body(unit->code, "void command_add_world__Health");
-    CHECK(contains(add_command, retain("world__Health")));
-    CHECK(add_command.find("emplace_or_replace<world__Health>") < add_command.find(retain("world__Health")));
+    const auto add_command = function_body(unit->code, "void add");
+    CHECK(contains(add_command, retain("::cactus_gen::world::Health")));
+    CHECK(add_command.find("registry.emplace_or_replace<T>(target") <
+          add_command.find(retain("::cactus_gen::world::Health")));
 
-    const auto remove_command = function_body(unit->code, "void command_remove_world__Health");
-    CHECK(contains(remove_command, discard("world__Health")));
+    const auto remove_command = function_body(unit->code, "void remove");
+    CHECK(contains(remove_command, discard("::cactus_gen::world::Health")));
 }
 
 // An entity placed via the in-game editor palette gets its
@@ -466,8 +471,8 @@ entity Marker:
     REQUIRE(spawn_impl_end != std::string::npos);
     const auto spawn_impl_body = unit->code.substr(spawn_impl_start, spawn_impl_end - spawn_impl_start);
 
-    CHECK(contains(spawn_impl_body, "retain_construction<world__LocalTransform>(reg, entity, *lt)"));
-    CHECK(contains(spawn_impl_body, "retain_construction<world__WorldTransform>(reg, entity, *wt)"));
+    CHECK(contains(spawn_impl_body, "retain_construction<::cactus_gen::world::LocalTransform>(reg, entity, *lt)"));
+    CHECK(contains(spawn_impl_body, "retain_construction<::cactus_gen::world::WorldTransform>(reg, entity, *wt)"));
 }
 
 TEST_CASE("marker traits carry no construction payload", "[codegen-entt][persistence][provenance]") {
@@ -492,8 +497,8 @@ rule Poison:
             add Poisoned
 )");
 
-    CHECK_FALSE(contains(unit->code, retain("world__Poisoned")));
-    CHECK(contains(unit->code, retain("world__Health")));
+    CHECK_FALSE(contains(unit->code, retain("::cactus_gen::world::Poisoned")));
+    CHECK(contains(unit->code, retain("::cactus_gen::world::Health")));
 }
 
 TEST_CASE("projected traits are never retained as durable construction data",
@@ -521,7 +526,7 @@ rule Glow:
                 strength = 1.0
 )");
 
-    CHECK_FALSE(contains(unit->code, retain("world__Highlight")));
+    CHECK_FALSE(contains(unit->code, retain("::cactus_gen::world::Highlight")));
 }
 
 // ── Eligibility survives removal ────────────────────────────────────────────
@@ -548,15 +553,16 @@ rule Strip:
         if health.current <= 0:
             remove Health
 )");
-    const auto boss   = function_body(unit->code, "create_world__boss_at");
-    const auto strip  = function_body(unit->code, "world__strip_Step");
+    const auto boss  = function_body(unit->code, "create_boss_at");
+    const auto strip = function_body(unit->code, "strip_on");
 
     CHECK(contains(boss, kOrigin));
-    CHECK(contains(boss, retain("world__Health")));
+    CHECK(contains(boss, retain("::cactus_gen::world::Health")));
     // The removed incarnation's construction copy goes with it, so a later
     // re-add cannot be read as if the original were still attached.
-    CHECK(contains(strip, discard("world__Health")));
-    CHECK(strip.find("registry.remove<world__Health>") < strip.find(discard("world__Health")));
+    CHECK(contains(strip, discard("::cactus_gen::world::Health")));
+    CHECK(strip.find("registry.remove<::cactus_gen::world::Health>") <
+          strip.find(discard("::cactus_gen::world::Health")));
 }
 // ── Generated schema descriptor ─────────────────────────────────────────────
 
@@ -848,7 +854,7 @@ TEST_CASE("a program with no declared assets still emits a callable, empty looku
 TEST_CASE("nested struct capture is guarded by the configured depth bound",
           "[codegen-entt][persistence][capture][limits]") {
     const auto unit = generate(kSchemaSource);
-    const auto slot = function_body(unit->code, "generated_capture_world__Slot");
+    const auto slot = function_body(unit->code, "generated_capture_struct");
 
     CHECK(contains(slot, "if (!ids.enter_nesting())"));
     CHECK(contains(slot, "ids.exit_nesting();"));

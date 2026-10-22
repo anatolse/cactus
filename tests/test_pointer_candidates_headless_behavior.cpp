@@ -26,17 +26,19 @@ entt::entity make_window_target(entt::registry& registry,
     const auto entity = registry.create();
     registry.emplace<CreationOrdinal>(
         entity, CreationOrdinal{.value = cactus::runtime::entt_backend::generated_next_creation_ordinal()});
-    registry.emplace<std_ui__ComputedLayout>(entity,
-                                             std_ui__ComputedLayout{.position          = position,
-                                                                    .size              = size,
-                                                                    .effective_visible = visible,
-                                                                    .effective_enabled = true,
-                                                                    .effective_opacity = 1.0F,
-                                                                    .clip_min          = {.x = 0.0F, .y = 0.0F},
-                                                                    .clip_max          = {.x = 800.0F, .y = 600.0F},
-                                                                    .draw_order        = draw_order});
-    registry.emplace<std_pointer__PointerTarget>(
-        entity, std_pointer__PointerTarget{.enabled = enabled, .blocks_lower = blocks_lower, .priority = 0});
+    registry.emplace<cactus_gen::stdlib::ui::ComputedLayout>(
+        entity,
+        cactus_gen::stdlib::ui::ComputedLayout{.position          = position,
+                                               .size              = size,
+                                               .effective_visible = visible,
+                                               .effective_enabled = true,
+                                               .effective_opacity = 1.0F,
+                                               .clip_min          = {.x = 0.0F, .y = 0.0F},
+                                               .clip_max          = {.x = 800.0F, .y = 600.0F},
+                                               .draw_order        = draw_order});
+    registry.emplace<cactus_gen::stdlib::pointer::PointerTarget>(
+        entity,
+        cactus_gen::stdlib::pointer::PointerTarget{.enabled = enabled, .blocks_lower = blocks_lower, .priority = 0});
     return entity;
 }
 
@@ -44,28 +46,30 @@ entt::entity make_flat_box_target(entt::registry& registry, const Vector2 positi
     const auto entity = registry.create();
     registry.emplace<CreationOrdinal>(
         entity, CreationOrdinal{.value = cactus::runtime::entt_backend::generated_next_creation_ordinal()});
-    registry.emplace<std_transform_flat__WorldTransform>(entity,
-                                                         std_transform_flat__WorldTransform{.position = position});
-    registry.emplace<std_physics_flat__Collider>(entity);
-    registry.emplace<std_physics_flat__BoxCollider>(entity, std_physics_flat__BoxCollider{.size = size});
-    registry.emplace<std_pointer__PointerTarget>(entity,
-                                                 std_pointer__PointerTarget{.enabled = true, .blocks_lower = true});
+    registry.emplace<cactus_gen::stdlib::transform::flat::WorldTransform>(
+        entity, cactus_gen::stdlib::transform::flat::WorldTransform{.position = position});
+    registry.emplace<cactus_gen::stdlib::physics::flat::Collider>(entity);
+    registry.emplace<cactus_gen::stdlib::physics::flat::BoxCollider>(
+        entity, cactus_gen::stdlib::physics::flat::BoxCollider{.size = size});
+    registry.emplace<cactus_gen::stdlib::pointer::PointerTarget>(
+        entity, cactus_gen::stdlib::pointer::PointerTarget{.enabled = true, .blocks_lower = true});
     return entity;
 }
 
 // The fixture's Button, laid out as a 50x50 window at the origin.
 entt::entity declared_button(entt::registry& registry) {
-    const auto view = registry.view<pointer_candidates_runtime__PointerEventLog>();
+    const auto view = registry.view<cactus_gen::pointer_candidates_runtime::PointerEventLog>();
     REQUIRE(view.size() == 1);
     const auto button = view.front();
-    registry.emplace<std_ui__ComputedLayout>(button,
-                                             std_ui__ComputedLayout{.position          = {.x = 0.0F, .y = 0.0F},
-                                                                    .size              = {.x = 50.0F, .y = 50.0F},
-                                                                    .effective_visible = true,
-                                                                    .effective_enabled = true,
-                                                                    .effective_opacity = 1.0F,
-                                                                    .clip_min          = {.x = 0.0F, .y = 0.0F},
-                                                                    .clip_max          = {.x = 800.0F, .y = 600.0F}});
+    registry.emplace<cactus_gen::stdlib::ui::ComputedLayout>(
+        button,
+        cactus_gen::stdlib::ui::ComputedLayout{.position          = {.x = 0.0F, .y = 0.0F},
+                                               .size              = {.x = 50.0F, .y = 50.0F},
+                                               .effective_visible = true,
+                                               .effective_enabled = true,
+                                               .effective_opacity = 1.0F,
+                                               .clip_min          = {.x = 0.0F, .y = 0.0F},
+                                               .clip_max          = {.x = 800.0F, .y = 600.0F}});
     return button;
 }
 
@@ -357,8 +361,8 @@ TEST_CASE("RoutePointer end-to-end: hover, capture, release-inside Click, and Po
     cactus_raylib_fake::set_mouse_position(Vector2{.x = 10.0F, .y = 10.0F});
     cactus_headless_test::drive_frame(registry);
     {
-        const auto& state = registry.get<std_pointer__PointerState>(target);
-        const auto& log   = registry.get<pointer_candidates_runtime__PointerEventLog>(target);
+        const auto& state = registry.get<cactus_gen::stdlib::pointer::PointerState>(target);
+        const auto& log   = registry.get<cactus_gen::pointer_candidates_runtime::PointerEventLog>(target);
         CHECK(state.hovered);
         CHECK(log.enter_count == 1);
         CHECK(log.leave_count == 0);
@@ -369,8 +373,8 @@ TEST_CASE("RoutePointer end-to-end: hover, capture, release-inside Click, and Po
     cactus_headless_test::drive_frame(registry);
     cactus_raylib_fake::set_mouse_button_pressed_this_frame(0, false);
     {
-        const auto& state = registry.get<std_pointer__PointerState>(target);
-        const auto& log   = registry.get<pointer_candidates_runtime__PointerEventLog>(target);
+        const auto& state = registry.get<cactus_gen::stdlib::pointer::PointerState>(target);
+        const auto& log   = registry.get<cactus_gen::pointer_candidates_runtime::PointerEventLog>(target);
         CHECK(state.pressed);
         CHECK(log.press_count == 1);
     }
@@ -379,8 +383,8 @@ TEST_CASE("RoutePointer end-to-end: hover, capture, release-inside Click, and Po
     cactus_raylib_fake::set_mouse_button_released_this_frame(0, true);
     cactus_headless_test::drive_frame(registry);
     {
-        const auto& state = registry.get<std_pointer__PointerState>(target);
-        const auto& log   = registry.get<pointer_candidates_runtime__PointerEventLog>(target);
+        const auto& state = registry.get<cactus_gen::stdlib::pointer::PointerState>(target);
+        const auto& log   = registry.get<cactus_gen::pointer_candidates_runtime::PointerEventLog>(target);
         CHECK_FALSE(state.pressed);
         CHECK(log.release_count == 1);
         CHECK(log.click_count == 1);
@@ -390,8 +394,8 @@ TEST_CASE("RoutePointer end-to-end: hover, capture, release-inside Click, and Po
     cactus_raylib_fake::set_mouse_position(Vector2{.x = 900.0F, .y = 900.0F});
     cactus_headless_test::drive_frame(registry);
     {
-        const auto& state = registry.get<std_pointer__PointerState>(target);
-        const auto& log   = registry.get<pointer_candidates_runtime__PointerEventLog>(target);
+        const auto& state = registry.get<cactus_gen::stdlib::pointer::PointerState>(target);
+        const auto& log   = registry.get<cactus_gen::pointer_candidates_runtime::PointerEventLog>(target);
         CHECK_FALSE(state.hovered);
         CHECK(log.leave_count == 1);
     }
@@ -418,7 +422,7 @@ TEST_CASE("RoutePointer end-to-end: release outside the target delivers PointerR
     cactus_raylib_fake::set_mouse_button_released_this_frame(0, true);
     cactus_headless_test::drive_frame(registry);
 
-    const auto& log = registry.get<pointer_candidates_runtime__PointerEventLog>(target);
+    const auto& log = registry.get<cactus_gen::pointer_candidates_runtime::PointerEventLog>(target);
     CHECK(log.release_count == 1);
     CHECK(log.click_count == 0);
 }

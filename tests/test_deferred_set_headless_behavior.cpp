@@ -12,9 +12,9 @@
 
 namespace {
 
-using Director = deferred_set__Director;
-using Health   = deferred_set__Health;
-using Animator = deferred_set__Animator;
+using Director = cactus_gen::deferred_set::Director;
+using Health   = cactus_gen::deferred_set::Health;
+using Animator = cactus_gen::deferred_set::Animator;
 
 template <typename Trait>
 entt::entity only_entity(entt::registry& registry) {
@@ -35,17 +35,18 @@ TEST_CASE("set patches another entity's trait at the activation commit", "[runti
     cactus_headless_test::drive_frame(registry);
 
     SECTION("values are taken when the statement runs") {
-        const auto& snapshot = registry.get<deferred_set__Snapshot>(only_entity<deferred_set__Snapshot>(registry));
+        const auto& snapshot =
+            registry.get<cactus_gen::deferred_set::Snapshot>(only_entity<cactus_gen::deferred_set::Snapshot>(registry));
         CHECK(snapshot.from_field == 1.0F);
         CHECK(snapshot.from_extern == 1.0F);
     }
 
     SECTION("the patch is not visible within the activation, and visible in the next") {
         const auto watched = director(registry).watched;
-        CHECK(registry.get<deferred_set__Watch>(watched).first == 10);
+        CHECK(registry.get<cactus_gen::deferred_set::Watch>(watched).first == 10);
         CHECK(registry.get<Health>(watched).current == 1);
         cactus_headless_test::drive_frame(registry);
-        CHECK(registry.get<deferred_set__Watch>(watched).second == 1);
+        CHECK(registry.get<cactus_gen::deferred_set::Watch>(watched).second == 1);
     }
 
     SECTION("the last writer wins") {
@@ -79,19 +80,19 @@ TEST_CASE("set patches another entity's trait at the activation commit", "[runti
 
     SECTION("a patch under a projection lands on the durable value and survives cleanup") {
         const auto tinted = director(registry).tinted;
-        CHECK(registry.get<deferred_set__TintSeen>(tinted).late == 2);
-        CHECK(registry.get<deferred_set__Tint>(tinted).level == 3);
+        CHECK(registry.get<cactus_gen::deferred_set::TintSeen>(tinted).late == 2);
+        CHECK(registry.get<cactus_gen::deferred_set::Tint>(tinted).level == 3);
     }
 
     SECTION("a projection-only trait is not patched") {
-        CHECK_FALSE(registry.all_of<deferred_set__Highlight>(director(registry).glowing));
+        CHECK_FALSE(registry.all_of<cactus_gen::deferred_set::Highlight>(director(registry).glowing));
     }
 
     SECTION("a pair handler patch reads the pre-pass values in every tuple") {
-        auto view = registry.view<deferred_set__Push>();
+        auto view = registry.view<cactus_gen::deferred_set::Push>();
         REQUIRE(view.size() == 3);
         for (const auto entity : view) {
-            CHECK(registry.get<deferred_set__Push>(entity).amount == 1.0F);
+            CHECK(registry.get<cactus_gen::deferred_set::Push>(entity).amount == 1.0F);
         }
     }
 }

@@ -20,7 +20,7 @@ TEST_CASE("animation events of one tick arrive in owner creation order",
     entt::registry registry;
     cactus_headless_test::drive_frames(registry, 1.0F / 60.0F, 10);
 
-    const auto recorder = generated_named_slots().animation_event_order__Recorder;
-    CHECK(registry.get<animation_event_order__Arrivals>(recorder).digits == 123);
+    const auto recorder = cactus_gen::detail::generated_named_slots().animation_event_order.Recorder;
+    CHECK(registry.get<cactus_gen::animation_event_order::Arrivals>(recorder).digits == 123);
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

@@ -26,12 +26,13 @@ entt::entity create_runtime_entity(entt::registry& registry) {
 
 entt::entity create_node(entt::registry& registry) {
     const auto entity = create_runtime_entity(registry);
-    registry.emplace<hierarchy_query_runtime__Node>(entity);
+    registry.emplace<cactus_gen::hierarchy_query_runtime::Node>(entity);
     return entity;
 }
 
 void set_parent(entt::registry& registry, entt::entity child, entt::entity parent) {
-    registry.emplace_or_replace<std_core__Parent>(child, std_core__Parent{.parent = parent});
+    registry.emplace_or_replace<cactus_gen::stdlib::core::Parent>(child,
+                                                                  cactus_gen::stdlib::core::Parent{.parent = parent});
 }
 
 }  // namespace
@@ -42,12 +43,12 @@ TEST_CASE("hierarchy queries headless: filtered forests are stable and detached"
     cactus::runtime::entt_backend::generated_init_project(registry);
     cactus::runtime::entt_backend::generated_load_project(registry);
 
-    const auto observer_view = registry.view<hierarchy_query_runtime__Results>();
+    const auto observer_view = registry.view<cactus_gen::hierarchy_query_runtime::Results>();
     REQUIRE(observer_view.begin() != observer_view.end());
     const auto observer = *observer_view.begin();
 
     const auto root_a = create_node(registry);
-    registry.emplace<hierarchy_query_runtime__RequestedRoot>(root_a);
+    registry.emplace<cactus_gen::hierarchy_query_runtime::RequestedRoot>(root_a);
 
     const auto child_b = create_node(registry);
     set_parent(registry, child_b, root_a);
@@ -57,7 +58,7 @@ TEST_CASE("hierarchy queries headless: filtered forests are stable and detached"
     set_parent(registry, child_c, root_a);
 
     const auto hidden_parent = create_node(registry);
-    registry.emplace<hierarchy_query_runtime__Hidden>(hidden_parent);
+    registry.emplace<cactus_gen::hierarchy_query_runtime::Hidden>(hidden_parent);
     set_parent(registry, hidden_parent, root_a);
     const auto filtered_root = create_node(registry);
     set_parent(registry, filtered_root, hidden_parent);
@@ -76,7 +77,7 @@ TEST_CASE("hierarchy queries headless: filtered forests are stable and detached"
     registry.destroy(stale_parent);
     set_parent(registry, stale_parent_root, stale_parent);
 
-    auto& results     = registry.get<hierarchy_query_runtime__Results>(observer);
+    auto& results     = registry.get<cactus_gen::hierarchy_query_runtime::Results>(observer);
     results.requested = root_a;
     cactus_headless_test::drive_frame(registry);
 

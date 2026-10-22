@@ -17,11 +17,11 @@
 
 namespace {
 
-using Tally = exact_accumulation__Tally;
-using Pool  = exact_accumulation__Pool;
-using Seen  = exact_accumulation__Seen;
-using Drift = exact_accumulation__Drift;
-using Body  = exact_accumulation__Body;
+using Tally = cactus_gen::exact_accumulation::Tally;
+using Pool  = cactus_gen::exact_accumulation::Pool;
+using Seen  = cactus_gen::exact_accumulation::Seen;
+using Drift = cactus_gen::exact_accumulation::Drift;
+using Body  = cactus_gen::exact_accumulation::Body;
 
 template <typename Trait>
 const Trait& only(entt::registry& registry) {

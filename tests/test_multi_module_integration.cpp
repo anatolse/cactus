@@ -434,13 +434,14 @@ TEST_CASE("integration: imported input phase handlers preserve linked declaratio
 
     // Step 4: Graph dispatch uses the canonical phase identity and stable linked
     // declaration order: dependency handler first, root handler second.
-    const auto dispatch_start = code.find("void generated_dispatch_phase_editorlib__input(entt::registry& registry");
+    const auto dispatch_start =
+        code.find("void generated_dispatch_phase(entt::registry& registry, const ::cactus_gen::editorlib::InputPhase&");
     REQUIRE(dispatch_start != std::string::npos);
     const auto dispatch_end = code.find("\n}\n", dispatch_start);
     REQUIRE(dispatch_end != std::string::npos);
     const auto dispatch     = code.substr(dispatch_start, dispatch_end - dispatch_start);
-    const auto editor_pos   = dispatch.find("editor_nav_input(registry, phase);");
-    const auto gameplay_pos = dispatch.find("gameplay_input_editorlib__input(registry, phase);");
+    const auto editor_pos   = dispatch.find("editor_nav_on(registry, phase);");
+    const auto gameplay_pos = dispatch.find("gameplay_input_on(registry, phase);");
     REQUIRE(editor_pos != std::string::npos);
     REQUIRE(gameplay_pos != std::string::npos);
     CHECK(editor_pos < gameplay_pos);
@@ -790,8 +791,8 @@ TEST_CASE("integration: linked 2D editor program emits hit-test/spawn glue and 2
     // Hit-test and spawn impls are registered with resolved component names.
     CHECK(code.find("register_editor_hit_test_impl") != std::string::npos);
     CHECK(code.find("register_editor_spawn_impl") != std::string::npos);
-    CHECK(code.find("reg.view<std_transform_flat__WorldTransform, std_physics_flat__BoxCollider>") !=
-          std::string::npos);
+    CHECK(code.find("reg.view<::cactus_gen::stdlib::transform::flat::WorldTransform, "
+                    "::cactus_gen::stdlib::physics::flat::BoxCollider>") != std::string::npos);
     CHECK(code.find("wt->position = pos2d") != std::string::npos);
 
     // 2D rig branch and viewport camera helper.
@@ -799,7 +800,7 @@ TEST_CASE("integration: linked 2D editor program emits hit-test/spawn glue and 2
     CHECK(code.find("set_active_camera_2d") != std::string::npos);
 
     // Edit-mode HUD overlay gated on the resolved EditorState component.
-    CHECK(code.find("registry.view<std_editor__EditorState>()") != std::string::npos);
+    CHECK(code.find("registry.view<::cactus_gen::stdlib::editor::EditorState>()") != std::string::npos);
     CHECK(code.find("EDIT [") != std::string::npos);
 
     // No 3D glue for a flat-only root program.
@@ -864,7 +865,7 @@ TEST_CASE("integration: a handler on a dotted cross-module event trigger resolve
     // are namespaced by the consuming module (dotted_event_app), not the
     // declaring module (std.pointer).
     CHECK(code.find("generated_emit_targeted_event(") != std::string::npos);
-    CHECK(code.find("dotted_event_app__PointerPressEvent") != std::string::npos);
+    CHECK(code.find("::cactus_gen::dotted_event_app::PointerPressEvent") != std::string::npos);
     // The aliased event occurrence's own field is readable, instead of
     // erroring ("self only allowed..." also gated event-field lookup).
     CHECK(code.find("click.position.x") != std::string::npos);
@@ -957,8 +958,8 @@ TEST_CASE("integration: linked 3D editor program emits raycast glue and 3D rig",
     // Raycast and spawn impls with resolved volume component names.
     CHECK(code.find("register_editor_raycast_impl") != std::string::npos);
     CHECK(code.find("register_editor_spawn_impl") != std::string::npos);
-    CHECK(code.find("reg.view<std_transform_volume__WorldTransform, std_render_models__ModelRenderer>") !=
-          std::string::npos);
+    CHECK(code.find("reg.view<::cactus_gen::stdlib::transform::volume::WorldTransform, "
+                    "::cactus_gen::stdlib::render::models::ModelRenderer>") != std::string::npos);
     CHECK(code.find("wt->position = pos3d") != std::string::npos);
 
     // 3D rig branch of camera_enter and the 3D viewport camera helper.
@@ -1036,12 +1037,13 @@ TEST_CASE("integration: proposal frame graph and contracted handlers lower end t
     CHECK(audio->contract.effects == std::unordered_set<std::string>{"audio"});
 
     const auto code = CppEnttCodegen::generate(*decorated);
-    CHECK(code.find("generated_inject_external_event(runtime_phase_contracts__frameEvent occurrence)") !=
+    CHECK(code.find("generated_inject_external_event(::cactus_gen::runtime_phase_contracts::frameEvent occurrence)") !=
           std::string::npos);
-    CHECK(code.find("NativeMovement__on__runtime_phase_contracts__fixed_tick") != std::string::npos);
-    CHECK(code.find("SpriteRenderer__on__runtime_phase_contracts__render") != std::string::npos);
-    CHECK(code.find("InputSource__on__runtime_phase_contracts__input") != std::string::npos);
-    CHECK(code.find("AudioOutput__on__runtime_phase_contracts__SoundRequested") != std::string::npos);
+    CHECK(code.find("::cactus_gen::runtime_phase_contracts::NativeMovement::on(phase") != std::string::npos);
+    CHECK(code.find("::cactus_gen::runtime_phase_contracts::SpriteRenderer::on(phase") != std::string::npos);
+    CHECK(code.find("::cactus_gen::runtime_phase_contracts::InputSource::on(phase") != std::string::npos);
+    CHECK(code.find("void on(const ::cactus_gen::runtime_phase_contracts::SoundRequestedEvent& trigger") !=
+          std::string::npos);
 }
 
 
@@ -1104,11 +1106,15 @@ TEST_CASE("integration: collider queries lower to runtime kernels over program-b
     SECTION("the shape lookup names the program's component types") {
         const auto lookup = code.find("cactus_collider_shape_of(entt::registry& registry, entt::entity entity)");
         REQUIRE(lookup != std::string::npos);
-        CHECK(code.find("registry.try_get<std_transform_volume__WorldTransform>(entity)") != std::string::npos);
-        CHECK(code.find("registry.try_get<std_physics_volume__Collider>(entity)") != std::string::npos);
+        CHECK(code.find("registry.try_get<::cactus_gen::stdlib::transform::volume::WorldTransform>(entity)") !=
+              std::string::npos);
+        CHECK(code.find("registry.try_get<::cactus_gen::stdlib::physics::volume::Collider>(entity)") !=
+              std::string::npos);
         // Box, then Capsule, then Sphere when a runtime add leaves two shapes.
-        const auto box     = code.find("registry.all_of<std_physics_volume__BoxCollider>(entity)", lookup);
-        const auto capsule = code.find("registry.all_of<std_physics_volume__CapsuleCollider>(entity)", lookup);
+        const auto box =
+            code.find("registry.all_of<::cactus_gen::stdlib::physics::volume::BoxCollider>(entity)", lookup);
+        const auto capsule =
+            code.find("registry.all_of<::cactus_gen::stdlib::physics::volume::CapsuleCollider>(entity)", lookup);
         REQUIRE(box != std::string::npos);
         REQUIRE(capsule != std::string::npos);
         CHECK(box < capsule);
@@ -1127,7 +1133,8 @@ TEST_CASE("integration: collider queries lower to runtime kernels over program-b
         CHECK(code.find("cactus_index_target.candidates(") != std::string::npos);
     }
     SECTION("first_hit folds with strict < from the miss identity") {
-        CHECK(code.find("std_physics_volume__SweepHit first = cactus_collider_sweep_miss();") != std::string::npos);
+        CHECK(code.find("::cactus_gen::stdlib::physics::volume::SweepHit first = cactus_collider_sweep_miss();") !=
+              std::string::npos);
         CHECK(code.find("if (cactus_value.hit && (!cactus_acc.first.hit || cactus_value.t < cactus_acc.first.t))") !=
               std::string::npos);
     }

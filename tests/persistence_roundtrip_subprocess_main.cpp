@@ -65,11 +65,13 @@ int run_save(const std::filesystem::path& directory) {
     // Exercise a template-spawned entity (Enemy, with its own construction
     // provenance and a nested LocalTransform) and the Formation/Member
     // hierarchy, not just the load-time singletons.
-    auto& spawner = registry.get<world_persistence__Spawner>(entity_with<world_persistence__Spawner>(registry));
+    auto& spawner = registry.get<cactus_gen::world_persistence::Spawner>(
+        entity_with<cactus_gen::world_persistence::Spawner>(registry));
     spawner.pending_enemies = 1;
     cactus_headless_test::drive_frame(registry, kStep);
 
-    auto& boss    = registry.get<world_persistence__Health>(entity_of_archetype(registry, "world_persistence.Boss"));
+    auto& boss =
+        registry.get<cactus_gen::world_persistence::Health>(entity_of_archetype(registry, "world_persistence.Boss"));
     boss.current  = 321;
 
     const auto snapshot = cactus::runtime::entt_backend::generated_capture_world_snapshot(registry);
@@ -104,19 +106,19 @@ int run_restore(const std::filesystem::path& directory) {
     if (boss_entity == entt::entity{entt::null}) {
         fail_roundtrip("RESTORE", "no restored entity carries the Boss archetype");
     }
-    const auto& boss = registry.get<world_persistence__Health>(boss_entity);
+    const auto& boss = registry.get<cactus_gen::world_persistence::Health>(boss_entity);
     if (boss.maximum != 500 || boss.current != 321) {
         fail_roundtrip("RESTORE", "Boss.Health did not restore its archetype baseline and persisted value");
     }
 
-    const auto badge_entity = entity_with<world_persistence__Badge>(registry);
+    const auto badge_entity = entity_with<cactus_gen::world_persistence::Badge>(registry);
     if (badge_entity == entt::entity{entt::null}) {
         fail_roundtrip("RESTORE", "no restored entity carries Badge");
     }
-    if (registry.get<world_persistence__Badge>(badge_entity).rank != 1) {
+    if (registry.get<cactus_gen::world_persistence::Badge>(badge_entity).rank != 1) {
         fail_roundtrip("RESTORE", "Formation/Member's Badge.rank did not restore");
     }
-    if (registry.all_of<std_core__Parent>(badge_entity)) {
+    if (registry.all_of<cactus_gen::stdlib::core::Parent>(badge_entity)) {
         fail_roundtrip("RESTORE", "Member restored with a Parent link, but Formation was never eligible");
     }
 
@@ -124,10 +126,10 @@ int run_restore(const std::filesystem::path& directory) {
     if (enemy == entt::entity{entt::null}) {
         fail_roundtrip("RESTORE", "no restored entity carries the Enemy archetype");
     }
-    if (registry.get<world_persistence__Health>(enemy).maximum != 700) {
+    if (registry.get<cactus_gen::world_persistence::Health>(enemy).maximum != 700) {
         fail_roundtrip("RESTORE", "Enemy's evaluated spawn argument (maximum) did not restore");
     }
-    if (!registry.all_of<std_transform_flat__LocalTransform>(enemy)) {
+    if (!registry.all_of<cactus_gen::stdlib::transform::flat::LocalTransform>(enemy)) {
         fail_roundtrip("RESTORE", "restored Enemy is missing its LocalTransform baseline trait");
     }
 

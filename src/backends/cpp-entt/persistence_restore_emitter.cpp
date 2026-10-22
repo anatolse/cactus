@@ -59,16 +59,17 @@ std::string decode_expression(const DecoratedProgram& program, const TypeInfo& t
             if (declaration == nullptr || EnttComponentEmitter::emit_enum(*declaration).empty()) {
                 return {};  // deferred to a raylib enum: no generated variant parser
             }
-            const auto enum_cpp = canonical_to_cpp_name(declaration->module_name, declaration->name);
-            return "generated_restore_variant_" + enum_cpp + "(" + access + ".as_enum().variant)";
+            const auto enum_cpp = cpp_type_ref(SymbolKind::Enum, declaration->module_name, declaration->name);
+            return "generated_restore_variant<" + enum_cpp + ">(" + access + ".as_enum().variant)";
         }
         case PersistenceValueKind::Struct: {
             const auto* declaration = EnttCodegenUtils::find_struct(program, type.name);
             if (declaration == nullptr) {
                 return {};
             }
-            return "generated_restore_struct_" + canonical_to_cpp_name(declaration->module_name, declaration->name) +
-                   "(" + access + ", ids)";
+            return "generated_restore_struct<" +
+                   cpp_type_ref(SymbolKind::Struct, declaration->module_name, declaration->name) + ">(" + access +
+                   ", ids)";
         }
         case PersistenceValueKind::List: {
             if (type.element == nullptr) {
@@ -103,17 +104,21 @@ std::string decode_expression(const DecoratedProgram& program, const TypeInfo& t
 }
 
 void emit_restore_enum_functions(std::ostringstream& out, const DecoratedProgram& program) {
+    out << "template <class T>\n";
+    out << "[[nodiscard]] T generated_restore_variant(std::string_view variant);\n\n";
     std::unordered_set<std::string> seen;
     for (const auto& [key, declaration] : program.enums) {
         if (!seen.insert(declaration_identity(declaration)).second ||
             EnttComponentEmitter::emit_enum(declaration).empty()) {
             continue;
         }
-        const auto enum_cpp = canonical_to_cpp_name(declaration.module_name, declaration.name);
-        out << "[[nodiscard]] inline " << enum_cpp << " generated_restore_variant_" << enum_cpp
-            << "(std::string_view variant) {\n";
+        const auto enum_cpp = cpp_type_ref(SymbolKind::Enum, declaration.module_name, declaration.name);
+        out << "template <>\n";
+        out << "[[nodiscard]] inline " << enum_cpp << " generated_restore_variant<" << enum_cpp
+            << ">(std::string_view variant) {\n";
         for (const auto& variant : declaration.variants) {
-            out << "    if (variant == \"" << variant << "\") { return " << enum_cpp << "::" << variant << "; }\n";
+            out << "    if (variant == \"" << variant << "\") { return " << enum_cpp << "::" << cpp_escaped(variant)
+                << "; }\n";
         }
         out << "    return static_cast<" << enum_cpp << ">(0);\n";
         out << "}\n\n";
@@ -121,14 +126,17 @@ void emit_restore_enum_functions(std::ostringstream& out, const DecoratedProgram
 }
 
 void emit_restore_struct_functions(std::ostringstream& out, const DecoratedProgram& program) {
+    out << "template <class T>\n";
+    out << "[[nodiscard]] T generated_restore_struct(const cactus::persistence::Value& value, RestoreIdMap& ids);\n\n";
     std::unordered_set<std::string> seen;
     for (const auto& [key, declaration] : program.structs) {
         if (!seen.insert(declaration_identity(declaration)).second) {
             continue;
         }
-        const auto struct_cpp = canonical_to_cpp_name(declaration.module_name, declaration.name);
-        out << "[[nodiscard]] inline " << struct_cpp << " generated_restore_struct_" << struct_cpp
-            << "(const cactus::persistence::Value& value, RestoreIdMap& ids) {\n";
+        const auto struct_cpp = cpp_type_ref(SymbolKind::Struct, declaration.module_name, declaration.name);
+        out << "template <>\n";
+        out << "[[nodiscard]] inline " << struct_cpp << " generated_restore_struct<" << struct_cpp
+            << ">(const cactus::persistence::Value& value, RestoreIdMap& ids) {\n";
         out << "    (void)ids;\n";
         out << "    " << struct_cpp << " result{};\n";
         out << "    const auto& fields = value.as_struct().fields;\n";
@@ -139,7 +147,7 @@ void emit_restore_struct_functions(std::ostringstream& out, const DecoratedProgr
             }
             out << "    if (const auto* field = cactus::persistence::find_field(fields, \"" << field.name
                 << "\")) {\n";
-            out << "        result." << field.name << " = " << decode << ";\n";
+            out << "        result." << cpp_escaped(field.name) << " = " << decode << ";\n";
             out << "    }\n";
         }
         out << "    return result;\n";
@@ -150,12 +158,16 @@ void emit_restore_struct_functions(std::ostringstream& out, const DecoratedProgr
 void emit_restore_trait_functions(std::ostringstream& out,
                                   const DecoratedProgram& program,
                                   const std::vector<PersistableTrait>& traits) {
+    out << "template <class T>\n";
+    out << "[[nodiscard]] T generated_restore_trait(const cactus::persistence::TraitRecord& record, RestoreIdMap& "
+           "ids);\n\n";
     for (const auto& trait : traits) {
         if (trait.declaration->fields.empty()) {
             continue;  // marker traits carry no payload to decode
         }
-        out << "[[nodiscard]] inline " << trait.cpp_name << " generated_restore_trait_" << trait.cpp_name
-            << "(const cactus::persistence::TraitRecord& record, RestoreIdMap& ids) {\n";
+        out << "template <>\n";
+        out << "[[nodiscard]] inline " << trait.cpp_name << " generated_restore_trait<" << trait.cpp_name
+            << ">(const cactus::persistence::TraitRecord& record, RestoreIdMap& ids) {\n";
         out << "    (void)ids;\n";
         out << "    " << trait.cpp_name << " value{};\n";
         for (const auto& field : trait.declaration->fields) {
@@ -166,7 +178,7 @@ void emit_restore_trait_functions(std::ostringstream& out,
             out << "    if (const auto* field = cactus::persistence::find_field("
                 << (field.is_persist ? "record.persisted" : "record.construction") << ", \"" << field.name
                 << "\")) {\n";
-            out << "        value." << field.name << " = " << decode << ";\n";
+            out << "        value." << cpp_escaped(field.name) << " = " << decode << ";\n";
             out << "    }\n";
         }
         out << "    return value;\n";
@@ -175,7 +187,7 @@ void emit_restore_trait_functions(std::ostringstream& out,
 }
 
 // Applies every recorded present trait to `entity`, decoding it through the
-// matching generated_restore_trait_* function and re-establishing capture
+// matching generated_restore_trait<T> specialization and re-establishing capture
 // provenance so a world can be re-saved immediately after being restored.
 // Absent (present == false) and unrecorded traits are left unset — restore
 // creates only what the document actually carries. `traits` must already
@@ -195,7 +207,7 @@ void emit_restore_node_traits(std::ostringstream& out, const std::vector<Persist
         if (trait.declaration->fields.empty()) {
             out << "        registry.emplace_or_replace<" << trait.cpp_name << ">(entity);\n";
         } else {
-            out << "        auto value = generated_restore_trait_" << trait.cpp_name << "(*found, ids);\n";
+            out << "        auto value = generated_restore_trait<" << trait.cpp_name << ">(*found, ids);\n";
             out << "        registry.emplace_or_replace<" << trait.cpp_name << ">(entity, value);\n";
             out << "        retain_construction<" << trait.cpp_name << ">(registry, entity, value);\n";
         }
@@ -309,7 +321,7 @@ std::string EnttRestoreEmitter::emit_world_restore(const DecoratedProgram& progr
     // projections are cleared against the still-live old registry first, so
     // their trackers reset their own internal state correctly; the handle-
     // only holders below need no registry and can clear in any order.
-    out << "    clear_projected_traits(registry);\n";
+    out << "    ::cactus_gen::detail::clear_projected_traits(registry);\n";
     out << "    registry = std::move(staged);\n";
     out << "    advance_binding_index_epoch();\n";
     out << "    reset_pointer_router_state();\n";
@@ -327,7 +339,7 @@ std::string EnttRestoreEmitter::emit_world_restore(const DecoratedProgram& progr
         out << "    generated_connect_lifecycle_trackers(registry);\n";
     }
     if (!EnttCodegenUtils::declared_entities(program).empty()) {
-        out << "    ::generated_rebind_named_slots(registry);\n";
+        out << "    ::cactus_gen::detail::generated_rebind_named_slots(registry);\n";
     }
     out << "    return RestoreOutcome{.ok = true};\n";
     out << "}\n\n";

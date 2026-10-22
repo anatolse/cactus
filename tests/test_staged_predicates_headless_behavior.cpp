@@ -17,7 +17,8 @@
 namespace {
 
 void drive_frame(entt::registry& registry) {
-    cactus::runtime::entt_backend::generated_inject_external_event(std_core__frameEvent{.dt = 1.0F / 60.0F});
+    cactus::runtime::entt_backend::generated_inject_external_event(
+        cactus_gen::stdlib::core::frameEvent{.dt = 1.0F / 60.0F});
     cactus::runtime::entt_backend::generated_drain_external_events(registry);
 }
 
@@ -33,18 +34,18 @@ Trait& single(entt::registry& registry) {
     return registry.get<Trait>(*view.begin());
 }
 
-const staged_predicates__Recorder& run_one_frame(entt::registry& registry) {
+const cactus_gen::staged_predicates::Recorder& run_one_frame(entt::registry& registry) {
     start(registry);
     drive_frame(registry);
-    return single<staged_predicates__Recorder>(registry);
+    return single<cactus_gen::staged_predicates::Recorder>(registry);
 }
 
 // Lava tag -> the field `read` picks.
 template <typename Read>
 std::map<int, int> per_lava(entt::registry& registry, Read read) {
     std::map<int, int> values;
-    for (const auto entity : registry.view<staged_predicates__Lava>()) {
-        const auto& lava = registry.get<staged_predicates__Lava>(entity);
+    for (const auto entity : registry.view<cactus_gen::staged_predicates::Lava>()) {
+        const auto& lava = registry.get<cactus_gen::staged_predicates::Lava>(entity);
         values[lava.tag] = read(registry, entity, lava);
     }
     return values;
@@ -90,27 +91,29 @@ TEST_CASE("a global reduction behind a false gate runs once with identities", "[
 TEST_CASE("grouped reductions keep their groups and aggregates", "[runtime][staging]") {
     entt::registry registry;
     run_one_frame(registry);
-    const auto hits =
-        per_lava(registry, [](entt::registry&, entt::entity, const staged_predicates__Lava& lava) { return lava.hits; });
+    const auto hits = per_lava(
+        registry,
+        [](entt::registry&, entt::entity, const cactus_gen::staged_predicates::Lava& lava) { return lava.hits; });
     CHECK(hits == std::map<int, int>{{1, 101}, {2, -1}, {3, 0}});
     const auto gated = per_lava(
-        registry, [](entt::registry&, entt::entity, const staged_predicates__Lava& lava) { return lava.gated; });
+        registry,
+        [](entt::registry&, entt::entity, const cactus_gen::staged_predicates::Lava& lava) { return lava.gated; });
     CHECK(gated == std::map<int, int>{{1, 10}, {2, -1}, {3, 10}});
 }
 
 TEST_CASE("a keep rule whose gate turns false removes every kept trait", "[runtime][staging]") {
     entt::registry registry;
     run_one_frame(registry);
-    const auto kept = [](entt::registry& reg, entt::entity entity, const staged_predicates__Lava&) {
-        const auto* hot = reg.try_get<staged_predicates__Hot>(entity);
+    const auto kept = [](entt::registry& reg, entt::entity entity, const cactus_gen::staged_predicates::Lava&) {
+        const auto* hot = reg.try_get<cactus_gen::staged_predicates::Hot>(entity);
         return hot == nullptr ? -1 : hot->count;
     };
     CHECK(per_lava(registry, kept) == std::map<int, int>{{1, 2}, {2, 2}, {3, 2}});
 
-    single<staged_predicates__Match>(registry).keeping = false;
+    single<cactus_gen::staged_predicates::Match>(registry).keeping = false;
     drive_frame(registry);
     CHECK(per_lava(registry, kept) == std::map<int, int>{{1, -1}, {2, -1}, {3, -1}});
-    CHECK(single<staged_predicates__Tally>(registry).cooled == 3);
+    CHECK(single<cactus_gen::staged_predicates::Tally>(registry).cooled == 3);
 }
 
 TEST_CASE("a targeted pass keeps only tuples incident to the recipient", "[runtime][staging]") {
@@ -130,6 +133,6 @@ TEST_CASE("a predicate on a field the pass writes sees live values", "[runtime][
     const auto& recorder = run_one_frame(registry);
     // Budget 2: the first two bodies in creation order spend it, the third is rejected.
     CHECK(recorder.budget == 12);
-    CHECK(single<staged_predicates__Budget>(registry).left == 0);
+    CHECK(single<cactus_gen::staged_predicates::Budget>(registry).left == 0);
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

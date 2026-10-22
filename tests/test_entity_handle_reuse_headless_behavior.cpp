@@ -12,9 +12,9 @@
 
 namespace {
 
-using Memory = entity_handle_reuse__Memory;
-using Marked = entity_handle_reuse__Marked;
-using Shot   = entity_handle_reuse__Shot;
+using Memory = cactus_gen::entity_handle_reuse::Memory;
+using Marked = cactus_gen::entity_handle_reuse::Marked;
+using Shot   = cactus_gen::entity_handle_reuse::Shot;
 
 }  // namespace
 
@@ -23,7 +23,7 @@ using Shot   = entity_handle_reuse__Shot;
 TEST_CASE("a stale handle never names a later entity, however often its slot is reused", "[runtime][entity-handles]") {
     entt::registry registry;
     cactus_headless_test::init_and_load(registry);
-    const auto gun = generated_named_slots().entity_handle_reuse__Gun;
+    const auto gun = cactus_gen::detail::generated_named_slots().entity_handle_reuse.Gun;
 
     // Two slots alternate, so 9000 ticks take each past its last version.
     for (int frame = 0; frame < 9000; ++frame) {

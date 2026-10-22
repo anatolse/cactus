@@ -14,7 +14,8 @@
 namespace {
 
 void drive_frame(entt::registry& registry) {
-    cactus::runtime::entt_backend::generated_inject_external_event(std_core__frameEvent{.dt = 1.0F / 60.0F});
+    cactus::runtime::entt_backend::generated_inject_external_event(
+        cactus_gen::stdlib::core::frameEvent{.dt = 1.0F / 60.0F});
     cactus::runtime::entt_backend::generated_drain_external_events(registry);
 }
 
@@ -24,9 +25,9 @@ void run_one_frame(entt::registry& registry) {
     drive_frame(registry);
 }
 
-const team_score_reduce_runtime__Team& team_of(entt::registry& registry, int id) {
-    for (const auto entity : registry.view<team_score_reduce_runtime__Team>()) {
-        const auto& team = registry.get<team_score_reduce_runtime__Team>(entity);
+const cactus_gen::team_score_reduce_runtime::Team& team_of(entt::registry& registry, int id) {
+    for (const auto entity : registry.view<cactus_gen::team_score_reduce_runtime::Team>()) {
+        const auto& team = registry.get<cactus_gen::team_score_reduce_runtime::Team>(entity);
         if (team.id == id) {
             return team;
         }
@@ -55,7 +56,7 @@ TEST_CASE("when the last member leaves the team gets count 0", "[runtime][codege
     CHECK(team_of(registry, RED_TEAM).members == 1);
     CHECK(team_of(registry, RED_TEAM).score == 5);
 
-    const auto members = registry.view<team_score_reduce_runtime__Member>();
+    const auto members = registry.view<cactus_gen::team_score_reduce_runtime::Member>();
     registry.destroy(members.begin(), members.end());
     drive_frame(registry);
 
@@ -79,9 +80,9 @@ TEST_CASE("int sums wrap and float sums are exact", "[runtime][codegen-entt][rul
     // 2147483647 + 1 - 1 wraps back to 2147483647 in any order. 1e8 + 1 - 1e8 is exactly 1.
     entt::registry registry;
     run_one_frame(registry);
-    const auto view = registry.view<team_score_reduce_runtime__Totals>();
+    const auto view = registry.view<cactus_gen::team_score_reduce_runtime::Totals>();
     REQUIRE(view.begin() != view.end());
-    const auto& totals = registry.get<team_score_reduce_runtime__Totals>(*view.begin());
+    const auto& totals = registry.get<cactus_gen::team_score_reduce_runtime::Totals>(*view.begin());
     CHECK(totals.whole == 2147483647);
     CHECK(totals.part == 1.0F);
 }
@@ -95,8 +96,8 @@ TEST_CASE("a targeted event runs only the recipient's group", "[runtime][codegen
 TEST_CASE("a global reduction ignores the event target", "[runtime][codegen-entt][rule-reduce]") {
     entt::registry registry;
     run_one_frame(registry);
-    const auto& totals =
-        registry.get<team_score_reduce_runtime__Totals>(*registry.view<team_score_reduce_runtime__Totals>().begin());
+    const auto& totals = registry.get<cactus_gen::team_score_reduce_runtime::Totals>(
+        *registry.view<cactus_gen::team_score_reduce_runtime::Totals>().begin());
     CHECK(totals.recounts == 1);
     CHECK(totals.recount_members == 1);
 }

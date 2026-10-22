@@ -13,8 +13,8 @@
 
 namespace {
 
-using Body      = std_physics_volume__CharacterBody;
-using Transform = std_transform_volume__WorldTransform;
+using Body      = cactus_gen::stdlib::physics::volume::CharacterBody;
+using Transform = cactus_gen::stdlib::transform::volume::WorldTransform;
 
 constexpr float kDt    = 1.0F / 60.0F;
 constexpr float kRest  = 1.0F;
@@ -25,7 +25,7 @@ Catch::Approx near(float value, double margin = 1e-3) {
 }
 
 const auto& slots() {
-    return generated_named_slots();
+    return cactus_gen::detail::generated_named_slots();
 }
 
 struct World {
@@ -40,17 +40,18 @@ struct World {
     void tick(int count = 1) {
         for (int i = 0; i < count; ++i) {
             const int before = ticks();
-            cactus::runtime::entt_backend::generated_inject_external_event(std_core__frameEvent{.dt = kDt});
+            cactus::runtime::entt_backend::generated_inject_external_event(
+                cactus_gen::stdlib::core::frameEvent{.dt = kDt});
             cactus::runtime::entt_backend::generated_drain_external_events(registry);
             REQUIRE(ticks() == before + 1);
         }
     }
 
     int ticks() {
-        return registry.get<character_body__Ticks>(slots().character_body__Clock).count;
+        return registry.get<cactus_gen::character_body::Ticks>(slots().character_body.Clock).count;
     }
     entt::entity child_of(entt::entity parent) {
-        for (const auto [entity, link] : registry.view<std_core__Parent>().each()) {
+        for (const auto [entity, link] : registry.view<cactus_gen::stdlib::core::Parent>().each()) {
             if (link.parent == parent) {
                 return entity;
             }
@@ -59,7 +60,7 @@ struct World {
         return entt::null;
     }
     const Vector3& seen(entt::entity entity) {
-        return registry.get<character_body__SeenAt>(entity).position;
+        return registry.get<cactus_gen::character_body::SeenAt>(entity).position;
     }
     Body& body(entt::entity entity) {
         return registry.get<Body>(entity);
@@ -83,7 +84,7 @@ struct World {
 
 TEST_CASE("a body moves with no game rule", "[runtime][codegen-entt][stdlib-character-body]") {
     World world;
-    const auto mover = slots().character_body__FreeMover;
+    const auto mover = slots().character_body.FreeMover;
     world.tick();
     CHECK(world.position(mover).x == near(3.0F * kDt, 1e-5));
     CHECK(world.position(mover).y == near(kRest, 1e-4));
@@ -92,7 +93,7 @@ TEST_CASE("a body moves with no game rule", "[runtime][codegen-entt][stdlib-char
 TEST_CASE("a body ignores layers its mask filters out", "[runtime][codegen-entt][stdlib-character-body]") {
     World world;
     world.tick(30);
-    CHECK(world.position(slots().character_body__MaskedMover).x == near(21.5F, 1e-3));
+    CHECK(world.position(slots().character_body.MaskedMover).x == near(21.5F, 1e-3));
 }
 
 // ── Solids and triggers ─────────────────────────────────────────────────────
@@ -100,24 +101,24 @@ TEST_CASE("a body ignores layers its mask filters out", "[runtime][codegen-entt]
 TEST_CASE("a body walks through a trigger, and a contact rule sees it the same tick",
           "[runtime][codegen-entt][stdlib-character-body][rule-keep]") {
     World world;
-    const auto wader = slots().character_body__Wader;
-    const auto pool  = slots().character_body__WadePool;
+    const auto wader = slots().character_body.Wader;
+    const auto pool  = slots().character_body.WadePool;
     bool entered     = false;
     for (int i = 0; i < 200; ++i) {
         world.tick();
         const bool overlapping = world.gap(wader, pool) < 0.0F;
-        CHECK(world.registry.all_of<character_body__Wading>(wader) == overlapping);
+        CHECK(world.registry.all_of<cactus_gen::character_body::Wading>(wader) == overlapping);
         entered = entered || overlapping;
         CHECK(world.position(wader).x == near(458.0F + (2.0F * kDt * static_cast<float>(i + 1)), 1e-3));
     }
     CHECK(entered);
     CHECK(world.position(wader).x > 461.0F);
-    CHECK_FALSE(world.registry.all_of<character_body__Wading>(wader));
+    CHECK_FALSE(world.registry.all_of<cactus_gen::character_body::Wading>(wader));
 }
 
 TEST_CASE("standing inside a trigger causes no correction", "[runtime][codegen-entt][stdlib-character-body]") {
     World world;
-    const auto soaker = slots().character_body__Soaker;
+    const auto soaker = slots().character_body.Soaker;
     world.tick(3);
     CHECK(world.position(soaker).x == near(470.0F, 1e-6));
     CHECK(world.position(soaker).y == near(10.0F, 1e-6));
@@ -125,7 +126,7 @@ TEST_CASE("standing inside a trigger causes no correction", "[runtime][codegen-e
 
 TEST_CASE("a body without Solid blocks nothing", "[runtime][codegen-entt][stdlib-character-body]") {
     World world;
-    const auto runner = slots().character_body__GhostRunner;
+    const auto runner = slots().character_body.GhostRunner;
     world.tick(60);
     CHECK(world.position(runner).x == near(479.0F, 1e-3));
 }
@@ -134,19 +135,19 @@ TEST_CASE("a body without Solid blocks nothing", "[runtime][codegen-entt][stdlib
 
 TEST_CASE("velocity written this tick moves the body this tick", "[runtime][codegen-entt][stdlib-character-body]") {
     World world;
-    const auto driven = slots().character_body__DrivenBody;
+    const auto driven = slots().character_body.DrivenBody;
     world.tick();
     CHECK(world.position(driven).x == near(360.0F + (2.0F * kDt), 1e-5));
 }
 
 TEST_CASE("a rule after physics.solve sees this tick's grounded", "[runtime][codegen-entt][stdlib-character-body]") {
     World world;
-    const auto watched = slots().character_body__Watched;
+    const auto watched = slots().character_body.Watched;
     bool landed        = false;
     for (int i = 0; i < 90; ++i) {
         world.tick();
         const bool grounded = world.body(watched).grounded;
-        CHECK(world.registry.get<character_body__GroundWatch>(watched).seen == grounded);
+        CHECK(world.registry.get<cactus_gen::character_body::GroundWatch>(watched).seen == grounded);
         landed = landed || grounded;
     }
     CHECK(landed);
@@ -156,7 +157,7 @@ TEST_CASE("a rule after physics.solve sees this tick's grounded", "[runtime][cod
 
 TEST_CASE("falling accelerates", "[runtime][codegen-entt][stdlib-character-body]") {
     World world;
-    const auto faller = slots().character_body__Faller;
+    const auto faller = slots().character_body.Faller;
     world.tick(2);
     CHECK(world.body(faller).velocity.y == near(-20.0F * kDt, 1e-5));
     CHECK(world.position(faller).y < 5.0F);
@@ -164,7 +165,7 @@ TEST_CASE("falling accelerates", "[runtime][codegen-entt][stdlib-character-body]
 
 TEST_CASE("a grounded body on a walkable slope does not creep", "[runtime][codegen-entt][stdlib-character-body]") {
     World world;
-    const auto sitter = slots().character_body__SlopeSitter;
+    const auto sitter   = slots().character_body.SlopeSitter;
     const Vector3 start = world.position(sitter);
     for (int i = 0; i < 60; ++i) {
         world.tick();
@@ -178,7 +179,7 @@ TEST_CASE("a grounded body on a walkable slope does not creep", "[runtime][codeg
 
 TEST_CASE("a fast body stops on the near side of a thin wall", "[runtime][codegen-entt][stdlib-character-body]") {
     World world;
-    const auto body = slots().character_body__ThinWaller;
+    const auto body = slots().character_body.ThinWaller;
     world.tick(30);
     CHECK(world.position(body).x + kRadius <= 82.0F - 0.025F + 1e-3F);
     CHECK(world.position(body).x > 81.0F);
@@ -186,7 +187,7 @@ TEST_CASE("a fast body stops on the near side of a thin wall", "[runtime][codege
 
 TEST_CASE("diagonal motion slides along a wall", "[runtime][codegen-entt][stdlib-character-body]") {
     World world;
-    const auto slider = slots().character_body__WallSlider;
+    const auto slider = slots().character_body.WallSlider;
     world.tick(30);
     const float x = world.position(slider).x;
     world.tick();
@@ -199,7 +200,7 @@ TEST_CASE("diagonal motion slides along a wall", "[runtime][codegen-entt][stdlib
 
 TEST_CASE("a corner stops the body without jitter", "[runtime][codegen-entt][stdlib-character-body]") {
     World world;
-    const auto runner = slots().character_body__CornerRunner;
+    const auto runner = slots().character_body.CornerRunner;
     world.tick(60);
     const Vector3 rest = world.position(runner);
     CHECK(rest.x == near(121.4F - kRadius, 1e-3));
@@ -213,7 +214,7 @@ TEST_CASE("a corner stops the body without jitter", "[runtime][codegen-entt][std
 
 TEST_CASE("a falling body lands on a floor", "[runtime][codegen-entt][stdlib-character-body]") {
     World world;
-    const auto lander = slots().character_body__Lander;
+    const auto lander = slots().character_body.Lander;
     world.tick(60);
     const auto& body = world.body(lander);
     CHECK(world.position(lander).y == near(kRest, 1e-3));
@@ -225,7 +226,7 @@ TEST_CASE("a falling body lands on a floor", "[runtime][codegen-entt][stdlib-cha
 
 TEST_CASE("a body on a slope steeper than max_slope slides down", "[runtime][codegen-entt][stdlib-character-body]") {
     World world;
-    const auto slider = slots().character_body__SteepSlider;
+    const auto slider = slots().character_body.SteepSlider;
     world.tick(5);
     float y = world.position(slider).y;
     for (int i = 0; i < 10; ++i) {
@@ -238,7 +239,7 @@ TEST_CASE("a body on a slope steeper than max_slope slides down", "[runtime][cod
 
 TEST_CASE("a grounded body can't walk up a slope steeper than max_slope", "[runtime][codegen-entt][stdlib-character-body]") {
     World world;
-    const auto walker = slots().character_body__RampWalker;
+    const auto walker = slots().character_body.RampWalker;
     for (int i = 0; i < 150; ++i) {
         world.tick();
         INFO("tick " << i << " x " << world.position(walker).x << " y " << world.position(walker).y);
@@ -249,7 +250,7 @@ TEST_CASE("a grounded body can't walk up a slope steeper than max_slope", "[runt
 
 TEST_CASE("time_since_grounded counts airborne ticks", "[runtime][codegen-entt][stdlib-character-body]") {
     World world;
-    const auto walker = slots().character_body__LedgeWalker;
+    const auto walker = slots().character_body.LedgeWalker;
     int airborne = 0;
     for (int i = 0; i < 120 && airborne < 3; ++i) {
         world.tick();
@@ -263,7 +264,7 @@ TEST_CASE("time_since_grounded counts airborne ticks", "[runtime][codegen-entt][
 
 TEST_CASE("a jump leaves the ground", "[runtime][codegen-entt][stdlib-character-body]") {
     World world;
-    const auto hopper = slots().character_body__Hopper;
+    const auto hopper = slots().character_body.Hopper;
     world.tick();
     CHECK(world.position(hopper).y > kRest);
     CHECK_FALSE(world.body(hopper).grounded);
@@ -273,7 +274,7 @@ TEST_CASE("a jump leaves the ground", "[runtime][codegen-entt][stdlib-character-
 
 TEST_CASE("a ceiling stops a jump", "[runtime][codegen-entt][stdlib-character-body]") {
     World world;
-    const auto hopper = slots().character_body__CeilingHopper;
+    const auto hopper = slots().character_body.CeilingHopper;
     world.tick(8);
     CHECK(world.body(hopper).velocity.y <= 0.0F);
     CHECK(world.position(hopper).y + 1.0F <= 2.4F + 1e-3F);
@@ -286,7 +287,7 @@ TEST_CASE("a ceiling stops a jump", "[runtime][codegen-entt][stdlib-character-bo
 
 TEST_CASE("a grounded body climbs a low step without leaving the ground", "[runtime][codegen-entt][stdlib-character-body]") {
     World world;
-    const auto climber = slots().character_body__StepClimber;
+    const auto climber = slots().character_body.StepClimber;
     for (int i = 0; i < 60; ++i) {
         world.tick();
         INFO("tick " << i << " x " << world.position(climber).x << " y " << world.position(climber).y);
@@ -299,7 +300,7 @@ TEST_CASE("a grounded body climbs a low step without leaving the ground", "[runt
 
 TEST_CASE("a step taller than step_height blocks the body", "[runtime][codegen-entt][stdlib-character-body]") {
     World world;
-    const auto stepper = slots().character_body__TallStepper;
+    const auto stepper = slots().character_body.TallStepper;
     for (int i = 0; i < 60; ++i) {
         world.tick();
         CHECK(world.body(stepper).velocity.y <= 0.0F);
@@ -312,7 +313,7 @@ TEST_CASE("a step taller than step_height blocks the body", "[runtime][codegen-e
 TEST_CASE("a body pressed against a tall block jumps onto it instead of hanging on its edge",
           "[runtime][codegen-entt][stdlib-character-body]") {
     World world;
-    const auto jumper = slots().character_body__EdgeJumper;
+    const auto jumper = slots().character_body.EdgeJumper;
     world.tick(120);
     CHECK(world.position(jumper).y == near(1.8F, 1e-3));
     CHECK(world.position(jumper).x > 420.35F);
@@ -321,7 +322,7 @@ TEST_CASE("a body pressed against a tall block jumps onto it instead of hanging 
 
 TEST_CASE("a grounded body walks down stairs without falling", "[runtime][codegen-entt][stdlib-character-body]") {
     World world;
-    const auto walker = slots().character_body__StairWalker;
+    const auto walker = slots().character_body.StairWalker;
     for (int i = 0; i < 150; ++i) {
         world.tick();
         INFO("tick " << i << " x " << world.position(walker).x << " y " << world.position(walker).y);
@@ -333,7 +334,7 @@ TEST_CASE("a grounded body walks down stairs without falling", "[runtime][codege
 
 TEST_CASE("walking off a high ledge falls over several ticks", "[runtime][codegen-entt][stdlib-character-body]") {
     World world;
-    const auto walker = slots().character_body__LedgeWalker;
+    const auto walker = slots().character_body.LedgeWalker;
     float y = world.position(walker).y;
     int falling = 0;
     for (int i = 0; i < 150; ++i) {
@@ -352,8 +353,8 @@ TEST_CASE("walking off a high ledge falls over several ticks", "[runtime][codege
 
 TEST_CASE("a body spawned inside a wall is pushed out in one tick", "[runtime][codegen-entt][stdlib-character-body]") {
     World world;
-    const auto body = slots().character_body__WallSpawn;
-    const auto wall = slots().character_body__SpawnWall;
+    const auto body = slots().character_body.WallSpawn;
+    const auto wall = slots().character_body.SpawnWall;
     REQUIRE(world.gap(body, wall) < -0.1F);
     world.tick();
     CHECK(world.gap(body, wall) >= -1e-3F);
@@ -361,8 +362,8 @@ TEST_CASE("a body spawned inside a wall is pushed out in one tick", "[runtime][c
 
 TEST_CASE("two overlapping bodies split the correction", "[runtime][codegen-entt][stdlib-character-body]") {
     World world;
-    const auto left  = slots().character_body__SplitLeft;
-    const auto right = slots().character_body__SplitRight;
+    const auto left  = slots().character_body.SplitLeft;
+    const auto right = slots().character_body.SplitRight;
     world.tick();
     CHECK(world.position(left).x == near(319.6F, 1e-4));
     CHECK(world.position(right).x == near(320.4F, 1e-4));
@@ -371,8 +372,8 @@ TEST_CASE("two overlapping bodies split the correction", "[runtime][codegen-entt
 
 TEST_CASE("bodies walking into each other stop face to face", "[runtime][codegen-entt][stdlib-character-body]") {
     World world;
-    const auto left  = slots().character_body__WalkerLeft;
-    const auto right = slots().character_body__WalkerRight;
+    const auto left  = slots().character_body.WalkerLeft;
+    const auto right = slots().character_body.WalkerRight;
     for (int i = 0; i < 120; ++i) {
         world.tick();
         CHECK(world.gap(left, right) >= -(2.0F * kDt) - 1e-4F);
@@ -389,7 +390,7 @@ TEST_CASE("bodies walking into each other stop face to face", "[runtime][codegen
 TEST_CASE("a rule after physics.solve sees a body's subtree at this tick's pose",
           "[runtime][codegen-entt][stdlib-character-body]") {
     World world;
-    const auto carrier = slots().character_body__Carrier;
+    const auto carrier = slots().character_body.Carrier;
     const auto hurtbox = world.child_of(carrier);
     const auto crest   = world.child_of(hurtbox);
     for (int i = 1; i <= 3; ++i) {
@@ -405,7 +406,7 @@ TEST_CASE("a rule after physics.solve sees a body's subtree at this tick's pose"
 
 TEST_CASE("a non-body pose root's subtree waits for late_tick", "[runtime][codegen-entt][stdlib-character-body]") {
     World world;
-    const auto cart = slots().character_body__Cart;
+    const auto cart = slots().character_body.Cart;
     const auto load = world.child_of(cart);
     world.tick(2);
     CHECK(world.position(cart).x == near(442.0F, 1e-5));
@@ -441,7 +442,7 @@ void check_same_position(const Vector3& now, const Vector3& before) {
 
 TEST_CASE("a paused body in midair keeps its pose and solver state", "[runtime][codegen-entt][stdlib-character-body]") {
     World world;
-    const auto faller        = slots().character_body__PausedFaller;
+    const auto faller        = slots().character_body.PausedFaller;
     const Body before        = world.body(faller);
     const Vector3 at         = world.position(faller);
     world.tick(10);
@@ -452,7 +453,7 @@ TEST_CASE("a paused body in midair keeps its pose and solver state", "[runtime][
 
 TEST_CASE("a paused grounded body keeps its grounding and scratch fields", "[runtime][codegen-entt][stdlib-character-body]") {
     World world;
-    const auto stander = slots().character_body__PausedStander;
+    const auto stander = slots().character_body.PausedStander;
     const Body before  = world.body(stander);
     const Vector3 at   = world.position(stander);
     world.tick(5);
@@ -464,7 +465,7 @@ TEST_CASE("a paused grounded body keeps its grounding and scratch fields", "[run
 TEST_CASE("a resumed body continues from its retained velocity without catch-up",
           "[runtime][codegen-entt][stdlib-character-body]") {
     World world;
-    const auto faller = slots().character_body__PausedFaller;
+    const auto faller = slots().character_body.PausedFaller;
     world.tick(30);
     world.body(faller).paused = false;
     world.tick();
@@ -475,8 +476,8 @@ TEST_CASE("a resumed body continues from its retained velocity without catch-up"
 
 TEST_CASE("an active body takes the whole correction from a paused body", "[runtime][codegen-entt][stdlib-character-body]") {
     World world;
-    const auto active  = slots().character_body__ActivePusher;
-    const auto blocker = slots().character_body__PausedBlocker;
+    const auto active        = slots().character_body.ActivePusher;
+    const auto blocker       = slots().character_body.PausedBlocker;
     const Vector3 blocker_at = world.position(blocker);
     world.tick();
     CHECK(world.position(active).x == near(39.8F, 1e-3));
@@ -486,8 +487,8 @@ TEST_CASE("an active body takes the whole correction from a paused body", "[runt
 
 TEST_CASE("two paused bodies stay overlapped until resumed", "[runtime][codegen-entt][stdlib-character-body]") {
     World world;
-    const auto left  = slots().character_body__PausedPairLeft;
-    const auto right = slots().character_body__PausedPairRight;
+    const auto left  = slots().character_body.PausedPairLeft;
+    const auto right = slots().character_body.PausedPairRight;
     world.tick(3);
     CHECK(world.position(left).x == 60.0F);
     CHECK(world.position(right).x == near(60.6F, 1e-6));

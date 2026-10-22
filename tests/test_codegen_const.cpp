@@ -59,8 +59,8 @@ TEST_CASE("Codegen constants: module-qualified names in dependency order", "[cod
         "const:\n"
         "    HALF = LATER * 0.5\n"
         "    LATER = 2.0\n");
-    const auto later = generated.at("inline const float test__LATER = 2.0F;");
-    const auto half  = generated.at("inline const float test__HALF = (test__LATER * 0.5F);");
+    const auto later = generated.at("inline const float LATER = 2.0F;");
+    const auto half  = generated.at("inline const float HALF = (::cactus_gen::test::LATER * 0.5F);");
     CHECK(later < half);
 }
 
@@ -71,14 +71,15 @@ TEST_CASE("Codegen constants: vector, struct, and list constants", "[codegen-ent
                                     "    ROBOT = UnitDef(health = 3, speed = 4.0)\n"
                                     "    WAVES: list[UnitDef] = [ROBOT, UnitDef(speed = 2.5, health = 6)]\n"
                                     "    NONE: list[UnitDef] = []\n");
-    CHECK(generated.has("inline const Vector2 test__ORIGIN = vec2(1.0F, 2.0F);"));
-    const auto unit = generated.at("struct test__UnitDef");
-    const auto robot =
-        generated.at("inline const test__UnitDef test__ROBOT = test__UnitDef{.speed = 4.0F, .health = 3};");
+    CHECK(generated.has("inline const Vector2 ORIGIN = vec2(1.0F, 2.0F);"));
+    const auto unit  = generated.at("struct UnitDef");
+    const auto robot = generated.at(
+        "inline const ::cactus_gen::test::UnitDef ROBOT = ::cactus_gen::test::UnitDef{.speed = 4.0F, .health = 3};");
     CHECK(unit < robot);
-    CHECK(generated.has("inline const std::vector<test__UnitDef> test__WAVES = {test__ROBOT, "
-                        "test__UnitDef{.speed = 2.5F, .health = 6}};"));
-    CHECK(generated.has("inline const std::vector<test__UnitDef> test__NONE = {};"));
+    CHECK(
+        generated.has("inline const std::vector<::cactus_gen::test::UnitDef> WAVES = {::cactus_gen::test::ROBOT, "
+                      "::cactus_gen::test::UnitDef{.speed = 2.5F, .health = 6}};"));
+    CHECK(generated.has("inline const std::vector<::cactus_gen::test::UnitDef> NONE = {};"));
 }
 
 TEST_CASE("Codegen constants: a constant calling a pure func follows its declaration", "[codegen-entt][const]") {
@@ -87,8 +88,8 @@ TEST_CASE("Codegen constants: a constant calling a pure func follows its declara
         "    return v * 2.0\n"
         "const:\n"
         "    SIX = twice(3.0)\n");
-    const auto prototype = generated.at("float test__twice(float v);");
-    const auto six       = generated.at("inline const float test__SIX = test__twice(3.0F);");
+    const auto prototype = generated.at("float twice(float v);");
+    const auto six       = generated.at("inline const float SIX = ::cactus_gen::test::twice(3.0F);");
     CHECK(prototype < six);
 }
 
@@ -98,10 +99,10 @@ TEST_CASE("Codegen constants: trait defaults may read constants", "[codegen-entt
         "    MOVE_SPEED = 6.0\n"
         "trait Mover:\n"
         "    var speed: float = MOVE_SPEED * 0.5\n");
-    const auto constant = generated.at("inline const float test__MOVE_SPEED");
-    const auto mover    = generated.at("struct test__Mover");
+    const auto constant = generated.at("inline const float MOVE_SPEED");
+    const auto mover    = generated.at("struct Mover");
     CHECK(constant < mover);
-    CHECK(generated.has("(test__MOVE_SPEED * 0.5F)"));
+    CHECK(generated.has("(::cactus_gen::test::MOVE_SPEED * 0.5F)"));
 }
 
 TEST_CASE("Codegen constants: handlers read constants and iterate list constants by reference",
@@ -119,9 +120,9 @@ TEST_CASE("Codegen constants: handlers read constants and iterate list constants
                                     "        p.speed = ROBOT.speed\n"
                                     "        for unit in WAVES:\n"
                                     "            p.speed += unit.speed\n");
-    CHECK(generated.has("= test__ROBOT.speed;"));
+    CHECK(generated.has("= ::cactus_gen::test::ROBOT.speed;"));
     CHECK(generated.has("const auto& foreach_snapshot_"));
-    CHECK(generated.has(" = test__WAVES;"));
+    CHECK(generated.has(" = ::cactus_gen::test::WAVES;"));
 }
 
 TEST_CASE("Codegen constants: window configuration reads constants by symbol", "[codegen-entt][const]") {
@@ -129,9 +130,9 @@ TEST_CASE("Codegen constants: window configuration reads constants by symbol", "
         "const:\n"
         "    WINDOW_WIDTH = 640 * 2\n"
         "    WINDOW_TITLE = \"Tables\"\n");
-    CHECK(generated.has("inline const int test__WINDOW_WIDTH = cactus::num::mul(640, 2);"));
-    CHECK(generated.has(".window_width = test__WINDOW_WIDTH"));
-    CHECK(generated.has(".window_title = test__WINDOW_TITLE"));
+    CHECK(generated.has("inline const int WINDOW_WIDTH = cactus::num::mul(640, 2);"));
+    CHECK(generated.has(".window_width = ::cactus_gen::test::WINDOW_WIDTH"));
+    CHECK(generated.has(".window_title = ::cactus_gen::test::WINDOW_TITLE"));
 }
 
 TEST_CASE("Codegen struct construction: designated initializers in field order", "[codegen-entt][struct-construction]") {
@@ -145,8 +146,8 @@ TEST_CASE("Codegen struct construction: designated initializers in field order",
                                     "        h.unit = UnitDef(health = 2, speed = 1.0)\n"
                                     "        add Holder to self:\n"
                                     "            unit = UnitDef(speed = 3.0, health = 4)\n");
-    CHECK(generated.has("test__UnitDef{.speed = 1.0F, .health = 2}"));
-    CHECK(generated.has("test__UnitDef{.speed = 3.0F, .health = 4}"));
+    CHECK(generated.has("::cactus_gen::test::UnitDef{.speed = 1.0F, .health = 2}"));
+    CHECK(generated.has("::cactus_gen::test::UnitDef{.speed = 3.0F, .health = 4}"));
 }
 
 TEST_CASE("Codegen struct construction: an impure reordered argument keeps source evaluation order",
@@ -163,7 +164,7 @@ TEST_CASE("Codegen struct construction: an impure reordered argument keeps sourc
     const auto first  = generated.at("auto cactus_gen_field_0 = ");
     const auto second = generated.at("auto cactus_gen_field_1 = 1.0F;");
     CHECK(first < second);
-    CHECK(generated.has("test__UnitDef{.speed = cactus_gen_field_1, .health = cactus_gen_field_0}"));
+    CHECK(generated.has("::cactus_gen::test::UnitDef{.speed = cactus_gen_field_1, .health = cactus_gen_field_0}"));
 }
 
 TEST_CASE("Codegen struct construction: template and entity bodies", "[codegen-entt][struct-construction]") {
@@ -176,8 +177,8 @@ TEST_CASE("Codegen struct construction: template and entity bodies", "[codegen-e
                                     "entity Boss:\n"
                                     "    Holder:\n"
                                     "        unit = UnitDef(speed = 9.0, health = 9)\n");
-    CHECK(generated.has("test__UnitDef{.speed = 1.0F, .health = 1}"));
-    CHECK(generated.has("test__UnitDef{.speed = 9.0F, .health = 9}"));
+    CHECK(generated.has("::cactus_gen::test::UnitDef{.speed = 1.0F, .health = 1}"));
+    CHECK(generated.has("::cactus_gen::test::UnitDef{.speed = 9.0F, .health = 9}"));
     CHECK_FALSE(generated.has("UnitDef(speed"));
 }
 TEST_CASE("Codegen constants: a stage handler inlines a derived scalar constant into GLSL",

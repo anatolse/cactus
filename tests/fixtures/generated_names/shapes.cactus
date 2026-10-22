@@ -1,0 +1,28 @@
+module shapes
+
+# Declarations a second module exports, so names cross a module boundary.
+
+pub struct Extent:
+    width: float
+    height: float
+
+pub enum Tone:
+    Light
+    default
+
+pub extern event Reset:
+    value: int
+
+pub trait Session:
+    var speed: int = 2
+    var tone: Tone = Tone.Light
+
+# Spelled like a projection helper of `Session`.
+pub trait projected_Session:
+    var default: int = 0
+
+const:
+    PI = 3.0
+
+pub func doubled(value: int) int:
+    return value * 2

@@ -15,23 +15,26 @@ namespace {
 constexpr float kStep = 1.0F / 60.0F;
 
 int knocks(entt::registry& registry, entt::entity front) {
-    return registry.get<delivery_clocks_runtime__Door>(front).knocks;
+    return registry.get<cactus_gen::delivery_clocks_runtime::Door>(front).knocks;
 }
 
 int seen(entt::registry& registry, entt::entity front) {
-    return registry.get<delivery_clocks_runtime__Seen>(front).count;
+    return registry.get<cactus_gen::delivery_clocks_runtime::Seen>(front).count;
 }
 
 int hops(entt::registry& registry, entt::entity front) {
-    return registry.get<delivery_clocks_runtime__Echoes>(front).hops;
+    return registry.get<cactus_gen::delivery_clocks_runtime::Echoes>(front).hops;
 }
 
 int chain_ends(entt::registry& registry, entt::entity stats) {
-    return registry.get<delivery_clocks_runtime__Counter>(stats).chain_end;
+    return registry.get<cactus_gen::delivery_clocks_runtime::Counter>(stats).chain_end;
 }
 
 std::size_t fixed_tick_delays() {
-    return cactus::runtime::entt_backend::generated_scheduler_state().delayed_std_core__fixed_tick.size();
+    namespace backend = cactus::runtime::entt_backend;
+    return std::get<backend::PhaseDelayedQueue<cactus_gen::stdlib::core::FixedTickPhase>>(
+               backend::generated_scheduler_state().delayed)
+        .size();
 }
 
 }  // namespace
@@ -41,9 +44,9 @@ std::size_t fixed_tick_delays() {
 TEST_CASE("delayed occurrences run in the next activation of their clock", "[runtime][delivery-cycles]") {
     entt::registry registry;
     cactus_headless_test::init_and_load(registry);
-    const auto& slots = generated_named_slots();
-    const auto front  = slots.delivery_clocks_runtime__Front;
-    const auto stats  = slots.delivery_clocks_runtime__Stats;
+    const auto& slots = cactus_gen::detail::generated_named_slots();
+    const auto front  = slots.delivery_clocks_runtime.Front;
+    const auto stats  = slots.delivery_clocks_runtime.Stats;
 
     // The load boundary's Echo ran once; its own Ping waits for the host drain.
     CHECK(hops(registry, front) == 1);

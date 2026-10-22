@@ -24,16 +24,16 @@ namespace {
 
 namespace backend = cactus::runtime::entt_backend;
 
-using Session   = game__Session;
-using Mode      = game__Mode;
-using Script    = small_world__Script;
-using Cell      = std_voxel_volume__Cell;
-using Volume    = std_voxel_volume__Volume;
-using Solid     = std_physics_volume__Solid;
-using Body      = std_physics_volume__CharacterBody;
-using RobotTransform = std_transform_volume__WorldTransform;
-using Robot     = robot__Robot;
-using Editor    = editing__Editor;
+using Session        = cactus_gen::game::Session;
+using Mode           = cactus_gen::game::Mode;
+using Script         = cactus_gen::small_world::Script;
+using Cell           = cactus_gen::stdlib::voxel::volume::Cell;
+using Volume         = cactus_gen::stdlib::voxel::volume::Volume;
+using Solid          = cactus_gen::stdlib::physics::volume::Solid;
+using Body           = cactus_gen::stdlib::physics::volume::CharacterBody;
+using RobotTransform = cactus_gen::stdlib::transform::volume::WorldTransform;
+using Robot          = cactus_gen::robot::Robot;
+using Editor         = cactus_gen::editing::Editor;
 
 // The small world: x/z 0..15, y -4..7.
 constexpr int kCells = 16 * 12 * 16;
@@ -53,18 +53,22 @@ struct World {
         backend::reset_quit_request();
         backend::generated_init_project(registry);
         backend::generated_load_project(registry);
-        backend::generated_run_boundary_activation(registry, std_core__loadEvent{});
+        backend::generated_run_boundary_activation(registry, cactus_gen::stdlib::core::loadEvent{});
     }
 
     void frame(int count = 1) {
         for (int i = 0; i < count; ++i) {
-            backend::generated_inject_external_event(std_core__frameEvent{.dt = kDt});
+            backend::generated_inject_external_event(cactus_gen::stdlib::core::frameEvent{.dt = kDt});
             backend::generated_drain_external_events(registry);
         }
     }
 
-    Session& session() { return registry.get<Session>(generated_named_slots().game__Game); }
-    Script& script() { return registry.get<Script>(generated_named_slots().small_world__Tester); }
+    Session& session() {
+        return registry.get<Session>(cactus_gen::detail::generated_named_slots().game.Game);
+    }
+    Script& script() {
+        return registry.get<Script>(cactus_gen::detail::generated_named_slots().small_world.Tester);
+    }
 
     // Frames until the session reaches `mode`, at most `limit`.
     bool run_until(Mode mode, int limit = 120) {
@@ -109,12 +113,14 @@ struct World {
         return registry.view<Trait>().size();
     }
 
-    const world__Generation& recipe() { return registry.get<world__Generation>(generated_named_slots().world__Generator); }
+    const cactus_gen::world::Generation& recipe() {
+        return registry.get<cactus_gen::world::Generation>(cactus_gen::detail::generated_named_slots().world.Generator);
+    }
 
-    robot__StrategyView& overview() {
-        const auto view = registry.view<robot__StrategyView>();
+    cactus_gen::robot::StrategyView& overview() {
+        const auto view = registry.view<cactus_gen::robot::StrategyView>();
         REQUIRE(view.size() == 1);
-        return registry.get<robot__StrategyView>(*view.begin());
+        return registry.get<cactus_gen::robot::StrategyView>(*view.begin());
     }
 
     void press(int button) {
@@ -186,16 +192,18 @@ TEST_CASE("the sandbox starts on the start menu with no world", "[runtime][codeg
     CHECK(world.session().mode == Mode::Start);
     CHECK(world.count<Volume>() == 0);
     bool start_menu_shown = false;
-    for (const auto [entity, on_screen, node] : world.registry.view<hud__OnScreen, std_ui__Node>().each()) {
-        if (on_screen.screen == hud__Screen::StartMenu) {
+    for (const auto [entity, on_screen, node] :
+         world.registry.view<cactus_gen::hud::OnScreen, cactus_gen::stdlib::ui::Node>().each()) {
+        if (on_screen.screen == cactus_gen::hud::Screen::StartMenu) {
             start_menu_shown = node.visible;
         }
-        if (on_screen.screen == hud__Screen::PauseMenu) {
+        if (on_screen.screen == cactus_gen::hud::Screen::PauseMenu) {
             CHECK_FALSE(node.visible);
         }
     }
     CHECK(start_menu_shown);
-    for (const auto [entity, viewport] : world.registry.view<hud__MenuView, std_camera_viewport__Viewport>().each()) {
+    for (const auto [entity, viewport] :
+         world.registry.view<cactus_gen::hud::MenuView, cactus_gen::stdlib::camera::viewport::Viewport>().each()) {
         CHECK(viewport.active);
     }
 }
@@ -208,17 +216,18 @@ TEST_CASE("a new game generates the whole world before play and drops the robot 
     CHECK(world.session().mode == Mode::Generating);
     REQUIRE(world.run_until(Mode::Playing));
     CHECK(world.count<Cell>() == static_cast<std::size_t>(kCells));
-    CHECK(world.count<robot__FirstPersonView>() == 1);
-    CHECK(world.count<robot__StrategyView>() == 1);
-    CHECK(world.count<sky__SkyBody>() == 4);
+    CHECK(world.count<cactus_gen::robot::FirstPersonView>() == 1);
+    CHECK(world.count<cactus_gen::robot::StrategyView>() == 1);
+    CHECK(world.count<cactus_gen::sky::SkyBody>() == 4);
 
     for (int x = 0; x < 16; ++x) {
         for (int z = 0; z < 16; ++z) {
             const auto bottom = world.cell_at(x, kMinY, z);
-            CHECK(world.registry.all_of<Solid, world__Bedrock>(bottom));
+            CHECK(world.registry.all_of<Solid, cactus_gen::world::Bedrock>(bottom));
         }
     }
-    const auto& recipe = world.registry.get<world__Generation>(generated_named_slots().world__Generator);
+    const auto& recipe =
+        world.registry.get<cactus_gen::world::Generation>(cactus_gen::detail::generated_named_slots().world.Generator);
     for (int dx = -1; dx <= 1; ++dx) {
         for (int dz = -1; dz <= 1; ++dz) {
             CHECK(world.solid(recipe.spawn_x + dx, recipe.spawn_floor, recipe.spawn_z + dz));
@@ -243,7 +252,8 @@ TEST_CASE("the same seed makes the same world whatever the batch size", "[runtim
         first = world.cells();
     }
     World world;
-    world.registry.get<world__WorldConfig>(generated_named_slots().small_world__Settings).batch = 100;
+    world.registry.get<cactus_gen::world::WorldConfig>(cactus_gen::detail::generated_named_slots().small_world.Settings)
+        .batch = 100;
     world.new_game();
     const auto second = world.cells();
     REQUIRE(second.size() == first.size());
@@ -312,7 +322,7 @@ TEST_CASE("an accelerated clock crosses midnight into the next day", "[runtime][
     // One long frame at 8x crosses two midnights at once.
     world.session().minute = 0.0F;
     world.session().speed  = 5;
-    backend::generated_inject_external_event(std_core__frameEvent{.dt = 400.0F});
+    backend::generated_inject_external_event(cactus_gen::stdlib::core::frameEvent{.dt = 400.0F});
     backend::generated_drain_external_events(world.registry);
     CHECK(world.session().day == day + 3);
     CHECK(world.session().minute == Catch::Approx(3200.0F - 2880.0F).margin(0.5));
@@ -348,7 +358,7 @@ TEST_CASE("looking down and clicking digs the cell under the robot", "[runtime][
     const auto robot = world.robot();
     world.registry.get<Robot>(robot).pitch = -1.45F;
     world.frame();
-    const auto& probe = world.registry.get<std_voxel_volume__RayProbe>(robot);
+    const auto& probe = world.registry.get<cactus_gen::stdlib::voxel::volume::RayProbe>(robot);
     REQUIRE(probe.hit);
     const int x = probe.x;
     const int y = probe.y;
@@ -369,7 +379,7 @@ TEST_CASE("building into the robot's own space is skipped", "[runtime][codegen-e
     const auto robot = world.robot();
     world.registry.get<Robot>(robot).pitch = -1.45F;
     world.frame();
-    const auto& probe = world.registry.get<std_voxel_volume__RayProbe>(robot);
+    const auto& probe = world.registry.get<cactus_gen::stdlib::voxel::volume::RayProbe>(robot);
     REQUIRE(probe.has_adjacent);
     const int ax = probe.adjacent_x;
     const int ay = probe.adjacent_y;
@@ -384,7 +394,7 @@ TEST_CASE("building into the robot's own space is skipped", "[runtime][codegen-e
 TEST_CASE("a region dig removes eligible solids but never bedrock", "[runtime][codegen-entt][robot-sandbox]") {
     World world;
     world.new_game();
-    world.session().edit_kind = game__EditKind::Dig;
+    world.session().edit_kind = cactus_gen::game::EditKind::Dig;
     world.session().layer     = -2;
     world.session().height    = 3;
     world.commit_region(1, 1, 3, 2);
@@ -403,7 +413,7 @@ TEST_CASE("a region dig given its corners in reverse order removes the same cell
     {
         World world;
         world.new_game();
-        world.session().edit_kind = game__EditKind::Dig;
+        world.session().edit_kind = cactus_gen::game::EditKind::Dig;
         world.session().layer     = -1;
         world.session().height    = 2;
         world.commit_region(1, 1, 3, 2);
@@ -411,7 +421,7 @@ TEST_CASE("a region dig given its corners in reverse order removes the same cell
     }
     World world;
     world.new_game();
-    world.session().edit_kind = game__EditKind::Dig;
+    world.session().edit_kind = cactus_gen::game::EditKind::Dig;
     world.session().layer     = -1;
     world.session().height    = 2;
     world.commit_region(3, 2, 1, 1);
@@ -429,8 +439,8 @@ TEST_CASE("a strategy drag with the mouse selects inclusive cells either way and
     world.new_game();
     world.script().toggle_view = true;
     world.frame();
-    REQUIRE(world.session().camera == game__View::Strategy);
-    world.session().edit_kind = game__EditKind::Dig;
+    REQUIRE(world.session().camera == cactus_gen::game::View::Strategy);
+    world.session().edit_kind = cactus_gen::game::EditKind::Dig;
     world.session().layer     = -1;
     world.session().height    = 1;
     cactus_raylib_fake::set_mouse_position(Vector2{.x = 640.0F, .y = 360.0F});
@@ -494,9 +504,9 @@ TEST_CASE("clicking toolbar buttons picks the material and edit kind without edi
     world.session().layer = -1;
     const auto before     = world.cells();
     world.click_label("Iron");
-    CHECK(world.session().material == game__Material::Iron);
+    CHECK(world.session().material == cactus_gen::game::Material::Iron);
     world.click_label("Build");
-    CHECK(world.session().edit_kind == game__EditKind::Build);
+    CHECK(world.session().edit_kind == cactus_gen::game::EditKind::Build);
     CHECK_FALSE(world.registry.get<Editor>(world.robot()).dragging);
     world.frame();
     CHECK(world.cells() == before);
@@ -506,12 +516,12 @@ TEST_CASE("a region build fills air with the chosen material and leaves solids a
           "[runtime][codegen-entt][robot-sandbox]") {
     World world;
     world.new_game();
-    world.session().edit_kind = game__EditKind::Dig;
+    world.session().edit_kind = cactus_gen::game::EditKind::Dig;
     world.session().layer     = -1;
     world.session().height    = 3;
     world.commit_region(1, 1, 4, 3);
-    world.session().edit_kind = game__EditKind::Build;
-    world.session().material  = game__Material::Iron;
+    world.session().edit_kind = cactus_gen::game::EditKind::Build;
+    world.session().material  = cactus_gen::game::Material::Iron;
     world.session().layer     = -2;
     world.session().height    = 2;
     world.commit_region(1, 1, 4, 3);
@@ -582,10 +592,11 @@ TEST_CASE("the strategy view pans, zooms within limits and centres on the robot"
     world.new_game();
     world.script().toggle_view = true;
     world.frame(2);
-    REQUIRE(world.session().camera == game__View::Strategy);
+    REQUIRE(world.session().camera == cactus_gen::game::View::Strategy);
     bool strategy_active = false;
     for (const auto [entity, overview, viewport] :
-         world.registry.view<robot__StrategyView, std_camera_viewport__Viewport>().each()) {
+         world.registry.view<cactus_gen::robot::StrategyView, cactus_gen::stdlib::camera::viewport::Viewport>()
+             .each()) {
         strategy_active = viewport.active;
     }
     CHECK(strategy_active);
@@ -622,7 +633,7 @@ TEST_CASE("the robot jumps up onto a one-block step", "[runtime][codegen-entt][r
     const auto& recipe = world.recipe();
     const int floor    = recipe.spawn_floor;
     // The robot starts facing -Z; put one block in front of it.
-    world.session().edit_kind = game__EditKind::Build;
+    world.session().edit_kind = cactus_gen::game::EditKind::Build;
     world.session().layer     = floor + 1;
     world.session().height    = 1;
     world.commit_region(recipe.spawn_x, recipe.spawn_z - 1, recipe.spawn_x, recipe.spawn_z - 1);
@@ -652,19 +663,19 @@ TEST_CASE("the robot walks through a doorway into a constructed room and stops a
     const int sx       = recipe.spawn_x;
     const int sz       = recipe.spawn_z;
     const int floor    = recipe.spawn_floor;
-    const auto region  = [&](game__EditKind kind, int layer, int height, int x0, int z0, int x1, int z1) {
+    const auto region  = [&](cactus_gen::game::EditKind kind, int layer, int height, int x0, int z0, int x1, int z1) {
         world.session().edit_kind = kind;
-        world.session().material  = game__Material::Wood;
+        world.session().material  = cactus_gen::game::Material::Wood;
         world.session().layer     = layer;
         world.session().height    = height;
         world.commit_region(x0, z0, x1, z1);
     };
     // A hall north of the spawn, a wall with a one-cell, two-high doorway, and a back wall.
-    region(game__EditKind::Dig, floor + 3, 3, sx - 3, sz - 6, sx + 3, sz + 1);
-    region(game__EditKind::Build, floor, 1, sx - 3, sz - 6, sx + 3, sz + 1);
-    region(game__EditKind::Build, floor + 3, 3, sx - 3, sz - 2, sx + 3, sz - 2);
-    region(game__EditKind::Dig, floor + 2, 2, sx, sz - 2, sx, sz - 2);
-    region(game__EditKind::Build, floor + 3, 3, sx - 3, sz - 7, sx + 3, sz - 7);
+    region(cactus_gen::game::EditKind::Dig, floor + 3, 3, sx - 3, sz - 6, sx + 3, sz + 1);
+    region(cactus_gen::game::EditKind::Build, floor, 1, sx - 3, sz - 6, sx + 3, sz + 1);
+    region(cactus_gen::game::EditKind::Build, floor + 3, 3, sx - 3, sz - 2, sx + 3, sz - 2);
+    region(cactus_gen::game::EditKind::Dig, floor + 2, 2, sx, sz - 2, sx, sz - 2);
+    region(cactus_gen::game::EditKind::Build, floor + 3, 3, sx - 3, sz - 7, sx + 3, sz - 7);
     REQUIRE_FALSE(world.solid(sx, floor + 1, sz - 2));
     REQUIRE_FALSE(world.solid(sx, floor + 2, sz - 2));
     REQUIRE(world.solid(sx, floor + 3, sz - 2));
@@ -692,16 +703,16 @@ TEST_CASE("planning underground in the strategy view keeps the robot in place an
     const auto start = world.registry.get<RobotTransform>(robot).position;
     world.script().toggle_view = true;
     world.frame(2);
-    REQUIRE(world.session().camera == game__View::Strategy);
+    REQUIRE(world.session().camera == cactus_gen::game::View::Strategy);
     world.session().cutaway   = true;
-    world.session().edit_kind = game__EditKind::Dig;
+    world.session().edit_kind = cactus_gen::game::EditKind::Dig;
     world.session().layer     = -2;
     world.session().height    = 1;
     world.commit_region(1, 1, 3, 3);
     world.frame(30);
     world.script().toggle_view = true;
     world.frame(2);
-    REQUIRE(world.session().camera == game__View::FirstPerson);
+    REQUIRE(world.session().camera == cactus_gen::game::View::FirstPerson);
     world.frame(30);
     const auto now = world.registry.get<RobotTransform>(robot).position;
     CHECK(now.x == Catch::Approx(start.x).margin(1e-3));
@@ -719,12 +730,12 @@ TEST_CASE("recovering puts the robot back in a reopened spawn pocket", "[runtime
     world.new_game();
     const auto& recipe        = world.recipe();
     const int floor           = recipe.spawn_floor;
-    world.session().edit_kind = game__EditKind::Build;
+    world.session().edit_kind = cactus_gen::game::EditKind::Build;
     world.session().layer     = floor + 1;
     world.session().height    = 1;
     world.commit_region(recipe.spawn_x + 1, recipe.spawn_z - 1, recipe.spawn_x + 1, recipe.spawn_z + 1);
     REQUIRE(world.solid(recipe.spawn_x + 1, floor + 1, recipe.spawn_z));
-    world.session().edit_kind = game__EditKind::Dig;
+    world.session().edit_kind = cactus_gen::game::EditKind::Dig;
     world.session().layer     = floor;
     world.commit_region(recipe.spawn_x - 1, recipe.spawn_z - 1, recipe.spawn_x - 1, recipe.spawn_z - 1);
     REQUIRE_FALSE(world.solid(recipe.spawn_x - 1, floor, recipe.spawn_z - 1));
@@ -777,9 +788,10 @@ TEST_CASE("first person hides the robot's own body and the strategy view shows i
     world.new_game();
     world.frame();
     const auto visible = [&] {
-        const auto view = world.registry.view<robot__RobotVisual, std_render_models__ModelRenderer>();
+        const auto view =
+            world.registry.view<cactus_gen::robot::RobotVisual, cactus_gen::stdlib::render::models::ModelRenderer>();
         REQUIRE(view.size_hint() >= 1);
-        return world.registry.get<std_render_models__ModelRenderer>(*view.begin()).visible;
+        return world.registry.get<cactus_gen::stdlib::render::models::ModelRenderer>(*view.begin()).visible;
     };
     CHECK_FALSE(visible());
     world.script().toggle_view = true;
@@ -796,16 +808,18 @@ TEST_CASE("the sun lights noon from above and the moon lights midnight", "[runti
 
     const auto light = [&](bool night) {
         for (const auto [entity, body, sky_light] :
-             world.registry.view<sky__SkyBody, std_render_meshes__DirectionalLight>().each()) {
+             world.registry.view<cactus_gen::sky::SkyBody, cactus_gen::stdlib::render::meshes::DirectionalLight>()
+                 .each()) {
             if (body.night == night) {
                 return sky_light;
             }
         }
         FAIL("no sky light");
-        return std_render_meshes__DirectionalLight{};
+        return cactus_gen::stdlib::render::meshes::DirectionalLight{};
     };
     const auto disc_height = [&](bool night) {
-        for (const auto [entity, body, place] : world.registry.view<sky__SkyBody, RobotTransform>().each()) {
+        for (const auto [entity, body, place] :
+             world.registry.view<cactus_gen::sky::SkyBody, RobotTransform>().each()) {
             if (body.night == night) {
                 return place.position.y;
             }
@@ -844,7 +858,7 @@ TEST_CASE("a save restores dug cells, the robot, the calendar and one set of vie
     cactus_test::ScopedPersistenceAdapter scoped(memory.as_adapter());
     World world;
     world.new_game();
-    world.session().edit_kind = game__EditKind::Dig;
+    world.session().edit_kind = cactus_gen::game::EditKind::Dig;
     world.session().layer     = -1;
     world.session().height    = 2;
     world.commit_region(2, 2, 4, 4);
@@ -861,7 +875,7 @@ TEST_CASE("a save restores dug cells, the robot, the calendar and one set of vie
     CHECK_FALSE(world.session().dirty);
     const float saved_minute = world.session().minute;
 
-    world.session().edit_kind = game__EditKind::Build;
+    world.session().edit_kind = cactus_gen::game::EditKind::Build;
     world.script().resume     = true;
     world.frame();
     world.commit_region(2, 2, 4, 4);
@@ -879,12 +893,12 @@ TEST_CASE("a save restores dug cells, the robot, the calendar and one set of vie
     CHECK_FALSE(world.solid(3, -1, 3));
     CHECK_FALSE(world.solid(3, -2, 3));
     CHECK(world.count<Cell>() == static_cast<std::size_t>(kCells));
-    CHECK(world.count<robot__FirstPersonView>() == 1);
-    CHECK(world.count<robot__StrategyView>() == 1);
-    CHECK(world.count<sky__SkyBody>() == 4);
+    CHECK(world.count<cactus_gen::robot::FirstPersonView>() == 1);
+    CHECK(world.count<cactus_gen::robot::StrategyView>() == 1);
+    CHECK(world.count<cactus_gen::sky::SkyBody>() == 4);
     int start_menus = 0;
-    for (const auto [entity, on_screen] : world.registry.view<hud__OnScreen>().each()) {
-        start_menus += on_screen.screen == hud__Screen::StartMenu ? 1 : 0;
+    for (const auto [entity, on_screen] : world.registry.view<cactus_gen::hud::OnScreen>().each()) {
+        start_menus += on_screen.screen == cactus_gen::hud::Screen::StartMenu ? 1 : 0;
     }
     CHECK(start_menus == 1);
     const auto restored = world.registry.get<RobotTransform>(world.robot()).position;
@@ -900,12 +914,12 @@ TEST_CASE("loading from the start menu, twice, restores the save each time with 
     {
         World world;
         world.new_game();
-        world.session().edit_kind = game__EditKind::Dig;
+        world.session().edit_kind = cactus_gen::game::EditKind::Dig;
         world.session().layer     = -1;
         world.session().height    = 2;
         world.commit_region(5, 5, 7, 6);
-        world.session().material = game__Material::Stone;
-        world.session().camera   = game__View::Strategy;
+        world.session().material = cactus_gen::game::Material::Stone;
+        world.session().camera   = cactus_gen::game::View::Strategy;
         world.script().pause     = true;
         world.frame();
         world.script().save = true;
@@ -920,11 +934,11 @@ TEST_CASE("loading from the start menu, twice, restores the save each time with 
         world.frame(6);
         REQUIRE(world.session().mode == Mode::Playing);
         CHECK(world.cells() == saved);
-        CHECK(world.session().material == game__Material::Stone);
-        CHECK(world.session().camera == game__View::Strategy);
-        CHECK(world.count<robot__FirstPersonView>() == 1);
-        CHECK(world.count<robot__StrategyView>() == 1);
-        CHECK(world.count<sky__SkyBody>() == 4);
+        CHECK(world.session().material == cactus_gen::game::Material::Stone);
+        CHECK(world.session().camera == cactus_gen::game::View::Strategy);
+        CHECK(world.count<cactus_gen::robot::FirstPersonView>() == 1);
+        CHECK(world.count<cactus_gen::robot::StrategyView>() == 1);
+        CHECK(world.count<cactus_gen::sky::SkyBody>() == 4);
         CHECK(world.count<Robot>() == 1);
         world.script().pause = true;
         world.frame();
@@ -958,7 +972,7 @@ TEST_CASE("a corrupt save reports the failure and keeps the current game",
             }});
     World world;
     world.new_game();
-    world.session().edit_kind = game__EditKind::Dig;
+    world.session().edit_kind = cactus_gen::game::EditKind::Dig;
     world.session().layer     = -1;
     world.session().height    = 1;
     world.commit_region(2, 2, 3, 3);

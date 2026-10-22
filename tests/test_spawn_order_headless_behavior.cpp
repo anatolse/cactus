@@ -15,10 +15,10 @@ TEST_CASE("ordered spawners give an order-observing rule the same result on ever
     for (int run = 0; run < 5; ++run) {
         entt::registry registry;
         cactus_headless_test::drive_one_frame(registry, 1.0F / 60.0F);
-        const auto view = registry.view<spawn_order_runtime__Winner>();
+        const auto view = registry.view<cactus_gen::spawn_order_runtime::Winner>();
         REQUIRE(view.size() == 1);
-        CHECK(registry.get<spawn_order_runtime__Winner>(view.front()).kind == 1);
-        CHECK(registry.view<spawn_order_runtime__Pickup>().size() == 2);
+        CHECK(registry.get<cactus_gen::spawn_order_runtime::Winner>(view.front()).kind == 1);
+        CHECK(registry.view<cactus_gen::spawn_order_runtime::Pickup>().size() == 2);
     }
 }
 

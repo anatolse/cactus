@@ -1,0 +1,85 @@
+module main
+
+# Every kind of generated name: types from two modules, a state, a phase, a
+# projection, a named entity, a template, and an extern rule.
+
+use std.core
+use std.transform.volume
+use std.camera.volume as cam
+use shapes
+
+state Mode:
+    Idle
+    Busy:
+        var left: float = 1.0
+
+trait Box:
+    var extent: shapes.Extent = shapes.Extent(width = 2.0, height = 3.0)
+    var ticks: int = 0
+
+trait Glow:
+    var level: float = 0.0
+
+trait Heading:
+    var angle: float = 0.0
+
+entity Game:
+    shapes.Session
+    shapes.projected_Session
+
+entity View:
+    cam.Camera
+
+template Crate(width: float):
+    Box:
+        extent = shapes.Extent(width = width, height = 1.0)
+    Mode.Idle
+    Heading
+
+entity First from Crate(width = 4.0)
+
+rule CountTicks:
+    each:
+        Box as box
+    on fixed_tick:
+        box.ticks += shapes.doubled(Game[shapes.Session].speed)
+
+rule Brighten:
+    each:
+        Box
+    on tick:
+        project Glow to self:
+            level = shapes.PI
+
+# Projects the trait whose name the `projected_Session` trait spells.
+rule HoldSpeed:
+    after:
+        Defaults
+    on tick:
+        project shapes.Session to Game:
+            speed = 2
+
+rule Wake:
+    each:
+        Mode.Idle
+    on tick:
+        add Mode.Busy
+
+extern rule NativeTurn:
+    each:
+        Box
+        Heading
+    on fixed_tick:
+        reads:
+            Box
+        writes:
+            Heading
+    on shapes.Reset:
+        writes:
+            Heading
+
+# `default` is a C++ keyword, as a field and as an enum variant.
+rule Defaults:
+    on tick:
+        Game[shapes.projected_Session].default += 1
+        Game[shapes.Session].tone = shapes.Tone.default

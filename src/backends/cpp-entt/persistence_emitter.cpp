@@ -526,14 +526,6 @@ std::vector<PersistableTrait> without_parent_trait(std::vector<PersistableTrait>
 
 namespace {
 
-std::string enum_variant_function(const std::string& enum_cpp) {
-    return "generated_variant_" + enum_cpp;
-}
-
-std::string struct_capture_function(const std::string& struct_cpp) {
-    return "generated_capture_" + struct_cpp;
-}
-
 // Assets and input actions are referenced by canonical declaration (dsl-
 // persistence-schema), never by the numeric handle a runtime happens to
 // assign them: handles are allocation-order artifacts, not stable identity.
@@ -638,17 +630,15 @@ std::string capture_expression(const DecoratedProgram& program, const TypeInfo& 
             if (declaration == nullptr || EnttComponentEmitter::emit_enum(*declaration).empty()) {
                 return {};  // deferred to a raylib enum: no generated variant names
             }
-            return "cactus::persistence::Value::of_enum(\"" + declaration_identity(*declaration) + "\", std::string(" +
-                   enum_variant_function(canonical_to_cpp_name(declaration->module_name, declaration->name)) + "(" +
-                   access + ")))";
+            return "cactus::persistence::Value::of_enum(\"" + declaration_identity(*declaration) +
+                   "\", std::string(generated_variant(" + access + ")))";
         }
         case PersistenceValueKind::Struct: {
             const auto* declaration = EnttCodegenUtils::find_struct(program, type.name);
             if (declaration == nullptr) {
                 return {};
             }
-            return struct_capture_function(canonical_to_cpp_name(declaration->module_name, declaration->name)) + "(" +
-                   access + ", ids)";
+            return "generated_capture_struct(" + access + ", ids)";
         }
         case PersistenceValueKind::List: {
             if (type.element == nullptr) {
@@ -685,7 +675,7 @@ void emit_field_capture(std::ostringstream& out,
                         const std::string& access,
                         const std::string& target,
                         const std::string& indent) {
-    const auto expression = capture_expression(program, field.type, access + field.name);
+    const auto expression = capture_expression(program, field.type, access + cpp_escaped(field.name));
     if (expression.empty()) {
         return;
     }
@@ -700,12 +690,11 @@ void emit_enum_variant_functions(std::ostringstream& out, const DecoratedProgram
             EnttComponentEmitter::emit_enum(declaration).empty()) {
             continue;
         }
-        const auto enum_cpp = canonical_to_cpp_name(declaration.module_name, declaration.name);
-        out << "[[nodiscard]] inline std::string_view " << enum_variant_function(enum_cpp) << "(" << enum_cpp
-            << " value) {\n";
+        const auto enum_cpp = cpp_type_ref(SymbolKind::Enum, declaration.module_name, declaration.name);
+        out << "[[nodiscard]] inline std::string_view generated_variant(" << enum_cpp << " value) {\n";
         out << "    switch (value) {\n";
         for (const auto& variant : declaration.variants) {
-            out << "        case " << enum_cpp << "::" << variant << ": return \"" << variant << "\";\n";
+            out << "        case " << enum_cpp << "::" << cpp_escaped(variant) << ": return \"" << variant << "\";\n";
         }
         out << "    }\n    return \"\";\n}\n\n";
     }
@@ -717,9 +706,9 @@ void emit_struct_capture_functions(std::ostringstream& out, const DecoratedProgr
         if (!seen.insert(declaration_identity(declaration)).second) {
             continue;
         }
-        const auto struct_cpp = canonical_to_cpp_name(declaration.module_name, declaration.name);
-        out << "[[nodiscard]] inline cactus::persistence::Value " << struct_capture_function(struct_cpp) << "(const "
-            << struct_cpp << "& value, DocumentIdMap& ids) {\n";
+        const auto struct_cpp = cpp_type_ref(SymbolKind::Struct, declaration.module_name, declaration.name);
+        out << "[[nodiscard]] inline cactus::persistence::Value generated_capture_struct(const " << struct_cpp
+            << "& value, DocumentIdMap& ids) {\n";
         out << "    if (!ids.enter_nesting()) { return cactus::persistence::Value{}; }\n";
         out << "    cactus::persistence::StructValue fields;\n";
         const auto field_count =
@@ -786,7 +775,8 @@ SupportedFieldCounts count_supported_fields(const DecoratedProgram& program, con
 // small however many traits a program persists.
 void emit_trait_capture(std::ostringstream& out, const DecoratedProgram& program, const PersistableTrait& trait) {
     const auto counts = count_supported_fields(program, *trait.declaration);
-    out << "inline void generated_capture_trait_" << trait.cpp_name << "(const entt::registry& registry,\n";
+    out << "template <>\n";
+    out << "inline void generated_capture_trait<" << trait.cpp_name << ">(const entt::registry& registry,\n";
     out << "                                     entt::entity entity,\n";
     out << "                                     DocumentIdMap& ids,\n";
     out << "                                     cactus::persistence::EntityRecord& record) {\n";
@@ -822,6 +812,11 @@ void emit_trait_capture(std::ostringstream& out, const DecoratedProgram& program
 void emit_attached_traits(std::ostringstream& out,
                           const DecoratedProgram& program,
                           const std::vector<PersistableTrait>& traits) {
+    out << "template <class T>\n";
+    out << "void generated_capture_trait(const entt::registry& registry,\n";
+    out << "                             entt::entity entity,\n";
+    out << "                             DocumentIdMap& ids,\n";
+    out << "                             cactus::persistence::EntityRecord& record);\n\n";
     for (const auto& trait : traits) {
         if (!trait.declaration->fields.empty()) {
             emit_trait_capture(out, program, trait);
@@ -833,14 +828,14 @@ void emit_attached_traits(std::ostringstream& out,
     out << "                                     cactus::persistence::EntityRecord& record) {\n";
     out << "    (void)ids;\n";
     for (const auto& trait : traits) {
-        out << "    if (!::projected_" << trait.cpp_name << ".is_projected(entity)) {\n";
+        out << "    if (!::cactus_gen::detail::projected<" << trait.cpp_name << ">.is_projected(entity)) {\n";
         if (trait.declaration->fields.empty()) {
             out << "        if (registry.all_of<" << trait.cpp_name << ">(entity)) {\n";
             out << "            record.traits.push_back(cactus::persistence::TraitRecord{.trait = \""
                 << trait.canonical << "\"});\n";
             out << "        }\n";
         } else {
-            out << "        generated_capture_trait_" << trait.cpp_name << "(registry, entity, ids, record);\n";
+            out << "        generated_capture_trait<" << trait.cpp_name << ">(registry, entity, ids, record);\n";
         }
         out << "    }\n";
     }

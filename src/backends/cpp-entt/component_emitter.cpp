@@ -17,19 +17,20 @@ bool should_defer_to_raylib_enum(const std::string& name) {
 }  // namespace
 
 std::string EnttComponentEmitter::emit_component(const ResolvedTrait& trait, const DecoratedProgram& program) {
-    const std::string cpp_name = canonical_to_cpp_name(trait.module_name, trait.name);
-    std::ostringstream out;
+    const auto ns       = cpp_namespace_path(trait.module_name);
+    const auto cpp_name = cpp_decl_name(SymbolKind::Trait, trait.name);
     if (trait.is_state_slot()) {
-        return emit_state_slot(cpp_name, *trait.state, program);
+        return namespace_block(ns, emit_state_slot(cpp_name, *trait.state, program));
     }
+    std::ostringstream out;
     if (trait.fields.empty()) {
         out << "struct " << cpp_name << " {};\n";
-        return out.str();
+        return namespace_block(ns, out.str());
     }
 
     out << "struct " << cpp_name << " {\n";
     for (const auto& field : trait.fields) {
-        out << "    " << EnttCodegenUtils::value_type_to_cpp(field.type) << " " << field.name;
+        out << "    " << EnttCodegenUtils::value_type_to_cpp(field.type) << " " << cpp_escaped(field.name);
         const auto* default_expr =
             EnttCodegenUtils::find_trait_field_default(program, trait.module_name, trait.name, field.name);
         if (default_expr == nullptr) {
@@ -51,7 +52,7 @@ std::string EnttComponentEmitter::emit_component(const ResolvedTrait& trait, con
         }
     }
     out << "};\n";
-    return out.str();
+    return namespace_block(ns, out.str());
 }
 
 std::string EnttComponentEmitter::emit_state_slot(const std::string& cpp_name,
@@ -67,6 +68,9 @@ std::string EnttComponentEmitter::emit_state_slot(const std::string& cpp_name,
     }
     std::ostringstream out;
     out << "struct " << cpp_name << " {\n";
+    for (std::size_t index = 0; index < variant_count; ++index) {
+        out << "    struct " << cpp_escaped(declaration->variants[index].name) << ";\n";
+    }
     out << "    " << (variant_count <= 256 ? "std::uint8_t" : "std::size_t") << " index = 0;\n";
     if (final_masks.size() == 1) {
         out << "    static constexpr std::uint64_t final_mask = 0x" << std::hex << final_masks.front() << std::dec
@@ -114,15 +118,14 @@ std::string EnttComponentEmitter::emit_state_helpers(const DecoratedProgram& pro
 }
 
 std::string EnttComponentEmitter::emit_pod_struct(const ResolvedStruct& s) {
-    const std::string cpp_name = canonical_to_cpp_name(s.module_name, s.name);
     std::ostringstream out;
-    out << "struct " << cpp_name << " {\n";
+    out << "struct " << cpp_decl_name(SymbolKind::Struct, s.name) << " {\n";
     for (const auto& field : s.fields) {
-        out << "    " << EnttCodegenUtils::value_type_to_cpp(field.type) << " " << field.name
+        out << "    " << EnttCodegenUtils::value_type_to_cpp(field.type) << " " << cpp_escaped(field.name)
             << EnttCodegenUtils::value_initializer(field.type) << ";\n";
     }
     out << "};\n";
-    return out.str();
+    return namespace_block(cpp_namespace_path(s.module_name), out.str());
 }
 
 std::string EnttComponentEmitter::emit_enum(const ResolvedEnum& e) {

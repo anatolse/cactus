@@ -7,31 +7,32 @@
 
 #ifndef CACTUS_EXTERNAL_HANDLER_MISSING_IMPLEMENTATIONS
 
-void cactus_external__external_handler_linking__NativeMovement__on__external_handler_linking__fixed_tick(
-    const cactus::runtime::entt_backend::external_handler_linking__fixed_tickPhaseRuntimeState& trigger,
+namespace linking = cactus_gen::external_handler_linking;
+
+void cactus_gen::external_handler_linking::NativeMovement::on(
+    const linking::FixedTickPhase& trigger,
     entt::entity entity,
-    const external_handler_linking__Position& read_external_handler_linking__Position,
-    external_handler_linking__Velocity& write_external_handler_linking__Velocity,
-    const cactus::runtime::entt_backend::
-        Capabilities__external_handler_linking__NativeMovement__on__external_handler_linking__fixed_tick&
-            capabilities) {
-    capabilities.command_set_external_handler_linking__Heading(entity, {.angle = 1.0F});
-    write_external_handler_linking__Velocity.value +=
-        read_external_handler_linking__Position.value * static_cast<float>(trigger.dt);
+    const linking::Position& position,
+    linking::Velocity& velocity,
+    const Capabilities<linking::FixedTickPhase>& capabilities) {
+    capabilities.set<linking::Heading>(entity, {.angle = 1.0F});
+#ifdef CACTUS_EXTERNAL_HANDLER_DISALLOWED_SET
+    capabilities.set<linking::Velocity>(entity, {});
+#endif
+    velocity.value += position.value * static_cast<float>(trigger.dt);
 }
 
-void cactus_external__external_handler_linking__NativeMovement__on__external_handler_linking__Reset(
-    const external_handler_linking__ResetEvent& trigger,
-    entt::entity entity,
-    const external_handler_linking__Velocity& read_external_handler_linking__Velocity,
-    external_handler_linking__Position& write_external_handler_linking__Position,
-    const cactus::runtime::entt_backend::
-        Capabilities__external_handler_linking__NativeMovement__on__external_handler_linking__Reset& capabilities) {
+#ifndef CACTUS_EXTERNAL_HANDLER_PARTIAL_IMPLEMENTATIONS
+void cactus_gen::external_handler_linking::NativeMovement::on(const linking::ResetEvent& trigger,
+                                                              entt::entity entity,
+                                                              const linking::Velocity& velocity,
+                                                              linking::Position& position,
+                                                              const Capabilities<linking::ResetEvent>& capabilities) {
     (void)entity;
     (void)capabilities;
-    write_external_handler_linking__Position.value =
-        read_external_handler_linking__Velocity.value + static_cast<float>(trigger.value);
+    position.value = velocity.value + static_cast<float>(trigger.value);
 }
+#endif
 
 #endif
 
@@ -39,7 +40,7 @@ int main() {
 #ifndef CACTUS_EXTERNAL_HANDLER_MISSING_IMPLEMENTATIONS
     entt::registry registry;
     cactus::runtime::entt_backend::generated_init_project(registry);
-    cactus::runtime::entt_backend::generated_inject_external_event(external_handler_linking__frameEvent{.dt = 0.25F});
+    cactus::runtime::entt_backend::generated_inject_external_event(linking::frameEvent{.dt = 0.25F});
     cactus::runtime::entt_backend::generated_drain_external_events(registry);
 #endif
     return 0;

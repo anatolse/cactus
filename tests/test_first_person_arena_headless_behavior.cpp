@@ -36,24 +36,25 @@ template <typename Trait>
 constexpr bool carries_game_over = requires(Trait trait) { trait.game_over; } || requires(Trait trait) {
     trait.game_over_count;
 };
-static_assert(!carries_game_over<main__Player>);
+static_assert(!carries_game_over<cactus_gen::main::Player>);
 
-main__Match& match_state(entt::registry& registry) {
-    const auto game = generated_named_slots().main__Game;
-    REQUIRE(registry.all_of<main__Match>(game));
-    return registry.get<main__Match>(game);
+cactus_gen::main::Match& match_state(entt::registry& registry) {
+    const auto game = cactus_gen::detail::generated_named_slots().main.Game;
+    REQUIRE(registry.all_of<cactus_gen::main::Match>(game));
+    return registry.get<cactus_gen::main::Match>(game);
 }
 
 entt::entity crosshair_hud() {
-    return generated_named_slots().main__CrosshairHud;
+    return cactus_gen::detail::generated_named_slots().main.CrosshairHud;
 }
 
 entt::entity game_over_hud() {
-    return generated_named_slots().main__GameOverHud;
+    return cactus_gen::detail::generated_named_slots().main.GameOverHud;
 }
 
 entt::entity isolate_single_enemy(entt::registry& registry) {
-    const auto enemies = registry.view<main__Enemy, std_transform_volume__WorldTransform>();
+    const auto enemies =
+        registry.view<cactus_gen::main::Enemy, cactus_gen::stdlib::transform::volume::WorldTransform>();
     REQUIRE(enemies.begin() != enemies.end());
     const auto seeker = *enemies.begin();
     for (const auto enemy : enemies) {
@@ -86,8 +87,8 @@ bool same_color(const Color left, const Color right) {
 // half_height, so the visible mesh's feet-anchored origin lands on the floor.
 // Tests that assert on rendering state look it up through the Parent relation.
 entt::entity enemy_visual_of(entt::registry& registry, const entt::entity enemy) {
-    for (const auto visual : registry.view<main__EnemyVisual, std_core__Parent>()) {
-        if (registry.get<std_core__Parent>(visual).parent == enemy) {
+    for (const auto visual : registry.view<cactus_gen::main::EnemyVisual, cactus_gen::stdlib::core::Parent>()) {
+        if (registry.get<cactus_gen::stdlib::core::Parent>(visual).parent == enemy) {
             return visual;
         }
     }
@@ -110,42 +111,45 @@ TEST_CASE("first-person arena headless: authored arena, player camera, HUD, and 
     cactus_headless_test::drive_one_frame(registry, kFrameDt);
 
     CHECK(cactus_raylib_fake::cursor_captured());
-    CHECK(count<main__Floor>(registry) == 1);
-    CHECK(count<main__PerimeterWall>(registry) == 4);
-    CHECK(count<main__BuildingWall>(registry) == 6);
-    CHECK(count<main__Stair>(registry) == 8);
-    CHECK(count<main__BuildingRoof>(registry) == 1);
-    CHECK(count<main__RobotSpawnPoint>(registry) == 2);
-    CHECK(count<main__KnightSpawnPoint>(registry) == 2);
-    CHECK(count<main__RobotEnemy>(registry) == 2);
-    CHECK(count<main__KnightEnemy>(registry) == 2);
-    CHECK(count<main__EnemyLife__Hunting>(registry) == 4);
+    CHECK(count<cactus_gen::main::Floor>(registry) == 1);
+    CHECK(count<cactus_gen::main::PerimeterWall>(registry) == 4);
+    CHECK(count<cactus_gen::main::BuildingWall>(registry) == 6);
+    CHECK(count<cactus_gen::main::Stair>(registry) == 8);
+    CHECK(count<cactus_gen::main::BuildingRoof>(registry) == 1);
+    CHECK(count<cactus_gen::main::RobotSpawnPoint>(registry) == 2);
+    CHECK(count<cactus_gen::main::KnightSpawnPoint>(registry) == 2);
+    CHECK(count<cactus_gen::main::RobotEnemy>(registry) == 2);
+    CHECK(count<cactus_gen::main::KnightEnemy>(registry) == 2);
+    CHECK(count<cactus_gen::main::EnemyLife::Hunting>(registry) == 4);
 
-    const auto player = only_entity<main__Player>(registry);
-    CHECK(registry.all_of<std_physics_volume__Collider, std_physics_volume__CapsuleCollider>(player));
-    const auto camera = only_entity<main__CameraRig>(registry);
-    REQUIRE(registry.all_of<std_core__Parent>(camera));
-    CHECK(registry.get<std_core__Parent>(camera).parent == player);
-    CHECK(registry.all_of<std_camera_volume__Camera, std_camera_viewport__Viewport>(camera));
-    CHECK(same_color(registry.get<std_camera_viewport__Viewport>(camera).clear_color,
+    const auto player = only_entity<cactus_gen::main::Player>(registry);
+    CHECK(registry.all_of<cactus_gen::stdlib::physics::volume::Collider,
+                          cactus_gen::stdlib::physics::volume::CapsuleCollider>(player));
+    const auto camera = only_entity<cactus_gen::main::CameraRig>(registry);
+    REQUIRE(registry.all_of<cactus_gen::stdlib::core::Parent>(camera));
+    CHECK(registry.get<cactus_gen::stdlib::core::Parent>(camera).parent == player);
+    CHECK(registry.all_of<cactus_gen::stdlib::camera::volume::Camera, cactus_gen::stdlib::camera::viewport::Viewport>(
+        camera));
+    CHECK(same_color(registry.get<cactus_gen::stdlib::camera::viewport::Viewport>(camera).clear_color,
                      Color{.r = 72, .g = 144, .b = 224, .a = 255}));
 
-    const auto floor = only_entity<main__Floor>(registry);
-    CHECK(
-        same_color(registry.get<std_render_meshes__Renderer>(floor).color, Color{.r = 64, .g = 64, .b = 64, .a = 255}));
-    const auto perimeter = registry.view<main__PerimeterWall, std_render_meshes__Renderer>();
+    const auto floor = only_entity<cactus_gen::main::Floor>(registry);
+    CHECK(same_color(registry.get<cactus_gen::stdlib::render::meshes::Renderer>(floor).color,
+                     Color{.r = 64, .g = 64, .b = 64, .a = 255}));
+    const auto perimeter =
+        registry.view<cactus_gen::main::PerimeterWall, cactus_gen::stdlib::render::meshes::Renderer>();
     REQUIRE(perimeter.begin() != perimeter.end());
-    CHECK(same_color(perimeter.template get<std_render_meshes__Renderer>(*perimeter.begin()).color,
+    CHECK(same_color(perimeter.template get<cactus_gen::stdlib::render::meshes::Renderer>(*perimeter.begin()).color,
                      Color{.r = 192, .g = 192, .b = 192, .a = 255}));
-    const auto building = registry.view<main__BuildingWall, std_render_meshes__Renderer>();
+    const auto building = registry.view<cactus_gen::main::BuildingWall, cactus_gen::stdlib::render::meshes::Renderer>();
     REQUIRE(building.begin() != building.end());
-    CHECK(same_color(building.template get<std_render_meshes__Renderer>(*building.begin()).color,
+    CHECK(same_color(building.template get<cactus_gen::stdlib::render::meshes::Renderer>(*building.begin()).color,
                      Color{.r = 128, .g = 80, .b = 32, .a = 255}));
 
     const auto crosshair = crosshair_hud();
     const auto game_over = game_over_hud();
-    CHECK(registry.get<std_render_text__ScreenLabel>(crosshair).visible);
-    CHECK_FALSE(registry.get<std_render_text__ScreenLabel>(game_over).visible);
+    CHECK(registry.get<cactus_gen::stdlib::render::text::ScreenLabel>(crosshair).visible);
+    CHECK_FALSE(registry.get<cactus_gen::stdlib::render::text::ScreenLabel>(game_over).visible);
 }
 
 TEST_CASE("first-person arena headless: enemy visuals are grounded at floor level, not the collision capsule center",
@@ -154,10 +158,11 @@ TEST_CASE("first-person arena headless: enemy visuals are grounded at floor leve
     entt::registry registry;
     cactus_headless_test::drive_one_frame(registry, kFrameDt);
 
-    const auto enemies = registry.view<main__Enemy, std_transform_volume__WorldTransform>();
-    REQUIRE(count<main__Enemy>(registry) == 4);
+    const auto enemies =
+        registry.view<cactus_gen::main::Enemy, cactus_gen::stdlib::transform::volume::WorldTransform>();
+    REQUIRE(count<cactus_gen::main::Enemy>(registry) == 4);
     for (const auto enemy : enemies) {
-        const auto& root_transform = registry.get<std_transform_volume__WorldTransform>(enemy);
+        const auto& root_transform = registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(enemy);
         // The collision/grounding root stays at torso height (floor + half
         // height) so wall separation, player-contact, and bullet-hit checks
         // keep working against a stable reference.
@@ -165,8 +170,9 @@ TEST_CASE("first-person arena headless: enemy visuals are grounded at floor leve
 
         const auto visual = enemy_visual_of(registry, enemy);
         REQUIRE(registry.valid(visual));
-        REQUIRE(registry.all_of<std_render_models__ModelRenderer, std_render_models__ModelAnimator>(visual));
-        const auto& visual_transform = registry.get<std_transform_volume__WorldTransform>(visual);
+        REQUIRE(registry.all_of<cactus_gen::stdlib::render::models::ModelRenderer,
+                                cactus_gen::stdlib::render::models::ModelAnimator>(visual));
+        const auto& visual_transform = registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(visual);
         // The rendered (feet-anchored) model is offset down by half_height,
         // so its composed world position lands on the floor, not floating at
         // the capsule's center.
@@ -174,18 +180,18 @@ TEST_CASE("first-person arena headless: enemy visuals are grounded at floor leve
         CHECK(visual_transform.position.y == Catch::Approx(0.0F).margin(0.01F));
         CHECK(visual_transform.position.z == Catch::Approx(root_transform.position.z).margin(0.001F));
 
-        const auto& animator = registry.get<std_render_models__ModelAnimator>(visual);
+        const auto& animator = registry.get<cactus_gen::stdlib::render::models::ModelAnimator>(visual);
         CHECK(animator.playing);
         // Animator speed is derived from movement speed (kind.speed /
         // kind.run_reference_speed in main.cactus) rather than a fixed 1.0,
         // so a future change to
         // either enemy's movement speed can't silently desync its clip's
         // stride from its translation again.
-        if (registry.all_of<main__RobotEnemy>(enemy)) {
+        if (registry.all_of<cactus_gen::main::RobotEnemy>(enemy)) {
             CHECK(animator.clip == 6);
             CHECK(animator.speed == Catch::Approx(3.0F / 3.5F).margin(0.001F));
         } else {
-            REQUIRE(registry.all_of<main__KnightEnemy>(enemy));
+            REQUIRE(registry.all_of<cactus_gen::main::KnightEnemy>(enemy));
             CHECK(animator.clip == 4);
             CHECK(animator.speed == Catch::Approx(3.3F / 3.5F).margin(0.001F));
         }
@@ -200,13 +206,14 @@ TEST_CASE("first-person arena headless: enemy models follow their moving bodies 
     cactus_headless_test::drive_one_frame(registry, kFrameDt);
     drive_frames(registry, 20);
 
-    for (const auto enemy : registry.view<main__Enemy, std_transform_volume__WorldTransform>()) {
-        const auto& root  = registry.get<std_transform_volume__WorldTransform>(enemy);
+    for (const auto enemy :
+         registry.view<cactus_gen::main::Enemy, cactus_gen::stdlib::transform::volume::WorldTransform>()) {
+        const auto& root  = registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(enemy);
         const auto visual = enemy_visual_of(registry, enemy);
         REQUIRE(registry.valid(visual));
-        const auto& local  = registry.get<std_transform_volume__LocalTransform>(visual);
-        const auto& model  = registry.get<std_transform_volume__WorldTransform>(visual);
-        const auto& facing = registry.get<main__Enemy>(enemy);
+        const auto& local  = registry.get<cactus_gen::stdlib::transform::volume::LocalTransform>(visual);
+        const auto& model  = registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(visual);
+        const auto& facing = registry.get<cactus_gen::main::Enemy>(enemy);
         CHECK(local.position.y == Catch::Approx(-0.9F));
         CHECK(model.position.x == Catch::Approx(root.position.x).margin(1e-4F));
         CHECK(model.position.y == Catch::Approx(root.position.y - 0.9F).margin(1e-4F));
@@ -221,7 +228,7 @@ TEST_CASE("first-person arena headless: each corner spawner produces an independ
     cactus_raylib_fake::reset();
     entt::registry registry;
     cactus_headless_test::drive_one_frame(registry, kFrameDt);
-    REQUIRE(count<main__Enemy>(registry) == 4);
+    REQUIRE(count<cactus_gen::main::Enemy>(registry) == 4);
 
     // Enemies now move at a believable run pace (fast enough to cross the
     // arena well within one ten-second spawn interval), so this
@@ -232,13 +239,14 @@ TEST_CASE("first-person arena headless: each corner spawner produces an independ
     // 610-frame (~10.17s) window.
     for (int chunk = 0; chunk < 61; ++chunk) {
         drive_frames(registry, 10);
-        for (const auto enemy : registry.view<main__Enemy, std_transform_volume__WorldTransform>()) {
-            registry.get<std_transform_volume__WorldTransform>(enemy).position =
+        for (const auto enemy :
+             registry.view<cactus_gen::main::Enemy, cactus_gen::stdlib::transform::volume::WorldTransform>()) {
+            registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(enemy).position =
                 Vector3{.x = 100.0F, .y = 0.9F, .z = 100.0F};
         }
     }
-    CHECK(count<main__RobotEnemy>(registry) == 4);
-    CHECK(count<main__KnightEnemy>(registry) == 4);
+    CHECK(count<cactus_gen::main::RobotEnemy>(registry) == 4);
+    CHECK(count<cactus_gen::main::KnightEnemy>(registry) == 4);
 }
 
 TEST_CASE("first-person arena headless: facing-relative movement, seeking, wall separation, and stairs work",
@@ -247,8 +255,8 @@ TEST_CASE("first-person arena headless: facing-relative movement, seeking, wall 
     entt::registry registry;
     cactus_headless_test::drive_one_frame(registry, kFrameDt);
 
-    const auto player      = only_entity<main__Player>(registry);
-    auto& player_transform = registry.get<std_transform_volume__WorldTransform>(player);
+    const auto player      = only_entity<cactus_gen::main::Player>(registry);
+    auto& player_transform = registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(player);
     const auto seeker      = isolate_single_enemy(registry);
     // Player sits away from the world origin along x as well as z: a seeker
     // walking toward the origin (the world_position live-read bug) would
@@ -257,7 +265,7 @@ TEST_CASE("first-person arena headless: facing-relative movement, seeking, wall 
     // the player keeps the seeker's x converged on the player's x instead
     // of drifting toward zero.
     player_transform.position   = Vector3{.x = 5.0F, .y = 0.9F, .z = 8.0F};
-    auto& seeker_transform      = registry.get<std_transform_volume__WorldTransform>(seeker);
+    auto& seeker_transform      = registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(seeker);
     seeker_transform.position   = Vector3{.x = 5.0F, .y = 0.9F, .z = 12.0F};
     const float distance_before = horizontal_distance(player_transform.position, seeker_transform.position);
     drive_frames(registry, 30);
@@ -273,7 +281,7 @@ TEST_CASE("first-person arena headless: facing-relative movement, seeking, wall 
     CHECK(player_transform.position.z >= -14.41F);
 
     // Heading diagonally into the same wall keeps the motion along it.
-    auto& camera_state = registry.get<std_camera_volume__FirstPersonCamera>(player);
+    auto& camera_state        = registry.get<cactus_gen::stdlib::camera::volume::FirstPersonCamera>(player);
     player_transform.position = Vector3{.x = 0.0F, .y = 0.9F, .z = -14.35F};
     player_transform.rotation = QuaternionFromEuler(0.0F, 0.78539816F, 0.0F);
     camera_state.yaw          = 0.78539816F;
@@ -291,7 +299,7 @@ TEST_CASE("first-person arena headless: facing-relative movement, seeking, wall 
     cactus_raylib_fake::set_key_down(KEY_W, false);
     CHECK(player_transform.position.x < 4.0F);
     CHECK(player_transform.position.y == Catch::Approx(4.9F).margin(0.05F));
-    CHECK(registry.get<std_physics_volume__CharacterBody>(player).grounded);
+    CHECK(registry.get<cactus_gen::stdlib::physics::volume::CharacterBody>(player).grounded);
 
     player_transform.position = Vector3{.x = 0.0F, .y = 0.9F, .z = 8.0F};
     camera_state.yaw          = 0.0F;
@@ -313,8 +321,8 @@ TEST_CASE("first-person arena headless: player falls gradually off a ledge inste
     entt::registry registry;
     cactus_headless_test::drive_one_frame(registry, kFrameDt);
 
-    const auto player          = only_entity<main__Player>(registry);
-    auto& player_transform     = registry.get<std_transform_volume__WorldTransform>(player);
+    const auto player      = only_entity<cactus_gen::main::Player>(registry);
+    auto& player_transform = registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(player);
     // Off the roof's footprint (x in [-4,4], z in [-4,4]) and away from the
     // exterior stairs (around x in [4.25,7.75], z = 0), so the only surface
     // below is the arena floor several meters down.
@@ -325,7 +333,7 @@ TEST_CASE("first-person arena headless: player falls gradually off a ledge inste
 
     drive_frames(registry, 90);
     CHECK(player_transform.position.y == Catch::Approx(0.9F).margin(0.05F));
-    CHECK(registry.get<std_physics_volume__CharacterBody>(player).grounded);
+    CHECK(registry.get<cactus_gen::stdlib::physics::volume::CharacterBody>(player).grounded);
 }
 
 TEST_CASE("first-person arena headless: player jumps while grounded and cannot re-trigger mid-air",
@@ -334,10 +342,10 @@ TEST_CASE("first-person arena headless: player jumps while grounded and cannot r
     entt::registry registry;
     cactus_headless_test::drive_one_frame(registry, kFrameDt);
 
-    const auto player          = only_entity<main__Player>(registry);
-    auto& player_transform     = registry.get<std_transform_volume__WorldTransform>(player);
+    const auto player          = only_entity<cactus_gen::main::Player>(registry);
+    auto& player_transform     = registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(player);
     player_transform.position  = Vector3{.x = 0.0F, .y = 0.9F, .z = 8.0F};
-    auto& body                 = registry.get<std_physics_volume__CharacterBody>(player);
+    auto& body                 = registry.get<cactus_gen::stdlib::physics::volume::CharacterBody>(player);
 
     cactus_raylib_fake::set_key_pressed_this_frame(KEY_SPACE, true);
     cactus_headless_test::drive_frame(registry, kFrameDt);
@@ -364,8 +372,8 @@ TEST_CASE("first-person arena headless: enemy steers around a wall directly bloc
     entt::registry registry;
     cactus_headless_test::drive_one_frame(registry, kFrameDt);
 
-    const auto player      = only_entity<main__Player>(registry);
-    auto& player_transform = registry.get<std_transform_volume__WorldTransform>(player);
+    const auto player      = only_entity<cactus_gen::main::Player>(registry);
+    auto& player_transform = registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(player);
     const auto seeker      = isolate_single_enemy(registry);
 
     // BuildingNorthLeft spans x in [-4,-1], z in [-4.15,-3.85] — solid, with
@@ -375,7 +383,7 @@ TEST_CASE("first-person arena headless: enemy steers around a wall directly bloc
     // face and, absent steering, gets pushed back to the same spot every
     // tick with nothing to break the symmetry.
     player_transform.position    = Vector3{.x = -2.5F, .y = 0.9F, .z = 0.0F};
-    auto& seeker_transform       = registry.get<std_transform_volume__WorldTransform>(seeker);
+    auto& seeker_transform       = registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(seeker);
     seeker_transform.position    = Vector3{.x = -2.5F, .y = 0.9F, .z = -8.0F};
     const Vector3 seeker_start   = seeker_transform.position;
     const float distance_before  = horizontal_distance(player_transform.position, seeker_transform.position);
@@ -393,8 +401,8 @@ TEST_CASE("first-person arena headless: enemy vaults a low obstacle instead of o
     entt::registry registry;
     cactus_headless_test::drive_one_frame(registry, kFrameDt);
 
-    const auto player      = only_entity<main__Player>(registry);
-    auto& player_transform = registry.get<std_transform_volume__WorldTransform>(player);
+    const auto player      = only_entity<cactus_gen::main::Player>(registry);
+    auto& player_transform = registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(player);
     const auto seeker      = isolate_single_enemy(registry);
 
     // LowBarrier spans x in [-1.5,1.5], z in [4.75,5.25], height 0.8 —
@@ -402,7 +410,7 @@ TEST_CASE("first-person arena headless: enemy vaults a low obstacle instead of o
     // to clear with a jump. Player and seeker sit aligned through its
     // center.
     player_transform.position   = Vector3{.x = 0.0F, .y = 0.9F, .z = 9.0F};
-    auto& seeker_transform      = registry.get<std_transform_volume__WorldTransform>(seeker);
+    auto& seeker_transform      = registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(seeker);
     seeker_transform.position   = Vector3{.x = 0.0F, .y = 0.9F, .z = 1.0F};
     const float distance_before = horizontal_distance(player_transform.position, seeker_transform.position);
 
@@ -422,15 +430,15 @@ TEST_CASE("first-person arena headless: enemy does not try to vault a wall too t
     entt::registry registry;
     cactus_headless_test::drive_one_frame(registry, kFrameDt);
 
-    const auto player      = only_entity<main__Player>(registry);
-    auto& player_transform = registry.get<std_transform_volume__WorldTransform>(player);
+    const auto player      = only_entity<cactus_gen::main::Player>(registry);
+    auto& player_transform = registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(player);
     const auto seeker      = isolate_single_enemy(registry);
 
     // Same aligned-through-a-wall setup as the steering test (BuildingNorthLeft,
     // 4m tall — clearly too tall to vault), but here checking height instead
     // of steering: the enemy must never jump at it.
     player_transform.position = Vector3{.x = -2.5F, .y = 0.9F, .z = 0.0F};
-    auto& seeker_transform    = registry.get<std_transform_volume__WorldTransform>(seeker);
+    auto& seeker_transform    = registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(seeker);
     seeker_transform.position = Vector3{.x = -2.5F, .y = 0.9F, .z = -8.0F};
 
     float max_height = seeker_transform.position.y;
@@ -448,47 +456,51 @@ TEST_CASE("first-person arena headless: bullets follow aim, serialize contacts, 
     entt::registry registry;
     cactus_headless_test::drive_one_frame(registry, kFrameDt);
 
-    const auto enemies = registry.view<main__Enemy, std_transform_volume__WorldTransform>();
-    REQUIRE(count<main__Enemy>(registry) >= 2);
+    const auto enemies =
+        registry.view<cactus_gen::main::Enemy, cactus_gen::stdlib::transform::volume::WorldTransform>();
+    REQUIRE(count<cactus_gen::main::Enemy>(registry) >= 2);
     auto iterator          = enemies.begin();
     const auto first_enemy = *iterator;
     ++iterator;
     const auto second_enemy = *iterator;
     for (const auto enemy : enemies) {
-        registry.get<std_transform_volume__WorldTransform>(enemy).position = Vector3{.x = 12.0F, .y = 0.9F, .z = 12.0F};
+        registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(enemy).position =
+            Vector3{.x = 12.0F, .y = 0.9F, .z = 12.0F};
     }
-    registry.get<std_transform_volume__WorldTransform>(first_enemy).position = Vector3{.x = 0.0F, .y = 0.9F, .z = 8.5F};
-    registry.get<std_transform_volume__WorldTransform>(second_enemy).position =
+    registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(first_enemy).position =
+        Vector3{.x = 0.0F, .y = 0.9F, .z = 8.5F};
+    registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(second_enemy).position =
         Vector3{.x = 0.0F, .y = 0.9F, .z = 8.5F};
 
     cactus_raylib_fake::set_mouse_button_pressed_this_frame(MOUSE_BUTTON_LEFT, true);
     cactus_headless_test::drive_frame(registry, kFrameDt);
     cactus_raylib_fake::set_mouse_button_pressed_this_frame(MOUSE_BUTTON_LEFT, false);
-    const auto bullets = registry.view<main__Bullet>();
+    const auto bullets = registry.view<cactus_gen::main::Bullet>();
     REQUIRE(bullets.size() == 1);
-    const auto velocity = bullets.template get<main__Bullet>(*bullets.begin()).velocity;
+    const auto velocity = bullets.template get<cactus_gen::main::Bullet>(*bullets.begin()).velocity;
     CHECK(velocity.x == Catch::Approx(0.0F).margin(0.001F));
     CHECK(velocity.z < 0.0F);
 
-    const auto bullet_position  = registry.get<std_transform_volume__WorldTransform>(*bullets.begin()).position;
+    const auto bullet_position =
+        registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(*bullets.begin()).position;
     const auto contact_position = Vector3{.x = bullet_position.x + velocity.x * kFrameDt,
                                           .y = bullet_position.y + velocity.y * kFrameDt,
                                           .z = bullet_position.z + velocity.z * kFrameDt};
-    registry.get<std_transform_volume__WorldTransform>(first_enemy).position  = contact_position;
-    registry.get<std_transform_volume__WorldTransform>(second_enemy).position = contact_position;
+    registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(first_enemy).position  = contact_position;
+    registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(second_enemy).position = contact_position;
     cactus_headless_test::drive_frame(registry, kFrameDt);
-    CHECK(count<main__Bullet>(registry) == 0);
-    const auto dying = registry.view<main__Enemy>();
-    const auto dying_count =
-        std::ranges::count_if(dying, [&](const auto enemy) { return registry.all_of<main__EnemyLife__Dying>(enemy); });
+    CHECK(count<cactus_gen::main::Bullet>(registry) == 0);
+    const auto dying       = registry.view<cactus_gen::main::Enemy>();
+    const auto dying_count = std::ranges::count_if(
+        dying, [&](const auto enemy) { return registry.all_of<cactus_gen::main::EnemyLife::Dying>(enemy); });
     CHECK(dying_count == 1);
 
     entt::entity dying_enemy = entt::null;
     for (const auto enemy : dying) {
-        if (registry.all_of<main__EnemyLife__Dying>(enemy)) {
+        if (registry.all_of<cactus_gen::main::EnemyLife::Dying>(enemy)) {
             dying_enemy = enemy;
         } else {
-            registry.get<std_transform_volume__WorldTransform>(enemy).position =
+            registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(enemy).position =
                 Vector3{.x = 12.0F, .y = 0.9F, .z = 12.0F};
         }
     }
@@ -497,29 +509,33 @@ TEST_CASE("first-person arena headless: bullets follow aim, serialize contacts, 
     REQUIRE(registry.valid(dying_visual));
     // The death animation clip actually plays (not frozen): a type-specific
     // death clip starts from time 0 and keeps advancing while dying.
-    const auto& dying_animator = registry.get<std_render_models__ModelAnimator>(dying_visual);
+    const auto& dying_animator = registry.get<cactus_gen::stdlib::render::models::ModelAnimator>(dying_visual);
     CHECK(dying_animator.playing);
-    if (registry.all_of<main__RobotEnemy>(dying_enemy)) {
+    if (registry.all_of<cactus_gen::main::RobotEnemy>(dying_enemy)) {
         CHECK(dying_animator.clip == 1);
     } else {
-        REQUIRE(registry.all_of<main__KnightEnemy>(dying_enemy));
+        REQUIRE(registry.all_of<cactus_gen::main::KnightEnemy>(dying_enemy));
         CHECK(dying_animator.clip == 6);
     }
-    const auto root_rotation        = registry.get<std_transform_volume__WorldTransform>(dying_enemy).rotation;
-    const auto death_start_rotation = registry.get<std_transform_volume__WorldTransform>(dying_visual).rotation;
+    const auto root_rotation =
+        registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(dying_enemy).rotation;
+    const auto death_start_rotation =
+        registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(dying_visual).rotation;
     drive_frames(registry, 28);
     REQUIRE(registry.valid(dying_enemy));
-    const auto& halfway = registry.get<main__Enemy>(dying_enemy);
-    CHECK(registry.get<main__EnemyLife__Dying>(dying_enemy).elapsed == Catch::Approx(0.5F).margin(0.08F));
-    const auto alpha = registry.get<std_render_models__ModelRenderer>(dying_visual).color.a;
+    const auto& halfway = registry.get<cactus_gen::main::Enemy>(dying_enemy);
+    CHECK(registry.get<cactus_gen::main::EnemyLife::Dying>(dying_enemy).elapsed == Catch::Approx(0.5F).margin(0.08F));
+    const auto alpha = registry.get<cactus_gen::stdlib::render::models::ModelRenderer>(dying_visual).color.a;
     CHECK(alpha >= 100);
     CHECK(alpha <= 155);
     // The model tips over; the collision root keeps its yaw.
-    check_quat(registry.get<std_transform_volume__WorldTransform>(dying_enemy).rotation, root_rotation);
-    check_quat(registry.get<std_transform_volume__WorldTransform>(dying_visual).rotation,
+    check_quat(registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(dying_enemy).rotation,
+               root_rotation);
+    check_quat(registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(dying_visual).rotation,
                cactus::runtime::stdlib::math::quat::from_euler(
                    halfway.death_pitch, halfway.facing_yaw + halfway.kind.visual_yaw_offset, 0.0F));
-    const auto halfway_rotation = registry.get<std_transform_volume__WorldTransform>(dying_visual).rotation;
+    const auto halfway_rotation =
+        registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(dying_visual).rotation;
     const float rotation_change =
         std::abs(halfway_rotation.x - death_start_rotation.x) + std::abs(halfway_rotation.y - death_start_rotation.y) +
         std::abs(halfway_rotation.z - death_start_rotation.z) + std::abs(halfway_rotation.w - death_start_rotation.w);
@@ -535,10 +551,11 @@ TEST_CASE("first-person arena headless: game over is exactly once, terminal, and
     entt::registry registry;
     cactus_headless_test::drive_one_frame(registry, kFrameDt);
 
-    const auto player        = only_entity<main__Player>(registry);
-    auto& player_transform   = registry.get<std_transform_volume__WorldTransform>(player);
-    const auto enemy         = *registry.view<main__Enemy, std_transform_volume__WorldTransform>().begin();
-    auto& enemy_transform    = registry.get<std_transform_volume__WorldTransform>(enemy);
+    const auto player      = only_entity<cactus_gen::main::Player>(registry);
+    auto& player_transform = registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(player);
+    const auto enemy =
+        *registry.view<cactus_gen::main::Enemy, cactus_gen::stdlib::transform::volume::WorldTransform>().begin();
+    auto& enemy_transform    = registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(enemy);
     enemy_transform.position = player_transform.position;
     cactus_headless_test::drive_frame(registry, kFrameDt);
 
@@ -548,20 +565,20 @@ TEST_CASE("first-person arena headless: game over is exactly once, terminal, and
     CHECK_FALSE(cactus_raylib_fake::cursor_captured());
     const auto crosshair = crosshair_hud();
     const auto label     = game_over_hud();
-    CHECK_FALSE(registry.get<std_render_text__ScreenLabel>(crosshair).visible);
-    CHECK(registry.get<std_render_text__ScreenLabel>(label).visible);
-    CHECK(registry.get<std_render_text__ScreenLabel>(label).text == "GAME OVER");
+    CHECK_FALSE(registry.get<cactus_gen::stdlib::render::text::ScreenLabel>(crosshair).visible);
+    CHECK(registry.get<cactus_gen::stdlib::render::text::ScreenLabel>(label).visible);
+    CHECK(registry.get<cactus_gen::stdlib::render::text::ScreenLabel>(label).text == "GAME OVER");
 
     const Vector3 frozen_player   = player_transform.position;
     const Vector3 frozen_enemy    = enemy_transform.position;
-    const auto frozen_enemy_count = count<main__Enemy>(registry);
+    const auto frozen_enemy_count = count<cactus_gen::main::Enemy>(registry);
     cactus_raylib_fake::set_key_down(KEY_W, true);
     cactus_raylib_fake::set_mouse_button_pressed_this_frame(MOUSE_BUTTON_LEFT, true);
     drive_frames(registry, 610);
     CHECK(horizontal_distance(player_transform.position, frozen_player) == Catch::Approx(0.0F));
     CHECK(horizontal_distance(enemy_transform.position, frozen_enemy) == Catch::Approx(0.0F));
-    CHECK(count<main__Bullet>(registry) == 0);
-    CHECK(count<main__Enemy>(registry) == frozen_enemy_count);
+    CHECK(count<cactus_gen::main::Bullet>(registry) == 0);
+    CHECK(count<cactus_gen::main::Enemy>(registry) == frozen_enemy_count);
     CHECK(match_state(registry).over_count == 1);
 }
 
@@ -575,7 +592,7 @@ entt::entity fire_bullet(entt::registry& registry) {
     cactus_raylib_fake::set_mouse_button_pressed_this_frame(MOUSE_BUTTON_LEFT, true);
     cactus_headless_test::drive_frame(registry, kFrameDt);
     cactus_raylib_fake::set_mouse_button_pressed_this_frame(MOUSE_BUTTON_LEFT, false);
-    const auto bullets = registry.view<main__Bullet>();
+    const auto bullets = registry.view<cactus_gen::main::Bullet>();
     REQUIRE(bullets.size() == 1);
     return *bullets.begin();
 }
@@ -589,7 +606,7 @@ void moved_by_host() {
 // An enemy without a CharacterBody doesn't move, so it stays where a test puts it.
 entt::entity still_enemy(entt::registry& registry) {
     const auto enemy = isolate_single_enemy(registry);
-    registry.remove<std_physics_volume__CharacterBody>(enemy);
+    registry.remove<cactus_gen::stdlib::physics::volume::CharacterBody>(enemy);
     return enemy;
 }
 
@@ -601,10 +618,10 @@ TEST_CASE("first-person arena headless: an enemy catches the player at contact, 
     entt::registry registry;
     cactus_headless_test::drive_one_frame(registry, kFrameDt);
 
-    const auto player      = only_entity<main__Player>(registry);
-    auto& player_transform = registry.get<std_transform_volume__WorldTransform>(player);
+    const auto player         = only_entity<cactus_gen::main::Player>(registry);
+    auto& player_transform    = registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(player);
     const auto seeker      = isolate_single_enemy(registry);
-    auto& seeker_transform = registry.get<std_transform_volume__WorldTransform>(seeker);
+    auto& seeker_transform    = registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(seeker);
     player_transform.position = Vector3{.x = 5.0F, .y = 0.9F, .z = 8.0F};
     seeker_transform.position = Vector3{.x = 5.0F, .y = 0.9F, .z = 4.0F};
 
@@ -613,7 +630,7 @@ TEST_CASE("first-person arena headless: an enemy catches the player at contact, 
         const float distance = horizontal_distance(player_transform.position, seeker_transform.position);
         // Both bodies are solid, so the enemy stops at the player.
         CHECK(distance >= kBodyContact - 0.02F);
-        CHECK(registry.all_of<main__Caught>(player) == match_state(registry).over);
+        CHECK(registry.all_of<cactus_gen::main::Caught>(player) == match_state(registry).over);
         if (!match_state(registry).over) {
             continue;
         }
@@ -629,22 +646,22 @@ TEST_CASE("first-person arena headless: a dying enemy can't catch the player",
     entt::registry registry;
     cactus_headless_test::drive_one_frame(registry, kFrameDt);
 
-    const auto player      = only_entity<main__Player>(registry);
+    const auto player        = only_entity<cactus_gen::main::Player>(registry);
     const auto enemy       = still_enemy(registry);
-    auto& enemy_transform  = registry.get<std_transform_volume__WorldTransform>(enemy);
+    auto& enemy_transform    = registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(enemy);
     const auto bullet      = fire_bullet(registry);
-    const auto bullet_from = registry.get<std_transform_volume__WorldTransform>(bullet).position;
+    const auto bullet_from   = registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(bullet).position;
     enemy_transform.position = Vector3{.x = bullet_from.x, .y = 0.9F, .z = bullet_from.z - 3.0F};
     moved_by_host();
-    for (int frame = 0; frame < 20 && !registry.all_of<main__EnemyLife__Dying>(enemy); ++frame) {
+    for (int frame = 0; frame < 20 && !registry.all_of<cactus_gen::main::EnemyLife::Dying>(enemy); ++frame) {
         cactus_headless_test::drive_frame(registry, kFrameDt);
     }
-    REQUIRE(registry.all_of<main__EnemyLife__Dying>(enemy));
+    REQUIRE(registry.all_of<cactus_gen::main::EnemyLife::Dying>(enemy));
 
-    enemy_transform.position = registry.get<std_transform_volume__WorldTransform>(player).position;
+    enemy_transform.position = registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(player).position;
     moved_by_host();
     drive_frames(registry, 20);
-    CHECK_FALSE(registry.all_of<main__Caught>(player));
+    CHECK_FALSE(registry.all_of<cactus_gen::main::Caught>(player));
     CHECK_FALSE(match_state(registry).over);
 }
 
@@ -656,33 +673,33 @@ TEST_CASE("first-person arena headless: a dying enemy hit again keeps its death 
 
     const auto enemy       = still_enemy(registry);
     const auto bullet      = fire_bullet(registry);
-    const auto bullet_from = registry.get<std_transform_volume__WorldTransform>(bullet).position;
-    registry.get<std_transform_volume__WorldTransform>(enemy).position =
+    const auto bullet_from = registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(bullet).position;
+    registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(enemy).position =
         Vector3{.x = bullet_from.x, .y = 0.9F, .z = bullet_from.z - 3.0F};
     moved_by_host();
-    for (int frame = 0; frame < 20 && !registry.all_of<main__EnemyLife__Dying>(enemy); ++frame) {
+    for (int frame = 0; frame < 20 && !registry.all_of<cactus_gen::main::EnemyLife::Dying>(enemy); ++frame) {
         cactus_headless_test::drive_frame(registry, kFrameDt);
     }
-    REQUIRE(registry.all_of<main__EnemyLife__Dying>(enemy));
+    REQUIRE(registry.all_of<cactus_gen::main::EnemyLife::Dying>(enemy));
     drive_frames(registry, 10);
-    const float elapsed   = registry.get<main__EnemyLife__Dying>(enemy).elapsed;
+    const float elapsed   = registry.get<cactus_gen::main::EnemyLife::Dying>(enemy).elapsed;
     const auto visual     = enemy_visual_of(registry, enemy);
-    const float clip_time = registry.get<std_render_models__ModelAnimator>(visual).time;
+    const float clip_time = registry.get<cactus_gen::stdlib::render::models::ModelAnimator>(visual).time;
     REQUIRE(elapsed > 0.1F);
 
     // Delivered straight to the enemy, as a bullet's hit would be.
     auto& activation  = cactus::runtime::entt_backend::generated_scheduler_state().activation;
     activation.active = true;
-    cactus::runtime::entt_backend::generated_dispatch_event(registry, main__EnemyHitEvent{}, enemy);
+    cactus::runtime::entt_backend::generated_dispatch_event(registry, cactus_gen::main::EnemyHitEvent{}, enemy);
     cactus::runtime::entt_backend::generated_drain_event_cascade(registry);
     cactus::runtime::entt_backend::generated_commit_activation(registry);
     activation.active = false;
 
-    REQUIRE(registry.all_of<main__EnemyLife__Dying>(enemy));
-    CHECK(registry.get<main__EnemyLife__Dying>(enemy).elapsed == elapsed);
-    CHECK(registry.get<std_render_models__ModelAnimator>(visual).time >= clip_time);
+    REQUIRE(registry.all_of<cactus_gen::main::EnemyLife::Dying>(enemy));
+    CHECK(registry.get<cactus_gen::main::EnemyLife::Dying>(enemy).elapsed == elapsed);
+    CHECK(registry.get<cactus_gen::stdlib::render::models::ModelAnimator>(visual).time >= clip_time);
     cactus_headless_test::drive_frame(registry, kFrameDt);
-    CHECK(registry.get<main__EnemyLife__Dying>(enemy).elapsed > elapsed);
+    CHECK(registry.get<cactus_gen::main::EnemyLife::Dying>(enemy).elapsed > elapsed);
 }
 
 TEST_CASE("first-person arena headless: bullets hit an enemy's body, not its hurtbox",
@@ -692,16 +709,17 @@ TEST_CASE("first-person arena headless: bullets hit an enemy's body, not its hur
     cactus_headless_test::drive_one_frame(registry, kFrameDt);
 
     const auto enemy       = still_enemy(registry);
-    auto& enemy_transform  = registry.get<std_transform_volume__WorldTransform>(enemy);
+    auto& enemy_transform  = registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(enemy);
     const auto bullet      = fire_bullet(registry);
-    const auto bullet_from = registry.get<std_transform_volume__WorldTransform>(bullet).position;
+    const auto bullet_from = registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(bullet).position;
     // Past the body's reach but inside the hurtbox's.
     enemy_transform.position = Vector3{.x = bullet_from.x + 0.52F, .y = 0.9F, .z = bullet_from.z - 2.0F};
     moved_by_host();
     drive_frames(registry, 12);
-    CHECK_FALSE(registry.all_of<main__EnemyLife__Dying>(enemy));
+    CHECK_FALSE(registry.all_of<cactus_gen::main::EnemyLife::Dying>(enemy));
     REQUIRE(registry.valid(bullet));
-    CHECK(registry.get<std_transform_volume__WorldTransform>(bullet).position.z < enemy_transform.position.z);
+    CHECK(registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(bullet).position.z <
+          enemy_transform.position.z);
 }
 
 TEST_CASE("first-person arena headless: camera world pose follows the player's position, yaw, and pitch",
@@ -710,10 +728,10 @@ TEST_CASE("first-person arena headless: camera world pose follows the player's p
     entt::registry registry;
     cactus_headless_test::drive_one_frame(registry, kFrameDt);
 
-    const auto player      = only_entity<main__Player>(registry);
-    const auto camera      = only_entity<main__CameraRig>(registry);
-    auto& player_transform = registry.get<std_transform_volume__WorldTransform>(player);
-    auto& camera_state     = registry.get<std_camera_volume__FirstPersonCamera>(player);
+    const auto player      = only_entity<cactus_gen::main::Player>(registry);
+    const auto camera      = only_entity<cactus_gen::main::CameraRig>(registry);
+    auto& player_transform = registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(player);
+    auto& camera_state     = registry.get<cactus_gen::stdlib::camera::volume::FirstPersonCamera>(player);
 
     constexpr float kYaw      = 0.8F;
     constexpr float kPitch    = -0.3F;
@@ -723,7 +741,7 @@ TEST_CASE("first-person arena headless: camera world pose follows the player's p
     camera_state.pitch        = kPitch;
     cactus_headless_test::drive_frame(registry, kFrameDt);
 
-    const auto& camera_transform     = registry.get<std_transform_volume__WorldTransform>(camera);
+    const auto& camera_transform     = registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(camera);
     constexpr float kCameraEyeHeight = 0.65F;
     CHECK(camera_transform.position.x == Catch::Approx(player_transform.position.x).margin(0.001F));
     CHECK(camera_transform.position.y == Catch::Approx(player_transform.position.y + kCameraEyeHeight).margin(0.001F));
@@ -756,15 +774,15 @@ TEST_CASE("first-person arena headless: Escape releases cursor capture without e
     entt::registry registry;
     cactus_headless_test::drive_one_frame(registry, kFrameDt);
     REQUIRE(cactus_raylib_fake::cursor_captured());
-    const auto player = only_entity<main__Player>(registry);
-    REQUIRE(registry.get<main__Player>(player).cursor_captured);
+    const auto player = only_entity<cactus_gen::main::Player>(registry);
+    REQUIRE(registry.get<cactus_gen::main::Player>(player).cursor_captured);
 
     cactus_raylib_fake::set_key_pressed_this_frame(KEY_ESCAPE, true);
     cactus_headless_test::drive_frame(registry, kFrameDt);
     cactus_raylib_fake::set_key_pressed_this_frame(KEY_ESCAPE, false);
 
     CHECK_FALSE(cactus_raylib_fake::cursor_captured());
-    CHECK_FALSE(registry.get<main__Player>(player).cursor_captured);
+    CHECK_FALSE(registry.get<cactus_gen::main::Player>(player).cursor_captured);
     CHECK_FALSE(match_state(registry).over);
 }
 
@@ -773,21 +791,21 @@ TEST_CASE("first-person arena headless: a primary click while released recapture
     cactus_raylib_fake::reset();
     entt::registry registry;
     cactus_headless_test::drive_one_frame(registry, kFrameDt);
-    const auto player = only_entity<main__Player>(registry);
+    const auto player = only_entity<cactus_gen::main::Player>(registry);
 
     cactus_raylib_fake::set_key_pressed_this_frame(KEY_ESCAPE, true);
     cactus_headless_test::drive_frame(registry, kFrameDt);
     cactus_raylib_fake::set_key_pressed_this_frame(KEY_ESCAPE, false);
     REQUIRE_FALSE(cactus_raylib_fake::cursor_captured());
 
-    const auto bullets_before = count<main__Bullet>(registry);
+    const auto bullets_before = count<cactus_gen::main::Bullet>(registry);
     cactus_raylib_fake::set_mouse_button_pressed_this_frame(MOUSE_BUTTON_LEFT, true);
     cactus_headless_test::drive_frame(registry, kFrameDt);
     cactus_raylib_fake::set_mouse_button_pressed_this_frame(MOUSE_BUTTON_LEFT, false);
 
     CHECK(cactus_raylib_fake::cursor_captured());
-    CHECK(registry.get<main__Player>(player).cursor_captured);
-    CHECK(count<main__Bullet>(registry) == bullets_before);
+    CHECK(registry.get<cactus_gen::main::Player>(player).cursor_captured);
+    CHECK(count<cactus_gen::main::Bullet>(registry) == bullets_before);
 }
 
 TEST_CASE("first-person arena headless: the arena is lit by exactly one enabled directional sun light",
@@ -796,9 +814,9 @@ TEST_CASE("first-person arena headless: the arena is lit by exactly one enabled 
     entt::registry registry;
     cactus_headless_test::drive_one_frame(registry, kFrameDt);
 
-    const auto lights = registry.view<std_render_meshes__DirectionalLight>();
+    const auto lights = registry.view<cactus_gen::stdlib::render::meshes::DirectionalLight>();
     REQUIRE(lights.size() == 1);
-    CHECK(registry.get<std_render_meshes__DirectionalLight>(*lights.begin()).enabled);
+    CHECK(registry.get<cactus_gen::stdlib::render::meshes::DirectionalLight>(*lights.begin()).enabled);
 }
 
 TEST_CASE("first-person arena headless: cursor_captured stays consistent with actual capture state across game over",
@@ -807,16 +825,17 @@ TEST_CASE("first-person arena headless: cursor_captured stays consistent with ac
     entt::registry registry;
     cactus_headless_test::drive_one_frame(registry, kFrameDt);
 
-    const auto player        = only_entity<main__Player>(registry);
-    auto& player_transform   = registry.get<std_transform_volume__WorldTransform>(player);
-    const auto enemy         = *registry.view<main__Enemy, std_transform_volume__WorldTransform>().begin();
-    auto& enemy_transform    = registry.get<std_transform_volume__WorldTransform>(enemy);
+    const auto player      = only_entity<cactus_gen::main::Player>(registry);
+    auto& player_transform = registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(player);
+    const auto enemy =
+        *registry.view<cactus_gen::main::Enemy, cactus_gen::stdlib::transform::volume::WorldTransform>().begin();
+    auto& enemy_transform    = registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(enemy);
     enemy_transform.position = player_transform.position;
     cactus_headless_test::drive_frame(registry, kFrameDt);
 
     REQUIRE(match_state(registry).over);
     CHECK_FALSE(cactus_raylib_fake::cursor_captured());
-    CHECK_FALSE(registry.get<main__Player>(player).cursor_captured);
+    CHECK_FALSE(registry.get<cactus_gen::main::Player>(player).cursor_captured);
 }
 
 TEST_CASE("first-person arena headless: pressing R after game over fully restarts the arena",
@@ -825,9 +844,9 @@ TEST_CASE("first-person arena headless: pressing R after game over fully restart
     entt::registry registry;
     cactus_headless_test::drive_one_frame(registry, kFrameDt);
 
-    const auto player            = only_entity<main__Player>(registry);
-    auto& player_transform       = registry.get<std_transform_volume__WorldTransform>(player);
-    auto& camera_state           = registry.get<std_camera_volume__FirstPersonCamera>(player);
+    const auto player            = only_entity<cactus_gen::main::Player>(registry);
+    auto& player_transform       = registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(player);
+    auto& camera_state           = registry.get<cactus_gen::stdlib::camera::volume::FirstPersonCamera>(player);
     const Vector3 spawn_position = player_transform.position;
     const Quat spawn_rotation    = player_transform.rotation;
 
@@ -837,10 +856,12 @@ TEST_CASE("first-person arena headless: pressing R after game over fully restart
     cactus_raylib_fake::set_mouse_button_pressed_this_frame(MOUSE_BUTTON_LEFT, true);
     cactus_headless_test::drive_frame(registry, kFrameDt);
     cactus_raylib_fake::set_mouse_button_pressed_this_frame(MOUSE_BUTTON_LEFT, false);
-    REQUIRE(count<main__Bullet>(registry) == 1);
+    REQUIRE(count<cactus_gen::main::Bullet>(registry) == 1);
 
-    const auto pre_restart_enemy = *registry.view<main__Enemy, std_transform_volume__WorldTransform>().begin();
-    registry.get<std_transform_volume__WorldTransform>(pre_restart_enemy).position = player_transform.position;
+    const auto pre_restart_enemy =
+        *registry.view<cactus_gen::main::Enemy, cactus_gen::stdlib::transform::volume::WorldTransform>().begin();
+    registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(pre_restart_enemy).position =
+        player_transform.position;
     cactus_headless_test::drive_frame(registry, kFrameDt);
     REQUIRE(match_state(registry).over);
     REQUIRE(match_state(registry).over_count == 1);
@@ -860,7 +881,7 @@ TEST_CASE("first-person arena headless: pressing R after game over fully restart
     const auto& state = match_state(registry);
     CHECK_FALSE(state.over);
     CHECK(state.over_count == 1);
-    CHECK(registry.get<main__Player>(player).cursor_captured);
+    CHECK(registry.get<cactus_gen::main::Player>(player).cursor_captured);
     CHECK(cactus_raylib_fake::cursor_captured());
     CHECK(player_transform.position.x == Catch::Approx(spawn_position.x));
     CHECK(player_transform.position.y == Catch::Approx(spawn_position.y));
@@ -877,13 +898,13 @@ TEST_CASE("first-person arena headless: pressing R after game over fully restart
     // a fresh game start (their countdown resets to 0.0, same as game load),
     // so a full fresh wave already exists after this same restart frame.
     CHECK_FALSE(registry.valid(pre_restart_enemy));
-    CHECK(count<main__Bullet>(registry) == 0);
-    CHECK(count<main__Enemy>(registry) == 4);
+    CHECK(count<cactus_gen::main::Bullet>(registry) == 0);
+    CHECK(count<cactus_gen::main::Enemy>(registry) == 4);
 
     const auto crosshair = crosshair_hud();
     const auto label     = game_over_hud();
-    CHECK(registry.get<std_render_text__ScreenLabel>(crosshair).visible);
-    CHECK_FALSE(registry.get<std_render_text__ScreenLabel>(label).visible);
+    CHECK(registry.get<cactus_gen::stdlib::render::text::ScreenLabel>(crosshair).visible);
+    CHECK_FALSE(registry.get<cactus_gen::stdlib::render::text::ScreenLabel>(label).visible);
 }
 
 TEST_CASE("first-person arena headless: R has no effect while the game is not over",
@@ -892,10 +913,10 @@ TEST_CASE("first-person arena headless: R has no effect while the game is not ov
     entt::registry registry;
     cactus_headless_test::drive_one_frame(registry, kFrameDt);
 
-    const auto player             = only_entity<main__Player>(registry);
-    auto& player_transform        = registry.get<std_transform_volume__WorldTransform>(player);
+    const auto player             = only_entity<cactus_gen::main::Player>(registry);
+    auto& player_transform        = registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(player);
     player_transform.position     = Vector3{.x = 5.0F, .y = 0.9F, .z = -3.0F};
-    const auto enemy_count_before = count<main__Enemy>(registry);
+    const auto enemy_count_before = count<cactus_gen::main::Enemy>(registry);
 
     cactus_raylib_fake::set_key_pressed_this_frame(KEY_R, true);
     cactus_headless_test::drive_frame(registry, kFrameDt);
@@ -904,7 +925,7 @@ TEST_CASE("first-person arena headless: R has no effect while the game is not ov
     CHECK_FALSE(match_state(registry).over);
     CHECK(player_transform.position.x == Catch::Approx(5.0F));
     CHECK(player_transform.position.z == Catch::Approx(-3.0F));
-    CHECK(count<main__Enemy>(registry) == enemy_count_before);
+    CHECK(count<cactus_gen::main::Enemy>(registry) == enemy_count_before);
 }
 
 TEST_CASE("first-person arena headless: overlapping live enemies of any kind are pushed apart",
@@ -917,20 +938,22 @@ TEST_CASE("first-person arena headless: overlapping live enemies of any kind are
     // moves these two enemies below.
     match_state(registry).over = true;
 
-    const auto robot  = *registry.view<main__RobotEnemy, std_transform_volume__WorldTransform>().begin();
-    const auto knight = *registry.view<main__KnightEnemy, std_transform_volume__WorldTransform>().begin();
-    for (const auto enemy : registry.view<main__Enemy>()) {
+    const auto robot =
+        *registry.view<cactus_gen::main::RobotEnemy, cactus_gen::stdlib::transform::volume::WorldTransform>().begin();
+    const auto knight =
+        *registry.view<cactus_gen::main::KnightEnemy, cactus_gen::stdlib::transform::volume::WorldTransform>().begin();
+    for (const auto enemy : registry.view<cactus_gen::main::Enemy>()) {
         if (enemy != robot && enemy != knight) {
             registry.destroy(enemy);
         }
     }
 
-    auto& robot_transform     = registry.get<std_transform_volume__WorldTransform>(robot);
-    auto& knight_transform    = registry.get<std_transform_volume__WorldTransform>(knight);
+    auto& robot_transform     = registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(robot);
+    auto& knight_transform    = registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(knight);
     robot_transform.position  = Vector3{.x = 0.0F, .y = 0.9F, .z = 0.0F};
     knight_transform.position = Vector3{.x = 0.1F, .y = 0.9F, .z = 0.0F};
-    const float radius_sum = registry.get<std_physics_volume__CapsuleCollider>(robot).radius +
-                             registry.get<std_physics_volume__CapsuleCollider>(knight).radius;
+    const float radius_sum    = registry.get<cactus_gen::stdlib::physics::volume::CapsuleCollider>(robot).radius +
+                                registry.get<cactus_gen::stdlib::physics::volume::CapsuleCollider>(knight).radius;
 
     drive_frames(registry, 10);
     CHECK(horizontal_distance(robot_transform.position, knight_transform.position) >= radius_sum - 0.001F);
@@ -944,23 +967,25 @@ TEST_CASE("first-person arena headless: a dying enemy does not participate in se
 
     match_state(registry).over = true;
 
-    const auto enemies      = registry.view<main__Enemy, std_transform_volume__WorldTransform>();
+    const auto enemies =
+        registry.view<cactus_gen::main::Enemy, cactus_gen::stdlib::transform::volume::WorldTransform>();
     auto iterator            = enemies.begin();
     const auto live          = *iterator;
     ++iterator;
     const auto dying_enemy = *iterator;
-    for (const auto enemy : registry.view<main__Enemy>()) {
+    for (const auto enemy : registry.view<cactus_gen::main::Enemy>()) {
         if (enemy != live && enemy != dying_enemy) {
             registry.destroy(enemy);
         }
     }
     // Set outside a commit, so do what StartDying would.
-    cactus::runtime::entt_backend::enter_state<main__EnemyLife, 1>(registry, dying_enemy, main__EnemyLife__Dying{});
-    registry.get<std_physics_volume__Collider>(dying_enemy).layer = 0;
-    registry.get<std_physics_volume__Collider>(dying_enemy).mask  = 1;
+    cactus::runtime::entt_backend::enter_state<cactus_gen::main::EnemyLife, 1>(
+        registry, dying_enemy, cactus_gen::main::EnemyLife::Dying{});
+    registry.get<cactus_gen::stdlib::physics::volume::Collider>(dying_enemy).layer = 0;
+    registry.get<cactus_gen::stdlib::physics::volume::Collider>(dying_enemy).mask  = 1;
 
-    auto& live_transform      = registry.get<std_transform_volume__WorldTransform>(live);
-    auto& dying_transform     = registry.get<std_transform_volume__WorldTransform>(dying_enemy);
+    auto& live_transform     = registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(live);
+    auto& dying_transform    = registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(dying_enemy);
     live_transform.position  = Vector3{.x = 0.0F, .y = 0.9F, .z = 0.0F};
     dying_transform.position = Vector3{.x = 0.1F, .y = 0.9F, .z = 0.0F};
 
@@ -979,32 +1004,32 @@ namespace {
 // Stages bullet scenarios high above the arena, clear of its geometry.
 constexpr float kSkyY = 20.0F;
 
-using WorldTransform = std_transform_volume__WorldTransform;
+using WorldTransform = cactus_gen::stdlib::transform::volume::WorldTransform;
 
 entt::entity fire_one_bullet(entt::registry& registry) {
     cactus_raylib_fake::set_mouse_button_pressed_this_frame(MOUSE_BUTTON_LEFT, true);
     cactus_headless_test::drive_frame(registry, kFrameDt);
     cactus_raylib_fake::set_mouse_button_pressed_this_frame(MOUSE_BUTTON_LEFT, false);
-    const auto bullets = registry.view<main__Bullet>();
+    const auto bullets = registry.view<cactus_gen::main::Bullet>();
     REQUIRE(bullets.size() == 1);
     return *bullets.begin();
 }
 
 void aim(entt::registry& registry, entt::entity bullet, Vector3 position, Vector3 velocity) {
     registry.get<WorldTransform>(bullet).position = position;
-    registry.get<main__Bullet>(bullet).velocity   = velocity;
+    registry.get<cactus_gen::main::Bullet>(bullet).velocity = velocity;
 }
 
 // Reuses one perimeter wall as a free-standing box.
 entt::entity place_wall(entt::registry& registry, Vector3 position, Vector3 size) {
-    const auto wall = *registry.view<main__PerimeterWall>().begin();
+    const auto wall = *registry.view<cactus_gen::main::PerimeterWall>().begin();
     registry.get<WorldTransform>(wall).position              = position;
-    registry.get<std_physics_volume__BoxCollider>(wall).size = size;
+    registry.get<cactus_gen::stdlib::physics::volume::BoxCollider>(wall).size = size;
     return wall;
 }
 
 bool is_dying(entt::registry& registry, entt::entity enemy) {
-    return registry.all_of<main__EnemyLife__Dying>(enemy);
+    return registry.all_of<cactus_gen::main::EnemyLife::Dying>(enemy);
 }
 
 }  // namespace
@@ -1070,7 +1095,7 @@ TEST_CASE("first-person arena headless: bullets fly through the player and dying
     entt::registry registry;
     cactus_headless_test::drive_one_frame(registry, kFrameDt);
     const auto enemy = isolate_single_enemy(registry);
-    const auto player = only_entity<main__Player>(registry);
+    const auto player = only_entity<cactus_gen::main::Player>(registry);
 
     // Kill the enemy with a first bullet.
     const auto first = fire_one_bullet(registry);

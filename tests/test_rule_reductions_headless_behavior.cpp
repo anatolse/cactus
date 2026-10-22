@@ -16,19 +16,20 @@ namespace {
 void run_one_frame(entt::registry& registry) {
     cactus::runtime::entt_backend::generated_init_project(registry);
     cactus::runtime::entt_backend::generated_load_project(registry);
-    cactus::runtime::entt_backend::generated_inject_external_event(std_core__frameEvent{.dt = 1.0F / 60.0F});
+    cactus::runtime::entt_backend::generated_inject_external_event(
+        cactus_gen::stdlib::core::frameEvent{.dt = 1.0F / 60.0F});
     cactus::runtime::entt_backend::generated_drain_external_events(registry);
 }
 
-const rule_reductions__Board& board_of(entt::registry& registry) {
-    const auto view = registry.view<rule_reductions__Board>();
+const cactus_gen::rule_reductions::Board& board_of(entt::registry& registry) {
+    const auto view = registry.view<cactus_gen::rule_reductions::Board>();
     REQUIRE(view.begin() != view.end());
-    return registry.get<rule_reductions__Board>(*view.begin());
+    return registry.get<cactus_gen::rule_reductions::Board>(*view.begin());
 }
 
-const rule_reductions__Team& team_of(entt::registry& registry, int id) {
-    for (const auto entity : registry.view<rule_reductions__Team>()) {
-        const auto& team = registry.get<rule_reductions__Team>(entity);
+const cactus_gen::rule_reductions::Team& team_of(entt::registry& registry, int id) {
+    for (const auto entity : registry.view<cactus_gen::rule_reductions::Team>()) {
+        const auto& team = registry.get<cactus_gen::rule_reductions::Team>(entity);
         if (team.id == id) {
             return team;
         }
@@ -131,7 +132,8 @@ TEST_CASE("a float sum does not depend on the order rows were created in", "[run
         std::vector<entt::entity> players;
         for (const float speed : speeds) {
             const auto player = registry.create();
-            registry.emplace<rule_reductions__Player>(player, rule_reductions__Player{.speed = speed});
+            registry.emplace<cactus_gen::rule_reductions::Player>(player,
+                                                                  cactus_gen::rule_reductions::Player{.speed = speed});
             registry.emplace<cactus::runtime::entt_backend::CreationOrdinal>(
                 player,
                 cactus::runtime::entt_backend::CreationOrdinal{
@@ -141,7 +143,8 @@ TEST_CASE("a float sum does not depend on the order rows were created in", "[run
         return players;
     };
     const auto drive_frame = [&registry] {
-        cactus::runtime::entt_backend::generated_inject_external_event(std_core__frameEvent{.dt = 1.0F / 60.0F});
+        cactus::runtime::entt_backend::generated_inject_external_event(
+            cactus_gen::stdlib::core::frameEvent{.dt = 1.0F / 60.0F});
         cactus::runtime::entt_backend::generated_drain_external_events(registry);
         return board_of(registry).speed;
     };

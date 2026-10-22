@@ -17,8 +17,8 @@ TEST_CASE("a native reader sees the writer's value in either declaration order",
           "[runtime][codegen-entt][native-field-reads]") {
     entt::registry registry;
     cactus_headless_test::drive_one_frame(registry, 1.0F / 60.0F);
-    auto view = registry.view<native_field_reads__Seen>();
+    auto view = registry.view<cactus_gen::native_field_reads::Seen>();
     REQUIRE(view.size() == 1);
-    CHECK(registry.get<native_field_reads__Seen>(*view.begin()).x == 1.0F);
+    CHECK(registry.get<cactus_gen::native_field_reads::Seen>(*view.begin()).x == 1.0F);
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

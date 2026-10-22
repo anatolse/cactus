@@ -13,7 +13,7 @@
 
 namespace {
 
-using Log   = order_by_total_runtime__Log;
+using Log = cactus_gen::order_by_total_runtime::Log;
 
 struct World {
     entt::registry registry;
@@ -24,12 +24,13 @@ struct World {
     }
 
     void add(int id, float v) {
-        cactus::runtime::entt_backend::generated_inject_external_event(order_by_total_runtime__ScoredEvent{.id = id, .v = v});
+        cactus::runtime::entt_backend::generated_inject_external_event(
+            cactus_gen::order_by_total_runtime::ScoredEvent{.id = id, .v = v});
         cactus::runtime::entt_backend::generated_drain_external_events(registry);
     }
 
     entt::entity find(int id) {
-        for (const auto [entity, score] : registry.view<order_by_total_runtime__Score>().each()) {
+        for (const auto [entity, score] : registry.view<cactus_gen::order_by_total_runtime::Score>().each()) {
             if (score.id == id) {
                 return entity;
             }
@@ -39,7 +40,8 @@ struct World {
     }
 
     const Log& run_frame() {
-        cactus::runtime::entt_backend::generated_inject_external_event(std_core__frameEvent{.dt = 1.0F / 60.0F});
+        cactus::runtime::entt_backend::generated_inject_external_event(
+            cactus_gen::stdlib::core::frameEvent{.dt = 1.0F / 60.0F});
         cactus::runtime::entt_backend::generated_drain_external_events(registry);
         const auto view = registry.view<Log>();
         REQUIRE(view.begin() != view.end());

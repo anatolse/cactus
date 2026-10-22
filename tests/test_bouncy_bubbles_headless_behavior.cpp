@@ -23,7 +23,8 @@
 namespace {
 
 void drive_frame(entt::registry& registry) {
-    cactus::runtime::entt_backend::generated_inject_external_event(std_core__frameEvent{.dt = 1.0F / 60.0F});
+    cactus::runtime::entt_backend::generated_inject_external_event(
+        cactus_gen::stdlib::core::frameEvent{.dt = 1.0F / 60.0F});
     cactus::runtime::entt_backend::generated_drain_external_events(registry);
 }
 
@@ -47,12 +48,14 @@ TEST_CASE("refactor-bouncy-bubbles-colliders: every wall, including the tilted o
     cactus::runtime::entt_backend::generated_init_project(registry);
     cactus::runtime::entt_backend::generated_load_project(registry);
 
-    const auto wall_view = registry.view<main__Wall, main__SquareCollider, std_transform_flat__WorldTransform>();
+    const auto wall_view   = registry.view<cactus_gen::main::Wall,
+                                           cactus_gen::main::SquareCollider,
+                                           cactus_gen::stdlib::transform::flat::WorldTransform>();
     std::size_t wall_count = 0;
     bool saw_tilted_wall   = false;
     for (auto entity : wall_view) {
         ++wall_count;
-        const float rotation = registry.get<std_transform_flat__WorldTransform>(entity).rotation;
+        const float rotation = registry.get<cactus_gen::stdlib::transform::flat::WorldTransform>(entity).rotation;
         const float mod90    = std::fmod(std::fmod(rotation, std::numbers::pi_v<float> / 2.0F) +
                                            (std::numbers::pi_v<float> / 2.0F),
                                        std::numbers::pi_v<float> / 2.0F);
@@ -63,8 +66,9 @@ TEST_CASE("refactor-bouncy-bubbles-colliders: every wall, including the tilted o
     REQUIRE(wall_count == 4);
     CHECK(saw_tilted_wall);
 
-    const auto bubble_view =
-        registry.view<main__Bubble, main__CircleCollider, std_transform_flat__WorldTransform>();
+    const auto bubble_view   = registry.view<cactus_gen::main::Bubble,
+                                             cactus_gen::main::CircleCollider,
+                                             cactus_gen::stdlib::transform::flat::WorldTransform>();
     std::size_t bubble_count = 0;
     for (auto entity : bubble_view) {
         (void)entity;
@@ -75,7 +79,7 @@ TEST_CASE("refactor-bouncy-bubbles-colliders: every wall, including the tilted o
     for (int frame = 0; frame < kFrameCount; ++frame) {
         drive_frame(registry);
         for (auto entity : bubble_view) {
-            const auto& position = registry.get<std_transform_flat__WorldTransform>(entity).position;
+            const auto& position = registry.get<cactus_gen::stdlib::transform::flat::WorldTransform>(entity).position;
             INFO("frame " << frame << " entity " << static_cast<std::uint32_t>(entity) << " position ("
                            << position.x << ", " << position.y << ")");
             CHECK(position.x >= kMinX);

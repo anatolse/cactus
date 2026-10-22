@@ -11,11 +11,12 @@
 
 namespace {
 
-using Actor = conditional_expressions__Actor;
-using Mode  = conditional_expressions__Mode;
+using Actor = cactus_gen::conditional_expressions::Actor;
+using Mode  = cactus_gen::conditional_expressions::Mode;
 
 void drive_frame(entt::registry& registry) {
-    cactus::runtime::entt_backend::generated_inject_external_event(std_core__frameEvent{.dt = 1.0F / 60.0F});
+    cactus::runtime::entt_backend::generated_inject_external_event(
+        cactus_gen::stdlib::core::frameEvent{.dt = 1.0F / 60.0F});
     cactus::runtime::entt_backend::generated_drain_external_events(registry);
 }
 

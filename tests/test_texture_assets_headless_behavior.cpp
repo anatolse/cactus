@@ -33,13 +33,14 @@ struct World {
 
     void frame(int count = 1) {
         for (int i = 0; i < count; ++i) {
-            backend::generated_inject_external_event(std_core__frameEvent{.dt = 1.0F / 60.0F});
+            backend::generated_inject_external_event(cactus_gen::stdlib::core::frameEvent{.dt = 1.0F / 60.0F});
             backend::generated_drain_external_events(registry);
         }
     }
 
-    const texture_assets__Measured& measured() {
-        return registry.get<texture_assets__Measured>(generated_named_slots().texture_assets__Measures);
+    const cactus_gen::texture_assets::Measured& measured() {
+        return registry.get<cactus_gen::texture_assets::Measured>(
+            cactus_gen::detail::generated_named_slots().texture_assets.Measures);
     }
 };
 

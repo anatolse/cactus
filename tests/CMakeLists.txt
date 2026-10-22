@@ -266,6 +266,7 @@ add_test(NAME SemanticModulesTests COMMAND test_semantic_modules)
 # Symbol identity tests
 add_executable(test_symbol_identity test_symbol_identity.cpp)
 target_link_libraries(test_symbol_identity PRIVATE cactus_frontend Catch2::Catch2WithMain)
+target_compile_definitions(test_symbol_identity PRIVATE CACTUS_RAYLIB_HEADER="${raylib_SOURCE_DIR}/src/raylib.h")
 add_test(NAME SymbolIdentityTests COMMAND test_symbol_identity)
 
 # Program linker tests
@@ -1015,6 +1016,8 @@ target_compile_definitions(test_example_cpp_compilation PRIVATE
 
     CACTUS_EXTERNAL_HANDLER_LINK_TARGET="example_external_handler_user_library"
     CACTUS_EXTERNAL_HANDLER_MISSING_TARGET="example_external_handler_missing_implementations"
+    CACTUS_EXTERNAL_HANDLER_PARTIAL_TARGET="example_external_handler_partial_implementations"
+    CACTUS_EXTERNAL_HANDLER_DISALLOWED_SET_TARGET="example_external_handler_disallowed_set"
 )
 
 add_test(NAME ExampleCppCompilationTests COMMAND test_example_cpp_compilation)
@@ -1041,6 +1044,12 @@ cactus_add_headless_behavior_test(test_concise_rule_notation_headless_behavior
     CACTUS_SOURCE examples/concise_rule_notation.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_concise_rule_notation_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_generated_names_headless_behavior
+    CACTUS_SOURCE tests/fixtures/generated_names/main.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_generated_names_headless_behavior.cpp
 )
 
 # Every executable defined in this directory is a test or a test subprocess, so

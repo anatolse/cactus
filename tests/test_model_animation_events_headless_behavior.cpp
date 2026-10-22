@@ -27,9 +27,10 @@ bool near_x(const float value, const float target) {
 // Filtered on PlaybackLog too, so MainCamera (also at a whole-number x) never
 // matches.
 entt::entity entity_at_x(entt::registry& registry, const float x) {
-    const auto view = registry.view<model_animation_events__PlaybackLog, std_transform_volume__WorldTransform>();
+    const auto view = registry.view<cactus_gen::model_animation_events::PlaybackLog,
+                                    cactus_gen::stdlib::transform::volume::WorldTransform>();
     for (auto entity : view) {
-        if (near_x(registry.get<std_transform_volume__WorldTransform>(entity).position.x, x)) {
+        if (near_x(registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(entity).position.x, x)) {
             return entity;
         }
     }
@@ -37,8 +38,8 @@ entt::entity entity_at_x(entt::registry& registry, const float x) {
     return entt::null;
 }
 
-const model_animation_events__PlaybackLog& log_at_x(entt::registry& registry, const float x) {
-    return registry.get<model_animation_events__PlaybackLog>(entity_at_x(registry, x));
+const cactus_gen::model_animation_events::PlaybackLog& log_at_x(entt::registry& registry, const float x) {
+    return registry.get<cactus_gen::model_animation_events::PlaybackLog>(entity_at_x(registry, x));
 }
 
 }  // namespace
@@ -165,7 +166,8 @@ TEST_CASE(
         CHECK(log.marker_count == 1);
         CHECK(log.finished_count == 1);
         CHECK(log.finished_clip == 7);
-        CHECK_FALSE(registry.get<std_render_models__ModelAnimator>(entity_at_x(registry, 0.0F)).playing);
+        CHECK_FALSE(
+            registry.get<cactus_gen::stdlib::render::models::ModelAnimator>(entity_at_x(registry, 0.0F)).playing);
     }
 
     // Frame 80's restart (revision bump + time reset + resume) rearms

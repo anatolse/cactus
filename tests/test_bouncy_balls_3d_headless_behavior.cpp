@@ -57,8 +57,10 @@ constexpr std::size_t kForcedBruteForceThreshold = 1'000'000;
 constexpr std::size_t kForcedSapThreshold         = 0;
 
 std::vector<entt::entity> balls_by_creation_order(entt::registry& registry) {
-    auto view =
-        registry.view<main__Ball, main__SphereCollider, std_transform_volume__WorldTransform, CreationOrdinal>();
+    auto view = registry.view<cactus_gen::main::Ball,
+                              cactus_gen::main::SphereCollider,
+                              cactus_gen::stdlib::transform::volume::WorldTransform,
+                              CreationOrdinal>();
     std::vector<std::pair<std::uint64_t, entt::entity>> ordered;
     for (auto entity : view) {
         ordered.emplace_back(registry.get<CreationOrdinal>(entity).value, entity);
@@ -75,7 +77,7 @@ std::vector<entt::entity> balls_by_creation_order(entt::registry& registry) {
 std::vector<Vector3> ball_velocities_by_creation_order(entt::registry& registry) {
     std::vector<Vector3> velocities;
     for (auto entity : balls_by_creation_order(registry)) {
-        velocities.push_back(registry.get<main__Ball>(entity).velocity);
+        velocities.push_back(registry.get<cactus_gen::main::Ball>(entity).velocity);
     }
     return velocities;
 }
@@ -90,10 +92,10 @@ entt::entity spawn_ball(entt::registry& registry, Vector3 position, Vector3 velo
     const auto entity = registry.create();
     registry.emplace<CreationOrdinal>(
         entity, CreationOrdinal{.value = cactus::runtime::entt_backend::generated_next_creation_ordinal()});
-    registry.emplace<std_transform_volume__WorldTransform>(entity,
-                                                           std_transform_volume__WorldTransform{.position = position});
-    registry.emplace<main__Ball>(entity, main__Ball{.velocity = velocity});
-    registry.emplace<main__SphereCollider>(entity, main__SphereCollider{.radius = radius});
+    registry.emplace<cactus_gen::stdlib::transform::volume::WorldTransform>(
+        entity, cactus_gen::stdlib::transform::volume::WorldTransform{.position = position});
+    registry.emplace<cactus_gen::main::Ball>(entity, cactus_gen::main::Ball{.velocity = velocity});
+    registry.emplace<cactus_gen::main::SphereCollider>(entity, cactus_gen::main::SphereCollider{.radius = radius});
     return entity;
 }
 
@@ -122,7 +124,7 @@ TEST_CASE("example-bouncy-balls-3d: initial balls stay within the box over many 
     cactus::runtime::entt_backend::generated_load_project(registry);
     cactus_headless_test::dispatch_load_event(registry);
 
-    const auto view = registry.view<main__Ball, std_transform_volume__WorldTransform>();
+    const auto view = registry.view<cactus_gen::main::Ball, cactus_gen::stdlib::transform::volume::WorldTransform>();
     std::size_t ball_count = 0;
     for (auto entity : view) {
         (void)entity;
@@ -133,7 +135,7 @@ TEST_CASE("example-bouncy-balls-3d: initial balls stay within the box over many 
     for (int frame = 0; frame < kFrameCount; ++frame) {
         cactus_headless_test::drive_frame(registry);
         for (auto entity : view) {
-            const auto& position = registry.get<std_transform_volume__WorldTransform>(entity).position;
+            const auto& position = registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(entity).position;
             INFO("frame " << frame << " position (" << position.x << ", " << position.y << ", " << position.z << ")");
             CHECK(std::abs(position.x) <= kBound);
             CHECK(std::abs(position.y) <= kBound);
@@ -154,11 +156,13 @@ TEST_CASE("example-bouncy-balls-3d: ball-ball contact rejects self/non-overlappi
     // (only radius/velocity/color are randomized); find the two at corner
     // k=0 (-1.5,-1.2,-1.5) and k=1 (1.5,-1.2,-1.5) to commandeer for a
     // controlled head-on collision, leaving the other 6 as spawned.
-    const auto view = registry.view<main__Ball, main__SphereCollider, std_transform_volume__WorldTransform>();
+    const auto view = registry.view<cactus_gen::main::Ball,
+                                    cactus_gen::main::SphereCollider,
+                                    cactus_gen::stdlib::transform::volume::WorldTransform>();
     std::optional<entt::entity> heavy_entity;
     std::optional<entt::entity> light_entity;
     for (auto entity : view) {
-        const auto& position = registry.get<std_transform_volume__WorldTransform>(entity).position;
+        const auto& position = registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(entity).position;
         if (cactus_raylib_fake::approx_equal(position, Vector3{.x = -1.5F, .y = -1.2F, .z = -1.5F})) {
             heavy_entity = entity;
         } else if (cactus_raylib_fake::approx_equal(position, Vector3{.x = 1.5F, .y = -1.2F, .z = -1.5F})) {
@@ -173,14 +177,16 @@ TEST_CASE("example-bouncy-balls-3d: ball-ball contact rejects self/non-overlappi
 
     // Overlapping (dist 1.0 < radius sum 1.3) and approaching (moving
     // directly toward each other along +/-x).
-    registry.get<main__SphereCollider>(heavy).radius = 1.0F;
-    registry.get<main__SphereCollider>(light).radius = 0.3F;
-    registry.get<std_transform_volume__WorldTransform>(heavy).position = Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};
-    registry.get<std_transform_volume__WorldTransform>(light).position = Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F};
+    registry.get<cactus_gen::main::SphereCollider>(heavy).radius = 1.0F;
+    registry.get<cactus_gen::main::SphereCollider>(light).radius = 0.3F;
+    registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(heavy).position =
+        Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};
+    registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(light).position =
+        Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F};
     const Vector3 heavy_velocity_before = Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F};
     const Vector3 light_velocity_before = Vector3{.x = -1.0F, .y = 0.0F, .z = 0.0F};
-    registry.get<main__Ball>(heavy).velocity = heavy_velocity_before;
-    registry.get<main__Ball>(light).velocity = light_velocity_before;
+    registry.get<cactus_gen::main::Ball>(heavy).velocity = heavy_velocity_before;
+    registry.get<cactus_gen::main::Ball>(light).velocity = light_velocity_before;
 
     // Snapshot every other ball's velocity — none of them overlap each
     // other or the two controlled balls, so a correct self-pair/
@@ -188,7 +194,7 @@ TEST_CASE("example-bouncy-balls-3d: ball-ball contact rejects self/non-overlappi
     std::vector<std::pair<entt::entity, Vector3>> other_velocities_before;
     for (auto entity : view) {
         if (entity != heavy && entity != light) {
-            other_velocities_before.emplace_back(entity, registry.get<main__Ball>(entity).velocity);
+            other_velocities_before.emplace_back(entity, registry.get<cactus_gen::main::Ball>(entity).velocity);
         }
     }
     REQUIRE(other_velocities_before.size() == 6);
@@ -196,7 +202,7 @@ TEST_CASE("example-bouncy-balls-3d: ball-ball contact rejects self/non-overlappi
     cactus_headless_test::drive_frame(registry);
 
     for (const auto& [entity, velocity_before] : other_velocities_before) {
-        const auto& velocity_after = registry.get<main__Ball>(entity).velocity;
+        const auto& velocity_after = registry.get<cactus_gen::main::Ball>(entity).velocity;
         CHECK(cactus_raylib_fake::approx_equal(velocity_after, velocity_before));
     }
 
@@ -226,8 +232,8 @@ TEST_CASE("example-bouncy-balls-3d: ball-ball contact rejects self/non-overlappi
     const Vector3 expected_light_velocity =
         resolve(light_velocity_before, mass_light, heavy_velocity_before, mass_heavy, normal_for_light);
 
-    const Vector3 heavy_velocity_after = registry.get<main__Ball>(heavy).velocity;
-    const Vector3 light_velocity_after = registry.get<main__Ball>(light).velocity;
+    const Vector3 heavy_velocity_after = registry.get<cactus_gen::main::Ball>(heavy).velocity;
+    const Vector3 light_velocity_after = registry.get<cactus_gen::main::Ball>(light).velocity;
     CHECK(cactus_raylib_fake::approx_equal(heavy_velocity_after, expected_heavy_velocity, 0.001F));
     CHECK(cactus_raylib_fake::approx_equal(light_velocity_after, expected_light_velocity, 0.001F));
 
@@ -361,16 +367,16 @@ TEST_CASE("example-bouncy-balls-3d: total pair-handler activation time benchmark
             spawn_ball(registry, position, velocity, 0.3F);
         }
 
-        const cactus::runtime::entt_backend::std_core__fixed_tickPhaseRuntimeState trigger{.dt = 1.0F / 60.0F};
+        const cactus_gen::stdlib::core::FixedTickPhase trigger{.dt = 1.0F / 60.0F};
 
         cactus::runtime::entt_backend::set_sap_small_domain_threshold_override_for_testing(kForcedBruteForceThreshold);
         BENCHMARK("brute-force total activation, N=" + std::to_string(count)) {
-            main__detect_ball_contact_fixed_tick(registry, trigger);
+            cactus_gen::main::detect_ball_contact_fixed_tick(registry, trigger);
         };
 
         cactus::runtime::entt_backend::set_sap_small_domain_threshold_override_for_testing(kForcedSapThreshold);
         BENCHMARK("SAP total activation, N=" + std::to_string(count)) {
-            main__detect_ball_contact_fixed_tick(registry, trigger);
+            cactus_gen::main::detect_ball_contact_fixed_tick(registry, trigger);
         };
 
         cactus::runtime::entt_backend::set_sap_small_domain_threshold_override_for_testing(std::nullopt);

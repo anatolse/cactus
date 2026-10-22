@@ -22,7 +22,7 @@ entt::entity create_node(entt::registry& registry) {
     const auto entity = registry.create();
     registry.emplace<CreationOrdinal>(
         entity, CreationOrdinal{.value = cactus::runtime::entt_backend::generated_next_creation_ordinal()});
-    registry.emplace<std_ui__Node>(entity);
+    registry.emplace<cactus_gen::stdlib::ui::Node>(entity);
     return entity;
 }
 
@@ -30,21 +30,21 @@ entt::entity create_node(entt::registry& registry) {
 // covered by test_standard_ui_layout_headless_behavior.cpp) so each test
 // controls exactly the render-relevant facts: draw_order, visibility,
 // opacity, and clip bounds.
-std_ui__ComputedLayout make_layout(const int draw_order,
-                                   const Vector2 position = {.x = 0.0F, .y = 0.0F},
-                                   const Vector2 size     = {.x = 100.0F, .y = 50.0F},
-                                   const bool visible     = true,
-                                   const float opacity    = 1.0F,
-                                   const Vector2 clip_min = {.x = 0.0F, .y = 0.0F},
-                                   const Vector2 clip_max = {.x = 800.0F, .y = 600.0F}) {
-    return std_ui__ComputedLayout{.position          = position,
-                                  .size              = size,
-                                  .effective_visible = visible,
-                                  .effective_enabled = true,
-                                  .effective_opacity = opacity,
-                                  .clip_min          = clip_min,
-                                  .clip_max          = clip_max,
-                                  .draw_order        = draw_order};
+cactus_gen::stdlib::ui::ComputedLayout make_layout(const int draw_order,
+                                                   const Vector2 position = {.x = 0.0F, .y = 0.0F},
+                                                   const Vector2 size     = {.x = 100.0F, .y = 50.0F},
+                                                   const bool visible     = true,
+                                                   const float opacity    = 1.0F,
+                                                   const Vector2 clip_min = {.x = 0.0F, .y = 0.0F},
+                                                   const Vector2 clip_max = {.x = 800.0F, .y = 600.0F}) {
+    return cactus_gen::stdlib::ui::ComputedLayout{.position          = position,
+                                                  .size              = size,
+                                                  .effective_visible = visible,
+                                                  .effective_enabled = true,
+                                                  .effective_opacity = opacity,
+                                                  .clip_min          = clip_min,
+                                                  .clip_max          = clip_max,
+                                                  .draw_order        = draw_order};
 }
 
 }  // namespace
@@ -58,24 +58,26 @@ TEST_CASE("Standard UI render draws Panel/Image/Button/Text primitives in the st
     cactus::runtime::entt_backend::generated_load_project(registry);
 
     const auto entity = create_node(registry);
-    registry.emplace<std_ui__ComputedLayout>(entity,
-                                             make_layout(0, {.x = 10.0F, .y = 10.0F}, {.x = 100.0F, .y = 50.0F}));
-    registry.emplace<std_ui__Panel>(entity,
-                                    std_ui__Panel{.background = RED, .border_color = BLUE, .border_width = 2.0F});
-    registry.emplace<std_ui__Button>(entity,
-                                     std_ui__Button{.label          = "go",
-                                                    .normal_color   = GREEN,
-                                                    .hover_color    = GREEN,
-                                                    .pressed_color  = GREEN,
-                                                    .disabled_color = GRAY,
-                                                    .text_color     = WHITE,
-                                                    .padding        = {.x = 4.0F, .y = 4.0F}});
-    registry.emplace<std_ui__Text>(
+    registry.emplace<cactus_gen::stdlib::ui::ComputedLayout>(
+        entity, make_layout(0, {.x = 10.0F, .y = 10.0F}, {.x = 100.0F, .y = 50.0F}));
+    registry.emplace<cactus_gen::stdlib::ui::Panel>(
+        entity, cactus_gen::stdlib::ui::Panel{.background = RED, .border_color = BLUE, .border_width = 2.0F});
+    registry.emplace<cactus_gen::stdlib::ui::Button>(entity,
+                                                     cactus_gen::stdlib::ui::Button{.label          = "go",
+                                                                                    .normal_color   = GREEN,
+                                                                                    .hover_color    = GREEN,
+                                                                                    .pressed_color  = GREEN,
+                                                                                    .disabled_color = GRAY,
+                                                                                    .text_color     = WHITE,
+                                                                                    .padding = {.x = 4.0F, .y = 4.0F}});
+    registry.emplace<cactus_gen::stdlib::ui::Text>(
         entity,
-        std_ui__Text{
-            .value = "shown over button", .font_size = 12, .color = YELLOW, .align = std_ui__TextAlign::Center});
+        cactus_gen::stdlib::ui::Text{.value     = "shown over button",
+                                     .font_size = 12,
+                                     .color     = YELLOW,
+                                     .align     = cactus_gen::stdlib::ui::TextAlign::Center});
 
-    standard_ui_layout_runtime__render_ui_tick(registry);
+    cactus_gen::standard_ui_layout_runtime::render_ui_tick(registry);
     cactus::runtime::entt_backend::end_render_frame();
 
     const auto& log = cactus_raylib_fake::call_log();
@@ -115,14 +117,14 @@ TEST_CASE("Standard UI render paints in ComputedLayout draw_order, not creation 
 
     // Created first but painted second (higher draw_order).
     const auto first_created = create_node(registry);
-    registry.emplace<std_ui__ComputedLayout>(first_created, make_layout(/*draw_order=*/5));
-    registry.emplace<std_ui__Panel>(first_created, std_ui__Panel{.background = RED});
+    registry.emplace<cactus_gen::stdlib::ui::ComputedLayout>(first_created, make_layout(/*draw_order=*/5));
+    registry.emplace<cactus_gen::stdlib::ui::Panel>(first_created, cactus_gen::stdlib::ui::Panel{.background = RED});
 
     const auto second_created = create_node(registry);
-    registry.emplace<std_ui__ComputedLayout>(second_created, make_layout(/*draw_order=*/0));
-    registry.emplace<std_ui__Panel>(second_created, std_ui__Panel{.background = BLUE});
+    registry.emplace<cactus_gen::stdlib::ui::ComputedLayout>(second_created, make_layout(/*draw_order=*/0));
+    registry.emplace<cactus_gen::stdlib::ui::Panel>(second_created, cactus_gen::stdlib::ui::Panel{.background = BLUE});
 
-    standard_ui_layout_runtime__render_ui_tick(registry);
+    cactus_gen::standard_ui_layout_runtime::render_ui_tick(registry);
     cactus::runtime::entt_backend::end_render_frame();
 
     const auto& log = cactus_raylib_fake::call_log();
@@ -146,13 +148,13 @@ TEST_CASE("Standard UI paints once per frame, after every viewport", "[runtime][
     cactus::runtime::entt_backend::generated_load_project(registry);
 
     const auto entity = create_node(registry);
-    registry.emplace<std_ui__ComputedLayout>(entity, make_layout(0));
-    registry.emplace<std_ui__Panel>(entity, std_ui__Panel{.background = RED});
+    registry.emplace<cactus_gen::stdlib::ui::ComputedLayout>(entity, make_layout(0));
+    registry.emplace<cactus_gen::stdlib::ui::Panel>(entity, cactus_gen::stdlib::ui::Panel{.background = RED});
 
     cactus::runtime::entt_backend::begin_render_frame();
     for (const auto viewport : {registry.create(), registry.create()}) {
         cactus::runtime::entt_backend::set_active_viewport_entity(viewport);
-        standard_ui_layout_runtime__render_ui_tick(registry);
+        cactus_gen::standard_ui_layout_runtime::render_ui_tick(registry);
     }
     cactus::runtime::entt_backend::set_active_viewport_entity(entt::null);
     CHECK(cactus_raylib_fake::call_log().empty());
@@ -175,22 +177,23 @@ TEST_CASE("Standard UI render skips invisible and fully-clipped entities, and ti
     cactus::runtime::entt_backend::generated_load_project(registry);
 
     const auto hidden = create_node(registry);
-    registry.emplace<std_ui__ComputedLayout>(hidden, make_layout(0, {.x = 0, .y = 0}, {.x = 10, .y = 10}, false));
-    registry.emplace<std_ui__Panel>(hidden, std_ui__Panel{.background = RED});
+    registry.emplace<cactus_gen::stdlib::ui::ComputedLayout>(
+        hidden, make_layout(0, {.x = 0, .y = 0}, {.x = 10, .y = 10}, false));
+    registry.emplace<cactus_gen::stdlib::ui::Panel>(hidden, cactus_gen::stdlib::ui::Panel{.background = RED});
 
     const auto clipped_away = create_node(registry);
-    registry.emplace<std_ui__ComputedLayout>(
+    registry.emplace<cactus_gen::stdlib::ui::ComputedLayout>(
         clipped_away,
         make_layout(1, {.x = 0, .y = 0}, {.x = 10, .y = 10}, true, 1.0F, {.x = 5, .y = 5}, {.x = 5, .y = 5}));
-    registry.emplace<std_ui__Panel>(clipped_away, std_ui__Panel{.background = GREEN});
+    registry.emplace<cactus_gen::stdlib::ui::Panel>(clipped_away, cactus_gen::stdlib::ui::Panel{.background = GREEN});
 
     const auto translucent = create_node(registry);
-    registry.emplace<std_ui__ComputedLayout>(translucent,
-                                             make_layout(2, {.x = 0, .y = 0}, {.x = 10, .y = 10}, true, 0.5F));
-    registry.emplace<std_ui__Panel>(translucent,
-                                    std_ui__Panel{.background = Color{.r = 10, .g = 20, .b = 30, .a = 255}});
+    registry.emplace<cactus_gen::stdlib::ui::ComputedLayout>(
+        translucent, make_layout(2, {.x = 0, .y = 0}, {.x = 10, .y = 10}, true, 0.5F));
+    registry.emplace<cactus_gen::stdlib::ui::Panel>(
+        translucent, cactus_gen::stdlib::ui::Panel{.background = Color{.r = 10, .g = 20, .b = 30, .a = 255}});
 
-    standard_ui_layout_runtime__render_ui_tick(registry);
+    cactus_gen::standard_ui_layout_runtime::render_ui_tick(registry);
     cactus::runtime::entt_backend::end_render_frame();
 
     const auto& log = cactus_raylib_fake::call_log();
@@ -226,13 +229,17 @@ TEST_CASE("Standard UI render slices FrameAnimation frames from a resolved textu
     cactus::runtime::entt_backend::generated_load_project(registry);
 
     const auto entity = create_node(registry);
-    registry.emplace<std_ui__ComputedLayout>(entity, make_layout(0, {.x = 0, .y = 0}, {.x = 40, .y = 40}));
-    registry.emplace<std_ui__Image>(entity,
-                                    std_ui__Image{.texture = 7U, .tint = WHITE, .fit = std_ui__ImageFit::Stretch});
-    registry.emplace<std_ui__FrameAnimation>(
-        entity, std_ui__FrameAnimation{.frame_count = 4, .fps = 0.0F, .frame = 2, .elapsed = 0.0F, .playing = false});
+    registry.emplace<cactus_gen::stdlib::ui::ComputedLayout>(entity,
+                                                             make_layout(0, {.x = 0, .y = 0}, {.x = 40, .y = 40}));
+    registry.emplace<cactus_gen::stdlib::ui::Image>(
+        entity,
+        cactus_gen::stdlib::ui::Image{.texture = 7U, .tint = WHITE, .fit = cactus_gen::stdlib::ui::ImageFit::Stretch});
+    registry.emplace<cactus_gen::stdlib::ui::FrameAnimation>(
+        entity,
+        cactus_gen::stdlib::ui::FrameAnimation{
+            .frame_count = 4, .fps = 0.0F, .frame = 2, .elapsed = 0.0F, .playing = false});
 
-    standard_ui_layout_runtime__render_ui_tick(registry);
+    cactus_gen::standard_ui_layout_runtime::render_ui_tick(registry);
     cactus::runtime::entt_backend::end_render_frame();
 
     const auto& log  = cactus_raylib_fake::call_log();
@@ -263,19 +270,20 @@ TEST_CASE("Standard UI Button presentation follows disabled > pressed > hovered 
         const auto entity        = create_node(registry);
         auto layout              = make_layout(0);
         layout.effective_enabled = enabled;
-        registry.emplace<std_ui__ComputedLayout>(entity, layout);
-        registry.emplace<std_ui__Button>(entity,
-                                         std_ui__Button{.label          = "go",
-                                                        .normal_color   = Color{.r = 1, .g = 0, .b = 0, .a = 255},
-                                                        .hover_color    = Color{.r = 2, .g = 0, .b = 0, .a = 255},
-                                                        .pressed_color  = Color{.r = 3, .g = 0, .b = 0, .a = 255},
-                                                        .disabled_color = Color{.r = 4, .g = 0, .b = 0, .a = 255},
-                                                        .text_color     = WHITE,
-                                                        .padding        = {.x = 4.0F, .y = 4.0F}});
-        registry.emplace<std_pointer__PointerState>(entity,
-                                                    std_pointer__PointerState{.hovered = hovered, .pressed = pressed});
+        registry.emplace<cactus_gen::stdlib::ui::ComputedLayout>(entity, layout);
+        registry.emplace<cactus_gen::stdlib::ui::Button>(
+            entity,
+            cactus_gen::stdlib::ui::Button{.label          = "go",
+                                           .normal_color   = Color{.r = 1, .g = 0, .b = 0, .a = 255},
+                                           .hover_color    = Color{.r = 2, .g = 0, .b = 0, .a = 255},
+                                           .pressed_color  = Color{.r = 3, .g = 0, .b = 0, .a = 255},
+                                           .disabled_color = Color{.r = 4, .g = 0, .b = 0, .a = 255},
+                                           .text_color     = WHITE,
+                                           .padding        = {.x = 4.0F, .y = 4.0F}});
+        registry.emplace<cactus_gen::stdlib::pointer::PointerState>(
+            entity, cactus_gen::stdlib::pointer::PointerState{.hovered = hovered, .pressed = pressed});
 
-        standard_ui_layout_runtime__render_ui_tick(registry);
+        cactus_gen::standard_ui_layout_runtime::render_ui_tick(registry);
         cactus::runtime::entt_backend::end_render_frame();
 
         const auto* draw =
@@ -299,18 +307,19 @@ TEST_CASE("Standard UI RenderUi coexists with the legacy DrawScreenRect compatib
     cactus::runtime::entt_backend::generated_load_project(registry);
 
     const auto entity = create_node(registry);
-    registry.emplace<std_ui__ComputedLayout>(entity, make_layout(0, {.x = 0, .y = 0}, {.x = 20, .y = 20}));
-    registry.emplace<std_ui__Panel>(entity, std_ui__Panel{.background = RED});
+    registry.emplace<cactus_gen::stdlib::ui::ComputedLayout>(entity,
+                                                             make_layout(0, {.x = 0, .y = 0}, {.x = 20, .y = 20}));
+    registry.emplace<cactus_gen::stdlib::ui::Panel>(entity, cactus_gen::stdlib::ui::Panel{.background = RED});
 
-    standard_ui_layout_runtime__render_ui_tick(registry);
+    cactus_gen::standard_ui_layout_runtime::render_ui_tick(registry);
     cactus::runtime::entt_backend::end_render_frame();
 
-    const std_ui__DrawScreenRectEvent legacy_event{.position  = {.x = 100.0F, .y = 100.0F},
-                                                   .size      = {.x = 30.0F, .y = 30.0F},
-                                                   .color     = MAGENTA,
-                                                   .filled    = true,
-                                                   .thickness = 1.0F};
-    standard_ui_layout_runtime__draw_screen_rect_renderer_tick(registry, legacy_event);
+    const cactus_gen::stdlib::ui::DrawScreenRectEvent legacy_event{.position  = {.x = 100.0F, .y = 100.0F},
+                                                                   .size      = {.x = 30.0F, .y = 30.0F},
+                                                                   .color     = MAGENTA,
+                                                                   .filled    = true,
+                                                                   .thickness = 1.0F};
+    cactus_gen::standard_ui_layout_runtime::draw_screen_rect_renderer_tick(registry, legacy_event);
 
     const auto& log = cactus_raylib_fake::call_log();
     CHECK(cactus_raylib_fake::find_call<cactus_raylib_fake::RecordedDrawRectangleRec>(

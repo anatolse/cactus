@@ -16,7 +16,7 @@
 
 namespace {
 
-using Spin = linearization_sample_runtime__Spin;
+using Spin = cactus_gen::linearization_sample_runtime::Spin;
 
 }  // namespace
 

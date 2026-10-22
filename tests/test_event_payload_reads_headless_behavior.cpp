@@ -10,13 +10,13 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-using Reading = event_payload_reads__Reading;
+using Reading = cactus_gen::event_payload_reads::Reading;
 
 TEST_CASE("handlers read quat and int payload fields through the bare or qualified trigger name",
           "[runtime][events][trigger-name]") {
     entt::registry registry;
     cactus_headless_test::init_and_load(registry);
-    const auto& reading = registry.get<Reading>(generated_named_slots().event_payload_reads__Probe);
+    const auto& reading = registry.get<Reading>(cactus_gen::detail::generated_named_slots().event_payload_reads.Probe);
 
     const auto expected = cactus::runtime::stdlib::math::quat::from_euler(0.0F, 1.0F, 0.0F);
     CHECK(reading.rotation.x == expected.x);

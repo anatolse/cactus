@@ -23,10 +23,10 @@ using cactus_headless_test::init_and_load;
 
 namespace rt = cactus::runtime::entt_backend;
 
-using Blessed = world_persistence_dynamic__Blessed;
-using Health  = world_persistence_dynamic__Health;
-using Sparkle = world_persistence_dynamic__Sparkle;
-using Stage   = world_persistence_dynamic__Stage;
+using Blessed = cactus_gen::world_persistence_dynamic::Blessed;
+using Health  = cactus_gen::world_persistence_dynamic::Health;
+using Sparkle = cactus_gen::world_persistence_dynamic::Sparkle;
+using Stage   = cactus_gen::world_persistence_dynamic::Stage;
 
 constexpr float kStep = 1.0F / 60.0F;
 
@@ -34,7 +34,7 @@ struct World {
     entt::registry registry;
 
     World() {
-        rt::generated_scheduler_state().std_core__fixed_tick = {};
+        rt::generated_scheduler_state().stdlib.core.fixed_tick = {};
         init_and_load(registry);
     }
 };

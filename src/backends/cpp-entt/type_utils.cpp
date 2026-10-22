@@ -27,14 +27,12 @@ namespace {
 
 template <typename ResolvedDecl>
 std::string resolved_decl_cpp_name(const ResolvedDecl& decl) {
+    const auto kind = decl.symbol_id.has_value() ? decl.symbol_id->kind : SymbolKind::Trait;
     // Prefer module_name: allows tests to override canonical identity after analysis.
-    if (!decl.module_name.empty()) {
-        return canonical_to_cpp_name(decl.module_name, decl.name);
+    if (decl.module_name.empty() && decl.symbol_id.has_value()) {
+        return cpp_type_ref(*decl.symbol_id);
     }
-    if (decl.symbol_id.has_value()) {
-        return canonical_to_cpp_name(*decl.symbol_id);
-    }
-    return decl.name;
+    return cpp_type_ref(kind, decl.module_name, decl.name);
 }
 
 template <typename Map>
@@ -64,7 +62,7 @@ std::string symbol_cpp_name_from_map(const SymbolId& symbol, const Map& map) {
     if (const auto* decl = find_decl_by_symbol(map, symbol); decl != nullptr) {
         return resolved_decl_cpp_name(*decl);
     }
-    return canonical_to_cpp_name(symbol);
+    return cpp_type_ref(symbol);
 }
 
 template <typename Map>
@@ -153,18 +151,90 @@ bool is_input_action_name(const ProgramNode* ast, const std::string& name) {
 
 }  // namespace
 
-std::string system_function_name(const std::string& module_name,
-                                 const std::string& system_name,
-                                 const std::string& suffix) {
-    return snake_case(canonical_to_cpp_name(module_name, system_name)) + "_" + suffix;
+std::string namespace_block(const std::string& ns, const std::string& body) {
+    return "namespace " + ns + " {\n" + body + "}  // namespace " + ns + "\n";
 }
 
-std::string system_function_name(const SymbolId& system_id, const std::string& suffix) {
-    return snake_case(canonical_to_cpp_name(system_id)) + "_" + suffix;
+std::string detail_namespace_path(const std::string& module_name) {
+    std::string result = "cactus_gen::detail";
+    for (const auto& segment : cpp_namespace_segments(module_name)) {
+        result += "::" + segment;
+    }
+    return result;
+}
+
+std::string join_strings(const std::vector<std::string>& items, std::string_view separator) {
+    std::string joined;
+    for (const auto& item : items) {
+        if (!joined.empty()) {
+            joined += separator;
+        }
+        joined += item;
+    }
+    return joined;
+}
+
+std::string component_local(const std::string& type_ref) {
+    std::vector<std::string> segments;
+    for (std::size_t begin = 0; begin <= type_ref.size();) {
+        const auto end     = std::min(type_ref.find("::", begin), type_ref.size());
+        auto segment       = type_ref.substr(begin, end - begin);
+        const auto trimmed = segment.find_last_not_of('_');
+        segment.erase(trimmed == std::string::npos ? 0 : trimmed + 1);
+        if (!segment.empty() && segment != "cactus_gen") {
+            segments.push_back(snake_case(segment));
+        }
+        begin = end + 2;
+    }
+    const auto first = segments.size() > 2 ? segments.end() - 2 : segments.begin();
+    std::string local;
+    for (auto it = first; it != segments.end(); ++it) {
+        local += *it + "_";
+    }
+    return local + "comp";
+}
+
+DetailName detail_name(const std::string& module_name, const std::string& name) {
+    return DetailName{.ns = detail_namespace_path(module_name), .name = name};
+}
+
+DetailName system_function_name(const std::string& module_name,
+                                const std::string& system_name,
+                                const std::string& suffix) {
+    return detail_name(module_name, snake_case(system_name) + "_" + suffix);
+}
+
+DetailName archetype_create_function_name(const std::string& module_name, const std::string& archetype_name) {
+    return detail_name(module_name, "create_" + snake_case(archetype_name));
+}
+
+DetailName archetype_create_at_function_name(const std::string& module_name, const std::string& archetype_name) {
+    return detail_name(module_name, "create_" + snake_case(archetype_name) + "_at");
+}
+
+// Per-node helpers live in `<archetype>_nodes`: create_node for the root, create_node_<role path> for
+// descendants. These are not registered in the editor template palette.
+DetailName archetype_node_create_function_name(const std::string& module_name,
+                                               const std::string& archetype_name,
+                                               const std::vector<std::string>& role_path) {
+    std::string name = "create_node";
+    for (const auto& role : role_path) {
+        name += "_" + snake_case(role);
+    }
+    return DetailName{.ns   = detail_namespace_path(module_name) + "::" + snake_case(archetype_name) + "_nodes",
+                      .name = name};
+}
+
+DetailName archetype_node_create_at_function_name(const std::string& module_name,
+                                                  const std::string& archetype_name,
+                                                  const std::vector<std::string>& role_path) {
+    auto name = archetype_node_create_function_name(module_name, archetype_name, role_path);
+    name.name += "_at";
+    return name;
 }
 
 std::string event_cpp_type_name(const SymbolId& event_id) {
-    return canonical_to_cpp_name(event_id) + "Event";
+    return cpp_type_ref(SymbolKind::Event, event_id.module.name, event_id.local_name);
 }
 
 std::string EnttCodegenUtils::value_type_to_cpp(const TypeInfo& type) {
@@ -212,7 +282,7 @@ std::string EnttCodegenUtils::type_to_cpp(const TypeInfo& type) {
         case TypeKind::Struct:
         case TypeKind::Enum: {
             if (type.symbol_id.has_value()) {
-                return canonical_to_cpp_name(*type.symbol_id);
+                return cpp_type_ref(*type.symbol_id);
             }
             // Strip module-alias qualifier (e.g. "rand.Rng" → "Rng").
             const auto dot = type.name.rfind('.');
@@ -231,22 +301,24 @@ std::string EnttCodegenUtils::type_to_cpp(const TypeInfo& type) {
 }
 
 std::string EnttCodegenUtils::emit_enum(const ResolvedEnum& e) {
-    const std::string cpp_name = resolved_decl_cpp_name(e);
+    const auto& module_name =
+        e.module_name.empty() && e.symbol_id.has_value() ? e.symbol_id->module.name : e.module_name;
+    const auto cpp_name = cpp_decl_name(SymbolKind::Enum, e.name);
     std::ostringstream out;
     if (e.variants.size() == 1) {
-        out << "enum class " << cpp_name << " : std::uint8_t { " << e.variants.front() << " };\n";
-        return out.str();
+        out << "enum class " << cpp_name << " : std::uint8_t { " << cpp_escaped(e.variants.front()) << " };\n";
+        return namespace_block(cpp_namespace_path(module_name), out.str());
     }
     out << "enum class " << cpp_name << " : std::uint8_t {\n";
     for (size_t i = 0; i < e.variants.size(); ++i) {
-        out << "    " << e.variants[i];
+        out << "    " << cpp_escaped(e.variants[i]);
         if (i + 1 < e.variants.size()) {
             out << ",";
         }
         out << "\n";
     }
     out << "};\n";
-    return out.str();
+    return namespace_block(cpp_namespace_path(module_name), out.str());
 }
 
 static std::string cpp_operator(const std::string& op) {
@@ -366,7 +438,7 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const ProgramNode*
                     return symbol_cpp_name(*e.resolved_const_id);
                 }
                 if (is_input_action_name(ast, e.name)) {
-                    return input_action_constant_name(e.name);
+                    return "::cactus_gen::detail::" + input_action_constant_name(e.name);
                 }
                 return e.name;
             } else if constexpr (std::is_same_v<E, BinaryExpr>) {
@@ -411,7 +483,7 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const ProgramNode*
                 if (EnttCodegenUtils::is_color_component_member(e.member)) {
                     return "(static_cast<float>(" + emit_expr(*e.object, ast) + "." + e.member + ") / 255.0F)";
                 }
-                return emit_expr(*e.object, ast) + "." + e.member;
+                return emit_expr(*e.object, ast) + "." + cpp_escaped(e.member);
             } else if constexpr (std::is_same_v<E, ListExpr>) {
                 std::string result = "{";
                 for (size_t i = 0; i < e.elements.size(); ++i) {
@@ -571,7 +643,7 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const DecoratedPro
                 return EnttCodegenUtils::emit_expr(*e.callee, program) + "(" +
                        EnttCodegenUtils::join_emitted_args(e.args, program) + ")";
             } else if constexpr (std::is_same_v<E, MemberExpr>) {
-                if (auto named = named_member_cpp(e, program)) {
+                if (auto named = named_member_cpp(e)) {
                     return *std::move(named);
                 }
                 if (e.resolved_const_id.has_value()) {
@@ -586,21 +658,22 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const DecoratedPro
                 // Three-level: alias.EnumType.Variant → canonical_EnumType::Variant
                 if (const auto* inner_member = std::get_if<MemberExpr>(&e.object->expr)) {
                     if (EnttCodegenUtils::find_enum(program, inner_member->member) != nullptr) {
-                        return EnttCodegenUtils::enum_cpp_name(inner_member->member, program) + "::" + e.member;
+                        return EnttCodegenUtils::enum_cpp_name(inner_member->member, program) +
+                               "::" + cpp_escaped(e.member);
                     }
                 }
                 // Two-level: EnumType.Variant → canonical_EnumType::Variant
                 if (const auto* ident = std::get_if<IdentExpr>(&e.object->expr);
                     ident != nullptr && !ident->resolved_const_id.has_value()) {
                     if (!ident->name.empty() && std::isupper(static_cast<unsigned char>(ident->name[0])) != 0) {
-                        return EnttCodegenUtils::enum_cpp_name(ident->name, program) + "::" + e.member;
+                        return EnttCodegenUtils::enum_cpp_name(ident->name, program) + "::" + cpp_escaped(e.member);
                     }
                 }
                 if (EnttCodegenUtils::is_color_component_member(e.member)) {
                     return "(static_cast<float>(" + EnttCodegenUtils::emit_expr(*e.object, program) + "." + e.member +
                           ") / 255.0F)";
                 }
-                return EnttCodegenUtils::emit_expr(*e.object, program) + "." + e.member;
+                return EnttCodegenUtils::emit_expr(*e.object, program) + "." + cpp_escaped(e.member);
             } else if constexpr (std::is_same_v<E, IfExpr>) {
                 return emit_if_ternary(e, emit);
             } else if constexpr (std::is_same_v<E, MatchExpr>) {
@@ -613,11 +686,15 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const DecoratedPro
 }
 
 std::string EnttCodegenUtils::symbol_cpp_name(const SymbolId& symbol) {
-    return canonical_to_cpp_name(symbol);
+    return cpp_type_ref(symbol);
+}
+
+DetailName EnttCodegenUtils::phase_dt_name(const SymbolId& phase) {
+    return detail_name(phase.module.name, phase.local_name + "_phase_dt");
 }
 
 std::string EnttCodegenUtils::phase_dt_cpp_name(const SymbolId& phase) {
-    return symbol_cpp_name(phase) + "_phase_dt";
+    return phase_dt_name(phase).ref();
 }
 
 std::string EnttCodegenUtils::collider_shape_builder(std::optional<std::string_view> shape_trait) {
@@ -629,29 +706,37 @@ std::string EnttCodegenUtils::collider_shape_builder(std::optional<std::string_v
     return name;
 }
 
-std::string EnttCodegenUtils::named_slot_name(const SymbolId& entity) {
-    return "generated_named_slots()." + canonical_to_cpp_name(entity);
+std::vector<std::string> EnttCodegenUtils::named_slot_path(const SymbolId& entity) {
+    auto path = cpp_namespace_segments(entity.module.name);
+    path.push_back(cpp_escaped(entity.local_name));
+    return path;
 }
 
-std::string EnttCodegenUtils::named_trait_ref_name(const NamedTraitRef& ref, const DecoratedProgram& program) {
-    return "named_ref__" + canonical_to_cpp_name(ref.entity) + "__" +
-           trait_cpp_name(ref.trait, ref.trait.local_name, program);
+std::string EnttCodegenUtils::named_slot_name(const SymbolId& entity) {
+    std::string name = "::cactus_gen::detail::generated_named_slots()";
+    for (const auto& segment : named_slot_path(entity)) {
+        name += "." + segment;
+    }
+    return name;
+}
+
+std::string EnttCodegenUtils::named_trait_ref_name(const NamedTraitRef& ref) {
+    return "named_" + snake_case(ref.entity.local_name) + "_" + snake_case(ref.trait.local_name);
 }
 
 bool EnttCodegenUtils::is_color_component_member(const std::string& member) {
     return member == "r" || member == "g" || member == "b" || member == "a";
 }
 
-std::optional<std::string> EnttCodegenUtils::named_member_cpp(const MemberExpr& member,
-                                                              const DecoratedProgram& program) {
+std::optional<std::string> EnttCodegenUtils::named_member_cpp(const MemberExpr& member) {
     if (member.resolved_entity_id.has_value()) {
         return named_slot_name(*member.resolved_entity_id);
     }
     if (const auto path = trait_field_path(member); path.has_value()) {
         if (const auto named = path->first->named_ref(); named.has_value()) {
-            auto lowered = named_trait_ref_name(*named, program);
+            auto lowered = named_trait_ref_name(*named);
             for (const auto& field : path->second) {
-                lowered += "." + field;
+                lowered += "." + cpp_escaped(field);
             }
             return lowered;
         }
@@ -686,15 +771,15 @@ std::string EnttCodegenUtils::hierarchy_strategy_cpp(const DecoratedProgram& pro
 }
 
 std::string EnttCodegenUtils::trait_cpp_name(const SymbolId& symbol) {
-    return canonical_to_cpp_name(symbol);
+    return cpp_type_ref(symbol);
 }
 
 std::string EnttCodegenUtils::struct_cpp_name(const SymbolId& symbol) {
-    return canonical_to_cpp_name(symbol);
+    return cpp_type_ref(symbol);
 }
 
 std::string EnttCodegenUtils::enum_cpp_name(const SymbolId& symbol) {
-    return canonical_to_cpp_name(symbol);
+    return cpp_type_ref(symbol);
 }
 
 std::string EnttCodegenUtils::trait_cpp_name(const std::optional<SymbolId>& symbol,
@@ -743,19 +828,6 @@ std::vector<SymbolId> EnttCodegenUtils::watched_lifecycle_traits(const Decorated
 
 bool EnttCodegenUtils::tracks_lifecycle(const DecoratedProgram& program) {
     return !program.execution_graph.phases.empty() && !watched_lifecycle_traits(program).empty();
-}
-
-std::string EnttCodegenUtils::handler_function_suffix(const EventHandlerNode& handler,
-                                                      const DecoratedProgram& program) {
-    if (!handler.resolved_trigger.has_value()) {
-        return handler.event_name;
-    }
-    const auto& trigger = *handler.resolved_trigger;
-    if (trigger.is_lifecycle()) {
-        return std::string(handler_trigger_kind_name(trigger.kind)) + "_" +
-               trait_cpp_name(trigger.symbol, trigger.symbol.local_name, program);
-    }
-    return handler.event_name.contains('.') ? canonical_to_cpp_name(trigger.symbol) : handler.event_name;
 }
 
 std::string EnttCodegenUtils::struct_cpp_name(const std::string& source_name, const DecoratedProgram& program) {

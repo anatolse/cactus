@@ -21,9 +21,10 @@ entt::entity make_box(entt::registry& registry) {
     const auto entity = registry.create();
     registry.emplace<backend::CreationOrdinal>(entity,
                                                backend::CreationOrdinal{.value = backend::generated_next_creation_ordinal()});
-    registry.emplace<std_transform_flat__WorldTransform>(
-        entity, std_transform_flat__WorldTransform{.position = {.x = 5000.0F, .y = 5000.0F}});
-    registry.emplace<std_physics_flat__BoxCollider>(entity, std_physics_flat__BoxCollider{.size = {.x = 10.0F, .y = 10.0F}});
+    registry.emplace<cactus_gen::stdlib::transform::flat::WorldTransform>(
+        entity, cactus_gen::stdlib::transform::flat::WorldTransform{.position = {.x = 5000.0F, .y = 5000.0F}});
+    registry.emplace<cactus_gen::stdlib::physics::flat::BoxCollider>(
+        entity, cactus_gen::stdlib::physics::flat::BoxCollider{.size = {.x = 10.0F, .y = 10.0F}});
     return entity;
 }
 

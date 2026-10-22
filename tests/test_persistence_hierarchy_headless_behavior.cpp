@@ -20,8 +20,8 @@ namespace {
 
 using cactus_headless_test::init_and_load;
 
-using Health = persistence_hierarchy_runtime__Health;
-using Parent = std_core__Parent;
+using Health = cactus_gen::persistence_hierarchy_runtime::Health;
+using Parent = cactus_gen::stdlib::core::Parent;
 
 struct World {
     entt::registry registry;

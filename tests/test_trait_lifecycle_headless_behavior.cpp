@@ -12,11 +12,11 @@
 
 namespace {
 
-using Log     = trait_lifecycle__Log;
-using Tally   = trait_lifecycle__Tally;
-using Dying   = trait_lifecycle__Dying;
-using Fading  = trait_lifecycle__Fading;
-using Burning = trait_lifecycle__Burning;
+using Log     = cactus_gen::trait_lifecycle::Log;
+using Tally   = cactus_gen::trait_lifecycle::Tally;
+using Dying   = cactus_gen::trait_lifecycle::Dying;
+using Fading  = cactus_gen::trait_lifecycle::Fading;
+using Burning = cactus_gen::trait_lifecycle::Burning;
 
 }  // namespace
 
@@ -25,13 +25,13 @@ using Burning = trait_lifecycle__Burning;
 TEST_CASE("trait lifecycle triggers react to arrival and departure of traits", "[runtime][trait-lifecycle]") {
     entt::registry registry;
     cactus_headless_test::init_and_load(registry);
-    const auto& slots   = generated_named_slots();
-    const auto grunt    = slots.trait_lifecycle__Grunt;
-    const auto scout    = slots.trait_lifecycle__Scout;
-    const auto deserter = slots.trait_lifecycle__Deserter;
-    const auto torch    = slots.trait_lifecycle__Torch;
-    const auto wreck    = slots.trait_lifecycle__Wreck;
-    const auto stats    = slots.trait_lifecycle__Stats;
+    const auto& slots   = cactus_gen::detail::generated_named_slots();
+    const auto grunt    = slots.trait_lifecycle.Grunt;
+    const auto scout    = slots.trait_lifecycle.Scout;
+    const auto deserter = slots.trait_lifecycle.Deserter;
+    const auto torch    = slots.trait_lifecycle.Torch;
+    const auto wreck    = slots.trait_lifecycle.Wreck;
+    const auto stats    = slots.trait_lifecycle.Stats;
 
     {  // a placed entity fires on added before on load
         CHECK(registry.get<Log>(grunt).arrived);

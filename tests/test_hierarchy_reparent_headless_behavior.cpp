@@ -16,9 +16,9 @@
 
 namespace {
 
-using Parent  = std_core__Parent;
-using Pickups = hierarchy_reparent__Pickups;
-using World_  = std_transform_flat__WorldTransform;
+using Parent  = cactus_gen::stdlib::core::Parent;
+using Pickups = cactus_gen::hierarchy_reparent::Pickups;
+using World_  = cactus_gen::stdlib::transform::flat::WorldTransform;
 using cactus::runtime::entt_backend::CreationOrdinal;
 
 struct World {
@@ -34,7 +34,7 @@ struct World {
     }
 
     void frame() {
-        inject(std_core__frameEvent{.dt = 1.0F / 60.0F});
+        inject(cactus_gen::stdlib::core::frameEvent{.dt = 1.0F / 60.0F});
     }
 
     // The newest entity carrying `Marker`.
@@ -54,17 +54,17 @@ struct World {
     }
 
     entt::entity hand(float x) {
-        inject(hierarchy_reparent__MakeHandEvent{.x = x});
-        return newest<hierarchy_reparent__Hand>();
+        inject(cactus_gen::hierarchy_reparent::MakeHandEvent{.x = x});
+        return newest<cactus_gen::hierarchy_reparent::Hand>();
     }
 
     entt::entity item(float x) {
-        inject(hierarchy_reparent__MakeItemEvent{.x = x});
-        return newest<hierarchy_reparent__Item>();
+        inject(cactus_gen::hierarchy_reparent::MakeItemEvent{.x = x});
+        return newest<cactus_gen::hierarchy_reparent::Item>();
     }
 
     void pick_up(entt::entity item, entt::entity hand) {
-        inject(hierarchy_reparent__PickUpEvent{.item = item, .hand = hand});
+        inject(cactus_gen::hierarchy_reparent::PickUpEvent{.item = item, .hand = hand});
     }
 
     [[nodiscard]] entt::entity parent_of(entt::entity entity) const {
@@ -98,11 +98,11 @@ TEST_CASE("hierarchy reparent: a picked-up item follows the hand until dropped",
     CHECK(world.world_x(item) == 11.0F);
     CHECK(world.registry.get<World_>(item).position.y == 1.0F);
 
-    world.inject(hierarchy_reparent__MoveHandEvent{.hand = hand, .x = 20.0F});
+    world.inject(cactus_gen::hierarchy_reparent::MoveHandEvent{.hand = hand, .x = 20.0F});
     world.frame();
     CHECK(world.world_x(item) == 21.0F);
 
-    world.inject(hierarchy_reparent__DropEvent{.item = item});
+    world.inject(cactus_gen::hierarchy_reparent::DropEvent{.item = item});
     CHECK_FALSE(world.registry.all_of<Parent>(item));
     world.frame();
     CHECK(world.world_x(item) == 1.0F);
@@ -148,7 +148,7 @@ TEST_CASE("hierarchy reparent: of two reparents forming a cycle in one commit, t
     World world;
     const auto a = world.item(1.0F);
     const auto b = world.item(2.0F);
-    world.inject(hierarchy_reparent__SwapEvent{.a = a, .b = b});
+    world.inject(cactus_gen::hierarchy_reparent::SwapEvent{.a = a, .b = b});
     CHECK(world.parent_of(a) == b);
     CHECK_FALSE(world.registry.all_of<Parent>(b));
     CHECK(world.pickups(a) == 1);

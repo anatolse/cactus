@@ -755,7 +755,6 @@ std::optional<std::string> emit_render_pass_dispatch_body(const DecoratedProgram
     if (!phase.symbol_id.has_value()) {
         throw std::runtime_error("render-pass GLSL codegen: phase '" + phase.name + "' has no resolved symbol");
     }
-    const std::string phase_cpp = EnttCodegenUtils::symbol_cpp_name(*phase.symbol_id);
     // dsl-render-passes' vertex handler is unary: exactly one filtered trait
     // drives the per-instance view (further filter traits, if any, would need
     // a multi-component view — not needed by either shipped example).
@@ -768,12 +767,12 @@ std::optional<std::string> emit_render_pass_dispatch_body(const DecoratedProgram
     const std::string trait_cpp = EnttCodegenUtils::trait_cpp_name(primary_alias_and_trait.second);
 
     std::ostringstream out;
-    out << "    static const char* kVertexShader_" << phase_cpp << " = R\"GLSL(\n" << vertex_glsl << ")GLSL\";\n";
-    out << "    static const char* kFragmentShader_" << phase_cpp << " = R\"GLSL(\n" << fragment_glsl << ")GLSL\";\n";
-    out << "    static cactus::runtime::entt_backend::RenderPassShaderState shader_state_" << phase_cpp << ";\n";
+    // Statics of the phase's own dispatch function, so they need no per-phase name.
+    out << "    static const char* kVertexShader = R\"GLSL(\n" << vertex_glsl << ")GLSL\";\n";
+    out << "    static const char* kFragmentShader = R\"GLSL(\n" << fragment_glsl << ")GLSL\";\n";
+    out << "    static cactus::runtime::entt_backend::RenderPassShaderState shader_state;\n";
     out << "    Shader* render_pass_shader = cactus::runtime::entt_backend::ensure_render_pass_shader(\n";
-    out << "        shader_state_" << phase_cpp << ", kVertexShader_" << phase_cpp << ", kFragmentShader_" << phase_cpp
-        << ");\n";
+    out << "        shader_state, kVertexShader, kFragmentShader);\n";
     out << "    if (render_pass_shader == nullptr) {\n";
     out << "        return;\n";
     out << "    }\n";
@@ -785,20 +784,22 @@ std::optional<std::string> emit_render_pass_dispatch_body(const DecoratedProgram
     out << "    BeginShaderMode(*render_pass_shader);\n";
     out << "    for (auto entity : registry.view<" << trait_cpp << ">()) {\n";
     out << "        (void)entity;\n";
-    out << "        const auto& " << trait_cpp << "_comp = registry.get<" << trait_cpp << ">(entity);\n";
+    out << "        const auto& " << component_local(trait_cpp) << " = registry.get<" << trait_cpp << ">(entity);\n";
     for (const auto& uniform : vertex_ctx.uniforms) {
         switch (uniform.type) {
             case GlslType::Float:
                 out << "        {\n";
-                out << "            const float value = " << trait_cpp << "_comp." << uniform.field_name << ";\n";
+                out << "            const float value = " << component_local(trait_cpp) << "." << uniform.field_name
+                    << ";\n";
                 out << "            SetShaderValue(*render_pass_shader, loc_" << uniform.glsl_name
                     << ", &value, SHADER_UNIFORM_FLOAT);\n";
                 out << "        }\n";
                 break;
             case GlslType::Vec2:
                 out << "        {\n";
-                out << "            const std::array<float, 2> value = {" << trait_cpp << "_comp." << uniform.field_name
-                    << ".x, " << trait_cpp << "_comp." << uniform.field_name << ".y};\n";
+                out << "            const std::array<float, 2> value = {" << component_local(trait_cpp) << "."
+                    << uniform.field_name << ".x, " << component_local(trait_cpp) << "." << uniform.field_name
+                    << ".y};\n";
                 out << "            SetShaderValue(*render_pass_shader, loc_" << uniform.glsl_name
                     << ", value.data(), SHADER_UNIFORM_VEC2);\n";
                 out << "        }\n";
@@ -806,13 +807,13 @@ std::optional<std::string> emit_render_pass_dispatch_body(const DecoratedProgram
             case GlslType::Color:
                 out << "        {\n";
                 out << "            const std::array<float, 4> value = {\n";
-                out << "                static_cast<float>(" << trait_cpp << "_comp." << uniform.field_name
+                out << "                static_cast<float>(" << component_local(trait_cpp) << "." << uniform.field_name
                     << ".r) / 255.0F,\n";
-                out << "                static_cast<float>(" << trait_cpp << "_comp." << uniform.field_name
+                out << "                static_cast<float>(" << component_local(trait_cpp) << "." << uniform.field_name
                     << ".g) / 255.0F,\n";
-                out << "                static_cast<float>(" << trait_cpp << "_comp." << uniform.field_name
+                out << "                static_cast<float>(" << component_local(trait_cpp) << "." << uniform.field_name
                     << ".b) / 255.0F,\n";
-                out << "                static_cast<float>(" << trait_cpp << "_comp." << uniform.field_name
+                out << "                static_cast<float>(" << component_local(trait_cpp) << "." << uniform.field_name
                     << ".a) / 255.0F,\n";
                 out << "            };\n";
                 out << "            SetShaderValue(*render_pass_shader, loc_" << uniform.glsl_name

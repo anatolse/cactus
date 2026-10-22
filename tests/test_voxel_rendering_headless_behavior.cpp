@@ -15,8 +15,8 @@ namespace {
 
 namespace backend = cactus::runtime::entt_backend;
 
-using Cell  = std_voxel_volume__Cell;
-using Solid = std_physics_volume__Solid;
+using Cell  = cactus_gen::stdlib::voxel::volume::Cell;
+using Solid = cactus_gen::stdlib::physics::volume::Solid;
 
 // Faces of the fixture's terrain. Stone slab 4 x 1 x 4 under a 2 x 1 x 4 wood
 // block: stone shows 8 uncovered tops, 16 bottoms and 16 sides; wood shows 8
@@ -40,7 +40,7 @@ struct World {
 
     void frame(int count = 1) {
         for (int i = 0; i < count; ++i) {
-            backend::generated_inject_external_event(std_core__frameEvent{.dt = 1.0F / 60.0F});
+            backend::generated_inject_external_event(cactus_gen::stdlib::core::frameEvent{.dt = 1.0F / 60.0F});
             backend::generated_drain_external_events(registry);
         }
     }

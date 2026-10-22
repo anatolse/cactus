@@ -23,9 +23,9 @@
 namespace {
 
 using cactus::runtime::entt_backend::generated_schema;
-using Rival  = persistence_references_runtime__Rival;
-using Roster = persistence_references_runtime__Roster;
-using Badge  = persistence_references_runtime__Badge;
+using Rival  = cactus_gen::persistence_references_runtime::Rival;
+using Roster = cactus_gen::persistence_references_runtime::Roster;
+using Badge  = cactus_gen::persistence_references_runtime::Badge;
 using cactus::runtime::entt_backend::CreationOrdinal;
 using cactus_test::fail_roundtrip;
 

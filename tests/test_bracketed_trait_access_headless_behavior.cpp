@@ -12,9 +12,9 @@
 
 namespace {
 
-using Match  = bracketed_trait_access__Match;
-using Runner = bracketed_trait_access__Runner;
-using Timer  = std_time__Timer;
+using Match  = cactus_gen::bracketed_trait_access::Match;
+using Runner = cactus_gen::bracketed_trait_access::Runner;
+using Timer  = cactus_gen::stdlib::time::Timer;
 
 using cactus_headless_test::drive_frame;
 

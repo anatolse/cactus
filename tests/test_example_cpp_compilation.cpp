@@ -417,9 +417,9 @@ TEST_CASE("integration: hierarchical entity templates example generates cpp-entt
     const auto code = generated.str();
 
     // Tree creation wires Parent on every non-root node to its immediate parent.
-    CHECK(code.find("create_hierarchical_entities__tree__node__crown__gem__sparkle") != std::string::npos);
-    CHECK(code.find("registry.emplace_or_replace<std_core__Parent>(child_0, std_core__Parent{.parent = entity});") !=
-          std::string::npos);
+    CHECK(code.find("hierarchical_entities::tree_nodes::create_node_crown_gem_sparkle") != std::string::npos);
+    CHECK(code.find("registry.emplace_or_replace<::cactus_gen::stdlib::core::Parent>(child_0, "
+                    "::cactus_gen::stdlib::core::Parent{.parent = entity});") != std::string::npos);
 }
 
 TEST_CASE("integration: removed cpp-manual backend is rejected", "[integration][cli][backend]") {
@@ -530,7 +530,7 @@ TEST_CASE("integration: user library links canonical callbacks independently per
     require_success(example, "cpp-compile-link", repo_root(), build_target_command(example.compile_target));
 }
 
-TEST_CASE("integration: missing user implementations diagnose both canonical handler symbols",
+TEST_CASE("integration: missing user implementations diagnose both trigger overloads",
           "[integration][examples][external-handler-abi]") {
     REQUIRE(fs::exists(compiler_path()));
 
@@ -543,12 +543,55 @@ TEST_CASE("integration: missing user implementations diagnose both canonical han
     };
     const auto result = run_command(repo_root(), example.name + "-link", build_target_command(example.compile_target));
     CHECK(result.exit_code != 0);
-    CHECK(result.output.find(
-              "cactus_external__external_handler_linking__NativeMovement__on__external_handler_linking__fixed_tick") !=
+    const auto undefined_overload = [&](std::string_view trigger) {
+        std::istringstream lines(result.output);
+        for (std::string line; std::getline(lines, line);) {
+            if (line.find("cactus_gen::external_handler_linking::NativeMovement::on(") != std::string::npos &&
+                line.find(trigger) != std::string::npos) {
+                return true;
+            }
+        }
+        return false;
+    };
+    CHECK(undefined_overload("external_handler_linking::FixedTickPhase const &"));
+    CHECK(undefined_overload("external_handler_linking::ResetEvent const &"));
+}
+
+TEST_CASE("integration: a library defining one trigger overload fails to link naming the other",
+          "[integration][examples][external-handler-abi]") {
+    REQUIRE(fs::exists(compiler_path()));
+
+    const ExampleCase example{
+        .name           = "external-handler-partial-implementations",
+        .source_file    = repo_root() / "tests" / "fixtures" / "external_handler_linking.cactus",
+        .backend        = "cpp-entt",
+        .generated_cpp  = {},
+        .compile_target = CACTUS_EXTERNAL_HANDLER_PARTIAL_TARGET,
+    };
+    const auto result = run_command(repo_root(), example.name + "-link", build_target_command(example.compile_target));
+    CHECK(result.exit_code != 0);
+    CHECK(result.output.find("NativeMovement::on(struct cactus_gen::external_handler_linking::ResetEvent const &") !=
           std::string::npos);
-    CHECK(result.output.find(
-              "cactus_external__external_handler_linking__NativeMovement__on__external_handler_linking__Reset") !=
-          std::string::npos);
+    CHECK(
+        result.output.find("NativeMovement::on(struct cactus_gen::external_handler_linking::FixedTickPhase const &") ==
+        std::string::npos);
+}
+
+TEST_CASE("integration: a set capability outside the handler contract does not compile",
+          "[integration][examples][external-handler-abi]") {
+    REQUIRE(fs::exists(compiler_path()));
+
+    const ExampleCase example{
+        .name           = "external-handler-disallowed-set",
+        .source_file    = repo_root() / "tests" / "fixtures" / "external_handler_linking.cactus",
+        .backend        = "cpp-entt",
+        .generated_cpp  = {},
+        .compile_target = CACTUS_EXTERNAL_HANDLER_DISALLOWED_SET_TARGET,
+    };
+    const auto result =
+        run_command(repo_root(), example.name + "-compile", build_target_command(example.compile_target));
+    CHECK(result.exit_code != 0);
+    CHECK(result.output.find("no matching member function for call to 'set'") != std::string::npos);
 }
 
 TEST_CASE("examples do not present removed syntax as current syntax", "[examples][drift]") {

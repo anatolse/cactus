@@ -333,3 +333,36 @@ A conforming backend MAY keep one binding of a pair pass in an index that surviv
 #### Scenario: Indexed and unindexed builds agree
 - **WHEN** the same program and inputs run once with indexes and once with the test-only switch disabling them
 - **THEN** every observable result is identical
+
+### Requirement: Index structures are chosen at compile time from the program's definitions
+A conforming backend that keeps a persistent pair-binding index SHALL choose its storage structure at compile time from the program's definitions, without author annotations, and SHALL NOT switch between structures at runtime. Runtime values MAY only size the chosen structure. For an equality join, each key part SHALL use:
+- for `enum` or `bool`, direct addressing over the type's values;
+- for `entity_id`, addressing by entity index;
+- for an `int` `let` field declared `in range(...)` against a container, dense addressing within each container, sized from the container's fields;
+- for any other `int`, hashing, with an informational diagnostic that names the rule and the key part and says a declared range would allow dense addressing.
+
+Spatial indexes over static members whose bounds come from the same code SHALL share one store when their member archetypes can overlap. Every choice SHALL keep the results, candidate order and handler effects of the unindexed pass, and the compiler SHALL offer test-only switches that force each alternative so they can be compared.
+
+#### Scenario: Ranged coordinates get a dense index
+- **WHEN** a pair rule equates `cell[Cell].x`, `.y` and `.z` with group values, and `Cell.x`, `.y` and `.z` are `let` fields declared in range of their volume
+- **THEN** the backend indexes the cells densely within each volume and emits no diagnostic for that rule
+
+#### Scenario: An unranged int key is hashed and reported
+- **WHEN** a pair rule's equality key is an `int` `let` field with no declared range
+- **THEN** the backend hashes that key and emits an informational diagnostic naming the rule and the field
+
+#### Scenario: Same-shaped spatial indexes share a store
+- **WHEN** three pair rules index solid cells, all cells and bedrock cells through the same box-collider bounds
+- **THEN** one static store holds each cell once, and each rule sees only its own members
+
+#### Scenario: Mixed collider sizes are indexed exactly
+- **WHEN** a level's static walls range from 0.5 to 29.5 units long and a body's pass queries them
+- **THEN** every wall overlapping the query is a candidate exactly as without an index
+
+#### Scenario: Forced alternatives agree
+- **WHEN** the same program and inputs run with the chosen structures, with each forced alternative, and without indexes
+- **THEN** every observable result is identical
+
+#### Scenario: A full voxel world indexes compactly
+- **WHEN** the 196,608-cell robot sandbox has built every binding index its rules use
+- **THEN** all binding indexes together occupy at most 16 MB

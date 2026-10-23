@@ -13,6 +13,8 @@ event Wither
 
 event Rekindle
 
+event Fade
+
 # ── Traits ────────────────────────────────────────────────────────────────────
 
 pub trait Health:
@@ -32,6 +34,7 @@ trait Stage:
     var awaken: int = 0
     var wither: int = 0
     var rekindle: int = 0
+    var fade: int = 0
 
 # ── Archetypes ────────────────────────────────────────────────────────────────
 
@@ -69,6 +72,9 @@ rule RunStage:
         if stage.rekindle > 0:
             stage.rekindle -= 1
             emit Rekindle
+        if stage.fade > 0:
+            stage.fade -= 1
+            emit Fade
 
 rule AwakenEmbers:
     each:
@@ -85,6 +91,15 @@ rule WitherHealth:
 
     on Wither:
         remove Health
+
+# Changes a spawned ember, so embers keep their construction values apart
+# from the live ones.
+rule FadeEmbers:
+    each:
+        Sparkle as sparkle
+
+    on Fade:
+        sparkle.hue = 0.1
 
 rule RekindleEmbers:
     each:

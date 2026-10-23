@@ -44,6 +44,7 @@ static void print_usage(const char* program) {
               << "  --force-hashed-keys                  Test only: hash every equality index key\n"
               << "  --no-shared-stores                   Test only: give each spatial index its own static store\n"
               << "  --grid-cell-size=<v>                 Test only: use this cell size for every spatial index\n"
+              << "  --retain-all-construction            Test only: keep a construction copy of every trait\n"
               << "  --help                               Show this help message\n";
 }
 
@@ -366,6 +367,7 @@ struct CliArgs {
     bool no_indexed_joins = false;
     bool force_hashed_keys = false;
     bool no_shared_stores = false;
+    bool retain_all_construction = false;
     std::optional<std::string> grid_cell_size_text;
     std::optional<float> grid_cell_size;
 };
@@ -411,6 +413,10 @@ static bool set_switch(const char* arg, CliArgs& out) {
     }
     if (std::strcmp(arg, "--no-shared-stores") == 0) {
         out.no_shared_stores = true;
+        return true;
+    }
+    if (std::strcmp(arg, "--retain-all-construction") == 0) {
+        out.retain_all_construction = true;
         return true;
     }
     if (std::string_view{arg}.starts_with(kGridCellSizeOption)) {
@@ -656,6 +662,7 @@ int main(int argc, char* argv[]) try {
     decorated.force_hashed_keys   = args.force_hashed_keys;
     decorated.share_static_stores = !args.no_shared_stores;
     decorated.grid_cell_size      = args.grid_cell_size;
+    decorated.retain_all_construction = args.retain_all_construction;
     std::string generated;
     if (!generate_cpp(decorated, generated) || !write_generated_output(generated, output_file, backend)) {
         return 1;

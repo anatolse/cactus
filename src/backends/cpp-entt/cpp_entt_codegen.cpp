@@ -2651,8 +2651,8 @@ void emit_archetype_trait_initializers(std::ostringstream& out,
             continue;
         }
 
-        const bool retain = origin.has_value() && EnttPersistenceEmitter::trait_has_construction_payload(
-                                                      program, trait.resolved_trait_id, trait.trait_name);
+        const bool retain = EnttPersistenceEmitter::node_keeps_construction_copy(
+            program, origin, trait.resolved_trait_id, trait.trait_name);
         out << ind << "{\n";
         emit_component_value(out, trait, cpp_name, program, ind + "    ");
         out << ind << "    ";

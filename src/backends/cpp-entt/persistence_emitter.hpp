@@ -20,6 +20,7 @@ struct PersistableTrait {
 };
 
 [[nodiscard]] std::vector<PersistableTrait> persistable_traits(const DecoratedProgram& program);
+[[nodiscard]] std::vector<SymbolId> persistable_symbols(const std::vector<PersistableTrait>& traits);
 
 // Drops Parent from a persistable_traits() listing when the program declares
 // it. Parent's field is an ordinary entity_id like any other trait field, so
@@ -44,20 +45,16 @@ public:
     [[nodiscard]] static std::optional<std::uint32_t> archetype_origin_index(
         const DecoratedProgram& program, const SymbolId& archetype, const std::vector<std::string>& role_path = {});
 
-    [[nodiscard]] static bool node_retains_construction(const DecoratedProgram& program,
-                                                        const SymbolId& archetype,
-                                                        const std::vector<std::string>& role_path = {});
-
-    // A fieldless marker trait is fully recorded by its membership, so it gets
-    // no construction copy.
-    [[nodiscard]] static bool trait_has_construction_payload(const DecoratedProgram& program,
-                                                             const std::optional<SymbolId>& resolved,
-                                                             const std::string& source_name);
+    // Whether creating this trait on an entity of `node` keeps a construction
+    // copy (see ConstructionRetention); never when the node retains no provenance.
+    [[nodiscard]] static bool node_keeps_construction_copy(const DecoratedProgram& program,
+                                                           std::optional<std::uint32_t> node,
+                                                           const std::optional<SymbolId>& resolved,
+                                                           const std::string& source_name);
 
     // Whether a runtime add/remove of this trait maintains construction data.
-    // Add targets are dynamic, so any such site can land on an eligible entity
-    // as soon as some archetype retains provenance — and on none when no
-    // archetype does, which is what keeps the bound in step with creation.
+    // Add targets are dynamic, so such a site keeps a copy as soon as some
+    // node keeps one of the trait.
     [[nodiscard]] static bool structural_site_tracks_construction(const DecoratedProgram& program,
                                                                   const std::optional<SymbolId>& resolved,
                                                                   const std::string& source_name);

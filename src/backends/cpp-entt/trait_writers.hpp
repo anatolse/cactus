@@ -2,6 +2,7 @@
 
 #include "frontend/semantic_analyzer.hpp"
 
+#include <functional>
 #include <vector>
 
 namespace cactus {
@@ -16,6 +17,15 @@ struct TraitWriters {
     std::vector<SymbolId> named_entities;            // sorted, unique
 };
 
-[[nodiscard]] TraitWriters trait_writers(const DecoratedProgram& program, const std::vector<SymbolId>& traits);
+// Which writes count. By default every write of a trait does, and a projection does not.
+struct TraitWriterFilter {
+    // When set, a write counts only if this accepts the fields it can touch.
+    std::function<bool(const SymbolId& trait, const FieldAccess& fields)> fields;
+    bool projections = false;
+};
+
+[[nodiscard]] TraitWriters trait_writers(const DecoratedProgram& program,
+                                         const std::vector<SymbolId>& traits,
+                                         const TraitWriterFilter& filter = {});
 
 }  // namespace cactus

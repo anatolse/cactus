@@ -1739,7 +1739,7 @@ static std::string emit_spawn_overrides(const std::string& entity_name,
                                         const DecoratedProgram& program,
                                         const std::unordered_set<std::string>& pointer_aliases,
                                         const PairCodegenScope* pair_scope,
-                                        bool retain_construction,
+                                        std::optional<std::uint32_t> origin,
                                         bool deferred) {
     const std::string ind(static_cast<std::size_t>(indent) * 4U, ' ');
     std::ostringstream out;
@@ -1764,8 +1764,8 @@ static std::string emit_spawn_overrides(const std::string& entity_name,
         }
         out << ind << "    registry.emplace_or_replace<" << cpp_name << ">(" << entity_name << ", " << value_name
             << ");\n";
-        if (retain_construction && EnttPersistenceEmitter::trait_has_construction_payload(
-                                       program, override_entry.resolved_trait_id, override_entry.trait_name)) {
+        if (EnttPersistenceEmitter::node_keeps_construction_copy(
+                program, origin, override_entry.resolved_trait_id, override_entry.trait_name)) {
             out << EnttPersistenceEmitter::emit_retain_construction(cpp_name, entity_name, ind + "    ");
         }
         out << ind << "}\n";
@@ -1983,7 +1983,7 @@ static void emit_spawn_child_expansion(std::ostringstream& out,
                 program,
                 pointer_aliases,
                 pair_scope,
-                EnttPersistenceEmitter::node_retains_construction(program, archetype, role_path),
+                EnttPersistenceEmitter::archetype_origin_index(program, archetype, role_path),
                 deferred);
         }
 
@@ -2057,7 +2057,7 @@ static std::string emit_hierarchical_spawn_expansion(const SymbolId& template_id
                                     program,
                                     pointer_aliases,
                                     pair_scope,
-                                    EnttPersistenceEmitter::node_retains_construction(program, template_id),
+                                    EnttPersistenceEmitter::archetype_origin_index(program, template_id),
                                     graph_runtime);
     };
     const std::string ranges_ok = gen_temp_name("ranges_ok", location);
@@ -2176,7 +2176,7 @@ static std::string emit_spawn_expression(const SpawnExpr& spawn,
                                     program,
                                     pointer_aliases,
                                     pair_scope,
-                                    EnttPersistenceEmitter::node_retains_construction(program, tmpl_id),
+                                    EnttPersistenceEmitter::archetype_origin_index(program, tmpl_id),
                                     graph_runtime);
     };
     const std::string ranges_ok = gen_temp_name("ranges_ok", spawn.location);
@@ -3199,7 +3199,7 @@ static std::string emit_spawn_stmt(const SpawnStmt& s,
                                     program,
                                     pointer_aliases,
                                     pair_scope,
-                                    EnttPersistenceEmitter::node_retains_construction(program, tmpl_id),
+                                    EnttPersistenceEmitter::archetype_origin_index(program, tmpl_id),
                                     graph_runtime);
     };
     const std::string ranges_ok = gen_temp_name("ranges_ok", s.location);

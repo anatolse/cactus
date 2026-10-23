@@ -73,6 +73,27 @@ cactus::persistence::Snapshot capture(entt::registry& registry) {
     return rt::generated_capture_world_snapshot(registry);
 }
 
+// What a save records of `trait` on the one entity of `archetype`.
+cactus::persistence::TraitRecord captured(entt::registry& registry, const std::string& archetype,
+                                          const std::string& trait) {
+    const auto snapshot = capture(registry);
+    const auto record   = std::ranges::find(snapshot.entities, archetype, &cactus::persistence::EntityRecord::archetype);
+    REQUIRE(record != snapshot.entities.end());
+    const auto* found = cactus::persistence::find_trait(*record, trait);
+    REQUIRE(found != nullptr);
+    return *found;
+}
+
+const cactus::persistence::Value& field(const std::vector<cactus::persistence::FieldValue>& fields,
+                                        const std::string& name) {
+    const auto* found = cactus::persistence::find_field(fields, name);
+    REQUIRE(found != nullptr);
+    return found->value;
+}
+
+constexpr const char* kEmber = "world_persistence_dynamic.Ember";
+constexpr const char* kHealth = "world_persistence_dynamic.Health";
+
 }  // namespace
 
 TEST_CASE("an ember records the values it was actually spawned with", "[runtime][persistence][provenance]") {
@@ -94,7 +115,9 @@ TEST_CASE("an ephemeral archetype keeps provenance because the program can make 
     auto& registry   = world.registry;
     const auto ember = spawn_ember(registry);
 
-    registry.get<Sparkle>(ember).hue = 0.1F;
+    stage(registry).fade = 1;
+    run_frames(registry, 1);
+    REQUIRE(registry.get<Sparkle>(ember).hue == Catch::Approx(0.1F));
 
     stage(registry).awaken = 1;
     run_frames(registry, 1);
@@ -114,9 +137,10 @@ TEST_CASE("a trait added at runtime records its initialization", "[runtime][pers
     run_frames(registry, 1);
 
     REQUIRE(registry.all_of<Health>(ember));
-    CHECK(registry.get<rt::Construction<Health>>(ember).value.current == 42);
+    const auto health = captured(registry, kEmber, kHealth);
+    CHECK(field(health.persisted, "current").as_int() == 42);
     // Health's own default for the field the add never mentions.
-    CHECK(registry.get<rt::Construction<Health>>(ember).value.maximum == 100);
+    CHECK(field(health.construction, "maximum").as_int() == 100);
 }
 
 TEST_CASE("a marker trait is membership only, with no construction payload",
@@ -139,7 +163,7 @@ TEST_CASE("removing and re-adding a trait records the new incarnation", "[runtim
 
     stage(registry).awaken = 1;
     run_frames(registry, 1);
-    REQUIRE(registry.get<rt::Construction<Health>>(ember).value.current == 42);
+    REQUIRE(field(captured(registry, kEmber, kHealth).persisted, "current").as_int() == 42);
 
     stage(registry).wither = 1;
     run_frames(registry, 1);
@@ -150,7 +174,7 @@ TEST_CASE("removing and re-adding a trait records the new incarnation", "[runtim
     run_frames(registry, 1);
 
     REQUIRE(registry.all_of<Health>(ember));
-    CHECK(registry.get<rt::Construction<Health>>(ember).value.current == 7);
+    CHECK(field(captured(registry, kEmber, kHealth).persisted, "current").as_int() == 7);
 }
 
 TEST_CASE("an archetype keeps its eligibility provenance after its durable trait is removed",
@@ -160,7 +184,8 @@ TEST_CASE("an archetype keeps its eligibility provenance after its durable trait
     const auto boss = entity_with<Health>(registry);
 
     REQUIRE(origin_of(registry, boss) == "world_persistence_dynamic.Boss");
-    REQUIRE(registry.get<rt::Construction<Health>>(boss).value.maximum == 500);
+    REQUIRE(field(captured(registry, "world_persistence_dynamic.Boss", kHealth).construction, "maximum").as_int() ==
+            500);
 
     stage(registry).wither = 1;
     run_frames(registry, 1);

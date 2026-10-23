@@ -21,27 +21,42 @@ std::vector<SymbolId> native_write_selection(const SymbolId& rule) {
 
 class WriterCollector {
 public:
-    explicit WriterCollector(const HandlerNode& handler) : handler_(&handler), contract_(&handler.contract) {}
+    WriterCollector(const HandlerNode& handler, const TraitWriterFilter& filter)
+        : handler_(&handler), contract_(&handler.contract), filter_(&filter) {}
 
     void collect(const SymbolId& trait, TraitWriters& out) const {
         if (contract_->effect_acts.contains("editor")) {
             out.target_sets.push_back({trait});
         }
-        if (contract_->writes.contains(trait)) {
+        if (contract_->writes.contains(trait) && counts(trait, field_access(contract_->write_fields, trait))) {
             collect_write(trait, out);
         }
         for (const auto& command : contract_->commands) {
-            if (command.kind == HandlerCommandKind::Set && command.target == trait) {
-                collect_set(trait, command, out);
+            if (command.kind == HandlerCommandKind::Set && command.target == trait &&
+                counts(trait, command.patched.value_or(all_fields()))) {
+                collect_targets(trait, command.entities, out);
+            }
+        }
+        if (!filter_->projections) {
+            return;
+        }
+        for (const auto& projection : contract_->projections) {
+            if (projection.trait == trait) {
+                collect_targets(trait, projection.entities, out);
             }
         }
     }
 
 private:
+    [[nodiscard]] bool counts(const SymbolId& trait, const FieldAccess& fields) const {
+        return !filter_->fields || filter_->fields(trait, fields);
+    }
+
     void collect_write(const SymbolId& trait, TraitWriters& out) const {
         bool explained = false;
         for (const auto& [entity, traits] : contract_->named_writes) {
-            if (traits.contains(trait)) {
+            const auto found = traits.find(trait);
+            if (found != traits.end() && counts(trait, found->second)) {
                 out.named_entities.push_back(entity);
                 explained = true;
             }
@@ -67,8 +82,10 @@ private:
         }
     }
 
-    void collect_set(const SymbolId& trait, const InferredHandlerCommand& command, TraitWriters& out) const {
-        for (const auto& target : command.entities) {
+    void collect_targets(const SymbolId& trait,
+                         const std::vector<EntityTarget>& entities,
+                         TraitWriters& out) const {
+        for (const auto& target : entities) {
             switch (target.kind) {
                 case EntityTargetKind::Self:
                     out.target_sets.push_back(contract_->selection.empty() ? std::vector{trait} : contract_->selection);
@@ -91,13 +108,14 @@ private:
                     break;
             }
         }
-        if (command.entities.empty()) {
+        if (entities.empty()) {
             out.target_sets.push_back({trait});
         }
     }
 
     const HandlerNode* handler_;
     const HandlerContract* contract_;
+    const TraitWriterFilter* filter_;
 };
 
 void sort_symbols(std::vector<SymbolId>& symbols) {
@@ -108,10 +126,12 @@ void sort_symbols(std::vector<SymbolId>& symbols) {
 
 }  // namespace
 
-TraitWriters trait_writers(const DecoratedProgram& program, const std::vector<SymbolId>& traits) {
+TraitWriters trait_writers(const DecoratedProgram& program,
+                           const std::vector<SymbolId>& traits,
+                           const TraitWriterFilter& filter) {
     TraitWriters result;
     for (const auto& handler : program.execution_graph.handlers) {
-        const WriterCollector collector(handler);
+        const WriterCollector collector(handler, filter);
         for (const auto& trait : traits) {
             collector.collect(trait, result);
         }

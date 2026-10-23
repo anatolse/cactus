@@ -1,6 +1,7 @@
 #include "backends/cpp-entt/persistence_emitter.hpp"
 
 #include "backends/cpp-entt/component_emitter.hpp"
+#include "backends/cpp-entt/construction_retention.hpp"
 #include "backends/cpp-entt/type_utils.hpp"
 
 #include "common/persistence_document.hpp"
@@ -16,6 +17,16 @@ namespace cactus {
 namespace {
 
 constexpr const char* kRuntime = "cactus::runtime::entt_backend::";
+
+const ResolvedTrait* find_resolved_trait(const DecoratedProgram& program,
+                                         const std::optional<SymbolId>& resolved,
+                                         const std::string& source_name) {
+    return EnttCodegenUtils::find_trait(program, resolved.has_value() ? make_canonical_id(*resolved) : source_name);
+}
+
+std::vector<SymbolId> symbols_of(const ResolvedTrait& declaration) {
+    return declaration.symbol_id.has_value() ? std::vector{*declaration.symbol_id} : std::vector<SymbolId>{};
+}
 
 std::string emit_construction_call(const char* function,
                                    const std::string& trait_cpp,
@@ -47,24 +58,21 @@ std::optional<std::uint32_t> EnttPersistenceEmitter::archetype_origin_index(cons
     return static_cast<std::uint32_t>(found - archetypes.data());
 }
 
-bool EnttPersistenceEmitter::node_retains_construction(const DecoratedProgram& program,
-                                                       const SymbolId& archetype,
-                                                       const std::vector<std::string>& role_path) {
-    return archetype_origin_index(program, archetype, role_path).has_value();
-}
-
-bool EnttPersistenceEmitter::trait_has_construction_payload(const DecoratedProgram& program,
-                                                            const std::optional<SymbolId>& resolved,
-                                                            const std::string& source_name) {
-    const auto* declaration = EnttCodegenUtils::find_trait(
-        program, resolved.has_value() ? make_canonical_id(*resolved) : source_name);
-    return declaration != nullptr && !declaration->fields.empty();
+bool EnttPersistenceEmitter::node_keeps_construction_copy(const DecoratedProgram& program,
+                                                          std::optional<std::uint32_t> node,
+                                                          const std::optional<SymbolId>& resolved,
+                                                          const std::string& source_name) {
+    const auto* declaration = find_resolved_trait(program, resolved, source_name);
+    return node.has_value() && declaration != nullptr && !declaration->fields.empty() &&
+           ConstructionRetention(program, symbols_of(*declaration)).retains(*node, declaration->symbol_id);
 }
 
 bool EnttPersistenceEmitter::structural_site_tracks_construction(const DecoratedProgram& program,
                                                                  const std::optional<SymbolId>& resolved,
                                                                  const std::string& source_name) {
-    return program_retains_provenance(program) && trait_has_construction_payload(program, resolved, source_name);
+    const auto* declaration = find_resolved_trait(program, resolved, source_name);
+    return declaration != nullptr && !declaration->fields.empty() &&
+           ConstructionRetention(program, symbols_of(*declaration)).retains_anywhere(declaration->symbol_id);
 }
 
 std::string EnttPersistenceEmitter::emit_archetype_origin(std::uint32_t node,
@@ -513,6 +521,17 @@ std::vector<PersistableTrait> persistable_traits(const DecoratedProgram& program
     return traits;
 }
 
+std::vector<SymbolId> persistable_symbols(const std::vector<PersistableTrait>& traits) {
+    std::vector<SymbolId> symbols;
+    symbols.reserve(traits.size());
+    for (const auto& trait : traits) {
+        if (trait.declaration->symbol_id.has_value()) {
+            symbols.push_back(*trait.declaration->symbol_id);
+        }
+    }
+    return symbols;
+}
+
 std::vector<PersistableTrait> without_parent_trait(std::vector<PersistableTrait> traits,
                                                     const DecoratedProgram& program) {
     const auto* parent_trait = EnttCodegenUtils::find_trait(program, "Parent");
@@ -773,7 +792,10 @@ SupportedFieldCounts count_supported_fields(const DecoratedProgram& program, con
 
 // One capture function per trait with fields keeps each generated function
 // small however many traits a program persists.
-void emit_trait_capture(std::ostringstream& out, const DecoratedProgram& program, const PersistableTrait& trait) {
+void emit_trait_capture(std::ostringstream& out,
+                        const DecoratedProgram& program,
+                        const PersistableTrait& trait,
+                        const ConstructionRetention& retention) {
     const auto counts = count_supported_fields(program, *trait.declaration);
     out << "template <>\n";
     out << "inline void generated_capture_trait<" << trait.cpp_name << ">(const entt::registry& registry,\n";
@@ -792,14 +814,18 @@ void emit_trait_capture(std::ostringstream& out, const DecoratedProgram& program
     if (counts.persisted > 0) {
         out << "    attached.persisted.reserve(" << counts.persisted << ");\n";
     }
-    out << "    if (const auto* built = registry.try_get<Construction<" << trait.cpp_name << ">>(entity)) {\n";
-    out << "        (void)built;\n";
+    // Without a copy nothing can have changed the construction fields, so the live value holds them.
+    std::string constructed = "live->";
+    if (counts.construction > 0 && retention.retains_anywhere(trait.declaration->symbol_id)) {
+        out << "    const auto* built = registry.try_get<Construction<" << trait.cpp_name << ">>(entity);\n";
+        out << "    const auto& constructed = built != nullptr ? built->value : *live;\n";
+        constructed = "constructed.";
+    }
     for (const auto& field : trait.declaration->fields) {
         if (!field.is_persist) {
-            emit_field_capture(out, program, field, "built->value.", "attached.construction", "        ");
+            emit_field_capture(out, program, field, constructed, "attached.construction", "    ");
         }
     }
-    out << "    }\n";
     for (const auto& field : trait.declaration->fields) {
         if (field.is_persist) {
             emit_field_capture(out, program, field, "live->", "attached.persisted", "    ");
@@ -817,9 +843,10 @@ void emit_attached_traits(std::ostringstream& out,
     out << "                             entt::entity entity,\n";
     out << "                             DocumentIdMap& ids,\n";
     out << "                             cactus::persistence::EntityRecord& record);\n\n";
+    const ConstructionRetention retention(program, persistable_symbols(traits));
     for (const auto& trait : traits) {
         if (!trait.declaration->fields.empty()) {
-            emit_trait_capture(out, program, trait);
+            emit_trait_capture(out, program, trait, retention);
         }
     }
     out << "inline void generated_capture_traits(const entt::registry& registry,\n";

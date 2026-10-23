@@ -836,6 +836,8 @@ struct DecoratedProgram {
     bool force_hashed_keys  = false;
     bool share_static_stores = true;
     std::optional<float> grid_cell_size;
+    // Test only: keep every construction copy, written or not.
+    bool retain_all_construction = false;
     HierarchyFacts hierarchy;        // likewise
     ModulePersistenceMetadata persistence;
     std::vector<ResolvedSourceModule> source_modules;

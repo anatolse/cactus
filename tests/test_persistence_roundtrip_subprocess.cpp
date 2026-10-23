@@ -9,28 +9,17 @@
 
 #include "backends/cpp-entt/runtime.hpp"
 #include "persistence_test_adapter.hpp"
+#include "subprocess_command.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <cstdlib>
 #include <filesystem>
 #include <string>
 
 namespace {
 
-// std::system runs the command through cmd.exe /c on Windows, with each
-// argument individually double-quoted — robust to spaces in either the exe
-// or the slot directory path (e.g. a Windows temp path under a spaced
-// username). cmd.exe's own quote-stripping only special-cases command lines
-// with exactly two quote characters; with more than two (one pair per
-// argument, as here) it instead blindly strips the first and last quote of
-// the whole line, mangling everything between the two argument pairs. An
-// extra outer quote pair sacrifices itself to that stripping and leaves the
-// per-argument quoting intact underneath.
 int run_subprocess(const std::string& exe_path, const std::string& mode, const std::filesystem::path& directory) {
-    const std::string inner = "\"" + exe_path + "\" " + mode + " \"" + directory.string() + "\"";
-    const std::string command = "\"" + inner + "\"";
-    return std::system(command.c_str());  // NOLINT(cert-env33-c,concurrency-mt-unsafe)
+    return cactus_test::run_quoted(exe_path, {mode, directory.string()});
 }
 
 }  // namespace

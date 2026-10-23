@@ -184,6 +184,7 @@ add_library(cactus_backend_cpp_entt STATIC
     src/backends/cpp-entt/type_utils.cpp
     src/backends/cpp-entt/system_emitter.cpp
     src/backends/cpp-entt/trait_writers.cpp
+    src/backends/cpp-entt/construction_retention.cpp
     src/backends/cpp-entt/index_cell_size.cpp
     src/backends/cpp-entt/range_checks.cpp
     src/backends/cpp-entt/event_emitter.cpp
@@ -420,7 +421,7 @@ function(cactus_add_persistence_roundtrip_subprocess TARGET_NAME)
     cmake_parse_arguments(CACTUS_ROUNDTRIP
         ""
         "${oneValueArgs}"
-        ""
+        "CODEGEN_FLAGS;DEFINITIONS"
         ${ARGN}
     )
 
@@ -445,6 +446,7 @@ function(cactus_add_persistence_roundtrip_subprocess TARGET_NAME)
                 "$<SHELL_PATH:${cactus_source}>"
                 --backend "${CACTUS_ROUNDTRIP_BACKEND}"
                 --output "$<SHELL_PATH:${generated_output}>"
+                ${CACTUS_ROUNDTRIP_CODEGEN_FLAGS}
         DEPENDS cactus ${cactus_inputs}
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
         COMMENT "Generating headless fixture for ${TARGET_NAME} (${CACTUS_ROUNDTRIP_BACKEND})"
@@ -461,6 +463,7 @@ function(cactus_add_persistence_roundtrip_subprocess TARGET_NAME)
     target_include_directories(${TARGET_NAME} PRIVATE "${CMAKE_SOURCE_DIR}/src")
     target_compile_definitions(${TARGET_NAME} PRIVATE
         CACTUS_HEADLESS_GENERATED_CPP="${generated_output}"
+        ${CACTUS_ROUNDTRIP_DEFINITIONS}
     )
     target_link_libraries(${TARGET_NAME} PRIVATE
         cactus_runtime_cpp_entt_headless_fake

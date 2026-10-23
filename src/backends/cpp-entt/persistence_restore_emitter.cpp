@@ -1,10 +1,13 @@
 #include "backends/cpp-entt/persistence_restore_emitter.hpp"
 
 #include "backends/cpp-entt/component_emitter.hpp"
+#include "backends/cpp-entt/construction_retention.hpp"
 #include "backends/cpp-entt/persistence_emitter.hpp"
 #include "backends/cpp-entt/range_checks.hpp"
 #include "backends/cpp-entt/type_utils.hpp"
 
+#include <cstddef>
+#include <cstdint>
 #include <sstream>
 #include <unordered_set>
 
@@ -196,12 +199,41 @@ void emit_restore_trait_functions(std::ostringstream& out,
 // EntityRecord::parent with root/reparent semantics the generic decode path
 // does not know, so decoding it again here would wrongly turn an absent
 // parent (a root) into a live Parent component pointing at a stale handle.
-void emit_restore_node_traits(std::ostringstream& out, const std::vector<PersistableTrait>& traits) {
+void emit_restore_construction_copy(std::ostringstream& out,
+                                    const DecoratedProgram& program,
+                                    const PersistableTrait& trait,
+                                    const ConstructionRetention& retention) {
+    const auto& symbol = trait.declaration->symbol_id;
+    if (retention.retains_everywhere(symbol)) {
+        out << "        retain_construction<" << trait.cpp_name << ">(registry, entity, value);\n";
+        return;
+    }
+    if (!retention.retains_anywhere(symbol)) {
+        return;
+    }
+    const auto nodes = program.persistence.archetypes.size();
+    out << "        static constexpr std::array<bool, " << nodes << "> kKeepsCopy{";
+    for (std::size_t node = 0; node < nodes; ++node) {
+        out << (node == 0 ? "" : ", ")
+            << (retention.retains(static_cast<std::uint32_t>(node), symbol) ? "true" : "false");
+    }
+    out << "};\n";
+    out << "        if (kKeepsCopy[node]) {\n";
+    out << "            retain_construction<" << trait.cpp_name << ">(registry, entity, value);\n";
+    out << "        }\n";
+}
+
+void emit_restore_node_traits(std::ostringstream& out,
+                              const DecoratedProgram& program,
+                              const std::vector<PersistableTrait>& traits) {
+    const ConstructionRetention retention(program, persistable_symbols(traits));
     out << "inline void generated_restore_node_traits(entt::registry& registry,\n";
     out << "                                          entt::entity entity,\n";
+    out << "                                          std::uint32_t node,\n";
     out << "                                          const cactus::persistence::EntityRecord& record,\n";
     out << "                                          RestoreIdMap& ids) {\n";
     out << "    (void)ids;\n";
+    out << "    (void)node;\n";
     for (const auto& trait : traits) {
         out << "    if (const auto* found = cactus::persistence::find_trait(record, \"" << trait.canonical
             << "\"); found != nullptr && found->present) {\n";
@@ -210,7 +242,7 @@ void emit_restore_node_traits(std::ostringstream& out, const std::vector<Persist
         } else {
             out << "        auto value = generated_restore_trait<" << trait.cpp_name << ">(*found, ids);\n";
             out << "        registry.emplace_or_replace<" << trait.cpp_name << ">(entity, value);\n";
-            out << "        retain_construction<" << trait.cpp_name << ">(registry, entity, value);\n";
+            emit_restore_construction_copy(out, program, trait, retention);
         }
         out << "    }\n";
     }
@@ -266,7 +298,7 @@ std::string EnttRestoreEmitter::emit_world_restore(const DecoratedProgram& progr
     emit_restore_enum_functions(out, program);
     emit_restore_struct_functions(out, program);
     emit_restore_trait_functions(out, program, traits);
-    emit_restore_node_traits(out, traits);
+    emit_restore_node_traits(out, program, traits);
 
     out << "// Reconstructs recorded nodes into a freshly staged registry — allocating\n";
     out << "// every record's handle first, so forward references and cycles resolve —\n";
@@ -332,7 +364,7 @@ std::string EnttRestoreEmitter::emit_world_restore(const DecoratedProgram& progr
             << "{.parent = ids.resolve(record.parent)});\n";
         out << "        }\n";
     }
-    out << "        generated_restore_node_traits(staged, entity, record, ids);\n";
+    out << "        generated_restore_node_traits(staged, entity, node, record, ids);\n";
     out << "    }\n";
     emit_staged_range_checks(out, program, traits);
     out << "    if (ids.resource_preparation_failed()) {\n";

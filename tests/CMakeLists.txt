@@ -95,6 +95,56 @@ add_dependencies(test_persistence_roundtrip_subprocess
 )
 add_test(NAME PersistenceRoundtripSubprocessTests COMMAND test_persistence_roundtrip_subprocess)
 
+# Each fixture that can save a world built twice: with the construction copies the
+# compiler keeps, and with every copy kept. Both play the same frames and must
+# write identical saves.
+set(construction_equivalence_fixtures
+    "world_persistence|examples/stdlib-fixtures/world_persistence.cactus"
+    "world_persistence_dynamic|examples/stdlib-fixtures/world_persistence_dynamic.cactus"
+    "persistence_references|tests/fixtures/persistence_references_runtime.cactus"
+    "persistence_hierarchy|tests/fixtures/persistence_hierarchy_runtime.cactus"
+    "ranged_fields_persistence|tests/fixtures/ranged_fields_persistence_runtime.cactus"
+    "named_entity_access|examples/named_entity_access.cactus"
+    "robot_sandbox|examples/robot-sandbox/small_world.cactus"
+)
+set(construction_equivalence_pairs)
+set(construction_equivalence_targets)
+foreach(fixture IN LISTS construction_equivalence_fixtures)
+    string(REPLACE "|" ";" parts "${fixture}")
+    list(GET parts 0 name)
+    list(GET parts 1 source)
+    set(definitions)
+    if(name STREQUAL "robot_sandbox")
+        set(definitions CACTUS_EQUIVALENCE_ROBOT_SANDBOX)
+    endif()
+    cactus_add_persistence_roundtrip_subprocess(construction_equivalence_${name}_chosen
+        CACTUS_SOURCE "${source}"
+        BACKEND cpp-entt
+        MAIN_SOURCE construction_equivalence_main.cpp
+        DEFINITIONS ${definitions}
+    )
+    cactus_add_persistence_roundtrip_subprocess(construction_equivalence_${name}_retained
+        CACTUS_SOURCE "${source}"
+        BACKEND cpp-entt
+        MAIN_SOURCE construction_equivalence_main.cpp
+        CODEGEN_FLAGS --retain-all-construction
+        DEFINITIONS ${definitions}
+    )
+    list(APPEND construction_equivalence_targets
+        construction_equivalence_${name}_chosen construction_equivalence_${name}_retained)
+    list(APPEND construction_equivalence_pairs
+        "${name}|$<TARGET_FILE:construction_equivalence_${name}_chosen>|$<TARGET_FILE:construction_equivalence_${name}_retained>")
+endforeach()
+list(JOIN construction_equivalence_pairs "," construction_equivalence_pair_text)
+add_executable(test_construction_copy_equivalence EXCLUDE_FROM_ALL test_construction_copy_equivalence.cpp)
+target_include_directories(test_construction_copy_equivalence PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(test_construction_copy_equivalence PRIVATE Catch2::Catch2WithMain)
+target_compile_definitions(test_construction_copy_equivalence PRIVATE
+    CACTUS_EQUIVALENCE_PAIRS="${construction_equivalence_pair_text}"
+)
+add_dependencies(test_construction_copy_equivalence ${construction_equivalence_targets})
+add_test(NAME ConstructionCopyEquivalenceTests COMMAND test_construction_copy_equivalence)
+
 # Coverage gate threshold evaluation (no instrumented build needed)
 function(cactus_add_coverage_threshold_case CASE_NAME)
     cmake_parse_arguments(CASE "TESTS_FAILED" "SUMMARY;THRESHOLD;EXPECT;EXPECT_OUTPUT" "" ${ARGN})
@@ -252,6 +302,10 @@ add_test(NAME PersistenceDocumentTests COMMAND test_persistence_document)
 add_executable(test_persistence_provenance_codegen test_persistence_provenance_codegen.cpp)
 target_link_libraries(test_persistence_provenance_codegen PRIVATE cactus_backend_cpp_entt Catch2::Catch2WithMain)
 add_test(NAME PersistenceProvenanceCodegenTests COMMAND test_persistence_provenance_codegen)
+
+add_executable(test_construction_retention test_construction_retention.cpp)
+target_link_libraries(test_construction_retention PRIVATE cactus_backend_cpp_entt Catch2::Catch2WithMain)
+add_test(NAME ConstructionRetentionTests COMMAND test_construction_retention)
 
 add_executable(test_persistence_restore_codegen test_persistence_restore_codegen.cpp)
 target_link_libraries(test_persistence_restore_codegen PRIVATE cactus_backend_cpp_entt Catch2::Catch2WithMain)

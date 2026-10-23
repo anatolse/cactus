@@ -39,7 +39,7 @@ Each captured entity record SHALL identify its resolved originating archetype no
 - **THEN** the record carries the evaluated argument and capture does not evaluate that expression again
 
 ### Requirement: Provenance tracking is bounded by whole-program analysis
-Construction provenance SHALL be retained for every entity that the program can make eligible, including currently ephemeral entities whose archetype can gain a persistence-bearing trait. When no path in the linked program attaches a persistence-bearing trait to an entity, entities of never-eligible archetypes SHALL carry no construction metadata. Native and authored creation and structural paths SHALL maintain the same provenance. Capture SHALL fail with a diagnostic rather than emit an eligible record with missing provenance.
+Construction provenance SHALL be retained for every entity that the program can make eligible, including currently ephemeral entities whose archetype can gain a persistence-bearing trait. When no path in the linked program attaches a persistence-bearing trait to an entity, entities of never-eligible archetypes SHALL carry no construction metadata. A separate construction copy of a trait SHALL be kept on an entity of an archetype node only when some path in the linked program can change a non-persist field of that trait on such an entity after it is made: a handler or extern field write, a `set` command, a `project` block, or a write through a named entity. Otherwise capture SHALL record the trait's live value as its construction values, which equals them because nothing can have changed it. Native and authored creation and structural paths SHALL maintain the same provenance. Capture SHALL fail with a diagnostic rather than emit an eligible record with missing provenance.
 
 #### Scenario: Particle-only program pays no provenance cost
 - **WHEN** a program never adds a persistence-bearing trait at runtime
@@ -52,6 +52,22 @@ Construction provenance SHALL be retained for every entity that the program can 
 #### Scenario: Native spawn participates in provenance
 - **WHEN** a contracted extern handler creates an eligible entity through its generated spawn capability
 - **THEN** capture retains its archetype and evaluated construction overrides just as for an authored spawn
+
+#### Scenario: An unwritten trait keeps no copy
+- **WHEN** an eligible cell archetype carries `BoxCollider` and no handler, `set`, `project` or extern rule can change `BoxCollider` on a cell
+- **THEN** cells keep no separate construction copy of `BoxCollider`, and a saved cell records its box size as construction data
+
+#### Scenario: A persist-only write keeps no copy
+- **WHEN** handlers write only a `persist` field of a cell's `Cell` trait
+- **THEN** cells keep no separate construction copy of `Cell`, and a saved cell records its coordinates as construction data and its texture as a persist value
+
+#### Scenario: A written trait keeps its copy
+- **WHEN** a handler can change a non-persist field of an eligible enemy's `Health` after it is made
+- **THEN** the enemy keeps a construction copy, and capture records the value it was made with rather than the changed one
+
+#### Scenario: A projection counts as a write
+- **WHEN** a handler can `project` a trait onto an eligible archetype
+- **THEN** that archetype's entities keep a construction copy of the trait
 
 ### Requirement: Runtime structure and trait incarnations are recorded
 Records SHALL carry the entity's final attached traits, including marker traits, and SHALL record baseline traits that were removed as absent. Each currently attached trait incarnation SHALL record its own initialization baseline and persist values. Removed traits SHALL contribute no field payloads. Frame-local projected traits SHALL NOT be captured as durable structure.

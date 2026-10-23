@@ -211,6 +211,10 @@ add_executable(test_semantic_let_fields test_semantic_let_fields.cpp)
 target_link_libraries(test_semantic_let_fields PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticLetFieldsTests COMMAND test_semantic_let_fields)
 
+add_executable(test_semantic_ranged_fields test_semantic_ranged_fields.cpp)
+target_link_libraries(test_semantic_ranged_fields PRIVATE cactus_frontend Catch2::Catch2WithMain)
+add_test(NAME SemanticRangedFieldsTests COMMAND test_semantic_ranged_fields)
+
 add_executable(test_semantic_function_loops test_semantic_function_loops.cpp)
 target_link_libraries(test_semantic_function_loops PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticFunctionLoopsTests COMMAND test_semantic_function_loops)
@@ -334,6 +338,10 @@ add_test(NAME RuntimeHierarchyTests COMMAND test_runtime_hierarchy)
 add_executable(test_runtime_named_slots test_runtime_named_slots.cpp)
 target_link_libraries(test_runtime_named_slots PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
 add_test(NAME RuntimeNamedSlotsTests COMMAND test_runtime_named_slots)
+
+add_executable(test_runtime_range_faults test_runtime_range_faults.cpp)
+target_link_libraries(test_runtime_range_faults PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
+add_test(NAME RuntimeRangeFaultsTests COMMAND test_runtime_range_faults)
 
 # Projected-trait tracker runtime tests (extract-codegen-runtime-scaffolding change)
 add_executable(test_runtime_projected_trait_tracker test_runtime_projected_trait_tracker.cpp)
@@ -626,6 +634,12 @@ cactus_add_headless_behavior_test(test_trait_lifecycle_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_trait_lifecycle_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_ranged_fields_headless_behavior
+    CACTUS_SOURCE examples/stdlib-fixtures/ranged_fields.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_ranged_fields_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_pairs_limit_headless_behavior
     CACTUS_SOURCE tests/fixtures/pairs_limit_runtime.cactus
     BACKEND cpp-entt
@@ -870,6 +884,12 @@ cactus_add_headless_behavior_test(test_persistence_validation_headless_behavior
     CACTUS_SOURCE tests/fixtures/persistence_references_runtime.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_persistence_validation_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_ranged_fields_persistence_headless_behavior
+    CACTUS_SOURCE tests/fixtures/ranged_fields_persistence_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_ranged_fields_persistence_headless_behavior.cpp
 )
 
 cactus_add_headless_behavior_test(test_persistence_hierarchy_headless_behavior

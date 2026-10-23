@@ -5,6 +5,7 @@
 #include <raylib.h>
 
 #include <algorithm>
+#include <iostream>
 #include <map>
 #include <array>
 #include <cmath>
@@ -4074,6 +4075,66 @@ bool& quit_request_storage() noexcept {
     return requested;
 }
 }  // namespace
+
+namespace {
+struct RangeFaultLog {
+    std::deque<RangeFault> faults;
+    std::size_t count = 0;
+};
+
+RangeFaultLog& range_fault_log() noexcept {
+    static RangeFaultLog log;
+    return log;
+}
+}  // namespace
+
+std::string describe_range_fault(const RangeFault& fault) {
+    auto text = std::string{fault.trait} + "." + std::string{fault.field} + " = " + std::to_string(fault.value);
+    switch (fault.reason) {
+        case RangeFaultReason::OutOfRange:
+            text += " is outside range(" + std::to_string(fault.lo) + ", " + std::to_string(fault.hi) + ")";
+            break;
+        case RangeFaultReason::StaleContainer:
+            text += " reads a container that no longer exists";
+            break;
+        case RangeFaultReason::MissingContainerTrait:
+            text += " reads a container entity that lacks its container trait";
+            break;
+    }
+    return text;
+}
+
+void report_range_fault(const RangeFault& fault) {
+    auto& log = range_fault_log();
+    if (log.faults.size() == RUNTIME_FAULT_LOG_CAPACITY) {
+        log.faults.pop_front();
+    }
+    log.faults.push_back(fault);
+    ++log.count;
+    std::clog << "cactus: warning: " << describe_range_fault(fault) << "; the command did nothing" << '\n';
+}
+
+bool passes_range_check(const std::optional<RangeFault>& fault) {
+    if (fault.has_value()) {
+        report_range_fault(*fault);
+        return false;
+    }
+    return true;
+}
+
+const std::deque<RangeFault>& runtime_faults() noexcept {
+    return range_fault_log().faults;
+}
+
+std::size_t runtime_fault_count() noexcept {
+    return range_fault_log().count;
+}
+
+void clear_runtime_faults() noexcept {
+    auto& log = range_fault_log();
+    log.faults.clear();
+    log.count = 0;
+}
 
 void request_quit() noexcept {
     quit_request_storage() = true;

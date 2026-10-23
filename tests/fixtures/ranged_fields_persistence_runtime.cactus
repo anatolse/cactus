@@ -1,0 +1,43 @@
+module ranged_fields_persistence_runtime
+
+use std.core
+
+# Cells ranged against their volume, saved and restored. Ruin's volume is
+# destroyed at load, so its cell's container handle is stale when saved.
+
+trait Volume:
+    let max_x: int = 3
+    persist var label: int = 0
+
+trait Cell:
+    let volume: entity_id
+    let x: int in range(0, volume[Volume].max_x + 1)
+    persist var texture: int = 0
+
+trait Doomed
+
+template CellT:
+    Cell
+
+entity Grid:
+    Volume
+
+entity Ruin:
+    Volume
+    Doomed
+
+entity Corner from CellT:
+    Cell:
+        volume = Grid
+        x = 2
+
+entity Orphan from CellT:
+    Cell:
+        volume = Ruin
+        x = 1
+
+rule Demolish:
+    each:
+        Doomed
+    on load:
+        destroy

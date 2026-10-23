@@ -80,4 +80,25 @@ TEST_CASE("CLI: a parse error in an imported module is printed once", "[cli][dia
     CHECK(result.stderr_lines[0].contains("broken.cactus:4:11: error: expected ':'"));
 }
 
+TEST_CASE("CLI: adding a container trait that another module ranges against is rejected at link",
+          "[cli][diagnostics][ranged-fields]") {
+    const auto project = stage_fixture("container_add_cross_module");
+    const auto result  = run_cactus(project / "main.cactus");
+    CHECK(result.exit_code == 1);
+    REQUIRE(result.stderr_lines.size() == 1);
+    CHECK(result.stderr_lines[0].contains(
+        "error: rule 'Grow' can't add container trait 'Volume': ranged field 'Cell.x' reads it"));
+}
+
+TEST_CASE("CLI: a volume's geometry cannot change after it is made", "[cli][diagnostics][ranged-fields]") {
+    const auto write = run_cactus(stage_fixture("voxel_geometry_write.cactus"));
+    CHECK(write.exit_code == 1);
+    REQUIRE(write.stderr_lines.size() == 1);
+    CHECK(write.stderr_lines[0].contains("error: can't assign let field 'Volume.max_x'"));
+    const auto add = run_cactus(stage_fixture("voxel_volume_add.cactus"));
+    CHECK(add.exit_code == 1);
+    REQUIRE(add.stderr_lines.size() == 1);
+    CHECK(add.stderr_lines[0].contains("error: rule 'Regrow' can't add container trait 'Volume'"));
+}
+
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

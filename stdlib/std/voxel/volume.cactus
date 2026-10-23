@@ -24,6 +24,8 @@ use std.render.layers as layers
 # A volume needs a finite origin, a positive finite cell size, max >= min on
 # every axis, and fewer than 2^24 cells. An invalid volume creates no cells and
 # reports why in `issue`.
+# A cell's coordinates lie inside its volume's bounds: a spawn outside them, or
+# against a destroyed volume, creates no cell and reports a range fault.
 
 const:
     MAX_CELLS = 16777216.0
@@ -44,14 +46,14 @@ pub enum VolumeIssue:
 # issue:       why the volume is invalid, or Valid
 # duplicate_found: a CellProbe met two live cells with one coordinate
 pub trait Volume:
-    persist var origin: vec3 = vec3(0.0, 0.0, 0.0)
-    persist var cell_size: float = 1.0
-    persist var min_x: int = 0
-    persist var min_y: int = 0
-    persist var min_z: int = 0
-    persist var max_x: int = 0
-    persist var max_y: int = 0
-    persist var max_z: int = 0
+    let origin: vec3 = vec3(0.0, 0.0, 0.0)
+    let cell_size: float = 1.0
+    let min_x: int = 0
+    let min_y: int = 0
+    let min_z: int = 0
+    let max_x: int = 0
+    let max_y: int = 0
+    let max_z: int = 0
     persist var cells_built: int = 0
     var batch: int = 4096
     var issue: VolumeIssue = VolumeIssue.Valid
@@ -61,9 +63,9 @@ pub trait Volume:
 # its exposed faces while it is Solid.
 pub trait Cell:
     let volume: entity_id
-    let x: int
-    let y: int
-    let z: int
+    let x: int in range(volume[Volume].min_x, volume[Volume].max_x + 1)
+    let y: int in range(volume[Volume].min_y, volume[Volume].max_y + 1)
+    let z: int in range(volume[Volume].min_z, volume[Volume].max_z + 1)
     persist var texture: texture_id
 
 # A unit cell of a volume; the volume spawns these itself.

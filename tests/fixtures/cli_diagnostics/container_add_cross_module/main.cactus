@@ -1,0 +1,10 @@
+module main
+
+use grid
+
+trait Cell:
+    let volume: entity_id
+    let x: int in range(volume[grid.Volume].min_x, volume[grid.Volume].max_x + 1)
+
+entity C:
+    Cell

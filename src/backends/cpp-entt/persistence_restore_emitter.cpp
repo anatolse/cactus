@@ -2,6 +2,7 @@
 
 #include "backends/cpp-entt/component_emitter.hpp"
 #include "backends/cpp-entt/persistence_emitter.hpp"
+#include "backends/cpp-entt/range_checks.hpp"
 #include "backends/cpp-entt/type_utils.hpp"
 
 #include <sstream>
@@ -216,6 +217,27 @@ void emit_restore_node_traits(std::ostringstream& out, const std::vector<Persist
     out << "}\n\n";
 }
 
+// Rejects a staged world holding a ranged value outside its range. A container
+// handle stale in the document is accepted: the value was valid when made.
+void emit_staged_range_checks(std::ostringstream& out,
+                              const DecoratedProgram& program,
+                              const std::vector<PersistableTrait>& traits) {
+    for (const auto& trait : traits) {
+        const auto* ranged = find_ranged_trait(program, trait.declaration->symbol_id, trait.declaration->name);
+        if (ranged == nullptr) {
+            continue;
+        }
+        out << "    for (const auto entity : staged.view<" << trait.cpp_name << ">()) {\n";
+        out << "        const auto fault = " << range_check_function_name(ranged->module_name, ranged->name).ref()
+            << "(staged, staged.get<" << trait.cpp_name << ">(entity));\n";
+        out << "        if (fault.has_value() && fault->reason != RangeFaultReason::StaleContainer) {\n";
+        out << "            return RestoreOutcome{\n";
+        out << "                .ok = false, .code = \"invalid_data\", .message = describe_range_fault(*fault)};\n";
+        out << "        }\n";
+        out << "    }\n";
+    }
+}
+
 }  // namespace
 
 std::string EnttRestoreEmitter::emit_world_restore(const DecoratedProgram& program) {
@@ -312,6 +334,7 @@ std::string EnttRestoreEmitter::emit_world_restore(const DecoratedProgram& progr
     }
     out << "        generated_restore_node_traits(staged, entity, record, ids);\n";
     out << "    }\n";
+    emit_staged_range_checks(out, program, traits);
     out << "    if (ids.resource_preparation_failed()) {\n";
     out << "        return RestoreOutcome{.ok = false, .code = \"resource_preparation_failure\",\n";
     out << "                              .message = \"no declared asset or input action named '\" + "

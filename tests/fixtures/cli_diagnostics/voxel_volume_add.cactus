@@ -1,0 +1,17 @@
+module voxel_volume_add
+
+use std.core
+use std.voxel.volume as voxel
+
+trait Seed
+
+entity Sprout:
+    Seed
+
+rule Regrow:
+    each:
+        Seed
+
+    on tick:
+        add voxel.Volume:
+            max_x = 2

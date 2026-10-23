@@ -581,6 +581,10 @@ FieldNode Parser::parse_field() {
     consume(TokenType::COLON, "expected ':'");
     auto type = parse_type_ref();
 
+    std::optional<FieldRange> range;
+    if (check(TokenType::IN)) {
+        range = parse_field_range();
+    }
     std::optional<std::unique_ptr<ExprNode>> default_val;
     if (match(TokenType::ASSIGN)) {
         default_val = parse_expression();
@@ -593,7 +597,30 @@ FieldNode Parser::parse_field() {
     field.type          = std::move(type);
     field.default_value = std::move(default_val);
     field.location      = loc;
+    field.range         = std::move(range);
     return field;
+}
+
+std::optional<FieldRange> Parser::parse_field_range() {
+    const auto location = advance().location;
+    if (!check(TokenType::IDENTIFIER) || peek().value != "range") {
+        errors_.error(peek().location, "expected 'range' after 'in' in a field declaration");
+        return std::nullopt;
+    }
+    advance();
+    consume(TokenType::LPAREN, "expected '(' after 'range'");
+    FieldRange range{.lo = parse_expression(), .hi = nullptr, .location = location};
+    if (!match(TokenType::COMMA)) {
+        errors_.error(peek().location, "a field range needs two bounds: range(lo, hi)");
+        return std::nullopt;
+    }
+    range.hi = parse_expression();
+    if (check(TokenType::COMMA)) {
+        errors_.error(peek().location, "a field range takes no step; write range(lo, hi)");
+        return std::nullopt;
+    }
+    consume(TokenType::RPAREN, "expected ')' after the range bounds");
+    return range;
 }
 
 namespace {

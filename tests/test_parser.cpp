@@ -276,6 +276,32 @@ TEST_CASE("Parser: trait with var fields", "[parser]") {
     CHECK(decl.fields[1].name == "max_health");
 }
 
+TEST_CASE("Parser: a let int field declares a range", "[parser][ranged-fields]") {
+    auto prog = parse(
+        "trait Cell:\n"
+        "    let volume: entity_id\n"
+        "    let x: int in range(volume[Volume].min_x, volume[Volume].max_x + 1) = 0\n"
+        "    let y: int\n");
+    auto& decl = std::get<TraitNode>(prog.declarations[0]);
+    REQUIRE(decl.fields.size() == 3);
+    REQUIRE(decl.fields[1].range.has_value());
+    CHECK(std::holds_alternative<MemberExpr>(decl.fields[1].range->lo->expr));
+    CHECK(std::holds_alternative<BinaryExpr>(decl.fields[1].range->hi->expr));
+    CHECK(decl.fields[1].default_value.has_value());
+    CHECK_FALSE(decl.fields[2].range.has_value());
+}
+
+TEST_CASE("Parser: malformed field ranges are diagnosed", "[parser][ranged-fields]") {
+    const auto [source, message] = GENERATE(table<std::string, std::string>({
+        {"trait C:\n    let x: int in range(0, 16, 2)\n", "a field range takes no step"},
+        {"trait C:\n    let x: int in range(16)\n", "a field range needs two bounds"},
+        {"trait C:\n    let x: int in 16\n", "expected 'range' after 'in'"},
+    }));
+    auto errors = parse_expect_errors(source);
+    CHECK(std::ranges::any_of(errors.diagnostics(),
+                              [&](const Diagnostic& diagnostic) { return diagnostic.message.contains(message); }));
+}
+
 TEST_CASE("Parser: trait with persist modifier", "[parser]") {
     auto prog = parse(
         "trait Player:\n"

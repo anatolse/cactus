@@ -160,6 +160,12 @@ void ModuleArtifact::write_field(std::ostream& out, const ResolvedField& field) 
         write_symbol_id(out, field.source_binding->source);
         write_str(out, field.source_binding->member);
     }
+    write_bool(out, field.range.has_value());
+    if (field.range.has_value()) {
+        write_expression(out, *field.range->lo);
+        write_expression(out, *field.range->hi);
+        write_symbol_vector(out, field.range->containers);
+    }
 }
 
 void ModuleArtifact::write_traits(std::ostream& out,
@@ -907,6 +913,13 @@ ResolvedField ModuleArtifact::read_field(std::istream& in) {
         binding.source = read_symbol_id(in);
         binding.member = read_str(in);
         field.source_binding = binding;
+    }
+    if (read_bool(in)) {
+        ResolvedFieldRange range;
+        range.lo         = read_expression(in);
+        range.hi         = read_expression(in);
+        range.containers = read_symbol_vector(in);
+        field.range      = std::move(range);
     }
     return field;
 }

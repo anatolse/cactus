@@ -1271,6 +1271,7 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     validate_spawn_sites(program);
     validate_stmt_contexts(program);
     validate_trait_default_values(program);
+    validate_ranged_fields(program);
     validate_trait_modifier_rules(program);
 
     // Scheduling reads template trait sets for lifecycle deliveries.
@@ -2675,6 +2676,183 @@ void SemanticAnalyzer::validate_trait_default_values(ProgramNode& program) {
             }
         }
     }
+}
+
+// ── Ranged let fields ───────────────────────────────────────────────────────
+
+namespace {
+
+const FieldNode* find_field_node(const TraitNode& trait, const std::string& name) {
+    const auto found = std::ranges::find(trait.fields, name, &FieldNode::name);
+    return found == trait.fields.end() ? nullptr : &*found;
+}
+
+bool is_int_arithmetic(const std::string& op) {
+    return op == "+" || op == "-" || op == "*" || op == "/" || op == "%";
+}
+
+constexpr const char* RANGE_BOUND_NOT_INT = "must be an 'int' expression";
+
+std::string range_bound_reads(const std::string& trait_name) {
+    return "can read only literals, constants, 'let' fields of '" + trait_name + "' and container reads 'f[T].g'";
+}
+
+}  // namespace
+
+void SemanticAnalyzer::validate_ranged_fields(ProgramNode& program) {
+    for (auto& decl : program.declarations) {
+        auto* trait = std::get_if<TraitNode>(&decl);
+        if (trait == nullptr) {
+            continue;
+        }
+        for (auto& field : trait->fields) {
+            if (field.range.has_value()) {
+                validate_field_range(*trait, field);
+            }
+        }
+    }
+}
+
+void SemanticAnalyzer::validate_field_range(TraitNode& trait, FieldNode& field) {
+    const auto qualified = trait.name + "." + field.name;
+    const auto prefix    = "range on field '" + qualified + "' ";
+    auto& range          = *field.range;
+    auto resolved_trait  = result_.traits.find(trait.name);
+    if (resolved_trait == result_.traits.end()) {
+        return;
+    }
+    auto& fields  = resolved_trait->second.fields;
+    auto resolved = std::ranges::find(fields, field.name, &ResolvedField::name);
+    if (resolved == fields.end()) {
+        return;
+    }
+    if (trait.state.has_value()) {
+        errors_.error(range.location, prefix + "is not allowed on a state variant");
+        return;
+    }
+    if (!field.modifiers.is_let) {
+        errors_.error(range.location, prefix + "needs a 'let' field; declare it 'let'");
+        return;
+    }
+    if (resolved->type.kind != TypeKind::Int) {
+        errors_.error(range.location, prefix + "needs an 'int' field");
+        return;
+    }
+    std::vector<SymbolId> containers;
+    const bool lo_valid = validate_range_bound(*range.lo, trait, qualified, containers);
+    const bool hi_valid = validate_range_bound(*range.hi, trait, qualified, containers);
+    if (!lo_valid || !hi_valid) {
+        return;
+    }
+    resolved->range = ResolvedFieldRange{
+        .lo = clone_expr(*range.lo), .hi = clone_expr(*range.hi), .containers = std::move(containers)};
+}
+
+bool SemanticAnalyzer::validate_range_bound(ExprNode& bound,
+                                            const TraitNode& trait,
+                                            const std::string& field_name,
+                                            std::vector<SymbolId>& containers) {
+    const auto context     = "range bound of '" + field_name + "'";
+    const auto reject      = [&](const std::string& reason) { return reject_range_bound(bound, context, reason); };
+    const auto not_int     = [&] { return reject(RANGE_BOUND_NOT_INT); };
+    const auto require_int = [&] { return infer_expr_type(bound, {}, {}, nullptr).kind == TypeKind::Int || not_int(); };
+    const auto not_allowed = [&] { return reject(range_bound_reads(trait.name)); };
+    return std::visit(
+        [&](auto& e) -> bool {
+            using E = std::decay_t<decltype(e)>;
+            if constexpr (std::is_same_v<E, LiteralExpr>) {
+                return e.kind == LiteralExpr::Kind::Int || not_int();
+            } else if constexpr (std::is_same_v<E, IdentExpr>) {
+                return validate_range_ident(e, bound, trait, context);
+            } else if constexpr (std::is_same_v<E, UnaryExpr>) {
+                return e.op == "-" ? validate_range_bound(*e.operand, trait, field_name, containers) : not_int();
+            } else if constexpr (std::is_same_v<E, BinaryExpr>) {
+                if (!is_int_arithmetic(e.op)) {
+                    return not_int();
+                }
+                const bool left = validate_range_bound(*e.left, trait, field_name, containers);
+                return validate_range_bound(*e.right, trait, field_name, containers) && left;
+            } else if constexpr (std::is_same_v<E, CallExpr>) {
+                return reject("can't call a function");
+            } else if constexpr (std::is_same_v<E, MemberExpr>) {
+                if (auto* access = std::get_if<TraitAccessExpr>(&e.object->expr)) {
+                    return validate_container_read(*access, e.member, trait, context, containers);
+                }
+                return resolve_const_member(e, {}) ? require_int() : not_allowed();
+            } else {
+                return not_allowed();
+            }
+        },
+        bound.expr);
+}
+
+bool SemanticAnalyzer::reject_range_bound(const ExprNode& bound,
+                                          const std::string& context,
+                                          const std::string& reason) {
+    errors_.error(bound.location, context + " " + reason);
+    return false;
+}
+
+bool SemanticAnalyzer::validate_range_ident(IdentExpr& ident,
+                                            const ExprNode& bound,
+                                            const TraitNode& trait,
+                                            const std::string& context) {
+    const auto* own = find_field_node(trait, ident.name);
+    if (own == nullptr && !resolve_const_ident(ident)) {
+        return reject_range_bound(bound, context, range_bound_reads(trait.name));
+    }
+    if (own == nullptr) {
+        return infer_expr_type(bound, {}, {}, nullptr).kind == TypeKind::Int ||
+               reject_range_bound(bound, context, RANGE_BOUND_NOT_INT);
+    }
+    if (!own->modifiers.is_let) {
+        return reject_range_bound(
+            bound, context, "reads '" + trait.name + "." + ident.name + "', which is not a 'let' field");
+    }
+    const auto* resolved = find_field_in(result_.traits.at(trait.name).fields, ident.name);
+    return (resolved != nullptr && resolved->type.kind == TypeKind::Int) ||
+           reject_range_bound(bound, context, RANGE_BOUND_NOT_INT);
+}
+
+bool SemanticAnalyzer::validate_container_read(TraitAccessExpr& access,
+                                               const std::string& member,
+                                               const TraitNode& trait,
+                                               const std::string& context,
+                                               std::vector<SymbolId>& containers) {
+    const auto reject = [&](const std::string& reason) {
+        errors_.error(access.location, context + " " + reason);
+        return false;
+    };
+    const auto* handle       = std::get_if<IdentExpr>(&access.object->expr);
+    const auto* handle_field = handle == nullptr ? nullptr : find_field_node(trait, handle->name);
+    const auto* resolved_handle =
+        handle_field == nullptr ? nullptr : find_field_in(result_.traits.at(trait.name).fields, handle->name);
+    if (resolved_handle == nullptr || !resolved_handle->is_let || resolved_handle->type.kind != TypeKind::EntityId) {
+        const auto spelling = handle == nullptr ? std::string{"its object"} : "'" + handle->name + "'";
+        return reject("reads through " + spelling + ", which is not a 'let entity_id' field of '" + trait.name +
+                      "'");
+    }
+    const auto container = try_resolve_trait_ref_to_symbol(access.trait_name);
+    const auto* resolved = container.has_value() ? find_resolved_trait(*container) : nullptr;
+    if (resolved == nullptr) {
+        return reject("reads unknown trait '" + access.trait_name + "'");
+    }
+    access.resolved_trait_id = *container;
+    const auto qualified     = access.trait_name + "." + member;
+    const auto* field        = find_field_in(resolved->fields, member);
+    if (field == nullptr) {
+        return reject("reads unknown field '" + qualified + "'");
+    }
+    if (!field->is_let) {
+        return reject("reads '" + qualified + "', which is not a 'let' field");
+    }
+    if (field->type.kind != TypeKind::Int) {
+        return reject(RANGE_BOUND_NOT_INT);
+    }
+    if (!std::ranges::contains(containers, *container)) {
+        containers.push_back(*container);
+    }
+    return true;
 }
 
 // ── Module constants (dsl-const-expressions) ────────────────────────────────

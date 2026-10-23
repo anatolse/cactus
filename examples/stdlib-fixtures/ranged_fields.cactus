@@ -1,0 +1,174 @@
+module ranged_fields
+
+use std.core
+
+# A cell's coordinate lies inside its volume. A value made outside its range,
+# or against a missing volume, makes the command do nothing.
+
+const:
+    LEVELS = 4
+
+trait Volume:
+    let min_x: int = 0
+    let max_x: int = 3
+
+trait Cell:
+    let volume: entity_id
+    let x: int in range(volume[Volume].min_x, volume[Volume].max_x + 1)
+
+trait Level:
+    let value: int in range(0, LEVELS)
+
+trait Glow:
+    let level: int in range(0, LEVELS)
+
+trait Arrived
+
+trait Row
+
+trait Probe:
+    var glow: int = -1
+
+trait Log:
+    var step: int = 0
+    var missing: entity_id
+    var good: entity_id
+    var too_far: entity_id
+    var below: entity_id
+    var orphan: entity_id
+    var wrong_container: entity_id
+    var fresh_volume: entity_id
+    var fresh_cell: entity_id
+    var fresh_too_far: entity_id
+    var after_destroy: entity_id
+    var good_row: entity_id
+    var bad_row: entity_id
+
+template VolumeT:
+    Volume
+
+template CellT:
+    Cell
+
+template RowT:
+    Row
+    children:
+        entity Slot:
+            Cell
+
+entity Grid:
+    Volume:
+        max_x = 7
+
+entity Recorder:
+    Log
+
+entity Placed from CellT:
+    Cell:
+        volume = Grid
+        x = 7
+
+entity Stray from CellT:
+    Cell:
+        volume = Grid
+        x = 8
+
+entity Kept:
+    Level:
+        value = 1
+    Probe
+
+entity Raised:
+    Level:
+        value = 1
+    Probe
+
+rule MarkArrival:
+    each:
+        Cell
+    on added Cell:
+        add Arrived
+
+rule Build:
+    each:
+        Log as log
+    on load:
+        log.good = spawn CellT:
+            Cell:
+                volume = Grid
+                x = 3
+        log.too_far = spawn CellT:
+            Cell:
+                volume = Grid
+                x = 8
+        log.below = spawn CellT:
+            Cell:
+                volume = Grid
+                x = -1
+        log.orphan = spawn CellT:
+            Cell:
+                volume = log.missing
+                x = 0
+        log.wrong_container = spawn CellT:
+            Cell:
+                volume = Recorder
+                x = 0
+        let fresh = spawn VolumeT:
+            Volume:
+                max_x = 1
+        log.fresh_volume = fresh
+        log.fresh_cell = spawn CellT:
+            Cell:
+                volume = fresh
+                x = 1
+        log.fresh_too_far = spawn CellT:
+            Cell:
+                volume = fresh
+                x = 2
+        log.good_row = spawn RowT:
+            children:
+                Slot:
+                    Cell:
+                        volume = Grid
+                        x = 2
+        log.bad_row = spawn RowT:
+            children:
+                Slot:
+                    Cell:
+                        volume = Grid
+                        x = 9
+        add Level to Kept:
+            value = 9
+        add Level to Raised:
+            value = 2
+
+rule Advance:
+    each:
+        Log as log
+    on tick:
+        if log.step == 0:
+            destroy log.fresh_volume
+        else if log.step == 1:
+            log.after_destroy = spawn CellT:
+                Cell:
+                    volume = log.fresh_volume
+                    x = 0
+        log.step += 1
+
+rule Shine:
+    each:
+        Log as log
+    on tick:
+        project Glow to Kept:
+            level = 9
+        project Glow to Raised:
+            level = 2
+
+rule SeeGlow:
+    each:
+        Glow as g
+        Probe as p
+    after:
+        Shine
+    on tick:
+        p.glow = g.level

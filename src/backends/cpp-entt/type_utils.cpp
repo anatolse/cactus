@@ -229,6 +229,25 @@ DetailName archetype_node_create_function_name(const std::string& module_name,
                       .name = name};
 }
 
+DetailName range_check_function_name(const std::string& module_name, const std::string& trait_name) {
+    return detail_name(module_name, "check_ranges_" + snake_case(trait_name));
+}
+
+DetailName range_value_function_name(const std::string& module_name,
+                                     const std::string& archetype_name,
+                                     const std::vector<std::string>& role_path,
+                                     const std::string& trait_name) {
+    auto name = archetype_node_create_function_name(module_name, archetype_name, role_path);
+    name.name = "range_value_" + name.name.substr(std::string_view{"create_"}.size()) + "_" + snake_case(trait_name);
+    return name;
+}
+
+DetailName archetype_range_precheck_function_name(const std::string& module_name, const std::string& archetype_name) {
+    auto name = archetype_node_create_function_name(module_name, archetype_name, {});
+    name.name = "passes_range_checks";
+    return name;
+}
+
 DetailName archetype_node_create_at_function_name(const std::string& module_name,
                                                   const std::string& archetype_name,
                                                   const std::vector<std::string>& role_path) {

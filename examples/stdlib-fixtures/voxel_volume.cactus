@@ -99,6 +99,24 @@ rule LookUpCell:
         lookup[CellLookup].x = x
         lookup[CellLookup].z = z
 
+# Spawns a cell one past Terrain's max_x when the test sets `armed`.
+pub trait Overflow:
+    var armed: bool = false
+    var cell: entity_id
+
+pub entity Spiller:
+    Overflow
+
+rule SpillCell:
+    each:
+        Overflow as overflow
+
+    on tick:
+        if not overflow.armed:
+            return
+        overflow.armed = false
+        overflow.cell = spawn voxel.CellTemplate(volume = Terrain, x = 4, y = 0, z = 0, center = vec3(14.5, 0.5, 0.5), size = 1.0)
+
 # Saves or restores slot "voxels" when the test sets a flag.
 pub trait StorageControl:
     var save: bool = false

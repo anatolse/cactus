@@ -4,6 +4,7 @@
 #include "frontend/archetype_reachability.hpp"
 #include "frontend/lexer.hpp"
 #include "frontend/module_artifact.hpp"
+#include "frontend/ranged_fields.hpp"
 #include "frontend/module_resolver.hpp"
 #include "frontend/parser.hpp"
 #include "frontend/program_linker.hpp"
@@ -579,6 +580,7 @@ int main(int argc, char* argv[]) try {
         decorated = analyzer.analyze(*root_prog);
         if (!errors.has_errors()) {
             cactus::derive_archetype_reachability(decorated, errors);
+            cactus::validate_container_traits(decorated, errors);
         }
         print_errors(errors);
         if (errors.has_errors()) {

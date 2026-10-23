@@ -918,7 +918,7 @@ TEST_CASE("ModuleArtifact: runtime declarations and handler graph round-trip", "
 }
 
 TEST_CASE("ModuleArtifact: artifact from before shape-generic spatial plans is rejected", "[artifact][spatial-join]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 39);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 40);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1126,6 +1126,57 @@ TEST_CASE("ModuleArtifact: conditional expressions round-trip with their pattern
     const auto& loaded_chain = std::get<IfExpr>(assignments.at(1).value->expr);
     const auto& loaded_else  = std::get<IfExpr>(loaded_chain.else_expr->expr);
     CHECK(std::get<LiteralExpr>(loaded_else.else_expr->expr).value == "3");
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("ModuleArtifact: ranged fields and their container traits round-trip", "[artifact][ranged-fields]") {
+    CHECK(ModuleArtifact::CURRENT_VERSION == 40);
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    const auto node = [](auto value) {
+        return std::make_unique<ExprNode>(ExprNode::Variant{std::move(value)}, SourceLocation{});
+    };
+    const auto volume = make_symbol_id(SymbolKind::Trait, "library", "Volume");
+    TraitAccessExpr access{.object = node(IdentExpr{.name = "volume"}), .trait_name = "Volume"};
+    access.resolved_trait_id = volume;
+    auto lo = node(MemberExpr{.object = node(std::move(access)), .member = "min_x"});
+
+    ResolvedTrait cell;
+    cell.name   = "Cell";
+    cell.is_pub = true;
+    cell.fields.push_back(ResolvedField{.name = "volume", .type = make_entity_id_type(), .is_let = true});
+    cell.fields.push_back(ResolvedField{
+        .name  = "x",
+        .type  = make_int_type(),
+        .is_let = true,
+        .range = ResolvedFieldRange{
+            .lo = std::move(lo), .hi = node(LiteralExpr{.kind = LiteralExpr::Kind::Int, .value = "16"}),
+            .containers = {volume}}});
+    DecoratedProgram program;
+    program.traits["Cell"] = cell;
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    REQUIRE(artifact.save(program, "library", build_dir));
+    std::string name;
+    auto loaded = artifact.load(build_dir / "library.cmod", name);
+    auto symbols = artifact.extract_pub_symbols(build_dir / "library.cmod");
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(loaded.has_value());
+    REQUIRE(symbols.has_value());
+    for (const auto* trait : {&loaded->traits.at("Cell"), &symbols->traits.at("Cell")}) {
+        CHECK_FALSE(trait->fields.at(0).range.has_value());
+        const auto& range = trait->fields.at(1).range;
+        REQUIRE(range.has_value());
+        CHECK(range->containers == std::vector{volume});
+        const auto& member = std::get<MemberExpr>(range->lo->expr);
+        CHECK(member.member == "min_x");
+        CHECK(std::get<TraitAccessExpr>(member.object->expr).resolved_trait_id == volume);
+        CHECK(std::get<LiteralExpr>(range->hi->expr).value == "16");
+    }
 
     fs::remove_all(build_dir, ec);
 }
@@ -1343,7 +1394,7 @@ TEST_CASE("ModuleArtifact: set command capabilities round-trip", "[artifact][def
     CHECK(loaded->handler_contracts.front().commands == commands);
     REQUIRE(loaded->execution_graph.handlers.size() == 1);
     CHECK(loaded->execution_graph.handlers.front().contract.commands == commands);
-    CHECK(ModuleArtifact::CURRENT_VERSION == 39);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 40);
 
     fs::remove_all(build_dir, ec);
 }
@@ -1867,7 +1918,7 @@ TEST_CASE("ModuleArtifact: every schedule edge reason round-trips", "[artifact][
 }
 
 TEST_CASE("ModuleArtifact: artifact from before field-level contracts is rejected", "[artifact][handler-contracts]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 39);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 40);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2094,7 +2145,7 @@ TEST_CASE("ModuleArtifact: unknown trigger kind is rejected", "[artifact][trait-
 }
 
 TEST_CASE("ModuleArtifact: artifact from before lifecycle triggers is rejected", "[artifact][trait-lifecycle]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 39);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 40);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2223,7 +2274,7 @@ TEST_CASE("ModuleArtifact: unknown group ordering direction is malformed", "[art
 }
 
 TEST_CASE("ModuleArtifact: artifact from before rule groups is rejected", "[artifact][rule-groups]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 39);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 40);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2248,7 +2299,7 @@ TEST_CASE("ModuleArtifact: artifact from before rule groups is rejected", "[arti
 }
 
 TEST_CASE("ModuleArtifact: artifact from before named-entity access is rejected", "[artifact][named-entity]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 39);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 40);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2607,7 +2658,7 @@ TEST_CASE("ModuleArtifact: a trait access expression round-trips", "[artifact][t
 }
 
 TEST_CASE("ModuleArtifact: artifact from before bracketed trait access is rejected", "[artifact][trait-access]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 39);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 40);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);

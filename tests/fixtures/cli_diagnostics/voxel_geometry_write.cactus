@@ -1,0 +1,15 @@
+module voxel_geometry_write
+
+use std.core
+use std.voxel.volume as voxel
+
+entity Terrain:
+    voxel.Volume:
+        max_x = 3
+
+rule Stretch:
+    each:
+        voxel.Volume as v
+
+    on tick:
+        v.max_x = 8

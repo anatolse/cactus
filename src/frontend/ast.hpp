@@ -41,12 +41,20 @@ struct FieldModifiers {
 
 // ── Field Declaration ───────────────────────────────────────────────────────
 
+// `in range(lo, hi)` after a field type: the half-open interval a `let int` value lies in.
+struct FieldRange {
+    std::unique_ptr<ExprNode> lo;
+    std::unique_ptr<ExprNode> hi;
+    SourceLocation location;
+};
+
 struct FieldNode {
     FieldModifiers modifiers;
     std::string name;
     TypeRef type;
     std::optional<std::unique_ptr<ExprNode>> default_value;
     SourceLocation location;
+    std::optional<FieldRange> range;
 };
 
 // ── Function Parameter ──────────────────────────────────────────────────────

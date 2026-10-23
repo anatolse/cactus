@@ -1,0 +1,20 @@
+module grid
+
+pub extern event tick:
+    dt: float
+
+pub trait Volume:
+    let min_x: int = 0
+    let max_x: int = 15
+
+trait Seed
+
+entity Origin:
+    Seed
+
+rule Grow:
+    each:
+        Seed
+    on tick:
+        add Volume:
+            max_x = 8

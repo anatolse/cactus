@@ -12,6 +12,7 @@
 #include "backends/cpp-entt/event_emitter.hpp"
 #include "backends/cpp-entt/persistence_emitter.hpp"
 #include "backends/cpp-entt/persistence_restore_emitter.hpp"
+#include "backends/cpp-entt/range_checks.hpp"
 #include "backends/cpp-entt/render_pass_emitter.hpp"
 #include "backends/cpp-entt/system_emitter.hpp"
 #include "backends/cpp-entt/type_utils.hpp"
@@ -2588,6 +2589,23 @@ std::string emit_named_slots(const DecoratedProgram& program) {
            namespace_block("cactus_gen::detail", out.str()) + "\n";
 }
 
+// `auto component = T{};` plus the archetype's assignments: the value a creation site gives `trait`.
+void emit_component_value(std::ostringstream& out,
+                          const ArchetypeTraitEntry& trait,
+                          const std::string& cpp_name,
+                          const DecoratedProgram& program,
+                          const std::string& ind) {
+    std::size_t widest = std::string("auto component").size();
+    for (const auto& assignment : trait.assignments) {
+        widest = std::max(widest, std::string("component.").size() + assignment.name.size());
+    }
+    out << ind << pad_to_width("auto component", widest) << " = " << cpp_name << "{};\n";
+    for (const auto& assignment : trait.assignments) {
+        out << ind << pad_to_width("component." + cpp_escaped(assignment.name), widest) << " = "
+            << EnttCodegenUtils::emit_expr(*assignment.value, program) << ";\n";
+    }
+}
+
 void emit_archetype_trait_initializers(std::ostringstream& out,
                                        const std::vector<ArchetypeTraitEntry>& traits,
                                        const DecoratedProgram& program,
@@ -2636,15 +2654,7 @@ void emit_archetype_trait_initializers(std::ostringstream& out,
         const bool retain = origin.has_value() && EnttPersistenceEmitter::trait_has_construction_payload(
                                                       program, trait.resolved_trait_id, trait.trait_name);
         out << ind << "{\n";
-        std::size_t widest = std::string("auto component").size();
-        for (const auto& assignment : trait.assignments) {
-            widest = std::max(widest, std::string("component.").size() + assignment.name.size());
-        }
-        out << ind << "    " << pad_to_width("auto component", widest) << " = " << cpp_name << "{};\n";
-        for (const auto& assignment : trait.assignments) {
-            out << ind << "    " << pad_to_width("component." + cpp_escaped(assignment.name), widest) << " = "
-                << EnttCodegenUtils::emit_expr(*assignment.value, program) << ";\n";
-        }
+        emit_component_value(out, trait, cpp_name, program, ind + "    ");
         out << ind << "    ";
         if (variant.has_value()) {
             out << EnttCodegenUtils::enter_state_call(*variant, entity_name, "component");
@@ -2818,12 +2828,93 @@ std::string emit_planned_creation_functions(const std::string& name,
     return out.str();
 }
 
-std::string emit_archetype_creation_functions(const std::string& archetype_name,
-                                              const SymbolId& archetype,
-                                              const std::vector<ArchetypeTraitEntry>& traits,
-                                              const std::vector<ChildArchetypeNode>& children,
-                                              const DecoratedProgram& program,
-                                              const std::vector<InitializerSlot>& slots) {
+struct RangedNodeTrait {
+    std::vector<std::string> role_path;
+    const ArchetypeTraitEntry* entry = nullptr;
+    const ResolvedTrait* trait       = nullptr;
+};
+
+// NOLINTNEXTLINE(misc-no-recursion) -- walks the archetype's child tree
+void collect_ranged_node_traits(const std::vector<ArchetypeTraitEntry>& traits,
+                                const std::vector<ChildArchetypeNode>& children,
+                                const DecoratedProgram& program,
+                                std::vector<std::string>& role_path,
+                                std::vector<RangedNodeTrait>& found) {
+    for (const auto& entry : traits) {
+        if (const auto* trait = find_ranged_trait(program, entry.resolved_trait_id, entry.trait_name)) {
+            found.push_back(RangedNodeTrait{.role_path = role_path, .entry = &entry, .trait = trait});
+        }
+    }
+    for (const auto& child : children) {
+        role_path.push_back(child.role);
+        collect_ranged_node_traits(child.traits, child.children, program, role_path, found);
+        role_path.pop_back();
+    }
+}
+
+bool archetype_has_ranged_traits(const std::vector<ArchetypeTraitEntry>& traits,
+                                 const std::vector<ChildArchetypeNode>& children,
+                                 const DecoratedProgram& program) {
+    std::vector<RangedNodeTrait> ranged;
+    std::vector<std::string> role_path;
+    collect_ranged_node_traits(traits, children, program, role_path, ranged);
+    return !ranged.empty();
+}
+
+// The value each node of the archetype gives each of its ranged traits, and a
+// check of all of them, so a spawn or load can refuse before creating anything.
+// Each takes the creation function's slot parameters.
+std::string emit_range_value_functions(const std::string& archetype_name,
+                                       const std::vector<ArchetypeTraitEntry>& traits,
+                                       const std::vector<ChildArchetypeNode>& children,
+                                       const std::vector<InitializerSlot>& slots,
+                                       const DecoratedProgram& program) {
+    std::vector<RangedNodeTrait> ranged;
+    std::vector<std::string> role_path;
+    collect_ranged_node_traits(traits, children, program, role_path, ranged);
+    if (ranged.empty()) {
+        return {};
+    }
+    std::vector<std::string> parameters;
+    std::vector<std::string> arguments;
+    std::ostringstream bound_slots;
+    for (const auto& slot : slots) {
+        if (slot.value != nullptr) {
+            bound_slots << "    [[maybe_unused]] const " << EnttCodegenUtils::value_type_to_cpp(slot.type)
+                        << (owns_memory(slot.type) ? "& " : " ") << initializer_slot_name(slot.index) << " = "
+                        << EnttCodegenUtils::emit_expr(*slot.value, program) << ";\n";
+            continue;
+        }
+        parameters.push_back("[[maybe_unused]] " + slot_parameter_type(slot.type) + " " +
+                             initializer_slot_name(slot.index));
+        arguments.push_back(initializer_slot_name(slot.index));
+    }
+    const auto parameter_list = join_strings(parameters, ", ");
+    const auto call_arguments = "(" + join_strings(arguments, ", ") + ")";
+    const auto precheck = archetype_range_precheck_function_name(program.module_name, archetype_name);
+    std::ostringstream out;
+    std::vector<std::string> checks;
+    for (const auto& node : ranged) {
+        const auto name = range_value_function_name(program.module_name, archetype_name, node.role_path, node.trait->name);
+        const auto cpp  = EnttCodegenUtils::trait_cpp_name(node.entry->resolved_trait_id, node.entry->trait_name, program);
+        out << "[[maybe_unused]] static " << cpp << " " << name.name << "(" << parameter_list << ") {\n";
+        out << bound_slots.str();
+        emit_component_value(out, *node.entry, cpp, program, "    ");
+        out << "    return component;\n}\n";
+        checks.push_back(emit_range_check_passes(*node.trait, name.name + call_arguments));
+    }
+    out << "[[maybe_unused]] static bool " << precheck.name << "([[maybe_unused]] entt::registry& registry"
+        << (parameter_list.empty() ? "" : ", " + parameter_list) << ") {\n";
+    out << "    return " << join_strings(checks, " && ") << ";\n}\n";
+    return namespace_block(precheck.ns, out.str()) + "\n";
+}
+
+std::string emit_archetype_creation_functions_unchecked(const std::string& archetype_name,
+                                                        const SymbolId& archetype,
+                                                        const std::vector<ArchetypeTraitEntry>& traits,
+                                                        const std::vector<ChildArchetypeNode>& children,
+                                                        const DecoratedProgram& program,
+                                                        const std::vector<InitializerSlot>& slots) {
     if (!slots.empty()) {
         return emit_planned_creation_functions(archetype_name, archetype, traits, children, slots, program);
     }
@@ -2870,6 +2961,16 @@ std::string emit_archetype_creation_functions(const std::string& archetype_name,
     creators << "}\n";
     out << namespace_block(create.ns, creators.str()) << "\n";
     return out.str();
+}
+
+std::string emit_archetype_creation_functions(const std::string& archetype_name,
+                                              const SymbolId& archetype,
+                                              const std::vector<ArchetypeTraitEntry>& traits,
+                                              const std::vector<ChildArchetypeNode>& children,
+                                              const DecoratedProgram& program,
+                                              const std::vector<InitializerSlot>& slots) {
+    return emit_range_value_functions(archetype_name, traits, children, slots, program) +
+           emit_archetype_creation_functions_unchecked(archetype_name, archetype, traits, children, program, slots);
 }
 
 // Canonical-aware, loud on ambiguous simple names — see EnttCodegenUtils::find_trait.
@@ -3746,6 +3847,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << emit_projected_trait_registry_helpers(program);
 
     out << EnttPersistenceEmitter::emit_world_capture(program);
+    out << emit_range_check_functions(program);
     out << EnttRestoreEmitter::emit_world_restore(program);
 
     out << emit_event_structs(program);
@@ -3996,6 +4098,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << "void generated_init_project(entt::registry& registry) {\n";
     out << "    (void)registry;\n";
     out << "    cactus::runtime::entt_backend::reset_quit_request();\n";
+    out << "    cactus::runtime::entt_backend::clear_runtime_faults();\n";
     out << "    cactus::runtime::entt_backend::advance_binding_index_epoch();\n";
     if (tracks_lifecycle) {
         out << "    generated_connect_lifecycle_trackers(registry);\n";
@@ -4019,8 +4122,20 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         }
         // A parent is created before its children, so creation order stays a topological order.
         for (const auto* entity : parent_first_order(EnttCodegenUtils::declared_entities(program)).order) {
-            out << "    " << archetype_create_at_function_name(program.module_name, entity->name).ref() << "(registry, "
-                << EnttCodegenUtils::named_slot_name(entity_symbol(*entity, program)) << ");\n";
+            const auto slot   = EnttCodegenUtils::named_slot_name(entity_symbol(*entity, program));
+            const auto create = archetype_create_at_function_name(program.module_name, entity->name).ref() +
+                                "(registry, " + slot + ");\n";
+            if (!archetype_has_ranged_traits(entity->traits, entity->children, program)) {
+                out << "    " << create;
+                continue;
+            }
+            // A declared entity whose ranged value fails is not created, so its handle goes stale.
+            out << "    if (" << archetype_range_precheck_function_name(program.module_name, entity->name).ref()
+                << "(registry)) {\n";
+            out << "        " << create;
+            out << "    } else {\n";
+            out << "        cactus::runtime::entt_backend::release_entity(registry, " << slot << ");\n";
+            out << "    }\n";
         }
     }
     // ── Editor runtime glue ───────────────────────────────────────────────────

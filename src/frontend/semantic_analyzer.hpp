@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -34,6 +35,13 @@ struct PhaseFieldSource {
     std::string member;  // field name on that source
 };
 
+// A ranged `let int` field's half-open bounds and the container traits they read.
+struct ResolvedFieldRange {
+    std::shared_ptr<const ExprNode> lo;
+    std::shared_ptr<const ExprNode> hi;
+    std::vector<SymbolId> containers;  // first-read order, no duplicates
+};
+
 struct ResolvedField {
     std::string name;
     TypeInfo type;
@@ -45,6 +53,7 @@ struct ResolvedField {
     bool is_synthesized     = false;
     bool is_completion_only = false;
     std::optional<PhaseFieldSource> source_binding;
+    std::optional<ResolvedFieldRange> range;
 };
 
 // Canonical identity mixin — present on all module-scope resolved declarations.
@@ -1680,6 +1689,22 @@ private:
                                 const std::string& context_name,
                                 bool in_rule_handler);
     void validate_trait_default_values(ProgramNode& program);
+    void validate_ranged_fields(ProgramNode& program);
+    void validate_field_range(TraitNode& trait, FieldNode& field);
+    bool validate_range_bound(ExprNode& bound,
+                              const TraitNode& trait,
+                              const std::string& field_name,
+                              std::vector<SymbolId>& containers);
+    bool validate_range_ident(IdentExpr& ident,
+                              const ExprNode& bound,
+                              const TraitNode& trait,
+                              const std::string& context);
+    bool reject_range_bound(const ExprNode& bound, const std::string& context, const std::string& reason);
+    bool validate_container_read(TraitAccessExpr& access,
+                                 const std::string& member,
+                                 const TraitNode& trait,
+                                 const std::string& context,
+                                 std::vector<SymbolId>& containers);
     bool resolve_const_ident(IdentExpr& ident) const;
     bool resolve_const_member(MemberExpr& member, const std::unordered_set<std::string>& shadowed) const;
     bool resolve_asset_member(MemberExpr& member, const SymbolId& asset) const;

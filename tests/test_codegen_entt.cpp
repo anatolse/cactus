@@ -10093,6 +10093,96 @@ TEST_CASE("Codegen EnTT: float literals equal to a std::numbers constant are spe
     CHECK_FALSE(code.contains("1.41421356F"));
 }
 
+static const std::string RANGED_DECLARATIONS =
+    "event tick:\n"
+    "    dt: float\n"
+    "trait Volume:\n"
+    "    let max_x: int = 3\n"
+    "trait Cell:\n"
+    "    let volume: entity_id\n"
+    "    let x: int in range(0, volume[Volume].max_x + 1)\n"
+    "trait Glow:\n"
+    "    let level: int in range(0, 4)\n"
+    "template CellT:\n"
+    "    Cell\n"
+    "entity Grid:\n"
+    "    Volume\n"
+    "entity Corner from CellT:\n"
+    "    Cell:\n"
+    "        volume = Grid\n"
+    "        x = 3\n";
+
+TEST_CASE("Codegen EnTT: traits without ranges emit no range checks", "[codegen-entt][ranged-fields]") {
+    ProgramNode program;
+    auto decorated  = full_pipeline("event tick:\n"
+                                    "    dt: float\n"
+                                    "trait Cell:\n"
+                                    "    let x: int\n"
+                                    "template CellT:\n"
+                                    "    Cell\n"
+                                    "entity C:\n"
+                                    "    Cell\n"
+                                    "rule Make:\n"
+                                    "    on tick:\n"
+                                    "        spawn CellT:\n"
+                                    "            Cell:\n"
+                                    "                x = 3\n"
+                                    "        add Cell to C:\n"
+                                    "            x = 4\n",
+                                    program);
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK_FALSE(code.contains("Range Checks"));
+    CHECK_FALSE(code.contains("check_ranges_"));
+    CHECK_FALSE(code.contains("passes_range_check"));
+    CHECK_FALSE(code.contains("range_value_"));
+}
+
+TEST_CASE("Codegen EnTT: a ranged trait gets one check reading its container", "[codegen-entt][ranged-fields]") {
+    ProgramNode program;
+    auto decorated  = full_pipeline(RANGED_DECLARATIONS, program);
+    const auto code = CppEnttCodegen::generate(decorated);
+    const auto check = generated_function(code, "check_ranges_cell(");
+    CHECK(check.contains("if (!registry.valid(value.volume))"));
+    CHECK(check.contains("Volume>(value.volume)"));
+    CHECK(check.contains("const int hi = cactus::num::add(cactus_gen_container_0->max_x, 1);"));
+    CHECK(check.contains("if (value.x < lo || value.x >= hi)"));
+    CHECK_FALSE(code.contains("check_ranges_volume("));
+}
+
+TEST_CASE("Codegen EnTT: a declared entity with a ranged trait loads only after its check",
+          "[codegen-entt][ranged-fields]") {
+    ProgramNode program;
+    auto decorated  = full_pipeline(RANGED_DECLARATIONS, program);
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.contains("if (::cactus_gen::detail::corner_nodes::passes_range_checks(registry)) {"));
+    CHECK(code.contains("cactus::runtime::entt_backend::release_entity(registry, "));
+    CHECK(code.contains("::cactus_gen::detail::create_grid_at(registry, "));
+    CHECK_FALSE(code.contains("grid_nodes::passes_range_checks"));
+}
+
+TEST_CASE("Codegen EnTT: immediate spawn, add and project of a ranged trait check before writing",
+          "[codegen-entt][ranged-fields]") {
+    ProgramNode program;
+    auto decorated  = full_pipeline(RANGED_DECLARATIONS +
+                                       "rule Make:\n"
+                                       "    on tick:\n"
+                                       "        spawn CellT:\n"
+                                       "            Cell:\n"
+                                       "                volume = Grid\n"
+                                       "                x = 9\n"
+                                       "        add Glow to Grid:\n"
+                                       "            level = 7\n"
+                                       "        project Glow to Grid:\n"
+                                       "            level = 5\n",
+                                    program);
+    const auto code = CppEnttCodegen::generate(decorated);
+    const auto make = generated_function(code, "make_on(");
+    CHECK(make.contains("::cactus_gen::detail::cell_t_nodes::range_value_node_cell()"));
+    CHECK(make.contains("cactus_gen_range_value_0.x = 9;"));
+    CHECK(make.contains("passes_range_check(::cactus_gen::detail::check_ranges_glow(registry, "));
+    CHECK(make.contains("Glow>(registry, ::cactus_gen::detail::generated_named_slots().test.Grid) = "));
+}
+
 TEST_CASE("Codegen EnTT: guards name a compound predicate instead of negating it in place", "[codegen-entt][lint]") {
     ProgramNode program;
     auto decorated  = full_pipeline("event tick:\n"

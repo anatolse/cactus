@@ -222,7 +222,8 @@ trait_decl      = [ "pub" ] "trait" IDENTIFIER
                     DEDENT ] ;
 
 field_decl      = field_modifiers ( "let" | "var" ) IDENTIFIER ":" type_ref
-                  [ "=" expression ] NEWLINE ;
+                  [ field_range ] [ "=" expression ] NEWLINE ;
+field_range     = "in" "range" "(" expression "," expression ")" ;
 field_modifiers = { "persist" | "pub" } ;
 ```
 
@@ -242,6 +243,24 @@ trait Health:
 ```
 
 A `let` field gets its value only when a value of its trait is made: from the field default, an entity or template body, a template argument, a `spawn` or `children:` override block, an `add T:` block (attaching `T` or replacing a carried `T` whole), or a `project T:` block. Every other write is a compile error, through any alias, binding or named entity: plain and compound assignment, a member write into a `let` vector or struct field (`h.pos.x = 1.0`), and a `set` that names the field (§3.16). The error names the field and suggests `add T:` or declaring the field `var`. A `var` field can also be written by handlers.
+
+A `let` field of type `int` may declare a *range*: `let x: int in range(a, b)`. The range is half-open, with the same meaning as the loop `range` (§3.16): a value `v` is in range when `a <= v` and `v < b`. A range on a `var` field, on any other type, or with a `step` argument is a compile error, and a field declares at most one range.
+
+Each bound is an `int` expression that reads only literals, constants, `let` fields of the same trait (bare names), and *container reads* `f[T].g`, where `f` is a `let entity_id` field of the same trait and `g` is a `let` field of trait `T`. Operators are allowed and follow the total `int` rules (§3.15). Calls, `var` fields, named entities and any other read are compile errors that name the bound. Each `T` read this way is a *container trait*:
+
+```cactus
+trait Volume:
+    let min_x: int = 0
+    let max_x: int = 15
+
+trait Cell:
+    let volume: entity_id
+    let x: int in range(volume[Volume].min_x, volume[Volume].max_x + 1)
+```
+
+A container trait gets its value only when its entity is made: from an entity or template body, a `spawn` override block, or a `children:` override block. An `add T:` or `project T:` of a container trait anywhere in the program, including an extern rule's `add` capability, is a compile error that names the trait and a ranged field that reads it. So the bounds a range reads never change. Removing a container trait or destroying its entity stays allowed and leaves values already made unchanged.
+
+A ranged value is checked whenever a value of its trait is made (§4.4, §5.3). A range is a domain fact, not a performance control; the backend may use it to choose storage.
 
 `persist` marks a field as durable game-save state; it carries no format, storage, or scene-survival meaning of its own — see §7.6 for what it makes eligible and how a save is produced.
 
@@ -1577,6 +1596,13 @@ rule StopBurning:
 - `T` must be a durable trait: a trait some handler projects is rejected, and so is a trigger in a `pairs:` rule. World restore fires no trigger.
 - A program with no lifecycle trigger does no tracking; only traits named by a trigger are watched.
 
+For ranged `let` fields (§3.6):
+
+- Each ranged field is checked whenever a value of its trait is made: when declared entities load, when a `spawn` command applies at commit, when an `add T:` command applies, when a `project T:` block runs, and when a document is restored (§7.6). The bounds are evaluated against the world state at the command's position.
+- The check fails when a container handle is stale, when it names an entity without the container trait, or when the value is out of range.
+- A failed check makes the whole operation do nothing: a spawn creates no entity and no children, so its handle stays stale and no trigger fires; an `add` leaves the entity as it was; a `project` leaves the trait unprojected; a declared entity is not created and its named handle is stale. The runtime reports a fault naming the trait, the field, the value and the evaluated range. Game code observes only that the command had no effect.
+- Native code that creates entities directly, bypassing commands, is outside the check.
+
 ### 4.5 Purity and Recursion
 
 - user `func` declarations are pure
@@ -1719,7 +1745,7 @@ The cpp-entt backend does not lower the `load` statement yet, so today `load` fi
 
 ### 5.3 Structural Changes
 
-`spawn`, `destroy`, `add`, `remove`, and `set` are buffered in an activation-local deterministic command list, applied in handler execution-graph order, then entity iteration order (creation order for a pass without `order by:`, §4.7), then statement order. Each command acts on the entity state at its position in the list: `add` then `set` patches the added trait, `remove` then `set` does nothing, and when several `set`s name the same field of the same entity the last one wins. An activation runs its phase handlers, dispatches emitted events, and drains the event cascade before applying structural commands. Ordinary trait writes remain visible to later scheduled handlers; structural changes do not alter entity selection within one commit round. A spawn committed after periodic repetition N is selectable in repetition N+1.
+`spawn`, `destroy`, `add`, `remove`, and `set` are buffered in an activation-local deterministic command list, applied in handler execution-graph order, then entity iteration order (creation order for a pass without `order by:`, §4.7), then statement order. Each command acts on the entity state at its position in the list: `add` then `set` patches the added trait, `remove` then `set` does nothing, and when several `set`s name the same field of the same entity the last one wins. A `spawn` or `add` whose ranged field fails its check (§4.4) does nothing at its position; a container spawned earlier in the list is visible to that check. An activation runs its phase handlers, dispatches emitted events, and drains the event cascade before applying structural commands. Ordinary trait writes remain visible to later scheduled handlers; structural changes do not alter entity selection within one commit round. A spawn committed after periodic repetition N is selectable in repetition N+1.
 
 Events emitted during an activation are delivered in *generations*. The handlers dispatched at an activation's start are generation 0; the occurrences runs of generation d emit form generation d + 1. Every occurrence of one generation is delivered before any of the next, and within a generation occurrences are delivered in the order they were produced. Delayed occurrences delivered at the start of a cascade belong to generation 1, ahead of what generation 0 emits. Each commit round starts a new cascade whose lifecycle deliveries are its generation 0. A run's *position* is (commit round, generation), the activation's own cascade being round 0; positions are ordered lexicographically, and a run at an earlier position completes before one at a later position starts.
 
@@ -2069,7 +2095,7 @@ A rejected restore leaves the world untouched — no partial replacement, and no
 
 - `adapter_unavailable` — no adapter is registered to read from
 - `io_failure` — the adapter's `read` reported failure (missing slot, corrupt storage, and similar)
-- `invalid_data` — the document is structurally unsound (unknown archetype/trait/field, a dangling or duplicate identity, a hierarchy cycle, a child recorded before its parent in a program that never reparents (§3.7), a configured size/depth limit exceeded, or a record whose trait set is not a reachable archetype of its node (§5.0); states, `Parent` and traits that may be present anywhere are not compared)
+- `invalid_data` — the document is structurally unsound (unknown archetype/trait/field, a dangling or duplicate identity, a hierarchy cycle, a child recorded before its parent in a program that never reparents (§3.7), a configured size/depth limit exceeded, or a record whose trait set is not a reachable archetype of its node (§5.0), a ranged `let` value outside its range whose container is in the document (§3.6); states, `Parent` and traits that may be present anywhere are not compared)
 - `incompatible_schema` — the document's schema descriptor does not match the running program's
 - `unsupported_value` — every field is structurally valid but some value cannot be represented (wrong kind, out of range, or an unknown enum variant)
 - `resource_preparation_failure` — the document is otherwise valid but names an asset or input declaration this build cannot resolve to a handle

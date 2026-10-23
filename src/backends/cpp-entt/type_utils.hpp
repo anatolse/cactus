@@ -196,6 +196,13 @@ DetailName archetype_create_at_function_name(const std::string& module_name, con
 DetailName archetype_node_create_function_name(const std::string& module_name,
                                                const std::string& archetype_name,
                                                const std::vector<std::string>& role_path);
+// The check of a trait with ranged fields, and the value an archetype node gives such a trait.
+DetailName range_check_function_name(const std::string& module_name, const std::string& trait_name);
+DetailName range_value_function_name(const std::string& module_name,
+                                     const std::string& archetype_name,
+                                     const std::vector<std::string>& role_path,
+                                     const std::string& trait_name);
+DetailName archetype_range_precheck_function_name(const std::string& module_name, const std::string& archetype_name);
 DetailName archetype_node_create_at_function_name(const std::string& module_name,
                                                   const std::string& archetype_name,
                                                   const std::vector<std::string>& role_path);

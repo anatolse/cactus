@@ -110,6 +110,7 @@ private:
 
     // Sub-parsers
     FieldNode parse_field();
+    std::optional<FieldRange> parse_field_range();
     FieldModifiers parse_field_modifiers();
     EventHandlerNode parse_event_handler();
     ExternHandlerNode parse_extern_handler();

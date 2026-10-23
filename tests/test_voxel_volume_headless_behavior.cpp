@@ -244,6 +244,26 @@ TEST_CASE("bounds too far apart for an int extent are too many cells", "[runtime
           cactus_gen::stdlib::voxel::volume::VolumeIssue::Valid);
 }
 
+TEST_CASE("a cell one past its volume's bounds is not created", "[runtime][codegen-entt][stdlib-voxel-volume]") {
+    World world;
+    world.fill();
+    const auto terrain = slots().voxel_volume.Terrain;
+    const auto spiller = slots().voxel_volume.Spiller;
+    backend::clear_runtime_faults();
+    world.registry.get<cactus_gen::voxel_volume::Overflow>(spiller).armed = true;
+    world.frame();
+    CHECK_FALSE(world.registry.valid(world.registry.get<cactus_gen::voxel_volume::Overflow>(spiller).cell));
+    CHECK(world.cell_at(terrain, 4, 0, 0) == entt::entity{entt::null});
+    CHECK(world.cell_count(terrain) == 49);
+    const auto& faults = backend::runtime_faults();
+    REQUIRE(faults.size() == 1);
+    CHECK(faults[0].trait == "Cell");
+    CHECK(faults[0].field == "x");
+    CHECK(faults[0].value == 4);
+    CHECK(faults[0].lo == 0);
+    CHECK(faults[0].hi == 4);
+}
+
 TEST_CASE("cell probes find air and solid cells, or nothing", "[runtime][codegen-entt][stdlib-voxel-volume]") {
     World world;
     world.fill();

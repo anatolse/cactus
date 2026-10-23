@@ -7,6 +7,7 @@
 
 #include "backends/cpp-entt/accumulation_plan.hpp"
 #include "backends/cpp-entt/persistence_emitter.hpp"
+#include "backends/cpp-entt/range_checks.hpp"
 #include "backends/cpp-entt/trait_writers.hpp"
 #include "backends/cpp-entt/type_utils.hpp"
 
@@ -1768,21 +1769,166 @@ static std::string emit_spawn_overrides(const std::string& entity_name,
     return out.str();
 }
 
-// ── Hierarchical spawn expansion (dsl-hierarchical-entity-templates D9) ─────
+// ── Range pre-checks of a spawn ─────────────────────────────────────────────
 
-static const TemplateNode* find_template_node(const DecoratedProgram& program,
-                                                                     const SymbolId& template_id) {
+// The text an override assigns to a field at the check: its hoisted value, or the expression itself.
+using OverrideValue = std::function<std::string(const FieldAssignment&)>;
+
+static const TemplateNode* find_template_definition(const DecoratedProgram& program, const SymbolId& template_id) {
     if (program.ast == nullptr) {
         return nullptr;
     }
     for (const auto& decl : program.ast->declarations) {
         const auto* tmpl = std::get_if<TemplateNode>(&decl);
-        if (tmpl != nullptr && tmpl->resolved_template_id.has_value() && *tmpl->resolved_template_id == template_id &&
-            !tmpl->children.empty()) {
+        if (tmpl != nullptr && tmpl->resolved_template_id == template_id) {
             return tmpl;
         }
     }
     return nullptr;
+}
+
+struct NodeRangeChecks {
+    std::string module;
+    std::string archetype;
+    std::string arguments;
+    std::string ind;
+    const OverrideValue* override_value = nullptr;
+    const DecoratedProgram* program     = nullptr;
+    std::vector<std::string> conditions;  // one passes_range_check call per checked value
+};
+
+static void emit_node_range_check(std::ostringstream& out,
+                                  NodeRangeChecks& context,
+                                  const std::vector<std::string>& role_path,
+                                  const ResolvedTrait& trait,
+                                  const ArchetypeTraitEntry& entry,
+                                  bool carried,
+                                  const ArchetypeTraitEntry* override_entry) {
+    const auto cpp = EnttCodegenUtils::trait_cpp_name(entry.resolved_trait_id, entry.trait_name, *context.program);
+    const auto initial =
+        carried ? range_value_function_name(context.module, context.archetype, role_path, trait.name).ref() + "(" +
+                      context.arguments + ")"
+                : cpp + "{}";
+    const auto value = "cactus_gen_range_value_" + std::to_string(context.conditions.size());
+    out << context.ind << "    auto " << value << " = " << initial << ";\n";
+    if (override_entry != nullptr) {
+        for (const auto& assignment : override_entry->assignments) {
+            out << context.ind << "    " << value << "." << cpp_escaped(assignment.name) << " = "
+                << (*context.override_value)(assignment) << ";\n";
+        }
+    }
+    context.conditions.push_back(emit_range_check_passes(trait, value));
+}
+
+// NOLINTNEXTLINE(misc-no-recursion) -- walks the spawned template's child tree
+static void emit_node_range_checks(std::ostringstream& out,
+                                   NodeRangeChecks& context,
+                                   const std::vector<ArchetypeTraitEntry>& traits,
+                                   const std::vector<ChildArchetypeNode>& children,
+                                   const std::vector<ArchetypeTraitEntry>& overrides,
+                                   const std::vector<ChildOverrideNode>& child_overrides,
+                                   std::vector<std::string>& role_path) {
+    const auto ranged = [&](const ArchetypeTraitEntry& entry) {
+        return find_ranged_trait(*context.program, entry.resolved_trait_id, entry.trait_name);
+    };
+    const auto override_of = [&](const ResolvedTrait* trait) -> const ArchetypeTraitEntry* {
+        const auto found = std::ranges::find_if(overrides, [&](const auto& entry) { return ranged(entry) == trait; });
+        return found == overrides.end() ? nullptr : &*found;
+    };
+    std::vector<const ResolvedTrait*> carried;
+    for (const auto& entry : traits) {
+        if (const auto* trait = ranged(entry)) {
+            carried.push_back(trait);
+            emit_node_range_check(out, context, role_path, *trait, entry, true, override_of(trait));
+        }
+    }
+    for (const auto& entry : overrides) {
+        if (const auto* trait = ranged(entry); trait != nullptr && !std::ranges::contains(carried, trait)) {
+            emit_node_range_check(out, context, role_path, *trait, entry, false, &entry);
+        }
+    }
+    static const std::vector<ArchetypeTraitEntry> NO_TRAITS;
+    static const std::vector<ChildOverrideNode> NO_CHILDREN;
+    for (const auto& child : children) {
+        const auto found = std::ranges::find(child_overrides, child.role, &ChildOverrideNode::role);
+        const bool has   = found != child_overrides.end();
+        role_path.push_back(child.role);
+        emit_node_range_checks(out,
+                               context,
+                               child.traits,
+                               child.children,
+                               has ? found->traits : NO_TRAITS,
+                               has ? found->children : NO_CHILDREN,
+                               role_path);
+        role_path.pop_back();
+    }
+}
+
+// `const bool <ok> = ...;`: whether every ranged trait the spawned tree would carry, with the
+// site's overrides applied, passes its check. Empty when the spawn makes no ranged value.
+static std::string emit_spawn_range_precheck(const SymbolId& template_id,
+                                             const std::vector<ArchetypeTraitEntry>& root_overrides,
+                                             const std::vector<ChildOverrideNode>& child_overrides,
+                                             const std::string& ok_name,
+                                             const std::string& ind,
+                                             const OverrideValue& override_value,
+                                             const DecoratedProgram& program) {
+    const auto* tmpl = find_template_definition(program, template_id);
+    if (tmpl == nullptr) {
+        return {};
+    }
+    std::string arguments;
+    for (const auto& slot : tmpl->initializers) {
+        if (slot.value == nullptr) {
+            arguments += (arguments.empty() ? "" : ", ") + initializer_slot_name(slot.index);
+        }
+    }
+    NodeRangeChecks context{.module         = template_creation_module(template_id, program),
+                            .archetype      = template_id.local_name,
+                            .arguments      = std::move(arguments),
+                            .ind            = ind,
+                            .override_value = &override_value,
+                            .program        = &program,
+                            .conditions     = {}};
+    std::ostringstream values;
+    std::vector<std::string> role_path;
+    emit_node_range_checks(values, context, tmpl->traits, tmpl->children, root_overrides, child_overrides, role_path);
+    if (context.conditions.empty()) {
+        return {};
+    }
+    // `&&` stops at the first failure, so one spawn reports one fault.
+    return ind + "const bool " + ok_name + " = [&]() {\n" + values.str() + ind + "    return " +
+           join_strings(context.conditions, " && ") + ";\n" + ind + "}();\n";
+}
+
+// `precheck`, then `on_fail` when it failed. Empty when the spawn makes no ranged value.
+static std::string emit_spawn_range_guard(const std::string& precheck,
+                                          const std::string& ok_name,
+                                          const std::string& ind,
+                                          const std::string& on_fail) {
+    if (precheck.empty()) {
+        return {};
+    }
+    return precheck + ind + "if (!" + ok_name + ") { " + on_fail + " }\n";
+}
+
+static OverrideValue spawn_override_value(bool deferred,
+                                          const std::vector<std::string>& trait_names,
+                                          const DecoratedProgram& program,
+                                          const std::unordered_set<std::string>& pointer_aliases,
+                                          const PairCodegenScope* pair_scope) {
+    return [=, &trait_names, &program, &pointer_aliases](const FieldAssignment& assignment) {
+        return deferred ? deferred_field_value_name(assignment)
+                        : rewrite_expr(*assignment.value, trait_names, program, pointer_aliases, {}, pair_scope);
+    };
+}
+
+// ── Hierarchical spawn expansion (dsl-hierarchical-entity-templates D9) ─────
+
+static const TemplateNode* find_template_node(const DecoratedProgram& program,
+                                                                     const SymbolId& template_id) {
+    const auto* tmpl = find_template_definition(program, template_id);
+    return tmpl != nullptr && !tmpl->children.empty() ? tmpl : nullptr;
 }
 
 // Spawn sites with child overrides expand the tree inline: create each node
@@ -1910,6 +2056,16 @@ static std::string emit_hierarchical_spawn_expansion(const SymbolId& template_id
                                     EnttPersistenceEmitter::node_retains_construction(program, template_id),
                                     graph_runtime);
     };
+    const std::string ranges_ok = gen_temp_name("ranges_ok", location);
+    const auto precheck         = [&](const std::string& ind) {
+        return emit_spawn_range_precheck(template_id,
+                                         root_overrides,
+                                         child_overrides,
+                                         ranges_ok,
+                                         ind,
+                                         spawn_override_value(graph_runtime, trait_names, program, pointer_aliases, pair_scope),
+                                         program);
+    };
     if (graph_runtime) {
         emit_deferred_override_values(
             out, "    ", root_overrides, child_overrides, trait_names, program, pointer_aliases, pair_scope);
@@ -1917,11 +2073,13 @@ static std::string emit_hierarchical_spawn_expansion(const SymbolId& template_id
         out << "    cactus::runtime::entt_backend::generated_queue_structural_command(\n";
         out << "        cactus::runtime::entt_backend::StructuralCommand::Kind::Spawn,\n";
         out << "        [=](entt::registry& registry) mutable {\n";
+        out << emit_spawn_range_guard(precheck("            "), ranges_ok, "            ", "return;");
         out << "            auto " << committed_name << " = "
             << archetype_node_create_at_function_name(tmpl_module, tmpl_local, role_path).ref() << "(registry, "
             << spawned_name << arguments << ");\n";
         out << overrides(committed_name, 3);
     } else {
+        out << emit_spawn_range_guard(precheck("    "), ranges_ok, "    ", "return entt::entity{entt::null};");
         out << "    auto " << spawned_name << " = "
             << archetype_node_create_function_name(tmpl_module, tmpl_local, role_path).ref() << "(registry" << arguments
             << ");\n";
@@ -2017,6 +2175,16 @@ static std::string emit_spawn_expression(const SpawnExpr& spawn,
                                     EnttPersistenceEmitter::node_retains_construction(program, tmpl_id),
                                     graph_runtime);
     };
+    const std::string ranges_ok = gen_temp_name("ranges_ok", spawn.location);
+    const auto precheck         = [&](const std::string& ind) {
+        return emit_spawn_range_precheck(tmpl_id,
+                                         spawn.overrides,
+                                         {},
+                                         ranges_ok,
+                                         ind,
+                                         spawn_override_value(graph_runtime, trait_names, program, pointer_aliases, pair_scope),
+                                         program);
+    };
     if (graph_runtime) {
         emit_deferred_override_values(
             out, "    ", spawn.overrides, {}, trait_names, program, pointer_aliases, pair_scope);
@@ -2024,11 +2192,13 @@ static std::string emit_spawn_expression(const SpawnExpr& spawn,
         out << "    cactus::runtime::entt_backend::generated_queue_structural_command(\n";
         out << "        cactus::runtime::entt_backend::StructuralCommand::Kind::Spawn,\n";
         out << "        [=](entt::registry& registry) mutable {\n";
+        out << emit_spawn_range_guard(precheck("            "), ranges_ok, "            ", "return;");
         out << "            " << template_create_at_ref(tmpl_id, program) << "(registry, " << spawned_name << arguments
             << ");\n";
         out << overrides(3);
         out << "        });\n";
     } else {
+        out << emit_spawn_range_guard(precheck("    "), ranges_ok, "    ", "return entt::entity{entt::null};");
         out << "    auto " << spawned_name << " = " << template_create_ref(tmpl_id, program) << "(registry" << arguments
             << ");\n";
         out << overrides(1);
@@ -3028,6 +3198,16 @@ static std::string emit_spawn_stmt(const SpawnStmt& s,
                                     EnttPersistenceEmitter::node_retains_construction(program, tmpl_id),
                                     graph_runtime);
     };
+    const std::string ranges_ok = gen_temp_name("ranges_ok", s.location);
+    const auto precheck         = [&](const std::string& check_indent) {
+        return emit_spawn_range_precheck(tmpl_id,
+                                         s.overrides,
+                                         {},
+                                         ranges_ok,
+                                         check_indent,
+                                         spawn_override_value(graph_runtime, trait_names, program, pointer_aliases, pair_scope),
+                                         program);
+    };
     if (graph_runtime) {
         emit_deferred_override_values(
             result, ind + "    ", s.overrides, {}, trait_names, program, pointer_aliases, pair_scope);
@@ -3036,14 +3216,23 @@ static std::string emit_spawn_stmt(const SpawnStmt& s,
         result << ind << "    cactus::runtime::entt_backend::generated_queue_structural_command(\n";
         result << ind << "        cactus::runtime::entt_backend::StructuralCommand::Kind::Spawn,\n";
         result << ind << "        [=](entt::registry& registry) mutable {\n";
+        result << emit_spawn_range_guard(precheck(ind + "            "), ranges_ok, ind + "            ", "return;");
         result << ind << "            " << template_create_at_ref(tmpl_id, program) << "(registry, " << spawned_name
                << arguments << ");\n";
         result << overrides(indent + 3);
         result << ind << "        });\n";
     } else {
+        const auto check = precheck(ind + "    ");
+        result << check;
+        if (!check.empty()) {
+            result << ind << "    if (" << ranges_ok << ") {\n";
+        }
         result << ind << "    auto " << spawned_name << " = " << template_create_ref(tmpl_id, program) << "(registry"
                << arguments << ");\n";
         result << overrides(indent + 1);
+        if (!check.empty()) {
+            result << ind << "    }\n";
+        }
     }
     result << ind << "}\n";
     return result.str();
@@ -3073,6 +3262,77 @@ static const FieldAssignment* reparent_value(const AddTraitStmt& add, const Deco
     }
     const auto parent = std::ranges::find(add.args, "parent", &FieldAssignment::name);
     return parent == add.args.end() ? nullptr : &*parent;
+}
+
+// A deferred `add` at commit: the value from the hoisted args, its range check, then the write.
+static std::string emit_deferred_add_write(const AddTraitStmt& s,
+                                           const std::string& cpp,
+                                           const std::optional<EnttCodegenUtils::StateVariant>& variant,
+                                           const ResolvedTrait* ranged,
+                                           const std::string& target_name,
+                                           const std::string& ind) {
+    const std::string existing_name = gen_temp_name("existing", s.location);
+    const std::string value_name    = gen_temp_name("value", s.location);
+    std::ostringstream result;
+    if (!s.args.empty()) {
+        result << ind << "auto* " << existing_name << " = registry.try_get<" << cpp << ">(" << target_name << ");\n";
+        result << ind << "auto " << value_name << " = " << existing_name << " ? *" << existing_name << " : " << cpp
+               << "{};\n";
+        for (const auto& arg : s.args) {
+            result << ind << value_name << "." << cpp_escaped(arg.name) << " = " << deferred_field_value_name(arg)
+                   << ";\n";
+        }
+    }
+    const auto value = s.args.empty() ? std::string{} : value_name;
+    if (ranged != nullptr) {
+        result << emit_range_check_statement(*ranged, value.empty() ? cpp + "{}" : value, "return;", ind);
+    }
+    result << ind << "::cactus_gen::detail::cancel_projected<" << cpp << ">(" << target_name << ");\n";
+    result << ind << emit_trait_write(cpp, variant, target_name, value);
+    return result.str();
+}
+
+// `<value>`: the target's current `cpp` value, or a default one, with `args` written over it.
+static void emit_candidate_value(std::ostringstream& out,
+                                 const std::string& cpp,
+                                 const std::string& target,
+                                 const std::string& existing_name,
+                                 const std::string& value_name,
+                                 const std::vector<FieldAssignment>& args,
+                                 const OverrideValue& value_of,
+                                 const std::string& ind) {
+    out << ind << "const auto* " << existing_name << " = registry.try_get<" << cpp << ">(" << target << ");\n";
+    out << ind << "auto " << value_name << " = " << existing_name << " != nullptr ? *" << existing_name << " : "
+        << cpp << "{};\n";
+    for (const auto& arg : args) {
+        out << ind << value_name << "." << cpp_escaped(arg.name) << " = " << value_of(arg) << ";\n";
+    }
+}
+
+// An immediate `add` of a trait with ranged fields: the value is built first and written only when it passes.
+static std::string emit_immediate_ranged_add(const AddTraitStmt& s,
+                                             const ResolvedTrait& ranged,
+                                             const std::string& target,
+                                             const std::string& cpp,
+                                             const std::string& retain,
+                                             const std::string& ind,
+                                             const OverrideValue& value_of) {
+    const std::string existing_name = gen_temp_name("existing", s.location);
+    const std::string value_name    = gen_temp_name("value", s.location);
+    std::ostringstream result;
+    result << ind << "if (registry.valid(" << target << ")) {\n";
+    if (s.args.empty()) {
+        result << ind << "    const auto " << value_name << " = " << cpp << "{};\n";
+    } else {
+        emit_candidate_value(result, cpp, target, existing_name, value_name, s.args, value_of, ind + "    ");
+    }
+    result << ind << "    if (" << emit_range_check_passes(ranged, value_name) << ") {\n";
+    result << ind << "        ::cactus_gen::detail::cancel_projected<" << cpp << ">(" << target << ");\n";
+    result << ind << "        registry.emplace_or_replace<" << cpp << ">(" << target << ", " << value_name << ");\n";
+    result << retain;
+    result << ind << "    }\n";
+    result << ind << "}\n";
+    return result.str();
 }
 
 static std::string emit_add_trait_stmt(const AddTraitStmt& s,
@@ -3106,6 +3366,7 @@ static std::string emit_add_trait_stmt(const AddTraitStmt& s,
     const auto write_trait = [&](const std::string& entity_expr, const std::string& value) {
         return emit_trait_write(cpp, variant, entity_expr, value);
     };
+    const auto* ranged = find_ranged_trait(program, s.resolved_trait_id, s.trait_name);
     if (!program.execution_graph.phases.empty()) {
         std::ostringstream result;
         result << ind << "{\n";
@@ -3121,24 +3382,16 @@ static std::string emit_add_trait_stmt(const AddTraitStmt& s,
                    << EnttCodegenUtils::hierarchy_index_expr(program) << ", " << target_name << ", "
                    << deferred_field_value_name(*parent) << ")) { return; }\n";
         }
-        result << ind << "            ::cactus_gen::detail::cancel_projected<" << cpp << ">(" << target_name << ");\n";
-        if (s.args.empty()) {
-            result << ind << "            " << write_trait(target_name, "");
-        } else {
-            result << ind << "            auto* " << existing_name << " = registry.try_get<" << cpp << ">("
-                   << target_name << ");\n";
-            result << ind << "            auto " << value_name << " = " << existing_name << " ? *" << existing_name
-                   << " : " << cpp << "{};\n";
-            for (const auto& arg : s.args) {
-                result << ind << "            " << value_name << "." << cpp_escaped(arg.name) << " = "
-                       << deferred_field_value_name(arg) << ";\n";
-            }
-            result << ind << "            " << write_trait(target_name, value_name);
-        }
+        result << emit_deferred_add_write(s, cpp, variant, ranged, target_name, ind + "            ");
         result << retain_line(target_name, ind + "            ");
         result << ind << "        });\n";
         result << ind << "}\n";
         return result.str();
+    }
+    if (ranged != nullptr) {
+        return emit_immediate_ranged_add(s, *ranged, target, cpp, retain_line(target, ind + "        "), ind, [&](const FieldAssignment& arg) {
+            return rewrite_expr(*arg.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
+        });
     }
     if (s.args.empty()) {
         if (GUARDED) {
@@ -3300,7 +3553,26 @@ static std::string emit_project_trait_stmt(const ProjectTraitStmt& s,
     const bool is_marker    = resolved_pt == nullptr || resolved_pt->fields.empty();
     std::ostringstream result;
     result << ind << "if (registry.valid(" << target << ")) {\n";
-    if (is_marker) {
+    const auto* ranged = find_ranged_trait(program, s.resolved_trait_id, s.trait_name);
+    if (ranged != nullptr) {
+        const std::string existing_name  = gen_temp_name("existing", s.location);
+        const std::string candidate_name = gen_temp_name("candidate", s.location);
+        emit_candidate_value(result,
+                             cpp,
+                             target,
+                             existing_name,
+                             candidate_name,
+                             s.args,
+                             [&](const FieldAssignment& arg) {
+                                 return rewrite_expr(
+                                     *arg.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
+                             },
+                             ind + "    ");
+        result << ind << "    if (" << emit_range_check_passes(*ranged, candidate_name) << ") {\n";
+        result << ind << "        ::cactus_gen::detail::project<" << cpp << ">(registry, " << target
+               << ") = " << candidate_name << ";\n";
+        result << ind << "    }\n";
+    } else if (is_marker) {
         result << ind << "    ::cactus_gen::detail::project<" << cpp << ">(registry, " << target << ");\n";
     } else {
         const std::string projected_name = gen_temp_name("projected", s.location);

@@ -45,6 +45,34 @@ void request_quit() noexcept;
 [[nodiscard]] bool quit_requested() noexcept;
 void reset_quit_request() noexcept;
 
+// ── Range faults ────────────────────────────────────────────────────────────
+// A ranged `let` value made outside its range, or against a missing container,
+// makes its command do nothing. The host reads why from this log; game code
+// only observes that nothing happened. Native code that creates entities
+// directly, bypassing commands, is not checked.
+enum class RangeFaultReason : std::uint8_t { OutOfRange, StaleContainer, MissingContainerTrait };
+
+struct RangeFault {
+    std::string_view trait;
+    std::string_view field;
+    std::int32_t value = 0;
+    std::int32_t lo    = 0;
+    std::int32_t hi    = 0;
+    RangeFaultReason reason = RangeFaultReason::OutOfRange;
+};
+
+inline constexpr std::size_t RUNTIME_FAULT_LOG_CAPACITY = 64;
+
+// Records the fault, dropping the oldest past capacity, and prints a warning.
+void report_range_fault(const RangeFault& fault);
+// Reports `fault` when the check failed; true when it passed.
+[[nodiscard]] bool passes_range_check(const std::optional<RangeFault>& fault);
+[[nodiscard]] const std::deque<RangeFault>& runtime_faults() noexcept;
+// Every fault reported since the last clear, including those the log dropped.
+[[nodiscard]] std::size_t runtime_fault_count() noexcept;
+void clear_runtime_faults() noexcept;
+[[nodiscard]] std::string describe_range_fault(const RangeFault& fault);
+
 // ── Frame-local consumed input (editor input override) ────────────────────────
 // Consumption is keyed by physical raylib key / mouse button code, not by
 // declared action, so consuming an editor control also hides same-key gameplay

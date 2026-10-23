@@ -7810,6 +7810,9 @@ void SemanticAnalyzer::collect_rule_dependency(const RuleNode& rule, std::size_t
     const auto spatial_join =
         rule.pairs.has_value() ? recognize_spatial_join(rule, pair_scope, errors_, !equality_join.has_value())
                                : std::nullopt;
+    if (equality_join.has_value() && !spatial_join.has_value()) {
+        report_hashed_key_parts(rule, *equality_join);
+    }
     for (std::size_t handler_index = 0; handler_index < rule.handlers.size(); ++handler_index) {
         const auto& handler = rule.handlers[handler_index];
         collect_rule_deps(handler.body, dep);
@@ -9707,16 +9710,14 @@ void collect_conjunct_paths(const ExprNode& expr, ExprPath& path, std::vector<Ex
 
 }  // namespace
 
-bool SemanticAnalyzer::immutable_member_value(const ExprNode& expr,
-                                              std::size_t binding,
-                                              const std::string& binding_name,
-                                              const PairScope& pair_scope) const {
-    if (const auto* ident = std::get_if<IdentExpr>(&expr.expr); ident != nullptr) {
-        return ident->name == binding_name;
-    }
+std::optional<std::pair<SymbolId, const ResolvedField*>> SemanticAnalyzer::member_key_field(
+    const ExprNode& expr,
+    std::size_t binding,
+    const std::string& binding_name,
+    const PairScope& pair_scope) const {
     const auto* member = std::get_if<MemberExpr>(&expr.expr);
     if (member == nullptr || member->object == nullptr) {
-        return false;
+        return std::nullopt;
     }
     std::optional<SymbolId> trait;
     if (const auto* access = std::get_if<TraitAccessExpr>(&member->object->expr);
@@ -9733,15 +9734,81 @@ bool SemanticAnalyzer::immutable_member_value(const ExprNode& expr,
     }
     const auto* declaration = trait.has_value() ? find_resolved_trait(*trait) : nullptr;
     if (declaration == nullptr) {
-        return false;
+        return std::nullopt;
     }
     const auto field = std::ranges::find(declaration->fields, member->member, &ResolvedField::name);
     if (field == declaration->fields.end() || !field->is_let) {
-        return false;
+        return std::nullopt;
     }
     const auto kind = field->type.kind;
-    return kind == TypeKind::Int || kind == TypeKind::Bool || kind == TypeKind::Enum || kind == TypeKind::EntityId;
+    if (kind != TypeKind::Int && kind != TypeKind::Bool && kind != TypeKind::Enum && kind != TypeKind::EntityId) {
+        return std::nullopt;
+    }
+    return std::pair{*trait, &*field};
 }
+
+namespace {
+
+// Collects the container fields a range bound reads through; false when it
+// reads the member's own fields, so the range differs per member.
+// NOLINTNEXTLINE(misc-no-recursion) -- a bound is an expression tree
+bool collect_bound_containers(const ExprNode& bound, std::vector<std::string>& containers) {
+    return std::visit(
+        [&](const auto& node) -> bool {
+            using E = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<E, LiteralExpr>) {
+                return true;
+            } else if constexpr (std::is_same_v<E, IdentExpr>) {
+                return node.resolved_const_id.has_value();
+            } else if constexpr (std::is_same_v<E, MemberExpr>) {
+                if (node.resolved_const_id.has_value() || node.resolved_enum_member.has_value()) {
+                    return true;
+                }
+                const auto* access = std::get_if<TraitAccessExpr>(&node.object->expr);
+                const auto* handle = access == nullptr ? nullptr : std::get_if<IdentExpr>(&access->object->expr);
+                if (handle == nullptr) {
+                    return false;
+                }
+                if (!std::ranges::contains(containers, handle->name)) {
+                    containers.push_back(handle->name);
+                }
+                return true;
+            } else if constexpr (std::is_same_v<E, UnaryExpr>) {
+                return collect_bound_containers(*node.operand, containers);
+            } else if constexpr (std::is_same_v<E, BinaryExpr>) {
+                return collect_bound_containers(*node.left, containers) &&
+                       collect_bound_containers(*node.right, containers);
+            } else {
+                return false;
+            }
+        },
+        bound.expr);
+}
+
+// How an index can address a key on `field`; sets `container` for a ranged int.
+EqualityKeyLayout key_layout(const ResolvedField& field, std::string& container) {
+    switch (field.type.kind) {
+        case TypeKind::Bool:
+        case TypeKind::Enum:
+            return EqualityKeyLayout::Direct;
+        case TypeKind::EntityId:
+            return EqualityKeyLayout::Entity;
+        default:
+            break;
+    }
+    std::vector<std::string> containers;
+    if (!field.range.has_value() || !collect_bound_containers(*field.range->lo, containers) ||
+        !collect_bound_containers(*field.range->hi, containers) || containers.size() > 1) {
+        return EqualityKeyLayout::Hashed;
+    }
+    if (containers.empty()) {
+        return EqualityKeyLayout::Direct;
+    }
+    container = containers.front();
+    return EqualityKeyLayout::Ranged;
+}
+
+}  // namespace
 
 std::optional<EqualityJoinKey> SemanticAnalyzer::equality_key(const BinaryExpr& equality,
                                                               const ExprPath& conjunct,
@@ -9752,18 +9819,45 @@ std::optional<EqualityJoinKey> SemanticAnalyzer::equality_key(const BinaryExpr& 
     for (std::uint8_t side = 0; side < 2; ++side) {
         const auto& member = side == 0 ? *equality.left : *equality.right;
         const auto& query  = side == 0 ? *equality.right : *equality.left;
-        if (!immutable_member_value(member, indexed_binding, indexed_name, pair_scope) ||
-            reads_pair_binding(query, pair_scope, indexed_binding)) {
+        const auto* ident  = std::get_if<IdentExpr>(&member.expr);
+        const bool identity = ident != nullptr && ident->name == indexed_name;
+        const auto field    = identity ? std::nullopt : member_key_field(member, indexed_binding, indexed_name, pair_scope);
+        if ((!identity && !field.has_value()) || reads_pair_binding(query, pair_scope, indexed_binding)) {
             continue;
         }
         auto member_path = conjunct;
         auto query_path  = conjunct;
         member_path.push_back(side);
         query_path.push_back(static_cast<std::uint8_t>(1 - side));
-        return EqualityJoinKey{
+        EqualityJoinKey key{
             .predicate_index = predicate_index, .member = std::move(member_path), .query = std::move(query_path)};
+        if (field.has_value()) {
+            key.trait  = field->first;
+            key.field  = field->second->name;
+            key.layout = key_layout(*field->second, key.container);
+        }
+        return key;
     }
     return std::nullopt;
+}
+
+void SemanticAnalyzer::report_hashed_key_parts(const RuleNode& rule, const EqualityJoinPlan& plan) {
+    const auto identity = std::ranges::any_of(
+        plan.keys, [](const EqualityJoinKey& key) { return !key.trait.has_value(); });
+    if (identity || !rule.where_clause.has_value()) {
+        return;
+    }
+    for (const auto& key : plan.keys) {
+        if (key.layout != EqualityKeyLayout::Hashed || !key.trait.has_value()) {
+            continue;
+        }
+        const auto* member = resolve_expr_path(*rule.where_clause->predicates.at(key.predicate_index), key.member);
+        errors_.info(member->location,
+                     "pair rule '" + rule.name + "' hashes its equality key on the int field '" +
+                         key.trait->local_name + "." + key.field +
+                         "': no range fixes it by constants or one container, and a declared `in range(...)` would "
+                         "allow dense addressing");
+    }
 }
 
 std::optional<EqualityJoinPlan> SemanticAnalyzer::recognize_equality_join(const RuleNode& rule,

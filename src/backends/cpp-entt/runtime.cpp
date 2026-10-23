@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <iostream>
+#include <iterator>
 #include <map>
 #include <array>
 #include <cmath>
@@ -3054,19 +3055,64 @@ std::uint64_t& binding_index_epoch_storage() noexcept {
     return epoch;
 }
 
+BindingIndexTracker*& first_binding_index_tracker() noexcept {
+    static BindingIndexTracker* first = nullptr;
+    return first;
+}
+
 // A member covering more grid cells than this is kept aside instead.
 constexpr std::int64_t kGridCellsPerMemberLimit = 64;
+// Inserts a static grid scans on every query before it merges them.
+constexpr std::size_t kGridSideListMax = 256;
 
 [[nodiscard]] bool finite_bounds(Vector3 min, Vector3 max) noexcept {
     return std::isfinite(min.x) && std::isfinite(min.y) && std::isfinite(min.z) && std::isfinite(max.x) &&
            std::isfinite(max.y) && std::isfinite(max.z);
 }
 
-// Grid coordinates covering [lo, hi] on one axis, clamped far inside int32.
-[[nodiscard]] std::pair<std::int64_t, std::int64_t> grid_span(float lo, float hi, float cell_size) noexcept {
-    constexpr float kFar = 1.0e9F;
-    return {static_cast<std::int64_t>(std::floor(std::clamp(lo / cell_size, -kFar, kFar))),
-            static_cast<std::int64_t>(std::floor(std::clamp(hi / cell_size, -kFar, kFar)))};
+[[nodiscard]] bool same_bounds(Vector3 a_min, Vector3 a_max, Vector3 b_min, Vector3 b_max) noexcept {
+    return a_min.x == b_min.x && a_min.y == b_min.y && a_min.z == b_min.z && a_max.x == b_max.x &&
+           a_max.y == b_max.y && a_max.z == b_max.z;
+}
+
+using GridCell = std::array<std::int64_t, 3>;
+
+// The grid cells covering finite bounds [min - reach_below, max], clamped far
+// inside int32. Multiplying by the inverse cell size keeps coordinates monotone,
+// so filing and queries agree.
+[[nodiscard]] std::pair<GridCell, GridCell> grid_cells(Vector3 min,
+                                                       Vector3 max,
+                                                       double reach_below,
+                                                       double inverse_cell_size) noexcept {
+    constexpr double kFar = 1.0e9;
+    const auto coord      = [&](double value) {
+        return static_cast<std::int64_t>(std::floor(std::clamp(value * inverse_cell_size, -kFar, kFar)));
+    };
+    return {GridCell{coord(static_cast<double>(min.x) - reach_below), coord(static_cast<double>(min.y) - reach_below),
+                     coord(static_cast<double>(min.z) - reach_below)},
+            GridCell{coord(max.x), coord(max.y), coord(max.z)}};
+}
+
+// Each span can reach 2e9, so the product is taken in double to avoid overflow.
+[[nodiscard]] double cell_count(const GridCell& lo, const GridCell& hi) noexcept {
+    return static_cast<double>(hi[0] - lo[0] + 1) * static_cast<double>(hi[1] - lo[1] + 1) *
+           static_cast<double>(hi[2] - lo[2] + 1);
+}
+
+template <typename Visit>
+void for_each_cell(const GridCell& lo, const GridCell& hi, const Visit& visit) {
+    for (auto x = lo[0]; x <= hi[0]; ++x) {
+        for (auto y = lo[1]; y <= hi[1]; ++y) {
+            for (auto z = lo[2]; z <= hi[2]; ++z) {
+                visit(x, y, z);
+            }
+        }
+    }
+}
+
+template <typename Member>
+[[nodiscard]] bool held_by(const Member& member, std::uint32_t owners) noexcept {
+    return member.entity != entt::null && (member.owners & owners) != 0;
 }
 }  // namespace
 
@@ -3076,142 +3122,267 @@ std::uint64_t binding_index_epoch() noexcept {
 
 void advance_binding_index_epoch() noexcept {
     ++binding_index_epoch_storage();
+    BindingIndexTracker::forget_all_pending();
 }
 
-std::size_t StaticProxyGrid3D::CellKeyHash::operator()(const CellKey& key) const noexcept {
-    auto hash = static_cast<std::uint64_t>(static_cast<std::uint32_t>(key.x)) * 73856093ULL;
-    hash ^= static_cast<std::uint64_t>(static_cast<std::uint32_t>(key.y)) * 19349663ULL;
-    hash ^= static_cast<std::uint64_t>(static_cast<std::uint32_t>(key.z)) * 83492791ULL;
-    return static_cast<std::size_t>(hash);
+void BindingIndexTracker::link() noexcept {
+    auto& first = first_binding_index_tracker();
+    next_       = first;
+    if (first != nullptr) {
+        first->previous_ = this;
+    }
+    first = this;
 }
 
-void StaticProxyGrid3D::clear(float cell_size) {
-    cell_size_ = std::isfinite(cell_size) && cell_size > 1e-3F ? cell_size : 1.0F;
+void BindingIndexTracker::unlink() noexcept {
+    if (previous_ != nullptr) {
+        previous_->next_ = next_;
+    } else {
+        first_binding_index_tracker() = next_;
+    }
+    if (next_ != nullptr) {
+        next_->previous_ = previous_;
+    }
+}
+
+void BindingIndexTracker::forget_all_pending() noexcept {
+    for (auto* tracker = first_binding_index_tracker(); tracker != nullptr; tracker = tracker->next_) {
+        tracker->pending_ = std::vector<entt::entity>{};
+    }
+}
+
+void StaticGrid3D::clear(float cell_size) {
+    size_pending_ = !std::isfinite(cell_size) || cell_size <= 0.0F;
+    set_cell_size(size_pending_ ? 1.0F : std::max(cell_size, kMinGridCellSize) * kCellSlack);
     members_.clear();
-    cells_.clear();
+    merged_ = 0;
+    live_   = 0;
+    dead_   = 0;
+    slots_.clear();
+    conflicts_.clear();
+    offsets_.clear();
+    filed_.clear();
     aside_.clear();
 }
 
-std::optional<std::array<StaticProxyGrid3D::CellKey, 2>> StaticProxyGrid3D::cell_range(Vector3 min,
-                                                                                    Vector3 max) const noexcept {
-    if (!finite_bounds(min, max)) {
-        return std::nullopt;
+std::uint32_t StaticGrid3D::find(entt::entity entity) const noexcept {
+    const auto slot = slots_.get(entity);
+    if (slot != SparseSlots::kNone && members_[slot].entity == entity) {
+        return slot;
     }
-    const auto [x0, x1] = grid_span(min.x, max.x, cell_size_);
-    const auto [y0, y1] = grid_span(min.y, max.y, cell_size_);
-    const auto [z0, z1] = grid_span(min.z, max.z, cell_size_);
-    // Each span can reach 2e9, so the product is taken in double to avoid overflow.
-    const double cells = static_cast<double>(x1 - x0 + 1) * static_cast<double>(y1 - y0 + 1) *
-                         static_cast<double>(z1 - z0 + 1);
-    if (x1 < x0 || y1 < y0 || z1 < z0 || cells > static_cast<double>(kGridCellsPerMemberLimit)) {
-        return std::nullopt;
+    const auto conflict = std::ranges::find(conflicts_, entity, [&](std::uint32_t at) { return members_[at].entity; });
+    return conflict == conflicts_.end() ? SparseSlots::kNone : *conflict;
+}
+
+void StaticGrid3D::set_cell_size(float cell_size) noexcept {
+    cell_size_    = cell_size;
+    inverse_cell_ = 1.0 / static_cast<double>(cell_size_);
+}
+
+void StaticGrid3D::file_slot(std::uint32_t slot) {
+    const auto entity = members_[slot].entity;
+    if (const auto taken = slots_.get(entity); taken != SparseSlots::kNone && members_[taken].entity != entt::null) {
+        conflicts_.push_back(slot);
+    } else {
+        slots_.set(entity, slot);
     }
-    return std::array<CellKey, 2>{
-        CellKey{.x = static_cast<std::int32_t>(x0), .y = static_cast<std::int32_t>(y0), .z = static_cast<std::int32_t>(z0)},
-        CellKey{.x = static_cast<std::int32_t>(x1), .y = static_cast<std::int32_t>(y1), .z = static_cast<std::int32_t>(z1)}};
+}
+
+void StaticGrid3D::drop(std::uint32_t slot) {
+    const auto entity = members_[slot].entity;
+    if (slots_.get(entity) == slot) {
+        slots_.erase(entity);
+        const auto same_index = std::ranges::find(conflicts_, entt::to_entity(entity), [&](std::uint32_t at) {
+            return entt::to_entity(members_[at].entity);
+        });
+        if (same_index != conflicts_.end()) {
+            slots_.set(members_[*same_index].entity, *same_index);
+            conflicts_.erase(same_index);
+        }
+    } else {
+        std::erase(conflicts_, slot);
+    }
+    members_[slot].entity = entt::null;
+    --live_;
+    ++dead_;
+}
+
+bool StaticGrid3D::insert(entt::entity entity, Vector3 min, Vector3 max, std::size_t owner) {
+    const auto bit  = owner_mask(owner);
+    auto owners     = bit;
+    bool had        = false;
+    if (const auto slot = find(entity); slot != SparseSlots::kNone) {
+        auto& member = members_[slot];
+        had          = (member.owners & bit) != 0;
+        if (same_bounds(member.min, member.max, min, max)) {
+            member.owners |= bit;
+            return !had;
+        }
+        owners |= member.owners;
+        drop(slot);
+    }
+    const auto slot = static_cast<std::uint32_t>(members_.size());
+    members_.push_back(Member{.entity = entity, .owners = owners, .min = min, .max = max});
+    file_slot(slot);
+    ++live_;
+    return !had;
+}
+
+bool StaticGrid3D::remove(entt::entity entity, std::size_t owner) {
+    const auto slot = find(entity);
+    const auto bit  = owner_mask(owner);
+    if (slot == SparseSlots::kNone || (members_[slot].owners & bit) == 0) {
+        return false;
+    }
+    members_[slot].owners &= ~bit;
+    if (members_[slot].owners == 0) {
+        drop(slot);
+    }
+    return true;
+}
+
+bool StaticGrid3D::merge_due() const noexcept {
+    if (size_pending_) {
+        return live_ > 0;
+    }
+    return members_.size() - merged_ > kGridSideListMax || dead_ > std::max(kGridSideListMax, live_ / 8);
+}
+
+void StaticGrid3D::choose_cell_size() {
+    std::vector<float> extents;
+    extents.reserve(members_.size());
+    for (const auto& member : members_) {
+        const float extent = box_extent(
+            Vector3{.x = member.max.x - member.min.x, .y = member.max.y - member.min.y, .z = member.max.z - member.min.z});
+        if (finite_bounds(member.min, member.max) && extent > 0.0F) {
+            extents.push_back(extent);
+        }
+    }
+    float chosen = 1.0F;
+    if (!extents.empty()) {
+        const auto middle = extents.begin() + static_cast<std::ptrdiff_t>(extents.size() / 2);
+        std::ranges::nth_element(extents, middle);
+        chosen = *middle;
+    }
+    set_cell_size((std::isfinite(chosen) ? std::max(chosen, kMinGridCellSize) : 1.0F) * kCellSlack);
+    size_pending_ = false;
 }
 
 template <typename Visit>
-void StaticProxyGrid3D::for_each_cell(const std::array<CellKey, 2>& range, const Visit& visit) {
-    for (auto x = range[0].x; x <= range[1].x; ++x) {
-        for (auto y = range[0].y; y <= range[1].y; ++y) {
-            for (auto z = range[0].z; z <= range[1].z; ++z) {
-                visit(CellKey{.x = x, .y = y, .z = z});
-            }
+bool StaticGrid3D::for_each_filing(const Member& member, const Visit& visit) const {
+    if (!finite_bounds(member.min, member.max)) {
+        return false;
+    }
+    const auto size     = static_cast<double>(cell_size_);
+    const auto [lo, hi] = grid_cells(member.min, member.max, 0.0, inverse_cell_);
+    const auto fits  = [&](float min, float max) { return static_cast<double>(max) - static_cast<double>(min) <= size; };
+    if (fits(member.min.x, member.max.x) && fits(member.min.y, member.max.y) && fits(member.min.z, member.max.z)) {
+        visit(lo[0], lo[1], lo[2]);
+        return true;
+    }
+    if (cell_count(lo, hi) > static_cast<double>(kGridCellsPerMemberLimit)) {
+        return false;
+    }
+    for_each_cell(lo, hi, visit);
+    return true;
+}
+
+std::size_t StaticGrid3D::bucket_of(std::int64_t x, std::int64_t y, std::int64_t z) const noexcept {
+    auto hash = static_cast<std::uint64_t>(x) * 0x9E3779B97F4A7C15ULL;
+    hash ^= static_cast<std::uint64_t>(y) * 0xC2B2AE3D27D4EB4FULL;
+    hash ^= static_cast<std::uint64_t>(z) * 0x165667B19E3779F9ULL;
+    hash ^= hash >> 32U;
+    return static_cast<std::size_t>(hash) & (offsets_.size() - 2);
+}
+
+void StaticGrid3D::merge() {
+    // Sized for the side list that may pile up before the next merge.
+    std::vector<Member> live;
+    live.reserve(live_ + kGridSideListMax + 1);
+    std::ranges::copy_if(members_, std::back_inserter(live),
+                         [](const Member& member) { return member.entity != entt::null; });
+    members_.swap(live);
+    slots_.clear();
+    conflicts_.clear();
+    for (std::uint32_t slot = 0; slot < members_.size(); ++slot) {
+        file_slot(slot);
+    }
+    merged_ = members_.size();
+    dead_   = 0;
+    if (size_pending_) {
+        choose_cell_size();
+    }
+    aside_.clear();
+    offsets_.assign(std::max<std::size_t>(16, std::bit_ceil(std::max<std::size_t>(1, members_.size() / 2))) + 1, 0);
+    // Each filing's bucket, computed once; ends[slot] is one past the member's last filing.
+    std::vector<std::uint32_t> buckets;
+    std::vector<std::uint32_t> ends(members_.size());
+    buckets.reserve(members_.size());
+    for (std::uint32_t slot = 0; slot < members_.size(); ++slot) {
+        if (!for_each_filing(members_[slot], [&](std::int64_t x, std::int64_t y, std::int64_t z) {
+                buckets.push_back(static_cast<std::uint32_t>(bucket_of(x, y, z)));
+                ++offsets_[buckets.back() + 1];
+            })) {
+            aside_.push_back(slot);
+        }
+        ends[slot] = static_cast<std::uint32_t>(buckets.size());
+    }
+    std::partial_sum(offsets_.begin(), offsets_.end(), offsets_.begin());
+    filed_.resize(buckets.size());
+    filed_.shrink_to_fit();
+    aside_.shrink_to_fit();
+    std::vector<std::uint32_t> cursor(offsets_.begin(), offsets_.end() - 1);
+    std::size_t at = 0;
+    for (std::uint32_t slot = 0; slot < members_.size(); ++slot) {
+        for (; at < ends[slot]; ++at) {
+            filed_[cursor[buckets[at]]++] = slot;
         }
     }
 }
 
-void StaticProxyGrid3D::insert(entt::entity entity, std::uint64_t ordinal, Vector3 min, Vector3 max) {
-    remove(entity);
-    const auto range = cell_range(min, max);
-    members_.emplace(entity, Member{.ordinal = ordinal, .min = min, .max = max, .aside = !range.has_value()});
-    if (!range.has_value()) {
-        aside_.push_back(entity);
+void StaticGrid3D::scan_cells(Vector3 min, Vector3 max, std::uint32_t owners, std::vector<entt::entity>& out) const {
+    if (offsets_.empty()) {
         return;
     }
-    for_each_cell(*range, [&](const CellKey& key) { cells_[key].push_back(entity); });
-}
-
-void StaticProxyGrid3D::remove(entt::entity entity) {
-    const auto found = members_.find(entity);
-    if (found == members_.end()) {
-        return;
-    }
-    const Member member = found->second;
-    members_.erase(found);
-    if (member.aside) {
-        std::erase(aside_, entity);
-        return;
-    }
-    for_each_cell(*cell_range(member.min, member.max), [&](const CellKey& key) {
-        const auto cell = cells_.find(key);
-        if (cell == cells_.end()) {
-            return;
+    const auto [lo, hi] = grid_cells(min, max, static_cast<double>(cell_size_), inverse_cell_);
+    const auto take     = [&](const Member& member) {
+        if (held_by(member, owners) && proxy_bounds_overlap(min, max, member.min, member.max)) {
+            out.push_back(member.entity);
         }
-        std::erase(cell->second, entity);
-        if (cell->second.empty()) {
-            cells_.erase(cell);
+    };
+    // A query wider than the filed members is cheaper as one pass over them.
+    if (cell_count(lo, hi) > static_cast<double>(merged_)) {
+        std::for_each(members_.begin(), members_.begin() + static_cast<std::ptrdiff_t>(merged_), take);
+        return;
+    }
+    for_each_cell(lo, hi, [&](std::int64_t x, std::int64_t y, std::int64_t z) {
+        const auto bucket = bucket_of(x, y, z);
+        for (auto at = offsets_[bucket]; at < offsets_[bucket + 1]; ++at) {
+            take(members_[filed_[at]]);
         }
     });
 }
 
-void StaticProxyGrid3D::offer(entt::entity entity, Vector3 min, Vector3 max, std::vector<OrderedEntity>& out) const {
-    const Member& member = members_.at(entity);
-    if (!finite_bounds(min, max) || !finite_bounds(member.min, member.max) ||
-        proxy_bounds_overlap(min, max, member.min, member.max)) {
-        out.emplace_back(member.ordinal, entity);
+void StaticGrid3D::query(Vector3 min, Vector3 max, std::vector<entt::entity>& out, std::uint32_t owners) {
+    if (merge_due()) {
+        merge();
     }
-}
-
-void StaticProxyGrid3D::scan_members(Vector3 min,
-                                     Vector3 max,
-                                     bool test_overlap,
-                                     std::vector<OrderedEntity>& out) const {
-    for (const auto& [entity, member] : members_) {
-        if (!member.aside && (!test_overlap || proxy_bounds_overlap(min, max, member.min, member.max))) {
-            out.emplace_back(member.ordinal, entity);
+    const bool finite      = finite_bounds(min, max);
+    const auto offer       = [&](const Member& member) {
+        if (held_by(member, owners) && (!finite || !finite_bounds(member.min, member.max) ||
+                                        proxy_bounds_overlap(min, max, member.min, member.max))) {
+            out.push_back(member.entity);
         }
-    }
-}
-
-void StaticProxyGrid3D::scan_cells(Vector3 min, Vector3 max, std::vector<OrderedEntity>& out) const {
-    const auto [x0, x1] = grid_span(min.x, max.x, cell_size_);
-    const auto [y0, y1] = grid_span(min.y, max.y, cell_size_);
-    const auto [z0, z1] = grid_span(min.z, max.z, cell_size_);
-    const double covered = static_cast<double>(x1 - x0 + 1) * static_cast<double>(y1 - y0 + 1) *
-                           static_cast<double>(z1 - z0 + 1);
-    // A query wider than the membership is cheaper as one pass over it.
-    if (covered > static_cast<double>(members_.size())) {
-        scan_members(min, max, true, out);
-        return;
-    }
-    const std::array<CellKey, 2> range{
-        CellKey{.x = static_cast<std::int32_t>(x0), .y = static_cast<std::int32_t>(y0), .z = static_cast<std::int32_t>(z0)},
-        CellKey{.x = static_cast<std::int32_t>(x1), .y = static_cast<std::int32_t>(y1), .z = static_cast<std::int32_t>(z1)}};
-    for_each_cell(range, [&](const CellKey& key) {
-        const auto cell = cells_.find(key);
-        if (cell == cells_.end()) {
-            return;
-        }
-        for (const auto entity : cell->second) {
-            offer(entity, min, max, out);
-        }
-    });
-}
-
-void StaticProxyGrid3D::query(Vector3 min, Vector3 max, std::vector<OrderedEntity>& out) const {
-    const auto first_new = static_cast<std::ptrdiff_t>(out.size());
-    for (const auto entity : aside_) {
-        offer(entity, min, max, out);
-    }
-    if (finite_bounds(min, max)) {
-        scan_cells(min, max, out);
+    };
+    if (!finite) {
+        std::ranges::for_each(members_, offer);
     } else {
-        scan_members(min, max, false, out);
+        for (const auto slot : aside_) {
+            offer(members_[slot]);
+        }
+        scan_cells(min, max, owners, out);
+        std::for_each(members_.begin() + static_cast<std::ptrdiff_t>(merged_), members_.end(), offer);
     }
-    std::sort(out.begin() + first_new, out.end());
-    out.erase(std::unique(out.begin() + first_new, out.end()), out.end());
 }
 
 void SapBroadPhase2D::sync(std::span<const ProxyAabb2D> proxies) {

@@ -7,7 +7,7 @@
 
 namespace cactus {
 
-enum class DiagnosticLevel { Error, Warning };
+enum class DiagnosticLevel { Error, Warning, Info };
 
 struct Diagnostic {
     DiagnosticLevel level;
@@ -21,6 +21,8 @@ class ErrorReporter {
 public:
     void error(const SourceLocation& loc, const std::string& msg);
     void warning(const SourceLocation& loc, const std::string& msg);
+    // Facts about the generated code; counted neither as errors nor warnings.
+    void info(const SourceLocation& loc, const std::string& msg);
 
     [[nodiscard]] bool has_errors() const {
         return error_count_ > 0;

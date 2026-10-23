@@ -534,6 +534,10 @@ void ModuleArtifact::write_equality_join(std::ostream& out, const std::optional<
         write_u64(out, static_cast<uint64_t>(key.predicate_index));
         write_expr_path(out, key.member);
         write_expr_path(out, key.query);
+        write_u8(out, static_cast<uint8_t>(key.layout));
+        write_optional_symbol_id(out, key.trait);
+        write_str(out, key.field);
+        write_str(out, key.container);
     }
 }
 
@@ -1255,6 +1259,10 @@ std::optional<EqualityJoinPlan> ModuleArtifact::read_equality_join(std::istream&
         key.predicate_index = static_cast<std::size_t>(read_u64(in));
         key.member          = read_expr_path(in);
         key.query           = read_expr_path(in);
+        key.layout          = static_cast<EqualityKeyLayout>(read_u8(in));
+        key.trait           = read_optional_symbol_id(in);
+        key.field           = read_str(in);
+        key.container       = read_str(in);
     }
     return plan;
 }

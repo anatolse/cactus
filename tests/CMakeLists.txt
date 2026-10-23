@@ -698,6 +698,27 @@ cactus_add_headless_behavior_test(test_character_body_unindexed_headless_behavio
     NO_INDEXED_JOINS
 )
 
+# The same fixtures with every index structure the compiler would not choose:
+# hashed keys, one static store per index, and a grid cell far smaller than
+# any member. Results must match the chosen structures exactly.
+foreach(fixture IN ITEMS
+        "voxel_volume|examples/stdlib-fixtures/voxel_volume.cactus"
+        "character_body|examples/stdlib-fixtures/character_body.cactus"
+        "collider_sweep_queries|examples/collider_sweep_queries.cactus"
+        "collision_predicates|tests/fixtures/collision_predicates_runtime.cactus"
+        "cross_domain_spatial_join|tests/fixtures/cross_domain_spatial_join_runtime.cactus"
+        "first_person_arena|examples/first-person-arena/main.cactus")
+    string(REPLACE "|" ";" fixture_parts "${fixture}")
+    list(GET fixture_parts 0 fixture_name)
+    list(GET fixture_parts 1 fixture_source)
+    cactus_add_headless_behavior_test(test_${fixture_name}_forced_indexes_headless_behavior
+        CACTUS_SOURCE ${fixture_source}
+        BACKEND cpp-entt
+        TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_${fixture_name}_headless_behavior.cpp
+        CODEGEN_FLAGS --force-hashed-keys --no-shared-stores --grid-cell-size=0.37
+    )
+endforeach()
+
 cactus_add_headless_behavior_test(test_texture_assets_headless_behavior
     CACTUS_SOURCE examples/stdlib-fixtures/texture_assets.cactus
     BACKEND cpp-entt

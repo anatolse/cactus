@@ -7,6 +7,7 @@
 
 #include "backends/cpp-entt/accumulation_plan.hpp"
 #include "backends/cpp-entt/persistence_emitter.hpp"
+#include "backends/cpp-entt/index_cell_size.hpp"
 #include "backends/cpp-entt/range_checks.hpp"
 #include "backends/cpp-entt/trait_writers.hpp"
 #include "backends/cpp-entt/type_utils.hpp"
@@ -16,8 +17,11 @@
 #include <cctype>
 #include <cstdint>
 #include <functional>
+#include <iterator>
+#include <numeric>
 #include <optional>
 #include <ranges>
+#include <span>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
@@ -5462,7 +5466,8 @@ struct IndexedFoldPlan {
     std::size_t indexed = 0;  // the binding kept in the index
     const SpatialShape* indexed_shape = nullptr;
     const SpatialShape* query_shape   = nullptr;
-    std::vector<SymbolId> watched;  // traits whose construction or destruction can change a member
+    std::vector<SymbolId> watched;   // traits whose construction or destruction can change a member
+    std::vector<SymbolId> required;  // traits every member carries
     TraitWriters writers;
 };
 
@@ -5501,13 +5506,10 @@ static bool fixed_for_member(const ExprNode& expr, std::size_t binding, const st
 }
 
 static std::vector<SymbolId> collider_proxy_traits() {
-    const ModuleId physics{.name = std::string(kPhysicsVolumeModule)};
     std::vector<SymbolId> traits{
         make_symbol_id(SymbolKind::Trait, ModuleId{.name = std::string(kTransformVolumeModule)}, "WorldTransform"),
-        make_symbol_id(SymbolKind::Trait, physics, "Collider")};
-    for (const auto shape : kColliderShapeTraits) {
-        traits.push_back(make_symbol_id(SymbolKind::Trait, physics, std::string(shape)));
-    }
+        make_symbol_id(SymbolKind::Trait, ModuleId{.name = std::string(kPhysicsVolumeModule)}, "Collider")};
+    std::ranges::move(collider_shape_traits(), std::back_inserter(traits));
     return traits;
 }
 
@@ -5588,7 +5590,8 @@ static std::optional<IndexedFoldPlan> indexed_join_plan(const RuleNode& sys,
     if (std::ranges::any_of(plan.writers.target_sets, covers_all)) {
         return std::nullopt;
     }
-    plan.watched = required;
+    plan.watched  = required;
+    plan.required = required;
     for (const auto& trait : proxy_traits) {
         add_unique(plan.watched, trait);
     }
@@ -5665,6 +5668,88 @@ static void emit_shared_index(std::ostringstream& out,
     out << sync;
 }
 
+// The grid cell size a spatial index starts from; 0 lets the index choose it when first built.
+static std::string spatial_cell_size(const IndexedFoldPlan& plan,
+                                     const std::vector<std::size_t>& origins,
+                                     const DecoratedProgram& program) {
+    if (program.grid_cell_size.has_value()) {
+        return EnttCodegenUtils::float_literal_cpp(std::to_string(*program.grid_cell_size));
+    }
+    if (!is_collider_shape(plan.indexed_shape->kind)) {
+        return "0.0F";
+    }
+    return constant_collider_cell_size(program, origins).value_or("0.0F");
+}
+
+constexpr std::string_view kStaticStoreMark = "@CACTUS_STATIC_STORE:";
+
+// A static store, named once every index of the program is known (see
+// assign_static_stores): `bounds` is the code that decides a member's bounds,
+// `origins` the archetypes its members can come from.
+static std::string static_store_placeholder(const std::string& bounds, const std::vector<std::size_t>& origins) {
+    std::vector<std::string> names;
+    names.reserve(origins.size());
+    for (const auto origin : origins) {
+        names.push_back(std::to_string(origin));
+    }
+    return "cactus::runtime::entt_backend::shared_static_store<" + std::string{kStaticStoreMark} +
+           std::to_string(stable_hash(bounds)) + ":" + join_strings(names, ",") + "@>()";
+}
+
+void EnttSystemEmitter::assign_static_stores(std::string& code) {
+    struct Placeholder {
+        std::size_t at     = 0;
+        std::size_t length = 0;
+        std::string bounds;
+        std::vector<std::string> origins;  // empty when unknown: then it may overlap any
+    };
+    std::vector<Placeholder> found;
+    for (auto at = code.find(kStaticStoreMark); at != std::string::npos; at = code.find(kStaticStoreMark, at + 1)) {
+        const auto start = at + kStaticStoreMark.size();
+        const auto colon = code.find(':', start);
+        const auto end   = code.find('@', colon);
+        Placeholder placeholder{.at = at, .length = end + 1 - at, .bounds = code.substr(start, colon - start)};
+        for (const auto part : std::views::split(std::string_view{code}.substr(colon + 1, end - colon - 1), ',')) {
+            if (!part.empty()) {
+                placeholder.origins.emplace_back(part.begin(), part.end());
+            }
+        }
+        found.push_back(std::move(placeholder));
+    }
+    std::vector<std::size_t> group(found.size());
+    std::ranges::iota(group, std::size_t{0});
+    const auto root = [&](std::size_t index) {
+        while (group[index] != index) {
+            index = group[index];
+        }
+        return index;
+    };
+    for (std::size_t left = 0; left < found.size(); ++left) {
+        for (std::size_t right = left + 1; right < found.size(); ++right) {
+            const auto& a        = found[left];
+            const auto& b        = found[right];
+            const bool overlap   = a.origins.empty() || b.origins.empty() ||
+                                 std::ranges::any_of(a.origins, [&](const std::string& origin) {
+                                     return std::ranges::contains(b.origins, origin);
+                                 });
+            if (a.bounds == b.bounds && overlap) {
+                group[root(right)] = root(left);
+            }
+        }
+    }
+    std::string named;
+    named.reserve(code.size());
+    std::size_t copied = 0;
+    for (std::size_t index = 0; index < found.size(); ++index) {
+        const auto& first = found[root(index)];
+        named.append(code, copied, found[index].at - copied);
+        named += std::to_string(stable_hash(first.bounds + ":" + join_strings(first.origins, ","))) + "ULL";
+        copied = found[index].at + found[index].length;
+    }
+    named.append(code, copied);
+    code = std::move(named);
+}
+
 // Rebuilds `index` from every current member when it was built for another
 // world; the catch_up call that follows then reclassifies the marked entities.
 static void emit_index_refresh(std::ostringstream& out,
@@ -5698,23 +5783,31 @@ static void emit_binding_index_sync(std::ostringstream& out,
     }
     const auto proxy = sap_proxy_expression(*plan.indexed_shape, SpatialJoinDimension::Volume3D, name, "0", predicate,
                                             scope, program);
+    // What decides a member's stored bounds; indexes that agree on it can share static members.
+    std::ostringstream bounds;
+    bounds << "        cactus_found.is_static = !(" << member_may_change(plan.writers, name, program) << ");\n";
+    bounds << "        const auto cactus_proxy = " << proxy.code << ";\n";
+    if (proxy.optional) {
+        bounds << "        if (cactus_proxy.has_value()) {\n";
+        bounds << "            cactus_found.bounds = std::pair{cactus_proxy->min, cactus_proxy->max};\n";
+        bounds << "        }\n";
+    } else {
+        bounds << "        cactus_found.bounds = std::pair{cactus_proxy.min, cactus_proxy.max};\n";
+    }
+    const auto watched   = cpp_trait_list(plan.watched, program);
+    const auto origins   = member_origins(program, plan.required);
+    const auto cell_size = spatial_cell_size(plan, origins, program);
+    const auto store     = static_store_placeholder(
+        program.share_static_stores ? bounds.str() : bounds.str() + member_types + watched + cell_size, origins);
     std::ostringstream sync;
-    emit_index_refresh(sync, index, ", 2.0F", cpp_trait_list(plan.watched, program), member_types);
+    emit_index_refresh(sync, index, ", " + store + ", " + cell_size, watched, member_types);
     sync << "    " << index << ".catch_up(registry, [&](entt::entity " << name << ") {\n";
     sync << "        " << ns << "SpatialBindingIndex3D::Classified cactus_found;\n";
     sync << "        if (!registry.all_of<" << member_types << ">(" << name << ")) {\n";
     sync << "            return cactus_found;\n";
     sync << "        }\n";
     sync << "        cactus_found.member    = true;\n";
-    sync << "        cactus_found.is_static = !(" << member_may_change(plan.writers, name, program) << ");\n";
-    sync << "        const auto cactus_proxy = " << proxy.code << ";\n";
-    if (proxy.optional) {
-        sync << "        if (cactus_proxy.has_value()) {\n";
-        sync << "            cactus_found.bounds = std::pair{cactus_proxy->min, cactus_proxy->max};\n";
-        sync << "        }\n";
-    } else {
-        sync << "        cactus_found.bounds = std::pair{cactus_proxy.min, cactus_proxy.max};\n";
-    }
+    sync << bounds.str();
     sync << "        return cactus_found;\n";
     sync << "    });\n";
     emit_shared_index(out, ns + "SpatialBindingIndex3D", index, sync.str());
@@ -5761,7 +5854,7 @@ static void emit_indexed_candidates(std::ostringstream& out,
     if (query_proxy.optional) {
         out << body << "if (!cactus_query.has_value()) { continue; }\n";
     }
-    out << body << index << ".candidates(" << bounds_of(query_proxy, "cactus_query") << "min, "
+    out << body << index << ".candidates(registry, " << bounds_of(query_proxy, "cactus_query") << "min, "
         << bounds_of(query_proxy, "cactus_query") << "max, cactus_dynamic, cactus_candidates);\n";
     out << body << "for (const auto& [cactus_ordinal, " << member << "] : cactus_candidates) {\n";
     out << body << "    " << call << ";\n";
@@ -5839,22 +5932,76 @@ static bool emit_indexed_pair_activation_if_planned(std::ostringstream& out,
 }
 
 // ── Equality-indexed folds ───────────────────────────────────────────────────
-// A reduced pair pass with an equality join keeps the non-group members in an
-// EqualityBindingIndex keyed by values they never change. Each group entity
-// folds exactly the members with its key, oldest first; the fold still checks
+// A reduced pair pass with an equality join keeps the non-group members in a
+// DenseKeyIndex, or a FlatKeyIndex when a key part can only be hashed, keyed by
+// values they never change. Each group entity folds exactly the members with
+// its key, oldest first; the fold still checks
 // every predicate. An identity key needs no index: the registry already finds
 // the one member a group names.
 
 struct EqualityKeyPart {
-    const ExprNode* member = nullptr;
-    const ExprNode* query  = nullptr;
+    const ExprNode* member     = nullptr;
+    const ExprNode* query      = nullptr;
+    const EqualityJoinKey* key = nullptr;
+};
+
+// A dense index's key: the parts addressed within a block, in key order, and
+// what names each member's block: an entity part, or the container field the
+// ranged parts read through. Neither means one block for every member.
+struct DenseKeyShape {
+    std::vector<std::size_t> values;
+    std::optional<std::size_t> block_part;
+    const EqualityJoinKey* ranged = nullptr;
 };
 
 struct EqualityFoldPlan {
     std::size_t indexed = 0;
     std::vector<EqualityKeyPart> parts;
     const ExprNode* identity = nullptr;
+    std::optional<DenseKeyShape> dense;
 };
+
+// The dense layout of a key whose parts all address known ranges with at most
+// one block entity; nullopt when the key must be hashed.
+static std::optional<DenseKeyShape> dense_key_shape(const std::vector<EqualityKeyPart>& parts,
+                                                    const DecoratedProgram& program) {
+    if (program.force_hashed_keys) {
+        return std::nullopt;
+    }
+    DenseKeyShape shape;
+    std::vector<std::size_t> entities;
+    for (std::size_t index = 0; index < parts.size(); ++index) {
+        const auto& key = *parts[index].key;
+        switch (key.layout) {
+            case EqualityKeyLayout::Hashed:
+                return std::nullopt;
+            case EqualityKeyLayout::Entity:
+                entities.push_back(index);
+                break;
+            case EqualityKeyLayout::Ranged:
+                if (shape.ranged != nullptr &&
+                    (shape.ranged->trait != key.trait || shape.ranged->container != key.container)) {
+                    return std::nullopt;
+                }
+                shape.ranged = &key;
+                shape.values.push_back(index);
+                break;
+            case EqualityKeyLayout::Direct:
+                shape.values.push_back(index);
+                break;
+        }
+    }
+    for (const auto index : entities) {
+        const auto& key            = *parts[index].key;
+        const bool names_container = shape.ranged != nullptr && key.trait == shape.ranged->trait &&
+                                     key.field == shape.ranged->container;
+        if (shape.block_part.has_value() || (shape.ranged != nullptr && !names_container)) {
+            return std::nullopt;
+        }
+        shape.block_part = index;
+    }
+    return shape;
+}
 
 static std::optional<EqualityFoldPlan> equality_fold_plan(const RuleNode& sys,
                                                           const HandlerContract* contract,
@@ -5867,8 +6014,8 @@ static std::optional<EqualityFoldPlan> equality_fold_plan(const RuleNode& sys,
     plan.indexed = contract->equality_join->indexed_binding;
     for (const auto& key : contract->equality_join->keys) {
         const auto& root = *sys.where_clause->predicates.at(key.predicate_index);
-        plan.parts.push_back(
-            EqualityKeyPart{.member = resolve_expr_path(root, key.member), .query = resolve_expr_path(root, key.query)});
+        plan.parts.push_back(EqualityKeyPart{
+            .member = resolve_expr_path(root, key.member), .query = resolve_expr_path(root, key.query), .key = &key});
     }
     if (std::ranges::any_of(plan.parts, [](const EqualityKeyPart& part) {
             return part.member == nullptr || part.query == nullptr;
@@ -5882,21 +6029,127 @@ static std::optional<EqualityFoldPlan> equality_fold_plan(const RuleNode& sys,
     });
     if (identity != plan.parts.end()) {
         plan.identity = identity->query;
+        return plan;
     }
+    plan.dense = dense_key_shape(plan.parts, program);
     return plan;
 }
 
-static std::string equality_key(const std::vector<EqualityKeyPart>& parts,
-                                bool member_side,
-                                const PairCodegenScope& scope,
-                                const DecoratedProgram& program) {
-    std::string key = "cactus::runtime::entt_backend::EqualityBindingIndex<" + std::to_string(parts.size()) + ">::Key{";
-    for (std::size_t i = 0; i < parts.size(); ++i) {
-        const auto& expr = member_side ? *parts[i].member : *parts[i].query;
-        key += (i == 0 ? "" : ", ") + std::string("cactus::runtime::entt_backend::equality_key_part(") +
-               rewrite_expr(expr, {}, program, {}, {}, &scope) + ")";
+static std::string equality_index_type(const EqualityFoldPlan& plan) {
+    return plan.dense.has_value()
+               ? "cactus::runtime::entt_backend::DenseKeyIndex<" + std::to_string(plan.dense->values.size()) + ">"
+               : "cactus::runtime::entt_backend::FlatKeyIndex<" + std::to_string(plan.parts.size()) + ">";
+}
+
+static std::string key_side(const EqualityKeyPart& part,
+                            bool member_side,
+                            const PairCodegenScope& scope,
+                            const DecoratedProgram& program) {
+    return rewrite_expr(member_side ? *part.member : *part.query, {}, program, {}, {}, &scope);
+}
+
+// The comma-separated key values: dense parts, or every part hashed.
+static std::string equality_key_values(const EqualityFoldPlan& plan,
+                                       bool member_side,
+                                       const PairCodegenScope& scope,
+                                       const DecoratedProgram& program) {
+    std::vector<std::string> values;
+    if (plan.dense.has_value()) {
+        for (const auto index : plan.dense->values) {
+            values.push_back("cactus::runtime::entt_backend::dense_key_part(" +
+                             key_side(plan.parts[index], member_side, scope, program) + ")");
+        }
+    } else {
+        for (const auto& part : plan.parts) {
+            values.push_back("cactus::runtime::entt_backend::equality_key_part(" +
+                             key_side(part, member_side, scope, program) + ")");
+        }
     }
-    return key + "}";
+    return join_strings(values, ", ");
+}
+
+static std::string dense_key(const EqualityFoldPlan& plan, const std::string& block, const std::string& values) {
+    return equality_index_type(plan) + "::Key{.block = " + block + ", .values = {" + values + "}}";
+}
+
+// A member's key; `member` names the member entity.
+static std::string equality_member_key(const EqualityFoldPlan& plan,
+                                       const std::string& member,
+                                       const PairCodegenScope& scope,
+                                       const DecoratedProgram& program) {
+    const auto values = equality_key_values(plan, true, scope, program);
+    if (!plan.dense.has_value()) {
+        return equality_index_type(plan) + "::Key{" + values + "}";
+    }
+    std::string block = "entt::null";
+    if (plan.dense->block_part.has_value()) {
+        block = key_side(plan.parts[*plan.dense->block_part], true, scope, program);
+    } else if (const auto* ranged = plan.dense->ranged; ranged != nullptr && ranged->trait.has_value()) {
+        block = "registry.get<const " + EnttCodegenUtils::trait_cpp_name(*ranged->trait, ranged->trait->local_name, program) +
+                ">(" + member + ")." + cpp_escaped(ranged->container);
+    }
+    return dense_key(plan, block, values);
+}
+
+// Replaces `out` with the members whose key equals the group's.
+static std::string equality_find(const EqualityFoldPlan& plan,
+                                 const std::string& index,
+                                 const std::string& out,
+                                 const PairCodegenScope& scope,
+                                 const DecoratedProgram& program) {
+    const auto values = equality_key_values(plan, false, scope, program);
+    if (!plan.dense.has_value()) {
+        return index + ".find(registry, " + equality_index_type(plan) + "::Key{" + values + "}, " + out + ")";
+    }
+    if (plan.dense->ranged != nullptr && !plan.dense->block_part.has_value()) {
+        return index + ".find_any_block(registry, {" + values + "}, " + out + ")";
+    }
+    const auto block = plan.dense->block_part.has_value()
+                           ? key_side(plan.parts[*plan.dense->block_part], false, scope, program)
+                           : std::string{"entt::null"};
+    return index + ".find(registry, " + dense_key(plan, block, values) + ", " + out + ")";
+}
+
+// The [lo, hi) of each dense part, read through `block` for ranged parts.
+static ContainerExtents dense_extents(const EqualityFoldPlan& plan,
+                                      const DenseKeyShape& dense,
+                                      const std::string& block,
+                                      const std::string& indent,
+                                      const DecoratedProgram& program) {
+    std::vector<const ResolvedFieldRange*> ranges;
+    std::vector<std::optional<std::pair<std::string, std::string>>> fixed;
+    for (const auto index : dense.values) {
+        const auto& key   = *plan.parts[index].key;
+        const auto* trait =
+            key.trait.has_value() ? EnttCodegenUtils::find_trait(program, make_canonical_id(*key.trait)) : nullptr;
+        const auto fields = trait == nullptr ? std::span<const ResolvedField>{} : std::span{trait->fields};
+        const auto field  = std::ranges::find(fields, key.field, &ResolvedField::name);
+        if (field == fields.end()) {
+            throw CodegenError(plan.parts[index].member->location, "unknown equality key field '" + key.field + "'");
+        }
+        if (field->type.kind == TypeKind::Bool) {
+            fixed.emplace_back(std::pair<std::string, std::string>{"0", "2"});
+        } else if (field->type.kind == TypeKind::Enum) {
+            const auto* enum_decl = EnttCodegenUtils::find_enum(
+                program, field->type.symbol_id.has_value() ? field->type.symbol_id->local_name : field->type.name);
+            if (enum_decl == nullptr) {
+                throw CodegenError(plan.parts[index].member->location, "unknown enum '" + field->type.name + "'");
+            }
+            fixed.emplace_back(std::pair<std::string, std::string>{"0", std::to_string(enum_decl->variants.size())});
+        } else {
+            ranges.push_back(&*field->range);
+            fixed.emplace_back(std::nullopt);
+        }
+    }
+    auto extents = emit_container_extents(ranges, block, "return std::nullopt;", indent, program);
+    std::vector<std::pair<std::string, std::string>> bounds;
+    bounds.reserve(fixed.size());
+    auto ranged = extents.bounds.begin();
+    for (auto& entry : fixed) {
+        bounds.push_back(entry.has_value() ? *entry : *ranged++);
+    }
+    extents.bounds = std::move(bounds);
+    return extents;
 }
 
 static void emit_equality_index_sync(std::ostringstream& out,
@@ -5906,17 +6159,38 @@ static void emit_equality_index_sync(std::ostringstream& out,
                                      const DecoratedProgram& program) {
     const auto& name        = binding.scope.binding_name;
     const auto index        = "cactus_index_" + name;
-    const auto index_type   = "cactus::runtime::entt_backend::EqualityBindingIndex<" + std::to_string(plan.parts.size()) + ">";
+    const auto index_type   = equality_index_type(plan);
     const auto member_types = join_strings(binding.cpp_types, ", ");
     std::ostringstream sync;
     emit_index_refresh(sync, index, "", member_types, member_types);
-    sync << "    " << index << ".catch_up(registry, [&](entt::entity " << name << ") -> std::optional<" << index_type
-         << "::Key> {\n";
-    sync << "        if (!registry.all_of<" << member_types << ">(" << name << ")) {\n";
-    sync << "            return std::nullopt;\n";
-    sync << "        }\n";
-    sync << "        return " << equality_key(plan.parts, true, pair_codegen_scope, program) << ";\n";
-    sync << "    });\n";
+    sync << "    " << index << ".catch_up(\n";
+    sync << "        registry,\n";
+    sync << "        [&](entt::entity " << name << ") -> std::optional<" << index_type << "::Key> {\n";
+    sync << "            if (!registry.all_of<" << member_types << ">(" << name << ")) {\n";
+    sync << "                return std::nullopt;\n";
+    sync << "            }\n";
+    sync << "            return " << equality_member_key(plan, name, pair_codegen_scope, program) << ";\n";
+    if (!plan.dense.has_value()) {
+        sync << "        });\n";
+        emit_shared_index(out, index_type, index, sync.str());
+        return;
+    }
+    const auto extents = dense_extents(plan, *plan.dense, "cactus_block", "            ", program);
+    std::vector<std::string> bounds;
+    bounds.reserve(extents.bounds.size());
+    for (const auto& [lo, hi] : extents.bounds) {
+        std::string bound = "std::pair<std::int64_t, std::int64_t>{";
+        bound += lo;
+        bound += ", ";
+        bound += hi;
+        bound += "}";
+        bounds.push_back(std::move(bound));
+    }
+    sync << "        },\n";
+    sync << "        [&]([[maybe_unused]] entt::entity cactus_block) -> std::optional<" << index_type << "::Extents> {\n";
+    sync << extents.lookups;
+    sync << "            return " << index_type << "::Extents{" << join_strings(bounds, ", ") << "};\n";
+    sync << "        });\n";
     emit_shared_index(out, index_type, index, sync.str());
 }
 
@@ -5931,6 +6205,9 @@ static void emit_equality_fold_dispatch(std::ostringstream& out,
     if (gated) {
         out << "    if (cactus_active) {\n";
     }
+    if (plan.identity == nullptr) {
+        out << "    std::vector<entt::entity> cactus_matches;\n";
+    }
     out << "    for (std::size_t cactus_i = 0; cactus_i < " << group << "_snapshot.size(); ++cactus_i) {\n";
     out << "        if (cactus_group_live[cactus_i] == 0) { continue; }\n";
     out << "        const auto " << group << " = " << group << "_snapshot[cactus_i];\n";
@@ -5940,8 +6217,9 @@ static void emit_equality_fold_dispatch(std::ostringstream& out,
         out << "        if (cactus::runtime::entt_backend::named_alive<"
             << join_strings(pair_binding_codegens[plan.indexed].cpp_types, ", ") << ">(registry, " << member << ")) {\n";
     } else {
-        out << "        for (const auto& [cactus_ordinal, " << member << "] : cactus_index_" << member << ".find("
-            << equality_key(plan.parts, false, fold_scope, program) << ")) {\n";
+        out << "        " << equality_find(plan, "cactus_index_" + member, "cactus_matches", fold_scope, program)
+            << ";\n";
+        out << "        for (const auto " << member << " : cactus_matches) {\n";
     }
     out << "            cactus_fold(" << (plan.indexed == 0 ? member + ", " + group : group + ", " + member) << ");\n";
     out << "        }\n";

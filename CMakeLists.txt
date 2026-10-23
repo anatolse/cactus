@@ -184,6 +184,7 @@ add_library(cactus_backend_cpp_entt STATIC
     src/backends/cpp-entt/type_utils.cpp
     src/backends/cpp-entt/system_emitter.cpp
     src/backends/cpp-entt/trait_writers.cpp
+    src/backends/cpp-entt/index_cell_size.cpp
     src/backends/cpp-entt/range_checks.cpp
     src/backends/cpp-entt/event_emitter.cpp
     src/backends/cpp-entt/render_pass_emitter.cpp
@@ -329,7 +330,7 @@ function(cactus_add_headless_behavior_test TARGET_NAME)
     cmake_parse_arguments(CACTUS_HEADLESS_TEST
         "LINEARIZATION_HARNESS;FORCE_ROW_STAGE;NO_INDEXED_JOINS"
         "${oneValueArgs}"
-        ""
+        "CODEGEN_FLAGS"
         ${ARGN}
     )
 
@@ -354,6 +355,7 @@ function(cactus_add_headless_behavior_test TARGET_NAME)
     if(CACTUS_HEADLESS_TEST_NO_INDEXED_JOINS)
         list(APPEND codegen_flags --no-indexed-joins)
     endif()
+    list(APPEND codegen_flags ${CACTUS_HEADLESS_TEST_CODEGEN_FLAGS})
 
     add_custom_command(
         OUTPUT "${generated_output}"

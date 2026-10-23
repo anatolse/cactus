@@ -4691,7 +4691,9 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
 
     out << emit_backend_main(program);
 
-    return out.str();
+    auto code = out.str();
+    EnttSystemEmitter::assign_static_stores(code);
+    return code;
 }
 
 }  // namespace cactus

@@ -349,13 +349,27 @@ struct SpatialJoinPlan {
     friend bool operator==(const SpatialJoinPlan&, const SpatialJoinPlan&) = default;
 };
 
+// How an index can address an equality key part. Serialized by numeric
+// value: append new layouts, never reorder.
+enum class EqualityKeyLayout : std::uint8_t {
+    Hashed,  // an int whose range neither constants nor one container fix
+    Direct,  // an enum or bool, or an int ranged by constants
+    Entity,  // an entity_id field, or the member itself
+    Ranged,  // an int ranged by fields read through the `container` field
+};
+
 // One key of an equality join, as paths from `where_clause->predicates[predicate_index]`:
 // `member` is the indexed binding itself or one of its `let` fields of a type
-// compared by value, and `query` reads nothing of the indexed binding.
+// compared by value, and `query` reads nothing of the indexed binding. A field
+// key names its trait and field.
 struct EqualityJoinKey {
     std::size_t predicate_index = 0;
     ExprPath member;
     ExprPath query;
+    EqualityKeyLayout layout = EqualityKeyLayout::Entity;
+    std::optional<SymbolId> trait;
+    std::string field;
+    std::string container;
 
     friend bool operator==(const EqualityJoinKey&, const EqualityJoinKey&) = default;
 };
@@ -818,6 +832,10 @@ struct DecoratedProgram {
     // Codegen may keep pair-binding indexes across passes; tests turn it off to
     // compare against the full product.
     bool index_pair_joins = true;
+    // Test only: override the index structures codegen chooses.
+    bool force_hashed_keys  = false;
+    bool share_static_stores = true;
+    std::optional<float> grid_cell_size;
     HierarchyFacts hierarchy;        // likewise
     ModulePersistenceMetadata persistence;
     std::vector<ResolvedSourceModule> source_modules;
@@ -1613,10 +1631,15 @@ private:
     // A reduced pair rule's equality join, when its `where:` has one.
     [[nodiscard]] std::optional<EqualityJoinPlan> recognize_equality_join(const RuleNode& rule,
                                                                           const PairScope& pair_scope) const;
-    [[nodiscard]] bool immutable_member_value(const ExprNode& expr,
-                                              std::size_t binding,
-                                              const std::string& binding_name,
-                                              const PairScope& pair_scope) const;
+    // An info diagnostic per key part an index can only hash.
+    void report_hashed_key_parts(const RuleNode& rule, const EqualityJoinPlan& plan);
+    // The trait and `let` field of a value-compared type that `expr` reads
+    // from `binding`, if it reads one.
+    [[nodiscard]] std::optional<std::pair<SymbolId, const ResolvedField*>> member_key_field(
+        const ExprNode& expr,
+        std::size_t binding,
+        const std::string& binding_name,
+        const PairScope& pair_scope) const;
     // The key one `==` conjunct gives the indexed binding, if either side is its let field.
     [[nodiscard]] std::optional<EqualityJoinKey> equality_key(const BinaryExpr& equality,
                                                               const ExprPath& conjunct,

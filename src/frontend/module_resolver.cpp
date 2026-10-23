@@ -24,10 +24,16 @@ void propagate_diagnostics(ErrorReporter& destination,
     }
 
     for (const auto& diagnostic : source.diagnostics()) {
-        if (diagnostic.level == DiagnosticLevel::Error) {
-            destination.error(diagnostic.location, diagnostic.message);
-        } else {
-            destination.warning(diagnostic.location, diagnostic.message);
+        switch (diagnostic.level) {
+            case DiagnosticLevel::Error:
+                destination.error(diagnostic.location, diagnostic.message);
+                break;
+            case DiagnosticLevel::Warning:
+                destination.warning(diagnostic.location, diagnostic.message);
+                break;
+            case DiagnosticLevel::Info:
+                destination.info(diagnostic.location, diagnostic.message);
+                break;
         }
     }
 }

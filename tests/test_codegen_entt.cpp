@@ -7962,18 +7962,86 @@ static std::string equality_join_source(const std::string& field_kind) {
            "        probe[Probe].found = matches\n";
 }
 
-TEST_CASE("Codegen EnTT: an equality join on let fields uses a keyed index",
+TEST_CASE("Codegen EnTT: an equality join with an unranged int key uses a flat hashed index",
           "[codegen-entt][equality-join][binding-index]") {
     const auto code = emit_indexed_join(equality_join_source("let"));
-    CHECK(code.contains("auto& cactus_index_cell = cactus::runtime::entt_backend::shared_binding_index<cactus::runtime::entt_backend::EqualityBindingIndex<2>, "));
-    CHECK(code.contains("cactus_index_cell.find("));
+    CHECK(code.contains("auto& cactus_index_cell = cactus::runtime::entt_backend::shared_binding_index<cactus::runtime::entt_backend::FlatKeyIndex<2>, "));
+    CHECK(code.contains("cactus_index_cell.find(registry, "));
     CHECK(code.contains("equality_key_part("));
+    CHECK_FALSE(code.contains("DenseKeyIndex"));
     CHECK_FALSE(code.contains("cell_snapshot"));
 
+    // Only the entity key is left: each member's block is its owner.
     const auto var_field = emit_indexed_join(equality_join_source("var"));
-    CHECK(var_field.contains("EqualityBindingIndex<1>"));
+    CHECK(var_field.contains("DenseKeyIndex<0>"));
+    CHECK(var_field.contains(".block = registry.get<const ::cactus_gen::Cell>(cell).owner"));
+    CHECK(var_field.contains(".block = registry.get<const ::cactus_gen::Probe>(probe).owner"));
 
-    CHECK_FALSE(emit_indexed_join(equality_join_source("let"), false).contains("EqualityBindingIndex"));
+    CHECK_FALSE(emit_indexed_join(equality_join_source("let"), false).contains("KeyIndex"));
+}
+
+static std::string ranged_join_source(const std::string& container_key) {
+    return "enum Kind:\n"
+           "    Stone\n"
+           "    Glass\n"
+           "    Wood\n"
+           "const:\n"
+           "    LEVELS = 4\n"
+           "trait Volume:\n"
+           "    let min_x: int = 0\n"
+           "    let max_x: int = 3\n"
+           "trait Cell:\n"
+           "    let volume: entity_id\n"
+           "    let x: int in range(volume[Volume].min_x, volume[Volume].max_x + 1)\n"
+           "    let level: int in range(1, LEVELS)\n"
+           "    let lit: bool\n"
+           "    let kind: Kind\n"
+           "trait Probe:\n"
+           "    var volume: entity_id\n"
+           "    var x: float = 0.0\n"
+           "    var level: int = 0\n"
+           "    var lit: bool = false\n"
+           "    var kind: Kind = Kind.Stone\n"
+           "    var found: int = 0\n"
+           "event tick:\n"
+           "    dt: float\n"
+           "rule Detect:\n"
+           "    pairs:\n"
+           "        probe:\n"
+           "            Probe\n"
+           "        cell:\n"
+           "            Cell\n"
+           "    where:\n"
+           "        " + container_key + "cell[Cell].x == probe[Probe].x and cell[Cell].level == probe[Probe].level and "
+           "cell[Cell].lit == probe[Probe].lit and cell[Cell].kind == probe[Probe].kind\n"
+           "    reduce per probe:\n"
+           "        matches = count()\n"
+           "    on tick:\n"
+           "        probe[Probe].found = matches\n";
+}
+
+TEST_CASE("Codegen EnTT: ranged, enum and bool keys use a dense index within each container",
+          "[codegen-entt][equality-join][binding-index]") {
+    const auto code = emit_indexed_join(ranged_join_source("cell[Cell].volume == probe[Probe].volume and "));
+    CHECK(code.contains("shared_binding_index<cactus::runtime::entt_backend::DenseKeyIndex<4>, "));
+    CHECK_FALSE(code.contains("FlatKeyIndex"));
+    CHECK(code.contains(".block = registry.get<const ::cactus_gen::Cell>(cell).volume"));
+    CHECK(code.contains(".block = registry.get<const ::cactus_gen::Probe>(probe).volume"));
+    CHECK(code.contains("dense_key_part(registry.get<const ::cactus_gen::Probe>(probe).x)"));
+    // Extents come from the container's fields, constants, and the enum's size.
+    CHECK(code.contains("registry.try_get<::cactus_gen::Volume>(cactus_block)"));
+    CHECK(code.contains("->min_x"));
+    CHECK(code.contains("std::pair<std::int64_t, std::int64_t>{1, ::cactus_gen::"));
+    CHECK(code.contains("LEVELS}"));
+    CHECK(code.contains("std::pair<std::int64_t, std::int64_t>{0, 2}"));
+    CHECK(code.contains("std::pair<std::int64_t, std::int64_t>{0, 3}"));
+    CHECK(code.contains("cactus_index_cell.find(registry, "));
+
+    // Without the container in the key, each query looks in every container.
+    const auto implicit = emit_indexed_join(ranged_join_source(""));
+    CHECK(implicit.contains("DenseKeyIndex<4>"));
+    CHECK(implicit.contains(".block = registry.get<const ::cactus_gen::Cell>(cell).volume"));
+    CHECK(implicit.contains("cactus_index_cell.find_any_block(registry, "));
 }
 
 static std::string identity_join_source(const std::string& extra_key) {
@@ -8002,7 +8070,7 @@ static std::string identity_join_source(const std::string& extra_key) {
 TEST_CASE("Codegen EnTT: an identity join looks the entity up directly and keeps no index",
           "[codegen-entt][equality-join][binding-index]") {
     const auto code = emit_indexed_join(identity_join_source(""));
-    CHECK_FALSE(code.contains("EqualityBindingIndex"));
+    CHECK_FALSE(code.contains("KeyIndex"));
     CHECK_FALSE(code.contains("watch_binding_traits"));
     CHECK_FALSE(code.contains("cactus_index_cell"));
     CHECK_FALSE(code.contains("cell_snapshot"));
@@ -8020,7 +8088,7 @@ TEST_CASE("Codegen EnTT: an identity join looks the entity up directly and keeps
 TEST_CASE("Codegen EnTT: an identity key decides the plan and the fold still checks the other keys",
           "[codegen-entt][equality-join][binding-index]") {
     const auto code = emit_indexed_join(identity_join_source(" and cell[Cell].x == probe[Probe].x"));
-    CHECK_FALSE(code.contains("EqualityBindingIndex"));
+    CHECK_FALSE(code.contains("KeyIndex"));
     CHECK(code.contains("named_alive<::cactus_gen::Cell>(registry, cell)"));
     const auto lambda = code.find("auto cactus_fold = [&]");
     REQUIRE(lambda != std::string::npos);

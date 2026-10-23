@@ -190,6 +190,36 @@ std::string emit_range_check_statement(const ResolvedTrait& trait,
            indent + "}\n";
 }
 
+ContainerExtents emit_container_extents(const std::vector<const ResolvedFieldRange*>& ranges,
+                                        const std::string& block,
+                                        const std::string& on_missing,
+                                        const std::string& indent,
+                                        const DecoratedProgram& program) {
+    std::vector<ContainerLookup> lookups;
+    for (const auto* range : ranges) {
+        collect_containers(*range->lo, lookups);
+        collect_containers(*range->hi, lookups);
+    }
+    std::ostringstream out;
+    const auto guard = [&](const std::string& missing) {
+        out << indent << "if (" << missing << ") {\n" << indent << "    " << on_missing << "\n" << indent << "}\n";
+    };
+    if (!lookups.empty()) {
+        guard("!registry.valid(" + block + ")");
+    }
+    for (const auto& lookup : lookups) {
+        out << indent << "const auto* " << lookup.var << " = registry.try_get<"
+            << EnttCodegenUtils::trait_cpp_name(lookup.trait, lookup.trait.local_name, program) << ">(" << block
+            << ");\n";
+        guard(lookup.var + " == nullptr");
+    }
+    ContainerExtents extents{.lookups = out.str(), .bounds = {}};
+    for (const auto* range : ranges) {
+        extents.bounds.emplace_back(emit_bound(*range->lo, lookups, program), emit_bound(*range->hi, lookups, program));
+    }
+    return extents;
+}
+
 std::string emit_range_check_passes(const ResolvedTrait& trait, const std::string& value) {
     return "cactus::runtime::entt_backend::passes_range_check(" + check_ref(trait) + "(registry, " + value + "))";
 }

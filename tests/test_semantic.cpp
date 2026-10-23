@@ -3921,6 +3921,94 @@ TEST_CASE("Semantic: equalities on let fields and the member itself form an equa
     CHECK(identity.handler_contracts[0].equality_join->keys.front().member == ExprPath{0});
 }
 
+static std::string ranged_join_rule() {
+    return stdlib_events() +
+           "enum Kind:\n"
+           "    Stone\n"
+           "    Glass\n"
+           "trait Volume:\n"
+           "    let min_x: int = 0\n"
+           "    let max_x: int = 3\n"
+           "trait Cell:\n"
+           "    let volume: entity_id\n"
+           "    let x: int in range(volume[Volume].min_x, volume[Volume].max_x + 1)\n"
+           "    let level: int in range(0, 4)\n"
+           "    let lit: bool\n"
+           "    let kind: Kind\n"
+           "    let size: int = 3\n"
+           "    let step: int in range(0, size)\n"
+           "trait Probe:\n"
+           "    var volume: entity_id\n"
+           "    var x: int = 0\n"
+           "    var level: int = 0\n"
+           "    var lit: bool = false\n"
+           "    var kind: Kind = Kind.Stone\n"
+           "    var found: int = 0\n"
+           "rule Detect:\n"
+           "    pairs:\n"
+           "        probe:\n"
+           "            Probe\n"
+           "        cell:\n"
+           "            Cell\n"
+           "    where:\n"
+           "        cell[Cell].volume == probe[Probe].volume and cell[Cell].x == probe[Probe].x and "
+           "cell[Cell].level == probe[Probe].level and cell[Cell].lit == probe[Probe].lit and "
+           "cell[Cell].kind == probe[Probe].kind and cell[Cell].step == probe[Probe].x\n"
+           "    reduce per probe:\n"
+           "        matches = count()\n"
+           "    on tick:\n"
+           "        probe[Probe].found = matches\n";
+}
+
+static std::size_t count_infos_containing(const std::vector<Diagnostic>& diagnostics, const std::string& needle) {
+    return static_cast<std::size_t>(std::ranges::count_if(diagnostics, [&](const Diagnostic& diagnostic) {
+        return diagnostic.level == DiagnosticLevel::Info && diagnostic.message.contains(needle);
+    }));
+}
+
+TEST_CASE("Semantic: each equality key part records how it can be addressed",
+          "[semantic][where-clause][equality-join][diagnostics]") {
+    auto [result, diagnostics] = analyze_with_diagnostics(ranged_join_rule());
+    const auto& plan = result.handler_contracts.at(0).equality_join;
+    REQUIRE(plan.has_value());
+    REQUIRE(plan->keys.size() == 6);
+    CHECK(plan->keys[0].layout == EqualityKeyLayout::Entity);
+    CHECK(plan->keys[0].field == "volume");
+    CHECK(plan->keys[1].layout == EqualityKeyLayout::Ranged);
+    CHECK(plan->keys[1].container == "volume");
+    CHECK(plan->keys[1].field == "x");
+    REQUIRE(plan->keys[1].trait.has_value());
+    CHECK(plan->keys[1].trait->local_name == "Cell");
+    CHECK(plan->keys[2].layout == EqualityKeyLayout::Direct);
+    CHECK(plan->keys[3].layout == EqualityKeyLayout::Direct);
+    CHECK(plan->keys[4].layout == EqualityKeyLayout::Direct);
+    // A range read from the member's own fields gives no shared block.
+    CHECK(plan->keys[5].layout == EqualityKeyLayout::Hashed);
+    CHECK(count_infos_containing(diagnostics, "Cell.step") == 1);
+    CHECK(count_infos_containing(diagnostics, "Cell.x") == 0);
+    CHECK(count_infos_containing(diagnostics, "Cell.level") == 0);
+    CHECK(count_warnings(diagnostics) == 0);
+}
+
+TEST_CASE("Semantic: an unranged int key part is hashed and reported once",
+          "[semantic][where-clause][equality-join][diagnostics]") {
+    auto [result, diagnostics] = analyze_with_diagnostics(
+        equality_join_rule("let", "cell[Cell].x == probe[Probe].x and probe[Probe].owner == c.owner"));
+    const auto& plan = result.handler_contracts.at(0).equality_join;
+    REQUIRE(plan.has_value());
+    CHECK(plan->keys[0].layout == EqualityKeyLayout::Hashed);
+    CHECK(plan->keys[1].layout == EqualityKeyLayout::Entity);
+    REQUIRE(count_infos_containing(diagnostics, "Cell.x") == 1);
+    CHECK(count_infos_containing(diagnostics, "'Detect'") == 1);
+    CHECK(count_infos_containing(diagnostics, "range") == 1);
+    CHECK(count_warnings(diagnostics) == 0);
+
+    // An identity key keeps no index, so nothing is hashed.
+    auto [identity, identity_diagnostics] =
+        analyze_with_diagnostics(equality_join_rule("let", "cell == probe[Probe].owner and cell[Cell].x == probe[Probe].x"));
+    CHECK(count_infos_containing(identity_diagnostics, "Cell.x") == 0);
+}
+
 TEST_CASE("Semantic: var fields, cross reads and missing reductions form no equality join",
           "[semantic][where-clause][equality-join][diagnostics]") {
     auto [var_field, var_diagnostics] = analyze_with_diagnostics(equality_join_rule("var", "cell[Cell].x == probe[Probe].x"));

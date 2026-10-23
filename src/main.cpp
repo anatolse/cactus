@@ -14,6 +14,7 @@
 #include "backends/cpp-entt/cpp_entt_codegen.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
@@ -23,7 +24,9 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -38,13 +41,28 @@ static void print_usage(const char* program) {
               << "  --module-path <dir>                  Additional module search directory (repeatable)\n"
               << "  --force-row-stage                    Test only: evaluate every clause expression per row\n"
               << "  --no-indexed-joins                   Test only: rebuild every pair pass from full snapshots\n"
+              << "  --force-hashed-keys                  Test only: hash every equality index key\n"
+              << "  --no-shared-stores                   Test only: give each spatial index its own static store\n"
+              << "  --grid-cell-size=<v>                 Test only: use this cell size for every spatial index\n"
               << "  --help                               Show this help message\n";
+}
+
+static const char* level_name(cactus::DiagnosticLevel level) {
+    switch (level) {
+        case cactus::DiagnosticLevel::Error:
+            return "error";
+        case cactus::DiagnosticLevel::Warning:
+            return "warning";
+        case cactus::DiagnosticLevel::Info:
+            return "info";
+    }
+    std::unreachable();
 }
 
 static void print_errors(const cactus::ErrorReporter& errors) {
     for (const auto& d : errors.diagnostics()) {
         std::cerr << d.location.filename << ":" << d.location.line << ":" << d.location.column << ": "
-                  << (d.level == cactus::DiagnosticLevel::Error ? "error" : "warning") << ": " << d.message << "\n";
+                  << level_name(d.level) << ": " << d.message << "\n";
     }
 }
 
@@ -346,7 +364,36 @@ struct CliArgs {
     std::vector<fs::path> module_paths;  // 6.1: --module-path flag
     bool force_row_stage = false;
     bool no_indexed_joins = false;
+    bool force_hashed_keys = false;
+    bool no_shared_stores = false;
+    std::optional<std::string> grid_cell_size_text;
+    std::optional<float> grid_cell_size;
 };
+
+constexpr std::string_view kGridCellSizeOption = "--grid-cell-size=";
+
+[[nodiscard]] static std::optional<float> positive_number(std::string_view text) {
+    const std::string value{text};
+    char* end        = nullptr;
+    const float size = std::strtof(value.c_str(), &end);
+    if (value.empty() || *end != '\0' || !std::isfinite(size) || size <= 0.0F) {
+        return std::nullopt;
+    }
+    return size;
+}
+
+// Exit code 1 when --grid-cell-size was given something other than a positive number.
+static std::optional<int> read_grid_cell_size(CliArgs& out) {
+    if (!out.grid_cell_size_text.has_value()) {
+        return std::nullopt;
+    }
+    out.grid_cell_size = positive_number(*out.grid_cell_size_text);
+    if (!out.grid_cell_size.has_value()) {
+        std::cerr << "error: --grid-cell-size needs a positive number\n";
+        return 1;
+    }
+    return std::nullopt;
+}
 
 // Sets the flag an option without a value names; false for any other argument.
 static bool set_switch(const char* arg, CliArgs& out) {
@@ -356,6 +403,18 @@ static bool set_switch(const char* arg, CliArgs& out) {
     }
     if (std::strcmp(arg, "--no-indexed-joins") == 0) {
         out.no_indexed_joins = true;
+        return true;
+    }
+    if (std::strcmp(arg, "--force-hashed-keys") == 0) {
+        out.force_hashed_keys = true;
+        return true;
+    }
+    if (std::strcmp(arg, "--no-shared-stores") == 0) {
+        out.no_shared_stores = true;
+        return true;
+    }
+    if (std::string_view{arg}.starts_with(kGridCellSizeOption)) {
+        out.grid_cell_size_text = std::string{std::string_view{arg}.substr(kGridCellSizeOption.size())};
         return true;
     }
     return false;
@@ -407,7 +466,7 @@ static std::optional<int> parse_cli_args(int argc, char** argv, CliArgs& out) {
         std::cerr << "error: no input file specified\n";
         return 1;
     }
-    return std::nullopt;
+    return read_grid_cell_size(out);
 }
 
 static std::unique_ptr<cactus::ProgramNode> compile_multi_module_pipeline(const std::string& input_file,
@@ -593,7 +652,10 @@ int main(int argc, char* argv[]) try {
             handler.contract.staging = {};
         }
     }
-    decorated.index_pair_joins = !args.no_indexed_joins;
+    decorated.index_pair_joins    = !args.no_indexed_joins;
+    decorated.force_hashed_keys   = args.force_hashed_keys;
+    decorated.share_static_stores = !args.no_shared_stores;
+    decorated.grid_cell_size      = args.grid_cell_size;
     std::string generated;
     if (!generate_cpp(decorated, generated) || !write_generated_output(generated, output_file, backend)) {
         return 1;

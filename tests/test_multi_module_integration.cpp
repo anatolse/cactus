@@ -1144,6 +1144,136 @@ TEST_CASE("integration: collider queries lower to runtime kernels over program-b
 
 // Every example program: each .cactus file outside build/ that no sibling
 // file imports, since an imported module is a library of its example.
+// The store key the index in `function`'s body passes to reset, or "" when it has none.
+static std::string static_store_key(const std::string& code, const std::string& function) {
+    const auto body = code.find("void " + function + "(entt::registry& registry");
+    REQUIRE(body != std::string::npos);
+    const std::string mark = "shared_static_store<";
+    const auto at          = code.find(mark, body);
+    const auto next_body   = code.find("\nvoid ", body + 1);
+    if (at == std::string::npos || (next_body != std::string::npos && at > next_body)) {
+        return "";
+    }
+    return code.substr(at + mark.size(), code.find('>', at) - at - mark.size());
+}
+
+static std::string linked_index_program(const std::string& name, const std::string& body) {
+    auto build_dir = integration_build_dir() / name;
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+    const std::string source = "module " + name +
+                               "\n"
+                               "use std.core\n"
+                               "use std.transform.volume as tv\n"
+                               "use std.physics.volume as physics\n"
+                               "trait Bullet\n"
+                               "trait Wall\n"
+                               "trait Crate\n"
+                               "trait Solid\n"
+                               "event Scraped\n"
+                               "entity Shot:\n"
+                               "    Bullet\n"
+                               "    tv.WorldTransform\n" +
+                               body;
+    ProgramNode merged_ast;
+    auto merged = link_with_stdlib(source, name, build_dir, merged_ast);
+    REQUIRE(merged.has_value());
+    auto code = CppEnttCodegen::generate(*merged);
+    fs::remove_all(build_dir, ec);
+    return code;
+}
+
+static std::string touch_rule(const std::string& rule, const std::string& traits) {
+    return "rule " + rule +
+           ":\n"
+           "    pairs:\n"
+           "        bullet:\n"
+           "            Bullet\n"
+           "        wall:\n" +
+           traits +
+           "            physics.Collider\n"
+           "            physics.BoxCollider\n"
+           "    where:\n"
+           "        physics.touching(bullet, wall)\n"
+           "    on fixed_tick:\n"
+           "        emit Scraped to bullet\n";
+}
+
+TEST_CASE("integration: constant collider sizes give a spatial index its cell size at compile time",
+          "[integration][codegen-entt][binding-index]") {
+    const auto code = linked_index_program("constant_cells",
+                                           "entity NorthWall:\n"
+                                           "    Wall\n"
+                                           "    tv.WorldTransform\n"
+                                           "    physics.Collider\n"
+                                           "    physics.BoxCollider:\n"
+                                           "        size = vec3(30.5, 3.0, 0.5)\n"
+                                           "entity Pillar:\n"
+                                           "    Wall\n"
+                                           "    tv.WorldTransform\n"
+                                           "    physics.Collider\n"
+                                           "    physics.BoxCollider\n" +
+                                               touch_rule("TouchWalls", "            Wall\n"));
+    const auto reset = code.find("cactus_index_wall.reset(registry, ");
+    REQUIRE(reset != std::string::npos);
+    const auto line = code.substr(reset, code.find(";\n", reset) - reset);
+    CHECK(line.contains("cactus::runtime::entt_backend::median_extent(std::array{"));
+    CHECK(line.contains("box_extent(vec3(30.5F, 3.0F, 0.5F))"));
+    CHECK(line.contains("box_extent(::cactus_gen::stdlib::physics::volume::BoxCollider{}.size)"));
+    CHECK_FALSE(code.contains(", 2.0F);\n"));
+    CHECK_FALSE(code.contains("@CACTUS_STATIC_STORE"));
+}
+
+TEST_CASE("integration: collider sizes known only at runtime leave the cell size to the first build",
+          "[integration][codegen-entt][binding-index]") {
+    const auto code = linked_index_program("runtime_cells",
+                                           "template Block(size: float):\n"
+                                           "    Wall\n"
+                                           "    tv.WorldTransform\n"
+                                           "    physics.Collider\n"
+                                           "    physics.BoxCollider:\n"
+                                           "        size = vec3(size, size, size)\n"
+                                           "rule Build:\n"
+                                           "    each:\n"
+                                           "        Bullet\n"
+                                           "    on added Bullet:\n"
+                                           "        spawn Block(size = 2.0)\n" +
+                                               touch_rule("TouchWalls", "            Wall\n"));
+    const auto reset = code.find("cactus_index_wall.reset(registry, ");
+    REQUIRE(reset != std::string::npos);
+    const auto line = code.substr(reset, code.find(";\n", reset) - reset);
+    CHECK(line.ends_with(", 0.0F)"));
+    CHECK_FALSE(line.contains("median_extent"));
+}
+
+TEST_CASE("integration: spatial indexes with the same bounds code share a static store when their members overlap",
+          "[integration][codegen-entt][binding-index]") {
+    const auto code = linked_index_program("shared_stores",
+                                           "entity Gate:\n"
+                                           "    Wall\n"
+                                           "    Solid\n"
+                                           "    tv.WorldTransform\n"
+                                           "    physics.Collider\n"
+                                           "    physics.BoxCollider\n"
+                                           "entity Box:\n"
+                                           "    Crate\n"
+                                           "    tv.WorldTransform\n"
+                                           "    physics.Collider\n"
+                                           "    physics.BoxCollider\n" +
+                                               touch_rule("TouchWalls", "            Wall\n") +
+                                               touch_rule("TouchSolids", "            Solid\n") +
+                                               touch_rule("TouchCrates", "            Crate\n"));
+    const auto walls  = static_store_key(code, "touch_walls_on");
+    const auto solids = static_store_key(code, "touch_solids_on");
+    const auto crates = static_store_key(code, "touch_crates_on");
+    REQUIRE_FALSE(walls.empty());
+    CHECK(walls == solids);
+    CHECK(walls != crates);
+    // Each index is still its own: its members come from its own filter.
+    CHECK(code.contains("registry.view<::cactus_gen::shared_stores::Wall, "));
+    CHECK(code.contains("registry.view<::cactus_gen::shared_stores::Solid, "));
+}
+
 static std::vector<fs::path> example_program_roots(const fs::path& examples) {
     std::vector<fs::path> files;
     std::set<fs::path> imported;

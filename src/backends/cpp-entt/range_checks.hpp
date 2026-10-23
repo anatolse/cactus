@@ -4,6 +4,8 @@
 
 #include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace cactus {
 
@@ -24,5 +26,16 @@ namespace cactus {
                                                      const std::string& value,
                                                      const std::string& on_fault,
                                                      const std::string& indent);
+
+// The [lo, hi) of each of `ranges`, read through container `block`; `lookups` runs `on_missing` if a trait is absent.
+struct ContainerExtents {
+    std::string lookups;
+    std::vector<std::pair<std::string, std::string>> bounds;
+};
+[[nodiscard]] ContainerExtents emit_container_extents(const std::vector<const ResolvedFieldRange*>& ranges,
+                                                      const std::string& block,
+                                                      const std::string& on_missing,
+                                                      const std::string& indent,
+                                                      const DecoratedProgram& program);
 
 }  // namespace cactus

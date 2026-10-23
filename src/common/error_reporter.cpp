@@ -26,6 +26,10 @@ void ErrorReporter::warning(const SourceLocation& loc, const std::string& msg) {
     }
 }
 
+void ErrorReporter::info(const SourceLocation& loc, const std::string& msg) {
+    record(DiagnosticLevel::Info, loc, msg);
+}
+
 void ErrorReporter::print_summary() const {
     if (error_count_ > 0 || warning_count_ > 0) {
         std::cerr << error_count_ << " error(s), " << warning_count_ << " warning(s)\n";

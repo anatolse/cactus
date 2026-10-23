@@ -15,6 +15,8 @@ public:
     static std::string emit_extern_system(const ExternRuleNode& sys, const DecoratedProgram& program);
     static bool requires_entt_hierarchy_helpers(const DecoratedProgram& program);
     static std::string emit_entt_hierarchy_helpers(const DecoratedProgram& program);
+    // Names each spatial index's static store; same bounds code and overlapping archetypes share one.
+    static void assign_static_stores(std::string& code);
 };
 
 }  // namespace cactus

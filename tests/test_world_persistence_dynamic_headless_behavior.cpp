@@ -74,20 +74,29 @@ cactus::persistence::Snapshot capture(entt::registry& registry) {
 }
 
 // What a save records of `trait` on the one entity of `archetype`.
-cactus::persistence::TraitRecord captured(entt::registry& registry, const std::string& archetype,
-                                          const std::string& trait) {
+struct CapturedTrait {
+    std::vector<cactus::persistence::StructField> construction;
+    std::vector<cactus::persistence::StructField> persisted;
+};
+
+CapturedTrait captured(entt::registry& registry, const std::string& archetype, const std::string& trait) {
     const auto snapshot = capture(registry);
-    const auto record   = std::ranges::find(snapshot.entities, archetype, &cactus::persistence::EntityRecord::archetype);
-    REQUIRE(record != snapshot.entities.end());
-    const auto* found = cactus::persistence::find_trait(*record, trait);
-    REQUIRE(found != nullptr);
-    return *found;
+    for (const auto record : snapshot.entities()) {
+        if (record.archetype() != archetype) {
+            continue;
+        }
+        const auto found = record.trait(trait);
+        REQUIRE(found.has_value());
+        return CapturedTrait{.construction = found->construction(), .persisted = found->persisted()};
+    }
+    FAIL("no record of " << archetype);
+    return {};
 }
 
-const cactus::persistence::Value& field(const std::vector<cactus::persistence::FieldValue>& fields,
-                                        const std::string& name) {
-    const auto* found = cactus::persistence::find_field(fields, name);
-    REQUIRE(found != nullptr);
+cactus::persistence::Value field(const std::vector<cactus::persistence::StructField>& fields,
+                                 const std::string& name) {
+    const auto found = std::ranges::find(fields, name, &cactus::persistence::StructField::name);
+    REQUIRE(found != fields.end());
     return found->value;
 }
 

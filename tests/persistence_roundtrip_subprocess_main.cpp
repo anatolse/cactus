@@ -75,7 +75,7 @@ int run_save(const std::filesystem::path& directory) {
     boss.current  = 321;
 
     const auto snapshot = cactus::runtime::entt_backend::generated_capture_world_snapshot(registry);
-    if (snapshot.entities.empty()) {
+    if (snapshot.entity_count() == 0) {
         fail_roundtrip("SAVE", "captured snapshot was empty");
     }
     const auto outcome =

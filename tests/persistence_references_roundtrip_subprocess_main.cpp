@@ -38,7 +38,7 @@ int run_save(const std::filesystem::path& directory) {
     cactus_headless_test::init_and_load(registry);
 
     const auto snapshot = cactus::runtime::entt_backend::generated_capture_world_snapshot(registry);
-    if (snapshot.entities.size() != 4) {
+    if (snapshot.entity_count() != 4) {
         fail_roundtrip("SAVE", "expected 4 captured entities (rival_a, rival_b, lonely, also_lonely)");
     }
     const auto outcome =

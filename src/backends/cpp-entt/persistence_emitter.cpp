@@ -7,9 +7,12 @@
 #include "common/persistence_document.hpp"
 
 #include <algorithm>
+#include <array>
 #include <set>
 #include <sstream>
+#include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace cactus {
@@ -631,117 +634,168 @@ void emit_reference_name_reverse_lookup(std::ostringstream& out,
     out << "}\n\n";
 }
 
-// C++ text producing a persistence::Value for one field access. Empty when the
-// schema cannot yet represent the type, so the caller omits the field rather
-// than recording something wrong for it.
-std::string capture_expression(const DecoratedProgram& program, const TypeInfo& type, const std::string& access) {
-    switch (describe_persistence_value(type).kind) {
-        case PersistenceValueKind::Bool:
-        case PersistenceValueKind::Int:
-        case PersistenceValueKind::Float:
-        case PersistenceValueKind::String:
+std::string kind_enumerator(PersistenceValueKind kind) {
+    return std::string("cactus::PersistenceValueKind::") + persistence_value_kind_enumerator(kind);
+}
+
+// Structs are registered before any type that names them, so a struct can
+// reach itself through a list.
+using StructSlots = std::unordered_map<std::string, std::string>;
+
+std::string struct_slot_name(std::size_t index) {
+    return "document_struct_" + std::to_string(index);
+}
+
+// C++ text registering `type` in the document being built (`out`) and yielding
+// its document type index.
+std::string type_registration(const DecoratedProgram& program, const TypeInfo& type, const StructSlots& structs) {
+    const auto described = describe_persistence_value(type);
+    const auto kind      = kind_enumerator(described.kind);
+    switch (described.kind) {
         case PersistenceValueKind::Vector:
-            return "cactus::runtime::entt_backend::to_persistence_value(" + access + ")";
-        case PersistenceValueKind::EntityRef:
-            return "cactus::persistence::Value::of_entity(ids.reference(" + access + "))";
+            return "out.type({.kind = " + kind + ", .lanes = " + std::to_string(described.lanes) +
+                   ", .lane_kind = " + kind_enumerator(described.lane_kind) + "})";
         case PersistenceValueKind::Enum: {
             const auto* declaration = EnttCodegenUtils::find_enum(program, type.name);
-            if (declaration == nullptr || EnttComponentEmitter::emit_enum(*declaration).empty()) {
-                return {};  // deferred to a raylib enum: no generated variant names
+            std::string variants;
+            for (const auto& variant : declaration->variants) {
+                variants += (variants.empty() ? "\"" : ", \"") + variant + "\"";
             }
-            return "cactus::persistence::Value::of_enum(\"" + declaration_identity(*declaration) +
-                   "\", std::string(generated_variant(" + access + ")))";
+            return "out.type({.kind = " + kind + ", .ref = out.enumeration(\"" + declaration_identity(*declaration) +
+                   "\", std::array<std::string_view, " + std::to_string(declaration->variants.size()) + ">{" +
+                   variants + "})})";
         }
-        case PersistenceValueKind::Struct: {
-            const auto* declaration = EnttCodegenUtils::find_struct(program, type.name);
-            if (declaration == nullptr) {
-                return {};
-            }
-            return "generated_capture_struct(" + access + ", ids)";
-        }
+        case PersistenceValueKind::Struct:
+            return "out.type({.kind = " + kind + ", .ref = " +
+                   structs.at(declaration_identity(*EnttCodegenUtils::find_struct(program, type.name))) + "})";
+        case PersistenceValueKind::List:
+            return "out.type({.kind = " + kind + ", .ref = " + type_registration(program, *type.element, structs) +
+                   "})";
+        default:
+            return "out.type({.kind = " + kind + "})";
+    }
+}
+
+std::string field_list_registration(const DecoratedProgram& program,
+                                    const std::vector<const ResolvedField*>& fields,
+                                    const StructSlots& structs) {
+    std::string text = "{";
+    for (const auto* field : fields) {
+        text += (text.size() == 1 ? "" : ", ");
+        text += "{.name = out.name(\"" + field->name + "\"), .type = " +
+                type_registration(program, field->type, structs) + "}";
+    }
+    return text + "}";
+}
+
+
+void emit_document_tables(std::ostringstream& out,
+                          const DecoratedProgram& program,
+                          const std::vector<PersistableTrait>& traits) {
+    const auto table = build_reference_name_table(program);
+    out << "// Where this program's names and layouts sit in one document's tables.\n";
+    out << "struct GeneratedDocumentTables {\n";
+    out << "    std::uint32_t unset_name = 0;\n";
+    out << "    std::array<std::uint32_t, " << table.assets.size() << "> assets{};\n";
+    out << "    std::array<std::uint32_t, " << table.input_buttons.size() << "> buttons{};\n";
+    out << "    std::array<std::uint32_t, " << table.input_axes.size() << "> axes{};\n";
+    out << "    std::array<std::uint32_t, " << program.persistence.archetypes.size() << "> nodes{};\n";
+    out << "    std::array<std::uint32_t, " << traits.size() << "> traits{};\n";
+    out << "};\n\n";
+
+    out << "[[nodiscard]] inline GeneratedDocumentTables generated_register_document_tables(\n";
+    out << "    cactus::persistence::SnapshotBuilder& out) {\n";
+    out << "    GeneratedDocumentTables tables;\n";
+    out << "    tables.unset_name = out.name(\"\");\n";
+    const std::array<std::pair<const char*, const char*>, 4> name_tables = {{
+        {"assets", "generated_asset_names"},
+        {"buttons", "generated_input_button_names"},
+        {"axes", "generated_input_axis_names"},
+        {"nodes", "generated_archetype_nodes"},
+    }};
+    for (const auto& [member, names] : name_tables) {
+        out << "    for (std::size_t index = 0; index < " << names << ".size(); ++index) {\n";
+        out << "        tables." << member << "[index] = out.name(" << names << "[index]);\n";
+        out << "    }\n";
+    }
+    StructSlots slots;
+    const auto structs = unique_structs(program);
+    for (std::size_t index = 0; index < structs.size(); ++index) {
+        slots.emplace(declaration_identity(*structs[index]), struct_slot_name(index));
+        out << "    const auto " << struct_slot_name(index) << " = out.declare_struct();\n";
+    }
+    for (std::size_t index = 0; index < structs.size(); ++index) {
+        out << "    out.define_struct(" << struct_slot_name(index) << ", "
+            << field_list_registration(program, persisting_fields(program, structs[index]->fields), slots) << ");\n";
+    }
+    for (std::size_t index = 0; index < traits.size(); ++index) {
+        const auto& fields = traits[index].declaration->fields;
+        out << "    tables.traits[" << index << "] = out.trait_shape(\"" << traits[index].canonical << "\", "
+            << field_list_registration(program, persisting_fields(program, fields, false), slots) << ", "
+            << field_list_registration(program, persisting_fields(program, fields, true), slots) << ");\n";
+    }
+    out << "    return tables;\n";
+    out << "}\n\n";
+}
+
+// C++ statement writing one value at `access` in the field-list order the
+// document tables record.
+std::string put_statement(const DecoratedProgram& program, const TypeInfo& type, const std::string& access, int depth) {
+    switch (describe_persistence_value(type).kind) {
+        case PersistenceValueKind::Bool:
+            return "out.put_bool(" + access + ");";
+        case PersistenceValueKind::Int:
+            return "out.put_int(" + access + ");";
+        case PersistenceValueKind::Float:
+            return "out.put_float(" + access + ");";
+        case PersistenceValueKind::String:
+            return "out.put_name(" + access + ");";
+        case PersistenceValueKind::Vector:
+            return std::string(kRuntime) + "put_persistence_lanes(out, " + access + ");";
+        case PersistenceValueKind::EntityRef:
+            return "out.put_entity(ids.reference(" + access + "));";
+        case PersistenceValueKind::Enum:
+            return "out.put_index(static_cast<std::uint32_t>(" + access + "));";
+        case PersistenceValueKind::Struct:
+            return "generated_put_struct(out, " + access + ", ids, tables);";
         case PersistenceValueKind::List: {
-            if (type.element == nullptr) {
-                return {};
-            }
-            const auto element = capture_expression(program, *type.element, "item");
-            if (element.empty()) {
-                return {};
-            }
-            return "[&]() { cactus::persistence::ListValue items; items.items.reserve(std::min<std::size_t>(" +
-                   access + ".size(), cactus::persistence::kMaxPersistenceCollectionSize)); for (const auto& item : " +
-                   access +
-                   ") { if (items.items.size() >= cactus::persistence::kMaxPersistenceCollectionSize) { "
-                   "ids.mark_limit_exceeded(); break; } items.items.push_back(" + element +
-                   "); } return cactus::persistence::Value::of_list(std::move(items)); }()";
+            const auto item = "item_" + std::to_string(depth);
+            return std::string(kRuntime) + "put_persistence_list(out, " + access + ", ids, [&](const auto& " + item +
+                   ") { " + put_statement(program, *type.element, item, depth + 1) + " });";
         }
         case PersistenceValueKind::AssetRef:
-            return "cactus::persistence::Value::of_asset(std::string(generated_asset_name(" + access + ")))";
+            return "out.put_index(" + std::string(kRuntime) + "document_name_at(tables.assets, static_cast<std::size_t>(" +
+                   access + ") - 1U, tables.unset_name));";
         case PersistenceValueKind::InputRef:
-            if (type.kind == TypeKind::InputAxis) {
-                return "cactus::persistence::Value::of_input(std::string(generated_input_axis_name(" + access +
-                       ")))";
-            }
-            return "cactus::persistence::Value::of_input(std::string(generated_input_button_name(" + access + ")))";
+            return "out.put_index(" + std::string(kRuntime) + "document_name_at(tables." +
+                   (type.kind == TypeKind::InputAxis ? "axes" : "buttons") + ", static_cast<std::size_t>(" + access +
+                   "), tables.unset_name));";
         case PersistenceValueKind::Unsupported:
             return {};
     }
     return {};
 }
 
-void emit_field_capture(std::ostringstream& out,
-                        const DecoratedProgram& program,
-                        const ResolvedField& field,
-                        const std::string& access,
-                        const std::string& target,
-                        const std::string& indent) {
-    const auto expression = capture_expression(program, field.type, access + cpp_escaped(field.name));
-    if (expression.empty()) {
-        return;
+void emit_struct_encoders(std::ostringstream& out, const DecoratedProgram& program) {
+    const auto structs = unique_structs(program);
+    const auto signature = [](const ResolvedStruct& declaration) {
+        return "inline void generated_put_struct(cactus::persistence::SnapshotBuilder& out, const " +
+               cpp_type_ref(SymbolKind::Struct, declaration.module_name, declaration.name) +
+               "& value, DocumentIdMap& ids, const GeneratedDocumentTables& tables)";
+    };
+    for (const auto* declaration : structs) {
+        out << signature(*declaration) << ";\n";
     }
-    out << indent << target << ".push_back(cactus::persistence::FieldValue{.name = \"" << field.name
-        << "\", .value = " << expression << "});\n";
-}
-
-void emit_enum_variant_functions(std::ostringstream& out, const DecoratedProgram& program) {
-    std::unordered_set<std::string> seen;
-    for (const auto& [key, declaration] : program.enums) {
-        if (!seen.insert(declaration_identity(declaration)).second ||
-            EnttComponentEmitter::emit_enum(declaration).empty()) {
-            continue;
-        }
-        const auto enum_cpp = cpp_type_ref(SymbolKind::Enum, declaration.module_name, declaration.name);
-        out << "[[nodiscard]] inline std::string_view generated_variant(" << enum_cpp << " value) {\n";
-        out << "    switch (value) {\n";
-        for (const auto& variant : declaration.variants) {
-            out << "        case " << enum_cpp << "::" << cpp_escaped(variant) << ": return \"" << variant << "\";\n";
-        }
-        out << "    }\n    return \"\";\n}\n\n";
-    }
-}
-
-void emit_struct_capture_functions(std::ostringstream& out, const DecoratedProgram& program) {
-    std::unordered_set<std::string> seen;
-    for (const auto& [key, declaration] : program.structs) {
-        if (!seen.insert(declaration_identity(declaration)).second) {
-            continue;
-        }
-        const auto struct_cpp = cpp_type_ref(SymbolKind::Struct, declaration.module_name, declaration.name);
-        out << "[[nodiscard]] inline cactus::persistence::Value generated_capture_struct(const " << struct_cpp
-            << "& value, DocumentIdMap& ids) {\n";
-        out << "    if (!ids.enter_nesting()) { return cactus::persistence::Value{}; }\n";
-        out << "    cactus::persistence::StructValue fields;\n";
-        const auto field_count =
-            std::ranges::count_if(declaration.fields, [&program](const auto& field) {
-                return !capture_expression(program, field.type, "x").empty();
-            });
-        if (field_count > 0) {
-            out << "    fields.fields.reserve(" << field_count << ");\n";
-        }
-        for (const auto& field : declaration.fields) {
-            emit_field_capture(out, program, field, "value.", "fields.fields", "    ");
+    out << "\n";
+    for (const auto* declaration : structs) {
+        out << signature(*declaration) << " {\n";
+        out << "    (void)tables;\n";
+        out << "    ids.enter_nesting();\n";
+        for (const auto* field : persisting_fields(program, declaration->fields)) {
+            out << "    " << put_statement(program, field->type, "value." + cpp_escaped(field->name), 0) << "\n";
         }
         out << "    ids.exit_nesting();\n";
-        out << "    return cactus::persistence::Value::of_struct(std::move(fields));\n}\n\n";
+        out << "}\n\n";
     }
 }
 
@@ -771,121 +825,104 @@ void emit_eligibility(std::ostringstream& out, const std::vector<PersistableTrai
     out << "}\n\n";
 }
 
-struct SupportedFieldCounts {
-    std::size_t construction = 0;
-    std::size_t persisted    = 0;
-};
+constexpr const char* kCaptureParameters =
+    "(const entt::registry& registry,\n"
+    "                                     entt::entity entity,\n"
+    "                                     DocumentIdMap& ids,\n"
+    "                                     cactus::persistence::SnapshotBuilder& out,\n"
+    "                                     const GeneratedDocumentTables& tables)";
 
-// How many of a trait's fields will actually reach `emit_field_capture`, split
-// by construction vs. persisted — known at codegen time, so the generated
-// vectors can be sized once instead of growing by repeated reallocation.
-SupportedFieldCounts count_supported_fields(const DecoratedProgram& program, const ResolvedTrait& trait) {
-    SupportedFieldCounts counts;
-    for (const auto& field : trait.fields) {
-        if (capture_expression(program, field.type, "x").empty()) {
-            continue;
-        }
-        (field.is_persist ? counts.persisted : counts.construction)++;
-    }
-    return counts;
-}
-
-// One capture function per trait with fields keeps each generated function
-// small however many traits a program persists.
+// One encoder per trait with fields keeps each generated function small
+// however many traits a program persists.
 void emit_trait_capture(std::ostringstream& out,
                         const DecoratedProgram& program,
                         const PersistableTrait& trait,
+                        std::size_t layout,
                         const ConstructionRetention& retention) {
-    const auto counts = count_supported_fields(program, *trait.declaration);
+    const auto construction = persisting_fields(program, trait.declaration->fields, false);
+    const auto persisted    = persisting_fields(program, trait.declaration->fields, true);
     out << "template <>\n";
-    out << "inline void generated_capture_trait<" << trait.cpp_name << ">(const entt::registry& registry,\n";
-    out << "                                     entt::entity entity,\n";
-    out << "                                     DocumentIdMap& ids,\n";
-    out << "                                     cactus::persistence::EntityRecord& record) {\n";
+    out << "inline void generated_capture_trait<" << trait.cpp_name << ">" << kCaptureParameters << " {\n";
     out << "    (void)ids;\n";
     out << "    const auto* live = registry.try_get<" << trait.cpp_name << ">(entity);\n";
     out << "    if (live == nullptr) {\n";
     out << "        return;\n";
     out << "    }\n";
-    out << "    cactus::persistence::TraitRecord attached{.trait = \"" << trait.canonical << "\"};\n";
-    if (counts.construction > 0) {
-        out << "    attached.construction.reserve(" << counts.construction << ");\n";
-    }
-    if (counts.persisted > 0) {
-        out << "    attached.persisted.reserve(" << counts.persisted << ");\n";
-    }
     // Without a copy nothing can have changed the construction fields, so the live value holds them.
     std::string constructed = "live->";
-    if (counts.construction > 0 && retention.retains_anywhere(trait.declaration->symbol_id)) {
+    if (!construction.empty() && retention.retains_anywhere(trait.declaration->symbol_id)) {
         out << "    const auto* built = registry.try_get<Construction<" << trait.cpp_name << ">>(entity);\n";
         out << "    const auto& constructed = built != nullptr ? built->value : *live;\n";
         constructed = "constructed.";
     }
-    for (const auto& field : trait.declaration->fields) {
-        if (!field.is_persist) {
-            emit_field_capture(out, program, field, constructed, "attached.construction", "    ");
-        }
+    out << "    out.begin_trait(tables.traits[" << layout << "]);\n";
+    for (const auto* field : construction) {
+        out << "    " << put_statement(program, field->type, constructed + cpp_escaped(field->name), 0) << "\n";
     }
-    for (const auto& field : trait.declaration->fields) {
-        if (field.is_persist) {
-            emit_field_capture(out, program, field, "live->", "attached.persisted", "    ");
-        }
+    out << "    out.begin_persisted();\n";
+    for (const auto* field : persisted) {
+        out << "    " << put_statement(program, field->type, "live->" + cpp_escaped(field->name), 0) << "\n";
     }
-    out << "    record.traits.push_back(std::move(attached));\n";
+    out << "    out.end_trait();\n";
     out << "}\n\n";
 }
 
 void emit_attached_traits(std::ostringstream& out,
                           const DecoratedProgram& program,
+                          const std::vector<PersistableTrait>& layouts,
                           const std::vector<PersistableTrait>& traits) {
     out << "template <class T>\n";
-    out << "void generated_capture_trait(const entt::registry& registry,\n";
-    out << "                             entt::entity entity,\n";
-    out << "                             DocumentIdMap& ids,\n";
-    out << "                             cactus::persistence::EntityRecord& record);\n\n";
+    out << "void generated_capture_trait" << kCaptureParameters << ";\n\n";
     const ConstructionRetention retention(program, persistable_symbols(traits));
     for (const auto& trait : traits) {
         if (!trait.declaration->fields.empty()) {
-            emit_trait_capture(out, program, trait, retention);
+            emit_trait_capture(out, program, trait, layout_index(layouts, trait.canonical), retention);
         }
     }
-    out << "inline void generated_capture_traits(const entt::registry& registry,\n";
-    out << "                                     entt::entity entity,\n";
-    out << "                                     DocumentIdMap& ids,\n";
-    out << "                                     cactus::persistence::EntityRecord& record) {\n";
+    out << "inline void generated_capture_traits" << kCaptureParameters << " {\n";
     out << "    (void)ids;\n";
+    out << "    (void)out;\n";
+    out << "    (void)tables;\n";
     for (const auto& trait : traits) {
         out << "    if (!::cactus_gen::detail::projected<" << trait.cpp_name << ">.is_projected(entity)) {\n";
         if (trait.declaration->fields.empty()) {
             out << "        if (registry.all_of<" << trait.cpp_name << ">(entity)) {\n";
-            out << "            record.traits.push_back(cactus::persistence::TraitRecord{.trait = \""
-                << trait.canonical << "\"});\n";
+            out << "            out.begin_trait(tables.traits[" << layout_index(layouts, trait.canonical) << "]);\n";
+            out << "            out.end_trait();\n";
             out << "        }\n";
         } else {
-            out << "        generated_capture_trait<" << trait.cpp_name << ">(registry, entity, ids, record);\n";
+            out << "        generated_capture_trait<" << trait.cpp_name << ">(registry, entity, ids, out, tables);\n";
         }
         out << "    }\n";
     }
     out << "}\n\n";
 }
 
-void emit_absent_traits(std::ostringstream& out, const DecoratedProgram& program) {
+void emit_absent_traits(std::ostringstream& out,
+                        const DecoratedProgram& program,
+                        const std::vector<PersistableTrait>& layouts) {
     out << "// A baseline trait gameplay removed is recorded as absent: membership\n";
     out << "// information, no payloads.\n";
     out << "inline void generated_capture_absent_traits(const entt::registry& registry,\n";
     out << "                                           entt::entity entity,\n";
     out << "                                           std::uint32_t node,\n";
-    out << "                                           cactus::persistence::EntityRecord& record) {\n";
+    out << "                                           cactus::persistence::SnapshotBuilder& out,\n";
+    out << "                                           const GeneratedDocumentTables& tables) {\n";
+    out << "    (void)tables;\n";
     out << "    switch (node) {\n";
     std::uint32_t node_index = 0;
     for (const auto& archetype : program.persistence.archetypes) {
         if (archetype_retains_construction_data(archetype, program.persistence.attaches_persistent_trait)) {
             out << "        case " << node_index << ":\n";
             for (const auto& baseline : archetype.baseline_traits) {
+                const auto layout = layout_index(layouts, make_canonical_id(baseline.trait));
+                if (layout == layouts.size()) {
+                    continue;
+                }
                 out << "            if (!registry.all_of<" << EnttCodegenUtils::trait_cpp_name(baseline.trait)
                     << ">(entity)) {\n";
-                out << "                record.traits.push_back(cactus::persistence::TraitRecord{.trait = \""
-                    << make_canonical_id(baseline.trait) << "\", .present = false});\n";
+                out << "                out.begin_trait(tables.traits[" << layout << "], false);\n";
+                out << "                out.end_trait();\n";
                 out << "            }\n";
             }
             out << "            break;\n";
@@ -898,11 +935,59 @@ void emit_absent_traits(std::ostringstream& out, const DecoratedProgram& program
 
 }  // namespace
 
+bool field_type_persists(const DecoratedProgram& program, const TypeInfo& type) {
+    switch (describe_persistence_value(type).kind) {
+        case PersistenceValueKind::Enum: {
+            const auto* declaration = EnttCodegenUtils::find_enum(program, type.name);
+            // An enum deferred to raylib has no generated variant table.
+            return declaration != nullptr && !EnttComponentEmitter::emit_enum(*declaration).empty();
+        }
+        case PersistenceValueKind::Struct:
+            return EnttCodegenUtils::find_struct(program, type.name) != nullptr;
+        case PersistenceValueKind::List:
+            return type.element != nullptr && field_type_persists(program, *type.element);
+        case PersistenceValueKind::Unsupported:
+            return false;
+        default:
+            return true;
+    }
+}
+
+std::vector<const ResolvedField*> persisting_fields(const DecoratedProgram& program,
+                                                    const std::vector<ResolvedField>& fields,
+                                                    std::optional<bool> persist) {
+    std::vector<const ResolvedField*> kept;
+    for (const auto& field : fields) {
+        if (field_type_persists(program, field.type) && (!persist.has_value() || field.is_persist == *persist)) {
+            kept.push_back(&field);
+        }
+    }
+    return kept;
+}
+
+std::vector<const ResolvedStruct*> unique_structs(const DecoratedProgram& program) {
+    std::vector<const ResolvedStruct*> structs;
+    std::unordered_set<std::string> seen;
+    for (const auto& [key, declaration] : program.structs) {
+        if (seen.insert(declaration_identity(declaration)).second) {
+            structs.push_back(&declaration);
+        }
+    }
+    std::ranges::sort(structs, {}, [](const ResolvedStruct* declaration) { return declaration_identity(*declaration); });
+    return structs;
+}
+
+std::size_t layout_index(const std::vector<PersistableTrait>& layouts, const std::string& canonical) {
+    const auto found = std::ranges::find(layouts, canonical, &PersistableTrait::canonical);
+    return static_cast<std::size_t>(found - layouts.begin());
+}
+
 std::string EnttPersistenceEmitter::emit_world_capture(const DecoratedProgram& program) {
     if (!program_retains_provenance(program)) {
         return {};
     }
-    const auto traits        = without_parent_trait(persistable_traits(program), program);
+    const auto layouts       = persistable_traits(program);
+    const auto traits        = without_parent_trait(layouts, program);
     const auto* parent_trait = EnttCodegenUtils::find_trait(program, "Parent");
 
     std::ostringstream out;
@@ -916,20 +1001,16 @@ std::string EnttPersistenceEmitter::emit_world_capture(const DecoratedProgram& p
     out << "}};\n\n";
 
     emit_reference_name_tables(out, program);
-    emit_enum_variant_functions(out, program);
-    emit_struct_capture_functions(out, program);
+    emit_document_tables(out, program, layouts);
+    emit_struct_encoders(out, program);
     emit_eligibility(out, traits);
-    emit_attached_traits(out, program, traits);
-    emit_absent_traits(out, program);
+    emit_attached_traits(out, program, layouts, traits);
+    emit_absent_traits(out, program, layouts);
 
     out << "// Read-only: capture never mutates the world, creates entities, or runs\n";
     out << "// gameplay handlers.\n";
     out << "[[nodiscard]] inline cactus::persistence::Snapshot generated_capture_world_snapshot(\n";
     out << "    const entt::registry& registry) {\n";
-    out << "    cactus::persistence::Snapshot snapshot;\n";
-    out << "    snapshot.schema_revision    = generated_schema.revision;\n";
-    out << "    snapshot.schema_fingerprint = generated_schema.fingerprint;\n";
-    out << "    snapshot.module             = \"" << program.module_name << "\";\n\n";
     out << "    std::vector<std::pair<std::uint64_t, entt::entity>> ordered;\n";
     out << "    if (const auto* origins = registry.storage<ArchetypeOrigin>()) { ordered.reserve(origins->size()); "
            "}\n";
@@ -939,32 +1020,34 @@ std::string EnttPersistenceEmitter::emit_world_capture(const DecoratedProgram& p
     out << "        }\n";
     out << "    }\n";
     out << "    std::ranges::sort(ordered);\n\n";
+    out << "    cactus::persistence::SnapshotBuilder out;\n";
+    out << "    out.set_schema(generated_schema.revision, generated_schema.fingerprint);\n";
+    out << "    out.set_module(\"" << program.module_name << "\");\n";
+    out << "    const auto tables = generated_register_document_tables(out);\n";
     out << "    DocumentIdMap ids;\n";
     out << "    ids.reserve(ordered.size());\n";
-    out << "    snapshot.entities.reserve(ordered.size());\n";
     out << "    std::vector<cactus::persistence::DocumentId> ordered_ids;\n";
     out << "    ordered_ids.reserve(ordered.size());\n";
     out << "    for (const auto& [ordinal, entity] : ordered) { (void)ordinal; "
            "ordered_ids.push_back(ids.include(entity)); }\n\n";
+    out << "    out.expect_entities(ordered.size());\n";
     out << "    for (std::size_t index = 0; index < ordered.size(); ++index) {\n";
     out << "        const auto entity = ordered[index].second;\n";
     out << "        const auto node = registry.get<ArchetypeOrigin>(entity).node;\n";
-    out << "        cactus::persistence::EntityRecord record;\n";
-    out << "        record.id        = ordered_ids[index];\n";
-    out << "        record.archetype = std::string(generated_archetype_nodes[node]);\n";
+    out << "        cactus::persistence::EntityRef parent;\n";
     if (parent_trait != nullptr) {
-        out << "        if (const auto* parent = registry.try_get<"
+        out << "        if (const auto* link = registry.try_get<"
             << EnttCodegenUtils::trait_cpp_name(parent_trait->symbol_id, parent_trait->name, program)
             << ">(entity)) {\n";
-        out << "            record.parent = ids.reference(parent->parent);\n";
+        out << "            parent = ids.reference(link->parent);\n";
         out << "        }\n";
     }
-    out << "        generated_capture_traits(registry, entity, ids, record);\n";
-    out << "        generated_capture_absent_traits(registry, entity, node, record);\n";
-    out << "        snapshot.entities.push_back(std::move(record));\n";
+    out << "        out.begin_entity(ordered_ids[index], tables.nodes[node], parent);\n";
+    out << "        generated_capture_traits(registry, entity, ids, out, tables);\n";
+    out << "        generated_capture_absent_traits(registry, entity, node, out, tables);\n";
     out << "    }\n";
-    out << "    snapshot.truncated = ids.limit_exceeded();\n";
-    out << "    return snapshot;\n";
+    out << "    if (ids.limit_exceeded()) { out.mark_truncated(); }\n";
+    out << "    return std::move(out).finish();\n";
     out << "}\n\n";
     out << "}  // namespace cactus::runtime::entt_backend\n\n";
     return out.str();

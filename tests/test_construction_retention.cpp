@@ -391,7 +391,7 @@ TEST_CASE("restore copies a trait only on the nodes that keep one", "[codegen-en
     CHECK_FALSE(restore.contains("retain_construction<::cactus_gen::world::Cell>"));
     CHECK(restore.contains("retain_construction<::cactus_gen::world::Health>"));
     CHECK(restore.contains("kKeepsCopy[node]"));
-    CHECK(code.contains("generated_restore_node_traits(staged, entity, node, record, ids);"));
+    CHECK(code.contains("generated_restore_node_traits(staged, entity, node, source, row, match.traits, ids);"));
 }
 
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity)

@@ -7,6 +7,7 @@
 #define CACTUS_GENERATED_NO_MAIN
 #include CACTUS_HEADLESS_GENERATED_CPP
 #include "fake_raylib/headless_frame_driver.hpp"
+#include "persistence_snapshot_edit.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -68,9 +69,11 @@ TEST_CASE("restore without the named entity's record leaves the name stale",
           "[runtime][persistence][restore][named-entity]") {
     entt::registry registry;
     init_and_load(registry);
-    auto snapshot = capture(registry);
-    const auto removed = std::erase_if(snapshot.entities, [](const cactus::persistence::EntityRecord& record) {
-        return record.archetype == "named_entity_access.Game";
+    std::size_t removed = 0;
+    const auto snapshot = cactus_test::edited(capture(registry), [&](std::vector<cactus_test::EditableRecord>& records) {
+        removed = std::erase_if(records, [](const cactus_test::EditableRecord& record) {
+            return record.archetype == "named_entity_access.Game";
+        });
     });
     REQUIRE(removed == 1);
 

@@ -106,6 +106,36 @@ TEST_CASE("generated restore validates the document before staging or publishing
     CHECK(staged_at < publish_at);
 }
 
+TEST_CASE("generated restore reads each trait through a typed decoder, never by field name",
+          "[codegen-entt][persistence][restore]") {
+    const auto unit   = generate(kSource);
+    const auto health = function_body(unit->code, "generated_read_trait<::cactus_gen::world::Health>");
+    CHECK(contains(health, "value.current = in.get_int();"));
+    CHECK_FALSE(contains(health, "\"current\""));
+
+    const auto nodes = function_body(unit->code, "generated_restore_node_traits");
+    CHECK(contains(nodes, "generated_read_trait<::cactus_gen::world::Health>(in, ids)"));
+    CHECK(contains(nodes, "switch (layouts[trait.shape])"));
+    CHECK_FALSE(contains(unit->code, "find_field("));
+    CHECK_FALSE(contains(unit->code, "FieldValue"));
+    CHECK_FALSE(contains(unit->code, "find_trait(record"));
+}
+
+TEST_CASE("generated restore maps document layouts to this program's before decoding",
+          "[codegen-entt][persistence][restore]") {
+    const auto unit = generate(kSource);
+    const auto body = function_body(unit->code, "generated_restore_world");
+
+    const auto validate_at = body.find("cactus::persistence::validate_document(");
+    const auto match_at    = body.find("cactus::persistence::match_trait_layouts(");
+    const auto relayout_at = body.find("cactus::persistence::relayout(");
+    REQUIRE(match_at != std::string::npos);
+    REQUIRE(relayout_at != std::string::npos);
+    CHECK(validate_at < match_at);
+    CHECK(match_at < relayout_at);
+    CHECK(contains(body, "generated_register_document_tables(canonical)"));
+}
+
 TEST_CASE("generated restore fires no lifecycle trigger and keeps tracking the restored world",
           "[codegen-entt][persistence][restore][trait-lifecycle]") {
     const auto unit = generate(kSource);

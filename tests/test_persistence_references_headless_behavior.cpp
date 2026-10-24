@@ -51,17 +51,16 @@ TEST_CASE("a world snapshot records mutual references between two included entit
     World world;
     const auto snapshot = capture(world.registry);
 
-    const auto records = snapshot.entities;
-    REQUIRE(records.size() == 4);  // rival_a, rival_b, lonely, also_lonely (Prop is ineligible)
+    REQUIRE(snapshot.entity_count() == 4);  // rival_a, rival_b, lonely, also_lonely (Prop is ineligible)
 
     int mutual_pairs = 0;
     int absent_count = 0;
-    for (const auto& record : records) {
-        const auto* rival = cactus::persistence::find_trait(record, "persistence_references_runtime.Rival");
-        REQUIRE(rival != nullptr);
-        const auto* field = cactus::persistence::find_field(rival->persisted, "rival");
-        REQUIRE(field != nullptr);
-        const auto ref = field->value.as_entity();
+    for (const auto record : snapshot.entities()) {
+        const auto rival = record.trait("persistence_references_runtime.Rival");
+        REQUIRE(rival.has_value());
+        const auto field = rival->persisted_field("rival");
+        REQUIRE(field.has_value());
+        const auto ref = field->as_entity();
         if (ref.present) {
             ++mutual_pairs;
         } else {

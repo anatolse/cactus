@@ -1,4 +1,4 @@
-// NOLINTBEGIN(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)
+// NOLINTBEGIN(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity)
 // -- Catch2 assertion macros intentionally expand through do-while and expression decomposition.
 #ifndef CACTUS_HEADLESS_GENERATED_CPP
 #error "CACTUS_HEADLESS_GENERATED_CPP must name the generated translation unit"
@@ -9,6 +9,7 @@
 
 #include "common/persistence_validation.hpp"
 #include "fake_raylib/headless_frame_driver.hpp"
+#include "persistence_snapshot_edit.hpp"
 #include "persistence_test_adapter.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -18,16 +19,18 @@
 
 namespace {
 
-using cactus_headless_test::init_and_load;
-using cactus::persistence::find_field;
-using cactus::persistence::find_trait;
 using cactus::persistence::Snapshot;
-using cactus::persistence::TraitRecord;
-using cactus::persistence::Value;
-using cactus::persistence::ValidationError;
 using cactus::persistence::validate_document;
+using cactus::persistence::ValidationError;
+using cactus::persistence::Value;
+using cactus_headless_test::init_and_load;
+using cactus_test::EditableRecord;
+using cactus_test::EditableTrait;
+using cactus_test::edited;
 
 const auto& schema = cactus::runtime::entt_backend::generated_schema;
+
+constexpr std::string_view kRival = "persistence_references_runtime.Rival";
 
 struct World {
     entt::registry registry;
@@ -44,13 +47,25 @@ bool any_error_at(const std::vector<ValidationError>& errors, const std::string&
     return std::ranges::any_of(errors, [&](const ValidationError& error) { return error.field_path == path; });
 }
 
-// Mutable, unlike cactus::persistence::find_trait: several tests below
-// corrupt a field on the returned record afterward.
-TraitRecord& require_trait(std::vector<TraitRecord>& traits, std::string_view trait_name) {
-    auto found =
-        std::ranges::find_if(traits, [&](const TraitRecord& trait) { return trait.trait == trait_name; });
-    REQUIRE(found != traits.end());
+bool any_message(const std::vector<ValidationError>& errors, std::string_view message) {
+    return std::ranges::any_of(errors, [&](const ValidationError& error) { return error.message == message; });
+}
+
+EditableTrait& require_trait(EditableRecord& record, std::string_view trait_name) {
+    auto* found = record.trait(trait_name);
+    REQUIRE(found != nullptr);
     return *found;
+}
+
+Value& require_field(EditableTrait& trait, std::string_view field_name) {
+    auto* found = trait.field(field_name);
+    REQUIRE(found != nullptr);
+    return *found;
+}
+
+std::string record_path(const Snapshot& snapshot, std::size_t index) {
+    const auto entity = snapshot.entity(index);
+    return std::string(entity.archetype()) + "[" + std::to_string(entity.id()) + "]";
 }
 
 }  // namespace
@@ -64,7 +79,7 @@ TEST_CASE("a validly captured document has no validation errors", "[persistence]
 TEST_CASE("an incompatible schema descriptor fails before any other check runs",
           "[persistence][validation]") {
     auto snapshot = valid_snapshot();
-    snapshot.schema_fingerprint += 1;
+    snapshot.set_schema(snapshot.schema_revision(), snapshot.schema_fingerprint() + 1);
 
     const auto errors = validate_document(schema, snapshot);
     REQUIRE(errors.size() == 1);
@@ -72,141 +87,158 @@ TEST_CASE("an incompatible schema descriptor fails before any other check runs",
 }
 
 TEST_CASE("a duplicate document identity is reported", "[persistence][validation]") {
-    auto snapshot = valid_snapshot();
-    REQUIRE(snapshot.entities.size() >= 2);
-    snapshot.entities[1].id = snapshot.entities[0].id;
+    const auto snapshot = edited(valid_snapshot(), [](std::vector<EditableRecord>& records) {
+        REQUIRE(records.size() >= 2);
+        records[1].id = records[0].id;
+    });
 
     const auto errors = validate_document(schema, snapshot);
-    CHECK(std::ranges::any_of(errors, [](const ValidationError& error) { return error.message == "duplicate document identity"; }));
+    CHECK(any_message(errors, "duplicate document identity"));
 }
 
 TEST_CASE("an unknown archetype is reported", "[persistence][validation]") {
-    auto snapshot                    = valid_snapshot();
-    snapshot.entities[0].archetype = "persistence_references_runtime.NoSuchArchetype";
+    const auto snapshot = edited(valid_snapshot(), [](std::vector<EditableRecord>& records) {
+        records[0].archetype = "persistence_references_runtime.NoSuchArchetype";
+    });
 
     const auto errors = validate_document(schema, snapshot);
-    const auto path    = "persistence_references_runtime.NoSuchArchetype[" + std::to_string(snapshot.entities[0].id) + "]";
+    const auto path =
+        "persistence_references_runtime.NoSuchArchetype[" + std::to_string(snapshot.entity(0).id()) + "]";
     REQUIRE(any_error_at(errors, path));
 }
 
 TEST_CASE("an unknown trait is reported", "[persistence][validation]") {
-    auto snapshot = valid_snapshot();
-    snapshot.entities[0].traits.push_back(TraitRecord{.trait = "persistence_references_runtime.NoSuchTrait"});
+    const auto snapshot = edited(valid_snapshot(), [](std::vector<EditableRecord>& records) {
+        records[0].traits.push_back(EditableTrait{.name = "persistence_references_runtime.NoSuchTrait"});
+    });
 
     const auto errors = validate_document(schema, snapshot);
-    CHECK(std::ranges::any_of(errors, [](const ValidationError& error) { return error.message == "unknown trait"; }));
+    CHECK(any_message(errors, "unknown trait"));
 }
 
 TEST_CASE("a field of the wrong value kind is reported", "[persistence][validation]") {
-    auto snapshot = valid_snapshot();
-    auto& rival    = require_trait(snapshot.entities[0].traits, "persistence_references_runtime.Rival");
-    for (auto& field : rival.persisted) {
-        if (field.name == "rival") {
-            field.value = Value::of_string("not an entity reference");
-        }
-    }
+    const auto snapshot = edited(valid_snapshot(), [](std::vector<EditableRecord>& records) {
+        require_field(require_trait(records[0], kRival), "rival") = Value::of_string("not an entity reference");
+    });
 
     const auto errors = validate_document(schema, snapshot);
-    CHECK(std::ranges::any_of(errors, [](const ValidationError& error) { return error.message == "wrong value kind"; }));
+    const auto path   = record_path(snapshot, 0) + "." + std::string(kRival) + ".rival";
+    CHECK(std::ranges::any_of(errors, [&](const ValidationError& error) {
+        return error.message == "wrong value kind" && error.field_path == path;
+    }));
 }
 
 TEST_CASE("a missing required field is reported", "[persistence][validation]") {
-    auto snapshot = valid_snapshot();
-    auto& rival    = require_trait(snapshot.entities[0].traits, "persistence_references_runtime.Rival");
-    rival.persisted.clear();
+    const auto snapshot = edited(valid_snapshot(), [](std::vector<EditableRecord>& records) {
+        require_trait(records[0], kRival).persisted.clear();
+    });
 
     const auto errors = validate_document(schema, snapshot);
-    CHECK(std::ranges::any_of(errors, [](const ValidationError& error) { return error.message == "missing required field"; }));
+    CHECK(any_message(errors, "missing required field"));
 }
 
 TEST_CASE("a dangling reference to a non-existent document identity is reported",
           "[persistence][validation]") {
-    auto snapshot = valid_snapshot();
-    auto& rival    = require_trait(snapshot.entities[0].traits, "persistence_references_runtime.Rival");
-    for (auto& field : rival.persisted) {
-        if (field.name == "rival") {
-            field.value = Value::of_entity(cactus::persistence::EntityRef{.id = 99999, .present = true});
-        }
-    }
+    const auto snapshot = edited(valid_snapshot(), [](std::vector<EditableRecord>& records) {
+        require_field(require_trait(records[0], kRival), "rival") =
+            Value::of_entity(cactus::persistence::EntityRef{.id = 99999, .present = true});
+    });
 
     const auto errors = validate_document(schema, snapshot);
-    CHECK(std::ranges::any_of(errors, [](const ValidationError& error) {
-        return error.message == "reference names a document identity with no matching record";
-    }));
+    CHECK(any_message(errors, "reference names a document identity with no matching record"));
 }
 
 TEST_CASE("a hierarchy cycle among parent links is reported", "[persistence][validation]") {
-    auto snapshot = valid_snapshot();
-    REQUIRE(snapshot.entities.size() >= 2);
-    snapshot.entities[0].parent = cactus::persistence::EntityRef{.id = snapshot.entities[1].id, .present = true};
-    snapshot.entities[1].parent = cactus::persistence::EntityRef{.id = snapshot.entities[0].id, .present = true};
+    const auto snapshot = edited(valid_snapshot(), [](std::vector<EditableRecord>& records) {
+        REQUIRE(records.size() >= 2);
+        records[0].parent = cactus::persistence::EntityRef{.id = records[1].id, .present = true};
+        records[1].parent = cactus::persistence::EntityRef{.id = records[0].id, .present = true};
+    });
 
     const auto errors = validate_document(schema, snapshot);
-    CHECK(std::ranges::any_of(
-        errors, [](const ValidationError& error) { return error.message == "parent chain contains a cycle"; }));
+    CHECK(any_message(errors, "parent chain contains a cycle"));
 }
 
 TEST_CASE("a list past the configured collection size limit is reported", "[persistence][validation]") {
-    auto snapshot = valid_snapshot();
-    auto& roster   = require_trait(snapshot.entities[0].traits, "persistence_references_runtime.Roster");
-    for (auto& field : roster.persisted) {
-        if (field.name == "members") {
-            cactus::persistence::ListValue oversized;
-            oversized.items.assign(cactus::persistence::kMaxPersistenceCollectionSize + 1,
-                                   Value::of_entity(cactus::persistence::EntityRef{}));
-            field.value = Value::of_list(std::move(oversized));
-        }
-    }
+    const auto snapshot = edited(valid_snapshot(), [](std::vector<EditableRecord>& records) {
+        cactus::persistence::ListValue oversized;
+        oversized.items.assign(cactus::persistence::kMaxPersistenceCollectionSize + 1,
+                               Value::of_entity(cactus::persistence::EntityRef{}));
+        require_field(require_trait(records[0], "persistence_references_runtime.Roster"), "members") =
+            Value::of_list(std::move(oversized));
+    });
 
     const auto errors = validate_document(schema, snapshot);
-    CHECK(std::ranges::any_of(errors, [](const ValidationError& error) {
-        return error.message == "list exceeds the configured collection size limit";
-    }));
+    CHECK(any_message(errors, "list exceeds the configured collection size limit"));
 }
 
 TEST_CASE("a document with more records than the list limit is not rejected for its size",
           "[persistence][validation]") {
-    auto snapshot = valid_snapshot();
-    REQUIRE_FALSE(snapshot.entities.empty());
-    auto next_id = std::ranges::max(snapshot.entities, {}, &cactus::persistence::EntityRecord::id).id;
-    const auto seed = snapshot.entities.back();
-    while (snapshot.entities.size() <= cactus::persistence::kMaxPersistenceCollectionSize + 1000) {
-        auto copy   = seed;
-        copy.id     = ++next_id;
-        copy.parent = cactus::persistence::EntityRef{};
-        snapshot.entities.push_back(std::move(copy));
-    }
+    const auto snapshot = edited(valid_snapshot(), [](std::vector<EditableRecord>& records) {
+        REQUIRE_FALSE(records.empty());
+        auto next_id    = std::ranges::max(records, {}, &EditableRecord::id).id;
+        const auto seed = records.back();
+        while (records.size() <= cactus::persistence::kMaxPersistenceCollectionSize + 1000) {
+            auto copy   = seed;
+            copy.id     = ++next_id;
+            copy.parent = cactus::persistence::EntityRef{};
+            records.push_back(std::move(copy));
+        }
+    });
 
     const auto errors = validate_document(schema, snapshot);
-    CHECK_FALSE(std::ranges::any_of(errors, [](const ValidationError& error) {
-        return error.message == "entity count exceeds the configured limit";
-    }));
+    CHECK_FALSE(any_message(errors, "entity count exceeds the configured limit"));
 }
 
 TEST_CASE("multiple problems are all reported together with field paths, not just the first",
           "[persistence][validation]") {
-    auto snapshot = valid_snapshot();
-    REQUIRE(snapshot.entities.size() >= 2);
-    snapshot.entities[0].archetype = "persistence_references_runtime.NoSuchArchetype";
-    snapshot.entities[1].traits.push_back(TraitRecord{.trait = "persistence_references_runtime.NoSuchTrait"});
+    const auto snapshot = edited(valid_snapshot(), [](std::vector<EditableRecord>& records) {
+        REQUIRE(records.size() >= 2);
+        records[0].archetype = "persistence_references_runtime.NoSuchArchetype";
+        records[1].traits.push_back(EditableTrait{.name = "persistence_references_runtime.NoSuchTrait"});
+    });
 
     const auto errors = validate_document(schema, snapshot);
     CHECK(errors.size() >= 2);
-    CHECK(std::ranges::any_of(errors, [](const ValidationError& error) { return error.message == "unknown archetype"; }));
-    CHECK(std::ranges::any_of(errors, [](const ValidationError& error) { return error.message == "unknown trait"; }));
+    CHECK(any_message(errors, "unknown archetype"));
+    CHECK(any_message(errors, "unknown trait"));
     for (const auto& error : errors) {
         CHECK_FALSE(error.field_path.empty());
     }
 }
 
+TEST_CASE("a truncated value payload is reported instead of being read past its end",
+          "[persistence][validation]") {
+    const auto captured = valid_snapshot();
+    const auto rival    = captured.entity(0).trait(kRival);
+    REQUIRE(rival.has_value());
+
+    auto builder = cactus::persistence::SnapshotBuilder::with_tables_of(captured);
+    builder.begin_entity(captured.entity(0).id(), builder.name(captured.entity(0).archetype()),
+                         captured.entity(0).parent());
+    builder.begin_trait(rival->shape());
+    builder.begin_persisted();
+    builder.put_bool(true);  // a reference takes five bytes
+    builder.end_trait();
+    const auto snapshot = std::move(builder).finish();
+
+    const auto errors = validate_document(schema, snapshot);
+    CHECK(std::ranges::any_of(errors, [&](const ValidationError& error) {
+        return error.message == "value data is truncated or malformed" &&
+               error.field_path == record_path(snapshot, 0) + "." + std::string(kRival);
+    }));
+}
+
 TEST_CASE("an adapter-approved but invalid document is still rejected by runtime validation",
           "[persistence][validation][restore]") {
     World world;
-    auto snapshot = cactus::runtime::entt_backend::generated_capture_world_snapshot(world.registry);
-    REQUIRE(snapshot.entities.size() >= 2);
     // An adapter's own encoding might not notice this, but runtime
     // validation must — no adapter can be trusted to enforce it.
-    snapshot.entities[1].id = snapshot.entities[0].id;
+    const auto snapshot = edited(cactus::runtime::entt_backend::generated_capture_world_snapshot(world.registry),
+                                 [](std::vector<EditableRecord>& records) {
+                                     REQUIRE(records.size() >= 2);
+                                     records[1].id = records[0].id;
+                                 });
 
     cactus_test::InMemoryPersistenceAdapter memory_adapter;
     cactus_test::ScopedPersistenceAdapter scoped_adapter(memory_adapter.as_adapter());
@@ -227,13 +259,11 @@ TEST_CASE("an adapter-approved but invalid document is still rejected by runtime
 TEST_CASE("a document with only value-kind problems is rejected with the unsupported_value code",
           "[persistence][validation][restore]") {
     World world;
-    auto snapshot = cactus::runtime::entt_backend::generated_capture_world_snapshot(world.registry);
-    auto& rival    = require_trait(snapshot.entities[0].traits, "persistence_references_runtime.Rival");
-    for (auto& field : rival.persisted) {
-        if (field.name == "rival") {
-            field.value = Value::of_string("not an entity reference");
-        }
-    }
+    const auto snapshot = edited(cactus::runtime::entt_backend::generated_capture_world_snapshot(world.registry),
+                                 [](std::vector<EditableRecord>& records) {
+                                     require_field(require_trait(records[0], kRival), "rival") =
+                                         Value::of_string("not an entity reference");
+                                 });
 
     const auto entities_before = world.registry.view<entt::entity>().size();
     const auto outcome = cactus::runtime::entt_backend::generated_restore_world(world.registry, snapshot);
@@ -245,13 +275,11 @@ TEST_CASE("a document with only value-kind problems is rejected with the unsuppo
 TEST_CASE("a resource that no longer exists in this build fails staging and leaves the old world intact",
           "[persistence][validation][restore]") {
     World world;
-    auto snapshot = cactus::runtime::entt_backend::generated_capture_world_snapshot(world.registry);
-    auto& badge    = require_trait(snapshot.entities[0].traits, "persistence_references_runtime.Badge");
-    for (auto& field : badge.persisted) {
-        if (field.name == "icon") {
-            field.value = Value::of_asset("persistence_references_runtime.NoSuchIcon");
-        }
-    }
+    const auto snapshot = edited(cactus::runtime::entt_backend::generated_capture_world_snapshot(world.registry),
+                                 [](std::vector<EditableRecord>& records) {
+                                     require_field(require_trait(records[0], "persistence_references_runtime.Badge"),
+                                                   "icon") = Value::of_asset("persistence_references_runtime.NoSuchIcon");
+                                 });
 
     const auto entities_before = world.registry.view<entt::entity>().size();
     const auto outcome = cactus::runtime::entt_backend::generated_restore_world(world.registry, snapshot);
@@ -264,7 +292,7 @@ TEST_CASE("an incompatible schema descriptor fails before any world mutation",
           "[persistence][validation][restore]") {
     World world;
     auto snapshot = cactus::runtime::entt_backend::generated_capture_world_snapshot(world.registry);
-    snapshot.schema_fingerprint += 1;
+    snapshot.set_schema(snapshot.schema_revision(), snapshot.schema_fingerprint() + 1);
 
     const auto entities_before = world.registry.view<entt::entity>().size();
     const auto outcome = cactus::runtime::entt_backend::generated_restore_world(world.registry, snapshot);
@@ -321,16 +349,20 @@ TEST_CASE("a successful restore request round-trips through the adapter and repo
 TEST_CASE("a record whose trait set no entity of its archetype can reach is rejected",
           "[persistence][validation][restore][archetype-reachability]") {
     World world;
-    auto snapshot = cactus::runtime::entt_backend::generated_capture_world_snapshot(world.registry);
-    REQUIRE(validate_document(schema, snapshot).empty());
-    const auto warrior = std::ranges::find(snapshot.entities, "persistence_references_runtime.Warrior",
-                                           &cactus::persistence::EntityRecord::archetype);
-    REQUIRE(warrior != snapshot.entities.end());
-    // Only a Prop ever carries Cosmetic.
-    warrior->traits.push_back(TraitRecord{.trait = "persistence_references_runtime.Cosmetic"});
+    const auto captured = cactus::runtime::entt_backend::generated_capture_world_snapshot(world.registry);
+    REQUIRE(validate_document(schema, captured).empty());
+    cactus::persistence::DocumentId warrior_id = 0;
+    const auto snapshot = edited(captured, [&](std::vector<EditableRecord>& records) {
+        const auto warrior =
+            std::ranges::find(records, "persistence_references_runtime.Warrior", &EditableRecord::archetype);
+        REQUIRE(warrior != records.end());
+        // Only a Prop ever carries Cosmetic.
+        warrior->traits.push_back(EditableTrait{.name = "persistence_references_runtime.Cosmetic"});
+        warrior_id = warrior->id;
+    });
 
-    const auto errors = validate_document(schema, snapshot);
-    const auto path   = "persistence_references_runtime.Warrior[" + std::to_string(warrior->id) + "]";
+    const auto errors  = validate_document(schema, snapshot);
+    const auto path    = "persistence_references_runtime.Warrior[" + std::to_string(warrior_id) + "]";
     const auto illegal = std::ranges::find_if(
         errors, [](const ValidationError& error) { return error.message.starts_with("illegal trait combination"); });
     REQUIRE(illegal != errors.end());
@@ -345,16 +377,19 @@ TEST_CASE("a record whose trait set no entity of its archetype can reach is reje
 
 TEST_CASE("a record with a trait set its archetype can reach passes", "[persistence][validation][archetype-reachability]") {
     World world;
-    auto snapshot      = cactus::runtime::entt_backend::generated_capture_world_snapshot(world.registry);
-    const auto warrior = std::ranges::find_if(snapshot.entities, [](const cactus::persistence::EntityRecord& record) {
-        return record.archetype == "persistence_references_runtime.Warrior" &&
-               find_trait(record, "persistence_references_runtime.Badge") == nullptr;
-    });
-    REQUIRE(warrior != snapshot.entities.end());
-    // Any Warrior can gain a Badge.
-    warrior->traits.push_back(TraitRecord{.trait = "persistence_references_runtime.Badge"});
+    const auto snapshot = edited(cactus::runtime::entt_backend::generated_capture_world_snapshot(world.registry),
+                                 [](std::vector<EditableRecord>& records) {
+                                     const auto warrior = std::ranges::find_if(records, [](EditableRecord& record) {
+                                         return record.archetype == "persistence_references_runtime.Warrior" &&
+                                                record.trait("persistence_references_runtime.Badge") == nullptr;
+                                     });
+                                     REQUIRE(warrior != records.end());
+                                     // Any Warrior can gain a Badge.
+                                     warrior->traits.push_back(
+                                         EditableTrait{.name = "persistence_references_runtime.Badge"});
+                                 });
     CHECK(std::ranges::none_of(validate_document(schema, snapshot), [](const ValidationError& error) {
         return error.message.starts_with("illegal trait combination");
     }));
 }
-// NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)
+// NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity)

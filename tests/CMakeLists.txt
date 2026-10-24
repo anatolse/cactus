@@ -298,6 +298,10 @@ add_executable(test_persistence_document test_persistence_document.cpp)
 target_link_libraries(test_persistence_document PRIVATE cactus_runtime_common Catch2::Catch2WithMain)
 add_test(NAME PersistenceDocumentTests COMMAND test_persistence_document)
 
+add_executable(test_persistence_validation test_persistence_validation.cpp)
+target_link_libraries(test_persistence_validation PRIVATE cactus_runtime_common Catch2::Catch2WithMain)
+add_test(NAME PersistenceValidationTests COMMAND test_persistence_validation)
+
 # Creation/structural provenance codegen tests (add-world-save-restore change)
 add_executable(test_persistence_provenance_codegen test_persistence_provenance_codegen.cpp)
 target_link_libraries(test_persistence_provenance_codegen PRIVATE cactus_backend_cpp_entt Catch2::Catch2WithMain)
@@ -959,6 +963,12 @@ cactus_add_headless_behavior_test(test_persistence_validation_headless_behavior
     CACTUS_SOURCE tests/fixtures/persistence_references_runtime.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_persistence_validation_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_persistence_capture_scaling_headless_behavior
+    CACTUS_SOURCE tests/fixtures/persistence_capture_scaling_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_persistence_capture_scaling_headless_behavior.cpp
 )
 
 cactus_add_headless_behavior_test(test_ranged_fields_persistence_headless_behavior

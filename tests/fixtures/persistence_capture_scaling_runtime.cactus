@@ -1,0 +1,23 @@
+module persistence_capture_scaling_runtime
+
+use std.core
+
+# Many small cells whose capture must cost the same number of allocations at
+# any world size.
+
+enum Material:
+    Stone
+    Grass
+
+trait Block:
+    let x: int = 0
+    let y: int = 0
+    persist var material: Material = Material.Stone
+    persist var lit: bool = false
+    persist var offset: vec3 = vec3(0.0, 0.0, 0.0)
+
+trait Marked
+
+template BlockT:
+    Block
+    Marked

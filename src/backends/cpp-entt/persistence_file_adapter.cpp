@@ -11,7 +11,6 @@
 #include <string>
 #include <string_view>
 #include <system_error>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -20,49 +19,20 @@ namespace cactus::runtime::entt_backend {
 namespace {
 
 // ── Versioned example-only binary encoding ──────────────────────────────────
-// A magic/version header, then the document in declaration order. Counts and
-// integers are LEB128 varints (signed ones zigzagged), vectors store only
-// their lanes, and every name is interned: its first use writes the string,
-// later uses write its index. A trait field whose value equals the same
-// field's value in the previous record is one repeat byte. The format carries
-// no compatibility promise across compiler versions.
+// A magic/version header, the document's tables, then its rows. Counts,
+// indexes and integers are LEB128 varints (signed ones zigzagged), floats keep
+// their bits, and a vector stores only its lanes. Each present trait row starts
+// with one bit per field: a set bit means the field repeats the bytes it had
+// in the previous row of the same layout, and is not written again. The format
+// carries no compatibility promise across compiler versions.
 
 constexpr std::array<char, 4> kMagic = {'C', 'P', 'S', 'T'};
-constexpr std::uint32_t kFileFormat  = 2;
-constexpr std::uint8_t kRepeatValue   = 0xFF;
+constexpr std::uint32_t kFileFormat  = 3;
 
-// Value equality that tells -0.0 from 0.0, so a repeat never changes a stored bit.
-bool same_bits(const persistence::Value& left, const persistence::Value& right) {
-    if (left.kind() != right.kind()) {
-        return false;
-    }
-    switch (left.kind()) {
-        case PersistenceValueKind::Float:
-            return std::bit_cast<std::uint32_t>(left.as_float()) == std::bit_cast<std::uint32_t>(right.as_float());
-        case PersistenceValueKind::Vector: {
-            const auto& a = left.as_vector();
-            const auto& b = right.as_vector();
-            return a.lane_kind == b.lane_kind && a.lanes == b.lanes &&
-                   std::bit_cast<std::array<std::uint32_t, 4>>(a.components) ==
-                       std::bit_cast<std::array<std::uint32_t, 4>>(b.components);
-        }
-        case PersistenceValueKind::Struct:
-            return std::ranges::equal(left.as_struct().fields, right.as_struct().fields,
-                                      [](const persistence::FieldValue& a, const persistence::FieldValue& b) {
-                                          return a.name == b.name && same_bits(a.value, b.value);
-                                      });
-        case PersistenceValueKind::List:
-            return std::ranges::equal(left.as_list().items, right.as_list().items, same_bits);
-        default:
-            return left == right;
-    }
-}
-
-// A trait field slot: the trait's and field's name indexes and whether it is a
-// construction or a persisted field.
-std::uint64_t field_slot(std::uint64_t trait, std::uint64_t field, bool persisted) {
-    return (trait << 33U) | (field << 1U) | (persisted ? 1U : 0U);
-}
+class IncompatibleFormat : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
 
 class Encoder {
 public:
@@ -84,39 +54,22 @@ public:
         varint((static_cast<std::uint64_t>(value) << 1U) ^ static_cast<std::uint64_t>(value >> 63));
     }
 
+    void index(std::uint32_t value) { varint(value == persistence::kNoIndex ? 0 : std::uint64_t{value} + 1); }
+
     void f32(float value) {
-        const auto raw = std::bit_cast<std::uint32_t>(value);
+        const auto bits = std::bit_cast<std::uint32_t>(value);
         for (unsigned shift = 0; shift < 32; shift += 8) {
-            u8(static_cast<std::uint8_t>(raw >> shift));
+            u8(static_cast<std::uint8_t>(bits >> shift));
         }
     }
 
-    std::uint64_t name(const std::string& value) {
-        const auto [found, inserted] = names_.try_emplace(value, names_.size());
-        if (!inserted) {
-            varint(found->second + 1);
-            return found->second;
-        }
-        varint(0);
+    void text(std::string_view value) {
         varint(value.size());
         bytes_.append(value);
-        return found->second;
-    }
-
-    // Whether `value` repeats the slot's previous value; otherwise it becomes that value.
-    bool repeats(std::uint64_t slot, const persistence::Value& value) {
-        const auto [last, unseen] = previous_.try_emplace(slot, value);
-        if (!unseen && same_bits(last->second, value)) {
-            return true;
-        }
-        last->second = value;
-        return false;
     }
 
 private:
     std::string bytes_;
-    std::unordered_map<std::string, std::uint64_t> names_;
-    std::unordered_map<std::uint64_t, persistence::Value> previous_;
 };
 
 class Decoder {
@@ -148,55 +101,37 @@ public:
         return static_cast<std::int64_t>(raw >> 1U) ^ -static_cast<std::int64_t>(raw & 1U);
     }
 
+    // A count of things each taking at least one byte, so never more than remain.
     std::uint32_t count() {
         const auto value = varint();
-        if (value > bytes_.size()) {
+        if (value > bytes_.size() - offset_) {
             throw std::runtime_error("persistence file adapter: count exceeds the save size");
         }
         return static_cast<std::uint32_t>(value);
     }
 
+    std::uint32_t index() {
+        const auto value = varint();
+        if (value > 0xFFFFFFFFULL) {
+            throw std::runtime_error("persistence file adapter: index out of range");
+        }
+        return value == 0 ? persistence::kNoIndex : static_cast<std::uint32_t>(value - 1);
+    }
+
     float f32() {
-        std::uint32_t raw = 0;
+        std::uint32_t bits = 0;
         for (unsigned shift = 0; shift < 32; shift += 8) {
-            raw |= static_cast<std::uint32_t>(u8()) << shift;
+            bits |= static_cast<std::uint32_t>(u8()) << shift;
         }
-        return std::bit_cast<float>(raw);
+        return std::bit_cast<float>(bits);
     }
 
-    // A name and its index.
-    std::pair<std::string, std::uint64_t> indexed_name() {
-        const auto reference = varint();
-        if (reference > 0) {
-            if (reference > names_.size()) {
-                throw std::runtime_error("persistence file adapter: unknown name reference");
-            }
-            return {names_[reference - 1], reference - 1};
-        }
+    std::string text() {
         const auto size = count();
-        if (bytes_.size() - offset_ < size) {
-            throw std::runtime_error("persistence file adapter: truncated save");
-        }
-        names_.emplace_back(bytes_.substr(offset_, size));
+        std::string value(bytes_.substr(offset_, size));
         offset_ += size;
-        return {names_.back(), names_.size() - 1};
+        return value;
     }
-
-    std::string name() { return indexed_name().first; }
-
-    [[nodiscard]] bool next_is(std::uint8_t byte) const {
-        return offset_ < bytes_.size() && static_cast<std::uint8_t>(bytes_[offset_]) == byte;
-    }
-
-    [[nodiscard]] const persistence::Value& previous(std::uint64_t slot) const {
-        const auto last = previous_.find(slot);
-        if (last == previous_.end()) {
-            throw std::runtime_error("persistence file adapter: repeat without a previous value");
-        }
-        return last->second;
-    }
-
-    void remember(std::uint64_t slot, const persistence::Value& value) { previous_[slot] = value; }
 
     void expect(std::string_view text) {
         for (const char expected : text) {
@@ -206,216 +141,392 @@ public:
         }
     }
 
+    [[nodiscard]] bool at_end() const noexcept { return offset_ == bytes_.size(); }
+
 private:
     std::string_view bytes_;
     std::size_t offset_ = 0;
-    std::vector<std::string> names_;
-    std::unordered_map<std::uint64_t, persistence::Value> previous_;
 };
 
-void write_value(Encoder& out, const persistence::Value& value);
-persistence::Value read_value(Decoder& in, std::size_t depth = 0);
-
-void write_entity_ref(Encoder& out, const persistence::EntityRef& ref) {
-    out.varint(ref.id);
-    out.u8(ref.present ? 1 : 0);
-}
-
-persistence::EntityRef read_entity_ref(Decoder& in) {
-    const auto id      = static_cast<persistence::DocumentId>(in.varint());
-    const auto present = in.u8() != 0;
-    return persistence::EntityRef{.id = id, .present = present};
-}
-
-void write_fields(Encoder& out, const std::vector<persistence::FieldValue>& fields) {
-    out.varint(fields.size());
-    for (const auto& field : fields) {
-        out.name(field.name);
-        write_value(out, field.value);
+[[nodiscard]] const persistence::DocumentType& type_at(const persistence::Snapshot& document, std::uint32_t index) {
+    const auto* type = document.type(index);
+    if (type == nullptr) {
+        throw std::runtime_error("persistence file adapter: unknown value type");
     }
+    return *type;
 }
 
-std::vector<persistence::FieldValue> read_fields(Decoder& in, std::size_t depth) {
-    std::vector<persistence::FieldValue> fields(in.count());
-    for (auto& field : fields) {
-        field.name  = in.name();
-        field.value = read_value(in, depth);
+[[nodiscard]] const std::vector<persistence::DocumentField>& struct_at(const persistence::Snapshot& document,
+                                                                       std::uint32_t index) {
+    if (index >= document.struct_shapes().size()) {
+        throw std::runtime_error("persistence file adapter: unknown struct layout");
     }
-    return fields;
+    return document.struct_shapes()[index];
 }
 
-void write_trait_fields(Encoder& out,
-                        std::uint64_t trait,
-                        bool persisted,
-                        const std::vector<persistence::FieldValue>& fields) {
-    out.varint(fields.size());
-    for (const auto& field : fields) {
-        if (out.repeats(field_slot(trait, out.name(field.name), persisted), field.value)) {
-            out.u8(kRepeatValue);
-            continue;
-        }
-        write_value(out, field.value);
-    }
-}
-
-std::vector<persistence::FieldValue> read_trait_fields(Decoder& in, std::uint64_t trait, bool persisted) {
-    std::vector<persistence::FieldValue> fields(in.count());
-    for (auto& field : fields) {
-        auto [name, index] = in.indexed_name();
-        field.name         = std::move(name);
-        const auto slot    = field_slot(trait, index, persisted);
-        if (in.next_is(kRepeatValue)) {
-            in.u8();
-            field.value = in.previous(slot);
-            continue;
-        }
-        field.value = read_value(in);
-        in.remember(slot, field.value);
-    }
-    return fields;
-}
-
-void write_value(Encoder& out, const persistence::Value& value) {
-    out.u8(static_cast<std::uint8_t>(value.kind()));
-    switch (value.kind()) {
-        case PersistenceValueKind::Bool:
-            out.u8(value.as_bool() ? 1 : 0);
-            return;
-        case PersistenceValueKind::Int:
-            out.signed_varint(value.as_int());
-            return;
-        case PersistenceValueKind::Float:
-            out.f32(value.as_float());
-            return;
-        case PersistenceValueKind::Vector: {
-            const auto& vector = value.as_vector();
-            out.u8(static_cast<std::uint8_t>(vector.lane_kind));
-            out.u8(vector.lanes);
-            for (std::size_t lane = 0; lane < vector.lanes && lane < vector.components.size(); ++lane) {
-                out.f32(vector.components[lane]);
-            }
-            return;
-        }
-        case PersistenceValueKind::String:
-            out.name(value.as_string());
-            return;
-        case PersistenceValueKind::EntityRef:
-            write_entity_ref(out, value.as_entity());
-            return;
-        case PersistenceValueKind::Enum:
-            out.name(value.as_enum().type);
-            out.name(value.as_enum().variant);
-            return;
-        case PersistenceValueKind::AssetRef:
-        case PersistenceValueKind::InputRef:
-            out.name(value.as_declaration());
-            return;
-        case PersistenceValueKind::Struct:
-            write_fields(out, value.as_struct().fields);
-            return;
-        case PersistenceValueKind::List: {
-            const auto& items = value.as_list().items;
-            out.varint(items.size());
-            for (const auto& item : items) {
-                write_value(out, item);
-            }
-            return;
-        }
-        case PersistenceValueKind::Unsupported:
-            return;  // absent: the kind byte alone is the whole payload
-    }
-}
-
-persistence::Value read_value(Decoder& in, std::size_t depth) {
+void check_depth(std::size_t depth) {
     // A crafted file could otherwise nest deep enough to overflow the stack.
     if (depth > persistence::kMaxPersistenceNestingDepth) {
         throw std::runtime_error("persistence file adapter: value nested too deeply");
     }
-    const auto kind = static_cast<PersistenceValueKind>(in.u8());
-    switch (kind) {
+}
+
+// Re-encodes one value from the document's fixed-width bytes into the file.
+void write_value(Encoder& out, const persistence::Snapshot& document, std::uint32_t type_index,
+                 persistence::ValueReader& in, std::size_t depth) {
+    check_depth(depth);
+    const auto& type = type_at(document, type_index);
+    switch (type.kind) {
         case PersistenceValueKind::Bool:
-            return persistence::Value::of_bool(in.u8() != 0);
+            out.u8(in.get_bool() ? 1 : 0);
+            return;
         case PersistenceValueKind::Int:
-            return persistence::Value::of_int(static_cast<std::int32_t>(in.signed_varint()));
+            out.signed_varint(in.get_int());
+            return;
         case PersistenceValueKind::Float:
-            return persistence::Value::of_float(in.f32());
-        case PersistenceValueKind::Vector: {
-            const auto lane_kind = static_cast<PersistenceValueKind>(in.u8());
-            const auto lanes     = in.u8();
-            std::array<float, 4> components{};
-            for (std::size_t lane = 0; lane < lanes && lane < components.size(); ++lane) {
-                components[lane] = in.f32();
+            out.f32(in.get_float());
+            return;
+        case PersistenceValueKind::Vector:
+            for (std::uint8_t lane = 0; lane < type.lanes; ++lane) {
+                out.f32(in.get_float());
             }
-            return persistence::Value::of_vector(lane_kind, lanes, components);
+            return;
+        case PersistenceValueKind::EntityRef: {
+            const auto ref = in.get_entity();
+            out.u8(ref.present ? 1 : 0);
+            out.varint(ref.id);
+            return;
         }
         case PersistenceValueKind::String:
-            return persistence::Value::of_string(in.name());
-        case PersistenceValueKind::EntityRef:
-            return persistence::Value::of_entity(read_entity_ref(in));
-        case PersistenceValueKind::Enum: {
-            auto type    = in.name();
-            auto variant = in.name();
-            return persistence::Value::of_enum(std::move(type), std::move(variant));
-        }
         case PersistenceValueKind::AssetRef:
-            return persistence::Value::of_asset(in.name());
         case PersistenceValueKind::InputRef:
-            return persistence::Value::of_input(in.name());
+        case PersistenceValueKind::Enum:
+            out.varint(in.get_index());
+            return;
         case PersistenceValueKind::Struct:
-            return persistence::Value::of_struct(persistence::StructValue{.fields = read_fields(in, depth + 1)});
-        case PersistenceValueKind::List: {
-            persistence::ListValue value;
-            value.items.resize(in.count());
-            for (auto& item : value.items) {
-                item = read_value(in, depth + 1);
+            for (const auto& field : struct_at(document, type.ref)) {
+                write_value(out, document, field.type, in, depth + 1);
             }
-            return persistence::Value::of_list(std::move(value));
+            return;
+        case PersistenceValueKind::List: {
+            const auto count = in.get_index();
+            out.varint(count);
+            for (std::uint32_t item = 0; item < count && !in.failed(); ++item) {
+                const auto item_type = type.ref == persistence::kNoIndex ? in.get_index() : type.ref;
+                if (type.ref == persistence::kNoIndex) {
+                    out.varint(item_type);
+                }
+                write_value(out, document, item_type, in, depth + 1);
+            }
+            return;
         }
         case PersistenceValueKind::Unsupported:
-            return persistence::Value{};
-    }
-    throw std::runtime_error("persistence file adapter: unrecognized value kind byte");
-}
-
-void write_entity_record(Encoder& out, const persistence::EntityRecord& record) {
-    out.varint(record.id);
-    out.name(record.archetype);
-    write_entity_ref(out, record.parent);
-    out.varint(record.traits.size());
-    for (const auto& trait : record.traits) {
-        const auto id = out.name(trait.trait);
-        out.u8(trait.present ? 1 : 0);
-        write_trait_fields(out, id, false, trait.construction);
-        write_trait_fields(out, id, true, trait.persisted);
+            return;
     }
 }
 
-persistence::EntityRecord read_entity_record(Decoder& in) {
-    persistence::EntityRecord record;
-    record.id        = static_cast<persistence::DocumentId>(in.varint());
-    record.archetype = in.name();
-    record.parent    = read_entity_ref(in);
-    record.traits.resize(in.count());
-    for (auto& trait : record.traits) {
-        auto [name, id]    = in.indexed_name();
-        trait.trait        = std::move(name);
-        trait.present      = in.u8() != 0;
-        trait.construction = read_trait_fields(in, id, false);
-        trait.persisted    = read_trait_fields(in, id, true);
+// The inverse of write_value: one value from the file into the builder.
+void read_value(Decoder& in, persistence::SnapshotBuilder& out, std::uint32_t type_index, std::size_t depth) {
+    check_depth(depth);
+    const auto type = type_at(out.document(), type_index);
+    switch (type.kind) {
+        case PersistenceValueKind::Bool:
+            out.put_bool(in.u8() != 0);
+            return;
+        case PersistenceValueKind::Int:
+            out.put_int(static_cast<std::int32_t>(in.signed_varint()));
+            return;
+        case PersistenceValueKind::Float:
+            out.put_float(in.f32());
+            return;
+        case PersistenceValueKind::Vector:
+            for (std::uint8_t lane = 0; lane < type.lanes; ++lane) {
+                out.put_float(in.f32());
+            }
+            return;
+        case PersistenceValueKind::EntityRef: {
+            const bool present = in.u8() != 0;
+            out.put_entity({.id = static_cast<persistence::DocumentId>(in.varint()), .present = present});
+            return;
+        }
+        case PersistenceValueKind::String:
+        case PersistenceValueKind::AssetRef:
+        case PersistenceValueKind::InputRef:
+        case PersistenceValueKind::Enum:
+            out.put_index(static_cast<std::uint32_t>(in.varint()));
+            return;
+        case PersistenceValueKind::Struct: {
+            // Tables stay put while rows are read, so the reference stays valid.
+            const auto& fields = struct_at(out.document(), type.ref);
+            for (const auto& field : fields) {
+                read_value(in, out, field.type, depth + 1);
+            }
+            return;
+        }
+        case PersistenceValueKind::List: {
+            const auto count = in.count();
+            out.put_index(count);
+            for (std::uint32_t item = 0; item < count; ++item) {
+                auto item_type = type.ref;
+                if (item_type == persistence::kNoIndex) {
+                    item_type = static_cast<std::uint32_t>(in.varint());
+                    out.put_index(item_type);
+                }
+                read_value(in, out, item_type, depth + 1);
+            }
+            return;
+        }
+        case PersistenceValueKind::Unsupported:
+            return;
     }
-    return record;
+    throw std::runtime_error("persistence file adapter: unrecognized value kind");
+}
+
+void write_fields(Encoder& out, const std::vector<persistence::DocumentField>& fields) {
+    out.varint(fields.size());
+    for (const auto& field : fields) {
+        out.varint(field.name);
+        out.varint(field.type);
+    }
+}
+
+std::vector<persistence::DocumentField> read_fields(Decoder& in) {
+    std::vector<persistence::DocumentField> fields(in.count());
+    for (auto& field : fields) {
+        field.name = static_cast<std::uint32_t>(in.varint());
+        field.type = static_cast<std::uint32_t>(in.varint());
+    }
+    return fields;
+}
+
+void write_tables(Encoder& out, const persistence::Snapshot& document) {
+    out.varint(document.names().size());
+    for (const auto& name : document.names()) {
+        out.text(name);
+    }
+    out.varint(document.types().size());
+    for (const auto& type : document.types()) {
+        out.u8(static_cast<std::uint8_t>(type.kind));
+        out.u8(type.lanes);
+        out.u8(static_cast<std::uint8_t>(type.lane_kind));
+        out.index(type.ref);
+    }
+    out.varint(document.struct_shapes().size());
+    for (const auto& fields : document.struct_shapes()) {
+        write_fields(out, fields);
+    }
+    out.varint(document.enums().size());
+    for (const auto& entry : document.enums()) {
+        out.varint(entry.name);
+        out.varint(entry.variants.size());
+        for (const auto variant : entry.variants) {
+            out.varint(variant);
+        }
+    }
+    out.varint(document.trait_shapes().size());
+    for (const auto& shape : document.trait_shapes()) {
+        out.varint(shape.name);
+        write_fields(out, shape.construction);
+        write_fields(out, shape.persisted);
+    }
+}
+
+persistence::SnapshotBuilder read_tables(Decoder& in) {
+    persistence::DocumentTables tables;
+    tables.names.resize(in.count());
+    for (auto& name : tables.names) {
+        name = in.text();
+    }
+    tables.types.resize(in.count());
+    for (auto& type : tables.types) {
+        type.kind      = static_cast<PersistenceValueKind>(in.u8());
+        type.lanes     = in.u8();
+        type.lane_kind = static_cast<PersistenceValueKind>(in.u8());
+        type.ref       = in.index();
+        if (type.kind > PersistenceValueKind::Unsupported || type.lanes > 4) {
+            throw std::runtime_error("persistence file adapter: malformed value type");
+        }
+    }
+    tables.structs.resize(in.count());
+    for (auto& fields : tables.structs) {
+        fields = read_fields(in);
+    }
+    tables.enums.resize(in.count());
+    for (auto& entry : tables.enums) {
+        entry.name = static_cast<std::uint32_t>(in.varint());
+        entry.variants.resize(in.count());
+        for (auto& variant : entry.variants) {
+            variant = static_cast<std::uint32_t>(in.varint());
+        }
+    }
+    tables.traits.resize(in.count());
+    for (auto& shape : tables.traits) {
+        shape.name         = static_cast<std::uint32_t>(in.varint());
+        shape.construction = read_fields(in);
+        shape.persisted    = read_fields(in);
+    }
+    return persistence::SnapshotBuilder::with_tables(std::move(tables));
+}
+
+// Where one field of a layout's previous row sits in the arena.
+struct FieldSpan {
+    std::size_t begin = 0;
+    std::size_t size  = 0;
+};
+
+// Per layout: its field types in value order and the previous row's field
+// spans, which the repeat bits compare against. Scratch space is reused, so a
+// row costs no allocation.
+class RowLayouts {
+public:
+    explicit RowLayouts(const persistence::Snapshot& document) {
+        layouts_.reserve(document.trait_shapes().size());
+        for (const auto& shape : document.trait_shapes()) {
+            Layout layout{.split = shape.construction.size()};
+            for (const auto* bucket : {&shape.construction, &shape.persisted}) {
+                for (const auto& field : *bucket) {
+                    layout.types.push_back(field.type);
+                }
+            }
+            layouts_.push_back(std::move(layout));
+        }
+    }
+
+    struct Layout {
+        std::vector<std::uint32_t> types;
+        std::size_t split = 0;
+        std::vector<FieldSpan> last;  // empty until a row of this layout was seen
+    };
+
+    [[nodiscard]] Layout& at(std::uint32_t shape) {
+        if (shape >= layouts_.size()) {
+            throw std::runtime_error("persistence file adapter: trait row names no layout");
+        }
+        return layouts_[shape];
+    }
+
+    std::vector<FieldSpan>& spans(std::size_t count) {
+        spans_.assign(count, FieldSpan{});
+        return spans_;
+    }
+
+    std::vector<std::uint8_t>& mask(std::size_t fields) {
+        mask_.assign((fields + 7) / 8, 0);
+        return mask_;
+    }
+
+    // The spans just filled become the layout's previous row.
+    static void remember(Layout& layout, std::vector<FieldSpan>& spans) { layout.last.swap(spans); }
+
+private:
+    std::vector<Layout> layouts_;
+    std::vector<FieldSpan> spans_;
+    std::vector<std::uint8_t> mask_;
+};
+
+[[nodiscard]] bool repeats(std::span<const std::uint8_t> mask, std::size_t field) {
+    return (mask[field / 8] & (1U << (field % 8))) != 0;
+}
+
+void write_trait_row(Encoder& out, const persistence::Snapshot& document, const persistence::TraitView& trait,
+                     RowLayouts& layouts) {
+    const auto& row = trait.row();
+    out.varint(row.shape);
+    out.u8(row.present ? 1 : 0);
+    if (!row.present) {
+        return;
+    }
+    auto& layout      = layouts.at(row.shape);
+    const auto& types = layout.types;
+    const auto arena  = document.arena();
+    auto& spans       = layouts.spans(types.size());
+    auto in           = trait.reader();
+    for (std::size_t index = 0; index < types.size(); ++index) {
+        const auto begin = in.offset();
+        document.skip_value(types[index], in);
+        spans[index] = FieldSpan{.begin = static_cast<std::size_t>(row.begin) + begin, .size = in.offset() - begin};
+    }
+    if (in.failed()) {
+        throw std::runtime_error("persistence file adapter: malformed value bytes");
+    }
+    auto& mask = layouts.mask(types.size());
+    for (std::size_t index = 0; index < types.size() && !layout.last.empty(); ++index) {
+        const auto now    = arena.subspan(spans[index].begin, spans[index].size);
+        const auto before = arena.subspan(layout.last[index].begin, layout.last[index].size);
+        if (std::ranges::equal(now, before)) {
+            mask[index / 8] = static_cast<std::uint8_t>(mask[index / 8] | (1U << (index % 8)));
+        }
+    }
+    for (const auto byte : mask) {
+        out.u8(byte);
+    }
+    for (std::size_t index = 0; index < types.size(); ++index) {
+        if (!repeats(mask, index)) {
+            persistence::ValueReader value(document, arena.subspan(spans[index].begin, spans[index].size));
+            write_value(out, document, types[index], value, 0);
+        }
+    }
+    RowLayouts::remember(layout, spans);
+}
+
+void read_trait_row(Decoder& in, persistence::SnapshotBuilder& out, RowLayouts& layouts) {
+    const auto shape   = static_cast<std::uint32_t>(in.varint());
+    const bool present = in.u8() != 0;
+    auto& layout       = layouts.at(shape);
+    out.begin_trait(shape, present);
+    if (!present) {
+        out.end_trait();
+        return;
+    }
+    const auto& types = layout.types;
+    auto& mask        = layouts.mask(types.size());
+    for (auto& byte : mask) {
+        byte = in.u8();
+    }
+    auto& spans = layouts.spans(types.size());
+    for (std::size_t index = 0; index < types.size(); ++index) {
+        if (index == layout.split) {
+            out.begin_persisted();
+        }
+        const auto begin = out.document().arena().size();
+        if (!repeats(mask, index)) {
+            read_value(in, out, types[index], 0);
+        } else if (layout.last.empty()) {
+            throw std::runtime_error("persistence file adapter: repeat without a previous value");
+        } else {
+            out.put_repeat(layout.last[index].begin, layout.last[index].size);
+        }
+        spans[index] = FieldSpan{.begin = begin, .size = out.document().arena().size() - begin};
+    }
+    if (layout.split == types.size()) {
+        out.begin_persisted();
+    }
+    out.end_trait();
+    RowLayouts::remember(layout, spans);
 }
 
 std::string encode_snapshot(const persistence::Snapshot& snapshot) {
     Encoder out;
     out.raw(std::string_view(kMagic.data(), kMagic.size()));
     out.varint(kFileFormat);
-    out.varint(snapshot.schema_revision);
-    out.varint(snapshot.schema_fingerprint);
-    out.name(snapshot.module);
-    out.varint(snapshot.entities.size());
-    for (const auto& record : snapshot.entities) {
-        write_entity_record(out, record);
+    out.varint(snapshot.schema_revision());
+    out.varint(snapshot.schema_fingerprint());
+    out.text(snapshot.module());
+    out.u8(snapshot.truncated() ? 1 : 0);
+    write_tables(out, snapshot);
+    RowLayouts layouts(snapshot);
+    out.varint(snapshot.entity_count());
+    persistence::DocumentId last_id = 0;
+    for (const auto entity : snapshot.entities()) {
+        out.signed_varint(static_cast<std::int64_t>(entity.id()) - static_cast<std::int64_t>(last_id));
+        last_id = entity.id();
+        out.varint(entity.row().archetype);
+        out.u8(entity.parent().present ? 1 : 0);
+        out.varint(entity.parent().id);
+        out.varint(entity.trait_count());
+        for (std::size_t index = 0; index < entity.trait_count(); ++index) {
+            write_trait_row(out, snapshot, entity.trait_at(index), layouts);
+        }
     }
     return out.take();
 }
@@ -423,18 +534,38 @@ std::string encode_snapshot(const persistence::Snapshot& snapshot) {
 persistence::Snapshot decode_snapshot(std::string_view bytes) {
     Decoder in(bytes);
     in.expect(std::string_view(kMagic.data(), kMagic.size()));
-    if (in.varint() != kFileFormat) {
-        throw std::runtime_error("persistence file adapter: unsupported file format version");
+    if (const auto format = in.varint(); format != kFileFormat) {
+        throw IncompatibleFormat("save file format " + std::to_string(format) + " is not readable by this build");
     }
-    persistence::Snapshot snapshot;
-    snapshot.schema_revision    = static_cast<std::uint32_t>(in.varint());
-    snapshot.schema_fingerprint = in.varint();
-    snapshot.module             = in.name();
-    snapshot.entities.resize(in.count());
-    for (auto& record : snapshot.entities) {
-        record = read_entity_record(in);
+    const auto revision    = static_cast<std::uint32_t>(in.varint());
+    const auto fingerprint = in.varint();
+    auto module            = in.text();
+    const bool truncated   = in.u8() != 0;
+    auto out               = read_tables(in);
+    out.set_schema(revision, fingerprint);
+    out.set_module(std::move(module));
+    if (truncated) {
+        out.mark_truncated();
     }
-    return snapshot;
+    RowLayouts layouts(out.document());
+    const auto entities = in.count();
+    out.reserve(entities, entities, 0);
+    std::int64_t id = 0;
+    for (std::uint32_t entity = 0; entity < entities; ++entity) {
+        id += in.signed_varint();
+        const auto archetype = static_cast<std::uint32_t>(in.varint());
+        const bool present   = in.u8() != 0;
+        const auto parent    = static_cast<persistence::DocumentId>(in.varint());
+        out.begin_entity(static_cast<persistence::DocumentId>(id), archetype, {.id = parent, .present = present});
+        const auto traits = in.count();
+        for (std::uint32_t trait = 0; trait < traits; ++trait) {
+            read_trait_row(in, out, layouts);
+        }
+    }
+    if (!in.at_end()) {
+        throw std::runtime_error("persistence file adapter: trailing bytes after the document");
+    }
+    return std::move(out).finish();
 }
 
 std::filesystem::path slot_file_path(const std::filesystem::path& directory, const std::string& slot) {
@@ -516,6 +647,8 @@ PersistenceAdapter make_example_file_adapter(const std::filesystem::path& direct
                     std::string bytes(static_cast<std::size_t>(std::filesystem::file_size(path)), '\0');
                     in.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
                     return PersistenceReadResult{.ok = true, .snapshot = decode_snapshot(bytes)};
+                } catch (const IncompatibleFormat& error) {
+                    return PersistenceReadResult{.ok = false, .code = "incompatible_schema", .message = error.what()};
                 } catch (const std::exception&) {
                     return PersistenceReadResult{
                         .ok = false, .code = "io_failure", .message = "failed to read slot '" + slot + "'"};

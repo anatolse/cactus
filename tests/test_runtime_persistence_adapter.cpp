@@ -25,17 +25,12 @@ persistence::SchemaDescriptor sample_schema() {
 }
 
 persistence::Snapshot sample_snapshot() {
-    persistence::Snapshot snapshot;
-    snapshot.schema_revision    = cactus::kPersistenceSchemaRevision;
-    snapshot.schema_fingerprint = 42ULL;
-    snapshot.module             = "world";
-    persistence::EntityRecord record;
-    record.id        = 1;
-    record.archetype = "world.Boss";
-    record.traits.push_back(persistence::TraitRecord{
-        .trait = "world.Health", .persisted = {persistence::FieldValue{.name = "current", .value = persistence::Value::of_int(137)}}});
-    snapshot.entities.push_back(std::move(record));
-    return snapshot;
+    persistence::SnapshotBuilder builder;
+    builder.set_schema(cactus::kPersistenceSchemaRevision, 42ULL);
+    builder.set_module("world");
+    builder.add_entity(1, "world.Boss");
+    builder.add_trait("world.Health", {}, {{.name = "current", .value = persistence::Value::of_int(137)}});
+    return std::move(builder).finish();
 }
 
 }  // namespace
@@ -101,8 +96,8 @@ TEST_CASE("malformed adapter data — an adapter reporting success with an incom
     // of what the adapter itself believes.
     register_persistence_adapter(PersistenceAdapter{
         .read = [](const std::string&, const persistence::SchemaDescriptor&) {
-            auto snapshot                = sample_snapshot();
-            snapshot.schema_fingerprint += 1;
+            auto snapshot = sample_snapshot();
+            snapshot.set_schema(snapshot.schema_revision(), snapshot.schema_fingerprint() + 1);
             return PersistenceReadResult{.ok = true, .snapshot = std::move(snapshot)};
         }});
 
@@ -117,8 +112,8 @@ TEST_CASE("incompatible descriptor on read — a stale revision is rejected the 
 
     register_persistence_adapter(PersistenceAdapter{
         .read = [](const std::string&, const persistence::SchemaDescriptor&) {
-            auto snapshot          = sample_snapshot();
-            snapshot.schema_revision += 1;
+            auto snapshot = sample_snapshot();
+            snapshot.set_schema(snapshot.schema_revision() + 1, snapshot.schema_fingerprint());
             return PersistenceReadResult{.ok = true, .snapshot = std::move(snapshot)};
         }});
 

@@ -4,6 +4,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <vector>
+
 using namespace cactus::runtime::entt_backend;
 
 TEST_CASE("DocumentIdMap: two included entities keep stable, present, distinct identities",
@@ -98,5 +100,66 @@ TEST_CASE("DocumentIdMap: a null entity reference is always absent and never all
     const auto null_ref = ids.reference(entt::entity{entt::null});
     CHECK_FALSE(null_ref.present);
     CHECK(null_ref.id == 0);
+}
+
+TEST_CASE("DocumentIdMap: a stale handle whose slot was reused keeps its own identity",
+          "[runtime][persistence][document-id-map]") {
+    entt::registry registry;
+    const auto stale = registry.create();
+    registry.destroy(stale);
+    const auto live = registry.create();
+    REQUIRE(entt::to_entity(live) == entt::to_entity(stale));
+
+    DocumentIdMap ids;
+    const auto stale_ref = ids.reference(stale);
+    const auto live_id   = ids.include(live);
+    CHECK(stale_ref.id != live_id);
+    CHECK_FALSE(ids.reference(stale).present);
+    CHECK(ids.reference(stale).id == stale_ref.id);
+    CHECK(ids.reference(live) == cactus::persistence::EntityRef{.id = live_id, .present = true});
+}
+
+TEST_CASE("DocumentIdMap: nesting stops one level before the configured depth",
+          "[runtime][persistence][document-id-map]") {
+    DocumentIdMap ids;
+    std::size_t levels = 0;
+    while (ids.can_nest()) {
+        ids.enter_nesting();
+        ++levels;
+    }
+    CHECK(levels + 1 == cactus::persistence::kMaxPersistenceNestingDepth);
+    ids.exit_nesting();
+    CHECK(ids.can_nest());
+}
+
+TEST_CASE("a captured list stops at the collection bound and marks the document truncated",
+          "[runtime][persistence][document-id-map]") {
+    cactus::persistence::SnapshotBuilder out;
+    DocumentIdMap ids;
+    const std::vector<int> items(cactus::persistence::kMaxPersistenceCollectionSize + 3, 7);
+    std::size_t written = 0;
+    put_persistence_list(out, items, ids, [&](int item) {
+        out.put_int(item);
+        ++written;
+    });
+    CHECK(written == cactus::persistence::kMaxPersistenceCollectionSize);
+    CHECK(ids.limit_exceeded());
+    CHECK(ids.can_nest());
+}
+
+TEST_CASE("RestoreIdMap resolves allocated identities and leaves the rest null",
+          "[runtime][persistence][document-id-map]") {
+    entt::registry registry;
+    const auto first  = registry.create();
+    const auto second = registry.create();
+
+    RestoreIdMap ids;
+    ids.allocate(9, second);
+    ids.allocate(4, first);
+    ids.seal();
+    CHECK(ids.resolve({.id = 4, .present = true}) == first);
+    CHECK(ids.resolve({.id = 9, .present = true}) == second);
+    CHECK(ids.resolve({.id = 5, .present = true}) == entt::entity{entt::null});
+    CHECK(ids.resolve({.id = 4, .present = false}) == entt::entity{entt::null});
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

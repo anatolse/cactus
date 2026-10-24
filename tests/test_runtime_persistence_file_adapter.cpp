@@ -10,9 +10,12 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <vector>
 
 using namespace cactus::runtime::entt_backend;
 namespace persistence = cactus::persistence;
+using persistence::StructField;
+using persistence::Value;
 
 namespace {
 
@@ -20,35 +23,31 @@ persistence::SchemaDescriptor sample_schema() {
     return persistence::SchemaDescriptor{.revision = cactus::kPersistenceSchemaRevision, .fingerprint = 42ULL};
 }
 
-persistence::Snapshot sample_snapshot() {
-    persistence::Snapshot snapshot;
-    snapshot.schema_revision    = cactus::kPersistenceSchemaRevision;
-    snapshot.schema_fingerprint = 42ULL;
-    snapshot.module             = "world";
+persistence::SnapshotBuilder sample_builder() {
+    persistence::SnapshotBuilder builder;
+    builder.set_schema(cactus::kPersistenceSchemaRevision, 42ULL);
+    builder.set_module("world");
+    builder.add_entity(1, "world.Boss");
+    builder.add_trait("world.Health", {}, {{.name = "current", .value = Value::of_int(137)}});
+    return builder;
+}
 
-    persistence::EntityRecord parent;
-    parent.id        = 1;
-    parent.archetype = "world.Boss";
-    parent.traits.push_back(persistence::TraitRecord{
-        .trait     = "world.Health",
-        .persisted = {persistence::FieldValue{.name = "current", .value = persistence::Value::of_int(137)}}});
+persistence::Snapshot sample_snapshot(bool with_child = true) {
+    auto builder = sample_builder();
+    if (with_child) {
+        persistence::ListValue tags;
+        tags.items.push_back(Value::of_enum("world.Rank", "Gold"));
+        builder.add_entity(2, "world.Badge", persistence::EntityRef{.id = 1, .present = true});
+        builder.add_trait("world.Label", {{.name = "text", .value = Value::of_string("elite")}},
+                          {{.name = "glow", .value = Value::of_float(0.5F)},
+                           {.name = "tags", .value = Value::of_list(std::move(tags))}});
+    }
+    return std::move(builder).finish();
+}
 
-    persistence::EntityRecord child;
-    child.id        = 2;
-    child.archetype = "world.Badge";
-    child.parent    = persistence::EntityRef{.id = 1, .present = true};
-    child.traits.push_back(persistence::TraitRecord{
-        .trait       = "world.Label",
-        .construction = {persistence::FieldValue{.name = "text", .value = persistence::Value::of_string("elite")}},
-        .persisted    = {persistence::FieldValue{.name = "glow", .value = persistence::Value::of_float(0.5F)}}});
-    persistence::ListValue tags;
-    tags.items.push_back(persistence::Value::of_enum("world.Rank", "Gold"));
-    child.traits.back().persisted.push_back(
-        persistence::FieldValue{.name = "tags", .value = persistence::Value::of_list(std::move(tags))});
-
-    snapshot.entities.push_back(std::move(parent));
-    snapshot.entities.push_back(std::move(child));
-    return snapshot;
+void write_bytes(const std::filesystem::path& path, const std::string& bytes) {
+    std::ofstream out(path, std::ios::binary);
+    out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
 }
 
 }  // namespace
@@ -82,11 +81,10 @@ TEST_CASE("writing a slot twice replaces the file and the second document is wha
     cactus_test::ScopedTempDirectory dir;
     const auto adapter = make_example_file_adapter(dir.path());
 
-    auto first = sample_snapshot();
+    const auto first = sample_snapshot();
     REQUIRE(adapter.write("slot1", sample_schema(), first).ok);
 
-    auto second             = sample_snapshot();
-    second.entities.pop_back();
+    const auto second = sample_snapshot(false);
     REQUIRE(adapter.write("slot1", sample_schema(), second).ok);
 
     const auto read_result = adapter.read("slot1", sample_schema());
@@ -107,9 +105,7 @@ TEST_CASE("a write that cannot commit its temp file leaves the previously saved 
     // path with a directory instead of a regular file.
     std::filesystem::create_directory(dir.path() / "slot1.cactussave.tmp");
 
-    auto attempted = sample_snapshot();
-    attempted.entities.pop_back();
-    const auto write_result = adapter.write("slot1", sample_schema(), attempted);
+    const auto write_result = adapter.write("slot1", sample_schema(), sample_snapshot(false));
     CHECK_FALSE(write_result.ok);
     CHECK(write_result.code == "io_failure");
 
@@ -117,48 +113,49 @@ TEST_CASE("a write that cannot commit its temp file leaves the previously saved 
     REQUIRE(read_result.ok);
     CHECK(read_result.snapshot == original);
 }
+
 TEST_CASE("every value kind survives the file adapter round trip", "[runtime][persistence][adapter][file]") {
     cactus_test::ScopedTempDirectory dir;
     const auto adapter = make_example_file_adapter(dir.path());
 
-    persistence::Snapshot snapshot;
-    snapshot.schema_revision    = cactus::kPersistenceSchemaRevision;
-    snapshot.schema_fingerprint = 0xFEDCBA9876543210ULL;
-    snapshot.module             = "world";
-    persistence::EntityRecord record;
-    record.id        = 70000;
-    record.archetype = "world.Everything";
-    record.parent    = persistence::EntityRef{.id = 3, .present = false};
+    persistence::SnapshotBuilder builder;
+    builder.set_schema(cactus::kPersistenceSchemaRevision, 0xFEDCBA9876543210ULL);
+    builder.set_module("world");
+    builder.mark_truncated();
+    builder.add_entity(70000, "world.Everything", persistence::EntityRef{.id = 3, .present = false});
     persistence::StructValue nested;
-    nested.fields.push_back(persistence::FieldValue{.name = "flag", .value = persistence::Value::of_bool(true)});
+    nested.fields.push_back(StructField{.name = "flag", .value = Value::of_bool(true)});
     persistence::ListValue items;
-    items.items.push_back(persistence::Value::of_int(-2147483647 - 1));
-    items.items.push_back(persistence::Value::of_int(2147483647));
-    record.traits.push_back(persistence::TraitRecord{
-        .trait        = "world.All",
-        .present      = false,
-        .construction = {persistence::FieldValue{.name = "negative", .value = persistence::Value::of_int(-5)},
-                         persistence::FieldValue{.name  = "position",
-                                                 .value = persistence::Value::of_vector(
-                                                     cactus::PersistenceValueKind::Float, 3, {1.5F, -2.0F, 3.25F, 0.0F})},
-                         persistence::FieldValue{.name  = "tint",
-                                                 .value = persistence::Value::of_vector(
-                                                     cactus::PersistenceValueKind::Int, 4, {1.0F, 2.0F, 3.0F, 255.0F})}},
-        .persisted = {persistence::FieldValue{.name = "target",
-                                              .value = persistence::Value::of_entity({.id = 1, .present = true})},
-                      persistence::FieldValue{.name = "skin", .value = persistence::Value::of_asset("world.Stone")},
-                      persistence::FieldValue{.name = "skin_unset", .value = persistence::Value::of_asset("")},
-                      persistence::FieldValue{.name = "key", .value = persistence::Value::of_input("world.Jump")},
-                      persistence::FieldValue{.name = "inner", .value = persistence::Value::of_struct(nested)},
-                      persistence::FieldValue{.name = "items", .value = persistence::Value::of_list(items)},
-                      persistence::FieldValue{.name = "label", .value = persistence::Value::of_string("")},
-                      persistence::FieldValue{.name = "missing", .value = persistence::Value{}}}});
-    snapshot.entities.push_back(record);
+    items.items.push_back(Value::of_int(-2147483647 - 1));
+    items.items.push_back(Value::of_int(2147483647));
+    persistence::ListValue mixed;
+    mixed.items.push_back(Value::of_int(1));
+    mixed.items.push_back(Value::of_string("two"));
+    builder.add_absent_trait("world.Gone");
+    builder.add_trait(
+        "world.All",
+        {{.name = "negative", .value = Value::of_int(-5)},
+         {.name  = "position",
+          .value = Value::of_vector(cactus::PersistenceValueKind::Float, 3, {1.5F, -2.0F, 3.25F, 0.0F})},
+         {.name  = "tint",
+          .value = Value::of_vector(cactus::PersistenceValueKind::Int, 4, {1.0F, 2.0F, 3.0F, 255.0F})}},
+        {{.name = "target", .value = Value::of_entity({.id = 1, .present = true})},
+         {.name = "skin", .value = Value::of_asset("world.Stone")},
+         {.name = "skin_unset", .value = Value::of_asset("")},
+         {.name = "key", .value = Value::of_input("world.Jump")},
+         {.name = "stance", .value = Value::of_enum("world.Stance", "Guarding")},
+         {.name = "inner", .value = Value::of_struct(nested)},
+         {.name = "items", .value = Value::of_list(items)},
+         {.name = "mixed", .value = Value::of_list(mixed)},
+         {.name = "label", .value = Value::of_string("")},
+         {.name = "missing", .value = Value{}}});
+    const auto snapshot = std::move(builder).finish();
 
     REQUIRE(adapter.write("slot1", sample_schema(), snapshot).ok);
     const auto read_result = adapter.read("slot1", sample_schema());
     REQUIRE(read_result.ok);
     CHECK(read_result.snapshot == snapshot);
+    CHECK(read_result.snapshot.truncated());
 }
 
 TEST_CASE("repeated names are stored once, so many similar records stay small",
@@ -166,53 +163,45 @@ TEST_CASE("repeated names are stored once, so many similar records stay small",
     cactus_test::ScopedTempDirectory dir;
     const auto adapter = make_example_file_adapter(dir.path());
 
-    persistence::Snapshot snapshot;
-    snapshot.module = "world";
+    persistence::SnapshotBuilder builder;
+    builder.set_module("world");
     constexpr int kRecords = 1000;
     for (int i = 0; i < kRecords; ++i) {
-        persistence::EntityRecord record;
-        record.id        = static_cast<persistence::DocumentId>(i + 1);
-        record.archetype = "world.CellArchetype";
-        record.traits.push_back(persistence::TraitRecord{
-            .trait        = "world.CellPosition",
-            .construction = {persistence::FieldValue{.name = "x", .value = persistence::Value::of_int(i % 64)},
-                             persistence::FieldValue{.name = "y", .value = persistence::Value::of_int(-(i % 16))},
-                             persistence::FieldValue{.name = "z", .value = persistence::Value::of_int(i / 64)}}});
-        snapshot.entities.push_back(std::move(record));
+        builder.add_entity(static_cast<persistence::DocumentId>(i + 1), "world.CellArchetype");
+        builder.add_trait("world.CellPosition", {{.name = "x", .value = Value::of_int(i % 64)},
+                                                 {.name = "y", .value = Value::of_int(-(i % 16))},
+                                                 {.name = "z", .value = Value::of_int(i / 64)}});
     }
+    const auto snapshot = std::move(builder).finish();
 
     REQUIRE(adapter.write("slot1", sample_schema(), snapshot).ok);
     const auto bytes = std::filesystem::file_size(dir.path() / "slot1.cactussave");
-    CHECK(bytes < static_cast<std::uintmax_t>(kRecords) * 24U);
+    CHECK(bytes < static_cast<std::uintmax_t>(kRecords) * 12U);
     const auto read_result = adapter.read("slot1", sample_schema());
     REQUIRE(read_result.ok);
     CHECK(read_result.snapshot == snapshot);
 }
 
-TEST_CASE("a field value repeated from the previous record costs about a byte",
+TEST_CASE("a field value repeated from the previous record costs about a bit",
           "[runtime][persistence][adapter][file]") {
     cactus_test::ScopedTempDirectory dir;
     const auto adapter = make_example_file_adapter(dir.path());
 
-    persistence::Snapshot snapshot;
-    snapshot.module = "world";
+    persistence::SnapshotBuilder builder;
+    builder.set_module("world");
     constexpr int kRecords = 1000;
+    const auto shared = Value::of_vector(cactus::PersistenceValueKind::Float, 4, {0.0F, 0.0F, 0.0F, 1.0F});
     for (int i = 0; i < kRecords; ++i) {
-        persistence::EntityRecord record;
-        record.id        = static_cast<persistence::DocumentId>(i + 1);
-        record.archetype = "world.CellArchetype";
-        const auto shared = persistence::Value::of_vector(cactus::PersistenceValueKind::Float, 4, {0.0F, 0.0F, 0.0F, 1.0F});
-        record.traits.push_back(persistence::TraitRecord{
-            .trait        = "world.Transform",
-            .construction = {persistence::FieldValue{.name = "rotation", .value = shared},
-                             persistence::FieldValue{.name = "scale", .value = shared}},
-            .persisted    = {persistence::FieldValue{.name = "rotation", .value = persistence::Value::of_int(i)}}});
-        snapshot.entities.push_back(std::move(record));
+        builder.add_entity(static_cast<persistence::DocumentId>(i + 1), "world.CellArchetype");
+        builder.add_trait("world.Transform",
+                          {{.name = "rotation", .value = shared}, {.name = "scale", .value = shared}},
+                          {{.name = "turn", .value = Value::of_int(i)}});
     }
+    const auto snapshot = std::move(builder).finish();
 
     REQUIRE(adapter.write("slot1", sample_schema(), snapshot).ok);
     const auto bytes = std::filesystem::file_size(dir.path() / "slot1.cactussave");
-    CHECK(bytes < static_cast<std::uintmax_t>(kRecords) * 20U);
+    CHECK(bytes < static_cast<std::uintmax_t>(kRecords) * 12U);
     const auto read_result = adapter.read("slot1", sample_schema());
     REQUIRE(read_result.ok);
     CHECK(read_result.snapshot == snapshot);
@@ -230,31 +219,45 @@ TEST_CASE("a truncated save fails to read with io_failure", "[runtime][persisten
     CHECK(read_result.code == "io_failure");
 }
 
+TEST_CASE("a save in the previous file format is rejected as incompatible", "[runtime][persistence][adapter][file]") {
+    cactus_test::ScopedTempDirectory dir;
+    const auto adapter = make_example_file_adapter(dir.path());
+
+    std::string bytes = "CPST";
+    bytes += '\x02';  // format 2
+    bytes += static_cast<char>(cactus::kPersistenceSchemaRevision);
+    bytes += '\x2A';
+    write_bytes(dir.path() / "slot1.cactussave", bytes);
+
+    const auto read_result = adapter.read("slot1", sample_schema());
+    CHECK_FALSE(read_result.ok);
+    CHECK(read_result.code == "incompatible_schema");
+    CHECK(read_result.message.contains("format 2"));
+}
+
 TEST_CASE("a negative zero after a positive zero keeps its sign", "[runtime][persistence][adapter][file]") {
     cactus_test::ScopedTempDirectory dir;
     const auto adapter = make_example_file_adapter(dir.path());
 
-    persistence::Snapshot snapshot;
-    snapshot.module = "world";
+    persistence::SnapshotBuilder builder;
+    builder.set_module("world");
+    persistence::DocumentId id = 0;
     for (const float value : {0.0F, -0.0F}) {
-        persistence::EntityRecord record;
-        record.id        = static_cast<persistence::DocumentId>(snapshot.entities.size() + 1);
-        record.archetype = "world.Cell";
-        record.traits.push_back(persistence::TraitRecord{
-            .trait     = "world.Motion",
-            .persisted = {persistence::FieldValue{.name = "speed", .value = persistence::Value::of_float(value)},
-                          persistence::FieldValue{.name  = "velocity",
-                                                  .value = persistence::Value::of_vector(
-                                                      cactus::PersistenceValueKind::Float, 3, {value, 1.0F, 2.0F, 0.0F})}}});
-        snapshot.entities.push_back(std::move(record));
+        builder.add_entity(++id, "world.Cell");
+        builder.add_trait(
+            "world.Motion", {},
+            {{.name = "speed", .value = Value::of_float(value)},
+             {.name  = "velocity",
+              .value = Value::of_vector(cactus::PersistenceValueKind::Float, 3, {value, 1.0F, 2.0F, 0.0F})}});
     }
 
-    REQUIRE(adapter.write("slot1", sample_schema(), snapshot).ok);
+    REQUIRE(adapter.write("slot1", sample_schema(), std::move(builder).finish()).ok);
     const auto read_result = adapter.read("slot1", sample_schema());
     REQUIRE(read_result.ok);
-    const auto& fields = read_result.snapshot.entities.at(1).traits.at(0).persisted;
-    CHECK(std::signbit(fields.at(0).value.as_float()));
-    CHECK(std::signbit(fields.at(1).value.as_vector().components[0]));
+    const auto motion = read_result.snapshot.entity(1).trait("world.Motion");
+    REQUIRE(motion.has_value());
+    CHECK(std::signbit(motion->field("speed")->as_float()));
+    CHECK(std::signbit(motion->field("velocity")->as_vector().components[0]));
 }
 
 TEST_CASE("a save nesting values without bound fails to read instead of overflowing the stack",
@@ -262,29 +265,44 @@ TEST_CASE("a save nesting values without bound fails to read instead of overflow
     cactus_test::ScopedTempDirectory dir;
     const auto adapter = make_example_file_adapter(dir.path());
 
+    constexpr int kLevels = 200000;
     std::string bytes = "CPST";
-    bytes += '\x02';                                // format
+    bytes += '\x03';  // format
     bytes += static_cast<char>(cactus::kPersistenceSchemaRevision);
-    bytes += '\x2A';                                // fingerprint
-    bytes += std::string("\x00\x01w", 3);           // module name
-    bytes += '\x01';                                // one entity
-    bytes += '\x01';                                // id
-    bytes += std::string("\x00\x01" "a", 3);        // archetype
-    bytes += std::string("\x00\x00", 2);            // parent
-    bytes += '\x01';                                // one trait
-    bytes += std::string("\x00\x01t", 3);           // trait name
-    bytes += '\x01';                                // present
-    bytes += '\x01';                                // one construction field
-    bytes += std::string("\x00\x01" "f", 3);        // field name
-    const auto list = static_cast<char>(cactus::PersistenceValueKind::List);
-    for (int level = 0; level < 200000; ++level) {
-        bytes += list;
+    bytes += '\x2A';                        // fingerprint
+    bytes += std::string("\x01w", 2);       // module
+    bytes += '\x00';                        // not truncated
+    bytes += '\x03';                        // names
+    bytes += std::string("\x01" "a\x01t\x01" "f", 6);
+    // A chain of list types, each listing the next, ending in an int.
+    const auto varint = [&](std::uint64_t value) {
+        while (value >= 0x80U) {
+            bytes += static_cast<char>((value & 0x7FU) | 0x80U);
+            value >>= 7U;
+        }
+        bytes += static_cast<char>(value);
+    };
+    varint(kLevels + 1);
+    for (int level = 0; level < kLevels; ++level) {
+        bytes += static_cast<char>(cactus::PersistenceValueKind::List);
+        bytes += std::string("\x00\x00", 2);
+        varint(static_cast<std::uint64_t>(level) + 2);
+    }
+    bytes += static_cast<char>(cactus::PersistenceValueKind::Int);
+    bytes += std::string("\x00\x00\x00", 3);
+    bytes += '\x00';                         // no structs
+    bytes += '\x00';                         // no enums
+    bytes += '\x01';                         // one trait layout
+    bytes += std::string("\x01\x01\x02\x00\x00", 5);  // "t": construction field "f" of type 0; no persisted
+    bytes += '\x01';                         // one entity
+    bytes += '\x02';                         // id 1
+    bytes += std::string("\x00\x00\x00", 3);  // archetype "a", no parent
+    bytes += std::string("\x01\x00\x01\x00", 4);  // one trait row: layout 0, present, no repeats
+    for (int level = 0; level < kLevels; ++level) {
         bytes += '\x01';
     }
-    {
-        std::ofstream out(dir.path() / "slot1.cactussave", std::ios::binary);
-        out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-    }
+    write_bytes(dir.path() / "slot1.cactussave", bytes);
+
     const auto read_result = adapter.read("slot1", sample_schema());
     CHECK_FALSE(read_result.ok);
     CHECK(read_result.code == "io_failure");

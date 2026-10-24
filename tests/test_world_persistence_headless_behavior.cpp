@@ -8,7 +8,9 @@
 #include CACTUS_HEADLESS_GENERATED_CPP
 
 #include "backends/cpp-entt/persistence_file_adapter.hpp"
+#include "common/persistence_validation.hpp"
 #include "fake_raylib/headless_frame_driver.hpp"
+#include "persistence_snapshot_edit.hpp"
 #include "persistence_test_adapter.hpp"
 
 #include <catch2/catch_approx.hpp>
@@ -17,6 +19,8 @@
 #include <algorithm>
 #include <cstdint>
 #include <limits>
+#include <numeric>
+#include <optional>
 #include <string>
 
 namespace {
@@ -50,48 +54,40 @@ void queue_spawns(entt::registry& registry, int enemies, int particles) {
     spawner.pending_particles  = particles;
 }
 
-const cactus::persistence::EntityRecord* record_for_archetype(const cactus::persistence::Snapshot& snapshot,
-                                                              const std::string& archetype) {
-    const auto found = std::find_if(snapshot.entities.begin(),
-                                    snapshot.entities.end(),
-                                    [&](const cactus::persistence::EntityRecord& record) {
-                                        return record.archetype == archetype;
-                                    });
-    return found == snapshot.entities.end() ? nullptr : &*found;
+std::optional<cactus::persistence::EntityView> record_for_archetype(const cactus::persistence::Snapshot& snapshot,
+                                                                   const std::string& archetype) {
+    for (const auto record : snapshot.entities()) {
+        if (record.archetype() == archetype) {
+            return record;
+        }
+    }
+    return std::nullopt;
 }
 
 std::size_t count_for_archetype(const cactus::persistence::Snapshot& snapshot, const std::string& archetype) {
-    return static_cast<std::size_t>(std::count_if(snapshot.entities.begin(),
-                                                  snapshot.entities.end(),
-                                                  [&](const cactus::persistence::EntityRecord& record) {
-                                                      return record.archetype == archetype;
-                                                  }));
+    return static_cast<std::size_t>(std::ranges::count_if(
+        snapshot.entities(), [&](const cactus::persistence::EntityView& record) { return record.archetype() == archetype; }));
 }
 
-const cactus::persistence::TraitRecord* trait_of(const cactus::persistence::EntityRecord& record,
-                                                 const std::string& trait) {
-    const auto found = std::find_if(record.traits.begin(),
-                                    record.traits.end(),
-                                    [&](const cactus::persistence::TraitRecord& candidate) {
-                                        return candidate.trait == trait;
-                                    });
-    return found == record.traits.end() ? nullptr : &*found;
+std::optional<cactus::persistence::TraitView> trait_of(const cactus::persistence::EntityView& record,
+                                                       const std::string& trait) {
+    return record.trait(trait);
 }
 
-int int_field(const std::vector<cactus::persistence::FieldValue>& fields, const std::string& name) {
-    const auto found = std::find_if(fields.begin(), fields.end(), [&](const cactus::persistence::FieldValue& field) {
-        return field.name == name;
-    });
-    REQUIRE(found != fields.end());
-    return found->value.as_int();
+cactus::persistence::Value field_of(const std::optional<cactus::persistence::TraitView>& trait,
+                                    const std::string& name) {
+    REQUIRE(trait.has_value());
+    const auto found = trait->field(name);
+    REQUIRE(found.has_value());
+    return *found;
 }
 
-float float_field(const std::vector<cactus::persistence::FieldValue>& fields, const std::string& name) {
-    const auto found = std::find_if(fields.begin(), fields.end(), [&](const cactus::persistence::FieldValue& field) {
-        return field.name == name;
-    });
-    REQUIRE(found != fields.end());
-    return found->value.as_float();
+int int_field(const std::optional<cactus::persistence::TraitView>& trait, const std::string& name) {
+    return field_of(trait, name).as_int();
+}
+
+float float_field(const std::optional<cactus::persistence::TraitView>& trait, const std::string& name) {
+    return field_of(trait, name).as_float();
 }
 
 cactus::persistence::Snapshot capture(entt::registry& registry) {
@@ -105,15 +101,15 @@ TEST_CASE("a world snapshot records the boss archetype baseline rather than trai
     World world;
     const auto snapshot = capture(world.registry);
 
-    const auto* boss = record_for_archetype(snapshot, "world_persistence.Boss");
-    REQUIRE(boss != nullptr);
+    const auto boss = record_for_archetype(snapshot, "world_persistence.Boss");
+    REQUIRE(boss.has_value());
 
-    const auto* health = trait_of(*boss, "world_persistence.Health");
-    REQUIRE(health != nullptr);
+    const auto health = trait_of(*boss, "world_persistence.Health");
+    REQUIRE(health.has_value());
     // Health defaults maximum to 100; the Boss declaration raises it to 500, and
     // that 500 belongs to the archetype baseline, not to construction data.
-    CHECK(int_field(health->construction, "maximum") == 500);
-    CHECK(int_field(health->persisted, "current") == 500);
+    CHECK(int_field(health, "maximum") == 500);
+    CHECK(int_field(health, "current") == 500);
 }
 
 TEST_CASE("a world snapshot records the latest value of an explicitly persistent field",
@@ -125,11 +121,11 @@ TEST_CASE("a world snapshot records the latest value of an explicitly persistent
     registry.get<cactus_gen::world_persistence::Health>(boss_entity).current = 137;
 
     const auto snapshot = capture(registry);
-    const auto* boss    = record_for_archetype(snapshot, "world_persistence.Boss");
-    REQUIRE(boss != nullptr);
-    const auto* health = trait_of(*boss, "world_persistence.Health");
-    REQUIRE(health != nullptr);
-    CHECK(int_field(health->persisted, "current") == 137);
+    auto boss          = record_for_archetype(snapshot, "world_persistence.Boss");
+    REQUIRE(boss.has_value());
+    const auto health = trait_of(*boss, "world_persistence.Health");
+    REQUIRE(health.has_value());
+    CHECK(int_field(health, "current") == 137);
 }
 
 TEST_CASE("a world snapshot records an enemy's original spawn argument, not its later mutation",
@@ -153,12 +149,12 @@ TEST_CASE("a world snapshot records an enemy's original spawn argument, not its 
     registry.get<cactus_gen::world_persistence::Health>(enemy).current = 42;
 
     const auto snapshot = capture(registry);
-    const auto* record  = record_for_archetype(snapshot, "world_persistence.Enemy");
-    REQUIRE(record != nullptr);
-    const auto* health = trait_of(*record, "world_persistence.Health");
-    REQUIRE(health != nullptr);
-    CHECK(int_field(health->construction, "maximum") == 700);
-    CHECK(int_field(health->persisted, "current") == 42);
+    const auto record  = record_for_archetype(snapshot, "world_persistence.Enemy");
+    REQUIRE(record.has_value());
+    const auto health = trait_of(*record, "world_persistence.Health");
+    REQUIRE(health.has_value());
+    CHECK(int_field(health, "maximum") == 700);
+    CHECK(int_field(health, "current") == 42);
 }
 
 TEST_CASE("a set patch keeps an unmarked field's construction value and saves a persist field's patched value",
@@ -182,12 +178,12 @@ TEST_CASE("a set patch keeps an unmarked field's construction value and saves a 
     REQUIRE(registry.get<cactus_gen::world_persistence::Health>(enemy).current == 42);
 
     const auto snapshot = capture(registry);
-    const auto* record  = record_for_archetype(snapshot, "world_persistence.Enemy");
-    REQUIRE(record != nullptr);
-    const auto* health = trait_of(*record, "world_persistence.Health");
-    REQUIRE(health != nullptr);
-    CHECK(int_field(health->construction, "regen") == 1);
-    CHECK(int_field(health->persisted, "current") == 42);
+    const auto record  = record_for_archetype(snapshot, "world_persistence.Enemy");
+    REQUIRE(record.has_value());
+    const auto health = trait_of(*record, "world_persistence.Health");
+    REQUIRE(health.has_value());
+    CHECK(int_field(health, "regen") == 1);
+    CHECK(int_field(health, "current") == 42);
 }
 
 TEST_CASE("customized particles stay out of a world snapshot", "[runtime][persistence][capture]") {
@@ -251,15 +247,15 @@ TEST_CASE("a hierarchical child with an ineligible parent is recorded as a root"
 
     // Formation declares no persist field anywhere in its own trait set, so it
     // is never captured even though its child is.
-    CHECK(record_for_archetype(snapshot, "world_persistence.Formation") == nullptr);
+    CHECK_FALSE(record_for_archetype(snapshot, "world_persistence.Formation").has_value());
 
-    const auto* member = record_for_archetype(snapshot, "world_persistence.Formation/Member");
-    REQUIRE(member != nullptr);
-    CHECK_FALSE(member->parent.present);
+    const auto member = record_for_archetype(snapshot, "world_persistence.Formation/Member");
+    REQUIRE(member.has_value());
+    CHECK_FALSE(member->parent().present);
 
-    const auto* badge = trait_of(*member, "world_persistence.Badge");
-    REQUIRE(badge != nullptr);
-    CHECK(int_field(badge->persisted, "rank") == 1);
+    const auto badge = trait_of(*member, "world_persistence.Badge");
+    REQUIRE(badge.has_value());
+    CHECK(int_field(badge, "rank") == 1);
 }
 
 TEST_CASE("a world snapshot orders entities by relative creation order", "[runtime][persistence][capture]") {
@@ -288,15 +284,15 @@ TEST_CASE("a world snapshot orders entities by relative creation order", "[runti
     const auto snapshot = capture(registry);
 
     // The boss is created at module load, before either runtime spawn.
-    REQUIRE_FALSE(snapshot.entities.empty());
-    CHECK(snapshot.entities.front().archetype == "world_persistence.Boss");
+    REQUIRE_FALSE(snapshot.entity_count() == 0);
+    CHECK(snapshot.entity(0).archetype() == "world_persistence.Boss");
 
     std::vector<int> enemy_currents;
-    for (const auto& record : snapshot.entities) {
-        if (record.archetype == "world_persistence.Enemy") {
-            const auto* health = trait_of(record, "world_persistence.Health");
-            REQUIRE(health != nullptr);
-            enemy_currents.push_back(int_field(health->persisted, "current"));
+    for (const auto record : snapshot.entities()) {
+        if (record.archetype() == "world_persistence.Enemy") {
+            const auto health = trait_of(record, "world_persistence.Health");
+            REQUIRE(health.has_value());
+            enemy_currents.push_back(int_field(health, "current"));
         }
     }
     REQUIRE(enemy_currents.size() == 2);
@@ -317,7 +313,7 @@ TEST_CASE("capture leaves the live world unchanged", "[runtime][persistence][cap
     const auto before       = registry.get<cactus_gen::world_persistence::Health>(boss);
 
     const auto snapshot = capture(registry);
-    CHECK_FALSE(snapshot.entities.empty());
+    CHECK_FALSE(snapshot.entity_count() == 0);
     CHECK(registry.view<entt::entity>().size() == entity_count);
     CHECK(registry.get<cactus_gen::world_persistence::Health>(boss).current == before.current);
     CHECK(registry.get<cactus_gen::world_persistence::Health>(boss).maximum == before.maximum);
@@ -334,7 +330,7 @@ TEST_CASE("capture runs no gameplay handler, even one a pending trigger would fi
 
     const auto entity_count_before = registry.view<entt::entity>().size();
     const auto snapshot            = capture(registry);
-    CHECK_FALSE(snapshot.entities.empty());
+    CHECK_FALSE(snapshot.entity_count() == 0);
 
     CHECK(registry.view<entt::entity>().size() == entity_count_before);
     const auto enemy_view =
@@ -356,15 +352,14 @@ TEST_CASE("a persistent list past the configured collection bound is truncated, 
     cargo.slots.assign(kOverLimit, 7);
 
     const auto snapshot   = capture(registry);
-    const auto* warehouse = record_for_archetype(snapshot, "world_persistence.Warehouse");
-    REQUIRE(warehouse != nullptr);
-    const auto* cargo_trait = trait_of(*warehouse, "world_persistence.Cargo");
-    REQUIRE(cargo_trait != nullptr);
-    const auto* slots = cactus::persistence::find_field(cargo_trait->persisted, "slots");
-    REQUIRE(slots != nullptr);
+    const auto warehouse = record_for_archetype(snapshot, "world_persistence.Warehouse");
+    REQUIRE(warehouse.has_value());
+    const auto cargo_trait = trait_of(*warehouse, "world_persistence.Cargo");
+    REQUIRE(cargo_trait.has_value());
+    const auto slots = field_of(cargo_trait, "slots");
 
-    CHECK(slots->value.as_list().items.size() == cactus::persistence::kMaxPersistenceCollectionSize);
-    CHECK(snapshot.truncated);
+    CHECK(slots.as_list().items.size() == cactus::persistence::kMaxPersistenceCollectionSize);
+    CHECK(snapshot.truncated());
 }
 
 TEST_CASE("a persistent list within the configured collection bound is not truncated",
@@ -377,7 +372,7 @@ TEST_CASE("a persistent list within the configured collection bound is not trunc
     cargo.slots.assign(3, 7);
 
     const auto snapshot = capture(registry);
-    CHECK_FALSE(snapshot.truncated);
+    CHECK_FALSE(snapshot.truncated());
 }
 
 TEST_CASE("capture preserves the exact 32-bit int range, not just typical gameplay values",
@@ -390,16 +385,16 @@ TEST_CASE("capture preserves the exact 32-bit int range, not just typical gamepl
 
     health.current      = std::numeric_limits<std::int32_t>::lowest();
     auto snapshot       = capture(registry);
-    const auto* boss    = record_for_archetype(snapshot, "world_persistence.Boss");
-    REQUIRE(boss != nullptr);
-    CHECK(int_field(trait_of(*boss, "world_persistence.Health")->persisted, "current") ==
+    auto boss          = record_for_archetype(snapshot, "world_persistence.Boss");
+    REQUIRE(boss.has_value());
+    CHECK(int_field(trait_of(*boss, "world_persistence.Health"), "current") ==
           std::numeric_limits<std::int32_t>::lowest());
 
     health.current = std::numeric_limits<std::int32_t>::max();
     snapshot        = capture(registry);
     boss            = record_for_archetype(snapshot, "world_persistence.Boss");
-    REQUIRE(boss != nullptr);
-    CHECK(int_field(trait_of(*boss, "world_persistence.Health")->persisted, "current") ==
+    REQUIRE(boss.has_value());
+    CHECK(int_field(trait_of(*boss, "world_persistence.Health"), "current") ==
           std::numeric_limits<std::int32_t>::max());
 }
 
@@ -416,11 +411,11 @@ TEST_CASE("capture preserves the exact backend float bit pattern, not a rounded 
     gauge.value = kAwkward;
 
     const auto snapshot = capture(registry);
-    const auto* record  = record_for_archetype(snapshot, "world_persistence.Gauge");
-    REQUIRE(record != nullptr);
-    const auto* precision = trait_of(*record, "world_persistence.Precision");
-    REQUIRE(precision != nullptr);
-    CHECK(float_field(precision->persisted, "value") == kAwkward);
+    const auto record  = record_for_archetype(snapshot, "world_persistence.Gauge");
+    REQUIRE(record.has_value());
+    const auto precision = trait_of(*record, "world_persistence.Precision");
+    REQUIRE(precision.has_value());
+    CHECK(float_field(precision, "value") == kAwkward);
 }
 
 TEST_CASE("a real captured snapshot survives write-then-read through the in-memory adapter as an equal document",
@@ -432,7 +427,7 @@ TEST_CASE("a real captured snapshot survives write-then-read through the in-memo
     drive_frame(registry, kStep);
 
     const auto original = capture(registry);
-    REQUIRE_FALSE(original.entities.empty());
+    REQUIRE_FALSE(original.entity_count() == 0);
 
     cactus_test::InMemoryPersistenceAdapter memory_adapter;
     cactus_test::ScopedPersistenceAdapter scoped_adapter(memory_adapter.as_adapter());
@@ -456,7 +451,7 @@ TEST_CASE("the same real captured snapshot round-trips to equal documents throug
     drive_frame(registry, kStep);
 
     const auto original = capture(registry);
-    REQUIRE_FALSE(original.entities.empty());
+    REQUIRE_FALSE(original.entity_count() == 0);
     const auto& schema = cactus::runtime::entt_backend::generated_schema;
 
     cactus_test::InMemoryPersistenceAdapter memory_adapter;
@@ -600,7 +595,7 @@ TEST_CASE("a document captured by the existing save path restores to an equivale
     drive_frame(registry, kStep);
 
     const auto original = capture(registry);
-    REQUIRE_FALSE(original.entities.empty());
+    REQUIRE_FALSE(original.entity_count() == 0);
 
     cactus_test::InMemoryPersistenceAdapter memory_adapter;
     cactus_test::ScopedPersistenceAdapter scoped_adapter(memory_adapter.as_adapter());
@@ -626,16 +621,18 @@ TEST_CASE("a document captured by the existing save path restores to an equivale
     // of an absent reference was never meant to be compared — so entity-level
     // equality here ignores id specifically where present is false.
     const auto recaptured = capture(registry);
-    REQUIRE(recaptured.entities.size() == original.entities.size());
-    for (std::size_t i = 0; i < original.entities.size(); ++i) {
-        INFO("entity index " << i << " archetype " << original.entities[i].archetype);
-        CHECK(recaptured.entities[i].archetype == original.entities[i].archetype);
-        CHECK(recaptured.entities[i].id == original.entities[i].id);
-        CHECK(recaptured.entities[i].parent.present == original.entities[i].parent.present);
-        if (original.entities[i].parent.present) {
-            CHECK(recaptured.entities[i].parent.id == original.entities[i].parent.id);
+    const auto before = cactus_test::records_of(original);
+    const auto after  = cactus_test::records_of(recaptured);
+    REQUIRE(after.size() == before.size());
+    for (std::size_t i = 0; i < before.size(); ++i) {
+        INFO("entity index " << i << " archetype " << before[i].archetype);
+        CHECK(after[i].archetype == before[i].archetype);
+        CHECK(after[i].id == before[i].id);
+        CHECK(after[i].parent.present == before[i].parent.present);
+        if (before[i].parent.present) {
+            CHECK(after[i].parent.id == before[i].parent.id);
         }
-        CHECK(recaptured.entities[i].traits == original.entities[i].traits);
+        CHECK(after[i].traits == before[i].traits);
     }
 }
 
@@ -687,9 +684,9 @@ TEST_CASE("restoring an empty compatible document produces an empty world",
     REQUIRE(registry.view<entt::entity>().size() > 0);
 
     cactus::persistence::Snapshot empty;
-    empty.schema_revision    = cactus::runtime::entt_backend::generated_schema.revision;
-    empty.schema_fingerprint = cactus::runtime::entt_backend::generated_schema.fingerprint;
-    empty.module             = "world_persistence";
+    empty.set_schema(cactus::runtime::entt_backend::generated_schema.revision,
+                     cactus::runtime::entt_backend::generated_schema.fingerprint);
+    empty.set_module("world_persistence");
 
     const auto outcome = cactus::runtime::entt_backend::generated_restore_world(registry, empty);
     REQUIRE(outcome.ok);
@@ -745,7 +742,7 @@ TEST_CASE("a failed restore preserves old-world scheduler work untouched",
     auto& registry = world.registry;
 
     cactus::persistence::Snapshot incompatible;
-    incompatible.schema_fingerprint = cactus::runtime::entt_backend::generated_schema.fingerprint + 1;
+    incompatible.set_schema(incompatible.schema_revision(), cactus::runtime::entt_backend::generated_schema.fingerprint + 1);
 
     auto& scheduler = cactus::runtime::entt_backend::generated_scheduler_state();
     scheduler.activation.root_event_queue.push_back(
@@ -819,10 +816,49 @@ TEST_CASE("a save queued after a restore in the same batch does not reuse a save
         "after_restore_check", cactus::runtime::entt_backend::generated_schema);
     REQUIRE(save_read.ok);
 
-    const auto* boss = record_for_archetype(save_read.snapshot, "world_persistence.Boss");
-    REQUIRE(boss != nullptr);
-    const auto* health = trait_of(*boss, "world_persistence.Health");
-    REQUIRE(health != nullptr);
-    CHECK(int_field(health->persisted, "current") == 111);
+    const auto boss = record_for_archetype(save_read.snapshot, "world_persistence.Boss");
+    REQUIRE(boss.has_value());
+    const auto health = trait_of(*boss, "world_persistence.Health");
+    REQUIRE(health.has_value());
+    CHECK(int_field(health, "current") == 111);
+}
+
+TEST_CASE("a valid document recording traits in another field order still restores",
+          "[runtime][persistence][restore]") {
+    World world;
+    const auto captured = cactus::runtime::entt_backend::generated_capture_world_snapshot(world.registry);
+    auto records        = cactus_test::records_of(captured);
+    // Built without the captured tables, with every field list reversed.
+    cactus::persistence::SnapshotBuilder builder;
+    builder.set_schema(captured.schema_revision(), captured.schema_fingerprint());
+    builder.set_module(captured.module());
+    for (auto& record : records) {
+        builder.add_entity(record.id, record.archetype, record.parent);
+        for (auto& trait : record.traits) {
+            std::ranges::reverse(trait.construction);
+            std::ranges::reverse(trait.persisted);
+            if (trait.present) {
+                builder.add_trait(trait.name, trait.construction, trait.persisted);
+            } else {
+                builder.add_absent_trait(trait.name);
+            }
+        }
+    }
+    const auto reordered = std::move(builder).finish();
+    REQUIRE(cactus::persistence::validate_document(cactus::runtime::entt_backend::generated_schema, reordered).empty());
+    std::vector<std::uint32_t> layouts(captured.trait_shapes().size());
+    std::iota(layouts.begin(), layouts.end(), 0U);
+    REQUIRE_FALSE(cactus::persistence::match_trait_layouts(reordered, captured, layouts).complete);
+
+    World restored;
+    const auto outcome = cactus::runtime::entt_backend::generated_restore_world(restored.registry, reordered);
+    INFO(outcome.message);
+    REQUIRE(outcome.ok);
+    const auto recaptured = cactus::runtime::entt_backend::generated_capture_world_snapshot(restored.registry);
+    REQUIRE(recaptured.entity_count() == captured.entity_count());
+    for (std::size_t index = 0; index < captured.entity_count(); ++index) {
+        CHECK(recaptured.entity(index).archetype() == captured.entity(index).archetype());
+        CHECK(recaptured.entity(index).trait_count() == captured.entity(index).trait_count());
+    }
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

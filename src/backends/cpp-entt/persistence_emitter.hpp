@@ -3,6 +3,7 @@
 #include "common/persistence_metadata.hpp"
 #include "frontend/semantic_analyzer.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -22,12 +23,28 @@ struct PersistableTrait {
 [[nodiscard]] std::vector<PersistableTrait> persistable_traits(const DecoratedProgram& program);
 [[nodiscard]] std::vector<SymbolId> persistable_symbols(const std::vector<PersistableTrait>& traits);
 
+// Whether capture records a field of this type and restore reads it back. The
+// encoders, decoders and document tables all skip the same fields.
+[[nodiscard]] bool field_type_persists(const DecoratedProgram& program, const TypeInfo& type);
+
+// The fields of `fields` whose type persists, optionally only the construction
+// (`persist == false`) or persisted ones, in declaration order.
+[[nodiscard]] std::vector<const ResolvedField*> persisting_fields(const DecoratedProgram& program,
+                                                                  const std::vector<ResolvedField>& fields,
+                                                                  std::optional<bool> persist = std::nullopt);
+
+// Each declared struct once, ordered by canonical identity.
+[[nodiscard]] std::vector<const ResolvedStruct*> unique_structs(const DecoratedProgram& program);
+
+// The position of `canonical` in `layouts`, or `layouts.size()`.
+[[nodiscard]] std::size_t layout_index(const std::vector<PersistableTrait>& layouts, const std::string& canonical);
+
 // Drops Parent from a persistable_traits() listing when the program declares
 // it. Parent's field is an ordinary entity_id like any other trait field, so
 // it appears in persistable_traits() like everything else — but its
 // hierarchy meaning (root vs included parent) is already fully carried by
-// EntityRecord::parent, so the generic per-entity trait walk (both capture's
-// and restore's) must not also record or apply it as an ordinary trait.
+// the entity row's parent, so the generic per-entity trait walk (both
+// capture's and restore's) must not also record or apply it as an ordinary trait.
 [[nodiscard]] std::vector<PersistableTrait> without_parent_trait(std::vector<PersistableTrait> traits,
                                                                  const DecoratedProgram& program);
 

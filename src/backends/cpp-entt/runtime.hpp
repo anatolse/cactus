@@ -14,6 +14,7 @@
 #include <entt/entt.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -1056,15 +1057,14 @@ ModelPlaybackTickResult tick_model_playback(entt::registry& registry,
 // pulling either into the document.
 class DocumentIdMap {
 public:
-    // Capture knows the eligible-entity count before assigning any identity;
-    // reserving avoids repeated rehashing while filling the table.
-    void reserve(std::size_t entity_count) { entries_.reserve(entity_count); }
+    // Capture knows the eligible-entity count before assigning any identity.
+    void reserve(std::size_t entity_count) { slots_.reserve(entity_count); }
 
     // Idempotent with respect to a prior reference(): a forward reference made
     // before an entity's own inclusion must keep pointing at the same identity
     // once that entity is included, not silently rebind to a fresh one.
     persistence::DocumentId include(entt::entity entity) {
-        auto& entry     = entry_for(entity);
+        auto& entry    = entry_for(entity);
         entry.included = true;
         return entry.id;
     }
@@ -1077,20 +1077,11 @@ public:
         return persistence::EntityRef{.id = entry.id, .present = entry.included};
     }
 
-    // Guards nested struct capture against the configured depth bound: false
-    // means the bound was already reached, so the caller must not recurse and
-    // should record an absent value instead, without calling exit_nesting()
-    // (nothing was entered). A true result must be paired with exactly one
-    // exit_nesting() call once the guarded recursion returns.
-    [[nodiscard]] bool enter_nesting() noexcept {
-        if (depth_ >= persistence::kMaxPersistenceNestingDepth) {
-            exceeded_ = true;
-            return false;
-        }
-        ++depth_;
-        return true;
-    }
-
+    // Values nest one level per struct and per list. A list that cannot nest
+    // records no items and marks the document truncated, so validation never
+    // meets a value past the configured depth.
+    [[nodiscard]] bool can_nest() const noexcept { return depth_ + 1 < persistence::kMaxPersistenceNestingDepth; }
+    void enter_nesting() noexcept { ++depth_; }
     void exit_nesting() noexcept { --depth_; }
 
     // A list past the configured collection bound stops growing rather than
@@ -1102,45 +1093,62 @@ public:
 
 private:
     struct Entry {
+        entt::entity entity        = entt::null;
         persistence::DocumentId id = 0;
         bool included              = false;
     };
 
-    // One hash probe per call instead of two lookups across two separately
-    // hashed containers keyed by the same entity.
+    // One slot per entity index. A stale handle whose index a live entity now
+    // uses (or the reverse) goes to the overflow map instead.
     Entry& entry_for(entt::entity entity) {
-        auto [it, inserted] = entries_.try_emplace(entity);
-        if (inserted) {
-            it->second.id = next_++;
+        const auto index = static_cast<std::size_t>(entt::to_entity(entity));
+        if (index >= slots_.size()) {
+            slots_.resize(std::max(index + 1, slots_.size() * 2));
         }
-        return it->second;
+        auto& slot = slots_[index];
+        if (slot.entity == entity) {
+            return slot;
+        }
+        if (slot.entity == entt::null) {
+            slot = Entry{.entity = entity, .id = next_++};
+            return slot;
+        }
+        auto [found, inserted] = overflow_.try_emplace(entity);
+        if (inserted) {
+            found->second = Entry{.entity = entity, .id = next_++};
+        }
+        return found->second;
     }
 
-    std::unordered_map<entt::entity, Entry> entries_;
-    std::size_t depth_  = 0;
-    bool exceeded_      = false;
+    std::vector<Entry> slots_;
+    std::unordered_map<entt::entity, Entry> overflow_;
+    std::size_t depth_            = 0;
+    bool exceeded_                = false;
     persistence::DocumentId next_ = 1;
 };
 
 // Resolves document-local identities to the handles restore allocated for
 // them in the staged registry — the read-side counterpart to DocumentIdMap.
-// Populated by an allocate-all-records pass before any reference is decoded,
-// so forward references and cycles among included records need no ordering.
-// An absent reference (persistence::EntityRef::present == false) and a
+// Populated by an allocate-all-records pass, then sealed, before any reference
+// is decoded, so forward references and cycles among included records need no
+// ordering. An absent reference (persistence::EntityRef::present == false) and a
 // reference naming an id this map never allocated both resolve to entt::null:
 // a stale value on which every total entity_id operation is already a safe
 // no-op, so restore need not fabricate distinct stale handles per excluded
 // original target the way capture's DocumentIdMap does.
 class RestoreIdMap {
 public:
-    void allocate(persistence::DocumentId id, entt::entity entity) { entities_[id] = entity; }
+    void reserve(std::size_t count) { entities_.reserve(count); }
+    void allocate(persistence::DocumentId id, entt::entity entity) { entities_.emplace_back(id, entity); }
+    void seal() { std::ranges::sort(entities_, {}, &std::pair<persistence::DocumentId, entt::entity>::first); }
 
     [[nodiscard]] entt::entity resolve(const persistence::EntityRef& ref) const {
         if (!ref.present) {
             return entt::null;
         }
-        const auto found = entities_.find(ref.id);
-        return found == entities_.end() ? entt::entity{entt::null} : found->second;
+        const auto found = std::ranges::lower_bound(entities_, ref.id, {},
+                                                    &std::pair<persistence::DocumentId, entt::entity>::first);
+        return found == entities_.end() || found->first != ref.id ? entt::entity{entt::null} : found->second;
     }
 
     // Records that an AssetRef/InputRef field named a declaration this build
@@ -1160,55 +1168,13 @@ public:
     [[nodiscard]] const std::string& unresolved_resource_name() const noexcept { return *unresolved_resource_; }
 
 private:
-    std::unordered_map<persistence::DocumentId, entt::entity> entities_;
+    std::vector<std::pair<persistence::DocumentId, entt::entity>> entities_;
     std::optional<std::string> unresolved_resource_;
 };
 
-// ── Field value decoding ────────────────────────────────────────────────────
-// The inverse of "Field value conversion" above: generated restore calls
-// these to turn a decoded persistence::Value back into the backend's native
-// representation. A caller must already know the field's kind matches (task
-// 4's validation gate is what guarantees that before any of this runs); a
-// mismatched variant access is a programming error, not a runtime condition.
-
-[[nodiscard]] inline bool generated_decode_bool(const persistence::Value& value) { return value.as_bool(); }
-[[nodiscard]] inline int generated_decode_int(const persistence::Value& value) { return value.as_int(); }
-[[nodiscard]] inline float generated_decode_float(const persistence::Value& value) { return value.as_float(); }
-[[nodiscard]] inline std::string generated_decode_string(const persistence::Value& value) {
-    return value.as_string();
-}
-
-[[nodiscard]] inline Vector2 generated_decode_vector2(const persistence::Value& value) {
-    const auto& vector = value.as_vector();
-    return Vector2{.x = vector.components[0], .y = vector.components[1]};
-}
-
-[[nodiscard]] inline Vector3 generated_decode_vector3(const persistence::Value& value) {
-    const auto& vector = value.as_vector();
-    return Vector3{.x = vector.components[0], .y = vector.components[1], .z = vector.components[2]};
-}
-
-[[nodiscard]] inline Quat generated_decode_quat(const persistence::Value& value) {
-    const auto& vector = value.as_vector();
-    return Quat{.x = vector.components[0], .y = vector.components[1], .z = vector.components[2],
-                .w = vector.components[3]};
-}
-
-[[nodiscard]] inline Color generated_decode_color(const persistence::Value& value) {
-    const auto& vector = value.as_vector();
-    return Color{.r = static_cast<unsigned char>(vector.components[0]),
-                 .g = static_cast<unsigned char>(vector.components[1]),
-                 .b = static_cast<unsigned char>(vector.components[2]),
-                 .a = static_cast<unsigned char>(vector.components[3])};
-}
-
-[[nodiscard]] inline entt::entity generated_decode_entity(const persistence::Value& value, const RestoreIdMap& ids) {
-    return ids.resolve(value.as_entity());
-}
-
-// ── Field value conversion ─────────────────────────────────────────────────
-// Program-independent, so generated capture calls these instead of restating
-// each backend representation inline.
+// ── Typed value encoding ───────────────────────────────────────────────────
+// Program-independent pieces of the per-trait encoders and decoders generated
+// capture and restore call, so they are not restated in emitted text.
 
 // The schema descriptor (common/persistence_metadata.cpp) reports Int and
 // Float fields as exactly 32 bits: the backend's actual storage width, which
@@ -1220,44 +1186,109 @@ private:
 // exact representation without redefining language arithmetic.
 static_assert(sizeof(int) == 4, "PersistenceValueKind::Int assumes a 32-bit backend int");
 static_assert(sizeof(float) == 4, "PersistenceValueKind::Float assumes a 32-bit backend float");
-
-[[nodiscard]] inline persistence::Value to_persistence_value(bool value) {
-    return persistence::Value::of_bool(value);
-}
-
-[[nodiscard]] inline persistence::Value to_persistence_value(int value) {
-    return persistence::Value::of_int(value);
-}
-
-[[nodiscard]] inline persistence::Value to_persistence_value(float value) {
-    return persistence::Value::of_float(value);
-}
-
-[[nodiscard]] inline persistence::Value to_persistence_value(const std::string& value) {
-    return persistence::Value::of_string(value);
-}
-
-[[nodiscard]] inline persistence::Value to_persistence_value(Vector2 value) {
-    return persistence::Value::of_vector(PersistenceValueKind::Float, 2, {value.x, value.y, 0.0F, 0.0F});
-}
-
-[[nodiscard]] inline persistence::Value to_persistence_value(Vector3 value) {
-    return persistence::Value::of_vector(PersistenceValueKind::Float, 3, {value.x, value.y, value.z, 0.0F});
-}
-
-[[nodiscard]] inline persistence::Value to_persistence_value(Quat value) {
-    return persistence::Value::of_vector(PersistenceValueKind::Float, 4, {value.x, value.y, value.z, value.w});
-}
-
 // Color lanes are bytes in the backend; float carries every one of them exactly.
 static_assert(sizeof(Color::r) == 1, "PersistenceValueKind::Int color lanes assume an 8-bit backend channel");
-[[nodiscard]] inline persistence::Value to_persistence_value(Color value) {
-    return persistence::Value::of_vector(PersistenceValueKind::Int,
-                                         4,
-                                         {static_cast<float>(value.r),
-                                          static_cast<float>(value.g),
-                                          static_cast<float>(value.b),
-                                          static_cast<float>(value.a)});
+
+inline void put_persistence_lanes(persistence::SnapshotBuilder& out, Vector2 value) {
+    out.put_lanes(std::array{value.x, value.y});
+}
+
+inline void put_persistence_lanes(persistence::SnapshotBuilder& out, Vector3 value) {
+    out.put_lanes(std::array{value.x, value.y, value.z});
+}
+
+inline void put_persistence_lanes(persistence::SnapshotBuilder& out, Quat value) {
+    out.put_lanes(std::array{value.x, value.y, value.z, value.w});
+}
+
+inline void put_persistence_lanes(persistence::SnapshotBuilder& out, Color value) {
+    out.put_lanes(std::array{static_cast<float>(value.r), static_cast<float>(value.g), static_cast<float>(value.b),
+                             static_cast<float>(value.a)});
+}
+
+[[nodiscard]] inline Vector2 read_persistence_vector2(persistence::ValueReader& in) {
+    std::array<float, 2> lanes{};
+    in.get_lanes(lanes);
+    return Vector2{.x = lanes[0], .y = lanes[1]};
+}
+
+[[nodiscard]] inline Vector3 read_persistence_vector3(persistence::ValueReader& in) {
+    std::array<float, 3> lanes{};
+    in.get_lanes(lanes);
+    return Vector3{.x = lanes[0], .y = lanes[1], .z = lanes[2]};
+}
+
+[[nodiscard]] inline Quat read_persistence_quat(persistence::ValueReader& in) {
+    std::array<float, 4> lanes{};
+    in.get_lanes(lanes);
+    return Quat{.x = lanes[0], .y = lanes[1], .z = lanes[2], .w = lanes[3]};
+}
+
+[[nodiscard]] inline Color read_persistence_color(persistence::ValueReader& in) {
+    std::array<float, 4> lanes{};
+    in.get_lanes(lanes);
+    return Color{.r = static_cast<unsigned char>(lanes[0]),
+                 .g = static_cast<unsigned char>(lanes[1]),
+                 .b = static_cast<unsigned char>(lanes[2]),
+                 .a = static_cast<unsigned char>(lanes[3])};
+}
+
+// The document name for a handle; `fallback` (the empty name) for an unset or
+// unknown handle.
+template <std::size_t N>
+[[nodiscard]] std::uint32_t document_name_at(const std::array<std::uint32_t, N>& names,
+                                             std::size_t index,
+                                             std::uint32_t fallback) {
+    return index < N ? names[index] : fallback;
+}
+
+// A count, then each item through `put_item`, within the collection and
+// nesting bounds.
+template <class List, class PutItem>
+void put_persistence_list(persistence::SnapshotBuilder& out, const List& items, DocumentIdMap& ids, PutItem put_item) {
+    if (!ids.can_nest()) {
+        out.put_index(0);
+        ids.mark_limit_exceeded();
+        return;
+    }
+    const auto count = std::min<std::size_t>(items.size(), persistence::kMaxPersistenceCollectionSize);
+    if (count < items.size()) {
+        ids.mark_limit_exceeded();
+    }
+    out.put_index(static_cast<std::uint32_t>(count));
+    ids.enter_nesting();
+    for (std::size_t index = 0; index < count; ++index) {
+        put_item(items[index]);
+    }
+    ids.exit_nesting();
+}
+
+template <class Item, class ReadItem>
+[[nodiscard]] std::vector<Item> read_persistence_list(persistence::ValueReader& in, ReadItem read_item) {
+    const auto count = in.get_index();
+    std::vector<Item> items;
+    items.reserve(std::min<std::size_t>(count, persistence::kMaxPersistenceCollectionSize));
+    for (std::uint32_t index = 0; index < count && !in.failed(); ++index) {
+        items.push_back(read_item());
+    }
+    return items;
+}
+
+// A declared asset or input action by name back to this build's handle. The
+// empty name is an unset handle; a name this build does not declare marks the
+// restore as failing resource preparation.
+template <class Handle, class Lookup>
+[[nodiscard]] Handle read_persistence_handle(persistence::ValueReader& in, RestoreIdMap& ids, Lookup lookup) {
+    const auto name = in.get_name();
+    if (name.empty()) {
+        return Handle{0};
+    }
+    const auto handle = lookup(name);
+    if (!handle.has_value()) {
+        ids.mark_resource_unresolved(std::string(name));
+        return Handle{0};
+    }
+    return *handle;
 }
 
 // ── World-persistence request scheduling ───────────────────────────────────

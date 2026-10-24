@@ -140,11 +140,38 @@ TEST_CASE("each trait with fields captures in its own function", "[codegen-entt]
     const auto capture = function_body(unit->code, "generated_capture_traits");
     const auto health  = function_body(unit->code, "generated_capture_trait<::cactus_gen::world::Health>");
 
-    CHECK(contains(capture, "generated_capture_trait<::cactus_gen::world::Health>(registry, entity, ids, record);"));
+    CHECK(contains(capture,
+                   "generated_capture_trait<::cactus_gen::world::Health>(registry, entity, ids, out, tables);"));
     CHECK_FALSE(contains(capture, "Construction<::cactus_gen::world::Health>"));
     CHECK(contains(health, "registry.try_get<Construction<::cactus_gen::world::Health>>(entity)"));
-    CHECK(contains(health, "\"maximum\""));
-    CHECK(contains(health, "\"current\""));
+}
+
+TEST_CASE("each trait captures through a typed encoder, with names only in the document tables",
+          "[codegen-entt][persistence][capture]") {
+    const auto unit   = generate(kDeclarations);
+    const auto health = function_body(unit->code, "generated_capture_trait<::cactus_gen::world::Health>");
+
+    const auto begin_at   = health.find("out.begin_trait(tables.traits[");
+    const auto maximum_at = health.find("out.put_int(constructed.maximum);");
+    const auto split_at   = health.find("out.begin_persisted();");
+    const auto current_at = health.find("out.put_int(live->current);");
+    REQUIRE(begin_at != std::string::npos);
+    REQUIRE(maximum_at != std::string::npos);
+    REQUIRE(split_at != std::string::npos);
+    REQUIRE(current_at != std::string::npos);
+    CHECK(begin_at < maximum_at);
+    CHECK(maximum_at < split_at);
+    CHECK(split_at < current_at);
+    CHECK(contains(health, "out.end_trait();"));
+    CHECK_FALSE(contains(health, "\"current\""));
+    CHECK_FALSE(contains(unit->code, "FieldValue"));
+    CHECK_FALSE(contains(unit->code, "cactus::persistence::Value::"));
+
+    // Names are registered once per document, not written per value.
+    const auto tables = function_body(unit->code, "generated_register_document_tables");
+    CHECK(contains(tables, "out.trait_shape(\"world.Health\""));
+    CHECK(contains(tables, "out.name(\"maximum\")"));
+    CHECK(contains(tables, "out.name(\"current\")"));
 }
 
 TEST_CASE("the nullary archetype factory routes through the provenance-retaining path",
@@ -817,8 +844,8 @@ entity Player:
     // declaration order, so a save never depends on allocation order.
     const auto assets = array_body(unit->code, "generated_asset_names");
     CHECK(contains(assets, "\"world.Icon\""));
-    CHECK(contains(unit->code, "generated_asset_name(live->icon)"));
-    CHECK(contains(unit->code, "cactus::persistence::Value::of_asset(std::string(generated_asset_name"));
+    CHECK(contains(unit->code,
+                   "document_name_at(tables.assets, static_cast<std::size_t>(live->icon) - 1U, tables.unset_name)"));
 }
 
 TEST_CASE("persistent input fields are captured through their own button/axis tables",
@@ -833,10 +860,10 @@ entity Player:
     Loadout
 )");
 
-    CHECK(contains(unit->code, "generated_input_button_name(live->fire)"));
-    CHECK(contains(unit->code, "generated_input_axis_name(live->steer)"));
-    CHECK(contains(unit->code, "cactus::persistence::Value::of_input(std::string(generated_input_button_name"));
-    CHECK(contains(unit->code, "cactus::persistence::Value::of_input(std::string(generated_input_axis_name"));
+    CHECK(contains(unit->code,
+                   "document_name_at(tables.buttons, static_cast<std::size_t>(live->fire), tables.unset_name)"));
+    CHECK(contains(unit->code,
+                   "document_name_at(tables.axes, static_cast<std::size_t>(live->steer), tables.unset_name)"));
 }
 
 TEST_CASE("a program with no declared assets still emits a callable, empty lookup",
@@ -854,9 +881,9 @@ TEST_CASE("a program with no declared assets still emits a callable, empty looku
 TEST_CASE("nested struct capture is guarded by the configured depth bound",
           "[codegen-entt][persistence][capture][limits]") {
     const auto unit = generate(kSchemaSource);
-    const auto slot = function_body(unit->code, "generated_capture_struct");
+    const auto slot = function_body(unit->code, "inline void generated_put_struct");
 
-    CHECK(contains(slot, "if (!ids.enter_nesting())"));
+    CHECK(contains(slot, "ids.enter_nesting();"));
     CHECK(contains(slot, "ids.exit_nesting();"));
 }
 
@@ -864,8 +891,8 @@ TEST_CASE("list capture is guarded by the configured collection-size bound",
           "[codegen-entt][persistence][capture][limits]") {
     const auto unit = generate(kSchemaSource);
 
-    CHECK(contains(unit->code, "cactus::persistence::kMaxPersistenceCollectionSize"));
-    CHECK(contains(unit->code, "ids.mark_limit_exceeded();"));
+    // The bound and the truncation mark live in the shared runtime helper.
+    CHECK(contains(unit->code, "cactus::runtime::entt_backend::put_persistence_list(out, live->slots, ids,"));
 }
 
 TEST_CASE("the captured snapshot records whether a limit truncated it",
@@ -873,7 +900,7 @@ TEST_CASE("the captured snapshot records whether a limit truncated it",
     const auto unit  = generate(kSchemaSource);
     const auto world = function_body(unit->code, "generated_capture_world_snapshot");
 
-    CHECK(contains(world, "snapshot.truncated = ids.limit_exceeded();"));
+    CHECK(contains(world, "if (ids.limit_exceeded()) { out.mark_truncated(); }"));
 }
 
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity)

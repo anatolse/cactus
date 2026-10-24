@@ -249,3 +249,18 @@ Restore SHALL accept documents of up to 4,194,304 entity records, a limit separa
 #### Scenario: A full voxel world restores
 - **WHEN** a world with 196,608 persistent cell entities is saved and loaded
 - **THEN** the restore succeeds and every cell comes back
+
+### Requirement: Snapshot memory follows the recorded data
+An in-memory snapshot SHALL store each canonical identity (archetype node, trait, field, enum variant, declared asset or input) at most once per document, and SHALL store field values without a per-value name or a per-value heap allocation. Capture and restore SHALL make a number of heap allocations that does not grow with the number of recorded values, apart from string, list and other variable-length values. Canonical identities SHALL remain readable by name through the snapshot, and validation diagnostics SHALL keep identifying field paths by name.
+
+#### Scenario: A full voxel world captures compactly
+- **WHEN** a world with 196,608 persistent cell entities is captured
+- **THEN** the snapshot occupies at most 256 bytes per entity record, and capture makes fewer than 1,000 heap allocations
+
+#### Scenario: Names are readable by canonical identity
+- **WHEN** a test or adapter reads a captured record's `std.voxel.volume.Cell` trait field `x`
+- **THEN** it gets the recorded value by those names, without knowing the running program's generated indices
+
+#### Scenario: Validation still names the field
+- **WHEN** an adapter returns a document in which one record's field holds a value of the wrong kind
+- **THEN** restore fails as invalid data with a diagnostic naming the archetype node, trait and field

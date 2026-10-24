@@ -140,3 +140,17 @@ The first-person arena SHALL have a dedicated fake-Raylib headless behavior test
 - **AND** later scripted movement, firing, enemy movement, and spawn intervals do not advance gameplay
 - **AND** cursor capture is released
 
+### Requirement: One build target builds every test executable
+The build SHALL provide a single target that builds every executable registered with `ctest`, including the headless behavioral and real-GL visual test executables that the default build skips. Registering a new test executable in the tests directory SHALL add it to this target without a separate list edit. The coverage gate SHALL build its test executables through this target.
+
+#### Scenario: Excluded test executables are rebuilt
+- **WHEN** a generated-code change breaks the compilation of a headless or visual test executable and the developer builds the test target
+- **THEN** the build fails with that executable's compile error instead of leaving the old binary for `ctest` to run
+
+#### Scenario: New test executables join automatically
+- **WHEN** a new test executable is added in the tests directory through the existing registration helpers
+- **THEN** building the test target builds it with no other build-file change
+
+#### Scenario: Coverage gate uses the same set
+- **WHEN** the coverage gate runs
+- **THEN** it builds exactly the executables the test target builds

@@ -1158,13 +1158,16 @@ cactus_add_headless_behavior_test(test_generated_names_headless_behavior
 )
 
 # Every executable defined in this directory is a test or a test subprocess, so
-# collecting them here keeps coverage_check's list in step with new tests.
+# collecting them here keeps cactus_tests and coverage_check in step with new tests.
 get_directory_property(cactus_test_dir_targets BUILDSYSTEM_TARGETS)
+# Most test executables are EXCLUDE_FROM_ALL; build this before ctest so it never runs stale binaries.
+add_custom_target(cactus_tests)
 foreach(target_name IN LISTS cactus_test_dir_targets)
     get_target_property(target_type ${target_name} TYPE)
     if(target_type STREQUAL "EXECUTABLE")
         cactus_enable_coverage(${target_name})
         set_property(GLOBAL APPEND PROPERTY CACTUS_TEST_EXECUTABLES ${target_name})
+        add_dependencies(cactus_tests ${target_name})
     endif()
 endforeach()
 

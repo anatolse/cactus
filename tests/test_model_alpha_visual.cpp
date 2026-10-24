@@ -19,6 +19,9 @@
 
 namespace {
 
+namespace models = cactus_gen::stdlib::render::models;
+namespace volume = cactus_gen::stdlib::transform::volume;
+
 // stdlib-render-models: a per-instance ModelRenderer.color alpha must
 // actually reduce visibility against the scene behind it. The shared lit
 // fragment shader (runtime.cpp) previously computed its alpha channel from
@@ -29,7 +32,8 @@ namespace {
 void draw_frame(entt::registry& registry) {
     BeginDrawing();
     ClearBackground(RAYWHITE);
-    cactus::runtime::entt_backend::generated_inject_external_event(std_core__frameEvent{.dt = 1.0F / 60.0F});
+    cactus::runtime::entt_backend::generated_inject_external_event(
+        cactus_gen::stdlib::core::frameEvent{.dt = 1.0F / 60.0F});
     cactus::runtime::entt_backend::generated_drain_external_events(registry);
     EndDrawing();
 }
@@ -78,10 +82,10 @@ TEST_CASE("model alpha visual: lower ModelRenderer.color alpha renders dimmer ag
     entt::entity default_entity  = entt::null;
     entt::entity static_entity   = entt::null;
     entt::entity animated_entity = entt::null;
-    registry.view<std_transform_volume__WorldTransform, std_render_models__ModelRenderer>().each(
+    registry.view<volume::WorldTransform, models::ModelRenderer>().each(
         [&](entt::entity entity,
-            const std_transform_volume__WorldTransform& transform,
-            std_render_models__ModelRenderer&) {
+            const volume::WorldTransform& transform,
+            models::ModelRenderer&) {
             if (near_x(transform.position.x, -2.0F)) {
                 default_entity = entity;
             } else if (near_x(transform.position.x, 0.0F)) {
@@ -96,7 +100,7 @@ TEST_CASE("model alpha visual: lower ModelRenderer.color alpha renders dimmer ag
 
     const auto isolate = [&](entt::entity visible_entity) {
         for (const auto entity : {default_entity, static_entity, animated_entity}) {
-            registry.get<std_render_models__ModelRenderer>(entity).visible = (entity == visible_entity);
+            registry.get<models::ModelRenderer>(entity).visible = (entity == visible_entity);
         }
     };
 

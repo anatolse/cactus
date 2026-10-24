@@ -51,8 +51,8 @@ TEST_CASE("particle-burst visual: instances render at their own positions, not o
     constexpr float kStartX      = 100.0F;
     constexpr float kY           = 300.0F;
     for (int i = 0; i < kInstanceCount; ++i) {
-        const auto entity = create_particle_burst__particle_template(registry);
-        registry.get<std_transform_flat__WorldTransform>(entity).position =
+        const auto entity = cactus_gen::detail::particle_burst::create_particle_template(registry);
+        registry.get<cactus_gen::stdlib::transform::flat::WorldTransform>(entity).position =
             Vector2{.x = kStartX + (static_cast<float>(i) * kSpacingPx), .y = kY};
     }
 
@@ -67,7 +67,8 @@ TEST_CASE("particle-burst visual: instances render at their own positions, not o
     for (int frame = 0; frame < kFramesBeforeScreenshot; ++frame) {
         BeginDrawing();
         ClearBackground(RAYWHITE);
-        cactus::runtime::entt_backend::generated_inject_external_event(std_core__frameEvent{.dt = 1.0F / 60.0F});
+        cactus::runtime::entt_backend::generated_inject_external_event(
+            cactus_gen::stdlib::core::frameEvent{.dt = 1.0F / 60.0F});
         cactus::runtime::entt_backend::generated_drain_external_events(registry);
         EndDrawing();
     }

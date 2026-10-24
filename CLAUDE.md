@@ -54,6 +54,9 @@ writing the test first (TDD): write a failing Catch2 test in `tests/` that captu
 the intended behavior, watch it fail, then implement until it passes. Follow the
 existing `test_*.cpp` naming and structure in `tests/`.
 
+Build the `cactus_tests` target before running `ctest`; most test executables are
+`EXCLUDE_FROM_ALL`, so a plain build leaves stale binaries for `ctest` to run.
+
 A new DSL/stdlib feature additionally needs a `.cactus` sample fixture plus a failing
 headless-behavior Catch2 test written first, mirroring the existing
 `test_*_headless_behavior.cpp` + `examples/*.cactus` pairing already in `tests/`.

@@ -784,6 +784,6 @@ if(CACTUS_ENABLE_COVERAGE)
         USES_TERMINAL
         VERBATIM
     )
-    add_dependencies(coverage_check cactus ${cactus_test_executables})
+    add_dependencies(coverage_check cactus cactus_tests)
 endif()
 

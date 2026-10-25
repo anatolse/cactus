@@ -360,7 +360,7 @@ TEST_CASE("Collider queries: push_out needs two pair bindings", "[semantic][stdl
 
 TEST_CASE("Collider queries: push_out reads collider data and CharacterBody on both bindings",
           "[semantic][stdlib-physics][contracts]") {
-    const auto analysis = analyze(bullet_rule(kPushOut));
+    const auto analysis = analyze(bullet_rule(kPushOut, "        bullet[Bullet].velocity = push\n"));
     INFO(describe(analysis));
     REQUIRE(analysis.clean());
     const auto& contract = analysis.contract("MoveBullets");
@@ -505,7 +505,7 @@ TEST_CASE("Collider planner: touching keeps its argument order", "[semantic][whe
 }
 
 TEST_CASE("Collider planner: a sole first_hit sweep in reduce: is eligible", "[semantic][rule-reduce][spatial-join]") {
-    const auto analysis = analyze(bullet_rule(kFirstHit));
+    const auto analysis = analyze(bullet_rule(kFirstHit, "        bullet[Bullet].travelled = first.t\n"));
     INFO(describe(analysis));
     REQUIRE(analysis.clean());
     CHECK_FALSE(analysis.warns(kUnaccelerated));
@@ -528,7 +528,9 @@ TEST_CASE("Collider planner: repeated first_hit over the same sweep stays eligib
 }
 
 TEST_CASE("Collider planner: mixed reducers are not eligible", "[semantic][rule-reduce][spatial-join]") {
-    const auto analysis = analyze(bullet_rule(kFirstHit + "        near = count()\n"));
+    const auto analysis = analyze(bullet_rule(kFirstHit + "        near = count()\n",
+                                              "        if near > 0:\n"
+                                              "            bullet[Bullet].travelled = first.t\n"));
     INFO(describe(analysis));
     REQUIRE(analysis.clean());
     CHECK_FALSE(analysis.contract("MoveBullets").spatial_join.has_value());
@@ -562,7 +564,8 @@ TEST_CASE("Collider planner: a delta reading the target is not eligible", "[sema
 }
 
 TEST_CASE("Collider planner: a sole push_out sum in reduce: is eligible", "[semantic][rule-reduce][spatial-join]") {
-    const auto analysis = analyze(bullet_rule(kPushOut + "        again = sum(physics.push_out(bullet, target))\n"));
+    const auto analysis = analyze(bullet_rule(kPushOut + "        again = sum(physics.push_out(bullet, target))\n",
+                                              "        bullet[Bullet].velocity = push + again\n"));
     INFO(describe(analysis));
     REQUIRE(analysis.clean());
     CHECK_FALSE(analysis.warns(kUnaccelerated));
@@ -577,7 +580,9 @@ TEST_CASE("Collider planner: a sole push_out sum in reduce: is eligible", "[sema
 }
 
 TEST_CASE("Collider planner: push_out mixed with count is not eligible", "[semantic][rule-reduce][spatial-join]") {
-    const auto analysis = analyze(bullet_rule(kPushOut + "        near = count()\n"));
+    const auto analysis = analyze(bullet_rule(kPushOut + "        near = count()\n",
+                                              "        if near > 0:\n"
+                                              "            bullet[Bullet].velocity = push\n"));
     INFO(describe(analysis));
     REQUIRE(analysis.clean());
     CHECK_FALSE(analysis.contract("MoveBullets").spatial_join.has_value());

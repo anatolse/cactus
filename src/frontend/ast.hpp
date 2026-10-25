@@ -990,12 +990,15 @@ struct ReduceClause {
     SourceLocation location;
 };
 
-// `keep T on b:` on a pair rule reduced `per: b`: `T` is present on each
-// group entity exactly while its group has rows.
+// `keep T` on a unary rule, `keep T on b` on a pair rule, and
+// `keep T on b if c` on a pair rule reduced `per b`: `T` is present on each
+// recipient exactly while it passes `where:`, has rows, or meets `c`.
 struct KeepClause {
     std::string trait_name;
     std::optional<SymbolId> resolved_trait_id;
-    std::string binding;
+    std::optional<std::string> binding;
+    SourceLocation binding_location;
+    std::unique_ptr<ExprNode> condition;
     std::vector<FieldAssignment> fields;
     SourceLocation location;
 };

@@ -1136,6 +1136,8 @@ private:
     // A reduced handler sees only the retained `per` binding
     // (writable), or no binding at all for a global reduction.
     [[nodiscard]] static PairScope build_reduced_handler_scope(const RuleNode& rule);
+    // One pair binding of the rule alone; empty when it has no such binding.
+    [[nodiscard]] static PairScope build_single_binding_scope(const RuleNode& rule, const std::string& binding);
     // The aggregates of a reduced rule as immutable handler locals.
     [[nodiscard]] static std::unordered_map<std::string, TypeInfo> reducer_locals(const RuleNode& rule);
     // dsl-where-clause: requires an existing filter:/pairs: domain, type-checks
@@ -1163,6 +1165,9 @@ private:
     void collect_named_entities(const ProgramNode& program);
     void resolve_named_entity_access(ProgramNode& program);
     void resolve_named_rule_access(RuleNode& rule);
+    void resolve_named_keep_access(RuleNode& rule,
+                                   const std::unordered_set<std::string>& scope,
+                                   const PairScope& after_scope);
     void resolve_named_access_expr(ExprNode& expr,
                                    const std::unordered_set<std::string>& shadowed,
                                    NamedAccessContext context);
@@ -1234,7 +1239,11 @@ private:
     // Domain and `per` placement, reducer names, input typing
     // and purity, and the `where:` split into group and row predicates.
     void validateReduceClause(RuleNode& rule);
+    static void split_group_predicates(RuleNode& rule);
     void reject_eliminated_bindings(const RuleNode& rule, const ReduceClause& reduce);
+    // Unary aliases and fields, and every pair binding but `retained` with its aliases.
+    [[nodiscard]] std::unordered_set<std::string> names_outside_binding(const RuleNode& rule,
+                                                                        const std::optional<std::string>& retained);
     void validate_reducer(ReducerDecl& reducer,
                           const RuleNode& rule,
                           const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
@@ -1876,9 +1885,14 @@ private:
     void resolve_group_after(const GroupNode& group);
     void synthesize_keep_handlers(ProgramNode& program);
     void validate_keep_clause(const RuleNode& rule);
+    void reject_keep_rule_clauses(const RuleNode& rule);
+    // The form-specific recipient checks; false when the clause can't be checked further.
+    bool validate_keep_recipient(const RuleNode& rule);
+    void validate_keep_values(const RuleNode& rule, const ResolvedTrait& trait);
+    void reject_unused_reducers(const RuleNode& rule);
     void validate_count_reducer(ReducerDecl& reducer, const RuleNode& rule, const PairScope* row_scope);
     void validate_best_reducer(ReducerDecl& reducer, const RuleNode& rule, const PairScope* row_scope);
-    void add_keep_effects(const RuleNode& rule, const EventHandlerNode& handler, InferredHandlerContract& contract);
+    void add_keep_effects(const RuleNode& rule, InferredHandlerContract& contract);
     // Local keep clauses: trait -> keeping rule's name, and every (rule, trait) pair.
     struct KeepClauses {
         std::unordered_map<SymbolId, std::string> keepers;
@@ -1892,6 +1906,7 @@ private:
                                     const std::vector<ArchetypeTraitEntry>& traits,
                                     const std::vector<ChildArchetypeNode>& children,
                                     const std::string& owner);
+    void check_keep_dependency_loops(const ProgramNode& program, const KeepClauses& clauses);
     void record_module_imports();
     void push_explicit_edge(const HandlerIdentity& before, const HandlerIdentity& after, ScheduleEdgeKind kind);
     void add_rule_level_edges(const SymbolId& rule,

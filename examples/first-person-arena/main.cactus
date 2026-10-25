@@ -948,8 +948,6 @@ rule CatchPlayer:
     group: physics.contacts
     where:
         physics.touching(hurtbox, player)
-    reduce per player:
-        hurtboxes = count()
     keep Caught on player
 
 rule EndGame:

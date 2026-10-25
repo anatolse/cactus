@@ -885,6 +885,60 @@ void discard_construction(entt::registry& registry, entt::entity entity) {
     registry.remove<Construction<Trait>>(entity);
 }
 
+// ── Kept traits ───────────────────────────────────────────────────────────────
+// A keep rule's commit: each recipient gets the trait (added, or patched in
+// place, which fires no trigger), and every other carrier loses it.
+
+template <typename Trait, bool Tracked>
+void apply_kept(entt::registry& registry, entt::entity target, const Trait& value) {
+    if (!registry.valid(target)) {
+        return;
+    }
+    if (auto* current = registry.try_get<Trait>(target)) {
+        *current = value;
+        return;
+    }
+    registry.emplace<Trait>(target, value);
+    if constexpr (Tracked) {
+        retain_construction<Trait>(registry, target);
+    }
+}
+
+// All fields at their defaults, so a present trait needs no patch.
+template <typename Trait, bool Tracked>
+void apply_kept(entt::registry& registry, entt::entity target) {
+    if (!registry.valid(target) || registry.all_of<Trait>(target)) {
+        return;
+    }
+    registry.emplace<Trait>(target);
+    if constexpr (Tracked) {
+        retain_construction<Trait>(registry, target);
+    }
+}
+
+template <typename Trait, bool Tracked>
+void apply_unkept(entt::registry& registry, entt::entity target) {
+    if (!registry.valid(target) || !registry.all_of<Trait>(target)) {
+        return;
+    }
+    registry.remove<Trait>(target);
+    if constexpr (Tracked) {
+        discard_construction<Trait>(registry, target);
+    }
+}
+
+// The carriers of `Trait` this run doesn't keep, oldest first.
+template <typename Trait, typename Kept>
+[[nodiscard]] std::vector<entt::entity> leaving_carriers(const entt::registry& registry, const Kept& kept) {
+    std::vector<entt::entity> leaving;
+    for (const auto entity : registry.view<const Trait>()) {
+        if (!kept(entity)) {
+            leaving.push_back(entity);
+        }
+    }
+    return creation_ordered(registry, leaving);
+}
+
 // Capture refuses to write a record it could not rebuild; a partial record is
 // worse than a reported failure.
 [[nodiscard]] inline bool has_capture_provenance(const entt::registry& registry, entt::entity entity) noexcept {

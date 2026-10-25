@@ -1798,13 +1798,19 @@ bool Parser::at_keep_clause() const {
     return check(TokenType::IDENTIFIER) && peek().value == "keep" && peek_next().type == TokenType::IDENTIFIER;
 }
 
-// `keep T on b:` with a field block, or `keep T on b` for no fields.
+// `keep T [on b] [if c]`, then a field block after `:` or a newline for no fields.
 KeepClause Parser::parse_keep_clause() {
     KeepClause clause;
     clause.location   = advance().location;  // consume 'keep'
     clause.trait_name = parse_dotted_name();
-    consume(TokenType::ON, "expected 'on' after the kept trait");
-    clause.binding = consume(TokenType::IDENTIFIER, "expected a binding name after 'on'").value;
+    if (check(TokenType::ON)) {
+        clause.binding_location = advance().location;
+        clause.binding = match(TokenType::SELF) ? "self"
+                                                : consume(TokenType::IDENTIFIER, "expected a binding name after 'on'").value;
+    }
+    if (match(TokenType::IF)) {
+        clause.condition = parse_expression();
+    }
     if (match(TokenType::COLON)) {
         clause.fields = parse_field_assignment_block();
     } else {

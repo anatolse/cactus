@@ -4059,28 +4059,31 @@ TEST_CASE("rule groups: programs without groups or before: keep their schedule",
                                                                          group_test_handler("Ordered", "tick")});
 }
 TEST_CASE("keep: a rule can't keep another module's trait", "[semantic][rule-keep][modules]") {
-    auto lib                       = make_module_with_trait("game.zones", "InZone");
-    lib.traits["InZone"].symbol_id = make_symbol_id(SymbolKind::Trait, "game.zones", "InZone");
-    ModuleImports imports;
-    imports.add("std.core", make_core_with_phases());
-    imports.add("zones", std::move(lib));
-    const auto [decorated, diagnostics] = analyze_source(
-        "module game.player\n"
-        "trait Body\n"
-        "trait Pool\n"
-        "rule Touch:\n"
-        "    pairs:\n"
-        "        body:\n"
-        "            Body\n"
-        "        pool:\n"
-        "            Pool\n"
-        "    reduce per body:\n"
-        "        n = count()\n"
-        "    keep zones.InZone on body\n"
-        "    on fixed_tick:\n"
-        "        let value = n\n",
-        imports);
-    CHECK(has_diagnostic(diagnostics, "a kept trait must be declared in the rule's own module"));
+    const std::string pairs = "    pairs:\n"
+                              "        body:\n"
+                              "            Body\n"
+                              "        pool:\n"
+                              "            Pool\n";
+    for (const auto& clauses : {std::string("    each:\n"
+                                "        Body\n"
+                                "    keep zones.InZone\n"),
+                                pairs + "    keep zones.InZone on body\n",
+                                pairs + "    reduce per body:\n"
+                                        "        n = count()\n"
+                                        "    keep zones.InZone on body if n > 0\n"}) {
+        auto lib                       = make_module_with_trait("game.zones", "InZone");
+        lib.traits["InZone"].symbol_id = make_symbol_id(SymbolKind::Trait, "game.zones", "InZone");
+        ModuleImports imports;
+        imports.add("std.core", make_core_with_phases());
+        imports.add("zones", std::move(lib));
+        const auto [decorated, diagnostics] = analyze_source("module game.player\n"
+                                                             "trait Body\n"
+                                                             "trait Pool\n"
+                                                             "rule Touch:\n" +
+                                                                 clauses,
+                                                             imports);
+        CHECK(has_diagnostic(diagnostics, "a kept trait must be declared in the rule's own module"));
+    }
 }
 
 TEST_CASE("keep: another module can't change an imported kept trait", "[semantic][rule-keep][modules]") {

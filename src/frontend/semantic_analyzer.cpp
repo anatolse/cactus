@@ -3,6 +3,7 @@
 #include "common/ast_expressions.hpp"
 #include "common/render_pass_builtin_fields.hpp"
 #include "common/render_pass_intrinsics.hpp"
+#include "common/strong_components.hpp"
 #include "common/vector_binary_ops.hpp"
 #include "frontend/archetype_reachability.hpp"
 #include "frontend/delivery_cycles.hpp"
@@ -2024,6 +2025,9 @@ void SemanticAnalyzer::resolve_trait_references(ProgramNode& program) {
                         for (auto& field : node.keep->fields) {
                             resolve_expr(*field.value);
                         }
+                        if (node.keep->condition != nullptr) {
+                            resolve_expr(*node.keep->condition);
+                        }
                     }
                     for (auto& handler : node.handlers) {
                         handler.resolved_trigger = handler.trigger_form == HandlerTriggerForm::Event
@@ -3597,13 +3601,20 @@ PairScope SemanticAnalyzer::build_pair_scope(const RuleNode& rule) {
 }
 
 PairScope SemanticAnalyzer::build_reduced_handler_scope(const RuleNode& rule) {
+    if (!rule.reduce.has_value() || !rule.reduce->per_binding.has_value()) {
+        return {};
+    }
+    return build_single_binding_scope(rule, *rule.reduce->per_binding);
+}
+
+PairScope SemanticAnalyzer::build_single_binding_scope(const RuleNode& rule, const std::string& binding) {
     PairScope scope;
-    if (!rule.pairs.has_value() || !rule.reduce.has_value() || !rule.reduce->per_binding.has_value()) {
+    if (!rule.pairs.has_value()) {
         return scope;
     }
     auto full = build_pair_scope(rule);
-    if (auto binding = full.find(*rule.reduce->per_binding); binding != full.end()) {
-        scope.insert(std::move(*binding));
+    if (auto found = full.find(binding); found != full.end()) {
+        scope.insert(std::move(*found));
     }
     return scope;
 }
@@ -4159,15 +4170,10 @@ void SemanticAnalyzer::validateReduceClause(RuleNode& rule) {
     }
 
     const auto row_scope = has_pairs ? build_pair_scope(*rule.pairs) : PairScope{};
-    std::optional<std::size_t> per_index;
-    if (reduce.per_binding.has_value()) {
-        const auto binding = row_scope.find(*reduce.per_binding);
-        if (binding == row_scope.end()) {
-            errors_.error(reduce.per_location,
-                          "'" + *reduce.per_binding + "' is not a declared pair binding in rule '" + rule.name + "'");
-            return;
-        }
-        per_index = binding->second.index;
+    if (reduce.per_binding.has_value() && !row_scope.contains(*reduce.per_binding)) {
+        errors_.error(reduce.per_location,
+                      "'" + *reduce.per_binding + "' is not a declared pair binding in rule '" + rule.name + "'");
+        return;
     }
 
     for (const auto& handler : rule.handlers) {
@@ -4197,51 +4203,78 @@ void SemanticAnalyzer::validateReduceClause(RuleNode& rule) {
         }
         validate_reducer(reducer, rule, filter_bindings, row_scope_ptr);
     }
+    reject_unused_reducers(rule);
+    split_group_predicates(rule);
+}
 
+// `where:` predicates that read only the `per` binding filter groups instead of rows.
+void SemanticAnalyzer::split_group_predicates(RuleNode& rule) {
+    auto& reduce = *rule.reduce;
     reduce.group_predicates.clear();
-    if (!per_index.has_value() || !rule.where_clause.has_value()) {
+    if (!reduce.per_binding.has_value() || !rule.where_clause.has_value()) {
+        return;
+    }
+    const auto row_scope = build_pair_scope(*rule.pairs);
+    const auto per       = row_scope.find(*reduce.per_binding);
+    if (per == row_scope.end()) {
         return;
     }
     const auto& predicates = rule.where_clause->predicates;
     for (std::size_t index = 0; index < predicates.size(); ++index) {
-        if (pair_bindings_read(*predicates[index], row_scope) == 1U << *per_index) {
+        if (pair_bindings_read(*predicates[index], row_scope) == 1U << per->second.index) {
             reduce.group_predicates.push_back(index);
         }
     }
 }
 
-// Clause expressions evaluated per aggregate row: sort keys and keep fields.
-static std::vector<const ExprNode*> post_reduce_clause_roots(const RuleNode& rule) {
+// The keep clause's field values and condition.
+static std::vector<const ExprNode*> keep_clause_roots(const RuleNode& rule) {
     std::vector<const ExprNode*> roots;
-    roots.reserve(rule.order_by.size() + (rule.keep.has_value() ? rule.keep->fields.size() : 0));
+    if (!rule.keep.has_value()) {
+        return roots;
+    }
+    for (const auto& field : rule.keep->fields) {
+        roots.push_back(field.value.get());
+    }
+    if (rule.keep->condition != nullptr) {
+        roots.push_back(rule.keep->condition.get());
+    }
+    return roots;
+}
+
+// Clause expressions evaluated per aggregate row: sort keys and the keep clause.
+static std::vector<const ExprNode*> post_reduce_clause_roots(const RuleNode& rule) {
+    auto roots = keep_clause_roots(rule);
     for (const auto& key : rule.order_by) {
         roots.push_back(key.expression.get());
     }
-    if (rule.keep.has_value()) {
-        for (const auto& field : rule.keep->fields) {
-            roots.push_back(field.value.get());
+    return roots;
+}
+
+std::unordered_set<std::string> SemanticAnalyzer::names_outside_binding(const RuleNode& rule,
+                                                                        const std::optional<std::string>& retained) {
+    std::unordered_set<std::string> names = unary_domain_scope_names(build_filter_bindings(rule.filter));
+    if (!rule.pairs.has_value()) {
+        return names;
+    }
+    for (const auto& binding : rule.pairs->bindings) {
+        if (binding.name == retained) {
+            continue;
+        }
+        names.insert(binding.name);
+        for (const auto& entry : binding.traits) {
+            if (entry.alias.has_value()) {
+                names.insert(*entry.alias);
+            }
         }
     }
-    return roots;
+    return names;
 }
 
 // Names the domain bound before `reduce:` but no handler or sort key may use
 // after it: every unary alias and field, and each pair binding but `per`.
 void SemanticAnalyzer::reject_eliminated_bindings(const RuleNode& rule, const ReduceClause& reduce) {
-    std::unordered_set<std::string> eliminated = unary_domain_scope_names(build_filter_bindings(rule.filter));
-    if (rule.pairs.has_value()) {
-        for (const auto& binding : rule.pairs.value().bindings) {
-            if (binding.name == reduce.per_binding) {
-                continue;
-            }
-            eliminated.insert(binding.name);
-            for (const auto& entry : binding.traits) {
-                if (entry.alias.has_value()) {
-                    eliminated.insert(*entry.alias);
-                }
-            }
-        }
-    }
+    const auto eliminated = names_outside_binding(rule, reduce.per_binding);
     const auto report = [&](const std::string& name, const SourceLocation& location) {
         errors_.error(location,
                       "'" + name + "' is not available after `reduce:` in rule '" + rule.name +
@@ -4270,6 +4303,42 @@ void SemanticAnalyzer::reject_eliminated_bindings(const RuleNode& rule, const Re
     }
     for (const auto& handler : rule.handlers) {
         walk_handler_body(handler.body, aggregates, scratch, check_read, check_assign, [](const SymbolId&) {});
+    }
+}
+
+// Every reducer is read by a handler, a sort key or the keep clause.
+void SemanticAnalyzer::reject_unused_reducers(const RuleNode& rule) {
+    if (!rule.reduce.has_value()) {
+        return;
+    }
+    std::unordered_set<std::string> read;
+    const auto note = [&](const ExprNode& expr, const LocalNames& locals) {
+        const auto* ident = std::get_if<IdentExpr>(&expr.expr);
+        if (ident != nullptr && !locals.contains(ident->name)) {
+            read.insert(ident->name);
+        }
+        return false;
+    };
+    InferredHandlerContract scratch;
+    for (const auto* root : post_reduce_clause_roots(rule)) {
+        walk_expression_reads(*root, {}, scratch, note);
+    }
+    for (const auto& handler : rule.handlers) {
+        walk_handler_body(
+            handler.body, {}, scratch, note, [](const VarAssign&, const LocalNames&) {}, [](const SymbolId&) {});
+    }
+    const auto& reducers = rule.reduce->reducers;
+    const auto* keep     = rule.keep.has_value() ? &*rule.keep : nullptr;
+    const bool keep_only =
+        keep != nullptr && std::ranges::none_of(reducers, [&](const ReducerDecl& r) { return read.contains(r.name); });
+    for (const auto& reducer : reducers) {
+        if (read.contains(reducer.name)) {
+            continue;
+        }
+        errors_.error(reducer.location,
+                      "reducer '" + reducer.name + "' is never read; " +
+                          (keep_only ? "remove `reduce:` to keep '" + keep->trait_name + "' while any row matches"
+                                     : std::string("read it in a handler, a sort key or the keep clause, or remove it")));
     }
 }
 
@@ -4419,25 +4488,9 @@ void SemanticAnalyzer::validate_keep_clause(const RuleNode& rule) {
         return;
     }
     const auto& keep = *rule.keep;
-    if (!rule.pairs.has_value() || !rule.reduce.has_value() || !rule.reduce->per_binding.has_value()) {
-        errors_.error(keep.location,
-                      "rule '" + rule.name + "': `keep` requires `reduce per <binding>:` on a `pairs:` rule");
+    reject_keep_rule_clauses(rule);
+    if (!validate_keep_recipient(rule)) {
         return;
-    }
-    const auto& per = *rule.reduce->per_binding;
-    if (keep.binding != per) {
-        errors_.error(keep.location,
-                      "rule '" + rule.name + "': `keep " + keep.trait_name + " on " + keep.binding +
-                          "` must name the `per` binding '" + per + "'");
-    }
-    for (const auto& handler : rule.handlers) {
-        const bool phase =
-            handler.resolved_trigger.has_value() && handler.resolved_trigger->kind == HandlerTriggerKind::Phase;
-        if (!phase && !handler.has_lifecycle_trigger()) {
-            errors_.error(handler.trigger_location,
-                          "rule '" + rule.name + "': keep rules run only on phase activations; '" +
-                              handler.event_name + "' is not a phase");
-        }
     }
 
     const auto* trait = find_resolved_trait(keep.resolved_trait_id, keep.trait_name);
@@ -4457,6 +4510,83 @@ void SemanticAnalyzer::validate_keep_clause(const RuleNode& rule) {
     if (std::ranges::any_of(trait->fields, &ResolvedField::is_persist)) {
         errors_.error(keep.location, "trait '" + keep.trait_name + "' has persistent fields and cannot be kept");
     }
+    validate_keep_values(rule, *trait);
+}
+
+// A keep rule is a definition: no handler, and no clause that only a handler could use.
+void SemanticAnalyzer::reject_keep_rule_clauses(const RuleNode& rule) {
+    if (!rule.keep.has_value()) {
+        return;
+    }
+    const auto& trait  = rule.keep->trait_name;
+    const auto message = "keep rule '" + rule.name + "' can't have a handler; `keep " + trait +
+                         "` is a definition. Move the body to another rule and react with `on added " + trait +
+                         "` / `on removed " + trait + "` or a filter on '" + trait + "'";
+    for (const auto& handler : rule.handlers) {
+        errors_.error(handler.trigger_location, message);
+    }
+    const auto no_effect = [&](const char* clause, const SourceLocation& location) {
+        errors_.error(location,
+                      std::string("`") + clause + "` has no effect on `keep " + trait +
+                          "`; narrow rows with `where:` or store `best(...)` in a kept field");
+    };
+    if (!rule.order_by.empty()) {
+        no_effect("order by:", rule.order_by.front().location);
+    }
+    if (rule.limit.has_value()) {
+        no_effect("limit:", rule.limit->location);
+    }
+}
+
+bool SemanticAnalyzer::validate_keep_recipient(const RuleNode& rule) {
+    const auto& keep  = *rule.keep;
+    const auto prefix = "rule '" + rule.name + "': ";
+    if (!rule_has_domain(rule)) {
+        errors_.error(keep.location, prefix + "`keep` needs an `each:` or `pairs:` domain");
+        return false;
+    }
+    if (rule.reduce.has_value() && !rule.reduce->per_binding.has_value()) {
+        errors_.error(keep.location,
+                      prefix + "`keep` can't follow a global `reduce:`; use `reduce per <binding>:` on a `pairs:` rule");
+        return false;
+    }
+    const bool reduced = rule.reduce.has_value();
+    if (keep.condition != nullptr && !reduced) {
+        errors_.error(keep.condition->location,
+                      prefix + "`if` works only on a `reduce per` keep; use `where:` to choose which entities carry '" +
+                          keep.trait_name + "'");
+    }
+    if (!rule.pairs.has_value()) {
+        if (keep.binding.has_value()) {
+            errors_.error(keep.binding_location,
+                          prefix + "a unary `keep " + keep.trait_name +
+                              "` puts the trait on each matched entity; remove `on " + *keep.binding + "`");
+        }
+        return true;
+    }
+    if (!keep.binding.has_value()) {
+        errors_.error(keep.location,
+                      prefix + "`keep " + keep.trait_name +
+                          "` on a `pairs:` rule needs a recipient; name a pair binding with `on`");
+        return false;
+    }
+    if (reduced && keep.binding != rule.reduce->per_binding) {
+        errors_.error(keep.location,
+                      prefix + "`keep " + keep.trait_name + " on " + *keep.binding +
+                          "` must name the `per` binding '" + *rule.reduce->per_binding + "'");
+        return true;
+    }
+    if (build_single_binding_scope(rule, *keep.binding).empty()) {
+        errors_.error(keep.binding_location,
+                      "'" + *keep.binding + "' is not a pair binding of rule '" + rule.name + "'");
+        return false;
+    }
+    return true;
+}
+
+// Fields (and a reduced keep's condition) read only what the form's recipient sees.
+void SemanticAnalyzer::validate_keep_values(const RuleNode& rule, const ResolvedTrait& trait) {
+    const auto& keep = *rule.keep;
     std::unordered_set<std::string> assigned;
     for (const auto& field : keep.fields) {
         if (!assigned.insert(field.name).second) {
@@ -4464,15 +4594,51 @@ void SemanticAnalyzer::validate_keep_clause(const RuleNode& rule) {
         }
         check_clause_purity_expr(*field.value, "keep: field values must be pure");
     }
-    const auto scope = build_reduced_handler_scope(rule);
-    validate_trait_field_supply(*trait,
-                                keep.fields,
-                                "`keep " + keep.trait_name + "`",
-                                keep.location,
-                                {},
-                                reducer_locals(rule),
-                                nullptr,
-                                &scope);
+    const auto desc = "`keep " + keep.trait_name + "`";
+    if (!rule.pairs.has_value()) {
+        const std::unordered_map<std::string, TypeInfo> self_context{{"__self_context", make_entity_id_type()}};
+        validate_trait_field_supply(
+            trait, keep.fields, desc, keep.location, build_filter_bindings(rule.filter), self_context, nullptr, nullptr);
+        return;
+    }
+    const auto scope = build_single_binding_scope(rule, *keep.binding);
+    if (!rule.reduce.has_value()) {
+        const auto other  = names_outside_binding(rule, keep.binding);
+        const auto before = errors_.error_count();
+        const auto check  = [&](const ExprNode& expr, const LocalNames&) {
+            const auto* ident = std::get_if<IdentExpr>(&expr.expr);
+            if (ident != nullptr && !ident->resolved_entity_id.has_value() && other.contains(ident->name)) {
+                errors_.error(expr.location,
+                              "'" + ident->name + "' is not available in `keep " + keep.trait_name + " on " +
+                                  *keep.binding + "`; only '" + *keep.binding + "' is. To keep a value from it, add `reduce per " +
+                                  *keep.binding + ":` and store `best(" + ident->name + ", by = ...)`");
+            }
+            return false;
+        };
+        InferredHandlerContract scratch;
+        for (const auto& field : keep.fields) {
+            walk_expression_reads(*field.value, {}, scratch, check);
+        }
+        if (errors_.error_count() > before) {
+            return;
+        }
+        validate_trait_field_supply(trait, keep.fields, desc, keep.location, {}, {}, nullptr, &scope);
+        return;
+    }
+    const auto locals = reducer_locals(rule);
+    validate_trait_field_supply(trait, keep.fields, desc, keep.location, {}, locals, nullptr, &scope);
+    if (keep.condition == nullptr) {
+        return;
+    }
+    const auto before = errors_.error_count();
+    check_clause_purity_expr(*keep.condition, "keep: conditions must be pure");
+    if (errors_.error_count() > before) {
+        return;
+    }
+    const auto type = infer_expr_type(*keep.condition, {}, locals, nullptr, &scope);
+    if (type.kind != TypeKind::Bool && type.kind != TypeKind::Unknown) {
+        errors_.error(keep.condition->location, "keep: condition must be of type 'bool', got '" + type.name + "'");
+    }
 }
 
 // A handler-less keep rule runs in its group's phase: give it that handler,
@@ -4500,6 +4666,13 @@ void SemanticAnalyzer::synthesize_keep_handlers(ProgramNode& program) {
             ResolvedHandlerTrigger{.kind = HandlerTriggerKind::Phase, .symbol = declaration->phase};
         handler.location = rule->keep->location;
         rule->handlers.push_back(std::move(handler));
+        // An unreduced pair keep is a `reduce per` keep with no reducers.
+        if (rule->pairs.has_value() && !rule->reduce.has_value() && rule->keep->binding.has_value()) {
+            rule->reduce.emplace(ReduceClause{.per_binding  = rule->keep->binding,
+                                              .per_location = rule->keep->binding_location,
+                                              .location     = rule->keep->location});
+            split_group_predicates(*rule);
+        }
     }
 }
 
@@ -4508,6 +4681,7 @@ void SemanticAnalyzer::synthesize_keep_handlers(ProgramNode& program) {
 void SemanticAnalyzer::validate_kept_traits(ProgramNode& program) {
     const auto clauses = collect_keep_clauses(program);
     check_kept_trait_handlers(clauses);
+    check_keep_dependency_loops(program, clauses);
     for (const auto& decl : program.declarations) {
         if (const auto* entity = std::get_if<EntityNode>(&decl)) {
             check_kept_trait_archetype(clauses, entity->traits, entity->children, "entity '" + entity->name + "'");
@@ -4542,6 +4716,109 @@ SemanticAnalyzer::KeepClauses SemanticAnalyzer::collect_keep_clauses(const Progr
     return clauses;
 }
 
+// Every trait a handler's domain and clauses depend on.
+static std::unordered_set<SymbolId> traits_read_by(const HandlerContract& contract) {
+    std::unordered_set<SymbolId> read(contract.reads.begin(), contract.reads.end());
+    read.insert(contract.selection.begin(), contract.selection.end());
+    read.insert(contract.exclusion.begin(), contract.exclusion.end());
+    for (const auto& binding : contract.pair_bindings) {
+        read.insert(binding.required_traits.begin(), binding.required_traits.end());
+    }
+    return read;
+}
+
+namespace {
+struct LocalKeeper {
+    const RuleNode* rule    = nullptr;
+    const KeepClause* keep  = nullptr;
+    SymbolId rule_id;
+    SymbolId trait_id;
+};
+}  // namespace
+
+// This module's keep rules with a resolved kept trait, in declaration order.
+static std::vector<LocalKeeper> local_keep_rules(const ProgramNode& program,
+                                                 const std::vector<std::pair<SymbolId, SymbolId>>& rule_traits) {
+    std::vector<LocalKeeper> keepers;
+    for (const auto& decl : program.declarations) {
+        const auto* rule = std::get_if<RuleNode>(&decl);
+        if (rule == nullptr || !rule->resolved_rule_id.has_value() || !rule->keep.has_value() ||
+            !rule->keep->resolved_trait_id.has_value() ||
+            !std::ranges::contains(rule_traits, *rule->resolved_rule_id, &std::pair<SymbolId, SymbolId>::first)) {
+            continue;
+        }
+        keepers.push_back({.rule     = rule,
+                           .keep     = &*rule->keep,
+                           .rule_id  = *rule->resolved_rule_id,
+                           .trait_id = *rule->keep->resolved_trait_id});
+    }
+    return keepers;
+}
+
+// A keep rule depends on the keeper of every trait it reads. Imports are acyclic,
+// so a loop can only pass through this module's keep rules.
+void SemanticAnalyzer::check_keep_dependency_loops(const ProgramNode& program, const KeepClauses& clauses) {
+    using NodeIndex    = StrongComponents::NodeIndex;
+    const auto keepers = local_keep_rules(program, clauses.rule_traits);
+    std::unordered_map<SymbolId, NodeIndex> by_rule;
+    std::unordered_map<SymbolId, NodeIndex> by_trait;
+    for (NodeIndex index = 0; index < keepers.size(); ++index) {
+        by_rule.emplace(keepers[index].rule_id, index);
+        by_trait.emplace(keepers[index].trait_id, index);
+    }
+    std::vector<std::vector<NodeIndex>> edges(keepers.size());
+    std::vector<std::string> self_read(keepers.size());
+    for (const auto& node : result_.execution_graph.handlers) {
+        const auto from = by_rule.find(node.identity.rule);
+        if (from == by_rule.end()) {
+            continue;
+        }
+        for (const auto& trait : traits_read_by(node.contract)) {
+            const auto to = by_trait.find(trait);
+            if (to == by_trait.end()) {
+                continue;
+            }
+            edges[from->second].push_back(to->second);
+            if (to->second == from->second) {
+                self_read[from->second] = trait.local_name;
+            }
+        }
+    }
+    const auto component = StrongComponents(edges).components();
+    std::vector<bool> reported(keepers.size(), false);
+    for (NodeIndex index = 0; index < keepers.size(); ++index) {
+        const auto& rule = *keepers[index].rule;
+        const auto& keep = *keepers[index].keep;
+        if (!self_read[index].empty()) {
+            errors_.error(keep.location,
+                          "keep rule '" + rule.name + "' reads its own kept trait '" + self_read[index] +
+                              "'; a kept trait can't depend on itself");
+            continue;
+        }
+        if (reported[component[index]]) {
+            continue;
+        }
+        const auto in_loop = [&](NodeIndex other) {
+            return component[other] == component[index] && self_read[other].empty();
+        };
+        const auto members = std::views::iota(NodeIndex{0}, static_cast<NodeIndex>(keepers.size())) |
+                             std::views::filter(in_loop) | std::ranges::to<std::vector>();
+        if (members.size() < 2) {
+            continue;
+        }
+        reported[component[index]] = true;
+        std::string names;
+        for (const auto member : members) {
+            names += names.empty() ? "'" : ", '";
+            names += keepers[member].rule->name;
+            names += "' (line " + std::to_string(keepers[member].keep->location.line) + ")";
+        }
+        errors_.error(keep.location,
+                      "keep rules form a loop through their kept traits: " + names +
+                          "; a kept trait can't depend on itself");
+    }
+}
+
 std::optional<std::string> SemanticAnalyzer::keeper_of(const KeepClauses& clauses, const SymbolId& trait) const {
     if (const auto found = clauses.keepers.find(trait); found != clauses.keepers.end()) {
         return found->second;
@@ -4555,7 +4832,7 @@ void SemanticAnalyzer::check_kept_trait_handlers(const KeepClauses& clauses) {
         const auto& rule = node.identity.rule;
         for (const auto& trait : changed_traits(node.contract)) {
             const auto keeper = keeper_of(clauses, trait);
-            // A keep rule's own body is checked by add_keep_effects; a second keeper by collect_keep_clauses.
+            // A keep rule's own commands are its keep; a second keeper is reported by collect_keep_clauses.
             if (keeper.has_value() && !std::ranges::contains(clauses.rule_traits, std::pair{rule, trait})) {
                 errors_.error(node.location, kept_trait_message(trait, *keeper, "rule '" + rule.local_name + "'"));
             }
@@ -5650,15 +5927,30 @@ void SemanticAnalyzer::resolve_named_rule_access(RuleNode& rule) {
     for (auto& key : rule.order_by) {
         resolve_named_access_expr(*key.expression, scope, NamedAccessContext::Rule);
     }
-    if (rule.keep.has_value()) {
-        for (auto& field : rule.keep->fields) {
-            resolve_named_access_expr(*field.value, scope, NamedAccessContext::Rule);
-        }
-    }
     for (auto& handler : rule.handlers) {
         auto handler_scope = scope;
         insert_trigger_names(handler_scope, handler);
         resolve_named_access_stmts(handler.body, handler_scope, NamedAccessContext::Rule);
+    }
+    access_pair_scope_ = nullptr;
+    if (rule.keep.has_value()) {
+        resolve_named_keep_access(rule, scope, after_scope);
+    }
+}
+
+// An unreduced pair keep sees only its recipient binding.
+void SemanticAnalyzer::resolve_named_keep_access(RuleNode& rule,
+                                                 const std::unordered_set<std::string>& scope,
+                                                 const PairScope& after_scope) {
+    auto& keep              = *rule.keep;
+    const bool unreduced    = rule.pairs.has_value() && !rule.reduce.has_value() && keep.binding.has_value();
+    const auto keep_scope   = unreduced ? build_single_binding_scope(rule, *keep.binding) : after_scope;
+    access_pair_scope_      = rule.pairs.has_value() ? &keep_scope : nullptr;
+    for (auto& field : keep.fields) {
+        resolve_named_access_expr(*field.value, scope, NamedAccessContext::Rule);
+    }
+    if (keep.condition != nullptr) {
+        resolve_named_access_expr(*keep.condition, scope, NamedAccessContext::Rule);
     }
     access_pair_scope_ = nullptr;
 }
@@ -7779,19 +8071,14 @@ static std::optional<ReductionPlan> reduction_plan(const RuleNode& rule, const P
     return plan;
 }
 
-// The keep clause adds, patches and removes `T` at the commit, and nothing
-// else in the rule may touch it.
-void SemanticAnalyzer::add_keep_effects(const RuleNode& rule,
-                                        const EventHandlerNode& handler,
-                                        InferredHandlerContract& contract) {
+// The keep clause adds, patches and removes `T` at the commit.
+void SemanticAnalyzer::add_keep_effects(const RuleNode& rule, InferredHandlerContract& contract) {
     if (!rule.keep.has_value() || !rule.keep->resolved_trait_id.has_value()) {
         return;
     }
-    const auto& kept = *rule.keep->resolved_trait_id;
-    if (changed_traits(contract).contains(kept)) {
-        errors_.error(handler.location, kept_trait_message(kept, rule.name, "its own handler"));
-    }
-    const auto entity = pair_binding_target(contract, rule.keep->binding);
+    const auto& kept  = *rule.keep->resolved_trait_id;
+    const auto entity = rule.keep->binding.has_value() ? pair_binding_target(contract, *rule.keep->binding)
+                                                       : EntityTarget{.kind = EntityTargetKind::Self};
     for (const auto kind : {HandlerCommandKind::Add, HandlerCommandKind::Set, HandlerCommandKind::Remove}) {
         add_contract_command(contract, kind, kept, entity, declared_fields(find_resolved_trait(kept)));
     }
@@ -7831,7 +8118,7 @@ void SemanticAnalyzer::collect_rule_dependency(const RuleNode& rule, std::size_t
             inferred.equality_join = spatial_join.has_value() ? std::nullopt : equality_join;
             inferred.reduction    = reduction_plan(rule, pair_scope);
             fold_when_clause_named_reads(rule, inferred);
-            add_keep_effects(rule, handler, inferred);
+            add_keep_effects(rule, inferred);
             finalize_write_kinds(inferred);
             inferred.iteration_order =
                 derive_iteration_order(inferred, rule.limit.has_value() && rule.order_by.empty());
@@ -8838,11 +9125,7 @@ static std::vector<const ExprNode*> rule_clause_read_roots(const RuleNode& rule)
     if (rule.reduce.has_value()) {
         for_each_reducer_expr(*rule.reduce, [&roots](const ExprNode& expr) { roots.push_back(&expr); });
     }
-    if (rule.keep.has_value()) {
-        for (const auto& field : rule.keep->fields) {
-            roots.push_back(field.value.get());
-        }
-    }
+    std::ranges::copy(keep_clause_roots(rule), std::back_inserter(roots));
     if (rule.limit.has_value() && rule.limit->count != nullptr) {
         roots.push_back(rule.limit->count.get());
     }

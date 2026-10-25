@@ -847,6 +847,8 @@ Sorting follows the reduction, and empty-group identities, retained writes, and
 
 **Reducers are typed and pure.** `count()` counts rows; `count(binding)` also counts rows (not distinct entities) and requires a pair binding. `sum` takes `int`, `float`, `vec2` or `vec3` and keeps that type; a vector sum adds per component. `min` and `max` take `int` or `float`, keep that type, and require a `default` of exactly that type. `any` takes `bool` and yields `bool`. `first_hit` takes and yields `std.physics.volume.SweepHit` (§7.7): it ignores misses and keeps the hit with the smallest `t`, and on equal `t` the row that comes first in fold order. `best(binding, by = key)` names a pair binding other than the `per` binding and an `int` or `float` key, and yields `entity_id`: that binding's entity in the row with the highest key, the earlier row in fold order on a tie; rows whose key is NaN are skipped. Reducer inputs have the purity class of a `where:` predicate (§3.8.2) and read the domain's bindings, constants and named entity fields. Reducer names are unique and must not reuse a pair binding name.
 
+**Every reducer is read.** A reducer must be read by a handler body, a sort key, a keep field or a keep condition. A reducer that nothing reads is an error at its declaration. When a keep rule reads none of its reducers, the error asks to remove `reduce:`, so the trait is kept while any row matches (§3.8.6).
+
 **Groups are outer.** Without `per`, the whole domain is one group, so the handler runs exactly once, even for empty input. `reduce per binding:` names a pair binding and creates one group for every entity in that binding's membership snapshot that passes the group filters, whether or not any row survives for it. An empty group gets identity values: `count` and `sum` are `0` (the zero vector for a vector `sum`), `min`/`max` their default, `any` is `false`, `first_hit` is the miss value `sweep` itself returns (`hit = false`, `t = 1.0`), and `best` is a stale `entity_id`. Defaults apply only to empty input.
 
 **`where:` splits into group and row filters.** With `reduce per b:`, a `where:` predicate whose pair-binding reads all root at `b` filters groups: an entity that fails it gets no group and no activation. Every other predicate filters rows. Without `per`, every predicate filters rows. The split is syntactic.
@@ -859,14 +861,45 @@ Sorting follows the reduction, and empty-group identities, retained writes, and
 
 #### 3.8.6 Keep Clause
 
-`keep T on b` names a trait that the compiler keeps on each group entity of a pair rule with `reduce per b:`: present exactly while the group has at least one row after `where:`. Entering and leaving the relation are then ordinary lifecycle triggers, `on added T` and `on removed T as old`. `keep` is a contextual word at the rule-clause position, written after `reduce:`.
+`keep T` defines a fact as a trait: the compiler keeps `T` on each recipient exactly while the rule's rows say so. Entering and leaving the fact are then ordinary lifecycle triggers, `on added T` and `on removed T as old`. A keep rule is a definition only: it has no handler. `keep` is a contextual word at the rule-clause position, written after `reduce:`.
 
 ```ebnf
-keep_clause     = "keep" dotted_name "on" IDENTIFIER
+keep_clause     = "keep" dotted_name [ "on" IDENTIFIER ] [ "if" expression ]
                   ( ":" NEWLINE INDENT { IDENTIFIER "=" expression NEWLINE } DEDENT | NEWLINE ) ;
 ```
 
+There are three forms, one per domain:
+
+| Form | Recipient | Present while |
+|---|---|---|
+| `each:` + `keep T` | each entity of the domain | it passes `where:` |
+| `pairs:` + `keep T on b` | each entity of `b` | it has at least one row after `where:` |
+| `pairs:` + `reduce per b:` + `keep T on b [if c]` | each group entity `b` | its group has rows, or `c` is true |
+
 ```cactus
+trait LowHealth:
+    var missing: float = 0.0
+
+rule LowHealthFact:
+    each:
+        Health as hp
+    group: facts
+    where:
+        hp.current < 30.0
+    keep LowHealth:
+        missing = 100.0 - hp.current
+
+rule CatchPlayer:
+    pairs:
+        player:
+            Player
+        hurtbox:
+            Hurtbox
+    group: physics.contacts
+    where:
+        physics.touching(hurtbox, player)
+    keep Caught on player
+
 trait InLava:
     var zones: int = 0
     var dps: float = 0.0
@@ -889,6 +922,19 @@ rule TouchLava:
         zones = n
         dps = damage
 
+rule EmptyInventoryFact:
+    pairs:
+        owner:
+            Inventory
+        item:
+            Item
+    group: facts
+    where:
+        item[Item].owner == owner
+    reduce per owner:
+        n = count()
+    keep EmptyInventory on owner if n == 0
+
 rule Burn:
     each:
         Health
@@ -898,11 +944,22 @@ rule Burn:
         emit StopBurning to self
 ```
 
-**Shape.** `b` is the `per` binding. `T` is a trait of the rule's own module with no `persist` field. The block assigns fields of `T` from pure expressions over the aggregates, `b`, constants and named entity fields; a field it leaves out takes its declared default, so a field without a default must be assigned. `keep` is rejected on unary, selectionless, unreduced, globally reduced and extern rules.
+**Shape.** `T` is a trait of the rule's own module with no `persist` field, and not a state variant. The block assigns fields of `T` from pure expressions; a field it leaves out takes its declared default, so a field without a default must be assigned. What the fields read depends on the form:
+- Unary: the rule's filter traits and aliases, constants and named entity fields. `on` is rejected; the entity itself is the recipient, so `keep T on self` is an error that asks to remove `on self`.
+- Unreduced pair: only `b`, constants and named entity fields. `on b` is required. Reading the other binding is an error; to keep a value from it, add `reduce per b:` and store `best(other, by = ...)`.
+- Reduced: the aggregates, `b`, constants and named entity fields. `b` must be the `per` binding.
 
-**Presence follows rows.** At each run, a group with rows gets `T` with this run's field values: added at the activation's commit, which fires `on added T`, or patched in place, which fires nothing. Every other carrier of `T`, including an entity that has left `b`'s membership, loses it at the commit, which fires `on removed T` with the last kept value. Changes apply in group creation order. A destroyed carrier fires nothing (§4.4). The set of carriers is the previous run's result, so a restored world reconciles at the next run.
+`keep` is rejected on selectionless, globally reduced and extern rules.
 
-**Phase.** A keep rule runs once per activation of its phase. Its phase handlers give the phase; a keep rule with no handler runs in its `group:`'s phase, and one with neither is rejected. Event and lifecycle handlers are rejected on a keep rule. While `when:` is false the rule doesn't run, and kept traits keep their presence and values; a frame with no activation of the phase changes nothing.
+**Condition.** `if c` is allowed only with `reduce per b:`. `c` is a pure `bool` over the same scope as the fields. It is checked for every group, including a group with no rows, and replaces the default "the group has rows": `keep EmptyInventory on owner if n == 0` keeps the trait on an owner with no items, and `keep Supported on unit if allies >= 3` keeps it from the third ally on. On the unary and unreduced pair forms `if` is an error; narrow the rows with `where:` instead.
+
+**Presence follows rows.** At each run, every recipient that is present by its form gets `T` with this run's field values: added at the activation's commit, which fires `on added T`, or patched in place, which fires nothing. Every other carrier of `T`, including an entity that has left the domain or `b`'s membership, loses it at the commit, which fires `on removed T` with the last kept value. Changes apply in the recipients' creation order. A destroyed carrier fires nothing (§4.4). The set of carriers is the previous run's result, so a restored world reconciles at the next run.
+
+**No handler.** A keep rule runs once per activation of its `group:`'s phase; one without a `group:` is rejected. Every handler on a keep rule is an error that names `T` and asks to move the body to another rule and react with `on added T` / `on removed T` or a filter on `T`. `order by:` and `limit:` are errors too: they have no effect on `keep T`; narrow the rows with `where:` or store `best(...)` in a kept field.
+
+**`when:` pauses updates.** While `when:` is false the rule doesn't run, and kept traits keep their presence and values until it runs again. A frame with no activation of the phase changes nothing.
+
+**No loops.** A keep rule depends on another keep rule when any of its clauses reads the trait the other keeps: the domain (`each:`, `without:`, a pair binding's traits), `where:`, a reducer input, a field, the condition or `when:`, including named entity reads. These dependencies must form no cycle, so a kept trait is always a function of other data. A rule that reads its own kept trait is an error that names it; a longer cycle is one error that names every rule in it. A chain, such as a keeper of `CanEscape` that filters on `LowHealth`, is accepted.
 
 **One writer.** At most one `keep` clause names a trait. Every other change to a kept trait is a compile error in any module: field assignment, `set`, `add`, `remove`, `project`, and declaring an entity or template with it. Reading it, filtering on it and reacting to it with `on added` / `on removed` are allowed. `best` names the winning entity of a relation, for example the checkpoint a player last stands in:
 

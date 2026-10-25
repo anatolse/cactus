@@ -317,6 +317,36 @@ TEST_CASE("Delivery cycles: keep both adds and removes its trait", "[delivery-cy
     CHECK(analysis.lifecycle_flow("Touch", "InZone", false, "Leave") != nullptr);
 }
 
+TEST_CASE("Delivery cycles: unary and unreduced pair keeps add and remove their traits", "[delivery-cycles][lifecycle]") {
+    const auto analysis = analyze(
+        "rule Low:\n"
+        "    each:\n"
+        "        Body as b\n"
+        "    group: contacts\n"
+        "    where:\n"
+        "        b.x < 0.0\n"
+        "    keep Burning\n"
+        "rule Near:\n"
+        "    pairs:\n"
+        "        body:\n"
+        "            Body\n"
+        "        zone:\n"
+        "            Zone\n"
+        "    group: contacts\n"
+        "    where:\n"
+        "        body[Body].x < zone[Zone].x\n"
+        "    keep InZone on body:\n"
+        "        zones = 1\n"
+        "rule Lit:\n"
+        "    on added Burning:\n"
+        "        return\n"
+        "rule Out:\n"
+        "    on removed InZone:\n"
+        "        return\n");
+    CHECK(analysis.lifecycle_flow("Low", "Burning", true, "Lit") != nullptr);
+    CHECK(analysis.lifecycle_flow("Near", "InZone", false, "Out") != nullptr);
+}
+
 TEST_CASE("Delivery cycles: a state transition enters one variant and leaves the others",
           "[delivery-cycles][lifecycle]") {
     const auto analysis = analyze(

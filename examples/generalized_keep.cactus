@@ -1,0 +1,189 @@
+module generalized_keep
+
+# `keep` defines a fact as a trait: an entity carries it exactly while the
+# rule's rows say so, and other rules react with `on added` / `on removed`.
+# Tests change health, positions and bags between ticks.
+
+use std.core
+
+trait Health:
+    var current: float = 100.0
+
+trait LowHealth:
+    var missing: float = 0.0
+
+trait Runner:
+    var x: float = 0.0
+
+trait Hurtbox:
+    var x: float = 0.0
+    var radius: float = 1.0
+
+trait Caught
+
+trait Bag:
+    var id: int = 0
+
+trait Item:
+    var bag: int = 0
+
+trait EmptyBag
+
+trait Soldier:
+    var x: float = 0.0
+
+trait Supported:
+    var allies: int = 0
+
+trait Log:
+    var ticks: int = 0
+    var lows: int = 0
+    var recoveries: int = 0
+    var caught: int = 0
+    var released: int = 0
+    var emptied: int = 0
+    var filled: int = 0
+    var supported: int = 0
+    var unsupported: int = 0
+
+trait Control:
+    var frozen: bool = false
+
+group facts:
+    phase: fixed_tick
+
+# Each entity carries LowHealth while it passes `where:`.
+rule LowHealthFact:
+    each:
+        Health as hp
+    group: facts
+    where:
+        hp.current < 30.0
+    keep LowHealth:
+        missing = 100.0 - hp.current
+    when:
+        not Settings[Control].frozen
+
+# A runner carries Caught while it touches at least one hurtbox.
+rule CaughtFact:
+    pairs:
+        runner:
+            Runner
+        hurtbox:
+            Hurtbox
+    group: facts
+    where:
+        (runner[Runner].x - hurtbox[Hurtbox].x) * (runner[Runner].x - hurtbox[Hurtbox].x) <= hurtbox[Hurtbox].radius * hurtbox[Hurtbox].radius
+    keep Caught on runner
+
+# The condition is checked for every bag, even one with no items.
+rule EmptyBagFact:
+    pairs:
+        bag:
+            Bag
+        item:
+            Item
+    group: facts
+    where:
+        item[Item].bag == bag[Bag].id
+    reduce per bag:
+        items = count()
+    keep EmptyBag on bag if items == 0
+
+# A soldier is supported with three allies close by.
+rule SupportedFact:
+    pairs:
+        unit:
+            Soldier
+        ally:
+            Soldier
+    group: facts
+    where:
+        unit != ally
+        (unit[Soldier].x - ally[Soldier].x) * (unit[Soldier].x - ally[Soldier].x) <= 4.0
+    reduce per unit:
+        allies = count()
+    keep Supported on unit if allies >= 3:
+        allies = allies
+
+rule CountTicks:
+    on fixed_tick:
+        Journal[Log].ticks += 1
+
+rule CountLow:
+    on added LowHealth:
+        Journal[Log].lows += 1
+
+    on removed LowHealth:
+        Journal[Log].recoveries += 1
+
+rule CountCaught:
+    on added Caught:
+        Journal[Log].caught += 1
+
+    on removed Caught:
+        Journal[Log].released += 1
+
+rule CountEmpty:
+    on added EmptyBag:
+        Journal[Log].emptied += 1
+
+    on removed EmptyBag:
+        Journal[Log].filled += 1
+
+rule CountSupported:
+    on added Supported:
+        Journal[Log].supported += 1
+
+    on removed Supported:
+        Journal[Log].unsupported += 1
+
+entity Journal:
+    Log
+
+entity Settings:
+    Control
+
+template Patient(current: float = 100.0):
+    Health:
+        current = current
+
+# Healthy until a test hurts it.
+entity Healthy from Patient()
+
+# Low from the first tick.
+entity Wounded from Patient(current = 20.0)
+
+# Low; loses Health in a test.
+entity Leaver from Patient(current = 10.0)
+
+entity Sprinter:
+    Runner
+
+template Spike(x: float):
+    Hurtbox:
+        x = x
+
+entity SpikeA from Spike(x = 10.0)
+entity SpikeB from Spike(x = 11.0)
+
+template Sack(id: int):
+    Bag:
+        id = id
+
+entity Pack from Sack(id = 1)
+entity Pouch from Sack(id = 2)
+
+entity Coin:
+    Item:
+        bag = 2
+
+template Trooper(x: float):
+    Soldier:
+        x = x
+
+# Three close soldiers have two allies each; Straggler is far away.
+entity First from Trooper(x = 0.0)
+entity Second from Trooper(x = 1.0)
+entity Third from Trooper(x = 1.5)
+entity Straggler from Trooper(x = 50.0)

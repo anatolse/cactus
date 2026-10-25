@@ -716,6 +716,12 @@ cactus_add_headless_behavior_test(test_rule_keep_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_rule_keep_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_generalized_keep_headless_behavior
+    CACTUS_SOURCE examples/generalized_keep.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_generalized_keep_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_collider_sweep_queries_headless_behavior
     CACTUS_SOURCE examples/collider_sweep_queries.cactus
     BACKEND cpp-entt

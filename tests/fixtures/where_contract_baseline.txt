@@ -378,6 +378,46 @@ deterministic_target_selection.cactus examples deterministic_target_selection.Se
     named_writes:
     named_requirements:
     iteration_order: free
+generalized_keep.cactus examples generalized_keep.CaughtFact/on std.core.fixed_tick
+    reads: generalized_keep.Hurtbox generalized_keep.Runner
+    read_fields: generalized_keep.Hurtbox{radius,x} generalized_keep.Runner{x}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:generalized_keep.Runner 1:generalized_keep.Hurtbox
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+generalized_keep.cactus examples generalized_keep.EmptyBagFact/on std.core.fixed_tick
+    reads: generalized_keep.Bag generalized_keep.Item
+    read_fields: generalized_keep.Bag{id} generalized_keep.Item{bag}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:generalized_keep.Bag 1:generalized_keep.Item
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+generalized_keep.cactus examples generalized_keep.LowHealthFact/on std.core.fixed_tick
+    reads: generalized_keep.Control generalized_keep.Health
+    read_fields: generalized_keep.Control{frozen} generalized_keep.Health{current}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads: [generalized_keep.Settings: generalized_keep.Control{frozen}]
+    named_writes:
+    named_requirements: generalized_keep.Settings/generalized_keep.Control
+    iteration_order: creation
+generalized_keep.cactus examples generalized_keep.SupportedFact/on std.core.fixed_tick
+    reads: generalized_keep.Soldier
+    read_fields: generalized_keep.Soldier{x}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:generalized_keep.Soldier 1:generalized_keep.Soldier
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
 main.cactus bouncy-balls-3d main.DetectBallContact/on std.core.fixed_tick
     reads: main.Ball main.SphereCollider std.transform.volume.WorldTransform
     read_fields: main.Ball{velocity} main.SphereCollider{radius} std.transform.volume.WorldTransform{position}

@@ -52,7 +52,6 @@ rule ReadProbeInPair:
     after:
         MoveProbe
     reduce per probe:
-        anchors = count()
         steps = sum(fixed_tick.dt * 60.0)
 
     on fixed_tick:
@@ -72,6 +71,7 @@ trait Shot:
     var normal: vec3 = vec3(0.0, 0.0, 0.0)
     var plain_hit: bool = false
     var plain_t: float = -1.0
+    var plain_rows: int = 0
 
 # Counts the shots whose first hit this collider was.
 trait Struck:
@@ -182,6 +182,7 @@ rule SweepShotsUnaccelerated:
     on fixed_tick:
         shot[Shot].plain_hit = first.hit
         shot[Shot].plain_t = first.t
+        shot[Shot].plain_rows = rows
         if first.hit:
             emit PlainShotHit to first.other
 
@@ -217,6 +218,7 @@ rule CountTouching:
 trait Pusher:
     var push: vec3 = vec3(9.0, 9.0, 9.0)
     var plain_push: vec3 = vec3(9.0, 9.0, 9.0)
+    var plain_rows: int = 0
 
 template PusherAt(position: vec3, layer: int, mask: int):
     tv.WorldTransform:
@@ -286,4 +288,5 @@ rule PushOutUnaccelerated:
 
     on fixed_tick:
         body[Pusher].plain_push = push
+        body[Pusher].plain_rows = rows
         body[physics.CharacterBody].velocity = vec3(0.0, 0.0, 0.0)

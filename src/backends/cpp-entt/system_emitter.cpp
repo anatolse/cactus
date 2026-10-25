@@ -4961,8 +4961,9 @@ static std::string reducer_cpp_type(const ReducerDecl& reducer) {
 
 // One accumulator per group, and the finished aggregate row the handler and
 // sort keys read. `<name>_seen` marks a min/max/best that has folded a value,
-// so a default applies only to empty input. A keep rule also counts rows.
-static void emit_reduce_types(std::ostringstream& out, const ReduceClause& reduce, bool count_rows) {
+// so a default applies only to empty input. `cactus_witnessed` marks a group
+// with rows, for a keep without a condition.
+static void emit_reduce_types(std::ostringstream& out, const ReduceClause& reduce, bool witness) {
     out << "    struct cactus_reduce_acc {\n";
     for (const auto& reducer : reduce.reducers) {
         const auto type = reducer_cpp_type(reducer);
@@ -4987,8 +4988,8 @@ static void emit_reduce_types(std::ostringstream& out, const ReduceClause& reduc
             out << "        bool " << reducer.name << "_seen = false;\n";
         }
     }
-    if (count_rows) {
-        out << "        int cactus_rows_folded = 0;\n";
+    if (witness) {
+        out << "        bool cactus_witnessed = false;\n";
     }
     out << "    };\n";
     out << "    struct cactus_reduce_row {\n";
@@ -4996,8 +4997,8 @@ static void emit_reduce_types(std::ostringstream& out, const ReduceClause& reduc
     for (const auto& reducer : reduce.reducers) {
         out << "        " << reducer_cpp_type(reducer) << " " << reducer.name << "{};\n";
     }
-    if (count_rows) {
-        out << "        int cactus_rows_folded = 0;\n";
+    if (witness) {
+        out << "        bool cactus_witnessed = false;\n";
     }
     out << "    };\n";
 }
@@ -5007,10 +5008,10 @@ static void emit_reducer_folds(std::ostringstream& out,
                                const ReduceClause& reduce,
                                const std::function<std::string(const ExprNode&)>& rewrite,
                                const std::string& ind,
-                               bool count_rows) {
+                               bool witness) {
     const std::string ns = "cactus::runtime::reduce::";
-    if (count_rows) {
-        out << ind << "++cactus_acc.cactus_rows_folded;\n";
+    if (witness) {
+        out << ind << "cactus_acc.cactus_witnessed = true;\n";
     }
     for (const auto& reducer : reduce.reducers) {
         const auto field = "cactus_acc." + reducer.name;
@@ -5064,11 +5065,11 @@ static void emit_reduce_row(std::ostringstream& out,
                             const std::string& group,
                             const DecoratedProgram& program,
                             const std::string& ind,
-                            bool count_rows = false) {
+                            bool witness = false) {
     out << ind << "cactus_reduce_row cactus_row;\n";
     out << ind << "cactus_row.cactus_group = " << group << ";\n";
-    if (count_rows) {
-        out << ind << "cactus_row.cactus_rows_folded = cactus_acc.cactus_rows_folded;\n";
+    if (witness) {
+        out << ind << "cactus_row.cactus_witnessed = cactus_acc.cactus_witnessed;\n";
     }
     for (const auto& reducer : reduce.reducers) {
         out << ind << "cactus_row." << reducer.name << " = ";
@@ -5202,72 +5203,78 @@ static void emit_collider_shape_cache(std::ostringstream& out, const PairCodegen
     out << "    };\n";
 }
 
-// `keep T on b`: every group with rows gets `T` (added, or patched in place),
-// and every other carrier of `T` loses it, at the activation's commit.
+// `apply_kept<T, tracked>` or `apply_unkept<T, tracked>`, as the queued command calls it.
+static std::string kept_command(const char* function, const KeepClause& keep, const DecoratedProgram& program) {
+    const auto cpp = EnttCodegenUtils::trait_cpp_name(keep.resolved_trait_id, keep.trait_name, program);
+    const bool tracked =
+        EnttPersistenceEmitter::structural_site_tracks_construction(program, keep.resolved_trait_id, keep.trait_name);
+    return std::string("cactus::runtime::entt_backend::") + function + "<" + cpp + ", " + (tracked ? "true" : "false") +
+           ">";
+}
+
+// Queues `T` on `recipient` with this run's field values, at the activation's commit.
+static void emit_keep_add(std::ostringstream& out,
+                          const KeepClause& keep,
+                          const std::string& recipient,
+                          const std::function<std::string(const ExprNode&)>& rewrite,
+                          const DecoratedProgram& program,
+                          const std::string& ind) {
+    // With no assigned fields the value is all defaults, so a present trait needs no patch.
+    const bool patches = !keep.fields.empty();
+    if (patches) {
+        out << ind << EnttCodegenUtils::trait_cpp_name(keep.resolved_trait_id, keep.trait_name, program)
+            << " cactus_value{};\n";
+    }
+    for (const auto& field : keep.fields) {
+        out << ind << "cactus_value." << field.name << " = " << rewrite(*field.value) << ";\n";
+    }
+    out << ind << "cactus::runtime::entt_backend::generated_queue_structural_command(\n";
+    out << ind << "    cactus::runtime::entt_backend::StructuralCommand::Kind::Add,\n";
+    out << ind << "    [cactus_target = " << recipient << (patches ? ", cactus_value" : "")
+        << "](entt::registry& registry) {\n";
+    out << ind << "        " << kept_command("apply_kept", keep, program) << "(registry, cactus_target"
+        << (patches ? ", cactus_value" : "") << ");\n";
+    out << ind << "    });\n";
+}
+
+// Queues the removal of `T` from every carrier `cactus_is_kept` rejects, oldest first.
+static void emit_keep_removals(std::ostringstream& out, const KeepClause& keep, const DecoratedProgram& program) {
+    const auto cpp = EnttCodegenUtils::trait_cpp_name(keep.resolved_trait_id, keep.trait_name, program);
+    out << "    for (const auto cactus_entity : cactus::runtime::entt_backend::leaving_carriers<" << cpp
+        << ">(registry, cactus_is_kept)) {\n";
+    out << "        cactus::runtime::entt_backend::generated_queue_structural_command(\n";
+    out << "            cactus::runtime::entt_backend::StructuralCommand::Kind::Remove,\n";
+    out << "            [cactus_target = cactus_entity](entt::registry& registry) {\n";
+    out << "                " << kept_command("apply_unkept", keep, program) << "(registry, cactus_target);\n";
+    out << "            });\n";
+    out << "    }\n";
+}
+
+// `keep T on b [if c]`: every group with rows, or whose condition holds, gets
+// `T`, and every other carrier of `T` loses it, at the activation's commit.
 static void emit_keep_commands(std::ostringstream& out,
                                const KeepClause& keep,
                                const ReduceClause& reduce,
                                const PairCodegenScope& group_scope,
                                const DecoratedProgram& program) {
     const auto& group  = group_scope.bindings.front().binding_name;
-    const auto cpp     = EnttCodegenUtils::trait_cpp_name(keep.resolved_trait_id, keep.trait_name, program);
-    const bool tracked =
-        EnttPersistenceEmitter::structural_site_tracks_construction(program, keep.resolved_trait_id, keep.trait_name);
+    const auto rewrite = [&](const ExprNode& expr) {
+        return rewrite_expr(expr, {}, program, {}, {}, &group_scope);
+    };
     out << "    std::vector<char> cactus_kept(" << group << "_snapshot.size(), 0);\n";
     out << "    for (const auto& cactus_row : cactus_rows) {\n";
-    out << "        if (cactus_row.cactus_rows_folded == 0) { continue; }\n";
-    out << "        cactus_kept[cactus_positions_" << group << ".find(cactus_row.cactus_group)] = 1;\n";
     emit_reduce_row_bindings(out, reduce, "        ");
-    // With no assigned fields the value is all defaults, so a present trait needs no patch.
-    const bool patches = !keep.fields.empty();
-    if (patches) {
-        out << "        " << cpp << " cactus_value{};\n";
-    }
-    for (const auto& field : keep.fields) {
-        out << "        cactus_value." << field.name << " = "
-            << rewrite_expr(*field.value, {}, program, {}, {}, &group_scope) << ";\n";
-    }
-    out << "        cactus::runtime::entt_backend::generated_queue_structural_command(\n";
-    out << "            cactus::runtime::entt_backend::StructuralCommand::Kind::Add,\n";
-    out << "            [cactus_target = " << group << (patches ? ", cactus_value" : "")
-        << "](entt::registry& registry) {\n";
-    out << "                if (!registry.valid(cactus_target)) { return; }\n";
-    if (patches) {
-        out << "                if (auto* cactus_current = registry.try_get<" << cpp << ">(cactus_target)) {\n";
-        out << "                    *cactus_current = cactus_value;\n";
-        out << "                    return;\n";
-        out << "                }\n";
-        out << "                registry.emplace<" << cpp << ">(cactus_target, cactus_value);\n";
-    } else {
-        out << "                if (registry.all_of<" << cpp << ">(cactus_target)) { return; }\n";
-        out << "                registry.emplace<" << cpp << ">(cactus_target);\n";
-    }
-    if (tracked) {
-        out << EnttPersistenceEmitter::emit_retain_construction(cpp, "cactus_target", "                ");
-    }
-    out << "            });\n";
+    const auto present = keep.condition != nullptr ? rewrite(*keep.condition) : "cactus_row.cactus_witnessed";
+    out << "        if (" << rejects(present) << ") { continue; }\n";
+    out << "        cactus_kept[cactus_positions_" << group << ".find(cactus_row.cactus_group)] = 1;\n";
+    emit_keep_add(out, keep, group, rewrite, program, "        ");
     out << "    }\n";
-    out << "    std::vector<std::pair<std::uint64_t, entt::entity>> cactus_leaving;\n";
-    out << "    for (const auto cactus_entity : registry.view<" << cpp << ">()) {\n";
-    out << "        const auto cactus_slot = cactus_positions_" << group << ".find(cactus_entity);\n";
-    out << "        if (cactus_slot != cactus::runtime::entt_backend::SnapshotPositions::kAbsent && "
-           "cactus_kept[cactus_slot] != 0) { continue; }\n";
-    out << "        cactus_leaving.emplace_back("
-           "registry.get<cactus::runtime::entt_backend::CreationOrdinal>(cactus_entity).value, cactus_entity);\n";
-    out << "    }\n";
-    out << "    std::ranges::sort(cactus_leaving);\n";
-    out << "    for (const auto& [cactus_ordinal, cactus_entity] : cactus_leaving) {\n";
-    out << "        cactus::runtime::entt_backend::generated_queue_structural_command(\n";
-    out << "            cactus::runtime::entt_backend::StructuralCommand::Kind::Remove,\n";
-    out << "            [cactus_target = cactus_entity](entt::registry& registry) {\n";
-    out << "                if (!registry.valid(cactus_target) || !registry.all_of<" << cpp
-        << ">(cactus_target)) { return; }\n";
-    out << "                registry.remove<" << cpp << ">(cactus_target);\n";
-    if (tracked) {
-        out << EnttPersistenceEmitter::emit_discard_construction(cpp, "cactus_target", "                ");
-    }
-    out << "            });\n";
-    out << "    }\n";
+    out << "    auto cactus_is_kept = [&](entt::entity cactus_carrier) {\n";
+    out << "        const auto cactus_slot = cactus_positions_" << group << ".find(cactus_carrier);\n";
+    out << "        return cactus_slot != cactus::runtime::entt_backend::SnapshotPositions::kAbsent && "
+           "cactus_kept[cactus_slot] != 0;\n";
+    out << "    };\n";
+    emit_keep_removals(out, keep, program);
 }
 
 // The group binding first: with no groups there is nothing to run, unless the
@@ -5404,7 +5411,7 @@ static void emit_group_table(std::ostringstream& out,
 // Folds one accepted row into its group's (or the total's) accumulator.
 static void emit_fold_lambda(std::ostringstream& out,
                              const ReduceClause& reduce,
-                             bool keeps,
+                             bool witness,
                              const PairCodegenScope& fold_scope,
                              const std::vector<const ExprNode*>& row_predicates,
                              const std::function<std::string(const ExprNode&)>& rewrite) {
@@ -5416,13 +5423,16 @@ static void emit_fold_lambda(std::ostringstream& out,
         out << "        if (cactus_slot == cactus::runtime::entt_backend::SnapshotPositions::kAbsent || "
                "cactus_group_live[cactus_slot] == 0) { return; }\n";
         out << "        auto& cactus_acc = cactus_groups[cactus_slot];\n";
+        if (witness && reduce.reducers.empty()) {
+            out << "        if (cactus_acc.cactus_witnessed) { return; }\n";
+        }
     } else {
         out << "        auto& cactus_acc = cactus_total;\n";
     }
     for (const auto* predicate : row_predicates) {
         out << "        if (" << rejects(rewrite(*predicate)) << ") { return; }\n";
     }
-    emit_reducer_folds(out, reduce, rewrite, "        ", keeps);
+    emit_reducer_folds(out, reduce, rewrite, "        ", witness);
     out << "    };\n";
 }
 
@@ -6258,9 +6268,10 @@ static void emit_reduced_pair_handler_body(std::ostringstream& out,
                                            const PairCodegenScope& pair_codegen_scope,
                                            const DecoratedProgram& program,
                                            const HandlerContract* contract) {
-    const auto& reduce = *sys.reduce;
-    const bool keeps   = sys.keep.has_value();
-    const auto index   = indexed_fold_plan(sys, contract, program);
+    const auto& reduce  = *sys.reduce;
+    const bool keeps    = sys.keep.has_value();
+    const bool witness  = keeps && sys.keep->condition == nullptr;
+    const auto index    = indexed_fold_plan(sys, contract, program);
     const auto equality = equality_fold_plan(sys, contract, program);
     std::optional<std::string> indexed;
     if (index.has_value()) {
@@ -6281,7 +6292,7 @@ static void emit_reduced_pair_handler_body(std::ostringstream& out,
     if (!active.empty()) {
         out << "    const bool cactus_active = " << active << ";\n";
     }
-    emit_reduce_types(out, reduce, keeps);
+    emit_reduce_types(out, reduce, witness);
     auto fold_scope = pair_codegen_scope;
     emit_fold_tables(out, sys, reduce, contract, fold_scope, indexed);
     const auto member_inputs = emit_member_inputs(out, reduce, contract, fold_scope, program, indexed);
@@ -6301,7 +6312,7 @@ static void emit_reduced_pair_handler_body(std::ostringstream& out,
     } else {
         out << "    cactus_reduce_acc cactus_total{};\n";
     }
-    emit_fold_lambda(out, reduce, keeps, fold_scope, fold_row_predicates(reduce, predicates, contract, filtered), rewrite);
+    emit_fold_lambda(out, reduce, witness, fold_scope, fold_row_predicates(reduce, predicates, contract, filtered), rewrite);
     if (index.has_value()) {
         emit_indexed_fold_dispatch(out, *index, *spatial_join_root(sys, contract), !active.empty(),
                                    pair_binding_codegens, fold_scope, program);
@@ -6316,7 +6327,7 @@ static void emit_reduced_pair_handler_body(std::ostringstream& out,
         out << "    for (std::size_t cactus_i = 0; cactus_i < cactus_groups.size(); ++cactus_i) {\n";
         out << "        if (cactus_group_live[cactus_i] == 0) { continue; }\n";
         out << "        const auto& cactus_acc = cactus_groups[cactus_i];\n";
-        emit_reduce_row(out, reduce, *reduce.per_binding + "_snapshot[cactus_i]", program, "        ", keeps);
+        emit_reduce_row(out, reduce, *reduce.per_binding + "_snapshot[cactus_i]", program, "        ", witness);
         out << "    }\n";
     } else {
         emit_total_reduce_rows(out, reduce, program);
@@ -6362,12 +6373,100 @@ static void emit_reduced_unary_handler_body(std::ostringstream& out,
     emit_reduced_dispatch(out, sys, handler, nullptr, program);
 }
 
+// `keep T` on a unary rule: one pass over the filter domain in creation order
+// keeps each entity that passes `where:`. A false activation gate keeps none.
+static void emit_unary_keep_handler_body(std::ostringstream& out,
+                                         const RuleNode& sys,
+                                         const HandlerDomainCodegen& domain,
+                                         const DecoratedProgram& program,
+                                         const HandlerContract* contract) {
+    const auto& keep = *sys.keep;
+    out << "    std::vector<entt::entity> cactus_kept_entities;\n";
+    const auto active = activation_condition(sys, contract, program);
+    out << (active.empty() ? "    {\n" : "    if (" + active + ") {\n");
+    emit_view_declaration(out, domain.filter_cpp_types, domain.exclude_cpp_types, 2);
+    out << "        for (auto entity : cactus::runtime::entt_backend::creation_ordered(registry, view)) {\n";
+    emit_component_bindings_from_entity(out, domain.filter_bindings_list, "entity", 3, program);
+    emit_filter_alias_bindings(out, domain.filter, program, 3);
+    const auto rewrite = [&](const ExprNode& expr) {
+        return rewrite_expr(expr, domain.filter_traits, program, {}, domain.filter_cpp_overrides);
+    };
+    for (const auto* predicate : where_at(sys, contract, ClauseStage::Row)) {
+        out << "            if (" << rejects(rewrite(*predicate)) << ") { continue; }\n";
+    }
+    out << "            cactus_kept_entities.push_back(entity);\n";
+    emit_keep_add(out, keep, "entity", rewrite, program, "            ");
+    out << "        }\n";
+    out << "    }\n";
+    out << "    const cactus::runtime::entt_backend::SnapshotPositions cactus_kept(cactus_kept_entities);\n";
+    out << "    auto cactus_is_kept = [&](entt::entity cactus_carrier) {\n";
+    out << "        return cactus_kept.find(cactus_carrier) != cactus::runtime::entt_backend::SnapshotPositions::kAbsent;\n";
+    out << "    };\n";
+    emit_keep_removals(out, keep, program);
+}
+
+struct HandlerBodyInputs {
+    const HandlerDomainCodegen* domain                          = nullptr;
+    const std::vector<PairBindingCodegen>* pair_binding_codegens = nullptr;
+    const PairCodegenScope* pair_codegen_scope                  = nullptr;
+    const DecoratedProgram* program                             = nullptr;
+    const HandlerContract* contract                             = nullptr;
+    bool is_pair                                                = false;
+    bool selectionless                                          = false;
+    const std::string* trigger_binding                          = nullptr;
+};
+
+// One handler's body, by the rule's domain and clauses.
+static void emit_handler_body(std::ostringstream& out,
+                              const RuleNode& sys,
+                              const EventHandlerNode& handler,
+                              const HandlerBodyInputs& in) {
+    const auto& domain   = *in.domain;
+    const auto& program  = *in.program;
+    const auto& pairs    = *in.pair_binding_codegens;
+    const auto& scope    = *in.pair_codegen_scope;
+    const auto* contract = in.contract;
+    if (sys.keep.has_value() && !sys.reduce.has_value()) {
+        emit_unary_keep_handler_body(out, sys, domain, program, contract);
+        return;
+    }
+    if (sys.reduce.has_value()) {
+        if (sys.pairs.has_value()) {
+            emit_reduced_pair_handler_body(out, sys, handler, pairs, scope, program, contract);
+        } else {
+            emit_reduced_unary_handler_body(out, sys, handler, domain, program, contract);
+        }
+        return;
+    }
+    emit_activation_gate(out, sys, contract, program);
+    if (handler.has_lifecycle_trigger()) {
+        emit_lifecycle_handler_body(out, sys, handler, *in.trigger_binding, program, contract);
+    } else if (in.is_pair) {
+        emit_pair_handler_body(out, sys, handler, pairs, scope, program, contract);
+    } else if (in.selectionless) {
+        emit_selectionless_handler_body(out, handler, domain.filter_traits, program, domain.filter_cpp_overrides);
+    } else if (!domain.filter_traits.empty()) {
+        emit_filtered_handler_body(out,
+                                   sys,
+                                   handler,
+                                   domain,
+                                   program,
+                                   contract,
+                                   contract != nullptr && contract->iteration_order == IterationOrder::Creation);
+    } else {
+        emit_fallback_handler_body(out,
+                                   sys,
+                                   handler,
+                                   domain.filter_bindings_list,
+                                   domain.filter_traits,
+                                   program,
+                                   domain.filter_cpp_overrides);
+    }
+}
+
 std::string EnttSystemEmitter::emit_system(const RuleNode& sys, const DecoratedProgram& program) {
     std::ostringstream out;
-    const auto domain                = build_handler_domain(sys.filter, sys.exclude, program);
-    const auto& filter_bindings_list = domain.filter_bindings_list;
-    const auto& filter_traits        = domain.filter_traits;
-    const auto& filter_cpp_overrides = domain.filter_cpp_overrides;
+    const auto domain = build_handler_domain(sys.filter, sys.exclude, program);
 
     const bool is_pair_system = sys.pairs.has_value();
     std::vector<PairBindingCodegen> pair_binding_codegens;
@@ -6415,33 +6514,17 @@ std::string EnttSystemEmitter::emit_system(const RuleNode& sys, const DecoratedP
         out << "    (void)cactus_recipient;\n";
         emit_named_requirements(out, contract, program);
         emit_when_gate(out, sys, program);
-        if (!sys.reduce.has_value()) {
-            emit_activation_gate(out, sys, contract, program);
-        }
-
-        if (sys.reduce.has_value() && is_pair_system) {
-            emit_reduced_pair_handler_body(
-                out, sys, handler, pair_binding_codegens, pair_codegen_scope, program, contract);
-        } else if (sys.reduce.has_value()) {
-            emit_reduced_unary_handler_body(out, sys, handler, domain, program, contract);
-        } else if (lifecycle) {
-            emit_lifecycle_handler_body(out, sys, handler, trigger_binding, program, contract);
-        } else if (is_pair) {
-            emit_pair_handler_body(out, sys, handler, pair_binding_codegens, pair_codegen_scope, program, contract);
-        } else if (selectionless) {
-            emit_selectionless_handler_body(out, handler, filter_traits, program, filter_cpp_overrides);
-        } else if (!filter_traits.empty()) {
-            emit_filtered_handler_body(out,
-                                       sys,
-                                       handler,
-                                       domain,
-                                       program,
-                                       contract,
-                                       contract != nullptr && contract->iteration_order == IterationOrder::Creation);
-        } else {
-            emit_fallback_handler_body(
-                out, sys, handler, filter_bindings_list, filter_traits, program, filter_cpp_overrides);
-        }
+        emit_handler_body(out,
+                          sys,
+                          handler,
+                          {.domain                = &domain,
+                           .pair_binding_codegens = &pair_binding_codegens,
+                           .pair_codegen_scope    = &pair_codegen_scope,
+                           .program               = &program,
+                           .contract              = contract,
+                           .is_pair               = is_pair,
+                           .selectionless         = selectionless,
+                           .trigger_binding       = &trigger_binding});
         out << "}\n\n";
     }
 

@@ -324,8 +324,6 @@ rule Wade:
     group: physics.contacts
     where:
         physics.touching(body, pool)
-    reduce per body:
-        pools = count()
     keep Wading on body
 
 rule WatchPose:

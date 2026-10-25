@@ -66,3 +66,10 @@ Examples include damage flash, tint override, outline, current-frame camera shak
 #### Scenario: Long-lived VFX uses spawned entity instead
 - **WHEN** an effect needs to persist across multiple frames, such as a particle emitter or floating damage number
 - **THEN** it is modeled as a spawned entity or durable state rather than a projected trait
+
+### Requirement: Projection bookkeeping makes no steady-state allocation
+The runtime state that remembers durable values under projections SHALL keep its storage across frames. Once a frame has projected a trait onto a given number of entities, later frames that project it onto at most that many entities SHALL make no heap allocation for this bookkeeping. Frame-end cleanup SHALL restore durable values exactly as before.
+
+#### Scenario: Per-frame layout projections reuse storage
+- **WHEN** a UI arrangement projects `ComputedLayout` onto the same 150 nodes every frame
+- **THEN** after the first frame projection bookkeeping makes no heap allocation, and each frame ends with the durable values restored

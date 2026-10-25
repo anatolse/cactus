@@ -176,3 +176,18 @@ The spatial single-entity queries of `std.physics.flat.query` and `std.physics.v
 #### Scenario: Overlap list is in creation order
 - **WHEN** crates C1, C2 and C3 are created in that order, C1 is destroyed, C4 is created, and all live crates overlap a box
 - **THEN** `query.overlap_box[Crate](center = c, size = s)` returns C2, C3, C4
+
+### Requirement: Hierarchy queries in loops build no container
+When `query.children[...]` is the iterable of a bounded foreach, and the enclosing handler cannot project any trait that the query's filter tests, the generated loop SHALL visit the same children in the same order as the snapshot would, and SHALL NOT construct a list or other heap-backed container. Preorder, postorder and root traversals SHALL reuse their storage across evaluations, so that once warmed they make no heap allocation. Structural commands issued inside the loop body SHALL still apply only at commit and SHALL NOT change the children the loop visits.
+
+#### Scenario: A child loop allocates nothing
+- **WHEN** a handler runs `for child in query.children[ui.Node](of = panel)` over three children every frame
+- **THEN** after the first frame the loop makes no heap allocation, and it visits the children in creation order
+
+#### Scenario: A spawn inside the loop does not change the iteration
+- **WHEN** the loop body spawns a new child of `panel`
+- **THEN** the loop still visits only the children that existed when it began, and the new child appears after commit
+
+#### Scenario: A projected filter trait keeps the snapshot
+- **WHEN** the enclosing handler can `project ui.Node` onto entities
+- **THEN** the loop iterates a snapshot taken when it begins, with the same result as before

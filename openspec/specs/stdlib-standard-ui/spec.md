@@ -176,3 +176,14 @@ Standard UI SHALL paint in window space after every viewport has drawn its world
 #### Scenario: Two viewports draw one frame
 - **WHEN** two viewports are active in a frame that renders a Standard UI panel
 - **THEN** the panel is painted once
+
+### Requirement: A pass computes all draw orders with one traversal
+When an arrangement pass calls `std.ui.stacking_order` and cannot write `Node.z_index` or project `Node`, all draw orders it reads SHALL come from one traversal of the UI forest, made the first time the pass asks. Later calls in the same pass SHALL take constant time, and once warmed the pass SHALL make no heap allocation for draw orders. The orders SHALL equal those of the sibling-local stacking rule.
+
+#### Scenario: Large HUD arranges in linear time
+- **WHEN** a HUD of 2,000 nodes is arranged
+- **THEN** the arrangement pass traverses the forest once for draw orders, not once per node
+
+#### Scenario: Steady-state arrangement allocates nothing
+- **WHEN** an unchanged HUD is arranged on consecutive frames
+- **THEN** after the first frame neither draw-order computation nor child iteration makes a heap allocation

@@ -195,3 +195,23 @@ A regular rule SHALL declare reduction grouping only in the clause header, as `r
 #### Scenario: Invalid grouped header is rejected
 - **WHEN** the header omits its binding, names an unknown binding, uses grouping on a unary rule, or contains no reducers
 - **THEN** compilation reports the corresponding grammar or grouping error without abandoning later declarations
+
+### Requirement: Every reducer is read
+
+A reducer SHALL be read by its rule: by a handler body, a sort key, a keep field value or a keep condition. A reducer that nothing reads SHALL be a source-located compile error at its declaration that names it. When a keep rule reads none of its reducers, the error's help SHALL say to remove `reduce:` so the trait is kept while any row matches. This enforces non-vacuity.
+
+#### Scenario: Unused reducer in a keep rule
+- **WHEN** a rule declares `reduce per player:` with `hurtboxes = count()` and `keep Caught on player` with no field reading `hurtboxes`
+- **THEN** the compiler reports an error at `hurtboxes` whose help says to remove `reduce:`
+
+#### Scenario: Unused reducer in a handler rule
+- **WHEN** a reduce rule declares `n = count()` and `top = best(...)` and its handler reads only `top`
+- **THEN** the compiler reports an error at `n`
+
+#### Scenario: Reducer read only by a sort key
+- **WHEN** a reducer is read only in `order by:`
+- **THEN** compilation accepts it
+
+#### Scenario: Reducer read only by a keep condition
+- **WHEN** a reducer is read only in `keep T on b if n == 0`
+- **THEN** compilation accepts it

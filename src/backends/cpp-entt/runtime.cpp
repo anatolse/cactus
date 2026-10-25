@@ -2699,6 +2699,11 @@ bool reparent_would_cycle(const HierarchyIndex& index, entt::entity entity, entt
 
 namespace {
 
+bool& hierarchy_snapshots_forced_flag() noexcept {
+    static bool forced = false;
+    return forced;
+}
+
 std::optional<HierarchyStrategy>& hierarchy_strategy_override() noexcept {
     static std::optional<HierarchyStrategy> strategy;
     return strategy;
@@ -2734,6 +2739,14 @@ void propagate_subtree(const HierarchyIndex& index,
 }
 
 }  // namespace
+
+void set_hierarchy_snapshots_forced(bool forced) noexcept {
+    hierarchy_snapshots_forced_flag() = forced;
+}
+
+bool hierarchy_snapshots_forced() noexcept {
+    return hierarchy_snapshots_forced_flag();
+}
 
 void set_hierarchy_strategy_override(std::optional<HierarchyStrategy> strategy) noexcept {
     hierarchy_strategy_override() = strategy;

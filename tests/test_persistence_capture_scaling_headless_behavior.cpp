@@ -4,46 +4,7 @@
 #error "CACTUS_HEADLESS_GENERATED_CPP must name the generated translation unit"
 #endif
 
-#include <cstddef>
-#include <cstdlib>
-#include <new>
-
-namespace {
-
-bool g_counting           = false;
-std::size_t g_allocations = 0;
-
-void* counted_allocation(std::size_t size) {
-    if (g_counting) {
-        ++g_allocations;
-    }
-    if (void* memory = std::malloc(size == 0 ? 1 : size)) {
-        return memory;
-    }
-    throw std::bad_alloc();
-}
-
-}  // namespace
-
-// Replaced so the test can count what capture allocates.
-void* operator new(std::size_t size) {
-    return counted_allocation(size);
-}
-void* operator new[](std::size_t size) {
-    return counted_allocation(size);
-}
-void operator delete(void* memory) noexcept {
-    std::free(memory);
-}
-void operator delete[](void* memory) noexcept {
-    std::free(memory);
-}
-void operator delete(void* memory, std::size_t) noexcept {
-    std::free(memory);
-}
-void operator delete[](void* memory, std::size_t) noexcept {
-    std::free(memory);
-}
+#include "heap_allocation_counter.hpp"
 
 #define CACTUS_GENERATED_NO_MAIN
 #include CACTUS_HEADLESS_GENERATED_CPP
@@ -72,13 +33,16 @@ Capture capture_cells(int cells) {
         block.offset      = Vector3{.x = static_cast<float>(index), .y = 1.0F, .z = 2.0F};
     }
 
-    g_allocations = 0;
-    g_counting    = true;
-    const auto snapshot = cactus::runtime::entt_backend::generated_capture_world_snapshot(registry);
-    g_counting = false;
+    std::size_t allocations = 0;
+    const auto snapshot     = [&] {
+        const cactus_test::AllocationCount counting;
+        auto captured = cactus::runtime::entt_backend::generated_capture_world_snapshot(registry);
+        allocations   = cactus_test::AllocationCount::count();
+        return captured;
+    }();
 
     const auto bytes = snapshot.arena().size() + snapshot.entity_rows().size_bytes() + snapshot.trait_rows().size_bytes();
-    return Capture{.allocations = g_allocations, .entities = snapshot.entity_count(), .bytes = bytes};
+    return Capture{.allocations = allocations, .entities = snapshot.entity_count(), .bytes = bytes};
 }
 
 }  // namespace

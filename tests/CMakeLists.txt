@@ -583,6 +583,18 @@ cactus_add_headless_behavior_test(test_standard_ui_layout_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_standard_ui_layout_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_standard_ui_allocation_headless_behavior
+    CACTUS_SOURCE tests/fixtures/standard_ui_layout_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_standard_ui_allocation_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_hierarchy_child_loop_headless_behavior
+    CACTUS_SOURCE tests/fixtures/hierarchy_child_loop_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_hierarchy_child_loop_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_standard_ui_render_headless_behavior
     CACTUS_SOURCE tests/fixtures/standard_ui_layout_runtime.cactus
     BACKEND cpp-entt

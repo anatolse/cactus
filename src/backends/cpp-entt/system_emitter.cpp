@@ -415,28 +415,39 @@ struct HandlerTriggerSpelling {
     std::string binding;   // the handler's payload parameter
 };
 
-const HandlerTriggerSpelling*& active_handler_trigger() {
-    thread_local const HandlerTriggerSpelling* active = nullptr;
+// The value an enclosing ActiveScope<T> points at, or null.
+template <typename T>
+T*& active_scope() {
+    thread_local T* active = nullptr;
     return active;
 }
 
-class HandlerTriggerScope {
+template <typename T>
+class ActiveScope {
 public:
-    explicit HandlerTriggerScope(const HandlerTriggerSpelling& trigger)
-        : previous_(std::exchange(active_handler_trigger(), &trigger)) {}
-    HandlerTriggerScope(const HandlerTriggerScope&)            = delete;
-    HandlerTriggerScope& operator=(const HandlerTriggerScope&) = delete;
-    HandlerTriggerScope(HandlerTriggerScope&&)                 = delete;
-    HandlerTriggerScope& operator=(HandlerTriggerScope&&)      = delete;
-    ~HandlerTriggerScope() { active_handler_trigger() = previous_; }
+    explicit ActiveScope(T& value) : previous_(std::exchange(active_scope<T>(), &value)) {}
+    ActiveScope(const ActiveScope&)            = delete;
+    ActiveScope& operator=(const ActiveScope&) = delete;
+    ActiveScope(ActiveScope&&)                 = delete;
+    ActiveScope& operator=(ActiveScope&&)      = delete;
+    ~ActiveScope() { active_scope<T>() = previous_; }
 
 private:
-    const HandlerTriggerSpelling* previous_;
+    T* previous_;
+};
+
+using HandlerTriggerScope = ActiveScope<const HandlerTriggerSpelling>;
+
+// The handler whose body is being emitted.
+struct HandlerBodyCodegen {
+    const HandlerContract* contract = nullptr;
+    bool structure_deferred         = false;  // structural commands wait for commit
+    bool uses_paint_order           = false;  // the body reads the pass's paint-order cache
 };
 
 // The payload parameter when `expr` spells the active handler's trigger name.
 std::optional<std::string> lowered_trigger_reference(const ExprNode& expr) {
-    const auto* trigger = active_handler_trigger();
+    const auto* trigger = active_scope<const HandlerTriggerSpelling>();
     if (trigger == nullptr || trigger->spelling.empty()) {
         return std::nullopt;
     }
@@ -456,6 +467,52 @@ const HandlerContract* graph_handler_contract(const RuleNode& rule,
     const auto found = std::ranges::find_if(program.execution_graph.handlers,
                                             [&](const auto& node) { return node.identity == identity; });
     return found == program.execution_graph.handlers.end() ? nullptr : &found->contract;
+}
+
+// The body being emitted, when its handler's contract is known, structural
+// commands wait for commit and Parent isn't projected, so the forest can't
+// change while the body runs.
+HandlerBodyCodegen* settled_handler_body() {
+    auto* body = active_scope<HandlerBodyCodegen>();
+    if (body == nullptr || body->contract == nullptr || !body->structure_deferred) {
+        return nullptr;
+    }
+    const bool projects_parent = std::ranges::any_of(
+        body->contract->projects, [](const SymbolId& trait) { return trait.local_name == "Parent"; });
+    return projects_parent ? nullptr : body;
+}
+
+// A child loop can follow the sibling links when the body projects no trait the
+// loop's filter tests.
+bool walks_child_links(const QueryCallExpr& qcall) {
+    const auto* body = settled_handler_body();
+    if (body == nullptr) {
+        return false;
+    }
+    return std::ranges::all_of(qcall.filters, [&](const QueryFilterPredicate& filter) {
+        return filter.resolved_trait_id.has_value() && !body->contract->projects.contains(*filter.resolved_trait_id);
+    });
+}
+
+// Draw orders come from the pass's cache when the body can change neither the
+// forest nor any z_index; reports the use so the pass declares the cache.
+bool reads_paint_order_cache() {
+    auto* body = settled_handler_body();
+    if (body == nullptr) {
+        return false;
+    }
+    const auto& contract = *body->contract;
+    const auto is_node   = [](const SymbolId& trait) {
+        return trait.module.name == "std.ui" && trait.local_name == "Node";
+    };
+    if (std::ranges::any_of(contract.projects, is_node) ||
+        std::ranges::any_of(contract.writes, [&](const SymbolId& trait) {
+            return is_node(trait) && field_access(contract.write_fields, trait).covers("z_index");
+        })) {
+        return false;
+    }
+    body->uses_paint_order = true;
+    return true;
 }
 
 std::string input_action_constant_name(const std::string& input_name) {
@@ -987,8 +1044,8 @@ const std::vector<DebugDrawRendererSpec>& debug_draw_renderer_specs() {
     return specs;
 }
 
-std::string foreach_temp_name(const ForeachStmt& stmt) {
-    return "foreach_snapshot_" + std::to_string(std::max(stmt.location.line, 0)) + "_" +
+std::string foreach_temp_name(const ForeachStmt& stmt, const std::string& role = "snapshot") {
+    return "foreach_" + role + "_" + std::to_string(std::max(stmt.location.line, 0)) + "_" +
            std::to_string(std::max(stmt.location.column, 0));
 }
 
@@ -2264,6 +2321,21 @@ static std::string find_named_arg_value(const std::vector<FieldAssignment>& name
     return "/* missing:" + name + " */";
 }
 
+// The view of the children a query.children call can yield.
+static std::string hierarchy_child_view(const QueryCallExpr& qcall, const DecoratedProgram& program) {
+    return "registry.view" +
+           build_view_suffix(qcall.filters, EnttCodegenUtils::trait_cpp_name("Parent", program), &program);
+}
+
+// The arguments a hierarchy_preorder or hierarchy_postorder call passes to hierarchy_order.
+static std::string hierarchy_order_args(const QueryCallExpr& qcall,
+                                        const std::string& func_name,
+                                        const DecoratedProgram& program) {
+    return "registry, " + EnttCodegenUtils::hierarchy_index_expr(program) + ", registry.view" +
+           build_view_suffix(qcall.filters, {}, &program) + ", " +
+           (func_name == "hierarchy_postorder" ? "true" : "false");
+}
+
 static std::string lower_ecs_query_call(const QueryCallExpr& qcall,
                                         const std::string& func_name,
                                         const auto& emit_arg,
@@ -2282,16 +2354,14 @@ static std::string lower_ecs_query_call(const QueryCallExpr& qcall,
         return "cactus::runtime::entt_backend::creation_ordered(registry, " + view + ")";
     }
     if (func_name == "children") {
-        const std::string of_expr    = find_named_arg_value(qcall.named_args, "of", emit_arg);
-        const std::string parent_cpp = EnttCodegenUtils::trait_cpp_name("Parent", program);
-        const std::string child_view = "registry.view" + build_view_suffix(qcall.filters, parent_cpp, &program);
+        const std::string of_expr = find_named_arg_value(qcall.named_args, "of", emit_arg);
         return "cactus::runtime::entt_backend::hierarchy_children(registry, " +
-               EnttCodegenUtils::hierarchy_index_expr(program) + ", " + of_expr + ", " + child_view + ")";
+               EnttCodegenUtils::hierarchy_index_expr(program) + ", " + of_expr + ", " +
+               hierarchy_child_view(qcall, program) + ")";
     }
     if (func_name == "hierarchy_preorder" || func_name == "hierarchy_postorder") {
-        return "cactus::runtime::entt_backend::hierarchy_order(registry, " +
-               EnttCodegenUtils::hierarchy_index_expr(program) + ", " + view + ", " +
-               (func_name == "hierarchy_postorder" ? "true" : "false") + ")";
+        return "cactus::runtime::entt_backend::hierarchy_order(" + hierarchy_order_args(qcall, func_name, program) +
+               ")";
     }
     if (func_name == "parent") {
         // of_expr is arbitrary rewritten DSL text (very plausibly the bare identifier `parent`,
@@ -2383,11 +2453,56 @@ static std::string lower_ui_query_call(const QueryCallExpr& qcall,
     if (func_name == "stacking_order") {
         const std::string of_expr  = find_named_arg_value(qcall.named_args, "of", emit_arg);
         const std::string node_cpp = EnttCodegenUtils::trait_cpp_name("std.ui.Node", program);
-        return "cactus::runtime::entt_backend::hierarchy_stacking_order(registry, " +
-               EnttCodegenUtils::hierarchy_index_expr(program) + ", registry.view<" + node_cpp + ">(), " +
-               of_expr + ", [&](entt::entity e) { return registry.get<" + node_cpp + ">(e).z_index; })";
+        const std::string callee   = reads_paint_order_cache()
+                                         ? "cactus_paint_order.order_of("
+                                         : "cactus::runtime::entt_backend::hierarchy_stacking_order(";
+        return callee + "registry, " + EnttCodegenUtils::hierarchy_index_expr(program) + ", registry.view<" +
+               node_cpp + ">(), " + of_expr + ", [&](entt::entity e) { return registry.get<" + node_cpp +
+               ">(e).z_index; })";
     }
     return "/* unsupported std.ui func: " + func_name + " */";
+}
+
+struct QueryTarget {
+    std::string module;
+    std::string function;
+};
+
+// Without a resolved callee, the modules whose `use` the call's qualifier matches, in declaration order.
+static std::vector<QueryTarget> unresolved_query_targets(const QueryCallExpr& qcall, const DecoratedProgram& program) {
+    std::vector<QueryTarget> targets;
+    const auto* member = qcall.callee == nullptr ? nullptr : std::get_if<MemberExpr>(&qcall.callee->expr);
+    if (member == nullptr || program.ast == nullptr) {
+        return targets;
+    }
+    for (const auto& decl : program.ast->declarations) {
+        const auto* use_node = std::get_if<UseNode>(&decl);
+        if (use_node == nullptr) {
+            continue;
+        }
+        const auto* ident  = std::get_if<IdentExpr>(&member->object->expr);
+        const bool matches = use_node->alias.has_value() ? ident != nullptr && ident->name == *use_node->alias
+                                                         : dotted_name_of(*member->object) == use_node->module_name;
+        if (matches) {
+            targets.push_back({.module = use_node->module_name, .function = member->member});
+        }
+    }
+    return targets;
+}
+
+// The std.query function a call names, if it names one.
+static std::optional<std::string> std_query_function(const QueryCallExpr& qcall, const DecoratedProgram& program) {
+    if (qcall.resolved_callee_id.has_value()) {
+        return qcall.resolved_callee_id->module.name == "std.query"
+                   ? std::optional{qcall.resolved_callee_id->local_name}
+                   : std::nullopt;
+    }
+    for (const auto& target : unresolved_query_targets(qcall, program)) {
+        if (target.module == "std.query") {
+            return target.function;
+        }
+    }
+    return std::nullopt;
 }
 
 static std::string lower_query_by_module(const auto& qcall,
@@ -2414,25 +2529,8 @@ static std::string lower_query_call_expr(const QueryCallExpr& qcall,
                                          const DecoratedProgram& program,
                                          const auto& emit_arg) {
     if (!qcall.resolved_callee_id.has_value()) {
-        if (qcall.callee == nullptr || program.ast == nullptr) {
-            return "/* unresolved query call */";
-        }
-        const auto* member = std::get_if<MemberExpr>(&qcall.callee->expr);
-        if (member == nullptr) {
-            return "/* unresolved query call */";
-        }
-        for (const auto& decl : program.ast->declarations) {
-            const auto* use_node = std::get_if<UseNode>(&decl);
-            if (use_node == nullptr) {
-                continue;
-            }
-            const auto* ident  = std::get_if<IdentExpr>(&member->object->expr);
-            const bool matches = use_node->alias.has_value() ? ident != nullptr && ident->name == *use_node->alias
-                                                             : dotted_name_of(*member->object) == use_node->module_name;
-            if (!matches) {
-                continue;
-            }
-            auto result = lower_query_by_module(qcall, program, emit_arg, use_node->module_name, member->member);
+        for (const auto& target : unresolved_query_targets(qcall, program)) {
+            auto result = lower_query_by_module(qcall, program, emit_arg, target.module, target.function);
             if (!result.empty()) {
                 return result;
             }
@@ -3668,6 +3766,38 @@ static std::string emit_range_foreach_stmt(const ForeachStmt& s,
     return result;
 }
 
+// The loop header for a std.query hierarchy iterable that needs no fresh
+// snapshot: a child walk over the sibling links, or a traversal into storage
+// the call site keeps. Nullopt for any other iterable.
+static std::optional<std::string> hierarchy_loop_header(const ForeachStmt& s,
+                                                        const std::string& ind,
+                                                        const DecoratedProgram& program,
+                                                        const std::function<std::string(const ExprNode&)>& rewrite) {
+    const auto* qcall = std::get_if<QueryCallExpr>(&s.iterable->expr);
+    const auto function = qcall == nullptr ? std::nullopt : std_query_function(*qcall, program);
+    if (!function.has_value()) {
+        return std::nullopt;
+    }
+    const auto& func_name = *function;
+    if (func_name == "children" && walks_child_links(*qcall)) {
+        return ind + "for ([[maybe_unused]] const auto " + s.var_name +
+               " : cactus::runtime::entt_backend::HierarchyChildren(registry, " +
+               EnttCodegenUtils::hierarchy_index_expr(program) + ", " +
+               find_named_arg_value(qcall->named_args, "of", rewrite) + ", " + hierarchy_child_view(*qcall, program) +
+               ")) {\n";
+    }
+    if ((func_name != "hierarchy_preorder" && func_name != "hierarchy_postorder") ||
+        active_scope<HandlerBodyCodegen>() == nullptr) {
+        return std::nullopt;
+    }
+    const auto buffer    = foreach_temp_name(s, "buffer");
+    const auto traversal = foreach_temp_name(s);
+    return ind + "static thread_local cactus::runtime::entt_backend::HierarchyTraversalBuffer " + buffer + ";\n" + ind +
+           "const auto " + traversal + " = cactus::runtime::entt_backend::hierarchy_order(" +
+           hierarchy_order_args(*qcall, func_name, program) + ", " + buffer + ");\n" + ind +
+           "for ([[maybe_unused]] const auto& " + s.var_name + " : " + traversal + ") {\n";
+}
+
 // Still 73 after extracting emit_emit_stmt/emit_spawn_stmt/emit_add_trait_stmt/
 // emit_remove_trait_stmt/emit_project_trait_stmt (task 6.7); the visit lambda's
 // own nesting is counted into the enclosing function too.
@@ -3945,21 +4075,31 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                                                        local_kinds);
                     }
                 }
-                const auto temp = foreach_temp_name(s);
-                const bool constant_iterable =
-                    std::visit([](const auto& node) {
-                        if constexpr (requires { node.resolved_const_id; }) {
-                            return node.resolved_const_id.has_value();
-                        } else {
-                            return false;
-                        }
-                    }, s.iterable->expr);
-                std::string result =
-                    ind + (constant_iterable ? "const auto& " : "auto ") + temp + " = " +
-                    rewrite_expr(
-                        *s.iterable, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds) +
-                    ";\n";
-                result += ind + "for ([[maybe_unused]] const auto& " + s.var_name + " : " + temp + ") {\n";
+                const auto rewrite_arg = [&](const ExprNode& arg) {
+                    return rewrite_expr(arg, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
+                };
+                auto result = hierarchy_loop_header(s, ind, program, rewrite_arg).value_or("");
+                if (result.empty()) {
+                    const auto temp = foreach_temp_name(s);
+                    const bool constant_iterable =
+                        std::visit([](const auto& node) {
+                            if constexpr (requires { node.resolved_const_id; }) {
+                                return node.resolved_const_id.has_value();
+                            } else {
+                                return false;
+                            }
+                        }, s.iterable->expr);
+                    result = ind + (constant_iterable ? "const auto& " : "auto ") + temp + " = " +
+                             rewrite_expr(*s.iterable,
+                                          trait_names,
+                                          program,
+                                          pointer_aliases,
+                                          cpp_overrides,
+                                          pair_scope,
+                                          local_kinds) +
+                             ";\n";
+                    result += ind + "for ([[maybe_unused]] const auto& " + s.var_name + " : " + temp + ") {\n";
+                }
                 auto loop_locals = clone_or_empty(lexical_locals);
                 auto loop_kinds  = clone_or_empty(local_kinds);
                 loop_locals.insert(s.var_name);
@@ -6514,17 +6654,28 @@ std::string EnttSystemEmitter::emit_system(const RuleNode& sys, const DecoratedP
         out << "    (void)cactus_recipient;\n";
         emit_named_requirements(out, contract, program);
         emit_when_gate(out, sys, program);
-        emit_handler_body(out,
-                          sys,
-                          handler,
-                          {.domain                = &domain,
-                           .pair_binding_codegens = &pair_binding_codegens,
-                           .pair_codegen_scope    = &pair_codegen_scope,
-                           .program               = &program,
-                           .contract              = contract,
-                           .is_pair               = is_pair,
-                           .selectionless         = selectionless,
-                           .trigger_binding       = &trigger_binding});
+        HandlerBodyCodegen body_codegen{.contract           = contract,
+                                        .structure_deferred = !program.execution_graph.phases.empty()};
+        std::ostringstream body;
+        {
+            const ActiveScope<HandlerBodyCodegen> body_scope(body_codegen);
+            emit_handler_body(body,
+                              sys,
+                              handler,
+                              {.domain                = &domain,
+                               .pair_binding_codegens = &pair_binding_codegens,
+                               .pair_codegen_scope    = &pair_codegen_scope,
+                               .program               = &program,
+                               .contract              = contract,
+                               .is_pair               = is_pair,
+                               .selectionless         = selectionless,
+                               .trigger_binding       = &trigger_binding});
+        }
+        if (body_codegen.uses_paint_order) {
+            out << "    static thread_local cactus::runtime::entt_backend::HierarchyPaintOrder cactus_paint_order;\n";
+            out << "    const auto cactus_paint_pass = cactus_paint_order.pass();\n";
+        }
+        out << body.str();
         out << "}\n\n";
     }
 

@@ -1300,6 +1300,82 @@ static std::vector<fs::path> example_program_roots(const fs::path& examples) {
 
 // Lists every delayed delivery edge of each example and fixture program. Run by hand with
 // `test_multi_module_integration "[delivery-survey]"` when cycle rules change.
+
+// The text of the generated function definition whose signature starts with `signature`.
+static std::string function_body(const std::string& code, const std::string& signature) {
+    auto start = code.find(signature);
+    while (start != std::string::npos && code.find(";\n", start) < code.find('{', start)) {
+        start = code.find(signature, start + 1);
+    }
+    if (start == std::string::npos) {
+        return {};
+    }
+    return code.substr(start, code.find("\n}\n", start) - start);
+}
+
+TEST_CASE("integration: std.ui arrangement reads draw orders from one paint-order traversal",
+          "[integration][ui][hierarchy]") {
+    auto build_dir = integration_build_dir() / "ui_paint_order_cache";
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    const std::string source =
+        "module paint_order_app\n"
+        "use std.ui as ui\n"
+        "\n"
+        "pub extern event restack\n"
+        "\n"
+        "trait Order:\n"
+        "    var value: int = 0\n"
+        "\n"
+        "rule Restack:\n"
+        "    each:\n"
+        "        ui.Node as node\n"
+        "        Order as order\n"
+        "    on restack:\n"
+        "        node.z_index = order.value\n"
+        "        order.value = ui.stacking_order(of = self)\n"
+        "\n"
+        "trait Seen:\n"
+        "    var value: int = 0\n"
+        "\n"
+        "rule Observe:\n"
+        "    each:\n"
+        "        Seen as seen\n"
+        "    after: Restack\n"
+        "    on restack:\n"
+        "        seen.value = ui.stacking_order(of = self)\n"
+        "\n"
+        "pub entity Panel:\n"
+        "    ui.Node\n"
+        "    Order\n"
+        "    Seen\n";
+
+    ProgramNode merged_ast;
+    auto merged = link_with_stdlib(source, "paint_order_app", build_dir, merged_ast);
+    REQUIRE(merged.has_value());
+    const auto code = CppEnttCodegen::generate(*merged);
+
+    const auto arrange = function_body(code, "void arrange_ui_on(");
+    REQUIRE_FALSE(arrange.empty());
+    CHECK(arrange.contains("static thread_local cactus::runtime::entt_backend::HierarchyPaintOrder cactus_paint_order;"));
+    CHECK(arrange.contains("const auto cactus_paint_pass = cactus_paint_order.pass();"));
+    CHECK(arrange.contains("cactus_paint_order.order_of(registry, "));
+    CHECK_FALSE(arrange.contains("hierarchy_stacking_order("));
+    CHECK_FALSE(arrange.contains("hierarchy_children("));
+
+    const auto restack = function_body(code, "void restack_on(");
+    REQUIRE_FALSE(restack.empty());
+    CHECK(restack.contains("cactus::runtime::entt_backend::hierarchy_stacking_order(registry, "));
+    CHECK_FALSE(restack.contains("HierarchyPaintOrder"));
+
+    const auto observe = function_body(code, "void observe_on(");
+    REQUIRE_FALSE(observe.empty());
+    CHECK(observe.contains("cactus_paint_order.order_of(registry, "));
+
+    fs::remove_all(build_dir, ec);
+}
+
 TEST_CASE("survey: delayed delivery edges of every example and fixture", "[.][delivery-survey]") {
     const auto examples = stdlib_dir().parent_path() / "examples";
     auto roots = example_program_roots(examples);

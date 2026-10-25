@@ -4710,6 +4710,76 @@ TEST_CASE("Codegen EnTT: hierarchy traversals lower to the runtime forest walk",
     CHECK_FALSE(code.contains("visited.insert"));
 }
 
+static const char* const kChildLoopPreamble =
+    "use std.query as query\n"
+    "pub extern event frame:\n"
+    "    dt: float\n"
+    "phase tick:\n"
+    "    from:\n"
+    "        frame\n"
+    "trait Panel:\n"
+    "    var count: int\n"
+    "trait Node\n"
+    "trait Hidden\n";
+
+TEST_CASE("Codegen EnTT: a child loop walks the sibling links without a snapshot",
+          "[codegen-entt][query][hierarchy]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(std::string(kChildLoopPreamble) +
+                                       "rule CountChildren:\n"
+                                       "    each:\n"
+                                       "        Panel as panel\n"
+                                       "    on tick:\n"
+                                       "        for child in query.children[Node, not Hidden](of = self):\n"
+                                       "            panel.count += 1\n",
+                                   program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.contains("for ([[maybe_unused]] const auto child : cactus::runtime::entt_backend::HierarchyChildren("
+                        "registry, cactus::runtime::entt_backend::hierarchy_index<Parent>(registry), entity, "
+                        "registry.view<Parent, ::cactus_gen::Node>(entt::exclude<::cactus_gen::Hidden>))) {"));
+    CHECK_FALSE(code.contains("hierarchy_children("));
+}
+
+TEST_CASE("Codegen EnTT: a child loop keeps the snapshot when the handler projects a filter trait",
+          "[codegen-entt][query][hierarchy]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(std::string(kChildLoopPreamble) +
+                                       "rule HideChildren:\n"
+                                       "    each:\n"
+                                       "        Panel\n"
+                                       "    on tick:\n"
+                                       "        for child in query.children[Node, not Hidden](of = self):\n"
+                                       "            project Hidden to child\n",
+                                   program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.contains("cactus::runtime::entt_backend::hierarchy_children(registry, "));
+    CHECK_FALSE(code.contains("HierarchyChildren("));
+}
+
+TEST_CASE("Codegen EnTT: a traversal loop reuses per-call-site storage", "[codegen-entt][query][hierarchy]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(std::string(kChildLoopPreamble) +
+                                       "rule Visit:\n"
+                                       "    each:\n"
+                                       "        Panel as panel\n"
+                                       "    on tick:\n"
+                                       "        for item in query.hierarchy_postorder[Node]():\n"
+                                       "            panel.count += 1\n",
+                                   program);
+
+    const auto code   = CppEnttCodegen::generate(decorated);
+    const auto buffer = extract_temp_name(code, "foreach_buffer_");
+    REQUIRE_FALSE(buffer.empty());
+    CHECK(code.contains("static thread_local cactus::runtime::entt_backend::HierarchyTraversalBuffer " + buffer +
+                        ";"));
+    CHECK(code.contains("cactus::runtime::entt_backend::hierarchy_order(registry, "
+                        "cactus::runtime::entt_backend::hierarchy_index<Parent>(registry), "
+                        "registry.view<::cactus_gen::Node>(), true, " +
+                        buffer + ")"));
+}
+
 TEST_CASE("Codegen EnTT: query.parent lowers to Parent component try_get", "[codegen-entt][query]") {
     ProgramNode program;
     auto decorated = full_pipeline(

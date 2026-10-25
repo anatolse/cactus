@@ -19,9 +19,12 @@
 #include <deque>
 #include <functional>
 #include <initializer_list>
+#include <iterator>
 #include <limits>
 #include <map>
+#include <memory>
 #include <optional>
+#include <ranges>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -2187,18 +2190,16 @@ public:
     // `clear` restores the value that existed before the *first* projection
     // (backend-cpp-entt "Repeated projection coalesces").
     void remember(entt::registry& registry, entt::entity entity) {
-        if (!registry.valid(entity) || previous_.contains(entity)) {
+        if (!registry.valid(entity) || find(entity) != nullptr) {
             return;
         }
-        entities_.push_back(entity);
+        slots_.set(entity, static_cast<std::uint32_t>(entries_.size()));
         if constexpr (std::is_empty_v<Component>) {
-            previous_.emplace(entity, registry.all_of<Component>(entity));
+            entries_.push_back({.entity = entity, .previous = registry.all_of<Component>(entity)});
         } else {
-            if (const auto* existing = registry.try_get<Component>(entity); existing != nullptr) {
-                previous_.emplace(entity, *existing);
-            } else {
-                previous_.emplace(entity, std::nullopt);
-            }
+            const auto* existing = registry.try_get<Component>(entity);
+            entries_.push_back(
+                {.entity = entity, .previous = existing != nullptr ? Previous{*existing} : Previous{std::nullopt}});
         }
     }
 
@@ -2235,13 +2236,15 @@ public:
     // owns the component going forward: forget the projected-cleanup
     // obligation without touching the registry.
     void cancel(entt::entity entity) {
-        previous_.erase(entity);
+        if (auto* entry = find(entity); entry != nullptr) {
+            entry->live = false;
+        }
     }
 
     // True while this entity's component is a frame-local projection rather
     // than durable structure, which world capture must not record.
     [[nodiscard]] bool is_projected(entt::entity entity) const {
-        return previous_.contains(entity);
+        return find(entity) != nullptr;
     }
 
     // The value a deferred field patch must write: the remembered
@@ -2253,8 +2256,8 @@ public:
         if (!registry.valid(entity)) {
             return nullptr;
         }
-        if (const auto previous_it = previous_.find(entity); previous_it != previous_.end()) {
-            return previous_it->second.has_value() ? &*previous_it->second : nullptr;
+        if (auto* entry = find(entity); entry != nullptr) {
+            return entry->previous.has_value() ? &*entry->previous : nullptr;
         }
         return registry.try_get<Component>(entity);
     }
@@ -2262,35 +2265,48 @@ public:
     // Restores or removes every tracked entity's component per the recorded
     // pre-projection snapshot, then resets tracking for the next frame. An
     // entity destroyed after being projected (no longer valid) is skipped,
-    // matching total entity_id semantics.
+    // matching total entity_id semantics. Storage is kept for the next frame.
     void clear(entt::registry& registry) {
-        for (const auto entity : entities_) {
-            const auto previous_it = previous_.find(entity);
-            if (previous_it == previous_.end() || !registry.valid(entity)) {
+        for (const auto& entry : entries_) {
+            if (!entry.live || !registry.valid(entry.entity)) {
                 continue;
             }
-            if constexpr (std::is_empty_v<Component>) {
-                if (previous_it->second) {
-                    registry.emplace_or_replace<Component>(entity);
-                } else if (registry.all_of<Component>(entity)) {
-                    registry.remove<Component>(entity);
+            if (entry.previous) {
+                if constexpr (std::is_empty_v<Component>) {
+                    registry.emplace_or_replace<Component>(entry.entity);
+                } else {
+                    registry.emplace_or_replace<Component>(entry.entity, *entry.previous);
                 }
-            } else {
-                if (previous_it->second.has_value()) {
-                    registry.emplace_or_replace<Component>(entity, *previous_it->second);
-                } else if (registry.all_of<Component>(entity)) {
-                    registry.remove<Component>(entity);
-                }
+            } else if (registry.all_of<Component>(entry.entity)) {
+                registry.remove<Component>(entry.entity);
             }
         }
-        entities_.clear();
-        previous_.clear();
+        entries_.clear();
     }
 
 private:
-    std::vector<entt::entity> entities_;
-    std::unordered_map<entt::entity, std::conditional_t<std::is_empty_v<Component>, bool, std::optional<Component>>>
-        previous_;
+    using Previous = std::conditional_t<std::is_empty_v<Component>, bool, std::optional<Component>>;
+
+    struct Entry {
+        entt::entity entity{entt::null};
+        Previous previous{};
+        bool live = true;
+    };
+
+    // Slots outlive the entries they named; an entry counts only when its handle matches.
+    template <typename Self>
+    [[nodiscard]] auto* find(this Self& self, entt::entity entity) {
+        using EntryPointer = decltype(self.entries_.data());
+        const auto slot    = self.slots_.get(entity);
+        if (slot >= self.entries_.size()) {
+            return EntryPointer{nullptr};
+        }
+        auto& entry = self.entries_[slot];
+        return entry.entity == entity && entry.live ? &entry : EntryPointer{nullptr};
+    }
+
+    SparseSlots slots_;
+    std::vector<Entry> entries_;
 };
 
 // ── Hierarchy (hierarchy-forest) ─────────────────────────────────────────────
@@ -2456,13 +2472,135 @@ template <typename View>
     return result;
 }
 
-// The entities `matching` contains whose parent is missing, stale or not
-// matching, oldest first.
+// Test-only: makes every HierarchyChildren range iterate a snapshot taken when it begins.
+void set_hierarchy_snapshots_forced(bool forced) noexcept;
+[[nodiscard]] bool hierarchy_snapshots_forced() noexcept;
+
+// The children of `of` that `matching` contains, oldest first, read from the
+// sibling links as iteration advances. It visits what hierarchy_children
+// returns only while the hierarchy and `matching` stay unchanged.
 template <typename View>
-[[nodiscard]] std::vector<entt::entity> hierarchy_roots(const entt::registry& registry,
-                                                        const HierarchyIndex& index,
-                                                        const View& matching) {
+class HierarchyChildren {
+public:
+    HierarchyChildren(const entt::registry& registry, const HierarchyIndex& index, entt::entity of, View matching)
+        : index_(&index), matching_(std::move(matching)) {
+        if (!registry.valid(of)) {
+            return;
+        }
+        if (hierarchy_snapshots_forced()) {
+            snapshot_ = hierarchy_children(registry, index, of, matching_);
+            first_    = snapshot_->empty() ? entt::entity{entt::null} : snapshot_->front();
+            return;
+        }
+        first_ = matching_from(index.first_child(of));
+    }
+
+    class Iterator {
+    public:
+        Iterator(const HierarchyChildren* range, entt::entity current) : range_(range), current_(current) {}
+
+        [[nodiscard]] entt::entity operator*() const noexcept {
+            return current_;
+        }
+        Iterator& operator++() {
+            current_ = range_->after(current_, ++position_);
+            return *this;
+        }
+        [[nodiscard]] bool operator==(std::default_sentinel_t /*end*/) const noexcept {
+            return current_ == entt::null;
+        }
+
+    private:
+        const HierarchyChildren* range_;
+        entt::entity current_;
+        std::size_t position_ = 0;
+    };
+
+    [[nodiscard]] Iterator begin() const {
+        return Iterator(this, first_);
+    }
+    [[nodiscard]] static std::default_sentinel_t end() noexcept {
+        return std::default_sentinel;
+    }
+
+private:
+    [[nodiscard]] entt::entity matching_from(entt::entity child) const {
+        while (child != entt::null && !matching_.contains(child)) {
+            child = index_->next_sibling(child);
+        }
+        return child;
+    }
+
+    [[nodiscard]] entt::entity after(entt::entity current, std::size_t position) const {
+        if (snapshot_.has_value()) {
+            return position < snapshot_->size() ? (*snapshot_)[position] : entt::entity{entt::null};
+        }
+        return matching_from(index_->next_sibling(current));
+    }
+
+    const HierarchyIndex* index_;
+    View matching_;
+    entt::entity first_{entt::null};
+    std::optional<std::vector<entt::entity>> snapshot_;
+};
+
+// Storage one traversal call site reuses across evaluations.
+struct HierarchyTraversalBuffer {
+    std::vector<entt::entity> order;
+    std::vector<entt::entity> stack;
     std::vector<std::pair<std::uint64_t, entt::entity>> ordered;
+    std::vector<entt::entity> roots;
+    bool leased = false;
+};
+
+// Holds a traversal's result in a buffer until it goes out of scope. A
+// traversal that finds the buffer leased (a re-entered call site) uses storage
+// of its own instead.
+class HierarchyTraversal {
+public:
+    explicit HierarchyTraversal(HierarchyTraversalBuffer& shared) {
+        if (shared.leased) {
+            owned_ = std::make_unique<HierarchyTraversalBuffer>();
+        }
+        buffer_         = owned_ != nullptr ? owned_.get() : &shared;
+        buffer_->leased = true;
+    }
+    HierarchyTraversal(const HierarchyTraversal&)            = delete;
+    HierarchyTraversal& operator=(const HierarchyTraversal&) = delete;
+    HierarchyTraversal(HierarchyTraversal&& other) noexcept
+        : buffer_(std::exchange(other.buffer_, nullptr)), owned_(std::move(other.owned_)) {}
+    HierarchyTraversal& operator=(HierarchyTraversal&&) = delete;
+    ~HierarchyTraversal() {
+        if (buffer_ != nullptr) {
+            buffer_->leased = false;
+        }
+    }
+
+    [[nodiscard]] HierarchyTraversalBuffer& buffer() noexcept {
+        return *buffer_;
+    }
+    [[nodiscard]] auto begin() const noexcept {
+        return buffer_->order.cbegin();
+    }
+    [[nodiscard]] auto end() const noexcept {
+        return buffer_->order.cend();
+    }
+
+private:
+    HierarchyTraversalBuffer* buffer_ = nullptr;
+    std::unique_ptr<HierarchyTraversalBuffer> owned_;
+};
+
+// Fills `roots` with the entities `matching` contains whose parent is missing,
+// stale or not matching, oldest first. `ordered` is scratch.
+template <typename View>
+void fill_hierarchy_roots(const entt::registry& registry,
+                          const HierarchyIndex& index,
+                          const View& matching,
+                          std::vector<std::pair<std::uint64_t, entt::entity>>& ordered,
+                          std::vector<entt::entity>& roots) {
+    ordered.clear();
+    roots.clear();
     for (const auto entity : matching) {
         const auto parent = index.parent_of(entity);
         if (parent == entt::null || !registry.valid(parent) || !matching.contains(parent)) {
@@ -2470,30 +2608,52 @@ template <typename View>
         }
     }
     std::ranges::sort(ordered);
-    std::vector<entt::entity> roots;
-    roots.reserve(ordered.size());
     for (const auto& [ordinal, entity] : ordered) {
         roots.push_back(entity);
     }
+}
+
+// The entities `matching` contains whose parent is missing, stale or not
+// matching, oldest first.
+template <typename View>
+[[nodiscard]] std::vector<entt::entity> hierarchy_roots(const entt::registry& registry,
+                                                        const HierarchyIndex& index,
+                                                        const View& matching) {
+    std::vector<std::pair<std::uint64_t, entt::entity>> ordered;
+    std::vector<entt::entity> roots;
+    fill_hierarchy_roots(registry, index, matching, ordered, roots);
     return roots;
 }
 
-// Every entity `matching` contains, in hierarchy preorder or postorder. An
-// entity whose parent is missing, stale or not matching is a root; roots and
-// siblings come oldest first.
 template <typename View>
-[[nodiscard]] std::vector<entt::entity> hierarchy_order(const entt::registry& registry,
-                                                        const HierarchyIndex& index,
-                                                        const View& matching,
-                                                        bool postorder) {
-    std::vector<entt::entity> result;
-    std::vector<entt::entity> stack;
+[[nodiscard]] const std::vector<entt::entity>& hierarchy_roots(const entt::registry& registry,
+                                                               const HierarchyIndex& index,
+                                                               const View& matching,
+                                                               HierarchyTraversalBuffer& buffer) {
+    fill_hierarchy_roots(registry, index, matching, buffer.ordered, buffer.roots);
+    return buffer.roots;
+}
+
+// Fills `buffer.order` with every entity `matching` contains, in hierarchy
+// preorder or postorder. An entity whose parent is missing, stale or not
+// matching is a root; roots and siblings come oldest first.
+template <typename View>
+void fill_hierarchy_order(const entt::registry& registry,
+                          const HierarchyIndex& index,
+                          const View& matching,
+                          bool postorder,
+                          HierarchyTraversalBuffer& buffer) {
+    auto& result = buffer.order;
+    auto& stack  = buffer.stack;
+    result.clear();
+    stack.clear();
     const auto push_matching = [&](entt::entity child) {
         if (matching.contains(child)) {
             stack.push_back(child);
         }
     };
-    for (const auto root : hierarchy_roots(registry, index, matching)) {
+    fill_hierarchy_roots(registry, index, matching, buffer.ordered, buffer.roots);
+    for (const auto root : buffer.roots) {
         const auto tree_start = result.size();
         stack.push_back(root);
         while (!stack.empty()) {
@@ -2513,7 +2673,27 @@ template <typename View>
             std::reverse(result.begin() + static_cast<std::ptrdiff_t>(tree_start), result.end());
         }
     }
-    return result;
+}
+
+template <typename View>
+[[nodiscard]] std::vector<entt::entity> hierarchy_order(const entt::registry& registry,
+                                                        const HierarchyIndex& index,
+                                                        const View& matching,
+                                                        bool postorder) {
+    HierarchyTraversalBuffer buffer;
+    fill_hierarchy_order(registry, index, matching, postorder, buffer);
+    return std::move(buffer.order);
+}
+
+template <typename View>
+[[nodiscard]] HierarchyTraversal hierarchy_order(const entt::registry& registry,
+                                                 const HierarchyIndex& index,
+                                                 const View& matching,
+                                                 bool postorder,
+                                                 HierarchyTraversalBuffer& shared) {
+    HierarchyTraversal traversal(shared);
+    fill_hierarchy_order(registry, index, matching, postorder, traversal.buffer());
+    return traversal;
 }
 
 // The position of `requested` in a preorder over `matching` whose siblings are
@@ -2548,6 +2728,99 @@ template <typename View, typename ZIndex>
     }
     return 0;
 }
+
+// Every node's hierarchy_stacking_order, from one traversal made on the first
+// lookup of a pass. A lookup outside a pass computes the order on its own.
+class HierarchyPaintOrder {
+public:
+    // A pass's lookups share one traversal; nothing it reads may change while it lasts.
+    class Pass {
+    public:
+        explicit Pass(HierarchyPaintOrder& order) noexcept : order_(&order) {
+            ++order.passes_;
+            order.built_ = false;
+        }
+        Pass(const Pass&)            = delete;
+        Pass& operator=(const Pass&) = delete;
+        Pass(Pass&&)                 = delete;
+        Pass& operator=(Pass&&)      = delete;
+        ~Pass() {
+            --order_->passes_;
+            order_->built_ = false;
+        }
+
+    private:
+        HierarchyPaintOrder* order_;
+    };
+
+    [[nodiscard]] Pass pass() noexcept {
+        return Pass(*this);
+    }
+
+    template <typename View, typename ZIndex>
+    [[nodiscard]] int order_of(const entt::registry& registry,
+                               const HierarchyIndex& index,
+                               const View& matching,
+                               entt::entity requested,
+                               const ZIndex& z_of) {
+        if (passes_ == 0) {
+            return hierarchy_stacking_order(registry, index, matching, requested, z_of);
+        }
+        if (!built_) {
+            build(registry, index, matching, z_of);
+        }
+        const auto position = positions_.get(requested);
+        return position < preorder_.size() && preorder_[position] == requested ? static_cast<int>(position) : 0;
+    }
+
+private:
+    struct Sibling {
+        int z_index = 0;
+        std::uint32_t age = 0;
+        entt::entity entity{entt::null};
+    };
+
+    template <typename View, typename ZIndex>
+    void build(const entt::registry& registry, const HierarchyIndex& index, const View& matching, const ZIndex& z_of) {
+        static_assert(std::is_same_v<std::decay_t<std::invoke_result_t<const ZIndex&, entt::entity>>, int>);
+        preorder_.clear();
+        stack_.clear();
+        fill_hierarchy_roots(registry, index, matching, ordered_, roots_);
+        for (const auto root : roots_) {
+            stack_.push_back(root);
+            while (!stack_.empty()) {
+                const auto entity = stack_.back();
+                stack_.pop_back();
+                positions_.set(entity, static_cast<std::uint32_t>(preorder_.size()));
+                preorder_.push_back(entity);
+                siblings_.clear();
+                index.for_each_child(entity, [&](entt::entity child) {
+                    if (matching.contains(child)) {
+                        siblings_.push_back(
+                            {.z_index = z_of(child), .age = static_cast<std::uint32_t>(siblings_.size()), .entity = child});
+                    }
+                });
+                std::ranges::sort(siblings_, {}, [](const Sibling& sibling) {
+                    return std::pair{sibling.z_index, sibling.age};
+                });
+                for (const auto& sibling : std::views::reverse(siblings_)) {
+                    stack_.push_back(sibling.entity);
+                }
+            }
+        }
+        built_ = true;
+    }
+
+    // Positions of entities no longer in the forest stay behind; preorder_ disowns them.
+    SparseSlots positions_;
+    std::vector<entt::entity> preorder_;
+    std::vector<entt::entity> stack_;
+    std::vector<Sibling> siblings_;
+    std::vector<std::pair<std::uint64_t, entt::entity>> ordered_;
+    std::vector<entt::entity> roots_;
+    int passes_  = 0;
+    bool built_  = false;
+};
 
 // ── Sweep-and-prune broad phase (spatial-broadphase-runtime capability) ────────
 // Runtime-owned, program-independent bipartite 2D/3D broad phase over

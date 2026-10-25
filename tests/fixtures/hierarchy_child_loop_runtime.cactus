@@ -1,0 +1,43 @@
+module hierarchy_child_loop_runtime
+
+use std.core
+use std.query as query
+
+pub trait Item
+pub trait Marked
+
+pub trait Box:
+    var visits: int = 0
+    var marked: int = 0
+
+template Leaf(owner: entity_id):
+    Item
+    Parent:
+        parent = owner
+
+pub entity Crate:
+    Box
+
+pub extern event Grow
+pub extern event Mark
+
+# Each visit spawns one more child; the loop still sees only the children it began with.
+rule GrowBoxes:
+    each:
+        Box as box
+
+    on Grow:
+        for child in query.children[Item](of = self):
+            box.visits += 1
+            spawn Leaf(owner = self)
+
+# The handler projects Marked, which the outer loop tests, so that loop iterates a snapshot.
+rule MarkBoxes:
+    each:
+        Box as box
+
+    on Mark:
+        for child in query.children[Item, Marked](of = self):
+            box.marked += 1
+            for other in query.children[Item](of = self):
+                project Marked to other

@@ -1,8 +1,11 @@
 // NOLINTBEGIN(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity)
 // -- Catch2 assertion macros intentionally expand through do-while and expression decomposition.
 #include "backends/cpp-entt/runtime.hpp"
+#include "heap_allocation_counter.hpp"
 
 #include <catch2/catch_test_macros.hpp>
+
+#include <vector>
 
 using namespace cactus::runtime::entt_backend;
 
@@ -193,4 +196,81 @@ TEST_CASE("ProjectedTraitTracker: durable_value without a projection is the live
     registry.destroy(with_component);
     CHECK(tracker.durable_value(registry, with_component) == nullptr);
 }
+
+TEST_CASE("ProjectedTraitTracker: projecting onto the same entities each frame stops allocating",
+          "[runtime][projected-trait][data]") {
+    entt::registry registry;
+    std::vector<entt::entity> entities(150);
+    registry.create(entities.begin(), entities.end());
+    for (std::size_t i = 0; i < entities.size(); i += 2) {
+        registry.emplace<DataComponent>(entities[i], DataComponent{.value = static_cast<int>(i)});
+    }
+
+    ProjectedTraitTracker<DataComponent> tracker;
+    const auto frame = [&] {
+        for (const auto entity : entities) {
+            tracker.project(registry, entity).value = -1;
+        }
+        tracker.clear(registry);
+    };
+    frame();
+    std::size_t allocations = 0;
+    {
+        const cactus_test::AllocationCount counting;
+        frame();
+        frame();
+        allocations = cactus_test::AllocationCount::count();
+    }
+    CHECK(allocations == 0);
+    for (std::size_t i = 0; i < entities.size(); ++i) {
+        if (i % 2 == 0) {
+            CHECK(registry.get<DataComponent>(entities[i]).value == static_cast<int>(i));
+        } else {
+            CHECK_FALSE(registry.all_of<DataComponent>(entities[i]));
+        }
+    }
+}
+
+TEST_CASE("ProjectedTraitTracker: cleanup restores durable values for entities that gained, lost or were reused",
+          "[runtime][projected-trait][data]") {
+    entt::registry registry;
+    const auto durable = registry.create();
+    registry.emplace<DataComponent>(durable, DataComponent{.value = 5});
+    const auto gained    = registry.create();
+    const auto cancelled = registry.create();
+    const auto reused    = registry.create();
+
+    ProjectedTraitTracker<DataComponent> tracker;
+    for (int frame = 0; frame < 2; ++frame) {
+        tracker.project(registry, durable).value = 50;
+        registry.remove<DataComponent>(durable);  // the projection lost the trait mid-frame
+        tracker.project(registry, gained).value = 60;
+        tracker.project(registry, cancelled).value = 70;
+        tracker.cancel(cancelled);
+        CHECK_FALSE(tracker.is_projected(cancelled));
+        tracker.project(registry, reused).value = 80;
+        CHECK(tracker.is_projected(reused));
+        tracker.clear(registry);
+
+        REQUIRE(registry.all_of<DataComponent>(durable));
+        CHECK(registry.get<DataComponent>(durable).value == 5);
+        CHECK_FALSE(registry.all_of<DataComponent>(gained));
+        CHECK(registry.get<DataComponent>(cancelled).value == 70);
+        CHECK_FALSE(registry.all_of<DataComponent>(reused));
+        CHECK_FALSE(tracker.is_projected(durable));
+        registry.remove<DataComponent>(cancelled);
+    }
+
+    tracker.project(registry, reused).value = 1;
+    registry.destroy(reused);
+    const auto successor = registry.create();
+    REQUIRE(entt::to_entity(successor) == entt::to_entity(reused));
+    CHECK_FALSE(tracker.is_projected(successor));
+    registry.emplace<DataComponent>(successor, DataComponent{.value = 9});
+    tracker.project(registry, successor).value = 90;
+    CHECK(tracker.durable_value(registry, successor)->value == 9);
+    tracker.clear(registry);
+    CHECK(registry.get<DataComponent>(successor).value == 9);
+}
+
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity)

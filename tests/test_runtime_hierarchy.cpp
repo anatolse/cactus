@@ -2,12 +2,15 @@
 // -- Catch2 assertion macros intentionally expand through do-while and expression decomposition.
 #include "backends/cpp-entt/runtime.hpp"
 #include "common/cactus_runtime.hpp"
+#include "heap_allocation_counter.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <bit>
 #include <cstdint>
 #include <optional>
+#include <random>
 #include <vector>
 
 using namespace cactus::runtime;
@@ -482,6 +485,244 @@ TEST_CASE("Hierarchy queries: stacking order sorts siblings by z then creation",
     CHECK(at(nested) == 4);
     CHECK(at(other) == 5);
     CHECK(at(plain) == 0);
+}
+
+
+TEST_CASE("Hierarchy queries: a child range walks the sibling links in creation order",
+          "[runtime][hierarchy][query]") {
+    World world;
+    auto& registry  = world.registry;
+    const auto root = world.make();
+    const auto a    = world.child_of(root);
+    const auto skip = world.child_of(root);
+    const auto b    = world.child_of(root);
+    const auto gone = world.make();
+    registry.emplace<Node>(a);
+    registry.emplace<Node>(b);
+    registry.destroy(gone);
+    const auto view = registry.view<TreeParent, Node>();
+
+    const auto walk = [&](entt::entity of) {
+        std::vector<entt::entity> visited;
+        for (const auto child : entt_backend::HierarchyChildren(registry, world.index(), of, view)) {
+            visited.push_back(child);
+        }
+        return visited;
+    };
+    CHECK(walk(root) == std::vector{a, b});
+    CHECK(walk(skip).empty());
+    CHECK(walk(gone).empty());
+
+    std::size_t allocations = 0;
+    std::size_t visited     = 0;
+    {
+        const cactus_test::AllocationCount counting;
+        for (const auto of : {root, skip, gone}) {
+            for ([[maybe_unused]] const auto child : entt_backend::HierarchyChildren(registry, world.index(), of, view)) {
+                ++visited;
+            }
+        }
+        allocations = cactus_test::AllocationCount::count();
+    }
+    CHECK(visited == 2);
+    CHECK(allocations == 0);
+
+    entt_backend::set_hierarchy_snapshots_forced(true);
+    CHECK(walk(root) == std::vector{a, b});
+    CHECK(walk(gone).empty());
+    entt_backend::set_hierarchy_snapshots_forced(false);
+}
+
+TEST_CASE("Hierarchy queries: a forced snapshot ignores children that start matching mid-loop",
+          "[runtime][hierarchy][query]") {
+    World world;
+    auto& registry   = world.registry;
+    const auto root  = world.make();
+    const auto first = world.child_of(root);
+    const auto later = world.child_of(root);
+    registry.emplace<Node>(first);
+    const auto view = registry.view<TreeParent, Node>();
+
+    const auto walk = [&](bool forced) {
+        registry.remove<Node>(later);
+        entt_backend::set_hierarchy_snapshots_forced(forced);
+        std::vector<entt::entity> visited;
+        for (const auto child : entt_backend::HierarchyChildren(registry, world.index(), root, view)) {
+            visited.push_back(child);
+            registry.emplace_or_replace<Node>(later);
+        }
+        entt_backend::set_hierarchy_snapshots_forced(false);
+        return visited;
+    };
+    CHECK(walk(true) == std::vector{first});
+    CHECK(walk(false) == std::vector{first, later});
+}
+
+TEST_CASE("Hierarchy queries: traversals into a reused buffer match and stop allocating",
+          "[runtime][hierarchy][query]") {
+    World world;
+    auto& registry  = world.registry;
+    const auto node = [&](entt::entity e) {
+        registry.emplace<Node>(e);
+        return e;
+    };
+    const auto root = node(world.make());
+    const auto a    = node(world.child_of(root));
+    node(world.child_of(a));
+    node(world.child_of(root));
+    const auto other = node(world.make());
+    node(world.child_of(other));
+    const auto view = registry.view<Node>();
+
+    entt_backend::HierarchyTraversalBuffer buffer;
+    const auto collect = [&](bool postorder) {
+        const auto traversal = entt_backend::hierarchy_order(registry, world.index(), view, postorder, buffer);
+        return std::vector<entt::entity>(traversal.begin(), traversal.end());
+    };
+    CHECK(collect(false) == entt_backend::hierarchy_order(registry, world.index(), view, false));
+    CHECK(collect(true) == entt_backend::hierarchy_order(registry, world.index(), view, true));
+    CHECK(entt_backend::hierarchy_roots(registry, world.index(), view, buffer) ==
+          entt_backend::hierarchy_roots(registry, world.index(), view));
+
+    std::size_t allocations = 0;
+    std::size_t visited     = 0;
+    {
+        const cactus_test::AllocationCount counting;
+        for (const bool postorder : {false, true}) {
+            for ([[maybe_unused]] const auto entity :
+                 entt_backend::hierarchy_order(registry, world.index(), view, postorder, buffer)) {
+                ++visited;
+            }
+        }
+        visited += entt_backend::hierarchy_roots(registry, world.index(), view, buffer).size();
+        allocations = cactus_test::AllocationCount::count();
+    }
+    CHECK(visited == 14);
+    CHECK(allocations == 0);
+}
+
+TEST_CASE("Hierarchy queries: a re-entered traversal works in storage of its own", "[runtime][hierarchy][query]") {
+    World world;
+    auto& registry  = world.registry;
+    const auto root = world.make();
+    registry.emplace<Node>(root);
+    registry.emplace<Node>(world.child_of(root));
+    const auto view = registry.view<Node>();
+
+    entt_backend::HierarchyTraversalBuffer buffer;
+    const auto expected = entt_backend::hierarchy_order(registry, world.index(), view, false);
+    std::vector<entt::entity> outer;
+    std::vector<entt::entity> inner;
+    for (const auto entity : entt_backend::hierarchy_order(registry, world.index(), view, false, buffer)) {
+        outer.push_back(entity);
+        for (const auto nested : entt_backend::hierarchy_order(registry, world.index(), view, false, buffer)) {
+            inner.push_back(nested);
+        }
+    }
+    CHECK(outer == expected);
+    CHECK(inner.size() == expected.size() * expected.size());
+    CHECK_FALSE(buffer.leased);
+}
+
+TEST_CASE("Hierarchy queries: one paint-order traversal equals the per-node stacking order",
+          "[runtime][hierarchy][query]") {
+    std::mt19937 random(7U);
+    for (int forest = 0; forest < 40; ++forest) {
+        World world;
+        auto& registry = world.registry;
+        std::vector<entt::entity> entities;
+        const auto count = 1U + (random() % 60U);
+        for (std::uint32_t i = 0; i < count; ++i) {
+            const bool root   = entities.empty() || random() % 4U == 0U;
+            const auto entity = root ? world.make() : world.child_of(entities[random() % entities.size()]);
+            if (random() % 8U != 0U) {
+                registry.emplace<Layer>(entity, Layer{.z_index = static_cast<int>(random() % 5U) - 2});
+            }
+            entities.push_back(entity);
+        }
+        const auto view = registry.view<Layer>();
+        const auto z_of = [&](entt::entity e) { return registry.get<Layer>(e).z_index; };
+
+        entt_backend::HierarchyPaintOrder paint;
+        const auto all_match = [&] {
+            return std::ranges::all_of(entities, [&](entt::entity entity) {
+                return paint.order_of(registry, world.index(), view, entity, z_of) ==
+                       entt_backend::hierarchy_stacking_order(registry, world.index(), view, entity, z_of);
+            });
+        };
+        for (int pass = 0; pass < 2; ++pass) {
+            const auto active = paint.pass();
+            CHECK(all_match());
+        }
+        CHECK(all_match());
+    }
+}
+
+TEST_CASE("Hierarchy queries: a warmed paint-order pass allocates nothing and sees z changes between passes",
+          "[runtime][hierarchy][query]") {
+    World world;
+    auto& registry   = world.registry;
+    const auto root  = world.make();
+    const auto left  = world.child_of(root);
+    const auto right = world.child_of(root);
+    for (const auto entity : {root, left, right}) {
+        registry.emplace<Layer>(entity);
+    }
+    const auto view = registry.view<Layer>();
+    const auto z_of = [&](entt::entity e) { return registry.get<Layer>(e).z_index; };
+
+    entt_backend::HierarchyPaintOrder paint;
+    const auto order_of = [&](entt::entity entity) {
+        return paint.order_of(registry, world.index(), view, entity, z_of);
+    };
+    {
+        const auto active = paint.pass();
+        CHECK(order_of(left) == 1);
+        CHECK(order_of(right) == 2);
+    }
+    registry.get<Layer>(left).z_index = 3;
+    std::size_t allocations = 0;
+    int left_order          = 0;
+    int right_order         = 0;
+    {
+        const cactus_test::AllocationCount counting;
+        const auto active = paint.pass();
+        left_order        = order_of(left);
+        right_order       = order_of(right);
+        allocations       = cactus_test::AllocationCount::count();
+    }
+    CHECK(left_order == 2);
+    CHECK(right_order == 1);
+    CHECK(allocations == 0);
+    const auto stale = world.make();
+    registry.destroy(stale);
+    const auto active = paint.pass();
+    CHECK(order_of(stale) == 0);
+}
+
+TEST_CASE("Hierarchy queries: a pass over 2,000 nodes traverses the forest once for draw orders",
+          "[runtime][hierarchy][query]") {
+    World world;
+    auto& registry = world.registry;
+    std::vector<entt::entity> nodes{world.make()};
+    for (std::size_t i = 1; i < 2000; ++i) {
+        nodes.push_back(world.child_of(nodes[(i - 1) / 4]));
+    }
+    for (const auto entity : nodes) {
+        registry.emplace<Layer>(entity);
+    }
+    const auto view = registry.view<Layer>();
+    const auto z_of = [&](entt::entity e) { return registry.get<Layer>(e).z_index; };
+
+    entt_backend::HierarchyPaintOrder paint;
+    const auto visits_before = world.index().child_visits();
+    {
+        const auto active = paint.pass();
+        for (const auto entity : nodes) {
+            (void)paint.order_of(registry, world.index(), view, entity, z_of);
+        }
+    }
+    CHECK(world.index().child_visits() - visits_before == nodes.size() - 1);
 }
 
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity)

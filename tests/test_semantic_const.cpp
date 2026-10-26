@@ -656,6 +656,17 @@ TEST_CASE("Render-pass funcs: a func with a loop is rejected at the stage call",
     CHECK(found->location.line > 6);
 }
 
+TEST_CASE("Render-pass funcs: a func with a trait parameter is rejected at the stage call",
+          "[semantic][render-passes][trait-parameters]") {
+    auto analysis = analyze("func size_of(sprite: Sprite) float:\n"
+                            "    return sprite.position.x\n" +
+                                render_pass_program("", "size_of(s)"),
+                            render_pass_imports());
+    INFO(describe(analysis));
+    CHECK(analysis.has("func 'size_of' cannot run in a render-pass vertex-stage handler: it takes a trait or event "
+                       "parameter"));
+}
+
 TEST_CASE("Render-pass funcs: a loop reached through another func is rejected",
           "[semantic][render-passes][function-loops]") {
     auto analysis = analyze(

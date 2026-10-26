@@ -427,6 +427,50 @@ inline auto trait_field_path(const MemberExpr& member) {
     return trait_field_path(std::as_const(*member.object), {member.member});
 }
 
+// A copy of a trait argument: a name, a dotted name, or a trait access over one; null otherwise.
+inline std::unique_ptr<ExprNode> clone_reference_argument(const ExprNode& arg) {
+    if (const auto* ident = std::get_if<IdentExpr>(&arg.expr)) {
+        return std::make_unique<ExprNode>(ExprNode::Variant{*ident}, arg.location);
+    }
+    if (const auto* member = std::get_if<MemberExpr>(&arg.expr)) {
+        auto object = clone_reference_argument(*member->object);
+        return object == nullptr ? nullptr
+                                 : std::make_unique<ExprNode>(ExprNode::Variant{MemberExpr{
+                                                                  .object               = std::move(object),
+                                                                  .member               = member->member,
+                                                                  .resolved_enum_member = std::nullopt,
+                                                                  .location             = member->location,
+                                                                  .resolved_entity_id   = member->resolved_entity_id,
+                                                              }},
+                                                              arg.location);
+    }
+    const auto* access = std::get_if<TraitAccessExpr>(&arg.expr);
+    auto object        = access == nullptr ? nullptr : clone_reference_argument(*access->object);
+    if (object == nullptr) {
+        return nullptr;
+    }
+    return std::make_unique<ExprNode>(ExprNode::Variant{TraitAccessExpr{.object             = std::move(object),
+                                                                        .trait_name         = access->trait_name,
+                                                                        .location           = access->location,
+                                                                        .resolved_trait_id  = access->resolved_trait_id,
+                                                                        .resolved_entity_id = access->resolved_entity_id,
+                                                                        .pair_binding_index = access->pair_binding_index}},
+                                      arg.location);
+}
+
+// `arg.field` over a copy of a trait argument; null when the argument has another form.
+inline std::unique_ptr<ExprNode> reference_field_read(const ExprNode& arg, const std::string& field) {
+    auto object = clone_reference_argument(arg);
+    if (object == nullptr) {
+        return nullptr;
+    }
+    return std::make_unique<ExprNode>(ExprNode::Variant{MemberExpr{.object               = std::move(object),
+                                                                   .member               = field,
+                                                                   .resolved_enum_member = std::nullopt,
+                                                                   .location             = arg.location}},
+                                      arg.location);
+}
+
 // The trait access a bracketed assignment targets, with its field path.
 inline std::optional<std::pair<const TraitAccessExpr*, std::vector<std::string>>> assign_trait_target(
     const VarAssign& assign) {

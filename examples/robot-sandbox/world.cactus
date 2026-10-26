@@ -89,12 +89,17 @@ func is_iron(x: int, y: int, z: int, seed: int) bool:
     return sample.valid and sample.nearest < 0.32 and quarter(sample.x + sample.y + sample.z)
 
 # The generated ground at a cell, for a world with this recipe.
-pub func ground_at(x: int, y: int, z: int, seed: int, min_y: int, spawn_x: int, spawn_z: int, spawn_floor: int) Ground:
+pub func ground_at(cell: voxel.Cell, recipe: Generation) Ground:
+    let x = cell.x
+    let y = cell.y
+    let z = cell.z
+    let seed = recipe.seed
+    let min_y = recipe.min_y
     if y == min_y:
         return Ground.Stone
-    if in_pocket(x, y, z, spawn_x, spawn_z, spawn_floor):
+    if in_pocket(x, y, z, recipe.spawn_x, recipe.spawn_z, recipe.spawn_floor):
         return Ground.Air
-    if near_spawn(x, z, spawn_x, spawn_z) and y == spawn_floor:
+    if near_spawn(x, z, recipe.spawn_x, recipe.spawn_z) and y == recipe.spawn_floor:
         return Ground.Stone
     let surface = surface_height(x, z, seed)
     if y > surface:
@@ -127,11 +132,10 @@ rule GenerateCell:
         voxel.Cell as cell
 
     on added voxel.Cell:
-        let min_y = Generator[Generation].min_y
-        let ground = ground_at(cell.x, cell.y, cell.z, Generator[Generation].seed, min_y, Generator[Generation].spawn_x, Generator[Generation].spawn_z, Generator[Generation].spawn_floor)
+        let ground = ground_at(cell, Generator[Generation])
         if ground == Ground.Air:
             return
         cell.texture = ground_texture(ground)
         add physics.Solid
-        if cell.y == min_y:
+        if cell.y == Generator[Generation].min_y:
             add Bedrock

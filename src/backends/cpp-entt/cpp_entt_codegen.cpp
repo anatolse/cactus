@@ -1918,6 +1918,17 @@ std::string constant_initializer_cpp(const ExprNode& value, bool view, const Dec
     return alias != nullptr ? EnttCodegenUtils::symbol_cpp_name(*alias) : EnttCodegenUtils::emit_expr(value, program);
 }
 
+// Funcs with trait or event parameters, declared once those structs exist; no constant can call one.
+std::string emit_reference_func_declarations(const DecoratedProgram& program) {
+    std::string out;
+    for (const auto& decl : program.ast == nullptr ? std::span<const Declaration>{} : program.ast->declarations) {
+        if (const auto* func = std::get_if<FuncNode>(&decl)) {
+            out += EnttSystemEmitter::emit_func_declaration(*func, program, true);
+        }
+    }
+    return out;
+}
+
 // Authored funcs are declared first so a constant may call one; constants then
 // follow in dependency order, so each initializer reads only constants above it.
 std::string emit_module_constants(const DecoratedProgram& program) {
@@ -1936,7 +1947,7 @@ std::string emit_module_constants(const DecoratedProgram& program) {
     std::unordered_map<SymbolId, const ExprNode*> values;
     for (const auto& decl : program.ast->declarations) {
         if (const auto* func = std::get_if<FuncNode>(&decl)) {
-            out << EnttSystemEmitter::emit_func_declaration(*func, program);
+            out << EnttSystemEmitter::emit_func_declaration(*func, program, false);
         } else if (const auto* block = std::get_if<ConstBlockNode>(&decl)) {
             for (const auto& assignment : block->assignments) {
                 if (assignment.resolved_const_id.has_value()) {
@@ -3873,6 +3884,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << EnttRestoreEmitter::emit_world_restore(program);
 
     out << emit_event_structs(program);
+    out << emit_reference_func_declarations(program);
 
     out << emit_external_command_forward_declarations(program);
     out << emit_graph_scheduler_state(program, accumulation, delivery);

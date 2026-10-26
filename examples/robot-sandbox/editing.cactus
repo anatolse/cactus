@@ -85,18 +85,19 @@ func low(a: int, b: int) int:
 func span(a: int, b: int) int:
     return if a < b: b - a + 1 else: a - b + 1
 
-pub func region_center(start_x: int, start_z: int, end_x: int, end_z: int, bottom: int, top: int) vec3:
-    return vec3(low(start_x, end_x) + span(start_x, end_x) * 0.5, bottom + (top - bottom + 1) * 0.5, low(start_z, end_z) + span(start_z, end_z) * 0.5)
+pub func region_center(editor: Editor, session: game.Session) vec3:
+    let bottom = bottom_layer(session.layer, session.height)
+    return vec3(low(editor.start_x, editor.end_x) + span(editor.start_x, editor.end_x) * 0.5, bottom + session.height * 0.5, low(editor.start_z, editor.end_z) + span(editor.start_z, editor.end_z) * 0.5)
 
-pub func region_size(start_x: int, start_z: int, end_x: int, end_z: int, bottom: int, top: int) vec3:
-    return vec3(span(start_x, end_x) * 1.0, (top - bottom + 1) * 1.0, span(start_z, end_z) * 1.0)
+pub func region_size(editor: Editor, session: game.Session) vec3:
+    return vec3(span(editor.start_x, editor.end_x) * 1.0, session.height * 1.0, span(editor.start_z, editor.end_z) * 1.0)
 
 # Cells a release would change: air cells clear of the robot when building,
 # solid cells above bedrock when digging.
-pub func eligible_cells(kind: game.EditKind, total: int, solid: int, bedrock: int, robot_cells: int, robot_solid: int) int:
-    if kind == game.EditKind.Dig:
-        return solid - bedrock
-    return total - solid - (robot_cells - robot_solid)
+pub func eligible_cells(editor: Editor, session: game.Session) int:
+    if session.edit_kind == game.EditKind.Dig:
+        return editor.solid - editor.bedrock
+    return editor.total - editor.solid - (editor.robot_cells - editor.robot_solid)
 
 rule Dig:
     each:
@@ -214,7 +215,7 @@ rule CountRegion:
         Select
     where:
         editor[Editor].dragging
-        collision.boxes_overlap(region_center(editor[Editor].start_x, editor[Editor].start_z, editor[Editor].end_x, editor[Editor].end_z, bottom_layer(game.Game[game.Session].layer, game.Game[game.Session].height), game.Game[game.Session].layer), region_size(editor[Editor].start_x, editor[Editor].start_z, editor[Editor].end_x, editor[Editor].end_z, bottom_layer(game.Game[game.Session].layer, game.Game[game.Session].height), game.Game[game.Session].layer), cell[tv.WorldTransform].position, cell[physics.BoxCollider].size)
+        collision.boxes_overlap(region_center(editor[Editor], game.Game[game.Session]), region_size(editor[Editor], game.Game[game.Session]), cell[tv.WorldTransform].position, cell[physics.BoxCollider].size)
     reduce per editor:
         total = count()
         robot_cells = sum(if collision.boxes_overlap(cell[tv.WorldTransform].position, cell[physics.BoxCollider].size, editor[tv.WorldTransform].position, ROBOT_BOX): 1 else: 0)
@@ -237,7 +238,7 @@ rule CountSolidRegion:
         Select
     where:
         editor[Editor].dragging
-        collision.boxes_overlap(region_center(editor[Editor].start_x, editor[Editor].start_z, editor[Editor].end_x, editor[Editor].end_z, bottom_layer(game.Game[game.Session].layer, game.Game[game.Session].height), game.Game[game.Session].layer), region_size(editor[Editor].start_x, editor[Editor].start_z, editor[Editor].end_x, editor[Editor].end_z, bottom_layer(game.Game[game.Session].layer, game.Game[game.Session].height), game.Game[game.Session].layer), cell[tv.WorldTransform].position, cell[physics.BoxCollider].size)
+        collision.boxes_overlap(region_center(editor[Editor], game.Game[game.Session]), region_size(editor[Editor], game.Game[game.Session]), cell[tv.WorldTransform].position, cell[physics.BoxCollider].size)
     reduce per editor:
         solid = count()
         robot_solid = sum(if collision.boxes_overlap(cell[tv.WorldTransform].position, cell[physics.BoxCollider].size, editor[tv.WorldTransform].position, ROBOT_BOX): 1 else: 0)
@@ -259,7 +260,7 @@ rule CountBedrockRegion:
         Select
     where:
         editor[Editor].dragging
-        collision.boxes_overlap(region_center(editor[Editor].start_x, editor[Editor].start_z, editor[Editor].end_x, editor[Editor].end_z, bottom_layer(game.Game[game.Session].layer, game.Game[game.Session].height), game.Game[game.Session].layer), region_size(editor[Editor].start_x, editor[Editor].start_z, editor[Editor].end_x, editor[Editor].end_z, bottom_layer(game.Game[game.Session].layer, game.Game[game.Session].height), game.Game[game.Session].layer), cell[tv.WorldTransform].position, cell[physics.BoxCollider].size)
+        collision.boxes_overlap(region_center(editor[Editor], game.Game[game.Session]), region_size(editor[Editor], game.Game[game.Session]), cell[tv.WorldTransform].position, cell[physics.BoxCollider].size)
     reduce per editor:
         bedrock = count()
 
@@ -282,7 +283,7 @@ rule DescribeSelection:
             game.Game[game.Session].preview = ""
             return
         let kind = game.Game[game.Session].edit_kind
-        let eligible = eligible_cells(kind, editor.total, editor.solid, editor.bedrock, editor.robot_cells, editor.robot_solid)
+        let eligible = eligible_cells(editor, game.Game[game.Session])
         let skipped = editor.total - eligible
         if kind == game.EditKind.Dig:
             game.Game[game.Session].preview = text.format("Dig {} cells, layers {}..{}, {} skipped", eligible, bottom_layer(game.Game[game.Session].layer, game.Game[game.Session].height), game.Game[game.Session].layer, skipped)
@@ -299,7 +300,7 @@ rule CommitRegion:
             tv.WorldTransform
             physics.BoxCollider
     where:
-        collision.boxes_overlap(region_center(editor[Editor].start_x, editor[Editor].start_z, editor[Editor].end_x, editor[Editor].end_z, bottom_layer(game.Game[game.Session].layer, game.Game[game.Session].height), game.Game[game.Session].layer), region_size(editor[Editor].start_x, editor[Editor].start_z, editor[Editor].end_x, editor[Editor].end_z, bottom_layer(game.Game[game.Session].layer, game.Game[game.Session].height), game.Game[game.Session].layer), cell[tv.WorldTransform].position, cell[physics.BoxCollider].size)
+        collision.boxes_overlap(region_center(editor[Editor], game.Game[game.Session]), region_size(editor[Editor], game.Game[game.Session]), cell[tv.WorldTransform].position, cell[physics.BoxCollider].size)
 
     on RegionCommitted:
         if game.Game[game.Session].edit_kind == game.EditKind.Dig:
@@ -314,7 +315,7 @@ rule ReportCommit:
         Editor as editor
 
     on RegionCommitted:
-        let eligible = eligible_cells(game.Game[game.Session].edit_kind, editor.total, editor.solid, editor.bedrock, editor.robot_cells, editor.robot_solid)
+        let eligible = eligible_cells(editor, game.Game[game.Session])
         game.Game[game.Session].status = text.format("Changed {} cells, skipped {}", eligible, editor.total - eligible)
         game.Game[game.Session].status_time = 0.0
         game.Game[game.Session].preview = ""
@@ -351,11 +352,11 @@ rule DrawSelection:
         if not editor.dragging:
             return
         let kind = game.Game[game.Session].edit_kind
-        let eligible = eligible_cells(kind, editor.total, editor.solid, editor.bedrock, editor.robot_cells, editor.robot_solid)
+        let eligible = eligible_cells(editor, game.Game[game.Session])
         let base = if kind == game.EditKind.Dig: DIG_COLOR else: BUILD_COLOR
         emit debug.DrawDebugWireBox3D:
-            center = region_center(editor.start_x, editor.start_z, editor.end_x, editor.end_z, bottom_layer(game.Game[game.Session].layer, game.Game[game.Session].height), game.Game[game.Session].layer)
-            size = region_size(editor.start_x, editor.start_z, editor.end_x, editor.end_z, bottom_layer(game.Game[game.Session].layer, game.Game[game.Session].height), game.Game[game.Session].layer)
+            center = region_center(editor, game.Game[game.Session])
+            size = region_size(editor, game.Game[game.Session])
             color = if eligible < editor.total: BLOCKED_COLOR else: base
 
 rule DrawTarget:

@@ -7543,6 +7543,23 @@ TEST_CASE("Codegen EnTT: binary arithmetic mixing a range loop variable with a c
 // never the declaring module's actual provenance.
 
 // The text of the first pair tuple-body lambda.
+TEST_CASE("Codegen EnTT: a trait or event parameter is a const reference", "[codegen-entt][trait-parameters]") {
+    const auto source = std::string("trait Health:\n"
+                                    "    var current: float = 100.0\n"
+                                    "event Hit:\n"
+                                    "    damage: int\n"
+                                    "func is_low(h: Health) bool:\n"
+                                    "    return h.current < 30.0\n"
+                                    "func is_critical(hit: Hit) bool:\n"
+                                    "    return hit.damage > 50\n");
+    const auto low = emit_test_func(source, "is_low");
+    CHECK(low.contains("bool is_low(const ::cactus_gen::"));
+    CHECK(low.contains("::Health& h)"));
+    CHECK(low.contains("return (h.current < 30.0F);"));
+    const auto critical = emit_test_func(source, "is_critical");
+    CHECK(critical.contains("::HitEvent& hit)"));
+}
+
 static std::string pair_body_lambda(const std::string& code) {
     const auto start = code.find("auto cactus_gen_pair_body_");
     if (start == std::string::npos) {
@@ -7565,6 +7582,41 @@ static std::string emit_named_rule(const std::string& source,
     }
     FAIL("rule '" + rule_name + "' not found in the analyzed program");
     return {};
+}
+
+TEST_CASE("Codegen EnTT: a pair predicate passes a large trait without copying it",
+          "[codegen-entt][trait-parameters]") {
+    const auto code = emit_named_rule("trait View:\n"
+                                      "    var a: float = 0.0\n"
+                                      "    var b: float = 0.0\n"
+                                      "    var c: float = 0.0\n"
+                                      "    var d: float = 0.0\n"
+                                      "    var e: float = 0.0\n"
+                                      "    var f: float = 0.0\n"
+                                      "    var g: float = 0.0\n"
+                                      "    var h: float = 0.0\n"
+                                      "    var i: float = 1.0\n"
+                                      "trait Unit:\n"
+                                      "    var x: float = 0.0\n"
+                                      "event tick:\n"
+                                      "    dt: float\n"
+                                      "event Seen\n"
+                                      "func sees(lens: View, x: float) bool:\n"
+                                      "    return x * lens.i > lens.a\n"
+                                      "rule Look:\n"
+                                      "    pairs:\n"
+                                      "        camera:\n"
+                                      "            View as cv\n"
+                                      "        unit:\n"
+                                      "            Unit\n"
+                                      "    where:\n"
+                                      "        sees(cv, unit[Unit].x)\n"
+                                      "    on tick:\n"
+                                      "        emit Seen\n",
+                                      "Look");
+    CHECK(code.contains("::sees(registry.get<const ::cactus_gen::"));
+    CHECK_FALSE(code.contains("View cv"));
+    CHECK_FALSE(code.contains("View{"));
 }
 
 static const std::string& spatial_join_traits() {

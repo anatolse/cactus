@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <set>
 
 using namespace cactus;
 namespace fs = std::filesystem;
@@ -918,7 +919,7 @@ TEST_CASE("ModuleArtifact: runtime declarations and handler graph round-trip", "
 }
 
 TEST_CASE("ModuleArtifact: artifact from before shape-generic spatial plans is rejected", "[artifact][spatial-join]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 43);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 44);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1149,7 +1150,7 @@ TEST_CASE("ModuleArtifact: conditional expressions round-trip with their pattern
 }
 
 TEST_CASE("ModuleArtifact: ranged fields and their container traits round-trip", "[artifact][ranged-fields]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 43);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 44);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1412,7 +1413,7 @@ TEST_CASE("ModuleArtifact: set command capabilities round-trip", "[artifact][def
     CHECK(loaded->handler_contracts.front().commands == commands);
     REQUIRE(loaded->execution_graph.handlers.size() == 1);
     CHECK(loaded->execution_graph.handlers.front().contract.commands == commands);
-    CHECK(ModuleArtifact::CURRENT_VERSION == 43);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 44);
 
     fs::remove_all(build_dir, ec);
 }
@@ -1936,7 +1937,7 @@ TEST_CASE("ModuleArtifact: every schedule edge reason round-trips", "[artifact][
 }
 
 TEST_CASE("ModuleArtifact: artifact from before field-level contracts is rejected", "[artifact][handler-contracts]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 43);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 44);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2163,7 +2164,7 @@ TEST_CASE("ModuleArtifact: unknown trigger kind is rejected", "[artifact][trait-
 }
 
 TEST_CASE("ModuleArtifact: artifact from before lifecycle triggers is rejected", "[artifact][trait-lifecycle]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 43);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 44);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2292,7 +2293,7 @@ TEST_CASE("ModuleArtifact: unknown group ordering direction is malformed", "[art
 }
 
 TEST_CASE("ModuleArtifact: artifact from before rule groups is rejected", "[artifact][rule-groups]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 43);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 44);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2317,7 +2318,7 @@ TEST_CASE("ModuleArtifact: artifact from before rule groups is rejected", "[arti
 }
 
 TEST_CASE("ModuleArtifact: artifact from before named-entity access is rejected", "[artifact][named-entity]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 43);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 44);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2676,7 +2677,7 @@ TEST_CASE("ModuleArtifact: a trait access expression round-trips", "[artifact][t
 }
 
 TEST_CASE("ModuleArtifact: artifact from before bracketed trait access is rejected", "[artifact][trait-access]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 43);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 44);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2820,6 +2821,124 @@ TEST_CASE("ModuleArtifact: a pub relation round-trips and resolves from another 
     REQUIRE_FALSE(errors.has_errors());
     REQUIRE(game.relations.contains("Watch"));
     CHECK(game.relations.at("Watch").from.trait == make_symbol_id(SymbolKind::Trait, "crew", "Robot"));
+
+    fs::remove_all(build_dir, ec);
+}
+
+namespace {
+
+struct CompiledModule {
+    std::unique_ptr<ProgramNode> ast;
+    DecoratedProgram program;
+};
+
+CompiledModule analyze_module(const std::string& source, const std::string& file, ErrorReporter& errors,
+                              const ModuleImports& imports = {}) {
+    Lexer lexer(source, file, errors);
+    Parser parser(lexer.tokenize(), errors);
+    CompiledModule compiled{.ast = std::make_unique<ProgramNode>(parser.parse_program()), .program = {}};
+    SemanticAnalyzer analyzer(errors);
+    compiled.program = analyzer.analyze(*compiled.ast, imports);
+    return compiled;
+}
+
+const std::string kCameraModule = R"(module cam
+pub trait CameraView:
+    var forward: vec3 = vec3(0.0, 0.0, 1.0)
+    var rect_size: vec2 = vec2(1.0, 1.0)
+    var fov: float = 1.0
+pub func has_area(camera: CameraView) bool:
+    return camera.rect_size.x > 0.0
+pub func depth(camera: CameraView, point: vec3) float:
+    if has_area(camera):
+        return camera.forward.z * point.z
+    return 0.0
+)";
+
+FieldAccess camera_view_reads(const ImportedSymbols& cam) {
+    ModuleImports imports;
+    imports.add("cam", cam);
+    ErrorReporter errors;
+    const auto compiled = analyze_module(R"(module game
+use cam
+extern event frame:
+    dt: float
+rule Probe:
+    each:
+        cam.CameraView as cv
+    where:
+        cam.depth(cv, vec3(0.0, 0.0, 1.0)) > 0.0
+    on frame:
+        let n = 1
+)",
+                                        "game.cactus", errors, imports);
+    INFO((errors.diagnostics().empty() ? std::string() : errors.diagnostics().front().message));
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(compiled.program.handler_contracts.size() == 1);
+    const auto& reads = compiled.program.handler_contracts.front().read_fields;
+    const auto found  = std::ranges::find_if(reads, [](const auto& entry) { return entry.first.local_name == "CameraView"; });
+    REQUIRE(found != reads.end());
+    return found->second;
+}
+
+}  // namespace
+
+TEST_CASE("ModuleArtifact: trait parameters and their reads round-trip", "[artifact][trait-parameters]") {
+    ErrorReporter errors;
+    const auto compiled = analyze_module(kCameraModule, "cam.cactus", errors);
+    const auto& program = compiled.program;
+    REQUIRE_FALSE(errors.has_errors());
+    const std::set<std::string> expected{"forward", "rect_size"};
+    REQUIRE(program.funcs.at("depth").params.at(0).reads.fields == expected);
+
+    const auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+    ModuleArtifact artifact(errors);
+    REQUIRE(artifact.save(program, "cam", build_dir));
+    auto symbols = artifact.extract_pub_symbols(build_dir / ModuleArtifact::artifact_filename("cam"));
+    REQUIRE(symbols.has_value());
+    const auto& param = symbols->funcs.at("depth").params.at(0);
+    CHECK(param.type.kind == TypeKind::TraitRef);
+    REQUIRE(param.type.symbol_id.has_value());
+    CHECK(param.type.symbol_id->local_name == "CameraView");
+    CHECK(param.reads.fields == expected);
+    CHECK_FALSE(param.reads.all);
+
+    ImportedSymbols from_source;
+    from_source.module_name          = "cam";
+    from_source.traits["CameraView"] = program.traits.at("CameraView");
+    from_source.funcs["depth"]       = program.funcs.at("depth");
+    from_source.funcs["has_area"]    = program.funcs.at("has_area");
+    const auto source_reads   = camera_view_reads(from_source);
+    const auto artifact_reads = camera_view_reads(*symbols);
+    CHECK(source_reads.fields == expected);
+    CHECK(artifact_reads == source_reads);
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("ModuleArtifact: an artifact from before trait parameters is rejected", "[artifact][trait-parameters]") {
+    CHECK(ModuleArtifact::CURRENT_VERSION == 44);
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+    fs::create_directories(build_dir);
+
+    auto path = build_dir / "before-trait-parameters.cmod";
+    {
+        std::ofstream out(path, std::ios::binary);
+        out.write("CMOD", 4);
+        const char previous_version = 43;
+        out.write(&previous_version, 1);
+    }
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    std::string name;
+    CHECK_FALSE(artifact.load(path, name).has_value());
+    REQUIRE(errors.has_errors());
+    CHECK(errors.diagnostics()[0].message.contains("incompatible module artifact version"));
 
     fs::remove_all(build_dir, ec);
 }

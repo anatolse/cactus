@@ -37,7 +37,10 @@ enum class TypeKind {
     Void,
     Unknown,
     // A `filter: S as m` binding; only a `match` subject.
-    StateSlot
+    StateSlot,
+    // A func parameter naming a trait or event: a read-only reference, never a value.
+    TraitRef,
+    EventRef
 };
 
 struct TypeInfo {
@@ -127,6 +130,22 @@ inline TypeInfo make_unknown_type() {
 
 inline TypeInfo make_state_slot_type(const SymbolId& state) {
     return {.kind = TypeKind::StateSlot, .name = state.local_name, .symbol_id = state};
+}
+
+inline TypeInfo make_trait_ref_type(const SymbolId& trait) {
+    return {.kind = TypeKind::TraitRef, .name = trait.local_name, .symbol_id = trait};
+}
+
+inline TypeInfo make_event_ref_type(const SymbolId& event) {
+    return {.kind = TypeKind::EventRef, .name = event.local_name, .symbol_id = event};
+}
+
+inline bool is_reference_type(const TypeInfo& type) {
+    return type.kind == TypeKind::TraitRef || type.kind == TypeKind::EventRef;
+}
+
+inline std::string reference_kind_name(const TypeInfo& type) {
+    return type.kind == TypeKind::EventRef ? "event" : "trait";
 }
 
 inline TypeInfo make_list_type(TypeInfo element_type) {

@@ -130,6 +130,18 @@ TEST_CASE("Staging: a join through a function call is row stage", "[semantic][st
     CHECK(analysis.staging("Touch").where == std::vector{Row, BindingRight});
 }
 
+TEST_CASE("Staging: a call passing one binding's trait stays on that binding", "[semantic][staging][trait-parameters]") {
+    const auto analysis = analyze("func hot(l: Lava) bool:\n"
+                                  "    return l.heat > 1.0\n"
+                                  "func near(b: Body, l: Lava) bool:\n"
+                                  "    return b.x < l.heat\n" +
+                                  touch_rule("        hot(lava[Lava])\n"
+                                             "        near(body[Body], lava[Lava])\n"));
+    INFO(describe(analysis));
+    REQUIRE(analysis.clean());
+    CHECK(analysis.staging("Touch").where == std::vector{BindingRight, Row});
+}
+
 TEST_CASE("Staging: a unary predicate on the entity is row stage", "[semantic][staging]") {
     const auto analysis = analyze("rule Heal:\n"
                                   "    each:\n"

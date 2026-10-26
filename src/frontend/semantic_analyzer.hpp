@@ -7,6 +7,7 @@
 #include "frontend/ast.hpp"
 #include "frontend/symbol_identity.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <functional>
@@ -63,9 +64,21 @@ struct CanonicalIdentity {
     std::optional<SymbolId> symbol_id;
 };
 
+struct FieldAccess {
+    bool all = false;
+    std::set<std::string> fields;  // ignored when `all`
+
+    [[nodiscard]] bool covers(const std::string& field) const {
+        return all || fields.contains(field);
+    }
+
+    friend bool operator==(const FieldAccess&, const FieldAccess&) = default;
+};
+
 struct ResolvedParam {
     std::string name;
     TypeInfo type;
+    FieldAccess reads;  // a trait parameter: the fields the func may read through it
 };
 
 struct ResolvedFunc : CanonicalIdentity {
@@ -80,6 +93,10 @@ struct ResolvedFunc : CanonicalIdentity {
     std::optional<TypeInfo> return_type;
     bool glsl_inlinable = false;  // a render-pass stage handler may inline its single `return`
 };
+
+inline bool has_reference_params(const ResolvedFunc& func) {
+    return std::ranges::any_of(func.params, [](const ResolvedParam& param) { return is_reference_type(param.type); });
+}
 
 struct ResolvedTrait : CanonicalIdentity {
     std::string name;
@@ -205,17 +222,6 @@ struct RuleDependency {
 };
 
 // Which fields of one trait a contract touches.
-struct FieldAccess {
-    bool all = false;
-    std::set<std::string> fields;  // ignored when `all`
-
-    [[nodiscard]] bool covers(const std::string& field) const {
-        return all || fields.contains(field);
-    }
-
-    friend bool operator==(const FieldAccess&, const FieldAccess&) = default;
-};
-
 // Serialized by numeric value: append new kinds, never reorder.
 enum class EntityTargetKind : std::uint8_t { Self, PairBinding, Named, Spawned, Unknown };
 
@@ -1156,6 +1162,8 @@ private:
                                     const std::string& sym_name,
                                     const SourceLocation& loc);
     TypeInfo resolve_imported_type(const std::string& name, const SourceLocation& loc);
+    [[nodiscard]] std::optional<TypeInfo> reference_type(const std::string& name) const;
+    TypeInfo resolve_param_type(const FuncParam& param, bool is_extern);
 
     // Phase 3: Semantic checks
     void check_const_strings(ProgramNode& program);
@@ -1278,6 +1286,7 @@ private:
                                    const PairBindingScope& binding,
                                    const std::vector<std::string>& fields,
                                    const SourceLocation& location);
+    void rewrite_pair_alias_argument(ExprNode& arg, const std::unordered_set<std::string>& shadowed) const;
     void check_trait_access_fields(const TraitAccessExpr& access,
                                    const std::vector<std::string>& fields,
                                    const SourceLocation& location,
@@ -1613,6 +1622,15 @@ private:
                              const PairScope* pair_scope = nullptr) const;
     // infer_expr_type's IdentExpr and MemberExpr arms, its two largest and
     // most branching cases.
+    [[nodiscard]] std::optional<SymbolId> reference_argument(
+        const ExprNode& arg,
+        const ResolvedParam& param,
+        const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+        const std::unordered_map<std::string, TypeInfo>& local_bindings) const;
+    void check_reference_arguments(const CallExpr& call,
+                                   const ResolvedFunc& function,
+                                   const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                                   const std::unordered_map<std::string, TypeInfo>& local_bindings) const;
     TypeInfo infer_ident_expr_type(const IdentExpr& ident,
                                    const SourceLocation& location,
                                    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
@@ -1934,6 +1952,12 @@ private:
                                const LocalNames& locals,
                                HandlerContract& contract,
                                const std::function<bool(const ExprNode&, const LocalNames&)>& resolve_read) const;
+    void walk_reference_argument(const ExprNode& arg,
+                                 const ResolvedParam& param,
+                                 const LocalNames& locals,
+                                 HandlerContract& contract,
+                                 const std::function<bool(const ExprNode&, const LocalNames&)>& resolve_read) const;
+    void derive_parameter_reads(const ProgramNode& program);
     // Folds every rule clause expression's reads into `contract`, and keeps the
     // own reads of each `where:` predicate checked between invocations in
     // `contract.clause_reads` for staging.
@@ -2201,6 +2225,9 @@ private:
 
     // The current rule handler's filter traits; a bare field name writes the first that declares it.
     std::vector<const ResolvedTrait*> bare_field_traits_;
+    // The bare `binding[T]` or `Entity[T]` being resolved as a func argument, which needs no field.
+    const TraitAccessExpr* whole_access_argument_ = nullptr;
+    bool reference_arguments_checked_             = true;
 
     // Expressions are typed more than once; report each entity_id read once.
     mutable std::set<std::tuple<std::string, int, int>> reported_entity_id_reads_;

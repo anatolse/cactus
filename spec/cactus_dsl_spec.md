@@ -1293,11 +1293,35 @@ rule SquareFragment:
 
 Regular `func` declarations are pure. `extern func` declarations are runtime/backend-provided.
 
-A `func` body may use `let`/`var` locals, assignment to its locals and parameters, `if`, value `match`, bounded `for` over a list or a `range` (§3.16), and `return`. Parameters are copies, so assigning one never changes the caller's value. A body cannot read or change world state: `self`, trait access, world queries, `exists()`, `emit`, `spawn`, `destroy`, `add`, `remove`, `set`, `project` and `load` are errors. It may call only functions proven pure: other `func`s and `extern func`s with an empty effect summary, such as `std.math`; a call to any other `extern func` is an error. A `func` cannot call itself, directly or through other functions, even inside a loop.
+A `func` body may use `let`/`var` locals, assignment to its locals and parameters, `if`, value `match`, bounded `for` over a list or a `range` (§3.16), and `return`. Parameters are copies, so assigning one never changes the caller's value. A body cannot read or change world state: `self`, trait access other than a field read of its own trait or event parameter, world queries, `exists()`, `emit`, `spawn`, `destroy`, `add`, `remove`, `set`, `project` and `load` are errors. It may call only functions proven pure: other `func`s and `extern func`s with an empty effect summary, such as `std.math`; a call to any other `extern func` is an error. A `func` cannot call itself, directly or through other functions, even inside a loop.
 
 A `func` with a return type must return a value on every path. An `if` returns on every path only when it has an `else` and every branch returns; a value `match` returns when every arm returns. A loop never counts, because it may run zero times, so a `func` that returns inside a loop also needs a `return` after it. Bounded loops always finish, but a large bound can still be expensive.
 
-A render-pass stage handler (§3.11.1) can call a `func` only when its body is a single `return` of GLSL-translatable operations; a `func` with locals, statements or loops is rejected at the call, even when it is reached through another `func` or a constant.
+A render-pass stage handler (§3.11.1) can call a `func` only when its body is a single `return` of GLSL-translatable operations and it has no trait or event parameter; any other `func` is rejected at the call, even when it is reached through another `func` or a constant.
+
+**Trait and event parameters.** A `func` parameter may name a trait or an event, local or through an import alias; a state variant (`EnemyMode.Chase`) counts as a trait. The parameter is a read-only reference to a trait or event the caller can already read, not a value:
+
+```cactus
+func is_low(h: Health) bool:
+    return h.current < 30.0
+
+func is_critical(hit: Hit) bool:
+    return hit.damage > 50
+
+rule Warn:
+    each:
+        Health as hp
+    where:
+        is_low(hp)
+    on tick:
+        emit LowHealth
+```
+
+- In the body, the parameter can only be read field by field (`h.current`, `camera.position.x`) or passed to another `func` parameter of the same type. Assigning it or its fields, storing it in a local, returning it, comparing it, or using it in any other expression is an error.
+- A trait argument is an `each:` alias, a pair alias, `binding[T]`, a named read `Entity[T]`, a trait-match arm alias, or a trait parameter of the enclosing `func`. It is legal exactly where reading one of its fields would be legal at the call, so `when:`, a binding removed by `reduce`, and the other inline-read rules apply unchanged. An `each:` trait without an alias gets one (`each: Health as hp`).
+- An event argument is the alias of the handler's triggering event, or an event parameter of the enclosing `func`.
+- Marker traits, state slots, relations and phases can't be parameter types. A trait or event is not a value type anywhere else: not a return type, local annotation, or struct or trait field type. An `extern func` can't take a trait or event parameter.
+- The compiler derives which fields each trait parameter reads, through every `func` it is passed on to. A call adds exactly those fields to the handler's contract, as if they were written inline at the call, with the same binding and named-entity precision; an event argument adds no trait read. The callee sees the values an inline read would see at that point of the handler, including the handler's own earlier writes, and the argument is passed without a copy.
 
 ```ebnf
 func_decl        = [ "pub" ] "func" IDENTIFIER

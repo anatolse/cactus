@@ -47,6 +47,13 @@ invocation, not a loop iteration — there is no `continue`/`break` in bounded
 instead of preserving it; keep the guard nested as an `if` there, or restructure the
 loop body, rather than reflexively applying the early-return transform.
 
+### Pass a trait, not its fields
+
+When a `func` needs several fields of one trait or event, take the trait itself as a
+parameter (`func to_screen(camera: CameraView, point: vec3)`) and pass the alias
+(`to_screen(cv, p)`), instead of unpacking each field into its own argument. The handler's
+contract still records only the fields the `func` reads.
+
 ### Game-dev simplicity bar
 
 New stdlib/example additions are evaluated against gameplay-core teachability: if it

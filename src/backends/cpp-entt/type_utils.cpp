@@ -311,7 +311,9 @@ std::string EnttCodegenUtils::type_to_cpp(const TypeInfo& type) {
         case TypeKind::InputAxis:
             return "std::uint8_t";
         case TypeKind::Struct:
-        case TypeKind::Enum: {
+        case TypeKind::Enum:
+        case TypeKind::TraitRef:
+        case TypeKind::EventRef: {
             if (type.symbol_id.has_value()) {
                 return cpp_type_ref(*type.symbol_id);
             }

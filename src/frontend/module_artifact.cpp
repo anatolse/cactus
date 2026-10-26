@@ -335,6 +335,7 @@ void ModuleArtifact::write_funcs(std::ostream& out,
         for (const auto& p : func.params) {
             write_str(out, p.name);
             write_type_info(out, p.type);
+            write_field_access(out, p.reads);
         }
         write_bool(out, func.glsl_inlinable);
         bool has_ret = func.return_type.has_value();
@@ -1068,8 +1069,9 @@ std::unordered_map<std::string, ResolvedFunc> ModuleArtifact::read_funcs(std::is
         func.params.reserve(param_count);
         for (uint32_t j = 0; j < param_count; ++j) {
             ResolvedParam p;
-            p.name = read_str(in);
-            p.type = read_type_info(in);
+            p.name  = read_str(in);
+            p.type  = read_type_info(in);
+            p.reads = read_field_access(in);
             func.params.push_back(std::move(p));
         }
         func.glsl_inlinable = read_bool(in);

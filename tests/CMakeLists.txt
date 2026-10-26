@@ -237,6 +237,13 @@ add_executable(test_semantic_relations test_semantic_relations.cpp)
 target_link_libraries(test_semantic_relations PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticRelationsTests COMMAND test_semantic_relations)
 
+add_executable(test_semantic_trait_parameters test_semantic_trait_parameters.cpp)
+target_link_libraries(test_semantic_trait_parameters PRIVATE cactus_frontend Catch2::Catch2WithMain)
+target_compile_definitions(test_semantic_trait_parameters PRIVATE
+    CACTUS_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
+)
+add_test(NAME SemanticTraitParametersTests COMMAND test_semantic_trait_parameters)
+
 add_executable(test_semantic_command_targets test_semantic_command_targets.cpp)
 target_link_libraries(test_semantic_command_targets PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticCommandTargetsTests COMMAND test_semantic_command_targets)
@@ -704,6 +711,12 @@ cactus_add_headless_behavior_test(test_event_payload_reads_headless_behavior
     CACTUS_SOURCE examples/stdlib-fixtures/event_payload_reads.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_event_payload_reads_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_trait_parameters_headless_behavior
+    CACTUS_SOURCE examples/stdlib-fixtures/trait_parameters.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_trait_parameters_headless_behavior.cpp
 )
 
 cactus_add_headless_behavior_test(test_trait_lifecycle_headless_behavior

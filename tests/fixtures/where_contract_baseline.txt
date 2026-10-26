@@ -958,6 +958,96 @@ team_score_reduce_runtime.cactus fixtures team_score_reduce_runtime.TeamScore/on
     named_writes:
     named_requirements:
     iteration_order: free
+trait_parameters.cactus stdlib-fixtures trait_parameters.GlowInline/on std.core.tick
+    reads: trait_parameters.Glow trait_parameters.Recorder
+    read_fields: trait_parameters.Glow{level} trait_parameters.Recorder{glow_inline}
+    write_fields: trait_parameters.Recorder{glow_inline}
+    write_kinds: trait_parameters.Recorder.glow_inline=1/0
+    bound_reads:
+    named_reads: [trait_parameters.Log: trait_parameters.Recorder{glow_inline}]
+    named_writes: [trait_parameters.Log: trait_parameters.Recorder{glow_inline}]
+    named_requirements: trait_parameters.Log/trait_parameters.Recorder
+    iteration_order: creation
+trait_parameters.cactus stdlib-fixtures trait_parameters.GlowPassed/on std.core.tick
+    reads: trait_parameters.Glow trait_parameters.Recorder
+    read_fields: trait_parameters.Glow{level} trait_parameters.Recorder{glow_passed}
+    write_fields: trait_parameters.Recorder{glow_passed}
+    write_kinds: trait_parameters.Recorder.glow_passed=1/0
+    bound_reads:
+    named_reads: [trait_parameters.Log: trait_parameters.Recorder{glow_passed}]
+    named_writes: [trait_parameters.Log: trait_parameters.Recorder{glow_passed}]
+    named_requirements: trait_parameters.Log/trait_parameters.Recorder
+    iteration_order: creation
+trait_parameters.cactus stdlib-fixtures trait_parameters.LowInline/on std.core.tick
+    reads: trait_parameters.Health trait_parameters.Recorder
+    read_fields: trait_parameters.Health{current} trait_parameters.Recorder{low_inline}
+    write_fields: trait_parameters.Recorder{low_inline}
+    write_kinds: trait_parameters.Recorder.low_inline=1/0
+    bound_reads:
+    named_reads: [trait_parameters.Log: trait_parameters.Recorder{low_inline}]
+    named_writes: [trait_parameters.Log: trait_parameters.Recorder{low_inline}]
+    named_requirements: trait_parameters.Log/trait_parameters.Recorder
+    iteration_order: creation
+trait_parameters.cactus stdlib-fixtures trait_parameters.LowPassed/on std.core.tick
+    reads: trait_parameters.Health trait_parameters.Recorder
+    read_fields: trait_parameters.Health{current} trait_parameters.Recorder{low_passed}
+    write_fields: trait_parameters.Recorder{low_passed}
+    write_kinds: trait_parameters.Recorder.low_passed=1/0
+    bound_reads:
+    named_reads: [trait_parameters.Log: trait_parameters.Recorder{low_passed}]
+    named_writes: [trait_parameters.Log: trait_parameters.Recorder{low_passed}]
+    named_requirements: trait_parameters.Log/trait_parameters.Recorder
+    iteration_order: creation
+trait_parameters.cactus stdlib-fixtures trait_parameters.PairInline/on std.core.tick
+    reads: trait_parameters.Body trait_parameters.Recorder
+    read_fields: trait_parameters.Body{position} trait_parameters.Recorder{pair_inline}
+    write_fields: trait_parameters.Recorder{pair_inline}
+    write_kinds: trait_parameters.Recorder.pair_inline=1/0
+    bound_reads: 0:trait_parameters.Body 1:trait_parameters.Body
+    named_reads: [trait_parameters.Log: trait_parameters.Recorder{pair_inline}]
+    named_writes: [trait_parameters.Log: trait_parameters.Recorder{pair_inline}]
+    named_requirements: trait_parameters.Log/trait_parameters.Recorder
+    iteration_order: free
+trait_parameters.cactus stdlib-fixtures trait_parameters.PairPassed/on std.core.tick
+    reads: trait_parameters.Body trait_parameters.Recorder
+    read_fields: trait_parameters.Body{position} trait_parameters.Recorder{pair_passed}
+    write_fields: trait_parameters.Recorder{pair_passed}
+    write_kinds: trait_parameters.Recorder.pair_passed=1/0
+    bound_reads: 0:trait_parameters.Body 1:trait_parameters.Body
+    named_reads: [trait_parameters.Log: trait_parameters.Recorder{pair_passed}]
+    named_writes: [trait_parameters.Log: trait_parameters.Recorder{pair_passed}]
+    named_requirements: trait_parameters.Log/trait_parameters.Recorder
+    iteration_order: free
+trait_parameters.cactus stdlib-fixtures trait_parameters.ProjectGlow/on std.core.tick
+    reads: trait_parameters.Body trait_parameters.Glow
+    read_fields: trait_parameters.Body{position} trait_parameters.Glow{*}
+    write_fields: trait_parameters.Glow{*}
+    write_kinds:
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+trait_parameters.cactus stdlib-fixtures trait_parameters.VisibleInline/on std.core.tick
+    reads: trait_parameters.Body trait_parameters.Recorder
+    read_fields: trait_parameters.Body{position,scale} trait_parameters.Recorder{visible_inline}
+    write_fields: trait_parameters.Recorder{visible_inline}
+    write_kinds: trait_parameters.Recorder.visible_inline=1/0
+    bound_reads:
+    named_reads: [trait_parameters.Log: trait_parameters.Recorder{visible_inline}]
+    named_writes: [trait_parameters.Log: trait_parameters.Recorder{visible_inline}]
+    named_requirements: trait_parameters.Log/trait_parameters.Recorder
+    iteration_order: creation
+trait_parameters.cactus stdlib-fixtures trait_parameters.VisiblePassed/on std.core.tick
+    reads: trait_parameters.Body trait_parameters.Recorder
+    read_fields: trait_parameters.Body{position,scale} trait_parameters.Recorder{visible_passed}
+    write_fields: trait_parameters.Recorder{visible_passed}
+    write_kinds: trait_parameters.Recorder.visible_passed=1/0
+    bound_reads:
+    named_reads: [trait_parameters.Log: trait_parameters.Recorder{visible_passed}]
+    named_writes: [trait_parameters.Log: trait_parameters.Recorder{visible_passed}]
+    named_requirements: trait_parameters.Log/trait_parameters.Recorder
+    iteration_order: creation
 voxel_volume.cactus stdlib-fixtures std.physics.volume.Depenetrate/on std.core.fixed_tick
     reads: std.physics.volume.BoxCollider std.physics.volume.CapsuleCollider std.physics.volume.CharacterBody std.physics.volume.Collider std.physics.volume.SphereCollider std.transform.volume.WorldTransform
     read_fields: std.physics.volume.BoxCollider{*} std.physics.volume.CapsuleCollider{*} std.physics.volume.CharacterBody{*} std.physics.volume.Collider{layer,mask} std.physics.volume.SphereCollider{*} std.transform.volume.WorldTransform{position,rotation}

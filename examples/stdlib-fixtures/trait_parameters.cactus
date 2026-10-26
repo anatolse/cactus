@@ -1,0 +1,227 @@
+module trait_parameters
+
+# Each rule that passes a trait or event to a func has a twin that writes the
+# same read inline. The test checks every pair of counters agrees.
+
+use std.core
+
+trait Health:
+    var current: float = 100.0
+    var max: float = 100.0
+
+trait Body:
+    var position: vec3 = vec3(0.0, 0.0, 0.0)
+    var scale: float = 1.0
+
+trait Fuel:
+    var amount: float = 50.0
+
+trait Glow:
+    var level: float = 0.0
+
+trait Match:
+    var round: int = 0
+    var limit: int = 3
+
+trait Recorder:
+    var low_passed: int = 0
+    var low_inline: int = 0
+    var pair_passed: int = 0
+    var pair_inline: int = 0
+    var named_passed: int = 0
+    var named_inline: int = 0
+    var glow_passed: int = 0
+    var glow_inline: int = 0
+    var crit_passed: int = 0
+    var crit_inline: int = 0
+    var written_passed: int = 0
+    var written_inline: int = 0
+    var visible_passed: int = 0
+    var visible_inline: int = 0
+
+event Hit:
+    damage: int
+
+func is_low(h: Health) bool:
+    return h.current < 30.0
+
+func is_critical(hit: Hit) bool:
+    return hit.damage > 50
+
+func above(b: Body, y: float) bool:
+    return b.position.y > y
+
+func left_of(a: Body, b: Body) bool:
+    return a.position.x < b.position.x
+
+func past_limit(m: Match) bool:
+    return m.round >= m.limit
+
+func bright(g: Glow) bool:
+    return g.level > 0.5
+
+func empty(f: Fuel) bool:
+    return f.amount < 10.0
+
+func has_area(b: Body) bool:
+    return b.scale > 0.0
+
+func visible(b: Body) bool:
+    return has_area(b) and above(b, 0.0)
+
+rule LowPassed:
+    each:
+        Health as hp
+    where:
+        is_low(hp)
+
+    on tick:
+        Log[Recorder].low_passed += 1
+
+rule LowInline:
+    each:
+        Health as hp
+    where:
+        hp.current < 30.0
+
+    on tick:
+        Log[Recorder].low_inline += 1
+
+rule PairPassed:
+    pairs:
+        a:
+            Body as left
+        b:
+            Body
+    where:
+        left_of(left, b[Body])
+
+    on tick:
+        Log[Recorder].pair_passed += 1
+
+rule PairInline:
+    pairs:
+        a:
+            Body
+        b:
+            Body
+    where:
+        a[Body].position.x < b[Body].position.x
+
+    on tick:
+        Log[Recorder].pair_inline += 1
+
+rule NamedPassed:
+    on tick:
+        if past_limit(Game[Match]):
+            Log[Recorder].named_passed += 1
+
+rule NamedInline:
+    on tick:
+        if Game[Match].round >= Game[Match].limit:
+            Log[Recorder].named_inline += 1
+
+rule ProjectGlow:
+    each:
+        Body as b
+    where:
+        above(b, 0.0)
+
+    on tick:
+        project Glow to self:
+            level = 1.0
+
+rule GlowPassed:
+    each:
+        Glow as g
+    after:
+        ProjectGlow
+    where:
+        bright(g)
+
+    on tick:
+        Log[Recorder].glow_passed += 1
+
+rule GlowInline:
+    each:
+        Glow as g
+    after:
+        ProjectGlow
+    where:
+        g.level > 0.5
+
+    on tick:
+        Log[Recorder].glow_inline += 1
+
+rule Strike:
+    on tick:
+        emit Hit:
+            damage = 80
+        emit Hit:
+            damage = 20
+
+rule CritPassed:
+    on Hit as h:
+        if is_critical(h):
+            Log[Recorder].crit_passed += 1
+
+rule CritInline:
+    on Hit as h:
+        if h.damage > 50:
+            Log[Recorder].crit_inline += 1
+
+rule Burn:
+    each:
+        Fuel as f
+
+    on tick:
+        f.amount = 5.0
+        if empty(f):
+            Log[Recorder].written_passed += 1
+        if f.amount < 10.0:
+            Log[Recorder].written_inline += 1
+
+rule VisiblePassed:
+    each:
+        Body as b
+    where:
+        visible(b)
+
+    on tick:
+        Log[Recorder].visible_passed += 1
+
+rule VisibleInline:
+    each:
+        Body as b
+    where:
+        b.scale > 0.0 and b.position.y > 0.0
+
+    on tick:
+        Log[Recorder].visible_inline += 1
+
+entity Game:
+    Match:
+        round = 3
+
+entity Log:
+    Recorder
+
+entity Tank:
+    Fuel
+
+template Patient(current: float):
+    Health:
+        current = current
+
+template Mover(x: float, y: float, scale: float):
+    Body:
+        position = vec3(x, y, 0.0)
+        scale = scale
+
+entity Weak from Patient(current = 10.0)
+entity Fine from Patient(current = 50.0)
+entity Hurt from Patient(current = 20.0)
+
+entity First from Mover(x = 0.0, y = 1.0, scale = 1.0)
+entity Second from Mover(x = 2.0, y = -1.0, scale = 1.0)
+entity Third from Mover(x = 1.0, y = 2.0, scale = 0.0)

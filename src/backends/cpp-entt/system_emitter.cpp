@@ -1616,6 +1616,55 @@ static std::string join_rewritten_args(const std::vector<std::unique_ptr<ExprNod
     return result;
 }
 
+static const std::vector<ResolvedField>* reference_fields(const TypeInfo& type, const DecoratedProgram& program) {
+    if (type.kind == TypeKind::TraitRef) {
+        const auto* trait = EnttCodegenUtils::find_trait(program, make_canonical_id(*type.symbol_id));
+        return trait == nullptr ? nullptr : &trait->fields;
+    }
+    const auto event = std::ranges::find_if(program.events, [&](const auto& entry) {
+        return entry.second.symbol_id == type.symbol_id;
+    });
+    return event == program.events.end() ? nullptr : &event->second.fields;
+}
+
+// The object an inline `arg.field` read reads, so the callee sees the same storage with no copy.
+static std::string lower_reference_argument(const ExprNode& arg,
+                                            const ResolvedParam& param,
+                                            const DecoratedProgram& program,
+                                            const std::function<std::string(const ExprNode&)>& lower) {
+    const auto* fields = reference_fields(param.type, program);
+    const auto read    = fields == nullptr || fields->empty() ? nullptr : reference_field_read(arg, fields->front().name);
+    if (read == nullptr) {
+        return lower(arg);
+    }
+    const auto lowered = lower(*read);
+    const auto& field  = fields->front().name;
+    for (const auto& member : {"." + cpp_escaped(field), "." + field}) {
+        if (lowered.ends_with(member)) {
+            return lowered.substr(0, lowered.size() - member.size());
+        }
+    }
+    if (const auto arrow = "->" + field; lowered.ends_with(arrow)) {
+        return "(*" + lowered.substr(0, lowered.size() - arrow.size()) + ")";
+    }
+    throw std::runtime_error("cpp-entt backend: cannot pass '" + lowered + "' to parameter '" + param.name + "'");
+}
+
+static std::string join_func_args(const std::vector<std::unique_ptr<ExprNode>>& args,
+                                  const ResolvedFunc& func,
+                                  const DecoratedProgram& program,
+                                  const std::function<std::string(const ExprNode&)>& lower) {
+    std::string result;
+    for (std::size_t index = 0; index < args.size(); ++index) {
+        result += index != 0U ? ", " : "";
+        const auto* param = index < func.params.size() ? &func.params[index] : nullptr;
+        result += param != nullptr && is_reference_type(param->type)
+                      ? lower_reference_argument(*args[index], *param, program, lower)
+                      : lower(*args[index]);
+    }
+    return result;
+}
+
 // (object, member) -> runtime-call dispatch table for rewrite_expr's
 // input/camera2d/camera3d/transform2d/transform3d builtin call rewriting
 // (camera2d/camera3d/transform2d/transform3d are aliases declared in
@@ -2746,13 +2795,10 @@ static std::string rewrite_expr_node(  // NOLINT(readability-function-cognitive-
                     if (const auto* func = EnttCodegenUtils::find_func(program, *e.resolved_callee_id);
                         func != nullptr && !func->is_extern) {
                         return cpp_type_ref(*e.resolved_callee_id) + "(" +
-                               join_rewritten_args(e.args,
-                                                   trait_names,
-                                                   program,
-                                                   pointer_aliases,
-                                                   cpp_overrides,
-                                                   pair_scope,
-                                                   local_kinds) +
+                               join_func_args(e.args, *func, program, [&](const ExprNode& arg) {
+                                   return rewrite_expr(
+                                       arg, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds);
+                               }) +
                                ")";
                     }
                 }
@@ -4263,21 +4309,26 @@ static std::string func_signature(const FuncNode& func, const ResolvedFunc& reso
         (resolved.return_type.has_value() ? EnttCodegenUtils::value_type_to_cpp(*resolved.return_type) : "void") + " " +
         cpp_decl_name(*func.resolved_func_id) + "(";
     for (std::size_t index = 0; index < resolved.params.size(); ++index) {
+        const auto& param = resolved.params[index];
+        const auto type   = EnttCodegenUtils::value_type_to_cpp(param.type);
         signature += index != 0U ? ", " : "";
-        signature += EnttCodegenUtils::value_type_to_cpp(resolved.params[index].type) + " " + resolved.params[index].name;
+        signature += (is_reference_type(param.type) ? "const " + type + "&" : type) + " " + param.name;
     }
     return signature + ")";
 }
 
 // Lets constants and other code before the definitions call authored funcs.
-std::string EnttSystemEmitter::emit_func_declaration(const FuncNode& func, const DecoratedProgram& program) {
+std::string EnttSystemEmitter::emit_func_declaration(const FuncNode& func,
+                                                     const DecoratedProgram& program,
+                                                     bool reference_params) {
     if (func.is_extern || !func.resolved_func_id.has_value()) {
         return {};
     }
     const auto* resolved = EnttCodegenUtils::find_func(program, *func.resolved_func_id);
-    return resolved == nullptr ? std::string{}
-                               : namespace_block(cpp_namespace_path(func.resolved_func_id->module),
-                                                 func_signature(func, *resolved) + ";\n");
+    if (resolved == nullptr || has_reference_params(*resolved) != reference_params) {
+        return {};
+    }
+    return namespace_block(cpp_namespace_path(func.resolved_func_id->module), func_signature(func, *resolved) + ";\n");
 }
 
 std::string EnttSystemEmitter::emit_func(const FuncNode& func, const DecoratedProgram& program) {

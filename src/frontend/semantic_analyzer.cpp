@@ -1266,7 +1266,10 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     validate_render_pass_stage_handlers(program);
     validate_external_handler_contracts(program);
     validate_event_usage(program);
+    // Its local types are approximate, so argument checks there would misreport.
+    reference_arguments_checked_ = false;
     validate_text_format_calls(program);
+    reference_arguments_checked_ = true;
 
     // Phase 3: Dynamic ECS checks (dynamic-ecs-language change)
     validate_template_backed_entity_overrides(program);
@@ -1282,6 +1285,7 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     build_persistence_metadata(program);
 
     // Phase 4: Build dependency graph
+    derive_parameter_reads(program);
     build_dependency_graph(program);
     validate_relation_ends(program);
     validate_relation_test_contexts(program);
@@ -1621,13 +1625,13 @@ void SemanticAnalyzer::resolve_declaration_types(T& node) {
         for (auto& p : node.params) {
             ResolvedParam rp;
             rp.name = p.name;
-            rp.type = resolve_type_ref(p.type);
+            rp.type = resolve_param_type(p, node.is_extern);
             rf.params.push_back(std::move(rp));
         }
         if (node.return_type.has_value()) {
             rf.return_type = resolve_type_ref(*node.return_type);
         }
-        rf.glsl_inlinable        = !node.is_extern && single_return_value(node.body) != nullptr;
+        rf.glsl_inlinable = !node.is_extern && single_return_value(node.body) != nullptr && !has_reference_params(rf);
         result_.funcs[node.name] = std::move(rf);
     }
 }
@@ -2085,7 +2089,63 @@ void SemanticAnalyzer::resolve_trait_references(ProgramNode& program) {
     }
 }
 
+static std::string state_not_value_message(const std::string& state) {
+    return "state '" + state + "' is not a value type; a rule reads it with `each: " + state + " as m` and `match m:`";
+}
+
+// A trait or event name, which only a func parameter may use as a type.
+std::optional<TypeInfo> SemanticAnalyzer::reference_type(const std::string& name) const {
+    if (auto trait = try_resolve_trait_ref_to_symbol(name)) {
+        return make_trait_ref_type(*trait);
+    }
+    if (auto event = try_resolve_event_ref_to_symbol(name)) {
+        return make_event_ref_type(*event);
+    }
+    return std::nullopt;
+}
+
+TypeInfo SemanticAnalyzer::resolve_param_type(const FuncParam& param, bool is_extern) {
+    const auto& ref     = param.type;
+    const auto prefix   = "parameter '" + param.name + "' can't have type '" + ref.name + "'";
+    const auto not_kind = [&](const char* kind) {
+        errors_.error(ref.location, prefix + ": a " + kind + " is not a trait or event");
+        return make_unknown_type();
+    };
+    if (ref.param.has_value()) {
+        return resolve_type_ref(ref);
+    }
+    if (auto type = reference_type(ref.name)) {
+        if (is_extern) {
+            errors_.error(ref.location, prefix + ": an `extern func` can't take a trait or event parameter");
+            return make_unknown_type();
+        }
+        const auto* trait = type->kind == TypeKind::TraitRef ? find_resolved_trait(*type->symbol_id) : nullptr;
+        if (trait != nullptr && trait->fields.empty()) {
+            errors_.error(ref.location, prefix + ": a marker trait has no fields to read");
+            return make_unknown_type();
+        }
+        return *type;
+    }
+    if (try_resolve_state_ref(ref.name).has_value()) {
+        errors_.error(ref.location, "parameter '" + param.name + "': " + state_not_value_message(ref.name));
+        return make_unknown_type();
+    }
+    if (try_resolve_ref_of_kind(ref.name, {SymbolKind::Relation}).has_value()) {
+        return not_kind("relation");
+    }
+    if (try_resolve_phase_ref_to_symbol(ref.name).has_value()) {
+        return not_kind("phase");
+    }
+    return resolve_type_ref(ref);
+}
+
 TypeInfo SemanticAnalyzer::resolve_type_ref(const TypeRef& ref) {
+    if (const auto type = ref.param.has_value() ? std::nullopt : reference_type(ref.name)) {
+        errors_.error(ref.location,
+                      reference_kind_name(*type) + " '" + ref.name +
+                          "' is not a value type; only a func parameter can name it");
+        return make_unknown_type();
+    }
     // ── Qualified name: "module.Symbol" or "alias.Symbol" ──────────────────
     auto dot = ref.name.rfind('.');
     if (dot != std::string::npos) {
@@ -2124,9 +2184,7 @@ TypeInfo SemanticAnalyzer::resolve_type_ref(const TypeRef& ref) {
     }
 
     if (try_resolve_state_ref(ref.name).has_value()) {
-        errors_.error(ref.location,
-                      "state '" + ref.name + "' is not a value type; a rule reads it with `each: " + ref.name +
-                          " as m` and `match m:`");
+        errors_.error(ref.location, state_not_value_message(ref.name));
         return make_unknown_type();
     }
 
@@ -5408,12 +5466,12 @@ void SemanticAnalyzer::validate_render_stage_call(const CallExpr& node,
                           "' has no registered portable GLSL translation for a render-pass "
                           "stage handler");
     } else if (!func->is_extern && !func->glsl_inlinable) {
-        const auto name = symbol.module == current_module_id_ ? symbol.local_name : make_canonical_id(symbol);
+        const auto name   = symbol.module == current_module_id_ ? symbol.local_name : make_canonical_id(symbol);
+        const auto* reason = has_reference_params(*func)
+                                ? "it takes a trait or event parameter"
+                                : "its body must be a single `return` of GLSL-translatable operations";
         errors_.error(location,
-                      std::format("func '{}' cannot run in a render-pass {}-stage handler: its body must be a single "
-                                  "`return` of GLSL-translatable operations",
-                                  name,
-                                  stage_desc));
+                      std::format("func '{}' cannot run in a render-pass {}-stage handler: {}", name, stage_desc, reason));
     }
 }
 
@@ -6128,6 +6186,9 @@ void SemanticAnalyzer::check_trait_access_fields(const TraitAccessExpr& access,
                                                  const std::vector<std::string>& fields,
                                                  const SourceLocation& location,
                                                  const std::string& kind) {
+    if (fields.empty() && &access == whole_access_argument_) {
+        return;
+    }
     if (fields.empty()) {
         errors_.error(location,
                       kind + " field access needs a field after '" + dotted_name_of(*access.object) + "[" +
@@ -6344,7 +6405,12 @@ void SemanticAnalyzer::resolve_named_expression(E& e,
         if (!std::holds_alternative<IdentExpr>(e.callee->expr)) {
             walk(*e.callee);
         }
-        std::ranges::for_each(e.args, [&](auto& arg) { walk(*arg); });
+        for (auto& arg : e.args) {
+            rewrite_pair_alias_argument(*arg, shadowed);
+            whole_access_argument_ = std::get_if<TraitAccessExpr>(&arg->expr);
+            walk(*arg);
+            whole_access_argument_ = nullptr;
+        }
     } else if constexpr (std::is_same_v<E, MatchExpr>) {
         walk(*e.subject);
         for (auto& arm : e.arms) {
@@ -6366,6 +6432,20 @@ void SemanticAnalyzer::resolve_named_expression(E& e,
     } else if constexpr (std::is_same_v<E, RelationTestExpr>) {
         for_each_relation_end(e, walk);
     }
+}
+
+// A bare pair alias passed to a func names its binding's trait: `mb` becomes `mover[Body]`.
+void SemanticAnalyzer::rewrite_pair_alias_argument(ExprNode& arg, const std::unordered_set<std::string>& shadowed) const {
+    const auto* ident = std::get_if<IdentExpr>(&arg.expr);
+    if (ident == nullptr || access_pair_scope_ == nullptr || shadowed.contains(ident->name)) {
+        return;
+    }
+    const auto alias = find_pair_alias(*access_pair_scope_, ident->name);
+    if (!alias.has_value()) {
+        return;
+    }
+    const auto location = arg.location;
+    arg = std::move(*make_trait_access_expr(make_dotted_expr({alias->first}, 1, location), alias->second, {}, location));
 }
 
 void SemanticAnalyzer::resolve_named_access_expr(ExprNode& expr,
@@ -7485,6 +7565,11 @@ bool SemanticAnalyzer::reject_local_assignment(
         return true;
     }
     if (local_it != locals.end()) {
+        if (is_reference_type(local_it->second)) {
+            errors_.error(stmt.location,
+                          reference_kind_name(local_it->second) + " parameter '" + stmt.name + "' is read-only");
+            return true;
+        }
         if (!local_it->second.is_let) {
             return false;
         }
@@ -8837,8 +8922,15 @@ void SemanticAnalyzer::walk_expression_reads(  // NOLINT(readability-function-co
                 visit(*node.operand, locals);
             } else if constexpr (std::is_same_v<E, CallExpr>) {
                 add_contract_call_effects(contract, node.resolved_callee_id);
-                for (const auto& arg : node.args) {
-                    visit(*arg, locals);
+                const auto* function =
+                    node.resolved_callee_id.has_value() ? find_resolved_func(*node.resolved_callee_id) : nullptr;
+                const auto params = function == nullptr ? std::span<const ResolvedParam>{} : function->params;
+                for (std::size_t index = 0; index < node.args.size(); ++index) {
+                    if (index < params.size() && params[index].type.kind == TypeKind::TraitRef) {
+                        walk_reference_argument(*node.args[index], params[index], locals, contract, resolve_read);
+                    } else {
+                        visit(*node.args[index], locals);
+                    }
                 }
             } else if constexpr (std::is_same_v<E, MemberExpr>) {
                 // Not resolved directly by resolve_read above; walk the object.
@@ -8879,6 +8971,80 @@ void SemanticAnalyzer::walk_expression_reads(  // NOLINT(readability-function-co
             }
         },
         expr.expr);
+}
+
+// A trait argument reads, through its own access path, the fields its parameter reads in the callee.
+void SemanticAnalyzer::walk_reference_argument(
+    const ExprNode& arg,
+    const ResolvedParam& param,
+    const LocalNames& locals,
+    HandlerContract& contract,
+    const std::function<bool(const ExprNode&, const LocalNames&)>& resolve_read) const {
+    const auto* trait = find_resolved_trait(*param.type.symbol_id);
+    if (trait == nullptr || trait->fields.empty() || reference_field_read(arg, trait->fields.front().name) == nullptr) {
+        walk_expression_reads(arg, locals, contract, resolve_read);
+        return;
+    }
+    std::vector<std::string> fields(param.reads.fields.begin(), param.reads.fields.end());
+    if (param.reads.all) {
+        fields.clear();
+        std::ranges::transform(trait->fields, std::back_inserter(fields), &ResolvedField::name);
+    }
+    // An argument the callee never reads still gets the checks an inline read would.
+    HandlerContract unread;
+    auto& target = fields.empty() ? unread : contract;
+    if (fields.empty()) {
+        fields.push_back(trait->fields.front().name);
+    }
+    for (const auto& field : fields) {
+        const auto read = reference_field_read(arg, field);
+        walk_expression_reads(*read, locals, target, resolve_read);
+        // The callee reads storage directly, with no settle call at a site.
+        if (read->field_read.has_value()) {
+            target.untracked_accesses.push_back(*read->field_read);
+        }
+    }
+}
+
+// Each trait parameter's reads: its own `p.field` reads plus those of every func it is passed to.
+void SemanticAnalyzer::derive_parameter_reads(const ProgramNode& program) {
+    std::unordered_map<std::string, const FuncNode*> bodies;
+    for (const auto& decl : program.declarations) {
+        if (const auto* func = std::get_if<FuncNode>(&decl); func != nullptr && !func->is_extern) {
+            bodies.emplace(func->name, func);
+        }
+    }
+    std::unordered_set<std::string> derived;
+    std::function<void(const std::string&)> derive = [&](const std::string& name) {
+        const auto body = bodies.find(name);
+        if (body == bodies.end() || !derived.insert(name).second) {
+            return;
+        }
+        auto& params      = result_.funcs.at(name).params;
+        const auto record = [&](const ExprNode& expr, const LocalNames& locals) {
+            if (const auto* call = std::get_if<CallExpr>(&expr.expr);
+                call != nullptr && call->resolved_callee_id.has_value() &&
+                call->resolved_callee_id->module == current_module_id_) {
+                derive(call->resolved_callee_id->local_name);
+            }
+            const auto* member = std::get_if<MemberExpr>(&expr.expr);
+            const auto* owner  = member == nullptr ? nullptr : std::get_if<IdentExpr>(&member->object->expr);
+            const auto param   = owner == nullptr || locals.contains(owner->name)
+                                     ? params.end()
+                                     : std::ranges::find(params, owner->name, &ResolvedParam::name);
+            if (param == params.end() || param->type.kind != TypeKind::TraitRef) {
+                return false;
+            }
+            param->reads.fields.insert(member->member);
+            return true;
+        };
+        InferredHandlerContract scratch;
+        walk_handler_body(
+            body->second->body, {}, scratch, record, [](const VarAssign&, const LocalNames&) {}, [](const SymbolId&) {});
+    };
+    for (const auto& name : bodies | std::views::keys) {
+        derive(name);
+    }
 }
 
 bool SemanticAnalyzer::record_trait_access_read(HandlerContract& contract,
@@ -11940,6 +12106,84 @@ static std::optional<TypeInfo> asset_handle_type(TypeKind kind) {
     }
 }
 
+// The trait or event an argument passes by reference, or nullopt after reporting why it can't.
+std::optional<SymbolId> SemanticAnalyzer::reference_argument(
+    const ExprNode& arg,
+    const ResolvedParam& param,
+    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+    const std::unordered_map<std::string, TypeInfo>& local_bindings) const {
+    const bool wants_trait = param.type.kind == TypeKind::TraitRef;
+    if (const auto* access = std::get_if<TraitAccessExpr>(&arg.expr);
+        wants_trait && access != nullptr && (access->pair_binding_index || access->resolved_entity_id)) {
+        return access->resolved_trait_id;
+    }
+    const auto* ident = std::get_if<IdentExpr>(&arg.expr);
+    const auto local  = ident == nullptr ? local_bindings.end() : local_bindings.find(ident->name);
+    auto symbol = local == local_bindings.end() ? std::nullopt : local->second.symbol_id;
+    if (symbol.has_value()) {
+        const auto& type  = local->second;
+        const bool viewed = type.kind == TypeKind::Struct &&
+                            (symbol->kind == SymbolKind::Trait || symbol->kind == SymbolKind::Event);
+        if (is_reference_type(type) || viewed) {
+            return symbol;
+        }
+    }
+    const auto bound = ident == nullptr || local != local_bindings.end() ? filter_bindings.end()
+                                                                         : filter_bindings.find(ident->name);
+    if (wants_trait && bound != filter_bindings.end() && bound->second != nullptr &&
+        !bound->second->is_state_slot() && bound->first != bound->second->name) {
+        return bound->second->symbol_id;
+    }
+    errors_.error(arg.location,
+                  wants_trait ? "argument for trait parameter '" + param.name +
+                                    "' must be a trait the rule binds: an alias, `binding[T]` or `Entity[T]`"
+                              : "argument for event parameter '" + param.name +
+                                    "' must be the alias of the handler's event");
+    return std::nullopt;
+}
+
+// The trait or event an argument passes by reference where a value is expected.
+static std::optional<TypeInfo> passed_reference(const ExprNode& arg,
+                                                const std::unordered_map<std::string, TypeInfo>& local_bindings) {
+    if (const auto* access = std::get_if<TraitAccessExpr>(&arg.expr); access != nullptr) {
+        return access->resolved_trait_id.transform(make_trait_ref_type);
+    }
+    const auto* ident = std::get_if<IdentExpr>(&arg.expr);
+    const auto local  = ident == nullptr ? local_bindings.end() : local_bindings.find(ident->name);
+    if (local == local_bindings.end() || !is_reference_type(local->second)) {
+        return std::nullopt;
+    }
+    return local->second;
+}
+
+void SemanticAnalyzer::check_reference_arguments(
+    const CallExpr& call,
+    const ResolvedFunc& function,
+    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+    const std::unordered_map<std::string, TypeInfo>& local_bindings) const {
+    for (std::size_t index = 0; index < std::min(call.args.size(), function.params.size()); ++index) {
+        const auto& param = function.params[index];
+        const auto& arg   = *call.args[index];
+        if (!is_reference_type(param.type)) {
+            if (const auto passed = passed_reference(arg, local_bindings); passed.has_value()) {
+                errors_.error(arg.location,
+                              "parameter '" + param.name + "' of '" + function.name + "' takes '" +
+                                  type_display_name(param.type) + "', not " + reference_kind_name(*passed) + " '" +
+                                  passed->name + "'");
+            }
+            continue;
+        }
+        const auto symbol = reference_argument(arg, param, filter_bindings, local_bindings);
+        if (!symbol.has_value() || symbol == param.type.symbol_id) {
+            continue;
+        }
+        errors_.error(arg.location,
+                      "parameter '" + param.name + "' of '" + function.name + "' takes " +
+                          reference_kind_name(param.type) + " '" + param.type.name + "', got '" + symbol->local_name +
+                          "'");
+    }
+}
+
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TypeInfo SemanticAnalyzer::infer_ident_expr_type(
     const IdentExpr& ident,
@@ -11954,6 +12198,12 @@ TypeInfo SemanticAnalyzer::infer_ident_expr_type(
         return ident.template_type;
     }
     if (auto local_it = local_bindings.find(ident.name); local_it != local_bindings.end()) {
+        if (is_reference_type(local_it->second)) {
+            errors_.error(location,
+                          reference_kind_name(local_it->second) + " parameter '" + ident.name +
+                              "' can only be read field by field or passed to a func parameter of the same type");
+            return make_unknown_type();
+        }
         return local_it->second;
     }
     if (const auto bound = pair_scope != nullptr ? pair_scope->find(ident.name) : PairScope::const_iterator{};
@@ -12205,6 +12455,10 @@ TypeInfo SemanticAnalyzer::infer_handler_field_type(const MemberExpr& member,
     return field == nullptr ? make_unknown_type() : field->type;
 }
 
+static bool has_fields(const TypeInfo& type) {
+    return type.kind == TypeKind::Struct || is_reference_type(type);
+}
+
 TypeInfo SemanticAnalyzer::infer_member_expr_type(
     const MemberExpr& member,
     const SourceLocation& location,
@@ -12257,7 +12511,7 @@ TypeInfo SemanticAnalyzer::infer_member_expr_type(
         return infer_handler_field_type(member, location, *handler_event);
     }
     const auto local = local_bindings.find(owner->name);
-    if (local == local_bindings.end() || local->second.kind != TypeKind::Struct) {
+    if (local == local_bindings.end() || !has_fields(local->second)) {
         return make_unknown_type();
     }
     const auto& local_type = local->second;
@@ -12498,13 +12752,15 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
                               imported_reference_diagnostic(imports_, "function", ident->name, provider_it->second));
             }
         }
-        if (call->resolved_callee_id.has_value()) {
-            if (const auto* function = find_resolved_func(*call->resolved_callee_id);
-                function != nullptr && function->return_type.has_value()) {
-                return *function->return_type;
-            }
+        const auto* function =
+            call->resolved_callee_id.has_value() ? find_resolved_func(*call->resolved_callee_id) : nullptr;
+        if (function == nullptr) {
+            return make_unknown_type();
         }
-        return make_unknown_type();
+        if (reference_arguments_checked_) {
+            check_reference_arguments(*call, *function, filter_bindings, local_bindings);
+        }
+        return function->return_type.value_or(make_unknown_type());
     }
     if (const auto* unary = std::get_if<UnaryExpr>(&expr.expr)) {
         auto operand = infer_expr_type(*unary->operand, filter_bindings, local_bindings, handler_event, pair_scope);

@@ -93,7 +93,32 @@ void set_active_camera_2d(Camera2D cam) noexcept;
 [[nodiscard]] Camera2D get_active_camera_2d() noexcept;
 void set_active_camera_3d(Camera3D cam) noexcept;
 [[nodiscard]] Camera3D get_active_camera_3d() noexcept;
+// The ray through a window pixel, projected through the active viewport's rectangle.
 [[nodiscard]] Ray screen_to_world_ray(Vector2 screen, const Camera3D& camera) noexcept;
+
+struct CameraBasis {
+    Vector3 forward;
+    Vector3 right;
+    Vector3 up;
+};
+
+// Must match std.camera.volume.camera_basis: to_screen relies on it.
+[[nodiscard]] CameraBasis camera_basis(Quat rotation) noexcept;
+[[nodiscard]] Camera3D camera_3d_from_pose(Vector3 position, Quat rotation, float fov_y) noexcept;
+
+// The pixel rectangle 3D drawing projects into; the whole window while unset.
+void set_active_viewport_rect(Rectangle rect) noexcept;
+[[nodiscard]] Rectangle active_viewport_rect() noexcept;
+template <typename Viewport>
+[[nodiscard]] Rectangle viewport_pixel_rect(const Viewport& viewport, const int width, const int height) noexcept {
+    const auto w = static_cast<float>(width);
+    const auto h = static_cast<float>(height);
+    return Rectangle{.x = viewport.x * w, .y = viewport.y * h, .width = viewport.width * w, .height = viewport.height * h};
+}
+[[nodiscard]] Matrix viewport_projection(const Camera3D& camera, Rectangle rect) noexcept;
+// BeginMode3D/EndMode3D, with the GL viewport and aspect of the active viewport rectangle.
+void begin_mode_3d(const Camera3D& camera) noexcept;
+void end_mode_3d() noexcept;
 
 // ── Shape rendering (std.render.shapes ShapeRenderer) ──────────────────────────
 // origin is the offset from position to the shape's un-rotated reference
@@ -738,25 +763,6 @@ void editor_apply_camera_3d(entt::registry& registry, Vector3 position, Quat rot
 
 /// Convert a screen-space delta to a 2D world-space delta (std.camera.flat.screen_delta_to_world).
 [[nodiscard]] Vector2 screen_delta_to_world_2d(Vector2 delta) noexcept;
-
-/// Pure ray/plane intersection behind editor_plane_project_3d: nullopt when the
-/// ray is parallel to the plane or the intersection lies behind the ray origin.
-[[nodiscard]] std::optional<Vector3> editor_ray_plane_intersect(Ray ray,
-                                                                Vector3 plane_origin,
-                                                                Vector3 plane_normal) noexcept;
-
-/// Project a screen position onto a 3D plane.
-[[nodiscard]] Vector3 editor_plane_project_3d(Vector2 screen, Vector3 plane_origin, Vector3 plane_normal) noexcept;
-
-/// Return the current frame's mouse delta in 3D world space.
-[[nodiscard]] Vector3 editor_mouse_delta_3d() noexcept;
-
-/// World-space delta for a screen-space cursor movement on a 3D plane
-/// (std.camera.volume.screen_delta_on_plane).
-[[nodiscard]] Vector3 screen_delta_on_plane_3d(Vector2 screen,
-                                               Vector2 delta,
-                                               Vector3 plane_origin,
-                                               Vector3 plane_normal) noexcept;
 
 // ── Per-entity creation ordering (dsl-pair-relations) ──────────────────────
 // ── World-persistence provenance ───────────────────────────────────────────

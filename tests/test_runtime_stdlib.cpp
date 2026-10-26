@@ -18,6 +18,7 @@
 #include <limits>
 #include <numbers>
 #include <optional>
+#include <random>
 #include <span>
 #include <sstream>
 #include <vector>
@@ -1401,58 +1402,60 @@ TEST_CASE("Runtime stdlib: palette_color wraps out-of-range indices", "[runtime]
     CHECK(wrapped.a == in_range.a);
 }
 
-TEST_CASE("Runtime stdlib: editor ray/plane intersection hits, rejects parallel and behind-origin rays",
-          "[runtime][editor][entt]") {
-    constexpr Vector3 kGroundOrigin{.x = 0.0F, .y = 0.0F, .z = 0.0F};
-    constexpr Vector3 kGroundNormal{.x = 0.0F, .y = 1.0F, .z = 0.0F};
+TEST_CASE("Runtime stdlib: the renderer's camera basis is the rotation applied to -Z, level with world up",
+          "[runtime][camera][entt]") {
+    std::mt19937 rng{1234U};
+    std::uniform_real_distribution<float> component{-1.0F, 1.0F};
+    constexpr Vector3 kWorldUp{.x = 0.0F, .y = 1.0F, .z = 0.0F};
+    for (int sample = 0; sample < 200; ++sample) {
+        const Quaternion rotation = QuaternionNormalize(
+            Quaternion{.x = component(rng), .y = component(rng), .z = component(rng), .w = component(rng)});
+        const Vector3 forward = Vector3RotateByQuaternion(Vector3{.x = 0.0F, .y = 0.0F, .z = -1.0F}, rotation);
+        const Vector3 right   = Vector3Normalize(Vector3CrossProduct(forward, kWorldUp));
+        const Vector3 up      = Vector3CrossProduct(right, forward);
 
-    SECTION("Downward center ray from an overhead camera hits the plane origin") {
-        const Ray ray{.position = {.x = 0.0F, .y = 10.0F, .z = 0.0F}, .direction = {.x = 0.0F, .y = -1.0F, .z = 0.0F}};
-        const auto hit = entt_backend::editor_ray_plane_intersect(ray, kGroundOrigin, kGroundNormal);
-        REQUIRE(hit.has_value());
-        CHECK(hit->x == Catch::Approx(0.0F).margin(1e-5));
-        CHECK(hit->y == Catch::Approx(0.0F).margin(1e-5));
-        CHECK(hit->z == Catch::Approx(0.0F).margin(1e-5));
-    }
+        const auto basis = entt_backend::camera_basis(rotation);
+        CHECK(Vector3Distance(basis.forward, forward) < 1e-5F);
+        CHECK(Vector3Distance(basis.right, right) < 1e-5F);
+        CHECK(Vector3Distance(basis.up, up) < 1e-5F);
 
-    SECTION("Angled ray lands at the projected ground point") {
-        const float inv_sqrt2 = 1.0F / std::numbers::sqrt2_v<float>;
-        const Ray ray{.position  = {.x = 0.0F, .y = 10.0F, .z = 0.0F},
-                      .direction = {.x = inv_sqrt2, .y = -inv_sqrt2, .z = 0.0F}};
-        const auto hit = entt_backend::editor_ray_plane_intersect(ray, kGroundOrigin, kGroundNormal);
-        REQUIRE(hit.has_value());
-        CHECK(hit->x == Catch::Approx(10.0F));
-        CHECK(hit->y == Catch::Approx(0.0F).margin(1e-5));
-        CHECK(hit->z == Catch::Approx(0.0F).margin(1e-5));
+        const Vector3 position{.x = component(rng) * 10.0F, .y = component(rng) * 10.0F, .z = 3.0F};
+        const Camera3D camera = entt_backend::camera_3d_from_pose(position, rotation, 50.0F);
+        CHECK(camera.fovy == 50.0F);
+        CHECK(camera.projection == CAMERA_PERSPECTIVE);
+        CHECK(Vector3Distance(Vector3Subtract(camera.target, camera.position), forward) < 1e-5F);
+        // The view matrix rows are what the GPU sees: right, up and backward.
+        const Matrix view = MatrixLookAt(camera.position, camera.target, camera.up);
+        CHECK(Vector3Distance(Vector3{.x = view.m0, .y = view.m4, .z = view.m8}, right) < 1e-4F);
+        CHECK(Vector3Distance(Vector3{.x = view.m1, .y = view.m5, .z = view.m9}, up) < 1e-4F);
+        CHECK(Vector3Distance(Vector3{.x = view.m2, .y = view.m6, .z = view.m10}, Vector3Negate(forward)) < 1e-4F);
     }
+}
 
-    SECTION("Ray parallel to the plane misses") {
-        const Ray ray{.position = {.x = 0.0F, .y = 10.0F, .z = 0.0F}, .direction = {.x = 1.0F, .y = 0.0F, .z = 0.0F}};
-        CHECK_FALSE(entt_backend::editor_ray_plane_intersect(ray, kGroundOrigin, kGroundNormal).has_value());
-    }
+TEST_CASE("Runtime stdlib: a camera looking straight down takes right from its rotation", "[runtime][camera][entt]") {
+    const Quaternion down = QuaternionFromAxisAngle(Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F}, -PI / 2.0F);
+    const auto basis      = entt_backend::camera_basis(down);
+    CHECK(Vector3Distance(basis.forward, Vector3{.x = 0.0F, .y = -1.0F, .z = 0.0F}) < 1e-5F);
+    CHECK(Vector3Distance(basis.right, Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F}) < 1e-5F);
+    CHECK(Vector3Distance(basis.up, Vector3{.x = 0.0F, .y = 0.0F, .z = -1.0F}) < 1e-5F);
+}
 
-    SECTION("Intersection behind the ray origin misses") {
-        const Ray ray{.position = {.x = 0.0F, .y = 10.0F, .z = 0.0F}, .direction = {.x = 0.0F, .y = 1.0F, .z = 0.0F}};
-        CHECK_FALSE(entt_backend::editor_ray_plane_intersect(ray, kGroundOrigin, kGroundNormal).has_value());
-    }
+TEST_CASE("Runtime stdlib: a 3D viewport projects with its own rectangle's aspect", "[runtime][camera][entt]") {
+    const Camera3D camera = entt_backend::camera_3d_from_pose(
+        Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, Quaternion{.x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F}, 60.0F);
+    const Matrix wide = entt_backend::viewport_projection(camera, Rectangle{.x = 0.0F, .y = 0.0F, .width = 1280.0F, .height = 720.0F});
+    const Matrix half = entt_backend::viewport_projection(camera, Rectangle{.x = 640.0F, .y = 0.0F, .width = 640.0F, .height = 720.0F});
+    CHECK(wide.m5 == Catch::Approx(half.m5));
+    CHECK(wide.m0 * 1280.0F / 720.0F == Catch::Approx(wide.m5));
+    CHECK(half.m0 * 640.0F / 720.0F == Catch::Approx(half.m5));
 
-    SECTION("Two projected cursor rays yield a ground-plane delta") {
-        // Project current and previous cursor rays onto y=0 and difference them
-        // — the underlying logic behind screen_delta_on_plane_3d's 3D delta.
-        const Ray current{.position  = {.x = 0.0F, .y = 10.0F, .z = 0.0F},
-                          .direction = {.x = 0.1F, .y = -1.0F, .z = 0.05F}};
-        const Ray previous{.position  = {.x = 0.0F, .y = 10.0F, .z = 0.0F},
-                           .direction = {.x = 0.0F, .y = -1.0F, .z = 0.0F}};
-        const auto current_hit  = entt_backend::editor_ray_plane_intersect(current, kGroundOrigin, kGroundNormal);
-        const auto previous_hit = entt_backend::editor_ray_plane_intersect(previous, kGroundOrigin, kGroundNormal);
-        REQUIRE(current_hit.has_value());
-        REQUIRE(previous_hit.has_value());
-        const Vector3 delta{.x = current_hit->x - previous_hit->x,
-                            .y = current_hit->y - previous_hit->y,
-                            .z = current_hit->z - previous_hit->z};
-        CHECK(delta.y == Catch::Approx(0.0F).margin(1e-5));
-        CHECK(std::abs(delta.x) + std::abs(delta.z) > 0.0F);
-    }
+    // The center pixel of the right half looks straight ahead.
+    entt_backend::set_active_viewport_rect(Rectangle{.x = 640.0F, .y = 0.0F, .width = 640.0F, .height = 720.0F});
+    const Ray center = entt_backend::screen_to_world_ray(Vector2{.x = 960.0F, .y = 360.0F}, camera);
+    entt_backend::set_active_viewport_rect(Rectangle{});
+    CHECK(center.direction.x == Catch::Approx(0.0F).margin(1e-5));
+    CHECK(center.direction.y == Catch::Approx(0.0F).margin(1e-5));
+    CHECK(center.direction.z == Catch::Approx(-1.0F));
 }
 
 TEST_CASE("Runtime stdlib: editor_raycast_3d without a registered impl returns null", "[runtime][editor][entt]") {

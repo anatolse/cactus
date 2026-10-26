@@ -320,32 +320,36 @@ rule SpawnInitialBalls:
 # DetectWallContact's margin math), so clamping to +/-(2.7 - radius) keeps
 # the spawned sphere clear of the walls. No cap on total ball count.
 rule SpawnBallOnClick:
-    each:
-        BallSpawner
+    pairs:
+        spawner:
+            BallSpawner as seed
+        camera:
+            cam3d.CameraView as cv
+    limit: 1 per spawner
 
     on input:
         if not input.pressed(SpawnBall):
             return
 
-        let spawn_point = cam3d.screen_to_plane(input.mouse_position(), vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 1.0))
+        let spawn_point = cam3d.ray_plane(cam3d.ray(cv, input.mouse_position()), vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 1.0)).point
 
-        rng = rand.advance(rng)
-        let ball_radius = rand.sample(rng, rand.uniform(0.15, 0.42))
+        seed.rng = rand.advance(seed.rng)
+        let ball_radius = rand.sample(seed.rng, rand.uniform(0.15, 0.42))
         let margin = 2.7 - ball_radius
         let clamped = v3m.clamp(spawn_point, vec3(margin * -1.0, margin * -1.0, 0.0), vec3(margin, margin, 0.0))
 
-        rng = rand.advance(rng)
-        let z = rand.sample(rng, rand.uniform(-1.0, 1.0))
-        rng = rand.advance(rng)
-        let theta = rand.sample(rng, rand.uniform(0.0, math.PI * 2.0))
+        seed.rng = rand.advance(seed.rng)
+        let z = rand.sample(seed.rng, rand.uniform(-1.0, 1.0))
+        seed.rng = rand.advance(seed.rng)
+        let theta = rand.sample(seed.rng, rand.uniform(0.0, math.PI * 2.0))
         let planar = math.sqrt(1.0 - z * z)
         let dir = vec3(planar * math.cos(theta), planar * math.sin(theta), z)
 
-        rng = rand.advance(rng)
-        let speed = rand.sample(rng, rand.uniform(0.8, 1.6))
+        seed.rng = rand.advance(seed.rng)
+        let speed = rand.sample(seed.rng, rand.uniform(0.8, 1.6))
 
-        rng = rand.advance(rng)
-        let color_index = rand.sample_int(rng, rand.uniform_int(0, 7))
+        seed.rng = rand.advance(seed.rng)
+        let color_index = rand.sample_int(seed.rng, rand.uniform_int(0, 7))
 
         spawn BallTemplate:
             tv.WorldTransform:

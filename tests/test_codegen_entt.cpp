@@ -1494,9 +1494,9 @@ TEST_CASE("Codegen EnTT: std.debug 3D event renderers issue one unconditional ra
 
     const auto line_tick = generated_function(code, "void draw_debug_line3_d_renderer_tick");
     CHECK(line_tick.contains("const ::cactus_gen::DrawDebugLine3DEvent& occurrence"));
-    CHECK(line_tick.contains("BeginMode3D(cactus::runtime::entt_backend::get_active_camera_3d())"));
+    CHECK(line_tick.contains("begin_mode_3d(cactus::runtime::entt_backend::get_active_camera_3d())"));
     CHECK(line_tick.contains("DrawLine3D(occurrence.start, occurrence.end, occurrence.color)"));
-    CHECK(line_tick.contains("EndMode3D()"));
+    CHECK(line_tick.contains("end_mode_3d()"));
 
     const auto box_tick = generated_function(code, "void draw_debug_wire_box3_d_renderer_tick");
     CHECK(box_tick.contains("DrawCubeWiresV(occurrence.center, occurrence.size, occurrence.color)"));
@@ -4553,11 +4553,11 @@ TEST_CASE("Codegen EnTT: viewport loop emits scissor for each viewport (split-sc
     const auto code = CppEnttCodegen::generate(decorated);
 
     // Each viewport iteration sets scissor region based on normalized rect
-    CHECK(
-        code.contains("BeginScissorMode(\n"
-                      "                static_cast<int>(cactus_gen_vp.x * static_cast<float>(cactus_gen_sw))"));
-    CHECK(code.contains("static_cast<int>(cactus_gen_vp.width * static_cast<float>(cactus_gen_sw))"));
-    CHECK(code.contains("static_cast<int>(cactus_gen_vp.height * static_cast<float>(cactus_gen_sh))"));
+    CHECK(code.contains("viewport_pixel_rect(cactus_gen_vp, cactus_gen_sw, cactus_gen_sh)"));
+    CHECK(code.contains("BeginScissorMode(\n"
+                        "                static_cast<int>(cactus_gen_rect.x),"));
+    CHECK(code.contains("static_cast<int>(cactus_gen_rect.width)"));
+    CHECK(code.contains("static_cast<int>(cactus_gen_rect.height)"));
 
     // Per-viewport camera is set with the entity's Camera component
     CHECK(code.contains("registry.all_of<::cactus_gen::Camera>(cactus_gen_vp_ent)"));

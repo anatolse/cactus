@@ -1,0 +1,89 @@
+module camera_view
+
+# Two cameras split the screen; a third has no viewport. Tests read the kept
+# views, the screen size seen in input, and where the right view says a
+# rendered block appears.
+
+use std.core as core
+use std.camera.volume as cam
+use std.camera.viewport as vp
+use std.transform.volume as tv
+use std.math.quat as quat
+use std.render.meshes as meshes
+
+asset BlockMesh: mesh = "models/block.mesh"
+asset BlockMaterial: material = "materials/block.mat"
+
+trait Recorder:
+    var input_screen: vec2 = vec2(0.0, 0.0)
+    var marker_screen: vec2 = vec2(0.0, 0.0)
+    var marker_in_front: bool = false
+    var ground: vec3 = vec3(0.0, 0.0, 0.0)
+    var ground_hit: bool = false
+
+trait Mover:
+    var step: vec3 = vec3(0.0, 0.0, 0.0)
+
+trait Probe:
+    var pixel: vec2 = vec2(300.0, 400.0)
+
+entity Log:
+    Recorder
+    Probe
+
+entity Block:
+    tv.WorldTransform:
+        position = vec3(1.0, 0.5, -2.0)
+    meshes.Renderer:
+        mesh = BlockMesh
+        material = BlockMaterial
+
+entity Left:
+    cam.Camera
+    vp.Viewport:
+        width = 0.5
+    tv.WorldTransform:
+        position = vec3(0.0, 4.0, 8.0)
+        rotation = quat.from_euler(-0.4, 0.0, 0.0)
+
+entity Right:
+    cam.Camera:
+        fov_y = 45.0
+    vp.Viewport:
+        x = 0.5
+        width = 0.5
+    tv.WorldTransform:
+        position = vec3(6.0, 2.0, 6.0)
+        rotation = quat.from_euler(-0.2, 0.7, 0.0)
+    Mover
+
+entity Blind:
+    cam.Camera
+    tv.WorldTransform
+
+rule RecordScreen:
+    on core.input:
+        Log[Recorder].input_screen = vp.Screen[vp.ScreenSize].size
+
+rule Move:
+    each:
+        Mover as m
+        tv.WorldTransform as t
+
+    on core.tick:
+        t.position += m.step
+
+rule ProjectMarker:
+    each:
+        cam.CameraView as cv
+        vp.Viewport as port
+    where:
+        port.x > 0.25
+
+    on core.input:
+        let projected = cam.to_screen(cv, Block[tv.WorldTransform].position)
+        Log[Recorder].marker_screen = projected.position
+        Log[Recorder].marker_in_front = projected.in_front
+        let hit = cam.ray_plane(cam.ray(cv, Log[Probe].pixel), vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0))
+        Log[Recorder].ground = hit.point
+        Log[Recorder].ground_hit = hit.hit

@@ -1,5 +1,13 @@
 module std.camera.volume
 
+use std.core as core
+use std.math as math
+use std.math.quat as quat
+use std.math.vec3 as v3
+use std.collision.volume as collision
+use std.camera.viewport as vp
+use std.transform.volume as tv
+
 # ── 3D Camera Traits & Rules ──────────────────────────────────────────────────
 
 # 3D perspective camera configuration.
@@ -47,11 +55,125 @@ pub trait ThirdPersonCamera:
 # yet available in the language. Until then, attach Camera + Viewport
 # (std.camera.viewport) to an entity whose own WorldTransform drives the 3D view.
 
-# ── Screen/World Projection Helpers ──────────────────────────────────────────
-# Projects screen-space coordinates through the active 3D camera onto a plane.
-# screen_to_plane: ray/plane intersection; returns plane_origin when degenerate
-# screen_delta_on_plane: world-space delta for a screen-space cursor movement
+# ── Camera View ───────────────────────────────────────────────────────────────
 
-pub extern func screen_to_plane(screen: vec2, plane_origin: vec3, plane_normal: vec3) vec3
+# A camera's unit view directions.
+pub struct Basis:
+    forward: vec3
+    right: vec3
+    up: vec3
 
-pub extern func screen_delta_on_plane(screen: vec2, delta: vec2, plane_origin: vec3, plane_normal: vec3) vec3
+# The view directions the renderer uses for a camera rotation: forward is the
+# rotation applied to -Z, right is level with world up. A camera looking
+# straight up or down takes right from the rotation instead.
+pub func camera_basis(rotation: quat) Basis:
+    let forward = quat.forward(rotation)
+    var side = v3.cross(forward, vec3(0.0, 1.0, 0.0))
+    if v3.length(side) < 0.000001:
+        side = quat.right(rotation)
+    let right = v3.normalize(side)
+    return Basis(forward = forward, right = right, up = v3.cross(right, forward))
+
+# What a camera viewport showed in the last rendered frame.
+# position:           the camera's world position
+# forward, right, up: unit view directions, as the renderer uses them
+# fov_y, near, far:   copied from Camera
+# rect_min:           the viewport's top-left corner in pixels
+# rect_size:          the viewport's size in pixels
+pub trait CameraView:
+    var position: vec3 = vec3(0.0, 0.0, 0.0)
+    var forward: vec3 = vec3(0.0, 0.0, -1.0)
+    var right: vec3 = vec3(1.0, 0.0, 0.0)
+    var up: vec3 = vec3(0.0, 1.0, 0.0)
+    var fov_y: float = 60.0
+    var near: float = 0.1
+    var far: float = 1000.0
+    var rect_min: vec2 = vec2(0.0, 0.0)
+    var rect_size: vec2 = vec2(0.0, 0.0)
+
+# Runs in late_tick after cameras move, so input next frame sees this frame's views.
+pub group views:
+    phase: core.late_tick
+
+func pixel_min(port: vp.Viewport, screen: vp.ScreenSize) vec2:
+    return vec2(port.x * screen.size.x, port.y * screen.size.y)
+
+func pixel_size(port: vp.Viewport, screen: vp.ScreenSize) vec2:
+    return vec2(port.width * screen.size.x, port.height * screen.size.y)
+
+rule KeepCameraViews:
+    each:
+        Camera as cam
+        vp.Viewport as port
+        tv.WorldTransform as pose
+    group: views
+    keep CameraView:
+        position = pose.position
+        forward = camera_basis(pose.rotation).forward
+        right = camera_basis(pose.rotation).right
+        up = camera_basis(pose.rotation).up
+        fov_y = cam.fov_y
+        near = cam.near
+        far = cam.far
+        rect_min = pixel_min(port, vp.Screen[vp.ScreenSize])
+        rect_size = pixel_size(port, vp.Screen[vp.ScreenSize])
+
+# ── Projection ────────────────────────────────────────────────────────────────
+
+# A point's pixel position. in_front is false for a point not farther than
+# near along forward; position is then rect_min.
+pub struct Projected:
+    position: vec2
+    in_front: bool
+
+# A ray through a pixel. origin is on the near plane; direction is unit length.
+pub struct ScreenRay:
+    origin: vec3
+    direction: vec3
+
+func has_area(camera: CameraView) bool:
+    return camera.rect_size.x > 0.0 and camera.rect_size.y > 0.0
+
+# Pixels per world unit at distance 1 along forward.
+func focal_length(camera: CameraView) float:
+    let half_fov = math.radians(camera.fov_y) * 0.5
+    return camera.rect_size.y * 0.5 * math.cos(half_fov) / math.sin(half_fov)
+
+func rect_center(camera: CameraView) vec2:
+    return camera.rect_min + camera.rect_size * 0.5
+
+# Where point appears in the camera's viewport, in pixels.
+pub func to_screen(camera: CameraView, point: vec3) Projected:
+    let offset = point - camera.position
+    let depth = v3.dot(offset, camera.forward)
+    if not has_area(camera) or not (depth > camera.near):
+        return Projected(position = camera.rect_min, in_front = false)
+    let scale = focal_length(camera) / depth
+    let center = rect_center(camera)
+    let x = center.x + v3.dot(offset, camera.right) * scale
+    let y = center.y - v3.dot(offset, camera.up) * scale
+    return Projected(position = vec2(x, y), in_front = true)
+
+# The ray from the camera through the pixel screen. Pixels outside the
+# viewport extend the same projection.
+pub func ray(camera: CameraView, screen: vec2) ScreenRay:
+    if not has_area(camera):
+        return ScreenRay(origin = camera.position, direction = camera.forward)
+    let focal = focal_length(camera)
+    let center = rect_center(camera)
+    let x = (screen.x - center.x) / focal
+    let y = (center.y - screen.y) / focal
+    let direction = v3.normalize(camera.forward + camera.right * x + camera.up * y)
+    let origin = camera.position + direction * (camera.near / v3.dot(direction, camera.forward))
+    return ScreenRay(origin = origin, direction = direction)
+
+# Where a ray meets the plane through plane_origin with normal plane_normal.
+# A ray parallel to the plane, or one that would meet it behind its origin,
+# misses. normal faces the ray.
+pub func ray_plane(r: ScreenRay, plane_origin: vec3, plane_normal: vec3) collision.RayHit:
+    let facing = v3.dot(r.direction, plane_normal)
+    let distance = v3.dot(plane_origin - r.origin, plane_normal) / facing
+    if math.abs(facing) < 0.000001 or distance < 0.0:
+        return collision.RayHit(hit = false, distance = 0.0, point = vec3(0.0, 0.0, 0.0), normal = vec3(0.0, 0.0, 0.0))
+    let normal = if facing < 0.0: plane_normal else: plane_normal * -1.0
+    return collision.RayHit(hit = true, distance = distance, point = r.origin + r.direction * distance, normal = normal)

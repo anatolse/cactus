@@ -16,6 +16,7 @@
 // unwrapped — see design.md's "fake surface scope" decision.
 
 #include <raylib.h>
+#include <rlgl.h>
 
 #ifdef CACTUS_RAYLIB_FAKE
 #include "fake_raylib/fake_raylib.hpp"
@@ -66,6 +67,8 @@ CACTUS_RL_WRAP_VOID(EnableCursor, (), ())
 CACTUS_RL_WRAP(bool, IsWindowReady, (), ())
 CACTUS_RL_WRAP(int, GetScreenWidth, (), ())
 CACTUS_RL_WRAP(int, GetScreenHeight, (), ())
+CACTUS_RL_WRAP(int, rlGetFramebufferWidth, (), ())
+CACTUS_RL_WRAP(int, rlGetFramebufferHeight, (), ())
 
 // ── Font metrics (computed when faked; never recorded) ─────────────────────
 // Real MeasureTextEx depends on the loaded default font's glyph data, which a
@@ -87,6 +90,8 @@ CACTUS_RL_WRAP_VOID(BeginMode2D, (Camera2D camera), (camera))
 CACTUS_RL_WRAP_VOID(EndMode2D, (), ())
 CACTUS_RL_WRAP_VOID(BeginMode3D, (Camera3D camera), (camera))
 CACTUS_RL_WRAP_VOID(EndMode3D, (), ())
+CACTUS_RL_WRAP_VOID(rlViewport, (int x, int y, int width, int height), (x, y, width, height))
+CACTUS_RL_WRAP_VOID(rlSetMatrixProjection, (Matrix proj), (proj))
 CACTUS_RL_WRAP_VOID(BeginTextureMode, (RenderTexture2D target), (target))
 CACTUS_RL_WRAP_VOID(EndTextureMode, (), ())
 CACTUS_RL_WRAP_VOID(BeginScissorMode, (int x, int y, int width, int height), (x, y, width, height))

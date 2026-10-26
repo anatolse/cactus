@@ -174,12 +174,17 @@ rule PlaceBlock:
         editor[Editor].build_pending = false
 
 rule Select:
-    each:
-        Editor as editor
+    pairs:
+        owner:
+            Editor as editor
+        overview:
+            robot.StrategyView
+            camera.CameraView as cv
     after:
         ui.RoutePointer
         robot.Look
         robot.ViewKeys
+    limit: 1 per owner
     when:
         game.Game[game.Session].mode == game.Mode.Playing
         game.Game[game.Session].camera == game.View.Strategy
@@ -189,7 +194,7 @@ rule Select:
             editor.dragging = false
             inp.consume(CancelKey)
             return
-        let hit = camera.screen_to_plane(inp.mouse_position(), vec3(0.0, game.Game[game.Session].layer + 1.0, 0.0), vec3(0.0, 1.0, 0.0))
+        let hit = camera.ray_plane(camera.ray(cv, inp.mouse_position()), vec3(0.0, game.Game[game.Session].layer + 1.0, 0.0), vec3(0.0, 1.0, 0.0)).point
         if input.pressed(DigButton):
             editor.dragging = true
             editor.start_x = math.floor(hit.x)

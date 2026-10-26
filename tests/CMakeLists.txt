@@ -719,6 +719,18 @@ cactus_add_headless_behavior_test(test_trait_parameters_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_trait_parameters_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_camera_view_headless_behavior
+    CACTUS_SOURCE examples/stdlib-fixtures/camera_view.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_camera_view_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_camera_projection_headless_behavior
+    CACTUS_SOURCE examples/stdlib-fixtures/camera_projection.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_camera_projection_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_trait_lifecycle_headless_behavior
     CACTUS_SOURCE examples/stdlib-fixtures/trait_lifecycle.cactus
     BACKEND cpp-entt

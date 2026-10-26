@@ -1496,14 +1496,14 @@ void flush_voxel_queue() noexcept try {
     render_debug_state_storage().used_default_3d_camera = true;
     const Camera3D camera                                = get_active_camera_3d();
     apply_lights(camera);
-    cactus::runtime::raylib::BeginMode3D(camera);
+    begin_mode_3d(camera);
     for (const auto& submission : voxel_queue()) {
         const auto found = voxel_volumes().find(submission.volume);
         if (found != voxel_volumes().end()) {
             draw_voxel_volume(found->second, submission.ceiling);
         }
     }
-    cactus::runtime::raylib::EndMode3D();
+    end_mode_3d();
     voxel_queue().clear();
 } catch (...) {
     std::terminate();
@@ -1527,7 +1527,7 @@ void flush_mesh_queue() noexcept try {
 
     apply_lights(camera);
 
-    cactus::runtime::raylib::BeginMode3D(camera);
+    begin_mode_3d(camera);
     for (const auto& submission : mesh_queue()) {
         Mesh* mesh         = ensure_mesh_resource(submission.mesh_runtime_id);
         Material* material = ensure_material_resource(submission.material_runtime_id);
@@ -1537,7 +1537,7 @@ void flush_mesh_queue() noexcept try {
         material->maps[MATERIAL_MAP_DIFFUSE].color = submission.diffuse_color;
         cactus::runtime::raylib::DrawMesh(*mesh, *material, mesh_transform_matrix(submission));
     }
-    cactus::runtime::raylib::EndMode3D();
+    end_mode_3d();
 } catch (...) {
     std::terminate();
 }
@@ -1559,7 +1559,7 @@ void flush_model_queue() noexcept try {
     if (window_ready) {
         const Camera3D camera = get_active_camera_3d();
         apply_lights(camera);
-        cactus::runtime::raylib::BeginMode3D(camera);
+        begin_mode_3d(camera);
     }
     for (const auto& submission : model_queue()) {
         const auto it             = models().find(submission.model_runtime_id);
@@ -1601,7 +1601,7 @@ void flush_model_queue() noexcept try {
         ++render_debug_state_storage().drawn_models;
     }
     if (window_ready) {
-        cactus::runtime::raylib::EndMode3D();
+        end_mode_3d();
     }
 } catch (...) {
     std::terminate();
@@ -1767,7 +1767,7 @@ void flush_text_3d_queue() noexcept try {
     Mesh& plane = text_plane_mesh();
 
     Material mat = LoadMaterialDefault();
-    cactus::runtime::raylib::BeginMode3D(camera);
+    begin_mode_3d(camera);
     for (const auto& sub : text_3d_queue()) {
         if (sub.text.empty()) {
             continue;
@@ -1786,7 +1786,7 @@ void flush_text_3d_queue() noexcept try {
         cactus::runtime::raylib::DrawMesh(plane, mat, xform);
         mat.maps[MATERIAL_MAP_DIFFUSE].texture = Texture2D{};
     }
-    cactus::runtime::raylib::EndMode3D();
+    end_mode_3d();
     UnloadMaterial(mat);
 } catch (...) {
     std::terminate();
@@ -3497,12 +3497,90 @@ Camera3D get_active_camera_3d() noexcept {
     return active_camera_3d_storage();
 }
 
-// raylib's GetScreenToWorldRay reads its own window size, which the headless fake never sets.
+CameraBasis camera_basis(const Quat rotation) noexcept {
+    namespace quat = cactus::runtime::stdlib::math::quat;
+    namespace vec3 = cactus::runtime::stdlib::math::vec3;
+    constexpr float kLevelEpsilon = 0.000001F;
+    const Vector3 forward         = quat::forward(rotation);
+    Vector3 side                  = vec3::cross(forward, Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F});
+    if (vec3::length(side) < kLevelEpsilon) {
+        side = quat::right(rotation);
+    }
+    const Vector3 right = vec3::normalize(side);
+    return CameraBasis{.forward = forward, .right = right, .up = vec3::cross(right, forward)};
+}
+
+Camera3D camera_3d_from_pose(const Vector3 position, const Quat rotation, const float fov_y) noexcept {
+    const CameraBasis basis = camera_basis(rotation);
+    return Camera3D{
+        .position   = position,
+        .target     = Vector3Add(position, basis.forward),
+        .up         = basis.up,
+        .fovy       = fov_y,
+        .projection = CAMERA_PERSPECTIVE,
+    };
+}
+
+namespace {
+
+Rectangle& active_viewport_rect_storage() noexcept {
+    static Rectangle rect{};
+    return rect;
+}
+
+}  // namespace
+
+void set_active_viewport_rect(const Rectangle rect) noexcept {
+    active_viewport_rect_storage() = rect;
+}
+
+Rectangle active_viewport_rect() noexcept {
+    const Rectangle rect = active_viewport_rect_storage();
+    if (rect.width > 0.0F && rect.height > 0.0F) {
+        return rect;
+    }
+    return Rectangle{.x      = 0.0F,
+                     .y      = 0.0F,
+                     .width  = static_cast<float>(cactus::runtime::raylib::GetScreenWidth()),
+                     .height = static_cast<float>(cactus::runtime::raylib::GetScreenHeight())};
+}
+
+Matrix viewport_projection(const Camera3D& camera, const Rectangle rect) noexcept {
+    const double aspect = rect.height > 0.0F ? static_cast<double>(rect.width) / static_cast<double>(rect.height) : 1.0;
+    const double top    = rlGetCullDistanceNear() * std::tan(static_cast<double>(camera.fovy) * 0.5 * DEG2RAD);
+    const double right  = top * aspect;
+    return MatrixFrustum(-right, right, -top, top, rlGetCullDistanceNear(), rlGetCullDistanceFar());
+}
+
+void begin_mode_3d(const Camera3D& camera) noexcept {
+    const Rectangle rect      = active_viewport_rect();
+    const float screen_width  = static_cast<float>(cactus::runtime::raylib::GetScreenWidth());
+    const float screen_height = static_cast<float>(cactus::runtime::raylib::GetScreenHeight());
+    const float scale_x =
+        screen_width > 0.0F ? static_cast<float>(cactus::runtime::raylib::rlGetFramebufferWidth()) / screen_width : 1.0F;
+    const float scale_y = screen_height > 0.0F
+                              ? static_cast<float>(cactus::runtime::raylib::rlGetFramebufferHeight()) / screen_height
+                              : 1.0F;
+    cactus::runtime::raylib::BeginMode3D(camera);
+    cactus::runtime::raylib::rlViewport(static_cast<int>(rect.x * scale_x),
+                                        static_cast<int>((screen_height - rect.y - rect.height) * scale_y),
+                                        static_cast<int>(rect.width * scale_x),
+                                        static_cast<int>(rect.height * scale_y));
+    cactus::runtime::raylib::rlSetMatrixProjection(viewport_projection(camera, rect));
+}
+
+void end_mode_3d() noexcept {
+    cactus::runtime::raylib::EndMode3D();
+    cactus::runtime::raylib::rlViewport(0,
+                                        0,
+                                        cactus::runtime::raylib::rlGetFramebufferWidth(),
+                                        cactus::runtime::raylib::rlGetFramebufferHeight());
+}
+
 Ray screen_to_world_ray(const Vector2 screen, const Camera3D& camera) noexcept {
-    return GetScreenToWorldRayEx(screen,
-                                 camera,
-                                 cactus::runtime::raylib::GetScreenWidth(),
-                                 cactus::runtime::raylib::GetScreenHeight());
+    const Rectangle rect = active_viewport_rect();
+    const Vector2 local{.x = screen.x - rect.x, .y = screen.y - rect.y};
+    return GetScreenToWorldRayEx(local, camera, static_cast<int>(rect.width), static_cast<int>(rect.height));
 }
 
 void draw_shape_rectangle(const Vector2 position,
@@ -4100,57 +4178,6 @@ Vector2 editor_mouse_delta_2d() noexcept {
 
 Vector2 screen_delta_to_world_2d(Vector2 delta) noexcept {
     return editor_screen_to_world_2d(delta) - editor_screen_to_world_2d(Vector2{.x = 0.0F, .y = 0.0F});
-}
-
-std::optional<Vector3> editor_ray_plane_intersect(const Ray ray,
-                                                  const Vector3 plane_origin,
-                                                  const Vector3 plane_normal) noexcept {
-    constexpr float kParallelEpsilon = 1e-6F;
-    const float denominator          = Vector3DotProduct(ray.direction, plane_normal);
-    if (std::abs(denominator) < kParallelEpsilon) {
-        return std::nullopt;
-    }
-    const float t = Vector3DotProduct(Vector3Subtract(plane_origin, ray.position), plane_normal) / denominator;
-    if (t < 0.0F) {
-        return std::nullopt;
-    }
-    return Vector3Add(ray.position, Vector3Scale(ray.direction, t));
-}
-
-Vector3 editor_plane_project_3d(Vector2 screen, Vector3 plane_origin, Vector3 plane_normal) noexcept {
-    const Ray ray = screen_to_world_ray(screen, get_active_camera_3d());
-    return editor_ray_plane_intersect(ray, plane_origin, plane_normal).value_or(plane_origin);
-}
-
-Vector3 editor_mouse_delta_3d() noexcept {
-    constexpr Vector3 kGroundOrigin{.x = 0.0F, .y = 0.0F, .z = 0.0F};
-    constexpr Vector3 kGroundNormal{.x = 0.0F, .y = 1.0F, .z = 0.0F};
-    const Camera3D cam   = get_active_camera_3d();
-    const Vector2 cursor = cactus::runtime::raylib::GetMousePosition();
-    const Vector2 delta  = cactus::runtime::raylib::GetMouseDelta();
-    const Vector2 previous{.x = cursor.x - delta.x, .y = cursor.y - delta.y};
-    const auto current_hit = editor_ray_plane_intersect(screen_to_world_ray(cursor, cam), kGroundOrigin, kGroundNormal);
-    const auto previous_hit =
-        editor_ray_plane_intersect(screen_to_world_ray(previous, cam), kGroundOrigin, kGroundNormal);
-    if (!current_hit || !previous_hit) {
-        return Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};
-    }
-    return Vector3Subtract(*current_hit, *previous_hit);
-}
-
-Vector3 screen_delta_on_plane_3d(const Vector2 screen,
-                                 const Vector2 delta,
-                                 const Vector3 plane_origin,
-                                 const Vector3 plane_normal) noexcept {
-    const Camera3D cam = get_active_camera_3d();
-    const Vector2 previous{.x = screen.x - delta.x, .y = screen.y - delta.y};
-    const auto current_hit = editor_ray_plane_intersect(screen_to_world_ray(screen, cam), plane_origin, plane_normal);
-    const auto previous_hit =
-        editor_ray_plane_intersect(screen_to_world_ray(previous, cam), plane_origin, plane_normal);
-    if (!current_hit || !previous_hit) {
-        return Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};
-    }
-    return Vector3Subtract(*current_hit, *previous_hit);
 }
 
 // ── Camera rig lifecycle ──────────────────────────────────────────────────────

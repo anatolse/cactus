@@ -72,6 +72,13 @@ TEST_CASE("CLI: a warning on a successful compile is printed once", "[cli][diagn
     CHECK(result.stderr_lines[0].contains("warning: pair rule 'P' is not accelerated"));
 }
 
+TEST_CASE("CLI: a call to a function a module does not declare is rejected", "[cli][diagnostics]") {
+    const auto result = run_cactus(stage_fixture("removed_camera_helper.cactus"));
+    CHECK(result.exit_code == 1);
+    REQUIRE(result.stderr_lines.size() == 1);
+    CHECK(result.stderr_lines[0].contains("error: unknown function 'screen_to_plane' in module 'std.camera.volume'"));
+}
+
 TEST_CASE("CLI: a parse error in an imported module is printed once", "[cli][diagnostics]") {
     const auto project = stage_fixture("module_parse_error");
     const auto result  = run_cactus(project / "main.cactus");

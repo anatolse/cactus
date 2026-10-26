@@ -1565,6 +1565,7 @@ private:
     const ResolvedFunc* find_resolved_func(const SymbolId& symbol) const;
     const ResolvedStruct* find_resolved_struct(const SymbolId& symbol) const;
     std::optional<SymbolId> resolve_struct_callee(const ExprNode& callee) const;
+    void check_module_member_call(const CallExpr& call);
     void lower_struct_query_call(ExprNode& expr) const;
     // `R(x, y)` with `R` a relation becomes a RelationTestExpr.
     void lower_relation_test(ExprNode& expr) const;

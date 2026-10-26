@@ -1,0 +1,68 @@
+module camera_projection
+
+# Box select: a unit carries InBox while the overview camera draws it inside
+# the drag rectangle. The camera fills the left half of the screen and looks
+# down at the units on the ground.
+
+use std.core as core
+use std.camera.volume as cam
+use std.camera.viewport as vp
+use std.transform.volume as tv
+use std.math as math
+use std.math.quat as quat
+
+trait Selectable
+
+trait InBox
+
+trait Drag:
+    var min: vec2 = vec2(200.0, 250.0)
+    var max: vec2 = vec2(900.0, 470.0)
+
+entity Selection:
+    Drag
+
+entity Overview:
+    cam.Camera
+    vp.Viewport:
+        width = 0.5
+    tv.WorldTransform:
+        position = vec3(0.0, 10.0, 10.0)
+        rotation = quat.from_euler(-0.7853982, 0.0, 0.0)
+
+template Unit(at: vec3):
+    Selectable
+    tv.WorldTransform:
+        position = at
+
+entity Center from Unit(at = vec3(0.0, 0.0, 0.0))
+
+entity Near from Unit(at = vec3(6.0, 0.0, 0.0))
+
+# Drawn right of the viewport, though inside the drag rectangle's pixels.
+entity Beside from Unit(at = vec3(10.0, 0.0, 0.0))
+
+entity Far from Unit(at = vec3(-15.0, 0.0, 0.0))
+
+# The mirror of Center through the camera: a naive projection puts it at the center.
+entity Behind from Unit(at = vec3(0.0, 20.0, 20.0))
+
+group picks:
+    phase: core.input
+
+func inside(p: cam.Projected, drag: Drag, camera: cam.CameraView) bool:
+    let lo = vec2(math.max(drag.min.x, camera.rect_min.x), math.max(drag.min.y, camera.rect_min.y))
+    let hi = vec2(math.min(drag.max.x, camera.rect_min.x + camera.rect_size.x), math.min(drag.max.y, camera.rect_min.y + camera.rect_size.y))
+    return p.in_front and p.position.x >= lo.x and p.position.x <= hi.x and p.position.y >= lo.y and p.position.y <= hi.y
+
+rule BoxSelect:
+    pairs:
+        camera:
+            cam.CameraView as cv
+        unit:
+            Selectable
+            tv.WorldTransform as t
+    group: picks
+    where:
+        inside(cam.to_screen(cv, t.position), Selection[Drag], cv)
+    keep InBox on unit

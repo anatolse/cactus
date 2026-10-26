@@ -169,6 +169,14 @@ int GetScreenHeight() noexcept {
     return state().screen_height;
 }
 
+int rlGetFramebufferWidth() noexcept {
+    return state().screen_width;
+}
+
+int rlGetFramebufferHeight() noexcept {
+    return state().screen_height;
+}
+
 Vector2 MeasureTextEx(const Font /*font*/, const char* text, const float fontSize, const float /*spacing*/) noexcept {
     // Deterministic stand-in for real glyph-metric measurement (see
     // raylib_io.hpp): half a font-size unit per character, one font-size unit
@@ -196,6 +204,14 @@ void BeginMode3D(Camera3D camera) noexcept {
 
 void EndMode3D() noexcept {
     record(RecordedEndMode3D{});
+}
+
+void rlViewport(const int x, const int y, const int width, const int height) noexcept {
+    record(RecordedViewport{.x = x, .y = y, .width = width, .height = height});
+}
+
+void rlSetMatrixProjection(const Matrix proj) noexcept {
+    record(RecordedSetMatrixProjection{.projection = proj});
 }
 
 void BeginTextureMode(RenderTexture2D target) noexcept {

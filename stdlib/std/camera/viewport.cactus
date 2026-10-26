@@ -1,5 +1,7 @@
 module std.camera.viewport
 
+use std.core as core
+
 # ── Viewport Trait ────────────────────────────────────────────────────────────
 
 # Normalized screen-space render region.
@@ -17,3 +19,21 @@ pub trait Viewport:
     var clear: bool = true
     var clear_color: color = #000000FF
     var active: bool = true
+
+# ── Screen ────────────────────────────────────────────────────────────────────
+
+# The window's size in pixels, as of this frame's input phase.
+pub trait ScreenSize:
+    var size: vec2 = vec2(0.0, 0.0)
+
+pub entity Screen:
+    ScreenSize
+
+# Reads the window size before any other input rule runs.
+extern rule MeasureScreen:
+    each:
+        ScreenSize
+
+    on core.input:
+        writes:
+            ScreenSize

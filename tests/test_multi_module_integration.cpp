@@ -592,7 +592,8 @@ static ImportedSymbols pub_symbols_from(const std::string& module_name, const De
                                                  .every_seconds   = phase.every_seconds,
                                                  .max_repetitions = phase.max_repetitions};
     }
-    syms.consts = prog.consts;
+    syms.entities = prog.pub_entities;
+    syms.consts   = prog.consts;
     return syms;
 }
 

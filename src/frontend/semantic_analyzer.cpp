@@ -1674,6 +1674,7 @@ void SemanticAnalyzer::resolve_expression_references(E& e,
     } else if constexpr (std::is_same_v<E, CallExpr>) {
         e.resolved_callee_id = resolve_callee_symbol(*e.callee);
         e.resolved_struct_id = resolve_struct_callee(*e.callee);
+        check_module_member_call(e);
         if (const auto* ident = std::get_if<IdentExpr>(&e.callee->expr);
             ident != nullptr && template_names_.contains(ident->name)) {
             errors_.error(e.location, "template applications are only valid at creation sites");
@@ -10951,6 +10952,24 @@ std::optional<SymbolId> SemanticAnalyzer::resolve_struct_callee(const ExprNode& 
         return std::nullopt;
     }
     return resolved->symbol;
+}
+
+// `alias.name(...)` where the imported module declares nothing named `name`.
+void SemanticAnalyzer::check_module_member_call(const CallExpr& call) {
+    if (call.resolved_callee_id.has_value() || call.resolved_struct_id.has_value() ||
+        is_std_text_format_callee(*call.callee)) {
+        return;
+    }
+    const auto segments = callee_chain_segments(*call.callee);
+    if (!segments.has_value() || segments->size() != 2) {
+        return;
+    }
+    const auto module = imports_.modules.find(segments->front());
+    if (module == imports_.modules.end() || resolve_name(*segments).has_value()) {
+        return;
+    }
+    errors_.error(call.location,
+                  "unknown function '" + segments->back() + "' in module '" + module->second.module_name + "'");
 }
 
 // `alias.Struct(field = ...)` parses as a named-argument query call; once the

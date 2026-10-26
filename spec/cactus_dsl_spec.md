@@ -2115,6 +2115,8 @@ The gameplay core is extended by stdlib modules and backend-provided declaration
 - audio stdlib for sound/music playback surfaces
 - `std.time` for entity lifetime and one-shot gameplay delays (§7.5)
 
+**Screen and world (`std.camera.volume`).** Every entity with `Camera`, `std.camera.viewport.Viewport` and a volume `WorldTransform` keeps a `CameraView`: the pose, projection and pixel rectangle of what that viewport showed in the last rendered frame (group `views`, `core.late_tick`). The window size is data too: `std.camera.viewport.Screen[ScreenSize].size`, written at the start of each `core.input`. Rules map between world and screen by binding a camera's view, `CameraView as cv`, and calling the pure functions `to_screen(cv, point)`, `ray(cv, pixel)` and `ray_plane(ray, origin, normal)`; a screen query over other entities is a pair rule between cameras and those entities. No stdlib function reads an implicit active camera.
+
 ### 7.2 Extern Functions
 
 `extern func` provides engine/runtime functionality such as math helpers, rendering calls, camera setters, collision helpers, and input helpers.

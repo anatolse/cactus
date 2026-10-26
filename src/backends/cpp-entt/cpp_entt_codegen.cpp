@@ -911,12 +911,14 @@ void emit_viewport_phase_dispatch(std::ostringstream& out,
     out << indent << "    for (auto& [cactus_gen_depth, cactus_gen_vp_ent] : cactus_gen_vps) {\n";
     out << indent << "        (void)cactus_gen_depth;\n";
     out << indent << "        const auto& cactus_gen_vp = registry.get<" << render_vp_cpp << ">(cactus_gen_vp_ent);\n";
+    out << indent << "        const Rectangle cactus_gen_rect = cactus::runtime::entt_backend::viewport_pixel_rect(cactus_gen_vp, cactus_gen_sw, cactus_gen_sh);\n";
     out << indent << "        cactus::runtime::raylib::BeginScissorMode(\n";
-    out << indent << "            static_cast<int>(cactus_gen_vp.x * static_cast<float>(cactus_gen_sw)),\n";
-    out << indent << "            static_cast<int>(cactus_gen_vp.y * static_cast<float>(cactus_gen_sh)),\n";
-    out << indent << "            static_cast<int>(cactus_gen_vp.width * static_cast<float>(cactus_gen_sw)),\n";
-    out << indent << "            static_cast<int>(cactus_gen_vp.height * static_cast<float>(cactus_gen_sh)));\n";
+    out << indent << "            static_cast<int>(cactus_gen_rect.x),\n";
+    out << indent << "            static_cast<int>(cactus_gen_rect.y),\n";
+    out << indent << "            static_cast<int>(cactus_gen_rect.width),\n";
+    out << indent << "            static_cast<int>(cactus_gen_rect.height));\n";
     out << indent << "        if (cactus_gen_vp.clear) { cactus::runtime::raylib::ClearBackground(cactus_gen_vp.clear_color); }\n";
+    out << indent << "        cactus::runtime::entt_backend::set_active_viewport_rect(cactus_gen_rect);\n";
     if (render_emit_2d_helper) {
         out << indent << "        if (registry.all_of<" << render_cam2d_cpp << ">(cactus_gen_vp_ent)) {\n";
         out << indent << "            const auto& cactus_gen_cam = registry.get<" << render_cam2d_cpp << ">(cactus_gen_vp_ent);\n";
@@ -2471,20 +2473,13 @@ std::string emit_camera_translate_helpers(bool emit_2d_helper,
     if (emit_3d_helper) {
         out << "Camera3D cactus_gen_translate_camera_3d(entt::entity entity, const " << cam3d_cpp
             << "& cam, entt::registry& registry) {\n";
-        out << "    Camera3D cam3d{};\n";
-        out << "    cam3d.fovy       = cam.fov_y;\n";
-        out << "    cam3d.projection = CAMERA_PERSPECTIVE;\n";
-        out << "    cam3d.up         = {.x = 0.0F, .y = 1.0F, .z = 0.0F};\n";
-        out << "    if (registry.all_of<" << wt3d_cpp << ">(entity)) {\n";
-        out << "        const auto& xform = registry.get<" << wt3d_cpp << ">(entity);\n";
-        out << "        cam3d.position = xform.position;\n";
-        out << "        const auto& q  = xform.rotation;\n";
-        out << "        cam3d.target   = {.x = xform.position.x + (-(2.0F * ((q.x * q.z) + (q.w * q.y)))),\n";
-        out << "                          .y = xform.position.y + (2.0F * ((q.w * q.x) - (q.y * q.z))),\n";
-        out << "                          .z = xform.position.z + (-(1.0F - (2.0F * ((q.x * q.x) + (q.y * "
-               "q.y)))))};\n";
+        out << "    if (const auto* xform = registry.try_get<" << wt3d_cpp << ">(entity)) {\n";
+        out << "        return cactus::runtime::entt_backend::camera_3d_from_pose(xform->position, xform->rotation, "
+               "cam.fov_y);\n";
         out << "    }\n";
-        out << "    return cam3d;\n";
+        out << "    return cactus::runtime::entt_backend::camera_3d_from_pose(\n";
+        out << "        Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, Quat{.x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F}, "
+               "cam.fov_y);\n";
         out << "}\n";
     }
     out << "}  // namespace\n\n";
@@ -4675,12 +4670,15 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "        for (auto& [cactus_gen_depth, cactus_gen_vp_ent] : cactus_gen_vps) {\n";
         out << "            (void)cactus_gen_depth;\n";
         out << "            const auto& cactus_gen_vp = registry.get<" << vp_cpp << ">(cactus_gen_vp_ent);\n";
+        out << "            const Rectangle cactus_gen_rect =\n";
+        out << "                cactus::runtime::entt_backend::viewport_pixel_rect(cactus_gen_vp, cactus_gen_sw, cactus_gen_sh);\n";
         out << "            cactus::runtime::raylib::BeginScissorMode(\n";
-        out << "                static_cast<int>(cactus_gen_vp.x * static_cast<float>(cactus_gen_sw)),\n";
-        out << "                static_cast<int>(cactus_gen_vp.y * static_cast<float>(cactus_gen_sh)),\n";
-        out << "                static_cast<int>(cactus_gen_vp.width * static_cast<float>(cactus_gen_sw)),\n";
-        out << "                static_cast<int>(cactus_gen_vp.height * static_cast<float>(cactus_gen_sh)));\n";
+        out << "                static_cast<int>(cactus_gen_rect.x),\n";
+        out << "                static_cast<int>(cactus_gen_rect.y),\n";
+        out << "                static_cast<int>(cactus_gen_rect.width),\n";
+        out << "                static_cast<int>(cactus_gen_rect.height));\n";
         out << "            if (cactus_gen_vp.clear) { cactus::runtime::raylib::ClearBackground(cactus_gen_vp.clear_color); }\n";
+        out << "            cactus::runtime::entt_backend::set_active_viewport_rect(cactus_gen_rect);\n";
         // Camera helper selection keys on the viewport entity's resolved camera
         // component type (flat vs volume Camera), not a shared bare Camera token.
         if (emit_2d_helper) {

@@ -18,6 +18,26 @@ bracketed_trait_access.cactus examples bracketed_trait_access.FindNextLane/on st
     named_writes:
     named_requirements:
     iteration_order: free
+camera_projection.cactus stdlib-fixtures camera_projection.BoxSelect/on std.core.input
+    reads: camera_projection.Drag std.camera.volume.CameraView std.transform.volume.WorldTransform
+    read_fields: camera_projection.Drag{max,min} std.camera.volume.CameraView{forward,fov_y,near,position,rect_min,rect_size,right,up} std.transform.volume.WorldTransform{position}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:std.camera.volume.CameraView 1:std.transform.volume.WorldTransform
+    named_reads: [camera_projection.Selection: camera_projection.Drag{max,min}]
+    named_writes:
+    named_requirements: camera_projection.Selection/camera_projection.Drag
+    iteration_order: free
+camera_view.cactus stdlib-fixtures camera_view.ProjectMarker/on std.core.input
+    reads: camera_view.Probe camera_view.Recorder std.camera.viewport.Viewport std.camera.volume.CameraView std.transform.volume.WorldTransform
+    read_fields: camera_view.Probe{pixel} camera_view.Recorder{ground,ground_hit,marker_in_front,marker_screen} std.camera.viewport.Viewport{x} std.camera.volume.CameraView{forward,fov_y,near,position,rect_min,rect_size,right,up} std.transform.volume.WorldTransform{position}
+    write_fields: camera_view.Recorder{ground,ground_hit,marker_in_front,marker_screen}
+    write_kinds: camera_view.Recorder.ground=0/0 camera_view.Recorder.ground_hit=0/0 camera_view.Recorder.marker_in_front=0/0 camera_view.Recorder.marker_screen=0/0
+    bound_reads:
+    named_reads: [camera_view.Block: std.transform.volume.WorldTransform{position}] [camera_view.Log: camera_view.Probe{pixel} camera_view.Recorder{ground,ground_hit,marker_in_front,marker_screen}]
+    named_writes: [camera_view.Log: camera_view.Recorder{ground,ground_hit,marker_in_front,marker_screen}]
+    named_requirements: camera_view.Block/std.transform.volume.WorldTransform camera_view.Log/camera_view.Recorder camera_view.Log/camera_view.Probe
+    iteration_order: creation
 character_body.cactus stdlib-fixtures character_body.Wade/on std.core.fixed_tick
     reads: std.physics.volume.BoxCollider std.physics.volume.CapsuleCollider std.physics.volume.Collider std.physics.volume.SphereCollider std.transform.volume.WorldTransform
     read_fields: std.physics.volume.BoxCollider{*} std.physics.volume.CapsuleCollider{*} std.physics.volume.Collider{layer,mask} std.physics.volume.SphereCollider{*} std.transform.volume.WorldTransform{position,rotation}

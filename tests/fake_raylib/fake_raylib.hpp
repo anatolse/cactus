@@ -27,6 +27,15 @@ struct RecordedBeginMode3D {
     Camera3D camera;
 };
 struct RecordedEndMode3D {};
+struct RecordedViewport {
+    int x;
+    int y;
+    int width;
+    int height;
+};
+struct RecordedSetMatrixProjection {
+    Matrix projection;
+};
 struct RecordedBeginTextureMode {
     RenderTexture2D target;
 };
@@ -150,6 +159,8 @@ using RecordedCall = std::variant<RecordedClearBackground,
                                   RecordedEndMode2D,
                                   RecordedBeginMode3D,
                                   RecordedEndMode3D,
+                                  RecordedViewport,
+                                  RecordedSetMatrixProjection,
                                   RecordedBeginTextureMode,
                                   RecordedEndTextureMode,
                                   RecordedBeginScissorMode,
@@ -222,6 +233,9 @@ void EnableCursor() noexcept;
 [[nodiscard]] bool IsWindowReady() noexcept;
 [[nodiscard]] int GetScreenWidth() noexcept;
 [[nodiscard]] int GetScreenHeight() noexcept;
+// The framebuffer matches the screen size.
+[[nodiscard]] int rlGetFramebufferWidth() noexcept;
+[[nodiscard]] int rlGetFramebufferHeight() noexcept;
 
 [[nodiscard]] Vector2 MeasureTextEx(Font font, const char* text, float fontSize, float spacing) noexcept;
 
@@ -230,6 +244,8 @@ void BeginMode2D(Camera2D camera) noexcept;
 void EndMode2D() noexcept;
 void BeginMode3D(Camera3D camera) noexcept;
 void EndMode3D() noexcept;
+void rlViewport(int x, int y, int width, int height) noexcept;
+void rlSetMatrixProjection(Matrix proj) noexcept;
 void BeginTextureMode(RenderTexture2D target) noexcept;
 void EndTextureMode() noexcept;
 void BeginScissorMode(int x, int y, int width, int height) noexcept;

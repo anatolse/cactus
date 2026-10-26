@@ -75,9 +75,6 @@ std::string stdlib_runtime_prefix(const SymbolId& func_id) {
     if (module_name == "std.camera.flat") {
         return "cactus::runtime::entt_backend";
     }
-    if (module_name == "std.camera.volume") {
-        return "cactus::runtime::entt_backend";
-    }
     if (module_name == "std.transform.flat") {
         return "cactus::runtime::entt_backend";
     }
@@ -141,9 +138,6 @@ const std::unordered_map<std::string, FuncRenameMap>& runtime_func_names() {
         {"std.camera.flat",
          {{"screen_to_world", {.runtime_name = "editor_screen_to_world_2d"}},
           {"screen_delta_to_world", {.runtime_name = "screen_delta_to_world_2d"}}}},
-        {"std.camera.volume",
-         {{"screen_to_plane", {.runtime_name = "editor_plane_project_3d"}},
-          {"screen_delta_on_plane", {.runtime_name = "screen_delta_on_plane_3d"}}}},
         {"std.transform.flat",
          {{"world_position", {.runtime_name = "editor_entity_position_2d", .needs_registry = true}}}},
         {"std.transform.volume",
@@ -912,6 +906,10 @@ bool is_pointer_router(const ExternRuleNode& sys) {
     return symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.ui", "RoutePointer");
 }
 
+bool is_measure_screen(const ExternRuleNode& sys) {
+    return symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.camera.viewport", "MeasureScreen");
+}
+
 bool is_debug_grid_3d(const ExternRuleNode& sys) {
     return symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.editor", "DebugGrid3D");
 }
@@ -962,8 +960,8 @@ constexpr const char* kBeginMode2D =
     "cactus::runtime::raylib::BeginMode2D(cactus::runtime::entt_backend::get_active_camera_2d());";
 constexpr const char* kEndMode2D = "cactus::runtime::raylib::EndMode2D();";
 constexpr const char* kBeginMode3D =
-    "cactus::runtime::raylib::BeginMode3D(cactus::runtime::entt_backend::get_active_camera_3d());";
-constexpr const char* kEndMode3D = "cactus::runtime::raylib::EndMode3D();";
+    "cactus::runtime::entt_backend::begin_mode_3d(cactus::runtime::entt_backend::get_active_camera_3d());";
+constexpr const char* kEndMode3D = "cactus::runtime::entt_backend::end_mode_3d();";
 
 // One row per generic event-payload renderer (see the comment above); (module_name, rule_name)
 // identifies the extern rule to match, mode_begin/mode_end wrap world-space primitives in a
@@ -1683,8 +1681,8 @@ struct BuiltinMemberCallSpec {
     std::function<std::string(const std::string& joined_args)> call_body;
 };
 
-const std::array<BuiltinMemberCallSpec, 14>& builtin_member_call_specs() {
-    static const std::array<BuiltinMemberCallSpec, 14> specs{{
+const std::array<BuiltinMemberCallSpec, 12>& builtin_member_call_specs() {
+    static const std::array<BuiltinMemberCallSpec, 12> specs{{
         {.object_name        = "input",
          .member_name        = "mouse_position",
          .required_arg_count = 0,
@@ -1733,20 +1731,6 @@ const std::array<BuiltinMemberCallSpec, 14>& builtin_member_call_specs() {
          .call_body =
              [](const std::string& args) {
                  return "cactus::runtime::entt_backend::screen_delta_to_world_2d(" + args + ")";
-             }},
-        {.object_name        = "camera3d",
-         .member_name        = "screen_to_plane",
-         .required_arg_count = 3,
-         .call_body =
-             [](const std::string& args) {
-                 return "cactus::runtime::entt_backend::editor_plane_project_3d(" + args + ")";
-             }},
-        {.object_name        = "camera3d",
-         .member_name        = "screen_delta_on_plane",
-         .required_arg_count = 4,
-         .call_body =
-             [](const std::string& args) {
-                 return "cactus::runtime::entt_backend::screen_delta_on_plane_3d(" + args + ")";
              }},
         {.object_name        = "transform2d",
          .member_name        = "world_position",
@@ -2805,7 +2789,8 @@ static std::string rewrite_expr_node(  // NOLINT(readability-function-cognitive-
                 // Bare ident call — check program.funcs module identity, then scan unaliased UseNodes.
                 if (const auto* ident = std::get_if<IdentExpr>(&e.callee->expr)) {
                     auto emit_stdlib = [&](const std::string& module_name) -> std::string {
-                        if (module_name.empty()) {
+                        // Value constructors are lowered below, never through a module's prefix.
+                        if (module_name.empty() || is_builtin_value_constructor(e)) {
                             return {};
                         }
                         const auto func_id =
@@ -7686,6 +7671,17 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
         out << "            cactus_gen_prim.pointer_pressed = cactus_gen_pstate->pressed;\n";
         out << "        }\n";
         out << "        cactus::runtime::entt_backend::render_ui_primitive(cactus_gen_prim);\n";
+        out << "    }\n";
+        out << "}\n\n";
+        return out.str();
+    }
+
+    if (is_measure_screen(sys)) {
+        const std::string screen = EnttCodegenUtils::trait_cpp_name("std.camera.viewport.ScreenSize", program);
+        out << tick_signature;
+        out << "    const Vector2 size = cactus::runtime::entt_backend::editor_screen_size();\n";
+        out << "    for (const auto entity : registry.view<" << screen << ">()) {\n";
+        out << "        registry.get<" << screen << ">(entity).size = size;\n";
         out << "    }\n";
         out << "}\n\n";
         return out.str();

@@ -513,38 +513,46 @@ rule EditorSelection3D:
             current = hit
 
 rule EditorTranslate3D:
-    each:
-        EditorSelected
+    pairs:
+        selection:
+            EditorSelected
+        rig:
+            EditorCamera3D
+            camera3d.CameraView as cv
 
     after:
         models.animate
 
     on tick:
-        let delta = camera3d.screen_delta_on_plane(input.mouse_position(), input.mouse_delta(), vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0))
+        let mouse = input.mouse_position()
+        let now = camera3d.ray_plane(camera3d.ray(cv, mouse), vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0))
+        let before = camera3d.ray_plane(camera3d.ray(cv, mouse - input.mouse_delta()), vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0))
+        let delta = if now.hit and before.hit: now.point - before.point else: vec3(0.0, 0.0, 0.0)
 
 rule EditorPlace3D:
-    each:
-        EditorState
+    pairs:
+        editor:
+            EditorState as settings
+        rig:
+            EditorCamera3D
+            camera3d.CameraView as cv
 
     after:
         EditorTemplatePalette
         EditorSelection3D
+    limit: 1 per editor
 
     on input:
-        if not active:
-            return
-        if not use_3d:
-            return
-        if mode != GizmoMode.Place:
+        if not settings.active or not settings.use_3d or settings.mode != GizmoMode.Place:
             return
         if not input.pressed(EditorSelectClick):
             return
-        let pos = camera3d.screen_to_plane(input.mouse_position(), vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0))
-        let id = spawn_template(active_template, vec2(0.0, 0.0), pos)
+        let ground = camera3d.ray_plane(camera3d.ray(cv, input.mouse_position()), vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0))
+        let id = spawn_template(settings.active_template, vec2(0.0, 0.0), ground.point)
         if not exists(id):
             return
         add EditorSelected to id
-        selected = id
+        settings.selected = id
 
 # Same shape as EditorGizmoRenderer2D (see its comment for geometry-parity notes
 # and the design.md decision 8 fixed-size trade-off — here: fixed 1x1x1 wire box

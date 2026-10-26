@@ -205,7 +205,7 @@ When a pair rule has no broad-phase-eligible predicate in its `where:` clause, n
 - **THEN** no unaccelerated pair rule warning is emitted for that rule
 
 #### Scenario: Equality join rule is not flagged
-- **WHEN** a pair rule reduces per one binding and its `where:` equates a `let` field of the other binding with a value of the group binding
+- **WHEN** a pair rule's `where:` equates a `let` field of its indexed binding with a value of the other binding, with or without `reduce:`
 - **THEN** no unaccelerated pair rule warning is emitted for that rule
 
 #### Scenario: Linear-distance warning replaces the generic warning
@@ -285,7 +285,7 @@ A pair rule's `where:` predicate SHALL be eligible for broad-phase acceleration 
 - **THEN** the predicate is evaluated as an ordinary predicate, with no compile error
 
 ### Requirement: Equality joins on values a member never changes are indexed
-A pair rule that reduces per one binding SHALL be recognized as an equality join when the operands of the top-level `and` chains of its `where:` predicates include at least one `==` comparison whose one side is either the other (indexed) binding itself or a `let` field of type `int`, `bool`, enum or `entity_id` read through that binding, and whose other side reads nothing of the indexed binding. A conforming backend MAY then look up, for each group entity, only the indexed members whose values equal the group's values. When one of the keys is the indexed binding itself, the backend SHALL look that entity up directly for each group and SHALL NOT keep a persistent index of the binding's members; an entity that is not alive or does not carry the binding's traits yields no row. Every predicate SHALL still be evaluated for each looked-up row, rows SHALL fold in the same order as the full product, and the result SHALL be the same as without the index.
+A pair rule SHALL be recognized as an equality join when the operands of the top-level `and` chains of its `where:` predicates include at least one `==` comparison whose one side is either the indexed binding itself or a `let` field of type `int`, `bool`, enum or `entity_id` read through that binding, and whose other side reads nothing of the indexed binding. This SHALL hold for every pair rule: plain handler rules, keep rules with or without `reduce:`, and reduced rules. The indexed binding SHALL be the binding that `reduce per` does not group by, and the right binding on every other pair rule. A conforming backend MAY then look up, for each entity of the other binding, only the indexed members whose values equal that entity's values. When one of the keys is the indexed binding itself, the backend SHALL look that entity up directly and SHALL NOT keep a persistent index of the binding's members; an entity that is not alive or does not carry the binding's traits yields no row. Every predicate SHALL still be evaluated for each looked-up row, rows SHALL run or fold in the same order as the full product, and the result SHALL be the same as without the index.
 
 #### Scenario: Coordinate lookup uses the equality join
 - **WHEN** a rule reduces per `probe` with `where: cell[Cell].volume == probe[CellProbe].volume and cell[Cell].x == probe[CellProbe].x`, and `Cell.volume` and `Cell.x` are `let` fields
@@ -306,6 +306,45 @@ A pair rule that reduces per one binding SHALL be recognized as an equality join
 #### Scenario: Mutable fields are not join keys
 - **WHEN** the only equality compares a `var` field of the indexed binding
 - **THEN** the rule is not an equality join and the unaccelerated pair rule warning is emitted
+
+#### Scenario: Plain handler rule is an equality join
+- **WHEN** a pair rule without `reduce:` over `a` and `b` declares `where: b[Cell].x == a[Cell].x + 1 and b[Cell].y == a[Cell].y` and an `on fixed_tick:` handler
+- **THEN** the rule is an equality join that indexes `b`, and its handler runs for the same tuples in the same order as the full product
+
+#### Scenario: Unreduced keep rule is an equality join
+- **WHEN** a pair rule declares `keep Linked on a` with `where: b[Cell].x == a[Cell].x`
+- **THEN** the rule is an equality join that indexes `b`, and `Linked` is kept on the same entities as without the index
+
+#### Scenario: Shifted key
+- **WHEN** a key equality is `b[Cell].x == a[Cell].x - 1`
+- **THEN** the key part is `Cell.x` of `b`, looked up with the value `a[Cell].x - 1`
+
+### Requirement: An `or` of equality chains is a disjunctive equality join
+A `where:` predicate SHALL be recognized as a disjunctive equality join when it is an `or` of two or more branches, each branch is an `and` chain, and each branch holds at least one key equality on the indexed binding under the rules of "Equality joins on values a member never changes are indexed". The key equalities of all branches, together with the key equalities of the rule's other top-level conjuncts, SHALL name the same member fields in every branch. Otherwise the predicate SHALL NOT be a join key, and the rule's other predicates decide whether it is accelerated. For each entity of the other binding, a pass SHALL look up the members that match any branch's key, and SHALL run or fold each matching tuple exactly once, even when several branches match it. Tuples SHALL keep full-product order, and every predicate, including the whole `or`, SHALL still be evaluated for each looked-up tuple. Nested `or` inside a branch SHALL make that predicate unrecognized.
+
+#### Scenario: Four neighbors
+- **WHEN** a plain pair rule over cells `a` and `b` declares one `where:` predicate `(b.x == a.x + 1 and b.y == a.y) or (b.x == a.x - 1 and b.y == a.y) or (b.y == a.y + 1 and b.x == a.x) or (b.y == a.y - 1 and b.x == a.x)` over `let` fields `x` and `y`
+- **THEN** the rule is a disjunctive equality join, each pass looks up at most four members per `a`, and no unaccelerated pair rule warning is emitted
+
+#### Scenario: A tuple matched by two branches runs once
+- **WHEN** two branches of a disjunctive join both match the tuple `(a, b)`
+- **THEN** the tuple's handler runs once, or the tuple folds once
+
+#### Scenario: Branches key different fields
+- **WHEN** one branch keys `b.x` and `b.y`, and another branch keys only `b.z`
+- **THEN** the predicate is not a join key, and the unaccelerated pair rule warning is emitted when nothing else accelerates the rule
+
+#### Scenario: A branch without a key
+- **WHEN** one branch is `b.x == a.x and b.y == a.y` and another is `a.open`
+- **THEN** the predicate is not a join key
+
+#### Scenario: Shared top-level key
+- **WHEN** a rule declares `where: b.volume == a.volume` and a second predicate `(b.x == a.x + 1) or (b.x == a.x - 1)`
+- **THEN** every branch keys `b.x`, so the rule is a disjunctive equality join keyed on `volume` and `x`, with two lookups per `a`
+
+#### Scenario: Indexed and unindexed builds agree on neighbors
+- **WHEN** the four-neighbor rule runs over the same grid once with indexes and once with the test-only switch disabling them, while cells gain and lose the rule's traits between passes
+- **THEN** every observable result, tuple order and handler effect is identical
 
 ### Requirement: Pair-binding indexes persist across passes without changing results
 A conforming backend MAY keep one binding of a pair pass in an index that survives between passes, when that pass has a recognized spatial bound or an equality join: the non-group binding of a reduced pass, or the right binding of a plain pass, whose left snapshot is then walked in order so tuples keep the full product's order. Such an index SHALL be brought up to date with every committed membership change of the binding before a pass reads it, SHALL be rebuilt after a world is initialized or replaced by a restore, and SHALL recompute each pass the bounds of every member a handler may write after construction. A member counts as possibly written when it carries every trait a writing handler selects, or is a named entity a handler writes, judged from the whole program's handler contracts; native writers with unknown targets count as writing every carrier of the trait. Indexes SHALL NOT change which rows run, the aggregate values, or the order of handler effects, and the compiler SHALL offer a test-only switch that disables them so both paths can be compared. Indexes observe only the program's own writes and committed structural changes; a host that writes trait fields from native code SHALL advance the runtime's index epoch afterwards, which rebuilds every index before its next use.

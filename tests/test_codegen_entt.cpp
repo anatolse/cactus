@@ -8165,6 +8165,119 @@ TEST_CASE("Codegen EnTT: an identity key decides the plan and the fold still che
     CHECK(code.find(".x == ", lambda) != std::string::npos);
 }
 
+// A rule `Detect` over grid cells `a` and `b`; `head` precedes `where:`, `clauses` follow it.
+static std::string neighbor_join_source(const std::string& predicate,
+                                        const std::string& clauses,
+                                        const std::string& head = "") {
+    return "trait Cell:\n"
+           "    let x: int in range(0, 8)\n"
+           "    let y: int in range(0, 8)\n"
+           "    let id: int = 0\n"
+           "    var open: bool = false\n"
+           "    var best: int = 0\n"
+           "event tick:\n"
+           "    dt: float\n"
+           "event Touch:\n"
+           "    id: int\n"
+           "rule Detect:\n"
+           "    pairs:\n"
+           "        a:\n"
+           "            Cell\n"
+           "        b:\n"
+           "            Cell\n" +
+           head + "    where:\n        " + predicate + "\n" + clauses;
+}
+
+static const std::string kFourNeighbors =
+    "(b[Cell].x == a[Cell].x + 1 and b[Cell].y == a[Cell].y) or (b[Cell].x == a[Cell].x - 1 and b[Cell].y == a[Cell].y) or "
+    "(b[Cell].y == a[Cell].y + 1 and b[Cell].x == a[Cell].x) or (b[Cell].y == a[Cell].y - 1 and b[Cell].x == a[Cell].x)";
+
+static const std::string kEmitTouch = "    on tick:\n        emit Touch:\n            id = b[Cell].id\n";
+
+TEST_CASE("Codegen EnTT: a plain four-neighbor rule looks neighbors up instead of walking the product",
+          "[codegen-entt][equality-join][binding-index]") {
+    const auto code = emit_indexed_join(neighbor_join_source(kFourNeighbors, kEmitTouch));
+    CHECK(code.contains("shared_binding_index<cactus::runtime::entt_backend::DenseKeyIndex<2>, "));
+    CHECK(count_occurrences(code, "cactus_index_b.find(registry, ") == 4);
+    CHECK(code.contains("merge_equality_candidates(registry, cactus_matches);"));
+    CHECK(code.contains("for (const auto a : a_snapshot) {"));
+    CHECK(code.contains("for (const auto b : cactus_matches) {"));
+    // The full product only remains for a targeted event.
+    CHECK(count_occurrences(code, "for (auto b : b_snapshot)") == 1);
+
+    // A lone chain needs no merge.
+    const auto single = emit_indexed_join(neighbor_join_source("b[Cell].x == a[Cell].x + 1 and b[Cell].y == a[Cell].y", kEmitTouch));
+    CHECK(count_occurrences(single, "cactus_index_b.find(registry, ") == 1);
+    CHECK_FALSE(single.contains("merge_equality_candidates"));
+
+    // A shared key joins each branch's key: two lookups, one per branch.
+    const auto shared = emit_indexed_join(neighbor_join_source(
+        "b[Cell].y == a[Cell].y\n        (b[Cell].x == a[Cell].x + 1) or (b[Cell].x == a[Cell].x - 1)", kEmitTouch));
+    CHECK(shared.contains("DenseKeyIndex<2>"));
+    CHECK(count_occurrences(shared, "cactus_index_b.find(registry, ") == 2);
+
+    // The right binding's own filter still applies to each looked-up member.
+    const auto filtered = emit_indexed_join(neighbor_join_source(kFourNeighbors + "\n        b[Cell].open", kEmitTouch));
+    CHECK(filtered.contains("if (cactus_keep_b(b)) {"));
+
+    const auto disabled = emit_indexed_join(neighbor_join_source(kFourNeighbors, kEmitTouch), false);
+    CHECK_FALSE(disabled.contains("KeyIndex"));
+    CHECK(count_occurrences(disabled, "for (auto b : b_snapshot)") == 2);
+}
+
+TEST_CASE("Codegen EnTT: ordered and limited neighbor rules buffer the looked-up tuples",
+          "[codegen-entt][equality-join][binding-index]") {
+    const auto code = emit_indexed_join(neighbor_join_source(kFourNeighbors,
+                                                             "    limit: 1 per a\n    on tick:\n        a[Cell].best = b[Cell].id\n",
+                                                             "    order by: b[Cell].id desc\n"));
+    CHECK(count_occurrences(code, "cactus_index_b.find(registry, ") == 4);
+    CHECK(code.contains("std::vector<std::pair<entt::entity, entt::entity>> "));
+}
+
+TEST_CASE("Codegen EnTT: reduced neighbor rules fold looked-up members, per group or in total",
+          "[codegen-entt][equality-join][binding-index]") {
+    const auto grouped = emit_indexed_join(neighbor_join_source(
+        kFourNeighbors, "    reduce per a:\n        n = count()\n    on tick:\n        a[Cell].best = n\n"));
+    CHECK(count_occurrences(grouped, "cactus_index_b.find(registry, ") == 4);
+    CHECK(grouped.contains("merge_equality_candidates(registry, cactus_matches);"));
+    CHECK(grouped.contains("cactus_fold(a, b);"));
+    CHECK_FALSE(grouped.contains("b_snapshot"));
+
+    const auto total = emit_indexed_join(neighbor_join_source(
+        kFourNeighbors, "    reduce:\n        n = count()\n    on tick:\n        emit Touch:\n            id = n\n"));
+    CHECK(count_occurrences(total, "cactus_index_b.find(registry, ") == 4);
+    CHECK_FALSE(total.contains("cactus_group_live"));
+    CHECK(total.contains("cactus_fold(a, b);"));
+}
+
+TEST_CASE("Codegen EnTT: identity branches look each named member up directly",
+          "[codegen-entt][equality-join][binding-index]") {
+    const auto code = emit_indexed_join(
+        "trait Cell:\n"
+        "    let x: int\n"
+        "trait Probe:\n"
+        "    var left: entity_id\n"
+        "    var right: entity_id\n"
+        "    var found: int = 0\n"
+        "event tick:\n"
+        "    dt: float\n"
+        "rule Detect:\n"
+        "    pairs:\n"
+        "        probe:\n"
+        "            Probe\n"
+        "        cell:\n"
+        "            Cell\n"
+        "    where:\n"
+        "        cell == probe[Probe].left or cell == probe[Probe].right\n"
+        "    reduce per probe:\n"
+        "        matches = count()\n"
+        "    on tick:\n"
+        "        probe[Probe].found = matches\n");
+    CHECK_FALSE(code.contains("KeyIndex"));
+    CHECK(count_occurrences(code, "cactus_matches.push_back(cactus_named);") == 2);
+    CHECK(code.contains("merge_equality_candidates(registry, cactus_matches);"));
+}
+
 TEST_CASE("Codegen EnTT: initializing a project starts a new binding-index epoch",
           "[codegen-entt][binding-index]") {
     ProgramNode program;

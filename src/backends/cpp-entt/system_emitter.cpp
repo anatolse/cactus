@@ -4629,6 +4629,14 @@ static bool emit_indexed_pair_activation_if_planned(std::ostringstream& out,
                                                     const DecoratedProgram& program,
                                                     const std::array<std::string, 2>& keeps,
                                                     const std::string& dispatch_name);
+static bool emit_equality_pair_activation_if_planned(std::ostringstream& out,
+                                                     const RuleNode& sys,
+                                                     const HandlerContract* contract,
+                                                     const std::vector<PairBindingCodegen>& pair_binding_codegens,
+                                                     const PairCodegenScope& pair_codegen_scope,
+                                                     const DecoratedProgram& program,
+                                                     const std::string& member_keep,
+                                                     const std::string& dispatch_name);
 
 // SAP-eligible pair-rule activation: builds one
 // proxy per entity of each binding's snapshot from that binding's shape slots,
@@ -4880,23 +4888,26 @@ static void emit_pair_handler_body(std::ostringstream& out,
     out << "        }\n";
     out << "    } else {\n";
     const auto* spatial_root = spatial_join_root(sys, contract);
-    if (spatial_root == nullptr) {
+    if (spatial_root != nullptr) {
+        if (!emit_indexed_pair_activation_if_planned(
+                out, sys, contract, *spatial_root, pair_binding_codegens, pair_codegen_scope, program, keeps,
+                dispatch_name)) {
+            emit_sap_pair_activation(out,
+                                     *contract->spatial_join,
+                                     *spatial_root,
+                                     pair_binding_codegens,
+                                     pair_codegen_scope,
+                                     program,
+                                     dispatch_name);
+        }
+    } else if (!emit_equality_pair_activation_if_planned(out, sys, contract, pair_binding_codegens, pair_codegen_scope,
+                                                         program, keeps[1], dispatch_name)) {
         out << "        for (auto " << left.scope.binding_name << " : " << left.scope.binding_name << "_snapshot) {\n";
         out << "            for (auto " << right.scope.binding_name << " : " << right.scope.binding_name
             << "_snapshot) {\n";
         emit_tuple_invocation();
         out << "            }\n";
         out << "        }\n";
-    } else if (!emit_indexed_pair_activation_if_planned(
-                   out, sys, contract, *spatial_root, pair_binding_codegens, pair_codegen_scope, program, keeps,
-                   dispatch_name)) {
-        emit_sap_pair_activation(out,
-                                 *contract->spatial_join,
-                                 *spatial_root,
-                                 pair_binding_codegens,
-                                 pair_codegen_scope,
-                                 program,
-                                 dispatch_name);
     }
     out << "    }\n";
     if (!buffered) {
@@ -6226,19 +6237,22 @@ static bool emit_indexed_pair_activation_if_planned(std::ostringstream& out,
     return true;
 }
 
-// ── Equality-indexed folds ───────────────────────────────────────────────────
-// A reduced pair pass with an equality join keeps the non-group members in a
+// ── Equality-indexed passes ──────────────────────────────────────────────────
+// A pair pass with an equality join keeps the indexed binding's members in a
 // DenseKeyIndex, or a FlatKeyIndex when a key part can only be hashed, keyed by
-// values they never change. Each group entity folds exactly the members with
-// its key, oldest first; the fold still checks
-// every predicate. An identity key needs no index: the registry already finds
-// the one member a group names.
+// values they never change. Each entity of the other binding visits exactly
+// the members with its key, oldest first; every predicate is still checked.
+// An `or` of key chains looks up one key per branch and merges the results.
+// An identity key needs no index: the registry already finds the one member an
+// entity names.
 
 struct EqualityKeyPart {
     const ExprNode* member     = nullptr;
-    const ExprNode* query      = nullptr;
     const EqualityJoinKey* key = nullptr;
 };
+
+// One query expression per key part.
+using EqualityLookup = std::vector<const ExprNode*>;
 
 // A dense index's key: the parts addressed within a block, in key order, and
 // what names each member's block: an entity part, or the container field the
@@ -6252,7 +6266,8 @@ struct DenseKeyShape {
 struct EqualityFoldPlan {
     std::size_t indexed = 0;
     std::vector<EqualityKeyPart> parts;
-    const ExprNode* identity = nullptr;
+    std::vector<EqualityLookup> lookups;  // one per branch, or one without branches
+    std::optional<std::size_t> identity;  // the part naming the member itself
     std::optional<DenseKeyShape> dense;
 };
 
@@ -6305,16 +6320,38 @@ static std::optional<EqualityFoldPlan> equality_fold_plan(const RuleNode& sys,
         !sys.where_clause.has_value()) {
         return std::nullopt;
     }
+    const auto& join = *contract->equality_join;
+    const auto side  = [&](const EqualityJoinKey& key, const ExprPath& path) {
+        return resolve_expr_path(*sys.where_clause->predicates.at(key.predicate_index), path);
+    };
     EqualityFoldPlan plan;
-    plan.indexed = contract->equality_join->indexed_binding;
-    for (const auto& key : contract->equality_join->keys) {
-        const auto& root = *sys.where_clause->predicates.at(key.predicate_index);
-        plan.parts.push_back(EqualityKeyPart{
-            .member = resolve_expr_path(root, key.member), .query = resolve_expr_path(root, key.query), .key = &key});
+    plan.indexed = join.indexed_binding;
+    const auto add_part = [&](const EqualityJoinKey& key) {
+        plan.parts.push_back(EqualityKeyPart{.member = side(key, key.member), .key = &key});
+    };
+    std::ranges::for_each(join.keys, add_part);
+    if (!join.branches.empty()) {
+        std::ranges::for_each(join.branches.front(), add_part);
     }
-    if (std::ranges::any_of(plan.parts, [](const EqualityKeyPart& part) {
-            return part.member == nullptr || part.query == nullptr;
-        })) {
+    const auto lookup = [&](std::span<const EqualityJoinKey> branch) {
+        EqualityLookup queries;
+        for (const auto& key : join.keys) {
+            queries.push_back(side(key, key.query));
+        }
+        for (const auto& key : branch) {
+            queries.push_back(side(key, key.query));
+        }
+        return queries;
+    };
+    if (join.branches.empty()) {
+        plan.lookups.push_back(lookup({}));
+    }
+    for (const auto& branch : join.branches) {
+        plan.lookups.push_back(lookup(branch));
+    }
+    const auto missing = [](const ExprNode* expr) { return expr == nullptr; };
+    if (std::ranges::any_of(plan.parts, missing, &EqualityKeyPart::member) ||
+        std::ranges::any_of(plan.lookups, [&](const EqualityLookup& queries) { return std::ranges::any_of(queries, missing); })) {
         return std::nullopt;
     }
     const auto& indexed_name = sys.pairs->bindings.at(plan.indexed).name;
@@ -6323,7 +6360,7 @@ static std::optional<EqualityFoldPlan> equality_fold_plan(const RuleNode& sys,
         return ident != nullptr && ident->name == indexed_name;
     });
     if (identity != plan.parts.end()) {
-        plan.identity = identity->query;
+        plan.identity = static_cast<std::size_t>(identity - plan.parts.begin());
         return plan;
     }
     plan.dense = dense_key_shape(plan.parts, program);
@@ -6336,28 +6373,32 @@ static std::string equality_index_type(const EqualityFoldPlan& plan) {
                : "cactus::runtime::entt_backend::FlatKeyIndex<" + std::to_string(plan.parts.size()) + ">";
 }
 
-static std::string key_side(const EqualityKeyPart& part,
-                            bool member_side,
-                            const PairCodegenScope& scope,
-                            const DecoratedProgram& program) {
-    return rewrite_expr(member_side ? *part.member : *part.query, {}, program, {}, {}, &scope);
+static std::string key_side(const ExprNode* side, const PairCodegenScope& scope, const DecoratedProgram& program) {
+    return rewrite_expr(*side, {}, program, {}, {}, &scope);
 }
 
-// The comma-separated key values: dense parts, or every part hashed.
+static EqualityLookup member_sides(const EqualityFoldPlan& plan) {
+    EqualityLookup sides;
+    for (const auto& part : plan.parts) {
+        sides.push_back(part.member);
+    }
+    return sides;
+}
+
+// The comma-separated key values of `sides`: dense parts, or every part hashed.
 static std::string equality_key_values(const EqualityFoldPlan& plan,
-                                       bool member_side,
+                                       const EqualityLookup& sides,
                                        const PairCodegenScope& scope,
                                        const DecoratedProgram& program) {
     std::vector<std::string> values;
     if (plan.dense.has_value()) {
         for (const auto index : plan.dense->values) {
-            values.push_back("cactus::runtime::entt_backend::dense_key_part(" +
-                             key_side(plan.parts[index], member_side, scope, program) + ")");
+            values.push_back("cactus::runtime::entt_backend::dense_key_part(" + key_side(sides[index], scope, program) +
+                             ")");
         }
     } else {
-        for (const auto& part : plan.parts) {
-            values.push_back("cactus::runtime::entt_backend::equality_key_part(" +
-                             key_side(part, member_side, scope, program) + ")");
+        for (const auto* side : sides) {
+            values.push_back("cactus::runtime::entt_backend::equality_key_part(" + key_side(side, scope, program) + ")");
         }
     }
     return join_strings(values, ", ");
@@ -6372,13 +6413,13 @@ static std::string equality_member_key(const EqualityFoldPlan& plan,
                                        const std::string& member,
                                        const PairCodegenScope& scope,
                                        const DecoratedProgram& program) {
-    const auto values = equality_key_values(plan, true, scope, program);
+    const auto values = equality_key_values(plan, member_sides(plan), scope, program);
     if (!plan.dense.has_value()) {
         return equality_index_type(plan) + "::Key{" + values + "}";
     }
     std::string block = "entt::null";
     if (plan.dense->block_part.has_value()) {
-        block = key_side(plan.parts[*plan.dense->block_part], true, scope, program);
+        block = key_side(plan.parts[*plan.dense->block_part].member, scope, program);
     } else if (const auto* ranged = plan.dense->ranged; ranged != nullptr && ranged->trait.has_value()) {
         block = "registry.get<const " + EnttCodegenUtils::trait_cpp_name(*ranged->trait, ranged->trait->local_name, program) +
                 ">(" + member + ")." + cpp_escaped(ranged->container);
@@ -6386,22 +6427,22 @@ static std::string equality_member_key(const EqualityFoldPlan& plan,
     return dense_key(plan, block, values);
 }
 
-// Replaces `out` with the members whose key equals the group's.
+// Replaces `out` with the members whose key equals `lookup`'s.
 static std::string equality_find(const EqualityFoldPlan& plan,
+                                 const EqualityLookup& lookup,
                                  const std::string& index,
                                  const std::string& out,
                                  const PairCodegenScope& scope,
                                  const DecoratedProgram& program) {
-    const auto values = equality_key_values(plan, false, scope, program);
+    const auto values = equality_key_values(plan, lookup, scope, program);
     if (!plan.dense.has_value()) {
         return index + ".find(registry, " + equality_index_type(plan) + "::Key{" + values + "}, " + out + ")";
     }
     if (plan.dense->ranged != nullptr && !plan.dense->block_part.has_value()) {
         return index + ".find_any_block(registry, {" + values + "}, " + out + ")";
     }
-    const auto block = plan.dense->block_part.has_value()
-                           ? key_side(plan.parts[*plan.dense->block_part], false, scope, program)
-                           : std::string{"entt::null"};
+    const auto block = plan.dense->block_part.has_value() ? key_side(lookup[*plan.dense->block_part], scope, program)
+                                                          : std::string{"entt::null"};
     return index + ".find(registry, " + dense_key(plan, block, values) + ", " + out + ")";
 }
 
@@ -6452,6 +6493,9 @@ static void emit_equality_index_sync(std::ostringstream& out,
                                      const PairBindingCodegen& binding,
                                      const PairCodegenScope& pair_codegen_scope,
                                      const DecoratedProgram& program) {
+    if (plan.identity.has_value()) {
+        return;
+    }
     const auto& name        = binding.scope.binding_name;
     const auto index        = "cactus_index_" + name;
     const auto index_type   = equality_index_type(plan);
@@ -6489,9 +6533,58 @@ static void emit_equality_index_sync(std::ostringstream& out,
     emit_shared_index(out, index_type, index, sync.str());
 }
 
+// The candidate buffers a pass's lookups reuse, declared before its loop.
+static void emit_equality_buffers(std::ostringstream& out, const EqualityFoldPlan& plan, const std::string& indent) {
+    const bool merged = plan.lookups.size() > 1;
+    if (!plan.identity.has_value() || merged) {
+        out << indent << "std::vector<entt::entity> cactus_matches;\n";
+    }
+    if (!plan.identity.has_value() && merged) {
+        out << indent << "std::vector<entt::entity> cactus_found;\n";
+    }
+}
+
+// Opens a loop binding each member that matches the current entity of the
+// other binding, oldest first and each once; the caller closes it at `indent`.
+static void emit_equality_member_loop(std::ostringstream& out,
+                                      const EqualityFoldPlan& plan,
+                                      const PairBindingCodegen& binding,
+                                      const PairCodegenScope& scope,
+                                      const DecoratedProgram& program,
+                                      const std::string& indent) {
+    const auto& member  = binding.scope.binding_name;
+    const auto index    = "cactus_index_" + member;
+    const auto alive    = "cactus::runtime::entt_backend::named_alive<" + join_strings(binding.cpp_types, ", ") + ">";
+    if (plan.lookups.size() == 1) {
+        const auto& lookup = plan.lookups.front();
+        if (plan.identity.has_value()) {
+            out << indent << "const entt::entity " << member << " = " << key_side(lookup[*plan.identity], scope, program)
+                << ";\n";
+            out << indent << "if (" << alive << "(registry, " << member << ")) {\n";
+            return;
+        }
+        out << indent << equality_find(plan, lookup, index, "cactus_matches", scope, program) << ";\n";
+        out << indent << "for (const auto " << member << " : cactus_matches) {\n";
+        return;
+    }
+    out << indent << "cactus_matches.clear();\n";
+    for (const auto& lookup : plan.lookups) {
+        if (plan.identity.has_value()) {
+            out << indent << "if (const entt::entity cactus_named = " << key_side(lookup[*plan.identity], scope, program)
+                << "; " << alive << "(registry, cactus_named)) { cactus_matches.push_back(cactus_named); }\n";
+            continue;
+        }
+        out << indent << equality_find(plan, lookup, index, "cactus_found", scope, program) << ";\n";
+        out << indent << "cactus_matches.insert(cactus_matches.end(), cactus_found.begin(), cactus_found.end());\n";
+    }
+    out << indent << "cactus::runtime::entt_backend::merge_equality_candidates(registry, cactus_matches);\n";
+    out << indent << "for (const auto " << member << " : cactus_matches) {\n";
+}
+
 static void emit_equality_fold_dispatch(std::ostringstream& out,
                                         const EqualityFoldPlan& plan,
                                         bool gated,
+                                        bool grouped,
                                         const std::vector<PairBindingCodegen>& pair_binding_codegens,
                                         const PairCodegenScope& fold_scope,
                                         const DecoratedProgram& program) {
@@ -6500,28 +6593,50 @@ static void emit_equality_fold_dispatch(std::ostringstream& out,
     if (gated) {
         out << "    if (cactus_active) {\n";
     }
-    if (plan.identity == nullptr) {
-        out << "    std::vector<entt::entity> cactus_matches;\n";
-    }
+    emit_equality_buffers(out, plan, "    ");
     out << "    for (std::size_t cactus_i = 0; cactus_i < " << group << "_snapshot.size(); ++cactus_i) {\n";
-    out << "        if (cactus_group_live[cactus_i] == 0) { continue; }\n";
-    out << "        const auto " << group << " = " << group << "_snapshot[cactus_i];\n";
-    if (plan.identity != nullptr) {
-        out << "        const entt::entity " << member << " = "
-            << rewrite_expr(*plan.identity, {}, program, {}, {}, &fold_scope) << ";\n";
-        out << "        if (cactus::runtime::entt_backend::named_alive<"
-            << join_strings(pair_binding_codegens[plan.indexed].cpp_types, ", ") << ">(registry, " << member << ")) {\n";
-    } else {
-        out << "        " << equality_find(plan, "cactus_index_" + member, "cactus_matches", fold_scope, program)
-            << ";\n";
-        out << "        for (const auto " << member << " : cactus_matches) {\n";
+    if (grouped) {
+        out << "        if (cactus_group_live[cactus_i] == 0) { continue; }\n";
     }
+    out << "        const auto " << group << " = " << group << "_snapshot[cactus_i];\n";
+    emit_equality_member_loop(out, plan, pair_binding_codegens[plan.indexed], fold_scope, program, "        ");
     out << "            cactus_fold(" << (plan.indexed == 0 ? member + ", " + group : group + ", " + member) << ");\n";
     out << "        }\n";
     out << "    }\n";
     if (gated) {
         out << "    }\n";
     }
+}
+
+// Invokes `dispatch_name` for every tuple of a plain pair pass whose right
+// binding is equality-indexed, in (left, right) snapshot order: the left
+// snapshot in order, each left entity's members oldest first.
+static bool emit_equality_pair_activation_if_planned(std::ostringstream& out,
+                                                     const RuleNode& sys,
+                                                     const HandlerContract* contract,
+                                                     const std::vector<PairBindingCodegen>& pair_binding_codegens,
+                                                     const PairCodegenScope& pair_codegen_scope,
+                                                     const DecoratedProgram& program,
+                                                     const std::string& member_keep,
+                                                     const std::string& dispatch_name) {
+    const auto plan = equality_fold_plan(sys, contract, program);
+    if (!plan.has_value() || plan->indexed != 1) {
+        return false;
+    }
+    const auto& left  = pair_binding_codegens[0].scope.binding_name;
+    const auto& right = pair_binding_codegens[1].scope.binding_name;
+    out << "        {\n";
+    emit_equality_index_sync(out, *plan, pair_binding_codegens[1], pair_codegen_scope, program);
+    emit_equality_buffers(out, *plan, "        ");
+    out << "        for (const auto " << left << " : " << left << "_snapshot) {\n";
+    emit_equality_member_loop(out, *plan, pair_binding_codegens[1], pair_codegen_scope, program, "            ");
+    const auto call = dispatch_name + "(" + left + ", " + right + ");";
+    out << "                " << (member_keep.empty() ? call : "if (" + member_keep + "(" + right + ")) { " + call + " }")
+        << "\n";
+    out << "            }\n";
+    out << "        }\n";
+    out << "        }\n";
+    return true;
 }
 
 // The `where:` predicates the fold checks per row: not group filters, not the
@@ -6568,7 +6683,7 @@ static void emit_reduced_pair_handler_body(std::ostringstream& out,
     if (index.has_value()) {
         emit_binding_index_sync(out, *index, *spatial_join_root(sys, contract), pair_binding_codegens[index->indexed],
                                 pair_codegen_scope, program);
-    } else if (equality.has_value() && equality->identity == nullptr) {
+    } else if (equality.has_value()) {
         emit_equality_index_sync(out, *equality, pair_binding_codegens[equality->indexed], pair_codegen_scope, program);
     }
     const auto filtered =
@@ -6602,7 +6717,8 @@ static void emit_reduced_pair_handler_body(std::ostringstream& out,
         emit_indexed_fold_dispatch(out, *index, *spatial_join_root(sys, contract), !active.empty(),
                                    pair_binding_codegens, fold_scope, program);
     } else if (equality.has_value()) {
-        emit_equality_fold_dispatch(out, *equality, !active.empty(), pair_binding_codegens, fold_scope, program);
+        emit_equality_fold_dispatch(out, *equality, !active.empty(), reduce.per_binding.has_value(),
+                                    pair_binding_codegens, fold_scope, program);
     } else {
         emit_fold_dispatch(out, sys, contract, !active.empty(), pair_binding_codegens, fold_scope, program);
     }

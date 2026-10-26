@@ -553,15 +553,22 @@ void ModuleArtifact::write_equality_join(std::ostream& out, const std::optional<
     }
     const auto& plan = *join;
     write_u64(out, static_cast<uint64_t>(plan.indexed_binding));
-    write_u32(out, static_cast<uint32_t>(plan.keys.size()));
-    for (const auto& key : plan.keys) {
-        write_u64(out, static_cast<uint64_t>(key.predicate_index));
-        write_expr_path(out, key.member);
-        write_expr_path(out, key.query);
-        write_u8(out, static_cast<uint8_t>(key.layout));
-        write_optional_symbol_id(out, key.trait);
-        write_str(out, key.field);
-        write_str(out, key.container);
+    const auto write_keys = [&](const std::vector<EqualityJoinKey>& keys) {
+        write_u32(out, static_cast<uint32_t>(keys.size()));
+        for (const auto& key : keys) {
+            write_u64(out, static_cast<uint64_t>(key.predicate_index));
+            write_expr_path(out, key.member);
+            write_expr_path(out, key.query);
+            write_u8(out, static_cast<uint8_t>(key.layout));
+            write_optional_symbol_id(out, key.trait);
+            write_str(out, key.field);
+            write_str(out, key.container);
+        }
+    };
+    write_keys(plan.keys);
+    write_u32(out, static_cast<uint32_t>(plan.branches.size()));
+    for (const auto& branch : plan.branches) {
+        write_keys(branch);
     }
 }
 
@@ -1305,15 +1312,22 @@ std::optional<EqualityJoinPlan> ModuleArtifact::read_equality_join(std::istream&
     }
     EqualityJoinPlan plan;
     plan.indexed_binding = static_cast<std::size_t>(read_u64(in));
-    plan.keys.resize(read_u32(in));
-    for (auto& key : plan.keys) {
-        key.predicate_index = static_cast<std::size_t>(read_u64(in));
-        key.member          = read_expr_path(in);
-        key.query           = read_expr_path(in);
-        key.layout          = static_cast<EqualityKeyLayout>(read_u8(in));
-        key.trait           = read_optional_symbol_id(in);
-        key.field           = read_str(in);
-        key.container       = read_str(in);
+    const auto read_keys = [&](std::vector<EqualityJoinKey>& keys) {
+        keys.resize(read_u32(in));
+        for (auto& key : keys) {
+            key.predicate_index = static_cast<std::size_t>(read_u64(in));
+            key.member          = read_expr_path(in);
+            key.query           = read_expr_path(in);
+            key.layout          = static_cast<EqualityKeyLayout>(read_u8(in));
+            key.trait           = read_optional_symbol_id(in);
+            key.field           = read_str(in);
+            key.container       = read_str(in);
+        }
+    };
+    read_keys(plan.keys);
+    plan.branches.resize(read_u32(in));
+    for (auto& branch : plan.branches) {
+        read_keys(branch);
     }
     return plan;
 }

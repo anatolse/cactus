@@ -321,6 +321,53 @@ TEST_CASE("a dense index finds each key's members oldest first within its block"
     CHECK(dense_find(registry, index, grid, 1, 2).empty());
 }
 
+TEST_CASE("shifted queries past a grid edge find nothing", "[runtime][binding-index]") {
+    entt::registry registry;
+    const auto grid   = make_grid(registry, 3, 3);
+    const auto corner = make_cell(registry, grid, 0, -2);
+    const auto edge   = make_cell(registry, grid, 3, 3);
+    CellIndex dense;
+    refresh(registry, dense);
+    FlatCellIndex flat;
+    refresh(registry, flat);
+    for (const auto& [x, y] : std::vector<std::pair<int, int>>{{-1, -2}, {0, -3}, {4, 3}, {3, 4}}) {
+        CHECK(dense_find(registry, dense, grid, x, y).empty());
+        CHECK(dense_find(registry, dense, entt::null, x, y).empty());
+        std::vector<entt::entity> found{entt::null};
+        flat.find(registry,
+                  FlatCellIndex::Key{equality_key_part(grid), equality_key_part(x), equality_key_part(y),
+                                     equality_key_part(0)},
+                  found);
+        CHECK(found.empty());
+    }
+    CHECK(dense_find(registry, dense, grid, 0, -2) == std::vector{corner});
+    CHECK(dense_find(registry, dense, entt::null, 3, 3) == std::vector{edge});
+}
+
+TEST_CASE("merged equality candidates come oldest first, each once", "[runtime][binding-index]") {
+    entt::registry registry;
+    const auto a = make_ordered(registry);
+    const auto b = make_ordered(registry);
+    const auto c = make_ordered(registry);
+    std::vector<entt::entity> candidates{c, a, b, a, c, c};
+    merge_equality_candidates(registry, candidates);
+    CHECK(candidates == std::vector{a, b, c});
+
+    candidates.clear();
+    merge_equality_candidates(registry, candidates);
+    CHECK(candidates.empty());
+
+    // A buffer that has grown is reused without allocating.
+    candidates.reserve(16);
+    const auto* storage  = candidates.data();
+    const auto capacity  = candidates.capacity();
+    candidates.assign({b, b, a});
+    merge_equality_candidates(registry, candidates);
+    CHECK(candidates == std::vector{a, b});
+    CHECK(candidates.data() == storage);
+    CHECK(candidates.capacity() == capacity);
+}
+
 TEST_CASE("a dense index keeps creation order when an older member joins later", "[runtime][binding-index]") {
     entt::registry registry;
     const auto grid  = make_grid(registry, 3, 3);

@@ -398,12 +398,15 @@ struct EqualityJoinKey {
     friend bool operator==(const EqualityJoinKey&, const EqualityJoinKey&) = default;
 };
 
-// Set when a pair rule that reduces per one binding equates, inside the `and`
-// chains of its `where:` predicates, values the other binding's members never
-// change with values computed per group. Every key must hold for a row.
+// Set when a pair rule equates, inside the `and` chains of its `where:`
+// predicates, values the indexed binding's members never change with values
+// of the other binding. Every key must hold for a row. `branches` come from one
+// `or` of `and` chains: a row matches `keys` plus any one branch. Every branch
+// keys the same fields, in the first branch's order, and none a field of `keys`.
 struct EqualityJoinPlan {
     std::size_t indexed_binding = 0;
     std::vector<EqualityJoinKey> keys;
+    std::vector<std::vector<EqualityJoinKey>> branches;
 
     friend bool operator==(const EqualityJoinPlan&, const EqualityJoinPlan&) = default;
 };
@@ -1735,7 +1738,7 @@ private:
                                                                                const PairScope& pair_scope,
                                                                                ErrorReporter& errors,
                                                                                bool warn_unaccelerated = true);
-    // A reduced pair rule's equality join, when its `where:` has one.
+    // A pair rule's equality join, when its `where:` has one.
     [[nodiscard]] std::optional<EqualityJoinPlan> recognize_equality_join(const RuleNode& rule,
                                                                           const PairScope& pair_scope) const;
     // An info diagnostic per key part an index can only hash.
@@ -1754,6 +1757,15 @@ private:
                                                               std::size_t indexed_binding,
                                                               const std::string& indexed_name,
                                                               const PairScope& pair_scope) const;
+    // The keys of each branch of the `or` at `path`; nullopt when a branch has
+    // no key or holds a nested `or`.
+    [[nodiscard]] std::optional<std::vector<std::vector<EqualityJoinKey>>> branch_keys(
+        const ExprNode& predicate,
+        const ExprPath& path,
+        std::size_t predicate_index,
+        std::size_t indexed_binding,
+        const std::string& indexed_name,
+        const PairScope& pair_scope) const;
 
     // A pair-binding trait path: its binding plus the trait identity and fields.
     struct SpatialJoinResolvedArg {

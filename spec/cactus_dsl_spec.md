@@ -787,7 +787,24 @@ Any other reducer counts or sums rows, so pruning would change it. The bound com
 
 This is purely an optimization: it never changes which entities or tuples satisfy the rule, or the order in which they run, including a self-tuple `(e, e)` when an entity belongs to both bindings, `order by:`, and `limit:`. Every other shape — wrapped in `not`, combined with `or`, an argument reading both bindings, component-wise arithmetic (`dx*dx + dy*dy`) in place of the dot-product form, a check split across intermediate `let` bindings, or a call to any other function — remains fully supported as an ordinary predicate, evaluated exactly as written. No backend is required to implement this acceleration, and its absence is never a compile error or a behavior difference. Write the exact test in `where:`: when it is a recognized shape, the backend derives the broad phase from it, so authors write no separate looser bound. A looser recognized predicate paired with an exact test in the handler (for example an inflated radius) is still valid, but it is a stopgap for exact tests that are not yet recognized, not the intended form (see `language-philosophy`: acceleration bounds are derived, not written).
 
-**Equality joins are indexed.** A pair rule that reduces per one binding is an equality join when the operands of the top-level `and` chains of its `where:` predicates include an `==` between the other binding itself, or one of its `let` fields of type `int`, `bool`, enum or `entity_id`, and a value that reads nothing of that binding. A member never changes those values, so a backend may look up each group's matching members instead of checking every pair. Every predicate is still evaluated per looked-up row, and the order and results are the same.
+**Equality joins are indexed.** Any pair rule — a plain handler rule, a keep rule with or without `reduce:`, or a reduced rule — is an equality join when the operands of the top-level `and` chains of its `where:` predicates include an `==` between the indexed binding itself, or one of its `let` fields of type `int`, `bool`, enum or `entity_id`, and a value that reads nothing of that binding. The indexed binding is the one `reduce per` does not group by, and the right binding of every other pair rule. The other side may be computed, such as `a[Cell].x + 1`. A member never changes those values, so a backend may look up each entity's matching members instead of checking every pair. Every predicate is still evaluated per looked-up row, and the order and results are the same.
+
+An `or` of `and` chains is a join key too, when every branch holds such an equality and all branches, together with the rule's other key equalities, key the same fields. Each entity then looks up one key per branch, and a tuple two branches find still runs, or folds, once. A branch without a key, branches keying different fields, or an `or` nested inside a branch make that predicate an ordinary filter. Neighbors on a grid of cells with `let x` and `let y` fields:
+
+```cactus
+rule CountNeighbors:
+    pairs:
+        a: Cell
+        b: Cell
+    where:
+        (b[Cell].x == a[Cell].x + 1 and b[Cell].y == a[Cell].y) or (b[Cell].x == a[Cell].x - 1 and b[Cell].y == a[Cell].y) or (b[Cell].y == a[Cell].y + 1 and b[Cell].x == a[Cell].x) or (b[Cell].y == a[Cell].y - 1 and b[Cell].x == a[Cell].x)
+    reduce per a:
+        n = count()
+    on fixed_tick:
+        a[Cell].neighbors = n
+```
+
+Each pass looks up at most four cells per `a` instead of checking every cell. Every branch keys `x` and `y`, so one index serves all four lookups.
 
 A backend may keep such indexes, and the broad phase of members whose bounds no handler can change after construction, between passes. It derives which members those are from the whole program's handler contracts, follows committed membership changes, and rebuilds after a restore; none of this changes which rows run or their order.
 

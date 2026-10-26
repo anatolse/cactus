@@ -931,6 +931,13 @@ private:
     std::size_t keys_ = 0;
 };
 
+// Orders the members several lookups found oldest first, each once.
+inline void merge_equality_candidates(const entt::registry& registry, std::vector<entt::entity>& candidates) {
+    std::ranges::sort(candidates, {}, [&](entt::entity entity) { return creation_ordinal(registry, entity); });
+    const auto [first, last] = std::ranges::unique(candidates);
+    candidates.erase(first, last);
+}
+
 // An equality-key component for one value: ints by their bits, entities by
 // their full handle, bools as 0 or 1.
 [[nodiscard]] inline std::uint64_t equality_key_part(int value) noexcept {

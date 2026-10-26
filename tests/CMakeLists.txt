@@ -748,6 +748,12 @@ cactus_add_headless_behavior_test(test_relations_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_relations_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_neighbor_joins_headless_behavior
+    CACTUS_SOURCE examples/neighbor_joins.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_neighbor_joins_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_collider_sweep_queries_headless_behavior
     CACTUS_SOURCE examples/collider_sweep_queries.cactus
     BACKEND cpp-entt
@@ -781,6 +787,13 @@ cactus_add_headless_behavior_test(test_voxel_volume_unindexed_headless_behavior
     NO_INDEXED_JOINS
 )
 
+cactus_add_headless_behavior_test(test_neighbor_joins_unindexed_headless_behavior
+    CACTUS_SOURCE examples/neighbor_joins.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_neighbor_joins_headless_behavior.cpp
+    NO_INDEXED_JOINS
+)
+
 cactus_add_headless_behavior_test(test_character_body_unindexed_headless_behavior
     CACTUS_SOURCE examples/stdlib-fixtures/character_body.cactus
     BACKEND cpp-entt
@@ -793,6 +806,7 @@ cactus_add_headless_behavior_test(test_character_body_unindexed_headless_behavio
 # any member. Results must match the chosen structures exactly.
 foreach(fixture IN ITEMS
         "voxel_volume|examples/stdlib-fixtures/voxel_volume.cactus"
+        "neighbor_joins|examples/neighbor_joins.cactus"
         "character_body|examples/stdlib-fixtures/character_body.cactus"
         "collider_sweep_queries|examples/collider_sweep_queries.cactus"
         "collision_predicates|tests/fixtures/collision_predicates_runtime.cactus"

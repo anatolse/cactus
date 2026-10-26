@@ -1,0 +1,125 @@
+module neighbor_joins
+
+# Cells on a 3x3 grid find the cells that share an edge with them: same row
+# and the next column, or same column and the next row. The compiler looks
+# each neighbor up by its coordinates instead of checking every pair of cells.
+# Tests open cells, change reach and take cells off the grid between ticks.
+
+use std.core
+
+trait Cell:
+    let id: int = 0
+    let x: int in range(0, 3)
+    let y: int in range(0, 3)
+    var open: bool = false
+    var reach: int = 1
+    var neighbors: int = 0
+    var ahead: int = 0
+    var best: int = -1
+
+# Kept on each cell next to an open cell.
+trait NextToOpen
+
+trait Log:
+    var count: int = 0
+    var trace: int = 0
+
+trait Ticks:
+    var count: int = 0
+
+event Touch:
+    from_id: int
+    to_id: int
+
+group facts:
+    phase: fixed_tick
+
+rule CountTicks:
+    on fixed_tick:
+        Clock[Ticks].count += 1
+
+# Every directed pair of neighbors reports itself once per tick.
+rule ReportNeighbors:
+    pairs:
+        a: Cell
+        b: Cell
+    where:
+        (b[Cell].x == a[Cell].x + 1 and b[Cell].y == a[Cell].y) or (b[Cell].x == a[Cell].x - 1 and b[Cell].y == a[Cell].y) or (b[Cell].y == a[Cell].y + 1 and b[Cell].x == a[Cell].x) or (b[Cell].y == a[Cell].y - 1 and b[Cell].x == a[Cell].x)
+    on fixed_tick:
+        emit Touch:
+            from_id = a[Cell].id
+            to_id = b[Cell].id
+
+# The trace depends on the order the reports arrive in.
+rule RecordTouch:
+    on Touch as touch:
+        Book[Log].count += 1
+        Book[Log].trace = (Book[Log].trace * 31 + touch.from_id * 9 + touch.to_id) % 1000003
+
+rule CountNeighbors:
+    pairs:
+        a: Cell
+        b: Cell
+    where:
+        (b[Cell].x == a[Cell].x + 1 and b[Cell].y == a[Cell].y) or (b[Cell].x == a[Cell].x - 1 and b[Cell].y == a[Cell].y) or (b[Cell].y == a[Cell].y + 1 and b[Cell].x == a[Cell].x) or (b[Cell].y == a[Cell].y - 1 and b[Cell].x == a[Cell].x)
+    reduce per a:
+        n = count()
+    on fixed_tick:
+        a[Cell].neighbors = n
+
+rule NextToOpenFact:
+    pairs:
+        a: Cell
+        b: Cell
+    group: facts
+    where:
+        (b[Cell].x == a[Cell].x + 1 and b[Cell].y == a[Cell].y) or (b[Cell].x == a[Cell].x - 1 and b[Cell].y == a[Cell].y) or (b[Cell].y == a[Cell].y + 1 and b[Cell].x == a[Cell].x) or (b[Cell].y == a[Cell].y - 1 and b[Cell].x == a[Cell].x)
+        b[Cell].open
+    keep NextToOpen on a
+
+# Each cell remembers its neighbor with the highest id.
+rule PickHighestNeighbor:
+    pairs:
+        a: Cell
+        b: Cell
+    order by: b[Cell].id desc
+    where:
+        (b[Cell].x == a[Cell].x + 1 and b[Cell].y == a[Cell].y) or (b[Cell].x == a[Cell].x - 1 and b[Cell].y == a[Cell].y) or (b[Cell].y == a[Cell].y + 1 and b[Cell].x == a[Cell].x) or (b[Cell].y == a[Cell].y - 1 and b[Cell].x == a[Cell].x)
+    limit: 1 per a
+    on fixed_tick:
+        a[Cell].best = b[Cell].id
+
+# With reach 1 both branches find the next cell in the row; it counts once.
+rule CountAhead:
+    pairs:
+        a: Cell
+        b: Cell
+    where:
+        (b[Cell].x == a[Cell].x + 1 and b[Cell].y == a[Cell].y) or (b[Cell].x == a[Cell].x + a[Cell].reach and b[Cell].y == a[Cell].y)
+    reduce per a:
+        n = count()
+    on fixed_tick:
+        a[Cell].ahead = n
+
+entity Clock:
+    Ticks
+
+entity Book:
+    Log
+
+template GridCell(id: int, x: int, y: int):
+    Cell:
+        id = id
+        x = x
+        y = y
+
+# Created out of id order, so creation order and id order differ.
+entity Center from GridCell(id = 4, x = 1, y = 1)
+entity Corner0 from GridCell(id = 0, x = 0, y = 0)
+entity Edge1 from GridCell(id = 1, x = 1, y = 0)
+entity Corner8 from GridCell(id = 8, x = 2, y = 2)
+entity Edge3 from GridCell(id = 3, x = 0, y = 1)
+entity Corner2 from GridCell(id = 2, x = 2, y = 0)
+entity Edge5 from GridCell(id = 5, x = 2, y = 1)
+entity Corner6 from GridCell(id = 6, x = 0, y = 2)
+entity Edge7 from GridCell(id = 7, x = 1, y = 2)

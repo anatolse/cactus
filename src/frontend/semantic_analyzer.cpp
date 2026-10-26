@@ -10130,17 +10130,84 @@ bool reads_pair_binding(const ExprNode& expr, const PairScope& pair_scope, std::
     return read;
 }
 
-// Paths to the operands of `expr`'s top-level `and` chain.
-void collect_conjunct_paths(const ExprNode& expr, ExprPath& path, std::vector<ExprPath>& out) {
-    if (const auto* binary = std::get_if<BinaryExpr>(&expr.expr); binary != nullptr && binary->op == "and") {
+// Paths to the operands of `expr`'s top-level `op` chain.
+void collect_chain_paths(const ExprNode& expr, std::string_view op, ExprPath& path, std::vector<ExprPath>& out) {
+    if (const auto* binary = std::get_if<BinaryExpr>(&expr.expr); binary != nullptr && binary->op == op) {
         for (std::uint8_t side = 0; side < 2; ++side) {
             path.push_back(side);
-            collect_conjunct_paths(side == 0 ? *binary->left : *binary->right, path, out);
+            collect_chain_paths(side == 0 ? *binary->left : *binary->right, op, path, out);
             path.pop_back();
         }
         return;
     }
     out.push_back(path);
+}
+
+std::vector<ExprPath> chain_paths(const ExprNode& root, const ExprPath& at, std::string_view op) {
+    std::vector<ExprPath> out;
+    auto path = at;
+    collect_chain_paths(*resolve_expr_path(root, at), op, path, out);
+    return out;
+}
+
+const BinaryExpr* binary_at(const ExprNode& root, const ExprPath& path, std::string_view op) {
+    const auto* binary = std::get_if<BinaryExpr>(&resolve_expr_path(root, path)->expr);
+    return binary != nullptr && binary->op == op ? binary : nullptr;
+}
+
+bool same_key_field(const EqualityJoinKey& left, const EqualityJoinKey& right) {
+    return left.trait == right.trait && left.field == right.field;
+}
+
+// Drops branch keys on fields `shared` fixes and repeats within a branch, then
+// orders each branch like the first; nullopt when branches key different fields.
+std::optional<std::vector<std::vector<EqualityJoinKey>>> align_branches(std::vector<std::vector<EqualityJoinKey>> branches,
+                                                                       const std::vector<EqualityJoinKey>& shared) {
+    for (auto& branch : branches) {
+        std::vector<EqualityJoinKey> kept;
+        for (auto& key : branch) {
+            const auto known = [&](const EqualityJoinKey& other) { return same_key_field(key, other); };
+            if (!std::ranges::any_of(shared, known) && !std::ranges::any_of(kept, known)) {
+                kept.push_back(std::move(key));
+            }
+        }
+        branch = std::move(kept);
+    }
+    for (auto& branch : branches | std::views::drop(1)) {
+        if (branch.size() != branches.front().size()) {
+            return std::nullopt;
+        }
+        std::vector<EqualityJoinKey> ordered;
+        for (const auto& first : branches.front()) {
+            const auto found =
+                std::ranges::find_if(branch, [&](const EqualityJoinKey& key) { return same_key_field(key, first); });
+            if (found == branch.end()) {
+                return std::nullopt;
+            }
+            ordered.push_back(std::move(*found));
+        }
+        branch = std::move(ordered);
+    }
+    if (branches.front().empty()) {
+        branches.clear();
+    }
+    return branches;
+}
+
+// The branches of the first `or` that aligns; none when an identity key already
+// names the one member.
+std::vector<std::vector<EqualityJoinKey>> first_aligned_branches(
+    std::vector<std::vector<std::vector<EqualityJoinKey>>> disjunctions,
+    const std::vector<EqualityJoinKey>& shared) {
+    if (std::ranges::any_of(shared, [](const EqualityJoinKey& key) { return !key.trait.has_value(); })) {
+        return {};
+    }
+    for (auto& branches : disjunctions) {
+        if (auto aligned = align_branches(std::move(branches), shared)) {
+            return std::move(*aligned);
+        }
+    }
+    return {};
 }
 
 }  // namespace
@@ -10282,7 +10349,12 @@ void SemanticAnalyzer::report_hashed_key_parts(const RuleNode& rule, const Equal
     if (identity || !rule.where_clause.has_value()) {
         return;
     }
-    for (const auto& key : plan.keys) {
+    // Every branch keys the same fields, so the first stands for all.
+    auto parts = plan.keys;
+    if (!plan.branches.empty()) {
+        std::ranges::copy(plan.branches.front(), std::back_inserter(parts));
+    }
+    for (const auto& key : parts) {
         if (key.layout != EqualityKeyLayout::Hashed || !key.trait.has_value()) {
             continue;
         }
@@ -10297,22 +10369,30 @@ void SemanticAnalyzer::report_hashed_key_parts(const RuleNode& rule, const Equal
 
 std::optional<EqualityJoinPlan> SemanticAnalyzer::recognize_equality_join(const RuleNode& rule,
                                                                           const PairScope& pair_scope) const {
-    const auto reduction = reduction_plan(rule, pair_scope);
-    if (!rule.pairs.has_value() || rule.pairs->bindings.size() != 2 || !reduction.has_value() ||
-        !reduction->group_binding.has_value() || !rule.where_clause.has_value()) {
+    if (!rule.pairs.has_value() || rule.pairs->bindings.size() != 2 || !rule.where_clause.has_value() ||
+        std::ranges::any_of(rule.pairs->bindings, &PairBindingNode::is_row)) {
         return std::nullopt;
     }
+    const auto reduction = reduction_plan(rule, pair_scope);
     EqualityJoinPlan plan;
-    plan.indexed_binding      = 1 - *reduction->group_binding;
-    const auto& indexed_name  = rule.pairs->bindings[plan.indexed_binding].name;
-    const auto& predicates    = rule.where_clause->predicates;
+    plan.indexed_binding = reduction.has_value() && reduction->group_binding.has_value()
+                               ? 1 - *reduction->group_binding
+                               : std::size_t{1};
+    const auto& indexed_name = rule.pairs->bindings[plan.indexed_binding].name;
+    const auto& predicates   = rule.where_clause->predicates;
+    std::vector<std::vector<std::vector<EqualityJoinKey>>> disjunctions;
     for (std::size_t index = 0; index < predicates.size(); ++index) {
-        std::vector<ExprPath> conjuncts;
-        ExprPath path;
-        collect_conjunct_paths(*predicates[index], path, conjuncts);
-        for (auto& conjunct : conjuncts) {
-            const auto* equality = std::get_if<BinaryExpr>(&resolve_expr_path(*predicates[index], conjunct)->expr);
-            if (equality == nullptr || equality->op != "==") {
+        const auto& predicate = *predicates[index];
+        for (const auto& conjunct : chain_paths(predicate, {}, "and")) {
+            if (binary_at(predicate, conjunct, "or") != nullptr) {
+                if (auto branches =
+                        branch_keys(predicate, conjunct, index, plan.indexed_binding, indexed_name, pair_scope)) {
+                    disjunctions.push_back(std::move(*branches));
+                }
+                continue;
+            }
+            const auto* equality = binary_at(predicate, conjunct, "==");
+            if (equality == nullptr) {
                 continue;
             }
             if (auto key = equality_key(*equality, conjunct, index, plan.indexed_binding, indexed_name, pair_scope)) {
@@ -10320,10 +10400,40 @@ std::optional<EqualityJoinPlan> SemanticAnalyzer::recognize_equality_join(const 
             }
         }
     }
-    if (plan.keys.empty()) {
+    plan.branches = first_aligned_branches(std::move(disjunctions), plan.keys);
+    if (plan.keys.empty() && plan.branches.empty()) {
         return std::nullopt;
     }
     return plan;
+}
+
+std::optional<std::vector<std::vector<EqualityJoinKey>>> SemanticAnalyzer::branch_keys(const ExprNode& predicate,
+                                                                                      const ExprPath& path,
+                                                                                      std::size_t predicate_index,
+                                                                                      std::size_t indexed_binding,
+                                                                                      const std::string& indexed_name,
+                                                                                      const PairScope& pair_scope) const {
+    std::vector<std::vector<EqualityJoinKey>> branches;
+    for (const auto& disjunct : chain_paths(predicate, path, "or")) {
+        auto& keys = branches.emplace_back();
+        for (const auto& conjunct : chain_paths(predicate, disjunct, "and")) {
+            if (binary_at(predicate, conjunct, "or") != nullptr) {
+                return std::nullopt;
+            }
+            const auto* equality = binary_at(predicate, conjunct, "==");
+            if (equality == nullptr) {
+                continue;
+            }
+            if (auto key =
+                    equality_key(*equality, conjunct, predicate_index, indexed_binding, indexed_name, pair_scope)) {
+                keys.push_back(std::move(*key));
+            }
+        }
+        if (keys.empty()) {
+            return std::nullopt;
+        }
+    }
+    return branches;
 }
 
 std::optional<SpatialJoinPlan> SemanticAnalyzer::recognize_spatial_join(const RuleNode& rule,

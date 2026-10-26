@@ -528,6 +528,56 @@ main.cactus first-person-arena std.physics.volume.Snap/on std.core.fixed_tick
     named_writes:
     named_requirements:
     iteration_order: free
+neighbor_joins.cactus examples neighbor_joins.CountAhead/on std.core.fixed_tick
+    reads: neighbor_joins.Cell
+    read_fields: neighbor_joins.Cell{ahead,reach,x,y}
+    write_fields: neighbor_joins.Cell{ahead}
+    write_kinds: neighbor_joins.Cell.ahead=0/0
+    bound_reads: 0:neighbor_joins.Cell 1:neighbor_joins.Cell
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+neighbor_joins.cactus examples neighbor_joins.CountNeighbors/on std.core.fixed_tick
+    reads: neighbor_joins.Cell
+    read_fields: neighbor_joins.Cell{neighbors,x,y}
+    write_fields: neighbor_joins.Cell{neighbors}
+    write_kinds: neighbor_joins.Cell.neighbors=0/0
+    bound_reads: 0:neighbor_joins.Cell 1:neighbor_joins.Cell
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+neighbor_joins.cactus examples neighbor_joins.NextToOpenFact/on std.core.fixed_tick
+    reads: neighbor_joins.Cell
+    read_fields: neighbor_joins.Cell{open,x,y}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:neighbor_joins.Cell 1:neighbor_joins.Cell
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+neighbor_joins.cactus examples neighbor_joins.PickHighestNeighbor/on std.core.fixed_tick
+    reads: neighbor_joins.Cell
+    read_fields: neighbor_joins.Cell{best,id,x,y}
+    write_fields: neighbor_joins.Cell{best}
+    write_kinds: neighbor_joins.Cell.best=0/0
+    bound_reads: 0:neighbor_joins.Cell 1:neighbor_joins.Cell
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+neighbor_joins.cactus examples neighbor_joins.ReportNeighbors/on std.core.fixed_tick
+    reads: neighbor_joins.Cell
+    read_fields: neighbor_joins.Cell{id,x,y}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:neighbor_joins.Cell 1:neighbor_joins.Cell
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
 pair_handler_return_runtime.cactus fixtures pair_handler_return_runtime.DetectBallContactWhere/on std.core.tick
     reads:
     read_fields:

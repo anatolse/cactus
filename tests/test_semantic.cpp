@@ -4026,6 +4026,159 @@ TEST_CASE("Semantic: var fields, cross reads and missing reductions form no equa
     CHECK_FALSE(weight.handler_contracts[0].equality_join.has_value());
 }
 
+// A pair rule over grid cells `a` and `b`; `head` precedes `where:`, `clauses` follow it.
+static std::string grid_pair_rule(const std::string& predicates, const std::string& clauses, const std::string& head = "") {
+    return stdlib_events() +
+           "trait Cell:\n"
+           "    let x: int in range(0, 8)\n"
+           "    let y: int in range(0, 8)\n"
+           "    let z: int in range(0, 8)\n"
+           "    let volume: entity_id\n"
+           "    let depth: int\n"
+           "    var open: bool = false\n"
+           "    var seen: int = 0\n"
+           "trait Linked\n"
+           "rule Join:\n"
+           "    pairs:\n"
+           "        a:\n"
+           "            Cell\n"
+           "        b:\n"
+           "            Cell\n" +
+           head + "    where:\n" + predicates + clauses;
+}
+
+static const std::string kGridTick = "    on tick:\n        let x = 1\n";
+
+static std::string neighbor_predicate() {
+    return "        (b[Cell].x == a[Cell].x + 1 and b[Cell].y == a[Cell].y) or "
+           "(b[Cell].x == a[Cell].x - 1 and b[Cell].y == a[Cell].y) or "
+           "(b[Cell].y == a[Cell].y + 1 and b[Cell].x == a[Cell].x) or "
+           "(b[Cell].y == a[Cell].y - 1 and b[Cell].x == a[Cell].x)\n";
+}
+
+TEST_CASE("Semantic: every pair rule kind can be an equality join indexing the right binding",
+          "[semantic][where-clause][equality-join][diagnostics]") {
+    const std::string keyed = "        b[Cell].x == a[Cell].x + 1 and b[Cell].y == a[Cell].y\n";
+    const std::vector<std::array<std::string, 3>> kinds{{
+        {"plain handler", kGridTick, ""},
+        {"unreduced keep", "    keep Linked on a\nextern event frame\nphase step:\n    from:\n        frame\ngroup facts:\n    phase: step\n",
+         "    group: facts\n"},
+        {"global reduce", "    reduce:\n        n = count()\n    on tick:\n        let x = n\n", ""},
+    }};
+    for (const auto& [kind, clauses, head] : kinds) {
+        INFO(kind);
+        auto [result, diagnostics] = analyze_with_diagnostics(grid_pair_rule(keyed, clauses, head));
+        REQUIRE_FALSE(result.handler_contracts.empty());
+        const auto& plan = result.handler_contracts[0].equality_join;
+        REQUIRE(plan.has_value());
+        CHECK(plan->indexed_binding == 1);
+        CHECK(plan->branches.empty());
+        REQUIRE(plan->keys.size() == 2);
+        CHECK(plan->keys[0].field == "x");
+        CHECK(plan->keys[1].field == "y");
+        CHECK_FALSE(has_warning_containing(diagnostics, unaccelerated_pair_warning("Join", "a", "b")));
+    }
+}
+
+TEST_CASE("Semantic: a shifted equality keys the member field with the shifted value",
+          "[semantic][where-clause][equality-join]") {
+    auto [result, diagnostics] =
+        analyze_with_diagnostics(grid_pair_rule("        b[Cell].x == a[Cell].x - 1\n", kGridTick));
+    const auto& plan = result.handler_contracts.at(0).equality_join;
+    REQUIRE(plan.has_value());
+    REQUIRE(plan->keys.size() == 1);
+    CHECK(plan->keys[0].field == "x");
+    REQUIRE(plan->keys[0].trait.has_value());
+    CHECK(plan->keys[0].trait->local_name == "Cell");
+    CHECK(plan->keys[0].member == ExprPath{0});
+    CHECK(plan->keys[0].query == ExprPath{1});
+}
+
+TEST_CASE("Semantic: an or of equality chains is a disjunctive equality join",
+          "[semantic][where-clause][equality-join][diagnostics]") {
+    auto [result, diagnostics] = analyze_with_diagnostics(grid_pair_rule(neighbor_predicate(), kGridTick));
+    const auto& plan = result.handler_contracts.at(0).equality_join;
+    REQUIRE(plan.has_value());
+    CHECK(plan->indexed_binding == 1);
+    CHECK(plan->keys.empty());
+    REQUIRE(plan->branches.size() == 4);
+    for (const auto& branch : plan->branches) {
+        REQUIRE(branch.size() == 2);
+        // Every branch lists its keys in the first branch's field order.
+        CHECK(branch[0].field == "x");
+        CHECK(branch[1].field == "y");
+    }
+    // The third branch is `b.y == a.y + 1 and b.x == a.x`: its x key is the right conjunct.
+    CHECK(plan->branches[2][0].member == ExprPath{0, 1, 1, 0});
+    CHECK(plan->branches[2][1].member == ExprPath{0, 1, 0, 0});
+    CHECK(plan->branches[3][0].member == ExprPath{1, 1, 0});
+    CHECK_FALSE(has_warning_containing(diagnostics, unaccelerated_pair_warning("Join", "a", "b")));
+}
+
+TEST_CASE("Semantic: top-level keys are shared by every branch of a disjunctive join",
+          "[semantic][where-clause][equality-join]") {
+    auto [result, diagnostics] = analyze_with_diagnostics(grid_pair_rule(
+        "        b[Cell].volume == a[Cell].volume\n"
+        "        (b[Cell].x == a[Cell].x + 1) or (b[Cell].x == a[Cell].x - 1)\n",
+        kGridTick));
+    const auto& plan = result.handler_contracts.at(0).equality_join;
+    REQUIRE(plan.has_value());
+    REQUIRE(plan->keys.size() == 1);
+    CHECK(plan->keys[0].field == "volume");
+    REQUIRE(plan->branches.size() == 2);
+    CHECK(plan->branches[0].size() == 1);
+    CHECK(plan->branches[1].at(0).field == "x");
+    CHECK(plan->branches[1].at(0).predicate_index == 1);
+
+    // A branch key on a field the shared keys already fix adds nothing.
+    auto [shared, shared_diagnostics] = analyze_with_diagnostics(grid_pair_rule(
+        "        b[Cell].y == a[Cell].y\n"
+        "        (b[Cell].x == a[Cell].x + 1 and b[Cell].y == a[Cell].y) or (b[Cell].x == a[Cell].x - 1)\n",
+        kGridTick));
+    const auto& shared_plan = shared.handler_contracts.at(0).equality_join;
+    REQUIRE(shared_plan.has_value());
+    REQUIRE(shared_plan->branches.size() == 2);
+    CHECK(shared_plan->branches[0].size() == 1);
+}
+
+TEST_CASE("Semantic: an or whose branches do not all key the same fields is no join key",
+          "[semantic][where-clause][equality-join][diagnostics]") {
+    const std::vector<std::pair<std::string, std::string>> cases{
+        {"different fields",
+         "        (b[Cell].x == a[Cell].x and b[Cell].y == a[Cell].y) or (b[Cell].z == a[Cell].z)\n"},
+        {"branch without key", "        (b[Cell].x == a[Cell].x and b[Cell].y == a[Cell].y) or a[Cell].open\n"},
+        {"nested or",
+         "        (b[Cell].x == a[Cell].x and (b[Cell].y == a[Cell].y or b[Cell].y == a[Cell].y + 1)) or "
+         "(b[Cell].x == a[Cell].x + 1 and b[Cell].y == a[Cell].y)\n"},
+    };
+    for (const auto& [name, predicate] : cases) {
+        INFO(name);
+        auto [result, diagnostics] = analyze_with_diagnostics(grid_pair_rule(predicate, kGridTick));
+        CHECK_FALSE(result.handler_contracts.at(0).equality_join.has_value());
+        CHECK(has_warning_containing(diagnostics, unaccelerated_pair_warning("Join", "a", "b")));
+    }
+
+    // Another predicate still makes the rule an equality join.
+    auto [fallback, fallback_diagnostics] = analyze_with_diagnostics(grid_pair_rule(
+        "        b[Cell].volume == a[Cell].volume\n"
+        "        (b[Cell].x == a[Cell].x) or (b[Cell].z == a[Cell].z)\n",
+        kGridTick));
+    const auto& plan = fallback.handler_contracts.at(0).equality_join;
+    REQUIRE(plan.has_value());
+    CHECK(plan->keys.size() == 1);
+    CHECK(plan->branches.empty());
+}
+
+TEST_CASE("Semantic: a hashed key part of a disjunctive join is reported once",
+          "[semantic][where-clause][equality-join][diagnostics]") {
+    auto [result, diagnostics] = analyze_with_diagnostics(grid_pair_rule(
+        "        (b[Cell].depth == a[Cell].depth + 1) or (b[Cell].depth == a[Cell].depth - 1)\n", kGridTick));
+    const auto& plan = result.handler_contracts.at(0).equality_join;
+    REQUIRE(plan.has_value());
+    CHECK(plan->branches.at(0).at(0).layout == EqualityKeyLayout::Hashed);
+    CHECK(count_infos_containing(diagnostics, "Cell.depth") == 1);
+}
+
 TEST_CASE("Semantic: linear 2D distance-vs-radius-sum where: predicate is flagged with a warning",
           "[semantic][where-clause][spatial-join][diagnostics]") {
     auto [result, diagnostics] = analyze_with_diagnostics(

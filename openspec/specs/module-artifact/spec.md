@@ -176,3 +176,14 @@ The module artifact SHALL serialize bracketed trait access expressions and brack
 #### Scenario: Previous-version artifact is rejected
 - **WHEN** a `.cmod` written before this format change is loaded
 - **THEN** the system reports "incompatible module artifact version in '<file>.cmod'; please recompile"
+
+### Requirement: Func parameter field reads round-trip
+The funcs section of the `.cmod` format SHALL record, for each trait or event parameter of a user `func`, the parameter's trait or event identity and, for a trait, the derived set of fields the `func` may read through it. A program that imports the module SHALL fold these reads into its handler contracts exactly as for a local `func`. The artifact format version SHALL be incremented, and artifacts of the previous version SHALL be rejected when loaded.
+
+#### Scenario: Imported func reads stay exact
+- **WHEN** module `cam` exports `pub func to_screen(camera: CameraView, point: vec3) Projected`, is saved to `.cmod`, and a program loads it and calls `cam.to_screen(cv, p)` from a handler
+- **THEN** the handler's contract records the same `CameraView` field reads as when the module is compiled from source
+
+#### Scenario: Old artifact rejected
+- **WHEN** a `.cmod` written with the previous format version is loaded
+- **THEN** loading fails with a version mismatch error

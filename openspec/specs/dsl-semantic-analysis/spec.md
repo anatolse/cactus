@@ -64,7 +64,7 @@ The semantic analyzer SHALL recognize calls resolved to `std.text.format`, infer
 - **THEN** semantic analysis reports that the argument type is not supported by `std.text.format`
 
 ### Requirement: Func purity enforcement
-The semantic analyzer SHALL verify that user-defined `func` declarations (those with `is_extern = false`) are pure: no `emit` statements, no mutation of external state, no `world` access. Violations SHALL produce a compile error. `extern func` declarations (those with `is_extern = true`) SHALL be skipped entirely — purity is not enforced over backend-provided functions.
+The semantic analyzer SHALL verify that user-defined `func` declarations (those with `is_extern = false`) are pure: no `emit` statements, no mutation of external state, no `world` access. Violations SHALL produce a compile error. Reading a field of the `func`'s own trait or event parameter (`camera.position`) SHALL be allowed, and is the only trait or event access a `func` body may make; every other trait access, including through an `entity_id` value, SHALL stay an error. `extern func` declarations (those with `is_extern = true`) SHALL be skipped entirely — purity is not enforced over backend-provided functions.
 
 #### Scenario: Emit in func rejected
 - **WHEN** a non-extern `func` body contains an `emit` statement
@@ -73,6 +73,14 @@ The semantic analyzer SHALL verify that user-defined `func` declarations (those 
 #### Scenario: World access in func rejected
 - **WHEN** a `func` body references `world` or accesses global mutable state
 - **THEN** the analyzer reports an error "world access is not allowed in pure functions"
+
+#### Scenario: Trait parameter field read is pure
+- **WHEN** a `func` with parameter `h: Health` returns `h.current * 2.0`
+- **THEN** the analyzer reports no purity error
+
+#### Scenario: Named trait read in func rejected
+- **WHEN** a `func` body reads `Game[Match].over`
+- **THEN** the analyzer reports a purity error
 
 #### Scenario: Extern func skipped by purity check
 - **WHEN** `pub extern func play_sfx(id: sound_id)` is declared (which may have side effects in C++)

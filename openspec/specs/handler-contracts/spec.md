@@ -198,11 +198,11 @@ Every handler contract SHALL record, for each trait in its reads and writes, whi
 - **THEN** its conservative read set records `Collider.radius`, and its binding-qualified read still names the `body` binding and `Collider`
 
 ### Requirement: Unnarrowable accesses cover all fields
-A contract SHALL record access to all fields of a trait when the access cannot be narrowed to named fields. This SHALL include: using a trait alias as a whole value (passing it to a `func`, assigning the alias itself); a trait-match arm on that trait; an `extern rule` `reads:` or `writes:` entry; a projected output; and any field access whose field the compiler cannot resolve. Structural commands (`spawn`, `destroy`, `add`, `remove`, `set`) SHALL continue to add no reads or writes.
+A contract SHALL record access to all fields of a trait when the access cannot be narrowed to named fields. This SHALL include: assigning a trait alias itself; a trait-match arm on that trait; an `extern rule` `reads:` or `writes:` entry; a projected output; and any field access whose field the compiler cannot resolve. Passing a trait to a `func` trait parameter SHALL NOT count as an unnarrowable access; it adds the callee's derived field reads (see "Trait arguments add the callee's field reads"). Structural commands (`spawn`, `destroy`, `add`, `remove`, `set`) SHALL continue to add no reads or writes.
 
 #### Scenario: Whole-alias use reads all fields
-- **WHEN** a handler passes its `Match as m` alias to a `func`
-- **THEN** its contract records a read of all fields of `Match`
+- **WHEN** a handler passes its `Match as m` alias to a `func` trait parameter, and the `func` reads every field of `Match`
+- **THEN** its contract records a read of all fields of `Match`, derived from the `func`, not assumed
 
 #### Scenario: Extern declaration covers all fields
 - **WHEN** an `extern rule` handler lists `Match` under `writes:`
@@ -362,3 +362,22 @@ A handler contract SHALL record a read of relation `R` for every row binding of 
 #### Scenario: Keep run before its readers
 - **WHEN** `WalkLinks` keeps `Walk` and another rule in the same phase tests `Walk(a, b)`
 - **THEN** the scheduler orders them the same way it orders a kept trait's keeper and readers
+
+### Requirement: Trait arguments add the callee's field reads
+For each trait parameter of a user `func`, the compiler SHALL derive the set of that trait's fields the `func` may read: fields read directly in its body, plus the fields read by every `func` it passes that parameter to, transitively. A call that passes a trait argument, from a handler body or from any rule clause the handler's contract folds in, SHALL add exactly that set to the handler's contract as reads of the argument's trait, with the same precision as inline reads at the call site. For a pair handler the reads SHALL be qualified by the argument's binding; for a named read they SHALL be recorded as named-entity accesses. Scheduling, exact accumulation and keep-loop detection SHALL treat these reads like any other read. Event arguments SHALL add no trait read.
+
+#### Scenario: Only read fields are recorded
+- **WHEN** a unary handler with `each: tv.WorldTransform as t` calls `height(t)`, and `height` reads only `t.position.y`
+- **THEN** its contract records a read of `WorldTransform.position` and no other `WorldTransform` field
+
+#### Scenario: Reads through a passed-on parameter
+- **WHEN** `to_screen(camera: CameraView, …)` reads `camera.forward` and passes `camera` to `has_area`, which reads `camera.rect_size`, and a handler calls `to_screen(cv, p)`
+- **THEN** the handler's contract records reads of `CameraView.forward` and `CameraView.rect_size`
+
+#### Scenario: Pair argument is binding-qualified
+- **WHEN** a pair handler passes `camera[CameraView]` to a `func` that reads `position`
+- **THEN** its binding-qualified reads name the `camera` binding and `CameraView`, and its per-field reads record `CameraView.position`
+
+#### Scenario: A writer of an unread field is not ordered before the caller
+- **WHEN** rule A writes `WorldTransform.scale`, rule B in the same phase calls `height(t)`, which reads only `position`, and nothing orders them
+- **THEN** the graph adds no edge between A and B for `WorldTransform`

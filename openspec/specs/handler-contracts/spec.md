@@ -343,3 +343,22 @@ The repository SHALL contain an automated test that enumerates the stdlib extern
 #### Scenario: An unsummarized world native fails the guard test
 - **WHEN** a contributor adds a stdlib extern function in `std.query` and gives it no field-read summary
 - **THEN** the guard test fails and names that function
+
+### Requirement: Contracts record relation access
+A handler contract SHALL record a read of relation `R` for every row binding of `R` and every `R(x, y)` test in its rule's `where:` or `when:`, and the fields of `R` that the handler reads. `add R` and `remove R` SHALL be recorded as commands only, like `set Trait`: they apply at the commit and add no read or write of `R`. Relation commands SHALL follow the same ordering and race rules as trait `add` and `remove` commands. A kept relation's rule SHALL be its only writer. The end traits of `R` SHALL NOT count as reads of those traits.
+
+#### Scenario: Test is a relation read
+- **WHEN** a rule declares `where: not Claim(robot, _)`
+- **THEN** its handler's contract records a read of `Claim`
+
+#### Scenario: Add is a command
+- **WHEN** a handler writes `add Claim(robot, task)`
+- **THEN** its contract lists `add Claim` in `commands` and no read or write of `Claim`
+
+#### Scenario: Row field read
+- **WHEN** a handler with row binding `r: Walk` reads `r.cost`
+- **THEN** its contract records a read of `Walk.cost` and no other `Walk` field
+
+#### Scenario: Keep run before its readers
+- **WHEN** `WalkLinks` keeps `Walk` and another rule in the same phase tests `Walk(a, b)`
+- **THEN** the scheduler orders them the same way it orders a kept trait's keeper and readers

@@ -2,6 +2,7 @@
 
 Define format-independent capture of live archetype instances, persistent values, construction data, and entity relationships into a typed snapshot document.
 ## Requirements
+
 ### Requirement: Explicit fields determine entity eligibility
 A live entity SHALL be captured if a trait in its originating archetype's declared trait set declares at least one persist field, or if a currently attached trait declares one. Construction overrides, marker traits, and `std.core.KeepOnLoad` SHALL NOT grant eligibility. Archetype eligibility SHALL survive removal of its persistence-bearing traits. No record SHALL be emitted for an ineligible entity.
 
@@ -264,3 +265,29 @@ An in-memory snapshot SHALL store each canonical identity (archetype node, trait
 #### Scenario: Validation still names the field
 - **WHEN** an adapter returns a document in which one record's field holds a value of the wrong kind
 - **THEN** restore fails as invalid data with a diagnostic naming the archetype node, trait and field
+
+### Requirement: Stored relation rows are recorded
+A world snapshot SHALL record every row of every stored relation whose `from` and `to` entities are both recorded, with its document-local end identities and all field values. A row with an unrecorded end SHALL be left out. Kept relations SHALL NOT be recorded; after restore their rows are empty until their keep rule runs. Rows SHALL be recorded in row creation order, under the relation's canonical identity.
+
+#### Scenario: Both ends saved
+- **WHEN** a save captures robot `r` and task `t`, and `Claim` holds `(r, t)`
+- **THEN** the document records the row `(r, t)`
+
+#### Scenario: One end not saved
+- **WHEN** `Walk` holds `(a, b)` and `b` is not eligible for capture
+- **THEN** the document records no row for `(a, b)`
+
+#### Scenario: Kept relation is not saved
+- **WHEN** `Walk` is kept and a save runs
+- **THEN** the document records no `Walk` rows
+
+### Requirement: Stored relation rows are restored and validated
+Restore SHALL rebuild each recorded row between the fresh handles of its two ends, in recorded order, with its recorded field values. Restore SHALL fire no trigger for rows. Document validation SHALL reject, before the world changes, a row whose end is missing from the document, an end that does not carry the relation's end trait in the restored world, two rows with the same pair, an unknown relation or field, and rows that break a `one` end.
+
+#### Scenario: Round trip
+- **WHEN** a world with `Claim(r, t)` is saved and restored
+- **THEN** the restored world holds one `Claim` row between the restored `r` and `t`
+
+#### Scenario: Document breaks a one end
+- **WHEN** a document records `Claim(r, t1)` and `Claim(r, t2)` and `Claim` has `from: Robot one`
+- **THEN** restore fails validation and the world is unchanged

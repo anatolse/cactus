@@ -6,7 +6,7 @@ Define the DSL surface, semantics, and validation rules for binary pair-relation
 ## Requirements
 
 ### Requirement: Regular rules support a binary pair domain
-A regular `rule` SHALL accept a `pairs:` block containing exactly two ordered, uniquely named entity bindings. Each binding SHALL contain one or more positive trait entries using the same dotted trait-name and optional `as` alias form as unary filters. `pairs:` SHALL be mutually exclusive with `each:` and `without:`, MAY be combined with `order by:` (`dsl-rule-order-by`), and SHALL NOT be accepted on `extern rule` declarations.
+A regular `rule` SHALL accept a `pairs:` block containing exactly two ordered, uniquely named bindings. Each binding SHALL be an entity binding or a row binding. An entity binding SHALL contain one or more positive trait entries using the same dotted trait-name and optional `as` alias form as unary filters. A row binding SHALL contain exactly one entry, a relation name with no alias (`dsl-relations`). At most one binding SHALL be a row binding. `pairs:` SHALL be mutually exclusive with `each:` and `without:`, MAY be combined with `order by:` (`dsl-rule-order-by`), and SHALL NOT be accepted on `extern rule` declarations.
 
 #### Scenario: Two-binding pair rule is accepted
 - **WHEN** `DetectContacts` declares `pairs:` bindings `body` and `wall`, each with at least one declared trait
@@ -24,8 +24,16 @@ A regular `rule` SHALL accept a `pairs:` block containing exactly two ordered, u
 - **WHEN** a `pairs:` rule also declares an `order by:` block
 - **THEN** semantic analysis accepts the combination, unlike `each:` or `without:` combined with `pairs:`
 
+#### Scenario: Row binding next to an entity binding
+- **WHEN** a `pairs:` block declares `w: Walker` and `r: Route`, where `Route` is a relation
+- **THEN** `w` is an entity binding and `r` is a row binding
+
+#### Scenario: Relation mixed with traits in one binding
+- **WHEN** a binding lists `Route` and `Tile`, where `Route` is a relation
+- **THEN** the compiler reports that a row binding has exactly one relation entry
+
 ### Requirement: Pair bindings are entity identifiers and trait namespaces
-Each pair binding SHALL have type `entity_id` and SHALL select the traits listed under it. `binding[Trait].field` SHALL access an unaliased selected trait, and `binding[module_alias.Trait].field` SHALL keep the imported qualification. The brackets SHALL contain exactly one trait reference, and it SHALL be a trait selected under that binding. A trait selected with `as alias` SHALL be accessed by the bare alias, `alias.field`, with no binding prefix. Aliases SHALL share one scope per rule: an alias name SHALL be unique across all bindings of the rule and SHALL NOT equal a binding name. An alias SHALL be visible wherever its binding is visible, so an alias of a binding that `reduce per` eliminates is not visible in the reduced handler.
+Each entity binding SHALL have type `entity_id` and SHALL select the traits listed under it. A row binding SHALL follow `dsl-relations` instead. `binding[Trait].field` SHALL access an unaliased selected trait, and `binding[module_alias.Trait].field` SHALL keep the imported qualification. The brackets SHALL contain exactly one trait reference, and it SHALL be a trait selected under that binding. A trait selected with `as alias` SHALL be accessed by the bare alias, `alias.field`, with no binding prefix. Aliases SHALL share one scope per rule: an alias name SHALL be unique across all bindings of the rule and SHALL NOT equal a binding name. An alias SHALL be visible wherever its binding is visible, so an alias of a binding that `reduce per` eliminates is not visible in the reduced handler.
 
 #### Scenario: Binding is used as an entity target
 - **WHEN** a pair handler executes `emit Contact to body`
@@ -105,7 +113,7 @@ Before executing tuple bodies, the runtime SHALL snapshot both binding membershi
 - **THEN** later snapshotted tuples still execute and the removal becomes visible only at activation commit
 
 ### Requirement: Pair-bound durable trait access is read-only
-Pair handlers SHALL permit reads of selected durable traits. Mutation of a pair-bound durable trait — assignment, compound assignment, or a writable trait-match alias derived from a pair binding — SHALL be rejected, UNLESS that binding is the `per` binding of a `limit:` clause (`dsl-rule-limit`) whose count expression the compiler proves equal to the literal `1`. In that case, only the named binding becomes writable, through `binding[Trait].field` and through the bare aliases of its traits; the rule's other pair binding, and any binding under a limit that is not provably one or under a global limit, remains read-only. Selection itself SHALL NOT count as a trait read.
+Pair handlers SHALL permit reads of selected durable traits. Mutation of a pair-bound durable trait — assignment, compound assignment, or a writable trait-match alias derived from a pair binding — SHALL be rejected, UNLESS that binding is named by a `per` part of a `limit:` clause (`dsl-rule-limit`) whose count expression the compiler proves equal to the literal `1`. In that case, only the named bindings become writable, through `binding[Trait].field` and through the bare aliases of their traits. A binding not named by a provably-one `per` part, any binding under a limit that is not provably one or under a global limit, and every row binding remain read-only. Selection itself SHALL NOT count as a trait read.
 
 #### Scenario: Pair trait field read is accepted
 - **WHEN** a condition reads `body[Collider].mask` and `wall[Collider].layer`
@@ -138,6 +146,10 @@ Pair handlers SHALL permit reads of selected durable traits. Mutation of a pair-
 #### Scenario: Mutation is rejected when the limit is not provably one
 - **WHEN** a rule declares `limit: 2 per actor` and a handler assigns to `actor`
 - **THEN** semantic analysis rejects the mutation, since `2` does not prove at most one tuple per `actor`
+
+#### Scenario: Both bindings are writable under a two-sided limit of one
+- **WHEN** a rule declares `limit: 1 per robot, 1 per task` and a handler assigns to fields of both `robot` and `task`
+- **THEN** semantic analysis accepts both mutations
 
 ### Requirement: Pair handlers require explicit entity targets
 A pair handler SHALL have no implicit current entity. `self` and statement forms that default to `self` SHALL be rejected. Explicit-target event emission, projection, add, remove, destroy, and spawn operations SHALL remain available subject to their ordinary typing, total-handle, buffering, and contract rules. Untargeted event emission SHALL remain a broadcast occurrence.

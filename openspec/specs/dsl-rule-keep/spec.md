@@ -3,16 +3,18 @@
 ## Purpose
 Define kept traits: a rule names a trait that the compiler keeps on each recipient exactly while the rule's rows say so (an entity passing `where:`, a pair binding with a matching row, or a reduced group whose condition holds), so entering and leaving a fact (a state, a contact, a zone, a range) become ordinary `on added` / `on removed` triggers.
 ## Requirements
+
 ### Requirement: Keep clause shape
 
-A rule SHALL accept one `keep` clause in one of three forms:
+A rule SHALL accept one `keep` clause in one of four forms:
 - On a unary `each:` rule without `reduce:`: `keep T`, with no `on`.
 - On a pair rule without `reduce:`: `keep T on b`, where `b` is one of its pair bindings.
 - On a pair rule with `reduce per b:`: `keep T on b`, where `b` is the `per` binding, optionally followed by `if condition`.
+- On a pair rule without `reduce:` whose two bindings are entity bindings: `keep R(a, b)`, where `R` is a relation and `a`, `b` are the two bindings (`dsl-relations`).
 
-`T` SHALL be a durable trait declared in the same module as the rule, with no `persist` fields and not a state variant. The clause body SHALL assign zero or more fields of `T` from pure expressions; every field it leaves out SHALL take `T`'s declared default, and a field with no default SHALL be assigned. On a unary rule the expressions read the rule's filter traits and aliases, constants and named entity fields. On an unreduced pair rule they read only `b`, constants and named entity fields. On a reduced rule they read the aggregates, `b`, constants and named entity fields. A condition SHALL be a pure `bool` over the same scope as the fields. `keep` is recognized contextually at the rule-clause position.
+`T` SHALL be a durable trait declared in the same module as the rule, with no `persist` fields and not a state variant. `R` SHALL be a relation declared in the same module as the rule. The clause body SHALL assign zero or more fields of `T` or `R` from pure expressions; every field it leaves out SHALL take its declared default, and a field with no default SHALL be assigned. On a unary rule the expressions read the rule's filter traits and aliases, constants and named entity fields. On an unreduced pair rule keeping a trait they read only `b`, constants and named entity fields. On a relation keep they read both bindings, constants and named entity fields. On a reduced rule they read the aggregates, `b`, constants and named entity fields. A condition SHALL be a pure `bool` over the same scope as the fields. `keep` is recognized contextually at the rule-clause position.
 
-The compiler SHALL reject, with a source-located error, `keep` on selectionless, globally reduced and extern rules; `on` on a unary rule; a pair keep without `on`; a binding other than the `per` binding on a reduced rule; `if` on a unary or unreduced pair rule; a field read outside the form's scope; and a field or condition whose type does not match. A read of the non-recipient binding on an unreduced pair keep SHALL be reported with help that suggests `reduce per` and `best(...)`.
+The compiler SHALL reject, with a source-located error, `keep` on selectionless, globally reduced, row-domain and extern rules; `on` on a unary rule; a pair keep of a trait without `on`; a binding other than the `per` binding on a reduced rule; `keep R(...)` on a unary, reduced or row-binding rule; `keep R(...)` whose arguments are not the rule's two bindings; `if` on a unary, unreduced pair or relation keep; a field read outside the form's scope; and a field or condition whose type does not match. A read of the non-recipient binding on an unreduced pair keep of a trait SHALL be reported with help that suggests `reduce per` and `best(...)`.
 
 #### Scenario: Valid keep clause
 - **WHEN** a rule over `pairs: body, lava` uses `reduce per body:` with `n = count()` and declares `keep InLava on body:` with `zones = n`
@@ -61,6 +63,18 @@ The compiler SHALL reject, with a source-located error, `keep` on selectionless,
 #### Scenario: Trait restrictions in every form
 - **WHEN** a unary, unreduced pair or reduced keep names a state variant, a trait with `persist` fields, or a trait from another module
 - **THEN** the compiler rejects it
+
+#### Scenario: Relation keep
+- **WHEN** a pair rule over `a` and `b` without `reduce:` declares `keep Walk(a, b):` with `cost = 1.0`
+- **THEN** compilation accepts it
+
+#### Scenario: Relation keep with other arguments
+- **WHEN** a pair rule over `a` and `b` declares `keep Walk(a, a)`
+- **THEN** the compiler reports that the arguments must be the rule's two bindings
+
+#### Scenario: Relation keep on a reduced rule
+- **WHEN** a rule with `reduce per a:` declares `keep Walk(a, b)`
+- **THEN** the compiler reports a source-located error that a relation keep needs an unreduced pair rule
 
 ### Requirement: Kept trait presence follows rows
 
@@ -167,7 +181,7 @@ A program SHALL have at most one `keep` clause per trait. Every other write to a
 
 ### Requirement: Keep rules don't depend on themselves
 
-A keep rule depends on another keep rule when any of its clauses reads the trait the other keeps: a domain filter (`each:`, `without:`, a pair binding's traits), `where:`, a reducer input, a field value, the condition, or `when:`, including named entity reads. These dependencies SHALL form no cycle across the linked program. A keep rule that reads its own kept trait SHALL count as a cycle. Each cycle SHALL be reported as a compile error that names every keep rule in it with its source location. This enforces determinacy of a kept trait as a function of other data.
+A keep rule depends on another keep rule when any of its clauses reads the trait or relation the other keeps: a domain filter (`each:`, `without:`, a pair binding's traits), a row binding, a relation test, `where:`, a reducer input, a field value, the condition, or `when:`, including named entity reads. These dependencies SHALL form no cycle across the linked program. A keep rule that reads its own kept trait or relation SHALL count as a cycle. Each cycle SHALL be reported as a compile error that names every keep rule in it with its source location. This enforces determinacy of a kept trait or relation as a function of other data.
 
 #### Scenario: Keeper reads its own trait
 - **WHEN** a unary rule with `without: Lit` declares `keep Lit`
@@ -185,3 +199,10 @@ A keep rule depends on another keep rule when any of its clauses reads the trait
 - **WHEN** a keep rule in one module reads a trait kept in an imported module whose keeper reads the first rule's trait
 - **THEN** the two modules import each other, and the compiler reports the import cycle
 
+#### Scenario: Relation keeper tests its own relation
+- **WHEN** a rule declares `keep Reach(a, b)` with `where: Reach(a, _) or a == b`
+- **THEN** the compiler reports an error that the rule reads its own kept relation `Reach`
+
+#### Scenario: Trait kept from a relation
+- **WHEN** `WalkLinks` keeps `Walk`, and `Connected` keeps a trait with `where: Walk(heart, t)`
+- **THEN** compilation accepts both

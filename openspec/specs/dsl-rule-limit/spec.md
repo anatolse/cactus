@@ -7,10 +7,11 @@ Define the `limit:` clause on rule declarations: bounding the number of handler 
 ## Requirements
 
 ### Requirement: `limit:` clause on rule declarations
-A regular rule with a unary (`each:`) or pair (`pairs:`) domain SHALL support an optional `limit:` clause. `limit:` SHALL be rejected on a selectionless rule (neither `each:` nor `pairs:`) and on `extern rule` declarations. `limit:` logically applies after `where:` and `order by:`: it bounds the already-filtered and, if present, ordered domain, without changing which rows survive `where:` or their relative order.
+A regular rule with a unary (`each:`) or pair (`pairs:`) domain SHALL support an optional `limit:` clause. `limit:` SHALL be rejected on a selectionless rule (neither `each:` nor `pairs:`) and on `extern rule` declarations. `limit:` logically applies after `where:` and `order by:`: it bounds the already-filtered and, if present, ordered domain, without changing which rows survive `where:` or their relative order. A `limit:` clause SHALL be global (one count, no `per`), one-sided (one `per` part) or two-sided (two `per` parts naming different bindings).
 
 ```ebnf
-limit_clause = "limit" ":" expression [ "per" IDENTIFIER ] NEWLINE ;
+limit_clause = "limit" ":" ( expression | limit_part [ "," limit_part ] ) NEWLINE ;
+limit_part   = expression "per" IDENTIFIER ;
 ```
 
 #### Scenario: Global limit on a unary domain is accepted
@@ -28,6 +29,14 @@ limit_clause = "limit" ":" expression [ "per" IDENTIFIER ] NEWLINE ;
 #### Scenario: Limit is rejected on extern rule
 - **WHEN** an `extern rule` declares `limit:`
 - **THEN** semantic analysis rejects it
+
+#### Scenario: Two-sided limit is parsed
+- **WHEN** a `pairs:` rule declares `limit: 1 per robot, 1 per task`
+- **THEN** the clause has two `per` parts, for `robot` and for `task`
+
+#### Scenario: Two parts on one binding
+- **WHEN** a `pairs:` rule declares `limit: 1 per robot, 2 per robot`
+- **THEN** semantic analysis reports that the two parts must name different bindings
 
 ### Requirement: Per-binding limit requires a pair domain
 The `per <binding>` form of `limit:` SHALL be accepted only on a `pairs:` rule, and `<binding>` MUST name one of that rule's two pair bindings. For every distinct value of the named binding among the tuples surviving `where:`, at most the limit's count of tuples SHALL produce a handler activation.
@@ -72,7 +81,7 @@ A `limit:` count expression MUST be pure — the same purity class as a `where:`
 - **THEN** semantic analysis rejects it
 
 ### Requirement: Limit selection is deterministic
-Row or tuple selection under `limit:` SHALL be deterministic: sort keys, when `order by:` is present, are evaluated against the rule's snapshot; ties break by stable creation order; without `order by:`, `limit` uses the domain's existing stable iteration order. A per-binding limit's partitions are each resolved independently, in the creation order of the `per` binding's own values. A conforming backend's physical implementation MUST NOT change which rows are selected relative to this logical definition.
+Row or tuple selection under `limit:` SHALL be deterministic: sort keys, when `order by:` is present, are evaluated against the rule's snapshot; ties break by stable creation order; without `order by:`, `limit` uses the domain's existing stable iteration order. A one-sided limit's partitions are each resolved independently, in the creation order of the `per` binding's own values. A two-sided limit SHALL be resolved as one greedy pass over the whole ordered domain (see "Two-sided limit selects a greedy matching"). A conforming backend's physical implementation MUST NOT change which rows are selected relative to this logical definition.
 
 #### Scenario: Tie-break uses creation order
 - **WHEN** two candidates share an equal `order by:` key under a `limit: 1`
@@ -111,3 +120,22 @@ A per-binding `limit: <expr> per <binding>` SHALL be recognized as provable to a
 #### Scenario: A constant other than one is not provable
 - **WHEN** a rule declares `limit: 2 per actor`
 - **THEN** the `actor` binding is not recognized as provably limited to one
+
+### Requirement: Two-sided limit selects a greedy matching
+A two-sided `limit: n per a, m per b` SHALL be accepted only on a `pairs:` rule whose `a` and `b` are its two entity bindings. Each part SHALL follow the count-expression rules of a one-sided part, scoped to its own binding. Selection SHALL walk the tuples that pass `where:` in the rule's order: `order by:` keys first, then left-binding-major snapshot order. A tuple SHALL be retained when its `a` value has fewer than `n` retained tuples and its `b` value has fewer than `m`. Otherwise it SHALL be skipped. Each part whose count is provably `1` SHALL make its binding provably limited to one (`dsl-pair-relations`).
+
+#### Scenario: Nearest-first matching
+- **WHEN** robots `r1`, `r2` and tasks `t1`, `t2` have distances `r1-t1 = 1`, `r2-t1 = 2`, `r1-t2 = 3`, `r2-t2 = 4`, and the rule declares `order by: dist` and `limit: 1 per robot, 1 per task`
+- **THEN** the retained tuples are `(r1, t1)` and `(r2, t2)`
+
+#### Scenario: More robots than tasks
+- **WHEN** three robots and one task pass `where:` under `limit: 1 per robot, 1 per task`
+- **THEN** exactly one tuple is retained, the first in the rule's order
+
+#### Scenario: Ties break by snapshot order
+- **WHEN** two tuples for one task have equal sort keys under `limit: 1 per robot, 1 per task`
+- **THEN** the tuple earlier in left-binding-major snapshot order is retained
+
+#### Scenario: Two-sided limit on a row binding
+- **WHEN** a pair rule with a row binding `r` declares `limit: 1 per w, 1 per r`
+- **THEN** semantic analysis reports that a two-sided limit needs two entity bindings

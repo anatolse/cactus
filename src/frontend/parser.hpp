@@ -47,6 +47,8 @@ private:
     StructNode parse_struct();
     EnumNode parse_enum();
     TraitNode parse_trait();
+    RelationNode parse_relation(bool is_pub);
+    void parse_relation_end(RelationNode& node, RelationEndNode& end, const char* label, bool& seen);
     EntityNode parse_entity(bool is_pub);
     TemplateNode parse_template(bool is_pub);
     RuleNode parse_rule();
@@ -167,6 +169,12 @@ private:
     // Statements
     AddTraitStmt parse_add_trait_stmt();
     RemoveTraitStmt parse_remove_trait_stmt();
+    [[nodiscard]] bool at_relation_row_command() const;
+    AddRelationStmt parse_add_relation_stmt();
+    RemoveRelationStmt parse_remove_relation_stmt();
+    void parse_relation_row(const std::string& relation,
+                            std::unique_ptr<ExprNode>& from,
+                            std::unique_ptr<ExprNode>& to);
     ProjectTraitStmt parse_project_trait_stmt();
     SetTraitStmt parse_set_trait_stmt();
     [[nodiscard]] bool at_indented_block() const;

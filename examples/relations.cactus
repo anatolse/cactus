@@ -1,0 +1,191 @@
+module relations
+
+# A relation is a set of rows, each keyed by a pair of entities. A kept
+# relation follows a rule's tuples, like a kept trait; a stored one changes
+# only through `add` and `remove`. Rows die with either end.
+# Tests change floors, robots and tasks between ticks.
+
+use std.core
+use std.transform.volume as tv
+use std.physics.volume as physics
+
+trait Tile:
+    let id: int = 0
+
+trait Floor
+
+# Kept on each floor tile that the heart tile links to.
+trait Connected
+
+# Robots and tasks are saved; tiles are not.
+trait Robot:
+    var x: float = 0.0
+    var recalled: bool = false
+    persist var shifts: int = 0
+
+trait DigTask:
+    let x: float = 0.0
+    let work: int = 1
+    persist var dug: int = 0
+
+trait Site
+
+trait Ticks:
+    var count: int = 0
+
+trait Control:
+    var frozen: bool = false
+
+event Finished
+
+# Two floor tiles link while their boxes touch.
+relation Walk:
+    from: Tile
+    to: Tile
+    let cost: float = 1.0
+
+# Built by tests.
+relation Bridge:
+    from: Tile
+    to: Tile
+
+relation Passable:
+    from: Tile
+    to: Tile
+
+# A robot works on at most one task, and a task has at most one robot.
+relation Claim:
+    from: Robot one
+    to: DigTask one
+    let done_at: int = 0
+
+group links:
+    phase: fixed_tick
+
+rule WalkLinks:
+    pairs:
+        a:
+            Tile
+            Floor
+            physics.Collider
+        b:
+            Tile
+            Floor
+            physics.Collider
+    group: physics.contacts
+    where:
+        a != b
+        physics.touching(a, b)
+    keep Walk(a, b):
+        cost = 1.0 + (a[Tile].id + b[Tile].id) * 0.5
+    when:
+        not Settings[Control].frozen
+
+# Union: a pair is passable over a walk or a bridge.
+rule PassableLinks:
+    pairs:
+        a: Tile
+        b: Tile
+    group: links
+    where:
+        Walk(a, b) or Bridge(a, b)
+    keep Passable(a, b)
+
+rule ConnectedFact:
+    each: Tile
+    group: links
+    where:
+        Walk(Heart, self)
+    keep Connected
+
+rule CountTicks:
+    on fixed_tick:
+        Clock[Ticks].count += 1
+
+# Nearest free robot and task first; each claims at most once.
+rule AssignTasks:
+    pairs:
+        robot: Robot
+        task: DigTask
+    order by:
+        abs(robot[Robot].x - task[DigTask].x) asc
+    after: CountTicks
+    where:
+        not robot[Robot].recalled
+        not Claim(robot, _)
+        not Claim(_, task)
+    limit: 1 per robot, 1 per task
+
+    on fixed_tick:
+        add Claim(robot, task):
+            done_at = Clock[Ticks].count + task[DigTask].work
+
+rule FinishClaims:
+    each: Claim as claim
+    after: CountTicks
+    where:
+        Clock[Ticks].count >= claim.done_at
+
+    on fixed_tick:
+        emit Finished to claim.to
+
+rule CompleteTasks:
+    each: DigTask
+
+    on Finished:
+        destroy self
+
+rule Recall:
+    each: Robot as robot
+    after: AssignTasks
+    where:
+        robot.recalled
+
+    on fixed_tick:
+        remove Claim(self, _)
+
+entity Clock:
+    Ticks
+
+entity Settings:
+    Control
+
+template Cell(id: int, x: float):
+    Tile:
+        id = id
+    tv.WorldTransform:
+        position = vec3(x, 0.0, 0.0)
+    physics.Collider
+    physics.BoxCollider:
+        size = vec3(1.2, 1.0, 1.2)
+
+template FloorCell(id: int, x: float):
+    use Cell(id = id, x = x)
+    Floor
+
+# Heart, Second and Third are floor in a row; Rock is next to Third; Island is far away.
+entity Heart from FloorCell(id = 0, x = 0.0)
+entity Second from FloorCell(id = 1, x = 1.0)
+entity Third from FloorCell(id = 2, x = 2.0)
+entity Rock from Cell(id = 3, x = 3.0)
+entity Island from Cell(id = 4, x = 10.0)
+
+template Worker(x: float):
+    Robot:
+        x = x
+
+entity Near from Worker(x = 0.0)
+entity Middle from Worker(x = 5.0)
+entity Far from Worker(x = 9.0)
+
+template Dig(x: float, work: int):
+    DigTask:
+        x = x
+        work = work
+
+entity Ditch from Dig(x = 1.0, work = 2)
+entity Mine from Dig(x = 8.0, work = 50)
+
+# Gets a DigTask from a test.
+entity Spare:
+    Site

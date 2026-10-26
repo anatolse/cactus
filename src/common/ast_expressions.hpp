@@ -2,6 +2,11 @@
 
 #include "frontend/ast.hpp"
 
+#include <algorithm>
+#include <optional>
+#include <string>
+#include <utility>
+
 namespace cactus {
 
 // Child nodes are matched by member name rather than by ExprNode alternative so
@@ -31,6 +36,15 @@ void fixed(Node& node, const Visit& visit) {
         visit(node.condition);
         visit(node.then_expr);
         visit(node.else_expr);
+    }
+    // A relation test's null end is the `_` wildcard.
+    if constexpr (requires { node.from; node.to; }) {
+        if (node.from != nullptr) {
+            visit(node.from);
+        }
+        if (node.to != nullptr) {
+            visit(node.to);
+        }
     }
 }
 
@@ -94,6 +108,54 @@ void visit_expression(Expression& expression, const Visitor& visitor) {
             expr_children::compounds(node, visit, fields);
         },
         expression.expr);
+}
+
+// A `where:` conjunct `r.from == <key>` or `r.to == <key>` of a pair rule with
+// row binding `r`, whose key reads no row: the pass looks rows up by key.
+struct RowEndJoin {
+    std::size_t predicate = 0;
+    bool from_end         = true;
+    const ExprNode* key   = nullptr;
+};
+
+[[nodiscard]] inline std::optional<RowEndJoin> find_row_end_join(const RuleNode& rule) {
+    if (!rule.pairs.has_value() || !rule.where_clause.has_value()) {
+        return std::nullopt;
+    }
+    const auto row = std::ranges::find_if(rule.pairs->bindings, &PairBindingNode::is_row);
+    if (row == rule.pairs->bindings.end()) {
+        return std::nullopt;
+    }
+    const auto end_of = [&](const ExprNode& side) -> std::optional<bool> {
+        const auto* member = std::get_if<MemberExpr>(&side.expr);
+        const auto* owner  = member == nullptr ? nullptr : std::get_if<IdentExpr>(&member->object->expr);
+        if (owner == nullptr || owner->name != row->name || (member->member != "from" && member->member != "to")) {
+            return std::nullopt;
+        }
+        return member->member == "from";
+    };
+    const auto reads_row = [&](const ExprNode& side) {
+        bool found = false;
+        visit_expression(side, [&](const ExprNode& node) {
+            const auto* ident = std::get_if<IdentExpr>(&node.expr);
+            found             = found || (ident != nullptr && ident->name == row->name);
+        });
+        return found;
+    };
+    const auto& predicates = rule.where_clause->predicates;
+    for (std::size_t index = 0; index < predicates.size(); ++index) {
+        const auto* equality = std::get_if<BinaryExpr>(&predicates[index]->expr);
+        if (equality == nullptr || equality->op != "==") {
+            continue;
+        }
+        for (const auto& [end_side, key_side] : {std::pair{equality->left.get(), equality->right.get()},
+                                                 std::pair{equality->right.get(), equality->left.get()}}) {
+            if (const auto end = end_of(*end_side); end.has_value() && !reads_row(*key_side)) {
+                return RowEndJoin{.predicate = index, .from_end = *end, .key = key_side};
+            }
+        }
+    }
+    return std::nullopt;
 }
 
 inline std::string initializer_slot_name(std::size_t index) {

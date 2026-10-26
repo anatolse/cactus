@@ -206,6 +206,56 @@ void emit_restore_node_traits(std::ostringstream& out,
     out << "}\n\n";
 }
 
+// One decoder per stored relation: fields by name, so any layout validation accepted reads back.
+void emit_restore_relation_functions(std::ostringstream& out, const DecoratedProgram& program) {
+    const auto relations = stored_relations(program);
+    for (std::size_t index = 0; index < relations.size(); ++index) {
+        const auto& relation = *relations[index];
+        const auto row       = EnttCodegenUtils::relation_cpp_name(*relation.symbol_id);
+        out << "inline void generated_restore_relation_" << index
+            << "(entt::registry& staged, const cactus::persistence::Snapshot& source,\n";
+        out << "                                     const cactus::persistence::RelationRow& row, RestoreIdMap& ids) "
+               "{\n";
+        out << "    " << row << " value{};\n";
+        const auto fields = persisting_fields(program, relation.fields);
+        if (fields.empty()) {
+            out << "    (void)source;\n";
+        } else {
+            out << "    cactus::persistence::ValueReader in(source, source.payload(row.values, false));\n";
+            out << "    for (const auto& field : source.trait_shapes()[row.values.shape].construction) {\n";
+            out << "        const auto name = source.name(field.name);\n";
+            for (const auto* field : fields) {
+                out << "        if (name == \"" << field->name << "\") {\n";
+                out << "            value." << cpp_escaped(field->name) << " = " << read_expression(program, field->type)
+                    << ";\n";
+                out << "            continue;\n";
+                out << "        }\n";
+            }
+            out << "        source.skip_value(field.type, in);\n";
+            out << "    }\n";
+        }
+        out << "    relation_store<" << row << ">(staged).add(ids.resolve({.id = row.from, .present = true}),\n";
+        out << "                                          ids.resolve({.id = row.to, .present = true}), value);\n";
+        out << "}\n\n";
+    }
+}
+
+// Rebuilds stored rows after every entity of the staged world exists.
+void emit_restore_relation_rows(std::ostringstream& out, const DecoratedProgram& program) {
+    const auto relations = stored_relations(program);
+    if (relations.empty()) {
+        return;
+    }
+    out << "    for (const auto& row : source.relation_rows()) {\n";
+    out << "        const auto relation = source.relation_name(row);\n";
+    for (std::size_t index = 0; index < relations.size(); ++index) {
+        out << "        if (relation == \"" << relations[index]->canonical_id << "\") {\n";
+        out << "            generated_restore_relation_" << index << "(staged, source, row, ids);\n";
+        out << "        }\n";
+    }
+    out << "    }\n";
+}
+
 // Rejects a staged world holding a ranged value outside its range. A container
 // handle stale in the document is accepted: the value was valid when made.
 void emit_staged_range_checks(std::ostringstream& out,
@@ -256,6 +306,7 @@ std::string EnttRestoreEmitter::emit_world_restore(const DecoratedProgram& progr
     emit_restore_struct_functions(out, program);
     emit_restore_trait_functions(out, program, traits);
     emit_restore_node_traits(out, program, layout_traits, traits);
+    emit_restore_relation_functions(out, program);
 
     out << "// Reconstructs recorded nodes into a freshly staged registry — allocating\n";
     out << "// every record's handle first, so forward references and cycles resolve —\n";
@@ -344,6 +395,7 @@ std::string EnttRestoreEmitter::emit_world_restore(const DecoratedProgram& progr
     }
     out << "        generated_restore_node_traits(staged, entity, node, source, row, match.traits, ids);\n";
     out << "    }\n";
+    emit_restore_relation_rows(out, program);
     emit_staged_range_checks(out, program, traits);
     out << "    if (ids.resource_preparation_failed()) {\n";
     out << "        return RestoreOutcome{.ok = false, .code = \"resource_preparation_failure\",\n";
@@ -370,6 +422,9 @@ std::string EnttRestoreEmitter::emit_world_restore(const DecoratedProgram& progr
     // no lifecycle trigger itself (recording is off outside a commit).
     if (tracks_lifecycle) {
         out << "    generated_connect_lifecycle_trackers(registry);\n";
+    }
+    if (!program.relations.empty()) {
+        out << "    generated_connect_relations(registry);\n";
     }
     if (!EnttCodegenUtils::declared_entities(program).empty()) {
         out << "    ::cactus_gen::detail::generated_rebind_named_slots(registry);\n";

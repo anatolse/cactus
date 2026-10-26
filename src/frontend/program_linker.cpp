@@ -89,10 +89,11 @@ void merge_module_imports(ExecutionGraph& target, const ExecutionGraph& src) {
     }
 }
 
-// A state's slot trait claims the state's canonical name, so states need no conflict check of their own.
-void merge_states(DecoratedProgram& target, const DecoratedProgram& src) {
-    for (const auto& [name, state] : src.states) {
-        target.states[state.canonical_id.empty() ? name : state.canonical_id] = state;
+// Merges without a conflict check: a state's slot trait claims the state's canonical name.
+template <typename Declarations>
+void merge_by_canonical_id(Declarations& target, const Declarations& source) {
+    for (const auto& [name, declaration] : source) {
+        target[declaration.canonical_id.empty() ? name : declaration.canonical_id] = declaration;
     }
 }
 
@@ -152,7 +153,8 @@ bool ProgramLinker::merge_into(DecoratedProgram& target,
         merge_declarations(target.traits, src.traits, symbol_origins_, src_module_name, errors_, [](const auto& trait) {
             return trait.is_pub;
         });
-    merge_states(target, src);
+    merge_by_canonical_id(target.states, src.states);
+    merge_by_canonical_id(target.relations, src.relations);
     const auto check_all = [](const auto&) { return true; };
     ok &= merge_declarations(target.structs, src.structs, symbol_origins_, src_module_name, errors_, check_all);
     ok &= merge_declarations(target.enums, src.enums, symbol_origins_, src_module_name, errors_, check_all);

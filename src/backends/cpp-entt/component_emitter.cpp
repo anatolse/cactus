@@ -29,10 +29,20 @@ std::string EnttComponentEmitter::emit_component(const ResolvedTrait& trait, con
     }
 
     out << "struct " << cpp_name << " {\n";
-    for (const auto& field : trait.fields) {
+    out << emit_field_lines(trait.module_name, trait.name, trait.fields, program);
+    out << "};\n";
+    return namespace_block(ns, out.str());
+}
+
+std::string EnttComponentEmitter::emit_field_lines(const std::string& module_name,
+                                                   const std::string& owner_name,
+                                                   const std::vector<ResolvedField>& fields,
+                                                   const DecoratedProgram& program) {
+    std::ostringstream out;
+    for (const auto& field : fields) {
         out << "    " << EnttCodegenUtils::value_type_to_cpp(field.type) << " " << cpp_escaped(field.name);
         const auto* default_expr =
-            EnttCodegenUtils::find_trait_field_default(program, trait.module_name, trait.name, field.name);
+            EnttCodegenUtils::find_trait_field_default(program, module_name, owner_name, field.name);
         if (default_expr == nullptr) {
             out << EnttCodegenUtils::value_initializer(field.type) << ";\n";
             continue;
@@ -52,8 +62,7 @@ std::string EnttComponentEmitter::emit_component(const ResolvedTrait& trait, con
             out << " = " << rendered << ";\n";
         }
     }
-    out << "};\n";
-    return namespace_block(ns, out.str());
+    return out.str();
 }
 
 std::string EnttComponentEmitter::emit_state_slot(const std::string& cpp_name,

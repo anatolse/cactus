@@ -557,6 +557,17 @@ void mark_operands(ArithmeticOperands& operands, const TypeInfo& left, const Typ
     }
 }
 
+RelationTestExpr clone_relation_test(const RelationTestExpr& test) {
+    const auto end = [](const std::unique_ptr<ExprNode>& node) { return node != nullptr ? clone_expr(*node) : nullptr; };
+    return RelationTestExpr{.relation_name = test.relation_name,
+                            .relation      = test.relation,
+                            .from          = end(test.from),
+                            .to            = end(test.to),
+                            .location      = test.location};
+}
+
+// Exhaustive per-ExprNode-kind dispatch; one branch per alternative.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 std::unique_ptr<ExprNode> clone_expr(const ExprNode& expr) {
     return std::visit(
         [&expr](const auto& e) -> std::unique_ptr<ExprNode> {
@@ -649,6 +660,8 @@ std::unique_ptr<ExprNode> clone_expr(const ExprNode& expr) {
                     copy.named_args.push_back(clone_field_assignment(arg));
                 }
                 return std::make_unique<ExprNode>(ExprNode::Variant{std::move(copy)}, expr.location);
+            } else if constexpr (std::is_same_v<E, RelationTestExpr>) {
+                return std::make_unique<ExprNode>(ExprNode::Variant{clone_relation_test(e)}, expr.location);
             }
         },
         expr.expr);
@@ -1007,17 +1020,6 @@ std::optional<std::unordered_set<std::string>> known_stdlib_effect_summary(const
     return std::nullopt;
 }
 
-template <typename Clause, typename Fn>
-void for_each_reducer_expr(Clause& reduce, const Fn& fn) {
-    for (auto& reducer : reduce.reducers) {
-        for (auto* expr : {reducer.input.get(), reducer.default_value.get(), reducer.key.get()}) {
-            if (expr != nullptr) {
-                fn(*expr);
-            }
-        }
-    }
-}
-
 }  // namespace
 
 bool stdlib_function_acts(const SymbolId& function) {
@@ -1225,6 +1227,7 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     // Phase 2: Resolve types in fields
     resolve_all_types(program);
     resolve_trait_references(program);
+    resolve_relation_declarations(program);
     resolve_declaration_const_refs(program);
     order_and_type_constants(program);
     refine_glsl_portability(program);
@@ -1280,6 +1283,9 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
 
     // Phase 4: Build dependency graph
     build_dependency_graph(program);
+    validate_relation_ends(program);
+    validate_relation_test_contexts(program);
+    validate_one_ends(program);
     validate_kept_traits(program);
 
     // Phase 5: Validate after: clauses and cycle detection
@@ -1418,6 +1424,8 @@ void SemanticAnalyzer::collect_types(ProgramNode& program) {
                     declare_module_scope_symbol(SymbolKind::Trait, node.name, node.location);
                     }
                     trait_names_.insert(node.name);
+                } else if constexpr (std::is_same_v<T, RelationNode>) {
+                    declare_module_scope_symbol(SymbolKind::Relation, node.name, node.location);
                 } else if constexpr (std::is_same_v<T, StateNode>) {
                     declare_module_scope_symbol(SymbolKind::State, node.name, node.location);
                     const auto state_id = make_symbol_id(SymbolKind::State, current_module_id_, node.name);
@@ -1702,10 +1710,13 @@ void SemanticAnalyzer::resolve_expression_references(E& e,
         }
     } else if constexpr (std::is_same_v<E, TraitAccessExpr>) {
         resolve_expr(*e.object);
+    } else if constexpr (std::is_same_v<E, RelationTestExpr>) {
+        for_each_relation_end(e, resolve_expr);
     }
 }
 
 template <typename S, typename ResolveTrait, typename ResolveChildren>
+// NOLINTNEXTLINE(readability-function-cognitive-complexity) -- exhaustive per-command-statement dispatch
 void SemanticAnalyzer::resolve_command_references(S& s,
                                                   const std::function<void(ExprNode&)>& resolve_expr,
                                                   const ResolveTrait& resolve_trait_entry,
@@ -1744,6 +1755,12 @@ void SemanticAnalyzer::resolve_command_references(S& s,
         }
         for (auto& arg : s.args) {
             resolve_expr(*arg.value);
+        }
+    } else if constexpr (std::is_same_v<S, AddRelationStmt> || std::is_same_v<S, RemoveRelationStmt>) {
+        s.resolved_relation_id = try_resolve_ref_of_kind(s.relation_name, {SymbolKind::Relation});
+        for_each_relation_end(s, resolve_expr);
+        if constexpr (std::is_same_v<S, AddRelationStmt>) {
+            std::ranges::for_each(s.args, [&](FieldAssignment& arg) { resolve_expr(*arg.value); });
         }
     }
 }
@@ -1886,6 +1903,7 @@ void SemanticAnalyzer::resolve_trait_references(ProgramNode& program) {
 
     resolve_expr = [&](ExprNode& expr) {
         lower_struct_query_call(expr);
+        lower_relation_test(expr);
         if (auto* ident = std::get_if<IdentExpr>(&expr.expr)) {
             if (const auto found = template_scope.find(ident->name); found != template_scope.end()) {
                 ident->template_slot = found->second.first;
@@ -2000,6 +2018,8 @@ void SemanticAnalyzer::resolve_trait_references(ProgramNode& program) {
                     }
                 } else if constexpr (std::is_same_v<T, RuleNode>) {
                     node.resolved_rule_id = make_symbol_id(SymbolKind::Rule, current_module_id_, node.name);
+                    extract_row_bindings(node);
+                    extract_row_domain(node);
                     resolve_filter_clause(node.filter);
                     resolve_filter_clause(node.exclude);
                     if (node.pairs.has_value()) {
@@ -2021,7 +2041,10 @@ void SemanticAnalyzer::resolve_trait_references(ProgramNode& program) {
                         for_each_reducer_expr(*node.reduce, resolve_expr);
                     }
                     if (node.keep.has_value()) {
-                        node.keep->resolved_trait_id = try_resolve_trait_ref_to_symbol(node.keep->trait_name);
+                        node.keep->resolved_target =
+                            node.keep->arguments.empty()
+                                ? try_resolve_trait_ref_to_symbol(node.keep->target_name)
+                                : try_resolve_ref_of_kind(node.keep->target_name, {SymbolKind::Relation});
                         for (auto& field : node.keep->fields) {
                             resolve_expr(*field.value);
                         }
@@ -2491,32 +2514,6 @@ void SemanticAnalyzer::check_persist(ProgramNode& program) {
 
 namespace {
 
-// Appends every `add TraitName` reachable in `stmts`, including ones nested in
-// conditionals, bounded loops, and trait-match arms.
-void collect_add_trait_statements(const std::vector<std::unique_ptr<StmtNode>>& stmts,
-                                  std::vector<const AddTraitStmt*>& out) {
-    for (const auto& stmt : stmts) {
-        if (stmt == nullptr) {
-            continue;
-        }
-        if (const auto* add = std::get_if<AddTraitStmt>(&stmt->stmt)) {
-            out.push_back(add);
-        } else if (const auto* branch = std::get_if<IfStmt>(&stmt->stmt)) {
-            collect_add_trait_statements(branch->then_body, out);
-            for (const auto& else_if : branch->else_if_branches) {
-                collect_add_trait_statements(else_if.body, out);
-            }
-            collect_add_trait_statements(branch->else_body, out);
-        } else if (const auto* loop = std::get_if<ForeachStmt>(&stmt->stmt)) {
-            collect_add_trait_statements(loop->body, out);
-        } else if (const auto* match = std::get_if<MatchStmt>(&stmt->stmt)) {
-            for (const auto& arm : match->arms) {
-                collect_add_trait_statements(arm.body, out);
-            }
-        }
-    }
-}
-
 std::vector<std::string> sorted_assigned_field_names(const ArchetypeTraitEntry& entry) {
     std::vector<std::string> names;
     names.reserve(entry.assignments.size());
@@ -2636,10 +2633,10 @@ void SemanticAnalyzer::build_persistence_metadata(const ProgramNode& program) {
                 std::vector<FieldNode>{});
         } else if (const auto* rule = std::get_if<RuleNode>(&decl)) {
             for (const auto& handler : rule->handlers) {
-                collect_add_trait_statements(handler.body, add_statements);
+                collect_statements(handler.body, add_statements);
             }
         } else if (const auto* func = std::get_if<FuncNode>(&decl)) {
-            collect_add_trait_statements(func->body, add_statements);
+            collect_statements(func->body, add_statements);
         }
     }
 
@@ -3419,6 +3416,12 @@ void SemanticAnalyzer::report_entity_id_trait_read(const ExprNode& object,
 }
 
 void SemanticAnalyzer::report_pair_read_only(const VarAssign& stmt, const PairBindingScope* binding) {
+    if (binding != nullptr && binding->relation.has_value()) {
+        errors_.error(stmt.location,
+                      "relation rows are read-only; replace the row with `add " + binding->relation->local_name +
+                          "(a, b):`");
+        return;
+    }
     if (binding != nullptr && binding->writability == PairBindingWritability::Writable) {
         errors_.error(stmt.location,
                       "pair-bound durable traits are read-only; assign a trait field through '" + stmt.name +
@@ -3588,15 +3591,17 @@ PairScope SemanticAnalyzer::build_pair_scope(const RuleNode& rule) {
         }
         return scope;
     }
-    if (!rule.limit.has_value() || !rule.limit->per_binding.has_value()) {
+    if (!rule.limit.has_value()) {
         return scope;
     }
-    const auto binding = scope.find(*rule.limit->per_binding);
-    if (binding == scope.end()) {
-        return scope;
+    for (const auto& part : rule.limit->parts) {
+        const auto binding = scope.find(part.binding);
+        if (binding == scope.end()) {
+            continue;
+        }
+        binding->second.writability =
+            part.provably_one ? PairBindingWritability::Writable : PairBindingWritability::UnprovenPerLimit;
     }
-    binding->second.writability =
-        rule.limit->provably_one ? PairBindingWritability::Writable : PairBindingWritability::UnprovenPerLimit;
     return scope;
 }
 
@@ -3637,7 +3642,8 @@ PairScope SemanticAnalyzer::build_pair_scope(const PairClause& pairs) {
     for (std::size_t index = 0; index < pairs.bindings.size(); ++index) {
         const auto& binding = pairs.bindings[index];
         PairBindingScope binding_scope;
-        binding_scope.index = index;
+        binding_scope.index    = index;
+        binding_scope.relation = binding.resolved_relation_id;
         for (const auto& entry : binding.traits) {
             if (!entry.resolved_trait_id.has_value()) {
                 continue;
@@ -3926,10 +3932,9 @@ void SemanticAnalyzer::validateOrderByClause(const RuleNode& rule) {
         return;
     }
 
-    if (rule.pairs.has_value()) {
-        auto pair_scope = build_pair_scope(*rule.pairs);
+    if (const auto pair_scope = rule_scope(rule); pair_scope.has_value()) {
         for (const auto& key : rule.order_by) {
-            validate_order_by_key(key, {}, &pair_scope, rule.name);
+            validate_order_by_key(key, {}, &*pair_scope, rule.name);
         }
         return;
     }
@@ -4031,12 +4036,14 @@ bool SemanticAnalyzer::limit_count_is_provably_one(const ExprNode& count) const 
     return declared != const_initializers_.end() && declared->second != nullptr && is_literal_one(*declared->second);
 }
 
-// The scope a limit count may read from: just the `per` binding when one is
-// named, and nothing at all otherwise — a global limit's count may reference
-// only constants, and a per-binding limit's must not reach for the binding it
+// The scope a limit count may read from: just the part's `per` binding, and
+// nothing at all for a global limit — a global limit's count may reference
+// only constants, and a per-binding count must not reach for the binding it
 // does not partition by, whose value varies across the very tuples the count
 // is meant to bound. Reports and yields nullopt when either rule is violated.
-std::optional<PairScope> SemanticAnalyzer::resolve_limit_count_scope(const RuleNode& rule) {
+std::optional<PairScope> SemanticAnalyzer::resolve_limit_count_scope(const RuleNode& rule,
+                                                                     const ExprNode& count,
+                                                                     const LimitPart* part) {
     PairScope per_scope;
     if (!rule.limit.has_value()) {
         return std::nullopt;
@@ -4047,7 +4054,7 @@ std::optional<PairScope> SemanticAnalyzer::resolve_limit_count_scope(const RuleN
         // constants, exactly like the pair case below, just against the
         // unary domain's own names instead of a pair binding's.
         for (const auto& name : unary_domain_scope_names(build_filter_bindings(rule.filter))) {
-            if (expr_references_ident(*rule.limit->count, name)) {
+            if (expr_references_ident(count, name)) {
                 errors_.error(rule.limit->location, "limit: count expression cannot reference filter binding '" +
                                                          name +
                                                          "'; a global `limit:` count may reference only constants");
@@ -4058,21 +4065,21 @@ std::optional<PairScope> SemanticAnalyzer::resolve_limit_count_scope(const RuleN
     }
     const auto& limit = *rule.limit;
     auto full_scope   = build_pair_scope(*rule.pairs);
-    if (limit.per_binding.has_value()) {
-        const auto binding = full_scope.find(*limit.per_binding);
+    if (part != nullptr) {
+        const auto binding = full_scope.find(part->binding);
         if (binding == full_scope.end()) {
-            errors_.error(limit.per_location,
-                          "'" + *limit.per_binding + "' is not a declared pair binding in rule '" + rule.name + "'");
+            errors_.error(part->location,
+                          "'" + part->binding + "' is not a declared pair binding in rule '" + rule.name + "'");
             return std::nullopt;
         }
-        per_scope.emplace(*limit.per_binding, binding->second);
+        per_scope.emplace(part->binding, binding->second);
     }
 
     // Scanned in the bindings' source order so a count naming both bindings
     // always reports the same one.
     const std::string* offender = nullptr;
     for (const auto& binding : rule.pairs.value().bindings) {
-        if (!per_scope.contains(binding.name) && expr_references_ident(*limit.count, binding.name)) {
+        if (!per_scope.contains(binding.name) && expr_references_ident(count, binding.name)) {
             offender = &binding.name;
             break;
         }
@@ -4081,8 +4088,8 @@ std::optional<PairScope> SemanticAnalyzer::resolve_limit_count_scope(const RuleN
         return per_scope;
     }
     std::string allowed = "a global `limit:` count may reference only constants";
-    if (limit.per_binding.has_value()) {
-        allowed = "a `per " + *limit.per_binding + "` count may only read '" + *limit.per_binding + "'";
+    if (part != nullptr) {
+        allowed = "a `per " + part->binding + "` count may only read '" + part->binding + "'";
     }
     errors_.error(limit.location,
                   "limit: count expression cannot reference pair binding '" + *offender + "'; " + allowed);
@@ -4090,7 +4097,8 @@ std::optional<PairScope> SemanticAnalyzer::resolve_limit_count_scope(const RuleN
 }
 
 static bool rule_has_domain(const RuleNode& rule) {
-    return !rule.filter.entries.empty() || !rule.filter.trait_names.empty() || rule.pairs.has_value();
+    return !rule.filter.entries.empty() || !rule.filter.trait_names.empty() || rule.pairs.has_value() ||
+           rule.rows.has_value();
 }
 
 void SemanticAnalyzer::validateLimitClause(RuleNode& rule) {
@@ -4103,41 +4111,57 @@ void SemanticAnalyzer::validateLimitClause(RuleNode& rule) {
         errors_.error(limit.location, "rule '" + rule.name + "': `limit:` requires an `each:` or `pairs:` clause");
         return;
     }
-    if (limit.per_binding.has_value() && rule.reduce.has_value()) {
-        errors_.error(limit.per_location,
+    if (!limit.parts.empty() && rule.reduce.has_value()) {
+        errors_.error(limit.parts.front().location,
                       "rule '" + rule.name +
                           "': `limit: ... per` cannot be combined with `reduce:`; each group is already one row");
         return;
     }
-    if (limit.per_binding.has_value() && !has_pairs) {
-        errors_.error(limit.per_location,
+    if (!limit.parts.empty() && !has_pairs) {
+        errors_.error(limit.parts.front().location,
                       "rule '" + rule.name +
                           "': `per` requires a `pairs:` clause; a unary domain has no binding to partition by");
         return;
     }
-
-    const auto per_scope = resolve_limit_count_scope(rule);
-    if (!per_scope.has_value()) {
+    if (reject_row_limit_parts(rule, limit)) {
         return;
+    }
+    if (limit.parts.size() == 2 && limit.parts[0].binding == limit.parts[1].binding) {
+        errors_.error(limit.parts[1].location,
+                      "rule '" + rule.name + "': the two parts of `limit:` must name different bindings");
+        return;
+    }
+    if (limit.count != nullptr) {
+        (void)validate_limit_count(rule, *limit.count, nullptr);
+    }
+    for (auto& part : limit.parts) {
+        part.provably_one = validate_limit_count(rule, *part.count, &part) && limit_count_is_provably_one(*part.count);
+    }
+}
+
+// Whether `count` is a valid count for the global limit or for `part`.
+bool SemanticAnalyzer::validate_limit_count(const RuleNode& rule, const ExprNode& count, const LimitPart* part) {
+    const auto per_scope = resolve_limit_count_scope(rule, count, part);
+    if (!per_scope.has_value()) {
+        return false;
     }
 
     // Purity before typing, for the same reason where:/order by: check it
     // first: an impure count is invalid whatever its type, and typing it
     // would surface its own diagnostics ahead of the more fundamental one.
     const auto error_count_before = errors_.error_count();
-    check_clause_purity_expr(*limit.count, "limit: count expressions must be pure");
+    check_clause_purity_expr(count, "limit: count expressions must be pure");
     if (errors_.error_count() > error_count_before) {
-        return;
+        return false;
     }
 
     const PairScope* scope_ptr = per_scope->empty() ? nullptr : &*per_scope;
-    const auto type            = infer_expr_type(*limit.count, {}, {}, nullptr, scope_ptr);
+    const auto type            = infer_expr_type(count, {}, {}, nullptr, scope_ptr);
     if (type.kind != TypeKind::Int && type.kind != TypeKind::Unknown) {
-        errors_.error(limit.location, "limit: count expression must be of type 'int', got '" + type.name + "'");
-        return;
+        errors_.error(count.location, "limit: count expression must be of type 'int', got '" + type.name + "'");
+        return false;
     }
-
-    limit.provably_one = limit.per_binding.has_value() && limit_count_is_provably_one(*limit.count);
+    return true;
 }
 
 // ── Reduce clause ───────────────────────────────────────────────────────────
@@ -4337,7 +4361,7 @@ void SemanticAnalyzer::reject_unused_reducers(const RuleNode& rule) {
         }
         errors_.error(reducer.location,
                       "reducer '" + reducer.name + "' is never read; " +
-                          (keep_only ? "remove `reduce:` to keep '" + keep->trait_name + "' while any row matches"
+                          (keep_only ? "remove `reduce:` to keep '" + keep->target_name + "' while any row matches"
                                      : std::string("read it in a handler, a sort key or the keep clause, or remove it")));
     }
 }
@@ -4433,9 +4457,9 @@ void SemanticAnalyzer::validate_reducer(ReducerDecl& reducer,
     }
 }
 
-// Traits a handler writes, projects, or adds/sets/removes.
-static std::unordered_set<SymbolId> changed_traits(const HandlerContract& contract) {
-    std::unordered_set<SymbolId> changed = contract.writes;
+// Tables a handler writes, projects, or adds/sets/removes.
+static std::unordered_set<TableRef> changed_tables(const HandlerContract& contract) {
+    std::unordered_set<TableRef> changed = contract.writes;
     changed.insert(contract.projects.begin(), contract.projects.end());
     for (const auto& command : contract.commands) {
         if (command.target.has_value() && command.kind != HandlerCommandKind::Spawn &&
@@ -4488,27 +4512,36 @@ void SemanticAnalyzer::validate_keep_clause(const RuleNode& rule) {
         return;
     }
     const auto& keep = *rule.keep;
+    if (!keep.arguments.empty()) {
+        validate_relation_keep(rule);
+        return;
+    }
+    if (try_resolve_ref_of_kind(keep.target_name, {SymbolKind::Relation}).has_value()) {
+        errors_.error(keep.location,
+                      "`keep " + keep.target_name + "` keeps a relation; write `keep " + keep.target_name + "(a, b)`");
+        return;
+    }
     reject_keep_rule_clauses(rule);
     if (!validate_keep_recipient(rule)) {
         return;
     }
 
-    const auto* trait = find_resolved_trait(keep.resolved_trait_id, keep.trait_name);
-    if (!keep.resolved_trait_id.has_value() || trait == nullptr) {
-        errors_.error(keep.location, "unknown trait '" + keep.trait_name + "' in `keep`");
+    const auto* trait = find_resolved_trait(keep.resolved_target, keep.target_name);
+    if (!keep.resolved_target.has_value() || trait == nullptr) {
+        errors_.error(keep.location, "unknown trait '" + keep.target_name + "' in `keep`");
         return;
     }
     if (trait->state.has_value()) {
-        errors_.error(keep.location, "state variant '" + keep.trait_name + "' cannot be kept");
+        errors_.error(keep.location, "state variant '" + keep.target_name + "' cannot be kept");
         return;
     }
-    if (keep.resolved_trait_id->module != current_module_id_) {
+    if (keep.resolved_target->module != current_module_id_) {
         errors_.error(keep.location,
-                      "rule '" + rule.name + "' can't keep '" + keep.trait_name +
+                      "rule '" + rule.name + "' can't keep '" + keep.target_name +
                           "': a kept trait must be declared in the rule's own module");
     }
     if (std::ranges::any_of(trait->fields, &ResolvedField::is_persist)) {
-        errors_.error(keep.location, "trait '" + keep.trait_name + "' has persistent fields and cannot be kept");
+        errors_.error(keep.location, "trait '" + keep.target_name + "' has persistent fields and cannot be kept");
     }
     validate_keep_values(rule, *trait);
 }
@@ -4518,7 +4551,7 @@ void SemanticAnalyzer::reject_keep_rule_clauses(const RuleNode& rule) {
     if (!rule.keep.has_value()) {
         return;
     }
-    const auto& trait  = rule.keep->trait_name;
+    const auto& trait  = rule.keep->target_name;
     const auto message = "keep rule '" + rule.name + "' can't have a handler; `keep " + trait +
                          "` is a definition. Move the body to another rule and react with `on added " + trait +
                          "` / `on removed " + trait + "` or a filter on '" + trait + "'";
@@ -4554,25 +4587,25 @@ bool SemanticAnalyzer::validate_keep_recipient(const RuleNode& rule) {
     if (keep.condition != nullptr && !reduced) {
         errors_.error(keep.condition->location,
                       prefix + "`if` works only on a `reduce per` keep; use `where:` to choose which entities carry '" +
-                          keep.trait_name + "'");
+                          keep.target_name + "'");
     }
     if (!rule.pairs.has_value()) {
         if (keep.binding.has_value()) {
             errors_.error(keep.binding_location,
-                          prefix + "a unary `keep " + keep.trait_name +
+                          prefix + "a unary `keep " + keep.target_name +
                               "` puts the trait on each matched entity; remove `on " + *keep.binding + "`");
         }
         return true;
     }
     if (!keep.binding.has_value()) {
         errors_.error(keep.location,
-                      prefix + "`keep " + keep.trait_name +
+                      prefix + "`keep " + keep.target_name +
                           "` on a `pairs:` rule needs a recipient; name a pair binding with `on`");
         return false;
     }
     if (reduced && keep.binding != rule.reduce->per_binding) {
         errors_.error(keep.location,
-                      prefix + "`keep " + keep.trait_name + " on " + *keep.binding +
+                      prefix + "`keep " + keep.target_name + " on " + *keep.binding +
                           "` must name the `per` binding '" + *rule.reduce->per_binding + "'");
         return true;
     }
@@ -4590,15 +4623,15 @@ void SemanticAnalyzer::validate_keep_values(const RuleNode& rule, const Resolved
     std::unordered_set<std::string> assigned;
     for (const auto& field : keep.fields) {
         if (!assigned.insert(field.name).second) {
-            errors_.error(field.location, "duplicate field '" + field.name + "' in `keep " + keep.trait_name + "`");
+            errors_.error(field.location, "duplicate field '" + field.name + "' in `keep " + keep.target_name + "`");
         }
         check_clause_purity_expr(*field.value, "keep: field values must be pure");
     }
-    const auto desc = "`keep " + keep.trait_name + "`";
+    const auto desc = "`keep " + keep.target_name + "`";
     if (!rule.pairs.has_value()) {
         const std::unordered_map<std::string, TypeInfo> self_context{{"__self_context", make_entity_id_type()}};
         validate_trait_field_supply(
-            trait, keep.fields, desc, keep.location, build_filter_bindings(rule.filter), self_context, nullptr, nullptr);
+            trait.fields, keep.fields, desc, keep.location, build_filter_bindings(rule.filter), self_context, nullptr, nullptr);
         return;
     }
     const auto scope = build_single_binding_scope(rule, *keep.binding);
@@ -4609,7 +4642,7 @@ void SemanticAnalyzer::validate_keep_values(const RuleNode& rule, const Resolved
             const auto* ident = std::get_if<IdentExpr>(&expr.expr);
             if (ident != nullptr && !ident->resolved_entity_id.has_value() && other.contains(ident->name)) {
                 errors_.error(expr.location,
-                              "'" + ident->name + "' is not available in `keep " + keep.trait_name + " on " +
+                              "'" + ident->name + "' is not available in `keep " + keep.target_name + " on " +
                                   *keep.binding + "`; only '" + *keep.binding + "' is. To keep a value from it, add `reduce per " +
                                   *keep.binding + ":` and store `best(" + ident->name + ", by = ...)`");
             }
@@ -4622,11 +4655,11 @@ void SemanticAnalyzer::validate_keep_values(const RuleNode& rule, const Resolved
         if (errors_.error_count() > before) {
             return;
         }
-        validate_trait_field_supply(trait, keep.fields, desc, keep.location, {}, {}, nullptr, &scope);
+        validate_trait_field_supply(trait.fields, keep.fields, desc, keep.location, {}, {}, nullptr, &scope);
         return;
     }
     const auto locals = reducer_locals(rule);
-    validate_trait_field_supply(trait, keep.fields, desc, keep.location, {}, locals, nullptr, &scope);
+    validate_trait_field_supply(trait.fields, keep.fields, desc, keep.location, {}, locals, nullptr, &scope);
     if (keep.condition == nullptr) {
         return;
     }
@@ -4682,6 +4715,7 @@ void SemanticAnalyzer::validate_kept_traits(ProgramNode& program) {
     const auto clauses = collect_keep_clauses(program);
     check_kept_trait_handlers(clauses);
     check_keep_dependency_loops(program, clauses);
+    reject_one_on_kept_relations(program, clauses);
     for (const auto& decl : program.declarations) {
         if (const auto* entity = std::get_if<EntityNode>(&decl)) {
             check_kept_trait_archetype(clauses, entity->traits, entity->children, "entity '" + entity->name + "'");
@@ -4695,34 +4729,42 @@ SemanticAnalyzer::KeepClauses SemanticAnalyzer::collect_keep_clauses(const Progr
     KeepClauses clauses;
     for (const auto& decl : program.declarations) {
         const auto* rule = std::get_if<RuleNode>(&decl);
-        if (rule == nullptr || !rule->keep.has_value() || !rule->keep->resolved_trait_id.has_value() ||
+        if (rule == nullptr || !rule->keep.has_value() || !rule->keep->resolved_target.has_value() ||
             !rule->resolved_rule_id.has_value()) {
             continue;
         }
-        const auto& trait = *rule->keep->resolved_trait_id;
-        clauses.rule_traits.emplace_back(*rule->resolved_rule_id, trait);
-        const auto [existing, fresh] = clauses.keepers.emplace(trait, rule->name);
+        const auto& table = *rule->keep->resolved_target;
+        clauses.rule_tables.emplace_back(*rule->resolved_rule_id, table);
+        const auto [existing, fresh] = clauses.keepers.emplace(table, rule->name);
         if (!fresh) {
             errors_.error(rule->keep->location,
-                          "'" + trait.local_name + "' is kept by both '" + existing->second + "' and '" + rule->name +
+                          "'" + table.local_name + "' is kept by both '" + existing->second + "' and '" + rule->name +
                               "'");
             continue;
         }
-        if (auto local = result_.traits.find(trait.local_name);
-            local != result_.traits.end() && trait.module == current_module_id_) {
+        if (table.module != current_module_id_) {
+            continue;
+        }
+        if (auto local = result_.traits.find(table.local_name); local != result_.traits.end()) {
+            local->second.kept_by = rule->name;
+        }
+        if (auto local = result_.relations.find(table.local_name); local != result_.relations.end()) {
             local->second.kept_by = rule->name;
         }
     }
     return clauses;
 }
 
-// Every trait a handler's domain and clauses depend on.
-static std::unordered_set<SymbolId> traits_read_by(const HandlerContract& contract) {
-    std::unordered_set<SymbolId> read(contract.reads.begin(), contract.reads.end());
+// Every table a handler's domain and clauses depend on.
+static std::unordered_set<TableRef> tables_read_by(const HandlerContract& contract) {
+    std::unordered_set<TableRef> read(contract.reads.begin(), contract.reads.end());
     read.insert(contract.selection.begin(), contract.selection.end());
     read.insert(contract.exclusion.begin(), contract.exclusion.end());
     for (const auto& binding : contract.pair_bindings) {
         read.insert(binding.required_traits.begin(), binding.required_traits.end());
+        if (binding.relation.has_value()) {
+            read.insert(*binding.relation);
+        }
     }
     return read;
 }
@@ -4732,39 +4774,51 @@ struct LocalKeeper {
     const RuleNode* rule    = nullptr;
     const KeepClause* keep  = nullptr;
     SymbolId rule_id;
-    SymbolId trait_id;
+    TableRef table;
 };
 }  // namespace
 
-// This module's keep rules with a resolved kept trait, in declaration order.
+// This module's keep rules with a resolved kept table, in declaration order.
 static std::vector<LocalKeeper> local_keep_rules(const ProgramNode& program,
-                                                 const std::vector<std::pair<SymbolId, SymbolId>>& rule_traits) {
+                                                 const std::vector<std::pair<SymbolId, TableRef>>& rule_tables) {
     std::vector<LocalKeeper> keepers;
     for (const auto& decl : program.declarations) {
         const auto* rule = std::get_if<RuleNode>(&decl);
         if (rule == nullptr || !rule->resolved_rule_id.has_value() || !rule->keep.has_value() ||
-            !rule->keep->resolved_trait_id.has_value() ||
-            !std::ranges::contains(rule_traits, *rule->resolved_rule_id, &std::pair<SymbolId, SymbolId>::first)) {
+            !rule->keep->resolved_target.has_value() ||
+            !std::ranges::contains(rule_tables, *rule->resolved_rule_id, &std::pair<SymbolId, TableRef>::first)) {
             continue;
         }
         keepers.push_back({.rule     = rule,
                            .keep     = &*rule->keep,
                            .rule_id  = *rule->resolved_rule_id,
-                           .trait_id = *rule->keep->resolved_trait_id});
+                           .table    = *rule->keep->resolved_target});
     }
     return keepers;
 }
 
-// A keep rule depends on the keeper of every trait it reads. Imports are acyclic,
+// What a keep loop's rules keep: "traits", "relations", or both.
+static const char* kept_tables_noun(const std::vector<LocalKeeper>& keepers,
+                                    const std::vector<StrongComponents::NodeIndex>& members) {
+    const auto relations = std::ranges::count_if(members, [&](StrongComponents::NodeIndex member) {
+        return keepers[member].table.kind == SymbolKind::Relation;
+    });
+    if (relations == 0) {
+        return "traits";
+    }
+    return std::cmp_equal(relations, members.size()) ? "relations" : "traits and relations";
+}
+
+// A keep rule depends on the keeper of every table it reads. Imports are acyclic,
 // so a loop can only pass through this module's keep rules.
 void SemanticAnalyzer::check_keep_dependency_loops(const ProgramNode& program, const KeepClauses& clauses) {
     using NodeIndex    = StrongComponents::NodeIndex;
-    const auto keepers = local_keep_rules(program, clauses.rule_traits);
+    const auto keepers = local_keep_rules(program, clauses.rule_tables);
     std::unordered_map<SymbolId, NodeIndex> by_rule;
-    std::unordered_map<SymbolId, NodeIndex> by_trait;
+    std::unordered_map<TableRef, NodeIndex> by_table;
     for (NodeIndex index = 0; index < keepers.size(); ++index) {
         by_rule.emplace(keepers[index].rule_id, index);
-        by_trait.emplace(keepers[index].trait_id, index);
+        by_table.emplace(keepers[index].table, index);
     }
     std::vector<std::vector<NodeIndex>> edges(keepers.size());
     std::vector<std::string> self_read(keepers.size());
@@ -4773,14 +4827,14 @@ void SemanticAnalyzer::check_keep_dependency_loops(const ProgramNode& program, c
         if (from == by_rule.end()) {
             continue;
         }
-        for (const auto& trait : traits_read_by(node.contract)) {
-            const auto to = by_trait.find(trait);
-            if (to == by_trait.end()) {
+        for (const auto& table : tables_read_by(node.contract)) {
+            const auto to = by_table.find(table);
+            if (to == by_table.end()) {
                 continue;
             }
             edges[from->second].push_back(to->second);
             if (to->second == from->second) {
-                self_read[from->second] = trait.local_name;
+                self_read[from->second] = table.local_name;
             }
         }
     }
@@ -4790,9 +4844,10 @@ void SemanticAnalyzer::check_keep_dependency_loops(const ProgramNode& program, c
         const auto& rule = *keepers[index].rule;
         const auto& keep = *keepers[index].keep;
         if (!self_read[index].empty()) {
+            const auto* kind = symbol_kind_name(keepers[index].table.kind);
             errors_.error(keep.location,
-                          "keep rule '" + rule.name + "' reads its own kept trait '" + self_read[index] +
-                              "'; a kept trait can't depend on itself");
+                          "keep rule '" + rule.name + "' reads its own kept " + kind + " '" + self_read[index] +
+                              "'; a kept " + kind + " can't depend on itself");
             continue;
         }
         if (reported[component[index]]) {
@@ -4807,6 +4862,7 @@ void SemanticAnalyzer::check_keep_dependency_loops(const ProgramNode& program, c
             continue;
         }
         reported[component[index]] = true;
+        const auto* tables = kept_tables_noun(keepers, members);
         std::string names;
         for (const auto member : members) {
             names += names.empty() ? "'" : ", '";
@@ -4814,27 +4870,30 @@ void SemanticAnalyzer::check_keep_dependency_loops(const ProgramNode& program, c
             names += "' (line " + std::to_string(keepers[member].keep->location.line) + ")";
         }
         errors_.error(keep.location,
-                      "keep rules form a loop through their kept traits: " + names +
-                          "; a kept trait can't depend on itself");
+                      std::string("keep rules form a loop through their kept ") + tables + ": " + names +
+                          "; a kept fact can't depend on itself");
     }
 }
 
-std::optional<std::string> SemanticAnalyzer::keeper_of(const KeepClauses& clauses, const SymbolId& trait) const {
-    if (const auto found = clauses.keepers.find(trait); found != clauses.keepers.end()) {
+std::optional<std::string> SemanticAnalyzer::keeper_of(const KeepClauses& clauses, const TableRef& table) const {
+    if (const auto found = clauses.keepers.find(table); found != clauses.keepers.end()) {
         return found->second;
     }
-    const auto* declaration = find_resolved_trait(trait);
+    if (const auto* relation = find_resolved_relation(table)) {
+        return relation->kept_by;
+    }
+    const auto* declaration = find_resolved_trait(table);
     return declaration == nullptr ? std::nullopt : declaration->kept_by;
 }
 
 void SemanticAnalyzer::check_kept_trait_handlers(const KeepClauses& clauses) {
     for (const auto& node : result_.execution_graph.handlers) {
         const auto& rule = node.identity.rule;
-        for (const auto& trait : changed_traits(node.contract)) {
-            const auto keeper = keeper_of(clauses, trait);
+        for (const auto& table : changed_tables(node.contract)) {
+            const auto keeper = keeper_of(clauses, table);
             // A keep rule's own commands are its keep; a second keeper is reported by collect_keep_clauses.
-            if (keeper.has_value() && !std::ranges::contains(clauses.rule_traits, std::pair{rule, trait})) {
-                errors_.error(node.location, kept_trait_message(trait, *keeper, "rule '" + rule.local_name + "'"));
+            if (keeper.has_value() && !std::ranges::contains(clauses.rule_tables, std::pair{rule, table})) {
+                errors_.error(node.location, kept_trait_message(table, *keeper, "rule '" + rule.local_name + "'"));
             }
         }
     }
@@ -5702,8 +5761,10 @@ void SemanticAnalyzer::validate_rule_filters(ProgramNode& program) {
             validate_selectionless_handlers(*rule);
 
             validate_pair_bindings(*rule);
-            validateReduceClause(*rule);
-            validate_keep_clause(*rule);
+            if (!reject_row_domain_clauses(*rule)) {
+                validateReduceClause(*rule);
+                validate_keep_clause(*rule);
+            }
             validateOrderByClause(*rule);
             validateLimitClause(*rule);
         }
@@ -5749,16 +5810,16 @@ void SemanticAnalyzer::validate_where_clauses(ProgramNode& program) {
             continue;
         }
 
-        if (rule->filter.entries.empty() && !rule->pairs.has_value()) {
+        if (rule->filter.entries.empty() && !rule->pairs.has_value() && !rule->rows.has_value()) {
             errors_.error(rule->where_clause->location,
                           "'where:' requires rule '" + rule->name + "' to declare an existing 'each:' or 'pairs:'"
                                                                     " domain");
             continue;
         }
 
-        auto filter_bindings = build_filter_bindings(rule->filter);
-        auto pair_scope       = rule->pairs.has_value() ? build_pair_scope(*rule->pairs) : PairScope{};
-        const PairScope* pair_scope_ptr = rule->pairs.has_value() ? &pair_scope : nullptr;
+        auto filter_bindings            = build_filter_bindings(rule->filter);
+        const auto pair_scope           = rule_scope(*rule);
+        const PairScope* pair_scope_ptr = pair_scope.has_value() ? &*pair_scope : nullptr;
         const std::unordered_map<std::string, TypeInfo> self_context{{"__self_context", make_entity_id_type()}};
 
         for (auto& predicate : rule->where_clause->predicates) {
@@ -5837,6 +5898,9 @@ std::unordered_set<std::string> SemanticAnalyzer::rule_binding_names(const RuleN
 
 std::unordered_set<std::string> SemanticAnalyzer::rule_domain_names(const RuleNode& rule) const {
     auto names = unary_domain_scope_names(build_filter_bindings(rule.filter));
+    if (rule.rows.has_value()) {
+        names.insert(rule.rows->alias);
+    }
     if (rule.pairs.has_value()) {
         for (const auto& binding : rule.pairs.value().bindings) {
             names.insert(binding.name);
@@ -5898,7 +5962,7 @@ void SemanticAnalyzer::collect_named_entities(const ProgramNode& program) {
 // the shadowed names so they resolve; a local of the same name still shadows one.
 void SemanticAnalyzer::resolve_named_rule_access(RuleNode& rule) {
     auto bindings          = rule_domain_names(rule);
-    const auto full_scope  = rule.pairs.has_value() ? build_pair_scope(*rule.pairs) : PairScope{};
+    const auto full_scope  = rule_scope(rule).value_or(PairScope{});
     const auto after_scope = rule.reduce.has_value() ? build_reduced_handler_scope(rule) : full_scope;
     for (const auto& [_, binding] : full_scope) {
         for (const auto& [alias, _spelling] : binding.trait_by_alias) {
@@ -5908,15 +5972,15 @@ void SemanticAnalyzer::resolve_named_rule_access(RuleNode& rule) {
     const auto clause = [&](ExprNode& expr) {
         resolve_named_access_expr(expr, bindings, NamedAccessContext::Rule);
     };
-    access_pair_scope_ = rule.pairs.has_value() ? &full_scope : nullptr;
+    access_pair_scope_ = rule.pairs.has_value() || rule.rows.has_value() ? &full_scope : nullptr;
     if (rule.where_clause.has_value()) {
         std::ranges::for_each(rule.where_clause->predicates, [&](auto& predicate) { clause(*predicate); });
     }
     if (rule.when_clause.has_value()) {
         std::ranges::for_each(rule.when_clause->predicates, [&](auto& predicate) { clause(*predicate); });
     }
-    if (rule.limit.has_value() && rule.limit->count != nullptr) {
-        clause(*rule.limit->count);
+    if (rule.limit.has_value()) {
+        for_each_limit_count(*rule.limit, clause);
     }
     auto scope = bindings;
     if (rule.reduce.has_value()) {
@@ -6106,6 +6170,12 @@ void SemanticAnalyzer::resolve_pair_trait_access(TraitAccessExpr& access,
                                                  const std::vector<std::string>& fields,
                                                  const SourceLocation& location) {
     access.pair_binding_index = binding.index;
+    if (binding.relation.has_value()) {
+        errors_.error(location,
+                      "'" + binding_name + "' is a relation row; join a `" + access.trait_name + "` binding on `" +
+                          binding_name + ".from` or `" + binding_name + ".to`");
+        return;
+    }
     if (const auto found = binding.trait_by_access_key.find(access.trait_name);
         found != binding.trait_by_access_key.end()) {
         access.resolved_trait_id = found->second;
@@ -6293,6 +6363,8 @@ void SemanticAnalyzer::resolve_named_expression(E& e,
         resolve_named_access_overrides(e.child_overrides, shadowed, context);
     } else if constexpr (std::is_same_v<E, QueryCallExpr>) {
         std::ranges::for_each(e.named_args, [&](FieldAssignment& argument) { walk(*argument.value); });
+    } else if constexpr (std::is_same_v<E, RelationTestExpr>) {
+        for_each_relation_end(e, walk);
     }
 }
 
@@ -6450,6 +6522,12 @@ void SemanticAnalyzer::resolve_named_statement(S& s,
         walk_block(s.body, &s.var_name);
     } else if constexpr (std::is_same_v<S, MatchStmt>) {
         resolve_named_match(s, shadowed, context);
+    } else if constexpr (std::is_same_v<S, AddRelationStmt> || std::is_same_v<S, RemoveRelationStmt>) {
+        walk(s.from);
+        walk(s.to);
+        if constexpr (std::is_same_v<S, AddRelationStmt>) {
+            walk_fields(s.args);
+        }
     }
 }
 
@@ -6773,9 +6851,11 @@ void SemanticAnalyzer::validate_event_usage(  // NOLINT(readability-function-cog
                 filter_bound.insert(t);
             }
 
-            PairScope pair_scope;
+            PairScope pair_scope = rule_scope(*rule).value_or(PairScope{});
+            if (rule->rows.has_value()) {
+                filter_bound.insert(rule->rows->alias);
+            }
             if (rule->pairs.has_value()) {
-                pair_scope = build_pair_scope(*rule);
                 for (const auto& binding : rule->pairs->bindings) {
                     filter_bound.insert(binding.name);
                     for (const auto& entry : binding.traits) {
@@ -6785,7 +6865,8 @@ void SemanticAnalyzer::validate_event_usage(  // NOLINT(readability-function-cog
                     }
                 }
             }
-            const PairScope* pair_scope_ptr = rule->pairs.has_value() ? &pair_scope : nullptr;
+            const PairScope* pair_scope_ptr =
+                rule->pairs.has_value() || rule->rows.has_value() ? &pair_scope : nullptr;
             // A reduced handler runs once per group (or once in total), so it
             // has no implicit entity, only the retained binding and aggregates.
             const bool reduced = rule->reduce.has_value();
@@ -6905,7 +6986,7 @@ void SemanticAnalyzer::require_entity_id_target(
 }
 
 void SemanticAnalyzer::validate_trait_field_supply(
-    const ResolvedTrait& trait,
+    const std::vector<ResolvedField>& fields,
     const std::vector<FieldAssignment>& args,
     const std::string& context_desc,
     const SourceLocation& required_field_location,
@@ -6913,8 +6994,8 @@ void SemanticAnalyzer::validate_trait_field_supply(
     const std::unordered_map<std::string, TypeInfo>& locals,
     const ResolvedStruct* handler_event,
     const PairScope* pair_scope) {
-    validate_trait_field_values(trait, args, context_desc, filter_bindings, locals, handler_event, pair_scope);
-    for (const auto& field : trait.fields) {
+    validate_trait_field_values(fields, args, context_desc, filter_bindings, locals, handler_event, pair_scope);
+    for (const auto& field : fields) {
         const bool supplied = std::ranges::any_of(args, [&](const auto& arg) { return arg.name == field.name; });
         if (!field.has_default && !supplied) {
             errors_.error(required_field_location,
@@ -6925,7 +7006,7 @@ void SemanticAnalyzer::validate_trait_field_supply(
 }
 
 void SemanticAnalyzer::validate_trait_field_values(
-    const ResolvedTrait& trait,
+    const std::vector<ResolvedField>& fields,
     const std::vector<FieldAssignment>& args,
     const std::string& context_desc,
     const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
@@ -6933,7 +7014,7 @@ void SemanticAnalyzer::validate_trait_field_values(
     const ResolvedStruct* handler_event,
     const PairScope* pair_scope) {
     std::unordered_map<std::string, const ResolvedField*> fields_by_name;
-    for (const auto& field : trait.fields) {
+    for (const auto& field : fields) {
         fields_by_name[field.name] = &field;
     }
 
@@ -7045,7 +7126,7 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
                                           locals,
                                           handler_event,
                                           pair_scope);
-        validate_trait_field_supply(*trait,
+        validate_trait_field_supply(trait->fields,
                                     add.args,
                                     "`add " + add.trait_name + "`",
                                     add.location,
@@ -7093,7 +7174,7 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
                                               locals,
                                               handler_event,
                                               pair_scope);
-            validate_trait_field_supply(*trait,
+            validate_trait_field_supply(trait->fields,
                                         project.args,
                                         "`project " + project.trait_name + "`",
                                         project.location,
@@ -7145,7 +7226,7 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
             return;
         }
         validate_trait_field_values(
-            *trait, set.args, "`set " + set.trait_name + "`", filter_bindings, locals, handler_event, pair_scope);
+            trait->fields, set.args, "`set " + set.trait_name + "`", filter_bindings, locals, handler_event, pair_scope);
         for (const auto& arg : set.args) {
             if (const auto* field = find_field_in(trait->fields, arg.name); field != nullptr && field->is_let) {
                 report_let_field_write(arg.location, *trait, arg.name);
@@ -7164,6 +7245,19 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
                                           locals,
                                           handler_event,
                                           pair_scope);
+    };
+
+    const auto validate_row = [&](const auto& row, const std::vector<FieldAssignment>* fields) {
+        validate_relation_command(RelationCommand{.relation_name = row.relation_name,
+                                                  .relation      = row.resolved_relation_id,
+                                                  .from          = row.from.get(),
+                                                  .to            = row.to.get(),
+                                                  .fields        = fields,
+                                                  .location      = row.location},
+                                  filter_bindings,
+                                  locals,
+                                  handler_event,
+                                  pair_scope);
     };
 
     auto in_rule_handler = !rule_name.empty();
@@ -7294,6 +7388,14 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
         }
         if (const auto* set_stmt = std::get_if<SetTraitStmt>(&stmt->stmt)) {
             validate_set(*set_stmt);
+            continue;
+        }
+        if (const auto* add_row = std::get_if<AddRelationStmt>(&stmt->stmt)) {
+            validate_row(*add_row, &add_row->args);
+            continue;
+        }
+        if (const auto* remove_row = std::get_if<RemoveRelationStmt>(&stmt->stmt)) {
+            validate_row(*remove_row, nullptr);
             continue;
         }
         if (const auto* destroy_stmt = std::get_if<DestroyStmt>(&stmt->stmt)) {
@@ -8073,10 +8175,16 @@ static std::optional<ReductionPlan> reduction_plan(const RuleNode& rule, const P
 
 // The keep clause adds, patches and removes `T` at the commit.
 void SemanticAnalyzer::add_keep_effects(const RuleNode& rule, InferredHandlerContract& contract) {
-    if (!rule.keep.has_value() || !rule.keep->resolved_trait_id.has_value()) {
+    if (!rule.keep.has_value() || !rule.keep->resolved_target.has_value()) {
         return;
     }
-    const auto& kept  = *rule.keep->resolved_trait_id;
+    const auto& kept = *rule.keep->resolved_target;
+    if (kept.kind == SymbolKind::Relation) {
+        const auto fields = declared_fields(find_resolved_relation(kept));
+        add_contract_command(contract, HandlerCommandKind::Add, kept, std::nullopt, fields);
+        add_contract_command(contract, HandlerCommandKind::Remove, kept, std::nullopt, fields);
+        return;
+    }
     const auto entity = rule.keep->binding.has_value() ? pair_binding_target(contract, *rule.keep->binding)
                                                        : EntityTarget{.kind = EntityTargetKind::Self};
     for (const auto kind : {HandlerCommandKind::Add, HandlerCommandKind::Set, HandlerCommandKind::Remove}) {
@@ -8090,13 +8198,14 @@ void SemanticAnalyzer::collect_rule_dependency(const RuleNode& rule, std::size_t
     dep.rule_id   = rule.resolved_rule_id;
 
     std::vector<ResolvedHandlerTrigger> declared_triggers;
-    const auto pair_scope = rule.pairs.has_value() ? build_pair_scope(rule) : PairScope{};
+    const auto pair_scope = rule_scope(rule).value_or(PairScope{});
     // Rule-level, not per-handler: every handler on this rule shares the same
     // `pairs:`/`where:` domain, so eligibility is identical for each of them.
     const auto equality_join = rule.pairs.has_value() ? recognize_equality_join(rule, pair_scope) : std::nullopt;
     const auto spatial_join =
-        rule.pairs.has_value() ? recognize_spatial_join(rule, pair_scope, errors_, !equality_join.has_value())
-                               : std::nullopt;
+        rule.pairs.has_value()
+            ? recognize_spatial_join(rule, pair_scope, errors_, !equality_join.has_value() && !find_row_end_join(rule))
+            : std::nullopt;
     if (equality_join.has_value() && !spatial_join.has_value()) {
         report_hashed_key_parts(rule, *equality_join);
     }
@@ -8112,8 +8221,9 @@ void SemanticAnalyzer::collect_rule_dependency(const RuleNode& rule, std::size_t
             }
             declared_triggers.push_back(*handler.resolved_trigger);
 
-            auto inferred = rule.pairs.has_value() ? infer_pair_handler_contract(rule, handler, pair_scope)
-                                                   : infer_regular_handler_contract(rule, handler);
+            auto inferred = rule.pairs.has_value() || rule.rows.has_value()
+                                ? infer_pair_handler_contract(rule, handler, pair_scope)
+                                : infer_regular_handler_contract(rule, handler);
             inferred.spatial_join  = spatial_join;
             inferred.equality_join = spatial_join.has_value() ? std::nullopt : equality_join;
             inferred.reduction    = reduction_plan(rule, pair_scope);
@@ -8716,7 +8826,7 @@ void SemanticAnalyzer::walk_expression_reads(  // NOLINT(readability-function-co
         }
     };
     std::visit(
-        [&](const auto& node) {
+        [&](const auto& node) {  // NOLINT(readability-function-cognitive-complexity) -- exhaustive per-ExprNode-kind dispatch
             using E = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<E, IdentExpr>) {
                 // handled (or intentionally ignored) by resolve_read above
@@ -8763,6 +8873,9 @@ void SemanticAnalyzer::walk_expression_reads(  // NOLINT(readability-function-co
                 for (const auto& arg : node.named_args) {
                     visit(*arg.value, locals);
                 }
+            } else if constexpr (std::is_same_v<E, RelationTestExpr>) {
+                record_relation_read(contract, node.relation, std::nullopt);
+                for_each_relation_end(node, [&](const ExprNode& end) { visit(end, locals); });
             }
         },
         expr.expr);
@@ -8988,6 +9101,34 @@ struct SemanticAnalyzer::HandlerBodyVisitor {
         visit_stmts(node.body, std::move(loop_locals));
     }
 
+    // A relation row command lands at the commit: a command, not a read or write.
+    void operator()(const AddRelationStmt& node) const {
+        const auto* relation =
+            node.resolved_relation_id.has_value() ? analyzer->find_resolved_relation(*node.resolved_relation_id) : nullptr;
+        add_contract_command(*contract,
+                             HandlerCommandKind::Add,
+                             node.resolved_relation_id,
+                             std::nullopt,
+                             declared_fields(relation));
+        visit_row(node.from, node.to);
+        for (const auto& field : node.args) {
+            visit_expr(*field.value, *locals);
+        }
+    }
+
+    void operator()(const RemoveRelationStmt& node) const {
+        add_contract_command(*contract, HandlerCommandKind::Remove, node.resolved_relation_id, std::nullopt);
+        visit_row(node.from, node.to);
+    }
+
+    void visit_row(const std::unique_ptr<ExprNode>& from, const std::unique_ptr<ExprNode>& to) const {
+        for (const auto* end : {from.get(), to.get()}) {
+            if (end != nullptr && !is_wildcard_pattern(*end)) {
+                visit_expr(*end, *locals);
+            }
+        }
+    }
+
     void operator()(const MatchStmt& node) const {
         visit_expr(*node.subject, *locals);
         for (const auto& arm : node.arms) {
@@ -9126,8 +9267,8 @@ static std::vector<const ExprNode*> rule_clause_read_roots(const RuleNode& rule)
         for_each_reducer_expr(*rule.reduce, [&roots](const ExprNode& expr) { roots.push_back(&expr); });
     }
     std::ranges::copy(keep_clause_roots(rule), std::back_inserter(roots));
-    if (rule.limit.has_value() && rule.limit->count != nullptr) {
-        roots.push_back(rule.limit->count.get());
+    if (rule.limit.has_value()) {
+        for_each_limit_count(*rule.limit, [&roots](const ExprNode& count) { roots.push_back(&count); });
     }
     if (rule.where_clause.has_value()) {
         for (const auto& predicate : rule.where_clause->predicates) {
@@ -9355,16 +9496,24 @@ void SemanticAnalyzer::record_pair_binding_write(const VarAssign& node,
 InferredHandlerContract SemanticAnalyzer::infer_pair_handler_contract(const RuleNode& rule,
                                                                       const EventHandlerNode& handler,
                                                                       const PairScope& pair_scope) const {
-    assert(rule.pairs.has_value());
-    const auto& pairs = *rule.pairs;
+    assert(rule.pairs.has_value() || rule.rows.has_value());
     InferredHandlerContract contract;
     contract.rule        = *rule.resolved_rule_id;
     contract.trigger     = *handler.resolved_trigger;
-    contract.domain_kind = HandlerDomainKind::Pair;
+    contract.domain_kind = rule.pairs.has_value() ? HandlerDomainKind::Pair : HandlerDomainKind::Rows;
+    if (rule.rows.has_value()) {
+        contract.pair_bindings.push_back(RelationBinding{.name = rule.rows->alias, .relation = rule.rows->relation});
+        record_relation_read(contract, rule.rows->relation, std::nullopt);
+    }
 
-    for (const auto& binding : pairs.bindings) {
+    const auto pair_bindings = rule.pairs.has_value() ? std::span(rule.pairs->bindings) : std::span<const PairBindingNode>{};
+    for (const auto& binding : pair_bindings) {
         RelationBinding relation;
-        relation.name = binding.name;
+        relation.name     = binding.name;
+        relation.relation = binding.resolved_relation_id;
+        if (binding.resolved_relation_id.has_value()) {
+            record_relation_read(contract, *binding.resolved_relation_id, std::nullopt);
+        }
         for (const auto& entry : binding.traits) {
             if (entry.resolved_trait_id.has_value()) {
                 relation.required_traits.push_back(*entry.resolved_trait_id);
@@ -9376,6 +9525,9 @@ InferredHandlerContract SemanticAnalyzer::infer_pair_handler_contract(const Rule
     auto resolve_read = [&](const ExprNode& expr, const LocalNames&) -> bool {
         if (const auto* call = std::get_if<CallExpr>(&expr.expr)) {
             record_collider_query_reads(*call, pair_scope, contract);
+        }
+        if (record_row_field_read(expr, pair_scope, contract)) {
+            return true;
         }
         // Bare pair-binding references and locals carry no read on their own.
         return false;
@@ -9403,7 +9555,7 @@ InferredHandlerContract SemanticAnalyzer::infer_pair_handler_contract(const Rule
     if (handler.alias.has_value()) {
         handler_locals.insert(*handler.alias);
     }
-    for (const auto& binding : pairs.bindings) {
+    for (const auto& binding : contract.pair_bindings) {
         handler_locals.insert(binding.name);
     }
     walk_handler_body(
@@ -10954,6 +11106,9 @@ std::optional<SymbolId> SemanticAnalyzer::lookup_imported_symbol(const ImportedS
     if (auto trait_it = syms.traits.find(name); trait_it != syms.traits.end()) {
         return resolved_decl_symbol(trait_it->second, SymbolKind::Trait, syms.module_name, name);
     }
+    if (auto relation_it = syms.relations.find(name); relation_it != syms.relations.end()) {
+        return resolved_decl_symbol(relation_it->second, SymbolKind::Relation, syms.module_name, name);
+    }
     if (auto struct_it = syms.structs.find(name); struct_it != syms.structs.end()) {
         return resolved_decl_symbol(struct_it->second, SymbolKind::Struct, syms.module_name, name);
     }
@@ -11691,7 +11846,12 @@ TypeInfo SemanticAnalyzer::infer_ident_expr_type(
     if (auto local_it = local_bindings.find(ident.name); local_it != local_bindings.end()) {
         return local_it->second;
     }
-    if (pair_scope != nullptr && pair_scope->contains(ident.name)) {
+    if (const auto bound = pair_scope != nullptr ? pair_scope->find(ident.name) : PairScope::const_iterator{};
+        pair_scope != nullptr && bound != pair_scope->end()) {
+        if (bound->second.relation.has_value()) {
+            report_row_binding_value(ident.name, location);
+            return make_unknown_type();
+        }
         return make_entity_id_type();
     }
     if (const auto bound = filter_bindings.find(ident.name);
@@ -11872,8 +12032,12 @@ std::optional<TypeInfo> SemanticAnalyzer::infer_pair_member_type(const std::vect
                                                                  const SourceLocation& location,
                                                                  const PairScope& pair_scope) const {
     const auto& root_name = chain.front();
-    if (!pair_scope.contains(root_name)) {
+    const auto binding    = pair_scope.find(root_name);
+    if (binding == pair_scope.end()) {
         return std::nullopt;
+    }
+    if (binding->second.relation.has_value()) {
+        return infer_row_member_type(chain, location, *binding->second.relation);
     }
     errors_.error(location,
                   "'" + chain[1] + "' is unavailable on pair binding '" + root_name + "'; trait access is written '" +
@@ -12109,6 +12273,12 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
             errors_.error(expr.location, "`self` only allowed inside rule event handlers");
             return make_unknown_type();
         }
+        if (pair_scope != nullptr && pair_scope->size() == 1 && pair_scope->begin()->second.relation.has_value()) {
+            errors_.error(expr.location,
+                          "`self` is unavailable in a relation row domain; a row is no entity, use `" +
+                              pair_scope->begin()->first + ".from` or `" + pair_scope->begin()->first + ".to`");
+            return make_unknown_type();
+        }
         if (pair_scope != nullptr) {
             errors_.error(expr.location,
                           "`self` is unavailable in a pair handler; a pair tuple has no unique current entity, use "
@@ -12125,6 +12295,9 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
     if (const auto* access = std::get_if<TraitAccessExpr>(&expr.expr)) {
         return infer_trait_access_type(
             *access, {}, expr.location, filter_bindings, local_bindings, handler_event, pair_scope);
+    }
+    if (const auto* test = std::get_if<RelationTestExpr>(&expr.expr)) {
+        return infer_relation_test_type(*test, filter_bindings, local_bindings, handler_event, pair_scope);
     }
 
     if (const auto* spawn = std::get_if<SpawnExpr>(&expr.expr)) {
@@ -13715,6 +13888,12 @@ void SemanticAnalyzer::validate_context_stmts(  // NOLINT(readability-function-c
                                                           {},
                                                           self_context_locals,
                                                           nullptr);
+                    }
+                } else if constexpr (std::is_same_v<S, AddRelationStmt> || std::is_same_v<S, RemoveRelationStmt>) {
+                    if (!in_rule_handler) {
+                        errors_.error(s.location,
+                                      std::string("`") + (std::is_same_v<S, AddRelationStmt> ? "add" : "remove") +
+                                          "` only allowed inside rule event handlers");
                     }
                 } else if constexpr (std::is_same_v<S, ForeachStmt>) {
                     validate_self_expr(*s.iterable, s.location);

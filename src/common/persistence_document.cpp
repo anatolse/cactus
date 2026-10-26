@@ -136,6 +136,20 @@ std::span<const std::uint8_t> Snapshot::payload(const TraitRow& row, bool persis
                                                          static_cast<std::size_t>(size));
 }
 
+std::vector<StructField> Snapshot::relation_fields(const RelationRow& row) const {
+    std::vector<StructField> fields;
+    if (row.values.shape >= traits_.size()) {
+        return fields;
+    }
+    const auto& layout = traits_[row.values.shape].construction;
+    fields.reserve(layout.size());
+    ValueReader in(*this, payload(row.values, false));
+    for (const auto& field : layout) {
+        fields.push_back(StructField{.name = std::string(name(field.name)), .value = read_value(field.type, in)});
+    }
+    return fields;
+}
+
 Value Snapshot::read_value(std::uint32_t type_index, ValueReader& in, std::size_t depth) const {
     const auto* type = this->type(type_index);
     if (type == nullptr || depth > kMaxPersistenceNestingDepth) {
@@ -621,6 +635,19 @@ void SnapshotBuilder::begin_trait(std::uint32_t shape, bool present) {
     split_ = false;
 }
 
+void SnapshotBuilder::begin_relation_row(std::uint32_t shape, DocumentId from, DocumentId to) {
+    if (document_.arena_.size() > kMaxSnapshotArenaBytes) {
+        throw std::length_error("persistence snapshot: values exceed the 4 GiB arena limit");
+    }
+    document_.relation_rows_.push_back(RelationRow{
+        .from = from, .to = to, .values = TraitRow{.begin = static_cast<std::uint32_t>(document_.arena_.size()), .shape = shape}});
+}
+
+void SnapshotBuilder::end_relation_row() {
+    auto& row              = document_.relation_rows_.back().values;
+    row.construction_bytes = static_cast<std::uint32_t>(document_.arena_.size() - row.begin);
+}
+
 void SnapshotBuilder::begin_persisted() {
     auto& row              = document_.trait_rows_.back();
     row.construction_bytes = static_cast<std::uint32_t>(document_.arena_.size() - row.begin);
@@ -778,22 +805,37 @@ void SnapshotBuilder::put_fields(const std::vector<StructField>& values, const s
     }
 }
 
-void SnapshotBuilder::add_trait(std::string_view trait,
-                                const std::vector<StructField>& construction,
-                                const std::vector<StructField>& persisted) {
+void SnapshotBuilder::add_relation_row(std::string_view relation,
+                                       DocumentId from,
+                                       DocumentId to,
+                                       const std::vector<StructField>& fields) {
+    const auto shape = shape_for(relation, fields, {});
+    begin_relation_row(shape, from, to);
+    put_fields(fields, document_.traits_[shape].construction);
+    end_relation_row();
+}
+
+// A recorded layout of `trait` the values fit, or a new one.
+std::uint32_t SnapshotBuilder::shape_for(std::string_view trait,
+                                         const std::vector<StructField>& construction,
+                                         const std::vector<StructField>& persisted) {
     const auto trait_name = name(trait);
     const auto found      = std::ranges::find_if(document_.traits_, [&](const DocumentTrait& candidate) {
         return candidate.name == trait_name && fits_fields(construction, candidate.construction) &&
                fits_fields(persisted, candidate.persisted);
     });
-    std::uint32_t shape = 0;
     if (found != document_.traits_.end()) {
-        shape = static_cast<std::uint32_t>(found - document_.traits_.begin());
-    } else {
-        auto construction_layout = layout_of(construction);
-        auto persisted_layout    = layout_of(persisted);
-        shape = trait_shape(trait, std::move(construction_layout), std::move(persisted_layout));
+        return static_cast<std::uint32_t>(found - document_.traits_.begin());
     }
+    auto construction_layout = layout_of(construction);
+    auto persisted_layout    = layout_of(persisted);
+    return trait_shape(trait, std::move(construction_layout), std::move(persisted_layout));
+}
+
+void SnapshotBuilder::add_trait(std::string_view trait,
+                                const std::vector<StructField>& construction,
+                                const std::vector<StructField>& persisted) {
+    const auto shape = shape_for(trait, construction, persisted);
     // Writing values never adds a trait layout, so this reference stays valid.
     const auto& layout = document_.traits_[shape];
     begin_trait(shape);
@@ -852,6 +894,9 @@ Snapshot relayout(const Snapshot& source, SnapshotBuilder target) {
             }
         }
     }
+    for (const auto& row : source.relation_rows()) {
+        target.add_relation_row(source.relation_name(row), row.from, row.to, source.relation_fields(row));
+    }
     return std::move(target).finish();
 }
 
@@ -875,6 +920,11 @@ const StructDescriptor* find_struct_descriptor(const SchemaDescriptor& schema, s
 const EnumDescriptor* find_enum_descriptor(const SchemaDescriptor& schema, std::string_view name) {
     const auto found = std::ranges::find(schema.enums, name, &EnumDescriptor::name);
     return found == schema.enums.end() ? nullptr : &*found;
+}
+
+const RelationDescriptor* find_relation_descriptor(const SchemaDescriptor& schema, std::string_view relation) {
+    const auto found = std::ranges::find(schema.relations, relation, &RelationDescriptor::relation);
+    return found == schema.relations.end() ? nullptr : &*found;
 }
 
 const ArchetypeDescriptor* find_archetype_descriptor(const SchemaDescriptor& schema, std::string_view node) {

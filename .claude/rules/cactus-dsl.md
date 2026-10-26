@@ -70,3 +70,17 @@ exception — see `examples/CLAUDE.md`).
   examples in `spec/cactus_dsl_spec.md` §3.8.6.
 - Use `best(binding, by = key)` to name the winning entity (the highest-priority zone)
   instead of hand-rolled max tracking.
+
+### Links between entities
+
+- To link two entities (a tile to a tile, a robot to its task, a player to a room), declare a
+  `relation` with `from:`/`to:` ends instead of an entity, or a trait, holding `entity_id`
+  fields. A relation can't hold a duplicate pair or a row to a dead entity, and rules read it
+  with `R(x, y)` tests in `where:` or a row binding (`r: R`, `each: R as r`).
+- Keep a relation (`keep R(a, b)` on a `pairs:` rule) when its rows follow from the world, like
+  adjacency. Store it (`add R` / `remove R`) when the rows are history or decisions, like claims.
+- For "at most one per entity", mark the end `one` and add rows from one phase rule with the
+  proven claim shape: `limit: 1 per a, 1 per b` (one part per `one` end), `where: not R(a, _)`
+  and `not R(_, b)`, and `add R(a, b)` in its handler. Rank candidates with `order by:` to pick
+  the nearest or best first. An event can't claim directly: record it as a trait and claim from
+  the phase rule.

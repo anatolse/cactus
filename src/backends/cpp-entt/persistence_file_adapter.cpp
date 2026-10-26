@@ -27,7 +27,7 @@ namespace {
 // carries no compatibility promise across compiler versions.
 
 constexpr std::array<char, 4> kMagic = {'C', 'P', 'S', 'T'};
-constexpr std::uint32_t kFileFormat  = 3;
+constexpr std::uint32_t kFileFormat  = 4;
 
 class IncompatibleFormat : public std::runtime_error {
 public:
@@ -505,6 +505,46 @@ void read_trait_row(Decoder& in, persistence::SnapshotBuilder& out, RowLayouts& 
     RowLayouts::remember(layout, spans);
 }
 
+// Relation rows follow the entities: layout, both ends, then the field values.
+void write_relation_rows(Encoder& out, const persistence::Snapshot& document) {
+    out.varint(document.relation_rows().size());
+    for (const auto& row : document.relation_rows()) {
+        const auto shape = row.values.shape;
+        if (shape >= document.trait_shapes().size()) {
+            throw std::runtime_error("persistence file adapter: relation row names no layout");
+        }
+        out.varint(shape);
+        out.varint(row.from);
+        out.varint(row.to);
+        persistence::ValueReader in(document, document.payload(row.values, false));
+        for (const auto& field : document.trait_shapes()[shape].construction) {
+            write_value(out, document, field.type, in, 0);
+        }
+        if (in.failed()) {
+            throw std::runtime_error("persistence file adapter: malformed value bytes");
+        }
+    }
+}
+
+void read_relation_rows(Decoder& in, persistence::SnapshotBuilder& out) {
+    const auto rows = in.count();
+    for (std::uint32_t index = 0; index < rows; ++index) {
+        const auto shape = static_cast<std::uint32_t>(in.varint());
+        const auto from  = static_cast<persistence::DocumentId>(in.varint());
+        const auto to    = static_cast<persistence::DocumentId>(in.varint());
+        if (shape >= out.document().trait_shapes().size()) {
+            throw std::runtime_error("persistence file adapter: relation row names no layout");
+        }
+        // Copied: reading values may add names, which never touches layouts, but keep it independent.
+        const auto fields = out.document().trait_shapes()[shape].construction;
+        out.begin_relation_row(shape, from, to);
+        for (const auto& field : fields) {
+            read_value(in, out, field.type, 0);
+        }
+        out.end_relation_row();
+    }
+}
+
 std::string encode_snapshot(const persistence::Snapshot& snapshot) {
     Encoder out;
     out.raw(std::string_view(kMagic.data(), kMagic.size()));
@@ -528,6 +568,7 @@ std::string encode_snapshot(const persistence::Snapshot& snapshot) {
             write_trait_row(out, snapshot, entity.trait_at(index), layouts);
         }
     }
+    write_relation_rows(out, snapshot);
     return out.take();
 }
 
@@ -562,6 +603,7 @@ persistence::Snapshot decode_snapshot(std::string_view bytes) {
             read_trait_row(in, out, layouts);
         }
     }
+    read_relation_rows(in, out);
     if (!in.at_end()) {
         throw std::runtime_error("persistence file adapter: trailing bytes after the document");
     }

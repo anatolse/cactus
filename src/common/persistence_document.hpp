@@ -223,6 +223,17 @@ struct TraitRow {
     friend bool operator==(const TraitRow&, const TraitRow&) = default;
 };
 
+// One stored relation row between two recorded entities. Its field values
+// sit in the arena like a trait's construction values, in a trait_shapes()
+// layout named after the relation.
+struct RelationRow {
+    DocumentId from = 0;
+    DocumentId to   = 0;
+    TraitRow values;
+
+    friend bool operator==(const RelationRow&, const RelationRow&) = default;
+};
+
 class Snapshot;
 
 // A document's tables on their own, as a decoder reads them.
@@ -409,6 +420,13 @@ public:
     [[nodiscard]] std::span<const DocumentTrait> trait_shapes() const noexcept { return traits_; }
     [[nodiscard]] std::span<const EntityRow> entity_rows() const noexcept { return entities_; }
     [[nodiscard]] std::span<const TraitRow> trait_rows() const noexcept { return trait_rows_; }
+    // Stored relation rows, in creation order, after every entity.
+    [[nodiscard]] std::span<const RelationRow> relation_rows() const noexcept { return relation_rows_; }
+    // The relation a row belongs to; empty when its layout is outside the table.
+    [[nodiscard]] std::string_view relation_name(const RelationRow& row) const noexcept {
+        return row.values.shape < traits_.size() ? name(traits_[row.values.shape].name) : std::string_view{};
+    }
+    [[nodiscard]] std::vector<StructField> relation_fields(const RelationRow& row) const;
     [[nodiscard]] std::span<const std::uint8_t> arena() const noexcept { return arena_; }
 
     // Empty for an index outside the table.
@@ -445,6 +463,7 @@ private:
     std::vector<DocumentTrait> traits_;
     std::vector<EntityRow> entities_;
     std::vector<TraitRow> trait_rows_;
+    std::vector<RelationRow> relation_rows_;
     std::vector<std::uint8_t> arena_;
 };
 
@@ -509,6 +528,9 @@ public:
     }
     void begin_entity(DocumentId id, std::uint32_t archetype, EntityRef parent);
     void begin_trait(std::uint32_t shape, bool present = true);
+    // A relation row's field values follow, in its layout's construction order.
+    void begin_relation_row(std::uint32_t shape, DocumentId from, DocumentId to);
+    void end_relation_row();
     void begin_persisted();
     void end_trait();
 
@@ -547,6 +569,10 @@ public:
                    const std::vector<StructField>& construction = {},
                    const std::vector<StructField>& persisted    = {});
     void add_absent_trait(std::string_view trait);
+    void add_relation_row(std::string_view relation,
+                          DocumentId from,
+                          DocumentId to,
+                          const std::vector<StructField>& fields = {});
 
 private:
     static constexpr std::size_t kReserveSample        = 1024;
@@ -573,6 +599,9 @@ private:
                                    const std::vector<DocumentField>& layout) const;
     [[nodiscard]] std::uint32_t type_of(const Value& value);
     [[nodiscard]] std::vector<DocumentField> layout_of(const std::vector<StructField>& values);
+    [[nodiscard]] std::uint32_t shape_for(std::string_view trait,
+                                          const std::vector<StructField>& construction,
+                                          const std::vector<StructField>& persisted);
     void put_value(const Value& value, std::uint32_t type);
     void put_fields(const std::vector<StructField>& values, const std::vector<DocumentField>& layout);
 
@@ -637,6 +666,15 @@ struct EnumDescriptor {
     std::span<const std::string_view> variants;  // declaration order: these are the values
 };
 
+struct RelationDescriptor {
+    std::string_view relation;  // canonical declaration
+    std::string_view from_trait;
+    std::string_view to_trait;
+    bool from_one = false;
+    bool to_one   = false;
+    std::span<const FieldDescriptor> fields;
+};
+
 struct ArchetypeDescriptor {
     std::string_view node;
     std::span<const std::string_view> baseline_traits;
@@ -655,6 +693,7 @@ struct SchemaDescriptor {
     std::span<const StructDescriptor> structs;
     std::span<const EnumDescriptor> enums;
     std::span<const ArchetypeDescriptor> archetypes;
+    std::span<const RelationDescriptor> relations;  // stored relations only
     // Set when the program's reachable trait sets are known; restore then
     // rejects a record whose trait set is not one of its node's.
     bool checks_trait_sets = false;
@@ -668,6 +707,8 @@ struct SchemaDescriptor {
 [[nodiscard]] const FieldDescriptor* find_field_descriptor(const TraitDescriptor& trait, std::string_view field);
 [[nodiscard]] const StructDescriptor* find_struct_descriptor(const SchemaDescriptor& schema, std::string_view name);
 [[nodiscard]] const EnumDescriptor* find_enum_descriptor(const SchemaDescriptor& schema, std::string_view name);
+[[nodiscard]] const RelationDescriptor* find_relation_descriptor(const SchemaDescriptor& schema,
+                                                                 std::string_view relation);
 [[nodiscard]] const ArchetypeDescriptor* find_archetype_descriptor(const SchemaDescriptor& schema,
                                                                    std::string_view node);
 

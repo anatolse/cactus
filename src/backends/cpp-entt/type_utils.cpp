@@ -818,6 +818,18 @@ std::string EnttCodegenUtils::enum_cpp_name(const SymbolId& symbol) {
     return cpp_type_ref(symbol);
 }
 
+std::string EnttCodegenUtils::relation_cpp_name(const SymbolId& symbol) {
+    return cpp_type_ref(symbol);
+}
+
+std::string EnttCodegenUtils::relation_store_cpp(const SymbolId& symbol) {
+    return "cactus::runtime::entt_backend::relation_store<" + relation_cpp_name(symbol) + ">(registry)";
+}
+
+std::string EnttCodegenUtils::uncompacted_relation_store_cpp(const SymbolId& symbol) {
+    return "cactus::runtime::entt_backend::uncompacted_relation_store<" + relation_cpp_name(symbol) + ">(registry)";
+}
+
 std::string EnttCodegenUtils::trait_cpp_name(const std::optional<SymbolId>& symbol,
                                              const std::string& fallback_source_name,
                                              const DecoratedProgram& program) {
@@ -1360,11 +1372,17 @@ const ExprNode* EnttCodegenUtils::find_trait_field_default(const DecoratedProgra
             current_module = mod->name;
             continue;
         }
-        const auto* trait_node = std::get_if<TraitNode>(&decl);
-        if (trait_node == nullptr || trait_node->name != trait_name || current_module != module_name) {
+        const std::vector<FieldNode>* fields = nullptr;
+        if (const auto* trait_node = std::get_if<TraitNode>(&decl); trait_node != nullptr && trait_node->name == trait_name) {
+            fields = &trait_node->fields;
+        } else if (const auto* relation_node = std::get_if<RelationNode>(&decl);
+                   relation_node != nullptr && relation_node->name == trait_name) {
+            fields = &relation_node->fields;
+        }
+        if (fields == nullptr || current_module != module_name) {
             continue;
         }
-        for (const auto& field : trait_node->fields) {
+        for (const auto& field : *fields) {
             if (field.name == field_name) {
                 return field.default_value.has_value() ? field.default_value->get() : nullptr;
             }

@@ -2661,7 +2661,7 @@ TEST_CASE("Parser: global limit on a pairs rule is parsed", "[parser][rule-limit
 
     auto& sys = std::get<RuleNode>(prog.declarations[0]);
     REQUIRE(sys.limit.has_value());
-    CHECK_FALSE(sys.limit->per_binding.has_value());
+    CHECK(sys.limit->parts.empty());
     const auto* count = std::get_if<LiteralExpr>(&sys.limit->count->expr);
     REQUIRE(count != nullptr);
     CHECK(count->value == "10");
@@ -2681,9 +2681,9 @@ TEST_CASE("Parser: per-binding limit on a pairs rule is parsed", "[parser][rule-
 
     auto& sys = std::get<RuleNode>(prog.declarations[0]);
     REQUIRE(sys.limit.has_value());
-    REQUIRE(sys.limit->per_binding.has_value());
-    CHECK(*sys.limit->per_binding == "actor");
-    const auto* count = std::get_if<LiteralExpr>(&sys.limit->count->expr);
+    REQUIRE(sys.limit->parts.size() == 1);
+    CHECK(sys.limit->parts[0].binding == "actor");
+    const auto* count = std::get_if<LiteralExpr>(&sys.limit->parts[0].count->expr);
     REQUIRE(count != nullptr);
     CHECK(count->value == "1");
 }
@@ -2701,7 +2701,7 @@ TEST_CASE("Parser: limit on a filter rule is parsed", "[parser][rule-limit]") {
 
     auto& sys = std::get<RuleNode>(prog.declarations[0]);
     REQUIRE(sys.limit.has_value());
-    CHECK_FALSE(sys.limit->per_binding.has_value());
+    CHECK(sys.limit->parts.empty());
     CHECK(sys.order_by.size() == 1);
 }
 
@@ -2719,9 +2719,9 @@ TEST_CASE("Parser: limit count accepts a computed expression", "[parser][rule-li
 
     auto& sys = std::get<RuleNode>(prog.declarations[0]);
     REQUIRE(sys.limit.has_value());
-    REQUIRE(sys.limit->per_binding.has_value());
-    CHECK(*sys.limit->per_binding == "tower");
-    CHECK(std::holds_alternative<MemberExpr>(sys.limit->count->expr));
+    REQUIRE(sys.limit->parts.size() == 1);
+    CHECK(sys.limit->parts[0].binding == "tower");
+    CHECK(std::holds_alternative<MemberExpr>(sys.limit->parts[0].count->expr));
 }
 
 TEST_CASE("Parser: rule without limit leaves clause unset", "[parser][rule-limit]") {
@@ -4829,6 +4829,195 @@ TEST_CASE("Parser: bracketed trait access takes exactly one trait name", "[parse
                                                 access + "\n");
         CHECK(has_diagnostic(errors, "a trait access takes exactly one trait name"));
     }
+}
+
+// ── Relations (dsl-relations) ───────────────────────────────────────────────
+
+TEST_CASE("Parser: relation declaration with ends and a field", "[parser][relations]") {
+    auto prog = parse(
+        "pub relation Walk:\n"
+        "    from: Tile\n"
+        "    to: tf.Tile\n"
+        "    let cost: float = 1.0\n");
+    const auto& relation = std::get<RelationNode>(prog.declarations[0]);
+    CHECK(relation.name == "Walk");
+    CHECK(relation.is_pub);
+    CHECK(relation.from.trait_name == "Tile");
+    CHECK_FALSE(relation.from.one);
+    CHECK(relation.to.trait_name == "tf.Tile");
+    CHECK_FALSE(relation.to.one);
+    REQUIRE(relation.fields.size() == 1);
+    CHECK(relation.fields[0].name == "cost");
+    CHECK(relation.fields[0].modifiers.is_let);
+}
+
+TEST_CASE("Parser: relation ends marked one", "[parser][relations]") {
+    auto prog = parse(
+        "relation Claim:\n"
+        "    from: Robot one\n"
+        "    to: DigTask one\n");
+    const auto& relation = std::get<RelationNode>(prog.declarations[0]);
+    CHECK_FALSE(relation.is_pub);
+    CHECK(relation.from.one);
+    CHECK(relation.to.one);
+    CHECK(relation.fields.empty());
+}
+
+TEST_CASE("Parser: relation is a keyword, one stays an identifier", "[parser][relations]") {
+    auto prog = parse(
+        "func one() int:\n"
+        "    return 1\n");
+    CHECK(std::get<FuncNode>(prog.declarations[0]).name == "one");
+    auto errors = parse_expect_errors(
+        "func relation() int:\n"
+        "    return 1\n");
+    CHECK(errors.has_errors());
+}
+
+TEST_CASE("Parser: relation declaration errors", "[parser][relations]") {
+    SECTION("missing to end") {
+        auto errors = parse_expect_errors(
+            "relation Walk:\n"
+            "    from: Tile\n");
+        CHECK(has_diagnostic(errors, "relation 'Walk' needs a `to:` end"));
+    }
+    SECTION("missing from end") {
+        auto errors = parse_expect_errors(
+            "relation Walk:\n"
+            "    to: Tile\n");
+        CHECK(has_diagnostic(errors, "relation 'Walk' needs a `from:` end"));
+    }
+    SECTION("duplicate end") {
+        auto errors = parse_expect_errors(
+            "relation Walk:\n"
+            "    from: Tile\n"
+            "    from: Floor\n"
+            "    to: Tile\n");
+        CHECK(has_diagnostic(errors, "relation 'Walk' declares `from:` twice"));
+    }
+    SECTION("var field") {
+        auto errors = parse_expect_errors(
+            "relation Walk:\n"
+            "    from: Tile\n"
+            "    to: Tile\n"
+            "    var cost: float = 1.0\n");
+        CHECK(has_diagnostic(errors, "relation fields are `let`; to change a row, replace it with `add Walk(a, b):`"));
+    }
+    SECTION("persist field") {
+        auto errors = parse_expect_errors(
+            "relation Walk:\n"
+            "    from: Tile\n"
+            "    to: Tile\n"
+            "    persist let cost: float = 1.0\n");
+        CHECK(has_diagnostic(errors, "relation fields can't be `persist`"));
+    }
+    SECTION("more than one trait on an end") {
+        auto errors = parse_expect_errors(
+            "relation Walk:\n"
+            "    from: Tile, Floor\n"
+            "    to: Tile\n");
+        CHECK(has_diagnostic(errors, "an end names exactly one trait"));
+    }
+}
+
+TEST_CASE("Parser: relation recovers after a bad end", "[parser][relations]") {
+    auto errors = parse_expect_errors(
+        "relation Walk:\n"
+        "    from: 3\n"
+        "    to: Tile\n"
+        "    let cost: float = 1.0\n"
+        "trait After\n");
+    CHECK(has_diagnostic(errors, "expected a trait name after `from:`"));
+    CHECK_FALSE(has_diagnostic(errors, "needs a `to:` end"));
+    CHECK(errors.error_count() == 1);
+}
+
+TEST_CASE("Parser: keep of a relation", "[parser][relations]") {
+    auto prog = parse(
+        "rule WalkLinks:\n"
+        "    pairs:\n"
+        "        a: Tile\n"
+        "        b: Tile\n"
+        "    group: Links\n"
+        "    keep Walk(a, b):\n"
+        "        cost = 2.0\n");
+    const auto& rule = std::get<RuleNode>(prog.declarations[0]);
+    REQUIRE(rule.keep.has_value());
+    CHECK(rule.keep->target_name == "Walk");
+    REQUIRE(rule.keep->arguments.size() == 2);
+    CHECK(rule.keep->arguments[0].spelling == "a");
+    CHECK(rule.keep->arguments[1].spelling == "b");
+    CHECK(rule.keep->fields.size() == 1);
+    CHECK_FALSE(rule.keep->binding.has_value());
+}
+
+TEST_CASE("Parser: add and remove of relation rows", "[parser][relations]") {
+    auto prog = parse(
+        "rule Claims:\n"
+        "    pairs:\n"
+        "        robot: Robot\n"
+        "        task: Task\n"
+        "    on tick:\n"
+        "        add Claim(robot, task)\n"
+        "        add game.Claim(robot, task):\n"
+        "            score = 2\n"
+        "        remove Claim(robot, _)\n");
+    const auto& body = std::get<RuleNode>(prog.declarations[0]).handlers[0].body;
+    REQUIRE(body.size() == 3);
+    const auto* plain = std::get_if<AddRelationStmt>(&body[0]->stmt);
+    REQUIRE(plain != nullptr);
+    CHECK(plain->relation_name == "Claim");
+    CHECK(plain->args.empty());
+    CHECK(dotted_name_of(*plain->from) == "robot");
+    CHECK(dotted_name_of(*plain->to) == "task");
+    const auto* fielded = std::get_if<AddRelationStmt>(&body[1]->stmt);
+    REQUIRE(fielded != nullptr);
+    CHECK(fielded->relation_name == "game.Claim");
+    REQUIRE(fielded->args.size() == 1);
+    CHECK(fielded->args[0].name == "score");
+    const auto* removed = std::get_if<RemoveRelationStmt>(&body[2]->stmt);
+    REQUIRE(removed != nullptr);
+    CHECK(removed->relation_name == "Claim");
+    CHECK(dotted_name_of(*removed->from) == "robot");
+    CHECK(is_wildcard_pattern(*removed->to));
+}
+
+TEST_CASE("Parser: relation row command needs two arguments", "[parser][relations]") {
+    auto errors = parse_expect_errors(
+        "rule Claims:\n"
+        "    each: Robot\n"
+        "    on tick:\n"
+        "        remove Claim(self)\n");
+    CHECK(has_diagnostic(errors, "a relation row takes two entities: `Claim(from, to)`"));
+}
+
+TEST_CASE("Parser: two-sided limit", "[parser][relations][rule-limit]") {
+    auto prog = parse(
+        "rule Claims:\n"
+        "    pairs:\n"
+        "        robot: Robot\n"
+        "        task: Task\n"
+        "    limit: 1 per robot, 2 per task\n"
+        "    on tick:\n"
+        "        emit Done\n");
+    const auto& limit = *std::get<RuleNode>(prog.declarations[0]).limit;
+    CHECK(limit.count == nullptr);
+    REQUIRE(limit.parts.size() == 2);
+    CHECK(limit.parts[0].binding == "robot");
+    CHECK(limit.parts[1].binding == "task");
+    CHECK(std::get<LiteralExpr>(limit.parts[1].count->expr).value == "2");
+}
+
+TEST_CASE("Parser: a second limit part needs per", "[parser][relations][rule-limit]") {
+    auto errors = parse_expect_errors(
+        "rule Claims:\n"
+        "    pairs:\n"
+        "        robot: Robot\n"
+        "        task: Task\n"
+        "    limit: 1 per robot, 2\n"
+        "    on tick:\n"
+        "        emit Done\n");
+    CHECK(has_diagnostic(errors, "each part of a two-sided `limit:` needs `per <binding>`"));
 }
 
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

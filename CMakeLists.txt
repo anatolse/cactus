@@ -173,6 +173,7 @@ add_library(cactus_frontend STATIC
     src/frontend/native_result_ordering.cpp
     src/frontend/native_field_reads.cpp
     src/frontend/ranged_fields.cpp
+    src/frontend/relations.cpp
 )
 target_include_directories(cactus_frontend PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(cactus_frontend PUBLIC cactus_common)
@@ -191,6 +192,7 @@ add_library(cactus_backend_cpp_entt STATIC
     src/backends/cpp-entt/render_pass_emitter.cpp
     src/backends/cpp-entt/persistence_emitter.cpp
     src/backends/cpp-entt/persistence_restore_emitter.cpp
+    src/backends/cpp-entt/relation_emitter.cpp
     src/backends/cpp-entt/cpp_entt_codegen.cpp
 )
 target_include_directories(cactus_backend_cpp_entt PUBLIC

@@ -4295,7 +4295,7 @@ static bool analyze_limit_provably_one(const std::string& source) {
     for (const auto& decl : program.declarations) {
         const auto* rule = std::get_if<RuleNode>(&decl);
         if (rule != nullptr && rule->limit.has_value()) {
-            return rule->limit->provably_one;
+            return !rule->limit->parts.empty() && rule->limit->parts.front().provably_one;
         }
     }
     FAIL("no rule with a limit: clause in the analyzed program");

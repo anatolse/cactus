@@ -298,6 +298,16 @@ struct ListExpr {
     SourceLocation location;
 };
 
+// `R(x, y)` in `where:` or `when:`, resolved by semantic analysis from a call
+// whose callee names a relation. A null argument is the `_` wildcard.
+struct RelationTestExpr {
+    std::string relation_name;
+    SymbolId relation;
+    std::unique_ptr<ExprNode> from;
+    std::unique_ptr<ExprNode> to;
+    SourceLocation location;
+};
+
 // A trait field an expression or statement accesses; no field means the whole trait.
 struct TraitFieldRef {
     SymbolId trait;
@@ -319,7 +329,8 @@ struct ExprNode {
                                  ListExpr,
                                  SpawnExpr,
                                  QueryCallExpr,
-                                 TraitAccessExpr>;
+                                 TraitAccessExpr,
+                                 RelationTestExpr>;
     Variant expr;
     SourceLocation location;
     mutable std::optional<TraitFieldRef> field_read;  // set by semantic analysis: this node reads one trait field
@@ -559,6 +570,25 @@ struct SetTraitStmt {
     SourceLocation location;
 };
 
+// add R(x, y)[: ...] — create or replace a stored relation row at the activation commit
+struct AddRelationStmt {
+    std::string relation_name;
+    std::optional<SymbolId> resolved_relation_id;  // set by semantic analysis; source spelling is preserved
+    std::unique_ptr<ExprNode> from;
+    std::unique_ptr<ExprNode> to;
+    std::vector<FieldAssignment> args;
+    SourceLocation location;
+};
+
+// remove R(x, y) — delete matching stored relation rows; either argument may be `_`
+struct RemoveRelationStmt {
+    std::string relation_name;
+    std::optional<SymbolId> resolved_relation_id;  // set by semantic analysis; source spelling is preserved
+    std::unique_ptr<ExprNode> from;
+    std::unique_ptr<ExprNode> to;
+    SourceLocation location;
+};
+
 struct StmtNode {
     using Variant = std::variant<LetStmt,
                                  VarAssign,
@@ -574,7 +604,9 @@ struct StmtNode {
                                  ExprStmt,
                                  IfStmt,
                                  ForeachStmt,
-                                 MatchStmt>;
+                                 MatchStmt,
+                                 AddRelationStmt,
+                                 RemoveRelationStmt>;
     Variant stmt;
     SourceLocation location;
 
@@ -583,6 +615,31 @@ struct StmtNode {
         : stmt(std::move(v))
         , location(std::move(loc)) {}
 };
+
+// Appends every `Stmt` in `stmts`, including ones nested in conditionals, bounded loops and match arms.
+template <typename Stmt>
+void collect_statements(const std::vector<std::unique_ptr<StmtNode>>& stmts, std::vector<const Stmt*>& out) {
+    for (const auto& stmt : stmts) {
+        if (stmt == nullptr) {
+            continue;
+        }
+        if (const auto* found = std::get_if<Stmt>(&stmt->stmt)) {
+            out.push_back(found);
+        } else if (const auto* branch = std::get_if<IfStmt>(&stmt->stmt)) {
+            collect_statements(branch->then_body, out);
+            for (const auto& else_if : branch->else_if_branches) {
+                collect_statements(else_if.body, out);
+            }
+            collect_statements(branch->else_body, out);
+        } else if (const auto* loop = std::get_if<ForeachStmt>(&stmt->stmt)) {
+            collect_statements(loop->body, out);
+        } else if (const auto* match = std::get_if<MatchStmt>(&stmt->stmt)) {
+            for (const auto& arm : match->arms) {
+                collect_statements(arm.body, out);
+            }
+        }
+    }
+}
 
 // ── Event Handler ───────────────────────────────────────────────────────────
 
@@ -812,6 +869,24 @@ struct TraitNode {
     std::optional<std::string> state;
 };
 
+// One end of a relation: exactly one trait, optionally limited to one row per entity.
+struct RelationEndNode {
+    std::string trait_name;
+    std::optional<SymbolId> resolved_trait_id;  // set by semantic analysis; source spelling is preserved
+    bool one = false;
+    SourceLocation location;
+};
+
+// `[pub] relation R:` — rows keyed by an ordered pair of entities.
+struct RelationNode {
+    std::string name;
+    bool is_pub = false;
+    RelationEndNode from;
+    RelationEndNode to;
+    std::vector<FieldNode> fields;
+    SourceLocation location;
+};
+
 struct StateVariantNode {
     std::string name;
     bool is_final = false;
@@ -894,6 +969,22 @@ struct PairBindingNode {
     std::string name;
     std::vector<FilterEntry> traits;  // at least one entry; validated by the parser
     SourceLocation location;
+    // Set by semantic analysis on a row binding (`r: R`), whose one entry moves out of `traits`.
+    std::string relation_name;
+    std::optional<SymbolId> resolved_relation_id;
+
+    [[nodiscard]] bool is_row() const {
+        return !relation_name.empty();
+    }
+};
+
+// `each: R as r`: a unary domain over relation rows. Set by semantic analysis,
+// which moves the relation entry out of the rule's filter.
+struct RowDomainNode {
+    std::string relation_name;
+    std::string alias;
+    SymbolId relation;
+    SourceLocation location;
 };
 
 // `pairs:` block on a regular rule — exactly two bindings, in source order.
@@ -923,18 +1014,28 @@ struct WhenClause {
 
 // ── Limit Clause (dsl-rule-limit) ───────────────────────────────────────────
 
-// `limit:` block on a regular rule — a pure `int` count expression, optionally
-// partitioned by one of a pair domain's two bindings (`per <binding>`).
-// Requires an existing `filter:` or `pairs:` domain; validated by semantic
-// analysis, not the parser.
-struct LimitClause {
+// `<count> per <binding>`: at most `count` tuples per value of one pair binding.
+struct LimitPart {
     std::unique_ptr<ExprNode> count;
-    std::optional<std::string> per_binding;
-    SourceLocation per_location;
+    std::string binding;
+    SourceLocation location;  // of `per`
     // Set by semantic analysis: `count` folds to the literal 1, which is what
-    // makes `per_binding` writable in this rule's handlers.
+    // makes `binding` writable in this rule's handlers.
     bool provably_one = false;
+};
+
+// `limit:` on a regular rule: a global pure `int` count, or one or two `per`
+// parts on different pair bindings. Requires an `each:` or `pairs:` domain;
+// validated by semantic analysis, not the parser.
+struct LimitClause {
+    std::unique_ptr<ExprNode> count;  // global limit; null when `parts` is set
+    std::vector<LimitPart> parts;
     SourceLocation location;
+
+    [[nodiscard]] const LimitPart* part_for(const std::string& binding) const {
+        const auto found = std::ranges::find(parts, binding, &LimitPart::binding);
+        return found == parts.end() ? nullptr : &*found;
+    }
 };
 
 // ── Reduce Clause ───────────────────────────────────────────────────────────
@@ -990,12 +1091,46 @@ struct ReduceClause {
     SourceLocation location;
 };
 
+// The non-wildcard ends of a relation test or row command.
+template <typename Row, typename Fn>
+void for_each_relation_end(Row& row, const Fn& fn) {
+    for (auto* end : {row.from.get(), row.to.get()}) {
+        if (end != nullptr) {
+            fn(*end);
+        }
+    }
+}
+
+template <typename Clause, typename Fn>
+void for_each_reducer_expr(Clause& reduce, const Fn& fn) {
+    for (auto& reducer : reduce.reducers) {
+        for (auto* expr : {reducer.input.get(), reducer.default_value.get(), reducer.key.get()}) {
+            if (expr != nullptr) {
+                fn(*expr);
+            }
+        }
+    }
+}
+
+// The global count, or each `per` part's count.
+template <typename Limit, typename Fn>
+void for_each_limit_count(Limit& limit, const Fn& fn) {
+    if (limit.count != nullptr) {
+        fn(*limit.count);
+    }
+    for (auto& part : limit.parts) {
+        fn(*part.count);
+    }
+}
+
 // `keep T` on a unary rule, `keep T on b` on a pair rule, and
 // `keep T on b if c` on a pair rule reduced `per b`: `T` is present on each
 // recipient exactly while it passes `where:`, has rows, or meets `c`.
+// `keep R(a, b)` on a pair rule: `R` holds a row per tuple passing `where:`.
 struct KeepClause {
-    std::string trait_name;
-    std::optional<SymbolId> resolved_trait_id;
+    std::string target_name;
+    std::optional<TableRef> resolved_target;
+    std::vector<LocatedName> arguments;  // `keep R(a, b)` only: the from and to bindings
     std::optional<std::string> binding;
     SourceLocation binding_location;
     std::unique_ptr<ExprNode> condition;
@@ -1019,6 +1154,7 @@ struct RuleNode {
     FilterClause filter;                            // empty entries = no filter (match all)
     FilterClause exclude;                           // empty entries = no exclude
     std::optional<PairClause> pairs;                // set when this rule uses a binary pair domain
+    std::optional<RowDomainNode> rows;              // set when this rule runs over relation rows
     std::optional<WhereClause> where_clause;         // set when this rule declares a where: clause
     std::optional<LimitClause> limit;                // set when this rule declares a limit: clause
     std::optional<ReduceClause> reduce;              // set when this rule declares a reduce: clause
@@ -1179,7 +1315,8 @@ using Declaration = std::variant<ModuleNode,
                                  GroupNode,
                                  FuncNode,
                                  AssetDeclNode,
-                                 InputDeclNode>;
+                                 InputDeclNode,
+                                 RelationNode>;
 
 struct ProgramNode {
     std::vector<Declaration> declarations;

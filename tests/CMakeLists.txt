@@ -233,6 +233,10 @@ add_executable(test_semantic_keep test_semantic_keep.cpp)
 target_link_libraries(test_semantic_keep PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticKeepTests COMMAND test_semantic_keep)
 
+add_executable(test_semantic_relations test_semantic_relations.cpp)
+target_link_libraries(test_semantic_relations PRIVATE cactus_frontend Catch2::Catch2WithMain)
+add_test(NAME SemanticRelationsTests COMMAND test_semantic_relations)
+
 add_executable(test_semantic_command_targets test_semantic_command_targets.cpp)
 target_link_libraries(test_semantic_command_targets PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticCommandTargetsTests COMMAND test_semantic_command_targets)
@@ -392,6 +396,10 @@ add_test(NAME RuntimePublicationResetTests COMMAND test_runtime_publication_rese
 add_executable(test_runtime_hierarchy test_runtime_hierarchy.cpp)
 target_link_libraries(test_runtime_hierarchy PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
 add_test(NAME RuntimeHierarchyTests COMMAND test_runtime_hierarchy)
+
+add_executable(test_relation_store test_relation_store.cpp)
+target_link_libraries(test_relation_store PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
+add_test(NAME RelationStoreTests COMMAND test_relation_store)
 
 add_executable(test_runtime_named_slots test_runtime_named_slots.cpp)
 target_link_libraries(test_runtime_named_slots PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
@@ -732,6 +740,12 @@ cactus_add_headless_behavior_test(test_generalized_keep_headless_behavior
     CACTUS_SOURCE examples/generalized_keep.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_generalized_keep_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_relations_headless_behavior
+    CACTUS_SOURCE examples/relations.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_relations_headless_behavior.cpp
 )
 
 cactus_add_headless_behavior_test(test_collider_sweep_queries_headless_behavior

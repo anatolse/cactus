@@ -165,7 +165,7 @@ TEST_CASE("Keep: the clause parses into the rule", "[parser][rule-keep]") {
     const auto analysis = analyze(touch_rule(kReducePerBody, kKeepZones));
     const auto& rule    = analysis.rule("Touch");
     REQUIRE(rule.keep.has_value());
-    CHECK(rule.keep->trait_name == "InZone");
+    CHECK(rule.keep->target_name == "InZone");
     CHECK(rule.keep->binding == "body");
     REQUIRE(rule.keep->fields.size() == 1);
     CHECK(rule.keep->fields.front().name == "zones");
@@ -199,7 +199,7 @@ TEST_CASE("Keep: a clause without `on` parses with no binding", "[parser][rule-k
     REQUIRE_FALSE(errors.has_errors());
     const auto& keep = rule_in(ast, "Low").keep;
     REQUIRE(keep.has_value());
-    CHECK(keep->trait_name == "Seen");
+    CHECK(keep->target_name == "Seen");
     CHECK_FALSE(keep->binding.has_value());
     CHECK(keep->condition == nullptr);
 }
@@ -247,8 +247,8 @@ TEST_CASE("Keep: a valid clause is accepted and runs in its group's phase", "[se
     INFO(describe(analysis));
     REQUIRE(analysis.clean());
     const auto& rule = analysis.rule("Touch");
-    REQUIRE(rule.keep->resolved_trait_id.has_value());
-    CHECK(rule.keep->resolved_trait_id->local_name == "InZone");
+    REQUIRE(rule.keep->resolved_target.has_value());
+    CHECK(rule.keep->resolved_target->local_name == "InZone");
     REQUIRE(rule.handlers.size() == 1);
     REQUIRE(rule.handlers.front().resolved_trigger.has_value());
     CHECK(rule.handlers.front().resolved_trigger->kind == HandlerTriggerKind::Phase);

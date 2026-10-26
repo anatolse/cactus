@@ -15,6 +15,7 @@ enum class TokenType : std::uint8_t {
     STRUCT,
     ENUM,
     TRAIT,
+    RELATION,
     ENTITY,
     TEMPLATE,
     RULE,
@@ -160,6 +161,8 @@ inline const char* token_type_to_string(TokenType t) {
             return "ENUM";
         case TokenType::TRAIT:
             return "TRAIT";
+        case TokenType::RELATION:
+            return "RELATION";
         case TokenType::ENTITY:
             return "ENTITY";
         case TokenType::TEMPLATE:

@@ -918,7 +918,7 @@ TEST_CASE("ModuleArtifact: runtime declarations and handler graph round-trip", "
 }
 
 TEST_CASE("ModuleArtifact: artifact from before shape-generic spatial plans is rejected", "[artifact][spatial-join]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 41);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 42);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1137,7 +1137,7 @@ TEST_CASE("ModuleArtifact: conditional expressions round-trip with their pattern
 }
 
 TEST_CASE("ModuleArtifact: ranged fields and their container traits round-trip", "[artifact][ranged-fields]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 41);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 42);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1400,7 +1400,7 @@ TEST_CASE("ModuleArtifact: set command capabilities round-trip", "[artifact][def
     CHECK(loaded->handler_contracts.front().commands == commands);
     REQUIRE(loaded->execution_graph.handlers.size() == 1);
     CHECK(loaded->execution_graph.handlers.front().contract.commands == commands);
-    CHECK(ModuleArtifact::CURRENT_VERSION == 41);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 42);
 
     fs::remove_all(build_dir, ec);
 }
@@ -1924,7 +1924,7 @@ TEST_CASE("ModuleArtifact: every schedule edge reason round-trips", "[artifact][
 }
 
 TEST_CASE("ModuleArtifact: artifact from before field-level contracts is rejected", "[artifact][handler-contracts]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 41);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 42);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2151,7 +2151,7 @@ TEST_CASE("ModuleArtifact: unknown trigger kind is rejected", "[artifact][trait-
 }
 
 TEST_CASE("ModuleArtifact: artifact from before lifecycle triggers is rejected", "[artifact][trait-lifecycle]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 41);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 42);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2280,7 +2280,7 @@ TEST_CASE("ModuleArtifact: unknown group ordering direction is malformed", "[art
 }
 
 TEST_CASE("ModuleArtifact: artifact from before rule groups is rejected", "[artifact][rule-groups]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 41);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 42);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2305,7 +2305,7 @@ TEST_CASE("ModuleArtifact: artifact from before rule groups is rejected", "[arti
 }
 
 TEST_CASE("ModuleArtifact: artifact from before named-entity access is rejected", "[artifact][named-entity]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 41);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 42);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2664,7 +2664,7 @@ TEST_CASE("ModuleArtifact: a trait access expression round-trips", "[artifact][t
 }
 
 TEST_CASE("ModuleArtifact: artifact from before bracketed trait access is rejected", "[artifact][trait-access]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 41);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 42);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2750,4 +2750,66 @@ TEST_CASE("ModuleArtifact: an edge with the removed declaration-order reason is 
 
     fs::remove_all(build_dir, ec);
 }
+TEST_CASE("ModuleArtifact: a pub relation round-trips and resolves from another module", "[artifact][relations]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    ErrorReporter errors;
+    const auto library = analyze_module_source(
+        "module crew\n"
+        "pub trait Robot\n"
+        "pub trait Task\n"
+        "pub relation Claim:\n"
+        "    from: Robot one\n"
+        "    to: Task\n"
+        "    let score: int = 3\n"
+        "relation Hidden:\n"
+        "    from: Robot\n"
+        "    to: Task\n",
+        errors,
+        {});
+    INFO((errors.diagnostics().empty() ? std::string{} : errors.diagnostics().front().message));
+    REQUIRE_FALSE(errors.has_errors());
+    ModuleArtifact artifact(errors);
+    REQUIRE(artifact.save(library, "crew", build_dir));
+
+    std::string module_name;
+    const auto loaded = artifact.load(build_dir / "crew.cmod", module_name);
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->relations.contains("Claim"));
+    const auto& claim = loaded->relations.at("Claim");
+    CHECK(claim.is_pub);
+    CHECK(claim.symbol_id == make_symbol_id(SymbolKind::Relation, "crew", "Claim"));
+    CHECK(claim.from.trait == make_symbol_id(SymbolKind::Trait, "crew", "Robot"));
+    CHECK(claim.from.one);
+    CHECK(claim.to.trait == make_symbol_id(SymbolKind::Trait, "crew", "Task"));
+    CHECK_FALSE(claim.to.one);
+    REQUIRE(claim.fields.size() == 1);
+    CHECK(claim.fields[0].name == "score");
+    CHECK(claim.fields[0].has_default);
+
+    const auto symbols = artifact.extract_pub_symbols(build_dir / "crew.cmod");
+    REQUIRE(symbols.has_value());
+    CHECK(symbols->relations.contains("Claim"));
+    CHECK_FALSE(symbols->relations.contains("Hidden"));
+
+    ModuleImports imports;
+    imports.add("cr", *symbols);
+    const auto game = analyze_module_source(
+        "module game\n"
+        "use crew as cr\n"
+        "relation Watch:\n"
+        "    from: cr.Robot\n"
+        "    to: cr.Task\n",
+        errors,
+        imports);
+    INFO((errors.diagnostics().empty() ? std::string{} : errors.diagnostics().front().message));
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(game.relations.contains("Watch"));
+    CHECK(game.relations.at("Watch").from.trait == make_symbol_id(SymbolKind::Trait, "crew", "Robot"));
+
+    fs::remove_all(build_dir, ec);
+}
+
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

@@ -224,7 +224,7 @@ TEST_CASE("a save in the previous file format is rejected as incompatible", "[ru
     const auto adapter = make_example_file_adapter(dir.path());
 
     std::string bytes = "CPST";
-    bytes += '\x02';  // format 2
+    bytes += '\x03';  // format 3
     bytes += static_cast<char>(cactus::kPersistenceSchemaRevision);
     bytes += '\x2A';
     write_bytes(dir.path() / "slot1.cactussave", bytes);
@@ -232,7 +232,7 @@ TEST_CASE("a save in the previous file format is rejected as incompatible", "[ru
     const auto read_result = adapter.read("slot1", sample_schema());
     CHECK_FALSE(read_result.ok);
     CHECK(read_result.code == "incompatible_schema");
-    CHECK(read_result.message.contains("format 2"));
+    CHECK(read_result.message.contains("format 3"));
 }
 
 TEST_CASE("a negative zero after a positive zero keeps its sign", "[runtime][persistence][adapter][file]") {
@@ -267,7 +267,7 @@ TEST_CASE("a save nesting values without bound fails to read instead of overflow
 
     constexpr int kLevels = 200000;
     std::string bytes = "CPST";
-    bytes += '\x03';  // format
+    bytes += '\x04';  // format
     bytes += static_cast<char>(cactus::kPersistenceSchemaRevision);
     bytes += '\x2A';                        // fingerprint
     bytes += std::string("\x01w", 2);       // module
@@ -307,4 +307,22 @@ TEST_CASE("a save nesting values without bound fails to read instead of overflow
     CHECK_FALSE(read_result.ok);
     CHECK(read_result.code == "io_failure");
 }
+TEST_CASE("relation rows survive the file adapter round trip", "[runtime][persistence][adapter][file][relations]") {
+    cactus_test::ScopedTempDirectory dir;
+    const auto adapter = make_example_file_adapter(dir.path());
+    auto builder       = sample_builder();
+    builder.add_entity(2, "world.Boss");
+    builder.add_relation_row("world.Rival", 1, 2, {{.name = "since", .value = Value::of_int(3)}});
+    builder.add_relation_row("world.Rival", 2, 1, {{.name = "since", .value = Value::of_int(5)}});
+    builder.add_relation_row("world.Watch", 2, 2);
+    const auto snapshot = std::move(builder).finish();
+
+    REQUIRE(adapter.write("slot1", sample_schema(), snapshot).ok);
+    const auto read_result = adapter.read("slot1", sample_schema());
+    REQUIRE(read_result.ok);
+    CHECK(read_result.snapshot == snapshot);
+    REQUIRE(read_result.snapshot.relation_rows().size() == 3);
+    CHECK(read_result.snapshot.relation_name(read_result.snapshot.relation_rows()[2]) == "world.Watch");
+}
+
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

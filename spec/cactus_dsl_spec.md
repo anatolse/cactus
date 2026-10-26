@@ -1,6 +1,6 @@
 # Cactus DSL Language Specification
 
-**Version:** 0.6.0
+**Version:** 0.7.0
 **Status:** Draft
 
 ## 1. Overview
@@ -95,7 +95,7 @@ Single-line comments start with `#` and extend to the end of the line.
 
 ```text
 module  use     const   struct  enum    trait   entity  template
-rule    event   phase   func    extern  asset   input
+rule    event   phase   func    extern  asset   input   relation
 let     var     persist pub
 on      emit    if      else    match   return
 order   by      after   as      every   max
@@ -107,6 +107,8 @@ fixed_tick late_tick
 ```
 
 `set` is a contextual keyword: it starts a `set_stmt` (§3.16) only at statement start when followed by a trait reference, and is an ordinary identifier everywhere else.
+
+`one` is contextual: it marks a relation end (§3.6.2) only right after the end's trait name.
 
 `state` and `final` are contextual words too. `state` starts a state declaration (§3.6.1) only at top-level declaration position when an identifier follows. `final` marks a variant only right after a variant name. Both stay ordinary identifiers elsewhere, so a field named `state` keeps working.
 
@@ -295,6 +297,62 @@ state EnemyMode:
 - Variants cannot declare `persist` fields, and cannot be targets of `project` or `keep`. A save does not record states.
 
 Use a state when rules select by it or react to entering and leaving it. Use an enum field when the value is only read.
+
+#### 3.6.2 Relations
+
+A relation is a set of rows. Each row links two entities and is keyed by the ordered pair `(from, to)`, so a relation holds at most one row per pair. A row has no identity of its own: it carries no traits, receives no events, and cannot be spawned, destroyed or emitted to.
+
+```ebnf
+relation_decl = [ "pub" ] "relation" IDENTIFIER ":" NEWLINE INDENT
+                "from" ":" dotted_name [ "one" ] NEWLINE
+                "to" ":" dotted_name [ "one" ] NEWLINE
+                { field_decl }
+                DEDENT ;
+```
+
+```cactus
+relation Walk:
+    from: Tile
+    to: Tile
+    let cost: float = 1.0
+
+# A robot claims at most one task, and a task has at most one robot.
+relation Claim:
+    from: Robot one
+    to: DigTask one
+```
+
+- Each end names exactly one durable trait; a state variant or a projected trait is rejected. Fields are `let` only: to change a row, replace it with `add R(a, b):`. `persist` is rejected on a relation field.
+- A row lives only while both ends are valid. It is removed at the commit position of the command that destroys an end or removes its end trait (§4.4), so no row ever names a dead entity.
+- A self row `R(a, a)` is allowed. `R(a, b)` and `R(b, a)` are different rows. Rows are ordered by creation: the commit position of the command or keep run that created them. Replacing a row keeps its position.
+- A relation is **kept** when a `keep R(a, b)` clause names it (§3.8.6), and **stored** otherwise. A stored relation changes only through `add R` and `remove R` (§4.4). A program has at most one keeper per relation, and `add`/`remove` of a kept relation is an error.
+- **`one` ends.** An end marked `one` holds at most one row per entity on that end; no mark means many. The compiler accepts an `add R(x, y)` of such a relation only when it proves the limit: the end argument is `self` of a unary rule or a pair binding limited to one (`limit: 1 per b`, §3.8.3); the other argument is a pair binding, `self`, a named entity or a constant; the handler runs on a phase; the rule's `where:` holds `not R(e, _)` (from end) or `not R(_, e)` (to end) as a top-level conjunct; and no other rule adds `R` in the same phase. Any other `add` is an error that names the failing condition and shows the proven form. A kept relation can't mark an end `one`.
+
+**Reading relations.** `R(x, y)` is a pure `bool` test, true when `R` holds the row `(x, y)` in the snapshot of the current pass. Either argument may be `_`, which matches any entity; `R(_, _)` is rejected. Tests are allowed only in `where:` and `when:`; `and`, `or` and `not` compose them into intersection, union and difference. A rule can also bind rows (§3.8.1): `r: R` in `pairs:`, or `each: R as r`. A row binding exposes `r.from`, `r.to` and `r.<field>`, is read-only, and can't be used with brackets or as a command or `emit` target. A rule binds at most one relation.
+
+```cactus
+rule AssignTasks:
+    pairs:
+        robot: Robot
+        task: DigTask
+    order by:
+        abs(robot[Robot].x - task[DigTask].x) asc
+    where:
+        not Claim(robot, _)
+        not Claim(_, task)
+    limit: 1 per robot, 1 per task
+
+    on fixed_tick:
+        add Claim(robot, task)
+
+rule FinishClaims:
+    each: Claim as claim
+
+    on fixed_tick:
+        emit Finished to claim.to
+```
+
+Use a relation for a link between two entities instead of an entity with `entity_id` fields: rows can't duplicate, can't outlive their ends, and the backend sees the graph.
 
 ### 3.7 Entities and Templates
 
@@ -625,7 +683,7 @@ pairs_clause    = "pairs" ":" NEWLINE INDENT
 pair_binding    = IDENTIFIER ":" clause_list(filter_entry) ;
 ```
 
-Each binding requires at least one positive trait entry; a `pairs:` block always has exactly two bindings.
+Each binding requires at least one positive trait entry; a `pairs:` block always has exactly two bindings. A binding whose only entry is a relation name (`r: R`, no alias) is a **row binding**: it iterates the rows of `R` instead of entities, and follows §3.6.2. At most one binding is a row binding. A `where:` conjunct `r.from == <expr>` or `r.to == <expr>`, where `<expr>` reads only the other binding, makes the pass look rows up by that end instead of walking the product.
 
 ```cactus
 rule DetectContacts:
@@ -762,6 +820,22 @@ rule GroundActor:
 
 **The global form bounds total count; the `per` form bounds each partition.** `limit: N` with no `per` admits at most `N` rows (unary) or `N` tuples in total (pair), and guarantees nothing about how often any single entity occurs among them. `limit: N per <binding>` is accepted only on a `pairs:` rule without `reduce:` (each group is already one row) and only when `<binding>` names one of that rule's two bindings; it admits at most `N` tuples for each distinct value of that binding. A binding value with no surviving tuples produces no activation at all.
 
+**A two-sided limit picks a greedy matching.** `limit: n per a, m per b` names both entity bindings of a `pairs:` rule, one part each. The tuples that pass `where:` are walked once in the rule's order (`order by:` keys, then left-binding-major snapshot order), and a tuple is kept when its `a` value has fewer than `n` kept tuples and its `b` value fewer than `m`. Each part follows the count rules below on its own binding, and each part whose count is provably `1` makes its binding writable. A part can't name a row binding.
+
+```cactus
+rule AssignTasks:
+    pairs:
+        robot: Robot
+        task: DigTask
+    order by:
+        abs(robot[Robot].x - task[DigTask].x) asc
+    limit: 1 per robot, 1 per task
+
+    on fixed_tick:
+        robot[Robot].busy = true
+        task[DigTask].taken = true
+```
+
 **The count expression is pure, `int`-typed, and narrowly scoped.** It has the same purity class as a `where:` predicate (§3.8.2) and must type-check as `int`. A global `limit:`'s count may reference only constants. A `limit ... per <binding>`'s count may additionally read `<binding>`'s own trait fields — evaluated once per distinct binding value — but must not reference the rule's other binding, whose value varies across the very tuples the count bounds.
 
 **Selection is deterministic.** With `order by:`, sort keys are evaluated against the rule's snapshot and equal keys break ties by stable creation order. Without `order by:`, `limit:` takes the domain's existing stable iteration order — for a pair domain, the left-binding-major snapshot order of §3.8.1. Each partition of a `per` limit resolves independently of every other. A conforming backend's physical strategy must not change which rows this selects.
@@ -875,6 +949,28 @@ There are three forms, one per domain:
 | `each:` + `keep T` | each entity of the domain | it passes `where:` |
 | `pairs:` + `keep T on b` | each entity of `b` | it has at least one row after `where:` |
 | `pairs:` + `reduce per b:` + `keep T on b [if c]` | each group entity `b` | its group has rows, or `c` is true |
+| `pairs:` + `keep R(a, b)` | one row of relation `R` per tuple | the tuple passes `where:` |
+
+`keep R(a, b)` keeps a relation (§3.6.2) instead of a trait. `a` and `b` are the rule's two entity bindings, in either order; the one passed for `from` must select `R`'s `from` end trait, and the one passed for `to` its `to` end trait. The field block may read both bindings, constants and named entity fields. Each run makes `R` hold exactly the rows of that run's tuples, added, updated and removed at its commit; `when:` false leaves every row as it was. The rule can't declare `reduce:`, `if`, or a row binding. A keep rule that tests or binds its own relation is a keep loop.
+
+```cactus
+rule WalkLinks:
+    pairs:
+        a:
+            Tile
+            Floor
+            physics.Collider
+        b:
+            Tile
+            Floor
+            physics.Collider
+    group: physics.contacts
+    where:
+        a != b
+        physics.touching(a, b)
+    keep Walk(a, b):
+        cost = 1.0 + (a[Tile].id + b[Tile].id) * 0.5
+```
 
 ```cactus
 trait LowHealth:
@@ -1660,6 +1756,8 @@ For ranged `let` fields (§3.6):
 - A failed check makes the whole operation do nothing: a spawn creates no entity and no children, so its handle stays stale and no trigger fires; an `add` leaves the entity as it was; a `project` leaves the trait unprojected; a declared entity is not created and its named handle is stale. The runtime reports a fault naming the trait, the field, the value and the evaluated range. Game code observes only that the command had no effect.
 - Native code that creates entities directly, bypassing commands, is outside the check.
 
+**Relation commands.** `add R(x, y)`, optionally with a field block, and `remove R(x, y)` change a stored relation (§3.6.2). Both are structural commands: the ends and field values are evaluated in the handler, and the change applies at the activation commit in command order, like `add T` and `remove T`. At its position, `add` creates the row, or replaces the field values of the existing one (fields the block leaves out take their defaults); it does nothing when either end is stale or lacks its end trait. `remove` deletes every matching row; `_` on either side matches any entity, and no match is no change. `_` is not allowed in `add`. Relation commands are commands in the handler contract, with the same ordering and race rules as trait commands. Destroying an entity or removing an end trait removes every row on that end at the same position, so a later command in the same commit already sees them gone.
+
 ### 4.5 Purity and Recursion
 
 - user `func` declarations are pure
@@ -2099,6 +2197,8 @@ World persistence is a small gameplay request surface plus a generated, format-i
 **Construction baseline vs. current value.** For an eligible entity, fields without `persist` are recorded at the value they held immediately after construction — the archetype default, or the evaluated `spawn`/template argument — never a later mutation. `persist` fields are recorded at their current value at capture time. A field only changes what a save reports at all if it carries `persist`; everything else is baseline provenance for reconstructing the same starting point.
 
 **Runtime structure.** The compiler generates one canonical schema descriptor and typed snapshot per program: entity records in creation order, document-local entity identities (so cycles and forward references need no live handle), canonical archetype/trait identity, final trait membership with reconstruction data, and parent links. This is generated data, not something authored in Cactus, and it excludes anything not reachable from a `persist` field or construction argument — event queues, physics solver internals, and random state are not implicitly captured.
+
+**Relation rows.** A snapshot records every row of every stored relation whose two ends it records, after the entity records and in row creation order, with document-local end identities and all field values. A row with an unrecorded end is left out. Kept relations are not recorded: after a restore their rows are empty until their keep rule runs. Restore rebuilds each row between the fresh handles of its ends and fires no trigger. Validation rejects, before the world changes, a row whose end has no record, an end record without the end trait, two rows with the same pair, an unknown relation or field, and rows that break a `one` end.
 
 **Requesting a save.** `std.persistence` exposes an ordinary event, so a save is requested like any other gameplay event:
 

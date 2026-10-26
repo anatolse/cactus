@@ -5,12 +5,18 @@
 #include "backends/cpp-entt/type_utils.hpp"
 
 #include <string>
+#include <vector>
 
 namespace cactus {
 
 class EnttComponentEmitter {
 public:
     static std::string emit_component(const ResolvedTrait& trait, const DecoratedProgram& program = {});
+    // The member lines of a trait or relation row struct, defaults included.
+    static std::string emit_field_lines(const std::string& module_name,
+                                        const std::string& owner_name,
+                                        const std::vector<ResolvedField>& fields,
+                                        const DecoratedProgram& program);
     // One `remove_state_variant` specialization per state, emitted after every component.
     static std::string emit_state_helpers(const DecoratedProgram& program);
     static std::string emit_pod_struct(const ResolvedStruct& s);

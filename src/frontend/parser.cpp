@@ -61,6 +61,7 @@ bool Parser::is_synchronization_point() const {
         case TokenType::DEDENT:
         case TokenType::EOF_TOKEN:
         case TokenType::TRAIT:
+        case TokenType::RELATION:
         case TokenType::RULE:
         case TokenType::FUNC:
         case TokenType::STRUCT:
@@ -183,6 +184,9 @@ Declaration Parser::parse_declaration() {  // NOLINT(readability-function-cognit
     if (tok.type == TokenType::TRAIT) {
         return parse_trait();
     }
+    if (tok.type == TokenType::RELATION) {
+        return parse_relation(false);
+    }
     if (tok.type == TokenType::RULE) {
         return parse_rule();
     }
@@ -219,6 +223,9 @@ Declaration Parser::parse_declaration() {  // NOLINT(readability-function-cognit
             auto t   = parse_trait();
             t.is_pub = true;
             return t;
+        }
+        if (check(TokenType::RELATION)) {
+            return parse_relation(true);
         }
         if (check(TokenType::ENTITY)) {
             return parse_entity(true);
@@ -265,7 +272,7 @@ Declaration Parser::parse_declaration() {  // NOLINT(readability-function-cognit
             return parse_struct();
         }
         errors_.error(peek().location,
-                      "expected trait, state, entity, template, func, extern func, asset, input, event, phase, group, "
+                      "expected trait, relation, state, entity, template, func, extern func, asset, input, event, phase, group, "
                       "enum, or struct "
                       "after 'pub'");
     }
@@ -288,7 +295,7 @@ Declaration Parser::parse_declaration() {  // NOLINT(readability-function-cognit
     }
 
     errors_.error(tok.location,
-                  "expected declaration (module, use, const, struct, enum, trait, state, entity, rule, view, event, phase, "
+                  "expected declaration (module, use, const, struct, enum, trait, relation, state, entity, rule, view, event, phase, "
                   "group, func, extern, interface, asset, input)");
     advance();  // skip bad token
     return ModuleNode{.name = "<error>", .location = tok.location};
@@ -543,6 +550,81 @@ TraitNode Parser::parse_trait() {
 
     expect_dedent();
     return node;
+}
+
+// ── Relation ────────────────────────────────────────────────────────────────
+
+RelationNode Parser::parse_relation(bool is_pub) {
+    RelationNode node;
+    node.is_pub   = is_pub;
+    node.location = peek().location;
+    consume(TokenType::RELATION, "expected 'relation'");
+    node.name = consume(TokenType::IDENTIFIER, "expected relation name").value;
+    consume(TokenType::COLON, "expected ':' after relation name");
+    expect_newline();
+    expect_indent();
+
+    bool seen_from = false;
+    bool seen_to   = false;
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+            break;
+        }
+        const auto error_count_before = errors_.error_count();
+        if (check(TokenType::FROM)) {
+            parse_relation_end(node, node.from, "from", seen_from);
+        } else if (check(TokenType::TO)) {
+            parse_relation_end(node, node.to, "to", seen_to);
+        } else {
+            const auto location = peek().location;
+            auto field          = parse_field();
+            if (field.modifiers.is_var) {
+                errors_.error(location,
+                              "relation fields are `let`; to change a row, replace it with `add " + node.name +
+                                  "(a, b):`");
+            }
+            if (field.modifiers.is_persist) {
+                errors_.error(location, "relation fields can't be `persist`; a stored row is saved with its ends");
+            }
+            node.fields.push_back(std::move(field));
+        }
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+        }
+    }
+    expect_dedent();
+    for (const auto& [seen, label] : {std::pair{seen_from, "from"}, std::pair{seen_to, "to"}}) {
+        if (!seen) {
+            errors_.error(node.location, "relation '" + node.name + "' needs a `" + label + ":` end");
+        }
+    }
+    return node;
+}
+
+// `from: Trait [one]` or `to: Trait [one]`.
+void Parser::parse_relation_end(RelationNode& node, RelationEndNode& end, const char* label, bool& seen) {
+    const auto location = advance().location;
+    if (seen) {
+        errors_.error(location, "relation '" + node.name + "' declares `" + label + ":` twice");
+    }
+    seen = true;
+    consume(TokenType::COLON, std::string("expected ':' after '") + label + "'");
+    if (!check(TokenType::IDENTIFIER)) {
+        errors_.error(peek().location, std::string("expected a trait name after `") + label + ":`");
+        return;
+    }
+    end.location   = location;
+    end.trait_name = parse_dotted_name();
+    if (check(TokenType::IDENTIFIER) && peek().value == "one") {
+        advance();
+        end.one = true;
+    }
+    if (check(TokenType::COMMA)) {
+        errors_.error(peek().location, "an end names exactly one trait");
+        return;
+    }
+    expect_newline();
 }
 
 // ── Field ───────────────────────────────────────────────────────────────────
@@ -1704,11 +1786,11 @@ bool Parser::at_limit_clause() const {
     return at_contextual_clause("limit");
 }
 
-// `limit: <expression> [per <binding>]` — a single inline count expression
-// rather than an indented block, since unlike where:/order by: a rule carries
-// at most one limit. `per` is contextual, so an expression the author ended
-// with a bare identifier can't be confused for it: the count is parsed first
-// and `per` only recognized when it is followed by the binding identifier.
+// `limit: <expression> [per <binding> [, <expression> per <binding>]]` — a
+// single inline line rather than an indented block, since unlike where:/order
+// by: a rule carries at most one limit. `per` is contextual, so an expression
+// the author ended with a bare identifier can't be confused for it: the count
+// is parsed first and `per` only recognized when it is followed by the binding.
 LimitClause Parser::parse_limit_clause() {
     auto loc = peek().location;
     advance();  // consume contextual 'limit' identifier
@@ -1716,12 +1798,21 @@ LimitClause Parser::parse_limit_clause() {
 
     LimitClause clause;
     clause.location = loc;
-    clause.count    = parse_expression();
-
-    if (check(TokenType::IDENTIFIER) && peek().value == "per") {
-        clause.per_location = peek().location;
-        advance();
-        clause.per_binding = consume(TokenType::IDENTIFIER, "expected binding name after 'per'").value;
+    auto count      = parse_expression();
+    while (check(TokenType::IDENTIFIER) && peek().value == "per") {
+        LimitPart part{.count = std::move(count), .location = advance().location};
+        part.binding = consume(TokenType::IDENTIFIER, "expected binding name after 'per'").value;
+        clause.parts.push_back(std::move(part));
+        if (!match(TokenType::COMMA)) {
+            break;
+        }
+        count = parse_expression();
+        if (!check(TokenType::IDENTIFIER) || peek().value != "per") {
+            errors_.error(count->location, "each part of a two-sided `limit:` needs `per <binding>`");
+        }
+    }
+    if (clause.parts.empty()) {
+        clause.count = std::move(count);
     }
     expect_newline();
     return clause;
@@ -1802,7 +1893,19 @@ bool Parser::at_keep_clause() const {
 KeepClause Parser::parse_keep_clause() {
     KeepClause clause;
     clause.location   = advance().location;  // consume 'keep'
-    clause.trait_name = parse_dotted_name();
+    clause.target_name = parse_dotted_name();
+    if (check(TokenType::LPAREN)) {
+        const auto open = advance().location;
+        for (bool more = true; more; more = match(TokenType::COMMA)) {
+            const auto name =
+                consume(TokenType::IDENTIFIER, "expected a pair binding in `keep " + clause.target_name + "(...)`");
+            clause.arguments.push_back(LocatedName{.spelling = name.value, .location = name.location});
+        }
+        consume(TokenType::RPAREN, "expected ')' after the relation's bindings");
+        if (clause.arguments.size() != 2) {
+            errors_.error(open, "`keep " + clause.target_name + "(a, b)` names the rule's two pair bindings");
+        }
+    }
     if (check(TokenType::ON)) {
         clause.binding_location = advance().location;
         clause.binding = match(TokenType::SELF) ? "self"
@@ -2441,6 +2544,62 @@ ForeachStmt Parser::parse_foreach_stmt() {
     return stmt;
 }
 
+// `add R(...)` / `remove R(...)`: a dotted name directly followed by `(`.
+bool Parser::at_relation_row_command() const {
+    for (auto index = current_ + 1; index + 1 < tokens_.size(); index += 2) {
+        if (tokens_[index].type != TokenType::IDENTIFIER) {
+            return false;
+        }
+        const auto next = tokens_[index + 1].type;
+        if (next == TokenType::LPAREN) {
+            return true;
+        }
+        if (next != TokenType::DOT) {
+            return false;
+        }
+    }
+    return false;
+}
+
+void Parser::parse_relation_row(const std::string& relation,
+                                std::unique_ptr<ExprNode>& from,
+                                std::unique_ptr<ExprNode>& to) {
+    const auto location = consume(TokenType::LPAREN, "expected '('").location;
+    std::vector<std::unique_ptr<ExprNode>> args;
+    for (bool more = !check(TokenType::RPAREN); more; more = match(TokenType::COMMA)) {
+        args.push_back(parse_expression());
+    }
+    consume(TokenType::RPAREN, "expected ')' after the relation row");
+    if (args.size() != 2) {
+        errors_.error(location, "a relation row takes two entities: `" + relation + "(from, to)`");
+        return;
+    }
+    from = std::move(args[0]);
+    to   = std::move(args[1]);
+}
+
+AddRelationStmt Parser::parse_add_relation_stmt() {
+    AddRelationStmt stmt;
+    stmt.location      = advance().location;  // consume 'add'
+    stmt.relation_name = parse_dotted_name();
+    parse_relation_row(stmt.relation_name, stmt.from, stmt.to);
+    if (match(TokenType::COLON)) {
+        stmt.args = parse_field_assignment_block();
+    } else {
+        expect_newline();
+    }
+    return stmt;
+}
+
+RemoveRelationStmt Parser::parse_remove_relation_stmt() {
+    RemoveRelationStmt stmt;
+    stmt.location      = advance().location;  // consume 'remove'
+    stmt.relation_name = parse_dotted_name();
+    parse_relation_row(stmt.relation_name, stmt.from, stmt.to);
+    expect_newline();
+    return stmt;
+}
+
 RemoveTraitStmt Parser::parse_remove_trait_stmt() {
     auto loc = peek().location;
     consume(TokenType::REMOVE, "expected 'remove'");
@@ -2785,6 +2944,12 @@ std::unique_ptr<StmtNode> Parser::parse_statement() {
     }
     if (check(TokenType::LOAD)) {
         return std::make_unique<StmtNode>(StmtNode::Variant{parse_load_stmt()}, loc);
+    }
+    if (check(TokenType::ADD) && at_relation_row_command()) {
+        return std::make_unique<StmtNode>(StmtNode::Variant{parse_add_relation_stmt()}, loc);
+    }
+    if (check(TokenType::REMOVE) && at_relation_row_command()) {
+        return std::make_unique<StmtNode>(StmtNode::Variant{parse_remove_relation_stmt()}, loc);
     }
     if (check(TokenType::ADD)) {
         auto add = parse_add_trait_stmt();

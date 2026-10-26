@@ -195,6 +195,30 @@ void ModuleArtifact::write_traits(std::ostream& out,
     }
 }
 
+void ModuleArtifact::write_relations(std::ostream& out,
+                                     const std::unordered_map<std::string, ResolvedRelation>& relations) {
+    write_u32(out, static_cast<uint32_t>(relations.size()));
+    for (const auto& [name, relation] : relations) {
+        write_str(out, relation.name);
+        write_str(out, relation.module_name);
+        write_str(out, relation.canonical_id);
+        write_optional_symbol_id(out, relation.symbol_id);
+        write_bool(out, relation.is_pub);
+        for (const auto* end : {&relation.from, &relation.to}) {
+            write_symbol_id(out, end->trait);
+            write_bool(out, end->one);
+        }
+        write_bool(out, relation.kept_by.has_value());
+        if (relation.kept_by.has_value()) {
+            write_str(out, *relation.kept_by);
+        }
+        write_u32(out, static_cast<uint32_t>(relation.fields.size()));
+        for (const auto& field : relation.fields) {
+            write_field(out, field);
+        }
+    }
+}
+
 void ModuleArtifact::write_states(std::ostream& out, const std::unordered_map<std::string, ResolvedState>& states) {
     write_u32(out, static_cast<uint32_t>(states.size()));
     for (const auto& [name, state] : states) {
@@ -549,6 +573,7 @@ void ModuleArtifact::write_contract(std::ostream& out, const HandlerContract& co
     for (const auto& binding : contract.pair_bindings) {
         write_str(out, binding.name);
         write_symbol_vector(out, binding.required_traits);
+        write_optional_symbol_id(out, binding.relation);
     }
     write_symbol_set(out, contract.reads);
     write_u32(out, static_cast<uint32_t>(contract.bound_reads.size()));
@@ -953,6 +978,32 @@ std::unordered_map<std::string, ResolvedTrait> ModuleArtifact::read_traits(std::
     return traits;
 }
 
+std::unordered_map<std::string, ResolvedRelation> ModuleArtifact::read_relations(std::istream& in) {
+    std::unordered_map<std::string, ResolvedRelation> relations;
+    const uint32_t count = read_u32(in);
+    for (uint32_t i = 0; i < count && in.good(); ++i) {
+        ResolvedRelation relation;
+        relation.name         = read_str(in);
+        relation.module_name  = read_str(in);
+        relation.canonical_id = read_str(in);
+        relation.symbol_id    = read_optional_symbol_id(in);
+        relation.is_pub       = read_bool(in);
+        for (auto* end : {&relation.from, &relation.to}) {
+            end->trait = read_symbol_id(in);
+            end->one   = read_bool(in);
+        }
+        if (read_bool(in)) {
+            relation.kept_by = read_str(in);
+        }
+        const uint32_t field_count = read_u32(in);
+        for (uint32_t j = 0; j < field_count && in.good(); ++j) {
+            relation.fields.push_back(read_field(in));
+        }
+        relations[relation.name] = std::move(relation);
+    }
+    return relations;
+}
+
 std::unordered_map<std::string, ResolvedStruct> ModuleArtifact::read_structs(std::istream& in) {
     std::unordered_map<std::string, ResolvedStruct> structs;
     uint32_t count = read_u32(in);
@@ -1279,6 +1330,7 @@ HandlerContract ModuleArtifact::read_contract(std::istream& in) {
         RelationBinding binding;
         binding.name            = read_str(in);
         binding.required_traits = read_symbol_vector(in);
+        binding.relation        = read_optional_symbol_id(in);
         contract.pair_bindings.push_back(std::move(binding));
     }
 
@@ -1606,6 +1658,7 @@ bool ModuleArtifact::save(const DecoratedProgram& program,
     // Sections
     write_traits(out, program.traits, module_name);
     write_states(out, program.states);
+    write_relations(out, program.relations);
     write_structs(out, program.structs, module_name);
     write_enums(out, program.enums, module_name);
     write_funcs(out, program.funcs, module_name);
@@ -1662,6 +1715,7 @@ std::optional<DecoratedProgram> ModuleArtifact::load(const fs::path& path, std::
     program.module_name       = module_name_out;
     program.traits            = read_traits(in);
     program.states            = read_states(in);
+    program.relations         = read_relations(in);
     program.structs           = read_structs(in);
     program.enums             = read_enums(in);
     program.funcs             = read_funcs(in);
@@ -1733,6 +1787,8 @@ std::optional<ImportedSymbols> ModuleArtifact::extract_pub_symbols(const fs::pat
     export_declarations<true>(program->traits, symbols.traits, SymbolKind::Trait, module_name);
     symbols.states = program->states;
     std::erase_if(symbols.states, [](const auto& entry) { return !entry.second.is_pub; });
+    symbols.relations = program->relations;
+    std::erase_if(symbols.relations, [](const auto& entry) { return !entry.second.is_pub; });
     export_declarations<false>(program->structs, symbols.structs, SymbolKind::Struct, module_name);
     export_declarations<false>(program->enums, symbols.enums, SymbolKind::Enum, module_name);
     export_declarations<true>(program->funcs, symbols.funcs, SymbolKind::Func, module_name);
@@ -1820,6 +1876,8 @@ static_assert(expr_alternative_is<7, MatchExpr>);
 static_assert(expr_alternative_is<8, IfExpr>);
 static_assert(expr_alternative_is<9, ListExpr>);
 static_assert(expr_alternative_is<12, TraitAccessExpr>);
+// A relation test only appears in `where:` / `when:`, which artifacts don't hold.
+static_assert(expr_alternative_is<13, RelationTestExpr>);
 
 namespace {
 
@@ -1830,7 +1888,8 @@ bool expression_is_serializable(const ExprNode& expression) {
     visit_expression(expression, [&serializable](const ExprNode& node) {
         serializable = serializable && !std::holds_alternative<SelfExpr>(node.expr) &&
                        !std::holds_alternative<SpawnExpr>(node.expr) &&
-                       !std::holds_alternative<QueryCallExpr>(node.expr);
+                       !std::holds_alternative<QueryCallExpr>(node.expr) &&
+                       !std::holds_alternative<RelationTestExpr>(node.expr);
     });
     return serializable;
 }

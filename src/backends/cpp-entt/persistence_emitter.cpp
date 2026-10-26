@@ -2,6 +2,7 @@
 
 #include "backends/cpp-entt/component_emitter.hpp"
 #include "backends/cpp-entt/construction_retention.hpp"
+#include "backends/cpp-entt/relation_emitter.hpp"
 #include "backends/cpp-entt/type_utils.hpp"
 
 #include "common/persistence_document.hpp"
@@ -206,8 +207,14 @@ struct DeclarationModel {
     std::vector<std::string> variants;  // enums only; declaration order is the values
 };
 
+struct RelationModel {
+    DeclarationModel declaration;
+    const ResolvedRelation* relation = nullptr;
+};
+
 struct SchemaModel {
     std::vector<FlatValueType> value_types;
+    std::vector<RelationModel> relations;
     std::vector<DeclarationModel> traits;
     std::vector<DeclarationModel> structs;
     std::vector<DeclarationModel> enums;
@@ -263,6 +270,12 @@ SchemaModel build_schema_model(const DecoratedProgram& program) {
     model.enums = declaration_models(program.enums, [](const ResolvedEnum& declaration) {
         return DeclarationModel{.canonical = declaration_identity(declaration), .variants = declaration.variants};
     });
+    for (const auto* relation : stored_relations(program)) {
+        model.relations.push_back(RelationModel{
+            .declaration = DeclarationModel{.canonical = relation->canonical_id,
+                                            .fields    = field_models(relation->fields, model.value_types)},
+            .relation    = relation});
+    }
     for (const auto& archetype : program.persistence.archetypes) {
         if (archetype_retains_construction_data(archetype, program.persistence.attaches_persistent_trait)) {
             model.archetypes.push_back(&archetype);
@@ -389,6 +402,12 @@ std::string EnttPersistenceEmitter::canonical_schema_text(const DecoratedProgram
         out << "trait " << declaration.canonical << "\n";
         render_fields(out, model, declaration);
     }
+    for (const auto& [declaration, relation] : model.relations) {
+        out << "relation " << declaration.canonical << " from " << make_canonical_id(relation->from.trait)
+            << (relation->from.one ? " one" : "") << " to " << make_canonical_id(relation->to.trait)
+            << (relation->to.one ? " one" : "") << "\n";
+        render_fields(out, model, declaration);
+    }
     for (const auto* archetype : model.archetypes) {
         out << "archetype " << canonical_node_string(archetype->node) << "\n";
         for (const auto& baseline : archetype->baseline_traits) {
@@ -465,6 +484,20 @@ std::string EnttPersistenceEmitter::emit_schema_descriptor(const DecoratedProgra
     }
     out << "}};\n\n";
 
+    for (const auto& [declaration, relation] : model.relations) {
+        emit_field_array(out, declaration);
+    }
+    out << "inline constexpr std::array<cactus::persistence::RelationDescriptor, " << model.relations.size()
+        << "> generated_relations = {{\n";
+    for (const auto& [declaration, relation] : model.relations) {
+        out << "    {.relation = \"" << declaration.canonical << "\", .from_trait = \""
+            << make_canonical_id(relation->from.trait) << "\", .to_trait = \"" << make_canonical_id(relation->to.trait)
+            << "\", .from_one = " << (relation->from.one ? "true" : "false")
+            << ", .to_one = " << (relation->to.one ? "true" : "false")
+            << ", .fields = " << array_name_for(declaration.canonical) << "},\n";
+    }
+    out << "}};\n\n";
+
     const auto unchecked = unchecked_traits(program);
     emit_string_array(out, "generated_unchecked_traits", unchecked);
     for (const auto* archetype : model.archetypes) {
@@ -498,6 +531,7 @@ std::string EnttPersistenceEmitter::emit_schema_descriptor(const DecoratedProgra
     out << "    .structs = generated_structs,\n";
     out << "    .enums = generated_enums,\n";
     out << "    .archetypes = generated_archetypes,\n";
+    out << "    .relations = generated_relations,\n";
     out << "    .checks_trait_sets = " << (program.reachability.derived ? "true" : "false") << ",\n";
     out << "    .unchecked_traits = generated_unchecked_traits,\n";
     out << "    .parents_first = " << (EnttCodegenUtils::checks_reparent(program) ? "false" : "true") << ",\n";
@@ -522,6 +556,12 @@ std::vector<PersistableTrait> persistable_traits(const DecoratedProgram& program
     }
     std::ranges::sort(traits, {}, &PersistableTrait::canonical);
     return traits;
+}
+
+std::vector<const ResolvedRelation*> stored_relations(const DecoratedProgram& program) {
+    auto relations = sorted_relations(program);
+    std::erase_if(relations, [](const ResolvedRelation* relation) { return relation->kept_by.has_value(); });
+    return relations;
 }
 
 std::vector<SymbolId> persistable_symbols(const std::vector<PersistableTrait>& traits) {
@@ -692,7 +732,8 @@ std::string field_list_registration(const DecoratedProgram& program,
 void emit_document_tables(std::ostringstream& out,
                           const DecoratedProgram& program,
                           const std::vector<PersistableTrait>& traits) {
-    const auto table = build_reference_name_table(program);
+    const auto table     = build_reference_name_table(program);
+    const auto relations = stored_relations(program);
     out << "// Where this program's names and layouts sit in one document's tables.\n";
     out << "struct GeneratedDocumentTables {\n";
     out << "    std::uint32_t unset_name = 0;\n";
@@ -701,6 +742,7 @@ void emit_document_tables(std::ostringstream& out,
     out << "    std::array<std::uint32_t, " << table.input_axes.size() << "> axes{};\n";
     out << "    std::array<std::uint32_t, " << program.persistence.archetypes.size() << "> nodes{};\n";
     out << "    std::array<std::uint32_t, " << traits.size() << "> traits{};\n";
+    out << "    std::array<std::uint32_t, " << relations.size() << "> relations{};\n";
     out << "};\n\n";
 
     out << "[[nodiscard]] inline GeneratedDocumentTables generated_register_document_tables(\n";
@@ -733,6 +775,11 @@ void emit_document_tables(std::ostringstream& out,
         out << "    tables.traits[" << index << "] = out.trait_shape(\"" << traits[index].canonical << "\", "
             << field_list_registration(program, persisting_fields(program, fields, false), slots) << ", "
             << field_list_registration(program, persisting_fields(program, fields, true), slots) << ");\n";
+    }
+    for (std::size_t index = 0; index < relations.size(); ++index) {
+        out << "    tables.relations[" << index << "] = out.trait_shape(\"" << relations[index]->canonical_id << "\", "
+            << field_list_registration(program, persisting_fields(program, relations[index]->fields), slots)
+            << ", {});\n";
     }
     out << "    return tables;\n";
     out << "}\n\n";
@@ -796,6 +843,28 @@ void emit_struct_encoders(std::ostringstream& out, const DecoratedProgram& progr
         }
         out << "    ids.exit_nesting();\n";
         out << "}\n\n";
+    }
+}
+
+// Rows of each stored relation whose two ends the save records, in creation order.
+void emit_relation_capture(std::ostringstream& out, const DecoratedProgram& program) {
+    const auto relations = stored_relations(program);
+    for (std::size_t index = 0; index < relations.size(); ++index) {
+        const auto& relation = *relations[index];
+        out << "    if (const auto* store = registry.ctx().find<RelationStore<"
+            << EnttCodegenUtils::relation_cpp_name(*relation.symbol_id) << ">>()) {\n";
+        out << "        store->for_each_live([&](const auto& entry) {\n";
+        out << "            const auto from = ids.reference(entry.from);\n";
+        out << "            const auto to   = ids.reference(entry.to);\n";
+        out << "            if (!from.present || !to.present) { return; }\n";
+        out << "            out.begin_relation_row(tables.relations[" << index << "], from.id, to.id);\n";
+        for (const auto* field : persisting_fields(program, relation.fields)) {
+            out << "            " << put_statement(program, field->type, "entry.row." + cpp_escaped(field->name), 0)
+                << "\n";
+        }
+        out << "            out.end_relation_row();\n";
+        out << "        });\n";
+        out << "    }\n";
     }
 }
 
@@ -910,24 +979,38 @@ void emit_absent_traits(std::ostringstream& out,
     out << "                                           const GeneratedDocumentTables& tables) {\n";
     out << "    (void)tables;\n";
     out << "    switch (node) {\n";
+    // Nodes with the same baseline share one case body.
+    std::vector<std::pair<std::string, std::vector<std::uint32_t>>> cases;
     std::uint32_t node_index = 0;
     for (const auto& archetype : program.persistence.archetypes) {
         if (archetype_retains_construction_data(archetype, program.persistence.attaches_persistent_trait)) {
-            out << "        case " << node_index << ":\n";
+            std::ostringstream body;
             for (const auto& baseline : archetype.baseline_traits) {
                 const auto layout = layout_index(layouts, make_canonical_id(baseline.trait));
                 if (layout == layouts.size()) {
                     continue;
                 }
-                out << "            if (!registry.all_of<" << EnttCodegenUtils::trait_cpp_name(baseline.trait)
-                    << ">(entity)) {\n";
-                out << "                out.begin_trait(tables.traits[" << layout << "], false);\n";
-                out << "                out.end_trait();\n";
-                out << "            }\n";
+                body << "            if (!registry.all_of<" << EnttCodegenUtils::trait_cpp_name(baseline.trait)
+                     << ">(entity)) {\n";
+                body << "                out.begin_trait(tables.traits[" << layout << "], false);\n";
+                body << "                out.end_trait();\n";
+                body << "            }\n";
             }
-            out << "            break;\n";
+            auto text  = std::move(body).str();
+            auto found = std::ranges::find(cases, text, &std::pair<std::string, std::vector<std::uint32_t>>::first);
+            if (found == cases.end()) {
+                cases.emplace_back(std::move(text), std::vector<std::uint32_t>{node_index});
+            } else {
+                found->second.push_back(node_index);
+            }
         }
         ++node_index;
+    }
+    for (const auto& [body, nodes] : cases) {
+        for (const auto node : nodes) {
+            out << "        case " << node << ":\n";
+        }
+        out << body << "            break;\n";
     }
     out << "        default: break;\n";
     out << "    }\n}\n\n";
@@ -1046,6 +1129,7 @@ std::string EnttPersistenceEmitter::emit_world_capture(const DecoratedProgram& p
     out << "        generated_capture_traits(registry, entity, ids, out, tables);\n";
     out << "        generated_capture_absent_traits(registry, entity, node, out, tables);\n";
     out << "    }\n";
+    emit_relation_capture(out, program);
     out << "    if (ids.limit_exceeded()) { out.mark_truncated(); }\n";
     out << "    return std::move(out).finish();\n";
     out << "}\n\n";

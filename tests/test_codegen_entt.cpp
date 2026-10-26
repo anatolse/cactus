@@ -10389,4 +10389,121 @@ TEST_CASE("Codegen EnTT: string constants are views read into std::string where 
     CHECK(code.contains("::cactus_gen::test::shout(std::string{::cactus_gen::test::GREETING})"));
     CHECK(code.contains("std::format(\"{}!\", std::string{::cactus_gen::test::GREETING})"));
 }
+// ── Relations (dsl-relations) ───────────────────────────────────────────────
+
+static const std::string& relation_traits() {
+    static const std::string value =
+        "event tick:\n"
+        "    dt: float\n"
+        "event Done\n"
+        "trait Walker:\n"
+        "    var tile: entity_id\n"
+        "trait Tile:\n"
+        "    var code: int = 0\n"
+        "relation Route:\n"
+        "    from: Tile\n"
+        "    to: Tile\n"
+        "    let cost: int = 1\n";
+    return value;
+}
+
+TEST_CASE("Codegen EnTT: an end-key join looks rows up by end instead of a product",
+          "[codegen-entt][relations]") {
+    const auto code = emit_named_rule(relation_traits() +
+                                          "rule Follow:\n"
+                                          "    pairs:\n"
+                                          "        w: Walker\n"
+                                          "        r: Route\n"
+                                          "    where:\n"
+                                          "        r.from == w[Walker].tile\n"
+                                          "    on tick:\n"
+                                          "        emit Done to r.to\n",
+                                      "Follow");
+    CHECK(code.contains("cactus_rows.for_each_from(registry.get<const ::cactus_gen::Walker>(w).tile"));
+    CHECK_FALSE(code.contains("for (const auto& cactus_row : cactus_rows.rows())"));
+    CHECK(code.contains("registry.valid(r.to)"));
+}
+
+TEST_CASE("Codegen EnTT: a row binding without an end-key join is a product", "[codegen-entt][relations]") {
+    const auto code = emit_named_rule(relation_traits() +
+                                          "rule Costly:\n"
+                                          "    pairs:\n"
+                                          "        w: Walker\n"
+                                          "        r: Route\n"
+                                          "    where:\n"
+                                          "        r.cost > 2\n"
+                                          "    on tick:\n"
+                                          "        emit Done to w\n",
+                                      "Costly");
+    CHECK(code.contains("for (const auto& cactus_row : cactus_rows.rows())"));
+    CHECK(code.contains("r.row.cost > 2"));
+    CHECK_FALSE(code.contains("for_each_from"));
+}
+
+TEST_CASE("Codegen EnTT: a unary row domain walks the store's rows", "[codegen-entt][relations]") {
+    const auto code = emit_named_rule(relation_traits() +
+                                          "rule Each:\n"
+                                          "    each: Route as r\n"
+                                          "    order by:\n"
+                                          "        r.cost desc\n"
+                                          "    limit: 2\n"
+                                          "    on tick:\n"
+                                          "        emit Done to r.from\n",
+                                      "Each");
+    CHECK(code.contains("Route>(registry)"));
+    CHECK(code.contains("for (const auto& cactus_row : cactus_rows.rows())"));
+    CHECK(code.contains("std::ranges::stable_sort(cactus_row_tuples"));
+    CHECK(code.contains("cactus_row_tuples.resize(cactus_row_limit)"));
+}
+
+TEST_CASE("Codegen EnTT: relation tests and commands use the store", "[codegen-entt][relations]") {
+    const auto code = emit_named_rule(relation_traits() +
+                                          "rule Link:\n"
+                                          "    pairs:\n"
+                                          "        a: Tile\n"
+                                          "        b: Tile\n"
+                                          "    where:\n"
+                                          "        not Route(a, _)\n"
+                                          "        Route(b, a) or Route(_, b)\n"
+                                          "    on tick:\n"
+                                          "        add Route(a, b):\n"
+                                          "            cost = 3\n"
+                                          "        remove Route(b, _)\n"
+                                          "        remove Route(a, b)\n",
+                                      "Link");
+    CHECK(code.contains("Route>(registry).has_from(a)"));
+    CHECK(code.contains("Route>(registry).contains(b, a)"));
+    CHECK(code.contains("Route>(registry).has_to(b)"));
+    CHECK(code.contains("Route>(registry, cactus_gen_row_from"));
+    CHECK(code.contains(".cost = 3;"));
+    CHECK(code.contains(".erase_from(cactus_gen_row_from"));
+    CHECK(code.contains(".erase(cactus_gen_row_from"));
+    // Every relation command waits for the commit, so later tuples of the pass still see the old rows.
+    CHECK(count_occurrences(code, "generated_queue_structural_command(") == 3);
+}
+
+TEST_CASE("Codegen EnTT: a two-sided limit walks the ordered tuples once, greedily",
+          "[codegen-entt][relations][rule-limit]") {
+    const auto code = emit_named_rule(limit_traits() +
+                                          "rule Match:\n"
+                                          "    pairs:\n"
+                                          "        actor:\n"
+                                          "            Actor\n"
+                                          "        surface:\n"
+                                          "            Surface\n"
+                                          "    order by:\n"
+                                          "        actor[Actor].ground - surface[Surface].code asc\n"
+                                          "    limit: 1 per actor, 1 per surface\n"
+                                          "    on tick:\n"
+                                          "        actor[Actor].ground = surface[Surface].code\n",
+                                      "Match");
+    CHECK(code.contains("auto& cactus_part0 = cactus_part0_it->second;"));
+    CHECK(code.contains("auto& cactus_part1 = cactus_part1_it->second;"));
+    CHECK(code.contains(
+        "if (cactus_part0.first >= cactus_part0.second || cactus_part1.first >= cactus_part1.second) { continue; }"));
+    CHECK(code.contains("++cactus_part0.first;"));
+    CHECK(code.contains("++cactus_part1.first;"));
+    CHECK(code.contains("registry.get<::cactus_gen::Actor>(actor).ground ="));
+}
+
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

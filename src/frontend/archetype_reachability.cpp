@@ -338,6 +338,7 @@ public:
     [[nodiscard]] static std::vector<const Domain*> row_domains(const HandlerModel& handler) {
         switch (handler.node->contract.domain_kind) {
             case HandlerDomainKind::Selectionless:
+            case HandlerDomainKind::Rows:
                 return {};
             case HandlerDomainKind::Unary:
                 return {&handler.unary};
@@ -737,6 +738,7 @@ private:
     [[nodiscard]] std::optional<std::string> dead_domain(const HandlerModel& handler, const Domain& domain) const {
         switch (handler.node->contract.domain_kind) {
             case HandlerDomainKind::Selectionless:
+            case HandlerDomainKind::Rows:
                 return std::nullopt;
             case HandlerDomainKind::Unary: {
                 if (domain.required.empty() && domain.excluded.empty()) {
@@ -805,6 +807,7 @@ private:
         }
         switch (handler.node->contract.domain_kind) {
             case HandlerDomainKind::Selectionless:
+            case HandlerDomainKind::Rows:
                 return true;
             case HandlerDomainKind::Unary:
                 return any_matches(handler.unary);

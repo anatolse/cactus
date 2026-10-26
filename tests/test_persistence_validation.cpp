@@ -226,4 +226,94 @@ TEST_CASE("a reachable trait set check honors unchecked traits and absent rows",
     missing.add_absent_trait("game.Gear");
     CHECK(has(validate_document(schema, std::move(missing).finish()), "game.Hero[1]", "illegal trait combination"));
 }
+// ── Relation rows (dsl-relations) ───────────────────────────────────────────
+
+namespace {
+
+constexpr std::array<FieldDescriptor, 1> kAllyFields{{{.name = "since", .type = 0}}};
+constexpr std::array<RelationDescriptor, 2> kRelations{{
+    {.relation = "game.Ally", .from_trait = "game.Gear", .to_trait = "game.Gear", .fields = kAllyFields},
+    {.relation = "game.Duel", .from_trait = "game.Gear", .to_trait = "game.Odd", .from_one = true},
+}};
+
+constexpr SchemaDescriptor kRelationSchema{.fingerprint = 7,
+                                           .module      = "game",
+                                           .value_types = kTypes,
+                                           .traits      = kTraits,
+                                           .structs     = kStructs,
+                                           .enums       = kEnums,
+                                           .archetypes  = kArchetypes,
+                                           .relations   = kRelations};
+
+SnapshotBuilder heroes(int count) {
+    SnapshotBuilder builder;
+    builder.set_schema(kRelationSchema.revision, kRelationSchema.fingerprint);
+    for (int id = 1; id <= count; ++id) {
+        builder.add_entity(static_cast<DocumentId>(id), "game.Hero");
+        builder.add_trait("game.Gear", kLevel, gear_persisted());
+    }
+    return builder;
+}
+
+const std::vector<StructField> kSince{{.name = "since", .value = Value::of_int(4)}};
+
+}  // namespace
+
+TEST_CASE("relation rows between recorded ends validate cleanly", "[persistence][validation][relations]") {
+    auto builder = heroes(2);
+    builder.add_relation_row("game.Ally", 1, 2, kSince);
+    builder.add_relation_row("game.Ally", 2, 1, kSince);
+    const auto document = std::move(builder).finish();
+    REQUIRE(document.relation_rows().size() == 2);
+    CHECK(document.relation_rows()[1].from == 2);
+    CHECK(validate_document(kRelationSchema, document).empty());
+}
+
+TEST_CASE("invalid relation rows are rejected", "[persistence][validation][relations]") {
+    SECTION("a missing end") {
+        auto builder = heroes(1);
+        builder.add_relation_row("game.Ally", 1, 9, kSince);
+        CHECK(has(validate_document(kRelationSchema, std::move(builder).finish()), "game.Ally[0]",
+                  "relation row names an end with no matching record"));
+    }
+    SECTION("an end without its end trait") {
+        auto builder = heroes(2);
+        builder.add_relation_row("game.Duel", 1, 2);
+        CHECK(has(validate_document(kRelationSchema, std::move(builder).finish()), "game.Duel[0]",
+                  "the to end does not carry 'game.Odd'"));
+    }
+    SECTION("a duplicate pair") {
+        auto builder = heroes(2);
+        builder.add_relation_row("game.Ally", 1, 2, kSince);
+        builder.add_relation_row("game.Ally", 1, 2, kSince);
+        CHECK(has(validate_document(kRelationSchema, std::move(builder).finish()), "game.Ally[1]",
+                  "duplicate relation row"));
+    }
+    SECTION("an unknown relation") {
+        auto builder = heroes(2);
+        builder.add_relation_row("game.Nope", 1, 2);
+        CHECK(has(validate_document(kRelationSchema, std::move(builder).finish()), "game.Nope[0]", "unknown relation"));
+    }
+    SECTION("an unknown field") {
+        auto builder = heroes(2);
+        builder.add_relation_row("game.Ally", 1, 2, {{.name = "until", .value = Value::of_int(1)}});
+        const auto errors = validate_document(kRelationSchema, std::move(builder).finish());
+        CHECK(has(errors, "game.Ally[0].until", "unknown field"));
+        CHECK(has(errors, "game.Ally[0].since", "missing required field"));
+    }
+    SECTION("a broken one end") {
+        auto builder = heroes(3);
+        builder.add_entity(4, "game.Hero");
+        builder.add_trait("game.Gear", kLevel, gear_persisted());
+        builder.add_trait("game.Odd");
+        builder.add_entity(5, "game.Hero");
+        builder.add_trait("game.Gear", kLevel, gear_persisted());
+        builder.add_trait("game.Odd");
+        builder.add_relation_row("game.Duel", 1, 4);
+        builder.add_relation_row("game.Duel", 1, 5);
+        CHECK(has(validate_document(kRelationSchema, std::move(builder).finish()), "game.Duel[1]",
+                  "breaks the `one` from end"));
+    }
+}
+
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity)

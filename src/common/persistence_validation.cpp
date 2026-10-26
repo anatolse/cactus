@@ -2,7 +2,11 @@
 
 #include <algorithm>
 #include <map>
+#include <optional>
+#include <set>
+#include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 
 namespace cactus::persistence {
@@ -83,6 +87,7 @@ public:
         if (schema_->parents_first) {
             require_parents_first();
         }
+        validate_relation_rows();
     }
 
 private:
@@ -161,7 +166,11 @@ private:
     }
 
     [[nodiscard]] TraitPlan plan_trait(const DocumentTrait& shape) const {
-        TraitPlan plan{.descriptor = find_trait_descriptor(*schema_, document_->name(shape.name))};
+        return plan_layout(find_trait_descriptor(*schema_, document_->name(shape.name)), shape);
+    }
+
+    [[nodiscard]] TraitPlan plan_layout(const TraitDescriptor* descriptor, const DocumentTrait& shape) const {
+        TraitPlan plan{.descriptor = descriptor};
         if (plan.descriptor == nullptr) {
             return plan;
         }
@@ -499,6 +508,78 @@ private:
                 report(PathStep{.parent = &base, .index = row.id}, "child recorded before its parent");
             }
         }
+    }
+
+    // Rows of one relation name each pair once, hold their ends' traits, and keep `one` ends single.
+    void validate_relation_rows() {
+        const auto rows = document_->relation_rows();
+        std::set<std::tuple<std::string_view, DocumentId, DocumentId>> pairs;
+        std::set<std::tuple<std::string_view, bool, DocumentId>> one_ends;
+        for (std::size_t index = 0; index < rows.size(); ++index) {
+            const auto& row     = rows[index];
+            const auto name     = document_->relation_name(row);
+            const auto base     = PathStep{.member = name.empty() ? std::string_view{"$relations"} : name};
+            const auto path     = PathStep{.parent = &base, .index = index};
+            const auto* relation = find_relation_descriptor(*schema_, name);
+            if (relation == nullptr) {
+                report(path, "unknown relation");
+                continue;
+            }
+            validate_relation_values(*relation, row, path);
+            validate_relation_end(row.from, relation->from_trait, "from", path);
+            validate_relation_end(row.to, relation->to_trait, "to", path);
+            if (!pairs.emplace(name, row.from, row.to).second) {
+                report(path, "duplicate relation row");
+            }
+            for (const bool from : {true, false}) {
+                const bool one = from ? relation->from_one : relation->to_one;
+                if (one && !one_ends.emplace(name, from, from ? row.from : row.to).second) {
+                    report(path, std::string("breaks the `one` ") + (from ? "from" : "to") + " end: an earlier row has this entity");
+                }
+            }
+        }
+    }
+
+    void validate_relation_values(const RelationDescriptor& relation, const RelationRow& row, const PathStep& path) {
+        const auto& shape = document_->trait_shapes()[row.values.shape];
+        const TraitDescriptor layout{.trait = relation.relation, .fields = relation.fields};
+        const auto plan = plan_layout(&layout, shape);
+        validate_bucket(shape.construction, plan.construction, document_->payload(row.values, false), path);
+        if (!shape.persisted.empty()) {
+            report(path, "relation fields have no persisted part");
+        }
+        for (const auto missing : plan.missing) {
+            report(PathStep{.parent = &path, .member = missing}, "missing required field");
+        }
+    }
+
+    void validate_relation_end(DocumentId id, std::string_view trait, const char* end, const PathStep& path) {
+        const auto record = row_of(id);
+        if (record == kNoIndex) {
+            report(path, "relation row names an end with no matching record");
+            return;
+        }
+        if (!record_carries(document_->entity_rows()[record], trait)) {
+            report(path, std::string("the ") + end + " end does not carry '" + std::string(trait) + "'");
+        }
+    }
+
+    // A recorded present trait, or a baseline trait the record does not mark absent.
+    [[nodiscard]] bool record_carries(const EntityRow& row, std::string_view trait) {
+        const auto rows   = document_->trait_rows();
+        const auto shapes = document_->trait_shapes();
+        std::optional<bool> recorded;
+        for (std::uint32_t offset = 0; offset < row.trait_count && row.first_trait + offset < rows.size(); ++offset) {
+            const auto& trait_row = rows[row.first_trait + offset];
+            if (trait_row.shape < shapes.size() && document_->name(shapes[trait_row.shape].name) == trait) {
+                recorded = trait_row.present != 0;
+            }
+        }
+        if (recorded.has_value()) {
+            return *recorded;
+        }
+        const auto* archetype = archetype_of(row.archetype);
+        return archetype != nullptr && std::ranges::contains(archetype->baseline_traits, trait);
     }
 
     const SchemaDescriptor* schema_;

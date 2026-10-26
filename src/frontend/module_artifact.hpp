@@ -27,7 +27,7 @@ namespace cactus {
 /// deserialization. Callers that need the AST must re-parse from source.
 class ModuleArtifact {
 public:
-    static constexpr uint8_t CURRENT_VERSION = 41;
+    static constexpr uint8_t CURRENT_VERSION = 42;
     static constexpr const char* MAGIC       = "CMOD";
 
     explicit ModuleArtifact(ErrorReporter& errors);
@@ -84,6 +84,7 @@ private:
                       const std::unordered_map<std::string, ResolvedTrait>& traits,
                       const std::string& module_name);
     static void write_states(std::ostream& out, const std::unordered_map<std::string, ResolvedState>& states);
+    void write_relations(std::ostream& out, const std::unordered_map<std::string, ResolvedRelation>& relations);
     void write_structs(std::ostream& out,
                        const std::unordered_map<std::string, ResolvedStruct>& structs,
                        const std::string& module_name);
@@ -139,6 +140,7 @@ private:
 
     std::unordered_map<std::string, ResolvedTrait> read_traits(std::istream& in);
     static std::unordered_map<std::string, ResolvedState> read_states(std::istream& in);
+    std::unordered_map<std::string, ResolvedRelation> read_relations(std::istream& in);
     std::unordered_map<std::string, ResolvedStruct> read_structs(std::istream& in);
     static std::unordered_map<std::string, ResolvedEnum> read_enums(std::istream& in);
     std::unordered_map<std::string, ResolvedFunc> read_funcs(std::istream& in);

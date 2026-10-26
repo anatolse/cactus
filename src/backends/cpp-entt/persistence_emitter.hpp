@@ -21,6 +21,8 @@ struct PersistableTrait {
 };
 
 [[nodiscard]] std::vector<PersistableTrait> persistable_traits(const DecoratedProgram& program);
+// Relations whose rows a save records: every relation no `keep` owns, sorted by canonical id.
+[[nodiscard]] std::vector<const ResolvedRelation*> stored_relations(const DecoratedProgram& program);
 [[nodiscard]] std::vector<SymbolId> persistable_symbols(const std::vector<PersistableTrait>& traits);
 
 // Whether capture records a field of this type and restore reads it back. The

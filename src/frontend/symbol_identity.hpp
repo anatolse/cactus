@@ -30,6 +30,7 @@ enum class SymbolKind : std::uint8_t {
     Const,
     Group,
     State,
+    Relation,
 };
 
 struct ModuleId {
@@ -49,6 +50,9 @@ struct SymbolId {
 
     friend bool operator==(const SymbolId&, const SymbolId&) = default;
 };
+
+// A table keyed by entities: a trait (one entity) or a relation (a pair).
+using TableRef = SymbolId;
 
 struct ModuleIdHash {
     [[nodiscard]] std::size_t operator()(const ModuleId& module) const noexcept {
@@ -110,6 +114,8 @@ struct SymbolIdHash {
             return "group";
         case SymbolKind::State:
             return "state";
+        case SymbolKind::Relation:
+            return "relation";
     }
     return "unknown";
 }

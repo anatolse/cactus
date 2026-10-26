@@ -100,6 +100,11 @@ public:
     static std::string trait_cpp_name(const SymbolId& symbol);
     static std::string struct_cpp_name(const SymbolId& symbol);
     static std::string enum_cpp_name(const SymbolId& symbol);
+    // The row struct of a relation; `relation_store<Row>(registry)` holds its rows.
+    static std::string relation_cpp_name(const SymbolId& symbol);
+    static std::string relation_store_cpp(const SymbolId& symbol);
+    // For commit-time mutations, which leave dead slots for the commit's single compaction.
+    static std::string uncompacted_relation_store_cpp(const SymbolId& symbol);
     static std::string trait_cpp_name(const std::optional<SymbolId>& symbol,
                                       const std::string& fallback_source_name,
                                       const DecoratedProgram& program);

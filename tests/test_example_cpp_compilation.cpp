@@ -599,7 +599,9 @@ TEST_CASE("examples do not present removed syntax as current syntax", "[examples
     static const std::array<DriftPattern, 5> REMOVED_PATTERNS{{
         {"legacy apply block", std::regex{R"(\bapply\s*:)", std::regex::icase}},
         {"legacy config block", std::regex{R"(\bconfig\s*:)", std::regex::icase}},
-        {"parenthesized add statement", std::regex{R"(\badd\s+[A-Za-z_][A-Za-z0-9_]*\s*\()"}},
+        // `add R(x, y)` adds a relation row; the legacy form took fields in parentheses.
+        {"parenthesized add statement",
+         std::regex{R"(\badd\s+[A-Za-z_][A-Za-z0-9_]*\s*\(\s*(\)|[A-Za-z_][A-Za-z0-9_]*\s*=))"}},
         {"parenthesized emit statement", std::regex{R"(\bemit\s+[A-Za-z_][A-Za-z0-9_]*\s*\()"}},
         {"positional spawn arguments",
          std::regex{R"(\bspawn\s+[A-Za-z_][A-Za-z0-9_.]*\s*\((?!\s*(\)|$|[A-Za-z_][A-Za-z0-9_]*\s*=)))"}},

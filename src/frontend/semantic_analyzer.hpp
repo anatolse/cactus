@@ -94,6 +94,27 @@ struct ResolvedTrait : CanonicalIdentity {
     }
 };
 
+struct ResolvedRelationEnd {
+    SymbolId trait;
+    bool one = false;
+
+    friend bool operator==(const ResolvedRelationEnd&, const ResolvedRelationEnd&) = default;
+};
+
+struct ResolvedRelation : CanonicalIdentity {
+    std::string name;
+    bool is_pub = false;
+    ResolvedRelationEnd from;
+    ResolvedRelationEnd to;
+    std::vector<ResolvedField> fields;
+    std::optional<std::string> kept_by;  // the rule whose keep clause owns this relation
+
+    [[nodiscard]] const ResolvedField* find_field(const std::string& field) const {
+        const auto found = std::ranges::find(fields, field, &ResolvedField::name);
+        return found == fields.end() ? nullptr : &*found;
+    }
+};
+
 struct ResolvedStateVariant {
     std::string name;
     bool is_final = false;
@@ -259,7 +280,9 @@ struct DeclarationOrder {
 
 // ── Pair relations (dsl-pair-relations) ─────────────────────────────────────
 
-enum class HandlerDomainKind : std::uint8_t { Selectionless, Unary, Pair };
+// Serialized by numeric value: append new kinds, never reorder. Rows runs over
+// relation rows (`each: R as r`).
+enum class HandlerDomainKind : std::uint8_t { Selectionless, Unary, Pair, Rows };
 
 // `Creation` when permuting a pass's rows can change its result, so it must
 // visit them in creation order; `Free` leaves the order to the backend.
@@ -270,6 +293,7 @@ enum class IterationOrder : std::uint8_t { Free, Creation };
 struct RelationBinding {
     std::string name;
     std::vector<SymbolId> required_traits;
+    std::optional<SymbolId> relation;  // a row binding's relation; it requires no traits
 
     friend bool operator==(const RelationBinding&, const RelationBinding&) = default;
 };
@@ -445,6 +469,7 @@ using NamedFieldTable = std::unordered_map<SymbolId, std::unordered_map<SymbolId
 [[nodiscard]] const FieldAccess& all_fields();
 // Every field of the trait; all fields when the declaration is unknown.
 [[nodiscard]] FieldAccess declared_fields(const ResolvedTrait* declaration);
+[[nodiscard]] FieldAccess declared_fields(const ResolvedRelation* relation);
 // A trait with no entry in `table` counts as all fields.
 [[nodiscard]] const FieldAccess& field_access(const std::unordered_map<SymbolId, FieldAccess>& table, const SymbolId& trait);
 [[nodiscard]] std::optional<FieldAccess> overlapping_fields(const FieldAccess& left, const FieldAccess& right);
@@ -522,6 +547,8 @@ void record_read(HandlerContract& contract,
                  const std::optional<std::string>& field,
                  const ResolvedTrait* declaration,
                  const ExprNode* site = nullptr);
+// A relation read: its rows' existence, plus `field` when one is read.
+void record_relation_read(HandlerContract& contract, const SymbolId& relation, const std::optional<std::string>& field);
 void record_write(HandlerContract& contract,
                   const SymbolId& trait,
                   const std::optional<std::string>& field,
@@ -813,6 +840,7 @@ struct DecoratedProgram {
     // consumers to canonical keys while preserving local lookup during semantic analysis.
     std::unordered_map<std::string, ResolvedTrait> traits;
     std::unordered_map<std::string, ResolvedState> states;
+    std::unordered_map<std::string, ResolvedRelation> relations;
     std::unordered_map<std::string, ResolvedStruct> structs;
     std::unordered_map<std::string, ResolvedEnum> enums;
     std::unordered_map<std::string, ResolvedFunc> funcs;
@@ -907,6 +935,7 @@ struct ImportedSymbols {
 
     std::unordered_map<std::string, ResolvedTrait> traits;               // pub traits
     std::unordered_map<std::string, ResolvedState> states;               // pub states
+    std::unordered_map<std::string, ResolvedRelation> relations;         // pub relations
     std::unordered_map<std::string, ResolvedStruct> structs;             // pub structs
     std::unordered_map<std::string, ResolvedEnum> enums;                 // pub enums
     std::unordered_map<std::string, ResolvedFunc> funcs;                 // pub extern funcs
@@ -971,6 +1000,7 @@ enum class PairBindingWritability : std::uint8_t { ReadOnly, Writable, UnprovenP
 struct PairBindingScope {
     std::size_t index                     = 0;
     PairBindingWritability writability = PairBindingWritability::ReadOnly;
+    std::optional<SymbolId> relation;  // set on a row binding, which selects no traits
     std::unordered_map<std::string, SymbolId> trait_by_access_key;
     std::unordered_map<std::string, std::string> trait_by_alias;
 };
@@ -1065,6 +1095,58 @@ private:
     void resolve_all_types(ProgramNode& program);
     TypeInfo resolve_type_ref(const TypeRef& ref);
     void resolve_trait_references(ProgramNode& program);
+    void resolve_relation_declarations(ProgramNode& program);
+    void extract_row_bindings(RuleNode& rule);
+    void extract_row_domain(RuleNode& rule);
+    // Rejects clauses a rule over relation rows can't have; true when the rule binds rows.
+    bool reject_row_domain_clauses(const RuleNode& rule);
+    void report_row_binding_value(const std::string& name, const SourceLocation& location) const;
+    [[nodiscard]] TypeInfo infer_row_member_type(const std::vector<std::string>& chain,
+                                                 const SourceLocation& location,
+                                                 const SymbolId& relation) const;
+    ResolvedField resolve_relation_field(FieldNode& field);
+    std::optional<SymbolId> resolve_relation_end(const RelationNode& relation, const RelationEndNode& end, bool from);
+    [[nodiscard]] const ResolvedRelation* find_resolved_relation(const SymbolId& relation) const;
+    void validate_relation_ends(const ProgramNode& program);
+    void validate_one_ends(const ProgramNode& program);
+    [[nodiscard]] const ResolvedRelation* one_end_relation(const AddRelationStmt& add) const;
+    void check_one_add(const RuleNode& rule,
+                       const EventHandlerNode& handler,
+                       const AddRelationStmt& add,
+                       const ResolvedRelation& relation);
+    // (relation canonical id, phase) -> each add's rule and location.
+    using OneAdders = std::map<std::pair<std::string, std::string>, std::vector<std::pair<std::string, SourceLocation>>>;
+    void report_two_one_adders(const OneAdders& adders);
+    // A `per` part counts tuples per entity; a row binding has no entity to count by.
+    bool reject_row_limit_parts(const RuleNode& rule, const LimitClause& limit);
+    [[nodiscard]] static std::optional<std::string> unproven_one_end(const RuleNode& rule,
+                                                                     const EventHandlerNode& handler,
+                                                                     const AddRelationStmt& add,
+                                                                     bool from);
+    [[nodiscard]] static std::string proven_one_form(const RuleNode& rule,
+                                                     const AddRelationStmt& add,
+                                                     const ResolvedRelation& relation);
+    [[nodiscard]] static bool is_fixed_row_argument(const RuleNode& rule, const ExprNode& argument);
+    // `add R(x, y)[: ...]` (with `fields`) or `remove R(x, y)` (without).
+    struct RelationCommand {
+        std::string relation_name;
+        std::optional<SymbolId> relation;
+        const ExprNode* from                       = nullptr;
+        const ExprNode* to                         = nullptr;
+        const std::vector<FieldAssignment>* fields = nullptr;
+        SourceLocation location;
+    };
+    void validate_relation_command(const RelationCommand& command,
+                                   const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                                   const std::unordered_map<std::string, TypeInfo>& locals,
+                                   const ResolvedStruct* handler_event,
+                                   const PairScope* pair_scope);
+    // `r.field`, `r.from` or `r.to` on a row binding: a relation read; false for anything else.
+    static bool record_row_field_read(const ExprNode& expr, const PairScope& pair_scope, HandlerContract& contract);
+    void validate_relation_keep(const RuleNode& rule);
+    [[nodiscard]] bool validate_relation_keep_arguments(const KeepClause& keep,
+                                                        const PairClause& pairs,
+                                                        const ResolvedRelation& relation);
 
     // Import-aware type resolution helpers
     TypeInfo resolve_qualified_type(const std::string& qualifier,
@@ -1133,6 +1215,9 @@ private:
     // every site that validates or infers against a whole rule rather than a
     // bare `pairs:` clause.
     [[nodiscard]] static PairScope build_pair_scope(const RuleNode& rule);
+    // The bindings a rule's clauses and handlers see: its pair bindings, or its
+    // row alias; nullopt for a unary entity or selectionless rule.
+    [[nodiscard]] static std::optional<PairScope> rule_scope(const RuleNode& rule);
     // A reduced handler sees only the retained `per` binding
     // (writable), or no binding at all for a global reduction.
     [[nodiscard]] static PairScope build_reduced_handler_scope(const RuleNode& rule);
@@ -1248,11 +1333,14 @@ private:
                           const RuleNode& rule,
                           const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
                           const PairScope* row_scope);
-    [[nodiscard]] std::optional<PairScope> resolve_limit_count_scope(const RuleNode& rule);
+    [[nodiscard]] std::optional<PairScope> resolve_limit_count_scope(const RuleNode& rule,
+                                                                     const ExprNode& count,
+                                                                     const LimitPart* part);
     // The deliberately narrow two-shape proof (design.md): the literal `1`, or
     // a name whose `const:` initializer is literally `1`. Nothing else — an
     // arithmetic expression that happens to evaluate to 1 is not provable.
     [[nodiscard]] bool limit_count_is_provably_one(const ExprNode& count) const;
+    bool validate_limit_count(const RuleNode& rule, const ExprNode& count, const LimitPart* part);
     // The recursive deny-list walk shared by check_func_purity_expr and
     // check_clause_purity_expr: every impure expression form funnels through
     // this one traversal, and each caller supplies hooks for the node kinds
@@ -1466,6 +1554,14 @@ private:
     const ResolvedStruct* find_resolved_struct(const SymbolId& symbol) const;
     std::optional<SymbolId> resolve_struct_callee(const ExprNode& callee) const;
     void lower_struct_query_call(ExprNode& expr) const;
+    // `R(x, y)` with `R` a relation becomes a RelationTestExpr.
+    void lower_relation_test(ExprNode& expr) const;
+    void validate_relation_test_contexts(const ProgramNode& program);
+    [[nodiscard]] TypeInfo infer_relation_test_type(const RelationTestExpr& test,
+                                                    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                                                    const std::unordered_map<std::string, TypeInfo>& local_bindings,
+                                                    const ResolvedStruct* handler_event,
+                                                    const PairScope* pair_scope) const;
     TypeInfo infer_struct_construction_type(const CallExpr& call,
                                             const SourceLocation& location,
                                             const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
@@ -1594,7 +1690,7 @@ private:
 
     /// Unknown-field and per-field type checks for a trait field block,
     /// reporting "... in <context_desc>" (e.g. "`set Foo`").
-    void validate_trait_field_values(const ResolvedTrait& trait,
+    void validate_trait_field_values(const std::vector<ResolvedField>& fields,
                                      const std::vector<FieldAssignment>& args,
                                      const std::string& context_desc,
                                      const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
@@ -1604,7 +1700,7 @@ private:
 
     /// validate_trait_field_values plus required-field coverage, for blocks
     /// that construct the trait (`add`, `project`).
-    void validate_trait_field_supply(const ResolvedTrait& trait,
+    void validate_trait_field_supply(const std::vector<ResolvedField>& fields,
                                      const std::vector<FieldAssignment>& args,
                                      const std::string& context_desc,
                                      const SourceLocation& required_field_location,
@@ -1893,14 +1989,15 @@ private:
     void validate_count_reducer(ReducerDecl& reducer, const RuleNode& rule, const PairScope* row_scope);
     void validate_best_reducer(ReducerDecl& reducer, const RuleNode& rule, const PairScope* row_scope);
     void add_keep_effects(const RuleNode& rule, InferredHandlerContract& contract);
-    // Local keep clauses: trait -> keeping rule's name, and every (rule, trait) pair.
+    // Local keep clauses: table -> keeping rule's name, and every (rule, table) pair.
     struct KeepClauses {
-        std::unordered_map<SymbolId, std::string> keepers;
-        std::vector<std::pair<SymbolId, SymbolId>> rule_traits;
+        std::unordered_map<TableRef, std::string> keepers;
+        std::vector<std::pair<SymbolId, TableRef>> rule_tables;
     };
     void validate_kept_traits(ProgramNode& program);
     KeepClauses collect_keep_clauses(const ProgramNode& program);
-    [[nodiscard]] std::optional<std::string> keeper_of(const KeepClauses& clauses, const SymbolId& trait) const;
+    void reject_one_on_kept_relations(const ProgramNode& program, const KeepClauses& clauses);
+    [[nodiscard]] std::optional<std::string> keeper_of(const KeepClauses& clauses, const TableRef& table) const;
     void check_kept_trait_handlers(const KeepClauses& clauses);
     void check_kept_trait_archetype(const KeepClauses& clauses,
                                     const std::vector<ArchetypeTraitEntry>& traits,

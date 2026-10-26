@@ -12,6 +12,7 @@
 #include "backends/cpp-entt/event_emitter.hpp"
 #include "backends/cpp-entt/persistence_emitter.hpp"
 #include "backends/cpp-entt/persistence_restore_emitter.hpp"
+#include "backends/cpp-entt/relation_emitter.hpp"
 #include "backends/cpp-entt/range_checks.hpp"
 #include "backends/cpp-entt/render_pass_emitter.hpp"
 #include "backends/cpp-entt/system_emitter.hpp"
@@ -1337,6 +1338,40 @@ void emit_host_clock_entry_points(std::ostringstream& out, const DeliveryPlan& d
     out << "}\n\n";
 }
 
+// Erased relation rows leave dead slots; each lifecycle round's handlers and
+// the next activation read compacted stores.
+void emit_commit_activation(std::ostringstream& out,
+                            const DecoratedProgram& program,
+                            const AccumulationPlan& accumulation,
+                            const DeliveryPlan& delivery,
+                            bool tracks_lifecycle) {
+    const bool relations = !program.relations.empty();
+    const auto* drain    = relations ? "&generated_compact_and_drain" : "&generated_drain_event_cascade";
+    if (relations) {
+        out << "void generated_compact_and_drain(entt::registry& registry) {\n";
+        out << "    generated_compact_relations(registry);\n";
+        out << "    generated_drain_event_cascade(registry);\n";
+        out << "}\n\n";
+    }
+    out << "void generated_commit_activation(entt::registry& registry) {\n";
+    if (!accumulation.empty()) {
+        out << "    ::generated_flush_accumulations();\n";
+    }
+    out << "    auto& activation = generated_scheduler_state().activation;\n";
+    if (!tracks_lifecycle) {
+        out << "    commit_activation(activation, registry, " << drain << ");\n";
+    } else if (delivery.cyclic()) {
+        out << "    commit_activation(activation, registry, " << drain
+            << ", generated_lifecycle_trackers(), GeneratedLifecycleRoutes{});\n";
+    } else {
+        out << "    commit_activation(activation, registry, " << drain << ", generated_lifecycle_trackers());\n";
+    }
+    if (relations) {
+        out << "    generated_compact_relations(registry);\n";
+    }
+    out << "}\n\n";
+}
+
 std::string emit_graph_scheduler_state(const DecoratedProgram& program,
                                        const AccumulationPlan& accumulation,
                                        const DeliveryPlan& delivery) {
@@ -1444,21 +1479,7 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program,
     if (!lifecycle_triggers.empty() && delivery.cyclic()) {
         emit_lifecycle_routes(out, program, delivery);
     }
-    out << "void generated_commit_activation(entt::registry& registry) {\n";
-    if (!accumulation.empty()) {
-        out << "    ::generated_flush_accumulations();\n";
-    }
-    out << "    auto& activation = generated_scheduler_state().activation;\n";
-    if (lifecycle_triggers.empty()) {
-        out << "    commit_activation(activation, registry, &generated_drain_event_cascade);\n";
-    } else if (delivery.cyclic()) {
-        out << "    commit_activation(activation, registry, &generated_drain_event_cascade, "
-               "generated_lifecycle_trackers(), GeneratedLifecycleRoutes{});\n";
-    } else {
-        out << "    commit_activation(activation, registry, &generated_drain_event_cascade, "
-               "generated_lifecycle_trackers());\n";
-    }
-    out << "}\n\n";
+    emit_commit_activation(out, program, accumulation, delivery, !lifecycle_triggers.empty());
 
     for (const auto* event : external_events) {
         emit_external_event_injector(out, *event, program);
@@ -3814,6 +3835,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << EnttComponentEmitter::emit_component(t, program) << "\n";
     }
     out << EnttComponentEmitter::emit_state_helpers(program);
+    out << emit_relation_declarations(program);
     out << emit_world_digest(program);
 
     if (const auto collider_helpers = emit_collider_query_helpers(program); !collider_helpers.empty()) {
@@ -4103,6 +4125,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     if (tracks_lifecycle) {
         out << "    generated_connect_lifecycle_trackers(registry);\n";
     }
+    out << (program.relations.empty() ? "" : "    generated_connect_relations(registry);\n");
     if (program.ast != nullptr) {
         for (auto& decl : program.ast->declarations) {
             if (auto* asset = std::get_if<AssetDeclNode>(&decl)) {

@@ -4351,3 +4351,98 @@ Vector3 editor_entity_position_3d(entt::registry& registry, entt::entity entity_
 }
 
 }  // namespace cactus::runtime::entt_backend
+
+namespace cactus::runtime::entt_backend {
+
+std::uint64_t PairSlotTable::key_of(entt::entity from, entt::entity to) noexcept {
+    return (static_cast<std::uint64_t>(entt::to_integral(from)) << 32U) |
+           static_cast<std::uint64_t>(entt::to_integral(to));
+}
+
+std::size_t PairSlotTable::home_of(std::uint64_t key) const noexcept {
+    // splitmix64 finalizer: entity ids are dense, so the raw key would cluster.
+    key ^= key >> 30U;
+    key *= 0xBF58476D1CE4E5B9ULL;
+    key ^= key >> 27U;
+    key *= 0x94D049BB133111EBULL;
+    key ^= key >> 31U;
+    return static_cast<std::size_t>(key) & (buckets_.size() - 1);
+}
+
+std::uint32_t PairSlotTable::find(entt::entity from, entt::entity to) const noexcept {
+    if (buckets_.empty()) {
+        return kNone;
+    }
+    const auto key = key_of(from, to);
+    for (auto index = home_of(key);; index = (index + 1) & (buckets_.size() - 1)) {
+        const auto& bucket = buckets_[index];
+        if (bucket.slot == kNone) {
+            return kNone;
+        }
+        if (bucket.key == key) {
+            return bucket.slot;
+        }
+    }
+}
+
+void PairSlotTable::insert(entt::entity from, entt::entity to, std::uint32_t slot) {
+    if ((size_ + 1) * 2 > buckets_.size()) {
+        grow();
+    }
+    const auto key = key_of(from, to);
+    auto index     = home_of(key);
+    while (buckets_[index].slot != kNone) {
+        index = (index + 1) & (buckets_.size() - 1);
+    }
+    buckets_[index] = Bucket{.key = key, .slot = slot};
+    ++size_;
+}
+
+void PairSlotTable::erase(entt::entity from, entt::entity to) noexcept {
+    if (buckets_.empty()) {
+        return;
+    }
+    const auto mask = buckets_.size() - 1;
+    const auto key  = key_of(from, to);
+    auto hole       = home_of(key);
+    while (buckets_[hole].slot != kNone && buckets_[hole].key != key) {
+        hole = (hole + 1) & mask;
+    }
+    if (buckets_[hole].slot == kNone) {
+        return;
+    }
+    // Backward shift: pull later entries of the probe run into the hole.
+    for (auto next = (hole + 1) & mask; buckets_[next].slot != kNone; next = (next + 1) & mask) {
+        const auto home = home_of(buckets_[next].key);
+        if (((next - home) & mask) >= ((next - hole) & mask)) {
+            buckets_[hole] = buckets_[next];
+            hole           = next;
+        }
+    }
+    buckets_[hole] = Bucket{};
+    --size_;
+}
+
+void PairSlotTable::clear() noexcept {
+    std::ranges::fill(buckets_, Bucket{});
+    size_ = 0;
+}
+
+void PairSlotTable::grow() {
+    auto old = std::move(buckets_);
+    buckets_.assign(old.empty() ? 16 : old.size() * 2, Bucket{});
+    size_ = 0;
+    for (const auto& bucket : old) {
+        if (bucket.slot == kNone) {
+            continue;
+        }
+        auto index = home_of(bucket.key);
+        while (buckets_[index].slot != kNone) {
+            index = (index + 1) & (buckets_.size() - 1);
+        }
+        buckets_[index] = bucket;
+        ++size_;
+    }
+}
+
+}  // namespace cactus::runtime::entt_backend

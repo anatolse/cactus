@@ -59,3 +59,14 @@ When a module imports `std.camera.viewport`, the cpp-entt codegen SHALL emit a v
 #### Scenario: Viewport loop executes under the graph-driven main loop
 - **WHEN** a program importing `std.camera.viewport` is generated with a non-empty execution graph and a resolved external frame event (graph-driven main loop)
 - **THEN** the viewport render loop still executes once per frame, inside the render phase activation's dispatch, between `begin_render_frame` and `end_render_frame`
+
+### Requirement: Screen size is data
+`std.camera.viewport` SHALL declare a public named entity `Screen` with a trait `ScreenSize` holding `size: vec2`, the window's size in pixels. A stdlib extern rule SHALL write `size` in `core.input`, before any game rule of that phase, declaring the write in its contract. Rules SHALL read the screen size from `Screen` and not from a native call. In a headless run, `size` SHALL be the host's configured window size.
+
+#### Scenario: Resize is seen next frame
+- **WHEN** the window is resized between two frames
+- **THEN** `Screen[ScreenSize].size` holds the new size in the next frame's `core.input` and after it
+
+#### Scenario: Headless size
+- **WHEN** a headless test configures a 1280×720 window
+- **THEN** `Screen[ScreenSize].size` is `(1280, 720)`

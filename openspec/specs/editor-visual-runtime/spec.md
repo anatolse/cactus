@@ -126,21 +126,6 @@ Fixed-size rather than `ModelRenderer`-bounds-scaled: see `editor-declarative-re
 - **WHEN** an entity has `EditorSelected` with `EditorState.mode` = `GizmoMode.Translate` and `EditorState.active` is true
 - **THEN** the render phase draws red (+X), green (+Y), and blue (+Z) axis lines (`DrawDebugLine3D`) at the entity's position
 
-### Requirement: editor_plane_project_3d intersects the cursor ray with a plane
-`editor_plane_project_3d(screen, plane_origin, plane_normal)` SHALL build a picking ray from the active 3D camera through `screen` (raylib `GetScreenToWorldRay` or equivalent) and return the ray/plane intersection point. When the ray is parallel to the plane (|denominator| below epsilon) or the intersection lies behind the ray origin (`t < 0`), it SHALL return `plane_origin`.
-
-#### Scenario: Center-screen click with a downward-looking camera hits the ground
-- **WHEN** the active 3D camera is at `(0, 10, 0)` looking at the origin and `editor_plane_project_3d` is called with the screen center, plane origin `(0,0,0)`, and normal `(0,1,0)`
-- **THEN** the returned point is approximately `(0, 0, 0)`
-
-#### Scenario: Ray parallel to plane falls back to plane origin
-- **WHEN** the cursor ray direction is perpendicular to the plane normal
-- **THEN** `editor_plane_project_3d` returns `plane_origin`
-
-#### Scenario: Intersection behind the camera falls back to plane origin
-- **WHEN** the ray/plane intersection parameter `t` is negative
-- **THEN** `editor_plane_project_3d` returns `plane_origin`
-
 ### Requirement: editor_raycast_3d picks entities via a codegen-registered impl
 The runtime SHALL expose `register_editor_raycast_impl` (mirroring `register_editor_hit_test_impl`); `editor_raycast_3d(screen_pos, mask)` SHALL delegate to the registered impl with the picking ray built from the active 3D camera, returning `entt::null` when no impl is registered. When the program declares a vec3 `WorldTransform` and `ModelRenderer`, codegen SHALL register an impl that tests the ray against each candidate entity's axis-aligned bounding box — the model's bind-pose bounds scaled by `WorldTransform.scale` and translated by `WorldTransform.position` — excluding entities with `EditorLocked`, and returns the hit with the smallest ray distance.
 
@@ -156,13 +141,3 @@ The runtime SHALL expose `register_editor_raycast_impl` (mirroring `register_edi
 - **WHEN** the program has no vec3 `WorldTransform` or no `ModelRenderer` trait
 - **THEN** `editor_raycast_3d` returns `entt::null`
 
-### Requirement: editor_mouse_delta_3d returns ground-plane mouse movement
-`editor_mouse_delta_3d()` SHALL project the current cursor position and the previous cursor position (current minus `GetMouseDelta()`) onto the y=0 plane via the same ray/plane intersection as `editor_plane_project_3d`, and return the difference as a world-space vector. When either projection falls back (parallel ray or negative `t`), it SHALL return the zero vector.
-
-#### Scenario: Horizontal mouse movement maps to world-space delta
-- **WHEN** the active 3D camera looks down at the ground plane and the mouse moves horizontally across the screen
-- **THEN** `editor_mouse_delta_3d()` returns a non-zero vector lying in the y=0 plane
-
-#### Scenario: Degenerate projection yields zero delta
-- **WHEN** the cursor ray is parallel to the ground plane
-- **THEN** `editor_mouse_delta_3d()` returns `(0, 0, 0)`

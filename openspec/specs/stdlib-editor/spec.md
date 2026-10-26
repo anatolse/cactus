@@ -91,8 +91,6 @@ The `std.editor` module SHALL declare the following `pub extern func` declaratio
 - `editor_raycast_3d(screen_pos: vec2, mask: int) entity_id`
 - `editor_screen_to_world_2d(screen: vec2) vec2`
 - `editor_mouse_delta_2d() vec2`
-- `editor_plane_project_3d(screen: vec2, plane_origin: vec3, plane_normal: vec3) vec3`
-- `editor_mouse_delta_3d() vec3`
 - `active_mode() GizmoMode` — returns the current `EditorState.mode` of the singleton `Editor` entity, for use by rules (such as the gizmo renderers) that are not filtered on `EditorState` itself and therefore have no other way to read it.
 - `is_editor_active() bool` — returns the current `EditorState.active` of the singleton `Editor` entity, same narrow-accessor idiom as `active_mode()`. Needed because `EditorSelected` persists across an editor deactivate (only a selection change clears it), so a rule filtered on `EditorSelected` but not `EditorState` — such as the gizmo renderers — has no other way to detect "editor is off" and stop drawing.
 - `template_names() list[string]` — returns the registered `pub template` names in declaration order, per `editor-template-registry`.
@@ -210,8 +208,8 @@ The `std.editor` module SHALL declare:
 ### Requirement: std.editor module provides 3D selection and transform rules
 The `std.editor` module SHALL declare:
 - `rule EditorSelection3D` with filter requiring `std.transform.volume.WorldTransform`, excluding `EditorLocked`, that on input click calls `editor_raycast_3d` and adds `EditorSelected` to the hit entity
-- `rule EditorTranslate3D` with filter requiring `std.transform.volume.WorldTransform as xform` and `EditorSelected`, that on tick while mouse is held adds `editor_mouse_delta_3d()` to `xform.position`
-- `rule EditorPlace3D` with filter requiring `EditorState as state`, that on input click in `GizmoMode.Place` mode calls `editor_spawn_template` with `state.active_template` and the position returned by `editor_plane_project_3d` against the ground plane (origin `(0,0,0)`, normal `(0,1,0)`), then adds `EditorSelected` to the spawned entity
+- `rule EditorTranslate3D`, a pair rule over `EditorSelected` entities and the editor rig camera (`EditorCamera3D` with `std.camera.volume.CameraView as cv`), that on tick computes the ground-plane delta as the difference of `ray_plane(ray(cv, …), (0,0,0), (0,1,0))` hits at the mouse position and at the mouse position minus the mouse delta, or zero when either misses
+- `rule EditorPlace3D`, a pair rule over `EditorState` and the editor rig camera (`EditorCamera3D` with `std.camera.volume.CameraView as cv`) with `limit: 1 per` the editor binding, that on input click in `GizmoMode.Place` mode calls `editor_spawn_template` with the editor's `active_template` and the point of `ray_plane(ray(cv, mouse), (0,0,0), (0,1,0))` (the origin when it misses), then adds `EditorSelected` to the spawned entity
 - `rule EditorGizmoRenderer3D` with filter requiring `std.transform.volume.WorldTransform` and `EditorSelected`, that on render reads `active_mode()`, projects `EditorGizmo3D` with that mode, color `#00FF00FF`, and size `1.0`, and emits the `std.debug` primitive events (per `editor-debug-draw`) corresponding to that mode's gizmo geometry: an always-drawn wire box, plus mode-specific axis lines (Translate), a circle (Rotate), or axis lines with tip markers (Scale). Like `EditorGizmoRenderer2D`, it uses `on render:` so its emitted events are drained within the render-frame flush boundary using that frame's camera.
 
 `EditorSelection3D` and `EditorPlace3D` SHALL act only when `EditorState.use_3d` is `true`; when it is `false` their input handlers SHALL perform no selection and no spawning.

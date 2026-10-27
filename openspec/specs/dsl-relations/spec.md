@@ -215,3 +215,95 @@ A row binding SHALL expose `r.from` and `r.to` as `entity_id` values and `r.<fie
 #### Scenario: Test sees the pass snapshot
 - **WHEN** an early tuple in a pass adds `Claim(r, t)` and a later tuple tests `Claim(r, _)`
 - **THEN** the later test is false
+
+### Requirement: Derived relation declarations
+A module SHALL accept `[pub] relation N = closure(R)`, `[pub] relation N = shortest(R, by = f)` and `[pub] relation N = components(R)`, where `R` is a relation visible in the module. `R`'s `from` and `to` ends SHALL name the same trait. Otherwise the declaration is a compile error that names both traits. `N` SHALL be a derived relation whose ends both name that trait. A derived relation SHALL be read-only: `keep N`, `add N` and `remove N` SHALL be compile errors. It SHALL take part in tests and row bindings like any relation, except as limited below. `R` MAY itself be a derived relation.
+
+```ebnf
+derived_relation = [ "pub" ] "relation" IDENTIFIER "=" derived_form NEWLINE ;
+derived_form     = "closure" "(" dotted_name ")"
+                 | "shortest" "(" dotted_name "," "by" "=" IDENTIFIER ")"
+                 | "components" "(" dotted_name ")" ;
+```
+
+#### Scenario: Closure of a kept relation
+- **WHEN** a module declares `relation Reach = closure(Walk)` and `Walk` has `from: Tile` and `to: Tile`
+- **THEN** compilation accepts it, and `Reach` has ends `Tile` and `Tile`
+
+#### Scenario: Ends differ
+- **WHEN** `Claim` has `from: Robot` and `to: DigTask`, and a module declares `relation C = closure(Claim)`
+- **THEN** the compiler reports that `closure` needs one trait on both ends, naming `Robot` and `DigTask`
+
+#### Scenario: Writing a derived relation
+- **WHEN** a handler writes `add Reach(a, b)`
+- **THEN** the compiler reports that `Reach` is derived from `Walk` and is read-only
+
+### Requirement: Closure rows are reachability
+`closure(R)` SHALL hold the row `(a, b)` exactly when there are rows `(a, x1), (x1, x2), …, (xk, b)` of `R` with `k ≥ 0`. A row `(a, a)` SHALL exist only when such a chain leads from `a` back to `a`.
+
+#### Scenario: Chain
+- **WHEN** `Walk` holds `(a, b)` and `(b, c)`
+- **THEN** `Reach` holds `(a, b)`, `(b, c)` and `(a, c)`, and not `(c, a)`
+
+#### Scenario: Not reflexive
+- **WHEN** `a` has no `Walk` rows
+- **THEN** `Reach(a, a)` is false
+
+#### Scenario: Territory connected to the heart
+- **WHEN** a keep rule over `heart` and `t` declares `where: Reach(heart, t) or t == heart` and `keep Connected on t`
+- **THEN** exactly the tiles linked to the heart by `Walk` chains carry `Connected`
+
+### Requirement: Shortest rows carry the first step and the cost
+In `shortest(R, by = f)`, `f` SHALL be an `int` field of `R`. A row's cost SHALL be `f`, or `0` when `f` is negative. The cost of a chain SHALL be the exact sum of its rows' costs. `shortest(R, by = f)` SHALL hold the row `(a, b)` for every `b ≠ a` that a chain leads to whose cost is at most `2147483647`, with fields:
+- `distance: int`, the least cost of such a chain;
+- `next: entity_id`, the second entity of a least-cost chain. When several least-cost chains have different second entities, `next` SHALL be the one with the lowest creation order.
+
+#### Scenario: Cheapest step
+- **WHEN** `Walk` links `a→b` (cost 1), `b→d` (cost 1), `a→c` (cost 1) and `c→d` (cost 5)
+- **THEN** `Route` holds `(a, d)` with `distance = 2` and `next = b`
+
+#### Scenario: Tie by creation order
+- **WHEN** two chains from `a` to `d` cost the same, one through `b` and one through `c`, and `b` was created before `c`
+- **THEN** `Route(a, d).next` is `b`, as seen through a row binding
+
+#### Scenario: Unreachable goal
+- **WHEN** no chain leads from `a` to `d`
+- **THEN** `Route` has no row `(a, d)`, and a rule joining a walker at `a` with goal `d` runs no tuple for it
+
+#### Scenario: Float cost field
+- **WHEN** a module declares `shortest(Walk, by = cost)` and `cost` is a `float`
+- **THEN** the compiler reports that `by` needs an `int` field, with help that says to scale costs to integers
+
+### Requirement: Components map every member to its oldest member
+`components(R)` SHALL treat `R`'s rows as two-way links over the entities that carry `R`'s end trait. It SHALL hold one row `(m, root)` for every such entity `m`, where `root` is the member of `m`'s connected group with the lowest creation order. An entity with no rows SHALL be its own group. The `from` end SHALL be `one`.
+
+#### Scenario: Two rooms
+- **WHEN** lair tiles form two groups with no link between them
+- **THEN** every tile's `Room` row points to the oldest tile of its own group
+
+#### Scenario: Merge keeps the older name
+- **WHEN** a new link joins a group whose oldest tile is `t3` with a group whose oldest tile is `t9`, and `t3` is older
+- **THEN** every tile of both groups maps to `t3`
+
+#### Scenario: Split
+- **WHEN** removing a tile splits a group with root `t3` into a part that holds `t3` and a part whose oldest tile is `t7`
+- **THEN** the first part maps to `t3` and the second to `t7`
+
+#### Scenario: Lone tile
+- **WHEN** a lair tile has no `SameRoom` rows
+- **THEN** `Room` holds `(tile, tile)`
+
+### Requirement: Derived relations are current, unsaved and bounded
+A derived relation SHALL be read as a function of `R`'s rows in the same snapshot that the reading pass sees for `R`. It SHALL NOT be saved, and SHALL be correct immediately after restore. A row binding of a `closure` or `shortest` relation SHALL require a top-level `where:` conjunct that equates `r.from` or `r.to` with an expression that does not read the row binding. Otherwise the compiler SHALL report an error, with help that says to fix an end. `components` row bindings and every relation test SHALL have no such requirement. Derived rows SHALL be ordered by the creation order of their `from` end, then of their `to` end.
+
+#### Scenario: Seen in the same pass as its source
+- **WHEN** a keep run adds `Walk(b, c)` and a later activation's rule tests `Reach(a, c)` while `Walk` holds `(a, b)`
+- **THEN** the test is true in that later activation
+
+#### Scenario: Unbounded row binding
+- **WHEN** a rule declares `each: Reach as r` with no equality on `r.from` or `r.to`
+- **THEN** the compiler reports an error with help that says to fix one end by equality
+
+#### Scenario: After restore
+- **WHEN** a world with stored links is restored
+- **THEN** the first pass that reads their closure sees the restored links' reachability

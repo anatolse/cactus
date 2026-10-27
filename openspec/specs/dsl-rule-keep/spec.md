@@ -206,3 +206,14 @@ A keep rule depends on another keep rule when any of its clauses reads the trait
 #### Scenario: Trait kept from a relation
 - **WHEN** `WalkLinks` keeps `Walk`, and `Connected` keeps a trait with `where: Walk(heart, t)`
 - **THEN** compilation accepts both
+
+### Requirement: Keep dependencies pass through derived relations
+A keep rule that reads a derived relation SHALL depend on every keep rule that keeps one of the relations it is derived from, directly or through other derived relations. These dependencies SHALL take part in the existing cycle check, and a cycle through a derived relation SHALL be reported like any other keep cycle.
+
+#### Scenario: Keeper reads the closure of its own relation
+- **WHEN** `WalkLinks` keeps `Walk` and also tests `Reach(a, b)` where `Reach = closure(Walk)`
+- **THEN** the compiler reports a cycle that names `WalkLinks`
+
+#### Scenario: Chain through a closure
+- **WHEN** `WalkLinks` keeps `Walk`, and `Connected` keeps a trait from `Reach(heart, t)` where `Reach = closure(Walk)`
+- **THEN** compilation accepts both, and `Connected` follows the `Walk` rows that `WalkLinks`'s last run committed, as it would by testing `Walk` itself

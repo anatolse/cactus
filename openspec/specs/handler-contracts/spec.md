@@ -381,3 +381,14 @@ For each trait parameter of a user `func`, the compiler SHALL derive the set of 
 #### Scenario: A writer of an unread field is not ordered before the caller
 - **WHEN** rule A writes `WorldTransform.scale`, rule B in the same phase calls `height(t)`, which reads only `position`, and nothing orders them
 - **THEN** the graph adds no edge between A and B for `WorldTransform`
+
+### Requirement: Derived relation reads are source reads
+A handler contract that reads a derived relation SHALL record a read of each relation it is derived from, and of the cost field for `shortest`. Ordering and race checks SHALL treat it as reading those source relations.
+
+#### Scenario: Closure read
+- **WHEN** a rule tests `Reach(heart, t)` where `Reach = closure(Walk)`
+- **THEN** its contract records a read of `Walk`
+
+#### Scenario: Shortest read
+- **WHEN** a rule binds `r: Route` where `Route = shortest(Walk, by = cost)`
+- **THEN** its contract records a read of `Walk` and of `Walk.cost`

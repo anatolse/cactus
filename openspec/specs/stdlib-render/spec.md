@@ -245,3 +245,22 @@ The `ShapeRenderer` extern rule SHALL wrap its raylib draw calls in `BeginMode2D
 #### Scenario: Hidden circle shape not drawn
 - **WHEN** a `ShapeType.Circle` Shape entity has `visible = false`
 - **THEN** no circle is drawn for that entity
+
+### Requirement: Entities can be hidden per viewport
+`std.render.visibility` SHALL declare `pub relation HiddenIn` with `from: tv.WorldTransform` and `to: std.camera.viewport.Viewport`, stored or kept by games like any relation. While `HiddenIn` holds `(e, v)`, no stdlib 3D renderer SHALL draw `e` in viewport `v`. Every other viewport SHALL draw `e` as before. With no `HiddenIn` rows, rendering SHALL be unchanged. The stdlib 3D renderers are the mesh, model, 3D text and volume renderers. A volume is hidden through its volume entity, which then needs a `WorldTransform`.
+
+#### Scenario: Minimap markers
+- **WHEN** a keep rule keeps `HiddenIn(marker, main)` for every minimap marker and `HiddenIn(model, minimap)` for every unit model
+- **THEN** the main viewport draws models and no markers, and the minimap viewport draws markers and no models
+
+#### Scenario: No rows
+- **WHEN** a program imports `std.render.visibility` and has no `HiddenIn` rows
+- **THEN** every viewport draws exactly what it drew before
+
+#### Scenario: Hidden in one of two split-screen views
+- **WHEN** `HiddenIn(marker, left)` holds and the screen has viewports `left` and `right`
+- **THEN** the marker is drawn in `right` only
+
+#### Scenario: Row removed with the viewport
+- **WHEN** a viewport entity is destroyed
+- **THEN** its `HiddenIn` rows are removed, and nothing else changes

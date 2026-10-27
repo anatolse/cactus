@@ -392,3 +392,14 @@ A handler contract that reads a derived relation SHALL record a read of each rel
 #### Scenario: Shortest read
 - **WHEN** a rule binds `r: Route` where `Route = shortest(Walk, by = cost)`
 - **THEN** its contract records a read of `Walk` and of `Walk.cost`
+
+### Requirement: Extern contracts can read relations
+An `extern rule` handler's `reads:` block SHALL accept relation names alongside trait names. A relation entry SHALL resolve canonically, like a trait entry. It SHALL record a read of the whole relation and give the native implementation read access to that relation's rows only. An extern `writes:`, `projects:` or `commands:` entry naming a relation SHALL be rejected in this change.
+
+#### Scenario: Renderer reads HiddenIn
+- **WHEN** a stdlib renderer's extern rule lists `visibility.HiddenIn` under `reads:`
+- **THEN** its contract records a read of `HiddenIn`, and keep rules for `HiddenIn` order against it as they would for a kept trait read
+
+#### Scenario: Extern write to a relation
+- **WHEN** an extern rule lists a relation under `writes:`
+- **THEN** the compiler reports that extern rules may only read relations

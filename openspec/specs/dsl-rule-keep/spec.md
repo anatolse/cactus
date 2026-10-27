@@ -12,7 +12,7 @@ A rule SHALL accept one `keep` clause in one of four forms:
 - On a pair rule with `reduce per b:`: `keep T on b`, where `b` is the `per` binding, optionally followed by `if condition`.
 - On a pair rule without `reduce:` whose two bindings are entity bindings: `keep R(a, b)`, where `R` is a relation and `a`, `b` are the two bindings (`dsl-relations`).
 
-`T` SHALL be a durable trait declared in the same module as the rule, with no `persist` fields and not a state variant. `R` SHALL be a relation declared in the same module as the rule. The clause body SHALL assign zero or more fields of `T` or `R` from pure expressions; every field it leaves out SHALL take its declared default, and a field with no default SHALL be assigned. On a unary rule the expressions read the rule's filter traits and aliases, constants and named entity fields. On an unreduced pair rule keeping a trait they read only `b`, constants and named entity fields. On a relation keep they read both bindings, constants and named entity fields. On a reduced rule they read the aggregates, `b`, constants and named entity fields. A condition SHALL be a pure `bool` over the same scope as the fields. `keep` is recognized contextually at the rule-clause position.
+`T` SHALL be a durable trait declared in the same module as the rule, with no `persist` fields and not a state variant. `R` SHALL be a relation declared in the same module as the rule, or a relation of an imported module that its declaring module does not keep and that marks no end `one`. A linked program SHALL have at most one keeper per relation, and no rule other than its keeper, in any module, SHALL `add` or `remove` rows of a relation kept from another module; the linker SHALL report either conflict. The clause body SHALL assign zero or more fields of `T` or `R` from pure expressions; every field it leaves out SHALL take its declared default, and a field with no default SHALL be assigned. On a unary rule the expressions read the rule's filter traits and aliases, constants and named entity fields. On an unreduced pair rule keeping a trait they read only `b`, constants and named entity fields. On a relation keep they read both bindings, constants and named entity fields. On a reduced rule they read the aggregates, `b`, constants and named entity fields. A condition SHALL be a pure `bool` over the same scope as the fields. `keep` is recognized contextually at the rule-clause position.
 
 The compiler SHALL reject, with a source-located error, `keep` on selectionless, globally reduced, row-domain and extern rules; `on` on a unary rule; a pair keep of a trait without `on`; a binding other than the `per` binding on a reduced rule; `keep R(...)` on a unary, reduced or row-binding rule; `keep R(...)` whose arguments are not the rule's two bindings; `if` on a unary, unreduced pair or relation keep; a field read outside the form's scope; and a field or condition whose type does not match. A read of the non-recipient binding on an unreduced pair keep of a trait SHALL be reported with help that suggests `reduce per` and `best(...)`.
 
@@ -75,6 +75,18 @@ The compiler SHALL reject, with a source-located error, `keep` on selectionless,
 #### Scenario: Relation keep on a reduced rule
 - **WHEN** a rule with `reduce per a:` declares `keep Walk(a, b)`
 - **THEN** the compiler reports a source-located error that a relation keep needs an unreduced pair rule
+
+#### Scenario: Keep an imported relation
+- **WHEN** a game module's pair rule declares `keep visibility.HiddenIn(marker, port)` and `std.render.visibility` keeps no `HiddenIn`
+- **THEN** compilation accepts it, and the linked `HiddenIn` is kept by that rule
+
+#### Scenario: Imported relation already kept
+- **WHEN** a rule keeps an imported relation that its own module keeps, or that marks an end `one`
+- **THEN** the compiler reports a source-located error
+
+#### Scenario: Two modules keep one imported relation
+- **WHEN** two linked modules each keep the same imported relation, or one keeps it and another adds its rows
+- **THEN** the linker reports an error naming the relation and both rules
 
 ### Requirement: Kept trait presence follows rows
 

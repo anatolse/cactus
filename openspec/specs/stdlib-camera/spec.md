@@ -98,3 +98,29 @@ Game code SHALL read a camera's projection only through a rule binding of the ca
 #### Scenario: Removed helper
 - **WHEN** a module calls `camera.screen_to_plane(...)`
 - **THEN** compilation fails with an error that names `screen_to_plane` as unknown
+
+### Requirement: 3D cameras can be orthographic
+`std.camera.volume` SHALL declare `pub enum Projection` with `Perspective` and `Orthographic`. `Camera` SHALL gain `var projection: Projection = Projection.Perspective` and `var ortho_height: float = 10.0`. An orthographic camera SHALL show a world-space box of height `ortho_height` along its `up` direction, with the width set by the viewport's aspect ratio, and with no perspective shrink. A value of `ortho_height` at or below zero SHALL act as `0.001`. A perspective camera SHALL render exactly as before.
+
+#### Scenario: Top-down minimap
+- **WHEN** a camera looks straight down with `projection = Orthographic` and `ortho_height = 85.0` over an 85-cell-wide map
+- **THEN** its viewport shows the whole map height, and two equal-size units at different heights look the same size
+
+#### Scenario: Default stays perspective
+- **WHEN** a program declares a `Camera` without setting `projection`
+- **THEN** it renders as a perspective camera with its `fov_y`
+
+### Requirement: Camera views cover orthographic cameras
+`CameraView` SHALL gain `projection: Projection` and `ortho_height: float`, copied from `Camera`. For an orthographic view:
+- `to_screen` SHALL map a point by its offsets along `right` and `up` alone. `in_front` is true when the point is farther than `near` along `forward`.
+- `ray` SHALL return a ray with `direction = forward` whose origin is on the near plane, offset along `right` and `up` for the pixel.
+
+The round-trip and renderer-agreement guarantees of perspective views SHALL hold for orthographic views.
+
+#### Scenario: Click on the minimap
+- **WHEN** a rule computes `ray_plane(ray(view, mouse), ground, up)` for an orthographic top-down minimap view
+- **THEN** the hit point is the ground point drawn under the mouse
+
+#### Scenario: Orthographic round trip
+- **WHEN** a point is projected with `to_screen` on an orthographic view and a ray is cast back through that pixel
+- **THEN** the ray passes within 0.01 world units of the point

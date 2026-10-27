@@ -285,8 +285,22 @@ rule LocateRayCell:
 # with its cell's texture repeated once per cell face, under the scene's lights.
 # The renderer follows committed Solid changes and texture writes by itself and
 # rebuilds only the parts of the surface that changed.
+
+# Blocky draws cubes. Smooth draws one rounded surface around the solid cells,
+# each part textured from its nearest solid cell. The smooth surface is visual
+# only: collision, probes and saves still see whole cells.
+pub enum SurfaceStyle:
+    Blocky
+    Smooth
+
+# roughness: how far Smooth moves the surface with noise, as a fraction of
+#            cell_size; kept within 0.0..0.4
+# seed:      picks the noise, so one world always looks the same
 pub trait VolumeRenderer:
     var visible: bool = true
+    var style: SurfaceStyle = SurfaceStyle.Blocky
+    var roughness: float = 0.25
+    var seed: int = 0
 
 # On a camera's viewport entity: that camera hides the cells of `volume` above
 # layer `top` and shows the cut surface. Collision, probes and saves still see

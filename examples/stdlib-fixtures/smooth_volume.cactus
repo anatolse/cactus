@@ -1,0 +1,165 @@
+module smooth_volume
+
+# A rock drawn with the smooth surface style, seen by two cameras. The right
+# camera cuts the rock away above layer 2. A restore rebuilds both cameras.
+#   Rock:   20 x 5 x 5 solid stone cells, two surface chunks along x. Its top
+#           is at y = 5.
+#   Tunnel: digs one cell per tick along x at y = 2, z = 2 while active.
+#   Body:   a capsule that falls onto the rock and rests on the cell boxes.
+#   Walker: a weightless capsule that walks into the rock's -x wall.
+#   Eye:    a ray probe pointing down at the rock's top.
+
+use std.core
+use std.math.quat as quat
+use std.transform.volume as tv
+use std.physics.volume as physics
+use std.camera.volume as camera
+use std.camera.viewport as viewport
+use std.render.meshes as meshes
+use std.voxel.volume as voxel
+use std.persistence as storage
+
+asset Stone: texture = "../platformer/assets/tiles/ground.png"
+
+pub entity Rock:
+    voxel.Volume:
+        max_x = 19
+        max_y = 4
+        max_z = 4
+    voxel.VolumeRenderer:
+        style = voxel.SurfaceStyle.Smooth
+        roughness = 0.2
+        seed = 7
+
+template View(x: float):
+    tv.WorldTransform:
+        position = vec3(10.0, 9.0, 16.0)
+        rotation = quat.from_euler(-0.5, 0.0, 0.0)
+    camera.Camera
+    viewport.Viewport:
+        x = x
+        width = 0.5
+
+template CutCamera:
+    use View(x = 0.5)
+    voxel.Cutaway:
+        volume = Rock
+        top = 2
+
+pub entity FullView from View(x = 0.0)
+
+pub entity CutView from CutCamera()
+
+pub entity Sun:
+    meshes.DirectionalLight:
+        direction = vec3(-0.3, -1.0, -0.2)
+
+template Capsule(position: vec3, velocity: vec3 = vec3(0.0, 0.0, 0.0), gravity: float = 9.81):
+    tv.WorldTransform:
+        position = position
+    physics.Collider
+    physics.CapsuleCollider:
+        radius = 0.4
+        height = 2.0
+    physics.CharacterBody:
+        velocity = velocity
+        gravity = gravity
+
+pub entity Body from Capsule(position = vec3(5.5, 8.0, 0.5))
+
+pub entity Walker from Capsule(position = vec3(-3.0, 2.5, 2.5), velocity = vec3(2.0, 0.0, 0.0), gravity = 0.0)
+
+pub entity Eye:
+    voxel.RayProbe:
+        volume = Rock
+        origin = vec3(10.5, 9.0, 0.5)
+        direction = vec3(0.0, -1.0, 0.0)
+        max_distance = 10.0
+
+pub trait Tunnel:
+    var active: bool = false
+    var next_x: int = 2
+    var last_x: int = 17
+
+pub entity Digger:
+    Tunnel
+
+event Dig
+
+rule DigTunnel:
+    pairs:
+        tunnel:
+            Tunnel
+        cell:
+            voxel.Cell
+            physics.Solid
+    where:
+        tunnel[Tunnel].active and tunnel[Tunnel].next_x <= tunnel[Tunnel].last_x
+        cell[voxel.Cell].x == tunnel[Tunnel].next_x and cell[voxel.Cell].y == 2 and cell[voxel.Cell].z == 2
+    reduce per tunnel:
+        matches = count()
+        target = best(cell, by = 0.0)
+
+    on tick:
+        if matches == 0:
+            return
+        tunnel[Tunnel].next_x += 1
+        emit Dig to target
+
+rule RemoveDugCell:
+    each:
+        voxel.Cell
+        physics.Solid
+
+    on Dig:
+        remove physics.Solid
+
+# Saves or restores slot "rock" when the test sets a flag, and rebuilds the
+# cameras a restore drops.
+pub trait StorageControl:
+    var save: bool = false
+    var restore: bool = false
+    var saved: bool = false
+    var failure: string = ""
+    persist var restores: int = 0
+
+pub entity Storage:
+    StorageControl
+
+rule DriveStorage:
+    each:
+        StorageControl as control
+
+    on tick:
+        if control.save:
+            control.save = false
+            emit storage.SaveRequested:
+                slot = "rock"
+                request_id = 1
+        if control.restore:
+            control.restore = false
+            emit storage.RestoreRequested:
+                slot = "rock"
+                request_id = 2
+
+    on storage.SaveCompleted:
+        control.saved = true
+
+    on storage.RestoreCompleted:
+        control.restores += 1
+        spawn View(x = 0.0)
+        spawn CutCamera()
+
+    on storage.SaveFailed as failed:
+        control.failure = failed.message
+
+    on storage.RestoreFailed as failed:
+        control.failure = failed.message
+
+rule FillRock:
+    each:
+        voxel.Cell as cell
+
+    on added voxel.Cell:
+        cell.texture = Stone
+        add physics.Solid

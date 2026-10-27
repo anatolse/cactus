@@ -7326,9 +7326,10 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
         const std::string cutaway  = EnttCodegenUtils::trait_cpp_name("std.voxel.volume.Cutaway", program);
         const std::string solid    = EnttCodegenUtils::trait_cpp_name("std.physics.volume.Solid", program);
         const std::string issue    = EnttCodegenUtils::enum_cpp_name("std.voxel.volume.VolumeIssue", program);
+        const std::string style    = EnttCodegenUtils::enum_cpp_name("std.voxel.volume.SurfaceStyle", program);
         out << tick_signature;
         out << "    " << ns << "render_voxel_volumes<" << volume << ", " << renderer << ", " << cell << ", " << cutaway
-            << ", " << solid << ", " << issue << "::Valid>(registry);\n";
+            << ", " << solid << ", " << issue << "::Valid, " << style << "::Smooth>(registry);\n";
         out << "}\n\n";
         return out.str();
     }

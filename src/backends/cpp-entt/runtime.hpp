@@ -242,7 +242,7 @@ void submit_voxel_volume(entt::entity volume, std::optional<int> ceiling) noexce
 void set_active_viewport_entity(entt::entity viewport) noexcept;
 [[nodiscard]] entt::entity active_viewport_entity() noexcept;
 
-template <typename Volume, typename Renderer, typename Cell, typename Cutaway, typename Solid, auto Valid>
+template <typename Volume, typename Renderer, typename Cell, typename Cutaway, typename Solid, auto Valid, auto Smooth>
 void render_voxel_volumes(entt::registry& registry) {
     for (const auto [volume_entity, volume, renderer] : registry.view<Volume, Renderer>().each()) {
         if (!renderer.visible || volume.issue != Valid) {
@@ -251,7 +251,10 @@ void render_voxel_volumes(entt::registry& registry) {
         const VoxelVolumeDesc desc{.origin    = volume.origin,
                                    .cell_size = volume.cell_size,
                                    .min       = {volume.min_x, volume.min_y, volume.min_z},
-                                   .max       = {volume.max_x, volume.max_y, volume.max_z}};
+                                   .max       = {volume.max_x, volume.max_y, volume.max_z},
+                                   .surface   = {.smooth    = renderer.style == Smooth,
+                                                 .roughness = renderer.roughness,
+                                                 .seed      = renderer.seed}};
         if (auto* grid = voxel_volume_begin(volume_entity, desc)) {
             const EarlierCell earlier{.registry = &registry};
             // Walks the cells in storage order, which keeps the scan sequential.

@@ -403,6 +403,9 @@ varying vec3 fragNormal;
 
 uniform sampler2D texture0;
 uniform vec4 colDiffuse;
+// Smooth voxel surfaces: xyz is the volume origin, w is 1 / cell_size; w = 0
+// keeps the mesh's own texture coordinates.
+uniform vec4 triplanar;
 
 #define MAX_LIGHTS 4
 #define LIGHT_POINT 1
@@ -423,8 +426,17 @@ uniform vec3 viewPos;
 void main()
 {
     vec4 texelColor = texture2D(texture0, fragTexCoord);
-    vec3 lightDot = vec3(0.0);
     vec3 normal = normalize(fragNormal);
+    if (triplanar.w > 0.0)
+    {
+        vec3 cell = (fragPosition - triplanar.xyz)*triplanar.w;
+        vec3 blend = pow(abs(normal), vec3(4.0));
+        blend /= blend.x + blend.y + blend.z;
+        texelColor = texture2D(texture0, vec2(cell.z, -cell.y))*blend.x +
+                     texture2D(texture0, cell.xz)*blend.y +
+                     texture2D(texture0, vec2(cell.x, -cell.y))*blend.z;
+    }
+    vec3 lightDot = vec3(0.0);
     vec3 viewD = normalize(viewPos - fragPosition);
     vec3 specular = vec3(0.0);
 
@@ -536,6 +548,9 @@ in vec3 fragNormal;
 
 uniform sampler2D texture0;
 uniform vec4 colDiffuse;
+// Smooth voxel surfaces: xyz is the volume origin, w is 1 / cell_size; w = 0
+// keeps the mesh's own texture coordinates.
+uniform vec4 triplanar;
 
 out vec4 finalColor;
 
@@ -558,8 +573,17 @@ uniform vec3 viewPos;
 void main()
 {
     vec4 texelColor = texture(texture0, fragTexCoord);
-    vec3 lightDot = vec3(0.0);
     vec3 normal = normalize(fragNormal);
+    if (triplanar.w > 0.0)
+    {
+        vec3 cell = (fragPosition - triplanar.xyz)*triplanar.w;
+        vec3 blend = pow(abs(normal), vec3(4.0));
+        blend /= blend.x + blend.y + blend.z;
+        texelColor = texture(texture0, vec2(cell.z, -cell.y))*blend.x +
+                     texture(texture0, cell.xz)*blend.y +
+                     texture(texture0, vec2(cell.x, -cell.y))*blend.z;
+    }
+    vec3 lightDot = vec3(0.0);
     vec3 viewD = normalize(viewPos - fragPosition);
     vec3 specular = vec3(0.0);
 
@@ -643,6 +667,7 @@ struct LightingShaderState {
     bool loaded{false};
     int ambient_loc{-1};
     int view_pos_loc{-1};
+    int triplanar_loc{-1};
     std::array<int, kMaxMeshLights> enabled_locs{};
     std::array<int, kMaxMeshLights> type_locs{};
     std::array<int, kMaxMeshLights> position_locs{};
@@ -713,6 +738,7 @@ bool load_lighting_shader(LightingShaderState& state, const char* vertex_src, co
     state.shader.locs[SHADER_LOC_VECTOR_VIEW]   = GetShaderLocation(state.shader, "viewPos");
     state.ambient_loc                           = GetShaderLocation(state.shader, "ambient");
     state.view_pos_loc                          = GetShaderLocation(state.shader, "viewPos");
+    state.triplanar_loc                         = GetShaderLocation(state.shader, "triplanar");
 
     for (int i = 0; i < kMaxMeshLights; ++i) {
         const auto index    = static_cast<std::size_t>(i);
@@ -1433,14 +1459,9 @@ void clear_voxel_store() noexcept {
 
 void build_voxel_chunk(const VoxelSurfaceGrid& grid, int chunk, std::optional<int> ceiling, VoxelChunkCache& cache) {
     release_voxel_meshes(cache);
-    std::map<std::uint32_t, std::vector<VoxelFaceQuad>> by_texture;
-    for (auto& face : grid.chunk_faces(chunk, ceiling)) {
-        by_texture[face.texture].push_back(face);
-    }
-    for (const auto& [texture, faces] : by_texture) {
-        cache.meshes.push_back(VoxelChunkMesh{.texture = texture,
-                                              .mesh    = upload_voxel_mesh(build_voxel_mesh(grid.desc(), faces)),
-                                              .faces   = static_cast<int>(faces.size())});
+    for (const auto& part : build_voxel_chunk_meshes(grid, chunk, ceiling)) {
+        cache.meshes.push_back(
+            VoxelChunkMesh{.texture = part.texture, .mesh = upload_voxel_mesh(part.mesh), .faces = part.faces});
     }
     cache.built   = true;
     cache.ceiling = ceiling;
@@ -1466,8 +1487,22 @@ Material& voxel_material(std::uint32_t texture) {
     return material;
 }
 
+// Smooth surfaces take their texture from world position; null turns it off.
+void set_voxel_triplanar(const VoxelVolumeDesc* desc) noexcept {
+    const auto& state = lighting_shader_state();
+    if (!state.loaded || state.triplanar_loc < 0) {
+        return;
+    }
+    std::array<float, 4> value{};
+    if (desc != nullptr && desc->surface.smooth) {
+        value = {desc->origin.x, desc->origin.y, desc->origin.z, 1.0F / desc->cell_size};
+    }
+    SetShaderValue(state.shader, state.triplanar_loc, value.data(), SHADER_UNIFORM_VEC4);
+}
+
 void draw_voxel_volume(VoxelVolumeRender& volume, std::optional<int> ceiling) {
     auto& debug = render_debug_state_storage();
+    set_voxel_triplanar(&volume.grid.desc());
     for (int chunk = 0; chunk < volume.grid.chunk_count(); ++chunk) {
         const auto view = volume.grid.chunk_view(chunk, ceiling);
         if (view == VoxelChunkView::Hidden) {
@@ -1503,6 +1538,7 @@ void flush_voxel_queue() noexcept try {
             draw_voxel_volume(found->second, submission.ceiling);
         }
     }
+    set_voxel_triplanar(nullptr);
     end_mode_3d();
     voxel_queue().clear();
 } catch (...) {

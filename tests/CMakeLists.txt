@@ -870,6 +870,12 @@ cactus_add_headless_behavior_test(test_voxel_rendering_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_voxel_rendering_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_smooth_volume_headless_behavior
+    CACTUS_SOURCE examples/stdlib-fixtures/smooth_volume.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_smooth_volume_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_robot_sandbox_headless_behavior
     CACTUS_SOURCE examples/robot-sandbox/small_world.cactus
     BACKEND cpp-entt

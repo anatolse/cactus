@@ -17,6 +17,8 @@ namespace backend = cactus::runtime::entt_backend;
 
 using Cell  = cactus_gen::stdlib::voxel::volume::Cell;
 using Solid = cactus_gen::stdlib::physics::volume::Solid;
+using VolumeRenderer = cactus_gen::stdlib::voxel::volume::VolumeRenderer;
+using SurfaceStyle   = cactus_gen::stdlib::voxel::volume::SurfaceStyle;
 
 // Faces of the fixture's terrain. Stone slab 4 x 1 x 4 under a 2 x 1 x 4 wood
 // block: stone shows 8 uncovered tops, 16 bottoms and 16 sides; wood shows 8
@@ -68,6 +70,16 @@ TEST_CASE("both cameras draw the exposed faces, the cut one only below its layer
     CHECK(World::debug().voxel_faces_drawn == kFullFaces + kCutFaces);
     // Stone and wood meshes for the full view, stone alone for the cut one.
     CHECK(World::debug().voxel_draw_calls == 3);
+}
+
+TEST_CASE("a volume renderer defaults to the blocky style", "[runtime][codegen-entt][stdlib-voxel-volume][render]") {
+    World world;
+    const auto renderers = world.registry.view<VolumeRenderer>();
+    REQUIRE(renderers.size() == 1);
+    const auto& renderer = renderers.get<VolumeRenderer>(renderers.front());
+    CHECK(renderer.style == SurfaceStyle::Blocky);
+    CHECK(renderer.roughness == 0.25F);
+    CHECK(renderer.seed == 0);
 }
 
 TEST_CASE("an unchanged frame reuses every chunk mesh", "[runtime][codegen-entt][stdlib-voxel-volume][render]") {

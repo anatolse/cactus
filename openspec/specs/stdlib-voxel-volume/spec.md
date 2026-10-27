@@ -82,3 +82,62 @@ Rendering SHALL observe direct texture updates and committed structural changes 
 #### Scenario: Restore after excavation
 - **WHEN** a saved solid cell replaces the current excavated cell during restore
 - **THEN** subsequent picking and rendering reflect the restored solid with no old cached surface or entity handle
+
+### Requirement: Volume renderers choose a surface style
+`std.voxel.volume` SHALL declare `pub enum SurfaceStyle` with `Blocky` and `Smooth`, and `VolumeRenderer` SHALL gain `var style: SurfaceStyle = SurfaceStyle.Blocky`, `var roughness: float = 0.25` and `var seed: int = 0`. `Blocky` SHALL draw exactly what volume renderers draw today. `roughness` is a fraction of `cell_size`. Values below `0.0` SHALL act as `0.0`, and values above `0.4` SHALL act as `0.4`. Changing `style`, `roughness` or `seed` SHALL rebuild the volume's surface by the next render.
+
+#### Scenario: Default stays blocky
+- **WHEN** a program declares a `VolumeRenderer` without setting `style`
+- **THEN** the volume renders with the same faces as before this change
+
+#### Scenario: Switching style
+- **WHEN** a handler sets `style = SurfaceStyle.Smooth` on a rendered volume
+- **THEN** the next render draws the smooth surface
+
+### Requirement: The smooth surface is rounded, closed and bounded
+With `Smooth`, a volume renderer SHALL draw one surface that separates solid cells from air and from the volume's outside. That surface SHALL be closed wherever solid cells meet air, with no gaps at chunk borders. Every surface point SHALL lie within `(0.5 + roughness) × cell_size` of the center of some solid cell on every axis, that is, inside that cell's box grown by `roughness × cell_size`. A single solid cell SHALL produce a visible rounded shape, not nothing. With `roughness = 0.0`, the surface SHALL depend only on which cells are solid.
+
+#### Scenario: A dug tunnel
+- **WHEN** a straight line of cells inside solid rock is made air
+- **THEN** the render shows a rounded tunnel whose walls stay within the bound around the neighboring solid cells
+
+#### Scenario: Chunk seams
+- **WHEN** a solid region spans two surface chunks
+- **THEN** the surface has no gap or crack along the chunk border
+
+#### Scenario: Lone cell
+- **WHEN** one solid cell is surrounded by air
+- **THEN** a rounded shape is drawn within that cell's bound
+
+### Requirement: Smooth surfaces are deterministic
+The smooth surface SHALL be a function of the volume description, the set of solid cells, their textures, `roughness` and `seed` only. It SHALL NOT depend on frame timing, edit order, chunk rebuild order or entity creation order. Two runs with the same world, including a world restored from a save, SHALL draw the same vertices. A different `seed` MAY change vertex positions but SHALL NOT change which cells the surface encloses.
+
+#### Scenario: Same world after restore
+- **WHEN** a world with a smooth volume is saved and restored
+- **THEN** the restored render's vertices equal the saved world's vertices
+
+#### Scenario: Edit order does not matter
+- **WHEN** two runs dig the same five cells in different orders and in different frames
+- **THEN** both runs draw the same surface after the last dig
+
+### Requirement: Smooth surfaces are visual only
+Choosing `Smooth` SHALL NOT change collision, character bodies, cell or ray probes, `Solid`, persistence, or which cells a `Cutaway` hides. A cutaway SHALL hide the smooth surface above its layer and SHALL show the cut as for `Blocky`.
+
+#### Scenario: Collision unchanged
+- **WHEN** a character body walks into a wall drawn with `Smooth`
+- **THEN** it stops at the cell box, exactly as with `Blocky`
+
+#### Scenario: Cutaway on a smooth volume
+- **WHEN** a camera's `Cutaway` selects a layer of a smooth volume
+- **THEN** that camera hides the surface above the layer and shows the section at the layer
+
+### Requirement: Smooth surfaces keep per-cell textures and incremental updates
+Each point of a smooth surface SHALL take the texture of the nearest solid cell, with ties broken by the lowest cell coordinate in `x`, then `y`, then `z`. The texture SHALL be projected so it keeps about one repeat per cell on walls, floors and slopes. A committed change to one cell's `Solid` or texture SHALL rebuild only the chunks whose surface that cell can change, which are the chunks that hold the cell or one of its 26 neighbors.
+
+#### Scenario: Two materials on one wall
+- **WHEN** a stone cell and a gold cell form one smooth wall
+- **THEN** each part of the wall shows its nearest cell's texture
+
+#### Scenario: An isolated dig
+- **WHEN** one cell in the middle of a large smooth volume is dug
+- **THEN** only the chunks within one cell of it are rebuilt

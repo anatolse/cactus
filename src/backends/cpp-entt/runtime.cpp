@@ -2568,6 +2568,7 @@ void submit_text_3d(const uint32_t entity_id,
     if (!visible) {
         return;
     }
+    ++render_debug_state_storage().submitted_texts_3d;
     text_3d_queue().push_back(TextSubmission3D{
         .entity_id = entity_id,
         .position  = position,
@@ -3546,14 +3547,19 @@ CameraBasis camera_basis(const Quat rotation) noexcept {
     return CameraBasis{.forward = forward, .right = right, .up = vec3::cross(right, forward)};
 }
 
-Camera3D camera_3d_from_pose(const Vector3 position, const Quat rotation, const float fov_y) noexcept {
-    const CameraBasis basis = camera_basis(rotation);
+Camera3D camera_3d_from_pose(const Vector3 position,
+                             const Quat rotation,
+                             const float fov_y,
+                             const bool orthographic,
+                             const float ortho_height) noexcept {
+    constexpr float kLeastOrthoHeight = 0.001F;
+    const CameraBasis basis           = camera_basis(rotation);
     return Camera3D{
         .position   = position,
         .target     = Vector3Add(position, basis.forward),
         .up         = basis.up,
-        .fovy       = fov_y,
-        .projection = CAMERA_PERSPECTIVE,
+        .fovy       = orthographic ? std::max(ortho_height, kLeastOrthoHeight) : fov_y,
+        .projection = orthographic ? CAMERA_ORTHOGRAPHIC : CAMERA_PERSPECTIVE,
     };
 }
 
@@ -3583,6 +3589,10 @@ Rectangle active_viewport_rect() noexcept {
 
 Matrix viewport_projection(const Camera3D& camera, const Rectangle rect) noexcept {
     const double aspect = rect.height > 0.0F ? static_cast<double>(rect.width) / static_cast<double>(rect.height) : 1.0;
+    if (camera.projection == CAMERA_ORTHOGRAPHIC) {
+        const double top = static_cast<double>(camera.fovy) * 0.5;
+        return MatrixOrtho(-top * aspect, top * aspect, -top, top, rlGetCullDistanceNear(), rlGetCullDistanceFar());
+    }
     const double top    = rlGetCullDistanceNear() * std::tan(static_cast<double>(camera.fovy) * 0.5 * DEG2RAD);
     const double right  = top * aspect;
     return MatrixFrustum(-right, right, -top, top, rlGetCullDistanceNear(), rlGetCullDistanceFar());

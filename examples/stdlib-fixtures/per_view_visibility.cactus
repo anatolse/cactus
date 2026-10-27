@@ -1,0 +1,99 @@
+module per_view_visibility
+
+# Two cameras split the screen. Everything marked HideLeft is kept hidden in
+# the left view: a mesh, a model, a 3D label and a one-cell volume. Shown is
+# never hidden. Tests remove marks and destroy the left view. The label starts
+# invisible: baking its text needs a real window, so tests show it only
+# without one.
+
+use std.core as core
+use std.math.quat as quat
+use std.transform.volume as tv
+use std.physics.volume as physics
+use std.camera.volume as cam
+use std.camera.viewport as vp
+use std.render.meshes as meshes
+use std.render.models as models
+use std.render.text as text
+use std.render.visibility as visibility
+use std.voxel.volume as voxel
+
+asset BlockMesh: mesh = "models/block.mesh"
+asset BlockMaterial: material = "materials/block.mat"
+asset Robot: model = "../model-renderer/art/robot.glb"
+asset Stone: texture = "../platformer/assets/tiles/ground.png"
+
+trait HideLeft
+
+trait LeftView
+
+template View(x: float):
+    tv.WorldTransform:
+        position = vec3(0.0, 4.0, 10.0)
+        rotation = quat.from_euler(-0.3, 0.0, 0.0)
+    cam.Camera
+    vp.Viewport:
+        x = x
+        width = 0.5
+
+pub entity Left:
+    use View(x = 0.0)
+    LeftView
+
+pub entity Right from View(x = 0.5)
+
+template Block(position: vec3):
+    tv.WorldTransform:
+        position = position
+    meshes.Renderer:
+        mesh = BlockMesh
+        material = BlockMaterial
+
+pub entity Hidden:
+    use Block(position = vec3(-2.0, 0.0, 0.0))
+    HideLeft
+
+pub entity Shown from Block(position = vec3(2.0, 0.0, 0.0))
+
+pub entity Model:
+    tv.WorldTransform:
+        position = vec3(0.0, 0.0, -3.0)
+    models.ModelRenderer:
+        model = Robot
+    HideLeft
+
+pub entity Label:
+    tv.WorldTransform:
+        position = vec3(0.0, 2.0, 0.0)
+    text.TextLabel:
+        text = "hidden"
+        visible = false
+    HideLeft
+
+pub entity Terrain:
+    tv.WorldTransform
+    voxel.Volume
+    voxel.VolumeRenderer
+    HideLeft
+
+pub group hiding:
+    phase: core.tick
+
+rule HideFromLeft:
+    pairs:
+        thing:
+            tv.WorldTransform
+            HideLeft
+        port:
+            vp.Viewport
+            LeftView
+    group: hiding
+    keep visibility.HiddenIn(thing, port)
+
+rule FillTerrain:
+    each:
+        voxel.Cell as cell
+
+    on added voxel.Cell:
+        cell.texture = Stone
+        add physics.Solid

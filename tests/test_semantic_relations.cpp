@@ -190,6 +190,85 @@ TEST_CASE("Relations: an end resolves an imported trait", "[semantic][relations]
           make_symbol_id(SymbolKind::Trait, "tf", "WorldTransform"));
 }
 
+namespace {
+
+ImportedSymbols hidden_library() {
+    ErrorReporter errors;
+    Lexer lexer(
+        "module lib\n"
+        "pub trait Thing\n"
+        "pub trait Port\n"
+        "pub relation Hidden:\n"
+        "    from: Thing\n"
+        "    to: Port\n"
+        "pub relation Owner:\n"
+        "    from: Thing one\n"
+        "    to: Port\n",
+        "lib.cactus",
+        errors);
+    Parser parser(lexer.tokenize(), errors);
+    auto ast = parser.parse_program();
+    SemanticAnalyzer analyzer(errors);
+    const auto program = analyzer.analyze(ast);
+    REQUIRE_FALSE(errors.has_errors());
+    ImportedSymbols symbols;
+    symbols.module_name = "lib";
+    symbols.traits      = program.traits;
+    symbols.relations   = program.relations;
+    return symbols;
+}
+
+Analysis analyze_with_library(const ImportedSymbols& library, const std::string& body) {
+    ModuleImports imports;
+    imports.add("lib", library);
+    return analyze_source("module game\nuse lib\n" + kPrelude + "entity One:\n    lib.Thing\nentity View:\n    lib.Port\n" +
+                              body,
+                          imports);
+}
+
+std::string library_keeper(const std::string& relation) {
+    return "rule HideAll:\n"
+           "    pairs:\n"
+           "        a: lib.Thing\n"
+           "        b: lib.Port\n"
+           "    group: links\n"
+           "    keep lib." +
+           relation + "(a, b)\n";
+}
+
+}  // namespace
+
+TEST_CASE("Relations: a rule may keep an imported relation", "[semantic][relations][rule-keep]") {
+    const auto analysis = analyze_with_library(hidden_library(), library_keeper("Hidden"));
+    INFO(describe(analysis));
+    REQUIRE(analysis.clean());
+    CHECK(analysis.program.imported_keepers.at("lib.Hidden") == make_symbol_id(SymbolKind::Rule, "game", "HideAll"));
+}
+
+TEST_CASE("Relations: imported keep errors", "[semantic][relations][rule-keep]") {
+    SECTION("its module keeps it") {
+        auto library                             = hidden_library();
+        library.relations.at("Hidden").kept_by = "LibKeeper";
+        const auto analysis                      = analyze_with_library(library, library_keeper("Hidden"));
+        CHECK(analysis.has("can't keep 'lib.Hidden': it is kept by rule 'LibKeeper' in module 'lib'"));
+    }
+    SECTION("a one end") {
+        const auto analysis = analyze_with_library(hidden_library(), library_keeper("Owner"));
+        CHECK(analysis.has("can't keep 'lib.Owner': it marks an end `one`"));
+    }
+    SECTION("another rule of the module adds rows") {
+        const auto analysis = analyze_with_library(hidden_library(),
+                                                   library_keeper("Hidden") +
+                                                       "rule Hide:\n"
+                                                       "    pairs:\n"
+                                                       "        a: lib.Thing\n"
+                                                       "        b: lib.Port\n"
+                                                       "    on fixed_tick:\n"
+                                                       "        add lib.Hidden(a, b)\n");
+        CHECK(analysis.has("'Hidden' is kept by rule 'HideAll'; rule 'Hide' can't change it"));
+    }
+}
+
 TEST_CASE("Relations: invalid ends and clashes are rejected", "[semantic][relations]") {
     SECTION("unknown trait") {
         const auto analysis = analyze(
@@ -1047,6 +1126,58 @@ TEST_CASE("Relations: unordered relation commands race like trait commands", "[s
                                       "        add Seen(robot, task)\n");
         INFO(describe(analysis));
         CHECK(analysis.clean());
+    }
+}
+
+TEST_CASE("Relations: an extern rule may read a relation", "[semantic][relations][contracts]") {
+    const auto analysis = analyze(walk_keeper("    keep Walk(a, b)\n") +
+                                  "extern rule DrawTiles:\n"
+                                  "    each: Tile\n"
+                                  "    group: links\n"
+                                  "    on fixed_tick:\n"
+                                  "        reads:\n"
+                                  "            Tile\n"
+                                  "            Walk\n"
+                                  "        effects:\n"
+                                  "            graphics\n");
+    INFO(describe(analysis));
+    REQUIRE(analysis.clean());
+    const auto& graph = analysis.program.execution_graph;
+    const auto node   = std::ranges::find_if(
+        graph.handlers, [](const HandlerNode& handler) { return handler.identity.rule.local_name == "DrawTiles"; });
+    REQUIRE(node != graph.handlers.end());
+    CHECK(node->contract.reads.contains(relation_id("Walk")));
+    const auto trait = analyze(
+        "rule FloorFact:\n"
+        "    each: Tile\n"
+        "    group: links\n"
+        "    keep Floor\n"
+        "extern rule DrawTiles:\n"
+        "    each: Tile\n"
+        "    group: links\n"
+        "    on fixed_tick:\n"
+        "        reads:\n"
+        "            Tile\n"
+        "            Floor\n"
+        "        effects:\n"
+        "            graphics\n");
+    INFO(describe(trait));
+    REQUIRE(trait.clean());
+    CHECK(edges_between(analysis, "WalkLinks", "DrawTiles") == edges_between(trait, "FloorFact", "DrawTiles"));
+}
+
+TEST_CASE("Relations: an extern rule may only read relations", "[semantic][relations][contracts]") {
+    for (const std::string clause : {"writes", "projects"}) {
+        const auto analysis = analyze(
+            "extern rule TouchWalk:\n"
+            "    each: Tile\n"
+            "    on fixed_tick:\n"
+            "        " +
+            clause +
+            ":\n"
+            "            Walk\n");
+        INFO(clause + "\n" + describe(analysis));
+        CHECK(analysis.has("extern rule 'TouchWalk' may only read relations; 'Walk' is under '" + clause + ":'"));
     }
 }
 

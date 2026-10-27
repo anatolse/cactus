@@ -602,10 +602,14 @@ void SemanticAnalyzer::validate_relation_keep(const RuleNode& rule) {
                       "'" + keep.target_name + "' is not a relation; `keep " + keep.target_name + "(...)` needs one");
         return;
     }
-    if (target->module != current_module_id_) {
+    const bool imported = relation->module_name != current_module_id_.name;
+    if (imported && relation->kept_by.has_value()) {
         errors_.error(keep.location,
-                      prefix + "can't keep '" + keep.target_name +
-                          "': a kept relation must be declared in the rule's own module");
+                      prefix + "can't keep '" + keep.target_name + "': it is kept by rule '" + *relation->kept_by +
+                          "' in module '" + relation->module_name + "'");
+    }
+    if (imported && (relation->from.one || relation->to.one)) {
+        errors_.error(keep.location, prefix + "can't keep '" + keep.target_name + "': it marks an end `one`");
     }
     if (!validate_relation_keep_arguments(keep, *rule.pairs, *relation)) {
         return;

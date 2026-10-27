@@ -49,6 +49,9 @@ private:
     void validate_persistence_requires_graph_scheduler(const DecoratedProgram& program);
     // A `set` patch applies at the activation commit, which the legacy frame path lacks.
     void validate_set_requires_graph_scheduler(const DecoratedProgram& program);
+    // A relation kept by an importing module has that one keeper, and no other rule adds or removes its rows.
+    bool apply_imported_keepers(DecoratedProgram& program);
+    bool merge_imported_keepers(DecoratedProgram& target, const DecoratedProgram& src);
 
     std::vector<ScheduleEdge> linked_explicit_edges_;
 

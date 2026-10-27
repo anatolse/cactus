@@ -105,7 +105,12 @@ struct CameraBasis {
 
 // Must match std.camera.volume.camera_basis: to_screen relies on it.
 [[nodiscard]] CameraBasis camera_basis(Quat rotation) noexcept;
-[[nodiscard]] Camera3D camera_3d_from_pose(Vector3 position, Quat rotation, float fov_y) noexcept;
+// An orthographic camera shows `ortho_height` world units, at least 0.001.
+[[nodiscard]] Camera3D camera_3d_from_pose(Vector3 position,
+                                           Quat rotation,
+                                           float fov_y,
+                                           bool orthographic = false,
+                                           float ortho_height = 0.0F) noexcept;
 
 // The pixel rectangle 3D drawing projects into; the whole window while unset.
 void set_active_viewport_rect(Rectangle rect) noexcept;
@@ -174,6 +179,7 @@ struct RenderDebugState {
     int submitted_models{0};
     int drawn_models{0};
     int submitted_billboards{0};
+    int submitted_texts_3d{0};
     int submitted_screen_labels{0};
     int registered_point_lights{0};
     int registered_directional_lights{0};
@@ -242,8 +248,35 @@ void submit_voxel_volume(entt::entity volume, std::optional<int> ceiling) noexce
 void set_active_viewport_entity(entt::entity viewport) noexcept;
 [[nodiscard]] entt::entity active_viewport_entity() noexcept;
 
-template <typename Volume, typename Renderer, typename Cell, typename Cutaway, typename Solid, auto Valid, auto Smooth>
-void render_voxel_volumes(entt::registry& registry) {
+// Whether the active viewport hides an entity through the relation `Row`:
+// one end check per viewport, then one pair lookup per entity.
+template <typename Row>
+class ActiveViewHidden {
+public:
+    explicit ActiveViewHidden(entt::registry& registry)
+        : store_(&relation_store<Row>(registry))
+        , viewport_(active_viewport_entity())
+        , any_(viewport_ != entt::null && store_->has_to(viewport_)) {}
+
+    [[nodiscard]] bool operator()(entt::entity entity) const noexcept {
+        return any_ && store_->contains(entity, viewport_);
+    }
+
+private:
+    const RelationStore<Row>* store_;
+    entt::entity viewport_;
+    bool any_;
+};
+
+template <typename Volume,
+          typename Renderer,
+          typename Cell,
+          typename Cutaway,
+          typename Solid,
+          auto Valid,
+          auto Smooth,
+          typename Hidden>
+void render_voxel_volumes(entt::registry& registry, const Hidden& hidden) {
     for (const auto [volume_entity, volume, renderer] : registry.view<Volume, Renderer>().each()) {
         if (!renderer.visible || volume.issue != Valid) {
             continue;
@@ -266,6 +299,9 @@ void render_voxel_volumes(entt::registry& registry) {
                 }
             }
             voxel_volume_end(volume_entity);
+        }
+        if (hidden(volume_entity)) {
+            continue;
         }
         std::optional<int> ceiling;
         const auto viewer = active_viewport_entity();

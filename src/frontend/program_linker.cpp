@@ -125,6 +125,10 @@ bool merge_declarations(Declarations& target,
     return ok;
 }
 
+std::string kept_by_both(const std::string& relation, const std::string& first, const std::string& second) {
+    return "'" + relation + "' is kept by both '" + first + "' and '" + second + "'";
+}
+
 }  // namespace
 
 ProgramLinker::ProgramLinker(ErrorReporter& errors)
@@ -155,6 +159,7 @@ bool ProgramLinker::merge_into(DecoratedProgram& target,
         });
     merge_by_canonical_id(target.states, src.states);
     merge_by_canonical_id(target.relations, src.relations);
+    ok &= merge_imported_keepers(target, src);
     const auto check_all = [](const auto&) { return true; };
     ok &= merge_declarations(target.structs, src.structs, symbol_origins_, src_module_name, errors_, check_all);
     ok &= merge_declarations(target.enums, src.enums, symbol_origins_, src_module_name, errors_, check_all);
@@ -239,6 +244,7 @@ bool ProgramLinker::merge_into(DecoratedProgram& target,
         target.string_pool.intern(dep.rule_name);
     }
 
+    ok = ok && apply_imported_keepers(target);
     if (ok) {
         merged_modules_.insert(src_module_name);
         ok = rebuild_execution_graph(target, false);
@@ -342,6 +348,47 @@ std::optional<DecoratedProgram> ProgramLinker::link(const std::vector<std::files
         return std::nullopt;
     }
     return merged;
+}
+
+bool ProgramLinker::merge_imported_keepers(DecoratedProgram& target, const DecoratedProgram& src) {
+    bool ok = true;
+    for (const auto& [relation, rule] : src.imported_keepers) {
+        const auto [existing, fresh] = target.imported_keepers.emplace(relation, rule);
+        if (!fresh && existing->second != rule) {
+            errors_.error({}, kept_by_both(relation, make_canonical_id(existing->second), make_canonical_id(rule)));
+            ok = false;
+        }
+    }
+    return ok;
+}
+
+bool ProgramLinker::apply_imported_keepers(DecoratedProgram& program) {
+    bool ok = true;
+    for (const auto& [canonical, keeper] : program.imported_keepers) {
+        const auto relation = program.relations.find(canonical);
+        if (relation == program.relations.end()) {
+            continue;
+        }
+        if (relation->second.kept_by.has_value() && relation->second.kept_by != keeper.local_name) {
+            errors_.error({}, kept_by_both(canonical, *relation->second.kept_by, make_canonical_id(keeper)));
+            ok = false;
+            continue;
+        }
+        relation->second.kept_by = keeper.local_name;
+        const auto symbol        = relation->second.symbol_id;
+        const auto changes       = [&](const InferredHandlerCommand& command) {
+            return command.target == symbol && command.kind != HandlerCommandKind::Set;
+        };
+        for (const auto& handler : program.execution_graph.handlers) {
+            if (handler.identity.rule != keeper && std::ranges::any_of(handler.contract.commands, changes)) {
+                errors_.error(handler.location,
+                              "'" + relation->second.name + "' is kept by rule '" + make_canonical_id(keeper) +
+                                  "'; rule '" + handler.identity.rule.local_name + "' can't change it");
+                ok = false;
+            }
+        }
+    }
+    return ok;
 }
 
 void ProgramLinker::validate_persistence_requires_graph_scheduler(const DecoratedProgram& program) {

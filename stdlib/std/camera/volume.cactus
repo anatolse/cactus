@@ -10,15 +10,24 @@ use std.transform.volume as tv
 
 # ── 3D Camera Traits & Rules ──────────────────────────────────────────────────
 
-# 3D perspective camera configuration.
-# fov_y: vertical field of view in degrees
-# near:  near clipping plane distance
-# far:   far clipping plane distance
+# Perspective shrinks things with distance; Orthographic shows them at one size.
+pub enum Projection:
+    Perspective
+    Orthographic
+
+# 3D camera configuration.
+# fov_y:        vertical field of view in degrees, for Perspective
+# near:         near clipping plane distance
+# far:          far clipping plane distance
+# ortho_height: world height the view shows, for Orthographic; the viewport's
+#               aspect sets the width, and 0.001 is the least
 # Active camera selection is governed by std.camera.viewport.Viewport.
 pub trait Camera:
     var fov_y: float = 60.0
     var near: float = 0.1
     var far: float = 1000.0
+    var projection: Projection = Projection.Perspective
+    var ortho_height: float = 10.0
 
 # Smooth-follow camera that tracks a target entity's position in 3D.
 # follow_entity: entity_id of the entity to follow
@@ -77,7 +86,7 @@ pub func camera_basis(rotation: quat) Basis:
 # What a camera viewport showed in the last rendered frame.
 # position:           the camera's world position
 # forward, right, up: unit view directions, as the renderer uses them
-# fov_y, near, far:   copied from Camera
+# fov_y, near, far, projection, ortho_height: copied from Camera
 # rect_min:           the viewport's top-left corner in pixels
 # rect_size:          the viewport's size in pixels
 pub trait CameraView:
@@ -88,6 +97,8 @@ pub trait CameraView:
     var fov_y: float = 60.0
     var near: float = 0.1
     var far: float = 1000.0
+    var projection: Projection = Projection.Perspective
+    var ortho_height: float = 10.0
     var rect_min: vec2 = vec2(0.0, 0.0)
     var rect_size: vec2 = vec2(0.0, 0.0)
 
@@ -115,6 +126,8 @@ rule KeepCameraViews:
         fov_y = cam.fov_y
         near = cam.near
         far = cam.far
+        projection = cam.projection
+        ortho_height = cam.ortho_height
         rect_min = pixel_min(port, vp.Screen[vp.ScreenSize])
         rect_size = pixel_size(port, vp.Screen[vp.ScreenSize])
 
@@ -139,6 +152,13 @@ func focal_length(camera: CameraView) float:
     let half_fov = math.radians(camera.fov_y) * 0.5
     return camera.rect_size.y * 0.5 * math.cos(half_fov) / math.sin(half_fov)
 
+func orthographic(camera: CameraView) bool:
+    return camera.projection == Projection.Orthographic
+
+# Pixels per world unit of an orthographic view.
+func ortho_scale(camera: CameraView) float:
+    return camera.rect_size.y / math.max(camera.ortho_height, 0.001)
+
 func rect_center(camera: CameraView) vec2:
     return camera.rect_min + camera.rect_size * 0.5
 
@@ -148,7 +168,7 @@ pub func to_screen(camera: CameraView, point: vec3) Projected:
     let depth = v3.dot(offset, camera.forward)
     if not has_area(camera) or not (depth > camera.near):
         return Projected(position = camera.rect_min, in_front = false)
-    let scale = focal_length(camera) / depth
+    let scale = if orthographic(camera): ortho_scale(camera) else: focal_length(camera) / depth
     let center = rect_center(camera)
     let x = center.x + v3.dot(offset, camera.right) * scale
     let y = center.y - v3.dot(offset, camera.up) * scale
@@ -159,8 +179,12 @@ pub func to_screen(camera: CameraView, point: vec3) Projected:
 pub func ray(camera: CameraView, screen: vec2) ScreenRay:
     if not has_area(camera):
         return ScreenRay(origin = camera.position, direction = camera.forward)
-    let focal = focal_length(camera)
     let center = rect_center(camera)
+    if orthographic(camera):
+        let scale = ortho_scale(camera)
+        let offset = camera.right * ((screen.x - center.x) / scale) + camera.up * ((center.y - screen.y) / scale)
+        return ScreenRay(origin = camera.position + camera.forward * camera.near + offset, direction = camera.forward)
+    let focal = focal_length(camera)
     let x = (screen.x - center.x) / focal
     let y = (center.y - screen.y) / focal
     let direction = v3.normalize(camera.forward + camera.right * x + camera.up * y)

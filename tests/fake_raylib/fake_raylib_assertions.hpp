@@ -6,6 +6,7 @@
 
 #include "fake_raylib/fake_raylib.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <functional>
@@ -39,6 +40,27 @@ namespace cactus_raylib_fake {
 [[nodiscard]] inline bool approx_equal(Matrix transform, Vector3 expected_translation, float epsilon = 0.0001F) noexcept {
     const Vector3 translation{.x = transform.m12, .y = transform.m13, .z = transform.m14};
     return approx_equal(translation, expected_translation, epsilon);
+}
+
+[[nodiscard]] inline bool has_draw_at(const std::vector<Matrix>& draws,
+                                      Vector3 position,
+                                      float epsilon = 0.0001F) noexcept {
+    return std::ranges::any_of(draws, [&](const Matrix& draw) { return approx_equal(draw, position, epsilon); });
+}
+
+// Mesh draw transforms logged inside scissor regions that start at `scissor_x`,
+// which is how a per-viewport render pass shows up in the log.
+[[nodiscard]] inline std::vector<Matrix> mesh_draws_in_scissor(int scissor_x) {
+    std::vector<Matrix> draws;
+    bool inside = false;
+    for (const auto& entry : call_log()) {
+        if (const auto* scissor = std::get_if<RecordedBeginScissorMode>(&entry)) {
+            inside = scissor->x == scissor_x;
+        } else if (const auto* mesh = std::get_if<RecordedDrawMesh>(&entry); mesh != nullptr && inside) {
+            draws.push_back(mesh->transform);
+        }
+    }
+    return draws;
 }
 
 // ── Find a recorded call by type ────────────────────────────────────────────

@@ -105,6 +105,10 @@ const std::vector<RecordedCall>& call_log() noexcept {
     return state().log;
 }
 
+void clear_call_log() noexcept {
+    state().log.clear();
+}
+
 bool IsKeyDown(int key) noexcept {
     return lookup(state().key_down, key);
 }

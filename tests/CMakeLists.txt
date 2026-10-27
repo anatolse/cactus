@@ -870,6 +870,18 @@ cactus_add_headless_behavior_test(test_voxel_rendering_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_voxel_rendering_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_per_view_visibility_headless_behavior
+    CACTUS_SOURCE examples/stdlib-fixtures/per_view_visibility.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_per_view_visibility_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_minimap_headless_behavior
+    CACTUS_SOURCE examples/stdlib-fixtures/minimap.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_minimap_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_smooth_volume_headless_behavior
     CACTUS_SOURCE examples/stdlib-fixtures/smooth_volume.cactus
     BACKEND cpp-entt

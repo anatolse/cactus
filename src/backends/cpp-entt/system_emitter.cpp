@@ -7226,7 +7226,23 @@ struct SingleViewRendererSpec {
     const char* transform_trait;
     const char* data_trait;
     std::function<std::string(const std::string& transform_var, const std::string& data_var)> call_body;
+    bool hideable = false;
 };
+
+// The per-viewport check a 3D renderer runs before drawing an entity; every
+// 3D renderer reads std.render.visibility.HiddenIn.
+std::string hidden_check() {
+    return "cactus::runtime::entt_backend::ActiveViewHidden<" +
+           EnttCodegenUtils::relation_cpp_name(
+               make_symbol_id(SymbolKind::Relation, "std.render.visibility", "HiddenIn")) +
+           ">(registry)";
+}
+
+std::string hidden_check_prelude() {
+    return "    const auto hidden = " + hidden_check() + ";\n";
+}
+
+constexpr const char* kSkipHidden = "        if (hidden(entity)) {\n            return;\n        }\n";
 
 const std::array<SingleViewRendererSpec, 4>& single_view_renderer_specs() {
     static const std::array<SingleViewRendererSpec, 4> specs{{
@@ -7246,7 +7262,8 @@ const std::array<SingleViewRendererSpec, 4>& single_view_renderer_specs() {
                  return "cactus::runtime::entt_backend::submit_mesh(" + t + ".position, " + t + ".rotation, " + t +
                         ".scale, " + d + ".mesh, " + d + ".material, " + d + ".visible, " + d + ".cast_shadow, " + d +
                         ".color)";
-             }},
+             },
+         .hideable = true},
         {.matches         = is_billboard_renderer,
          .transform_trait = "std.transform.volume.WorldTransform",
          .data_trait      = "BillboardRenderer",
@@ -7277,10 +7294,13 @@ std::string emit_single_view_renderer_body(const ExternRuleNode& sys,
     std::ostringstream out;
     out << "void " << system_function_name(program.module_name, sys.name, "tick").name
         << "(entt::registry& registry) {\n";
+    if (spec.hideable) {
+        out << hidden_check_prelude();
+    }
     out << "    auto view = registry.view<" << transform << ", " << data << ">();\n";
     out << "    view.each([&](entt::entity entity, const " << transform << "& " << transform_var << ", const " << data
         << "& " << data_var << ") {\n";
-    out << "        (void)entity;\n";
+    out << (spec.hideable ? kSkipHidden : "        (void)entity;\n");
     out << "        " << spec.call_body(transform_var, data_var) << ";\n";
     out << "    });\n";
     out << "}\n\n";
@@ -7329,7 +7349,8 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
         const std::string style    = EnttCodegenUtils::enum_cpp_name("std.voxel.volume.SurfaceStyle", program);
         out << tick_signature;
         out << "    " << ns << "render_voxel_volumes<" << volume << ", " << renderer << ", " << cell << ", " << cutaway
-            << ", " << solid << ", " << issue << "::Valid, " << style << "::Smooth>(registry);\n";
+            << ", " << solid << ", " << issue << "::Valid, " << style << "::Smooth>(registry, "
+            << hidden_check() << ");\n";
         out << "}\n\n";
         return out.str();
     }
@@ -7488,10 +7509,11 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
         const auto wt_var       = component_local(wt);
         const auto mr_var       = component_local(mr);
         out << tick_signature;
+        out << hidden_check_prelude();
         out << "    auto view = registry.view<" << wt << ", " << mr << ">();\n";
         out << "    view.each([&](entt::entity entity, const " << wt << "& " << wt_var << ", const " << mr << "& "
             << mr_var << ") {\n";
-        out << "        (void)entity;\n";
+        out << kSkipHidden;
         if (EnttCodegenUtils::find_trait(program, "ModelAnimator") != nullptr) {
             out << "        if (const auto* animator = registry.try_get<" << manim << ">(entity)) {\n";
             out << "            cactus::runtime::entt_backend::submit_model(" << wt_var << ".position, " << wt_var
@@ -7551,9 +7573,11 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
         const auto tl_var    = component_local(tl);
         out << tick_signature;
         if (world_transform_is_volume(program)) {
+            out << hidden_check_prelude();
             out << "    auto view = registry.view<" << wt << ", " << tl << ">();\n";
             out << "    view.each([&](entt::entity entity, const " << wt << "& " << wt_var << ", const " << tl << "& "
                 << tl_var << ") {\n";
+            out << kSkipHidden;
             out << "        cactus::runtime::entt_backend::submit_text_3d(static_cast<uint32_t>(entity), " << wt_var
                 << ".position, " << wt_var << ".rotation, " << wt_var << ".scale, " << tl_var << ".font_size, "
                 << tl_var << ".color, " << tl_var << ".text, " << tl_var << ".visible);\n";

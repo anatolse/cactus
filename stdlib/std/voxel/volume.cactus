@@ -7,6 +7,7 @@ use std.transform.volume as tv
 use std.physics.volume as physics
 use std.collision.volume as collision
 use std.render.layers as layers
+use std.render.visibility as visibility
 
 # ── Editable block volumes ───────────────────────────────────────────────────
 # A Volume is a fixed, axis-aligned grid of cubic cells. Every cell is an
@@ -323,5 +324,6 @@ extern rule RenderVolumes:
             Cell
             physics.Solid
             Cutaway
+            visibility.HiddenIn
         effects:
             graphics

@@ -1,0 +1,14 @@
+module std.render.visibility
+
+use std.camera.viewport as viewport
+use std.transform.volume as tv
+
+# ── Per-view visibility ───────────────────────────────────────────────────────
+# While HiddenIn holds (e, v), the 3D renderers (meshes, models, 3D text,
+# volumes) don't draw e in viewport v; every other viewport draws it. With no
+# rows, every viewport draws everything. Keep rows with a pairs: rule, or add
+# and remove them. A volume is hidden through its volume entity, which then
+# needs a WorldTransform.
+pub relation HiddenIn:
+    from: tv.WorldTransform
+    to: viewport.Viewport

@@ -1,6 +1,7 @@
 module std.render.meshes
 
 use std.render.layers as layers
+use std.render.visibility as visibility
 use std.transform.volume as tv
 
 # ── 3D Mesh Rendering Traits ──────────────────────────────────────────────────
@@ -63,6 +64,7 @@ extern rule MeshRenderer:
         reads:
             tv.WorldTransform
             Renderer
+            visibility.HiddenIn
         effects:
             graphics
 

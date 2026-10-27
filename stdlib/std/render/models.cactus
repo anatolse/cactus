@@ -2,6 +2,7 @@ module std.render.models
 
 use std.core as core
 use std.render.layers as layers
+use std.render.visibility as visibility
 use std.transform.volume as tv
 
 # ── 3D Model Rendering Traits ─────────────────────────────────────────────────
@@ -31,6 +32,7 @@ extern rule ModelRender:
             tv.WorldTransform
             ModelRenderer
             ModelAnimator
+            visibility.HiddenIn
         effects:
             graphics
 

@@ -137,6 +137,8 @@ static cactus::ImportedSymbols extract_pub_symbols(const std::string& module_nam
         exported.name         = exported.symbol_id->local_name;
         syms.traits[name]     = std::move(exported);
     }
+    syms.relations = prog.relations;
+    std::erase_if(syms.relations, [](const auto& entry) { return !entry.second.is_pub; });
     for (const auto& [name, strct] : prog.structs) {
         auto exported = strct;
         if (!exported.symbol_id.has_value()) {

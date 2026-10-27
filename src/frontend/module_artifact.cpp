@@ -1693,6 +1693,11 @@ bool ModuleArtifact::save(const DecoratedProgram& program,
     write_traits(out, program.traits, module_name);
     write_states(out, program.states);
     write_relations(out, program.relations);
+    write_u32(out, static_cast<uint32_t>(program.imported_keepers.size()));
+    for (const auto& [relation, rule] : program.imported_keepers) {
+        write_str(out, relation);
+        write_symbol_id(out, rule);
+    }
     write_structs(out, program.structs, module_name);
     write_enums(out, program.enums, module_name);
     write_funcs(out, program.funcs, module_name);
@@ -1750,6 +1755,11 @@ std::optional<DecoratedProgram> ModuleArtifact::load(const fs::path& path, std::
     program.traits            = read_traits(in);
     program.states            = read_states(in);
     program.relations         = read_relations(in);
+    const auto keeper_count   = read_u32(in);
+    for (uint32_t i = 0; i < keeper_count && in.good(); ++i) {
+        auto relation                       = read_str(in);
+        program.imported_keepers[relation] = read_symbol_id(in);
+    }
     program.structs           = read_structs(in);
     program.enums             = read_enums(in);
     program.funcs             = read_funcs(in);

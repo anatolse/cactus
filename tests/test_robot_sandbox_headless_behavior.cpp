@@ -842,16 +842,24 @@ TEST_CASE("first person hides the robot's own body and the strategy view shows i
     World world;
     world.new_game();
     world.frame();
-    const auto visible = [&] {
-        const auto view =
-            world.registry.view<cactus_gen::robot::RobotVisual, cactus_gen::stdlib::render::models::ModelRenderer>();
-        REQUIRE(view.size_hint() >= 1);
-        return world.registry.get<cactus_gen::stdlib::render::models::ModelRenderer>(*view.begin()).visible;
+    const auto body = [&] {
+        const auto view = world.registry.view<cactus_gen::robot::RobotVisual>();
+        REQUIRE(view.size() >= 1);
+        return *view.begin();
     };
-    CHECK_FALSE(visible());
+    const auto hidden_in = [&](auto view_trait) {
+        const auto views = world.registry.view<decltype(view_trait)>();
+        REQUIRE(views.size() == 1);
+        return cactus::runtime::entt_backend::relation_store<cactus_gen::stdlib::render::visibility::HiddenIn>(
+                   world.registry)
+            .contains(body(), *views.begin());
+    };
+    CHECK(hidden_in(cactus_gen::robot::FirstPersonView{}));
+    CHECK_FALSE(hidden_in(cactus_gen::robot::StrategyView{}));
     world.script().toggle_view = true;
     world.frame(2);
-    CHECK(visible());
+    CHECK(hidden_in(cactus_gen::robot::FirstPersonView{}));
+    CHECK_FALSE(hidden_in(cactus_gen::robot::StrategyView{}));
 }
 
 // ── Sky ─────────────────────────────────────────────────────────────────────

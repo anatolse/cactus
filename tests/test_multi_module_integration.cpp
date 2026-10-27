@@ -593,6 +593,8 @@ static ImportedSymbols pub_symbols_from(const std::string& module_name, const De
                                                  .max_repetitions = phase.max_repetitions};
     }
     syms.entities = prog.pub_entities;
+    syms.relations = prog.relations;
+    std::erase_if(syms.relations, [](const auto& entry) { return !entry.second.is_pub; });
     syms.consts   = prog.consts;
     return syms;
 }
@@ -637,7 +639,8 @@ static std::optional<DecoratedProgram> link_with_stdlib(const std::string& root_
                                                         const std::string& root_module,
                                                         const fs::path& build_dir,
                                                         ProgramNode& merged_ast_out,
-                                                        const std::optional<fs::path>& module_dir = std::nullopt) {
+                                                        const std::optional<fs::path>& module_dir = std::nullopt,
+                                                        std::vector<std::string>* link_diagnostics = nullptr) {
     fs::create_directories(build_dir);
     const auto root_file = build_dir / (root_module + ".cactus");
     {
@@ -741,6 +744,14 @@ static std::optional<DecoratedProgram> link_with_stdlib(const std::string& root_
     ErrorReporter link_errors;
     ProgramLinker linker(link_errors);
     auto merged = linker.link(artifact_paths);
+    if (link_diagnostics != nullptr) {
+        for (const auto& diag : link_errors.diagnostics()) {
+            link_diagnostics->push_back(diag.message);
+        }
+        if (!merged.has_value()) {
+            return std::nullopt;
+        }
+    }
     for (const auto& diag : link_errors.diagnostics()) {
         UNSCOPED_INFO(diag.message);
     }
@@ -749,6 +760,131 @@ static std::optional<DecoratedProgram> link_with_stdlib(const std::string& root_
     merged->ast         = &merged_ast_out;
     merged->module_name = root_module;
     return merged;
+}
+
+namespace {
+
+const std::string kHiddenLibrary =
+    "module vis\n"
+    "pub trait Thing\n"
+    "pub trait Port\n"
+    "pub relation Hidden:\n"
+    "    from: Thing\n"
+    "    to: Port\n";
+
+std::string hidden_keeper(const std::string& module, const std::string& rule) {
+    return "module " + module +
+           "\n"
+           "use std.core as core\n"
+           "use vis\n"
+           "pub group hiding:\n"
+           "    phase: core.tick\n"
+           "rule " +
+           rule +
+           ":\n"
+           "    pairs:\n"
+           "        a: vis.Thing\n"
+           "        b: vis.Port\n"
+           "    group: hiding\n"
+           "    keep vis.Hidden(a, b)\n";
+}
+
+const std::string kHiddenAdder =
+    "module adder\n"
+    "use std.core as core\n"
+    "use vis\n"
+    "rule Hide:\n"
+    "    pairs:\n"
+    "        a: vis.Thing\n"
+    "        b: vis.Port\n"
+    "    on core.tick:\n"
+    "        add vis.Hidden(a, b)\n";
+
+const std::string kHiddenEntities =
+    "entity One:\n"
+    "    vis.Thing\n"
+    "entity View:\n"
+    "    vis.Port\n";
+
+// Removes a test's module directory when the test ends.
+struct ModuleDirGuard {
+    fs::path dir;
+    explicit ModuleDirGuard(fs::path path)
+        : dir(std::move(path)) {}
+    ModuleDirGuard(const ModuleDirGuard&)            = delete;
+    ModuleDirGuard& operator=(const ModuleDirGuard&) = delete;
+    ModuleDirGuard(ModuleDirGuard&&)                 = delete;
+    ModuleDirGuard& operator=(ModuleDirGuard&&)      = delete;
+    ~ModuleDirGuard() {
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+    }
+};
+
+fs::path write_modules(const std::string& name, const std::vector<std::pair<std::string, std::string>>& modules) {
+    const auto dir = integration_build_dir() / name / "modules";
+    std::error_code ec;
+    fs::remove_all(dir.parent_path(), ec);
+    fs::create_directories(dir);
+    for (const auto& [module, source] : modules) {
+        std::ofstream(dir / (module + ".cactus")) << source;
+    }
+    return dir;
+}
+
+}  // namespace
+
+TEST_CASE("integration: a module keeps a relation declared in an imported module", "[integration][relations]") {
+    const auto modules = write_modules("imported_keep", {{"vis", kHiddenLibrary}});
+    const ModuleDirGuard guard(modules.parent_path());
+    ProgramNode ast;
+    auto merged        = link_with_stdlib(
+        hidden_keeper("game", "HideAll") + kHiddenEntities, "game", modules.parent_path() / "build", ast, modules);
+    REQUIRE(merged.has_value());
+    REQUIRE(merged->relations.contains("vis.Hidden"));
+    CHECK(merged->relations.at("vis.Hidden").kept_by == "HideAll");
+}
+
+TEST_CASE("integration: an imported relation has one keeper and no other writers", "[integration][relations]") {
+    SECTION("two modules keep it") {
+        const auto modules = write_modules(
+            "imported_keep_twice",
+            {{"vis", kHiddenLibrary}, {"first", hidden_keeper("first", "HideA")}, {"second", hidden_keeper("second", "HideB")}});
+        const ModuleDirGuard guard(modules.parent_path());
+        ProgramNode ast;
+        std::vector<std::string> diagnostics;
+        const auto merged = link_with_stdlib("module game\nuse first\nuse second\nuse vis\n" + kHiddenEntities,
+                                             "game",
+                                             modules.parent_path() / "build",
+                                             ast,
+                                             modules,
+                                             &diagnostics);
+        CHECK_FALSE(merged.has_value());
+        CHECK(std::ranges::any_of(diagnostics, [](const std::string& message) {
+            return message == "'vis.Hidden' is kept by both 'first.HideA' and 'second.HideB'";
+        }));
+    }
+    SECTION("another module adds rows") {
+        const auto modules =
+            write_modules("imported_keep_added",
+                          {{"vis", kHiddenLibrary}, {"keeper", hidden_keeper("keeper", "HideAll")}, {"adder", kHiddenAdder}});
+        const ModuleDirGuard guard(modules.parent_path());
+        ProgramNode ast;
+        std::vector<std::string> diagnostics;
+        const auto merged = link_with_stdlib("module game\nuse keeper\nuse adder\nuse vis\n" + kHiddenEntities,
+                                             "game",
+                                             modules.parent_path() / "build",
+                                             ast,
+                                             modules,
+                                             &diagnostics);
+        CHECK_FALSE(merged.has_value());
+        for (const auto& message : diagnostics) {
+            UNSCOPED_INFO(message);
+        }
+        CHECK(std::ranges::any_of(diagnostics, [](const std::string& message) {
+            return message == "'Hidden' is kept by rule 'keeper.HideAll'; rule 'Hide' can't change it";
+        }));
+    }
 }
 
 TEST_CASE("integration: linked 2D editor program emits hit-test/spawn glue and 2D rig",

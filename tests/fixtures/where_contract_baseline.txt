@@ -20,7 +20,7 @@ bracketed_trait_access.cactus examples bracketed_trait_access.FindNextLane/on st
     iteration_order: free
 camera_projection.cactus stdlib-fixtures camera_projection.BoxSelect/on std.core.input
     reads: camera_projection.Drag std.camera.volume.CameraView std.transform.volume.WorldTransform
-    read_fields: camera_projection.Drag{max,min} std.camera.volume.CameraView{forward,fov_y,near,position,rect_min,rect_size,right,up} std.transform.volume.WorldTransform{position}
+    read_fields: camera_projection.Drag{max,min} std.camera.volume.CameraView{forward,fov_y,near,ortho_height,position,projection,rect_min,rect_size,right,up} std.transform.volume.WorldTransform{position}
     write_fields:
     write_kinds:
     bound_reads: 0:std.camera.volume.CameraView 1:std.transform.volume.WorldTransform
@@ -30,7 +30,7 @@ camera_projection.cactus stdlib-fixtures camera_projection.BoxSelect/on std.core
     iteration_order: free
 camera_view.cactus stdlib-fixtures camera_view.ProjectMarker/on std.core.input
     reads: camera_view.Probe camera_view.Recorder std.camera.viewport.Viewport std.camera.volume.CameraView std.transform.volume.WorldTransform
-    read_fields: camera_view.Probe{pixel} camera_view.Recorder{ground,ground_hit,marker_in_front,marker_screen} std.camera.viewport.Viewport{x} std.camera.volume.CameraView{forward,fov_y,near,position,rect_min,rect_size,right,up} std.transform.volume.WorldTransform{position}
+    read_fields: camera_view.Probe{pixel} camera_view.Recorder{ground,ground_hit,marker_in_front,marker_screen} std.camera.viewport.Viewport{x} std.camera.volume.CameraView{forward,fov_y,near,ortho_height,position,projection,rect_min,rect_size,right,up} std.transform.volume.WorldTransform{position}
     write_fields: camera_view.Recorder{ground,ground_hit,marker_in_front,marker_screen}
     write_kinds: camera_view.Recorder.ground=0/0 camera_view.Recorder.ground_hit=0/0 camera_view.Recorder.marker_in_front=0/0 camera_view.Recorder.marker_screen=0/0
     bound_reads:
@@ -604,6 +604,26 @@ main.cactus first-person-arena std.physics.volume.Snap/on std.core.fixed_tick
     write_fields: std.physics.volume.CharacterBody{ground_normal,ground_offset,grounded,time_since_grounded,velocity} std.transform.volume.WorldTransform{position}
     write_kinds: std.physics.volume.CharacterBody.ground_normal=0/0 std.physics.volume.CharacterBody.ground_offset=3/0 std.physics.volume.CharacterBody.grounded=3/0 std.physics.volume.CharacterBody.time_since_grounded=3/0 std.physics.volume.CharacterBody.velocity=0/0 std.transform.volume.WorldTransform.position=3/0
     bound_reads: 0:std.physics.volume.BoxCollider 0:std.physics.volume.CapsuleCollider 0:std.physics.volume.CharacterBody 0:std.physics.volume.Collider 0:std.physics.volume.SphereCollider 0:std.transform.volume.WorldTransform 1:std.physics.volume.BoxCollider 1:std.physics.volume.CapsuleCollider 1:std.physics.volume.Collider 1:std.physics.volume.SphereCollider 1:std.transform.volume.WorldTransform
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+minimap.cactus stdlib-fixtures minimap.ClickMinimap/on std.core.input
+    reads: minimap.CameraTarget minimap.Click minimap.ViewLayer std.camera.volume.CameraView
+    read_fields: minimap.CameraTarget{point} minimap.Click{pixel,pressed} minimap.ViewLayer{minimap} std.camera.volume.CameraView{forward,fov_y,near,ortho_height,position,projection,rect_min,rect_size,right,up}
+    write_fields: minimap.CameraTarget{point}
+    write_kinds: minimap.CameraTarget.point=0/0
+    bound_reads:
+    named_reads: [minimap.Main: minimap.CameraTarget{point}] [minimap.Mouse: minimap.Click{pixel,pressed}]
+    named_writes: [minimap.Main: minimap.CameraTarget{point}]
+    named_requirements: minimap.Mouse/minimap.Click minimap.Main/minimap.CameraTarget
+    iteration_order: creation
+minimap.cactus stdlib-fixtures minimap.HideOtherLayers/on std.core.tick
+    reads: minimap.MapLayer minimap.ViewLayer
+    read_fields: minimap.MapLayer{minimap} minimap.ViewLayer{minimap}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:minimap.MapLayer 1:minimap.ViewLayer
     named_reads:
     named_writes:
     named_requirements:

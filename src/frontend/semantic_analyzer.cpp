@@ -4802,6 +4802,9 @@ SemanticAnalyzer::KeepClauses SemanticAnalyzer::collect_keep_clauses(const Progr
             continue;
         }
         if (table.module != current_module_id_) {
+            if (table.kind == SymbolKind::Relation) {
+                result_.imported_keepers.emplace(make_canonical_id(table), *rule->resolved_rule_id);
+            }
             continue;
         }
         if (auto local = result_.traits.find(table.local_name); local != result_.traits.end()) {
@@ -6697,6 +6700,15 @@ struct SemanticAnalyzer::ExternalContractValidator {
                 symbol = analyzer->try_resolve_trait_ref_to_symbol(entry.spelling);
             }
             if (!symbol.has_value()) {
+                symbol = analyzer->try_resolve_ref_of_kind(entry.spelling, {SymbolKind::Relation});
+                if (symbol.has_value() && std::string_view(clause) != "reads") {
+                    analyzer->errors_.error(entry.location,
+                                            "extern rule '" + rule->name + "' may only read relations; '" +
+                                                entry.spelling + "' is under '" + clause + ":'");
+                    continue;
+                }
+            }
+            if (!symbol.has_value()) {
                 analyzer->errors_.error(entry.location,
                                         "unknown " + std::string(clause) + " contract entry '" + entry.spelling +
                                             "' in extern rule '" + rule->name + "'");
@@ -8395,8 +8407,13 @@ void SemanticAnalyzer::collect_extern_rule_dependency(const ExternRuleNode& rule
                                    ? HandlerDomainKind::Selectionless
                                    : HandlerDomainKind::Unary;
         for (const auto& read : handler.resolved_reads) {
-            record_read(contract, read, std::nullopt, nullptr);
+            if (read.kind == SymbolKind::Relation) {
+                record_relation_read(contract, read, std::nullopt);
+            } else {
+                record_read(contract, read, std::nullopt, nullptr);
+            }
         }
+        expand_derived_reads(contract);
         for (const auto& write : handler.resolved_writes) {
             record_write(contract, write, std::nullopt, nullptr, FieldWriteKind{});
         }

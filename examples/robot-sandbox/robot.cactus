@@ -17,6 +17,7 @@ use std.camera.volume as camera
 use std.camera.viewport as viewport
 use std.render.models as models
 use std.render.meshes as meshes
+use std.render.visibility as visibility
 use std.voxel.volume as voxel
 use std.ui as ui
 use game
@@ -262,14 +263,20 @@ rule ShowFirstPerson:
     on tick:
         vp.active = game.Game[game.Session].camera == game.View.FirstPerson
 
+group hiding:
+    phase: tick
+
 # The robot's own body would fill the first-person view.
 rule HideBodyInFirstPerson:
-    each:
-        RobotVisual
-        models.ModelRenderer as renderer
-
-    on tick:
-        renderer.visible = game.Game[game.Session].camera != game.View.FirstPerson
+    pairs:
+        body:
+            tv.WorldTransform
+            RobotVisual
+        port:
+            viewport.Viewport
+            FirstPersonView
+    group: hiding
+    keep visibility.HiddenIn(body, port)
 
 rule ShowStrategy:
     each:

@@ -214,6 +214,7 @@ void set_screen_size(int width, int height) noexcept;
 // ── Call log access ──────────────────────────────────────────────────────
 
 [[nodiscard]] const std::vector<RecordedCall>& call_log() noexcept;
+void clear_call_log() noexcept;
 
 // ── Functions matching raylib's real signatures, called by
 //    cactus::runtime::raylib wrappers when CACTUS_RAYLIB_FAKE is defined ──

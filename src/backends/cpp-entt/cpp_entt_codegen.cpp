@@ -2453,7 +2453,8 @@ std::string emit_camera_translate_helpers(bool emit_2d_helper,
                                           bool emit_3d_helper,
                                           const std::string& cam2d_cpp,
                                           const std::string& cam3d_cpp,
-                                          const std::string& wt3d_cpp) {
+                                          const std::string& wt3d_cpp,
+                                          const std::string& projection_cpp) {
     std::ostringstream out;
     if (!emit_2d_helper && !emit_3d_helper) {
         return out.str();
@@ -2473,13 +2474,13 @@ std::string emit_camera_translate_helpers(bool emit_2d_helper,
     if (emit_3d_helper) {
         out << "Camera3D cactus_gen_translate_camera_3d(entt::entity entity, const " << cam3d_cpp
             << "& cam, entt::registry& registry) {\n";
-        out << "    if (const auto* xform = registry.try_get<" << wt3d_cpp << ">(entity)) {\n";
-        out << "        return cactus::runtime::entt_backend::camera_3d_from_pose(xform->position, xform->rotation, "
-               "cam.fov_y);\n";
-        out << "    }\n";
+        out << "    const auto* xform = registry.try_get<" << wt3d_cpp << ">(entity);\n";
         out << "    return cactus::runtime::entt_backend::camera_3d_from_pose(\n";
-        out << "        Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, Quat{.x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F}, "
-               "cam.fov_y);\n";
+        out << "        xform != nullptr ? xform->position : Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F},\n";
+        out << "        xform != nullptr ? xform->rotation : Quat{.x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F},\n";
+        out << "        cam.fov_y,\n";
+        out << "        cam.projection == " << projection_cpp << "::Orthographic,\n";
+        out << "        cam.ortho_height);\n";
         out << "}\n";
     }
     out << "}  // namespace\n\n";
@@ -3870,7 +3871,12 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     // phase batch's per-viewport wrap) and before the legacy generated_render_project
     // (which also calls these). Defining them once here avoids a redefinition
     // between the two call sites.
-    out << emit_camera_translate_helpers(emit_2d_helper, emit_3d_helper, cam2d_cpp, cam3d_cpp, wt3d_cpp);
+    out << emit_camera_translate_helpers(emit_2d_helper,
+                                         emit_3d_helper,
+                                         cam2d_cpp,
+                                         cam3d_cpp,
+                                         wt3d_cpp,
+                                         EnttCodegenUtils::enum_cpp_name("std.camera.volume.Projection", program));
 
     out << emit_projected_trait_registry_helpers(program);
 

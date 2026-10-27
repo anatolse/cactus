@@ -1458,6 +1458,40 @@ TEST_CASE("Runtime stdlib: a 3D viewport projects with its own rectangle's aspec
     CHECK(center.direction.z == Catch::Approx(-1.0F));
 }
 
+TEST_CASE("Runtime stdlib: an orthographic camera shows a box of its height", "[runtime][camera][entt]") {
+    constexpr Vector3 kOrigin{.x = 0.0F, .y = 0.0F, .z = 0.0F};
+    constexpr Quaternion kIdentity{.x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F};
+    const Camera3D camera = entt_backend::camera_3d_from_pose(kOrigin, kIdentity, 60.0F, true, 20.0F);
+    CHECK(camera.projection == CAMERA_ORTHOGRAPHIC);
+    CHECK(camera.fovy == 20.0F);
+    const Matrix projection =
+        entt_backend::viewport_projection(camera, Rectangle{.x = 0.0F, .y = 0.0F, .width = 400.0F, .height = 200.0F});
+    // Half the height up reaches the top edge; the 2:1 rectangle doubles the width.
+    CHECK(projection.m5 * 10.0F == Catch::Approx(1.0F));
+    CHECK(projection.m0 * 20.0F == Catch::Approx(1.0F));
+    // No perspective divide: w stays 1 at every depth.
+    CHECK(projection.m11 == 0.0F);
+    CHECK(projection.m15 == 1.0F);
+}
+
+TEST_CASE("Runtime stdlib: an orthographic height at or below zero acts as 0.001", "[runtime][camera][entt]") {
+    constexpr Vector3 kOrigin{.x = 0.0F, .y = 0.0F, .z = 0.0F};
+    constexpr Quaternion kIdentity{.x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F};
+    for (const float height : {0.0F, -5.0F}) {
+        CHECK(entt_backend::camera_3d_from_pose(kOrigin, kIdentity, 60.0F, true, height).fovy == 0.001F);
+    }
+}
+
+TEST_CASE("Runtime stdlib: a perspective camera ignores the orthographic height", "[runtime][camera][entt]") {
+    const Camera3D camera = entt_backend::camera_3d_from_pose(Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
+                                                              Quaternion{.x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F},
+                                                              60.0F,
+                                                              false,
+                                                              20.0F);
+    CHECK(camera.projection == CAMERA_PERSPECTIVE);
+    CHECK(camera.fovy == 60.0F);
+}
+
 TEST_CASE("Runtime stdlib: editor_raycast_3d without a registered impl returns null", "[runtime][editor][entt]") {
     entt::registry registry;
     entt_backend::register_editor_raycast_impl({});

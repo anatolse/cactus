@@ -864,6 +864,8 @@ struct DecoratedProgram {
     std::unordered_map<std::string, ResolvedTrait> traits;
     std::unordered_map<std::string, ResolvedState> states;
     std::unordered_map<std::string, ResolvedRelation> relations;
+    // Imported relations this module keeps: canonical relation id -> keep rule.
+    std::map<std::string, SymbolId> imported_keepers;
     std::unordered_map<std::string, ResolvedStruct> structs;
     std::unordered_map<std::string, ResolvedEnum> enums;
     std::unordered_map<std::string, ResolvedFunc> funcs;

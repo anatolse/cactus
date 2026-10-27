@@ -1,0 +1,112 @@
+module minimap
+
+# A main perspective view and a top-down orthographic minimap in the top right
+# corner. Each unit shows its block in the main view and its marker in the
+# minimap. Tests click the minimap: the main camera's target moves to the
+# ground point drawn under the click.
+
+use std.core as core
+use std.math.quat as quat
+use std.transform.volume as tv
+use std.camera.volume as cam
+use std.camera.viewport as vp
+use std.render.meshes as meshes
+use std.render.visibility as visibility
+
+asset BlockMesh: mesh = "models/block.mesh"
+asset BlockMaterial: material = "materials/block.mat"
+
+# Things and views of the minimap layer, or of the main layer.
+trait MapLayer:
+    let minimap: bool = false
+
+trait ViewLayer:
+    let minimap: bool = false
+
+trait CameraTarget:
+    var point: vec3 = vec3(0.0, 0.0, 0.0)
+
+trait Click:
+    var pixel: vec2 = vec2(0.0, 0.0)
+    var pressed: bool = false
+
+pub entity Main:
+    tv.WorldTransform:
+        position = vec3(0.0, 12.0, 16.0)
+        rotation = quat.from_euler(-0.6, 0.0, 0.0)
+    cam.Camera
+    vp.Viewport
+    ViewLayer
+    CameraTarget
+
+pub entity Minimap:
+    tv.WorldTransform:
+        position = vec3(0.0, 40.0, 0.0)
+        rotation = quat.from_euler(-1.5707964, 0.0, 0.0)
+    cam.Camera:
+        projection = cam.Projection.Orthographic
+        ortho_height = 30.0
+    vp.Viewport:
+        x = 0.75
+        width = 0.25
+        height = 0.25
+        depth = 1
+    ViewLayer:
+        minimap = true
+
+pub entity Mouse:
+    Click
+
+template Block:
+    meshes.Renderer:
+        mesh = BlockMesh
+        material = BlockMaterial
+
+template Unit(at: vec3):
+    use Block
+    tv.WorldTransform:
+        position = at
+    MapLayer
+    children:
+        entity Marker:
+            use Block
+            tv.LocalTransform:
+                position = vec3(0.0, 2.0, 0.0)
+            tv.WorldTransform
+            MapLayer:
+                minimap = true
+
+pub entity Friend from Unit(at = vec3(-6.0, 0.0, 4.0))
+
+pub entity Enemy from Unit(at = vec3(8.0, 0.0, -5.0))
+
+pub group hiding:
+    phase: core.tick
+
+# A thing shows only in the views of its own layer.
+rule HideOtherLayers:
+    pairs:
+        thing:
+            tv.WorldTransform
+            MapLayer
+        port:
+            vp.Viewport
+            ViewLayer
+    group: hiding
+    where:
+        thing[MapLayer].minimap != port[ViewLayer].minimap
+    keep visibility.HiddenIn(thing, port)
+
+rule ClickMinimap:
+    each:
+        cam.CameraView as cv
+        ViewLayer as layer
+    where:
+        layer.minimap
+    when:
+        Mouse[Click].pressed
+
+    on core.input:
+        let hit = cam.ray_plane(cam.ray(cv, Mouse[Click].pixel), vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0))
+        if hit.hit:
+            Main[CameraTarget].point = hit.point

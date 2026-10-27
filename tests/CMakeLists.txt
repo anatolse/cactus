@@ -408,6 +408,10 @@ add_executable(test_relation_store test_relation_store.cpp)
 target_link_libraries(test_relation_store PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
 add_test(NAME RelationStoreTests COMMAND test_relation_store)
 
+add_executable(test_derived_relations test_derived_relations.cpp)
+target_link_libraries(test_derived_relations PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
+add_test(NAME DerivedRelationsTests COMMAND test_derived_relations)
+
 add_executable(test_runtime_named_slots test_runtime_named_slots.cpp)
 target_link_libraries(test_runtime_named_slots PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
 add_test(NAME RuntimeNamedSlotsTests COMMAND test_runtime_named_slots)
@@ -771,6 +775,12 @@ cactus_add_headless_behavior_test(test_relations_headless_behavior
     CACTUS_SOURCE examples/relations.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_relations_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_derived_relations_headless_behavior
+    CACTUS_SOURCE examples/derived_relations.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_derived_relations_headless_behavior.cpp
 )
 
 cactus_add_headless_behavior_test(test_neighbor_joins_headless_behavior

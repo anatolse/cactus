@@ -24,20 +24,30 @@ std::string end_phrase(const std::string& relation_name, bool from) {
 
 }  // namespace
 
+ResolvedRelation SemanticAnalyzer::declared_relation(const RelationNode& node) const {
+    const auto relation_id = make_symbol_id(SymbolKind::Relation, current_module_id_, node.name);
+    ResolvedRelation relation;
+    relation.name         = node.name;
+    relation.is_pub       = node.is_pub;
+    relation.module_name  = relation_id.module.name;
+    relation.canonical_id = make_canonical_id(relation_id);
+    relation.symbol_id    = relation_id;
+    return relation;
+}
+
 // Ends and fields of every relation declared in this module.
 void SemanticAnalyzer::resolve_relation_declarations(ProgramNode& program) {
+    std::vector<RelationNode*> derived;
     for (auto& decl : program.declarations) {
         auto* node = std::get_if<RelationNode>(&decl);
         if (node == nullptr) {
             continue;
         }
-        const auto relation_id = make_symbol_id(SymbolKind::Relation, current_module_id_, node->name);
-        ResolvedRelation relation;
-        relation.name         = node->name;
-        relation.is_pub       = node->is_pub;
-        relation.module_name  = relation_id.module.name;
-        relation.canonical_id = make_canonical_id(relation_id);
-        relation.symbol_id    = relation_id;
+        if (node->derivation.has_value()) {
+            derived.push_back(node);
+            continue;
+        }
+        auto relation = declared_relation(*node);
         for (const bool from : {true, false}) {
             auto& end = from ? node->from : node->to;
             if (end.trait_name.empty()) {
@@ -55,6 +65,117 @@ void SemanticAnalyzer::resolve_relation_declarations(ProgramNode& program) {
         }
         result_.relations[node->name] = std::move(relation);
     }
+    resolve_derived_relations(derived);
+}
+
+namespace {
+
+ResolvedField derived_field(const std::string& name, TypeInfo type) {
+    return ResolvedField{.name = name, .type = std::move(type), .is_let = true};
+}
+
+std::string derived_read_only_message(const ResolvedRelation& relation) {
+    return "'" + relation.name + "' is derived from '" + relation.derivation->source.local_name + "' and is read-only";
+}
+
+}  // namespace
+
+// Derived relations in dependency order: a source derived in this module resolves first.
+void SemanticAnalyzer::resolve_derived_relations(const std::vector<RelationNode*>& nodes) {
+    std::unordered_map<std::string, RelationNode*> pending;
+    for (auto* node : nodes) {
+        pending.emplace(node->name, node);
+    }
+    std::unordered_set<std::string> active;
+    const auto resolve = [&](this const auto& self, RelationNode& node) -> void {
+        if (result_.relations.contains(node.name)) {
+            return;
+        }
+        if (!active.insert(node.name).second) {
+            errors_.error(node.location, "relation '" + node.name + "' is derived from itself");
+            return;
+        }
+        auto& derivation  = *node.derivation;
+        const auto source = try_resolve_ref_of_kind(derivation.source_name, {SymbolKind::Relation});
+        const auto local  = source.has_value() && source->module == current_module_id_
+                                ? pending.find(source->local_name)
+                                : pending.end();
+        if (local != pending.end()) {
+            self(*local->second);
+        }
+        auto relation = declared_relation(node);
+        if (const auto* resolved = source.has_value() ? find_resolved_relation(*source) : nullptr) {
+            derivation.resolved_source = source;
+            derive_relation_shape(node, *resolved, relation);
+        } else if (!source.has_value() || !active.contains(source->local_name)) {
+            errors_.error(derivation.location,
+                          "unknown relation '" + derivation.source_name + "' in `" + std::string(derivation_form(derivation.kind)) +
+                              "(" + derivation.source_name + ")`");
+        }
+        result_.relations[node.name] = std::move(relation);
+        active.erase(node.name);
+    };
+    for (auto* node : nodes) {
+        resolve(*node);
+    }
+}
+
+// Both ends name the source's end trait; `shortest` rows carry `next` and `distance`.
+void SemanticAnalyzer::derive_relation_shape(const RelationNode& node,
+                                             const ResolvedRelation& source,
+                                             ResolvedRelation& relation) const {
+    const auto& derivation = *node.derivation;
+    if (source.from.trait != source.to.trait) {
+        errors_.error(derivation.location,
+                      "`" + std::string(derivation_form(derivation.kind)) + "` needs one trait on both ends; '" +
+                          derivation.source_name + "' has `from: " + source.from.trait.local_name + "` and `to: " +
+                          source.to.trait.local_name + "`");
+    }
+    relation.from.trait = source.from.trait;
+    relation.to.trait   = source.from.trait;
+    relation.from.one   = derivation.kind == DerivationKind::Components;
+    relation.derivation = ResolvedDerivation{
+        .kind = derivation.kind, .source = *derivation.resolved_source, .cost_field = derivation.cost_field};
+    if (derivation.kind != DerivationKind::Shortest || !derivation.cost_field.has_value()) {
+        return;
+    }
+    relation.fields   = {derived_field("next", make_entity_id_type()), derived_field("distance", make_int_type())};
+    const auto& cost  = *derivation.cost_field;
+    const auto* field = source.find_field(cost);
+    if (field == nullptr) {
+        errors_.error(derivation.location,
+                      "relation '" + derivation.source_name + "' has no field '" + cost + "' for `by`");
+    } else if (field->type.kind != TypeKind::Int) {
+        errors_.error(derivation.location,
+                      "`by` needs an `int` field; '" + derivation.source_name + "." + cost + "' is '" +
+                          field->type.name + "'; scale costs to integers");
+    }
+}
+
+// A `closure` or `shortest` row binding must fix an end, so a pass never lists all pairs.
+void SemanticAnalyzer::require_fixed_derived_end(const RuleNode& rule) {
+    const auto* name = row_binding_name(rule);
+    if (name == nullptr || find_row_end_join(rule).has_value()) {
+        return;
+    }
+    std::optional<SymbolId> relation;
+    SourceLocation location;
+    if (rule.rows.has_value()) {
+        relation = rule.rows->relation;
+        location = rule.rows->location;
+    } else {
+        const auto binding = std::ranges::find(rule.pairs->bindings, *name, &PairBindingNode::name);
+        relation           = binding->resolved_relation_id;
+        location           = binding->location;
+    }
+    const auto* declaration = relation.has_value() ? find_resolved_relation(*relation) : nullptr;
+    if (declaration == nullptr || !declaration->derived_by_key()) {
+        return;
+    }
+    errors_.error(location,
+                  "row binding '" + *name + "' of derived relation '" + declaration->name +
+                      "' lists every pair; fix one end with `" + *name + ".from == ...` or `" + *name +
+                      ".to == ...` in `where:`");
 }
 
 // A relation field is a `let` field whose default is a const expression of its type.
@@ -228,6 +349,7 @@ bool SemanticAnalyzer::reject_row_domain_clauses(const RuleNode& rule) {
     if (!row_binding && !rule.rows.has_value()) {
         return false;
     }
+    require_fixed_derived_end(rule);
     if (rule.reduce.has_value()) {
         errors_.error(rule.reduce->location,
                       "rule '" + rule.name + "': `reduce:` can't run over relation rows; reduce over entity bindings");
@@ -455,6 +577,12 @@ void SemanticAnalyzer::validate_relation_keep(const RuleNode& rule) {
     const auto& keep = *rule.keep;
     reject_keep_rule_clauses(rule);
     const auto prefix = "rule '" + rule.name + "': ";
+    const auto& target   = keep.resolved_target;
+    const auto* relation = target.has_value() ? find_resolved_relation(*target) : nullptr;
+    if (relation != nullptr && relation->derivation.has_value()) {
+        errors_.error(keep.location, derived_read_only_message(*relation));
+        return;
+    }
     if (!rule.pairs.has_value() || rule.reduce.has_value()) {
         errors_.error(keep.location, prefix + "a relation keep needs an unreduced `pairs:` rule");
         return;
@@ -469,8 +597,6 @@ void SemanticAnalyzer::validate_relation_keep(const RuleNode& rule) {
                       prefix + "`keep " + keep.target_name + "(...)` names its bindings; remove `on " + *keep.binding +
                           "`");
     }
-    const auto& target   = keep.resolved_target;
-    const auto* relation = target.has_value() ? find_resolved_relation(*target) : nullptr;
     if (relation == nullptr) {
         errors_.error(keep.location,
                       "'" + keep.target_name + "' is not a relation; `keep " + keep.target_name + "(...)` needs one");
@@ -555,6 +681,26 @@ void record_relation_read(HandlerContract& contract, const SymbolId& relation, c
     }
 }
 
+// A derived relation reads each relation it derives from, and `shortest` its cost field.
+void SemanticAnalyzer::expand_derived_reads(HandlerContract& contract) const {
+    std::vector<SymbolId> pending;
+    std::ranges::copy_if(contract.reads, std::back_inserter(pending), [](const SymbolId& read) {
+        return read.kind == SymbolKind::Relation;
+    });
+    while (!pending.empty()) {
+        const auto* relation = find_resolved_relation(pending.back());
+        pending.pop_back();
+        if (relation == nullptr || !relation->derivation.has_value()) {
+            continue;
+        }
+        const auto& derivation = *relation->derivation;
+        if (!contract.reads.contains(derivation.source)) {
+            pending.push_back(derivation.source);
+        }
+        record_relation_read(contract, derivation.source, derivation.cost_field);
+    }
+}
+
 bool SemanticAnalyzer::record_row_field_read(const ExprNode& expr,
                                              const PairScope& pair_scope,
                                              HandlerContract& contract) {
@@ -588,6 +734,10 @@ void SemanticAnalyzer::validate_relation_command(
     const auto* relation = command.relation.has_value() ? find_resolved_relation(*command.relation) : nullptr;
     if (relation == nullptr) {
         errors_.error(command.location, "unknown relation '" + command.relation_name + "'");
+        return;
+    }
+    if (relation->derivation.has_value()) {
+        errors_.error(command.location, derived_read_only_message(*relation));
         return;
     }
     for (const auto* end : {command.from, command.to}) {

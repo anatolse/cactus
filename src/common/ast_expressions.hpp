@@ -110,7 +110,7 @@ void visit_expression(Expression& expression, const Visitor& visitor) {
         expression.expr);
 }
 
-// A `where:` conjunct `r.from == <key>` or `r.to == <key>` of a pair rule with
+// A `where:` conjunct `r.from == <key>` or `r.to == <key>` of a rule with
 // row binding `r`, whose key reads no row: the pass looks rows up by key.
 struct RowEndJoin {
     std::size_t predicate = 0;
@@ -118,18 +118,27 @@ struct RowEndJoin {
     const ExprNode* key   = nullptr;
 };
 
-[[nodiscard]] inline std::optional<RowEndJoin> find_row_end_join(const RuleNode& rule) {
-    if (!rule.pairs.has_value() || !rule.where_clause.has_value()) {
-        return std::nullopt;
+// The name of a rule's row binding: a `pairs:` row entry or `each: R as r`.
+[[nodiscard]] inline const std::string* row_binding_name(const RuleNode& rule) {
+    if (rule.rows.has_value()) {
+        return &rule.rows->alias;
+    }
+    if (!rule.pairs.has_value()) {
+        return nullptr;
     }
     const auto row = std::ranges::find_if(rule.pairs->bindings, &PairBindingNode::is_row);
-    if (row == rule.pairs->bindings.end()) {
+    return row == rule.pairs->bindings.end() ? nullptr : &row->name;
+}
+
+[[nodiscard]] inline std::optional<RowEndJoin> find_row_end_join(const RuleNode& rule) {
+    const auto* row = row_binding_name(rule);
+    if (row == nullptr || !rule.where_clause.has_value()) {
         return std::nullopt;
     }
     const auto end_of = [&](const ExprNode& side) -> std::optional<bool> {
         const auto* member = std::get_if<MemberExpr>(&side.expr);
         const auto* owner  = member == nullptr ? nullptr : std::get_if<IdentExpr>(&member->object->expr);
-        if (owner == nullptr || owner->name != row->name || (member->member != "from" && member->member != "to")) {
+        if (owner == nullptr || owner->name != *row || (member->member != "from" && member->member != "to")) {
             return std::nullopt;
         }
         return member->member == "from";
@@ -138,7 +147,7 @@ struct RowEndJoin {
         bool found = false;
         visit_expression(side, [&](const ExprNode& node) {
             const auto* ident = std::get_if<IdentExpr>(&node.expr);
-            found             = found || (ident != nullptr && ident->name == row->name);
+            found             = found || (ident != nullptr && ident->name == *row);
         });
         return found;
     };

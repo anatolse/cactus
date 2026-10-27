@@ -105,6 +105,9 @@ public:
     static std::string relation_store_cpp(const SymbolId& symbol);
     // For commit-time mutations, which leave dead slots for the commit's single compaction.
     static std::string uncompacted_relation_store_cpp(const SymbolId& symbol);
+    static const ResolvedRelation* find_relation(const DecoratedProgram& program, const SymbolId& relation);
+    // What a read of the relation looks rows up in: its store, or a derived relation's cache.
+    static std::string relation_reader_cpp(const DecoratedProgram& program, const SymbolId& relation);
     static std::string trait_cpp_name(const std::optional<SymbolId>& symbol,
                                       const std::string& fallback_source_name,
                                       const DecoratedProgram& program);

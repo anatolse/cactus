@@ -118,6 +118,14 @@ struct ResolvedRelationEnd {
     friend bool operator==(const ResolvedRelationEnd&, const ResolvedRelationEnd&) = default;
 };
 
+struct ResolvedDerivation {
+    DerivationKind kind = DerivationKind::Closure;
+    SymbolId source;
+    std::optional<std::string> cost_field;
+
+    friend bool operator==(const ResolvedDerivation&, const ResolvedDerivation&) = default;
+};
+
 struct ResolvedRelation : CanonicalIdentity {
     std::string name;
     bool is_pub = false;
@@ -125,6 +133,12 @@ struct ResolvedRelation : CanonicalIdentity {
     ResolvedRelationEnd to;
     std::vector<ResolvedField> fields;
     std::optional<std::string> kept_by;  // the rule whose keep clause owns this relation
+    std::optional<ResolvedDerivation> derivation;
+
+    // `closure` and `shortest` rows are computed per fixed end, never listed whole.
+    [[nodiscard]] bool derived_by_key() const {
+        return derivation.has_value() && derivation->kind != DerivationKind::Components;
+    }
 
     [[nodiscard]] const ResolvedField* find_field(const std::string& field) const {
         const auto found = std::ranges::find(fields, field, &ResolvedField::name);
@@ -1105,6 +1119,11 @@ private:
     TypeInfo resolve_type_ref(const TypeRef& ref);
     void resolve_trait_references(ProgramNode& program);
     void resolve_relation_declarations(ProgramNode& program);
+    [[nodiscard]] ResolvedRelation declared_relation(const RelationNode& node) const;
+    void resolve_derived_relations(const std::vector<RelationNode*>& nodes);
+    void derive_relation_shape(const RelationNode& node, const ResolvedRelation& source, ResolvedRelation& relation) const;
+    void require_fixed_derived_end(const RuleNode& rule);
+    void expand_derived_reads(HandlerContract& contract) const;
     void extract_row_bindings(RuleNode& rule);
     void extract_row_domain(RuleNode& rule);
     // Rejects clauses a rule over relation rows can't have; true when the rule binds rows.

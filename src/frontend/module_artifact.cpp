@@ -216,6 +216,15 @@ void ModuleArtifact::write_relations(std::ostream& out,
         for (const auto& field : relation.fields) {
             write_field(out, field);
         }
+        write_bool(out, relation.derivation.has_value());
+        if (const auto& derivation = relation.derivation; derivation.has_value()) {
+            write_u8(out, static_cast<uint8_t>(derivation->kind));
+            write_symbol_id(out, derivation->source);
+            write_bool(out, derivation->cost_field.has_value());
+            if (derivation->cost_field.has_value()) {
+                write_str(out, *derivation->cost_field);
+            }
+        }
     }
 }
 
@@ -1006,6 +1015,15 @@ std::unordered_map<std::string, ResolvedRelation> ModuleArtifact::read_relations
         const uint32_t field_count = read_u32(in);
         for (uint32_t j = 0; j < field_count && in.good(); ++j) {
             relation.fields.push_back(read_field(in));
+        }
+        if (read_bool(in)) {
+            ResolvedDerivation derivation;
+            derivation.kind   = static_cast<DerivationKind>(read_u8(in));
+            derivation.source = read_symbol_id(in);
+            if (read_bool(in)) {
+                derivation.cost_field = read_str(in);
+            }
+            relation.derivation = std::move(derivation);
         }
         relations[relation.name] = std::move(relation);
     }

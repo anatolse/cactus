@@ -2,7 +2,9 @@
 
 #include <entt/entt.hpp>
 
+#include <atomic>
 #include <cassert>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -11,6 +13,32 @@
 #include <vector>
 
 namespace cactus::runtime::entt_backend {
+
+// Revisions are unique across stores, so a cache never mistakes a new store for the one it read.
+[[nodiscard]] inline std::uint64_t next_relation_revision() noexcept {
+    static std::atomic<std::uint64_t> next{0};
+    return next.fetch_add(1, std::memory_order_relaxed) + 1;
+}
+
+namespace store_detail {
+
+// A dense per-entity slot, grown on demand.
+template <typename Value>
+Value& slot(std::vector<Value>& values, entt::entity entity, const Value& fill) {
+    const auto index = static_cast<std::size_t>(entt::to_entity(entity));
+    if (index >= values.size()) {
+        values.resize(index + 1, fill);
+    }
+    return values[index];
+}
+
+template <typename Value>
+[[nodiscard]] Value at(const std::vector<Value>& values, entt::entity entity, const Value& fill) {
+    const auto index = static_cast<std::size_t>(entt::to_entity(entity));
+    return index < values.size() ? values[index] : fill;
+}
+
+}  // namespace store_detail
 
 // Ordered entity pair -> row slot. Linear probing with backward-shift
 // deletion keeps the table free of tombstones, so a steady add/remove cycle
@@ -62,6 +90,15 @@ public:
 
     [[nodiscard]] std::size_t size() const noexcept {
         return entries_.size() - dead_;
+    }
+
+    // Changes when a row is added or erased or its fields change; compaction keeps it.
+    [[nodiscard]] std::uint64_t revision() const noexcept {
+        if (changed_) {
+            revision_ = next_relation_revision();
+            changed_  = false;
+        }
+        return revision_;
     }
 
     [[nodiscard]] bool contains(entt::entity from, entt::entity to) const noexcept {
@@ -215,23 +252,25 @@ private:
     };
 
     [[nodiscard]] static std::uint32_t head_of(const std::vector<Ends>& ends, entt::entity entity) noexcept {
-        const auto index = static_cast<std::size_t>(entt::to_entity(entity));
-        return index < ends.size() ? ends[index].head : kNone;
+        return store_detail::at(ends, entity, Ends{}).head;
     }
 
     static Ends& ends_of(std::vector<Ends>& ends, entt::entity entity) {
-        const auto index = static_cast<std::size_t>(entt::to_entity(entity));
-        if (index >= ends.size()) {
-            ends.resize(index + 1);
-        }
-        return ends[index];
+        return store_detail::slot(ends, entity, Ends{});
     }
 
     std::uint32_t place(entt::entity from, entt::entity to, const Row& row) {
         if (const auto slot = pairs_.find(from, to); slot != kNone) {
+            if constexpr (std::equality_comparable<Row>) {
+                if (entries_[slot].row == row) {
+                    return slot;
+                }
+            }
             entries_[slot].row = row;
+            changed_           = true;
             return slot;
         }
+        changed_        = true;
         const auto slot = static_cast<std::uint32_t>(entries_.size());
         entries_.push_back(Entry{.from = from, .to = to, .row = row});
         stamps_.push_back(0);
@@ -269,6 +308,7 @@ private:
         pairs_.erase(entry.from, entry.to);
         alive_[slot] = 0;
         ++dead_;
+        changed_ = true;
     }
 
     std::vector<Entry> entries_;
@@ -280,6 +320,8 @@ private:
     PairSlotTable pairs_;
     std::uint32_t dead_ = 0;
     std::uint32_t run_  = 0;
+    mutable std::uint64_t revision_ = 0;
+    mutable bool changed_           = true;
 };
 
 // The store holding `Row`'s relation, created on first use; mutations leave

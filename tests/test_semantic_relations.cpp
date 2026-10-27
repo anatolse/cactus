@@ -1050,4 +1050,255 @@ TEST_CASE("Relations: unordered relation commands race like trait commands", "[s
     }
 }
 
+// ── Derived relations ───────────────────────────────────────────────────────
+
+namespace {
+
+const std::string kCore =
+    "entity Core:\n"
+    "    Tile\n";
+
+const std::string kStep =
+    "relation Step:\n"
+    "    from: Tile\n"
+    "    to: Tile\n"
+    "    let cost: int = 1\n" +
+    kCore;
+
+}  // namespace
+
+TEST_CASE("Derived relations: declarations take the source's end trait", "[semantic][relations][derived]") {
+    const auto analysis = analyze(kStep +
+                                  "relation Reach = closure(Walk)\n"
+                                  "relation Route = shortest(Step, by = cost)\n"
+                                  "relation Group = components(Bridge)\n");
+    INFO(describe(analysis));
+    REQUIRE(analysis.clean());
+    const auto& reach = analysis.program.relations.at("Reach");
+    REQUIRE(reach.derivation.has_value());
+    CHECK(reach.derivation->kind == DerivationKind::Closure);
+    CHECK(reach.derivation->source == relation_id("Walk"));
+    CHECK(reach.from.trait.local_name == "Tile");
+    CHECK(reach.to.trait.local_name == "Tile");
+    CHECK(reach.fields.empty());
+    const auto& route = analysis.program.relations.at("Route");
+    CHECK(route.derivation->cost_field == "cost");
+    REQUIRE(route.fields.size() == 2);
+    CHECK(route.find_field("next")->type.kind == TypeKind::EntityId);
+    CHECK(route.find_field("distance")->type.kind == TypeKind::Int);
+    const auto& group = analysis.program.relations.at("Group");
+    CHECK(group.from.one);
+    CHECK_FALSE(group.to.one);
+}
+
+TEST_CASE("Derived relations: a derived relation may derive from another", "[semantic][relations][derived]") {
+    const auto analysis = analyze(
+        "relation Group = components(Reach)\n"
+        "relation Reach = closure(Walk)\n");
+    INFO(describe(analysis));
+    REQUIRE(analysis.clean());
+    CHECK(analysis.program.relations.at("Group").derivation->source == relation_id("Reach"));
+    CHECK(analysis.program.relations.at("Group").from.trait.local_name == "Tile");
+}
+
+TEST_CASE("Derived relations: declaration errors", "[semantic][relations][derived]") {
+    SECTION("unknown source") {
+        const auto analysis = analyze("relation Reach = closure(Nope)\n");
+        CHECK(analysis.has("unknown relation 'Nope' in `closure(Nope)`"));
+    }
+    SECTION("ends differ") {
+        const auto analysis = analyze("relation Chain = closure(Claim)\n");
+        CHECK(analysis.has("`closure` needs one trait on both ends; 'Claim' has `from: Robot` and `to: Task`"));
+    }
+    SECTION("missing cost field") {
+        const auto analysis = analyze(kStep + "relation Route = shortest(Step, by = speed)\n");
+        CHECK(analysis.has("relation 'Step' has no field 'speed' for `by`"));
+    }
+    SECTION("float cost field") {
+        const auto analysis = analyze("relation Route = shortest(Walk, by = cost)\n");
+        CHECK(analysis.has("`by` needs an `int` field; 'Walk.cost' is 'float'; scale costs to integers"));
+    }
+    SECTION("derived from itself") {
+        const auto analysis = analyze(
+            "relation Left = closure(Right)\n"
+            "relation Right = closure(Left)\n");
+        CHECK(analysis.has("relation 'Left' is derived from itself"));
+    }
+    SECTION("keep of a derived relation") {
+        const auto analysis = analyze("relation Reach = closure(Walk)\n"
+                                      "rule ReachLinks:\n" +
+                                      kTilePairs +
+                                      "    group: links\n"
+                                      "    keep Reach(a, b)\n");
+        CHECK(analysis.has("'Reach' is derived from 'Walk' and is read-only"));
+    }
+    SECTION("add and remove of a derived relation") {
+        const auto analysis = analyze("relation Reach = closure(Walk)\n"
+                                      "rule Adder:\n" +
+                                      kTilePairs +
+                                      "    on fixed_tick:\n"
+                                      "        add Reach(a, b)\n"
+                                      "        remove Reach(a, _)\n");
+        CHECK(std::ranges::count_if(analysis.diagnostics, [](const Diagnostic& d) {
+                  return d.message.contains("'Reach' is derived from 'Walk' and is read-only");
+              }) == 2);
+    }
+}
+
+TEST_CASE("Derived relations: closure and shortest row bindings fix an end", "[semantic][relations][derived]") {
+    const std::string relations = kStep +
+                                  "relation Reach = closure(Walk)\n"
+                                  "relation Route = shortest(Step, by = cost)\n"
+                                  "relation Group = components(Walk)\n";
+    const auto follow = [&](const std::string& relation, const std::string& where) {
+        return analyze(relations + "rule Follow:\n" +
+                       "    pairs:\n"
+                       "        t: Tile\n"
+                       "        r: " +
+                       relation + "\n" + where +
+                       "    on fixed_tick:\n"
+                       "        emit Done to t\n");
+    };
+    SECTION("closure without an end equality") {
+        const auto analysis = follow("Reach", "");
+        CHECK(analysis.has("row binding 'r' of derived relation 'Reach' lists every pair; fix one end with "
+                           "`r.from == ...` or `r.to == ...` in `where:`"));
+    }
+    SECTION("an inequality fixes nothing") {
+        const auto analysis = follow("Route",
+                                     "    where:\n"
+                                     "        r.from != t\n");
+        CHECK(analysis.has("row binding 'r' of derived relation 'Route' lists every pair"));
+    }
+    SECTION("from fixed") {
+        const auto analysis = follow("Reach",
+                                     "    where:\n"
+                                     "        r.from == t\n");
+        INFO(describe(analysis));
+        CHECK(analysis.clean());
+    }
+    SECTION("to fixed") {
+        const auto analysis = follow("Route",
+                                     "    where:\n"
+                                     "        t == r.to\n"
+                                     "        r.distance > 0\n");
+        INFO(describe(analysis));
+        CHECK(analysis.clean());
+    }
+    SECTION("components need no end") {
+        const auto analysis = follow("Group", "");
+        INFO(describe(analysis));
+        CHECK(analysis.clean());
+    }
+    SECTION("unary row domain") {
+        const auto unfixed = analyze(relations +
+                                     "rule Spread:\n"
+                                     "    each: Reach as r\n"
+                                     "    on fixed_tick:\n"
+                                     "        emit Done to r.to\n");
+        CHECK(unfixed.has("row binding 'r' of derived relation 'Reach' lists every pair"));
+        const auto fixed = analyze(relations +
+                                   "rule Spread:\n"
+                                   "    each: Reach as r\n"
+                                   "    where:\n"
+                                   "        r.from == Core\n"
+                                   "    on fixed_tick:\n"
+                                   "        emit Done to r.to\n");
+        INFO(describe(fixed));
+        CHECK(fixed.clean());
+    }
+    SECTION("tests need no end") {
+        const auto analysis = analyze(relations + "rule Probe:\n" + kTilePairs +
+                                      "    where:\n"
+                                      "        Reach(a, b) or Route(a, _)\n"
+                                      "    on fixed_tick:\n"
+                                      "        emit Done to a\n");
+        INFO(describe(analysis));
+        CHECK(analysis.clean());
+    }
+}
+
+TEST_CASE("Derived relations: keep loops pass through derived relations", "[semantic][relations][derived][rule-keep]") {
+    SECTION("a keeper reads the closure of its own relation") {
+        const auto analysis = analyze("relation Reach = closure(Walk)\n" +
+                                      walk_keeper("        not Reach(a, b)\n"
+                                                  "    keep Walk(a, b)\n"));
+        CHECK(analysis.has("keep rule 'WalkLinks' reads its own kept relation 'Walk'"));
+    }
+    SECTION("a loop through a closure") {
+        const auto analysis = analyze("relation Reach = closure(Walk)\n"
+                                      "rule WalkLinks:\n"
+                                      "    pairs:\n"
+                                      "        a:\n"
+                                      "            Tile\n"
+                                      "            Floor\n"
+                                      "        b: Tile\n"
+                                      "    group: links\n"
+                                      "    keep Walk(a, b)\n"
+                                      "rule FloorFact:\n"
+                                      "    each: Tile\n"
+                                      "    group: links\n"
+                                      "    where:\n"
+                                      "        Reach(self, _)\n"
+                                      "    keep Floor\n");
+        CHECK(analysis.has("keep rules form a loop through their kept traits and relations"));
+    }
+    SECTION("a chain through a closure orders the keepers") {
+        const auto analysis = analyze("relation Reach = closure(Walk)\n" + kCore + walk_keeper("    keep Walk(a, b)\n") +
+                                      "rule ConnectedFact:\n"
+                                      "    each: Tile\n"
+                                      "    group: links\n"
+                                      "    where:\n"
+                                      "        Reach(Core, self) or self == Core\n"
+                                      "    keep Connected\n");
+        INFO(describe(analysis));
+        REQUIRE(analysis.clean());
+        CHECK(analysis.contract("ConnectedFact").reads.contains(relation_id("Walk")));
+    }
+}
+
+TEST_CASE("Derived relations: reads are reads of the source", "[semantic][relations][derived][contracts]") {
+    SECTION("closure test") {
+        const auto analysis = analyze("relation Reach = closure(Walk)\n"
+                                      "rule Probe:\n" +
+                                      kTilePairs +
+                                      "    where:\n"
+                                      "        Reach(a, b)\n"
+                                      "    on fixed_tick:\n"
+                                      "        emit Done to a\n");
+        INFO(describe(analysis));
+        CHECK(analysis.contract("Probe").reads.contains(relation_id("Walk")));
+    }
+    SECTION("shortest row binding") {
+        const auto analysis = analyze(kStep +
+                                      "relation Route = shortest(Step, by = cost)\n"
+                                      "rule Follow:\n"
+                                      "    pairs:\n"
+                                      "        t: Tile\n"
+                                      "        r: Route\n"
+                                      "    where:\n"
+                                      "        r.to == t\n"
+                                      "    on fixed_tick:\n"
+                                      "        emit Done to r.next\n");
+        INFO(describe(analysis));
+        const auto& contract = analysis.contract("Follow");
+        CHECK(contract.reads.contains(relation_id("Step")));
+        REQUIRE(contract.read_fields.contains(relation_id("Step")));
+        CHECK(contract.read_fields.at(relation_id("Step")).fields.contains("cost"));
+    }
+    SECTION("through two derivations") {
+        const auto analysis = analyze("relation Reach = closure(Walk)\n"
+                                      "relation Group = components(Reach)\n"
+                                      "rule Probe:\n" +
+                                      kTilePairs +
+                                      "    where:\n"
+                                      "        Group(a, b)\n"
+                                      "    on fixed_tick:\n"
+                                      "        emit Done to a\n");
+        const auto& contract = analysis.contract("Probe");
+        CHECK(contract.reads.contains(relation_id("Reach")));
+        CHECK(contract.reads.contains(relation_id("Walk")));
+    }
+}
+
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

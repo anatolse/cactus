@@ -388,6 +388,66 @@ deferred_set.cactus examples deferred_set.Shove/on std.core.tick
     named_writes:
     named_requirements:
     iteration_order: free
+derived_relations.cactus examples derived_relations.ConnectedFact/on std.core.fixed_tick
+    reads: derived_relations.Link derived_relations.Reach
+    read_fields: derived_relations.Link{} derived_relations.Reach{}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: creation
+derived_relations.cactus examples derived_relations.FollowRoute/on std.core.fixed_tick
+    reads: derived_relations.Link derived_relations.Route derived_relations.Walker
+    read_fields: derived_relations.Link{cost} derived_relations.Route{next} derived_relations.Walker{at,steps,target}
+    write_fields: derived_relations.Walker{at,steps}
+    write_kinds: derived_relations.Walker.at=3/0 derived_relations.Walker.steps=1/0
+    bound_reads: 0:derived_relations.Walker
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+derived_relations.cactus examples derived_relations.LinkFloors/on std.core.fixed_tick
+    reads: derived_relations.Tile
+    read_fields: derived_relations.Tile{cost,x,y}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:derived_relations.Tile 1:derived_relations.Tile
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+derived_relations.cactus examples derived_relations.LinkedFact/on std.core.fixed_tick
+    reads: derived_relations.Portal derived_relations.PortalReach
+    read_fields: derived_relations.PortalReach{} derived_relations.Portal{}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: creation
+derived_relations.cactus examples derived_relations.RoomSizes/on std.core.fixed_tick
+    reads: derived_relations.Room derived_relations.SameRoom
+    read_fields: derived_relations.Room{} derived_relations.SameRoom{}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+derived_relations.cactus examples derived_relations.SameRoomLinks/on std.core.fixed_tick
+    reads: derived_relations.Tile
+    read_fields: derived_relations.Tile{x,y}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:derived_relations.Tile 1:derived_relations.Tile
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
 deterministic_target_selection.cactus examples deterministic_target_selection.SelectTarget/on std.core.fixed_tick
     reads: deterministic_target_selection.Enemy deterministic_target_selection.Position deterministic_target_selection.Target deterministic_target_selection.Tower
     read_fields: deterministic_target_selection.Enemy{cloaked} deterministic_target_selection.Position{pos} deterministic_target_selection.Target{has_target,selected} deterministic_target_selection.Tower{range}

@@ -354,6 +354,69 @@ rule FinishClaims:
 
 Use a relation for a link between two entities instead of an entity with `entity_id` fields: rows can't duplicate, can't outlive their ends, and the backend sees the graph.
 
+**Derived relations.** Three questions about links need recursion, which authors can't write: what can I reach, what is the cheapest way there, and which connected group am I in. Cactus answers them with built-in derived relations, declared from a relation `R` whose two ends name the same trait:
+
+```ebnf
+derived_relation = [ "pub" ] "relation" IDENTIFIER "=" derived_form NEWLINE ;
+derived_form     = "closure" "(" dotted_name ")"
+                 | "shortest" "(" dotted_name "," "by" "=" IDENTIFIER ")"
+                 | "components" "(" dotted_name ")" ;
+```
+
+- `relation Reach = closure(R)` holds `(a, b)` exactly when a chain of one or more `R` rows leads from `a` to `b`. `(a, a)` holds only when a chain leads back to `a`.
+- `relation Route = shortest(R, by = cost)` holds `(a, b)` for every `b ≠ a` that a chain reaches with total cost at most `2147483647`. `cost` must be an `int` field of `R`; a negative cost counts as `0`. A row has fields `distance: int`, the least total cost, and `next: entity_id`, the first step of a cheapest chain. When several cheapest chains start with different steps, `next` is the oldest of them (lowest creation order).
+- `relation Room = components(R)` treats `R`'s rows as two-way links over every entity that carries `R`'s end trait. It holds one row `(m, root)` per such entity, where `root` is the oldest member of `m`'s connected group; an entity with no rows is its own group. The `from` end is `one`. When groups merge, the older name survives; when a group splits, the part without the old root takes its own oldest member.
+
+A derived relation has both ends on `R`'s end trait. It is read-only (`keep`, `add` and `remove` of it are errors), it is never saved, and every pass reads it as a function of `R`'s rows in that pass's snapshot, including right after a restore. `R` may itself be derived. A row binding of a `closure` or `shortest` relation must fix one end with a top-level `where:` conjunct `r.from == e` or `r.to == e`, where `e` doesn't read the row, so a pass never lists all pairs; `components` row bindings and every relation test need no such conjunct. Derived rows are ordered by the creation order of their `from` end, then of their `to` end.
+
+For keep loops, contracts and ordering, reading a derived relation is a read of `R` (and, for `shortest`, of its cost field). A keep rule that reads one therefore depends on `R`'s keeper, and like any read of a kept relation it sees the rows the keeper's last run committed.
+
+```cactus
+relation Walk:
+    from: Tile
+    to: Tile
+    let cost: int = 1
+
+relation Reach = closure(Walk)
+relation Route = shortest(Walk, by = cost)
+relation Room = components(SameRoom)
+
+# Territory connected to the heart.
+rule ConnectedFact:
+    each: Tile
+    group: links
+    where:
+        Reach(Heart, self) or self == Heart
+    keep Connected
+
+# Each walker takes the first step of a cheapest route to its target.
+rule FollowRoute:
+    pairs:
+        walker: Walker
+        r: Route
+    where:
+        r.to == walker[Walker].target
+        r.from == walker[Walker].at
+    limit: 1 per walker
+    on fixed_tick:
+        walker[Walker].at = r.next
+
+# Each room's size, kept on its oldest tile.
+rule RoomSizes:
+    pairs:
+        root: Lair
+        member: Lair
+    group: links
+    where:
+        Room(member, root)
+    reduce per root:
+        n = count()
+    keep RoomSize on root:
+        size = n
+```
+
+The backend computes only the rows that rules ask for and caches them until `R` changes: a reach set per fixed end for `closure`, a cheapest-route table per goal (for `r.to ==`) or per source for `shortest`, and one union-find for `components`.
+
 ### 3.7 Entities and Templates
 
 The four load-time and runtime constructs and how they differ:

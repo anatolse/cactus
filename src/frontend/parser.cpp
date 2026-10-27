@@ -1,5 +1,7 @@
 #include "frontend/parser.hpp"
 
+#include <array>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -560,6 +562,10 @@ RelationNode Parser::parse_relation(bool is_pub) {
     node.location = peek().location;
     consume(TokenType::RELATION, "expected 'relation'");
     node.name = consume(TokenType::IDENTIFIER, "expected relation name").value;
+    if (match(TokenType::ASSIGN)) {
+        node.derivation = parse_relation_derivation(node.name);
+        return node;
+    }
     consume(TokenType::COLON, "expected ':' after relation name");
     expect_newline();
     expect_indent();
@@ -600,6 +606,61 @@ RelationNode Parser::parse_relation(bool is_pub) {
         }
     }
     return node;
+}
+
+// `closure(R)`, `shortest(R, by = f)` or `components(R)`, up to the end of the line.
+RelationDerivationNode Parser::parse_relation_derivation(const std::string& relation) {
+    RelationDerivationNode derivation;
+    derivation.location           = peek().location;
+    const auto error_count_before = errors_.error_count();
+    parse_derived_form(relation, derivation);
+    if (errors_.error_count() > error_count_before) {
+        synchronize();
+    } else {
+        expect_newline();
+    }
+    return derivation;
+}
+
+void Parser::parse_derived_form(const std::string& relation, RelationDerivationNode& derivation) {
+    static constexpr std::array kKinds{DerivationKind::Closure, DerivationKind::Shortest, DerivationKind::Components};
+    const auto kind = std::ranges::find(kKinds, std::string_view(peek().value), derivation_form);
+    if (!check(TokenType::IDENTIFIER) || kind == kKinds.end()) {
+        errors_.error(peek().location,
+                      "expected `closure`, `shortest` or `components` after `relation " + relation + " =`");
+        return;
+    }
+    const auto name = std::string(derivation_form(*kind));
+    derivation.kind = *kind;
+    advance();
+    if (!match(TokenType::LPAREN)) {
+        errors_.error(peek().location, "expected '(' after `" + name + "`");
+        return;
+    }
+    if (!check(TokenType::IDENTIFIER)) {
+        errors_.error(peek().location, "expected a relation name in `" + name + "(...)`");
+        return;
+    }
+    derivation.source_name = parse_dotted_name();
+    const bool shortest    = derivation.kind == DerivationKind::Shortest;
+    if (match(TokenType::COMMA)) {
+        if (!shortest) {
+            errors_.error(peek().location, "`" + name + "` takes one relation");
+            return;
+        }
+        if (!check(TokenType::IDENTIFIER) || peek().value != "by") {
+            errors_.error(peek().location, "expected `by = <field>` after the relation in `shortest(...)`");
+            return;
+        }
+        advance();
+        consume(TokenType::ASSIGN, "expected '=' after `by`");
+        derivation.cost_field = consume(TokenType::IDENTIFIER, "expected a field name after `by =`").value;
+    }
+    consume(TokenType::RPAREN, "expected ')' to close `" + name + "(...)`");
+    if (shortest && !derivation.cost_field.has_value()) {
+        errors_.error(derivation.location,
+                      "`shortest` needs a cost field: `shortest(" + derivation.source_name + ", by = <field>)`");
+    }
 }
 
 // `from: Trait [one]` or `to: Trait [one]`.

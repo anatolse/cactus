@@ -10,6 +10,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -921,13 +922,38 @@ struct RelationEndNode {
     SourceLocation location;
 };
 
-// `[pub] relation R:` — rows keyed by an ordered pair of entities.
+enum class DerivationKind : std::uint8_t { Closure, Shortest, Components };
+
+// The keyword that spells a derivation in `relation R = <form>(...)`.
+[[nodiscard]] constexpr std::string_view derivation_form(DerivationKind kind) {
+    switch (kind) {
+        case DerivationKind::Closure:
+            return "closure";
+        case DerivationKind::Shortest:
+            return "shortest";
+        case DerivationKind::Components:
+            return "components";
+    }
+    std::unreachable();
+}
+
+// `closure(R)`, `shortest(R, by = f)` or `components(R)`.
+struct RelationDerivationNode {
+    DerivationKind kind = DerivationKind::Closure;
+    std::string source_name;
+    std::optional<SymbolId> resolved_source;  // set by semantic analysis; source spelling is preserved
+    std::optional<std::string> cost_field;
+    SourceLocation location;
+};
+
+// `[pub] relation R:` — rows keyed by an ordered pair of entities; `relation R = ...` derives them.
 struct RelationNode {
     std::string name;
     bool is_pub = false;
     RelationEndNode from;
     RelationEndNode to;
     std::vector<FieldNode> fields;
+    std::optional<RelationDerivationNode> derivation;
     SourceLocation location;
 };
 

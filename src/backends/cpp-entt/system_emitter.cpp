@@ -2587,8 +2587,9 @@ static std::string lower_query_call_expr(const QueryCallExpr& qcall,
 
 // `R(x, y)` is a pair lookup; `R(x, _)` and `R(_, y)` look up one end's index.
 static std::string lower_relation_test(const RelationTestExpr& test,
+                                       const DecoratedProgram& program,
                                        const std::function<std::string(const ExprNode&)>& rewrite) {
-    const auto store = EnttCodegenUtils::relation_store_cpp(test.relation);
+    const auto store = EnttCodegenUtils::relation_reader_cpp(program, test.relation);
     if (test.from == nullptr) {
         return store + ".has_to(" + rewrite(*test.to) + ")";
     }
@@ -2999,7 +3000,7 @@ static std::string rewrite_expr_node(  // NOLINT(readability-function-cognitive-
             } else if constexpr (std::is_same_v<E, TraitAccessExpr>) {
                 return lower_trait_field_path(e, {}, program, pair_scope);
             } else if constexpr (std::is_same_v<E, RelationTestExpr>) {
-                return lower_relation_test(e, [&](const ExprNode& child) {
+                return lower_relation_test(e, program, [&](const ExprNode& child) {
                     return rewrite_expr(child, trait_names, program, pointer_aliases, cpp_overrides, pair_scope,
                                         local_kinds);
                 });
@@ -6943,30 +6944,43 @@ struct RowPassShape {
 };
 
 // Buffers the tuples that pass `where:`: rows by end lookup under an end-key
-// join with the entity binding outermost, else in binding-major order.
+// join with the entity binding outermost, else in binding-major order. A
+// keyed relation (`closure`, `shortest`) is only ever looked up by its key.
 static void emit_row_tuple_collection(std::ostringstream& out,
                                       const RuleNode& sys,
                                       const RowPassShape& shape,
+                                      bool keyed,
                                       const std::function<std::string(const ExprNode&)>& rewrite) {
     const auto collect = [&](const std::string& ind, const std::string& entity) {
         out << ind << "if (cactus_row_passes(" << shape.args(entity, "cactus_row")
             << ")) { cactus_row_tuples.emplace_back(" << entity << ", &cactus_row); }\n";
     };
+    const auto join   = find_row_end_join(sys);
+    const auto lookup = [&](const std::string& ind, const std::string& entity) {
+        out << ind << "cactus_rows.for_each_" << (join->from_end ? "from" : "to") << "(" << rewrite(*join->key)
+            << ", [&](const cactus_row_entry& cactus_row) {\n";
+        collect(ind + "    ", entity);
+        out << ind << "});\n";
+    };
     const auto& entity = shape.entity_name;
     if (shape.unary) {
+        if (keyed && join.has_value()) {
+            lookup("    ", "entt::null");
+            return;
+        }
         out << "    for (const auto& cactus_row : cactus_rows.rows()) {\n";
         collect("        ", "entt::null");
         out << "    }\n";
         return;
     }
-    const auto join = find_row_end_join(sys);
-    if (join.has_value() && !shape.row_first) {
+    if (join.has_value() && (!shape.row_first || keyed)) {
         out << "    for (auto " << entity << " : " << entity << "_snapshot) {\n";
-        out << "        cactus_rows.for_each_" << (join->from_end ? "from" : "to") << "(" << rewrite(*join->key)
-            << ", [&](const cactus_row_entry& cactus_row) {\n";
-        collect("            ", entity);
-        out << "        });\n";
+        lookup("        ", entity);
         out << "    }\n";
+        if (shape.row_first) {
+            out << "    std::ranges::stable_sort(cactus_row_tuples, {}, [&](const auto& cactus_tuple) { return "
+                   "cactus_rows.order_of(*cactus_tuple.second); });\n";
+        }
         return;
     }
     const auto rows_loop   = std::string("for (const auto& cactus_row : cactus_rows.rows())");
@@ -6991,8 +7005,10 @@ static void emit_row_pass(std::ostringstream& out,
     const auto row_index     = unary || pair_binding_codegens[0].scope.row ? std::size_t{0} : std::size_t{1};
     const auto entity_index  = 1 - row_index;
     const auto& row_name     = pair_binding_codegens[row_index].scope.binding_name;
-    const auto store         = EnttCodegenUtils::relation_store_cpp(*pair_binding_codegens[row_index].scope.relation);
-    out << "    auto& cactus_rows = " << store << ";\n";
+    const auto& relation     = *pair_binding_codegens[row_index].scope.relation;
+    const auto* declaration  = EnttCodegenUtils::find_relation(program, relation);
+    const bool keyed         = declaration != nullptr && declaration->derived_by_key();
+    out << "    auto& cactus_rows = " << EnttCodegenUtils::relation_reader_cpp(program, relation) << ";\n";
     out << "    using cactus_row_entry = std::remove_cvref_t<decltype(cactus_rows)>::Entry;\n";
     std::string entity_name;
     if (unary) {
@@ -7032,7 +7048,7 @@ static void emit_row_pass(std::ostringstream& out,
     out << "    };\n";
     const RowPassShape shape{.unary = unary, .row_first = row_index == 0, .entity_name = entity_name};
     out << "    std::vector<std::pair<entt::entity, const cactus_row_entry*>> cactus_row_tuples;\n";
-    emit_row_tuple_collection(out, sys, shape, rewrite);
+    emit_row_tuple_collection(out, sys, shape, keyed, rewrite);
     emit_row_tuple_order_and_limit(
         out, sys, params, shape.tuple_args("cactus_a"), shape.tuple_args("cactus_b"), scope, program);
     out << "    for (const auto& cactus_tuple : cactus_row_tuples) {\n";

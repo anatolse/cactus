@@ -559,7 +559,7 @@ std::vector<PersistableTrait> persistable_traits(const DecoratedProgram& program
 }
 
 std::vector<const ResolvedRelation*> stored_relations(const DecoratedProgram& program) {
-    auto relations = sorted_relations(program);
+    auto relations = owned_relations(program);
     std::erase_if(relations, [](const ResolvedRelation* relation) { return relation->kept_by.has_value(); });
     return relations;
 }

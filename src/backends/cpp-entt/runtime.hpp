@@ -7,6 +7,7 @@
 
 #include "backends/cpp-entt/binding_index.hpp"
 #include "backends/cpp-entt/creation_order.hpp"
+#include "backends/cpp-entt/derived_relations.hpp"
 #include "backends/cpp-entt/raylib_io.hpp"
 #include "backends/cpp-entt/relation_store.hpp"
 #include "backends/cpp-entt/spatial_query.hpp"

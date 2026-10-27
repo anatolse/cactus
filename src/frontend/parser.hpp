@@ -49,6 +49,8 @@ private:
     TraitNode parse_trait();
     RelationNode parse_relation(bool is_pub);
     void parse_relation_end(RelationNode& node, RelationEndNode& end, const char* label, bool& seen);
+    RelationDerivationNode parse_relation_derivation(const std::string& relation);
+    void parse_derived_form(const std::string& relation, RelationDerivationNode& derivation);
     EntityNode parse_entity(bool is_pub);
     TemplateNode parse_template(bool is_pub);
     RuleNode parse_rule();

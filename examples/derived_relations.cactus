@@ -1,0 +1,182 @@
+module derived_relations
+
+# Derived relations answer three questions about links without recursion:
+# what can I reach (`closure`), what is the cheapest way there (`shortest`),
+# and which connected group am I in (`components`).
+# Floor tiles on a 3x3 grid link to their floor neighbors; the center is a
+# wall. Lair tiles in a row form rooms. Tests change floors, lair tiles and
+# portals between ticks.
+
+use std.core
+
+trait Tile:
+    let x: int in range(0, 32)
+    let y: int in range(0, 4)
+    let cost: int = 1
+
+trait Floor
+
+trait Lair
+
+# Kept on each tile that links lead to from the heart, and on the heart.
+trait Connected
+
+# Kept on the oldest tile of each room.
+trait RoomSize:
+    let size: int = 0
+
+trait Walker:
+    var at: entity_id
+    var target: entity_id
+    var steps: int = 0
+
+# Gates and their portals are saved; tiles are not.
+trait Gate:
+    persist var uses: int = 0
+
+trait Linked
+
+trait Ticks:
+    var count: int = 0
+
+relation Link:
+    from: Tile
+    to: Tile
+    let cost: int = 1
+
+relation SameRoom:
+    from: Lair
+    to: Lair
+
+relation Portal:
+    from: Gate
+    to: Gate
+
+relation Reach = closure(Link)
+relation Route = shortest(Link, by = cost)
+relation Room = components(SameRoom)
+relation PortalReach = closure(Portal)
+
+group links:
+    phase: fixed_tick
+
+rule CountTicks:
+    on fixed_tick:
+        Clock[Ticks].count += 1
+
+# A floor tile links to each floor tile next to it; a step costs the tile it enters.
+rule LinkFloors:
+    pairs:
+        a:
+            Tile
+            Floor
+        b:
+            Tile
+            Floor
+    group: links
+    where:
+        (b[Tile].x == a[Tile].x + 1 and b[Tile].y == a[Tile].y) or (b[Tile].x == a[Tile].x - 1 and b[Tile].y == a[Tile].y) or (b[Tile].y == a[Tile].y + 1 and b[Tile].x == a[Tile].x) or (b[Tile].y == a[Tile].y - 1 and b[Tile].x == a[Tile].x)
+    keep Link(a, b):
+        cost = b[Tile].cost
+
+rule ConnectedFact:
+    each: Tile
+    group: links
+    where:
+        Reach(Heart, self) or self == Heart
+    keep Connected
+
+rule SameRoomLinks:
+    pairs:
+        a:
+            Tile
+            Lair
+        b:
+            Tile
+            Lair
+    group: links
+    where:
+        (b[Tile].x == a[Tile].x + 1 and b[Tile].y == a[Tile].y) or (b[Tile].x == a[Tile].x - 1 and b[Tile].y == a[Tile].y)
+    keep SameRoom(a, b)
+
+rule RoomSizes:
+    pairs:
+        root: Lair
+        member: Lair
+    group: links
+    where:
+        Room(member, root)
+    reduce per root:
+        n = count()
+    keep RoomSize on root:
+        size = n
+
+# Each walker takes the first step of a cheapest route to its target.
+rule FollowRoute:
+    pairs:
+        walker: Walker
+        r: Route
+    after: CountTicks
+    where:
+        r.to == walker[Walker].target
+        r.from == walker[Walker].at
+    limit: 1 per walker
+    on fixed_tick:
+        walker[Walker].at = r.next
+        walker[Walker].steps += 1
+
+rule LinkedFact:
+    each: Gate
+    group: links
+    where:
+        PortalReach(FirstGate, self)
+    keep Linked
+
+entity Clock:
+    Ticks
+
+template Cell(x: int, y: int):
+    Tile:
+        x = x
+        y = y
+
+template FloorCell(x: int, y: int):
+    use Cell(x = x, y = y)
+    Floor
+
+template LairCell(x: int):
+    use Cell(x = x, y = 3)
+    Lair
+
+# The grid, row by row. East is created before North, so it wins a tie.
+entity Heart from FloorCell(x = 0, y = 0)
+entity East from FloorCell(x = 1, y = 0)
+entity FarEast from FloorCell(x = 2, y = 0)
+entity North from FloorCell(x = 0, y = 1)
+entity Wall from Cell(x = 1, y = 1)
+entity EastSide from FloorCell(x = 2, y = 1)
+entity FarNorth from FloorCell(x = 0, y = 2)
+entity Top from FloorCell(x = 1, y = 2)
+entity Goal from FloorCell(x = 2, y = 2)
+entity Island from FloorCell(x = 10, y = 0)
+
+# Five lair tiles in a row; the middle one starts as plain ground.
+entity L0 from LairCell(x = 20)
+entity L1 from LairCell(x = 21)
+entity L2 from Cell(x = 22, y = 3)
+entity L3 from LairCell(x = 23)
+entity L4 from LairCell(x = 24)
+
+# Tests place the walkers and set their targets.
+entity Runner:
+    Walker
+
+entity Stuck:
+    Walker
+
+template Door():
+    Gate
+
+entity FirstGate from Door()
+entity SecondGate from Door()
+entity ThirdGate from Door()

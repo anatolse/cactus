@@ -832,6 +832,18 @@ std::string EnttCodegenUtils::uncompacted_relation_store_cpp(const SymbolId& sym
     return "cactus::runtime::entt_backend::uncompacted_relation_store<" + relation_cpp_name(symbol) + ">(registry)";
 }
 
+const ResolvedRelation* EnttCodegenUtils::find_relation(const DecoratedProgram& program, const SymbolId& relation) {
+    return find_decl_by_symbol(program.relations, relation);
+}
+
+std::string EnttCodegenUtils::relation_reader_cpp(const DecoratedProgram& program, const SymbolId& relation) {
+    const auto* declaration = find_relation(program, relation);
+    if (declaration == nullptr || !declaration->derivation.has_value()) {
+        return relation_store_cpp(relation);
+    }
+    return "cactus::runtime::entt_backend::derived_relation<" + relation_cpp_name(relation) + ">(registry)";
+}
+
 std::string EnttCodegenUtils::trait_cpp_name(const std::optional<SymbolId>& symbol,
                                              const std::string& fallback_source_name,
                                              const DecoratedProgram& program) {

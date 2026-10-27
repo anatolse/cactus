@@ -4932,6 +4932,54 @@ TEST_CASE("Parser: relation recovers after a bad end", "[parser][relations]") {
     CHECK(errors.error_count() == 1);
 }
 
+TEST_CASE("Parser: derived relation forms", "[parser][relations][derived]") {
+    auto prog = parse(
+        "relation Reach = closure(Walk)\n"
+        "pub relation Route = shortest(nav.Walk, by = cost)\n"
+        "relation Room = components(SameRoom)\n");
+    REQUIRE(prog.declarations.size() == 3);
+    const auto& reach = std::get<RelationNode>(prog.declarations[0]);
+    CHECK(reach.name == "Reach");
+    CHECK_FALSE(reach.is_pub);
+    REQUIRE(reach.derivation.has_value());
+    CHECK(reach.derivation->kind == DerivationKind::Closure);
+    CHECK(reach.derivation->source_name == "Walk");
+    CHECK_FALSE(reach.derivation->cost_field.has_value());
+    const auto& route = std::get<RelationNode>(prog.declarations[1]);
+    CHECK(route.is_pub);
+    REQUIRE(route.derivation.has_value());
+    CHECK(route.derivation->kind == DerivationKind::Shortest);
+    CHECK(route.derivation->source_name == "nav.Walk");
+    CHECK(route.derivation->cost_field == "cost");
+    const auto& room = std::get<RelationNode>(prog.declarations[2]);
+    REQUIRE(room.derivation.has_value());
+    CHECK(room.derivation->kind == DerivationKind::Components);
+    CHECK(room.derivation->source_name == "SameRoom");
+}
+
+TEST_CASE("Parser: derived relation errors", "[parser][relations][derived]") {
+    SECTION("unknown form") {
+        auto errors = parse_expect_errors("relation Reach = union(Walk)\n");
+        CHECK(has_diagnostic(errors, "expected `closure`, `shortest` or `components` after `relation Reach =`"));
+    }
+    SECTION("shortest without by") {
+        auto errors = parse_expect_errors("relation Route = shortest(Walk)\n");
+        CHECK(has_diagnostic(errors, "`shortest` needs a cost field: `shortest(Walk, by = <field>)`"));
+    }
+    SECTION("by on closure") {
+        auto errors = parse_expect_errors("relation Reach = closure(Walk, by = cost)\n");
+        CHECK(has_diagnostic(errors, "`closure` takes one relation"));
+    }
+    SECTION("recovers at the next declaration") {
+        auto errors = parse_expect_errors(
+            "relation Reach = closure(3)\n"
+            "trait After\n"
+            "relation Room = components(Walk)\n");
+        CHECK(has_diagnostic(errors, "expected a relation name in `closure(...)`"));
+        CHECK(errors.error_count() == 1);
+    }
+}
+
 TEST_CASE("Parser: keep of a relation", "[parser][relations]") {
     auto prog = parse(
         "rule WalkLinks:\n"

@@ -10,6 +10,7 @@
 #include "backends/cpp-entt/component_emitter.hpp"
 #include "backends/cpp-entt/cpp_entt_codegen.hpp"
 #include "backends/cpp-entt/event_emitter.hpp"
+#include "backends/cpp-entt/relation_emitter.hpp"
 #include "backends/cpp-entt/system_emitter.hpp"
 #include "backends/cpp-entt/type_utils.hpp"
 
@@ -10669,6 +10670,107 @@ TEST_CASE("Codegen EnTT: a two-sided limit walks the ordered tuples once, greedi
     CHECK(code.contains("++cactus_part0.first;"));
     CHECK(code.contains("++cactus_part1.first;"));
     CHECK(code.contains("registry.get<::cactus_gen::Actor>(actor).ground ="));
+}
+
+// ── Derived relations ───────────────────────────────────────────────────────
+
+static std::string derived_relation_source(const std::string& rules) {
+    return relation_traits() +
+           "relation Reach = closure(Route)\n"
+           "relation Path = shortest(Route, by = cost)\n"
+           "relation Group = components(Route)\n"
+           "entity Home:\n"
+           "    Tile\n" +
+           rules;
+}
+
+TEST_CASE("Codegen EnTT: a to-keyed shortest binding looks up a per-goal cache", "[codegen-entt][relations][derived]") {
+    const auto code = emit_named_rule(derived_relation_source("rule Follow:\n"
+                                                              "    pairs:\n"
+                                                              "        w: Walker\n"
+                                                              "        r: Path\n"
+                                                              "    where:\n"
+                                                              "        r.to == w[Walker].tile\n"
+                                                              "    on tick:\n"
+                                                              "        emit Done to r.next\n"),
+                                      "Follow");
+    CHECK(code.contains("auto& cactus_rows = cactus::runtime::entt_backend::derived_relation<::cactus_gen::test::Path>(registry);"));
+    CHECK(code.contains("cactus_rows.for_each_to(registry.get<const ::cactus_gen::Walker>(w).tile"));
+    CHECK(code.contains("r.row.next"));
+    CHECK_FALSE(code.contains("cactus_rows.rows()"));
+    CHECK_FALSE(code.contains("order_of"));
+}
+
+TEST_CASE("Codegen EnTT: a keyed derived binding listed first keeps row order", "[codegen-entt][relations][derived]") {
+    const auto code = emit_named_rule(derived_relation_source("rule Spread:\n"
+                                                              "    pairs:\n"
+                                                              "        r: Reach\n"
+                                                              "        t: Tile\n"
+                                                              "    where:\n"
+                                                              "        r.from == t\n"
+                                                              "    on tick:\n"
+                                                              "        emit Done to r.to\n"),
+                                      "Spread");
+    CHECK(code.contains("cactus_rows.for_each_from(t"));
+    CHECK(code.contains("cactus_rows.order_of(*cactus_tuple.second)"));
+    CHECK_FALSE(code.contains("cactus_rows.rows()"));
+}
+
+TEST_CASE("Codegen EnTT: a unary keyed row domain looks its key up", "[codegen-entt][relations][derived]") {
+    const auto code = emit_named_rule(derived_relation_source("rule Spread:\n"
+                                                              "    each: Reach as r\n"
+                                                              "    where:\n"
+                                                              "        r.from == Home\n"
+                                                              "    on tick:\n"
+                                                              "        emit Done to r.to\n"),
+                                      "Spread");
+    CHECK(code.contains("cactus_rows.for_each_from("));
+    CHECK_FALSE(code.contains("cactus_rows.rows()"));
+}
+
+TEST_CASE("Codegen EnTT: a components row domain walks every member", "[codegen-entt][relations][derived]") {
+    const auto code = emit_named_rule(derived_relation_source("rule Members:\n"
+                                                              "    each: Group as g\n"
+                                                              "    on tick:\n"
+                                                              "        emit Done to g.to\n"),
+                                      "Members");
+    CHECK(code.contains("derived_relation<::cactus_gen::test::Group>(registry);"));
+    CHECK(code.contains("for (const auto& cactus_row : cactus_rows.rows())"));
+}
+
+TEST_CASE("Codegen EnTT: derived relation tests read the cache", "[codegen-entt][relations][derived]") {
+    const auto code = emit_named_rule(derived_relation_source("rule Probe:\n"
+                                                              "    pairs:\n"
+                                                              "        a: Tile\n"
+                                                              "        b: Tile\n"
+                                                              "    where:\n"
+                                                              "        Reach(a, b) or Path(a, _) or Group(_, b)\n"
+                                                              "    on tick:\n"
+                                                              "        emit Done to a\n"),
+                                      "Probe");
+    CHECK(code.contains("derived_relation<::cactus_gen::test::Reach>(registry).contains(a, b)"));
+    CHECK(code.contains("derived_relation<::cactus_gen::test::Path>(registry).has_from(a)"));
+    CHECK(code.contains("derived_relation<::cactus_gen::test::Group>(registry).has_to(b)"));
+}
+
+TEST_CASE("Codegen EnTT: derived rows name their source and own no store", "[codegen-entt][relations][derived]") {
+    ProgramNode program;
+    const auto decorated = full_pipeline(derived_relation_source(""), program);
+    const auto code      = emit_relation_declarations(decorated);
+    const auto path      = generated_struct(code, "Path");
+    CHECK(path.contains("Derivation::Shortest;"));
+    CHECK(path.contains("using Source = ::cactus_gen::test::Route;"));
+    CHECK(path.contains("static std::int64_t source_cost(const Source& row) noexcept { return row.cost; }"));
+    CHECK(path.contains("entt::entity next"));
+    CHECK(path.contains("distance"));
+    CHECK_FALSE(path.contains("operator=="));
+    CHECK(generated_struct(code, "Group").contains("kFromOne = true"));
+    CHECK(generated_struct(code, "Route").contains("friend bool operator==(const Route&, const Route&) = default;"));
+    // The stored source comes first, so every derived row can name it.
+    CHECK(code.find("struct Route {") < code.find("struct Path {"));
+    CHECK(code.contains("connect_relation_ends<::cactus_gen::test::Route>"));
+    CHECK_FALSE(code.contains("connect_relation_ends<::cactus_gen::test::Path>"));
+    CHECK_FALSE(code.contains("::cactus_gen::test::Reach>(registry).compact()"));
 }
 
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

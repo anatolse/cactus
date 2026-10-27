@@ -919,7 +919,7 @@ TEST_CASE("ModuleArtifact: runtime declarations and handler graph round-trip", "
 }
 
 TEST_CASE("ModuleArtifact: artifact from before shape-generic spatial plans is rejected", "[artifact][spatial-join]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 44);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 45);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1150,7 +1150,7 @@ TEST_CASE("ModuleArtifact: conditional expressions round-trip with their pattern
 }
 
 TEST_CASE("ModuleArtifact: ranged fields and their container traits round-trip", "[artifact][ranged-fields]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 44);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 45);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1413,7 +1413,7 @@ TEST_CASE("ModuleArtifact: set command capabilities round-trip", "[artifact][def
     CHECK(loaded->handler_contracts.front().commands == commands);
     REQUIRE(loaded->execution_graph.handlers.size() == 1);
     CHECK(loaded->execution_graph.handlers.front().contract.commands == commands);
-    CHECK(ModuleArtifact::CURRENT_VERSION == 44);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 45);
 
     fs::remove_all(build_dir, ec);
 }
@@ -1937,7 +1937,7 @@ TEST_CASE("ModuleArtifact: every schedule edge reason round-trips", "[artifact][
 }
 
 TEST_CASE("ModuleArtifact: artifact from before field-level contracts is rejected", "[artifact][handler-contracts]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 44);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 45);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2164,7 +2164,7 @@ TEST_CASE("ModuleArtifact: unknown trigger kind is rejected", "[artifact][trait-
 }
 
 TEST_CASE("ModuleArtifact: artifact from before lifecycle triggers is rejected", "[artifact][trait-lifecycle]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 44);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 45);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2293,7 +2293,7 @@ TEST_CASE("ModuleArtifact: unknown group ordering direction is malformed", "[art
 }
 
 TEST_CASE("ModuleArtifact: artifact from before rule groups is rejected", "[artifact][rule-groups]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 44);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 45);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2318,7 +2318,7 @@ TEST_CASE("ModuleArtifact: artifact from before rule groups is rejected", "[arti
 }
 
 TEST_CASE("ModuleArtifact: artifact from before named-entity access is rejected", "[artifact][named-entity]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 44);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 45);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2677,7 +2677,7 @@ TEST_CASE("ModuleArtifact: a trait access expression round-trips", "[artifact][t
 }
 
 TEST_CASE("ModuleArtifact: artifact from before bracketed trait access is rejected", "[artifact][trait-access]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 44);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 45);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2825,6 +2825,57 @@ TEST_CASE("ModuleArtifact: a pub relation round-trips and resolves from another 
     fs::remove_all(build_dir, ec);
 }
 
+TEST_CASE("ModuleArtifact: a pub derived relation round-trips its derivation", "[artifact][relations][derived]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    ErrorReporter errors;
+    const auto library = analyze_module_source(
+        "module nav\n"
+        "pub trait Tile\n"
+        "pub relation Step:\n"
+        "    from: Tile\n"
+        "    to: Tile\n"
+        "    let cost: int = 1\n"
+        "pub relation Route = shortest(Step, by = cost)\n",
+        errors,
+        {});
+    INFO((errors.diagnostics().empty() ? std::string{} : errors.diagnostics().front().message));
+    REQUIRE_FALSE(errors.has_errors());
+    ModuleArtifact artifact(errors);
+    REQUIRE(artifact.save(library, "nav", build_dir));
+
+    std::string module_name;
+    const auto loaded = artifact.load(build_dir / "nav.cmod", module_name);
+    REQUIRE(loaded.has_value());
+    const auto& route = loaded->relations.at("Route");
+    REQUIRE(route.derivation.has_value());
+    CHECK(route.derivation->kind == DerivationKind::Shortest);
+    CHECK(route.derivation->source == make_symbol_id(SymbolKind::Relation, "nav", "Step"));
+    CHECK(route.derivation->cost_field == "cost");
+    CHECK(route.fields.size() == 2);
+    CHECK_FALSE(loaded->relations.at("Step").derivation.has_value());
+
+    const auto symbols = artifact.extract_pub_symbols(build_dir / "nav.cmod");
+    REQUIRE(symbols.has_value());
+    ModuleImports imports;
+    imports.add("nv", *symbols);
+    const auto game = analyze_module_source(
+        "module game\n"
+        "use nav as nv\n"
+        "relation Far = closure(nv.Route)\n",
+        errors,
+        imports);
+    INFO((errors.diagnostics().empty() ? std::string{} : errors.diagnostics().front().message));
+    REQUIRE_FALSE(errors.has_errors());
+    const auto& far = game.relations.at("Far");
+    CHECK(far.derivation->source == make_symbol_id(SymbolKind::Relation, "nav", "Route"));
+    CHECK(far.from.trait == make_symbol_id(SymbolKind::Trait, "nav", "Tile"));
+
+    fs::remove_all(build_dir, ec);
+}
+
 namespace {
 
 struct CompiledModule {
@@ -2919,7 +2970,7 @@ TEST_CASE("ModuleArtifact: trait parameters and their reads round-trip", "[artif
 }
 
 TEST_CASE("ModuleArtifact: an artifact from before trait parameters is rejected", "[artifact][trait-parameters]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 44);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 45);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);

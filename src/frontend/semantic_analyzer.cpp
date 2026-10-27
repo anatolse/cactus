@@ -8314,6 +8314,7 @@ void SemanticAnalyzer::collect_rule_dependency(const RuleNode& rule, std::size_t
             inferred.equality_join = spatial_join.has_value() ? std::nullopt : equality_join;
             inferred.reduction    = reduction_plan(rule, pair_scope);
             fold_when_clause_named_reads(rule, inferred);
+            expand_derived_reads(inferred);
             add_keep_effects(rule, inferred);
             finalize_write_kinds(inferred);
             inferred.iteration_order =

@@ -1,7 +1,6 @@
 #pragma once
 
 #include <raylib.h>
-#include <raymath.h>
 
 #include <algorithm>
 #include <array>
@@ -14,10 +13,12 @@
 #include <numbers>
 #include <optional>
 #include <ranges>
+#include <raymath.h>
 #include <string>
 #include <string_view>
 #include <type_traits>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 // vec2/vec3 constructors and the scalar*vector operator overloads below live
@@ -215,6 +216,67 @@ static_assert(div(std::numeric_limits<int>::min(), -1) == std::numeric_limits<in
 
 namespace cactus::runtime {
 
+template <typename Entry, typename Function>
+[[nodiscard]] auto memoize_relation_value(Function function) {
+    using Value = std::remove_cvref_t<std::invoke_result_t<Function&, const Entry&>>;
+    return [function = std::move(function),
+            cache    = std::unordered_map<const Entry*, Value>{}](const Entry& entry) mutable {
+        if (const auto found = cache.find(&entry); found != cache.end()) {
+            return found->second;
+        }
+        return cache.emplace(&entry, function(entry)).first->second;
+    };
+}
+
+template <bool HasFrom, bool HasTo, bool FromKey = false, typename Rows, typename From, typename To, typename Visit>
+void for_each_relation_match(Rows& rows, [[maybe_unused]] From from, [[maybe_unused]] To to, const Visit& visit) {
+    if constexpr (HasFrom && HasTo) {
+        const auto find = [&] {
+            if constexpr (requires { rows.find_entry(from, to, FromKey); }) {
+                return rows.find_entry(from, to, FromKey);
+            } else {
+                return rows.find_entry(from, to);
+            }
+        };
+        if (const auto* entry = find()) {
+            visit(*entry);
+        }
+    } else if constexpr (HasFrom) {
+        rows.for_each_from(from, visit);
+    } else if constexpr (HasTo) {
+        rows.for_each_to(to, visit);
+    } else {
+        for (const auto& entry : rows.rows()) {
+            visit(entry);
+        }
+    }
+}
+
+template <bool RestoreOrder, bool FilterAtCollection = true, typename Left, typename Right, typename Enumerate, typename Predicate>
+[[nodiscard]] auto collect_relation_join([[maybe_unused]] const Left& left,
+                                         [[maybe_unused]] const Right& right,
+                                         const Enumerate& enumerate,
+                                         [[maybe_unused]] const Predicate& predicate) {
+    using LeftEntry  = Left::Entry;
+    using RightEntry = Right::Entry;
+    using Tuple      = std::pair<const LeftEntry*, const RightEntry*>;
+    std::vector<Tuple> tuples;
+    enumerate([&](const LeftEntry& a, const RightEntry& b) {
+        if constexpr (FilterAtCollection) {
+            if (!predicate(a, b)) {
+                return;
+            }
+        }
+        tuples.emplace_back(&a, &b);
+    });
+    if constexpr (RestoreOrder) {
+        std::ranges::sort(tuples, {}, [&](const Tuple& tuple) {
+            return std::pair{left.order_of(*tuple.first), right.order_of(*tuple.second)};
+        });
+    }
+    return tuples;
+}
+
 using Quat        = Quaternion;
 using AssetHandle = std::uint32_t;
 
@@ -395,9 +457,9 @@ public:
             return positive_infinity_ ? std::numeric_limits<float>::infinity()
                                       : -std::numeric_limits<float>::infinity();
         }
-        const bool negative     = (limbs_[kLimbs - 1U] >> 63U) != 0U;
-        const auto magnitude    = negative ? negated(limbs_) : limbs_;
-        const std::uint32_t top = top_bit(magnitude);
+        const bool negative      = (limbs_[kLimbs - 1U] >> 63U) != 0U;
+        const auto magnitude     = negative ? negated(limbs_) : limbs_;
+        const std::uint32_t top  = top_bit(magnitude);
         const std::uint32_t sign = negative ? 0x80000000U : 0U;
         if (top == kNoBit) {
             return seen_ && only_negative_zero_ ? -0.0F : 0.0F;
@@ -451,7 +513,8 @@ private:
     [[nodiscard]] static constexpr std::uint32_t top_bit(const Limbs& limbs) noexcept {
         for (std::size_t i = kLimbs; i-- > 0U;) {
             if (limbs[i] != 0U) {
-                return static_cast<std::uint32_t>((i * 64U) + 63U - static_cast<std::size_t>(std::countl_zero(limbs[i])));
+                return static_cast<std::uint32_t>((i * 64U) + 63U -
+                                                  static_cast<std::size_t>(std::countl_zero(limbs[i])));
             }
         }
         return kNoBit;
@@ -461,9 +524,9 @@ private:
     }
     // The 24 bits starting at `position`.
     [[nodiscard]] static constexpr std::uint64_t bits_at(const Limbs& limbs, std::uint32_t position) noexcept {
-        const std::size_t limb      = position / 64U;
-        const std::uint32_t offset  = position % 64U;
-        std::uint64_t bits          = limbs[limb] >> offset;
+        const std::size_t limb     = position / 64U;
+        const std::uint32_t offset = position % 64U;
+        std::uint64_t bits         = limbs[limb] >> offset;
         if (offset > 40U && limb + 1U < kLimbs) {
             bits |= limbs[limb + 1U] << (64U - offset);
         }
@@ -675,9 +738,7 @@ private:
 
     // Readers walk rows in storage order, so the next cell is usually beside the last one.
     std::ranges::subrange<typename std::vector<Delta>::iterator> find_cell(const float* target) {
-        const auto holds = [&](std::size_t index) {
-            return index < deltas_.size() && deltas_[index].target == target;
-        };
+        const auto holds = [&](std::size_t index) { return index < deltas_.size() && deltas_[index].target == target; };
         std::size_t first = cell_end_;
         if (!holds(first)) {
             first = cell_begin_ - 1;

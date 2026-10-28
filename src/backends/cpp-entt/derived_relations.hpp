@@ -43,10 +43,10 @@ template <typename Row>
 class ComponentCache;
 
 template <typename Row>
-using DerivedRelation =
-    std::conditional_t<Row::kDerivation == Derivation::Closure,
-                       ClosureCache<Row>,
-                       std::conditional_t<Row::kDerivation == Derivation::Shortest, RouteCache<Row>, ComponentCache<Row>>>;
+using DerivedRelation = std::conditional_t<
+    Row::kDerivation == Derivation::Closure,
+    ClosureCache<Row>,
+    std::conditional_t<Row::kDerivation == Derivation::Shortest, RouteCache<Row>, ComponentCache<Row>>>;
 
 template <DerivedRow Row>
 DerivedRelation<Row>& derived_relation(entt::registry& registry);
@@ -74,9 +74,8 @@ using store_detail::slot;
 // Entries oldest-first by the end that is not the key.
 template <typename Entry>
 void sort_by_other_end(const entt::registry& registry, std::vector<Entry>& rows, bool key_is_from) {
-    std::ranges::sort(rows, {}, [&](const Entry& entry) {
-        return creation_ordinal(registry, key_is_from ? entry.to : entry.from);
-    });
+    std::ranges::sort(
+        rows, {}, [&](const Entry& entry) { return creation_ordinal(registry, key_is_from ? entry.to : entry.from); });
 }
 
 }  // namespace derived_detail
@@ -186,6 +185,19 @@ public:
         return !keyed(to, false).rows.empty();
     }
 
+    [[nodiscard]] const Entry* find_entry(entt::entity from, entt::entity to, bool from_key = false) {
+        if (!this->registry().valid(from) || !this->registry().valid(to)) {
+            return nullptr;
+        }
+        const auto& rows   = keyed(from_key ? from : to, from_key).rows;
+        const auto other   = from_key ? to : from;
+        const auto ordinal = creation_ordinal(this->registry(), other);
+        const auto found   = std::ranges::lower_bound(rows, ordinal, {}, [&](const Entry& entry) {
+            return creation_ordinal(this->registry(), from_key ? entry.to : entry.from);
+        });
+        return found != rows.end() && found->from == from && found->to == to ? &*found : nullptr;
+    }
+
     template <typename Visit>
     void for_each_from(entt::entity from, const Visit& visit) {
         for (const auto& entry : keyed(from, true).rows) {
@@ -269,8 +281,10 @@ public:
 
     void compute(entt::entity key, bool forward, std::vector<DerivedEntry<Row>>& rows) const {
         const auto search   = distances(key, forward);
-        const auto distance = [&](entt::entity entity) { return derived_detail::at(search.distance, entity, kUnreached); };
-        const auto add      = [&](entt::entity from, entt::entity to, entt::entity next, std::int64_t total) {
+        const auto distance = [&](entt::entity entity) {
+            return derived_detail::at(search.distance, entity, kUnreached);
+        };
+        const auto add = [&](entt::entity from, entt::entity to, entt::entity next, std::int64_t total) {
             Row row{};
             row.next     = next;
             row.distance = static_cast<decltype(row.distance)>(total);
@@ -350,8 +364,9 @@ private:
 
     // For each reached entity, the lowest-ordinal first step `w` of a cheapest
     // chain: candidates in creation order each claim what their cheapest links still reach.
-    [[nodiscard]] std::vector<std::pair<entt::entity, entt::entity>> first_steps(entt::entity key,
-                                                                   const std::vector<std::int64_t>& distance) const {
+    [[nodiscard]] std::vector<std::pair<entt::entity, entt::entity>> first_steps(
+        entt::entity key,
+        const std::vector<std::int64_t>& distance) const {
         const auto tight = [&](entt::entity from, const auto& entry) {
             const auto at = derived_detail::at(distance, from, kUnreached);
             return at != kUnreached && at + cost(entry.row) == derived_detail::at(distance, entry.to, kUnreached);
@@ -362,7 +377,8 @@ private:
                 candidates.push_back(entry.to);
             }
         });
-        std::ranges::sort(candidates, {}, [&](entt::entity entity) { return creation_ordinal(this->registry(), entity); });
+        std::ranges::sort(
+            candidates, {}, [&](entt::entity entity) { return creation_ordinal(this->registry(), entity); });
         std::vector<entt::entity> step;
         std::vector<std::pair<entt::entity, entt::entity>> result;
         for (const auto candidate : candidates) {
@@ -415,6 +431,11 @@ public:
     [[nodiscard]] bool contains(entt::entity from, entt::entity to) {
         const auto* entry = member(from);
         return entry != nullptr && entry->to == to;
+    }
+
+    [[nodiscard]] const Entry* find_entry(entt::entity from, entt::entity to) {
+        const auto* entry = member(from);
+        return entry != nullptr && entry->to == to ? entry : nullptr;
     }
 
     [[nodiscard]] bool has_from(entt::entity from) {

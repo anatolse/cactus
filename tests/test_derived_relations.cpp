@@ -492,4 +492,52 @@ TEST_CASE("Derived components: merge, split and lone members", "[runtime][relati
     CHECK(all == std::vector<Pair>{{t[0], t[0]}, {t[2], t[2]}, {t[3], t[3]}, {t[4], t[3]}, {t[5], t[5]}});
 }
 
+TEST_CASE("Derived rows: exact entries share a goal and survive cache growth", "[runtime][relations][row-join]") {
+    World world(32);
+    for (std::size_t index = 0; index + 1 < world.tiles.size(); ++index) {
+        world.link(index, index + 1);
+    }
+    auto& routes      = derived_relation<Route>(world.registry);
+    const auto* first = routes.find_entry(world.tiles[0], world.tiles[31]);
+    REQUIRE(first != nullptr);
+    CHECK(first->row.distance == 31);
+    for (std::size_t index = 0; index < 20; ++index) {
+        const auto* entry = routes.find_entry(world.tiles[index], world.tiles[31]);
+        REQUIRE(entry != nullptr);
+        CHECK(entry->from == world.tiles[index]);
+        CHECK(entry->row.distance == static_cast<int>(31 - index));
+    }
+    CHECK(routes.cached_keys() == 1);
+    CHECK(routes.builds() == 1);
+    for (std::size_t index = 1; index < 31; ++index) {
+        REQUIRE(routes.find_entry(world.tiles[0], world.tiles[index]) != nullptr);
+    }
+    CHECK(first->row.distance == 31);
+    CHECK(first->row.next == world.tiles[1]);
+    CHECK(routes.find_entry(world.tiles[31], world.tiles[0]) == nullptr);
+    CHECK(routes.find_entry(world.tiles[0], world.tiles[0]) == nullptr);
+    CHECK(routes.find_entry(world.tiles[0], static_cast<entt::entity>(entt::null)) == nullptr);
+    const auto* forward = routes.find_entry(world.tiles[1], world.tiles[31], true);
+    REQUIRE(forward != nullptr);
+    CHECK(forward->row.distance == 30);
+    world.link(0, 31, 1);
+    const auto* changed = derived_relation<Route>(world.registry).find_entry(world.tiles[0], world.tiles[31]);
+    REQUIRE(changed != nullptr);
+    CHECK(changed->row.distance == 1);
+    CHECK(changed->row.next == world.tiles[31]);
+    const auto* reach = derived_relation<Reach>(world.registry).find_entry(world.tiles[0], world.tiles[31]);
+    REQUIRE(reach != nullptr);
+    CHECK(reach->from == world.tiles[0]);
+}
+
+TEST_CASE("Derived rows: exact component entries keep isolated members", "[runtime][relations][row-join]") {
+    World world(3);
+    world.link(0, 1);
+    auto& groups = derived_relation<Group>(world.registry);
+    REQUIRE(groups.find_entry(world.tiles[1], world.tiles[0]) != nullptr);
+    REQUIRE(groups.find_entry(world.tiles[2], world.tiles[2]) != nullptr);
+    CHECK(groups.find_entry(world.tiles[1], world.tiles[1]) == nullptr);
+    CHECK(groups.find_entry(static_cast<entt::entity>(entt::null), world.tiles[0]) == nullptr);
+}
+
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity)

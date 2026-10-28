@@ -851,6 +851,9 @@ void emit_relation_capture(std::ostringstream& out, const DecoratedProgram& prog
     const auto relations = stored_relations(program);
     for (std::size_t index = 0; index < relations.size(); ++index) {
         const auto& relation = *relations[index];
+        out << "inline void generated_capture_relation_" << index << "(const entt::registry& registry,\n";
+        out << "    DocumentIdMap& ids, cactus::persistence::SnapshotBuilder& out, "
+               "const GeneratedDocumentTables& tables) {\n";
         out << "    if (const auto* store = registry.ctx().find<RelationStore<"
             << EnttCodegenUtils::relation_cpp_name(*relation.symbol_id) << ">>()) {\n";
         out << "        store->for_each_live([&](const auto& entry) {\n";
@@ -865,6 +868,7 @@ void emit_relation_capture(std::ostringstream& out, const DecoratedProgram& prog
         out << "            out.end_relation_row();\n";
         out << "        });\n";
         out << "    }\n";
+        out << "}\n\n";
     }
 }
 
@@ -1089,6 +1093,7 @@ std::string EnttPersistenceEmitter::emit_world_capture(const DecoratedProgram& p
     emit_eligibility(out, traits);
     emit_attached_traits(out, program, layouts, traits);
     emit_absent_traits(out, program, layouts);
+    emit_relation_capture(out, program);
 
     out << "// Read-only: capture never mutates the world, creates entities, or runs\n";
     out << "// gameplay handlers.\n";
@@ -1129,7 +1134,10 @@ std::string EnttPersistenceEmitter::emit_world_capture(const DecoratedProgram& p
     out << "        generated_capture_traits(registry, entity, ids, out, tables);\n";
     out << "        generated_capture_absent_traits(registry, entity, node, out, tables);\n";
     out << "    }\n";
-    emit_relation_capture(out, program);
+    const auto relation_count = stored_relations(program).size();
+    for (std::size_t index = 0; index < relation_count; ++index) {
+        out << "    generated_capture_relation_" << index << "(registry, ids, out, tables);\n";
+    }
     out << "    if (ids.limit_exceeded()) { out.mark_truncated(); }\n";
     out << "    return std::move(out).finish();\n";
     out << "}\n\n";

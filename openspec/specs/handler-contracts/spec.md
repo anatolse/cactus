@@ -13,7 +13,8 @@ Every regular or external handler SHALL have an independent contract containing 
 - **THEN** the semantic representation contains distinct contracts for `Player.fixed_tick` and `Player.Damaged`
 
 ### Requirement: Handler contracts declare one execution domain
-Every handler contract SHALL contain exactly one domain: selectionless, unary relation, or pair relation. A unary relation SHALL contain positive and excluded canonical trait identities. A pair relation SHALL contain exactly two ordered named bindings and each binding's required canonical traits.
+
+Every handler contract SHALL contain exactly one domain: selectionless, unary relation, or pair relation. A unary entity relation SHALL contain positive and excluded canonical trait identities; a unary row domain SHALL contain its canonical relation identity and alias. A pair relation SHALL contain exactly two ordered named bindings. Each binding SHALL record either its required canonical entity traits or its canonical row relation identity. A pair of row bindings SHALL retain both identities and names even when they refer to the same relation. Physical join order SHALL NOT change the recorded authored binding order.
 
 #### Scenario: Unary contract remains unary
 - **WHEN** a rule filters Position and Velocity
@@ -22,6 +23,10 @@ Every handler contract SHALL contain exactly one domain: selectionless, unary re
 #### Scenario: Pair contract preserves binding roles
 - **WHEN** a pair rule binds `projectile` and `target`
 - **THEN** every handler contract preserves those names, order, and separate required trait sets
+
+#### Scenario: Joined row identities remain distinct bindings
+- **WHEN** a rule joins `incoming: Walk` and `outgoing: Walk`
+- **THEN** each handler contract records two row roles with the same canonical relation identity and their separate authored names
 
 ### Requirement: Pair contracts record binding-qualified reads
 A pair handler contract SHALL record each trait read with its relation binding and SHALL also expose the conservative union of canonical read traits for scheduling against existing handlers. Pair selection SHALL determine membership without adding reads.
@@ -403,3 +408,23 @@ An `extern rule` handler's `reads:` block SHALL accept relation names alongside 
 #### Scenario: Extern write to a relation
 - **WHEN** an extern rule lists a relation under `writes:`
 - **THEN** the compiler reports that extern rules may only read relations
+
+### Requirement: Joined row domains read both relations and their sources
+
+A handler over two row bindings SHALL record reads of both relations for membership and row-field selection, even if its body uses only one binding. A derived binding SHALL contribute all transitive source-relation reads and shortest-path cost reads required by the existing derived-read contract. Other expressions in `where:`, `when:`, `order by:` and the body SHALL contribute their normal reads. Scheduling, occurrence conflict checks and keep-dependency analysis SHALL use these reads without converting a row role into an entity role or granting it write access.
+
+#### Scenario: An unused row binding still affects membership
+- **WHEN** a join's body emits only fields of `a`, while `b` determines which tuples match
+- **THEN** the contract still records a read of `b`'s relation
+
+#### Scenario: A derived binding contributes its source cost
+- **WHEN** a rule joins `Located` to `Route = shortest(Walk, by = cost)`
+- **THEN** its contract reads `Located`, the derived route relation, `Walk`, and `Walk.cost` through the existing canonical derived-read representation
+
+#### Scenario: Joined handlers retain occurrence conflict checks
+- **WHEN** two otherwise unordered producers have descendant runs where a joined handler removes relation rows and another handler adds rows of that relation at a conflicting occurrence position
+- **THEN** the existing occurrence conflict analysis diagnoses or orders the normal structural commands, and the joined handler still records reads of both of its row domains
+
+#### Scenario: Derived keep dependencies remain visible
+- **WHEN** a source relation is kept and a joined handler reads a relation derived from it
+- **THEN** dependency analysis records that source read, and the join sees the source rows committed before its pass rather than uncommitted keep commands

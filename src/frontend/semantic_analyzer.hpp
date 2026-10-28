@@ -359,12 +359,6 @@ enum class SpatialShapeKind : std::uint8_t { Sphere, Box, Collider, SweptCollide
 // Where the recognized query sits: a `where:` predicate or a `reduce:` aggregate.
 enum class SpatialJoinSource : std::uint8_t { Where, Reduce };
 
-// Child steps from a predicate root to one of its sub-expressions: a call
-// step picks an argument, a binary step picks left (0) or right (1).
-using ExprPath = std::vector<std::uint8_t>;
-
-[[nodiscard]] const ExprNode* resolve_expr_path(const ExprNode& root, const ExprPath& path);
-
 // One pair binding's shape in a recognized overlap predicate. `slots` locate
 // its arguments in the matched predicate: a sphere has center and radius, a
 // box has center, size and rotation, a swept collider has its delta, and a
@@ -1124,12 +1118,12 @@ private:
     [[nodiscard]] ResolvedRelation declared_relation(const RelationNode& node) const;
     void resolve_derived_relations(const std::vector<RelationNode*>& nodes);
     void derive_relation_shape(const RelationNode& node, const ResolvedRelation& source, ResolvedRelation& relation) const;
-    void require_fixed_derived_end(const RuleNode& rule);
+    void require_fixed_derived_end(RuleNode& rule);
     void expand_derived_reads(HandlerContract& contract) const;
     void extract_row_bindings(RuleNode& rule);
     void extract_row_domain(RuleNode& rule);
     // Rejects clauses a rule over relation rows can't have; true when the rule binds rows.
-    bool reject_row_domain_clauses(const RuleNode& rule);
+    bool reject_row_domain_clauses(RuleNode& rule);
     void report_row_binding_value(const std::string& name, const SourceLocation& location) const;
     [[nodiscard]] TypeInfo infer_row_member_type(const std::vector<std::string>& chain,
                                                  const SourceLocation& location,

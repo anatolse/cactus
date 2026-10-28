@@ -273,4 +273,132 @@ TEST_CASE("RelationStore: commit commands apply in order and check their ends", 
     }
 }
 
+TEST_CASE("RelationStore: exact entries and collected joins preserve row order", "[runtime][relations][row-join]") {
+    entt::registry registry;
+    const auto e = make_entities(registry, 4);
+    RelationStore<WalkRow> left;
+    RelationStore<WalkRow> right;
+    left.add(e[2], e[1], WalkRow{.cost = 2.0F});
+    left.add(e[0], e[1], WalkRow{.cost = 1.0F});
+    right.add(e[1], e[3], WalkRow{.cost = 3.0F});
+    right.add(e[1], e[2], WalkRow{.cost = 4.0F});
+    const auto* entry = left.find_entry(e[2], e[1]);
+    REQUIRE(entry != nullptr);
+    CHECK(entry->row.cost == 2.0F);
+    CHECK(left.order_of(*entry) == 0);
+    CHECK(left.find_entry(e[1], e[2]) == nullptr);
+    const auto enumerate = [&](const auto& accept) {
+        for (const auto& b : right.rows()) {
+            left.for_each_to(b.from, [&](const auto& a) { accept(a, b); });
+        }
+    };
+    const auto matches = cactus::runtime::collect_relation_join<true>(
+        left, right, enumerate, [](const auto& a, const auto& b) { return a.row.cost + b.row.cost < 6.0F; });
+    REQUIRE(matches.size() == 3);
+    CHECK(matches[0].first->from == e[2]);
+    CHECK(matches[0].second->to == e[3]);
+    CHECK(matches[1].first->from == e[0]);
+    CHECK(matches[1].second->to == e[3]);
+    CHECK(matches[2].second->to == e[2]);
+    const auto empty = cactus::runtime::collect_relation_join<false>(
+        left, right, enumerate, [](const auto&, const auto&) { return false; });
+    CHECK(empty.empty());
+}
+
+namespace {
+
+struct CountedRows {
+    using Entry = RelationStore<WalkRow>::Entry;
+    RelationStore<WalkRow> store;
+    std::size_t probes  = 0;
+    std::size_t visited = 0;
+
+    template <typename Visit>
+    void for_each_from(entt::entity key, const Visit& visit) {
+        ++probes;
+        store.for_each_from(key, [&](const Entry& entry) {
+            ++visited;
+            visit(entry);
+        });
+    }
+
+    template <typename Visit>
+    void for_each_to(entt::entity key, const Visit& visit) {
+        ++probes;
+        store.for_each_to(key, [&](const Entry& entry) {
+            ++visited;
+            visit(entry);
+        });
+    }
+
+    const Entry* find_entry(entt::entity from, entt::entity to) {
+        ++probes;
+        return store.find_entry(from, to);
+    }
+
+    auto rows() {
+        visited += store.size();
+        return store.rows();
+    }
+};
+
+}  // namespace
+
+TEST_CASE("Relation match lookups visit only their endpoint buckets", "[runtime][relations][row-join]") {
+    entt::registry registry;
+    const auto entities = make_entities(registry, 4098);
+    CountedRows rows;
+    for (std::size_t index = 0; index < 2048; ++index) {
+        rows.store.add(entities[index], entities[index + 2048], WalkRow{});
+    }
+    std::size_t matches = 0;
+    const auto accept   = [&](const auto&) { ++matches; };
+    for (std::size_t index = 0; index < 2048; ++index) {
+        cactus::runtime::for_each_relation_match<true, false>(rows, entities[index], 0, accept);
+    }
+    CHECK(matches == 2048);
+    CHECK(rows.probes == 2048);
+    CHECK(rows.visited == 2048);
+    cactus::runtime::for_each_relation_match<false, true>(rows, 0, entities[2048], accept);
+    CHECK(matches == 2049);
+    cactus::runtime::for_each_relation_match<true, true>(rows, entities[0], entities[2048], accept);
+    CHECK(matches == 2050);
+    cactus::runtime::for_each_relation_match<true, true>(rows, entities[0], entities[2049], accept);
+    CHECK(matches == 2050);
+    cactus::runtime::for_each_relation_match<false, false>(rows, 0, 0, accept);
+    CHECK(matches == 4098);
+}
+
+TEST_CASE("Relation binding predicates are evaluated once per snapshot row", "[runtime][relations][row-join]") {
+    using Entry = RelationStore<WalkRow>::Entry;
+    Entry accepted{.row = WalkRow{.cost = 2.0F}};
+    Entry rejected{.row = WalkRow{.cost = 0.0F}};
+    int calls      = 0;
+    auto predicate = cactus::runtime::memoize_relation_value<Entry>([&](const Entry& entry) {
+        ++calls;
+        return entry.row.cost > 0.0F;
+    });
+    CHECK(predicate(accepted));
+    CHECK(predicate(accepted));
+    CHECK_FALSE(predicate(rejected));
+    CHECK_FALSE(predicate(rejected));
+    CHECK(calls == 2);
+}
+
+TEST_CASE("Relation binding sort keys are evaluated once per snapshot row", "[runtime][relations][row-join]") {
+    using Entry = RelationStore<WalkRow>::Entry;
+    Entry first{.row = WalkRow{.cost = 2.0F}};
+    Entry second{.row = WalkRow{.cost = 3.0F}};
+    int calls = 0;
+    auto key = cactus::runtime::memoize_relation_value<Entry>([&](const Entry& entry) {
+        ++calls;
+        return entry.row.cost;
+    });
+    CHECK(key(first) == 2.0F);
+    CHECK(key(second) == 3.0F);
+    CHECK(key(first) == 2.0F);
+    CHECK(key(second) == 3.0F);
+    CHECK(calls == 2);
+}
+
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity)

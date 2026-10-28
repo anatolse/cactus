@@ -170,7 +170,7 @@ A rule SHALL bind relation rows in two places:
 - A `pairs:` binding whose only entry is a relation name, `r: R`.
 - A unary `each:` with exactly one relation entry and an alias, `each: R as r`, and no `without:`.
 
-A row binding SHALL expose `r.from` and `r.to` as `entity_id` values and `r.<field>` for each field. It SHALL be read-only, and it SHALL NOT be used with brackets, as a command or `emit` target, or in `reduce:` or `keep`. A rule SHALL have at most one row binding. Its membership snapshot SHALL list rows in row creation order. A unary row domain SHALL accept `where:`, `order by:`, a global `limit:` and `when:`.
+A row binding SHALL expose `r.from` and `r.to` as `entity_id` values and `r.<field>` for each field. It SHALL be read-only, and it SHALL NOT be used with brackets, as a command or `emit` target, or in `reduce:` or `keep`. A rule SHALL have at most two row bindings, both in the existing two-binding `pairs:` form. A pair with two row bindings SHALL meet "Two relation rows join by their endpoints". Stored and kept row domains SHALL use row creation order; derived row domains SHALL use their declared endpoint creation order. A unary row domain SHALL accept `where:`, `order by:`, a global `limit:` and `when:`.
 
 #### Scenario: Row joined to an entity
 - **WHEN** a pair rule binds `w: Walker` and `r: Route` with `where: r.from == w[Walker].tile`
@@ -185,8 +185,8 @@ A row binding SHALL expose `r.from` and `r.to` as `entity_id` values and `r.<fie
 - **THEN** the compiler reports that relation rows are read-only, with help that suggests `add R(a, b):`
 
 #### Scenario: Two row bindings
-- **WHEN** a pair rule binds `r1: Walk` and `r2: Door`
-- **THEN** the compiler reports that a rule may bind at most one relation
+- **WHEN** a pair rule binds `r1: Walk` and `r2: Door` with the top-level predicate `r1.to == r2.from`
+- **THEN** compilation accepts it and runs only tuples whose named endpoints are equal
 
 #### Scenario: Row as a trait namespace
 - **WHEN** a handler reads `r[Tile].x`
@@ -294,7 +294,8 @@ In `shortest(R, by = f)`, `f` SHALL be an `int` field of `R`. A row's cost SHALL
 - **THEN** `Room` holds `(tile, tile)`
 
 ### Requirement: Derived relations are current, unsaved and bounded
-A derived relation SHALL be read as a function of `R`'s rows in the same snapshot that the reading pass sees for `R`. It SHALL NOT be saved, and SHALL be correct immediately after restore. A row binding of a `closure` or `shortest` relation SHALL require a top-level `where:` conjunct that equates `r.from` or `r.to` with an expression that does not read the row binding. Otherwise the compiler SHALL report an error, with help that says to fix an end. `components` row bindings and every relation test SHALL have no such requirement. Derived rows SHALL be ordered by the creation order of their `from` end, then of their `to` end.
+
+A derived relation SHALL be read as a function of `R`'s rows in the same snapshot that the reading pass sees for `R`. It SHALL NOT be saved, and SHALL be correct immediately after restore. A row binding of a `closure` or `shortest` relation SHALL require a top-level `where:` conjunct that equates `r.from` or `r.to` with an expression that does not read that binding. Either equality orientation SHALL be accepted. In a two-row join, dependencies between such endpoint expressions SHALL admit an evaluation order starting with a stored relation, a kept relation, a `components` relation, or a derived binding whose endpoint expression reads neither row binding. A `closure` or `shortest` binding SHALL become available only after every row binding read by its chosen endpoint expression is available. A rule with no such evaluation order SHALL be rejected with a diagnostic naming the unanchored bindings and asking for an independently fixed endpoint. `components` row bindings and every relation test SHALL have no endpoint-fixing requirement. Derived rows SHALL be ordered by the creation order of their `from` end, then of their `to` end.
 
 #### Scenario: Seen in the same pass as its source
 - **WHEN** a keep run adds `Walk(b, c)` and a later activation's rule tests `Reach(a, c)` while `Walk` holds `(a, b)`
@@ -307,3 +308,73 @@ A derived relation SHALL be read as a function of `R`'s rows in the same snapsho
 #### Scenario: After restore
 - **WHEN** a world with stored links is restored
 - **THEN** the first pass that reads their closure sees the restored links' reachability
+
+#### Scenario: Stored location anchors a shortest route
+- **WHEN** a rule joins `place: Located` to `route: Route`, where `Located` is stored, with `route.from == place.to` and `route.to == Goal`
+- **THEN** the rule is accepted, and each tuple exposes the location row and the matching route's `distance` and `next`
+
+#### Scenario: The derived binding is authored first
+- **WHEN** the same rule lists `route: Route` before `place: Located`
+- **THEN** it is accepted and uses route-major logical order even if locating candidates starts from `Located`
+
+#### Scenario: Two derived bindings have an anchor
+- **WHEN** a rule joins two closure bindings `a` and `b` with `a.from == Origin` and `a.to == b.from`
+- **THEN** it is accepted, because `Origin` bounds `a` and each available `a` row bounds `b`
+
+#### Scenario: Two derived bindings have only a circular bound
+- **WHEN** two shortest bindings have only `a.to == b.from` and neither has an endpoint fixed independently of the other
+- **THEN** compilation reports the unanchored bindings instead of expanding all derived rows
+
+### Requirement: Two relation rows join by their endpoints
+
+A `pairs:` rule whose two bindings name relation rows SHALL contain at least one top-level conjunct of the form `a.<end> == b.<end>`, where each `<end>` is `from` or `to` and `a` and `b` are the two different binding names. The equality SHALL be recognized in either orientation and within top-level `and` chains, ignoring parentheses. An equality only under `or` or `not`, a row-field equality, or an equality of one binding with itself SHALL NOT satisfy this requirement. Other pure predicates SHALL remain permitted and SHALL filter candidates normally. Both bindings SHALL support stored, kept and derived relations, subject to derived bounds, including two aliases of the same relation. No extra join annotation or clause SHALL be required.
+
+#### Scenario: All endpoint orientations
+- **WHEN** rules join `a.from` to `b.from`, `a.from` to `b.to`, `a.to` to `b.from`, or `a.to` to `b.to`
+- **THEN** each rule is accepted and selects exactly its matching row pairs
+
+#### Scenario: No endpoint join
+- **WHEN** a two-row rule has no endpoint equality, or only `a.cost == b.cost`
+- **THEN** compilation reports that a two-row pair needs a top-level endpoint equality and shows an example using its binding names
+
+#### Scenario: A disjunction does not bound the join
+- **WHEN** the only endpoint equality is inside `a.to == b.from or a.from == b.to`
+- **THEN** the rule is rejected with the endpoint-join diagnostic
+
+#### Scenario: Several predicates match one tuple
+- **WHEN** a row pair satisfies two endpoint equalities and additional field predicates
+- **THEN** the handler runs once for that ordered row pair
+
+#### Scenario: Self-join
+- **WHEN** both bindings name the same relation under different names
+- **THEN** same-row and reversed-role tuples are permitted when they pass `where:`, and each ordered row pair runs once
+
+### Requirement: Joined row passes preserve order and activation timing
+
+A two-row pass SHALL read the row membership and row values of both relations from the current pass snapshot. Its logical tuple order SHALL be the left row domain's order followed by the right row domain's order for each left row. `where:` SHALL filter this product, `order by:` SHALL sort surviving tuples with ties preserving logical order, and a global `limit:` SHALL select from that filtered and ordered sequence. Changing the physical lookup direction SHALL NOT change the selected tuples or their order. Queued changes to either relation or its ends SHALL become visible only at the normal commit and subsequent pass snapshots.
+
+Two-row rules SHALL retain all existing row restrictions: no row writes, trait access through an endpoint expression, row reductions, row keeps, `without:`, lifecycle handlers, `self`, or per-row `limit:` parts. The existing proof for commands adding a relation with a `one` end SHALL NOT treat a row endpoint as an entity binding limited to one. A two-row pass SHALL run for phase occurrences and untargeted ordinary events. A targeted occurrence SHALL select no tuples, because neither binding supplies an entity recipient; emitting an event to a row endpoint SHALL remain valid.
+
+#### Scenario: Lookup direction preserves observed order
+- **WHEN** stored rows were created in an order different from their endpoint entity order and the physical plan probes the authored left relation
+- **THEN** emitted occurrences still follow left-row-major, then right-row order
+
+#### Scenario: Sorting and a global limit
+- **WHEN** a joined pass declares `order by: route.distance asc` and `limit: 2`, and several tuples tie
+- **THEN** the two lowest-distance tuples run, with ties resolved by the original logical tuple order
+
+#### Scenario: Mutation during a joined pass
+- **WHEN** the first tuple queues a row replacement, removal, or endpoint destruction affecting a later tuple
+- **THEN** that later tuple still reads its snapshot rows, and the next pass observes the committed change
+
+#### Scenario: Endpoint targeting remains explicit
+- **WHEN** a phase-driven join emits `Step to place.from` and a unary entity rule handles `Step`
+- **THEN** the unary rule receives the occurrence for that entity; the joined pass is not an implicit receiver for events targeted to that endpoint
+
+#### Scenario: A row endpoint grants no one-end proof
+- **WHEN** a joined pass tries to add a `one` relation using `place.from` as the one-end argument without the existing accepted proof
+- **THEN** compilation rejects the command with the existing one-end diagnostic
+
+#### Scenario: Existing unsupported row clauses remain errors
+- **WHEN** a joined rule declares `reduce:`, `keep`, or `limit: 1 per place`
+- **THEN** compilation reports the applicable row-domain restriction instead of treating a row as an entity

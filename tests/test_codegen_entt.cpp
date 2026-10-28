@@ -6458,10 +6458,7 @@ TEST_CASE("Codegen EnTT: pair handler snapshots both bindings and iterates their
             CHECK(code.contains("registry.view<::cactus_gen::DynamicBody, ::cactus_gen::Transform>()"));
             CHECK(code.contains("std::vector<entt::entity> wall_snapshot;"));
             CHECK(code.contains("registry.view<::cactus_gen::Solid, ::cactus_gen::Collider>()"));
-            // Sorted by creation ordinal for deterministic tuple order, reading
-            // each entity's ordinal exactly once rather than per comparison.
-            CHECK(code.contains("registry.get<cactus::runtime::entt_backend::CreationOrdinal>(pair_entity).value,"));
-            CHECK(code.contains("std::ranges::sort(body_ordered);"));
+            CHECK(code.contains("body_snapshot = cactus::runtime::entt_backend::creation_ordered(registry, body_view);"));
             // Left-binding-major nested iteration over the snapshots, in the
             // untargeted (broadcast) branch — the recipient-targeted branch
             // precedes it and has its own incident-tuple loop shapes.
@@ -8870,8 +8867,8 @@ TEST_CASE("Codegen EnTT: a grouped reduction folds broad-phase rows and writes i
     const auto empty = code.find("if (actor_snapshot.empty()) {");
     REQUIRE(empty != std::string::npos);
     CHECK(empty < groups);
-    CHECK(code.find("actor_snapshot.reserve") < empty);
-    CHECK(empty < code.find("wall_snapshot.reserve"));
+    CHECK(code.find("actor_snapshot =") < empty);
+    CHECK(empty < code.find("wall_snapshot ="));
     // Spawned entities have huge indices, so groups are found by snapshot position.
     CHECK(code.find("SnapshotPositions cactus_positions_actor(actor_snapshot);") < groups);
     CHECK(code.find("cactus_positions_actor.find(actor)", fold) != std::string::npos);
@@ -10618,7 +10615,8 @@ TEST_CASE("Codegen EnTT: a unary row domain walks the store's rows", "[codegen-e
                                       "Each");
     CHECK(code.contains("Route>(registry)"));
     CHECK(code.contains("for (const auto& cactus_row : cactus_rows.rows())"));
-    CHECK(code.contains("std::ranges::stable_sort(cactus_row_tuples"));
+    CHECK(code.contains("std::ranges::stable_sort(cactus_order"));
+    CHECK(code.contains("cactus_row_key0(*cactus_row.second)"));
     CHECK(code.contains("cactus_row_tuples.resize(cactus_row_limit)"));
 }
 

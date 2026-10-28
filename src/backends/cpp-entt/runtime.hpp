@@ -2382,7 +2382,7 @@ public:
         for (const auto& [ordinal, entity] : carriers_) {
             const auto* node = find_node(entity);
             if (node != nullptr && node->carrier) {
-                visit(entity);
+                std::forward<Visit>(visit)(entity);
             }
         }
     }
@@ -2392,7 +2392,7 @@ public:
     void for_each_child(entt::entity entity, Visit&& visit) const {
         for (auto child = first_child(entity); child != entt::null; child = next_sibling(child)) {
             ++child_visits_;
-            visit(child);
+            std::forward<Visit>(visit)(child);
         }
     }
 

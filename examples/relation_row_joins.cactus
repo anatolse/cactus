@@ -1,0 +1,424 @@
+module relation_row_joins
+
+use std.core
+use std.text as text
+
+enum Query:
+    Goal
+    ReverseGoal
+    Chain
+    FromFrom
+    FromTo
+    ToTo
+    Sorted
+    Snapshot
+    ReachChain
+    Components
+    Kept
+    Events
+    BothEnds
+    LiveWhere
+    LiveGoal
+    LiveLimited
+
+trait Tile:
+    persist var label: int = 0
+    persist var hits: int = 0
+
+trait Robot:
+    let number: int = 0
+    persist var steps: int = 0
+    persist var distance: int = 0
+
+trait Control:
+    persist var active: bool = true
+    var query: Query = Query.Goal
+    var trace: string = ""
+    var targeted: bool = false
+    var recruit: bool = false
+    var seen: int = 0
+
+relation Walk:
+    from: Tile
+    to: Tile
+    let cost: int = 1
+    let rank: float = 0.0
+
+relation Located:
+    from: Robot
+    to: Tile
+
+relation Suggested:
+    from: Robot
+    to: Tile
+
+relation Occupies:
+    from: Robot
+    to: Tile
+
+relation Observed:
+    from: Tile
+    to: Tile
+
+relation Route = shortest(Walk, by = cost)
+relation Reach = closure(Walk)
+relation Group = components(Walk)
+
+event Step:
+    tile: entity_id
+    distance: int
+
+event PairSeen:
+    left: int
+    right: int
+
+event Touch:
+    other: entity_id
+
+event Probe
+
+entity Settings:
+    Control
+
+template Square(label: int):
+    Tile:
+        label = label
+
+entity Start from Square(label = 1)
+entity Middle from Square(label = 2)
+entity Other from Square(label = 3)
+entity Goal from Square(label = 4)
+
+template Worker(number: int):
+    Robot:
+        number = number
+
+entity First from Worker(number = 1)
+entity Second from Worker(number = 2)
+
+rule BuildGraph:
+    on load:
+        add Walk(Start, Middle):
+            cost = 2
+        add Walk(Middle, Goal)
+        add Walk(Start, Other)
+        add Walk(Other, Goal):
+            cost = 3
+        add Located(First, Start)
+        add Located(Second, Middle)
+
+rule FollowGoal:
+    pairs:
+        place: Located
+        route: Route
+    where:
+        route.from == place.to
+        route.to == Goal
+    when:
+        Settings[Control].active and Settings[Control].query == Query.Goal
+
+    on fixed_tick:
+        emit Step to place.from:
+            tile = route.next
+            distance = route.distance
+
+rule ReverseGoal:
+    pairs:
+        route: Route
+        place: Located
+    after: FollowGoal
+    where:
+        route.from == place.to
+        route.to == Goal
+    when:
+        Settings[Control].active and Settings[Control].query == Query.ReverseGoal
+
+    on fixed_tick:
+        emit Step to place.from:
+            tile = route.next
+            distance = route.distance
+
+rule Chain:
+    pairs:
+        a: Walk
+        b: Walk
+    after: ReverseGoal
+    where:
+        a.to == b.from
+    when:
+        Settings[Control].active and Settings[Control].query == Query.Chain
+
+    on fixed_tick:
+        emit PairSeen:
+            left = a.cost
+            right = b.cost
+
+rule FromFrom:
+    pairs:
+        a: Walk
+        b: Walk
+    after: Chain
+    where:
+        a.from == b.from
+    when:
+        Settings[Control].active and Settings[Control].query == Query.FromFrom
+
+    on fixed_tick:
+        emit PairSeen:
+            left = a.cost
+            right = b.cost
+
+rule FromTo:
+    pairs:
+        a: Walk
+        b: Walk
+    after: FromFrom
+    where:
+        a.from == b.to
+    when:
+        Settings[Control].active and Settings[Control].query == Query.FromTo
+
+    on fixed_tick:
+        emit PairSeen:
+            left = a.cost
+            right = b.cost
+
+rule ToTo:
+    pairs:
+        a: Walk
+        b: Walk
+    after: FromTo
+    where:
+        a.to == b.to
+    when:
+        Settings[Control].active and Settings[Control].query == Query.ToTo
+
+    on fixed_tick:
+        emit PairSeen:
+            left = a.cost
+            right = b.cost
+
+rule Sorted:
+    pairs:
+        a: Walk
+        b: Walk
+    order by:
+        b.rank asc
+    after: ToTo
+    where:
+        a.to == b.from
+        a.cost > 0
+        b.cost > 0
+    limit: 2
+    when:
+        Settings[Control].active and Settings[Control].query == Query.Sorted
+
+    on fixed_tick:
+        emit PairSeen:
+            left = a.cost
+            right = b.cost
+
+rule Snapshot:
+    pairs:
+        a: Walk
+        b: Walk
+    after: Sorted
+    where:
+        a.to == b.from
+    when:
+        Settings[Control].active and Settings[Control].query == Query.Snapshot
+
+    on fixed_tick:
+        emit PairSeen:
+            left = a.cost
+            right = b.cost
+        remove Walk(b.from, b.to)
+        add Walk(a.from, a.to):
+            cost = a.cost + 10
+        destroy b.to
+
+rule ReachChain:
+    pairs:
+        a: Reach
+        b: Reach
+    after: Snapshot
+    where:
+        a.from == Start
+        a.to == b.from
+    when:
+        Settings[Control].active and Settings[Control].query == Query.ReachChain
+
+    on fixed_tick:
+        emit Touch to a.to:
+            other = b.to
+
+rule Components:
+    pairs:
+        member: Group
+        route: Route
+    after: ReachChain
+    where:
+        route.from == member.from
+        route.to == Goal
+    when:
+        Settings[Control].active and Settings[Control].query == Query.Components
+
+    on fixed_tick:
+        emit Touch to member.from:
+            other = route.next
+
+group positions:
+    phase: fixed_tick
+
+rule KeepLocations:
+    pairs:
+        robot: Robot
+        tile: Tile
+    group: positions
+    where:
+        Located(robot, tile)
+    keep Occupies(robot, tile)
+
+rule Kept:
+    pairs:
+        place: Occupies
+        route: Route
+    after: Components
+    where:
+        route.from == place.to
+        route.to == Goal
+    when:
+        Settings[Control].active and Settings[Control].query == Query.Kept
+
+    on fixed_tick:
+        emit Step to place.from:
+            tile = route.next
+            distance = route.distance
+
+rule RememberStep:
+    each: Robot as robot
+
+    on Step as step:
+        robot.steps += 1
+        robot.distance = step.distance
+        Settings[Control].trace += text.format("{};", robot.number)
+        remove Suggested(self, _)
+        add Suggested(self, step.tile)
+
+rule Recruit:
+    on input:
+        if Settings[Control].recruit:
+            spawn Worker(number = 3)
+            Settings[Control].recruit = false
+
+rule PlaceRecruit:
+    each: Robot as robot
+    where:
+        robot.number >= 3
+        not Located(self, _)
+
+    on fixed_tick:
+        add Located(self, Start)
+
+rule BothEnds:
+    pairs:
+        joined_rows_1: Walk
+        accept: Walk
+    after: Kept
+    where:
+        joined_rows_1.from == accept.from and joined_rows_1.to == accept.to
+    when:
+        Settings[Control].active and Settings[Control].query == Query.BothEnds
+
+    on fixed_tick:
+        emit PairSeen:
+            left = joined_rows_1.cost
+            right = accept.cost
+
+rule LiveWhere:
+    pairs:
+        a: Walk
+        b: Walk
+    after: BothEnds
+    where:
+        a.to == b.from
+        Settings[Control].seen < 1
+    when:
+        Settings[Control].query == Query.LiveWhere
+
+    on fixed_tick:
+        Settings[Control].seen += 1
+        emit PairSeen:
+            left = a.cost
+            right = b.cost
+
+rule LiveGoal:
+    pairs:
+        route: Route
+        place: Located
+    after: LiveWhere
+    where:
+        route.from == place.to
+        route.to == Goal
+        Settings[Control].seen < 1
+    when:
+        Settings[Control].query == Query.LiveGoal
+
+    on fixed_tick:
+        Settings[Control].seen += 1
+        emit Step to place.from:
+            tile = route.next
+            distance = route.distance
+
+rule LiveLimited:
+    pairs:
+        a: Walk
+        b: Walk
+    after: LiveGoal
+    where:
+        a.to == b.from
+        Settings[Control].seen < 1
+    limit: 2
+    when:
+        Settings[Control].query == Query.LiveLimited
+
+    on fixed_tick:
+        Settings[Control].seen += 1
+        emit PairSeen:
+            left = a.cost
+            right = b.cost
+
+rule SendProbe:
+    when:
+        Settings[Control].active and Settings[Control].query == Query.Events
+
+    on input:
+        if Settings[Control].targeted:
+            emit Probe to Start
+        else:
+            emit Probe
+
+rule EventPairs:
+    pairs:
+        a: Walk
+        b: Walk
+    where:
+        a.to == b.from
+    when:
+        Settings[Control].active and Settings[Control].query == Query.Events
+
+    on Probe:
+        emit PairSeen:
+            left = a.cost
+            right = b.cost
+
+rule RememberPair:
+    on PairSeen as pair:
+        Settings[Control].trace += text.format("{}:{};", pair.left, pair.right)
+
+rule RememberTouch:
+    each: Tile as tile
+
+    on Touch as touch:
+        tile.hits += 1
+        add Observed(self, touch.other)

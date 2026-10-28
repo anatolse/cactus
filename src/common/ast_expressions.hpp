@@ -19,7 +19,10 @@ void fixed(Node& node, const Visit& visit) {
     if constexpr (requires { node.operand; }) {
         visit(node.operand);
     }
-    if constexpr (requires { node.left; node.right; }) {
+    if constexpr (requires {
+                      node.left;
+                      node.right;
+                  }) {
         visit(node.left);
         visit(node.right);
     }
@@ -32,13 +35,20 @@ void fixed(Node& node, const Visit& visit) {
     if constexpr (requires { node.body; }) {
         visit(node.body);
     }
-    if constexpr (requires { node.condition; node.then_expr; node.else_expr; }) {
+    if constexpr (requires {
+                      node.condition;
+                      node.then_expr;
+                      node.else_expr;
+                  }) {
         visit(node.condition);
         visit(node.then_expr);
         visit(node.else_expr);
     }
     // A relation test's null end is the `_` wildcard.
-    if constexpr (requires { node.from; node.to; }) {
+    if constexpr (requires {
+                      node.from;
+                      node.to;
+                  }) {
         if (node.from != nullptr) {
             visit(node.from);
         }
@@ -67,7 +77,10 @@ void lists(Node& node, const Visit& visit, const Fields& fields) {
 
 template <typename Node, typename Visit, typename Fields>
 void compounds(Node& node, const Visit& visit, const Fields& fields) {
-    if constexpr (requires { node.source; node.operations; }) {
+    if constexpr (requires {
+                      node.source;
+                      node.operations;
+                  }) {
         visit(node.source);
         for (auto& operation : node.operations) {
             for (auto& argument : operation.args) {
@@ -75,14 +88,20 @@ void compounds(Node& node, const Visit& visit, const Fields& fields) {
             }
         }
     }
-    if constexpr (requires { node.subject; node.arms; }) {
+    if constexpr (requires {
+                      node.subject;
+                      node.arms;
+                  }) {
         visit(node.subject);
         for (auto& arm : node.arms) {
             visit(arm.pattern);
             visit(arm.body);
         }
     }
-    if constexpr (requires { node.overrides; node.arguments; }) {
+    if constexpr (requires {
+                      node.overrides;
+                      node.arguments;
+                  }) {
         fields(node.arguments.values);
         for (auto& trait : node.overrides) {
             fields(trait.assignments);
@@ -110,8 +129,26 @@ void visit_expression(Expression& expression, const Visitor& visitor) {
         expression.expr);
 }
 
-// A `where:` conjunct `r.from == <key>` or `r.to == <key>` of a rule with
-// row binding `r`, whose key reads no row: the pass looks rows up by key.
+inline void collect_chain_paths(const ExprNode& expr, std::string_view op, ExprPath& path, std::vector<ExprPath>& out) {
+    const auto* binary = std::get_if<BinaryExpr>(&expr.expr);
+    if (binary == nullptr || binary->op != op) {
+        out.push_back(path);
+        return;
+    }
+    for (std::uint8_t side = 0; side < 2; ++side) {
+        path.push_back(side);
+        collect_chain_paths(side == 0 ? *binary->left : *binary->right, op, path, out);
+        path.pop_back();
+    }
+}
+
+[[nodiscard]] inline std::vector<ExprPath> chain_paths(const ExprNode& root, const ExprPath& at, std::string_view op) {
+    std::vector<ExprPath> out;
+    auto path = at;
+    collect_chain_paths(*resolve_expr_path(root, at), op, path, out);
+    return out;
+}
+
 struct RowEndJoin {
     std::size_t predicate = 0;
     bool from_end         = true;
@@ -130,39 +167,100 @@ struct RowEndJoin {
     return row == rule.pairs->bindings.end() ? nullptr : &row->name;
 }
 
+[[nodiscard]] inline std::optional<bool> row_endpoint(const ExprNode& expr, std::string_view binding) {
+    const auto* member = std::get_if<MemberExpr>(&expr.expr);
+    const auto* owner  = member == nullptr ? nullptr : std::get_if<IdentExpr>(&member->object->expr);
+    if (owner == nullptr || owner->name != binding || (member->member != "from" && member->member != "to")) {
+        return std::nullopt;
+    }
+    return member->member == "from";
+}
+
+[[nodiscard]] inline std::uint8_t row_key_dependencies(const ExprNode& expr,
+                                                       const std::array<std::string_view, 2>& names) {
+    std::uint8_t dependencies = 0;
+    visit_expression(expr, [&](const ExprNode& node) {
+        const auto* ident = std::get_if<IdentExpr>(&node.expr);
+        if (ident == nullptr) {
+            return;
+        }
+        for (std::size_t index = 0; index < names.size(); ++index) {
+            if (!names[index].empty() && ident->name == names[index]) {
+                dependencies |= static_cast<std::uint8_t>(1U << index);
+            }
+        }
+    });
+    return dependencies;
+}
+
+inline void collect_row_end_keys(RowJoinPlan& plan,
+                                 const ExprNode& root,
+                                 const std::array<std::string_view, 2>& names,
+                                 std::size_t predicate,
+                                 const ExprPath& path) {
+    const auto* equality = std::get_if<BinaryExpr>(&resolve_expr_path(root, path)->expr);
+    if (equality == nullptr || equality->op != "==") {
+        return;
+    }
+    for (std::size_t index = 0; index < names.size(); ++index) {
+        if (names[index].empty()) {
+            continue;
+        }
+        for (std::uint8_t side = 0; side < 2; ++side) {
+            const auto& end_side    = side == 0 ? *equality->left : *equality->right;
+            const auto& key_side    = side == 0 ? *equality->right : *equality->left;
+            const auto end          = row_endpoint(end_side, names[index]);
+            const auto dependencies = row_key_dependencies(key_side, names);
+            if (!end.has_value() || (dependencies & (1U << index)) != 0) {
+                continue;
+            }
+            auto key_path = path;
+            key_path.push_back(static_cast<std::uint8_t>(1U - side));
+            const bool joined = !names[1 - index].empty() && row_endpoint(key_side, names[1 - index]).has_value();
+            plan.keys[index].push_back(RowEndKey{.predicate    = predicate,
+                                                 .expression   = std::move(key_path),
+                                                 .from_end     = *end,
+                                                 .dependencies = dependencies});
+            plan.linked = plan.linked || joined;
+        }
+    }
+}
+
+[[nodiscard]] inline RowJoinPlan analyze_row_ends(const RuleNode& rule) {
+    RowJoinPlan plan;
+    if (!rule.where_clause.has_value()) {
+        return plan;
+    }
+    std::array<std::string_view, 2> names{};
+    if (rule.rows.has_value()) {
+        names[0] = rule.rows->alias;
+    } else if (rule.pairs.has_value()) {
+        for (std::size_t index = 0; index < rule.pairs->bindings.size(); ++index) {
+            names[index] = rule.pairs->bindings[index].name;
+        }
+    }
+    const auto& predicates = rule.where_clause->predicates;
+    for (std::size_t index = 0; index < predicates.size(); ++index) {
+        for (const auto& path : chain_paths(*predicates[index], {}, "and")) {
+            collect_row_end_keys(plan, *predicates[index], names, index, path);
+        }
+    }
+    return plan;
+}
+
 [[nodiscard]] inline std::optional<RowEndJoin> find_row_end_join(const RuleNode& rule) {
     const auto* row = row_binding_name(rule);
     if (row == nullptr || !rule.where_clause.has_value()) {
         return std::nullopt;
     }
-    const auto end_of = [&](const ExprNode& side) -> std::optional<bool> {
-        const auto* member = std::get_if<MemberExpr>(&side.expr);
-        const auto* owner  = member == nullptr ? nullptr : std::get_if<IdentExpr>(&member->object->expr);
-        if (owner == nullptr || owner->name != *row || (member->member != "from" && member->member != "to")) {
-            return std::nullopt;
-        }
-        return member->member == "from";
-    };
-    const auto reads_row = [&](const ExprNode& side) {
-        bool found = false;
-        visit_expression(side, [&](const ExprNode& node) {
-            const auto* ident = std::get_if<IdentExpr>(&node.expr);
-            found             = found || (ident != nullptr && ident->name == *row);
-        });
-        return found;
-    };
-    const auto& predicates = rule.where_clause->predicates;
-    for (std::size_t index = 0; index < predicates.size(); ++index) {
-        const auto* equality = std::get_if<BinaryExpr>(&predicates[index]->expr);
-        if (equality == nullptr || equality->op != "==") {
-            continue;
-        }
-        for (const auto& [end_side, key_side] : {std::pair{equality->left.get(), equality->right.get()},
-                                                 std::pair{equality->right.get(), equality->left.get()}}) {
-            if (const auto end = end_of(*end_side); end.has_value() && !reads_row(*key_side)) {
-                return RowEndJoin{.predicate = index, .from_end = *end, .key = key_side};
-            }
-        }
+    const auto index = rule.pairs.has_value() && !rule.pairs->bindings[0].is_row() ? std::size_t{1} : std::size_t{0};
+    RowJoinPlan fallback;
+    const auto& plan = rule.row_join.has_value() ? *rule.row_join : (fallback = analyze_row_ends(rule));
+    if (!plan.keys[index].empty()) {
+        const auto& key = plan.keys[index].front();
+        return RowEndJoin{.predicate = key.predicate,
+                          .from_end  = key.from_end,
+                          .key = resolve_expr_path(*rule.where_clause->predicates[key.predicate], key.expression)};
     }
     return std::nullopt;
 }

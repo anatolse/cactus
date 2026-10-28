@@ -4,6 +4,7 @@
 #include "common/types.hpp"
 
 #include <algorithm>
+#include <array>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -22,6 +23,10 @@ namespace cactus {
 struct ExprNode;
 struct StmtNode;
 struct ArchetypeTraitEntry;
+
+using ExprPath = std::vector<std::uint8_t>;
+[[nodiscard]] const ExprNode* resolve_expr_path(const ExprNode& root, const ExprPath& path);
+
 
 // ── Type Reference (unresolved, from parser) ────────────────────────────────
 
@@ -1216,6 +1221,20 @@ struct ResolvedRuleOrdering {
     std::vector<SymbolId> before_groups;
 };
 
+struct RowEndKey {
+    std::size_t predicate = 0;
+    ExprPath expression;
+    bool from_end             = true;
+    std::uint8_t dependencies = 0;
+};
+
+struct RowJoinPlan {
+    std::array<std::vector<RowEndKey>, 2> keys;
+    std::array<bool, 2> keyed{};
+    std::size_t driver = 0;
+    bool linked        = false;
+};
+
 struct RuleNode {
     std::string name;
     bool is_stdlib = false;
@@ -1225,6 +1244,7 @@ struct RuleNode {
     FilterClause exclude;                           // empty entries = no exclude
     std::optional<PairClause> pairs;                // set when this rule uses a binary pair domain
     std::optional<RowDomainNode> rows;              // set when this rule runs over relation rows
+    std::optional<RowJoinPlan> row_join;
     std::optional<WhereClause> where_clause;         // set when this rule declares a where: clause
     std::optional<LimitClause> limit;                // set when this rule declares a limit: clause
     std::optional<ReduceClause> reduce;              // set when this rule declares a reduce: clause

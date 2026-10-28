@@ -27,6 +27,11 @@ struct CreationOrdinal {
 template <typename Range>
 [[nodiscard]] std::vector<entt::entity> creation_ordered(const entt::registry& registry, const Range& range) {
     std::vector<std::pair<std::uint64_t, entt::entity>> ordered;
+    if constexpr (requires { range.size(); }) {
+        ordered.reserve(range.size());
+    } else if constexpr (requires { range.size_hint(); }) {
+        ordered.reserve(range.size_hint());
+    }
     for (const auto entity : range) {
         ordered.emplace_back(creation_ordinal(registry, entity), entity);
     }

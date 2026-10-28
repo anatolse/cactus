@@ -730,14 +730,6 @@ PairBindingCodegen build_pair_binding_codegen(const PairBindingNode& binding, co
     return result;
 }
 
-// Emits the deterministic snapshot-and-sort prologue for one pair binding:
-// collect matching entity handles via a typed view (finite, not materialized
-// as tuples), pairing each with its creation ordinal in the same pass so the
-// sort below reads every ordinal exactly once (registry.get<> is a sparse-set
-// lookup; re-fetching it per comparison would cost O(n log n) lookups instead
-// of O(n)). Sorting by creation ordinal keeps tuple/event order stable and
-// backend-independent (spec: "cpp-entt maintains stable entity creation
-// ordinals").
 void emit_pair_binding_snapshot(std::ostringstream& out, const PairBindingCodegen& binding, int indent) {
     const std::string ind(static_cast<std::size_t>(indent) * 4U, ' ');
     const std::string& name = binding.scope.binding_name;
@@ -748,18 +740,8 @@ void emit_pair_binding_snapshot(std::ostringstream& out, const PairBindingCodege
         out << (i == 0 ? "" : ", ") << binding.cpp_types[i];
     }
     out << ">();\n";
-    out << ind << "    std::vector<std::pair<std::uint64_t, entt::entity>> " << name << "_ordered;\n";
-    out << ind << "    for (auto pair_entity : " << name << "_view) {\n";
-    out << ind << "        " << name
-        << "_ordered.emplace_back(registry.get<cactus::runtime::entt_backend::CreationOrdinal>(pair_entity)"
-           ".value,\n";
-    out << ind << "                               pair_entity);\n";
-    out << ind << "    }\n";
-    out << ind << "    std::ranges::sort(" << name << "_ordered);\n";
-    out << ind << "    " << name << "_snapshot.reserve(" << name << "_ordered.size());\n";
-    out << ind << "    for (const auto& [ordinal, entity] : " << name << "_ordered) {\n";
-    out << ind << "        " << name << "_snapshot.push_back(entity);\n";
-    out << ind << "    }\n";
+    out << ind << "    " << name << "_snapshot = cactus::runtime::entt_backend::creation_ordered(registry, "
+        << name << "_view);\n";
     out << ind << "}\n";
 }
 
@@ -6353,7 +6335,7 @@ static std::optional<DenseKeyShape> dense_key_shape(const std::vector<EqualityKe
 static std::optional<EqualityFoldPlan> equality_fold_plan(const RuleNode& sys,
                                                           const HandlerContract* contract,
                                                           const DecoratedProgram& program) {
-    if (!program.index_pair_joins || contract == nullptr || !contract->equality_join.has_value() ||
+    if (!sys.pairs.has_value() || !program.index_pair_joins || contract == nullptr || !contract->equality_join.has_value() ||
         !sys.where_clause.has_value()) {
         return std::nullopt;
     }
@@ -6880,31 +6862,50 @@ static void emit_relation_keep_handler_body(std::ostringstream& out,
 
 // ── Relation row passes ─────────────────────────────────────
 
-// Sort keys and limit of a pass over row tuples: `cactus_row_tuples` holds
-// (entity, row) pairs, the entity null in a unary row domain.
+static std::vector<std::string> emit_row_sort_keys(std::ostringstream& out,
+                                                  const RuleNode& sys,
+                                                  const HandlerContract* contract,
+                                                  const std::string& params,
+                                                  const std::string& tuple_args,
+                                                  const PairCodegenScope& scope,
+                                                  const DecoratedProgram& program) {
+    std::vector<std::string> row_keys;
+    const bool joined = scope.bindings.size() == 2 &&
+                        std::ranges::all_of(scope.bindings, [](const auto& binding) { return binding.row; });
+    for (std::size_t index = 0; index < sys.order_by.size(); ++index) {
+        const auto stage = stage_at(staging_of(contract).order_by, index);
+        const auto binding_index = stage == ClauseStage::BindingLeft ? std::size_t{0} : std::size_t{1};
+        const auto key = "cactus_row_key" + std::to_string(index);
+        const auto expression = rewrite_expr(*sys.order_by[index].expression, {}, program, {}, {}, &scope);
+        out << "    auto " << key << " = ";
+        if (is_binding_stage(stage) && scope.bindings[binding_index].row) {
+            const auto type = joined ? gen_temp_name("joined_entry_" + std::to_string(binding_index), sys.location)
+                                     : "cactus_row_entry";
+            out << "cactus::runtime::memoize_relation_value<" << type << ">([&](const " << type << "& "
+                << scope.bindings[binding_index].binding_name << ") { return " << expression << "; });\n";
+            const auto* slot = joined && binding_index == 0 ? "first" : "second";
+            row_keys.push_back(key + "(*cactus_row." + slot + ")");
+            continue;
+        }
+        out << "[&](" << params << ") { return " << expression << "; };\n";
+        auto row_key = key + "(";
+        row_key += tuple_args;
+        row_key += ")";
+        row_keys.push_back(std::move(row_key));
+    }
+    return row_keys;
+}
+
 static void emit_row_tuple_order_and_limit(std::ostringstream& out,
                                            const RuleNode& sys,
+                                           const HandlerContract* contract,
                                            const std::string& params,
-                                           const std::string& args_a,
-                                           const std::string& args_b,
+                                           const std::string& tuple_args,
                                            const PairCodegenScope& scope,
                                            const DecoratedProgram& program) {
     if (!sys.order_by.empty()) {
-        for (std::size_t index = 0; index < sys.order_by.size(); ++index) {
-            out << "    auto cactus_row_key" << index << " = [&](" << params << ") { return "
-                << rewrite_expr(*sys.order_by[index].expression, {}, program, {}, {}, &scope) << "; };\n";
-        }
-        out << "    std::ranges::stable_sort(cactus_row_tuples, [&](const auto& cactus_a, const auto& cactus_b) {\n";
-        for (std::size_t index = 0; index < sys.order_by.size(); ++index) {
-            const auto key = "cactus_row_key" + std::to_string(index);
-            const bool desc = sys.order_by[index].descending;
-            out << "        if (const auto cactus_ka = " << key << "(" << args_a << "), cactus_kb = " << key << "("
-                << args_b << "); cactus_ka != cactus_kb) {\n";
-            out << "            return cactus_ka " << (desc ? ">" : "<") << " cactus_kb;\n";
-            out << "        }\n";
-        }
-        out << "        return false;\n";
-        out << "    });\n";
+        const auto row_keys = emit_row_sort_keys(out, sys, contract, params, tuple_args, scope, program);
+        emit_keyed_sort(out, sys, "cactus_row_tuples", row_keys, 1);
     }
     if (!sys.limit.has_value()) {
         return;
@@ -6992,6 +6993,30 @@ static void emit_row_tuple_collection(std::ostringstream& out,
     out << "    }\n";
 }
 
+static void emit_row_callbacks(std::ostringstream& out,
+                               const EventHandlerNode& handler,
+                               const std::string& params,
+                               const std::vector<const ExprNode*>& guards,
+                               const PairCodegenScope& scope,
+                               const DecoratedProgram& program) {
+    LexicalLocalBindings locals;
+    for (const auto& binding : scope.bindings) {
+        locals.insert(binding.binding_name);
+    }
+    LocalNumericKinds kinds;
+    out << "    auto cactus_row_body = [&](" << params << ") {\n";
+    out << rewrite_stmt_block(handler.body, 2, {}, program, {}, false, {}, &scope, locals, kinds);
+    out << "    };\n";
+    out << "    auto cactus_row_passes = [&](" << params << ") {\n";
+    if (guards.empty()) {
+        out << "        return true;\n";
+    } else {
+        emit_where_predicate_conjunction(
+            out, guards, [&](const ExprNode& expr) { return rewrite_expr(expr, {}, program, {}, {}, &scope); });
+    }
+    out << "    };\n";
+}
+
 // `each: R as r`, or a pair rule with one row binding. The rows are the
 // store's live span, already in creation order.
 static void emit_row_pass(std::ostringstream& out,
@@ -7001,13 +7026,13 @@ static void emit_row_pass(std::ostringstream& out,
                           const PairCodegenScope& scope,
                           const DecoratedProgram& program,
                           const HandlerContract* contract) {
-    const bool unary         = pair_binding_codegens.size() == 1;
-    const auto row_index     = unary || pair_binding_codegens[0].scope.row ? std::size_t{0} : std::size_t{1};
-    const auto entity_index  = 1 - row_index;
-    const auto& row_name     = pair_binding_codegens[row_index].scope.binding_name;
-    const auto& relation     = *pair_binding_codegens[row_index].scope.relation;
-    const auto* declaration  = EnttCodegenUtils::find_relation(program, relation);
-    const bool keyed         = declaration != nullptr && declaration->derived_by_key();
+    const bool unary        = pair_binding_codegens.size() == 1;
+    const auto row_index    = unary || pair_binding_codegens[0].scope.row ? std::size_t{0} : std::size_t{1};
+    const auto entity_index = 1 - row_index;
+    const auto& row_name    = pair_binding_codegens[row_index].scope.binding_name;
+    const auto& relation    = *pair_binding_codegens[row_index].scope.relation;
+    const auto* declaration = EnttCodegenUtils::find_relation(program, relation);
+    const bool keyed        = declaration != nullptr && declaration->derived_by_key();
     out << "    auto& cactus_rows = " << EnttCodegenUtils::relation_reader_cpp(program, relation) << ";\n";
     out << "    using cactus_row_entry = std::remove_cvref_t<decltype(cactus_rows)>::Entry;\n";
     std::string entity_name;
@@ -7018,7 +7043,8 @@ static void emit_row_pass(std::ostringstream& out,
         emit_pair_binding_snapshot(out, pair_binding_codegens[entity_index], 1);
         (void)emit_binding_filter(out, sys, contract, entity_index, scope, program);
         out << "    if (cactus_recipient.has_value()) {\n";
-        out << "        std::erase_if(" << entity_name << "_snapshot, [&](entt::entity cactus_member) { return "
+        out << "        std::erase_if(" << entity_name
+            << "_snapshot, [&](entt::entity cactus_member) { return "
                "cactus_member != *cactus_recipient; });\n";
         out << "    }\n";
     }
@@ -7027,32 +7053,153 @@ static void emit_row_pass(std::ostringstream& out,
         return index == row_index ? "[[maybe_unused]] const cactus_row_entry& " + row_name
                                   : "[[maybe_unused]] entt::entity " + entity_name;
     };
-    const auto params = unary ? param(0) : param(0) + ", " + param(1);
+    const auto params                   = unary ? param(0) : param(0) + ", " + param(1);
     std::vector<const ExprNode*> guards = where_at(sys, contract, ClauseStage::Row);
     std::ranges::copy(where_at(sys, contract, binding_stage(row_index)), std::back_inserter(guards));
     const auto rewrite = [&](const ExprNode& expr) { return rewrite_expr(expr, {}, program, {}, {}, &scope); };
-    LexicalLocalBindings locals;
-    for (const auto& binding : pair_binding_codegens) {
-        locals.insert(binding.scope.binding_name);
-    }
-    LocalNumericKinds kinds;
-    out << "    auto cactus_row_body = [&](" << params << ") {\n";
-    out << rewrite_stmt_block(handler.body, 2, {}, program, {}, false, {}, &scope, locals, kinds);
-    out << "    };\n";
-    out << "    auto cactus_row_passes = [&](" << params << ") {\n";
-    if (guards.empty()) {
-        out << "        return true;\n";
-    } else {
-        emit_where_predicate_conjunction(out, guards, rewrite);
-    }
-    out << "    };\n";
+    emit_row_callbacks(out, handler, params, guards, scope, program);
     const RowPassShape shape{.unary = unary, .row_first = row_index == 0, .entity_name = entity_name};
     out << "    std::vector<std::pair<entt::entity, const cactus_row_entry*>> cactus_row_tuples;\n";
     emit_row_tuple_collection(out, sys, shape, keyed, rewrite);
-    emit_row_tuple_order_and_limit(
-        out, sys, params, shape.tuple_args("cactus_a"), shape.tuple_args("cactus_b"), scope, program);
+    emit_row_tuple_order_and_limit(out, sys, contract, params, shape.tuple_args("cactus_row"), scope, program);
     out << "    for (const auto& cactus_tuple : cactus_row_tuples) {\n";
     out << "        cactus_row_body(" << shape.tuple_args("cactus_tuple") << ");\n";
+    out << "    }\n";
+}
+
+struct RowLookupBlock {
+    std::string opening;
+    std::string closing;
+};
+
+static std::array<const RowEndKey*, 2> available_row_keys(const RowJoinPlan& plan,
+                                                          std::size_t index,
+                                                          std::uint8_t available) {
+    std::array<const RowEndKey*, 2> result{};
+    for (const auto& key : plan.keys[index]) {
+        if ((key.dependencies & static_cast<std::uint8_t>(~available)) != 0) {
+            continue;
+        }
+        auto& selected = result[key.from_end ? 0 : 1];
+        if (selected == nullptr || (selected->dependencies != 0 && key.dependencies == 0)) {
+            selected = &key;
+        }
+    }
+    return result;
+}
+
+static RowLookupBlock row_lookup_block(const RuleNode& sys,
+                                       const RowJoinPlan& plan,
+                                       std::size_t index,
+                                       std::uint8_t available,
+                                       const PairCodegenScope& scope,
+                                       const DecoratedProgram& program) {
+    const auto& name  = scope.bindings[index].binding_name;
+    const auto suffix = std::to_string(index);
+    const auto rows   = gen_temp_name("joined_rows_" + suffix, sys.location);
+    const auto type   = gen_temp_name("joined_entry_" + suffix, sys.location);
+    const auto keys   = available_row_keys(plan, index, available);
+    const auto lower  = [&](const RowEndKey& key) {
+        const auto* expression = resolve_expr_path(*sys.where_clause->predicates[key.predicate], key.expression);
+        return rewrite_expr(*expression, {}, program, {}, {}, &scope);
+    };
+    const bool from_key =
+        keys[0] != nullptr && keys[0]->dependencies == 0 && (keys[1] == nullptr || keys[1]->dependencies != 0);
+    const auto boolean = [](bool value) { return value ? std::string("true") : std::string("false"); };
+    const auto arguments =
+        (keys[0] == nullptr ? "0" : lower(*keys[0])) + ", " + (keys[1] == nullptr ? "0" : lower(*keys[1]));
+    return {.opening = "cactus::runtime::for_each_relation_match<" + boolean(keys[0] != nullptr) + ", " +
+                       boolean(keys[1] != nullptr) + ", " + boolean(from_key) + ">(" + rows + ", " + arguments +
+                       ", [&](const " + type + "& " + name + ") {\n",
+            .closing = "});\n"};
+}
+
+static std::array<std::string, 2> emit_row_binding_filters(std::ostringstream& out,
+                                                           const RuleNode& sys,
+                                                           const PairCodegenScope& scope,
+                                                           const DecoratedProgram& program,
+                                                           const HandlerContract* contract,
+                                                           std::size_t driver) {
+    std::array<std::string, 2> names;
+    for (std::size_t index = 0; index < names.size(); ++index) {
+        const auto predicates = where_at(sys, contract, binding_stage(index));
+        if (predicates.empty()) {
+            continue;
+        }
+        const auto suffix = std::to_string(index);
+        const auto type   = gen_temp_name("joined_entry_" + suffix, sys.location);
+        names[index]      = gen_temp_name("joined_filter_" + suffix, sys.location);
+        out << "    auto " << names[index] << " = ";
+        if (index != driver) {
+            out << "cactus::runtime::memoize_relation_value<" << type << ">(";
+        }
+        out << "[&](const " << type << "& " << scope.bindings[index].binding_name << ") {\n";
+        emit_where_predicate_conjunction(out, predicates, [&](const ExprNode& expression) {
+            return rewrite_expr(expression, {}, program, {}, {}, &scope);
+        });
+        out << (index == driver ? "    };\n" : "    });\n");
+    }
+    return names;
+}
+
+static void emit_joined_row_pass(std::ostringstream& out,
+                                 const RuleNode& sys,
+                                 const EventHandlerNode& handler,
+                                 const PairCodegenScope& scope,
+                                 const DecoratedProgram& program,
+                                 const HandlerContract* contract) {
+    if (!sys.row_join.has_value() || !sys.where_clause.has_value()) {
+        throw CodegenError(sys.location, "a joined row pass requires a resolved endpoint-join plan");
+    }
+    const auto& plan = *sys.row_join;
+    const bool filter_at_collection = sys.limit.has_value() || contract == nullptr || contract->writes.empty();
+    out << "    if (cactus_recipient.has_value()) { return; }\n";
+    std::vector<std::string> parameters;
+    for (std::size_t index = 0; index < 2; ++index) {
+        const auto suffix = std::to_string(index);
+        const auto rows = gen_temp_name("joined_rows_" + suffix, sys.location);
+        const auto type = gen_temp_name("joined_entry_" + suffix, sys.location);
+        out << "    auto& " << rows << " = "
+            << EnttCodegenUtils::relation_reader_cpp(program, *scope.bindings[index].relation) << ";\n";
+        out << "    using " << type << " = std::remove_cvref_t<decltype(" << rows << ")>::Entry;\n";
+        parameters.push_back("[[maybe_unused]] const " + type + "& " +
+                             scope.bindings[index].binding_name);
+    }
+    const auto params = parameters[0] + ", " + parameters[1];
+    const auto guards = where_at(sys, contract, ClauseStage::Row);
+    emit_row_callbacks(out, handler, params, guards, scope, program);
+    const auto filters = emit_row_binding_filters(out, sys, scope, program, contract, plan.driver);
+    const auto outer   = row_lookup_block(sys, plan, plan.driver, 0, scope, program);
+    const auto inner =
+        row_lookup_block(sys, plan, 1 - plan.driver, static_cast<std::uint8_t>(1U << plan.driver), scope, program);
+    const auto enumerate = gen_temp_name("enumerate_join", sys.location);
+    const auto accept = gen_temp_name("accept_join", sys.location);
+    out << "    auto " << enumerate << " = [&](const auto& " << accept << ") {\n";
+    const auto filter = [&](std::size_t index) {
+        if (!filters[index].empty()) {
+            out << "        if (!" << filters[index] << "(" << scope.bindings[index].binding_name << ")) { return; }\n";
+        }
+    };
+    out << outer.opening;
+    filter(plan.driver);
+    out << inner.opening;
+    filter(1 - plan.driver);
+    out << "        " << accept << "(" << scope.bindings[0].binding_name << ", " << scope.bindings[1].binding_name << ");\n";
+    out << inner.closing << outer.closing << "    };\n";
+    out << "    auto cactus_row_tuples = cactus::runtime::collect_relation_join<"
+        << (plan.driver == 1 ? "true" : "false") << ", " << (filter_at_collection ? "true" : "false")
+        << ">(" << gen_temp_name("joined_rows_0", sys.location) << ", "
+        << gen_temp_name("joined_rows_1", sys.location) << ", " << enumerate << ", cactus_row_passes);\n";
+    emit_row_tuple_order_and_limit(out, sys, contract, params, "*cactus_row.first, *cactus_row.second", scope, program);
+    std::string selected = "cactus_row_tuples";
+    if (!filter_at_collection) {
+        selected = gen_temp_name("selected_rows", sys.location);
+        out << "    auto " << selected << " = std::views::filter(cactus_row_tuples, [&](const auto& joined_tuple) {\n";
+        out << "        return cactus_row_passes(*joined_tuple.first, *joined_tuple.second);\n";
+        out << "    });\n";
+    }
+    out << "    for (const auto& joined_tuple : " << selected << ") {\n";
+    out << "        cactus_row_body(*joined_tuple.first, *joined_tuple.second);\n";
     out << "    }\n";
 }
 
@@ -7081,7 +7228,11 @@ static void emit_handler_body(std::ostringstream& out,
         sys.rows.has_value() || std::ranges::any_of(pairs, [](const PairBindingCodegen& binding) { return binding.scope.row; });
     if (row_pass && !handler.has_lifecycle_trigger()) {
         emit_activation_gate(out, sys, contract, program);
-        emit_row_pass(out, sys, handler, pairs, scope, program, contract);
+        if (pairs.size() == 2 && pairs[0].scope.row && pairs[1].scope.row) {
+            emit_joined_row_pass(out, sys, handler, scope, program, contract);
+        } else {
+            emit_row_pass(out, sys, handler, pairs, scope, program, contract);
+        }
         return;
     }
     if (sys.keep.has_value() && !sys.keep->arguments.empty()) {
@@ -7356,8 +7507,6 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
     }
 
     if (is_follow_bodies(sys)) {
-        const std::string lt   = EnttCodegenUtils::trait_cpp_name("std.transform.volume.LocalTransform", program);
-        const std::string wt   = EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program);
         const std::string body = EnttCodegenUtils::trait_cpp_name("std.physics.volume.CharacterBody", program);
         out << tick_signature;
         emit_hierarchy_propagation(out, program, TransformDimension::Volume);

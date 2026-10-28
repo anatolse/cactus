@@ -243,7 +243,11 @@ void emit_restore_relation_functions(std::ostringstream& out, const DecoratedPro
 // Rebuilds stored rows after every entity of the staged world exists.
 void emit_restore_relation_rows(std::ostringstream& out, const DecoratedProgram& program) {
     const auto relations = stored_relations(program);
+    out << "inline void generated_restore_relations(entt::registry& staged,\n";
+    out << "    const cactus::persistence::Snapshot& source, RestoreIdMap& ids) {\n";
     if (relations.empty()) {
+        out << "    (void)staged; (void)source; (void)ids;\n";
+        out << "}\n\n";
         return;
     }
     out << "    for (const auto& row : source.relation_rows()) {\n";
@@ -254,6 +258,7 @@ void emit_restore_relation_rows(std::ostringstream& out, const DecoratedProgram&
         out << "        }\n";
     }
     out << "    }\n";
+    out << "}\n\n";
 }
 
 // Rejects a staged world holding a ranged value outside its range. A container
@@ -307,6 +312,7 @@ std::string EnttRestoreEmitter::emit_world_restore(const DecoratedProgram& progr
     emit_restore_trait_functions(out, program, traits);
     emit_restore_node_traits(out, program, layout_traits, traits);
     emit_restore_relation_functions(out, program);
+    emit_restore_relation_rows(out, program);
 
     out << "// Reconstructs recorded nodes into a freshly staged registry — allocating\n";
     out << "// every record's handle first, so forward references and cycles resolve —\n";
@@ -395,7 +401,7 @@ std::string EnttRestoreEmitter::emit_world_restore(const DecoratedProgram& progr
     }
     out << "        generated_restore_node_traits(staged, entity, node, source, row, match.traits, ids);\n";
     out << "    }\n";
-    emit_restore_relation_rows(out, program);
+    out << "    generated_restore_relations(staged, source, ids);\n";
     emit_staged_range_checks(out, program, traits);
     out << "    if (ids.resource_preparation_failed()) {\n";
     out << "        return RestoreOutcome{.ok = false, .code = \"resource_preparation_failure\",\n";

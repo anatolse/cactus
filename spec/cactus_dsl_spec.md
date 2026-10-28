@@ -328,7 +328,7 @@ relation Claim:
 - A relation is **kept** when a `keep R(a, b)` clause names it (§3.8.6), and **stored** otherwise. A stored relation changes only through `add R` and `remove R` (§4.4). A program has at most one keeper per relation, and `add`/`remove` of a kept relation is an error.
 - **`one` ends.** An end marked `one` holds at most one row per entity on that end; no mark means many. The compiler accepts an `add R(x, y)` of such a relation only when it proves the limit: the end argument is `self` of a unary rule or a pair binding limited to one (`limit: 1 per b`, §3.8.3); the other argument is a pair binding, `self`, a named entity or a constant; the handler runs on a phase; the rule's `where:` holds `not R(e, _)` (from end) or `not R(_, e)` (to end) as a top-level conjunct; and no other rule adds `R` in the same phase. Any other `add` is an error that names the failing condition and shows the proven form. A kept relation can't mark an end `one`.
 
-**Reading relations.** `R(x, y)` is a pure `bool` test, true when `R` holds the row `(x, y)` in the snapshot of the current pass. Either argument may be `_`, which matches any entity; `R(_, _)` is rejected. Tests are allowed only in `where:` and `when:`; `and`, `or` and `not` compose them into intersection, union and difference. A rule can also bind rows (§3.8.1): `r: R` in `pairs:`, or `each: R as r`. A row binding exposes `r.from`, `r.to` and `r.<field>`, is read-only, and can't be used with brackets or as a command or `emit` target. A rule binds at most one relation.
+**Reading relations.** `R(x, y)` is a pure `bool` test, true when `R` holds the row `(x, y)` in the snapshot of the current pass. Either argument may be `_`, which matches any entity; `R(_, _)` is rejected. Tests are allowed only in `where:` and `when:`; `and`, `or` and `not` compose them into intersection, union and difference. A rule can also bind rows (§3.8.1): `r: R` in `pairs:`, or `each: R as r`. A row binding exposes `r.from`, `r.to` and `r.<field>`, is read-only, and can't be used with brackets or as a command or `emit` target. Both `pairs:` bindings may name rows when a top-level endpoint equality joins them, such as `a.to == b.from`; each binding still names only one relation.
 
 ```cactus
 rule AssignTasks:
@@ -368,6 +368,14 @@ derived_form     = "closure" "(" dotted_name ")"
 - `relation Room = components(R)` treats `R`'s rows as two-way links over every entity that carries `R`'s end trait. It holds one row `(m, root)` per such entity, where `root` is the oldest member of `m`'s connected group; an entity with no rows is its own group. The `from` end is `one`. When groups merge, the older name survives; when a group splits, the part without the old root takes its own oldest member.
 
 A derived relation has both ends on `R`'s end trait. It is read-only (`keep`, `add` and `remove` of it are errors), it is never saved, and every pass reads it as a function of `R`'s rows in that pass's snapshot, including right after a restore. `R` may itself be derived. A row binding of a `closure` or `shortest` relation must fix one end with a top-level `where:` conjunct `r.from == e` or `r.to == e`, where `e` doesn't read the row, so a pass never lists all pairs; `components` row bindings and every relation test need no such conjunct. Derived rows are ordered by the creation order of their `from` end, then of their `to` end.
+
+In a two-row join, a stored, kept or `components` relation can supply the first
+rows. A `closure` or `shortest` binding can then use an endpoint from an
+available row as its key. Alternatively, a named entity or another expression
+independent of both rows can fix its first key. Two derived bindings that only
+refer to each other's endpoints have no starting key and are rejected as
+unanchored. Reversing an equality or the authored binding order does not change
+whether these bounds are valid.
 
 For keep loops, contracts and ordering, reading a derived relation is a read of `R` (and, for `shortest`, of its cost field). A keep rule that reads one therefore depends on `R`'s keeper, and like any read of a kept relation it sees the rows the keeper's last run committed.
 
@@ -746,7 +754,44 @@ pairs_clause    = "pairs" ":" NEWLINE INDENT
 pair_binding    = IDENTIFIER ":" clause_list(filter_entry) ;
 ```
 
-Each binding requires at least one positive trait entry; a `pairs:` block always has exactly two bindings. A binding whose only entry is a relation name (`r: R`, no alias) is a **row binding**: it iterates the rows of `R` instead of entities, and follows §3.6.2. At most one binding is a row binding. A `where:` conjunct `r.from == <expr>` or `r.to == <expr>`, where `<expr>` reads only the other binding, makes the pass look rows up by that end instead of walking the product.
+Each binding requires at least one positive trait entry; a `pairs:` block always has exactly two bindings. A binding whose only entry is a relation name (`r: R`, no alias) is a **row binding**: it iterates the rows of `R` instead of entities, and follows §3.6.2. A `where:` conjunct `r.from == <expr>` or `r.to == <expr>`, where `<expr>` reads only the other binding, makes the pass look rows up by that end instead of walking the product.
+
+Two row bindings require a top-level `where:` equality between one endpoint
+of each row. All four `from`/`to` combinations work, including equality in
+either orientation inside top-level `and` chains. An equality only under `or`
+or `not`, or only between row fields such as `a.cost == b.cost`, does not bound
+the join. The relations may be stored, kept or derived; they may also be the
+same relation under two names. Every ordered row pair runs at most once.
+
+```cactus
+rule FollowGoal:
+    pairs:
+        place: Located
+        route: Route
+    where:
+        route.from == place.to
+        route.to == Goal
+    on fixed_tick:
+        emit Step to place.from:
+            tile = route.next
+            distance = route.distance
+```
+
+This reads the robot-to-tile link from `Located` and the matching path row
+without copying the location into a trait. The result's logical order is
+left-row-major, then right-row order. Stored/kept rows use row creation order;
+derived rows use endpoint creation order. A physical lookup may start from
+either side while preserving that logical order. `where:`, `order by:` and a
+global `limit:` filter, sort and limit the result in that order. Row values and
+membership come from the pass snapshot; queued changes appear after commit.
+
+Row joins have no implicit entity recipient. Phases and untargeted ordinary
+events run them; a targeted occurrence selects no tuples. They can emit to an
+endpoint explicitly, as above. Rows remain read-only and cannot be recipients
+of `keep`, reductions, per-row limits or lifecycle handlers. `self`, endpoint
+trait reads such as `place.to[Tile].x`, and using a row as an entity are errors.
+The existing proof for adding a `one` relation is unchanged: row endpoints do
+not become entity bindings limited to one.
 
 ```cactus
 rule DetectContacts:

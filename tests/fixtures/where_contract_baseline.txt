@@ -708,6 +708,186 @@ pairs_order_by_runtime.cactus fixtures pairs_order_by_runtime.RankPairsByGap/on 
     named_writes:
     named_requirements:
     iteration_order: free
+relation_row_joins.cactus examples relation_row_joins.BothEnds/on std.core.fixed_tick
+    reads: relation_row_joins.Control relation_row_joins.Walk
+    read_fields: relation_row_joins.Control{active,query} relation_row_joins.Walk{cost}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads: [relation_row_joins.Settings: relation_row_joins.Control{active,query}]
+    named_writes:
+    named_requirements: relation_row_joins.Settings/relation_row_joins.Control
+    iteration_order: free
+relation_row_joins.cactus examples relation_row_joins.Chain/on std.core.fixed_tick
+    reads: relation_row_joins.Control relation_row_joins.Walk
+    read_fields: relation_row_joins.Control{active,query} relation_row_joins.Walk{cost}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads: [relation_row_joins.Settings: relation_row_joins.Control{active,query}]
+    named_writes:
+    named_requirements: relation_row_joins.Settings/relation_row_joins.Control
+    iteration_order: free
+relation_row_joins.cactus examples relation_row_joins.Components/on std.core.fixed_tick
+    reads: relation_row_joins.Control relation_row_joins.Group relation_row_joins.Route relation_row_joins.Walk
+    read_fields: relation_row_joins.Control{active,query} relation_row_joins.Group{} relation_row_joins.Route{next} relation_row_joins.Walk{cost}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads: [relation_row_joins.Settings: relation_row_joins.Control{active,query}]
+    named_writes:
+    named_requirements: relation_row_joins.Settings/relation_row_joins.Control
+    iteration_order: free
+relation_row_joins.cactus examples relation_row_joins.EventPairs/on relation_row_joins.Probe
+    reads: relation_row_joins.Control relation_row_joins.Walk
+    read_fields: relation_row_joins.Control{active,query} relation_row_joins.Walk{cost}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads: [relation_row_joins.Settings: relation_row_joins.Control{active,query}]
+    named_writes:
+    named_requirements: relation_row_joins.Settings/relation_row_joins.Control
+    iteration_order: free
+relation_row_joins.cactus examples relation_row_joins.FollowGoal/on std.core.fixed_tick
+    reads: relation_row_joins.Control relation_row_joins.Located relation_row_joins.Route relation_row_joins.Walk
+    read_fields: relation_row_joins.Control{active,query} relation_row_joins.Located{} relation_row_joins.Route{distance,next} relation_row_joins.Walk{cost}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads: [relation_row_joins.Settings: relation_row_joins.Control{active,query}]
+    named_writes:
+    named_requirements: relation_row_joins.Settings/relation_row_joins.Control
+    iteration_order: free
+relation_row_joins.cactus examples relation_row_joins.FromFrom/on std.core.fixed_tick
+    reads: relation_row_joins.Control relation_row_joins.Walk
+    read_fields: relation_row_joins.Control{active,query} relation_row_joins.Walk{cost}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads: [relation_row_joins.Settings: relation_row_joins.Control{active,query}]
+    named_writes:
+    named_requirements: relation_row_joins.Settings/relation_row_joins.Control
+    iteration_order: free
+relation_row_joins.cactus examples relation_row_joins.FromTo/on std.core.fixed_tick
+    reads: relation_row_joins.Control relation_row_joins.Walk
+    read_fields: relation_row_joins.Control{active,query} relation_row_joins.Walk{cost}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads: [relation_row_joins.Settings: relation_row_joins.Control{active,query}]
+    named_writes:
+    named_requirements: relation_row_joins.Settings/relation_row_joins.Control
+    iteration_order: free
+relation_row_joins.cactus examples relation_row_joins.KeepLocations/on std.core.fixed_tick
+    reads: relation_row_joins.Located
+    read_fields: relation_row_joins.Located{}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+relation_row_joins.cactus examples relation_row_joins.Kept/on std.core.fixed_tick
+    reads: relation_row_joins.Control relation_row_joins.Occupies relation_row_joins.Route relation_row_joins.Walk
+    read_fields: relation_row_joins.Control{active,query} relation_row_joins.Occupies{} relation_row_joins.Route{distance,next} relation_row_joins.Walk{cost}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads: [relation_row_joins.Settings: relation_row_joins.Control{active,query}]
+    named_writes:
+    named_requirements: relation_row_joins.Settings/relation_row_joins.Control
+    iteration_order: free
+relation_row_joins.cactus examples relation_row_joins.LiveGoal/on std.core.fixed_tick
+    reads: relation_row_joins.Control relation_row_joins.Located relation_row_joins.Route relation_row_joins.Walk
+    read_fields: relation_row_joins.Control{query,seen} relation_row_joins.Located{} relation_row_joins.Route{distance,next} relation_row_joins.Walk{cost}
+    write_fields: relation_row_joins.Control{seen}
+    write_kinds: relation_row_joins.Control.seen=3/0
+    bound_reads:
+    named_reads: [relation_row_joins.Settings: relation_row_joins.Control{query,seen}]
+    named_writes: [relation_row_joins.Settings: relation_row_joins.Control{seen}]
+    named_requirements: relation_row_joins.Settings/relation_row_joins.Control
+    iteration_order: free
+relation_row_joins.cactus examples relation_row_joins.LiveLimited/on std.core.fixed_tick
+    reads: relation_row_joins.Control relation_row_joins.Walk
+    read_fields: relation_row_joins.Control{query,seen} relation_row_joins.Walk{cost}
+    write_fields: relation_row_joins.Control{seen}
+    write_kinds: relation_row_joins.Control.seen=3/0
+    bound_reads:
+    named_reads: [relation_row_joins.Settings: relation_row_joins.Control{query,seen}]
+    named_writes: [relation_row_joins.Settings: relation_row_joins.Control{seen}]
+    named_requirements: relation_row_joins.Settings/relation_row_joins.Control
+    iteration_order: free
+relation_row_joins.cactus examples relation_row_joins.LiveWhere/on std.core.fixed_tick
+    reads: relation_row_joins.Control relation_row_joins.Walk
+    read_fields: relation_row_joins.Control{query,seen} relation_row_joins.Walk{cost}
+    write_fields: relation_row_joins.Control{seen}
+    write_kinds: relation_row_joins.Control.seen=3/0
+    bound_reads:
+    named_reads: [relation_row_joins.Settings: relation_row_joins.Control{query,seen}]
+    named_writes: [relation_row_joins.Settings: relation_row_joins.Control{seen}]
+    named_requirements: relation_row_joins.Settings/relation_row_joins.Control
+    iteration_order: free
+relation_row_joins.cactus examples relation_row_joins.PlaceRecruit/on std.core.fixed_tick
+    reads: relation_row_joins.Located relation_row_joins.Robot
+    read_fields: relation_row_joins.Located{} relation_row_joins.Robot{number}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: creation
+relation_row_joins.cactus examples relation_row_joins.ReachChain/on std.core.fixed_tick
+    reads: relation_row_joins.Control relation_row_joins.Reach relation_row_joins.Walk
+    read_fields: relation_row_joins.Control{active,query} relation_row_joins.Reach{} relation_row_joins.Walk{}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads: [relation_row_joins.Settings: relation_row_joins.Control{active,query}]
+    named_writes:
+    named_requirements: relation_row_joins.Settings/relation_row_joins.Control
+    iteration_order: free
+relation_row_joins.cactus examples relation_row_joins.ReverseGoal/on std.core.fixed_tick
+    reads: relation_row_joins.Control relation_row_joins.Located relation_row_joins.Route relation_row_joins.Walk
+    read_fields: relation_row_joins.Control{active,query} relation_row_joins.Located{} relation_row_joins.Route{distance,next} relation_row_joins.Walk{cost}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads: [relation_row_joins.Settings: relation_row_joins.Control{active,query}]
+    named_writes:
+    named_requirements: relation_row_joins.Settings/relation_row_joins.Control
+    iteration_order: free
+relation_row_joins.cactus examples relation_row_joins.Snapshot/on std.core.fixed_tick
+    reads: relation_row_joins.Control relation_row_joins.Walk
+    read_fields: relation_row_joins.Control{active,query} relation_row_joins.Walk{cost}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads: [relation_row_joins.Settings: relation_row_joins.Control{active,query}]
+    named_writes:
+    named_requirements: relation_row_joins.Settings/relation_row_joins.Control
+    iteration_order: free
+relation_row_joins.cactus examples relation_row_joins.Sorted/on std.core.fixed_tick
+    reads: relation_row_joins.Control relation_row_joins.Walk
+    read_fields: relation_row_joins.Control{active,query} relation_row_joins.Walk{cost,rank}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads: [relation_row_joins.Settings: relation_row_joins.Control{active,query}]
+    named_writes:
+    named_requirements: relation_row_joins.Settings/relation_row_joins.Control
+    iteration_order: free
+relation_row_joins.cactus examples relation_row_joins.ToTo/on std.core.fixed_tick
+    reads: relation_row_joins.Control relation_row_joins.Walk
+    read_fields: relation_row_joins.Control{active,query} relation_row_joins.Walk{cost}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads: [relation_row_joins.Settings: relation_row_joins.Control{active,query}]
+    named_writes:
+    named_requirements: relation_row_joins.Settings/relation_row_joins.Control
+    iteration_order: free
 relations.cactus examples relations.AssignTasks/on std.core.fixed_tick
     reads: relations.Claim relations.DigTask relations.Robot relations.Ticks
     read_fields: relations.Claim{} relations.DigTask{work,x} relations.Robot{recalled,x} relations.Ticks{count}

@@ -404,7 +404,7 @@ TEST_CASE("Relations: row binding errors", "[semantic][relations]") {
             "        r2: Bridge\n"
             "    on fixed_tick:\n"
             "        emit Done\n");
-        CHECK(analysis.has("a rule may bind at most one relation"));
+        CHECK(analysis.has("top-level endpoint equality"));
     }
     SECTION("relation mixed with traits") {
         const auto analysis = analyze(
@@ -1430,6 +1430,176 @@ TEST_CASE("Derived relations: reads are reads of the source", "[semantic][relati
         CHECK(contract.reads.contains(relation_id("Reach")));
         CHECK(contract.reads.contains(relation_id("Walk")));
     }
+}
+
+namespace {
+
+std::string row_join(const std::string& first,
+                     const std::string& second,
+                     const std::string& predicate,
+                     const std::string& name    = "Joined",
+                     const std::string& clauses = "",
+                     const std::string& body    = "emit Done to a.from") {
+    return "rule " + name + ":\n    pairs:\n        a: " + first + "\n        b: " + second + "\n    where:\n        " +
+           predicate + "\n" + clauses + "    on fixed_tick:\n        " + body + "\n";
+}
+
+}  // namespace
+
+TEST_CASE("Relations: endpoint joins accept two row roles", "[semantic][relations][row-join]") {
+    for (const std::string first : {"from", "to"}) {
+        for (const std::string second : {"from", "to"}) {
+            const auto equality = "a." + first + " == b." + second;
+            for (const std::string right : {"Walk", "Bridge"}) {
+                const auto analysis = analyze(row_join("Walk", right, "(" + equality + " and a.from != Boss)"));
+                INFO(describe(analysis));
+                CHECK(analysis.clean());
+                CHECK(find_row_end_join(analysis.rule("Joined")).has_value());
+            }
+            const auto reversed = analyze(row_join("Bridge", "Walk", "b." + second + " == a." + first));
+            INFO(describe(reversed));
+            CHECK(reversed.clean());
+        }
+    }
+}
+
+TEST_CASE("Relations: imported row joins keep canonical identities", "[semantic][relations][row-join]") {
+    const auto analysis = analyze_with_library(hidden_library(), row_join("lib.Hidden", "lib.Owner", "a.to == b.to"));
+    INFO(describe(analysis));
+    REQUIRE(analysis.clean());
+    const auto& bindings = analysis.contract("Joined").pair_bindings;
+    REQUIRE(bindings.size() == 2);
+    CHECK(bindings[0].relation == make_symbol_id(SymbolKind::Relation, "lib", "Hidden"));
+    CHECK(bindings[1].relation == make_symbol_id(SymbolKind::Relation, "lib", "Owner"));
+}
+
+TEST_CASE("Relations: row joins require endpoint equality", "[semantic][relations][row-join]") {
+    for (const std::string predicate :
+         {"a.cost == b.cost", "a.to == b.from or a.from == b.to", "not (a.to == b.from)", "a.from == a.to"}) {
+        const auto analysis = analyze(row_join("Walk", "Walk", predicate));
+        INFO(describe(analysis));
+        CHECK(analysis.has("top-level endpoint equality"));
+    }
+}
+
+TEST_CASE("Relations: derived row joins need an available anchor", "[semantic][relations][row-join]") {
+    const std::string declarations = "relation Reach = closure(Walk)\nrelation Group = components(Walk)\n";
+    for (const std::string source : {"Walk", "Group"}) {
+        const auto analysis = analyze(declarations + row_join(source, "Reach", "a.to == b.from"));
+        INFO(describe(analysis));
+        CHECK(analysis.clean());
+        const auto reverse = analyze(declarations + row_join("Reach", source, "a.to == b.from"));
+        INFO(describe(reverse));
+        CHECK(reverse.clean());
+    }
+    const auto anchored = analyze(declarations + row_join("Reach", "Reach", "(a.from == Boss and a.to == b.from)"));
+    INFO(describe(anchored));
+    CHECK(anchored.clean());
+    const auto circular = analyze(declarations + row_join("Reach", "Reach", "a.to == b.from"));
+    INFO(describe(circular));
+    CHECK(circular.has("unanchored"));
+}
+
+TEST_CASE("Relations: bad row joins do not hide later errors", "[semantic][relations][row-join]") {
+    const auto analysis =
+        analyze(row_join("Walk", "Walk", "a.cost == b.cost") + row_join("Walk", "Bridge", "a.from != b.to", "Later"));
+    INFO(describe(analysis));
+    CHECK(analysis.has("top-level endpoint equality"));
+    CHECK(std::ranges::count_if(analysis.diagnostics, [](const Diagnostic& diagnostic) {
+              return diagnostic.level == DiagnosticLevel::Error;
+          }) >= 2);
+}
+
+TEST_CASE("Relations: joined contracts read both roles and derived sources",
+          "[semantic][relations][row-join][contracts]") {
+    const auto stored = analyze(row_join("Walk", "Bridge", "a.to == b.from"));
+    INFO(describe(stored));
+    REQUIRE(stored.clean());
+    const auto& direct = stored.contract("Joined");
+    REQUIRE(direct.pair_bindings.size() == 2);
+    CHECK(direct.pair_bindings[0].name == "a");
+    CHECK(direct.pair_bindings[1].name == "b");
+    CHECK(direct.reads.contains(relation_id("Walk")));
+    CHECK(direct.reads.contains(relation_id("Bridge")));
+    const auto paths =
+        analyze(kStep + "relation Route = shortest(Step, by = cost)\n" + row_join("Walk", "Route", "a.to == b.from"));
+    INFO(describe(paths));
+    REQUIRE(paths.clean());
+    const auto& derived = paths.contract("Joined");
+    CHECK(derived.reads.contains(relation_id("Walk")));
+    CHECK(derived.reads.contains(relation_id("Route")));
+    CHECK(derived.reads.contains(relation_id("Step")));
+    REQUIRE(derived.read_fields.contains(relation_id("Step")));
+    CHECK(derived.read_fields.at(relation_id("Step")).fields.contains("cost"));
+    const auto kept = analyze(walk_keeper("    keep Walk(a, b)\n") + "relation Reach = closure(Walk)\n" +
+                              row_join("Bridge", "Reach", "a.to == b.from"));
+    INFO(describe(kept));
+    REQUIRE(kept.clean());
+    CHECK(kept.contract("Joined").reads.contains(relation_id("Walk")));
+    const auto same = analyze(row_join("Walk", "Walk", "a.to == b.from\n        a.cost > 0.0\n        b.cost > 0.0\n        true"));
+    INFO(describe(same));
+    REQUIRE(same.clean());
+    const auto& same_contract = same.contract("Joined");
+    CHECK(same_contract.pair_bindings[0].relation == same_contract.pair_bindings[1].relation);
+    CHECK(same_contract.staging.where == std::vector{ClauseStage::Row, ClauseStage::BindingLeft,
+                                                   ClauseStage::BindingRight, ClauseStage::Activation});
+}
+
+TEST_CASE("Relations: row joins retain row restrictions", "[semantic][relations][row-join]") {
+    const auto check = [](const std::string& clauses, const std::string& body, const std::string& message) {
+        CAPTURE(clauses, body);
+        const auto analysis = analyze(row_join("Walk", "Walk", "a.to == b.from", "Joined", clauses, body));
+        INFO(describe(analysis));
+        CHECK(analysis.has(message));
+    };
+    check("", "a.cost = 2.0", "relation rows are read-only");
+    check("", "destroy a", "is a relation row, not an entity");
+    check("", "emit Done to self", "`self` is unavailable");
+    check("", "let x = a.from[Tile].x", "can't read trait");
+    check("", "add Claim(a.from, b.to)", "is `one`");
+    check("    limit: 1 per a\n", "emit Done", "names a relation row");
+    check("    reduce:\n        n = count()\n", "emit Done", "`reduce:` can't run over relation rows");
+    check("    keep Floor on a\n", "emit Done", "`keep` can't run over relation rows");
+    auto limited_source =
+        row_join("Walk", "Bridge", "a.to == b.from", "Joined", "    limit: 2\n", "remove Walk(a.from, b.to)");
+    limited_source.insert(limited_source.find("    where:"), "    order by:\n        a.cost asc\n");
+    const auto limited = analyze(limited_source);
+    INFO(describe(limited));
+    CHECK(limited.clean());
+    auto lifecycle_source = row_join("Walk", "Bridge", "a.to == b.from");
+    lifecycle_source.replace(lifecycle_source.find("on fixed_tick"), std::string("on fixed_tick").size(), "on added Tile");
+    CHECK(analyze(lifecycle_source).has("lifecycle triggers are not allowed in pair rules"));
+    auto excluded_source = row_join("Walk", "Bridge", "a.to == b.from");
+    excluded_source.insert(excluded_source.find("    where:"), "    without: Floor\n");
+    ErrorReporter errors;
+    Lexer lexer("module game\n" + kPrelude + excluded_source, "game.cactus", errors);
+    Parser parser(lexer.tokenize(), errors);
+    (void)parser.parse_program();
+    CHECK(errors.has_errors());
+    CHECK(std::ranges::any_of(errors.diagnostics(), [](const Diagnostic& diagnostic) {
+        return diagnostic.message.contains("cannot be combined with 'pairs:'");
+    }));
+}
+
+TEST_CASE("Relations: joined reads participate in descendant occurrence conflicts",
+          "[semantic][relations][row-join][contracts]") {
+    auto joined = row_join("Walk", "Bridge", "a.to == b.from", "Joined", "", "remove Bridge(a.from, b.to)");
+    joined.replace(joined.find("on fixed_tick"), std::string("on fixed_tick").size(), "on ReadRows");
+    const auto producers =
+        "event ReadRows\nevent ChangeRows\n"
+        "rule RequestRead:\n    on fixed_tick:\n        emit ReadRows\n"
+        "rule RequestChange:\n    on fixed_tick:\n        emit ChangeRows\n";
+    const auto writer =
+        "rule Change:\n    each: Bridge as row\n    on ChangeRows:\n        add Bridge(row.from, row.to)\n";
+    const auto unordered = analyze(producers + joined + writer);
+    INFO(describe(unordered));
+    CHECK(unordered.has("unorientable conflict"));
+    CHECK(unordered.has("game.Bridge"));
+    auto ordered_producers = std::string(producers);
+    ordered_producers.insert(ordered_producers.find("    on fixed_tick:"), "    after:\n        RequestChange\n");
+    const auto ordered = analyze(ordered_producers + joined + writer);
+    INFO(describe(ordered));
+    CHECK(ordered.clean());
 }
 
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

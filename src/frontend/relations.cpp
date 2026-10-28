@@ -1,14 +1,13 @@
-#include "frontend/semantic_analyzer.hpp"
-
 #include "common/ast_expressions.hpp"
+#include "frontend/semantic_analyzer.hpp"
 
 #include <algorithm>
 #include <format>
 #include <map>
 #include <span>
 #include <string>
-#include <utility>
 #include <unordered_set>
+#include <utility>
 
 namespace cactus {
 
@@ -74,8 +73,8 @@ ResolvedField derived_field(const std::string& name, TypeInfo type) {
     return ResolvedField{.name = name, .type = std::move(type), .is_let = true};
 }
 
-std::string derived_read_only_message(const ResolvedRelation& relation) {
-    return "'" + relation.name + "' is derived from '" + relation.derivation->source.local_name + "' and is read-only";
+std::string derived_read_only_message(const ResolvedRelation& relation, const ResolvedDerivation& derivation) {
+    return "'" + relation.name + "' is derived from '" + derivation.source.local_name + "' and is read-only";
 }
 
 }  // namespace
@@ -97,9 +96,8 @@ void SemanticAnalyzer::resolve_derived_relations(const std::vector<RelationNode*
         }
         auto& derivation  = *node.derivation;
         const auto source = try_resolve_ref_of_kind(derivation.source_name, {SymbolKind::Relation});
-        const auto local  = source.has_value() && source->module == current_module_id_
-                                ? pending.find(source->local_name)
-                                : pending.end();
+        const auto local = source.has_value() && source->module == current_module_id_ ? pending.find(source->local_name)
+                                                                                      : pending.end();
         if (local != pending.end()) {
             self(*local->second);
         }
@@ -109,8 +107,8 @@ void SemanticAnalyzer::resolve_derived_relations(const std::vector<RelationNode*
             derive_relation_shape(node, *resolved, relation);
         } else if (!source.has_value() || !active.contains(source->local_name)) {
             errors_.error(derivation.location,
-                          "unknown relation '" + derivation.source_name + "' in `" + std::string(derivation_form(derivation.kind)) +
-                              "(" + derivation.source_name + ")`");
+                          "unknown relation '" + derivation.source_name + "' in `" +
+                              std::string(derivation_form(derivation.kind)) + "(" + derivation.source_name + ")`");
         }
         result_.relations[node.name] = std::move(relation);
         active.erase(node.name);
@@ -128,8 +126,8 @@ void SemanticAnalyzer::derive_relation_shape(const RelationNode& node,
     if (source.from.trait != source.to.trait) {
         errors_.error(derivation.location,
                       "`" + std::string(derivation_form(derivation.kind)) + "` needs one trait on both ends; '" +
-                          derivation.source_name + "' has `from: " + source.from.trait.local_name + "` and `to: " +
-                          source.to.trait.local_name + "`");
+                          derivation.source_name + "' has `from: " + source.from.trait.local_name +
+                          "` and `to: " + source.to.trait.local_name + "`");
     }
     relation.from.trait = source.from.trait;
     relation.to.trait   = source.from.trait;
@@ -153,7 +151,37 @@ void SemanticAnalyzer::derive_relation_shape(const RelationNode& node,
 }
 
 // A `closure` or `shortest` row binding must fix an end, so a pass never lists all pairs.
-void SemanticAnalyzer::require_fixed_derived_end(const RuleNode& rule) {
+void SemanticAnalyzer::require_fixed_derived_end(RuleNode& rule) {
+    auto& plan        = rule.row_join.emplace(analyze_row_ends(rule));
+    const bool joined = rule.pairs.has_value() && std::ranges::all_of(rule.pairs->bindings, &PairBindingNode::is_row);
+    if (joined) {
+        for (std::size_t index = 0; index < 2; ++index) {
+            const auto& binding  = rule.pairs->bindings[index];
+            const auto* relation = binding.resolved_relation_id.has_value()
+                                       ? find_resolved_relation(*binding.resolved_relation_id)
+                                       : nullptr;
+            plan.keyed[index]    = relation != nullptr && relation->derived_by_key();
+        }
+        if (!plan.linked) {
+            errors_.error(rule.pairs->location,
+                          "rule '" + rule.name +
+                              "' needs a top-level endpoint equality between its row bindings, such as `" +
+                              rule.pairs->bindings[0].name + ".to == " + rule.pairs->bindings[1].name + ".from`");
+            return;
+        }
+        const auto available = [&](std::size_t index) {
+            return !plan.keyed[index] ||
+                   std::ranges::any_of(plan.keys[index], [](const RowEndKey& key) { return key.dependencies == 0; });
+        };
+        if (!available(0) && !available(1)) {
+            errors_.error(rule.pairs->location,
+                          "unanchored row bindings '" + rule.pairs->bindings[0].name + "' and '" +
+                              rule.pairs->bindings[1].name + "'; fix one derived endpoint independently of both rows");
+            return;
+        }
+        plan.driver   = available(0) && (!plan.keyed[0] || plan.keyed[1]) ? 0 : 1;
+        return;
+    }
     const auto* name = row_binding_name(rule);
     if (name == nullptr || find_row_end_join(rule).has_value()) {
         return;
@@ -163,7 +191,7 @@ void SemanticAnalyzer::require_fixed_derived_end(const RuleNode& rule) {
     if (rule.rows.has_value()) {
         relation = rule.rows->relation;
         location = rule.rows->location;
-    } else {
+    } else if (rule.pairs.has_value()) {
         const auto binding = std::ranges::find(rule.pairs->bindings, *name, &PairBindingNode::name);
         relation           = binding->resolved_relation_id;
         location           = binding->location;
@@ -193,9 +221,9 @@ ResolvedField SemanticAnalyzer::resolve_relation_field(FieldNode& field) {
     const auto actual = infer_expr_type(value, {}, {}, nullptr);
     if (actual.kind != TypeKind::Unknown && resolved.type.kind != TypeKind::Unknown &&
         actual.kind != resolved.type.kind) {
-        errors_.error(field.location,
-                      "default value type '" + actual.name + "' does not match field type '" + resolved.type.name +
-                          "'");
+        errors_.error(
+            field.location,
+            "default value type '" + actual.name + "' does not match field type '" + resolved.type.name + "'");
     }
     validate_const_expression(value, "relation field default value must be a const expression", true);
     return resolved;
@@ -265,7 +293,6 @@ void SemanticAnalyzer::extract_row_bindings(RuleNode& rule) {
     if (!rule.pairs.has_value()) {
         return;
     }
-    std::size_t rows = 0;
     for (auto& binding : rule.pairs->bindings) {
         std::optional<SymbolId> relation;
         const auto entry = std::ranges::find_if(binding.traits, [&](const FilterEntry& candidate) {
@@ -288,9 +315,6 @@ void SemanticAnalyzer::extract_row_bindings(RuleNode& rule) {
         binding.relation_name        = entry->qualified_name;
         binding.resolved_relation_id = relation;
         binding.traits.clear();
-        if (++rows == 2) {
-            errors_.error(binding.location, "a rule may bind at most one relation; '" + rule.name + "' binds two");
-        }
     }
 }
 
@@ -307,8 +331,8 @@ void SemanticAnalyzer::extract_row_domain(RuleNode& rule) {
     }
     const auto location = entry->location;
     if (entries.size() != 1) {
-        errors_.error(location, "a relation row domain has exactly one relation entry; '" + rule.name +
-                                    "' also lists traits");
+        errors_.error(location,
+                      "a relation row domain has exactly one relation entry; '" + rule.name + "' also lists traits");
         entries.erase(entry);
         return;
     }
@@ -344,8 +368,9 @@ std::optional<PairScope> SemanticAnalyzer::rule_scope(const RuleNode& rule) {
     return std::nullopt;
 }
 
-bool SemanticAnalyzer::reject_row_domain_clauses(const RuleNode& rule) {
-    const bool row_binding = rule.pairs.has_value() && std::ranges::any_of(rule.pairs->bindings, &PairBindingNode::is_row);
+bool SemanticAnalyzer::reject_row_domain_clauses(RuleNode& rule) {
+    const bool row_binding =
+        rule.pairs.has_value() && std::ranges::any_of(rule.pairs->bindings, &PairBindingNode::is_row);
     if (!row_binding && !rule.rows.has_value()) {
         return false;
     }
@@ -472,7 +497,10 @@ void visit_statement_expressions(const Node& node, const Visit& visit) {
     if constexpr (requires { node.args; }) {
         visit_children(node.args, visit);
     }
-    if constexpr (requires { node.from; node.to; }) {
+    if constexpr (requires {
+                      node.from;
+                      node.to;
+                  }) {
         visit_child(node.from, visit);
         visit_child(node.to, visit);
     }
@@ -576,11 +604,11 @@ FieldAccess declared_fields(const ResolvedRelation* relation) {
 void SemanticAnalyzer::validate_relation_keep(const RuleNode& rule) {
     const auto& keep = *rule.keep;
     reject_keep_rule_clauses(rule);
-    const auto prefix = "rule '" + rule.name + "': ";
+    const auto prefix    = "rule '" + rule.name + "': ";
     const auto& target   = keep.resolved_target;
     const auto* relation = target.has_value() ? find_resolved_relation(*target) : nullptr;
     if (relation != nullptr && relation->derivation.has_value()) {
-        errors_.error(keep.location, derived_read_only_message(*relation));
+        errors_.error(keep.location, derived_read_only_message(*relation, *relation->derivation));
         return;
     }
     if (!rule.pairs.has_value() || rule.reduce.has_value()) {
@@ -593,9 +621,9 @@ void SemanticAnalyzer::validate_relation_keep(const RuleNode& rule) {
                           keep.target_name + "' holds");
     }
     if (keep.binding.has_value()) {
-        errors_.error(keep.binding_location,
-                      prefix + "`keep " + keep.target_name + "(...)` names its bindings; remove `on " + *keep.binding +
-                          "`");
+        errors_.error(
+            keep.binding_location,
+            prefix + "`keep " + keep.target_name + "(...)` names its bindings; remove `on " + *keep.binding + "`");
     }
     if (relation == nullptr) {
         errors_.error(keep.location,
@@ -618,8 +646,8 @@ void SemanticAnalyzer::validate_relation_keep(const RuleNode& rule) {
         check_clause_purity_expr(*field.value, "keep: field values must be pure");
     }
     const auto scope = build_pair_scope(rule);
-    const auto desc  = "`keep " + keep.target_name + "(" + keep.arguments[0].spelling + ", " +
-                      keep.arguments[1].spelling + ")`";
+    const auto desc =
+        "`keep " + keep.target_name + "(" + keep.arguments[0].spelling + ", " + keep.arguments[1].spelling + ")`";
     validate_trait_field_supply(relation->fields, keep.fields, desc, keep.location, {}, {}, nullptr, &scope);
 }
 
@@ -660,7 +688,8 @@ bool SemanticAnalyzer::validate_relation_keep_arguments(const KeepClause& keep,
 void SemanticAnalyzer::reject_one_on_kept_relations(const ProgramNode& program, const KeepClauses& clauses) {
     for (const auto& decl : program.declarations) {
         const auto* node = std::get_if<RelationNode>(&decl);
-        if (node == nullptr || !clauses.keepers.contains(make_symbol_id(SymbolKind::Relation, current_module_id_, node->name))) {
+        if (node == nullptr ||
+            !clauses.keepers.contains(make_symbol_id(SymbolKind::Relation, current_module_id_, node->name))) {
             continue;
         }
         for (const auto* end : {&node->from, &node->to}) {
@@ -677,7 +706,9 @@ void SemanticAnalyzer::reject_one_on_kept_relations(const ProgramNode& program, 
 
 // ── Contracts ───────────────────────────────────────────────────────────────
 
-void record_relation_read(HandlerContract& contract, const SymbolId& relation, const std::optional<std::string>& field) {
+void record_relation_read(HandlerContract& contract,
+                          const SymbolId& relation,
+                          const std::optional<std::string>& field) {
     contract.reads.insert(relation);
     auto& access = contract.read_fields[relation];
     if (field.has_value()) {
@@ -741,7 +772,7 @@ void SemanticAnalyzer::validate_relation_command(
         return;
     }
     if (relation->derivation.has_value()) {
-        errors_.error(command.location, derived_read_only_message(*relation));
+        errors_.error(command.location, derived_read_only_message(*relation, *relation->derivation));
         return;
     }
     for (const auto* end : {command.from, command.to}) {
@@ -830,8 +861,8 @@ bool SemanticAnalyzer::is_fixed_row_argument(const RuleNode& rule, const ExprNod
     if (ident == nullptr) {
         return false;
     }
-    const bool binding = rule.pairs.has_value() &&
-                         std::ranges::contains(rule.pairs->bindings, ident->name, &PairBindingNode::name);
+    const bool binding =
+        rule.pairs.has_value() && std::ranges::contains(rule.pairs->bindings, ident->name, &PairBindingNode::name);
     return binding || ident->resolved_entity_id.has_value() || ident->resolved_const_id.has_value();
 }
 
@@ -840,14 +871,13 @@ std::optional<std::string> SemanticAnalyzer::unproven_one_end(const RuleNode& ru
                                                               const EventHandlerNode& handler,
                                                               const AddRelationStmt& add,
                                                               bool from) {
-    const auto& end   = from ? *add.from : *add.to;
-    const auto& other = from ? *add.to : *add.from;
-    const auto prefix = std::string("the `") + end_label(from) + "` end of `" + add.relation_name + "` is `one`";
-    const auto* ident = std::get_if<IdentExpr>(&end.expr);
-    const bool unary  = !rule.pairs.has_value() && !rule.rows.has_value() && !rule.filter.entries.empty();
-    const bool pair_binding =
-        ident != nullptr && rule.pairs.has_value() &&
-        std::ranges::contains(rule.pairs->bindings, ident->name, &PairBindingNode::name);
+    const auto& end         = from ? *add.from : *add.to;
+    const auto& other       = from ? *add.to : *add.from;
+    const auto prefix       = std::string("the `") + end_label(from) + "` end of `" + add.relation_name + "` is `one`";
+    const auto* ident       = std::get_if<IdentExpr>(&end.expr);
+    const bool unary        = !rule.pairs.has_value() && !rule.rows.has_value() && !rule.filter.entries.empty();
+    const bool pair_binding = ident != nullptr && rule.pairs.has_value() &&
+                              std::ranges::contains(rule.pairs->bindings, ident->name, &PairBindingNode::name);
     if (pair_binding) {
         const auto* part = rule.limit.has_value() ? rule.limit->part_for(ident->name) : nullptr;
         if (part == nullptr || !part->provably_one) {
@@ -865,8 +895,8 @@ std::optional<std::string> SemanticAnalyzer::unproven_one_end(const RuleNode& ru
                "', which can run more than once per activation; record the order as a trait and claim in a phase rule";
     }
     const auto predicates = rule.where_clause.has_value() ? std::span(rule.where_clause->predicates)
-                                                           : std::span<const std::unique_ptr<ExprNode>>{};
-    const bool tested = std::ranges::any_of(predicates, [&](const std::unique_ptr<ExprNode>& predicate) {
+                                                          : std::span<const std::unique_ptr<ExprNode>>{};
+    const bool tested     = std::ranges::any_of(predicates, [&](const std::unique_ptr<ExprNode>& predicate) {
         return and_chain_has_free_test(*predicate, *add.resolved_relation_id, end, from);
     });
     if (!tested) {
@@ -991,7 +1021,8 @@ bool SemanticAnalyzer::reject_row_limit_parts(const RuleNode& rule, const LimitC
                       "rule '" + rule.name + "': a two-sided limit needs two entity bindings; '" + row->binding +
                           "' binds relation rows");
     } else {
-        errors_.error(row->location, "`per " + row->binding + "` names a relation row; a `per` part needs an entity binding");
+        errors_.error(row->location,
+                      "`per " + row->binding + "` names a relation row; a `per` part needs an entity binding");
     }
     return true;
 }

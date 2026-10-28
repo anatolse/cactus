@@ -1663,3 +1663,41 @@ A module-level authored constant whose type and initializer C++ can evaluate at 
 #### Scenario: No throwing static initialization
 - **WHEN** clang-tidy runs `bugprone-throwing-static-initialization` on generated output of a curated example
 - **THEN** it reports no diagnostics
+
+### Requirement: Relation row joins use endpoint lookups
+
+The cpp-entt backend SHALL derive a row-join plan from the accepted endpoint equalities and available derived anchors. It SHALL enumerate candidates through matching endpoint lookups, or exact pair lookups when both ends are known, rather than evaluating the full product of unrelated row domains. It SHALL check all remaining predicates and visit each candidate ordered row pair at most once. A `closure` or `shortest` binding SHALL be evaluated only through its bounded lookups; the join SHALL NOT materialize that relation's all-pairs domain. These obligations SHALL hold in either authored binding order and for self-joins.
+
+When a shortest binding has both an independently fixed `to` and a `from` fixed by the other row, the backend SHALL reuse the goal-keyed route cache across source rows. An unchanged source snapshot and goal SHALL NOT cause a new graph search per source row. Join lookup work after derived caches are built SHALL depend on driving rows and matching endpoint buckets, not on the full unrelated row product; an actual many-to-many output can still contain a product number of matching tuples.
+
+#### Scenario: Sparse stored joins avoid the Cartesian product
+- **WHEN** two large stored relations share only a small number of endpoint keys
+- **THEN** candidate instrumentation shows endpoint-bucket probes and no checks of unrelated row pairs
+
+#### Scenario: Several robots share a goal
+- **WHEN** twenty location rows join a shortest relation with `route.from == place.to` and `route.to == Goal` against an unchanged graph
+- **THEN** a single goal-keyed graph search serves all twenty lookups, and each source finds its matching row without rescanning the whole goal's route field
+
+#### Scenario: Two anchored derived bindings
+- **WHEN** a closure binding fixed to `Origin` joins a second closure on its endpoint
+- **THEN** only the required keyed reachability queries run, without materializing either all-pairs relation
+
+### Requirement: Optimized row joins preserve snapshots and stable tuple selection
+
+The backend SHALL preserve the logical row orders, field values, filtering, sorting, global limits and event order required by `dsl-relations`, independent of physical probe direction. Buffered row references SHALL remain valid throughout candidate collection and handler execution, including self-joins, new derived cache keys and queued structural changes. Restore SHALL discard obsolete join state and derived references before the next pass. Generated output SHALL build as C++23 and comply with the repository's enabled clang-tidy checks without added suppressions.
+
+#### Scenario: Physical plans agree with a reference join
+- **WHEN** endpoint-indexed joins and a test reference over the same small ordered row snapshots run the same filters, sort and limit
+- **THEN** their selected row pairs, field values and emitted event sequences are identical
+
+#### Scenario: Self-join lookup grows a derived cache
+- **WHEN** a self-join requests several keyed views of the same derived relation during collection
+- **THEN** all previously retained row references remain valid and each handler sees its original snapshot values
+
+#### Scenario: A restore replaces relation ends
+- **WHEN** a saved world is restored after joined rows and their endpoint entities have changed
+- **THEN** the first subsequent pass uses remapped restored rows and current derived results, with no old entity handles or cache references
+
+#### Scenario: Generated join code passes static checks
+- **WHEN** the row-join fixture's generated C++ is compiled and checked with the repository clang-tidy configuration
+- **THEN** it builds and passes all enabled checks without a file-wide or newly added local suppression

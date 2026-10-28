@@ -10315,26 +10315,6 @@ bool reads_pair_binding(const ExprNode& expr, const PairScope& pair_scope, std::
     return read;
 }
 
-// Paths to the operands of `expr`'s top-level `op` chain.
-void collect_chain_paths(const ExprNode& expr, std::string_view op, ExprPath& path, std::vector<ExprPath>& out) {
-    if (const auto* binary = std::get_if<BinaryExpr>(&expr.expr); binary != nullptr && binary->op == op) {
-        for (std::uint8_t side = 0; side < 2; ++side) {
-            path.push_back(side);
-            collect_chain_paths(side == 0 ? *binary->left : *binary->right, op, path, out);
-            path.pop_back();
-        }
-        return;
-    }
-    out.push_back(path);
-}
-
-std::vector<ExprPath> chain_paths(const ExprNode& root, const ExprPath& at, std::string_view op) {
-    std::vector<ExprPath> out;
-    auto path = at;
-    collect_chain_paths(*resolve_expr_path(root, at), op, path, out);
-    return out;
-}
-
 const BinaryExpr* binary_at(const ExprNode& root, const ExprPath& path, std::string_view op) {
     const auto* binary = std::get_if<BinaryExpr>(&resolve_expr_path(root, path)->expr);
     return binary != nullptr && binary->op == op ? binary : nullptr;

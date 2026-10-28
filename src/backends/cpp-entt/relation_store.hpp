@@ -106,8 +106,17 @@ public:
     }
 
     [[nodiscard]] const Row* find(entt::entity from, entt::entity to) const noexcept {
+        const auto* entry = find_entry(from, to);
+        return entry == nullptr ? nullptr : &entry->row;
+    }
+
+    [[nodiscard]] const Entry* find_entry(entt::entity from, entt::entity to) const noexcept {
         const auto slot = pairs_.find(from, to);
-        return slot == kNone ? nullptr : &entries_[slot].row;
+        return slot == kNone ? nullptr : &entries_[slot];
+    }
+
+    [[nodiscard]] std::size_t order_of(const Entry& entry) const noexcept {
+        return static_cast<std::size_t>(&entry - entries_.data());
     }
 
     [[nodiscard]] bool has_from(entt::entity from) const noexcept {
@@ -282,16 +291,16 @@ private:
 
     // Appends `slot` to both of its ends' lists and to the pair table.
     void link(std::uint32_t slot) {
-        const auto& entry = entries_[slot];
-        auto& links       = links_[slot];
-        auto& from        = ends_of(from_ends_, entry.from);
-        links.prev_from   = from.tail;
+        const auto& entry                                              = entries_[slot];
+        auto& links                                                    = links_[slot];
+        auto& from                                                     = ends_of(from_ends_, entry.from);
+        links.prev_from                                                = from.tail;
         (from.tail == kNone ? from.head : links_[from.tail].next_from) = slot;
-        from.tail = slot;
-        auto& to      = ends_of(to_ends_, entry.to);
-        links.prev_to = to.tail;
-        (to.tail == kNone ? to.head : links_[to.tail].next_to) = slot;
-        to.tail = slot;
+        from.tail                                                      = slot;
+        auto& to                                                       = ends_of(to_ends_, entry.to);
+        links.prev_to                                                  = to.tail;
+        (to.tail == kNone ? to.head : links_[to.tail].next_to)         = slot;
+        to.tail                                                        = slot;
         pairs_.insert(entry.from, entry.to, slot);
     }
 
@@ -304,7 +313,7 @@ private:
         auto& to = to_ends_[static_cast<std::size_t>(entt::to_entity(entry.to))];
         (links.prev_to == kNone ? to.head : links_[links.prev_to].next_to) = links.next_to;
         (links.next_to == kNone ? to.tail : links_[links.next_to].prev_to) = links.prev_to;
-        links = Links{};
+        links                                                              = Links{};
         pairs_.erase(entry.from, entry.to);
         alive_[slot] = 0;
         ++dead_;
@@ -318,8 +327,8 @@ private:
     std::vector<Ends> from_ends_;
     std::vector<Ends> to_ends_;
     PairSlotTable pairs_;
-    std::uint32_t dead_ = 0;
-    std::uint32_t run_  = 0;
+    std::uint32_t dead_             = 0;
+    std::uint32_t run_              = 0;
     mutable std::uint64_t revision_ = 0;
     mutable bool changed_           = true;
 };
@@ -373,8 +382,8 @@ void add_relation_row(entt::registry& registry, entt::entity from, entt::entity 
 // removal of a trait and the destruction of its entity alike.
 template <typename Row>
 void connect_relation_ends(entt::registry& registry) {
-    using FromTrait = typename Row::FromTrait;
-    using ToTrait   = typename Row::ToTrait;
+    using FromTrait = Row::FromTrait;
+    using ToTrait   = Row::ToTrait;
     (void)uncompacted_relation_store<Row>(registry);
     if constexpr (std::is_same_v<FromTrait, ToTrait>) {
         registry.on_destroy<FromTrait>().template connect<&erase_relation_entity<Row>>();

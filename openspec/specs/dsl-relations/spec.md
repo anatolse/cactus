@@ -132,8 +132,8 @@ A handler SHALL accept `add R(x, y)`, optionally with a field block, and `remove
 ### Requirement: `one` ends are proved at compile time
 
 An end marked `one` SHALL hold at most one row per entity on that end, in every committed state. The compiler SHALL accept an `add R(x, y)` of a relation with a `one` end only when it can prove that the add keeps the limit. For each `one` end, with `e` the argument at that end, all of the following SHALL hold:
-- `e` is `self` of a unary rule, or a pair binding that the rule's `limit:` provably limits to one (`dsl-rule-limit`).
-- The other argument is a pair binding, `self`, a named entity, or a constant expression.
+- `e` is `self` of a unary entity rule, an entity pair binding that the rule's `limit:` provably limits to one, or a direct row endpoint exactly matching a partition key whose count is provably one (`dsl-rule-limit`). Equality predicates or computed endpoint expressions SHALL NOT substitute for an exact key match.
+- The other argument is an entity pair binding, a direct endpoint of a bound relation row, `self` of a unary entity rule, a named entity, or a constant expression. Existing relation endpoint type checks SHALL still apply.
 - The handler's trigger is a phase, so the handler runs once per activation.
 - The rule's `where:` contains, as a top-level conjunct, the test that `e` has no row on that end: `not R(e, _)` for `from`, `not R(_, e)` for `to`.
 - No other handler in the program that runs in the same phase contains an `add R`.
@@ -164,13 +164,29 @@ Any other `add R` of such a relation SHALL be a source-located compile error tha
 - **WHEN** relation `Owns` has `to: Room one`, and a unary `fixed_tick` rule over rooms with `where: not Owns(_, self)` adds `Owns(Player, self)`
 - **THEN** compilation accepts it
 
+#### Scenario: Proven row-endpoint claim
+- **WHEN** a phase rule over `Candidate as c` declares `limit: 1 per c.from, 1 per c.to`, top-level `not Claim(c.from, _)` and `not Claim(_, c.to)`, and adds `Claim(c.from, c.to)`, with compatible end types and no second adder in that phase
+- **THEN** compilation accepts the claim
+
+#### Scenario: Endpoint proof must match the written end
+- **WHEN** a rule limits `c.from` but writes a different endpoint to a `one` end without that endpoint being limited to one
+- **THEN** compilation rejects the write and names the missing endpoint proof
+
+#### Scenario: Endpoint allocation preserves the other proof checks
+- **WHEN** an endpoint-limited claim lacks an empty-end test, runs on an ordinary event, or has another adder in its phase
+- **THEN** compilation rejects it using the applicable existing proof condition
+
+#### Scenario: Exact endpoint keys do not grant equality inference
+- **WHEN** a rule limits `a.from` and writes `b.from` to a `one` end, with only `a.from == b.from` as justification
+- **THEN** compilation rejects that write unless `b.from` independently has an accepted proof
+
 ### Requirement: Relation rows as rule bindings
 
 A rule SHALL bind relation rows in two places:
 - A `pairs:` binding whose only entry is a relation name, `r: R`.
 - A unary `each:` with exactly one relation entry and an alias, `each: R as r`, and no `without:`.
 
-A row binding SHALL expose `r.from` and `r.to` as `entity_id` values and `r.<field>` for each field. It SHALL be read-only, and it SHALL NOT be used with brackets, as a command or `emit` target, or in `reduce:` or `keep`. A rule SHALL have at most two row bindings, both in the existing two-binding `pairs:` form. A pair with two row bindings SHALL meet "Two relation rows join by their endpoints". Stored and kept row domains SHALL use row creation order; derived row domains SHALL use their declared endpoint creation order. A unary row domain SHALL accept `where:`, `order by:`, a global `limit:` and `when:`.
+A row binding SHALL expose `r.from` and `r.to` as `entity_id` values and `r.<field>` for each field. It SHALL be read-only, and it SHALL NOT be used with brackets, as a command or `emit` target, or in `reduce:` or `keep`. A rule SHALL have at most two row bindings, both in the existing two-binding `pairs:` form. A pair with two row bindings SHALL meet "Two relation rows join by their endpoints". Stored and kept row domains SHALL use row creation order; derived row domains SHALL use their declared endpoint creation order. A unary row domain SHALL accept `where:`, `order by:`, a global or direct-endpoint `limit:` and `when:`.
 
 #### Scenario: Row joined to an entity
 - **WHEN** a pair rule binds `w: Walker` and `r: Route` with `where: r.from == w[Walker].tile`
@@ -191,6 +207,12 @@ A row binding SHALL expose `r.from` and `r.to` as `entity_id` values and `r.<fie
 #### Scenario: Row as a trait namespace
 - **WHEN** a handler reads `r[Tile].x`
 - **THEN** the compiler reports that `r` is a relation row, with help that suggests joining a `Tile` binding on `r.from`
+
+A row SHALL remain read-only under endpoint limits. Direct endpoint partitioning SHALL NOT make the row an entity binding or grant trait access through its endpoints.
+
+#### Scenario: Unary scored rows allocate by both endpoints
+- **WHEN** a unary relation-row rule orders by its distance field and limits both direct endpoints
+- **THEN** the row rule selects candidates using the endpoint allocation semantics of `dsl-rule-limit`
 
 ### Requirement: Relation tests in `where:`
 
@@ -353,7 +375,7 @@ A `pairs:` rule whose two bindings name relation rows SHALL contain at least one
 
 A two-row pass SHALL read the row membership and row values of both relations from the current pass snapshot. Its logical tuple order SHALL be the left row domain's order followed by the right row domain's order for each left row. `where:` SHALL filter this product, `order by:` SHALL sort surviving tuples with ties preserving logical order, and a global `limit:` SHALL select from that filtered and ordered sequence. Changing the physical lookup direction SHALL NOT change the selected tuples or their order. Queued changes to either relation or its ends SHALL become visible only at the normal commit and subsequent pass snapshots.
 
-Two-row rules SHALL retain all existing row restrictions: no row writes, trait access through an endpoint expression, row reductions, row keeps, `without:`, lifecycle handlers, `self`, or per-row `limit:` parts. The existing proof for commands adding a relation with a `one` end SHALL NOT treat a row endpoint as an entity binding limited to one. A two-row pass SHALL run for phase occurrences and untargeted ordinary events. A targeted occurrence SHALL select no tuples, because neither binding supplies an entity recipient; emitting an event to a row endpoint SHALL remain valid.
+Two-row rules SHALL retain all existing row restrictions: no row writes, trait access through an endpoint expression, row reductions, row keeps, `without:`, lifecycle handlers, `self`, or `limit:` parts keyed by a bare row. A direct row endpoint SHALL support a capacity partition and a static-one proof only through its own endpoint key (`dsl-rule-limit`); it SHALL NOT become an entity binding or gain trait writability. A two-row pass SHALL run for phase occurrences and untargeted ordinary events. A targeted occurrence SHALL select no tuples, because neither binding supplies an entity recipient; emitting an event to a row endpoint SHALL remain valid.
 
 #### Scenario: Lookup direction preserves observed order
 - **WHEN** stored rows were created in an order different from their endpoint entity order and the physical plan probes the authored left relation
@@ -377,4 +399,4 @@ Two-row rules SHALL retain all existing row restrictions: no row writes, trait a
 
 #### Scenario: Existing unsupported row clauses remain errors
 - **WHEN** a joined rule declares `reduce:`, `keep`, or `limit: 1 per place`
-- **THEN** compilation reports the applicable row-domain restriction instead of treating a row as an entity
+- **THEN** compilation reports the applicable row-domain restriction instead of treating a row as an entity, while valid direct endpoint keys remain accepted

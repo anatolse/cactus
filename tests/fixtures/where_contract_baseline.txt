@@ -708,6 +708,76 @@ pairs_order_by_runtime.cactus fixtures pairs_order_by_runtime.RankPairsByGap/on 
     named_writes:
     named_requirements:
     iteration_order: free
+relation_endpoint_limits.cactus examples relation_endpoint_limits.Allocate/on std.core.fixed_tick
+    reads: relation_endpoint_limits.Candidate relation_endpoint_limits.Claim relation_endpoint_limits.Control
+    read_fields: relation_endpoint_limits.Candidate{score} relation_endpoint_limits.Claim{} relation_endpoint_limits.Control{mode}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads: [relation_endpoint_limits.Settings: relation_endpoint_limits.Control{mode}]
+    named_writes:
+    named_requirements: relation_endpoint_limits.Settings/relation_endpoint_limits.Control
+    iteration_order: free
+relation_endpoint_limits.cactus examples relation_endpoint_limits.Arrive/on std.core.tick
+    reads: relation_endpoint_limits.Claim relation_endpoint_limits.Control relation_endpoint_limits.Goal relation_endpoint_limits.Located
+    read_fields: relation_endpoint_limits.Claim{} relation_endpoint_limits.Control{mode} relation_endpoint_limits.Goal{} relation_endpoint_limits.Located{}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads: [relation_endpoint_limits.Settings: relation_endpoint_limits.Control{mode}]
+    named_writes:
+    named_requirements: relation_endpoint_limits.Settings/relation_endpoint_limits.Control
+    iteration_order: free
+relation_endpoint_limits.cactus examples relation_endpoint_limits.JoinForward/on std.core.tick
+    reads: relation_endpoint_limits.Control relation_endpoint_limits.Located relation_endpoint_limits.Route relation_endpoint_limits.Walk
+    read_fields: relation_endpoint_limits.Control{hits,mode} relation_endpoint_limits.Located{} relation_endpoint_limits.Route{distance} relation_endpoint_limits.Walk{cost}
+    write_fields: relation_endpoint_limits.Control{hits}
+    write_kinds: relation_endpoint_limits.Control.hits=1/0
+    bound_reads:
+    named_reads: [relation_endpoint_limits.Settings: relation_endpoint_limits.Control{hits,mode}]
+    named_writes: [relation_endpoint_limits.Settings: relation_endpoint_limits.Control{hits}]
+    named_requirements: relation_endpoint_limits.Settings/relation_endpoint_limits.Control
+    iteration_order: free
+relation_endpoint_limits.cactus examples relation_endpoint_limits.JoinReverse/on std.core.tick
+    reads: relation_endpoint_limits.Control relation_endpoint_limits.Located relation_endpoint_limits.Route relation_endpoint_limits.Walk
+    read_fields: relation_endpoint_limits.Control{hits,mode} relation_endpoint_limits.Located{} relation_endpoint_limits.Route{distance} relation_endpoint_limits.Walk{cost}
+    write_fields: relation_endpoint_limits.Control{hits}
+    write_kinds: relation_endpoint_limits.Control.hits=1/0
+    bound_reads:
+    named_reads: [relation_endpoint_limits.Settings: relation_endpoint_limits.Control{hits,mode}]
+    named_writes: [relation_endpoint_limits.Settings: relation_endpoint_limits.Control{hits}]
+    named_requirements: relation_endpoint_limits.Settings/relation_endpoint_limits.Control
+    iteration_order: free
+relation_endpoint_limits.cactus examples relation_endpoint_limits.Mixed/on std.core.tick
+    reads: relation_endpoint_limits.Candidate relation_endpoint_limits.Control
+    read_fields: relation_endpoint_limits.Candidate{} relation_endpoint_limits.Control{hits,mode}
+    write_fields: relation_endpoint_limits.Control{hits}
+    write_kinds: relation_endpoint_limits.Control.hits=1/0
+    bound_reads:
+    named_reads: [relation_endpoint_limits.Settings: relation_endpoint_limits.Control{hits,mode}]
+    named_writes: [relation_endpoint_limits.Settings: relation_endpoint_limits.Control{hits}]
+    named_requirements: relation_endpoint_limits.Settings/relation_endpoint_limits.Control
+    iteration_order: free
+relation_endpoint_limits.cactus examples relation_endpoint_limits.Routes/on std.core.late_tick
+    reads: relation_endpoint_limits.Claim relation_endpoint_limits.Control relation_endpoint_limits.Goal relation_endpoint_limits.Located relation_endpoint_limits.Route relation_endpoint_limits.Walk
+    read_fields: relation_endpoint_limits.Claim{} relation_endpoint_limits.Control{mode} relation_endpoint_limits.Goal{} relation_endpoint_limits.Located{} relation_endpoint_limits.Route{distance} relation_endpoint_limits.Walk{cost}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads: [relation_endpoint_limits.Settings: relation_endpoint_limits.Control{mode}]
+    named_writes:
+    named_requirements: relation_endpoint_limits.Settings/relation_endpoint_limits.Control
+    iteration_order: free
+relation_endpoint_limits.cactus examples relation_endpoint_limits.Witnesses/on std.core.tick
+    reads: relation_endpoint_limits.Candidate relation_endpoint_limits.Control
+    read_fields: relation_endpoint_limits.Candidate{score} relation_endpoint_limits.Control{mode,trace}
+    write_fields: relation_endpoint_limits.Control{trace}
+    write_kinds: relation_endpoint_limits.Control.trace=3/0
+    bound_reads:
+    named_reads: [relation_endpoint_limits.Settings: relation_endpoint_limits.Control{mode,trace}]
+    named_writes: [relation_endpoint_limits.Settings: relation_endpoint_limits.Control{trace}]
+    named_requirements: relation_endpoint_limits.Settings/relation_endpoint_limits.Control
+    iteration_order: free
 relation_row_joins.cactus examples relation_row_joins.BothEnds/on std.core.fixed_tick
     reads: relation_row_joins.Control relation_row_joins.Walk
     read_fields: relation_row_joins.Control{active,query} relation_row_joins.Walk{cost}

@@ -4712,7 +4712,11 @@ static std::pair<std::string, std::string> emit_limit_part_counters(std::ostring
                                                                     const LimitPart& part,
                                                                     const PairCodegenScope& pair_codegen_scope,
                                                                     const DecoratedProgram& program) {
-    const auto count_expr  = rewrite_expr(*part.count, {}, program, {}, {}, &pair_codegen_scope);
+    auto count_expr = part.constant_count.has_value()
+        ? std::to_string(*part.constant_count) : rewrite_expr(*part.count, {}, program, {}, {}, &pair_codegen_scope);
+    if (part.constant_count == std::numeric_limits<int>::min()) {
+        count_expr = "std::numeric_limits<int>::min()";
+    }
     const auto count_name  = gen_temp_name("pair_limit_of", part.location);
     const auto counts_name = gen_temp_name("pair_partition", part.location);
     out << "    auto " << count_name << " = [&]([[maybe_unused]] entt::entity " << part.binding << ") {\n";
@@ -4734,6 +4738,22 @@ static void emit_limit_part_slot(std::ostringstream& out,
         << "); }\n";
 }
 
+static void emit_limit_admission(std::ostringstream& out,
+                                 const std::vector<std::pair<std::string, std::string>>& counters,
+                                 const std::vector<std::string>& members,
+                                 const std::string& reject) {
+    std::string full;
+    for (std::size_t index = 0; index < counters.size(); ++index) {
+        const auto slot = "cactus_part" + std::to_string(index);
+        emit_limit_part_slot(out, counters[index], members[index], slot);
+        full += full.empty() ? "" : " || ";
+        full += std::format("{0}.first >= {0}.second", slot);
+    }
+    out << "        if (" << full << ") { " << reject << "; }\n";
+    for (std::size_t index = 0; index < counters.size(); ++index) {
+        out << "        ++cactus_part" << index << ".first;\n";
+    }
+}
 // The truncation replay for a limited pair rule (dsl-rule-limit): one linear
 // pass over the already-filtered (and, when `order by:` is present, sorted)
 // tuple buffer. A global limit counts into a single implicit partition; a
@@ -4771,17 +4791,12 @@ static void emit_pair_limit_replay(std::ostringstream& out,
         counters.push_back(emit_limit_part_counters(out, part, pair_codegen_scope, program));
     }
     out << "    for (const auto& cactus_tuple : " << tuple_buffer_name << ") {\n";
-    std::string full;
-    for (std::size_t index = 0; index < limit.parts.size(); ++index) {
-        const auto slot = "cactus_part" + std::to_string(index);
-        emit_limit_part_slot(out, counters[index], member_of(limit.parts[index]), slot);
-        full += full.empty() ? "" : " || ";
-        full += std::format("{0}.first >= {0}.second", slot);
+    std::vector<std::string> members;
+    members.reserve(limit.parts.size());
+    for (const auto& part : limit.parts) {
+        members.push_back(member_of(part));
     }
-    out << "        if (" << full << ") { continue; }\n";
-    for (std::size_t index = 0; index < limit.parts.size(); ++index) {
-        out << "        ++cactus_part" << index << ".first;\n";
-    }
+    emit_limit_admission(out, counters, members, "continue");
     out << "        " << pair_body_name << "(cactus_tuple.first, cactus_tuple.second);\n";
     out << "    }\n";
 }
@@ -6917,14 +6932,31 @@ static void emit_row_tuple_order_and_limit(std::ostringstream& out,
         out << "    if (cactus_row_tuples.size() > cactus_row_limit) { cactus_row_tuples.resize(cactus_row_limit); }\n";
         return;
     }
-    // A `per` part names the entity binding: the first tuples of each entity, up to its count.
-    const auto counters = emit_limit_part_counters(out, limit.parts.front(), scope, program);
+    std::vector<std::pair<std::string, std::string>> counters;
+    counters.reserve(limit.parts.size());
+    for (const auto& part : limit.parts) {
+        counters.push_back(emit_limit_part_counters(out, part, scope, program));
+    }
+    const bool joined = scope.bindings.size() == 2 &&
+                        std::ranges::all_of(scope.bindings, [](const auto& binding) { return binding.row; });
     out << "    std::erase_if(cactus_row_tuples, [&](const auto& cactus_tuple) {\n";
-    emit_limit_part_slot(out, counters, "first", "cactus_row_slot");
-    out << "        return cactus_row_slot.first++ >= cactus_row_slot.second;\n";
+    std::vector<std::string> members;
+    members.reserve(limit.parts.size());
+    for (const auto& part : limit.parts) {
+        std::string member = "first";
+        if (!part.resolved_key.has_value()) {
+            std::unreachable();
+        }
+        if (part.resolved_key->endpoint.has_value()) {
+            member = joined && part.resolved_key->binding_index == 0 ? "first" : "second";
+            member += *part.resolved_key->endpoint == RelationEndpoint::From ? "->from" : "->to";
+        }
+        members.push_back(std::move(member));
+    }
+    emit_limit_admission(out, counters, members, "return true");
+    out << "        return false;\n";
     out << "    });\n";
 }
-
 // The binding order of a row pass: a lone row, or an entity and a row.
 struct RowPassShape {
     bool unary     = false;

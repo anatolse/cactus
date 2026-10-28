@@ -144,6 +144,38 @@ SymbolId relation_id(const std::string& name) {
 
 }  // namespace
 
+TEST_CASE("Relation endpoint limits accept row and mixed domains", "[relations][endpoint-limit]") {
+    const std::string domains[] = {
+        "    each: Seen as candidate\n",
+        "    pairs:\n        candidate: Seen\n        actor: Robot\n",
+        "    pairs:\n        candidate: Seen\n        witness: Seen\n"
+        "    where: candidate.from == witness.from\n",
+    };
+    for (const auto& domain : domains) {
+        for (const std::string count : {"1", "0", "-1", "3"}) {
+            const auto result = analyze("rule Allocate:\n" + domain + "    limit: " + count +
+                                        " per candidate.from, 1 per candidate.to\n"
+                                        "    on fixed_tick:\n        let target = candidate.to\n");
+            INFO(describe(result));
+            CHECK(result.clean());
+        }
+    }
+}
+
+TEST_CASE("Relation endpoint limits prove direct claims", "[relations][endpoint-limit]") {
+    const auto result = analyze(
+        "rule Allocate:\n"
+        "    each: Seen as candidate\n"
+        "    where:\n"
+        "        not Claim(candidate.from, _)\n"
+        "        not Claim(_, candidate.to)\n"
+        "    limit: 1 per candidate.from, 1 per candidate.to\n"
+        "    on fixed_tick:\n"
+        "        add Claim(candidate.from, candidate.to)\n");
+    INFO(describe(result));
+    CHECK(result.clean());
+}
+
 // ── Declarations ────────────────────────────────────────────────────────────
 
 TEST_CASE("Relations: declarations resolve their ends and fields", "[semantic][relations]") {
@@ -948,7 +980,7 @@ TEST_CASE("Relations: two-sided limit checks", "[semantic][relations][rule-limit
             "    limit: 1 per t, 1 per r\n"
             "    on fixed_tick:\n"
             "        emit Done\n");
-        CHECK(analysis.has("a two-sided limit needs two entity bindings"));
+        CHECK(analysis.has("names a relation row"));
     }
     SECTION("a one-sided part on a row binding") {
         const auto analysis = analyze(
@@ -959,7 +991,7 @@ TEST_CASE("Relations: two-sided limit checks", "[semantic][relations][rule-limit
             "    limit: 1 per r\n"
             "    on fixed_tick:\n"
             "        emit Done\n");
-        CHECK(analysis.has("`per r` names a relation row; a `per` part needs an entity binding"));
+        CHECK(analysis.has("names a relation row"));
     }
     SECTION("each count reads only its own binding") {
         const auto ok = analyze(
@@ -1603,3 +1635,187 @@ TEST_CASE("Relations: joined reads participate in descendant occurrence conflict
 }
 
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)
+
+TEST_CASE("Endpoint limits reject invalid domains and capacities", "[relations][endpoint-limit]") {
+    const std::string limits[] = {
+        "1 per candidate.from, 2 per candidate.from", "1 per candidate", "1 per missing.from",
+        "candidate.from per candidate.to", "1.0 per candidate.to", "true per candidate.from",
+        "Boss[Player].missing per candidate.from", "1 per actor.from"
+    };
+    for (const auto& limit : limits) {
+        const auto result = analyze("rule Bad:\n    pairs:\n        candidate: Seen\n        actor: Robot\n"
+                                    "    limit: " + limit + "\n    on fixed_tick:\n        emit Done\n");
+        INFO(limit);
+        INFO(describe(result));
+        CHECK_FALSE(result.clean());
+    }
+}
+
+TEST_CASE("Endpoint uniqueness retains proof restrictions", "[relations][endpoint-limit]") {
+    const std::string limits[] = {"1 per candidate.from", "1 per candidate.to",
+                                  "2 per candidate.from, 1 per candidate.to"};
+    for (const auto& limit : limits) {
+        const auto result = analyze("rule Bad:\n    each: Seen as candidate\n"
+                                    "    where: not Claim(candidate.from, _) and not Claim(_, candidate.to)\n"
+                                    "    limit: " + limit + "\n    on fixed_tick:\n"
+                                    "        add Claim(candidate.from, candidate.to)\n");
+        INFO(describe(result));
+        CHECK(result.has("not limited to one"));
+    }
+    for (const std::string trigger : {"fixed_tick", "OrderGiven"}) {
+        const auto result = analyze("rule Bad:\n    each: Seen as candidate\n"
+                                    "    limit: 1 per candidate.from, 1 per candidate.to\n"
+                                    "    on " + trigger + ":\n        add Claim(candidate.from, candidate.to)\n");
+        INFO(describe(result));
+        CHECK_FALSE(result.clean());
+    }
+}
+
+TEST_CASE("Endpoint limits leave rows and endpoint traits read only", "[relations][endpoint-limit]") {
+    for (const std::string body : {"candidate.from[Robot].x = 1.0", "candidate.from = Boss",
+                                   "let value = candidate.from[Robot].x"}) {
+        ErrorReporter errors;
+        Lexer lexer("module game\n" + kPrelude + "rule Bad:\n    each: Seen as candidate\n"
+                    "    limit: 1 per candidate.from\n    on fixed_tick:\n        " + body + "\n",
+                    "game.cactus", errors);
+        Parser parser(lexer.tokenize(), errors);
+        auto ast = parser.parse_program();
+        if (!errors.has_errors()) {
+            SemanticAnalyzer analyzer(errors);
+            (void)analyzer.analyze(ast);
+        }
+        INFO(body);
+        CHECK(errors.has_errors());
+    }
+}
+TEST_CASE("Endpoint key parser rejects fields and nested paths", "[relations][endpoint-limit]") {
+    for (const std::string key : {"candidate.score", "candidate.from.owner"}) {
+        ErrorReporter errors;
+        Lexer lexer("module game\n" + kPrelude + "rule Bad:\n    each: Seen as candidate\n"
+                    "    limit: 1 per " + key + "\n    on fixed_tick:\n        emit Done\n", "game.cactus", errors);
+        Parser parser(lexer.tokenize(), errors);
+        (void)parser.parse_program();
+        CHECK(errors.has_errors());
+        CHECK_FALSE(errors.diagnostics().empty());
+    }
+}
+
+TEST_CASE("Endpoint limits accept named capacities", "[relations][endpoint-limit]") {
+    const auto result = analyze("const:\n    SEATS: int = 3\nrule Seats:\n    each: Seen as candidate\n"
+                                "    limit: SEATS per candidate.to\n    on fixed_tick:\n        emit Done\n");
+    INFO(describe(result));
+    CHECK(result.clean());
+}
+
+TEST_CASE("Endpoint proofs match exact keys in joined and mixed domains", "[relations][endpoint-limit]") {
+    const std::string domains[] = {
+        "    each: Seen as candidate\n",
+        "    pairs:\n        candidate: Seen\n        actor: Robot\n",
+        "    pairs:\n        candidate: Seen\n        witness: Seen\n"
+    };
+    for (const auto& domain : domains) {
+        const auto result = analyze("const:\n    ONE: int = 1\nrule ClaimRows:\n" + domain +
+            "    where:\n        not Claim(candidate.from, _)\n        not Claim(_, candidate.to)\n" +
+            (domain.contains("witness") ? "        candidate.from == witness.from\n" : "") +
+            "    limit: ONE per candidate.from, ONE per candidate.to\n"
+            "    on fixed_tick:\n        add Claim(candidate.from, candidate.to)\n");
+        INFO(describe(result));
+        CHECK(result.clean());
+    }
+    const auto mismatch = analyze(
+        "rule Bad:\n    pairs:\n        candidate: Seen\n        witness: Seen\n"
+        "    where:\n        candidate.from == witness.from\n"
+        "        not Claim(witness.from, _)\n        not Claim(_, candidate.to)\n"
+        "    limit: 1 per candidate.from, 1 per candidate.to\n"
+        "    on fixed_tick:\n        add Claim(witness.from, candidate.to)\n");
+    CHECK(mismatch.has("not limited to one"));
+}
+
+TEST_CASE("Unary row partition rejects unknown bare bindings", "[relations][endpoint-limit]") {
+    const auto result = analyze("rule Bad:\n    each: Seen as candidate\n"
+                                "    limit: 1 per missing\n    on fixed_tick:\n        emit Done\n");
+    CHECK_FALSE(result.clean());
+}
+
+TEST_CASE("Constant expression capacities prove one with total integer arithmetic", "[relations][endpoint-limit]") {
+    for (const std::string count : {"2 - 1", "CHAIN", "(2147483647 + 1) - 2147483647",
+                                   "(-3 / 2) + 3", "(5 / 0) + 1", "5 % 0 - 4"}) {
+        const auto result = analyze("const:\n    ONE: int = 2 - 1\n    CHAIN: int = ONE * 1\n"
+            "rule ClaimRows:\n    each: Seen as candidate\n"
+            "    where: not Claim(candidate.from, _) and not Claim(_, candidate.to)\n"
+            "    limit: " + count + " per candidate.from, 1 per candidate.to\n"
+            "    on fixed_tick:\n        add Claim(candidate.from, candidate.to)\n");
+        INFO(count);
+        INFO(describe(result));
+        CHECK(result.clean());
+    }
+}
+
+TEST_CASE("Endpoint proofs handle reversed and one-sided relations", "[relations][endpoint-limit]") {
+    for (const bool reversed : {false, true}) {
+        for (const bool to_one : {false, true}) {
+            const auto from = reversed ? "candidate.to" : "candidate.from";
+            const auto to = reversed ? "candidate.from" : "candidate.to";
+            const auto result = analyze("relation Award:\n    from: " + std::string(reversed ? "Task" : "Robot") +
+                " one\n    to: " + (reversed ? "Robot" : "Task") + (to_one ? " one\n" : "\n") +
+                "rule AwardRows:\n    each: Seen as candidate\n"
+                "    where: not Award(" + from + ", _) and not Award(_, " + to + ")\n"
+                "    limit: 1 per candidate.from, 1 per candidate.to\n"
+                "    on fixed_tick:\n        add Award(" + from + ", " + to + ")\n");
+            INFO(describe(result));
+            CHECK(result.clean());
+        }
+    }
+    const auto mixed = analyze("rule Mixed:\n    pairs:\n        actor: Robot\n        candidate: Seen\n"
+        "    where:\n        actor == candidate.from\n        not Claim(actor, _)\n        not Claim(_, candidate.to)\n"
+        "    limit: 1 per actor, 1 per candidate.to\n"
+        "    on fixed_tick:\n        add Claim(actor, candidate.to)\n");
+    INFO(describe(mixed));
+    CHECK(mixed.clean());
+}
+
+TEST_CASE("Endpoint proofs retain free tests and single-adder checks", "[relations][endpoint-limit]") {
+    const std::string header = "    each: Seen as candidate\n"
+        "    where: not Claim(candidate.from, _) and not Claim(_, candidate.to)\n"
+        "    limit: 1 per candidate.from, 1 per candidate.to\n"
+        "    on fixed_tick:\n        add Claim(candidate.from, candidate.to)\n";
+    const auto duplicate = analyze("rule First:\n" + header + "rule Second:\n" + header);
+    CHECK_FALSE(duplicate.clean());
+    const auto nested = analyze("rule Bad:\n    each: Seen as candidate\n"
+        "    where: (not Claim(candidate.from, _) or true) and not Claim(_, candidate.to)\n"
+        "    limit: 1 per candidate.from, 1 per candidate.to\n"
+        "    on fixed_tick:\n        add Claim(candidate.from, candidate.to)\n");
+    CHECK(nested.has("lacks"));
+    const auto dynamic = analyze("rule Bad:\n    each: Claim as candidate\n"
+        "    limit: candidate.score per candidate.from\n    on fixed_tick:\n        emit Done\n");
+    CHECK(dynamic.has("only constants"));
+    const auto impure = analyze("rule Bad:\n    each: Seen as candidate\n"
+        "    limit: query.count[Robot]() per candidate.from\n    on fixed_tick:\n        emit Done\n");
+    CHECK_FALSE(impure.clean());
+    const auto errors = analyze("rule Bad:\n    each: Seen as candidate\n"
+        "    limit: true per candidate.from, 1.5 per candidate.to\n    on fixed_tick:\n        emit Done\n");
+    CHECK(std::ranges::count_if(errors.diagnostics, [](const Diagnostic& diagnostic) {
+        return diagnostic.level == DiagnosticLevel::Error;
+    }) >= 2);
+}
+
+TEST_CASE("Endpoint key syntax rejects nesting and more than two parts", "[relations][endpoint-limit]") {
+    for (const std::string suffix : {"candidate.from.owner", "candidate.from, 1 per candidate.to, 1 per candidate.from"}) {
+        ErrorReporter errors;
+        Lexer lexer("module game\n" + kPrelude + "rule Bad:\n    each: Seen as candidate\n"
+                    "    limit: 1 per " + suffix + "\n    on fixed_tick:\n        emit Done\n", "game.cactus", errors);
+        Parser parser(lexer.tokenize(), errors);
+        (void)parser.parse_program();
+        CHECK(std::ranges::any_of(errors.diagnostics(), [](const Diagnostic& diagnostic) {
+            return diagnostic.message.contains("partition") || diagnostic.message.contains("endpoint key");
+        }));
+    }
+}
+
+TEST_CASE("Endpoint key errors retain independent capacity diagnostics", "[relations][endpoint-limit]") {
+    const auto result = analyze("rule Bad:\n    pairs:\n        actor: Robot\n        candidate: Seen\n"
+        "    limit: 1 per actor.from, true per candidate.to\n"
+        "    on fixed_tick:\n        emit Done\n");
+    CHECK(result.has("must name a relation row binding"));
+    CHECK(result.has("must be of type 'int'"));
+}

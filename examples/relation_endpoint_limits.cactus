@@ -1,0 +1,219 @@
+module relation_endpoint_limits
+
+use std.core
+use std.text as text
+
+trait Tile:
+    persist var label: int = 0
+trait Robot:
+    persist var label: int = 0
+trait Control:
+    persist var mode: int = 0
+    var hits: int = 0
+    var trace: string = ""
+
+relation Candidate:
+    from: Robot
+    to: Tile
+    let score: int = 0
+    let rank: int = 0
+
+relation Located:
+    from: Robot
+    to: Tile
+
+relation Walk:
+    from: Tile
+    to: Tile
+    let cost: int = 1
+
+relation Route = shortest(Walk, by = cost)
+
+relation Goal:
+    from: Tile
+    to: Tile
+
+relation Selected:
+    from: Robot
+    to: Tile
+
+relation Claim:
+    from: Robot one
+    to: Tile one
+
+entity Settings:
+    Control
+entity First:
+    Robot
+entity Second:
+    Robot
+entity Start:
+    Tile
+entity Middle:
+    Tile
+entity Finish:
+    Tile
+
+rule Setup:
+    on load:
+        add Candidate(First, Middle):
+            score = 1
+        add Candidate(Second, Middle):
+            score = 2
+        add Candidate(First, Finish):
+            score = 3
+        add Candidate(Second, Finish):
+            score = 4
+        add Located(First, Start)
+        add Located(Second, Middle)
+        add Walk(Start, Middle)
+        add Walk(Middle, Finish)
+        add Goal(Finish, Finish)
+
+rule Allocate:
+    each: Candidate as candidate
+    order by: candidate.score asc
+    where: not Claim(candidate.from, _) and not Claim(_, candidate.to)
+    limit: 1 per candidate.from, 1 per candidate.to
+    when: Settings[Control].mode == 0
+    on fixed_tick:
+        add Claim(candidate.from, candidate.to)
+
+rule Routes:
+    pairs:
+        place: Located
+        route: Route
+    order by: route.distance asc
+    where:
+        route.from == place.to
+        Goal(route.to, _)
+        not Claim(place.from, _)
+        not Claim(_, route.to)
+    limit: 1 per place.from, 1 per route.to
+    when: Settings[Control].mode == 1
+    on late_tick:
+        add Claim(place.from, route.to)
+
+rule Mixed:
+    pairs:
+        actor: Robot
+        candidate: Candidate
+    where: candidate.from == actor
+    limit: 1 per actor, 2 per candidate.to
+    when: Settings[Control].mode == 2
+    on tick:
+        Settings[Control].hits += 1
+rule Seats:
+    each: Candidate as candidate
+    order by: candidate.rank asc
+    after: Mixed
+    limit: 2 per candidate.from, 2 per candidate.to
+    when: Settings[Control].mode == 3
+    on tick:
+        Settings[Control].trace += text.format("{};", candidate.score)
+
+rule OneFrom:
+    each: Candidate as candidate
+    order by: candidate.rank asc
+    after: Seats
+    limit: (11 - 010) per candidate.from
+    when: Settings[Control].mode == 4
+    on tick:
+        Settings[Control].trace += text.format("{};", candidate.score)
+
+rule NoSeats:
+    each: Candidate as candidate
+    after: OneFrom
+    limit: 0 per candidate.from, -2147483648 per candidate.to
+    when: Settings[Control].mode == 5
+    on tick:
+        Settings[Control].hits += 1
+
+rule EarlyReturn:
+    each: Candidate as candidate
+    order by: candidate.rank asc
+    after: NoSeats
+    limit: 1 per candidate.from, 1 per candidate.to
+    when: Settings[Control].mode == 6
+    on tick:
+        if candidate.score == 1:
+            return
+        Settings[Control].trace += text.format("{};", candidate.score)
+
+rule Snapshot:
+    each: Candidate as candidate
+    order by: candidate.rank asc
+    after: EarlyReturn
+    limit: 1 per candidate.from, 1 per candidate.to
+    when: Settings[Control].mode == 7
+    on tick:
+        Settings[Control].trace += text.format("{};", candidate.score)
+        add Candidate(candidate.from, candidate.to):
+            score = 999
+        remove Candidate(_, Finish)
+        destroy Finish
+
+rule JoinForward:
+    pairs:
+        place: Located
+        route: Route
+    order by: route.distance asc
+    after: Snapshot
+    where: route.from == place.to
+    limit: 1 per place.from, 2 per route.to
+    when: Settings[Control].mode == 8
+    on tick:
+        Settings[Control].hits += 1
+        add Selected(place.from, route.to)
+
+rule JoinReverse:
+    pairs:
+        route: Route
+        place: Located
+    order by: route.distance asc
+    after: JoinForward
+    where: route.from == place.to
+    limit: 1 per place.from, 2 per route.to
+    when: Settings[Control].mode == 9
+    on tick:
+        Settings[Control].hits += 1
+        add Selected(place.from, route.to)
+
+rule Arrive:
+    each: Located as place
+    after: JoinReverse
+    where:
+        Goal(place.to, _)
+        not Claim(place.from, _)
+        not Claim(_, place.to)
+    limit: 1 per place.from, 1 per place.to
+    when: Settings[Control].mode == 10
+    on tick:
+        add Claim(place.from, place.to)
+rule Witnesses:
+    pairs:
+        candidate: Candidate
+        witness: Candidate
+    order by: candidate.score asc
+    after: Arrive
+    where: candidate.from == witness.from
+    limit: 2 per candidate.from, 2 per candidate.to
+    when: Settings[Control].mode == 11
+    on tick:
+        Settings[Control].trace += text.format("{};", candidate.score)
+
+rule Roles:
+    each: Walk as edge
+    after: Witnesses
+    limit: 1 per edge.from, 1 per edge.to
+    when: Settings[Control].mode == 12
+    on tick:
+        Settings[Control].trace += text.format("{};", edge.cost)
+
+rule NegativeSeats:
+    each: Candidate as candidate
+    after: Roles
+    limit: -1 per candidate.to
+    when: Settings[Control].mode == 13
+    on tick:
+        Settings[Control].hits += 1

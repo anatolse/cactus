@@ -789,6 +789,12 @@ cactus_add_headless_behavior_test(test_relation_row_joins_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_relation_row_joins_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_relation_endpoint_limits_headless_behavior
+    CACTUS_SOURCE examples/relation_endpoint_limits.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_relation_endpoint_limits_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_neighbor_joins_headless_behavior
     CACTUS_SOURCE examples/neighbor_joins.cactus
     BACKEND cpp-entt

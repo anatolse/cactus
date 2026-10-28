@@ -176,6 +176,39 @@ struct RowEndJoin {
     return member->member == "from";
 }
 
+[[nodiscard]] inline std::optional<LimitKey> resolve_limit_key(const RuleNode& rule,
+                                                               std::string_view name,
+                                                               std::optional<bool> from) {
+    const auto endpoint =
+        from.has_value() ? std::optional{*from ? RelationEndpoint::From : RelationEndpoint::To} : std::nullopt;
+    if (rule.rows.has_value()) {
+        return name == rule.rows->alias && endpoint.has_value() ? std::optional{LimitKey{.endpoint = endpoint}}
+                                                                : std::nullopt;
+    }
+    if (!rule.pairs.has_value()) {
+        return std::nullopt;
+    }
+    const auto& bindings = rule.pairs->bindings;
+    const auto found     = std::ranges::find(bindings, name, &PairBindingNode::name);
+    if (found == bindings.end() || found->is_row() != endpoint.has_value()) {
+        return std::nullopt;
+    }
+    return LimitKey{.binding_index = static_cast<std::size_t>(found - bindings.begin()), .endpoint = endpoint};
+}
+
+[[nodiscard]] inline std::optional<LimitKey> row_endpoint_key(const RuleNode& rule, const ExprNode& expr) {
+    const auto* member = std::get_if<MemberExpr>(&expr.expr);
+    const auto* owner  = member == nullptr ? nullptr : std::get_if<IdentExpr>(&member->object->expr);
+    if (owner == nullptr) {
+        return std::nullopt;
+    }
+    const auto from = row_endpoint(expr, owner->name);
+    return from.has_value() ? resolve_limit_key(rule, owner->name, from) : std::nullopt;
+}
+
+[[nodiscard]] inline bool is_bound_row_endpoint(const RuleNode& rule, const ExprNode& expr) {
+    return row_endpoint_key(rule, expr).has_value();
+}
 [[nodiscard]] inline std::uint8_t row_key_dependencies(const ExprNode& expr,
                                                        const std::array<std::string_view, 2>& names) {
     std::uint8_t dependencies = 0;

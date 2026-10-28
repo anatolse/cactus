@@ -1142,7 +1142,7 @@ private:
     using OneAdders = std::map<std::pair<std::string, std::string>, std::vector<std::pair<std::string, SourceLocation>>>;
     void report_two_one_adders(const OneAdders& adders);
     // A `per` part counts tuples per entity; a row binding has no entity to count by.
-    bool reject_row_limit_parts(const RuleNode& rule, const LimitClause& limit);
+    void resolve_limit_keys(const RuleNode& rule, LimitClause& limit);
     [[nodiscard]] static std::optional<std::string> unproven_one_end(const RuleNode& rule,
                                                                      const EventHandlerNode& handler,
                                                                      const AddRelationStmt& add,
@@ -1363,10 +1363,7 @@ private:
     [[nodiscard]] std::optional<PairScope> resolve_limit_count_scope(const RuleNode& rule,
                                                                      const ExprNode& count,
                                                                      const LimitPart* part);
-    // The deliberately narrow two-shape proof (design.md): the literal `1`, or
-    // a name whose `const:` initializer is literally `1`. Nothing else — an
-    // arithmetic expression that happens to evaluate to 1 is not provable.
-    [[nodiscard]] bool limit_count_is_provably_one(const ExprNode& count) const;
+    [[nodiscard]] std::optional<int> limit_constant_count(const ExprNode& count) const;
     bool validate_limit_count(const RuleNode& rule, const ExprNode& count, const LimitPart* part);
     // The recursive deny-list walk shared by check_func_purity_expr and
     // check_clause_purity_expr: every impure expression form funnels through

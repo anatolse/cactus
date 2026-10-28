@@ -1,6 +1,7 @@
 #include "frontend/semantic_analyzer.hpp"
 
 #include "common/ast_expressions.hpp"
+#include "common/numeric.hpp"
 #include "common/render_pass_builtin_fields.hpp"
 #include "common/render_pass_intrinsics.hpp"
 #include "common/strong_components.hpp"
@@ -340,10 +341,14 @@ struct NumericConstant {
     long double value{};
 };
 
-std::optional<NumericConstant> numeric_literal(const LiteralExpr& literal) {
+std::optional<NumericConstant> numeric_literal(const LiteralExpr& literal, bool total_int) {
     try {
         if (literal.kind == LiteralExpr::Kind::Int) {
-            return NumericConstant{.kind = TypeKind::Int, .value = std::stold(literal.value)};
+            const auto value =
+                total_int
+                    ? static_cast<long double>(static_cast<int>(static_cast<std::uint32_t>(std::stoull(literal.value))))
+                    : std::stold(literal.value);
+            return NumericConstant{.kind = TypeKind::Int, .value = value};
         }
         if (literal.kind == LiteralExpr::Kind::Float) {
             return NumericConstant{.kind = TypeKind::Float, .value = std::stold(literal.value)};
@@ -354,59 +359,94 @@ std::optional<NumericConstant> numeric_literal(const LiteralExpr& literal) {
     return std::nullopt;
 }
 
+std::optional<int> evaluate_integer_binary(std::string_view op, int left, int right) {
+    if (op == "+") {
+        return num::add(left, right);
+    }
+    if (op == "-") {
+        return num::sub(left, right);
+    }
+    if (op == "*") {
+        return num::mul(left, right);
+    }
+    if (op == "/") {
+        return num::div(left, right);
+    }
+    if (op == "%") {
+        return num::mod(left, right);
+    }
+    return std::nullopt;
+}
+std::optional<NumericConstant> evaluate_numeric_binary(const BinaryExpr& binary,
+                                                       NumericConstant left,
+                                                       NumericConstant right,
+                                                       bool total_int) {
+    const auto result_kind =
+        left.kind == TypeKind::Float || right.kind == TypeKind::Float ? TypeKind::Float : TypeKind::Int;
+    if (total_int && result_kind == TypeKind::Int) {
+        const auto value =
+            evaluate_integer_binary(binary.op, static_cast<int>(left.value), static_cast<int>(right.value));
+        return value.has_value()
+                   ? std::optional{NumericConstant{.kind = TypeKind::Int, .value = static_cast<long double>(*value)}}
+                   : std::nullopt;
+    }
+    if (binary.op == "+") {
+        return NumericConstant{.kind = result_kind, .value = left.value + right.value};
+    }
+    if (binary.op == "-") {
+        return NumericConstant{.kind = result_kind, .value = left.value - right.value};
+    }
+    if (binary.op == "*") {
+        return NumericConstant{.kind = result_kind, .value = left.value * right.value};
+    }
+    if (binary.op == "/" && right.value != 0.0L) {
+        const auto quotient = left.value / right.value;
+        return NumericConstant{.kind  = result_kind,
+                               .value = result_kind == TypeKind::Int ? std::trunc(quotient) : quotient};
+    }
+    if (binary.op == "%" && result_kind == TypeKind::Int && right.value != 0.0L) {
+        return NumericConstant{.kind = TypeKind::Int, .value = std::fmod(left.value, right.value)};
+    }
+    return std::nullopt;
+}
+
 std::optional<NumericConstant> evaluate_numeric_constant(
     const ExprNode& expr,
     const std::unordered_map<std::string, const ExprNode*>& constants,
-    std::unordered_set<std::string>& evaluating) {
+    std::unordered_set<std::string>& evaluating,
+    bool total_int = false) {
     if (const auto* literal = std::get_if<LiteralExpr>(&expr.expr)) {
-        return numeric_literal(*literal);
+        return numeric_literal(*literal, total_int);
     }
     if (const auto* ident = std::get_if<IdentExpr>(&expr.expr)) {
         const auto found = constants.find(ident->name);
         if (found == constants.end() || !evaluating.insert(ident->name).second) {
             return std::nullopt;
         }
-        auto value = evaluate_numeric_constant(*found->second, constants, evaluating);
+        auto value = evaluate_numeric_constant(*found->second, constants, evaluating, total_int);
         evaluating.erase(ident->name);
         return value;
     }
     if (const auto* unary = std::get_if<UnaryExpr>(&expr.expr)) {
-        auto operand = evaluate_numeric_constant(*unary->operand, constants, evaluating);
+        auto operand = evaluate_numeric_constant(*unary->operand, constants, evaluating, total_int);
         if (!operand.has_value() || unary->op != "-") {
             return std::nullopt;
         }
-        operand->value = -operand->value;
+        operand->value = total_int && operand->kind == TypeKind::Int
+                             ? static_cast<long double>(num::neg(static_cast<int>(operand->value)))
+                             : -operand->value;
         return operand;
     }
     const auto* binary = std::get_if<BinaryExpr>(&expr.expr);
     if (binary == nullptr) {
         return std::nullopt;
     }
-    auto left  = evaluate_numeric_constant(*binary->left, constants, evaluating);
-    auto right = evaluate_numeric_constant(*binary->right, constants, evaluating);
+    auto left  = evaluate_numeric_constant(*binary->left, constants, evaluating, total_int);
+    auto right = evaluate_numeric_constant(*binary->right, constants, evaluating, total_int);
     if (!left.has_value() || !right.has_value()) {
         return std::nullopt;
     }
-    const auto result_kind =
-        left->kind == TypeKind::Float || right->kind == TypeKind::Float ? TypeKind::Float : TypeKind::Int;
-    if (binary->op == "+") {
-        return NumericConstant{.kind = result_kind, .value = left->value + right->value};
-    }
-    if (binary->op == "-") {
-        return NumericConstant{.kind = result_kind, .value = left->value - right->value};
-    }
-    if (binary->op == "*") {
-        return NumericConstant{.kind = result_kind, .value = left->value * right->value};
-    }
-    if (binary->op == "/" && right->value != 0.0L) {
-        const auto quotient = left->value / right->value;
-        return NumericConstant{.kind  = result_kind,
-                               .value = result_kind == TypeKind::Int ? std::trunc(quotient) : quotient};
-    }
-    if (binary->op == "%" && result_kind == TypeKind::Int && right->value != 0.0L) {
-        return NumericConstant{.kind = TypeKind::Int, .value = std::fmod(left->value, right->value)};
-    }
-    return std::nullopt;
+    return evaluate_numeric_binary(*binary, *left, *right, total_int);
 }
 
 TypeInfo make_resolved_user_type(TypeKind kind, const SymbolId& symbol, std::string display_name = {}) {
@@ -3654,6 +3694,9 @@ PairScope SemanticAnalyzer::build_pair_scope(const RuleNode& rule) {
         return scope;
     }
     for (const auto& part : rule.limit->parts) {
+        if (part.from_endpoint.has_value()) {
+            continue;
+        }
         const auto binding = scope.find(part.binding);
         if (binding == scope.end()) {
             continue;
@@ -4079,22 +4122,14 @@ std::unordered_set<std::string> unary_domain_scope_names(
 
 }  // namespace
 
-bool SemanticAnalyzer::limit_count_is_provably_one(const ExprNode& count) const {
-    const auto is_literal_one = [](const ExprNode& expr) {
-        const auto* literal = std::get_if<LiteralExpr>(&expr.expr);
-        return literal != nullptr && literal->kind == LiteralExpr::Kind::Int && literal->value == "1";
-    };
-    if (is_literal_one(count)) {
-        return true;
+std::optional<int> SemanticAnalyzer::limit_constant_count(const ExprNode& count) const {
+    std::unordered_set<std::string> evaluating;
+    const auto value = evaluate_numeric_constant(count, const_initializers_, evaluating, true);
+    if (!value.has_value() || value->kind != TypeKind::Int) {
+        return std::nullopt;
     }
-    const auto* ident = std::get_if<IdentExpr>(&count.expr);
-    if (ident == nullptr) {
-        return false;
-    }
-    const auto declared = const_initializers_.find(ident->name);
-    return declared != const_initializers_.end() && declared->second != nullptr && is_literal_one(*declared->second);
+    return static_cast<int>(value->value);
 }
-
 // The scope a limit count may read from: just the part's `per` binding, and
 // nothing at all for a global limit — a global limit's count may reference
 // only constants, and a per-binding count must not reach for the binding it
@@ -4108,6 +4143,10 @@ std::optional<PairScope> SemanticAnalyzer::resolve_limit_count_scope(const RuleN
         return std::nullopt;
     }
     if (!rule.pairs.has_value()) {
+        if (rule.rows.has_value() && expr_references_ident(count, rule.rows->alias)) {
+            errors_.error(count.location, "limit: endpoint capacity counts may reference only constants");
+            return std::nullopt;
+        }
         // `per` requires `pairs:` (rejected earlier in validateLimitClause), so
         // this is always the global form here: its count may reference only
         // constants, exactly like the pair case below, just against the
@@ -4124,7 +4163,7 @@ std::optional<PairScope> SemanticAnalyzer::resolve_limit_count_scope(const RuleN
     }
     const auto& limit = *rule.limit;
     auto full_scope   = build_pair_scope(*rule.pairs);
-    if (part != nullptr) {
+    if (part != nullptr && !part->from_endpoint.has_value()) {
         const auto binding = full_scope.find(part->binding);
         if (binding == full_scope.end()) {
             errors_.error(part->location,
@@ -4147,7 +4186,7 @@ std::optional<PairScope> SemanticAnalyzer::resolve_limit_count_scope(const RuleN
         return per_scope;
     }
     std::string allowed = "a global `limit:` count may reference only constants";
-    if (part != nullptr) {
+    if (part != nullptr && !part->from_endpoint.has_value()) {
         allowed = "a `per " + part->binding + "` count may only read '" + part->binding + "'";
     }
     errors_.error(limit.location,
@@ -4176,30 +4215,34 @@ void SemanticAnalyzer::validateLimitClause(RuleNode& rule) {
                           "': `limit: ... per` cannot be combined with `reduce:`; each group is already one row");
         return;
     }
-    if (!limit.parts.empty() && !has_pairs) {
+    if (!limit.parts.empty() && !has_pairs && !rule.rows.has_value()) {
         errors_.error(limit.parts.front().location,
                       "rule '" + rule.name +
                           "': `per` requires a `pairs:` clause; a unary domain has no binding to partition by");
         return;
     }
-    if (reject_row_limit_parts(rule, limit)) {
-        return;
-    }
-    if (limit.parts.size() == 2 && limit.parts[0].binding == limit.parts[1].binding) {
+    resolve_limit_keys(rule, limit);
+    if (limit.parts.size() == 2 && limit.parts[0].resolved_key.has_value() &&
+        limit.parts[0].resolved_key == limit.parts[1].resolved_key) {
         errors_.error(limit.parts[1].location,
                       "rule '" + rule.name + "': the two parts of `limit:` must name different bindings");
-        return;
     }
     if (limit.count != nullptr) {
         (void)validate_limit_count(rule, *limit.count, nullptr);
     }
     for (auto& part : limit.parts) {
-        part.provably_one = validate_limit_count(rule, *part.count, &part) && limit_count_is_provably_one(*part.count);
+        const bool valid_count = validate_limit_count(rule, *part.count, &part);
+        part.constant_count = valid_count && part.resolved_key.has_value() ? limit_constant_count(*part.count) : std::nullopt;
+        part.provably_one = part.constant_count == 1;
     }
 }
 
 // Whether `count` is a valid count for the global limit or for `part`.
 bool SemanticAnalyzer::validate_limit_count(const RuleNode& rule, const ExprNode& count, const LimitPart* part) {
+    if (part != nullptr && part->from_endpoint.has_value() &&
+        !validate_const_expression(count, "limit: endpoint capacity counts may reference only constants", true)) {
+        return false;
+    }
     const auto per_scope = resolve_limit_count_scope(rule, count, part);
     if (!per_scope.has_value()) {
         return false;

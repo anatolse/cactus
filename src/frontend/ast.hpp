@@ -1090,12 +1090,22 @@ struct WhenClause {
 // ── Limit Clause (dsl-rule-limit) ───────────────────────────────────────────
 
 // `<count> per <binding>`: at most `count` tuples per value of one pair binding.
+enum class RelationEndpoint : std::uint8_t { From, To };
+
+struct LimitKey {
+    std::size_t binding_index = 0;
+    std::optional<RelationEndpoint> endpoint;
+    bool operator==(const LimitKey&) const = default;
+};
+
 struct LimitPart {
     std::unique_ptr<ExprNode> count;
     std::string binding;
+    std::optional<bool> from_endpoint;
+    std::optional<LimitKey> resolved_key;
+    std::optional<int> constant_count;
     SourceLocation location;  // of `per`
-    // Set by semantic analysis: `count` folds to the literal 1, which is what
-    // makes `binding` writable in this rule's handlers.
+    // Endpoint uniqueness does not confer trait access.
     bool provably_one = false;
 };
 
@@ -1107,8 +1117,15 @@ struct LimitClause {
     std::vector<LimitPart> parts;
     SourceLocation location;
 
-    [[nodiscard]] const LimitPart* part_for(const std::string& binding) const {
-        const auto found = std::ranges::find(parts, binding, &LimitPart::binding);
+    [[nodiscard]] const LimitPart* part_for(const std::string& binding,
+                                            std::optional<bool> endpoint = std::nullopt) const {
+        const auto found = std::ranges::find_if(
+            parts, [&](const LimitPart& part) { return part.binding == binding && part.from_endpoint == endpoint; });
+        return found == parts.end() ? nullptr : &*found;
+    }
+
+    [[nodiscard]] const LimitPart* part_for(const LimitKey& key) const {
+        const auto found = std::ranges::find_if(parts, [&](const LimitPart& part) { return part.resolved_key == key; });
         return found == parts.end() ? nullptr : &*found;
     }
 };

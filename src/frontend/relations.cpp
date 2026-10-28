@@ -179,7 +179,7 @@ void SemanticAnalyzer::require_fixed_derived_end(RuleNode& rule) {
                               rule.pairs->bindings[1].name + "'; fix one derived endpoint independently of both rows");
             return;
         }
-        plan.driver   = available(0) && (!plan.keyed[0] || plan.keyed[1]) ? 0 : 1;
+        plan.driver = available(0) && (!plan.keyed[0] || plan.keyed[1]) ? 0 : 1;
         return;
     }
     const auto* name = row_binding_name(rule);
@@ -814,8 +814,13 @@ bool same_entity(const ExprNode* left, const ExprNode* right) {
     if (std::holds_alternative<SelfExpr>(left->expr) && std::holds_alternative<SelfExpr>(right->expr)) {
         return true;
     }
-    const auto* a = std::get_if<IdentExpr>(&left->expr);
-    const auto* b = std::get_if<IdentExpr>(&right->expr);
+    const auto* a      = std::get_if<IdentExpr>(&left->expr);
+    const auto* b      = std::get_if<IdentExpr>(&right->expr);
+    const auto* member = std::get_if<MemberExpr>(&left->expr);
+    const auto* owner  = member == nullptr ? nullptr : std::get_if<IdentExpr>(&member->object->expr);
+    if (owner != nullptr && row_endpoint(*left, owner->name).has_value()) {
+        return row_endpoint(*left, owner->name) == row_endpoint(*right, owner->name);
+    }
     return a != nullptr && b != nullptr && a->name == b->name;
 }
 
@@ -851,6 +856,9 @@ std::string free_test(const std::string& relation_name, const std::string& end, 
 }  // namespace
 
 bool SemanticAnalyzer::is_fixed_row_argument(const RuleNode& rule, const ExprNode& argument) {
+    if (is_bound_row_endpoint(rule, argument)) {
+        return true;
+    }
     if (std::holds_alternative<SelfExpr>(argument.expr) || std::holds_alternative<LiteralExpr>(argument.expr)) {
         return true;
     }
@@ -878,7 +886,12 @@ std::optional<std::string> SemanticAnalyzer::unproven_one_end(const RuleNode& ru
     const bool unary        = !rule.pairs.has_value() && !rule.rows.has_value() && !rule.filter.entries.empty();
     const bool pair_binding = ident != nullptr && rule.pairs.has_value() &&
                               std::ranges::contains(rule.pairs->bindings, ident->name, &PairBindingNode::name);
-    if (pair_binding) {
+    if (is_bound_row_endpoint(rule, end)) {
+        const auto* part = rule.limit.has_value() ? rule.limit->part_for(*row_endpoint_key(rule, end)) : nullptr;
+        if (part == nullptr || !part->provably_one) {
+            return prefix + " and `" + spelling(end) + "` is not limited to one";
+        }
+    } else if (pair_binding) {
         const auto* part = rule.limit.has_value() ? rule.limit->part_for(ident->name) : nullptr;
         if (part == nullptr || !part->provably_one) {
             return prefix + " and `" + ident->name + "` is not limited to one";
@@ -916,7 +929,7 @@ std::string SemanticAnalyzer::proven_one_form(const RuleNode& rule,
             continue;
         }
         const auto end = spelling(from ? *add.from : *add.to);
-        if (rule.pairs.has_value()) {
+        if (rule.pairs.has_value() || rule.rows.has_value()) {
             parts.push_back("1 per " + end);
         }
         tests.push_back(free_test(add.relation_name, end, from));
@@ -1007,24 +1020,26 @@ void SemanticAnalyzer::report_two_one_adders(const OneAdders& adders) {
     }
 }
 
-bool SemanticAnalyzer::reject_row_limit_parts(const RuleNode& rule, const LimitClause& limit) {
-    const auto& parts = limit.parts;
-    const auto row    = std::ranges::find_if(parts, [&](const LimitPart& part) {
-        const auto binding = std::ranges::find(rule.pairs->bindings, part.binding, &PairBindingNode::name);
-        return binding != rule.pairs->bindings.end() && binding->is_row();
-    });
-    if (row == parts.end()) {
-        return false;
+void SemanticAnalyzer::resolve_limit_keys(const RuleNode& rule, LimitClause& limit) {
+    for (auto& part : limit.parts) {
+        part.resolved_key = resolve_limit_key(rule, part.binding, part.from_endpoint);
+        const bool row =
+            rule.rows.has_value()
+                ? rule.rows->alias == part.binding
+                : rule.pairs.has_value() && std::ranges::any_of(rule.pairs->bindings, [&](const auto& binding) {
+                      return binding.name == part.binding && binding.is_row();
+                  });
+        if (part.from_endpoint.has_value() && !row) {
+            errors_.error(part.location, "limit: endpoint key '" + part.binding + "' must name a relation row binding");
+        }
+        if (!part.from_endpoint.has_value() && !rule.pairs.has_value() && !row) {
+            errors_.error(part.location, "limit: bare partition keys require an entity pair binding");
+        }
+        if (!part.from_endpoint.has_value() && row) {
+            errors_.error(part.location,
+                          "limit: '" + part.binding + "' names a relation row; choose '" + part.binding +
+                              ".from' or '" + part.binding + ".to'");
+        }
     }
-    if (parts.size() == 2) {
-        errors_.error(limit.location,
-                      "rule '" + rule.name + "': a two-sided limit needs two entity bindings; '" + row->binding +
-                          "' binds relation rows");
-    } else {
-        errors_.error(row->location,
-                      "`per " + row->binding + "` names a relation row; a `per` part needs an entity binding");
-    }
-    return true;
 }
-
 }  // namespace cactus

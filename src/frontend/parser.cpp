@@ -1862,7 +1862,23 @@ LimitClause Parser::parse_limit_clause() {
     auto count      = parse_expression();
     while (check(TokenType::IDENTIFIER) && peek().value == "per") {
         LimitPart part{.count = std::move(count), .location = advance().location};
+        if (clause.parts.size() >= 2) {
+            errors_.error(part.location, "limit: at most two partition keys are allowed");
+        }
         part.binding = consume(TokenType::IDENTIFIER, "expected binding name after 'per'").value;
+        if (match(TokenType::DOT)) {
+            if (match(TokenType::FROM)) {
+                part.from_endpoint = true;
+            } else if (match(TokenType::TO)) {
+                part.from_endpoint = false;
+            } else {
+                errors_.error(peek().location, "limit: endpoint key must end in 'from' or 'to'");
+                advance();
+            }
+        }
+        if (!check(TokenType::COMMA) && !check(TokenType::NEWLINE) && !check(TokenType::EOF_TOKEN)) {
+            errors_.error(peek().location, "limit: endpoint key must be a direct binding.from or binding.to");
+        }
         clause.parts.push_back(std::move(part));
         if (!match(TokenType::COMMA)) {
             break;

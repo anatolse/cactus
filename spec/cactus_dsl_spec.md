@@ -326,7 +326,7 @@ relation Claim:
 - A row lives only while both ends are valid. It is removed at the commit position of the command that destroys an end or removes its end trait (§4.4), so no row ever names a dead entity.
 - A self row `R(a, a)` is allowed. `R(a, b)` and `R(b, a)` are different rows. Rows are ordered by creation: the commit position of the command or keep run that created them. Replacing a row keeps its position.
 - A relation is **kept** when a `keep R(a, b)` clause names it (§3.8.6), and **stored** otherwise. A stored relation changes only through `add R` and `remove R` (§4.4). A program has at most one keeper per relation, and `add`/`remove` of a kept relation is an error.
-- **`one` ends.** An end marked `one` holds at most one row per entity on that end; no mark means many. The compiler accepts an `add R(x, y)` of such a relation only when it proves the limit: the end argument is `self` of a unary rule or a pair binding limited to one (`limit: 1 per b`, §3.8.3); the other argument is a pair binding, `self`, a named entity or a constant; the handler runs on a phase; the rule's `where:` holds `not R(e, _)` (from end) or `not R(_, e)` (to end) as a top-level conjunct; and no other rule adds `R` in the same phase. Any other `add` is an error that names the failing condition and shows the proven form. A kept relation can't mark an end `one`.
+- **`one` ends.** An end marked `one` holds at most one row per entity on that end; no mark means many. The compiler accepts an `add R(x, y)` of such a relation only when it proves the limit: the end argument is `self` of a unary entity rule, an entity pair binding limited to one, or a direct row endpoint with an exactly matching statically-one partition key (§3.8.3); the other argument is an entity binding, a direct bound row endpoint, `self`, a named entity or a constant; the handler runs on a phase; the rule's `where:` holds `not R(e, _)` (from end) or `not R(_, e)` (to end) as a top-level conjunct; and no other rule adds `R` in the same phase. Any other `add` is an error that names the failing condition and shows the proven form. A kept relation can't mark an end `one`.
 
 **Reading relations.** `R(x, y)` is a pure `bool` test, true when `R` holds the row `(x, y)` in the snapshot of the current pass. Either argument may be `_`, which matches any entity; `R(_, _)` is rejected. Tests are allowed only in `where:` and `when:`; `and`, `or` and `not` compose them into intersection, union and difference. A rule can also bind rows (§3.8.1): `r: R` in `pairs:`, or `each: R as r`. A row binding exposes `r.from`, `r.to` and `r.<field>`, is read-only, and can't be used with brackets or as a command or `emit` target. Both `pairs:` bindings may name rows when a top-level endpoint equality joins them, such as `a.to == b.from`; each binding still names only one relation.
 
@@ -656,7 +656,9 @@ group_decl      = [ "pub" ] "group" IDENTIFIER ":" NEWLINE INDENT
                   [ after_clause ]
                   DEDENT ;
 
-limit_clause    = "limit" ":" expression [ "per" IDENTIFIER ] NEWLINE ;
+limit_clause    = "limit" ":" ( expression | limit_part [ "," limit_part ] ) NEWLINE ;
+limit_part      = expression "per" limit_key ;
+limit_key       = IDENTIFIER [ "." ( "from" | "to" ) ] ;
 ```
 
 `each:` and `without:` are the only unary selection spellings. `each` and `without`
@@ -790,8 +792,7 @@ events run them; a targeted occurrence selects no tuples. They can emit to an
 endpoint explicitly, as above. Rows remain read-only and cannot be recipients
 of `keep`, reductions, per-row limits or lifecycle handlers. `self`, endpoint
 trait reads such as `place.to[Tile].x`, and using a row as an entity are errors.
-The existing proof for adding a `one` relation is unchanged: row endpoints do
-not become entity bindings limited to one.
+A direct row endpoint limited to statically one can prove that endpoint unique for a relation claim (§3.8.3). It grants no trait access or mutation.
 
 ```cactus
 rule DetectContacts:
@@ -943,9 +944,9 @@ rule GroundActor:
         actor[KinematicActor].ground_surface = surface[Solid].top
 ```
 
-**The global form bounds total count; the `per` form bounds each partition.** `limit: N` with no `per` admits at most `N` rows (unary) or `N` tuples in total (pair), and guarantees nothing about how often any single entity occurs among them. `limit: N per <binding>` is accepted only on a `pairs:` rule without `reduce:` (each group is already one row) and only when `<binding>` names one of that rule's two bindings; it admits at most `N` tuples for each distinct value of that binding. A binding value with no surviving tuples produces no activation at all.
+**The global form bounds total count; the `per` form bounds each partition.** `limit: N` with no `per` admits at most `N` rows (unary) or `N` tuples in total (pair), and guarantees nothing about how often any single entity occurs among them. `limit: N per <binding>` is accepted only on a `pairs:` rule without `reduce:` (each group is already one row) and only when `<binding>` names one of that rule's two entity bindings; it admits at most `N` tuples for each distinct value of that binding. A binding value with no surviving tuples produces no activation at all.
 
-**A two-sided limit picks a greedy matching.** `limit: n per a, m per b` names both entity bindings of a `pairs:` rule, one part each. The tuples that pass `where:` are walked once in the rule's order (`order by:` keys, then left-binding-major snapshot order), and a tuple is kept when its `a` value has fewer than `n` kept tuples and its `b` value fewer than `m`. Each part follows the count rules below on its own binding, and each part whose count is provably `1` makes its binding writable. A part can't name a row binding.
+**A two-sided limit picks a greedy matching.** `limit: n per a, m per b` names two different partition keys: entity pair bindings or direct row endpoints, including both endpoints of a unary row domain. The tuples that pass `where:` are walked once in the rule's order (`order by:` keys, then left-binding-major snapshot order), and a tuple is kept when its `a` value has fewer than `n` kept tuples and its `b` value fewer than `m`. Each part follows the count rules below on its own binding, and each entity-key part whose count is provably `1` makes its binding writable. A bare row binding is not a key; use its direct `.from` or `.to` endpoint.
 
 ```cactus
 rule AssignTasks:
@@ -965,8 +966,19 @@ rule AssignTasks:
 
 **Selection is deterministic.** With `order by:`, sort keys are evaluated against the rule's snapshot and equal keys break ties by stable creation order. Without `order by:`, `limit:` takes the domain's existing stable iteration order — for a pair domain, the left-binding-major snapshot order of §3.8.1. Each partition of a `per` limit resolves independently of every other. A conforming backend's physical strategy must not change which rows this selects.
 
-**A provably-one `per` limit makes its binding writable.** When a `limit: <expr> per <binding>`'s count expression is the literal `1`, or a name whose `const:` initializer is literally `1`, the compiler proves that at most one tuple per `<binding>` value can run — and `<binding>` becomes an ordinary mutable assignment target inside that rule's handlers, carved out of §3.8.1's pair read-only rule. The proof is deliberately syntactic: any other expression, including one that always evaluates to `1` at runtime (`2 - 1`, a non-constant field read), is not provable. The rule's other binding stays read-only, a global `limit:` grants no writability on either binding, and trait-matching directly on a pair binding stays rejected regardless of any `limit:` — only assignment through `binding[Trait].field` or a bare alias of that binding's traits is admitted. Such a write is inferred into the handler's contract exactly like a write through a unary `each:` alias, so scheduling sees the same read/write conflict information.
+**A constant count of one supplies a uniqueness proof.** A literal `1`, a named constant equal to one, or an arithmetic constant expression such as `2 - 1` proves that each key occurs at most once. Constant arithmetic follows Cactus integer wrapping and floor division. A runtime count never supplies this proof, even when its current value happens to be one. An entity key with this proof becomes writable through `binding[Trait].field` or the bare aliases of its selected traits; trait-matching on that binding remains read-only. The writes enter the normal handler contract. An endpoint key supplies only the exact endpoint's relation `one` proof: it does not make the row writable or allow endpoint trait access. Equalities in `where:` do not transfer a proof to another endpoint.
 
+**Relation endpoints are capacity keys.** A unary row rule (`each: Candidate as candidate`) or a pair rule can use `limit: 1 per candidate.from, 2 per candidate.to`. Mixed domains can combine `1 per actor` with `2 per offer.to`; two-row joins can combine `1 per place.from` with `1 per route.to`. The count of an endpoint part must be a pure constant `int` expression. Row fields, endpoint traits and other entity fields cannot supply it. Existing dynamic counts for entity keys remain valid. Two parts must name different resolved keys; bare rows, fields, unknown names, entity endpoints and nested paths are errors. Endpoint limits preserve every existing join-bound and row restriction.
+
+Think of allocation in three steps: `where:` defines eligibility, `order by:` defines preference, and `limit:` defines capacity. Endpoint-bearing domains walk the filtered/sorted sequence once. A candidate is retained only when all its key counters have space, then all counters increase. A skipped candidate consumes nothing. Each key role has its own counters, even when handles coincide. Distinct witness tuples count separately. An early return from the selected handler still consumes its capacity.
+
+Capacities apply only to this pass. They are not persistent occupancy; filter existing claims in `where:`. Queued row changes and destruction become visible after commit. Every later pass and restored world recomputes allocation; selection counters are never saved.
+
+Stored rows use row creation order for ties, derived rows use their existing endpoint order, and joins use authored left-major order. Endpoint-bearing limits preserve that domain order; they never sort by endpoint handles. Entity-only one-sided limits retain their existing partition traversal order.
+
+This is greedy allocation, not optimal assignment. With candidates `(r1,t1,1)`, `(r2,t1,2)`, `(r1,t2,3)` in that preference order and capacity one on both ends, greedy retains only `(r1,t1)`. A different assignment could retain two candidates. There is no maximum-cardinality or minimum-total-cost promise.
+
+See `examples/relation_endpoint_limits.cactus` for scored rows, mixed domains, and a bounded `Located`/`Route` join that establishes unique robot-to-tile claims. A robot already at its goal uses the separate arrival rule: `shortest` has no self row, and no distance sentinel or copied location fact is needed.
 #### 3.8.4 When Clause
 
 `when:` switches a whole rule on or off from game-wide state. It holds one or more pure `bool` predicates that form a conjunction; when any predicate is false, a handler pass does nothing — no entity or tuple is visited, the body does not run, and no writes or commands are produced. `when` is recognized contextually at the rule-clause position, after `where:` and `limit:`; it is not a reserved keyword elsewhere. It applies to every handler of the rule, including event handlers and rules with no `each:` or `pairs:`, and it is rejected on `extern rule` declarations.

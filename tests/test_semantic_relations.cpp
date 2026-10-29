@@ -1819,3 +1819,141 @@ TEST_CASE("Endpoint key errors retain independent capacity diagnostics", "[relat
     CHECK(result.has("must name a relation row binding"));
     CHECK(result.has("must be of type 'int'"));
 }
+
+TEST_CASE("Relation keeps project direct row keys", "[relations][row-projection]") {
+    for (const auto& keys : {"edge.from, edge.to", "edge.to, edge.from", "edge.from, edge.from"}) {
+        const auto result = analyze(
+            std::string("rule Project:\n    each: Walk as edge\n    group: links\n    keep Bridge(") + keys + ")\n");
+        INFO(describe(result));
+        CHECK(result.clean());
+    }
+    for (const auto& domain : {"    pairs:\n        tile: Tile\n        edge: Walk\n    group: links\n    where: tile "
+                               "== edge.from\n    keep Bridge(tile, edge.to)\n",
+                               "    pairs:\n        edge: Walk\n        other: Walk\n    group: links\n    where: "
+                               "edge.to == other.from\n    keep Bridge(edge.from, other.to)\n"}) {
+        const auto result = analyze(std::string("rule Project:\n") + domain);
+        INFO(describe(result));
+        CHECK(result.clean());
+    }
+}
+
+TEST_CASE("Projected keep payloads are uniform", "[relations][row-projection]") {
+    for (const auto& expression : {"1.0", "2.0 + 3.0"}) {
+        const auto result = analyze(std::string("rule Project:\n    each: Bridge as edge\n    group: links\n    keep "
+                                                "Walk(edge.to, edge.from):\n        cost = ") +
+                                    expression + "\n");
+        INFO(describe(result));
+        CHECK(result.clean());
+    }
+    const auto result = analyze(
+        "rule Project:\n    each: Walk as edge\n    group: links\n    keep Bridge(edge.to, edge.from):\n        cost = "
+        "edge.cost\n");
+    CHECK(result.has("independent of domain bindings"));
+}
+
+TEST_CASE("Projected keeps retain definition restrictions", "[relations][row-projection]") {
+    for (const auto& suffix : {"    keep Bridge(edge.from, edge.to)\n    on fixed_tick:\n        emit Done\n",
+                               "    keep Bridge(edge.from, edge.to)\n    limit: 1\n",
+                               "    keep Bridge(edge.from, edge.to) if true\n",
+                               "    keep Bridge(edge.from, edge.to) on edge\n",
+                               "    keep Floor\n"}) {
+        INFO(suffix);
+        const auto result = analyze(std::string("rule Project:\n    each: Walk as edge\n    group: links\n") + suffix);
+        CHECK_FALSE(result.clean());
+    }
+    const auto ungrouped = analyze("rule Project:\n    each: Walk as edge\n    keep Bridge(edge.from, edge.to)\n");
+    CHECK(ungrouped.has("group"));
+    const auto cycle =
+        analyze("rule Project:\n    each: Walk as edge\n    group: links\n    keep Walk(edge.to, edge.from)\n");
+    CHECK_FALSE(cycle.clean());
+    const auto ordered = analyze(
+        "rule Project:\n    each: Walk as edge\n    order by: edge.cost asc\n    group: links\n    keep "
+        "Bridge(edge.from, edge.to)\n");
+    CHECK(ordered.has("order by:"));
+}
+
+TEST_CASE("Projected keep keys must identify compatible endpoints", "[relations][row-projection]") {
+    for (const auto& key : {"missing.from", "edge.cost", "edge", "edge.from.x"}) {
+        ErrorReporter errors;
+        Lexer lexer("module game\n" + kPrelude +
+                        std::string("rule Project:\n    each: Walk as edge\n    group: links\n    keep Bridge(") + key +
+                        ", edge.to)\n",
+                    "game.cactus",
+                    errors);
+        Parser parser(lexer.tokenize(), errors);
+        auto ast = parser.parse_program();
+        if (!errors.has_errors()) {
+            SemanticAnalyzer analyzer(errors);
+            (void)analyzer.analyze(ast);
+        }
+        CHECK(errors.has_errors());
+    }
+    const auto result =
+        analyze("rule Project:\n    each: Walk as edge\n    group: links\n    keep Owns(edge.from, edge.to)\n");
+    CHECK(result.has("Player"));
+}
+
+TEST_CASE("Projected payload scope accepts named fields and rejects witnesses", "[relations][row-projection]") {
+    const std::string setup =
+        "entity Origin:\n    Tile\n"
+        "relation Output:\n    from: Tile\n    to: Tile\n    let cost: float\n"
+        "func identity(value: float) float:\n    return value\n"
+        "const:\n    COST = 4.0\n";
+    const std::string keeper =
+        "rule Project:\n    each: Walk as edge\n    group: links\n    keep Output(edge.from, edge.to)";
+    for (const auto& value : {"Origin[Tile].height", "identity(1.0)", "COST"}) {
+        const auto result = analyze(setup + keeper + ":\n        cost = " + value + "\n");
+        INFO(describe(result));
+        CHECK(result.clean());
+    }
+    for (const auto& value : {"edge.cost", "identity(edge.cost)"}) {
+        const auto result = analyze(setup + keeper + ":\n        cost = " + value + "\n");
+        CHECK(result.has("independent of domain bindings"));
+    }
+    CHECK(analyze(setup + keeper + "\n").has("required field 'cost'"));
+    CHECK(analyze(setup + keeper + ":\n        cost = query.count[Tile]()\n").has("pure"));
+    const auto mixed =
+        analyze(setup +
+                "rule Project:\n    pairs:\n        tile: Tile as t\n        edge: Walk\n    group: links\n    where: "
+                "tile == edge.from\n    keep Output(tile, edge.to):\n        cost = t.height\n");
+    CHECK(mixed.has("independent of domain bindings"));
+}
+
+TEST_CASE("Projected keep dependencies and source bounds remain checked", "[relations][row-projection]") {
+    const std::string origin = "entity Origin:\n    Tile\n";
+    const std::string keeper =
+        "rule Project:\n    each: Walk as edge\n    group: links\n    keep Bridge(edge.from, edge.to)\n";
+    CHECK_FALSE(
+        analyze(keeper + "rule Other:\n    each: Walk as edge\n    group: links\n    keep Bridge(edge.to, edge.from)\n")
+            .clean());
+    CHECK_FALSE(analyze(keeper + "rule Write:\n    on fixed_tick:\n        add Bridge(Boss, Boss)\n").clean());
+    CHECK_FALSE(analyze("relation Single:\n    from: Tile one\n    to: Tile\nrule Project:\n    each: Walk as edge\n   "
+                        " group: links\n    keep Single(edge.from, edge.to)\n")
+                    .clean());
+    const auto unbounded = analyze(
+        "relation Reach = closure(Walk)\nrule Project:\n    each: Reach as edge\n    group: links\n    keep "
+        "Bridge(edge.from, edge.to)\n");
+    CHECK_FALSE(unbounded.clean());
+    const auto bounded = analyze(origin +
+                                 "relation Reach = closure(Walk)\nrule Project:\n    each: Reach as edge\n    group: "
+                                 "links\n    where: edge.from == Origin\n    keep Bridge(edge.from, edge.to)\n");
+    INFO(describe(bounded));
+    CHECK(bounded.clean());
+    const auto cycle = analyze(origin +
+                               "relation Reach = closure(Bridge)\nrule Project:\n    each: Reach as edge\n    group: "
+                               "links\n    where: edge.from == Origin\n    keep Bridge(edge.from, edge.to)\n");
+    CHECK(cycle.has("reads its own kept relation"));
+    const auto transitive =
+        analyze(keeper + "rule Back:\n    each: Bridge as edge\n    group: links\n    keep Walk(edge.from, edge.to)\n");
+    CHECK(transitive.has("keep rules form a loop"));
+}
+
+TEST_CASE("Projected keeps can target imported relations", "[relations][row-projection]") {
+    const std::string source = "relation Source:\n    from: lib.Thing\n    to: lib.Port\n";
+    const std::string keeper =
+        "rule Project:\n    each: Source as edge\n    group: links\n    keep lib.Hidden(edge.from, edge.to)\n";
+    CHECK(analyze_with_library(hidden_library(), source + keeper).clean());
+    auto kept                           = hidden_library();
+    kept.relations.at("Hidden").kept_by = "Existing";
+    CHECK_FALSE(analyze_with_library(kept, source + keeper).clean());
+}

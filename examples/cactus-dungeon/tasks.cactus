@@ -1,0 +1,272 @@
+module tasks
+
+use std.core
+use world
+use territory
+use std.math as math
+use std.physics.volume as physics
+use std.transform.volume as tv
+use std.voxel.volume as voxel
+
+pub trait Task
+
+pub trait Work:
+    persist var progress: float = 0.0
+
+pub relation DigMark:
+    from: world.Player
+    to: world.Tile
+
+pub relation Located:
+    from: world.Robot
+    to: world.Tile
+
+pub relation Commands:
+    from: world.Robot one
+    to: world.Player
+
+pub relation Claim:
+    from: world.Robot one
+    to: world.Tile one
+
+relation Job:
+    from: world.Player
+    to: world.Tile
+
+relation CanWork:
+    from: world.Robot
+    to: world.Tile
+
+relation Approach:
+    from: world.Tile
+    to: world.Tile
+    let cost: int = 1
+
+relation Route = shortest(Approach, by = cost)
+
+event Step:
+    tile: entity_id
+
+event Position:
+    at: vec3
+
+event Dig:
+    worker: entity_id
+
+event Earned:
+    amount: int
+
+event Credit:
+    amount: int
+
+event ClaimFloor:
+    tile: entity_id
+
+pub func diggable(kind: world.Kind) bool:
+    return kind == world.Kind.Earth or kind == world.Kind.Gold or kind == world.Kind.InfiniteGold
+
+rule PlaceWorkers:
+    pairs:
+        robot:
+            world.Robot
+            tv.WorldTransform as pose
+        tile:
+            world.Tile
+            voxel.Cell as cell
+    where:
+        not Located(robot, _)
+        cell.x == math.floor(pose.position.x)
+        cell.z == math.floor(pose.position.z)
+    limit: 1 per robot
+
+    on fixed_tick:
+        add Located(robot, tile)
+
+rule AssignCommands:
+    pairs:
+        place: Located
+        owner: world.OwnedBy
+    where:
+        place.to == owner.from
+        not Commands(place.from, _)
+    limit: 1 per place.from
+
+    on fixed_tick:
+        add Commands(place.from, owner.to)
+
+rule DigJobs:
+    pairs:
+        player: world.Player
+        tile: world.Tile
+    group: territory.links
+    where:
+        (DigMark(player, tile) and diggable(tile[world.Tile].kind)) or (territory.Frontier(player, tile) and tile[world.Tile].kind == world.Kind.Floor)
+    keep Job(player, tile)
+
+rule DigTasks:
+    pairs:
+        tile: world.Tile
+        player: world.Player
+    group: territory.links
+    where:
+        Job(player, tile)
+    reduce per tile:
+        marks = count()
+    keep Task on tile if marks > 0
+
+rule EligibleWorkers:
+    pairs:
+        robot: world.Robot
+        tile: world.Tile
+    group: territory.links
+    where:
+        (Commands(robot, world.Human) and Job(world.Human, tile)) or (Commands(robot, world.Enemy) and Job(world.Enemy, tile))
+    keep CanWork(robot, tile)
+
+rule BeginWork:
+    each: Task
+
+    on added Task:
+        add Work
+
+rule EndWork:
+    each: world.Tile
+
+    on removed Task:
+        remove Work
+
+rule ReleaseClaims:
+    each: Claim as claim
+    where:
+        not CanWork(claim.from, claim.to)
+
+    on fixed_tick:
+        remove Claim(claim.from, claim.to)
+
+rule ApproachLinks:
+    pairs:
+        a:
+            world.Tile
+            territory.Walkable
+        b: world.Tile
+    group: territory.links
+    where:
+        territory.Walk(a, b) or (territory.Neighbor(a, b) and Job(_, b))
+    keep Approach(a, b)
+
+rule AssignTasks:
+    pairs:
+        place: Located
+        route: Route
+    order by: route.distance asc
+    after: ReleaseClaims
+    where:
+        route.from == place.to
+        CanWork(place.from, route.to)
+        not Claim(place.from, _)
+        not Claim(_, route.to)
+    limit: 1 per place.from, 1 per route.to
+
+    on fixed_tick:
+        add Claim(place.from, route.to)
+
+rule FollowRoute:
+    pairs:
+        claim: Claim
+        route: Route
+    after: AssignTasks
+    where:
+        route.to == claim.to
+        Located(claim.from, route.from)
+        CanWork(claim.from, claim.to)
+
+    on fixed_tick:
+        if route.next == claim.to:
+            emit Dig to claim.to:
+                worker = claim.from
+        else:
+            emit Step to claim.from:
+                tile = route.next
+
+rule MoveWorker:
+    each: world.Robot
+
+    on Step as step:
+        remove Located(self, _)
+        add Located(self, step.tile)
+
+rule WorkerPositions:
+    pairs:
+        place: Located
+        tile:
+            world.Tile
+            voxel.Cell as cell
+    where:
+        tile == place.to
+
+    on tick:
+        emit Position to place.from:
+            at = vec3(cell.x + 0.5, 1.25, cell.z + 0.5)
+
+rule ShowWorkerPosition:
+    each:
+        world.Robot
+        tv.WorldTransform as pose
+
+    on Position as request:
+        pose.position = request.at
+
+rule DigTile:
+    each:
+        world.Tile as tile
+        Work as work
+        voxel.Cell as cell
+
+    on Dig as dig:
+        work.progress += 1.0 / 60.0
+        let required = if tile.kind == world.Kind.InfiniteGold: 2.0 else: 1.0
+        if work.progress < required:
+            return
+        work.progress -= required
+        if tile.kind == world.Kind.Floor:
+            emit ClaimFloor to dig.worker:
+                tile = self
+            remove Claim(_, self)
+            return
+        if tile.kind == world.Kind.Gold or tile.kind == world.Kind.InfiniteGold:
+            emit Earned to dig.worker:
+                amount = if tile.kind == world.Kind.InfiniteGold: 20 else: 100
+        if tile.kind == world.Kind.InfiniteGold:
+            return
+        tile.kind = world.Kind.Floor
+        cell.texture = world.FloorTexture
+        remove physics.Solid
+        remove DigMark(_, self)
+        remove Claim(_, self)
+
+rule PayWorkers:
+    pairs:
+        robot: world.Robot
+        player: world.Player
+    where:
+        Commands(robot, player)
+
+    on Earned as earned:
+        emit Credit to player:
+            amount = earned.amount
+
+rule ClaimWorkedFloor:
+    pairs:
+        robot: world.Robot
+        player: world.Player
+    where:
+        Commands(robot, player)
+
+    on ClaimFloor as request:
+        add world.OwnershipRequest(request.tile, player)
+
+rule PayPlayer:
+    each: world.Player as player
+
+    on Credit as credit:
+        player.gold += credit.amount

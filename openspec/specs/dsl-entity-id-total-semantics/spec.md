@@ -4,7 +4,7 @@
 TBD - created by archiving change dsl-entity-id-total-semantics. Update Purpose after archive.
 ## Requirements
 ### Requirement: `entity_id` is an opaque entity handle with total operation semantics
-`entity_id` is an opaque value that identifies an entity instance. The language exposes no null or zero entity literal — authors never construct or manipulate null handles. Handles may become **stale** when the referenced entity is destroyed. All operations involving `entity_id` are **total**: operations on stale handles are safe no-ops or no-match at runtime. Authors are never required to check for stale handles; the generated backend takes responsibility for validity guards.
+`entity_id` SHALL be an opaque value that identifies an entity instance. The language exposes no null or zero entity literal — authors never construct or manipulate null handles. Handles may become **stale** when the referenced entity is destroyed. All operations involving `entity_id` are **total**: operations on stale handles are safe no-ops or no-match at runtime. Authors are never required to check for stale handles; the generated backend takes responsibility for validity guards.
 
 The canonical semantics of `entity_id` operations on stale/dead handles are:
 
@@ -65,7 +65,7 @@ exists_expr = "exists" "(" expr ")" ;
 - **THEN** the semantic analyzer SHALL report: "`exists()` argument must be of type `entity_id`"
 
 ### Requirement: `match stale_id:` yields no match
-When a `match entity_id:` statement is evaluated and the referenced entity is dead (stale handle), no arm executes — not even the `_ =>` wildcard arm. The `_ =>` wildcard means "entity is live but no listed trait matched," not "entity is dead or no trait matched." Authors who need to handle the dead-entity case use `if exists(id): match id: ...`
+When a `match entity_id:` statement is evaluated and the referenced entity is dead (stale handle), no arm SHALL execute — not even the `_ =>` wildcard arm. The `_ =>` wildcard means "entity is live but no listed trait matched," not "entity is dead or no trait matched." Authors who need to handle the dead-entity case use `if exists(id): match id: ...`
 
 #### Scenario: match on dead entity — no arms fire
 - **WHEN** `match c.other:` executes and `c.other` is a stale handle

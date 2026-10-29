@@ -4999,6 +4999,19 @@ TEST_CASE("Parser: keep of a relation", "[parser][relations]") {
     CHECK_FALSE(rule.keep->binding.has_value());
 }
 
+TEST_CASE("Parser: projected relation keep keys", "[parser][relations][row-projection]") {
+    auto prog = parse("rule Project:\n    each: Walk as edge\n    group: links\n    keep Reverse(edge.to, edge.from)\n");
+    const auto& keep = *std::get<RuleNode>(prog.declarations[0]).keep;
+    REQUIRE(keep.arguments.size() == 2);
+    CHECK(keep.arguments[0].spelling == "edge");
+    CHECK(keep.arguments[0].from_endpoint == false);
+    CHECK(keep.arguments[1].from_endpoint == true);
+    for (const auto& key : {"edge.cost", "edge.to.x", "edge.to + 1"}) {
+        auto errors = parse_expect_errors(std::string("rule Project:\n    each: Walk as edge\n    keep Reverse(") + key + ", edge.from)\n");
+        CHECK(errors.has_errors());
+    }
+}
+
 TEST_CASE("Parser: add and remove of relation rows", "[parser][relations]") {
     auto prog = parse(
         "rule Claims:\n"

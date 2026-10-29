@@ -1,0 +1,15 @@
+module main
+
+use std.core
+use world
+use territory
+use tasks
+
+const:
+    WINDOW_WIDTH = 1280
+    WINDOW_HEIGHT = 720
+    WINDOW_TITLE = "Cactus Dungeon"
+    TARGET_FPS = 60
+
+entity Settings:
+    world.WorldConfig

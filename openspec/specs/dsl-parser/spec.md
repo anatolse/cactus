@@ -817,7 +817,7 @@ The parser MUST implement panic-mode synchronization that skips tokens until rea
 - **THEN** the parser SHALL stop at EOF_TOKEN and not read past the end of the token stream
 
 ### Requirement: Parser SHALL support multi-error reporting
-The parser SHOULD continue parsing after encountering errors to report multiple syntax errors in a single compilation pass, when possible without compromising error recovery quality.
+The parser SHALL support multi-error reporting. It SHOULD continue parsing after encountering errors to report multiple syntax errors in a single compilation pass, when possible without compromising error recovery quality.
 
 #### Scenario: Multiple independent errors reported in one pass
 - **WHEN** a source file contains syntax errors in multiple independent declarations

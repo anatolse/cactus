@@ -1,7 +1,7 @@
 # cpp-source-lint-suppressions Specification
 
 ## Purpose
-TBD - Update Purpose after archive
+Define header diagnostic coverage and the justification required for compiler-source lint suppressions.
 
 ## Requirements
 

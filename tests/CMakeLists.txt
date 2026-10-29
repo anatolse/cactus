@@ -789,6 +789,12 @@ cactus_add_headless_behavior_test(test_relation_row_joins_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_relation_row_joins_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_relation_row_projection_headless_behavior
+    CACTUS_SOURCE examples/relation_row_projection.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_relation_row_projection_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_relation_endpoint_limits_headless_behavior
     CACTUS_SOURCE examples/relation_endpoint_limits.cactus
     BACKEND cpp-entt
@@ -904,6 +910,12 @@ cactus_add_headless_behavior_test(test_robot_sandbox_headless_behavior
     CACTUS_SOURCE examples/robot-sandbox/small_world.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_robot_sandbox_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_cactus_dungeon_headless_behavior
+    CACTUS_SOURCE examples/cactus-dungeon/small_map.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_cactus_dungeon_headless_behavior.cpp
 )
 
 cactus_add_headless_behavior_test(test_noise_headless_behavior

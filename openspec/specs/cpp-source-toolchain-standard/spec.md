@@ -1,7 +1,7 @@
 # cpp-source-toolchain-standard Specification
 
 ## Purpose
-TBD - Update Purpose after archive
+Define the C++ language standard and toolchain checks used to build the compiler source.
 
 ## Requirements
 

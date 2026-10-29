@@ -379,7 +379,7 @@ bool SemanticAnalyzer::reject_row_domain_clauses(RuleNode& rule) {
         errors_.error(rule.reduce->location,
                       "rule '" + rule.name + "': `reduce:` can't run over relation rows; reduce over entity bindings");
     }
-    if (rule.keep.has_value()) {
+    if (rule.keep.has_value() && rule.keep->arguments.empty()) {
         errors_.error(rule.keep->location,
                       "rule '" + rule.name + "': `keep` can't run over relation rows; keep from entity bindings");
     }
@@ -611,7 +611,7 @@ void SemanticAnalyzer::validate_relation_keep(const RuleNode& rule) {
         errors_.error(keep.location, derived_read_only_message(*relation, *relation->derivation));
         return;
     }
-    if (!rule.pairs.has_value() || rule.reduce.has_value()) {
+    if ((!rule.pairs.has_value() && !rule.rows.has_value()) || rule.reduce.has_value()) {
         errors_.error(keep.location, prefix + "a relation keep needs an unreduced `pairs:` rule");
         return;
     }
@@ -639,22 +639,90 @@ void SemanticAnalyzer::validate_relation_keep(const RuleNode& rule) {
     if (imported && (relation->from.one || relation->to.one)) {
         errors_.error(keep.location, prefix + "can't keep '" + keep.target_name + "': it marks an end `one`");
     }
-    if (!validate_relation_keep_arguments(keep, *rule.pairs, *relation)) {
+    if (!validate_relation_keep_arguments(keep, rule, *relation)) {
         return;
     }
     for (const auto& field : keep.fields) {
         check_clause_purity_expr(*field.value, "keep: field values must be pure");
     }
-    const auto scope = build_pair_scope(rule);
+    if (row_binding_name(rule) != nullptr) {
+        const auto names = rule_domain_names(rule);
+        for (const auto& field : keep.fields) {
+            visit_expression(*field.value, [&](const ExprNode& expr) {
+                const auto* ident = std::get_if<IdentExpr>(&expr.expr);
+                if (ident != nullptr && !ident->resolved_entity_id.has_value() && names.contains(ident->name)) {
+                    errors_.error(expr.location, "projected keep fields must be independent of domain bindings");
+                }
+            });
+        }
+        validate_trait_field_supply(
+            relation->fields, keep.fields, "`keep " + keep.target_name + "`", keep.location, {}, {}, nullptr, nullptr);
+        return;
+    }
+    const auto scope = rule_scope(rule).value_or(PairScope{});
     const auto desc =
         "`keep " + keep.target_name + "(" + keep.arguments[0].spelling + ", " + keep.arguments[1].spelling + ")`";
     validate_trait_field_supply(relation->fields, keep.fields, desc, keep.location, {}, {}, nullptr, &scope);
 }
 
-// The arguments are the rule's two bindings, each selecting the trait of its end.
+bool SemanticAnalyzer::binding_key_selects_trait(const RuleNode& rule,
+                                                 const LimitKey& key,
+                                                 const SymbolId& trait) const {
+    if (!key.endpoint.has_value()) {
+        return rule.pairs.has_value() && std::ranges::contains(rule.pairs->bindings[key.binding_index].traits,
+                                                               std::optional(trait),
+                                                               &FilterEntry::resolved_trait_id);
+    }
+    std::optional<SymbolId> source;
+    if (rule.rows.has_value()) {
+        source = rule.rows->relation;
+    } else if (rule.pairs.has_value()) {
+        source = rule.pairs->bindings[key.binding_index].resolved_relation_id;
+    }
+    const auto* declaration = source.has_value() ? find_resolved_relation(*source) : nullptr;
+    return declaration != nullptr &&
+           (*key.endpoint == RelationEndpoint::From ? declaration->from.trait : declaration->to.trait) == trait;
+}
+
+bool SemanticAnalyzer::validate_projected_keep_arguments(const KeepClause& keep,
+                                                         const RuleNode& rule,
+                                                         const ResolvedRelation& relation) {
+    if (keep.arguments.size() != 2) {
+        return false;
+    }
+    bool valid    = true;
+    bool endpoint = false;
+    for (std::size_t index = 0; index < keep.arguments.size(); ++index) {
+        const auto& argument = keep.arguments[index];
+        const auto key       = resolve_limit_key(rule, argument.spelling, argument.from_endpoint);
+        if (!key.has_value()) {
+            errors_.error(argument.location, "keep: expected an entity binding or direct row endpoint key");
+            valid = false;
+            continue;
+        }
+        const auto& end = index == 0 ? relation.from : relation.to;
+        endpoint        = endpoint || key->endpoint.has_value();
+        if (binding_key_selects_trait(rule, *key, end.trait)) {
+            continue;
+        }
+        errors_.error(argument.location,
+                      "keep: key must select `" + end.trait.local_name + "` for the output endpoint");
+        valid = false;
+    }
+    if (!endpoint) {
+        errors_.error(keep.location, "keep: a row projection needs at least one row endpoint key");
+        valid = false;
+    }
+    return valid;
+}
+
 bool SemanticAnalyzer::validate_relation_keep_arguments(const KeepClause& keep,
-                                                        const PairClause& pairs,
+                                                        const RuleNode& rule,
                                                         const ResolvedRelation& relation) {
+    if (row_binding_name(rule) != nullptr) {
+        return validate_projected_keep_arguments(keep, rule, relation);
+    }
+    const auto& pairs    = *rule.pairs;
     const auto& bindings = pairs.bindings;
     if (bindings.size() != 2 || keep.arguments.size() != 2) {
         return false;  // the parser reported the shape
@@ -662,7 +730,8 @@ bool SemanticAnalyzer::validate_relation_keep_arguments(const KeepClause& keep,
     const auto& from = keep.arguments[0].spelling;
     const auto& to   = keep.arguments[1].spelling;
     const auto names = std::pair{bindings[0].name, bindings[1].name};
-    if (std::pair{from, to} != names && std::pair{to, from} != names) {
+    if ((std::pair{from, to} != names && std::pair{to, from} != names) ||
+        std::ranges::any_of(keep.arguments, [](const auto& argument) { return argument.from_endpoint.has_value(); })) {
         errors_.error(keep.location,
                       "the arguments of `keep " + keep.target_name + "(...)` must be the rule's two bindings '" +
                           names.first + "' and '" + names.second + "'");

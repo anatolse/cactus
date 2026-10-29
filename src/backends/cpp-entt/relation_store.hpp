@@ -368,14 +368,27 @@ void erase_relation_entity(entt::registry& registry, entt::entity entity) {
     store.erase_to(entity);
 }
 
+template <typename Row>
+[[nodiscard]] bool valid_relation_ends(const entt::registry& registry, entt::entity from, entt::entity to) {
+    return registry.valid(from) && registry.valid(to) && registry.all_of<typename Row::FromTrait>(from) &&
+           registry.all_of<typename Row::ToTrait>(to);
+}
+
 // An `add R(from, to)` at its commit position: nothing when an end is stale or lacks its end trait.
 template <typename Row>
 void add_relation_row(entt::registry& registry, entt::entity from, entt::entity to, const Row& row) {
-    if (!registry.valid(from) || !registry.valid(to) || !registry.all_of<typename Row::FromTrait>(from) ||
-        !registry.all_of<typename Row::ToTrait>(to)) {
+    if (!valid_relation_ends<Row>(registry, from, to)) {
         return;
     }
     uncompacted_relation_store<Row>(registry).add(from, to, row);
+}
+
+template <typename Row>
+void keep_relation_row(entt::registry& registry, entt::entity from, entt::entity to, const Row& row) {
+    if (!valid_relation_ends<Row>(registry, from, to)) {
+        return;
+    }
+    uncompacted_relation_store<Row>(registry).keep(from, to, row);
 }
 
 // A row lives while both ends carry their end traits: EnTT signals the

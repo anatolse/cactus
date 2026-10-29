@@ -1,0 +1,153 @@
+module territory
+
+use std.core
+use std.voxel.volume as voxel
+use world
+
+pub trait Bridge
+pub trait Walkable
+pub trait Connected
+
+pub relation BridgePlan:
+    from: world.Player
+    to: world.Tile
+    let sell: bool = false
+
+rule ApplyBridgePlans:
+    each: BridgePlan as plan
+
+    on fixed_tick:
+        if plan.sell:
+            emit BridgeSold:
+                tile = plan.to
+        else:
+            emit BridgeBuilt:
+                tile = plan.to
+                player = plan.from
+        remove BridgePlan(plan.from, plan.to)
+
+pub event BridgeBuilt:
+    tile: entity_id
+    player: entity_id
+
+pub event BridgeSold:
+    tile: entity_id
+
+rule InstallBridge:
+    on BridgeBuilt as request:
+        add Bridge to request.tile
+        add world.OwnershipRequest(request.tile, request.player)
+
+rule RemoveBridge:
+    on BridgeSold as request:
+        remove Bridge from request.tile
+        remove world.OwnedBy(request.tile, _)
+
+pub relation Walk:
+    from: world.Tile
+    to: world.Tile
+    let cost: int = 1
+
+pub relation Neighbor:
+    from: world.Tile
+    to: world.Tile
+
+pub relation Frontier:
+    from: world.Player
+    to: world.Tile
+
+pub relation Territory:
+    from: world.Tile
+    to: world.Tile
+
+pub relation Reach = closure(Territory)
+pub relation Route = shortest(Walk, by = cost)
+
+pub group links:
+    phase: fixed_tick
+
+rule AssignOwner:
+    pairs:
+        tile: world.Tile
+        player: world.Player
+    where:
+        world.OwnershipRequest(tile, player)
+        not world.OwnedBy(tile, _)
+    limit: 1 per tile
+
+    on fixed_tick:
+        add world.OwnedBy(tile, player)
+        remove world.OwnershipRequest(tile, _)
+
+rule WalkableTiles:
+    pairs:
+        tile: world.Tile
+        bridge: Bridge
+    group: links
+    where:
+        bridge == tile
+    reduce per tile:
+        bridges = count()
+    keep Walkable on tile if tile[world.Tile].kind == world.Kind.Floor or bridges > 0
+
+rule NeighborLinks:
+    pairs:
+        a:
+            world.Tile
+            voxel.Cell
+        b:
+            world.Tile
+            voxel.Cell
+    group: links
+    where:
+        b[voxel.Cell].volume == a[voxel.Cell].volume
+        (b[voxel.Cell].x == a[voxel.Cell].x + 1 and b[voxel.Cell].z == a[voxel.Cell].z) or (b[voxel.Cell].x == a[voxel.Cell].x - 1 and b[voxel.Cell].z == a[voxel.Cell].z) or (b[voxel.Cell].z == a[voxel.Cell].z + 1 and b[voxel.Cell].x == a[voxel.Cell].x) or (b[voxel.Cell].z == a[voxel.Cell].z - 1 and b[voxel.Cell].x == a[voxel.Cell].x)
+    keep Neighbor(a, b)
+
+rule WalkLinks:
+    pairs:
+        a:
+            world.Tile
+            Walkable
+        b:
+            world.Tile
+            Walkable
+    group: links
+    where:
+        Neighbor(a, b)
+    keep Walk(a, b)
+
+rule TerritoryLinks:
+    pairs:
+        a:
+            world.Tile
+            Walkable
+        b:
+            world.Tile
+            Walkable
+    group: links
+    where:
+        Walk(a, b)
+        (world.OwnedBy(a, world.Human) and world.OwnedBy(b, world.Human)) or (world.OwnedBy(a, world.Enemy) and world.OwnedBy(b, world.Enemy))
+    keep Territory(a, b)
+
+rule ClaimableFloor:
+    pairs:
+        owner: world.OwnedBy
+        step: Walk
+    group: links
+    where:
+        owner.from == step.from
+        not world.OwnedBy(step.to, _)
+    keep Frontier(owner.to, step.to)
+
+rule ConnectedTiles:
+    pairs:
+        heart:
+            world.Tile
+            world.Heart
+        tile: world.Tile
+    group: links
+    where:
+        tile == heart or Reach(heart, tile)
+    keep Connected on tile

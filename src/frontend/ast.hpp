@@ -1219,10 +1219,16 @@ void for_each_limit_count(Limit& limit, const Fn& fn) {
 // `keep T on b if c` on a pair rule reduced `per b`: `T` is present on each
 // recipient exactly while it passes `where:`, has rows, or meets `c`.
 // `keep R(a, b)` on a pair rule: `R` holds a row per tuple passing `where:`.
+struct KeepArgument {
+    std::string spelling;
+    SourceLocation location;
+    std::optional<bool> from_endpoint;
+};
+
 struct KeepClause {
     std::string target_name;
     std::optional<TableRef> resolved_target;
-    std::vector<LocatedName> arguments;  // `keep R(a, b)` only: the from and to bindings
+    std::vector<KeepArgument> arguments;
     std::optional<std::string> binding;
     SourceLocation binding_location;
     std::unique_ptr<ExprNode> condition;

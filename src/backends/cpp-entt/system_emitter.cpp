@@ -6842,6 +6842,40 @@ static void emit_unary_keep_handler_body(std::ostringstream& out,
 
 // `keep R(a, b)`: one run stamps a row per tuple passing `where:`, then drops
 // the rows it did not stamp, all at the activation's commit.
+static void emit_relation_keep_boundary(std::ostringstream& out,
+                                        const KeepClause& keep,
+                                        const std::string& call) {
+    const auto store = EnttCodegenUtils::uncompacted_relation_store_cpp(*keep.resolved_target);
+    out << "    cactus::runtime::entt_backend::generated_queue_structural_command(\n";
+    out << "        cactus::runtime::entt_backend::StructuralCommand::Kind::Add,\n";
+    out << "        [](entt::registry& registry) { " << store << "." << call << "; });\n";
+}
+
+static std::string relation_keep_tuple_body(const KeepClause& keep,
+                                            const PairCodegenScope& scope,
+                                            const DecoratedProgram& program) {
+    const auto row = EnttCodegenUtils::relation_cpp_name(*keep.resolved_target);
+    std::ostringstream body;
+    body << "        " << row << " cactus_row_value{};\n";
+    for (const auto& field : keep.fields) {
+        body << "        cactus_row_value." << cpp_escaped(field.name) << " = "
+             << rewrite_expr(*field.value, {}, program, {}, {}, &scope) << ";\n";
+    }
+    const auto key = [&](std::size_t index) {
+        const auto& argument = keep.arguments[index];
+        if (!argument.from_endpoint.has_value()) {
+            return argument.spelling;
+        }
+        return argument.spelling + (*argument.from_endpoint ? ".from" : ".to");
+    };
+    body << "        cactus::runtime::entt_backend::generated_queue_structural_command(\n";
+    body << "            cactus::runtime::entt_backend::StructuralCommand::Kind::Add,\n";
+    body << "            [cactus_from = " << key(0) << ", cactus_to = " << key(1)
+         << ", cactus_row_value](entt::registry& registry) { "
+         << "cactus::runtime::entt_backend::keep_relation_row(registry, cactus_from, cactus_to, cactus_row_value); });\n";
+    return body.str();
+}
+
 static void emit_relation_keep_handler_body(std::ostringstream& out,
                                             const RuleNode& sys,
                                             const EventHandlerNode& handler,
@@ -6850,29 +6884,10 @@ static void emit_relation_keep_handler_body(std::ostringstream& out,
                                             const DecoratedProgram& program,
                                             const HandlerContract* contract) {
     const auto& keep  = *sys.keep;
-    const auto row    = EnttCodegenUtils::relation_cpp_name(*keep.resolved_target);
-    const auto store  = EnttCodegenUtils::uncompacted_relation_store_cpp(*keep.resolved_target);
-    const auto queue  = [&](const std::string& call) {
-        out << "    cactus::runtime::entt_backend::generated_queue_structural_command(\n";
-        out << "        cactus::runtime::entt_backend::StructuralCommand::Kind::Add,\n";
-        out << "        [](entt::registry& registry) { " << store << "." << call << "; });\n";
-    };
-    queue("begin_run()");
-    std::ostringstream body;
-    body << "        " << row << " cactus_row_value{};\n";
-    for (const auto& field : keep.fields) {
-        body << "        cactus_row_value." << cpp_escaped(field.name) << " = "
-             << rewrite_expr(*field.value, {}, program, {}, {}, &pair_codegen_scope) << ";\n";
-    }
-    const auto& from = keep.arguments[0].spelling;
-    const auto& to   = keep.arguments[1].spelling;
-    body << "        cactus::runtime::entt_backend::generated_queue_structural_command(\n";
-    body << "            cactus::runtime::entt_backend::StructuralCommand::Kind::Add,\n";
-    body << "            [" << from << ", " << to << ", cactus_row_value](entt::registry& registry) { " << store
-         << ".keep(" << from << ", " << to << ", cactus_row_value); });\n";
-    const auto tuple_body = body.str();
+    emit_relation_keep_boundary(out, keep, "begin_run()");
+    const auto tuple_body = relation_keep_tuple_body(keep, pair_codegen_scope, program);
     emit_pair_handler_body(out, sys, handler, pair_binding_codegens, pair_codegen_scope, program, contract, &tuple_body);
-    queue("drop_unstamped()");
+    emit_relation_keep_boundary(out, keep, "drop_unstamped()");
 }
 
 // ── Relation row passes ─────────────────────────────────────
@@ -7026,6 +7041,7 @@ static void emit_row_tuple_collection(std::ostringstream& out,
 }
 
 static void emit_row_callbacks(std::ostringstream& out,
+                               const RuleNode& sys,
                                const EventHandlerNode& handler,
                                const std::string& params,
                                const std::vector<const ExprNode*>& guards,
@@ -7037,7 +7053,8 @@ static void emit_row_callbacks(std::ostringstream& out,
     }
     LocalNumericKinds kinds;
     out << "    auto cactus_row_body = [&](" << params << ") {\n";
-    out << rewrite_stmt_block(handler.body, 2, {}, program, {}, false, {}, &scope, locals, kinds);
+    out << (sys.keep.has_value() ? relation_keep_tuple_body(*sys.keep, scope, program)
+                                : rewrite_stmt_block(handler.body, 2, {}, program, {}, false, {}, &scope, locals, kinds));
     out << "    };\n";
     out << "    auto cactus_row_passes = [&](" << params << ") {\n";
     if (guards.empty()) {
@@ -7089,7 +7106,7 @@ static void emit_row_pass(std::ostringstream& out,
     std::vector<const ExprNode*> guards = where_at(sys, contract, ClauseStage::Row);
     std::ranges::copy(where_at(sys, contract, binding_stage(row_index)), std::back_inserter(guards));
     const auto rewrite = [&](const ExprNode& expr) { return rewrite_expr(expr, {}, program, {}, {}, &scope); };
-    emit_row_callbacks(out, handler, params, guards, scope, program);
+    emit_row_callbacks(out, sys, handler, params, guards, scope, program);
     const RowPassShape shape{.unary = unary, .row_first = row_index == 0, .entity_name = entity_name};
     out << "    std::vector<std::pair<entt::entity, const cactus_row_entry*>> cactus_row_tuples;\n";
     emit_row_tuple_collection(out, sys, shape, keyed, rewrite);
@@ -7199,7 +7216,7 @@ static void emit_joined_row_pass(std::ostringstream& out,
     }
     const auto params = parameters[0] + ", " + parameters[1];
     const auto guards = where_at(sys, contract, ClauseStage::Row);
-    emit_row_callbacks(out, handler, params, guards, scope, program);
+    emit_row_callbacks(out, sys, handler, params, guards, scope, program);
     const auto filters = emit_row_binding_filters(out, sys, scope, program, contract, plan.driver);
     const auto outer   = row_lookup_block(sys, plan, plan.driver, 0, scope, program);
     const auto inner =
@@ -7260,10 +7277,16 @@ static void emit_handler_body(std::ostringstream& out,
         sys.rows.has_value() || std::ranges::any_of(pairs, [](const PairBindingCodegen& binding) { return binding.scope.row; });
     if (row_pass && !handler.has_lifecycle_trigger()) {
         emit_activation_gate(out, sys, contract, program);
+        if (sys.keep.has_value()) {
+            emit_relation_keep_boundary(out, *sys.keep, "begin_run()");
+        }
         if (pairs.size() == 2 && pairs[0].scope.row && pairs[1].scope.row) {
             emit_joined_row_pass(out, sys, handler, scope, program, contract);
         } else {
             emit_row_pass(out, sys, handler, pairs, scope, program, contract);
+        }
+        if (sys.keep.has_value()) {
+            emit_relation_keep_boundary(out, *sys.keep, "drop_unstamped()");
         }
         return;
     }

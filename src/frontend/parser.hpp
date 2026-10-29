@@ -161,6 +161,7 @@ private:
     std::optional<ReducerDecl> parse_reducer_decl();
     [[nodiscard]] bool at_keep_clause() const;
     KeepClause parse_keep_clause();
+    KeepArgument parse_binding_key(const std::string& context);
     [[nodiscard]] bool at_order_by_clause() const;
     std::vector<LocatedName> parse_name_block(TokenType keyword, const char* clause_name);
     std::vector<HandlerReferenceNode> parse_handler_order_block();

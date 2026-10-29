@@ -1169,8 +1169,12 @@ private:
     static bool record_row_field_read(const ExprNode& expr, const PairScope& pair_scope, HandlerContract& contract);
     void validate_relation_keep(const RuleNode& rule);
     [[nodiscard]] bool validate_relation_keep_arguments(const KeepClause& keep,
-                                                        const PairClause& pairs,
+                                                        const RuleNode& rule,
                                                         const ResolvedRelation& relation);
+    [[nodiscard]] bool binding_key_selects_trait(const RuleNode& rule, const LimitKey& key, const SymbolId& trait) const;
+    [[nodiscard]] bool validate_projected_keep_arguments(const KeepClause& keep,
+                                                         const RuleNode& rule,
+                                                         const ResolvedRelation& relation);
 
     // Import-aware type resolution helpers
     TypeInfo resolve_qualified_type(const std::string& qualifier,

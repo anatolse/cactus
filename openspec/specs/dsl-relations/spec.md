@@ -88,7 +88,7 @@ A relation that a `keep R(a, b)` clause names SHALL be a kept relation. Every ot
 
 ### Requirement: Kept relation rows follow the rule's tuples
 
-`keep R(a, b)` SHALL be accepted on a `pairs:` rule without `reduce:`, where `a` and `b` are the rule's two entity bindings in either order. The binding passed for `from` SHALL select `R`'s `from` end trait, and the binding passed for `to` SHALL select its `to` end trait. The clause body SHALL assign zero or more fields of `R` from pure expressions over both bindings, constants and named entity fields. A field it leaves out SHALL take its declared default, and a field with no default SHALL be assigned. At each run, `R` SHALL hold exactly one row per tuple that passes `where:`, with that tuple's field values. Rows SHALL be added, updated and removed at the run's commit. Kept relations SHALL follow the same run, `when:`, `group:` and no-handler rules as kept traits (`dsl-rule-keep`).
+`keep R(a, b)` SHALL be accepted on an entity-only `pairs:` rule without `reduce:`, where `a` and `b` are the rule's two entity bindings in either order. An unreduced unary row, mixed entity/row or two-row domain SHALL additionally accept the direct-key projection form defined by "Relation row queries project kept pairs". The binding passed for `from` SHALL select `R`'s `from` end trait, and the binding passed for `to` SHALL select its `to` end trait. The clause body SHALL assign zero or more fields of `R` from pure expressions over both bindings, constants and named entity fields. A field it leaves out SHALL take its declared default, and a field with no default SHALL be assigned. At each run of the entity-only form, `R` SHALL hold exactly one row per tuple that passes `where:`, with that tuple's field values. The row-domain projection form SHALL instead hold exactly the distinct output pairs supported by passing tuples, with its uniform field values. Rows SHALL be added, updated and removed at the run's commit. Kept relations SHALL follow the same run, `when:`, `group:` and no-handler rules as kept traits (`dsl-rule-keep`).
 
 #### Scenario: Rows track the where: clause
 - **WHEN** `WalkLinks` keeps `Walk(a, b)` where `a` and `b` are adjacent floor tiles, and a tile next to `a` becomes floor
@@ -105,6 +105,10 @@ A relation that a `keep R(a, b)` clause names SHALL be a kept relation. Every ot
 #### Scenario: Paused keeper
 - **WHEN** a kept relation's rule has `when:` false for a run
 - **THEN** every row and its field values stay as they were
+
+#### Scenario: A row query keeps projected endpoints
+- **WHEN** a bounded join of ownership and walk rows projects the owning player and unowned destination into a kept relation
+- **THEN** each supported player/destination pair is present once after the keeper commits
 
 ### Requirement: Stored relation commands
 
@@ -186,7 +190,7 @@ A rule SHALL bind relation rows in two places:
 - A `pairs:` binding whose only entry is a relation name, `r: R`.
 - A unary `each:` with exactly one relation entry and an alias, `each: R as r`, and no `without:`.
 
-A row binding SHALL expose `r.from` and `r.to` as `entity_id` values and `r.<field>` for each field. It SHALL be read-only, and it SHALL NOT be used with brackets, as a command or `emit` target, or in `reduce:` or `keep`. A rule SHALL have at most two row bindings, both in the existing two-binding `pairs:` form. A pair with two row bindings SHALL meet "Two relation rows join by their endpoints". Stored and kept row domains SHALL use row creation order; derived row domains SHALL use their declared endpoint creation order. A unary row domain SHALL accept `where:`, `order by:`, a global or direct-endpoint `limit:` and `when:`.
+A row binding SHALL expose `r.from` and `r.to` as `entity_id` values and `r.<field>` for each field. It SHALL be read-only, and it SHALL NOT be used with brackets, as a command or `emit` target, or in `reduce:` or a trait `keep`. Direct-key relation projection SHALL be the permitted keep form on a row domain, as defined by "Relation row queries project kept pairs". A rule SHALL have at most two row bindings, both in the existing two-binding `pairs:` form. A pair with two row bindings SHALL meet "Two relation rows join by their endpoints". Stored and kept row domains SHALL use row creation order; derived row domains SHALL use their declared endpoint creation order. A unary row domain SHALL accept `where:`, `order by:`, a global or direct-endpoint `limit:` and `when:`.
 
 #### Scenario: Row joined to an entity
 - **WHEN** a pair rule binds `w: Walker` and `r: Route` with `where: r.from == w[Walker].tile`
@@ -375,7 +379,7 @@ A `pairs:` rule whose two bindings name relation rows SHALL contain at least one
 
 A two-row pass SHALL read the row membership and row values of both relations from the current pass snapshot. Its logical tuple order SHALL be the left row domain's order followed by the right row domain's order for each left row. `where:` SHALL filter this product, `order by:` SHALL sort surviving tuples with ties preserving logical order, and a global `limit:` SHALL select from that filtered and ordered sequence. Changing the physical lookup direction SHALL NOT change the selected tuples or their order. Queued changes to either relation or its ends SHALL become visible only at the normal commit and subsequent pass snapshots.
 
-Two-row rules SHALL retain all existing row restrictions: no row writes, trait access through an endpoint expression, row reductions, row keeps, `without:`, lifecycle handlers, `self`, or `limit:` parts keyed by a bare row. A direct row endpoint SHALL support a capacity partition and a static-one proof only through its own endpoint key (`dsl-rule-limit`); it SHALL NOT become an entity binding or gain trait writability. A two-row pass SHALL run for phase occurrences and untargeted ordinary events. A targeted occurrence SHALL select no tuples, because neither binding supplies an entity recipient; emitting an event to a row endpoint SHALL remain valid.
+Two-row rules SHALL retain all existing row restrictions: no row writes, trait access through an endpoint expression, row reductions, row-domain trait keeps, `without:`, lifecycle handlers, `self`, or `limit:` parts keyed by a bare row. A direct row endpoint SHALL support a capacity partition and a static-one proof only through its own endpoint key (`dsl-rule-limit`); it SHALL NOT become an entity binding or gain trait writability. A two-row pass SHALL run for phase occurrences and untargeted ordinary events. A targeted occurrence SHALL select no tuples, because neither binding supplies an entity recipient; emitting an event to a row endpoint SHALL remain valid.
 
 #### Scenario: Lookup direction preserves observed order
 - **WHEN** stored rows were created in an order different from their endpoint entity order and the physical plan probes the authored left relation
@@ -398,5 +402,82 @@ Two-row rules SHALL retain all existing row restrictions: no row writes, trait a
 - **THEN** compilation rejects the command with the existing one-end diagnostic
 
 #### Scenario: Existing unsupported row clauses remain errors
-- **WHEN** a joined rule declares `reduce:`, `keep`, or `limit: 1 per place`
+- **WHEN** a joined rule declares `reduce:`, a trait `keep`, or `limit: 1 per place`
 - **THEN** compilation reports the applicable row-domain restriction instead of treating a row as an entity, while valid direct endpoint keys remain accepted
+
+A valid projected relation keeper SHALL use phase-group scheduling instead of a handler and SHALL retain the snapshot and logical source order of its row query. It SHALL keep no implicit entity recipient and SHALL NOT enable endpoint trait access.
+
+#### Scenario: Projection has no event handler
+- **WHEN** a two-row projection keeper declares a phase group and no handler
+- **THEN** it runs on that group's phase and commits projected membership at the normal boundary
+
+### Requirement: Relation row queries project kept pairs
+An unreduced unary row rule or pair rule containing at least one row binding SHALL accept `keep R(k1, k2)`, where R is a kept relation, each key is a direct declared row endpoint (`r.from` or `r.to`) or an entity binding of a mixed pair, and at least one key is a row endpoint. Both keys SHALL be permitted to refer to one row, including the same endpoint twice when endpoint traits fit. Output endpoint types SHALL be checked from source relation declarations or entity filters against the target relation's declared end traits; unknown or narrower runtime traits SHALL NOT be assumed. Bare rows, row fields, nested paths, arbitrary expressions and undeclared keys SHALL be rejected with source-located diagnostics.
+
+The output membership SHALL equal the distinct pairs obtained by projecting the passing snapshot tuples. Multiple witnesses SHALL produce one pair. Removing one witness SHALL preserve a pair supported by another; removing the final witness SHALL remove it on the next keeper commit. Existing pairs SHALL retain their row creation position. New pairs SHALL be created in the order of their first witness in logical domain order, independent of physical lookup direction. A pair removed and later recreated SHALL receive a new row creation position.
+
+The new form's fields SHALL use defaults or pure expressions that reference no domain binding or its filter aliases. Constants and named entity field reads SHALL be accepted under existing purity and type rules. Witness-dependent payload expressions SHALL be rejected even when a particular query happens to have no duplicate pairs. Existing entity-only relation keeps SHALL retain their field scopes. A required field with no default and no valid assignment SHALL remain an error.
+
+Every existing relation-keep restriction SHALL remain in force except the explicitly extended domains and keys: a phase group is required; handlers, `reduce:`, `on`, `if`, `order by:` and `limit:` are rejected; imported-relation ownership, one keeper, no stored writers and no kept `one` ends still apply. Existing endpoint join equalities and bounds on derived row inputs SHALL remain required. All source rows, derived sources, predicates, field expressions and `when:` SHALL participate in read contracts and keeper cycle analysis. Source rows SHALL remain read-only. A false `when:` or an inactive phase SHALL preserve output membership and values. Projected kept rows SHALL be unsaved and rebuilt by their first scheduled run after restore.
+
+#### Scenario: Frontier has several witnesses
+- **WHEN** two tiles owned by one player each have a walk link to the same unowned floor tile, and a keeper projects player and destination
+- **THEN** the frontier holds exactly one row for that player and destination
+
+#### Scenario: A frontier witness disappears
+- **WHEN** one of those two ownership or walk rows is removed
+- **THEN** the frontier row remains after its keeper runs
+- **AND** removing the last supporting witness removes that row after the next keeper commit
+
+#### Scenario: Unary inverse projection
+- **WHEN** a unary row rule binds `each: Walk as edge` and keeps `Reverse(edge.to, edge.from)` with compatible end traits
+- **THEN** the output contains exactly the reversed input pairs
+
+#### Scenario: Mixed entity and row projection
+- **WHEN** a mixed entity/row rule projects its entity binding and a compatible direct row endpoint
+- **THEN** the filtered distinct output pairs are kept
+
+#### Scenario: Same endpoint in both output roles
+- **WHEN** a unary row keeper projects `edge.from` to both compatible output ends
+- **THEN** each supported source entity has one reflexive output row
+
+#### Scenario: Output type mismatch
+- **WHEN** an output expects Player but its key is an endpoint declared as Tile
+- **THEN** compilation rejects the key instead of assuming an additional runtime trait
+
+#### Scenario: Uniform fields
+- **WHEN** a projected relation keeper assigns `cost = 1` and a field from a named entity, with no domain references
+- **THEN** compilation accepts the assignments and all witnesses in the pass give identical field values to each output pair
+
+#### Scenario: Witness-dependent fields
+- **WHEN** a row-domain keeper assigns a field from `route.distance`, an entity binding's trait, or a function argument that reads a domain binding
+- **THEN** compilation reports that projected keep fields must be independent of domain bindings
+
+#### Scenario: Stable first-witness ordering
+- **WHEN** logical tuple order creates pairs A, B, A and the physical join direction changes
+- **THEN** new output rows are ordered A then B in either physical plan
+- **AND** subsequent witness reordering does not move either surviving output row
+
+#### Scenario: Empty output
+- **WHEN** a keeper runs with no passing source tuples while old output rows exist
+- **THEN** all old rows are removed at its commit
+
+#### Scenario: Output endpoint retired earlier in the commit
+- **WHEN** a passing snapshot tuple projects an endpoint whose entity or required end trait is removed earlier in the same activation's commit
+- **THEN** the queued keep creates no row for that invalid endpoint
+
+#### Scenario: Projected keeper is paused
+- **WHEN** `when:` is false and the sources change
+- **THEN** output rows and values remain unchanged until the keeper runs again
+
+#### Scenario: Restore recomputes projection
+- **WHEN** saved ownership and walk rows are restored
+- **THEN** the first scheduled frontier keeper rebuilds membership from the restored rows without loading a saved frontier copy
+
+#### Scenario: Bounded derived input
+- **WHEN** a projected row query binds a shortest or closure input without the required endpoint bound
+- **THEN** compilation rejects the unbounded input just as for an ordinary row query
+
+#### Scenario: Projection participates in keep cycles
+- **WHEN** the target relation is read directly or through a derived input or another keeper in a cycle
+- **THEN** compilation rejects the cycle and names its keepers

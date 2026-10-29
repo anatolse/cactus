@@ -790,7 +790,8 @@ membership come from the pass snapshot; queued changes appear after commit.
 Row joins have no implicit entity recipient. Phases and untargeted ordinary
 events run them; a targeted occurrence selects no tuples. They can emit to an
 endpoint explicitly, as above. Rows remain read-only and cannot be recipients
-of `keep`, reductions, per-row limits or lifecycle handlers. `self`, endpoint
+of trait `keep`, reductions, per-row limits or lifecycle handlers. Direct endpoint
+relation keeps are allowed (§3.8.6). `self`, endpoint
 trait reads such as `place.to[Tile].x`, and using a row as an entity are errors.
 A direct row endpoint limited to statically one can prove that endpoint unique for a relation claim (§3.8.3). It grants no trait access or mutation.
 
@@ -1075,11 +1076,13 @@ Sorting follows the reduction, and empty-group identities, retained writes, and
 `keep T` defines a fact as a trait: the compiler keeps `T` on each recipient exactly while the rule's rows say so. Entering and leaving the fact are then ordinary lifecycle triggers, `on added T` and `on removed T as old`. A keep rule is a definition only: it has no handler. `keep` is a contextual word at the rule-clause position, written after `reduce:`.
 
 ```ebnf
-keep_clause     = "keep" dotted_name [ "on" IDENTIFIER ] [ "if" expression ]
+keep_clause     = "keep" dotted_name [ "(" keep_key "," keep_key ")" ]
+                  [ "on" IDENTIFIER ] [ "if" expression ]
                   ( ":" NEWLINE INDENT { IDENTIFIER "=" expression NEWLINE } DEDENT | NEWLINE ) ;
+keep_key        = IDENTIFIER [ "." ( "from" | "to" ) ] ;
 ```
 
-There are three forms, one per domain:
+The forms depend on the domain:
 
 | Form | Recipient | Present while |
 |---|---|---|
@@ -1087,8 +1090,15 @@ There are three forms, one per domain:
 | `pairs:` + `keep T on b` | each entity of `b` | it has at least one row after `where:` |
 | `pairs:` + `reduce per b:` + `keep T on b [if c]` | each group entity `b` | its group has rows, or `c` is true |
 | `pairs:` + `keep R(a, b)` | one row of relation `R` per tuple | the tuple passes `where:` |
+| unary row or `pairs:` containing rows + `keep R(k1, k2)` | one row per distinct projected pair | at least one passing tuple supports the pair |
 
-`keep R(a, b)` keeps a relation (§3.6.2) instead of a trait. `a` and `b` are the rule's two entity bindings, in either order; the one passed for `from` must select `R`'s `from` end trait, and the one passed for `to` its `to` end trait. The field block may read both bindings, constants and named entity fields. Each run makes `R` hold exactly the rows of that run's tuples, added, updated and removed at its commit; `when:` false leaves every row as it was. The rule can't declare `reduce:`, `if`, or a row binding. A keep rule that tests or binds its own relation is a keep loop. `R` may come from an imported module that doesn't keep it, such as `std.render.visibility.HiddenIn`, if it marks no end `one`; the linked program still has one keeper per relation, and no other rule of any module may `add` or `remove` its rows.
+`keep R(a, b)` keeps a relation (§3.6.2) instead of a trait. `a` and `b` are the rule's two entity bindings, in either order; the one passed for `from` must select `R`'s `from` end trait, and the one passed for `to` its `to` end trait. The field block may read both bindings, constants and named entity fields. Each run makes `R` hold exactly the rows of that run's tuples, added, updated and removed at its commit; `when:` false leaves every row as it was. The rule can't declare `reduce:` or `if`. A keep rule that tests or binds its own relation is a keep loop. `R` may come from an imported module that doesn't keep it, such as `std.render.visibility.HiddenIn`, if it marks no end `one`; the linked program still has one keeper per relation, and no other rule of any module may `add` or `remove` its rows.
+
+A row-domain relation keep means: keep every output pair supported by the query. Keys are direct row endpoints (`edge.from` or `edge.to`) or entity bindings of a mixed pair; at least one is a row endpoint. Both keys may name the same endpoint when its declared trait fits both target ends. Bare rows, payload fields, nested paths and arbitrary expressions are rejected. Typing uses source declarations, without assuming extra runtime traits.
+
+Duplicate witnesses produce one row. A surviving row keeps its creation position; new rows follow first-witness logical query order, independent of physical lookup direction. Removing the final witness removes the row at the next keeper commit. Row-domain fields use defaults or pure expressions independent of domain bindings and aliases. Constants and named entity fields are allowed; witness-dependent values are rejected. Required fields still need assignments.
+
+These keeps require a phase group and reject handlers, `reduce:`, `on`, `if`, `order by:` and `limit:`. Trait keeps on rows remain invalid. Existing join bounds, single-writer checks, keep-cycle checks and kept `one` restrictions remain. A false `when:` or an inactive phase preserves rows. Kept rows are unsaved and rebuild when their keeper next runs after restore. See `examples/relation_row_projection.cactus`.
 
 ```cactus
 rule WalkLinks:

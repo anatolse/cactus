@@ -1865,17 +1865,9 @@ LimitClause Parser::parse_limit_clause() {
         if (clause.parts.size() >= 2) {
             errors_.error(part.location, "limit: at most two partition keys are allowed");
         }
-        part.binding = consume(TokenType::IDENTIFIER, "expected binding name after 'per'").value;
-        if (match(TokenType::DOT)) {
-            if (match(TokenType::FROM)) {
-                part.from_endpoint = true;
-            } else if (match(TokenType::TO)) {
-                part.from_endpoint = false;
-            } else {
-                errors_.error(peek().location, "limit: endpoint key must end in 'from' or 'to'");
-                advance();
-            }
-        }
+        auto key = parse_binding_key("limit:");
+        part.binding = std::move(key.spelling);
+        part.from_endpoint = key.from_endpoint;
         if (!check(TokenType::COMMA) && !check(TokenType::NEWLINE) && !check(TokenType::EOF_TOKEN)) {
             errors_.error(peek().location, "limit: endpoint key must be a direct binding.from or binding.to");
         }
@@ -1967,6 +1959,23 @@ bool Parser::at_keep_clause() const {
 }
 
 // `keep T [on b] [if c]`, then a field block after `:` or a newline for no fields.
+KeepArgument Parser::parse_binding_key(const std::string& context) {
+    const auto name = consume(TokenType::IDENTIFIER, context + " expected a binding name");
+    KeepArgument argument{.spelling = name.value, .location = name.location};
+    if (!match(TokenType::DOT)) {
+        return argument;
+    }
+    if (match(TokenType::FROM)) {
+        argument.from_endpoint = true;
+    } else if (match(TokenType::TO)) {
+        argument.from_endpoint = false;
+    } else {
+        errors_.error(peek().location, context + " endpoint key must end in 'from' or 'to'");
+        advance();
+    }
+    return argument;
+}
+
 KeepClause Parser::parse_keep_clause() {
     KeepClause clause;
     clause.location   = advance().location;  // consume 'keep'
@@ -1974,9 +1983,7 @@ KeepClause Parser::parse_keep_clause() {
     if (check(TokenType::LPAREN)) {
         const auto open = advance().location;
         for (bool more = true; more; more = match(TokenType::COMMA)) {
-            const auto name =
-                consume(TokenType::IDENTIFIER, "expected a pair binding in `keep " + clause.target_name + "(...)`");
-            clause.arguments.push_back(LocatedName{.spelling = name.value, .location = name.location});
+            clause.arguments.push_back(parse_binding_key("keep:"));
         }
         consume(TokenType::RPAREN, "expected ')' after the relation's bindings");
         if (clause.arguments.size() != 2) {

@@ -1,0 +1,169 @@
+module relation_row_projection
+
+use std.core as core
+
+trait Tile:
+    persist var label: int = 0
+
+trait Player:
+    persist var label: int = 0
+
+trait Control:
+    persist var active: bool = true
+    persist var cost: int = 7
+    var retire: bool = false
+    var strip: bool = false
+
+relation OwnedBy:
+    from: Tile
+    to: Player
+
+relation Walk:
+    from: Tile
+    to: Tile
+    let cost: int = 1
+
+relation Frontier:
+    from: Player
+    to: Tile
+    let cost: int = 2
+    let priority: int = 0
+
+relation Reverse:
+    from: Tile
+    to: Tile
+
+relation Sources:
+    from: Tile
+    to: Tile
+
+relation Mixed:
+    from: Tile
+    to: Tile
+
+relation ReverseFrontier:
+    from: Player
+    to: Tile
+
+relation Copied:
+    from: Tile
+    to: Tile
+
+relation Reach = closure(Walk)
+relation Reachable:
+    from: Tile
+    to: Tile
+
+relation ReverseReachable:
+    from: Tile
+    to: Tile
+
+relation SlowCopies:
+    from: Tile
+    to: Tile
+
+entity Settings:
+    Control
+
+entity Red:
+    Player:
+        label = 1
+
+entity Blue:
+    Player:
+        label = 2
+
+template Square(label: int):
+    Tile:
+        label = label
+
+entity Start from Square(label = 1)
+entity Other from Square(label = 2)
+entity Goal from Square(label = 3)
+entity Last from Square(label = 4)
+
+group links:
+    phase: core.tick
+
+phase slow:
+    after: core.tick
+    every: 0.5
+    max: 1
+
+group slow_links:
+    phase: slow
+
+rule RetireGoal:
+    before: links
+    when: Settings[Control].retire
+
+    on core.tick:
+        if Settings[Control].strip:
+            remove Tile from Goal
+        else:
+            destroy Goal
+
+rule Claimable:
+    pairs:
+        owner: OwnedBy
+        step: Walk
+    group: links
+    where:
+        owner.from == step.from
+        not OwnedBy(step.to, _)
+    keep Frontier(owner.to, step.to):
+        priority = Settings[Control].cost
+    when: Settings[Control].active
+
+rule ReverseEdges:
+    each: Walk as edge
+    group: links
+    keep Reverse(edge.to, edge.from)
+
+rule SourceTiles:
+    each: Walk as edge
+    group: links
+    keep Sources(edge.from, edge.from)
+
+rule MixedEdges:
+    pairs:
+        tile: Tile
+        edge: Walk
+    group: links
+    where: tile == edge.from
+    keep Mixed(tile, edge.to)
+
+rule ReversedClaimable:
+    pairs:
+        step: Walk
+        owner: OwnedBy
+    group: links
+    where:
+        owner.from == step.from
+        not OwnedBy(step.to, _)
+    keep ReverseFrontier(owner.to, step.to)
+
+rule CopyKept:
+    each: Reverse as edge
+    group: links
+    keep Copied(edge.from, edge.to)
+
+rule ProjectReachable:
+    each: Reach as route
+    group: links
+    where: route.from == Start
+    keep Reachable(route.from, route.to)
+
+rule ProjectReverseReachable:
+    pairs:
+        route: Reach
+        edge: Walk
+    group: links
+    where:
+        route.from == edge.to
+    keep ReverseReachable(edge.from, route.to)
+
+rule SlowProjection:
+    each: Walk as edge
+    group: slow_links
+    keep SlowCopies(edge.from, edge.to)

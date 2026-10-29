@@ -573,6 +573,7 @@ set(MODEL_RENDERER_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/model-rendere
 set(MODEL_ANIMATION_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/model-animation.generated.cpp")
 set(FIRST_PERSON_ARENA_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/first-person-arena.generated.cpp")
 set(ROBOT_SANDBOX_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/robot-sandbox.generated.cpp")
+set(CACTUS_DUNGEON_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/cactus-dungeon.generated.cpp")
 set(PLATFORMER_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/platformer.generated.cpp")
 set(WAVING_LABEL_2D_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/waving-label-2d.generated.cpp")
 set(WAVING_LABEL_3D_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/waving-label-3d.generated.cpp")
@@ -685,6 +686,12 @@ cactus_add_example(example_robot_sandbox_generated
     SOURCE "examples/robot-sandbox/main.cactus"
     BACKEND "cpp-entt"
     OUTPUT "${ROBOT_SANDBOX_GENERATED_CPP}"
+)
+
+cactus_add_example(example_cactus_dungeon_generated
+    SOURCE "examples/cactus-dungeon/main.cactus"
+    BACKEND "cpp-entt"
+    OUTPUT "${CACTUS_DUNGEON_GENERATED_CPP}"
 )
 
 cactus_add_example(example_platformer_generated

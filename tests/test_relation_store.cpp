@@ -273,6 +273,31 @@ TEST_CASE("RelationStore: commit commands apply in order and check their ends", 
     }
 }
 
+TEST_CASE("RelationStore: kept commit commands validate both ends", "[runtime][relations][row-projection]") {
+    entt::registry registry;
+    connect_relation_ends<ClaimRow>(registry);
+    const auto e = make_entities(registry, 2);
+    registry.emplace<Robot>(e[0]);
+    registry.emplace<Task>(e[1]);
+    auto& store = relation_store<ClaimRow>(registry);
+    store.begin_run();
+    SECTION("valid ends") {
+        cactus::runtime::entt_backend::keep_relation_row(registry, e[0], e[1], ClaimRow{});
+        cactus::runtime::entt_backend::keep_relation_row(registry, e[0], e[1], ClaimRow{});
+        store.drop_unstamped();
+        CHECK(store.size() == 1);
+        CHECK(store.contains(e[0], e[1]));
+        return;
+    }
+    SECTION("destroyed from end") { registry.destroy(e[0]); }
+    SECTION("destroyed to end") { registry.destroy(e[1]); }
+    SECTION("missing from trait") { registry.remove<Robot>(e[0]); }
+    SECTION("missing to trait") { registry.remove<Task>(e[1]); }
+    cactus::runtime::entt_backend::keep_relation_row(registry, e[0], e[1], ClaimRow{});
+    store.drop_unstamped();
+    CHECK(store.size() == 0);
+}
+
 TEST_CASE("RelationStore: exact entries and collected joins preserve row order", "[runtime][relations][row-join]") {
     entt::registry registry;
     const auto e = make_entities(registry, 4);

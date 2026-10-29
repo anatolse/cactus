@@ -5869,6 +5869,8 @@ void SemanticAnalyzer::validate_rule_filters(ProgramNode& program) {
             if (!reject_row_domain_clauses(*rule)) {
                 validateReduceClause(*rule);
                 validate_keep_clause(*rule);
+            } else if (rule->keep.has_value() && !rule->keep->arguments.empty()) {
+                validate_keep_clause(*rule);
             }
             validateOrderByClause(*rule);
             validateLimitClause(*rule);

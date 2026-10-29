@@ -6,15 +6,16 @@ Define kept traits: a rule names a trait that the compiler keeps on each recipie
 
 ### Requirement: Keep clause shape
 
-A rule SHALL accept one `keep` clause in one of four forms:
+A rule SHALL accept one `keep` clause in one of the following forms:
 - On a unary `each:` rule without `reduce:`: `keep T`, with no `on`.
 - On a pair rule without `reduce:`: `keep T on b`, where `b` is one of its pair bindings.
 - On a pair rule with `reduce per b:`: `keep T on b`, where `b` is the `per` binding, optionally followed by `if condition`.
 - On a pair rule without `reduce:` whose two bindings are entity bindings: `keep R(a, b)`, where `R` is a relation and `a`, `b` are the two bindings (`dsl-relations`).
+- On an unreduced unary row, mixed entity/row or two-row domain: `keep R(k1, k2)`, with the direct output keys and uniform field scope specified by "Relation row queries project kept pairs" in `dsl-relations`.
 
-`T` SHALL be a durable trait declared in the same module as the rule, with no `persist` fields and not a state variant. `R` SHALL be a relation declared in the same module as the rule, or a relation of an imported module that its declaring module does not keep and that marks no end `one`. A linked program SHALL have at most one keeper per relation, and no rule other than its keeper, in any module, SHALL `add` or `remove` rows of a relation kept from another module; the linker SHALL report either conflict. The clause body SHALL assign zero or more fields of `T` or `R` from pure expressions; every field it leaves out SHALL take its declared default, and a field with no default SHALL be assigned. On a unary rule the expressions read the rule's filter traits and aliases, constants and named entity fields. On an unreduced pair rule keeping a trait they read only `b`, constants and named entity fields. On a relation keep they read both bindings, constants and named entity fields. On a reduced rule they read the aggregates, `b`, constants and named entity fields. A condition SHALL be a pure `bool` over the same scope as the fields. `keep` is recognized contextually at the rule-clause position.
+`T` SHALL be a durable trait declared in the same module as the rule, with no `persist` fields and not a state variant. `R` SHALL be a relation declared in the same module as the rule, or a relation of an imported module that its declaring module does not keep and that marks no end `one`. A linked program SHALL have at most one keeper per relation, and no rule other than its keeper, in any module, SHALL `add` or `remove` rows of a relation kept from another module; the linker SHALL report either conflict. The clause body SHALL assign zero or more fields of `T` or `R` from pure expressions; every field it leaves out SHALL take its declared default, and a field with no default SHALL be assigned. On a unary rule the expressions read the rule's filter traits and aliases, constants and named entity fields. On an unreduced pair rule keeping a trait they read only `b`, constants and named entity fields. On an entity-only relation keep they read both bindings, constants and named entity fields. On a row-domain projected relation keep they read only constants and named entity fields, with no domain binding or filter alias references. On a reduced rule they read the aggregates, `b`, constants and named entity fields. A condition SHALL be a pure `bool` over the same scope as the fields. `keep` is recognized contextually at the rule-clause position.
 
-The compiler SHALL reject, with a source-located error, `keep` on selectionless, globally reduced, row-domain and extern rules; `on` on a unary rule; a pair keep of a trait without `on`; a binding other than the `per` binding on a reduced rule; `keep R(...)` on a unary, reduced or row-binding rule; `keep R(...)` whose arguments are not the rule's two bindings; `if` on a unary, unreduced pair or relation keep; a field read outside the form's scope; and a field or condition whose type does not match. A read of the non-recipient binding on an unreduced pair keep of a trait SHALL be reported with help that suggests `reduce per` and `best(...)`.
+The compiler SHALL reject, with a source-located error, `keep` on selectionless, globally reduced and extern rules, and trait keeps on row-domain rules; `on` on a unary rule; a pair keep of a trait without `on`; a binding other than the `per` binding on a reduced rule; `keep R(...)` on a unary entity or reduced rule; `keep R(...)` whose arguments are not valid direct keys for its form; `if` on a unary, unreduced pair or relation keep; a field read outside the form's scope; and a field or condition whose type does not match. A read of the non-recipient binding on an unreduced pair keep of a trait SHALL be reported with help that suggests `reduce per` and `best(...)`.
 
 #### Scenario: Valid keep clause
 - **WHEN** a rule over `pairs: body, lava` uses `reduce per body:` with `n = count()` and declares `keep InLava on body:` with `zones = n`
@@ -87,6 +88,14 @@ The compiler SHALL reject, with a source-located error, `keep` on selectionless,
 #### Scenario: Two modules keep one imported relation
 - **WHEN** two linked modules each keep the same imported relation, or one keeps it and another adds its rows
 - **THEN** the linker reports an error naming the relation and both rules
+
+#### Scenario: Projected relation keep over rows
+- **WHEN** a valid unreduced row query declares `keep Frontier(owner.to, step.to)` in a phase group
+- **THEN** compilation accepts the relation projection without making the rows trait recipients
+
+#### Scenario: Trait keep remains invalid on rows
+- **WHEN** a row-domain rule tries to keep a trait on a row endpoint
+- **THEN** compilation rejects it and does not grant endpoint trait access
 
 ### Requirement: Kept trait presence follows rows
 

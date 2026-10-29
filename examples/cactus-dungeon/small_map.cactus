@@ -1,0 +1,11 @@
+module small_map
+
+use std.core
+use world
+use territory
+use tasks
+
+entity Settings:
+    world.WorldConfig:
+        size = 24
+        batch = 1152

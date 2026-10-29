@@ -53,7 +53,7 @@ The `std.render.text` module SHALL declare `extern rule TextRenderer3D` with a f
 ---
 
 ### Requirement: font_size semantics differ by rendering context
-In the 2D path (`TextRenderer2D`), `font_size` is interpreted as screen pixels — the height of rendered characters on screen. In the 3D path (`TextRenderer3D`), `font_size` is interpreted as world units — the height of rendered characters in world space. The trait does not carry a unit qualifier; the rendering context determines the interpretation.
+In the 2D path (`TextRenderer2D`), `font_size` SHALL be interpreted as screen pixels — the height of rendered characters on screen. In the 3D path (`TextRenderer3D`), `font_size` SHALL be interpreted as world units — the height of rendered characters in world space. The trait does not carry a unit qualifier; the rendering context determines the interpretation.
 
 #### Scenario: 2D font_size is screen pixels
 - **WHEN** a flat-world entity has `TextLabel` with `font_size = 32`

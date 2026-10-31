@@ -6,8 +6,12 @@ pub extern event tick:
 trait Enemy:
     var hp: int = 1
 
-entity Grunt:
+template Grunt:
     Enemy
+
+rule Spawn:
+    on tick:
+        spawn Grunt()
 
 rule P:
     pairs:

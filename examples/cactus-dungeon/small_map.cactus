@@ -4,8 +4,20 @@ use std.core
 use world
 use territory
 use tasks
+use rooms
+use knights
+use combat
+use controls
+use visuals
+use animation
+use hud
+use ai
+use flow
 
 entity Settings:
+    ai.Configuration:
+        enabled = false
     world.WorldConfig:
         size = 24
-        batch = 1152
+        height = 3
+        batch = 2304

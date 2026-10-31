@@ -1,0 +1,193 @@
+module visuals
+
+use std.core
+use std.render.models as models
+use std.render.meshes as meshes
+use std.voxel.volume as voxel
+use std.transform.volume as tv
+use animation
+use world
+use territory
+use tasks
+use units
+use rooms
+use controls
+use layers
+
+pub asset RobotModel: model = "../model-renderer/art/robot.glb"
+pub asset KnightModel: model = "../model-renderer/art/Crispoly-Characters-Mini-Red-Knight.glb"
+
+const:
+    ROBOT_SCALE = 0.3
+    KNIGHT_SCALE = 0.5
+pub asset HeartModel: model = "art/heart.glb"
+
+event FloorTint:
+    texture: texture_id
+
+pub template SunLight:
+    meshes.DirectionalLight:
+        direction = vec3(0.0, -1.0, 0.0)
+        color = #FFF3DDFF
+        intensity = 1.0
+
+entity Sun:
+    use SunLight
+
+pub template Flipbooks:
+    children:
+        entity LavaFlow:
+            voxel.TextureFlipbook:
+                texture = world.LavaTexture
+                fps = 6.0
+        entity WaterFlow:
+            voxel.TextureFlipbook:
+                texture = world.WaterTexture
+                fps = 4.0
+        entity GoldGlint:
+            voxel.TextureFlipbook:
+                texture = world.GoldTexture
+                fps = 3.0
+
+entity Liquids:
+    use Flipbooks
+
+rule UnitModels:
+    each:
+        units.Unit as unit
+        tv.WorldTransform as pose
+    without: models.ModelRenderer
+
+    on input:
+        let robot = unit.kind == units.UnitKind.Robot
+        let size = if robot: ROBOT_SCALE else: KNIGHT_SCALE
+        pose.scale = vec3(size, size, size)
+        add models.ModelRenderer:
+            model = if robot: RobotModel else: KnightModel
+        add models.ModelAnimator:
+            clip = animation.clip_for(unit.kind, animation.Pose.Idle)
+        add models.ModelPlayback
+        add animation.Motion
+        add layers.Layer
+
+rule HeartModels:
+    each: world.Heart
+    without: models.ModelRenderer
+    after: UnitModels
+
+    on input:
+        add models.ModelRenderer:
+            model = HeartModel
+        add layers.Layer
+
+rule TerrainLayer:
+    each: voxel.Volume
+    without: layers.Layer
+    after: HeartModels
+
+    on input:
+        add layers.Layer
+
+rule RemoveHeartModel:
+    each: world.Tile
+
+    on removed world.Heart:
+        remove models.ModelRenderer
+
+rule UnitColors:
+    pairs:
+        unit:
+            units.Unit
+            controls.SelectionStatus as status
+            models.ModelRenderer as draw
+        owner: world.Player as player
+    where: tasks.Commands(unit, owner)
+    limit: 1 per unit
+
+    on tick:
+        draw.color = if status.active: #FFDF60FF else: player.color
+
+rule HeartColors:
+    pairs:
+        heart:
+            world.Heart
+            models.ModelRenderer as draw
+        owner: world.Player as player
+    after: UnitColors
+    where: world.OwnedBy(heart, owner)
+    limit: 1 per heart
+
+    on tick:
+        draw.color = player.color
+
+rule ClaimedFloors:
+    pairs:
+        tile:
+            world.Tile as data
+            voxel.Cell as cell
+        owner: world.Player
+    after: BridgeAppearance
+    where:
+        data.kind == world.Kind.Floor
+        world.OwnedBy(tile, owner)
+    limit: 1 per tile
+
+    on tick:
+        emit FloorTint to tile:
+            texture = if owner == world.Human: world.BlueTexture else: world.RedTexture
+
+rule TintPlainFloor:
+    each: voxel.Cell as cell
+
+    on FloorTint as request:
+        match self:
+            rooms.RoomTile =>
+                return
+            _ =>
+                cell.texture = request.texture
+
+rule TileAppearance:
+    each:
+        world.Tile as tile
+        voxel.Cell as cell
+
+    on tick:
+        cell.texture = world.texture_for(tile.kind)
+
+rule RoomAppearance:
+    each:
+        rooms.RoomTile as room
+        voxel.Cell as cell
+    after: TileAppearance
+
+    on tick:
+        cell.texture = match room.kind:
+            rooms.RoomKind.Lair => world.LairTexture
+            rooms.RoomKind.Farm => world.FarmTexture
+            rooms.RoomKind.Training => world.TrainingTexture
+            rooms.RoomKind.Bridge => world.BridgeTexture
+
+rule BridgeAppearance:
+    each:
+        territory.Bridge
+        voxel.Cell as cell
+    after: RoomAppearance
+
+    on tick:
+        cell.texture = world.BridgeTexture
+
+rule FloorSurfaces:
+    pairs:
+        tile:
+            world.Tile
+            voxel.Cell as upper
+        floor: voxel.Cell as base
+    where:
+        base.volume == upper.volume
+        base.x == upper.x
+        base.z == upper.z
+        base.y == 0
+    limit: 1 per floor
+
+    on late_tick:
+        base.texture = upper.texture

@@ -20,6 +20,9 @@ enum Query:
     LiveWhere
     LiveGoal
     LiveLimited
+    TestedPairs
+    ReverseTestedPairs
+    UnionPairs
 
 trait Tile:
     persist var label: int = 0
@@ -387,6 +390,45 @@ rule LiveLimited:
         emit PairSeen:
             left = a.cost
             right = b.cost
+
+rule TestedPairs:
+    pairs:
+        robot: Robot
+        tile: Tile
+    after: LiveLimited
+    where:
+        Located(robot, tile)
+    when:
+        Settings[Control].active and Settings[Control].query == Query.TestedPairs
+
+    on fixed_tick:
+        Settings[Control].trace += text.format("{}>{};", robot[Robot].number, tile[Tile].label)
+
+rule ReverseTestedPairs:
+    pairs:
+        tile: Tile
+        robot: Robot
+    after: TestedPairs
+    where:
+        Located(robot, tile)
+    when:
+        Settings[Control].active and Settings[Control].query == Query.ReverseTestedPairs
+
+    on fixed_tick:
+        Settings[Control].trace += text.format("{}>{};", robot[Robot].number, tile[Tile].label)
+
+rule UnionPairs:
+    pairs:
+        tile: Tile
+        step: Tile
+    after: ReverseTestedPairs
+    where:
+        step == tile or Walk(tile, step)
+    when:
+        Settings[Control].active and Settings[Control].query == Query.UnionPairs
+
+    on fixed_tick:
+        Settings[Control].trace += text.format("{}>{};", tile[Tile].label, step[Tile].label)
 
 rule SendProbe:
     when:

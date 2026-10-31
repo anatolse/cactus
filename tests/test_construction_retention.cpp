@@ -383,14 +383,19 @@ TEST_CASE("capture reads the live value of a trait no node copies", "[codegen-en
 }
 
 TEST_CASE("restore copies a trait only on the nodes that keep one", "[codegen-entt][persistence][retention]") {
-    auto unit          = analyze(kProgram);
-    const auto code    = CppEnttCodegen::generate(unit->program);
-    const auto restore = function_body(code, "generated_restore_node_traits");
+    auto unit        = analyze(kProgram);
+    const auto code  = CppEnttCodegen::generate(unit->program);
+    const auto start = code.find("struct RestoreRetention<");
+    const auto end   = code.find("using GeneratedRestoreTraits", start);
+    REQUIRE(start != std::string::npos);
+    REQUIRE(end != std::string::npos);
+    const auto restore = code.substr(start, end - start);
 
-    CHECK_FALSE(restore.contains("retain_construction<::cactus_gen::world::Box>"));
-    CHECK_FALSE(restore.contains("retain_construction<::cactus_gen::world::Cell>"));
-    CHECK(restore.contains("retain_construction<::cactus_gen::world::Health>"));
-    CHECK(restore.contains("kKeepsCopy[node]"));
+    CHECK_FALSE(restore.contains("RestoreRetention<::cactus_gen::world::Box>"));
+    CHECK_FALSE(restore.contains("RestoreRetention<::cactus_gen::world::Cell>"));
+    CHECK(restore.contains("struct RestoreRetention<::cactus_gen::world::Health> {"));
+    CHECK(restore.contains("static constexpr std::array<bool, "));
+    CHECK_FALSE(code.contains("generated_restore_trait_"));
     CHECK(code.contains("generated_restore_node_traits(staged, entity, node, source, row, match.traits, ids);"));
 }
 

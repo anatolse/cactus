@@ -179,9 +179,7 @@ public:
                                                 const DecoratedProgram& program,
                                                 const std::function<std::string(const ExprNode&)>& emit_argument);
 
-    // Editor/rig dimensionality (D2): derived from the root module's resolved
-    // WorldTransform references, never from merged-map presence — std.editor
-    // transitively imports both flat and volume variants into every program.
+    // Prefer entry references, then authored modules; std.editor imports both variants.
     static WorldTransformUsage world_transform_usage(const DecoratedProgram& program);
 
     // A trait field's declared `= expression` default, read from the AST so the

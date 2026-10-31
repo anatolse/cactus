@@ -1,0 +1,494 @@
+module knights
+
+use std.core
+use session
+use std.voxel.volume as voxel
+use std.transform.volume as tv
+use world
+use territory
+use tasks
+use rooms
+use units
+
+pub trait Knight:
+    persist var hunger: float = 0.0
+    persist var fatigue: float = 0.0
+    persist var training: float = 0.0
+    persist var resting: bool = false
+
+pub trait Recruitment:
+    persist var requested: bool = false
+    persist var credit: bool = false
+
+pub trait FarmStock:
+    persist var food: int = 0
+    persist var growth: float = 0.0
+
+pub trait FreeBeds:
+    let count: int = 0
+
+pub trait BedFill:
+    let count: int = 0
+
+trait Birth:
+    let bed: entity_id
+
+pub relation Sleeps:
+    from: Knight one
+    to: rooms.RoomTile one
+
+relation Reserved:
+    from: world.Player
+    to: rooms.RoomTile one
+
+relation FoodGoal:
+    from: Knight
+    to: rooms.RoomTile
+
+relation RestGoal:
+    from: Knight
+    to: rooms.RoomTile
+
+relation TrainGoal:
+    from: Knight
+    to: rooms.RoomTile
+
+relation Goal:
+    from: Knight
+    to: rooms.RoomTile
+
+relation Occupies:
+    from: Knight
+    to: rooms.RoomTile
+
+relation Presence:
+    from: world.Player
+    to: units.Unit
+
+relation Intruder:
+    from: world.Player
+    to: units.Unit
+
+pub event RecruitRequested
+
+event SpawnRecruit:
+    bed: entity_id
+
+event Train:
+    knight: entity_id
+
+group decisions:
+    phase: input
+
+pub template Recruit(at: vec3, bed: entity_id):
+    Knight
+    Birth:
+        bed = bed
+    units.Unit:
+        kind = units.UnitKind.Knight
+        health = 300.0
+    units.Order.Auto
+    units.OrderRequest.None
+    tv.WorldTransform:
+        position = at
+
+rule PreparePlayers:
+    each: world.Player
+    without: Recruitment
+
+    on load:
+        add Recruitment
+
+rule RequestRecruit:
+    each: Recruitment as request
+
+    on RecruitRequested:
+        request.requested = true
+
+rule PrepareFarm:
+    each: rooms.RoomTile as room
+    where: room.kind == rooms.RoomKind.Farm
+
+    on added rooms.RoomTile:
+        add FarmStock
+
+rule RemoveStock:
+    each: world.Tile
+
+    on removed rooms.RoomTile:
+        remove FarmStock
+
+rule GrowFood:
+    each:
+        FarmStock as stock
+        territory.Connected
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on fixed_tick:
+        if stock.food >= 4:
+            return
+        stock.growth += fixed_tick.dt
+        if stock.growth >= 1.0:
+            stock.food += 1
+            stock.growth -= 1.0
+
+rule CountFreeBeds:
+    pairs:
+        player: world.Player
+        bed:
+            rooms.RoomTile as room
+            territory.Connected
+    group: territory.links
+    where:
+        room.kind == rooms.RoomKind.Lair
+        world.OwnedBy(bed, player)
+        not Sleeps(_, bed)
+        not Reserved(_, bed)
+    reduce per player:
+        beds = count()
+    keep FreeBeds on player:
+        count = beds
+
+rule PayRecruit:
+    pairs:
+        player:
+            world.Player
+            Recruitment as request
+            FreeBeds as beds
+        farm:
+            FarmStock as stock
+            territory.Connected
+    after:
+        GrowFood
+        rooms.SellBridges
+    where:
+        request.requested
+        not request.credit
+        beds.count > 0
+        stock.food > 0
+        world.OwnedBy(farm, player)
+    limit: 1 per player, 1 per farm
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on fixed_tick:
+        request.requested = false
+        request.credit = true
+        stock.food -= 1
+
+rule ReserveRecruit:
+    pairs:
+        player:
+            world.Player
+            Recruitment as request
+        bed:
+            rooms.RoomTile as room
+            territory.Connected
+    after: PayRecruit
+    where:
+        request.credit
+        room.kind == rooms.RoomKind.Lair
+        world.OwnedBy(bed, player)
+        not Reserved(_, bed)
+        not Sleeps(_, bed)
+    limit: 1 per player, 1 per bed
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on fixed_tick:
+        request.credit = false
+        add Reserved(player, bed)
+        emit SpawnRecruit to player:
+            bed = bed
+
+rule Arrive:
+    pairs:
+        player: world.Player
+        heart:
+            world.Heart
+            voxel.Cell as cell
+    where: world.OwnedBy(heart, player)
+    limit: 1 per player
+
+    on SpawnRecruit as request:
+        spawn Recruit(at = vec3(cell.x + 0.5, 1.25, cell.z + 0.5), bed = request.bed)
+
+rule AssignBed:
+    pairs:
+        knight:
+            Knight
+            Birth as birth
+        bed: rooms.RoomTile as room
+    where:
+        bed == birth.bed
+        room.kind == rooms.RoomKind.Lair
+        not Sleeps(knight, _)
+        not Sleeps(_, bed)
+    limit: 1 per knight, 1 per bed
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on fixed_tick:
+        add Sleeps(knight, bed)
+        remove Birth from knight
+
+rule ReleaseReservations:
+    each: Reserved as reservation
+    after:
+        AssignBed
+        ReserveRecruit
+    where: Sleeps(_, reservation.to)
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on fixed_tick:
+        remove Reserved(reservation.from, reservation.to)
+
+rule Needs:
+    each: Knight as knight
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on fixed_tick:
+        if knight.fatigue <= 0.0:
+            knight.resting = false
+        knight.hunger += fixed_tick.dt
+        knight.fatigue += fixed_tick.dt
+        if knight.fatigue >= 10.0:
+            knight.resting = true
+
+rule SeekFood:
+    pairs:
+        knight:
+            Knight as needs
+            units.Order.Auto
+        farm:
+            rooms.RoomTile
+            FarmStock as stock
+            territory.Connected
+    group: territory.links
+    where:
+        needs.hunger >= 5.0
+        stock.food > 0
+        tasks.Friendly(knight, farm)
+    keep FoodGoal(knight, farm)
+
+rule SeekRest:
+    pairs:
+        knight:
+            Knight as needs
+            units.Order.Auto
+        bed:
+            rooms.RoomTile
+            territory.Connected
+    group: territory.links
+    where:
+        needs.hunger < 5.0
+        needs.resting
+        Sleeps(knight, bed)
+    keep RestGoal(knight, bed)
+
+rule SeekTraining:
+    pairs:
+        knight:
+            Knight as needs
+            units.Order.Auto
+        tile:
+            rooms.RoomTile as room
+            territory.Connected
+    group: territory.links
+    where:
+        needs.hunger < 5.0
+        not needs.resting
+        room.kind == rooms.RoomKind.Training
+        tasks.Friendly(knight, tile)
+    keep TrainGoal(knight, tile)
+
+rule KnightGoals:
+    pairs:
+        knight:
+            Knight
+            units.Order.Auto
+            units.OrderRequest.None
+        tile: rooms.RoomTile
+    group: decisions
+    before: units.orders
+    where: FoodGoal(knight, tile) or RestGoal(knight, tile) or TrainGoal(knight, tile)
+    keep Goal(knight, tile)
+
+rule FollowNeeds:
+    pairs:
+        goal: Goal
+        route: territory.Route
+    order by: route.distance asc
+    after: tasks.MoveOrders
+    before: tasks.Stride
+    where:
+        route.to == goal.to
+        tasks.Located(goal.from, route.from)
+    limit: 1 per goal.from
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on fixed_tick:
+        emit tasks.Step to goal.from:
+            tile = route.next
+
+rule Eat:
+    pairs:
+        knight:
+            Knight as needs
+            units.Order.Auto
+            units.OrderRequest.None
+        farm:
+            FarmStock as stock
+            territory.Connected
+    after:
+        PayRecruit
+        Needs
+    where:
+        tasks.Located(knight, farm)
+        tasks.Friendly(knight, farm)
+        needs.hunger >= 5.0
+        stock.food > 0
+    limit: 1 per knight, 1 per farm
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on fixed_tick:
+        stock.food -= 1
+        needs.hunger -= 5.0
+
+rule Rest:
+    pairs:
+        knight:
+            Knight as needs
+            units.Unit as unit
+            units.Order.Auto
+            units.OrderRequest.None
+        bed:
+            rooms.RoomTile
+            territory.Connected
+    after: Needs
+    where:
+        Sleeps(knight, bed)
+        tasks.Located(knight, bed)
+        needs.fatigue > 0.0
+        unit.health > 0.0
+    limit: 1 per knight, 1 per bed
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on fixed_tick:
+        needs.fatigue = if needs.fatigue > fixed_tick.dt * 4.0: needs.fatigue - fixed_tick.dt * 4.0 else: 0.0
+        let profile = units.stats_for(unit)
+        unit.health = if unit.health + fixed_tick.dt * 10.0 < profile.max_health: unit.health + fixed_tick.dt * 10.0 else: profile.max_health
+
+rule Practice:
+    pairs:
+        knight:
+            Knight as needs
+            units.Order.Auto
+            units.OrderRequest.None
+        tile:
+            rooms.RoomTile as room
+            territory.Connected
+    after:
+        Eat
+        Rest
+    where:
+        tasks.Located(knight, tile)
+        tasks.Friendly(knight, tile)
+        room.kind == rooms.RoomKind.Training
+        needs.hunger < 5.0
+        not needs.resting
+    limit: 1 per knight, 1 per tile
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on fixed_tick:
+        needs.training += fixed_tick.dt
+        if needs.training >= 1.0:
+            needs.training -= 1.0
+            emit Train to knight:
+                knight = knight
+
+rule BillTraining:
+    pairs:
+        knight: Knight
+        player: world.Player
+    where: tasks.Commands(knight, player)
+
+    on Train as request:
+        emit PayTraining to player:
+            knight = request.knight
+
+event PayTraining:
+    knight: entity_id
+
+rule PayTrainer:
+    each: world.Player as player
+
+    on PayTraining as request:
+        if player.gold < 2:
+            return
+        player.gold -= 2
+        emit units.GainXP to request.knight:
+            activity = units.Activity.Train
+
+rule BedRooms:
+    pairs:
+        sleep: Sleeps
+        room: rooms.Room
+    group: territory.links
+    where: sleep.to == room.from
+    keep Occupies(sleep.from, room.to)
+
+rule CountBeds:
+    pairs:
+        room: rooms.RoomStats
+        knight: Knight
+    group: territory.links
+    where: Occupies(knight, room)
+    reduce per room:
+        filled = count()
+    keep BedFill on room if true:
+        count = filled
+
+rule TerritoryPresence:
+    pairs:
+        place: tasks.Located
+        owner: world.OwnedBy
+    group: territory.links
+    where: place.to == owner.from
+    keep Presence(owner.to, place.from)
+
+rule Intruders:
+    pairs:
+        unit: units.Unit
+        presence: Presence
+    group: territory.links
+    where:
+        presence.to == unit
+        tasks.Commands(unit, _)
+        not tasks.Commands(unit, presence.from)
+    keep Intruder(presence.from, unit)
+
+rule Defend:
+    pairs:
+        knight:
+            Knight
+            units.Order.Auto
+        intruder: Intruder
+    after: tasks.FinishMove
+    where:
+        tasks.Commands(knight, intruder.from)
+        knight != intruder.to
+    limit: 1 per knight
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on fixed_tick:
+        add units.Order.Attack to knight:
+            target = intruder.to

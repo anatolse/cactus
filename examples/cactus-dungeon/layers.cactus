@@ -1,0 +1,27 @@
+module layers
+
+use std.core
+use std.camera.viewport as viewport
+use std.transform.volume as tv
+use std.render.visibility as visibility
+
+pub trait Layer:
+    let minimap: bool = false
+
+pub trait ViewLayer:
+    let minimap: bool = false
+
+group filtering:
+    phase: late_tick
+
+rule HideOtherLayers:
+    pairs:
+        thing:
+            tv.WorldTransform
+            Layer as layer
+        port:
+            viewport.Viewport
+            ViewLayer as scope
+    group: filtering
+    where: layer.minimap != scope.minimap
+    keep visibility.HiddenIn(thing, port)

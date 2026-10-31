@@ -928,6 +928,16 @@ relation_row_joins.cactus examples relation_row_joins.ReverseGoal/on std.core.fi
     named_writes:
     named_requirements: relation_row_joins.Settings/relation_row_joins.Control
     iteration_order: free
+relation_row_joins.cactus examples relation_row_joins.ReverseTestedPairs/on std.core.fixed_tick
+    reads: relation_row_joins.Control relation_row_joins.Located relation_row_joins.Robot relation_row_joins.Tile
+    read_fields: relation_row_joins.Control{active,query,trace} relation_row_joins.Located{} relation_row_joins.Robot{number} relation_row_joins.Tile{label}
+    write_fields: relation_row_joins.Control{trace}
+    write_kinds: relation_row_joins.Control.trace=3/0
+    bound_reads: 0:relation_row_joins.Tile 1:relation_row_joins.Robot
+    named_reads: [relation_row_joins.Settings: relation_row_joins.Control{active,query,trace}]
+    named_writes: [relation_row_joins.Settings: relation_row_joins.Control{trace}]
+    named_requirements: relation_row_joins.Settings/relation_row_joins.Control
+    iteration_order: free
 relation_row_joins.cactus examples relation_row_joins.Snapshot/on std.core.fixed_tick
     reads: relation_row_joins.Control relation_row_joins.Walk
     read_fields: relation_row_joins.Control{active,query} relation_row_joins.Walk{cost}
@@ -946,6 +956,16 @@ relation_row_joins.cactus examples relation_row_joins.Sorted/on std.core.fixed_t
     bound_reads:
     named_reads: [relation_row_joins.Settings: relation_row_joins.Control{active,query}]
     named_writes:
+    named_requirements: relation_row_joins.Settings/relation_row_joins.Control
+    iteration_order: free
+relation_row_joins.cactus examples relation_row_joins.TestedPairs/on std.core.fixed_tick
+    reads: relation_row_joins.Control relation_row_joins.Located relation_row_joins.Robot relation_row_joins.Tile
+    read_fields: relation_row_joins.Control{active,query,trace} relation_row_joins.Located{} relation_row_joins.Robot{number} relation_row_joins.Tile{label}
+    write_fields: relation_row_joins.Control{trace}
+    write_kinds: relation_row_joins.Control.trace=3/0
+    bound_reads: 0:relation_row_joins.Robot 1:relation_row_joins.Tile
+    named_reads: [relation_row_joins.Settings: relation_row_joins.Control{active,query,trace}]
+    named_writes: [relation_row_joins.Settings: relation_row_joins.Control{trace}]
     named_requirements: relation_row_joins.Settings/relation_row_joins.Control
     iteration_order: free
 relation_row_joins.cactus examples relation_row_joins.ToTo/on std.core.fixed_tick

@@ -257,4 +257,37 @@ TEST_CASE("Unlimited joined predicates read live named fields in logical order",
     CHECK(world.control().seen == 2);
 }
 
+TEST_CASE("Relation-tested entity pairs keep product order from either end", "[headless][row-join]") {
+    World world;
+    const auto& slots = World::slots();
+    auto& locations   = backend::relation_store<game::Located>(world.registry);
+    locations.clear();
+    locations.compact();
+    locations.add(slots.Second, slots.Goal, game::Located{});
+    locations.add(slots.First, slots.Other, game::Located{});
+    locations.add(slots.Second, slots.Middle, game::Located{});
+    locations.add(slots.First, slots.Start, game::Located{});
+    CHECK(world.run(game::Query::TestedPairs) == "1>1;1>3;2>2;2>4;");
+    CHECK(world.run(game::Query::ReverseTestedPairs) == "1>1;2>2;1>3;2>4;");
+}
+
+TEST_CASE("A union of identity and relation branches keeps product order and runs each pair once",
+          "[headless][row-join][union]") {
+    World world;
+    const auto& slots = World::slots();
+    world.walk().add(slots.Goal, slots.Goal, game::Walk{});
+    world.walk().add(slots.Other, slots.Start, game::Walk{});
+    std::string expected;
+    for (const auto tile : {slots.Start, slots.Middle, slots.Other, slots.Goal}) {
+        for (const auto next : {slots.Start, slots.Middle, slots.Other, slots.Goal}) {
+            if (next == tile || world.walk().contains(tile, next)) {
+                expected += std::format("{}>{};", world.registry.get<game::Tile>(tile).label,
+                                        world.registry.get<game::Tile>(next).label);
+            }
+        }
+    }
+    CHECK(expected == "1>1;1>2;1>3;2>2;2>4;3>1;3>3;3>4;4>4;");
+    CHECK(world.run(game::Query::UnionPairs) == expected);
+}
+
 }  // namespace

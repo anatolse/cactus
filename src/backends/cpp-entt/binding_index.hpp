@@ -580,6 +580,52 @@ public:
         gather(registry, values, blocks_, [](const Key&) { return true; }, out);
     }
 
+    // Replaces `out` with the members of any block whose every value lies in
+    // [lo, hi], both inclusive, oldest first.
+    void find_region(const entt::registry& registry,
+                     const std::array<std::int64_t, Parts>& lo,
+                     const std::array<std::int64_t, Parts>& hi,
+                     std::vector<entt::entity>& out) const {
+        out.clear();
+        for (const auto& block : blocks_) {
+            std::array<std::int64_t, Parts> from{};
+            std::array<std::int64_t, Parts> to{};
+            bool empty = false;
+            for (std::size_t part = 0; part < Parts; ++part) {
+                from[part] = std::max(lo[part], block.extents[part].first);
+                to[part]   = std::min(hi[part], block.extents[part].second - 1);
+                empty      = empty || from[part] > to[part];
+            }
+            if (empty) {
+                continue;
+            }
+            for (auto values = from;;) {
+                for (auto member = heads_[row_in(block, values)]; member != kNone;
+                     member      = next_.get(entity_from_bits(member))) {
+                    out.push_back(entity_from_bits(member));
+                }
+                std::size_t part = Parts;
+                while (part > 0 && ++values[part - 1] > to[part - 1]) {
+                    values[part - 1] = from[part - 1];
+                    --part;
+                }
+                if (part == 0) {
+                    break;
+                }
+            }
+        }
+        for (const auto& member : overflow_) {
+            bool inside = true;
+            for (std::size_t part = 0; part < Parts; ++part) {
+                inside = inside && member.key.values[part] >= lo[part] && member.key.values[part] <= hi[part];
+            }
+            if (inside) {
+                out.push_back(member.entity);
+            }
+        }
+        std::ranges::sort(out, {}, [&](entt::entity entity) { return creation_ordinal(registry, entity); });
+    }
+
     [[nodiscard]] std::size_t size() const noexcept { return size_; }
 
 private:

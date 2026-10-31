@@ -1,0 +1,727 @@
+module hud
+
+use std.core
+use session
+use std.query as query
+use std.text as text
+use std.math as math
+use std.math.quat as quat
+use std.math.vec2 as vectors
+use std.camera.volume as camera
+use std.camera.viewport as viewport
+use std.transform.volume as tv
+use std.render.models as models
+use std.render.text as labels
+use std.pointer as pointer
+use std.ui as ui
+use std.voxel.volume as voxel
+use world
+use units
+use tasks
+use territory
+use rooms
+use knights
+use controls
+use statistics
+use layers
+use visuals
+
+asset Quad: model = "art/quad.glb"
+
+const:
+    LAIR_NAME = "Lair"
+    FARM_NAME = "Farm"
+    TRAINING_NAME = "Training"
+    BRIDGE_NAME = "Bridge"
+    MAP_MIN = vec2(0.75, 0.1)
+    MAP_MAX = vec2(1.0, 0.35)
+
+pub enum CaptionKind:
+    Top
+    Room
+
+pub trait HudCaption:
+    let kind: CaptionKind
+
+event CaptionText:
+    kind: CaptionKind
+    value: string
+
+rule UpdateCaption:
+    each:
+        HudCaption as caption
+        ui.Text as label
+
+    on CaptionText as request:
+        if caption.kind == request.kind:
+            label.value = request.value
+
+pub enum Action:
+    Select
+    Dig
+    Lair
+    Farm
+    Training
+    Bridge
+    Sell
+    Attack
+    Defend
+    Recruit
+    Previous
+    Next
+    Pause
+    Save
+    Load
+
+pub trait ActionButton:
+    let action: Action
+
+pub trait RoomBrowser:
+    persist var kind: rooms.RoomKind = rooms.RoomKind.Lair
+    persist var page: int = 0
+
+pub state RoomSelection:
+    Empty
+    Selected:
+        let target: entity_id
+
+trait RoomChoice
+pub trait TileMarker
+pub trait UnitMarker
+trait MapMarker
+pub trait MapClick
+
+pub enum BarKind:
+    Health
+    XP
+    HealthBackground
+    XPBackground
+
+pub trait Bar:
+    let kind: BarKind
+
+pub relation Explored:
+    from: world.Player
+    to: world.Tile
+
+relation Seen:
+    from: units.Unit
+    to: world.Tile
+
+relation InSight:
+    from: world.Player
+    to: world.Tile
+
+relation UnitMapped:
+    from: units.Unit
+    to: world.Player
+
+relation TileOwner:
+    from: MapMarker
+    to: world.Player
+
+relation UnitOwner:
+    from: MapMarker
+    to: world.Player
+
+pub event PauseRequested
+pub event SaveRequested
+pub event LoadRequested
+
+event InspectRoom
+
+group eyes:
+    phase: tick
+
+group choices:
+    phase: input
+
+template Panel(min: vec2, max: vec2, pivot: vec2, offset: vec2, size: vec2, axis: ui.Axis):
+    ui.Node
+    ui.Anchors:
+        min = min
+        max = max
+        pivot = pivot
+        offset = offset
+    ui.PreferredSize:
+        min_size = size
+    ui.Panel:
+        background = #182032EE
+    ui.Stack:
+        axis = axis
+        align = ui.Align.Center
+        gap = 4.0
+        padding = vec2(8.0, 8.0)
+    pointer.PointerTarget
+    pointer.PointerState
+
+template Caption(size: vec2):
+    ui.Node
+    ui.Text:
+        align = ui.TextAlign.Start
+        font_size = 16
+    ui.PreferredSize:
+        min_size = size
+
+template Button(label: string, action: Action):
+    ui.Node
+    ui.Button:
+        label = label
+        normal_color = #354663FF
+    ui.PreferredSize:
+        min_size = vec2(70.0, 32.0)
+    pointer.PointerTarget
+    pointer.PointerState
+    ActionButton:
+        action = action
+
+pub entity HudRoot:
+    ui.Node
+    viewport.ScreenSize
+    ui.Anchors:
+        min = vec2(0.0, 0.0)
+        max = vec2(1.0, 1.0)
+    RoomBrowser
+    RoomSelection.Empty
+
+pub template HudViews:
+    ui.Node
+    Parent:
+        parent = HudRoot
+    children:
+        entity Header:
+            use Panel(min = vec2(0.0, 0.0), max = vec2(1.0, 0.0), pivot = vec2(0.0, 0.0), offset = vec2(0.0, 0.0), size = vec2(0.0, 50.0), axis = ui.Axis.Horizontal)
+            children:
+                entity Top:
+                    use Caption(size = vec2(630.0, 30.0))
+                    HudCaption:
+                        kind = CaptionKind.Top
+                entity Pause:
+                    use Button(label = "Pause", action = Action.Pause)
+                entity Save:
+                    use Button(label = "Save", action = Action.Save)
+                entity Load:
+                    use Button(label = "Load", action = Action.Load)
+        entity Toolbar:
+            use Panel(min = vec2(0.0, 1.0), max = vec2(1.0, 1.0), pivot = vec2(0.0, 1.0), offset = vec2(0.0, 0.0), size = vec2(0.0, 58.0), axis = ui.Axis.Horizontal)
+            children:
+                entity Select:
+                    use Button(label = "Select", action = Action.Select)
+                entity Dig:
+                    use Button(label = "Dig", action = Action.Dig)
+                entity Lair:
+                    use Button(label = "Lair 50", action = Action.Lair)
+                entity Farm:
+                    use Button(label = "Farm 75", action = Action.Farm)
+                entity Training:
+                    use Button(label = "Train 100", action = Action.Training)
+                entity Bridge:
+                    use Button(label = "Bridge 30", action = Action.Bridge)
+                entity Sell:
+                    use Button(label = "Sell", action = Action.Sell)
+                entity Attack:
+                    use Button(label = "Attack", action = Action.Attack)
+                entity Defend:
+                    use Button(label = "Defend", action = Action.Defend)
+                entity Recruit:
+                    use Button(label = "Recruit", action = Action.Recruit)
+        entity RoomPanel:
+            use Panel(min = vec2(0.0, 0.12), max = vec2(0.0, 0.12), pivot = vec2(0.0, 0.0), offset = vec2(12.0, 0.0), size = vec2(270.0, 150.0), axis = ui.Axis.Vertical)
+            children:
+                entity Info:
+                    use Caption(size = vec2(250.0, 80.0))
+                    HudCaption:
+                        kind = CaptionKind.Room
+                entity RoomButtons:
+                    ui.Node
+                    ui.Stack:
+                        axis = ui.Axis.Horizontal
+                        align = ui.Align.Center
+                        gap = 4.0
+                    children:
+                        entity PreviousRoom:
+                            use Button(label = "Previous", action = Action.Previous)
+                        entity NextRoom:
+                            use Button(label = "Next", action = Action.Next)
+        entity MapCanvas:
+            ui.Node:
+                z_index = 10
+            ui.Anchors:
+                min = MAP_MIN
+                max = MAP_MAX
+            ui.Panel:
+                border_color = #C8A86AFF
+                border_width = 2.0
+            pointer.PointerTarget
+            pointer.PointerState
+            MapClick
+
+pub template MapView:
+    camera.Camera:
+        projection = camera.Projection.Orthographic
+        ortho_height = 85.0
+    viewport.Viewport:
+        x = MAP_MIN.x
+        y = MAP_MIN.y
+        width = MAP_MAX.x - MAP_MIN.x
+        height = MAP_MAX.y - MAP_MIN.y
+        depth = 1
+        clear_color = #000000FF
+    tv.WorldTransform:
+        rotation = quat.from_euler(-1.5707964, 0.0, 0.0)
+    layers.ViewLayer:
+        minimap = true
+
+rule OpenViews:
+    after: world.Begin
+
+    on load:
+        spawn HudViews()
+        spawn MapView()
+
+template MapMark(owner: entity_id):
+    Parent:
+        parent = owner
+    tv.LocalTransform:
+        rotation = quat.from_euler(-1.5707964, 0.0, 0.0)
+    tv.WorldTransform
+    models.ModelRenderer:
+        model = Quad
+        cast_shadow = false
+    layers.Layer:
+        minimap = true
+    MapMarker
+
+template TileMark(owner: entity_id):
+    use MapMark(owner = owner)
+    TileMarker
+
+template UnitMark(owner: entity_id):
+    use MapMark(owner = owner)
+    tv.LocalTransform:
+        position = vec3(0.0, 0.5, 0.0)
+        scale = vec3(0.45, 0.45, 0.45)
+    UnitMarker
+
+template UnitBar(owner: entity_id, kind: BarKind, height: float):
+    Parent:
+        parent = owner
+    tv.LocalTransform:
+        position = vec3(0.0, height, 0.0)
+        scale = vec3(0.8, 0.06, 1.0)
+    tv.WorldTransform
+    models.ModelRenderer:
+        model = Quad
+        cast_shadow = false
+    layers.Layer
+    Bar:
+        kind = kind
+
+rule ToolbarActions:
+    each: ActionButton as button
+
+    on pointer.Click:
+        match button.action:
+            Action.Select =>
+                add controls.Tool.Select to controls.Overview
+            Action.Dig =>
+                add controls.Tool.Dig to controls.Overview
+            Action.Lair =>
+                add controls.Tool.Build to controls.Overview:
+                    kind = rooms.RoomKind.Lair
+                HudRoot[RoomBrowser].kind = rooms.RoomKind.Lair
+                HudRoot[RoomBrowser].page = 0
+            Action.Farm =>
+                add controls.Tool.Build to controls.Overview:
+                    kind = rooms.RoomKind.Farm
+                HudRoot[RoomBrowser].kind = rooms.RoomKind.Farm
+                HudRoot[RoomBrowser].page = 0
+            Action.Training =>
+                add controls.Tool.Build to controls.Overview:
+                    kind = rooms.RoomKind.Training
+                HudRoot[RoomBrowser].kind = rooms.RoomKind.Training
+                HudRoot[RoomBrowser].page = 0
+            Action.Bridge =>
+                add controls.Tool.Build to controls.Overview:
+                    kind = rooms.RoomKind.Bridge
+            Action.Sell =>
+                add controls.Tool.Sell to controls.Overview
+            Action.Attack =>
+                add controls.Tool.Attack to controls.Overview
+            Action.Defend =>
+                add controls.Tool.Defend to controls.Overview
+            Action.Recruit =>
+                emit knights.RecruitRequested to world.Human
+            Action.Previous =>
+                HudRoot[RoomBrowser].page -= 1
+            Action.Next =>
+                HudRoot[RoomBrowser].page += 1
+            Action.Pause =>
+                emit PauseRequested
+            Action.Save =>
+                emit SaveRequested
+            Action.Load =>
+                emit LoadRequested
+
+rule TopValues:
+    each:
+        world.Player as player
+        statistics.UnitCounts as units
+        statistics.RoomCounts as rooms
+        statistics.FoodCounts as food
+    where: self == world.Human
+
+    on tick:
+        emit CaptionText:
+            kind = CaptionKind.Top
+            value = text.format("Gold: {}  Robots: {}  Knights: {}  Beds: {}  Food ready: {}  {}", player.gold, units.robots, units.knights, rooms.beds, food.ready, session.Game[session.Session].status)
+
+rule BrowsableRooms:
+    each:
+        rooms.RoomStats
+        rooms.RoomTile as room
+    group: choices
+    where:
+        world.OwnedBy(self, world.Human)
+        room.kind == HudRoot[RoomBrowser].kind
+    keep RoomChoice
+
+rule ChooseRoom:
+    each: RoomBrowser as browser
+
+    on tick:
+        let choices = query.all[RoomChoice]()
+        var count = 0
+        for choice in choices:
+            count += 1
+        if count == 0:
+            add RoomSelection.Empty
+            return
+        browser.page = (browser.page % count + count) % count
+        var index = 0
+        for choice in choices:
+            if index == browser.page:
+                add RoomSelection.Selected:
+                    target = choice
+            index += 1
+
+rule EmptyRoomInfo:
+    each: RoomSelection.Empty
+    after: TopValues
+
+    on tick:
+        emit CaptionText:
+            kind = CaptionKind.Room
+            value = "No rooms of this type"
+
+rule RequestRoomInfo:
+    each: RoomSelection.Selected as choice
+    after: EmptyRoomInfo
+
+    on tick:
+        emit InspectRoom to choice.target
+
+func room_name(kind: rooms.RoomKind) string:
+    return match kind:
+        rooms.RoomKind.Lair => LAIR_NAME
+        rooms.RoomKind.Farm => FARM_NAME
+        rooms.RoomKind.Training => TRAINING_NAME
+        rooms.RoomKind.Bridge => BRIDGE_NAME
+
+rule RoomInfo:
+    each:
+        rooms.RoomTile as room
+        rooms.RoomStats as stats
+        knights.BedFill as beds
+        statistics.RoomFood as food
+        voxel.Cell as cell
+
+    on InspectRoom:
+        var active = false
+        match self:
+            rooms.ActiveRoom =>
+                active = true
+        let fill = if room.kind == rooms.RoomKind.Farm: food.stock else: beds.count
+        emit CaptionText:
+            kind = CaptionKind.Room
+            value = text.format("{} ({},{})\nCapacity: {} Fill: {}\n{}", room_name(room.kind), cell.x, cell.z, stats.capacity, fill, if active: "active" else: "inactive")
+
+rule SenseCells:
+    pairs:
+        unit:
+            units.Unit
+            tv.WorldTransform as pose
+        tile:
+            world.Tile
+            voxel.Cell as cell
+    group: eyes
+    where:
+        (pose.position.x - cell.x - 0.5) * (pose.position.x - cell.x - 0.5) + (pose.position.z - cell.z - 0.5) * (pose.position.z - cell.z - 0.5) <= 36.0
+    keep Seen(unit, tile)
+
+rule FactionSight:
+    pairs:
+        command: tasks.Commands
+        seen: Seen
+    group: eyes
+    where: command.from == seen.from
+    keep InSight(command.to, seen.to)
+
+rule Reveal:
+    each: InSight as sight
+    where: not Explored(sight.from, sight.to)
+
+    on tick:
+        add Explored(sight.from, sight.to)
+
+rule MappedUnits:
+    pairs:
+        place: tasks.Located
+        seen: Explored
+    group: eyes
+    where: place.to == seen.to
+    keep UnitMapped(place.from, seen.from)
+
+rule CreateTileMarkers:
+    each: world.Tile
+    where: Explored(world.Human, self)
+
+    on input:
+        for child in query.children[MapMarker](of = self):
+            match child:
+                MapMarker =>
+                    return
+        spawn TileMark(owner = self)
+
+rule CreateUnitMarkers:
+    each: units.Unit
+    after: CreateTileMarkers
+
+    on input:
+        for child in query.children[MapMarker](of = self):
+            match child:
+                MapMarker =>
+                    return
+        spawn UnitMark(owner = self)
+
+func tile_color(kind: world.Kind) color:
+    return match kind:
+        world.Kind.Rock => #464D5AFF
+        world.Kind.Earth => #70482CFF
+        world.Kind.Gold => #C08F27FF
+        world.Kind.InfiniteGold => #E8B73EFF
+        world.Kind.Water => #1E67A4FF
+        world.Kind.Lava => #EB470FFF
+        world.Kind.Floor => #6C6455FF
+
+func room_color(kind: rooms.RoomKind) color:
+    return match kind:
+        rooms.RoomKind.Lair => #694889FF
+        rooms.RoomKind.Farm => #47853CFF
+        rooms.RoomKind.Training => #9F7241FF
+        rooms.RoomKind.Bridge => #855F36FF
+
+rule MarkerTiles:
+    pairs:
+        marker:
+            MapMarker
+            TileMarker
+            Parent as link
+        owner: world.OwnedBy
+    group: eyes
+    where: link.parent == owner.from
+    keep TileOwner(marker, owner.to)
+
+rule MarkerUnits:
+    pairs:
+        marker:
+            MapMarker
+            UnitMarker
+            Parent as link
+        owner: tasks.Commands
+    group: eyes
+    where: link.parent == owner.from
+    keep UnitOwner(marker, owner.to)
+
+rule TerrainMarkerColors:
+    pairs:
+        marker:
+            TileMarker
+            Parent as link
+            models.ModelRenderer as draw
+        tile: world.Tile as data
+    after: visuals.HeartColors
+    where: link.parent == tile
+    limit: 1 per marker
+
+    on tick:
+        draw.color = tile_color(data.kind)
+
+rule OwnerMarkerColors:
+    pairs:
+        marker:
+            MapMarker
+            models.ModelRenderer as draw
+        owner: world.Player as player
+    after: TerrainMarkerColors
+    where: TileOwner(marker, owner) or UnitOwner(marker, owner)
+    limit: 1 per marker
+
+    on tick:
+        draw.color = player.color
+
+rule RoomMarkerColors:
+    pairs:
+        marker:
+            TileMarker
+            Parent as link
+            models.ModelRenderer as draw
+        room: rooms.RoomTile as data
+    after: OwnerMarkerColors
+    where: link.parent == room
+    limit: 1 per marker
+
+    on tick:
+        draw.color = room_color(data.kind)
+
+rule BridgeMarkerColors:
+    pairs:
+        marker:
+            TileMarker
+            Parent as link
+            models.ModelRenderer as draw
+        bridge: territory.Bridge
+    after: RoomMarkerColors
+    where: link.parent == bridge
+    limit: 1 per marker
+
+    on tick:
+        draw.color = room_color(rooms.RoomKind.Bridge)
+
+rule HideUnitMarkers:
+    each:
+        UnitMarker
+        models.ModelRenderer as draw
+
+    on late_tick:
+        draw.visible = false
+
+rule ShowUnitMarkers:
+    pairs:
+        marker:
+            UnitMarker
+            Parent as link
+            models.ModelRenderer as draw
+        known: UnitMapped
+    after: HideUnitMarkers
+    where:
+        known.from == link.parent
+        known.to == world.Human
+    limit: 1 per marker
+
+    on late_tick:
+        draw.visible = true
+
+rule PlaceMinimap:
+    pairs:
+        port:
+            camera.Camera as cam
+            tv.WorldTransform as pose
+            layers.ViewLayer as layer
+        terrain: voxel.Volume as volume
+    where: layer.minimap
+    limit: 1 per port
+
+    on input:
+        pose.position = vec3(0.5 * (volume.max_x + 1), 120.0, 0.5 * (volume.max_z + 1))
+        cam.ortho_height = 1.0 * (volume.max_z + 1)
+
+rule ClickMinimap:
+    pairs:
+        canvas: MapClick
+        port:
+            camera.CameraView as cv
+            layers.ViewLayer as layer
+    where: layer.minimap
+    limit: 1 per canvas
+
+    on pointer.Click as request:
+        let hit = camera.ray_plane(camera.ray(cv, request.position), vec3(0.0, 1.5, 0.0), vec3(0.0, 1.0, 0.0))
+        if hit.hit:
+            controls.Overview[controls.Rig].focus = hit.point
+
+rule CreateBars:
+    each: units.Unit
+    after: CreateUnitMarkers
+
+    on input:
+        for child in query.children[Bar](of = self):
+            match child:
+                Bar =>
+                    return
+        spawn UnitBar(owner = self, kind = BarKind.HealthBackground, height = 1.5)
+        spawn UnitBar(owner = self, kind = BarKind.Health, height = 1.53)
+        spawn UnitBar(owner = self, kind = BarKind.XPBackground, height = 1.38)
+        spawn UnitBar(owner = self, kind = BarKind.XP, height = 1.41)
+
+rule BarValues:
+    pairs:
+        bar:
+            Bar as data
+            Parent as link
+            models.ModelRenderer as draw
+            tv.LocalTransform as pose
+        unit:
+            units.Unit as stats
+            tv.WorldTransform as parent_pose
+    after: BridgeMarkerColors
+    where: link.parent == unit
+    limit: 1 per bar
+
+    on tick:
+        pose.rotation = quat.multiply(quat.inverse(parent_pose.rotation), controls.Overview[tv.WorldTransform].rotation)
+        match data.kind:
+            BarKind.Health =>
+                let profile = units.stats_for(stats)
+                let fraction = math.clamp(stats.health / profile.max_health, 0.0, 1.0)
+                pose.scale.x = 0.8 * fraction
+                draw.visible = fraction > 0.0
+                draw.color = if fraction < 0.3: #F06464FF else: #67D58BFF
+            BarKind.XP =>
+                let progress = units.xp_progress(stats)
+                pose.scale.x = 0.8 * progress
+                draw.visible = progress > 0.0
+                draw.color = #60A5FAFF
+            _ =>
+                draw.color = #172130FF
+
+rule CreateLevelLabels:
+    each: units.Unit
+    without: labels.ScreenLabel
+
+    on input:
+        add labels.ScreenLabel:
+            text = ""
+            position = vec2(0.0, 0.0)
+            font_size = 12
+            visible = false
+
+rule LevelLabels:
+    pairs:
+        port: camera.CameraView as cv
+        unit:
+            units.Unit as stats
+            tv.WorldTransform as pose
+            labels.ScreenLabel as label
+    where: port == controls.Overview
+    limit: 1 per unit
+
+    on late_tick:
+        let p = camera.to_screen(cv, pose.position + vec3(0.0, 1.8, 0.0))
+        let screen = HudRoot[viewport.ScreenSize].size
+        let over_map = p.position.x >= MAP_MIN.x * screen.x and p.position.x <= MAP_MAX.x * screen.x and p.position.y >= MAP_MIN.y * screen.y and p.position.y <= MAP_MAX.y * screen.y
+        label.text = text.format("L{}", units.level_for(stats.xp))
+        label.position = p.position + vec2(-8.0, -8.0)
+        let session_mode = session.Game[session.Session].mode
+        let playing = session_mode == session.SessionMode.Playing or session_mode == session.SessionMode.Paused
+        label.visible = playing and p.in_front and not over_map and stats.health > 0.0

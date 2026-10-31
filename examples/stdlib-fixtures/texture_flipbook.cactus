@@ -1,0 +1,55 @@
+module texture_flipbook
+
+# A 4 x 1 x 4 volume seen by one camera. Cells with x < 2 use a strip of 8
+# square lava frames played at 4 frames per second, the cell at (3, 0, 3) a
+# strip that is not square frames, and the rest a still stone texture.
+
+use std.core
+use std.math.quat as quat
+use std.transform.volume as tv
+use std.physics.volume as physics
+use std.camera.volume as camera
+use std.camera.viewport as viewport
+use std.voxel.volume as voxel
+
+asset Stone: texture = "../platformer/assets/tiles/ground.png"
+asset Lava: texture = "assets/flipbook_strip.png"
+asset Broken: texture = "assets/bad_strip.png"
+
+pub entity Terrain:
+    voxel.Volume:
+        max_x = 3
+        max_y = 0
+        max_z = 3
+    voxel.VolumeRenderer
+
+pub entity View:
+    tv.WorldTransform:
+        position = vec3(2.0, 6.0, 9.0)
+        rotation = quat.from_euler(-0.6, 0.0, 0.0)
+    camera.Camera
+    viewport.Viewport
+
+pub entity LavaFlow:
+    voxel.TextureFlipbook:
+        texture = Lava
+        fps = 4.0
+
+pub entity BrokenFlow:
+    voxel.TextureFlipbook:
+        texture = Broken
+        fps = 2.0
+
+rule GenerateTerrain:
+    each:
+        voxel.Cell as cell
+
+    on added voxel.Cell:
+        add physics.Solid
+        if cell.x < 2:
+            cell.texture = Lava
+            return
+        if cell.x == 3 and cell.z == 3:
+            cell.texture = Broken
+            return
+        cell.texture = Stone

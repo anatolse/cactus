@@ -887,6 +887,27 @@ std::vector<const PhasePlan*> phase_activation_order(const DecoratedProgram& pro
     return ordered;
 }
 
+// The dispatched standard UI render rules: they paint in window space, so they
+// still run once in a frame where no viewport is active.
+std::vector<DetailName> window_space_render_callees(const DecoratedProgram& program) {
+    std::vector<DetailName> callees;
+    for (const auto& handler : program.execution_graph.handlers) {
+        if (handler.implementation != HandlerImplementationKind::External) {
+            continue;
+        }
+        const auto* rule = find_external_rule(program, handler.identity.rule);
+        if (rule == nullptr || !rule->is_stdlib || rule->resolved_rule_id->module.name != "std.ui" ||
+            rule->resolved_rule_id->local_name != "RenderUi") {
+            continue;
+        }
+        auto callee = system_function_name(program.module_name, rule->name, "tick");
+        if (!std::ranges::contains(callees, callee.ref(), &DetailName::ref)) {
+            callees.push_back(std::move(callee));
+        }
+    }
+    return callees;
+}
+
 void emit_viewport_phase_dispatch(std::ostringstream& out,
                                   const std::string& indent,
                                   bool render_uses_viewport,
@@ -894,7 +915,8 @@ void emit_viewport_phase_dispatch(std::ostringstream& out,
                                   bool render_emit_3d_helper,
                                   const std::string& render_vp_cpp,
                                   const std::string& render_cam2d_cpp,
-                                  const std::string& render_cam3d_cpp) {
+                                  const std::string& render_cam3d_cpp,
+                                  const std::vector<DetailName>& window_space_callees) {
     if (!render_uses_viewport || (!render_emit_2d_helper && !render_emit_3d_helper)) {
         out << indent << "generated_dispatch_phase(registry, phase);\n";
         return;
@@ -937,6 +959,13 @@ void emit_viewport_phase_dispatch(std::ostringstream& out,
     out << indent << "        flush_viewport_3d();\n";
     out << indent << "        cactus::runtime::raylib::EndScissorMode();\n";
     out << indent << "    }\n";
+    if (!window_space_callees.empty()) {
+        out << indent << "    if (cactus_gen_vps.empty()) {\n";
+        for (const auto& callee : window_space_callees) {
+            out << indent << "        " << callee.ref() << "(registry);\n";
+        }
+        out << indent << "    }\n";
+    }
     out << indent << "    cactus::runtime::entt_backend::set_active_viewport_entity(entt::null);\n";
     out << indent << "}\n";
 }
@@ -1143,7 +1172,8 @@ void emit_render_phase_dispatch(std::ostringstream& out,
                                  render_emit_3d_helper,
                                  render_vp_cpp,
                                  render_cam2d_cpp,
-                                 render_cam3d_cpp);
+                                 render_cam3d_cpp,
+                                 window_space_render_callees(program));
 }
 
 void emit_phase_runtime_states(std::ostringstream& out, const DecoratedProgram& program) {
@@ -1185,8 +1215,13 @@ void emit_stable_handler_table(std::ostringstream& out, const DecoratedProgram& 
     out << "}};\n\n";
 }
 
-// One emit call per route of an occurrence whose producer is on cycle `component`.
-void emit_routed_emit_case(std::ostringstream& out, std::uint32_t component, bool outside, bool targeted) {
+// One emit call per route of an occurrence whose producer is on cycle `component`;
+// `last_use` passes the occurrence on for its final use.
+void emit_routed_emit_case(std::ostringstream& out,
+                           std::uint32_t component,
+                           bool outside,
+                           bool targeted,
+                           const std::string& last_use) {
     const auto literal   = std::to_string(component) + "U";
     const auto recipient = std::string(targeted ? "target, " : "");
     const auto now       = std::string(targeted ? "emit_targeted_event" : "emit_event");
@@ -1196,8 +1231,8 @@ void emit_routed_emit_case(std::ostringstream& out, std::uint32_t component, boo
         out << "            " << now << "(activation, occurrence, " << recipient << "DeliveryRoute::ImmediateOnly, "
             << literal << ");\n";
     }
-    out << "            " << later << "(activation, std::move(occurrence), " << recipient
-        << "DeliveryRoute::DelayedOnly, " << literal << ");\n";
+    out << "            " << later << "(activation, " << last_use << ", " << recipient << "DeliveryRoute::DelayedOnly, "
+        << literal << ");\n";
     out << "            return;\n";
 }
 
@@ -1213,18 +1248,19 @@ void emit_delayed_emit_overloads(std::ostringstream& out,
         if (delayed == nullptr) {
             continue;
         }
-        const auto type = event_runtime_cpp_type(program, *event->symbol_id);
+        const auto type     = event_runtime_cpp_type(program, *event->symbol_id);
+        const auto last_use = std::string(is_trivially_copyable(*event, program) ? "occurrence" : "std::move(occurrence)");
         for (const bool targeted : {false, true}) {
             out << "void " << (targeted ? "generated_emit_targeted_event(" : "generated_emit_event(") << type
                 << " occurrence" << (targeted ? ", entt::entity target" : "") << ") {\n";
             out << "    auto& activation = generated_scheduler_state().activation;\n";
             out << "    switch (activation.current_component) {\n";
             for (const auto& [component, outside] : *delayed) {
-                emit_routed_emit_case(out, component, outside, targeted);
+                emit_routed_emit_case(out, component, outside, targeted, last_use);
             }
             out << "        default:\n";
-            out << "            " << (targeted ? "emit_targeted_event(activation, std::move(occurrence), target);\n"
-                                             : "emit_event(activation, std::move(occurrence));\n");
+            out << "            " << (targeted ? "emit_targeted_event(activation, " + last_use + ", target);\n"
+                                             : "emit_event(activation, " + last_use + ");\n");
             out << "    }\n";
             out << "}\n\n";
         }
@@ -1503,6 +1539,16 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program,
     const auto emit_render_dispatch = [&](const std::string& indent) {
         emit_render_phase_dispatch(out, program, render_phase, indent);
     };
+    const auto window_space_callees = render_phase != nullptr && module_uses_camera_viewport(program)
+                                          ? window_space_render_callees(program)
+                                          : std::vector<DetailName>{};
+    if (!window_space_callees.empty()) {
+        out << "}  // namespace cactus::runtime::entt_backend\n\n";
+        for (const auto& callee : window_space_callees) {
+            out << namespace_block(callee.ns, "void " + callee.name + "(entt::registry& registry);\n");
+        }
+        out << "namespace cactus::runtime::entt_backend {\n\n";
+    }
 
     const auto phase_order = phase_activation_order(program);
     for (const auto* phase : phase_order) {
@@ -1967,10 +2013,16 @@ std::string emit_module_constants(const DecoratedProgram& program) {
         const bool compile_time = EnttCodegenUtils::is_constexpr_const(program, symbol);
         const bool view         = compile_time && constant->type.kind == TypeKind::String;
         const auto type         = view ? std::string("std::string_view") : EnttCodegenUtils::type_to_cpp(constant->type);
-        out << namespace_block(cpp_namespace_path(symbol.module),
-                               std::string(compile_time ? "inline constexpr " : "inline const ") + type + " " +
-                                   cpp_decl_name(symbol) + " = " + constant_initializer_cpp(*value->second, view, program) +
-                                   ";\n");
+        const auto initializer  = constant_initializer_cpp(*value->second, view, program);
+        const auto name         = cpp_decl_name(symbol);
+        std::ostringstream declaration;
+        if (compile_time) {
+            declaration << "inline constexpr " << type << " " << name << " = " << initializer << ";\n";
+        } else {
+            declaration << "inline const " << type << "& " << name << "() {\n    static const " << type
+                        << " value = " << initializer << ";\n    return value;\n}\n";
+        }
+        out << namespace_block(cpp_namespace_path(symbol.module), declaration.str());
     }
     out << "\n";
     return out.str();
@@ -2073,7 +2125,9 @@ std::optional<SymbolId> window_constant_symbol(const DecoratedProgram& program, 
 }
 
 std::optional<std::string> window_constant(const DecoratedProgram& program, const std::string& name) {
-    return window_constant_symbol(program, name).transform(&EnttCodegenUtils::symbol_cpp_name);
+    return window_constant_symbol(program, name).transform([&program](const auto& symbol) {
+        return EnttCodegenUtils::const_reference_cpp(program, symbol);
+    });
 }
 
 // A view title is spelled as the literal it views: `.data()` of a view is not known to be null-terminated.
@@ -2083,7 +2137,7 @@ std::string window_title(const DecoratedProgram& program) {
         return "\"Cactus Game\"";
     }
     if (!EnttCodegenUtils::is_constexpr_const(program, *symbol)) {
-        return EnttCodegenUtils::symbol_cpp_name(*symbol) + ".c_str()";
+        return EnttCodegenUtils::const_reference_cpp(program, *symbol) + ".c_str()";
     }
     const auto* value = EnttCodegenUtils::find_const_initializer(*program.ast, *symbol);
     while (!std::holds_alternative<LiteralExpr>(value->expr)) {
@@ -3685,36 +3739,7 @@ std::string emit_backend_main(const DecoratedProgram& program) {
 }
 }  // namespace
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
-std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
-    std::ostringstream out;
-    // Before any system is emitted: it marks the statements that buffer.
-    const AccumulationPlan accumulation(program);
-    const AccumulationScope accumulation_scope(accumulation);
-    const DeliveryPlan delivery(program);
-
-    const bool uses_flat     = module_uses_camera_flat(program);
-    const bool uses_viewport = module_uses_camera_viewport(program);
-    const bool uses_volume   = module_uses_camera_volume(program);
-    const bool uses_text     = uses_text_format(program);
-    const bool uses_editor   = module_uses_editor(program);
-    // Dimensionality from the root module's resolved WorldTransform references —
-    // deterministic even when std.editor links both flat and volume variants.
-    const WorldTransformUsage wt_usage = EnttCodegenUtils::world_transform_usage(program);
-    // Camera-rig classification, computed once and reused everywhere it's
-    // needed below (the early cactus_gen_translate_camera_2d/3d helper emission and
-    // the legacy generated_render_project viewport loop): the 2D rig stores
-    // only EditorCamera2D + Camera + Viewport, so it exists for any
-    // flat-camera program that is not 3D (including transforms-free UI
-    // tools); the 3D rig carries a volume WorldTransform and requires it.
-    const bool rig_is_2d        = wt_usage.flat || (uses_flat && !wt_usage.volume);
-    const bool rig_is_3d        = wt_usage.volume;
-    const std::string cam2d_cpp = EnttCodegenUtils::trait_cpp_name("std.camera.flat.Camera", program);
-    const std::string cam3d_cpp = EnttCodegenUtils::trait_cpp_name("std.camera.volume.Camera", program);
-    const std::string wt3d_cpp  = EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program);
-    const bool emit_2d_helper   = uses_viewport && uses_flat && (rig_is_2d || !rig_is_3d);
-    const bool emit_3d_helper   = uses_viewport && uses_volume && rig_is_3d;
-
+static void emit_headers(std::ostringstream& out, const DecoratedProgram& program, bool uses_text) {
     // Header
     out << "// Generated by Cactus DSL Compiler (cpp-entt backend)\n\n";
     out << "// Generated C++ mirrors authored DSL constants, declarations, and system control flow.\n\n";
@@ -3762,6 +3787,39 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "#include \"common/cactus_runtime.hpp\"\n";
     }
     out << "\n";
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
+    std::ostringstream out;
+    // Before any system is emitted: it marks the statements that buffer.
+    const AccumulationPlan accumulation(program);
+    const AccumulationScope accumulation_scope(accumulation);
+    const DeliveryPlan delivery(program);
+
+    const bool uses_flat     = module_uses_camera_flat(program);
+    const bool uses_viewport = module_uses_camera_viewport(program);
+    const bool uses_volume   = module_uses_camera_volume(program);
+    const bool uses_text     = uses_text_format(program);
+    const bool uses_editor   = module_uses_editor(program);
+    // Dimensionality from the root module's resolved WorldTransform references —
+    // deterministic even when std.editor links both flat and volume variants.
+    const WorldTransformUsage wt_usage = EnttCodegenUtils::world_transform_usage(program);
+    // Camera-rig classification, computed once and reused everywhere it's
+    // needed below (the early cactus_gen_translate_camera_2d/3d helper emission and
+    // the legacy generated_render_project viewport loop): the 2D rig stores
+    // only EditorCamera2D + Camera + Viewport, so it exists for any
+    // flat-camera program that is not 3D (including transforms-free UI
+    // tools); the 3D rig carries a volume WorldTransform and requires it.
+    const bool rig_is_2d        = wt_usage.flat || (uses_flat && !wt_usage.volume);
+    const bool rig_is_3d        = wt_usage.volume;
+    const std::string cam2d_cpp = EnttCodegenUtils::trait_cpp_name("std.camera.flat.Camera", program);
+    const std::string cam3d_cpp = EnttCodegenUtils::trait_cpp_name("std.camera.volume.Camera", program);
+    const std::string wt3d_cpp  = EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program);
+    const bool emit_2d_helper   = uses_viewport && uses_flat && (rig_is_2d || !rig_is_3d);
+    const bool emit_3d_helper   = uses_viewport && uses_volume && rig_is_3d;
+
+    emit_headers(out, program, uses_text);
 
     out << "using Quat = cactus::runtime::Quat;\n";
     out << "\n";
@@ -4124,7 +4182,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     const auto win_fps    = window_constant(program, "TARGET_FPS").value_or("60");
 
     out << "// ── Runtime Glue ────────────────────────────────────────────────────\n\n";
-    out << "ProjectConfig generated_project_config() noexcept {\n";
+    out << "ProjectConfig generated_project_config() {\n";
     out << "    return {.window_width = " << win_width << ", .window_height = " << win_height
         << ", .window_title = " << win_title << ", .target_fps = " << win_fps << "};\n";
     out << "}\n\n";

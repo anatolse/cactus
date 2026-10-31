@@ -394,10 +394,7 @@ static std::string as_float(const std::string& value) {
 }
 
 std::string EnttCodegenUtils::emit_binary(const BinaryExpr& binary, const std::string& left, const std::string& right) {
-    if (!is_arithmetic_operator(binary.op)) {
-        return "(" + left + " " + cpp_operator(binary.op) + " " + right + ")";
-    }
-    if (int_operands(binary.operands)) {
+    if (is_arithmetic_operator(binary.op) && int_operands(binary.operands)) {
         return total_int_helper(binary.op) + "(" + left + ", " + right + ")";
     }
     const auto& lhs = binary.operands == ArithmeticOperands::IntFloat ? as_float(left) : left;
@@ -1183,7 +1180,13 @@ bool EnttCodegenUtils::is_trivially_copyable(const TypeInfo& type, const Decorat
 
 std::string EnttCodegenUtils::const_reference_cpp(const DecoratedProgram& program, const SymbolId& symbol) {
     const auto* constant = find_const(program, symbol);
-    if (constant != nullptr && constant->type.kind == TypeKind::String && is_constexpr_const(program, symbol)) {
+    if (constant == nullptr) {
+        return symbol_cpp_name(symbol);
+    }
+    if (!is_constexpr_const(program, symbol)) {
+        return symbol_cpp_name(symbol) + "()";
+    }
+    if (constant->type.kind == TypeKind::String) {
         return "std::string{" + symbol_cpp_name(symbol) + "}";
     }
     return symbol_cpp_name(symbol);
@@ -1268,11 +1271,16 @@ void note_world_transform_ref(const std::optional<SymbolId>& id, WorldTransformU
     }
 }
 
-// The merged codegen AST contains every module's declarations; only the root
-// module's references decide dimensionality. Declarations without a resolved
-// id (single-module pipeline) are root by construction.
-bool is_root_decl(const std::optional<SymbolId>& id, const std::string& root_module) {
-    return !id.has_value() || root_module.empty() || id->module.name == root_module;
+enum class TransformScope : std::uint8_t { Root, GameModules };
+
+bool is_transform_owner(const std::optional<SymbolId>& id, const std::string& root_module, TransformScope scope) {
+    if (!id.has_value()) {
+        return true;
+    }
+    if (scope == TransformScope::GameModules) {
+        return !module_name_is_stdlib(id->module.name);
+    }
+    return root_module.empty() || id->module.name == root_module;
 }
 
 void scan_trait_entries(const std::vector<ArchetypeTraitEntry>& traits, WorldTransformUsage& usage) {
@@ -1306,25 +1314,28 @@ void scan_filter(const FilterClause& filter, WorldTransformUsage& usage) {
 }
 
 // NOLINTNEXTLINE(bugprone-branch-clone) -- rule/extern-rule arms differ by node type
-void scan_root_declaration(const Declaration& decl, const std::string& root_module, WorldTransformUsage& usage) {
+void scan_scene_declaration(const Declaration& decl,
+                            const std::string& root_module,
+                            TransformScope scope,
+                            WorldTransformUsage& usage) {
     if (const auto* entity = std::get_if<EntityNode>(&decl)) {
-        if (is_root_decl(entity->resolved_entity_id, root_module)) {
+        if (is_transform_owner(entity->resolved_entity_id, root_module, scope)) {
             scan_trait_entries(entity->traits, usage);
             scan_children(entity->children, usage);
             scan_child_overrides(entity->child_overrides, usage);
         }
     } else if (const auto* tmpl = std::get_if<TemplateNode>(&decl)) {
-        if (is_root_decl(tmpl->resolved_template_id, root_module)) {
+        if (is_transform_owner(tmpl->resolved_template_id, root_module, scope)) {
             scan_trait_entries(tmpl->traits, usage);
             scan_children(tmpl->children, usage);
         }
     } else if (const auto* rule = std::get_if<RuleNode>(&decl)) {
-        if (is_root_decl(rule->resolved_rule_id, root_module)) {
+        if (is_transform_owner(rule->resolved_rule_id, root_module, scope)) {
             scan_filter(rule->filter, usage);
             scan_filter(rule->exclude, usage);
         }
     } else if (const auto* ext = std::get_if<ExternRuleNode>(&decl)) {
-        if (is_root_decl(ext->resolved_rule_id, root_module)) {
+        if (is_transform_owner(ext->resolved_rule_id, root_module, scope)) {
             scan_filter(ext->filter, usage);
             scan_filter(ext->exclude, usage);
         }
@@ -1364,7 +1375,12 @@ WorldTransformUsage EnttCodegenUtils::world_transform_usage(const DecoratedProgr
     WorldTransformUsage usage;
     if (program.ast != nullptr) {
         for (const auto& decl : program.ast->declarations) {
-            scan_root_declaration(decl, program.module_name, usage);
+            scan_scene_declaration(decl, program.module_name, TransformScope::Root, usage);
+        }
+        if (!usage.flat && !usage.volume) {
+            for (const auto& decl : program.ast->declarations) {
+                scan_scene_declaration(decl, program.module_name, TransformScope::GameModules, usage);
+            }
         }
     }
     if (usage.flat || usage.volume) {

@@ -406,6 +406,14 @@ uniform vec4 colDiffuse;
 // Smooth voxel surfaces: xyz is the volume origin, w is 1 / cell_size; w = 0
 // keeps the mesh's own texture coordinates.
 uniform vec4 triplanar;
+// Flipbook textures: x is the frame shown, y the frames in the vertical strip; y <= 1 is a still texture.
+uniform vec2 flipbook;
+
+vec2 framed(vec2 uv)
+{
+    if (flipbook.y <= 1.0) return uv;
+    return vec2(uv.x, (fract(uv.y) + flipbook.x)/flipbook.y);
+}
 
 #define MAX_LIGHTS 4
 #define LIGHT_POINT 1
@@ -425,16 +433,16 @@ uniform vec3 viewPos;
 
 void main()
 {
-    vec4 texelColor = texture2D(texture0, fragTexCoord);
+    vec4 texelColor = texture2D(texture0, framed(fragTexCoord));
     vec3 normal = normalize(fragNormal);
     if (triplanar.w > 0.0)
     {
         vec3 cell = (fragPosition - triplanar.xyz)*triplanar.w;
         vec3 blend = pow(abs(normal), vec3(4.0));
         blend /= blend.x + blend.y + blend.z;
-        texelColor = texture2D(texture0, vec2(cell.z, -cell.y))*blend.x +
-                     texture2D(texture0, cell.xz)*blend.y +
-                     texture2D(texture0, vec2(cell.x, -cell.y))*blend.z;
+        texelColor = texture2D(texture0, framed(vec2(cell.z, -cell.y)))*blend.x +
+                     texture2D(texture0, framed(cell.xz))*blend.y +
+                     texture2D(texture0, framed(vec2(cell.x, -cell.y)))*blend.z;
     }
     vec3 lightDot = vec3(0.0);
     vec3 viewD = normalize(viewPos - fragPosition);
@@ -551,6 +559,14 @@ uniform vec4 colDiffuse;
 // Smooth voxel surfaces: xyz is the volume origin, w is 1 / cell_size; w = 0
 // keeps the mesh's own texture coordinates.
 uniform vec4 triplanar;
+// Flipbook textures: x is the frame shown, y the frames in the vertical strip; y <= 1 is a still texture.
+uniform vec2 flipbook;
+
+vec2 framed(vec2 uv)
+{
+    if (flipbook.y <= 1.0) return uv;
+    return vec2(uv.x, (fract(uv.y) + flipbook.x)/flipbook.y);
+}
 
 out vec4 finalColor;
 
@@ -572,16 +588,16 @@ uniform vec3 viewPos;
 
 void main()
 {
-    vec4 texelColor = texture(texture0, fragTexCoord);
+    vec4 texelColor = texture(texture0, framed(fragTexCoord));
     vec3 normal = normalize(fragNormal);
     if (triplanar.w > 0.0)
     {
         vec3 cell = (fragPosition - triplanar.xyz)*triplanar.w;
         vec3 blend = pow(abs(normal), vec3(4.0));
         blend /= blend.x + blend.y + blend.z;
-        texelColor = texture(texture0, vec2(cell.z, -cell.y))*blend.x +
-                     texture(texture0, cell.xz)*blend.y +
-                     texture(texture0, vec2(cell.x, -cell.y))*blend.z;
+        texelColor = texture(texture0, framed(vec2(cell.z, -cell.y)))*blend.x +
+                     texture(texture0, framed(cell.xz))*blend.y +
+                     texture(texture0, framed(vec2(cell.x, -cell.y)))*blend.z;
     }
     vec3 lightDot = vec3(0.0);
     vec3 viewD = normalize(viewPos - fragPosition);
@@ -668,6 +684,7 @@ struct LightingShaderState {
     int ambient_loc{-1};
     int view_pos_loc{-1};
     int triplanar_loc{-1};
+    int flipbook_loc{-1};
     std::array<int, kMaxMeshLights> enabled_locs{};
     std::array<int, kMaxMeshLights> type_locs{};
     std::array<int, kMaxMeshLights> position_locs{};
@@ -739,6 +756,7 @@ bool load_lighting_shader(LightingShaderState& state, const char* vertex_src, co
     state.ambient_loc                           = GetShaderLocation(state.shader, "ambient");
     state.view_pos_loc                          = GetShaderLocation(state.shader, "viewPos");
     state.triplanar_loc                         = GetShaderLocation(state.shader, "triplanar");
+    state.flipbook_loc                          = GetShaderLocation(state.shader, "flipbook");
 
     for (int i = 0; i < kMaxMeshLights; ++i) {
         const auto index    = static_cast<std::size_t>(i);
@@ -1487,6 +1505,49 @@ Material& voxel_material(std::uint32_t texture) {
     return material;
 }
 
+struct FlipbookPlay {
+    entt::entity owner{entt::null};
+    float fps  = 0.0F;
+    int frames = 1;
+};
+
+// This frame's flipbooks by texture handle.
+std::unordered_map<AssetHandle, FlipbookPlay>& flipbooks() {
+    static std::unordered_map<AssetHandle, FlipbookPlay> value;
+    return value;
+}
+
+// Textures whose flipbook was already diagnosed.
+std::unordered_set<AssetHandle>& diagnosed_flipbooks() {
+    static std::unordered_set<AssetHandle> value;
+    return value;
+}
+
+void diagnose_flipbook(AssetHandle texture, const std::string& message) {
+    if (diagnosed_flipbooks().insert(texture).second) {
+        render_debug_state_storage().texture_diagnostics.push_back(message);
+    }
+}
+
+// The (frame, frames) faces drawn with `texture` show now; (0, 1) for a still texture.
+std::pair<int, int> voxel_texture_frame(AssetHandle texture) {
+    const auto found = flipbooks().find(texture);
+    if (found == flipbooks().end()) {
+        return {0, 1};
+    }
+    const auto& play = found->second;
+    return {flipbook_frame(cactus::runtime::raylib::GetTime(), play.fps, play.frames), play.frames};
+}
+
+void set_voxel_flipbook(std::pair<int, int> frame) noexcept {
+    const auto& state = lighting_shader_state();
+    if (!state.loaded || state.flipbook_loc < 0) {
+        return;
+    }
+    const std::array<float, 2> value{static_cast<float>(frame.first), static_cast<float>(frame.second)};
+    SetShaderValue(state.shader, state.flipbook_loc, value.data(), SHADER_UNIFORM_VEC2);
+}
+
 // Smooth surfaces take their texture from world position; null turns it off.
 void set_voxel_triplanar(const VoxelVolumeDesc* desc) noexcept {
     const auto& state = lighting_shader_state();
@@ -1516,9 +1577,12 @@ void draw_voxel_volume(VoxelVolumeRender& volume, std::optional<int> ceiling) {
             build_voxel_chunk(volume.grid, chunk, wanted, cache);
         }
         for (const auto& chunk_mesh : cache.meshes) {
+            const auto frame = voxel_texture_frame(chunk_mesh.texture);
+            set_voxel_flipbook(frame);
             cactus::runtime::raylib::DrawMesh(chunk_mesh.mesh, voxel_material(chunk_mesh.texture), MatrixIdentity());
             ++debug.voxel_draw_calls;
             debug.voxel_faces_drawn += chunk_mesh.faces;
+            debug.voxel_draw_frames.push_back(frame);
         }
     }
 }
@@ -1539,6 +1603,7 @@ void flush_voxel_queue() noexcept try {
         }
     }
     set_voxel_triplanar(nullptr);
+    set_voxel_flipbook({0, 1});
     end_mode_3d();
     voxel_queue().clear();
 } catch (...) {
@@ -1947,6 +2012,8 @@ void reset_render_debug_state() noexcept {
     text_label_3d_cache().clear();
     ui_queue() = UiQueue{};
     clear_voxel_store();
+    flipbooks().clear();
+    diagnosed_flipbooks().clear();
     clear_texture_store();
     clear_mesh_store();
     clear_material_store();
@@ -1964,6 +2031,8 @@ void begin_render_frame() noexcept {
     active_viewport_storage() = entt::null;
     render_debug_state_storage().voxel_faces_drawn = 0;
     render_debug_state_storage().voxel_draw_calls  = 0;
+    render_debug_state_storage().voxel_draw_frames.clear();
+    flipbooks().clear();
     // A volume not drawn last frame was destroyed or replaced.
     std::erase_if(voxel_volumes(), [](auto& entry) {
         const bool stale = entry.second.synced_frame + 2 < render_frame_counter();
@@ -2019,6 +2088,46 @@ void end_render_frame() noexcept {
     // rendering, so they overlay every view (never flushed per viewport).
     flush_screen_label_queue();
     screen_label_queue().clear();
+}
+
+std::optional<int> flipbook_frame_count(int width, int height) noexcept {
+    if (width <= 0 || height <= 0 || height % width != 0) {
+        return std::nullopt;
+    }
+    return height / width;
+}
+
+int flipbook_frame(double seconds, float fps, int frames) noexcept {
+    if (frames <= 1 || fps <= 0.0F || !(seconds >= 0.0)) {
+        return 0;
+    }
+    const auto shown = static_cast<std::int64_t>(std::floor(seconds * static_cast<double>(fps)));
+    return static_cast<int>(shown % frames);
+}
+
+void submit_texture_flipbook(entt::entity owner, AssetHandle texture, float fps) noexcept try {
+    const auto resolved = shared_asset_registry().resolve(AssetKind::Texture, texture);
+    if (!resolved.ready()) {
+        note_missing_asset();
+        return;
+    }
+    const auto path            = shared_asset_registry().asset_id_for_runtime(AssetKind::Texture, resolved.runtime_id);
+    const auto [found, joined] = flipbooks().try_emplace(texture, FlipbookPlay{.owner = owner, .fps = fps});
+    if (!joined && found->second.owner != owner) {
+        diagnose_flipbook(texture, "two flipbooks play texture " + path);
+        return;
+    }
+    const auto& image  = probe_texture(resolved.runtime_id);
+    const auto frames  = flipbook_frame_count(image.width, image.height);
+    if (!frames.has_value()) {
+        diagnose_flipbook(texture, "flipbook texture is not a vertical strip of square frames: " + path);
+        flipbooks().erase(found);
+        return;
+    }
+    found->second.fps    = fps;
+    found->second.frames = *frames;
+} catch (...) {
+    std::terminate();
 }
 
 VoxelSurfaceGrid* voxel_volume_begin(entt::entity volume, const VoxelVolumeDesc& desc) noexcept try {

@@ -210,6 +210,8 @@ void set_mouse_wheel_move(float delta) noexcept;
 void set_window_ready(bool ready) noexcept;
 // Screen size defaults to 800x600.
 void set_screen_size(int width, int height) noexcept;
+// Seconds since the window opened, as GetTime reports them; defaults to 0.
+void set_time(double seconds) noexcept;
 
 // ── Call log access ──────────────────────────────────────────────────────
 
@@ -232,6 +234,7 @@ void DisableCursor() noexcept;
 void EnableCursor() noexcept;
 
 [[nodiscard]] bool IsWindowReady() noexcept;
+[[nodiscard]] double GetTime() noexcept;
 [[nodiscard]] int GetScreenWidth() noexcept;
 [[nodiscard]] int GetScreenHeight() noexcept;
 // The framebuffer matches the screen size.

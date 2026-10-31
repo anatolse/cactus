@@ -237,6 +237,10 @@ add_executable(test_semantic_relations test_semantic_relations.cpp)
 target_link_libraries(test_semantic_relations PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticRelationsTests COMMAND test_semantic_relations)
 
+add_executable(test_pair_plans test_pair_plans.cpp)
+target_link_libraries(test_pair_plans PRIVATE cactus_frontend Catch2::Catch2WithMain)
+add_test(NAME PairPlanTests COMMAND test_pair_plans)
+
 add_executable(test_semantic_trait_parameters test_semantic_trait_parameters.cpp)
 target_link_libraries(test_semantic_trait_parameters PRIVATE cactus_frontend Catch2::Catch2WithMain)
 target_compile_definitions(test_semantic_trait_parameters PRIVATE
@@ -789,6 +793,12 @@ cactus_add_headless_behavior_test(test_relation_row_joins_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_relation_row_joins_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_grid_region_joins_headless_behavior
+    CACTUS_SOURCE examples/grid_region_joins.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_grid_region_joins_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_relation_row_projection_headless_behavior
     CACTUS_SOURCE examples/relation_row_projection.cactus
     BACKEND cpp-entt
@@ -886,6 +896,12 @@ cactus_add_headless_behavior_test(test_voxel_rendering_headless_behavior
     CACTUS_SOURCE examples/stdlib-fixtures/voxel_rendering.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_voxel_rendering_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_texture_flipbook_headless_behavior
+    CACTUS_SOURCE examples/stdlib-fixtures/texture_flipbook.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_texture_flipbook_headless_behavior.cpp
 )
 
 cactus_add_headless_behavior_test(test_per_view_visibility_headless_behavior

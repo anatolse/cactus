@@ -27,7 +27,7 @@ namespace cactus {
 /// deserialization. Callers that need the AST must re-parse from source.
 class ModuleArtifact {
 public:
-    static constexpr uint8_t CURRENT_VERSION = 46;
+    static constexpr uint8_t CURRENT_VERSION = 47;
     static constexpr const char* MAGIC       = "CMOD";
 
     explicit ModuleArtifact(ErrorReporter& errors);
@@ -45,6 +45,8 @@ public:
 
     /// Extract only pub symbols from a `.cmod` file without loading the full program.
     std::optional<ImportedSymbols> extract_pub_symbols(const std::filesystem::path& path);
+
+    static ImportedSymbols extract_pub_symbols(const std::string& module_name, const DecoratedProgram& program);
 
     /// Convert module_name to artifact filename: "enemies.walker" → "enemies.walker.cmod"
     static std::filesystem::path artifact_filename(const std::string& module_name);
@@ -112,10 +114,12 @@ private:
     static void write_entities(std::ostream& out, const std::unordered_map<std::string, ImportedEntity>& entities);
     static void write_string_vector(std::ostream& out, const std::vector<std::string>& values);
     static void write_dep_graph(std::ostream& out, const std::vector<RuleDependency>& graph);
-    static void write_contract(std::ostream& out, const HandlerContract& contract);
+    void write_contract(std::ostream& out, const HandlerContract& contract);
+    void write_pair_plan(std::ostream& out, const PairPlan& plan);
     static void write_expr_path(std::ostream& out, const ExprPath& path);
+    static void write_equality_key(std::ostream& out, const EqualityJoinKey& key);
     static void write_equality_join(std::ostream& out, const std::optional<EqualityJoinPlan>& join);
-    static void write_handler_contracts(std::ostream& out, const std::vector<InferredHandlerContract>& contracts);
+    void write_handler_contracts(std::ostream& out, const std::vector<InferredHandlerContract>& contracts);
     void write_execution_graph(std::ostream& out, const ExecutionGraph& graph);
     static void write_group_facts(std::ostream& out, const ExecutionGraph& graph);
     static void write_string_pool(std::ostream& out, const StringPool& pool);
@@ -157,10 +161,12 @@ private:
     static std::unordered_map<std::string, ImportedEntity> read_entities(std::istream& in);
     static std::vector<std::string> read_string_vector(std::istream& in);
     static std::vector<RuleDependency> read_dep_graph(std::istream& in);
-    static HandlerContract read_contract(std::istream& in);
+    HandlerContract read_contract(std::istream& in);
+    PairPlan read_pair_plan(std::istream& in);
     static ExprPath read_expr_path(std::istream& in);
+    static EqualityJoinKey read_equality_key(std::istream& in);
     static std::optional<EqualityJoinPlan> read_equality_join(std::istream& in);
-    static std::vector<InferredHandlerContract> read_handler_contracts(std::istream& in);
+    std::vector<InferredHandlerContract> read_handler_contracts(std::istream& in);
     ExecutionGraph read_execution_graph(std::istream& in);
     static void read_group_facts(std::istream& in, ExecutionGraph& graph);
     static StringPool read_string_pool(std::istream& in);

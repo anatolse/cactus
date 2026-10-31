@@ -262,3 +262,30 @@ TEST_CASE("to_screen agrees with the renderer's projection", "[runtime][camera-v
 }
 
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity)
+
+TEST_CASE("Camera views use a live screen-size carrier after the named screen is removed",
+          "[runtime][camera-view][restore]") {
+    World world;
+    drive_frame(world.registry);
+    const auto screen = slots().stdlib.camera.viewport.Screen;
+    cactus_gen::detail::camera_view::create_window_metrics(world.registry);
+    world.registry.destroy(screen);
+    world.registry.clear<cam::CameraView>();
+    cactus_raylib_fake::set_screen_size(800, 600);
+    drive_frame(world.registry);
+    drive_frame(world.registry);
+    const auto camera = slots().camera_view.Left;
+    const auto& port  = world.registry.get<Viewport>(camera);
+    const auto& view  = world.view(camera);
+    CHECK(view.rect_size.x == port.width * 800.0F);
+    CHECK(view.rect_size.y == port.height * 600.0F);
+}
+
+TEST_CASE("Camera views disappear when no live screen-size carrier exists", "[runtime][camera-view][restore]") {
+    World world;
+    drive_frame(world.registry);
+    REQUIRE(world.registry.view<cam::CameraView>().size() == 2);
+    world.registry.destroy(slots().stdlib.camera.viewport.Screen);
+    drive_frame(world.registry);
+    REQUIRE(world.registry.view<cam::CameraView>().size() == 0);
+}

@@ -7,6 +7,8 @@ use std.random as random
 use std.physics.volume as physics
 use std.transform.volume as tv
 use std.voxel.volume as voxel
+use units
+use session
 
 pub asset RockTexture: texture = "art/rock.png"
 pub asset EarthTexture: texture = "art/earth.png"
@@ -32,10 +34,12 @@ pub enum Kind:
     Lava
 
 pub trait WorldConfig:
-    var size: int = 85
-    var seed: int = 7
-    var starting_robots: int = 4
-    var batch: int = 4096
+    persist var size: int = 85
+    persist var height: int = 4
+    persist var seed: int = 7
+    persist var starting_robots: int = 4
+    persist var batch: int = 4096
+    persist var autostart: bool = true
 
 pub trait Generation:
     persist var seed: int = 7
@@ -51,12 +55,14 @@ pub trait Robot
 
 pub trait Player:
     persist var gold: int = 1000
+    let color: color = #70A8FFFF
 
 pub entity Human:
     Player
 
 pub entity Enemy:
-    Player
+    Player:
+        color = #F07470FF
 
 pub relation OwnedBy:
     from: Tile one
@@ -67,20 +73,30 @@ pub relation OwnershipRequest:
     to: Player
 
 trait PendingCell
+trait Upper
+
+event Excavated:
+    volume: entity_id
+    x: int
+    z: int
 
 pub template Worker(at: vec3):
     Robot
+    units.Unit
+    units.Order.Auto
+    units.OrderRequest.None
     tv.WorldTransform:
         position = at
 
-pub template Terrain(size: int, seed: int, robots: int, batch: int):
+pub template Terrain(size: int, height: int, seed: int, robots: int, batch: int):
     voxel.Volume:
         max_x = size - 1
-        max_y = 1
+        max_y = height
         max_z = size - 1
         batch = batch
     voxel.VolumeRenderer:
         style = voxel.SurfaceStyle.Smooth
+        roughness = 0.4
         seed = seed
     tv.WorldTransform
     Generation:
@@ -91,16 +107,28 @@ rule Begin:
     each: WorldConfig as config
 
     on load:
-        spawn Terrain(size = config.size, seed = config.seed, robots = config.starting_robots, batch = config.batch)
+        if not config.autostart:
+            session.Game[session.Session].mode = session.SessionMode.Menu
+            return
+        spawn Terrain(size = config.size, height = config.height, seed = config.seed, robots = config.starting_robots, batch = config.batch)
 
 pub func near_base(x: int, z: int, center: int) bool:
     return math.abs(1.0 * (x - center)) <= 2.0 and math.abs(1.0 * (z - center)) <= 2.0
+
+pub func on_border(x: int, z: int, volume: voxel.Volume) bool:
+    return x == 0 or z == 0 or x == volume.max_x or z == volume.max_z
+
+pub func wet(x: int, z: int, seed: int) bool:
+    return noise.perlin2(vec2(x * 1.0, z * 1.0) / 9.0, seed + 101) < -0.4
+
+pub func dry_around(x: int, z: int, seed: int) bool:
+    return not (wet(x - 1, z - 1, seed) or wet(x, z - 1, seed) or wet(x + 1, z - 1, seed) or wet(x - 1, z, seed) or wet(x + 1, z, seed) or wet(x - 1, z + 1, seed) or wet(x, z + 1, seed) or wet(x + 1, z + 1, seed))
 
 pub func kind_at(cell: voxel.Cell, volume: voxel.Volume, recipe: Generation) Kind:
     let x = cell.x
     let z = cell.z
     let far = volume.max_x - 4
-    if x == 0 or z == 0 or x == volume.max_x or z == volume.max_z:
+    if on_border(x, z, volume):
         return Kind.Rock
     if near_base(x, z, 4) or near_base(x, z, far):
         return Kind.Floor
@@ -111,15 +139,24 @@ pub func kind_at(cell: voxel.Cell, volume: voxel.Volume, recipe: Generation) Kin
     let ore = random.sample_int(random.seeded(recipe.seed + x * 9176 + z * 6361), random.uniform_int(0, 99))
     if terrain > 0.45:
         return Kind.Rock
-    if terrain < -0.45:
+    if wet(x, z, recipe.seed):
         return Kind.Water
-    if terrain < -0.32 and ore < 25:
+    if noise.perlin2(p / 6.0, recipe.seed + 202) < -0.4 and dry_around(x, z, recipe.seed):
         return Kind.Lava
     if ore == 0:
         return Kind.InfiniteGold
     if ore < 16:
         return Kind.Gold
     return Kind.Earth
+
+pub func walled(kind: Kind) bool:
+    return kind == Kind.Rock or kind == Kind.Earth or kind == Kind.Gold or kind == Kind.InfiniteGold
+
+pub func wall_top(x: int, z: int, volume: voxel.Volume, recipe: Generation) int:
+    if on_border(x, z, volume):
+        return volume.max_y
+    let rough = noise.perlin2(vec2(x * 1.0, z * 1.0) / 3.0, recipe.seed + 303)
+    return 2 + math.floor(math.clamp((rough + 1.0) * 0.5, 0.0, 0.999) * (volume.max_y - 1))
 
 pub func texture_for(kind: Kind) texture_id:
     return match kind:
@@ -157,6 +194,14 @@ rule GenerateCell:
                 texture = if kind == Kind.Water or kind == Kind.Lava: texture_for(kind) else: FloorTexture
             add physics.Solid to node
             return
+        if cell.y > 1:
+            add Upper to node
+            if not walled(kind) or cell.y > wall_top(cell.x, cell.z, volume, recipe):
+                return
+            set voxel.Cell on node:
+                texture = texture_for(kind)
+            add physics.Solid to node
+            return
         set voxel.Cell on node:
             texture = texture_for(kind)
         add Tile to node:
@@ -165,10 +210,31 @@ rule GenerateCell:
             add OwnershipRequest(node, Human)
         if near_base(cell.x, cell.z, volume.max_x - 4):
             add OwnershipRequest(node, Enemy)
-        if kind != Kind.Floor and kind != Kind.Water and kind != Kind.Lava:
+        if walled(kind):
             add physics.Solid to node
         if not ((cell.x == 4 and cell.z == 4) or (cell.x == volume.max_x - 4 and cell.z == volume.max_z - 4)):
             return
         add Heart to node
         for i in range(0, recipe.starting_robots):
             spawn Worker(at = vec3(cell.x + 0.75 + (i % 2) * 0.5, 1.25, cell.z + 0.75 + (i / 2) * 0.5))
+
+rule OpenColumn:
+    each:
+        Tile
+        voxel.Cell as cell
+
+    on removed physics.Solid:
+        emit Excavated:
+            volume = cell.volume
+            x = cell.x
+            z = cell.z
+
+rule ClearColumn:
+    each:
+        Upper
+        physics.Solid
+        voxel.Cell as cell
+
+    on Excavated as dug:
+        if cell.volume == dug.volume and cell.x == dug.x and cell.z == dug.z:
+            remove physics.Solid

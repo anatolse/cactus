@@ -1,0 +1,30 @@
+module session
+
+use std.core
+
+pub enum SessionMode:
+    Menu
+    Generating
+    Playing
+    Paused
+    Loading
+    GameOver
+    Options
+
+pub trait Session:
+    var mode: SessionMode = SessionMode.Playing
+    var return_mode: SessionMode = SessionMode.Playing
+    var request_id: int = 0
+    var status: string = ""
+    var new_game: bool = false
+    persist var seconds: float = 0.0
+
+pub entity Game:
+    Session
+
+rule Clock:
+    each: Session as state
+    where: state.mode == SessionMode.Playing
+
+    on tick:
+        state.seconds += tick.dt

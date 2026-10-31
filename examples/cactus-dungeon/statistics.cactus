@@ -1,0 +1,84 @@
+module statistics
+
+use std.core
+use world
+use units
+use tasks
+use territory
+use rooms
+use knights
+
+pub trait UnitCounts:
+    let robots: int = 0
+    let knights: int = 0
+
+pub trait RoomCounts:
+    let lairs: int = 0
+    let farms: int = 0
+    let beds: int = 0
+    let training: int = 0
+
+pub trait FoodCounts:
+    let ready: int = 0
+
+pub trait RoomFood:
+    let stock: int = 0
+
+group totals:
+    phase: tick
+
+rule CountUnits:
+    pairs:
+        player: world.Player
+        unit: units.Unit as data
+    group: totals
+    where: tasks.Commands(unit, player)
+    reduce per player:
+        robots = sum(if data.kind == units.UnitKind.Robot: 1 else: 0)
+        knights = sum(if data.kind == units.UnitKind.Knight: 1 else: 0)
+    keep UnitCounts on player if true:
+        robots = robots
+        knights = knights
+
+rule CountRooms:
+    pairs:
+        player: world.Player
+        room:
+            rooms.RoomTile as kind
+            rooms.RoomStats as stats
+    group: totals
+    where: world.OwnedBy(room, player)
+    reduce per player:
+        lairs = sum(if kind.kind == rooms.RoomKind.Lair: 1 else: 0)
+        farms = sum(if kind.kind == rooms.RoomKind.Farm: 1 else: 0)
+        beds = sum(if kind.kind == rooms.RoomKind.Lair: stats.capacity else: 0)
+        training = sum(if kind.kind == rooms.RoomKind.Training: stats.capacity else: 0)
+    keep RoomCounts on player if true:
+        lairs = lairs
+        farms = farms
+        beds = beds
+        training = training
+
+rule CountFood:
+    pairs:
+        player: world.Player
+        farm:
+            knights.FarmStock as stock
+            territory.Connected
+    group: totals
+    where: world.OwnedBy(farm, player)
+    reduce per player:
+        food = sum(stock.food)
+    keep FoodCounts on player if true:
+        ready = food
+
+rule RoomFoodStocks:
+    pairs:
+        room: rooms.RoomStats
+        farm: knights.FarmStock as stock
+    group: totals
+    where: rooms.Room(farm, room)
+    reduce per room:
+        food = sum(stock.food)
+    keep RoomFood on room if true:
+        stock = food

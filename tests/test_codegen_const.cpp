@@ -76,10 +76,12 @@ TEST_CASE("Codegen constants: vector, struct, and list constants", "[codegen-ent
     const auto robot = generated.at(
         "inline constexpr ::cactus_gen::test::UnitDef ROBOT = ::cactus_gen::test::UnitDef{.speed = 4.0F, .health = 3};");
     CHECK(unit < robot);
+    CHECK(generated.has("inline const std::vector<::cactus_gen::test::UnitDef>& WAVES()"));
     CHECK(
-        generated.has("inline const std::vector<::cactus_gen::test::UnitDef> WAVES = {::cactus_gen::test::ROBOT, "
+        generated.has("static const std::vector<::cactus_gen::test::UnitDef> value = {::cactus_gen::test::ROBOT, "
                       "::cactus_gen::test::UnitDef{.speed = 2.5F, .health = 6}};"));
-    CHECK(generated.has("inline const std::vector<::cactus_gen::test::UnitDef> NONE = {};"));
+    CHECK(generated.has("inline const std::vector<::cactus_gen::test::UnitDef>& NONE()"));
+    CHECK(generated.has("static const std::vector<::cactus_gen::test::UnitDef> value = {};"));
 }
 
 TEST_CASE("Codegen constants: a constant calling a pure func follows its declaration", "[codegen-entt][const]") {
@@ -89,8 +91,9 @@ TEST_CASE("Codegen constants: a constant calling a pure func follows its declara
         "const:\n"
         "    SIX = twice(3.0)\n");
     const auto prototype = generated.at("float twice(float v);");
-    const auto six       = generated.at("inline const float SIX = ::cactus_gen::test::twice(3.0F);");
+    const auto six       = generated.at("inline const float& SIX()");
     CHECK(prototype < six);
+    CHECK(generated.has("static const float value = ::cactus_gen::test::twice(3.0F);"));
 }
 
 TEST_CASE("Codegen constants: trait defaults may read constants", "[codegen-entt][const]") {
@@ -122,7 +125,7 @@ TEST_CASE("Codegen constants: handlers read constants and iterate list constants
                                     "            p.speed += unit.speed\n");
     CHECK(generated.has("= ::cactus_gen::test::ROBOT.speed;"));
     CHECK(generated.has("const auto& foreach_snapshot_"));
-    CHECK(generated.has(" = ::cactus_gen::test::WAVES;"));
+    CHECK(generated.has(" = ::cactus_gen::test::WAVES();"));
 }
 
 TEST_CASE("Codegen constants: window configuration reads constants by symbol", "[codegen-entt][const]") {
@@ -224,4 +227,19 @@ TEST_CASE("Codegen constants: a stage handler inlines a derived scalar constant 
         imports);
     CHECK(generated.has("(corner * (200.0 * 0.5))"));
 }
+TEST_CASE("Codegen constants: runtime window configuration uses cached values",
+          "[codegen-entt][const][dungeon-regression]") {
+    const auto generated = generate(
+        "const:\n    BASE_TITLE = \"Computed window\"\n"
+        "func width() int:\n    return 1280\n"
+        "func caption() string:\n    return BASE_TITLE\n"
+        "const:\n    WINDOW_WIDTH = width()\n    WINDOW_HEIGHT = width() / 2\n"
+        "    TARGET_FPS = width()\n    WINDOW_TITLE = caption()\n");
+    CHECK(generated.has("ProjectConfig generated_project_config() {"));
+    CHECK(generated.has(".window_width = ::cactus_gen::test::WINDOW_WIDTH()"));
+    CHECK(generated.has(".window_height = ::cactus_gen::test::WINDOW_HEIGHT()"));
+    CHECK(generated.has(".target_fps = ::cactus_gen::test::TARGET_FPS()"));
+    CHECK(generated.has(".window_title = ::cactus_gen::test::WINDOW_TITLE().c_str()"));
+}
+
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

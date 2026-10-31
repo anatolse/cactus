@@ -1,0 +1,312 @@
+module combat
+
+use std.core
+use session
+use std.math as math
+use std.math.vec3 as vectors
+use std.transform.volume as tv
+use std.voxel.volume as voxel
+use world
+use territory
+use tasks
+use units
+use knights
+
+pub enum BattleResult:
+    Active
+    Won
+    Lost
+
+const:
+    DEATH_TIME = 1.5
+
+pub trait Outcome:
+    persist var status: BattleResult = BattleResult.Active
+
+relation Intent:
+    from: units.Unit
+    to: units.Unit
+
+relation UnitGoal:
+    from: units.Unit
+    to: world.Tile
+
+relation HeartGoal:
+    from: units.Unit
+    to: world.Tile
+
+relation AttackGoal:
+    from: units.Unit
+    to: world.Tile
+
+pub event Swing
+
+pub event Hit:
+    attacker: entity_id
+    amount: float
+
+event HeartHit:
+    amount: float
+
+event HeartFallen
+event HeartLost
+
+event PlayerDefeated:
+    player: entity_id
+
+rule PrepareOutcomes:
+    each: world.Player
+    without: Outcome
+
+    on load:
+        add Outcome
+
+rule AttackIntents:
+    pairs:
+        actor:
+            units.Unit
+            units.Order.Attack as order
+        target: units.Unit
+    group: territory.links
+    where: target == order.target
+    keep Intent(actor, target)
+
+rule UnitTargets:
+    pairs:
+        intent: Intent
+        place: tasks.Located
+    group: territory.links
+    where: intent.to == place.from
+    keep UnitGoal(intent.from, place.to)
+
+rule HeartTargets:
+    pairs:
+        actor:
+            units.Unit
+            units.Order.Attack as order
+        heart:
+            world.Tile
+            world.Heart
+    group: territory.links
+    where: heart == order.target
+    keep HeartGoal(actor, heart)
+
+rule AttackTargets:
+    pairs:
+        actor:
+            units.Unit
+            units.Order.Attack
+            units.OrderRequest.None
+        tile: world.Tile
+    group: territory.links
+    where: UnitGoal(actor, tile) or HeartGoal(actor, tile)
+    keep AttackGoal(actor, tile)
+
+rule Pursue:
+    pairs:
+        goal: AttackGoal
+        route: territory.Route
+    order by: route.distance asc
+    after: knights.FollowNeeds
+    before: tasks.Stride
+    where:
+        route.to == goal.to
+        tasks.Located(goal.from, route.from)
+    limit: 1 per goal.from
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on fixed_tick:
+        emit tasks.Step to goal.from:
+            tile = route.next
+
+rule Guard:
+    pairs:
+        actor:
+            units.Unit
+            units.Order.Defend as order
+        route: territory.Route
+    after: Pursue
+    before: tasks.Stride
+    where:
+        route.to == order.target
+        tasks.Located(actor, route.from)
+    limit: 1 per actor
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on fixed_tick:
+        emit tasks.Step to actor:
+            tile = route.next
+
+rule FinishAttack:
+    each:
+        units.Unit
+        units.Order.Attack as order
+    after:
+        Guard
+        knights.Defend
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on fixed_tick:
+        match order.target:
+            units.Unit =>
+                return
+            world.Heart =>
+                return
+            _ =>
+                add units.Order.Auto
+
+rule FightUnits:
+    pairs:
+        actor:
+            units.Unit as attacker
+            tv.WorldTransform as first
+        target:
+            units.Unit as defender
+            tv.WorldTransform as second
+    order by: vectors.distance(first.position, second.position) asc
+    after:
+        knights.Practice
+        tasks.FollowRoute
+    before: tasks.Stride
+    where:
+        actor != target
+        attacker.health > 0.0
+        defender.health > 0.0
+        tasks.Commands(actor, _)
+        tasks.Commands(target, _)
+        not tasks.Ally(actor, target)
+        vectors.distance(first.position, second.position) <= 1.5
+    limit: 1 per actor
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on fixed_tick:
+        let attack = units.stats_for(attacker)
+        let defense = units.stats_for(defender)
+        emit Swing to actor
+        emit Hit to target:
+            attacker = actor
+            amount = math.max(1.0, attack.attack - defense.defense) * fixed_tick.dt
+
+rule TakeHit:
+    each: units.Unit as unit
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on Hit as hit:
+        if unit.health <= 0.0:
+            return
+        unit.health -= hit.amount
+        if unit.health <= 0.0:
+            emit units.GainXP to hit.attacker:
+                activity = units.Activity.Combat
+
+rule FightHearts:
+    pairs:
+        actor:
+            units.Unit as attacker
+            tv.WorldTransform as pose
+        heart:
+            world.Heart as target
+            voxel.Cell as cell
+    after: FightUnits
+    where:
+        attacker.health > 0.0
+        target.health > 0.0
+        tasks.Commands(actor, _)
+        not tasks.Friendly(actor, heart)
+        vectors.distance(pose.position, vec3(cell.x + 0.5, 1.25, cell.z + 0.5)) <= 1.5
+    limit: 1 per actor
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on fixed_tick:
+        let profile = units.stats_for(attacker)
+        emit Swing to actor
+        emit HeartHit to heart:
+            amount = profile.attack * fixed_tick.dt
+
+rule DamageHeart:
+    each: world.Heart as heart
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on HeartHit as hit:
+        heart.health -= hit.amount
+
+pub trait Dying:
+    var time: float = 0.0
+
+rule StartDying:
+    each: units.Unit as unit
+    without: Dying
+    after: FightHearts
+    where: unit.health <= 0.0
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on fixed_tick:
+        add Dying
+
+rule RemoveDead:
+    each:
+        units.Unit
+        Dying as dying
+    after: StartDying
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on fixed_tick:
+        dying.time += fixed_tick.dt
+        if dying.time >= DEATH_TIME:
+            destroy
+
+rule FallenHearts:
+    each: world.Heart as heart
+    after: FightHearts
+    where: heart.health <= 0.0
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on fixed_tick:
+        emit HeartFallen to self
+        remove world.Heart
+
+rule HeartOwner:
+    pairs:
+        heart: world.Heart
+        owner: world.OwnedBy
+    where: owner.from == heart
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on HeartFallen:
+        emit HeartLost to owner.to
+
+rule RecordLoss:
+    each:
+        world.Player
+        Outcome as outcome
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on HeartLost:
+        if outcome.status != BattleResult.Active:
+            return
+        outcome.status = BattleResult.Lost
+        emit PlayerDefeated:
+            player = self
+
+rule RecordVictory:
+    each:
+        world.Player
+        Outcome as outcome
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on PlayerDefeated as request:
+        if self == request.player or outcome.status != BattleResult.Active:
+            return
+        outcome.status = BattleResult.Won

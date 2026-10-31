@@ -114,8 +114,11 @@ TEST_CASE("generated restore reads each trait through a typed decoder, never by 
     CHECK_FALSE(contains(health, "\"current\""));
 
     const auto nodes = function_body(unit->code, "generated_restore_node_traits");
-    CHECK(contains(nodes, "generated_read_trait<::cactus_gen::world::Health>(in, ids)"));
-    CHECK(contains(nodes, "switch (layouts[trait.shape])"));
+    CHECK(contains(unit->code, "using GeneratedRestoreTraits = RestoreTraitList<"));
+    CHECK(contains(nodes, "restore_layout_trait(GeneratedRestoreTraits{}, layouts[trait.shape], registry, entity, node, in, ids);"));
+    CHECK_FALSE(contains(unit->code, "generated_restore_trait_"));
+    CHECK_FALSE(contains(unit->code, "kRestoreTraits"));
+    CHECK_FALSE(contains(unit->code, "GeneratedRestoreTrait = void (*)"));
     CHECK_FALSE(contains(unit->code, "find_field("));
     CHECK_FALSE(contains(unit->code, "FieldValue"));
     CHECK_FALSE(contains(unit->code, "find_trait(record"));

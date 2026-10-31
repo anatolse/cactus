@@ -9,6 +9,25 @@
 
 namespace cactus {
 
+inline bool has_literal_string_result(const ExprNode& expression);
+
+inline bool has_literal_string_result(const MatchExpr& match) {
+    return std::ranges::any_of(match.arms, [](const auto& arm) { return has_literal_string_result(*arm.body); });
+}
+
+inline bool has_literal_string_result(const ExprNode& expression) {
+    if (const auto* literal = std::get_if<LiteralExpr>(&expression.expr)) {
+        return literal->kind == LiteralExpr::Kind::String;
+    }
+    if (const auto* conditional = std::get_if<IfExpr>(&expression.expr)) {
+        return has_literal_string_result(*conditional->then_expr) || has_literal_string_result(*conditional->else_expr);
+    }
+    if (const auto* match = std::get_if<MatchExpr>(&expression.expr)) {
+        return has_literal_string_result(*match);
+    }
+    return false;
+}
+
 // Child nodes are matched by member name rather than by ExprNode alternative so
 // one traversal covers every alternative that shares a shape; a new alternative
 // needs a matching clause here or its children go unvisited.

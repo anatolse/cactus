@@ -1,0 +1,525 @@
+module controls
+
+use std.core
+use session
+use std.input as inp
+use std.math as math
+use std.math.vec2 as vectors
+use std.math.quat as quat
+use std.camera.volume as camera
+use std.camera.viewport as viewport
+use std.transform.volume as tv
+use std.voxel.volume as voxel
+use std.ui as ui
+use std.pointer as pointer
+use std.query as query
+use world
+use tasks
+use units
+use rooms
+use layers
+
+pub state Tool:
+    Select
+    Dig
+    Build:
+        let kind: rooms.RoomKind
+    Sell
+    Attack
+    Defend
+
+pub trait SelectionStatus:
+    var active: bool = false
+
+pub trait Highlight
+
+pub trait Selector:
+    var start: vec2 = vec2(0.0, 0.0)
+    var point: vec2 = vec2(0.0, 0.0)
+    var dragging: bool = false
+    var box: bool = false
+    var shift: bool = false
+    var defend: bool = false
+    var taken: bool = false
+    var cell_start: vec2 = vec2(0.0, 0.0)
+    var cell_end: vec2 = vec2(0.0, 0.0)
+    var grounded: bool = false
+    var wall: bool = false
+    var digging: bool = false
+    var blocked: bool = false
+
+const:
+    ZOOM_MIN = 6.0
+    ZOOM_MAX = 24.0
+    PAN_SPEED = 14.0
+    EDGE = 8.0
+    TURN_RATE = 10.0
+    QUARTER = 1.5707964
+    PITCH = -1.0303768
+    REACH = 0.6
+
+pub trait Rig:
+    persist var focus: vec3 = vec3(4.5, 0.0, 4.5)
+    persist var yaw: float = 0.0
+    persist var turn: int = 0
+    persist var zoom: float = 12.0
+
+pub event SelectionCommit
+pub event ContextCommit
+pub event DesignationCommit
+
+event CancelOrders
+
+event ClearSelection
+
+event SelectUnit:
+    toggle: bool = false
+
+enum ContextOrder:
+    Move
+    Attack
+    Defend
+
+event OrderChosen:
+    target: entity_id
+    kind: ContextOrder
+
+input Pick: button
+    mouse = inp.MouseButton.Left
+
+input Context: button
+    mouse = inp.MouseButton.Right
+
+input Additive: button
+    key = inp.Key.Shift
+
+input Forward: button
+    key = inp.Key.W
+
+input Backward: button
+    key = inp.Key.S
+
+input Left: button
+    key = inp.Key.A
+
+input Right: button
+    key = inp.Key.D
+
+input ArrowLeft: button
+    key = inp.Key.Left
+
+input ArrowRight: button
+    key = inp.Key.Right
+
+input ArrowUp: button
+    key = inp.Key.Up
+
+input ArrowDown: button
+    key = inp.Key.Down
+
+input TurnLeft: button
+    key = inp.Key.Q
+
+input TurnRight: button
+    key = inp.Key.E
+
+input Cancel: button
+    key = inp.Key.X
+
+pub entity Overview:
+    Rig
+    Selector
+    Tool.Select
+    layers.ViewLayer
+    camera.Camera:
+        far = 500.0
+    viewport.Viewport
+    tv.WorldTransform
+
+group highlights:
+    phase: tick
+
+func in_view(port: camera.CameraView, pixel: vec2) bool:
+    return pixel.x >= port.rect_min.x and pixel.x <= port.rect_min.x + port.rect_size.x and pixel.y >= port.rect_min.y and pixel.y <= port.rect_min.y + port.rect_size.y
+
+func near_pointer(port: camera.CameraView, at: vec3, pointer: Selector) bool:
+    let p = camera.to_screen(port, at)
+    return p.in_front and in_view(port, pointer.point) and vectors.length(p.position - pointer.point) <= 12.0
+
+func in_box(port: camera.CameraView, at: vec3, pointer: Selector) bool:
+    let p = camera.to_screen(port, at)
+    let lo = vec2(math.min(pointer.start.x, pointer.point.x), math.min(pointer.start.y, pointer.point.y))
+    let hi = vec2(math.max(pointer.start.x, pointer.point.x), math.max(pointer.start.y, pointer.point.y))
+    return p.in_front and in_view(port, p.position) and p.position.x >= lo.x and p.position.x <= hi.x and p.position.y >= lo.y and p.position.y <= hi.y
+
+rule PrepareSelection:
+    each: units.Unit
+    without: SelectionStatus
+
+    on input:
+        add SelectionStatus
+
+rule PreparePicking:
+    each: Selector
+    without: voxel.RayProbe
+
+    on input:
+        for terrain in query.all[voxel.Volume]():
+            add voxel.RayProbe:
+                volume = terrain
+                cell = terrain
+                max_distance = 500.0
+            return
+
+rule CastPointer:
+    each:
+        camera.CameraView as cv
+        voxel.RayProbe as probe
+    after: ui.RoutePointer
+    before: voxel.probes
+
+    on input:
+        let pixel = inp.mouse_position()
+        let ray = camera.ray(cv, pixel)
+        probe.enabled = in_view(cv, pixel)
+        probe.origin = ray.origin
+        probe.direction = ray.direction
+
+rule PointerUIStatus:
+    pairs:
+        port: Selector as selector
+        widget:
+            ui.Node
+            pointer.PointerState as state
+    after: ui.RoutePointer
+    before: Pointer
+    reduce per port:
+        hovered = any(state.hovered)
+
+    on input:
+        selector.blocked = hovered
+
+rule Pointer:
+    each:
+        Selector as selector
+        Tool as tool
+        voxel.RayProbe as probe
+    after: ui.RoutePointer, voxel.probes
+    before: units.orders
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on input:
+        if input.pressed(Cancel):
+            emit CancelOrders to self
+        if selector.blocked:
+            selector.dragging = false
+            return
+        selector.point = inp.mouse_position()
+        if input.pressed(Pick):
+            selector.start = selector.point
+            selector.dragging = true
+            selector.grounded = probe.hit
+            selector.wall = probe.hit and probe.y > 0
+            if probe.hit:
+                selector.cell_start = vec2(probe.x * 1.0, probe.z * 1.0)
+        if selector.dragging and not input.down(Pick) and not input.released(Pick):
+            selector.dragging = false
+        if selector.dragging and input.released(Pick):
+            selector.dragging = false
+            selector.shift = input.down(Additive)
+            selector.box = vectors.length(selector.point - selector.start) > 4.0
+            selector.digging = false
+            match tool:
+                Tool.Select =>
+                    if selector.wall and probe.hit:
+                        selector.digging = true
+                        selector.cell_end = vec2(probe.x * 1.0, probe.z * 1.0)
+                        emit DesignationCommit to self
+                        return
+                    emit SelectionCommit to self
+                Tool.Attack =>
+                    selector.defend = false
+                    selector.taken = false
+                    emit ContextCommit to self
+                Tool.Defend =>
+                    selector.defend = true
+                    selector.taken = false
+                    emit ContextCommit to self
+                _ =>
+                    selector.digging = match tool:
+                        Tool.Dig => true
+                        _ => false
+                    if selector.grounded and probe.hit:
+                        selector.cell_end = vec2(probe.x * 1.0, probe.z * 1.0)
+                        emit DesignationCommit to self
+        if input.pressed(Context):
+            match tool:
+                Tool.Select =>
+                    selector.defend = input.down(Additive)
+                _ =>
+                    add Tool.Select
+                    return
+            selector.defend = input.down(Additive)
+            selector.taken = false
+            emit ContextCommit to self
+
+rule ClearBeforeSelection:
+    each: Selector as selector
+
+    on SelectionCommit:
+        if not selector.shift:
+            emit ClearSelection
+
+rule ClearAll:
+    each: SelectionStatus as status
+
+    on ClearSelection:
+        status.active = false
+
+rule PickClick:
+    pairs:
+        port:
+            camera.CameraView as cv
+            Selector as selector
+        unit:
+            units.Unit
+            tv.WorldTransform as pose
+    order by: vectors.length(camera.to_screen(cv, pose.position).position - selector.point) asc
+    after: ClearBeforeSelection
+    where:
+        not selector.box
+        tasks.Commands(unit, world.Human)
+        near_pointer(cv, pose.position, selector)
+    limit: 1 per port
+
+    on SelectionCommit:
+        emit SelectUnit to unit:
+            toggle = selector.shift
+
+rule PickBox:
+    pairs:
+        port:
+            camera.CameraView as cv
+            Selector as selector
+        unit:
+            units.Unit
+            tv.WorldTransform as pose
+    after: PickClick
+    where:
+        selector.box
+        tasks.Commands(unit, world.Human)
+        in_box(cv, pose.position, selector)
+
+    on SelectionCommit:
+        emit SelectUnit to unit
+
+rule SetSelection:
+    each: SelectionStatus as status
+
+    on SelectUnit as request:
+        status.active = if request.toggle: not status.active else: true
+
+rule HighlightSelection:
+    each: SelectionStatus as status
+    group: highlights
+    where: status.active
+    keep Highlight
+
+rule PickEnemy:
+    pairs:
+        port:
+            camera.CameraView as cv
+            Selector as selector
+        unit:
+            units.Unit
+            tv.WorldTransform as pose
+    order by: vectors.length(camera.to_screen(cv, pose.position).position - selector.point) asc
+    where:
+        tasks.Commands(unit, _)
+        not tasks.Commands(unit, world.Human)
+        near_pointer(cv, pose.position, selector)
+    limit: 1 per port
+
+    on ContextCommit:
+        selector.taken = true
+        emit OrderChosen to port:
+            target = unit
+            kind = ContextOrder.Attack
+
+rule PickHeart:
+    pairs:
+        port:
+            camera.CameraView as cv
+            Selector as selector
+        heart:
+            world.Tile
+            world.Heart
+            voxel.Cell as cell
+    after: PickEnemy
+    where:
+        not selector.taken
+        not world.OwnedBy(heart, world.Human)
+        near_pointer(cv, vec3(cell.x + 0.5, 1.5, cell.z + 0.5), selector)
+    limit: 1 per port
+
+    on ContextCommit:
+        selector.taken = true
+        emit OrderChosen to port:
+            target = heart
+            kind = ContextOrder.Attack
+
+rule PickCell:
+    pairs:
+        port:
+            camera.CameraView as cv
+            Selector as selector
+            voxel.RayProbe as probe
+        tile:
+            world.Tile
+            voxel.Cell as cell
+    after: PickHeart
+    where:
+        not selector.taken
+        in_view(cv, selector.point)
+        probe.hit
+        cell.x == probe.x
+        cell.z == probe.z
+    limit: 1 per port
+
+    on ContextCommit:
+        emit OrderChosen to port:
+            target = tile
+            kind = if selector.defend: ContextOrder.Defend else: ContextOrder.Move
+
+rule DispatchOrders:
+    pairs:
+        port: Selector
+        unit:
+            units.Unit
+            SelectionStatus as status
+    where:
+        status.active
+        tasks.Commands(unit, world.Human)
+
+    on OrderChosen as request:
+        match request.kind:
+            ContextOrder.Move =>
+                emit units.MoveRequested to unit:
+                    target = request.target
+            ContextOrder.Attack =>
+                emit units.AttackRequested to unit:
+                    target = request.target
+            ContextOrder.Defend =>
+                emit units.DefendRequested to unit:
+                    target = request.target
+
+rule CancelSelectionOrders:
+    pairs:
+        port: Selector
+        unit:
+            units.Unit
+            SelectionStatus as status
+    where:
+        status.active
+        tasks.Commands(unit, world.Human)
+
+    on CancelOrders:
+        emit units.CancelRequested to unit
+
+func in_designation(pointer: Selector, cell: voxel.Cell) bool:
+    let first = pointer.cell_start
+    let last = pointer.cell_end
+    return cell.x >= math.min(first.x, last.x) and cell.x <= math.max(first.x, last.x) and cell.z >= math.min(first.y, last.y) and cell.z <= math.max(first.y, last.y)
+
+rule DesignateDig:
+    pairs:
+        port:
+            camera.CameraView as cv
+            Selector as selector
+        tile:
+            world.Tile as data
+            voxel.Cell as cell
+    where:
+        selector.digging
+        tasks.diggable(data.kind)
+        in_designation(selector, cell)
+
+    on DesignationCommit:
+        add tasks.DigMark(world.Human, tile)
+
+rule DesignateBuild:
+    pairs:
+        port:
+            camera.CameraView as cv
+            Selector as selector
+            Tool.Build as plan
+        tile:
+            world.Tile
+            voxel.Cell as cell
+    where: in_designation(selector, cell)
+
+    on DesignationCommit:
+        add rooms.RoomPlan(world.Human, tile):
+            kind = plan.kind
+
+rule DesignateSale:
+    pairs:
+        port:
+            camera.CameraView as cv
+            Selector as selector
+            Tool.Sell
+        tile:
+            world.Tile
+            voxel.Cell as cell
+    where: in_designation(selector, cell)
+
+    on DesignationCommit:
+        emit rooms.SellRequested to tile:
+            player = world.Human
+
+func edge_push(low: float, high: float, at: float) float:
+    if at >= high - EDGE:
+        return 1.0
+    if at <= low + EDGE:
+        return -1.0
+    return 0.0
+
+func pressed_axis(positive: bool, negative: bool) float:
+    return (if positive: 1.0 else: 0.0) - (if negative: 1.0 else: 0.0)
+
+rule MoveCamera:
+    pairs:
+        port:
+            Rig as rig
+            camera.CameraView as cv
+        terrain: voxel.Volume as volume
+    after: ui.RoutePointer
+    limit: 1 per port
+
+    on tick:
+        let pointer = inp.mouse_position()
+        let inside = in_view(cv, pointer)
+        let edge_x = if inside: edge_push(cv.rect_min.x, cv.rect_min.x + cv.rect_size.x, pointer.x) else: 0.0
+        let edge_z = if inside: -edge_push(cv.rect_min.y, cv.rect_min.y + cv.rect_size.y, pointer.y) else: 0.0
+        let x = math.clamp(pressed_axis(input.down(Right) or input.down(ArrowRight), input.down(Left) or input.down(ArrowLeft)) + edge_x, -1.0, 1.0)
+        let z = math.clamp(pressed_axis(input.down(Forward) or input.down(ArrowUp), input.down(Backward) or input.down(ArrowDown)) + edge_z, -1.0, 1.0)
+        rig.focus.x = math.clamp(rig.focus.x + (math.cos(rig.yaw) * x - math.sin(rig.yaw) * z) * tick.dt * PAN_SPEED, 1.0, 1.0 * volume.max_x - 1.0)
+        rig.focus.z = math.clamp(rig.focus.z + (-math.sin(rig.yaw) * x - math.cos(rig.yaw) * z) * tick.dt * PAN_SPEED, 1.0, 1.0 * volume.max_z - 1.0)
+        if input.pressed(TurnLeft):
+            rig.turn -= 1
+        if input.pressed(TurnRight):
+            rig.turn += 1
+        let goal = 1.0 * rig.turn * QUARTER
+        rig.yaw = if math.abs(goal - rig.yaw) < 0.001: goal else: rig.yaw + (goal - rig.yaw) * math.min(1.0, tick.dt * TURN_RATE)
+        rig.zoom = math.clamp(rig.zoom - inp.wheel_delta() * 2.0, ZOOM_MIN, ZOOM_MAX)
+
+rule CameraPose:
+    each:
+        Rig as rig
+        tv.WorldTransform as pose
+    after: MoveCamera
+
+    on tick:
+        pose.position = rig.focus + vec3(math.sin(rig.yaw) * rig.zoom * REACH, rig.zoom, math.cos(rig.yaw) * rig.zoom * REACH)
+        pose.rotation = quat.from_euler(PITCH, rig.yaw, 0.0)

@@ -4,6 +4,15 @@ use std.core
 use world
 use territory
 use tasks
+use rooms
+use knights
+use combat
+use controls
+use visuals
+use animation
+use hud
+use ai
+use flow
 
 const:
     WINDOW_WIDTH = 1280
@@ -12,4 +21,7 @@ const:
     TARGET_FPS = 60
 
 entity Settings:
-    world.WorldConfig
+    ai.Configuration:
+        enabled = true
+    world.WorldConfig:
+        autostart = false

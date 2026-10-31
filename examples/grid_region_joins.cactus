@@ -1,0 +1,86 @@
+module grid_region_joins
+
+use std.core
+use std.text as text
+
+enum Query:
+    Box
+    Disk
+
+trait Board:
+    let size: int = 6
+
+trait Spot:
+    let board: entity_id
+    let x: int in range(0, board[Board].size)
+    let z: int in range(0, board[Board].size)
+    persist var visits: int = 0
+
+trait Probe:
+    let name: int = 0
+    persist var x: float = 0.0
+    persist var z: float = 0.0
+    persist var lo: int = 0
+    persist var hi: int = 0
+
+trait Control:
+    persist var query: Query = Query.Box
+    var trace: string = ""
+
+entity Settings:
+    Control
+
+entity Field:
+    Board
+
+template Place(x: int, z: int):
+    Spot:
+        board = Field
+        x = x
+        z = z
+
+template Looker(name: int, x: float, z: float, lo: int, hi: int):
+    Probe:
+        name = name
+        x = x
+        z = z
+        lo = lo
+        hi = hi
+
+entity Near from Looker(name = 1, x = 1.5, z = 2.5, lo = 1, hi = 2)
+entity Far from Looker(name = 2, x = 4.0, z = 4.0, lo = 4, hi = 9)
+
+rule Fill:
+    on load:
+        for x in range(0, 6):
+            for z in range(0, 6):
+                spawn Place(x = x, z = z)
+
+func inside(probe: Probe, spot: Spot) bool:
+    let low = probe.lo
+    return spot.x >= low and spot.x <= probe.hi and spot.z >= low and spot.z <= probe.hi
+
+rule BoxPairs:
+    pairs:
+        probe: Probe as p
+        spot: Spot as s
+    where:
+        inside(p, s)
+    when:
+        Settings[Control].query == Query.Box
+
+    on fixed_tick:
+        Settings[Control].trace += text.format("{}:{},{};", p.name, s.x, s.z)
+
+rule DiskPairs:
+    pairs:
+        probe: Probe as p
+        spot: Spot as s
+    after: BoxPairs
+    where:
+        (p.x - s.x - 0.5) * (p.x - s.x - 0.5) + (p.z - s.z - 0.5) * (p.z - s.z - 0.5) <= 2.25
+    when:
+        Settings[Control].query == Query.Disk
+
+    on fixed_tick:
+        Settings[Control].trace += text.format("{}:{},{};", p.name, s.x, s.z)

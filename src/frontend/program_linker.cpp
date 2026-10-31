@@ -4,6 +4,7 @@
 #include "frontend/delivery_cycles.hpp"
 #include "frontend/execution_graph_scheduler.hpp"
 #include "frontend/module_artifact.hpp"
+#include "frontend/pair_plans.hpp"
 #include "frontend/ranged_fields.hpp"
 #include "frontend/symbol_identity.hpp"
 
@@ -339,6 +340,7 @@ std::optional<DecoratedProgram> ProgramLinker::link(const std::vector<std::files
         return std::nullopt;
     }
     derive_archetype_reachability(merged, errors_);
+    finalize_pair_plans(merged, errors_);
     validate_container_traits(merged, errors_);
 
     validate_persistence_requires_graph_scheduler(merged);

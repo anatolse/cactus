@@ -14,6 +14,9 @@ use std.render.meshes as meshes
 asset BlockMesh: mesh = "models/block.mesh"
 asset BlockMaterial: material = "materials/block.mat"
 
+template WindowMetrics:
+    vp.ScreenSize
+
 trait Recorder:
     var input_screen: vec2 = vec2(0.0, 0.0)
     var marker_screen: vec2 = vec2(0.0, 0.0)

@@ -84,7 +84,7 @@ TEST_CASE("math.min returns NaN when an argument is NaN", "[runtime][codegen-ent
 
 TEST_CASE("a float constant matches the runtime call bit for bit", "[runtime][codegen-entt][const-expressions]") {
     CHECK(after_one_frame<cactus_gen::total_arithmetic::Conversion>().sine_matches);
-    CHECK(std::bit_cast<std::uint32_t>(cactus_gen::total_arithmetic::SINE) ==
+    CHECK(std::bit_cast<std::uint32_t>(cactus_gen::total_arithmetic::SINE()) ==
           std::bit_cast<std::uint32_t>(cactus::runtime::stdlib::math::sin(0.5F)));
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

@@ -1,0 +1,322 @@
+module flow
+
+use std.core
+use std.query as query
+use std.voxel.volume as voxel
+use std.ui as ui
+use std.pointer as pointer
+use std.app as app
+use std.persistence as storage
+use std.camera.viewport as viewport
+use world
+use units
+use knights
+use combat
+use hud
+use session
+use visuals
+use layers
+
+const:
+    SAVE_SLOT = "cactus-dungeon"
+
+pub event MenuRequested
+pub event NewGameRequested
+
+pub enum MenuAction:
+    New
+    Load
+    Options
+    Exit
+
+pub trait MenuButton:
+    let action: MenuAction
+
+template MenuItem(label: string, action: MenuAction):
+    ui.Node
+    ui.Button:
+        label = label
+    ui.PreferredSize:
+        min_size = vec2(220.0, 38.0)
+    pointer.PointerTarget
+    pointer.PointerState
+    MenuButton:
+        action = action
+
+pub trait MenuPanel
+trait MenuHeading
+
+pub template MenuShell:
+    ui.Node
+    ui.Anchors:
+        min = vec2(0.0, 0.0)
+        max = vec2(1.0, 1.0)
+    ui.Panel:
+        background = #0E121CFF
+    MenuPanel
+    children:
+        entity MenuBox:
+            ui.Node
+            ui.Anchors:
+                min = vec2(0.5, 0.5)
+                max = vec2(0.5, 0.5)
+                pivot = vec2(0.5, 0.5)
+            ui.PreferredSize:
+                min_size = vec2(320.0, 280.0)
+            ui.Panel:
+                background = #182032FF
+            ui.Stack:
+                axis = ui.Axis.Vertical
+                align = ui.Align.Center
+                gap = 10.0
+                padding = vec2(20.0, 20.0)
+            children:
+                entity MenuTitle:
+                    ui.Node
+                    ui.Text:
+                        value = "Cactus Dungeon"
+                        font_size = 22
+                        align = ui.TextAlign.Center
+                    ui.PreferredSize:
+                        min_size = vec2(280.0, 40.0)
+                    MenuHeading
+                entity NewButton:
+                    use MenuItem(label = "New Game", action = MenuAction.New)
+                entity LoadButton:
+                    use MenuItem(label = "Load Game", action = MenuAction.Load)
+                entity OptionsButton:
+                    use MenuItem(label = "Options", action = MenuAction.Options)
+                entity ExitButton:
+                    use MenuItem(label = "Exit", action = MenuAction.Exit)
+
+rule OpenMenu:
+    after: hud.OpenViews
+
+    on load:
+        spawn MenuShell()
+
+rule MenuActions:
+    each: MenuButton as button
+    after: hud.ToolbarActions
+
+    on pointer.Click:
+        match button.action:
+            MenuAction.New =>
+                emit NewGameRequested
+            MenuAction.Load =>
+                emit hud.LoadRequested
+            MenuAction.Options =>
+                if session.Game[session.Session].mode == session.SessionMode.Options:
+                    emit MenuRequested
+                    return
+                session.Game[session.Session].mode = session.SessionMode.Options
+            MenuAction.Exit =>
+                emit app.QuitRequested
+
+rule Screens:
+    each: combat.Outcome as result
+    after: GameOver
+    where: self == world.Human
+
+    on late_tick:
+        let current_mode = session.Game[session.Session].mode
+        let playing = current_mode == session.SessionMode.Playing or current_mode == session.SessionMode.Paused
+        hud.HudRoot[ui.Node].visible = playing
+        let heading = match current_mode:
+            session.SessionMode.Generating => "Generating dungeon..."
+            session.SessionMode.Loading => "Loading dungeon..."
+            session.SessionMode.Options => "WASD, arrows, edges: pan  Q/E: turn  Wheel: zoom"
+            session.SessionMode.GameOver => if result.status == combat.BattleResult.Won: "Victory" else: "Defeat"
+            _ => "Cactus Dungeon"
+        emit ShowMenu:
+            visible = not playing
+            enabled = current_mode != session.SessionMode.Generating and current_mode != session.SessionMode.Loading
+            options = current_mode == session.SessionMode.Options
+            title = heading
+        emit ShowGameViews:
+            active = playing
+
+rule Pause:
+    each: session.Session as state
+
+    on hud.PauseRequested:
+        match state.mode:
+            session.SessionMode.Playing =>
+                state.mode = session.SessionMode.Paused
+            session.SessionMode.Paused =>
+                state.mode = session.SessionMode.Playing
+            _ =>
+                return
+
+rule Menu:
+    each: session.Session as state
+
+    on MenuRequested:
+        state.mode = session.SessionMode.Menu
+
+rule RemoveUnits:
+    each: units.Unit
+
+    on NewGameRequested:
+        destroy
+
+rule RemoveCells:
+    each: voxel.Cell
+    after: RemoveUnits
+
+    on NewGameRequested:
+        destroy
+
+rule RemoveTerrain:
+    each: voxel.Volume
+    after: RemoveCells
+
+    on NewGameRequested:
+        destroy
+
+rule ResetPlayers:
+    each: world.Player as player
+    after: RemoveTerrain
+
+    on NewGameRequested:
+        player.gold = 1000
+        add combat.Outcome
+        add knights.Recruitment
+
+rule QueueNewGame:
+    each: session.Session as state
+    after: ResetPlayers
+
+    on NewGameRequested:
+        state.new_game = true
+        state.mode = session.SessionMode.Generating
+
+rule NewGame:
+    each: world.WorldConfig as config
+    after: world.GenerateCell, session.Clock
+    where: session.Game[session.Session].new_game
+
+    on tick:
+        session.Game[session.Session].new_game = false
+        session.Game[session.Session].mode = session.SessionMode.Generating
+        session.Game[session.Session].seconds = 0.0
+        spawn world.Terrain(size = config.size, height = config.height, seed = config.seed, robots = config.starting_robots, batch = config.batch)
+
+rule Ready:
+    each: world.WorldConfig as config
+    where: session.Game[session.Session].mode == session.SessionMode.Generating
+
+    on late_tick:
+        var count = 0
+        for tile in query.all[world.Tile]():
+            count += 1
+        if count == config.size * config.size:
+            session.Game[session.Session].mode = session.SessionMode.Playing
+
+rule GameOver:
+    each: combat.Outcome as outcome
+    after: Ready
+    where:
+        self == world.Human
+        outcome.status != combat.BattleResult.Active
+        session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on late_tick:
+        session.Game[session.Session].mode = session.SessionMode.GameOver
+
+event ShowMenu:
+    visible: bool
+    enabled: bool
+    options: bool
+    title: string
+
+rule MenuVisibility:
+    each:
+        MenuPanel
+        ui.Node as panel
+
+    on ShowMenu as request:
+        panel.visible = request.visible
+        panel.enabled = request.enabled
+
+rule OptionsLabel:
+    each:
+        MenuButton as button
+        ui.Button as face
+    where: button.action == MenuAction.Options
+
+    on ShowMenu as request:
+        face.label = if request.options: "Back" else: "Options"
+
+rule MenuHeadingText:
+    each:
+        MenuHeading
+        ui.Text as label
+
+    on ShowMenu as request:
+        label.value = request.title
+
+event ShowGameViews:
+    active: bool
+
+rule GameViewVisibility:
+    each:
+        layers.ViewLayer
+        viewport.Viewport as port
+
+    on ShowGameViews as request:
+        port.active = request.active
+
+rule SaveGame:
+    each: session.Session as state
+    where: state.mode == session.SessionMode.Playing or state.mode == session.SessionMode.Paused
+
+    on hud.SaveRequested:
+        state.request_id += 1
+        state.status = "Saving..."
+        emit storage.SaveRequested:
+            slot = SAVE_SLOT
+            request_id = state.request_id
+
+rule LoadGame:
+    each: session.Session as state
+    where: state.mode != session.SessionMode.Loading and state.mode != session.SessionMode.Generating
+
+    on hud.LoadRequested:
+        state.return_mode = state.mode
+        state.mode = session.SessionMode.Loading
+        state.request_id += 1
+        emit storage.RestoreRequested:
+            slot = SAVE_SLOT
+            request_id = state.request_id
+
+rule Saved:
+    each: session.Session as state
+
+    on storage.SaveCompleted:
+        state.status = "Game saved"
+
+rule SaveFailed:
+    each: session.Session as state
+
+    on storage.SaveFailed as request:
+        state.status = request.message
+
+rule Loaded:
+    each: session.Session as state
+
+    on storage.RestoreCompleted:
+        state.mode = session.SessionMode.Playing
+        state.status = "Game loaded"
+        spawn hud.HudViews()
+        spawn hud.MapView()
+        spawn MenuShell()
+        spawn visuals.SunLight()
+        spawn visuals.Flipbooks()
+
+rule LoadFailed:
+    each: session.Session as state
+
+    on storage.RestoreFailed as request:
+        state.mode = state.return_mode
+        state.status = request.message

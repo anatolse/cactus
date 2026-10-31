@@ -1,0 +1,29 @@
+module relation_rows
+
+pub extern event tick:
+    dt: float
+
+event Linked
+
+trait Tile:
+    let x: int = 0
+
+relation Walk:
+    from: Tile
+    to: Tile
+
+template Floor:
+    Tile
+
+rule Dig:
+    on tick:
+        spawn Floor()
+
+rule Follow:
+    pairs:
+        a: Tile
+        b: Tile
+    where:
+        Walk(a, b)
+    on tick:
+        emit Linked to a

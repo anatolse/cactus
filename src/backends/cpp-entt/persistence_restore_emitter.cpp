@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <sstream>
+#include <string>
 #include <vector>
 
 namespace cactus {
@@ -114,8 +115,6 @@ void emit_restore_struct_functions(std::ostringstream& out, const DecoratedProgr
 void emit_restore_trait_functions(std::ostringstream& out,
                                   const DecoratedProgram& program,
                                   const std::vector<PersistableTrait>& traits) {
-    out << "template <class T>\n";
-    out << "[[nodiscard]] T generated_read_trait(cactus::persistence::ValueReader& in, RestoreIdMap& ids);\n\n";
     for (const auto& trait : traits) {
         if (trait.declaration->fields.empty()) {
             continue;  // marker traits carry no payload to decode
@@ -134,33 +133,34 @@ void emit_restore_trait_functions(std::ostringstream& out,
     }
 }
 
-void emit_restore_construction_copy(std::ostringstream& out,
-                                    const DecoratedProgram& program,
-                                    const PersistableTrait& trait,
-                                    const ConstructionRetention& retention) {
+// The trait's construction-copy policy on restore; none when it never keeps one.
+void emit_restore_retention(std::ostringstream& out,
+                            const DecoratedProgram& program,
+                            const PersistableTrait& trait,
+                            const ConstructionRetention& retention) {
     const auto& symbol = trait.declaration->symbol_id;
+    if (trait.declaration->fields.empty() || !retention.retains_anywhere(symbol)) {
+        return;
+    }
+    out << "template <>\n";
+    out << "struct RestoreRetention<" << trait.cpp_name << "> {\n";
     if (retention.retains_everywhere(symbol)) {
-        out << "                retain_construction<" << trait.cpp_name << ">(registry, entity, value);\n";
-        return;
+        out << "    static constexpr bool always = true;\n";
+    } else {
+        const auto nodes = program.persistence.archetypes.size();
+        out << "    static constexpr std::array<bool, " << nodes << "> nodes{";
+        for (std::size_t node = 0; node < nodes; ++node) {
+            out << (node == 0 ? "" : ", ")
+                << (retention.retains(static_cast<std::uint32_t>(node), symbol) ? "true" : "false");
+        }
+        out << "};\n";
     }
-    if (!retention.retains_anywhere(symbol)) {
-        return;
-    }
-    const auto nodes = program.persistence.archetypes.size();
-    out << "                static constexpr std::array<bool, " << nodes << "> kKeepsCopy{";
-    for (std::size_t node = 0; node < nodes; ++node) {
-        out << (node == 0 ? "" : ", ")
-            << (retention.retains(static_cast<std::uint32_t>(node), symbol) ? "true" : "false");
-    }
-    out << "};\n";
-    out << "                if (kKeepsCopy[node]) {\n";
-    out << "                    retain_construction<" << trait.cpp_name << ">(registry, entity, value);\n";
-    out << "                }\n";
+    out << "};\n\n";
 }
 
-// Applies every recorded present trait to `entity`, decoding it through the
-// matching generated_read_trait<T> specialization and re-establishing capture
-// provenance so a world can be re-saved immediately after being restored.
+// Applies every recorded present trait to `entity` through restore_trait<T>,
+// which decodes it and re-establishes capture provenance so a world can be
+// re-saved immediately after being restored.
 // Absent (present == false) and unrecorded traits are left unset — restore
 // creates only what the document actually carries. `traits` must already
 // exclude Parent (see without_parent_trait): restore applies it from the entity
@@ -171,6 +171,16 @@ void emit_restore_node_traits(std::ostringstream& out,
                               const std::vector<PersistableTrait>& layout_traits,
                               const std::vector<PersistableTrait>& traits) {
     const ConstructionRetention retention(program, persistable_symbols(traits));
+    std::vector<std::string> restored(layout_traits.size(), "UnrestoredTrait");
+    for (const auto& trait : traits) {
+        restored[layout_index(layout_traits, trait.canonical)] = trait.cpp_name;
+        emit_restore_retention(out, program, trait, retention);
+    }
+    out << "using GeneratedRestoreTraits = RestoreTraitList<";
+    for (std::size_t index = 0; index < restored.size(); ++index) {
+        out << (index == 0 ? "\n    " : ",\n    ") << restored[index];
+    }
+    out << ">;\n\n";
     out << "inline void generated_restore_node_traits(entt::registry& registry,\n";
     out << "                                          entt::entity entity,\n";
     out << "                                          std::uint32_t node,\n";
@@ -186,22 +196,7 @@ void emit_restore_node_traits(std::ostringstream& out,
     out << "        }\n";
     out << "        auto in = cactus::persistence::TraitView(snapshot, row.first_trait + offset).reader();\n";
     out << "        (void)in;\n";
-    out << "        switch (layouts[trait.shape]) {\n";
-    for (const auto& trait : traits) {
-        out << "            case " << layout_index(layout_traits, trait.canonical) << ": {\n";
-        if (trait.declaration->fields.empty()) {
-            out << "                registry.emplace_or_replace<" << trait.cpp_name << ">(entity);\n";
-        } else {
-            out << "                auto value = generated_read_trait<" << trait.cpp_name << ">(in, ids);\n";
-            out << "                registry.emplace_or_replace<" << trait.cpp_name << ">(entity, value);\n";
-            emit_restore_construction_copy(out, program, trait, retention);
-        }
-        out << "                break;\n";
-        out << "            }\n";
-    }
-    out << "            default:\n";
-    out << "                break;\n";
-    out << "        }\n";
+    out << "        restore_layout_trait(GeneratedRestoreTraits{}, layouts[trait.shape], registry, entity, node, in, ids);\n";
     out << "    }\n";
     out << "}\n\n";
 }

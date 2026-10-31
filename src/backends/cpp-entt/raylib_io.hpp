@@ -67,6 +67,7 @@ CACTUS_RL_WRAP_VOID(EnableCursor, (), ())
 CACTUS_RL_WRAP(bool, IsWindowReady, (), ())
 CACTUS_RL_WRAP(int, GetScreenWidth, (), ())
 CACTUS_RL_WRAP(int, GetScreenHeight, (), ())
+CACTUS_RL_WRAP(double, GetTime, (), ())
 CACTUS_RL_WRAP(int, rlGetFramebufferWidth, (), ())
 CACTUS_RL_WRAP(int, rlGetFramebufferHeight, (), ())
 

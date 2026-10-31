@@ -24,6 +24,7 @@
 #include <functional>
 #include <iterator>
 #include <limits>
+#include <map>
 #include <ranges>
 #include <span>
 #include <sstream>
@@ -1233,6 +1234,7 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     call_graph_.clear();
     template_names_.clear();
     entity_names_.clear();
+    func_nodes_.clear();
     named_entities_.clear();
     use_names_.clear();
     archetype_traits_.clear();
@@ -1673,6 +1675,7 @@ void SemanticAnalyzer::resolve_declaration_types(T& node) {
         }
         rf.glsl_inlinable = !node.is_extern && single_return_value(node.body) != nullptr && !has_reference_params(rf);
         result_.funcs[node.name] = std::move(rf);
+        func_nodes_[node.name]   = &node;
     }
 }
 
@@ -8345,10 +8348,9 @@ void SemanticAnalyzer::collect_rule_dependency(const RuleNode& rule, std::size_t
     // Rule-level, not per-handler: every handler on this rule shares the same
     // `pairs:`/`where:` domain, so eligibility is identical for each of them.
     const auto equality_join = rule.pairs.has_value() ? recognize_equality_join(rule, pair_scope) : std::nullopt;
+    bool distance_warned     = false;
     const auto spatial_join =
-        rule.pairs.has_value()
-            ? recognize_spatial_join(rule, pair_scope, errors_, !equality_join.has_value() && !find_row_end_join(rule))
-            : std::nullopt;
+        rule.pairs.has_value() ? recognize_spatial_join(rule, pair_scope, errors_, distance_warned) : std::nullopt;
     if (equality_join.has_value() && !spatial_join.has_value()) {
         report_hashed_key_parts(rule, *equality_join);
     }
@@ -8377,6 +8379,10 @@ void SemanticAnalyzer::collect_rule_dependency(const RuleNode& rule, std::size_t
             inferred.iteration_order =
                 derive_iteration_order(inferred, rule.limit.has_value() && rule.order_by.empty());
             stage_rule_clauses(rule, pair_scope, inferred);
+            if (rule.pairs.has_value()) {
+                inferred.pair_plan        = plan_pair_pass(rule, pair_scope, inferred);
+                inferred.pair_plan.warned = distance_warned;
+            }
             handler.untracked_accesses = std::exchange(inferred.untracked_accesses, {});
             result_.handler_contracts.push_back(inferred);
 
@@ -10649,14 +10655,13 @@ std::optional<std::vector<std::vector<EqualityJoinKey>>> SemanticAnalyzer::branc
 std::optional<SpatialJoinPlan> SemanticAnalyzer::recognize_spatial_join(const RuleNode& rule,
                                                                         const PairScope& pair_scope,
                                                                         ErrorReporter& errors,
-                                                                        bool warn_unaccelerated) {
+                                                                        bool& distance_warned) {
     if (!rule.pairs.has_value() || rule.pairs->bindings.size() != 2) {
         return std::nullopt;
     }
 
     static const std::vector<std::unique_ptr<ExprNode>> NO_PREDICATES;
     const auto& predicates   = rule.where_clause.has_value() ? rule.where_clause->predicates : NO_PREDICATES;
-    bool linear_distance_warned = false;
     for (std::size_t predicate_index = 0; predicate_index < predicates.size(); ++predicate_index) {
         const ExprNode& predicate = *predicates[predicate_index];
         std::optional<SpatialJoinMatch> match;
@@ -10672,7 +10677,7 @@ std::optional<SpatialJoinPlan> SemanticAnalyzer::recognize_spatial_join(const Ru
             }
         }
         if (!match.has_value()) {
-            linear_distance_warned |= check_unaccelerated_distance_predicate(predicate, pair_scope, errors);
+            distance_warned |= check_unaccelerated_distance_predicate(predicate, pair_scope, errors);
             continue;
         }
         return SpatialJoinPlan{.dimension               = match->dimension,
@@ -10680,17 +10685,397 @@ std::optional<SpatialJoinPlan> SemanticAnalyzer::recognize_spatial_join(const Ru
                                .right                    = std::move(match->right),
                                .matched_predicate_index = predicate_index};
     }
-    if (auto swept = recognize_collider_reduce(rule, pair_scope); swept.has_value()) {
-        return swept;
+    return recognize_collider_reduce(rule, pair_scope);
+}
+
+namespace {
+
+// NOLINTNEXTLINE(misc-no-recursion) -- an expression is a tree
+bool same_expr(const ExprNode& left, const ExprNode& right) {
+    if (left.expr.index() != right.expr.index()) {
+        return false;
     }
-    if (!linear_distance_warned && warn_unaccelerated) {
-        const auto& bindings = rule.pairs->bindings;
-        errors.warning(rule.pairs->location,
-                       "pair rule '" + rule.name +
-                           "' is not accelerated: no recognized overlap predicate in where:, so every (" +
-                           bindings[0].name + ", " + bindings[1].name + ") tuple is checked");
+    return std::visit(
+        // NOLINTNEXTLINE(misc-no-recursion)
+        [&](const auto& node) -> bool {
+            using E           = std::decay_t<decltype(node)>;
+            const auto& other = std::get<E>(right.expr);
+            if constexpr (std::is_same_v<E, LiteralExpr>) {
+                return node.kind == other.kind && node.value == other.value;
+            } else if constexpr (std::is_same_v<E, IdentExpr>) {
+                return node.name == other.name;
+            } else if constexpr (std::is_same_v<E, MemberExpr>) {
+                return node.member == other.member && same_expr(*node.object, *other.object);
+            } else if constexpr (std::is_same_v<E, TraitAccessExpr>) {
+                return node.trait_name == other.trait_name && same_expr(*node.object, *other.object);
+            } else if constexpr (std::is_same_v<E, UnaryExpr>) {
+                return node.op == other.op && same_expr(*node.operand, *other.operand);
+            } else if constexpr (std::is_same_v<E, BinaryExpr>) {
+                return node.op == other.op && same_expr(*node.left, *other.left) && same_expr(*node.right, *other.right);
+            } else if constexpr (std::is_same_v<E, CallExpr>) {
+                return node.args.size() == other.args.size() && same_expr(*node.callee, *other.callee) &&
+                       std::ranges::equal(node.args, other.args, [](const auto& a, const auto& b) { return same_expr(*a, *b); });
+            } else {
+                return false;
+            }
+        },
+        left.expr);
+}
+
+// Replaces each name in `names` with a copy of its expression, leaving the copies alone.
+// NOLINTNEXTLINE(misc-no-recursion) -- an expression is a tree
+void substitute_names(ExprNode& node, const std::unordered_map<std::string, const ExprNode*>& names) {
+    if (const auto* ident = std::get_if<IdentExpr>(&node.expr); ident != nullptr) {
+        if (const auto found = names.find(ident->name); found != names.end()) {
+            node = std::move(*clone_expr(*found->second));
+        }
+        return;
+    }
+    // NOLINTNEXTLINE(misc-no-recursion)
+    const auto visit  = [&](auto& child) { substitute_names(*child, names); };
+    const auto fields = [&](auto& assignments) {
+        for (auto& assignment : assignments) {
+            visit(assignment.value);
+        }
+    };
+    std::visit(
+        [&](auto& child) {
+            expr_children::fixed(child, visit);
+            expr_children::lists(child, visit, fields);
+            expr_children::compounds(child, visit, fields);
+        },
+        node.expr);
+}
+
+// The terms of a `+`/`-` chain with their signs.
+// NOLINTNEXTLINE(misc-no-recursion) -- an expression is a tree
+void linear_terms(const ExprNode& expr, int sign, std::vector<std::pair<int, const ExprNode*>>& terms) {
+    const auto* binary = std::get_if<BinaryExpr>(&expr.expr);
+    if (binary != nullptr && (binary->op == "+" || binary->op == "-")) {
+        linear_terms(*binary->left, sign, terms);
+        linear_terms(*binary->right, binary->op == "+" ? sign : -sign, terms);
+        return;
+    }
+    terms.emplace_back(sign, &expr);
+}
+
+std::unique_ptr<ExprNode> signed_sum(const std::vector<std::pair<int, const ExprNode*>>& terms) {
+    std::unique_ptr<ExprNode> sum;
+    for (const auto& [sign, term] : terms) {
+        auto copy = clone_expr(*term);
+        if (sum == nullptr) {
+            if (sign < 0) {
+                copy = std::make_unique<ExprNode>(ExprNode::Variant{UnaryExpr{.op       = "-",
+                                                                              .operand  = std::move(copy),
+                                                                              .location = term->location,
+                                                                              .operands = ArithmeticOperands::Other}},
+                                                  term->location);
+            }
+            sum = std::move(copy);
+            continue;
+        }
+        sum = std::make_unique<ExprNode>(ExprNode::Variant{BinaryExpr{.op       = sign < 0 ? "-" : "+",
+                                                                      .left     = std::move(sum),
+                                                                      .right    = std::move(copy),
+                                                                      .location = term->location,
+                                                                      .operands = ArithmeticOperands::Other}},
+                                         term->location);
+    }
+    return sum;
+}
+
+std::shared_ptr<const ExprNode> owned_copy(const ExprNode& expr) {
+    return std::shared_ptr<const ExprNode>(clone_expr(expr));
+}
+
+}  // namespace
+
+std::optional<RelationRowsPlan> SemanticAnalyzer::relation_rows_at(const RuleNode& rule,
+                                                                   std::size_t predicate_index,
+                                                                   const ExprPath& path) {
+    const auto* node = resolve_expr_path(*rule.where_clause->predicates.at(predicate_index), path);
+    const auto* test = node == nullptr ? nullptr : std::get_if<RelationTestExpr>(&node->expr);
+    if (test == nullptr) {
+        return std::nullopt;
+    }
+    const auto names = [](const std::unique_ptr<ExprNode>& end, const std::string& binding) {
+        const auto* ident = end == nullptr ? nullptr : std::get_if<IdentExpr>(&end->expr);
+        return ident != nullptr && ident->name == binding;
+    };
+    const auto& left  = rule.pairs->bindings[0].name;
+    const auto& right = rule.pairs->bindings[1].name;
+    if (names(test->from, left) && names(test->to, right)) {
+        return RelationRowsPlan{.predicate_index = predicate_index, .test = path, .left_is_from = true};
+    }
+    if (names(test->from, right) && names(test->to, left)) {
+        return RelationRowsPlan{.predicate_index = predicate_index, .test = path, .left_is_from = false};
     }
     return std::nullopt;
+}
+
+std::vector<UnionBranch> SemanticAnalyzer::recognize_union(const RuleNode& rule,
+                                                           const PairScope& pair_scope,
+                                                           const RuleStaging& staging) const {
+    const auto& predicates   = rule.where_clause->predicates;
+    const auto& indexed_name = rule.pairs->bindings[1].name;
+    for (std::size_t index = 0; index < predicates.size(); ++index) {
+        if (stage_at(staging.where, index) != ClauseStage::Row) {
+            continue;
+        }
+        const auto& predicate = *predicates[index];
+        for (const auto& conjunct : chain_paths(predicate, {}, "and")) {
+            if (binary_at(predicate, conjunct, "or") == nullptr) {
+                continue;
+            }
+            std::vector<UnionBranch> branches;
+            for (const auto& disjunct : chain_paths(predicate, conjunct, "or")) {
+                UnionBranch branch;
+                for (const auto& atom : chain_paths(predicate, disjunct, "and")) {
+                    if (!branch.rows.has_value()) {
+                        branch.rows = relation_rows_at(rule, index, atom);
+                    }
+                    const auto* equality = binary_at(predicate, atom, "==");
+                    if (branch.identity.has_value() || equality == nullptr) {
+                        continue;
+                    }
+                    auto key = equality_key(*equality, atom, index, 1, indexed_name, pair_scope);
+                    if (key.has_value() && !key->trait.has_value()) {
+                        branch.identity = std::move(key);
+                    }
+                }
+                if (!branch.rows.has_value() && !branch.identity.has_value()) {
+                    branches.clear();
+                    break;
+                }
+                if (branch.rows.has_value()) {
+                    branch.identity.reset();
+                }
+                branches.push_back(std::move(branch));
+            }
+            if (!branches.empty()) {
+                return branches;
+            }
+        }
+    }
+    return {};
+}
+
+std::unique_ptr<ExprNode> SemanticAnalyzer::inline_pure_call(const CallExpr& call) const {
+    const auto* callee = std::get_if<IdentExpr>(&call.callee->expr);
+    const auto found   = callee == nullptr ? func_nodes_.end() : func_nodes_.find(callee->name);
+    if (found == func_nodes_.end() || found->second->is_extern || call.has_named_args() ||
+        found->second->params.size() != call.args.size()) {
+        return nullptr;
+    }
+    const auto& func = *found->second;
+    std::unordered_map<std::string, const ExprNode*> names;
+    for (std::size_t index = 0; index < func.params.size(); ++index) {
+        names[func.params[index].name] = call.args[index].get();
+    }
+    std::vector<std::unique_ptr<ExprNode>> locals;
+    for (const auto& statement : func.body) {
+        if (const auto* let = std::get_if<LetStmt>(&statement->stmt); let != nullptr && !let->is_mutable) {
+            auto value = clone_expr(*let->value);
+            substitute_names(*value, names);
+            names[let->name] = value.get();
+            locals.push_back(std::move(value));
+            continue;
+        }
+        const auto* ret = std::get_if<ReturnStmt>(&statement->stmt);
+        if (ret == nullptr || !ret->value.has_value() || statement != func.body.back()) {
+            return nullptr;
+        }
+        auto result = clone_expr(**ret->value);
+        substitute_names(*result, names);
+        return result;
+    }
+    return nullptr;
+}
+
+std::vector<std::shared_ptr<const ExprNode>> SemanticAnalyzer::region_conjuncts(const RuleNode& rule,
+                                                                                const RuleStaging& staging) const {
+    std::vector<std::shared_ptr<const ExprNode>> conjuncts;
+    const auto& predicates = rule.where_clause->predicates;
+    for (std::size_t index = 0; index < predicates.size(); ++index) {
+        if (stage_at(staging.where, index) != ClauseStage::Row) {
+            continue;
+        }
+        for (const auto& path : chain_paths(*predicates[index], {}, "and")) {
+            const auto* node = resolve_expr_path(*predicates[index], path);
+            const auto* call = std::get_if<CallExpr>(&node->expr);
+            std::shared_ptr<const ExprNode> inlined =
+                call == nullptr ? nullptr : std::shared_ptr<const ExprNode>(inline_pure_call(*call));
+            if (inlined == nullptr) {
+                conjuncts.push_back(owned_copy(*node));
+                continue;
+            }
+            for (const auto& part : chain_paths(*inlined, {}, "and")) {
+                conjuncts.emplace_back(inlined, resolve_expr_path(*inlined, part));
+            }
+        }
+    }
+    return conjuncts;
+}
+
+std::optional<GridRegionPlan> SemanticAnalyzer::grid_region_on(
+    const RuleNode& rule,
+    const PairScope& pair_scope,
+    std::size_t region,
+    const std::vector<std::shared_ptr<const ExprNode>>& conjuncts) const {
+    const auto& region_name = rule.pairs->bindings[region].name;
+    std::optional<SymbolId> trait;
+    std::map<std::string, GridRegionAxis> bounds;
+    std::shared_ptr<const ExprNode> radius_sq;
+    const auto ranged = [&](const ExprNode& expr) -> const ResolvedField* {
+        const auto field = member_key_field(expr, region, region_name, pair_scope);
+        if (!field.has_value() || !field->second->range.has_value() || field->second->type.kind != TypeKind::Int ||
+            (trait.has_value() && *trait != field->first)) {
+            return nullptr;
+        }
+        trait = field->first;
+        return field->second;
+    };
+    const auto free_of_region = [&](const ExprNode& expr) { return !reads_pair_binding(expr, pair_scope, region); };
+    using Centers           = std::vector<std::pair<std::string, std::shared_ptr<const ExprNode>>>;
+    const auto disk_centers = [&](const ExprNode& sum) {
+        Centers centers;
+        std::vector<std::pair<int, const ExprNode*>> squares;
+        linear_terms(sum, 1, squares);
+        for (const auto& [sign, square] : squares) {
+            const auto* product = std::get_if<BinaryExpr>(&square->expr);
+            if (sign < 0 || product == nullptr || product->op != "*" || !same_expr(*product->left, *product->right)) {
+                return Centers{};
+            }
+            std::vector<std::pair<int, const ExprNode*>> terms;
+            linear_terms(*product->left, 1, terms);
+            const auto field_term =
+                std::ranges::find_if(terms, [&](const auto& term) { return ranged(*term.second) != nullptr; });
+            if (field_term == terms.end()) {
+                return Centers{};
+            }
+            const auto* field   = ranged(*field_term->second);
+            const int direction = field_term->first;
+            terms.erase(field_term);
+            if (terms.empty() ||
+                !std::ranges::all_of(terms, [&](const auto& term) { return free_of_region(*term.second); })) {
+                return Centers{};
+            }
+            for (auto& term : terms) {
+                term.first *= -direction;
+            }
+            centers.emplace_back(field->name, std::shared_ptr<const ExprNode>(signed_sum(terms)));
+        }
+        return centers;
+    };
+    for (const auto& conjunct : conjuncts) {
+        const auto* comparison = std::get_if<BinaryExpr>(&conjunct->expr);
+        if (comparison == nullptr) {
+            continue;
+        }
+        const bool above = comparison->op == ">=" || comparison->op == ">";
+        const bool below = comparison->op == "<=" || comparison->op == "<";
+        if (!above && !below) {
+            continue;
+        }
+        for (std::uint8_t side = 0; side < 2; ++side) {
+            const auto& member = side == 0 ? *comparison->left : *comparison->right;
+            const auto& bound  = side == 0 ? *comparison->right : *comparison->left;
+            const auto* field  = free_of_region(bound) ? ranged(member) : nullptr;
+            if (field == nullptr) {
+                continue;
+            }
+            auto& axis = bounds[field->name];
+            auto& slot = (side == 0) == above ? axis.lo : axis.hi;
+            if (slot == nullptr) {
+                slot = owned_copy(bound);
+            }
+            break;
+        }
+        if (!below || !free_of_region(*comparison->right)) {
+            continue;
+        }
+        const auto centers = disk_centers(*comparison->left);
+        for (const auto& [field, center] : centers) {
+            bounds[field].center = center;
+        }
+        if (!centers.empty()) {
+            radius_sq = owned_copy(*comparison->right);
+        }
+    }
+    const auto* declaration = trait.has_value() ? find_resolved_trait(*trait) : nullptr;
+    if (declaration == nullptr || bounds.empty()) {
+        return std::nullopt;
+    }
+    GridRegionPlan plan{.region_binding = region, .trait = *trait, .axes = {}, .radius_sq = std::move(radius_sq)};
+    std::string shared_container;
+    for (const auto& field : declaration->fields) {
+        if (!field.is_let || !field.range.has_value() || field.type.kind != TypeKind::Int) {
+            continue;
+        }
+        std::string container;
+        const auto layout = key_layout(field, container);
+        if (layout == EqualityKeyLayout::Hashed ||
+            (!container.empty() && !shared_container.empty() && container != shared_container)) {
+            return std::nullopt;
+        }
+        shared_container = container.empty() ? shared_container : container;
+        auto axis        = bounds.contains(field.name) ? bounds.at(field.name) : GridRegionAxis{};
+        axis.field       = field.name;
+        axis.layout      = layout;
+        plan.axes.push_back(std::move(axis));
+    }
+    plan.container = shared_container;
+    return plan;
+}
+
+std::optional<GridRegionPlan> SemanticAnalyzer::recognize_grid_region(const RuleNode& rule,
+                                                                      const PairScope& pair_scope,
+                                                                      const RuleStaging& staging) const {
+    return grid_region_on(rule, pair_scope, 1, region_conjuncts(rule, staging));
+}
+
+PairPlan SemanticAnalyzer::plan_pair_pass(const RuleNode& rule,
+                                          const PairScope& pair_scope,
+                                          const HandlerContract& contract) const {
+    PairPlan plan{.location = rule.pairs->location};
+    if (contract.spatial_join.has_value()) {
+        plan.kind = PairPlanKind::Spatial;
+        return plan;
+    }
+    if (contract.equality_join.has_value()) {
+        plan.kind = PairPlanKind::Equality;
+        return plan;
+    }
+    if (row_binding_name(rule) != nullptr) {
+        plan.kind = find_row_end_join(rule).has_value() ? PairPlanKind::RelationRows : PairPlanKind::Product;
+        return plan;
+    }
+    if (rule.pairs->bindings.size() != 2 || !rule.where_clause.has_value()) {
+        return plan;
+    }
+    const auto& predicates = rule.where_clause->predicates;
+    for (std::size_t index = 0; index < predicates.size(); ++index) {
+        if (stage_at(contract.staging.where, index) != ClauseStage::Row) {
+            continue;
+        }
+        for (const auto& path : chain_paths(*predicates[index], {}, "and")) {
+            if (auto rows = relation_rows_at(rule, index, path)) {
+                plan.kind = PairPlanKind::RelationRows;
+                plan.rows = std::move(rows);
+                return plan;
+            }
+        }
+    }
+    if (auto branches = recognize_union(rule, pair_scope, contract.staging); !branches.empty()) {
+        plan.kind           = PairPlanKind::Union;
+        plan.union_branches = std::move(branches);
+        return plan;
+    }
+    if (auto grid = recognize_grid_region(rule, pair_scope, contract.staging)) {
+        plan.kind = PairPlanKind::GridRegion;
+        plan.grid = std::move(grid);
+    }
+    return plan;
 }
 
 template <typename S>
@@ -12854,6 +13239,10 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
         }
         if (binary->op == "==" || binary->op == "!=" || binary->op == "<" || binary->op == ">" || binary->op == "<=" ||
             binary->op == ">=" || binary->op == "and" || binary->op == "or") {
+            const auto numeric = [](TypeKind kind) { return kind == TypeKind::Int || kind == TypeKind::Float; };
+            if (numeric(left.kind) && numeric(right.kind)) {
+                mark_operands(binary->operands, left, right);
+            }
             return make_bool_type();
         }
         mark_operands(binary->operands, left, right);

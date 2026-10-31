@@ -1,0 +1,272 @@
+module rooms
+
+use std.core
+use session
+use world
+use territory
+use tasks
+
+pub enum RoomKind:
+    Lair
+    Farm
+    Training
+    Bridge
+
+pub trait RoomTile:
+    persist var kind: RoomKind = RoomKind.Lair
+
+pub trait RoomStats:
+    let capacity: int = 0
+
+pub trait ActiveRoom
+
+trait Buildable
+trait BridgeGround
+
+relation BridgeSite:
+    from: world.Player
+    to: world.Tile
+
+pub relation RoomPlan:
+    from: world.Player
+    to: world.Tile
+    let kind: RoomKind
+    let sell: bool = false
+
+pub relation SameRoom:
+    from: RoomTile
+    to: RoomTile
+
+pub relation Room = components(SameRoom)
+
+event Purchase:
+    tile: entity_id
+    kind: RoomKind
+
+event Install:
+    kind: RoomKind
+    player: entity_id
+
+event Refund:
+    amount: int
+
+event Clear
+event ClearBridge
+
+pub event SellRequested:
+    player: entity_id
+
+rule RequestRoomSale:
+    pairs:
+        tile: RoomTile as room
+        owner: world.OwnedBy
+    where: owner.from == tile
+
+    on SellRequested as request:
+        if owner.to != request.player:
+            return
+        add RoomPlan(owner.to, tile):
+            kind = room.kind
+            sell = true
+
+rule RequestBridgeSale:
+    pairs:
+        tile: territory.Bridge
+        owner: world.OwnedBy
+    after: RequestRoomSale
+    where: owner.from == tile
+
+    on SellRequested as request:
+        if owner.to != request.player:
+            return
+        add RoomPlan(owner.to, tile):
+            kind = RoomKind.Bridge
+            sell = true
+
+pub func price(kind: RoomKind) int:
+    return match kind:
+        RoomKind.Lair => 50
+        RoomKind.Farm => 75
+        RoomKind.Training => 100
+        RoomKind.Bridge => 30
+
+rule BuildableFloor:
+    each:
+        world.Tile as tile
+        territory.Connected
+    without: RoomTile
+    group: territory.links
+    where:
+        tile.kind == world.Kind.Floor
+    keep Buildable
+
+rule LiquidGround:
+    each: world.Tile as tile
+    without: territory.Bridge
+    group: territory.links
+    where:
+        tile.kind == world.Kind.Water or tile.kind == world.Kind.Lava
+    keep BridgeGround
+
+rule BridgeSites:
+    pairs:
+        owner: world.OwnedBy
+        neighbor: territory.Neighbor
+    group: territory.links
+    where:
+        neighbor.from == owner.from
+    keep BridgeSite(owner.to, neighbor.to)
+
+rule PaintRooms:
+    pairs:
+        tile: Buildable
+        plan: RoomPlan
+    after:
+        tasks.FollowRoute
+        territory.ApplyBridgePlans
+        territory.AssignOwner
+    where:
+        plan.to == tile
+        not plan.sell
+        plan.kind != RoomKind.Bridge
+        world.OwnedBy(tile, plan.from)
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on fixed_tick:
+        emit Purchase to plan.from:
+            tile = tile
+            kind = plan.kind
+
+rule PaintBridges:
+    pairs:
+        tile: BridgeGround
+        plan: RoomPlan
+    after: PaintRooms
+    where:
+        plan.to == tile
+        not plan.sell
+        plan.kind == RoomKind.Bridge
+        BridgeSite(plan.from, tile)
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on fixed_tick:
+        emit Purchase to plan.from:
+            tile = tile
+            kind = plan.kind
+
+rule BuyRoom:
+    each: world.Player as player
+
+    on Purchase as request:
+        let cost = price(request.kind)
+        if player.gold < cost:
+            return
+        player.gold -= cost
+        emit Install to request.tile:
+            kind = request.kind
+            player = self
+
+rule InstallRoom:
+    each: world.Tile
+
+    on Install as request:
+        if request.kind == RoomKind.Bridge:
+            add territory.Bridge
+            add world.OwnershipRequest(self, request.player)
+            return
+        add RoomTile:
+            kind = request.kind
+
+rule SellRooms:
+    pairs:
+        tile: RoomTile as room
+        plan: RoomPlan
+    after: PaintBridges
+    where:
+        plan.to == tile
+        plan.sell
+        world.OwnedBy(tile, plan.from)
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on fixed_tick:
+        emit Refund to plan.from:
+            amount = price(room.kind) / 2
+        emit Clear to tile
+
+rule SellBridges:
+    pairs:
+        tile: territory.Bridge
+        plan: RoomPlan
+    after: SellRooms
+    where:
+        plan.to == tile
+        plan.sell
+        world.OwnedBy(tile, plan.from)
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on fixed_tick:
+        emit Refund to plan.from:
+            amount = price(RoomKind.Bridge) / 2
+        emit ClearBridge to tile
+
+rule RefundSale:
+    each: world.Player as player
+
+    on Refund as request:
+        player.gold += request.amount
+
+rule ClearRoom:
+    each: world.Tile
+
+    on Clear:
+        remove RoomTile
+
+rule ClearSoldBridge:
+    each: world.Tile
+
+    on ClearBridge:
+        remove territory.Bridge
+        remove world.OwnedBy(self, _)
+
+rule ConsumePlans:
+    each: RoomPlan as plan
+    after:
+        SellBridges
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on fixed_tick:
+        remove RoomPlan(plan.from, plan.to)
+
+rule RoomLinks:
+    pairs:
+        a: RoomTile as first
+        b: RoomTile as second
+    group: territory.links
+    where:
+        first.kind == second.kind
+        territory.Territory(a, b)
+    keep SameRoom(a, b)
+
+rule RoomCapacities:
+    pairs:
+        root: RoomTile
+        member: RoomTile
+    group: territory.links
+    where:
+        Room(member, root)
+    reduce per root:
+        tiles = count()
+    keep RoomStats on root if tiles > 0:
+        capacity = tiles
+
+rule ActiveRooms:
+    each:
+        RoomStats
+        territory.Connected
+    group: territory.links
+    keep ActiveRoom

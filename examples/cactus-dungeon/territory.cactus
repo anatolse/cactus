@@ -1,6 +1,7 @@
 module territory
 
 use std.core
+use session
 use std.voxel.volume as voxel
 use world
 
@@ -15,6 +16,8 @@ pub relation BridgePlan:
 
 rule ApplyBridgePlans:
     each: BridgePlan as plan
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
 
     on fixed_tick:
         if plan.sell:
@@ -75,6 +78,8 @@ rule AssignOwner:
         not world.OwnedBy(tile, _)
     limit: 1 per tile
 
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
     on fixed_tick:
         add world.OwnedBy(tile, player)
         remove world.OwnershipRequest(tile, _)
@@ -119,17 +124,13 @@ rule WalkLinks:
 
 rule TerritoryLinks:
     pairs:
-        a:
-            world.Tile
-            Walkable
-        b:
-            world.Tile
-            Walkable
+        step: Walk
+        owner: world.OwnedBy
     group: links
     where:
-        Walk(a, b)
-        (world.OwnedBy(a, world.Human) and world.OwnedBy(b, world.Human)) or (world.OwnedBy(a, world.Enemy) and world.OwnedBy(b, world.Enemy))
-    keep Territory(a, b)
+        step.to == owner.from
+        world.OwnedBy(step.from, owner.to)
+    keep Territory(step.from, step.to)
 
 rule ClaimableFloor:
     pairs:

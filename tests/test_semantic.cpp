@@ -2,6 +2,7 @@
 // -- Catch2 assertion macros intentionally expand through do-while and expression decomposition.
 #include "common/error_reporter.hpp"
 #include "frontend/lexer.hpp"
+#include "frontend/pair_plans.hpp"
 #include "frontend/parser.hpp"
 #include "frontend/semantic_analyzer.hpp"
 #include "frontend/symbol_identity.hpp"
@@ -82,6 +83,7 @@ static std::pair<DecoratedProgram, std::vector<Diagnostic>> analyze_with_diagnos
     SemanticAnalyzer analyzer(errors);
     auto result = analyzer.analyze(program);
     REQUIRE_FALSE(errors.has_errors());
+    finalize_pair_plans(result, errors);
     return {std::move(result), errors.diagnostics()};
 }
 
@@ -1723,7 +1725,8 @@ static std::vector<std::string> analyze_messages(const std::string& source) {
     auto program = parser.parse_program();
     REQUIRE_FALSE(errors.has_errors());
     SemanticAnalyzer analyzer(errors);
-    analyzer.analyze(program);
+    auto analyzed = analyzer.analyze(program);
+    finalize_pair_plans(analyzed, errors);
     std::vector<std::string> messages;
     for (const auto& d : errors.diagnostics()) {
         messages.push_back(d.message);

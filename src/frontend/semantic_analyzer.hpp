@@ -495,6 +495,62 @@ void merge_field_access(FieldAccess& into, const FieldAccess& from);
 [[nodiscard]] bool clause_reads_written(const std::unordered_map<SymbolId, FieldAccess>& reads,
                                         const std::unordered_map<SymbolId, FieldAccess>& writes);
 
+// How a pair pass finds its tuples. Serialized by numeric value: append new kinds, never reorder.
+enum class PairPlanKind : std::uint8_t { Product, Spatial, Equality, RelationRows, Union, GridRegion, BoundedProduct };
+
+// A row-stage `R(x, y)` test at `test` in `where_clause->predicates[predicate_index]`
+// whose ends are the two entity bindings.
+struct RelationRowsPlan {
+    std::size_t predicate_index = 0;
+    ExprPath test;
+    bool left_is_from = true;
+};
+
+// One `or` branch of a union: the right binding is a value of the left (`identity`), or a relation test.
+struct UnionBranch {
+    std::optional<EqualityJoinKey> identity;
+    std::optional<RelationRowsPlan> rows;
+};
+
+// A ranged `let` int field of the region binding. A box axis keeps `lo` and
+// `hi`, either may be null; a disk axis keeps `center`. Bounds read only the
+// other binding.
+struct GridRegionAxis {
+    std::string field;
+    EqualityKeyLayout layout = EqualityKeyLayout::Direct;  // Ranged when its range reads the container
+    std::shared_ptr<const ExprNode> lo;
+    std::shared_ptr<const ExprNode> hi;
+    std::shared_ptr<const ExprNode> center;
+};
+
+// Members of `region_binding` whose ranged `trait` fields lie inside the
+// bounds: one axis per ranged field, in declaration order. With `radius_sq`,
+// the disk axes' squared distances from their centers sum to at most it.
+// `container` names the entity field the Ranged axes read their ranges through.
+struct GridRegionPlan {
+    std::size_t region_binding = 1;
+    SymbolId trait;
+    std::string container;
+    std::vector<GridRegionAxis> axes;
+    std::shared_ptr<const ExprNode> radius_sq;
+};
+
+// Only named entities can fill `binding`, so it has at most `bound` members.
+struct BoundedProductPlan {
+    std::size_t binding = 0;
+    std::size_t bound   = 0;
+};
+
+struct PairPlan {
+    PairPlanKind kind = PairPlanKind::Product;
+    std::optional<RelationRowsPlan> rows;  // unset for a row binding's end join
+    std::vector<UnionBranch> union_branches;
+    std::optional<GridRegionPlan> grid;
+    std::optional<BoundedProductPlan> bounded;
+    SourceLocation location;  // the `pairs:` block
+    bool warned = false;      // a more specific warning already covers a product
+};
+
 struct HandlerContract {
     HandlerDomainKind domain_kind = HandlerDomainKind::Selectionless;
     std::vector<SymbolId> selection;             // Unary domain: positive traits
@@ -505,6 +561,7 @@ struct HandlerContract {
     std::optional<SpatialJoinPlan> spatial_join;
     // Pair domain only, and only without a spatial join.
     std::optional<EqualityJoinPlan> equality_join;
+    PairPlan pair_plan;  // pair domain only
     std::optional<ReductionPlan> reduction;
     RuleStaging staging;
 
@@ -1766,16 +1823,40 @@ private:
     // `where:` predicate list for a direct, unwrapped recognized overlap call
     // whose two shapes each read one distinct pair binding, or the equivalent
     // manual squared-distance-via-dot expression, else a first_hit sweep.
-    // Without one, reports one warning (via `errors`): the linear-distance warning when a predicate
-    // compares that distance between binding-rooted positions, otherwise the
-    // unaccelerated pair rule warning at the `pairs:` clause.
+    // Without one, reports the linear-distance warning when a predicate compares
+    // that distance between binding-rooted positions, and sets `distance_warned`.
     [[nodiscard]] static std::optional<SpatialJoinPlan> recognize_spatial_join(const RuleNode& rule,
                                                                                const PairScope& pair_scope,
                                                                                ErrorReporter& errors,
-                                                                               bool warn_unaccelerated = true);
+                                                                               bool& distance_warned);
     // A pair rule's equality join, when its `where:` has one.
     [[nodiscard]] std::optional<EqualityJoinPlan> recognize_equality_join(const RuleNode& rule,
                                                                           const PairScope& pair_scope) const;
+    // The one plan a pair pass enumerates its tuples by. A product may still be
+    // bounded once the whole program is linked (finalize_pair_plans).
+    [[nodiscard]] PairPlan plan_pair_pass(const RuleNode& rule,
+                                          const PairScope& pair_scope,
+                                          const HandlerContract& contract) const;
+    // A row-stage `R(x, y)` test at `path` whose ends are the two entity bindings.
+    [[nodiscard]] static std::optional<RelationRowsPlan> relation_rows_at(const RuleNode& rule,
+                                                                          std::size_t predicate_index,
+                                                                          const ExprPath& path);
+    // The first row-stage `or` whose every branch has its own plan.
+    [[nodiscard]] std::vector<UnionBranch> recognize_union(const RuleNode& rule,
+                                                           const PairScope& pair_scope,
+                                                           const RuleStaging& staging) const;
+    [[nodiscard]] std::optional<GridRegionPlan> recognize_grid_region(const RuleNode& rule,
+                                                                      const PairScope& pair_scope,
+                                                                      const RuleStaging& staging) const;
+    [[nodiscard]] std::optional<GridRegionPlan> grid_region_on(const RuleNode& rule,
+                                                               const PairScope& pair_scope,
+                                                               std::size_t region,
+                                                               const std::vector<std::shared_ptr<const ExprNode>>& conjuncts) const;
+    // Row-stage `where:` conjuncts, with calls to local pure bool functions inlined.
+    [[nodiscard]] std::vector<std::shared_ptr<const ExprNode>> region_conjuncts(const RuleNode& rule,
+                                                                                const RuleStaging& staging) const;
+    // The body of a local `let`-and-`return` function applied to `call`'s arguments.
+    [[nodiscard]] std::unique_ptr<ExprNode> inline_pure_call(const CallExpr& call) const;
     // An info diagnostic per key part an index can only hash.
     void report_hashed_key_parts(const RuleNode& rule, const EqualityJoinPlan& plan);
     // The trait and `let` field of a value-compared type that `expr` reads
@@ -2217,6 +2298,8 @@ private:
     // Separate sets for templates vs entities (spawn only works on templates)
     std::unordered_set<std::string> template_names_;
     std::unordered_set<std::string> entity_names_;
+    // This module's function declarations, for planning-only inlining.
+    std::unordered_map<std::string, const FuncNode*> func_nodes_;
     // Local entities with their composed trait sets, filled after template flattening.
     std::unordered_map<std::string, ImportedEntity> named_entities_;
 

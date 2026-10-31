@@ -211,6 +211,8 @@ struct RenderDebugState {
     int voxel_faces_drawn{0};
     int voxel_draw_calls{0};
     int voxel_chunk_builds{0};
+    // (frame, frames) of each voxel draw call this frame; (0, 1) for a still texture.
+    std::vector<std::pair<int, int>> voxel_draw_frames;
 };
 
 struct ProjectConfig {
@@ -230,6 +232,15 @@ void reset_render_debug_state() noexcept;
 // cells above `ceiling`.
 [[nodiscard]] VoxelSurfaceGrid* voxel_volume_begin(entt::entity volume, const VoxelVolumeDesc& desc) noexcept;
 void voxel_volume_end(entt::entity volume) noexcept;
+
+// Frames in a vertical strip of square frames; nullopt unless the height is a
+// positive whole multiple of the width.
+[[nodiscard]] std::optional<int> flipbook_frame_count(int width, int height) noexcept;
+// The frame a flipbook shows `seconds` into presentation.
+[[nodiscard]] int flipbook_frame(double seconds, float fps, int frames) noexcept;
+// Plays `texture` on volume faces this frame. A second owner for the same
+// texture, or a strip that is not square frames, is diagnosed once.
+void submit_texture_flipbook(entt::entity owner, AssetHandle texture, float fps) noexcept;
 
 // Whether the cell entity `key` was created before `other`; consulted only for
 // duplicate cells.
@@ -1275,6 +1286,59 @@ private:
     std::vector<std::pair<persistence::DocumentId, entt::entity>> entities_;
     std::optional<std::string> unresolved_resource_;
 };
+
+// ── Restore dispatch ───────────────────────────────────────────────────────
+// The program supplies a decoder per trait with fields, a retention policy per
+// trait that keeps a construction copy, and one trait list in layout order.
+
+template <class T>
+[[nodiscard]] T generated_read_trait(persistence::ValueReader& in, RestoreIdMap& ids);
+
+// Never keeps a copy unless specialized with `always`, or with `nodes`: one flag per archetype node.
+template <class T>
+struct RestoreRetention {};
+
+// A document layout this program does not restore.
+struct UnrestoredTrait {};
+
+template <class T>
+void restore_trait(entt::registry& registry,
+                   entt::entity entity,
+                   std::uint32_t node,
+                   persistence::ValueReader& in,
+                   RestoreIdMap& ids) {
+    if constexpr (std::is_same_v<T, UnrestoredTrait>) {
+        return;
+    } else if constexpr (std::is_empty_v<T>) {
+        registry.emplace_or_replace<T>(entity);
+    } else {
+        auto value = generated_read_trait<T>(in, ids);
+        registry.emplace_or_replace<T>(entity, value);
+        if constexpr (requires { RestoreRetention<T>::always; }) {
+            retain_construction<T>(registry, entity, value);
+        } else if constexpr (requires { RestoreRetention<T>::nodes; }) {
+            if (node < RestoreRetention<T>::nodes.size() && RestoreRetention<T>::nodes[node]) {
+                retain_construction<T>(registry, entity, value);
+            }
+        }
+    }
+}
+
+template <class... T>
+struct RestoreTraitList {};
+
+// Restores the trait at `layout` in the list; nothing for a layout past its end.
+template <class... T>
+void restore_layout_trait(RestoreTraitList<T...> /*traits*/,
+                          std::uint32_t layout,
+                          entt::registry& registry,
+                          entt::entity entity,
+                          std::uint32_t node,
+                          persistence::ValueReader& in,
+                          RestoreIdMap& ids) {
+    std::uint32_t index = 0;
+    (void)((index++ == layout && (restore_trait<T>(registry, entity, node, in, ids), true)) || ...);
+}
 
 // ── Typed value encoding ───────────────────────────────────────────────────
 // Program-independent pieces of the per-trait encoders and decoders generated
@@ -2501,6 +2565,36 @@ void propagate_hierarchy_below(const HierarchyIndex& index,
 // siblings in creation order.
 void destroy_entity_recursive(entt::registry& registry, const HierarchyIndex& index, entt::entity entity);
 
+// The other ends of the rows at `entity`'s `from` (or `to`) end that `accept`
+// admits, oldest first: the order a product pass would reach them.
+template <bool FromEnd, typename Rows, typename Accept>
+void relation_partners(const entt::registry& registry,
+                       Rows& rows,
+                       entt::entity entity,
+                       const Accept& accept,
+                       std::vector<entt::entity>& partners) {
+    partners.clear();
+    const auto visit = [&](const auto& entry) {
+        const auto other = FromEnd ? entry.to : entry.from;
+        if (accept(other)) {
+            partners.push_back(other);
+        }
+    };
+    if constexpr (FromEnd) {
+        rows.for_each_from(entity, visit);
+    } else {
+        rows.for_each_to(entity, visit);
+    }
+    std::ranges::sort(partners, {}, [&](entt::entity partner) { return creation_ordinal(registry, partner); });
+}
+
+// Sorts `entities` oldest first and drops repeats.
+inline void sort_unique_in_creation_order(const entt::registry& registry, std::vector<entt::entity>& entities) {
+    std::ranges::sort(entities, {}, [&](entt::entity entity) { return creation_ordinal(registry, entity); });
+    const auto repeats = std::ranges::unique(entities);
+    entities.erase(repeats.begin(), repeats.end());
+}
+
 // The children of `of` that `matching` contains, oldest first.
 template <typename View>
 [[nodiscard]] std::vector<entt::entity> hierarchy_children(const entt::registry& registry,
@@ -3053,6 +3147,6 @@ void generated_init_project(entt::registry& registry);
 void generated_load_project(entt::registry& registry);
 void generated_update_project(entt::registry& registry, entt::dispatcher& dispatcher, float dt);
 void generated_render_project(entt::registry& registry, entt::dispatcher& dispatcher);
-[[nodiscard]] ProjectConfig generated_project_config() noexcept;
+[[nodiscard]] ProjectConfig generated_project_config();
 
 }  // namespace cactus::runtime::entt_backend

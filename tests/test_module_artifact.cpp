@@ -919,7 +919,7 @@ TEST_CASE("ModuleArtifact: runtime declarations and handler graph round-trip", "
 }
 
 TEST_CASE("ModuleArtifact: artifact from before shape-generic spatial plans is rejected", "[artifact][spatial-join]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 46);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 47);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1026,6 +1026,70 @@ TEST_CASE("ModuleArtifact: an equality join plan round-trips", "[artifact][equal
     REQUIRE(loaded->handler_contracts.front().equality_join.has_value());
     CHECK(*loaded->handler_contracts.front().equality_join == plan);
     CHECK_FALSE(loaded->handler_contracts.front().spatial_join.has_value());
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("ModuleArtifact: pair plans round-trip", "[artifact][pair-plans]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    const auto literal = [](const std::string& value) {
+        return std::make_shared<const ExprNode>(
+            ExprNode::Variant{LiteralExpr{.kind = LiteralExpr::Kind::Float, .value = value}}, SourceLocation{});
+    };
+    InferredHandlerContract inferred;
+    inferred.rule        = test_symbol(SymbolKind::Rule, "Sense");
+    inferred.trigger     = {.kind = HandlerTriggerKind::Event, .symbol = test_symbol(SymbolKind::Event, "tick")};
+    inferred.domain_kind = HandlerDomainKind::Pair;
+    auto& plan           = inferred.pair_plan;
+    plan.kind            = PairPlanKind::GridRegion;
+    plan.rows            = RelationRowsPlan{.predicate_index = 1, .test = {0, 1}, .left_is_from = false};
+    plan.union_branches  = {UnionBranch{.identity = EqualityJoinKey{.predicate_index = 0, .member = {0}, .query = {1}}},
+                            UnionBranch{.rows = RelationRowsPlan{.predicate_index = 0, .test = {1}}}};
+    plan.grid            = GridRegionPlan{.region_binding = 1,
+                                          .trait          = test_symbol(SymbolKind::Trait, "Spot"),
+                                          .container      = "board",
+                                          .axes           = {GridRegionAxis{.field  = "x",
+                                                                            .layout = EqualityKeyLayout::Ranged,
+                                                                            .lo     = literal("1.0"),
+                                                                            .hi     = literal("3.0")},
+                                                             GridRegionAxis{.field = "z", .center = literal("2.5")}},
+                                          .radius_sq      = literal("4.0")};
+    plan.bounded         = BoundedProductPlan{.binding = 1, .bound = 2};
+    plan.location        = SourceLocation{"game.cactus", 7, 5};
+    plan.warned          = true;
+    DecoratedProgram program;
+    program.handler_contracts.push_back(inferred);
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    REQUIRE(artifact.save(program, "runtime.lib", build_dir));
+    std::string module_name;
+    const auto loaded = artifact.load(build_dir / "runtime.lib.cmod", module_name);
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(loaded.has_value());
+    const auto& read = loaded->handler_contracts.front().pair_plan;
+    CHECK(read.kind == PairPlanKind::GridRegion);
+    REQUIRE(read.rows.has_value());
+    CHECK(read.rows->test == ExprPath{0, 1});
+    CHECK_FALSE(read.rows->left_is_from);
+    REQUIRE(read.union_branches.size() == 2);
+    CHECK(read.union_branches[0].identity == plan.union_branches[0].identity);
+    CHECK(read.union_branches[1].rows->predicate_index == 0);
+    REQUIRE(read.grid.has_value());
+    CHECK(read.grid->container == "board");
+    REQUIRE(read.grid->axes.size() == 2);
+    CHECK(read.grid->axes[0].layout == EqualityKeyLayout::Ranged);
+    CHECK(std::get<LiteralExpr>(read.grid->axes[0].hi->expr).value == "3.0");
+    CHECK(read.grid->axes[1].lo == nullptr);
+    CHECK(std::get<LiteralExpr>(read.grid->axes[1].center->expr).value == "2.5");
+    CHECK(std::get<LiteralExpr>(read.grid->radius_sq->expr).value == "4.0");
+    REQUIRE(read.bounded.has_value());
+    CHECK(read.bounded->bound == 2);
+    CHECK(read.location.line == 7);
+    CHECK(read.warned);
 
     fs::remove_all(build_dir, ec);
 }
@@ -1150,7 +1214,7 @@ TEST_CASE("ModuleArtifact: conditional expressions round-trip with their pattern
 }
 
 TEST_CASE("ModuleArtifact: ranged fields and their container traits round-trip", "[artifact][ranged-fields]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 46);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 47);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1413,7 +1477,7 @@ TEST_CASE("ModuleArtifact: set command capabilities round-trip", "[artifact][def
     CHECK(loaded->handler_contracts.front().commands == commands);
     REQUIRE(loaded->execution_graph.handlers.size() == 1);
     CHECK(loaded->execution_graph.handlers.front().contract.commands == commands);
-    CHECK(ModuleArtifact::CURRENT_VERSION == 46);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 47);
 
     fs::remove_all(build_dir, ec);
 }
@@ -1937,7 +2001,7 @@ TEST_CASE("ModuleArtifact: every schedule edge reason round-trips", "[artifact][
 }
 
 TEST_CASE("ModuleArtifact: artifact from before field-level contracts is rejected", "[artifact][handler-contracts]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 46);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 47);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2164,7 +2228,7 @@ TEST_CASE("ModuleArtifact: unknown trigger kind is rejected", "[artifact][trait-
 }
 
 TEST_CASE("ModuleArtifact: artifact from before lifecycle triggers is rejected", "[artifact][trait-lifecycle]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 46);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 47);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2293,7 +2357,7 @@ TEST_CASE("ModuleArtifact: unknown group ordering direction is malformed", "[art
 }
 
 TEST_CASE("ModuleArtifact: artifact from before rule groups is rejected", "[artifact][rule-groups]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 46);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 47);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2318,7 +2382,7 @@ TEST_CASE("ModuleArtifact: artifact from before rule groups is rejected", "[arti
 }
 
 TEST_CASE("ModuleArtifact: artifact from before named-entity access is rejected", "[artifact][named-entity]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 46);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 47);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2395,8 +2459,14 @@ TEST_CASE("ModuleArtifact: a pub state round-trips and resolves from another mod
     REQUIRE(symbols->states.contains("Mode"));
     CHECK(symbols->traits.contains("Mode.Dying"));
 
+    const auto direct = ModuleArtifact::extract_pub_symbols("enemies", library);
+    REQUIRE(direct.states.contains("Mode"));
+    CHECK(direct.states.at("Mode").symbol_id == symbols->states.at("Mode").symbol_id);
+    CHECK(direct.states.at("Mode").variants.size() == symbols->states.at("Mode").variants.size());
+    CHECK(direct.traits.at("Mode.Chasing").state == symbols->traits.at("Mode.Chasing").state);
+
     ModuleImports imports;
-    imports.add("en", *symbols);
+    imports.add("en", direct);
     const auto game = analyze_module_source(
         "module game\n"
         "use enemies as en\n"
@@ -2677,7 +2747,7 @@ TEST_CASE("ModuleArtifact: a trait access expression round-trips", "[artifact][t
 }
 
 TEST_CASE("ModuleArtifact: artifact from before bracketed trait access is rejected", "[artifact][trait-access]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 46);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 47);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2990,7 +3060,7 @@ TEST_CASE("ModuleArtifact: trait parameters and their reads round-trip", "[artif
 }
 
 TEST_CASE("ModuleArtifact: an artifact from before trait parameters is rejected", "[artifact][trait-parameters]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 46);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 47);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);

@@ -847,6 +847,10 @@ bool is_voxel_volume_renderer(const ExternRuleNode& sys) {
     return symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.voxel.volume", "RenderVolumes");
 }
 
+bool is_flipbook_player(const ExternRuleNode& sys) {
+    return symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.voxel.volume", "PlayFlipbooks");
+}
+
 bool is_billboard_renderer(const ExternRuleNode& sys) {
     return symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.render.meshes", "BillboardRenderer");
 }
@@ -1774,10 +1778,16 @@ static void emit_deferred_field_values(std::ostringstream& out,
                                        const std::unordered_map<std::string, std::string>& cpp_overrides,
                                        const PairCodegenScope* pair_scope) {
     for (const auto& assignment : assignments) {
-        out << ind << "const decltype(" << cpp_name << "::" << assignment.name << ") "
-            << deferred_field_value_name(assignment) << " = "
-            << rewrite_expr(*assignment.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
-            << ";\n";
+        out << ind << "decltype(" << cpp_name << "::" << assignment.name << ") "
+            << deferred_field_value_name(assignment);
+        const auto* literal = std::get_if<LiteralExpr>(&assignment.value->expr);
+        if (literal != nullptr && literal->kind == LiteralExpr::Kind::String && literal->value.empty()) {
+            out << "{};\n";
+        } else {
+            out << " = "
+                << rewrite_expr(*assignment.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
+                << ";\n";
+        }
     }
 }
 
@@ -2587,7 +2597,8 @@ static std::string lower_match_expr(const MatchExpr& match_expr,
                                     const std::function<std::string(const ExprNode&)>& rewrite) {
     const auto subject = gen_temp_name("match_subject", match_expr.location);
     const auto subject_value = rewrite(*match_expr.subject) + (match_expr.on_state_slot ? ".index" : "");
-    std::string lowered = "[&]() { const auto " + subject + " = " + subject_value + "; ";
+    std::string lowered = std::string("[&]()") + (has_literal_string_result(match_expr) ? " -> std::string" : "") +
+                          " { const auto " + subject + " = " + subject_value + "; ";
     if (match_expr.on_state_slot) {
         lowered += "switch (" + subject + ") { ";
     }
@@ -2632,7 +2643,10 @@ static std::string lower_trait_field_path(const TraitAccessExpr& access,
         if (binding == nullptr) {
             throw CodegenError(access.location, "trait access '" + access.trait_name + "' has no named entity or pair binding");
         }
-        base = "registry.get<" + std::string(binding->writable ? "" : "const ") +
+        const auto* plan = AccumulationScope::active();
+        const bool settles =
+            !fields.empty() && plan != nullptr && plan->buffered({.trait = trait_id, .field = fields.front()});
+        base = "registry.get<" + std::string(binding->writable || settles ? "" : "const ") +
                EnttCodegenUtils::trait_cpp_name(trait_id, access.trait_name, program) + ">(" + ident->name + ")";
     }
     const auto* trait = EnttCodegenUtils::find_trait(program, make_canonical_id(trait_id));
@@ -2703,7 +2717,7 @@ static std::string rewrite_expr_node(  // NOLINT(readability-function-cognitive-
                     return "::cactus_gen::detail::" + input_action_constant_name(e.name);
                 }
                 // If it's a known trait field, qualify it with the canonical variable name
-                if (known_fields.contains(e.name)) {
+                if (known_fields.contains(e.name) && (local_kinds == nullptr || !local_kinds->contains(e.name))) {
                     auto comp = find_comp_for_field(e.name, trait_names, program);
                     if (!comp.empty()) {
                         const auto ovr = cpp_overrides.find(comp);
@@ -3056,6 +3070,26 @@ static std::string accumulation_component(const VarAssign& assign, const Accumul
 
 // ── Rewrite statement: replace field[i] = with comp.field = ─────────────────
 
+static std::string rejects(const std::string& condition, std::string_view predicate = "cactus_admitted");
+
+static std::pair<std::size_t, std::string> leading_trait_returns(const MatchStmt& match_stmt,
+                                                                 const DecoratedProgram& program,
+                                                                 const std::string& match_entity) {
+    std::size_t leading_returns = 0;
+    std::string return_guard;
+    for (const auto& arm : match_stmt.arms) {
+        const auto* returned = arm.body.size() == 1 ? std::get_if<ReturnStmt>(&arm.body.front()->stmt) : nullptr;
+        if (arm.is_wildcard() || arm.alias.has_value() || returned == nullptr || returned->value.has_value()) {
+            break;
+        }
+        return_guard += (leading_returns == 0 ? "" : " || ") + std::string("registry.all_of<") +
+                        EnttCodegenUtils::trait_cpp_name(arm.resolved_trait_id, arm.trait_name(), program) + ">(" +
+                        match_entity + ")";
+        ++leading_returns;
+    }
+    return {leading_returns, return_guard};
+}
+
 static std::string emit_trait_match_stmt(const MatchStmt& match_stmt,
                                          int indent,
                                          const std::vector<std::string>& trait_names,
@@ -3081,10 +3115,18 @@ static std::string emit_trait_match_stmt(const MatchStmt& match_stmt,
         << ";\n";
     out << ind << "    if (registry.valid(" << match_entity << ")) {\n";
 
+    const auto [leading_returns, return_guard] = leading_trait_returns(match_stmt, program, match_entity);
+    if (leading_returns != 0) {
+        out << ind << "        if (" << return_guard << ") { return; }\n";
+    }
     bool first = true;
+    std::size_t arm_index = 0;
     for (const auto& arm : match_stmt.arms) {
+        if (arm_index++ < leading_returns) {
+            continue;
+        }
         if (arm.is_wildcard()) {
-            out << ind << "        " << (first ? "if (true)" : "else") << " {\n";
+            out << ind << "        " << (first ? "" : "else ") << "{\n";
             auto wildcard_locals = lexical_locals;
             auto wildcard_kinds  = local_kinds;
             out << rewrite_stmt_block(arm.body,
@@ -3938,7 +3980,8 @@ static std::string rewrite_stmt(const StmtNode& stmt,
             using S = std::decay_t<decltype(s)>;
             if constexpr (std::is_same_v<S, LetStmt>) {
                 const auto result =
-                    ind + "[[maybe_unused]] auto " + s.name + " = " +
+                    ind + "[[maybe_unused]] " + (has_literal_string_result(*s.value) ? "std::string " : "auto ") +
+                    s.name + " = " +
                     rewrite_expr(
                         *s.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds) +
                     ";\n";
@@ -4103,8 +4146,20 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                     }
                     return "(" + condition + ")";
                 };
-                const auto condition = rewrite_expr(
+                auto condition = rewrite_expr(
                     *s.condition, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds);
+                if (const auto* unary = std::get_if<UnaryExpr>(&s.condition->expr);
+                    unary != nullptr && unary->op == "not" &&
+                    std::holds_alternative<BinaryExpr>(unary->operand->expr)) {
+                    condition = rejects(rewrite_expr(*unary->operand,
+                                                     trait_names,
+                                                     program,
+                                                     pointer_aliases,
+                                                     cpp_overrides,
+                                                     pair_scope,
+                                                     local_kinds),
+                                        gen_temp_name("admitted", s.location));
+                }
                 std::string result = ind + "if " + parenthesize_condition(condition) + " {\n";
                 auto then_locals   = clone_or_empty(lexical_locals);
                 auto then_kinds    = clone_or_empty(local_kinds);
@@ -4426,11 +4481,11 @@ static std::string as_operand(const std::string& cpp) {
 
 // An `if` condition that holds when `condition` does not. A compound condition is named first:
 // negating it in place reads as a De Morgan candidate to clang-tidy.
-static std::string rejects(const std::string& condition) {
+static std::string rejects(const std::string& condition, std::string_view predicate) {
     if (is_name(condition)) {
         return "!" + condition;
     }
-    return "const bool cactus_admitted = " + condition + "; !cactus_admitted";
+    return std::string("const bool ").append(predicate).append(" = ").append(condition).append("; !").append(predicate);
 }
 
 // `pred0 && pred1 && ...`, each predicate lowered through `rewrite`.
@@ -4656,6 +4711,26 @@ static bool emit_equality_pair_activation_if_planned(std::ostringstream& out,
                                                      const DecoratedProgram& program,
                                                      const std::string& member_keep,
                                                      const std::string& dispatch_name);
+static bool emit_grid_region_pair_activation_if_planned(std::ostringstream& out,
+                                                        const HandlerContract* contract,
+                                                        const std::vector<PairBindingCodegen>& pair_binding_codegens,
+                                                        const PairCodegenScope& pair_codegen_scope,
+                                                        const DecoratedProgram& program,
+                                                        const std::array<std::string, 2>& keeps,
+                                                        const std::string& dispatch_name);
+static const GridRegionPlan* grid_region_plan(const HandlerContract* contract, const DecoratedProgram& program);
+static void emit_grid_region_setup(std::ostringstream& out,
+                                   const GridRegionPlan& plan,
+                                   const PairBindingCodegen& binding,
+                                   const DecoratedProgram& program);
+static void emit_grid_region_visit(std::ostringstream& out,
+                                   const GridRegionPlan& plan,
+                                   const std::vector<PairBindingCodegen>& pair_binding_codegens,
+                                   const PairCodegenScope& pair_codegen_scope,
+                                   const DecoratedProgram& program,
+                                   const std::string& member_keep,
+                                   const std::string& dispatch_name,
+                                   const std::string& indent);
 
 // SAP-eligible pair-rule activation: builds one
 // proxy per entity of each binding's snapshot from that binding's shape slots,
@@ -4801,6 +4876,154 @@ static void emit_pair_limit_replay(std::ostringstream& out,
     out << "    }\n";
 }
 
+static std::string pair_member_test(const PairBindingCodegen& binding,
+                                    const std::string& keep,
+                                    const std::string& entity) {
+    return "registry.all_of<" + join_strings(binding.cpp_types, ", ") + ">(" + entity + ")" +
+           (keep.empty() ? "" : " && " + keep + "(" + entity + ")");
+}
+
+// The plan a pass enumerates its tuples by, or null when it runs the full product.
+static const PairPlan* planned_pass(const HandlerContract* contract, const DecoratedProgram& program, PairPlanKind kind) {
+    return program.index_pair_joins && contract != nullptr && contract->pair_plan.kind == kind ? &contract->pair_plan
+                                                                                              : nullptr;
+}
+
+static const RelationTestExpr& relation_rows_test(const RuleNode& sys, const RelationRowsPlan& rows) {
+    return std::get<RelationTestExpr>(
+        resolve_expr_path(*sys.where_clause->predicates.at(rows.predicate_index), rows.test)->expr);
+}
+
+// Fills `partners` with the right-binding members `rows` links to `left`, oldest first.
+static void emit_relation_partners(std::ostringstream& out,
+                                   const RuleNode& sys,
+                                   const RelationRowsPlan& rows,
+                                   const std::string& left,
+                                   const std::string& membership,
+                                   const std::string& partners,
+                                   const DecoratedProgram& program) {
+    const auto& test = relation_rows_test(sys, rows);
+    out << "            cactus::runtime::entt_backend::relation_partners<" << (rows.left_is_from ? "true" : "false")
+        << ">(registry, " << EnttCodegenUtils::relation_reader_cpp(program, test.relation) << ", " << left
+        << ", [&](entt::entity cactus_member) { return " << membership << "; }, " << partners << ");\n";
+}
+
+// Invokes `dispatch_name` for every tuple the relation test admits, in product
+// order: the left snapshot in order, each left entity's partners oldest first.
+static bool emit_relation_test_pair_activation_if_planned(std::ostringstream& out,
+                                                          const RuleNode& sys,
+                                                          const HandlerContract* contract,
+                                                          const std::vector<PairBindingCodegen>& pair_binding_codegens,
+                                                          const DecoratedProgram& program,
+                                                          const std::string& member_keep,
+                                                          const std::string& dispatch_name) {
+    const auto* plan = planned_pass(contract, program, PairPlanKind::RelationRows);
+    if (plan == nullptr || !plan->rows.has_value()) {
+        return false;
+    }
+    const auto& left      = pair_binding_codegens[0].scope.binding_name;
+    const auto& right     = pair_binding_codegens[1];
+    const auto partners   = gen_temp_name("partners", sys.location);
+    const auto membership = pair_member_test(right, member_keep, "cactus_member");
+    out << "        std::vector<entt::entity> " << partners << ";\n";
+    out << "        for (const auto " << left << " : " << left << "_snapshot) {\n";
+    emit_relation_partners(out, sys, *plan->rows, left, membership, partners, program);
+    out << "            for (const auto " << right.scope.binding_name << " : " << partners << ") {\n";
+    out << "                " << dispatch_name << "(" << left << ", " << right.scope.binding_name << ");\n";
+    out << "            }\n";
+    out << "        }\n";
+    return true;
+}
+
+// Invokes `dispatch_name` for the union of every branch's partners, in product
+// order: each left entity's candidates oldest first, each once.
+static bool emit_union_pair_activation_if_planned(std::ostringstream& out,
+                                                  const RuleNode& sys,
+                                                  const HandlerContract* contract,
+                                                  const std::vector<PairBindingCodegen>& pair_binding_codegens,
+                                                  const PairCodegenScope& pair_codegen_scope,
+                                                  const DecoratedProgram& program,
+                                                  const std::string& member_keep,
+                                                  const std::string& dispatch_name) {
+    const auto* plan = planned_pass(contract, program, PairPlanKind::Union);
+    if (plan == nullptr) {
+        return false;
+    }
+    const auto& left      = pair_binding_codegens[0].scope.binding_name;
+    const auto& right     = pair_binding_codegens[1];
+    const auto candidates = gen_temp_name("candidates", sys.location);
+    const auto partners   = gen_temp_name("partners", sys.location);
+    const auto membership = pair_member_test(right, member_keep, "cactus_member");
+    out << "        std::vector<entt::entity> " << candidates << ";\n";
+    out << "        std::vector<entt::entity> " << partners << ";\n";
+    out << "        for (const auto " << left << " : " << left << "_snapshot) {\n";
+    out << "            " << candidates << ".clear();\n";
+    for (const auto& branch : plan->union_branches) {
+        if (branch.rows.has_value()) {
+            emit_relation_partners(out, sys, *branch.rows, left, membership, partners, program);
+            out << "            " << candidates << ".insert(" << candidates << ".end(), " << partners << ".begin(), "
+                << partners << ".end());\n";
+            continue;
+        }
+        const auto& key   = *branch.identity;
+        const auto* query = resolve_expr_path(*sys.where_clause->predicates.at(key.predicate_index), key.query);
+        out << "            if (const entt::entity cactus_member = "
+            << rewrite_expr(*query, {}, program, {}, {}, &pair_codegen_scope) << "; registry.valid(cactus_member) && "
+            << membership << ") { " << candidates << ".push_back(cactus_member); }\n";
+    }
+    out << "            cactus::runtime::entt_backend::sort_unique_in_creation_order(registry, " << candidates << ");\n";
+    out << "            for (const auto " << right.scope.binding_name << " : " << candidates << ") {\n";
+    out << "                " << dispatch_name << "(" << left << ", " << right.scope.binding_name << ");\n";
+    out << "            }\n";
+    out << "        }\n";
+    return true;
+}
+
+// Every tuple of a pass with no recipient: the pass's plan when one applies,
+// else the full product.
+static void emit_unrecipient_pair_activation(std::ostringstream& out,
+                                             const RuleNode& sys,
+                                             const HandlerContract* contract,
+                                             const std::vector<PairBindingCodegen>& pair_binding_codegens,
+                                             const PairCodegenScope& pair_codegen_scope,
+                                             const DecoratedProgram& program,
+                                             const std::array<std::string, 2>& keeps,
+                                             const std::string& dispatch_name) {
+    const auto& left  = pair_binding_codegens[0];
+    const auto& right = pair_binding_codegens[1];
+    const auto* spatial_root = spatial_join_root(sys, contract);
+    if (spatial_root != nullptr) {
+        if (!emit_indexed_pair_activation_if_planned(
+                out, sys, contract, *spatial_root, pair_binding_codegens, pair_codegen_scope, program, keeps,
+                dispatch_name)) {
+            emit_sap_pair_activation(out,
+                                     *contract->spatial_join,
+                                     *spatial_root,
+                                     pair_binding_codegens,
+                                     pair_codegen_scope,
+                                     program,
+                                     dispatch_name);
+        }
+        return;
+    }
+    if (emit_equality_pair_activation_if_planned(out, sys, contract, pair_binding_codegens, pair_codegen_scope, program,
+                                                 keeps[1], dispatch_name) ||
+        emit_relation_test_pair_activation_if_planned(out, sys, contract, pair_binding_codegens, program, keeps[1],
+                                                      dispatch_name) ||
+        emit_union_pair_activation_if_planned(out, sys, contract, pair_binding_codegens, pair_codegen_scope, program,
+                                              keeps[1], dispatch_name) ||
+        emit_grid_region_pair_activation_if_planned(out, contract, pair_binding_codegens, pair_codegen_scope, program,
+                                                    keeps, dispatch_name)) {
+        return;
+    }
+    out << "        for (auto " << left.scope.binding_name << " : " << left.scope.binding_name << "_snapshot) {\n";
+    out << "            for (auto " << right.scope.binding_name << " : " << right.scope.binding_name << "_snapshot) {\n";
+    out << "                " << dispatch_name << "(" << left.scope.binding_name << ", " << right.scope.binding_name
+        << ");\n";
+    out << "            }\n";
+    out << "        }\n";
+}
+
 // A pair handler snapshots both bindings' live memberships up
 // front (deterministic, creation-ordinal order), then iterates
 // their directed Cartesian product left-binding-major without
@@ -4896,53 +5119,32 @@ static void emit_pair_handler_body(std::ostringstream& out,
     // component set (an O(1) sparse-set check) rather than scanning
     // the snapshot vector, since the snapshot was built moments
     // earlier from that same view and cannot have changed since.
+    const auto recipient_name = gen_temp_name("recipient", sys.location);
     out << "    if (cactus_recipient.has_value()) {\n";
-    out << "        const auto target = *cactus_recipient;\n";
-    out << "        if (registry.all_of<";
-    for (std::size_t i = 0; i < left.cpp_types.size(); ++i) {
-        out << (i == 0 ? "" : ", ") << left.cpp_types[i];
-    }
-    out << ">(target)" << (keeps[0].empty() ? "" : " && " + keeps[0] + "(target)") << ") {\n";
-    out << "            auto " << left.scope.binding_name << " = target;\n";
-    out << "            for (auto " << right.scope.binding_name << " : " << right.scope.binding_name
-        << "_snapshot) {\n";
-    emit_tuple_invocation();
-    out << "            }\n";
-    out << "        }\n";
-    out << "        if (registry.all_of<";
-    for (std::size_t i = 0; i < right.cpp_types.size(); ++i) {
-        out << (i == 0 ? "" : ", ") << right.cpp_types[i];
-    }
-    out << ">(target)" << (keeps[1].empty() ? "" : " && " + keeps[1] + "(target)") << ") {\n";
-    out << "            for (auto " << left.scope.binding_name << " : " << left.scope.binding_name << "_snapshot) {\n";
-    out << "                if (" << left.scope.binding_name << " == target) { continue; }\n";
-    out << "                auto " << right.scope.binding_name << " = target;\n";
-    emit_tuple_invocation();
-    out << "            }\n";
-    out << "        }\n";
-    out << "    } else {\n";
-    const auto* spatial_root = spatial_join_root(sys, contract);
-    if (spatial_root != nullptr) {
-        if (!emit_indexed_pair_activation_if_planned(
-                out, sys, contract, *spatial_root, pair_binding_codegens, pair_codegen_scope, program, keeps,
-                dispatch_name)) {
-            emit_sap_pair_activation(out,
-                                     *contract->spatial_join,
-                                     *spatial_root,
-                                     pair_binding_codegens,
-                                     pair_codegen_scope,
-                                     program,
-                                     dispatch_name);
-        }
-    } else if (!emit_equality_pair_activation_if_planned(out, sys, contract, pair_binding_codegens, pair_codegen_scope,
-                                                         program, keeps[1], dispatch_name)) {
-        out << "        for (auto " << left.scope.binding_name << " : " << left.scope.binding_name << "_snapshot) {\n";
+    out << "        const auto " << recipient_name << " = *cactus_recipient;\n";
+    out << "        if (" << pair_member_test(left, keeps[0], recipient_name) << ") {\n";
+    out << "            auto " << left.scope.binding_name << " = " << recipient_name << ";\n";
+    if (const auto* region = grid_region_plan(contract, program); region != nullptr) {
+        emit_grid_region_setup(out, *region, right, program);
+        emit_grid_region_visit(out, *region, pair_binding_codegens, pair_codegen_scope, program, keeps[1], dispatch_name,
+                               "            ");
+    } else {
         out << "            for (auto " << right.scope.binding_name << " : " << right.scope.binding_name
             << "_snapshot) {\n";
         emit_tuple_invocation();
         out << "            }\n";
-        out << "        }\n";
     }
+    out << "        }\n";
+    out << "        if (" << pair_member_test(right, keeps[1], recipient_name) << ") {\n";
+    out << "            for (auto " << left.scope.binding_name << " : " << left.scope.binding_name << "_snapshot) {\n";
+    out << "                if (" << left.scope.binding_name << " == " << recipient_name << ") { continue; }\n";
+    out << "                auto " << right.scope.binding_name << " = " << recipient_name << ";\n";
+    emit_tuple_invocation();
+    out << "            }\n";
+    out << "        }\n";
+    out << "    } else {\n";
+    emit_unrecipient_pair_activation(out, sys, contract, pair_binding_codegens, pair_codegen_scope, program, keeps,
+                                     dispatch_name);
     out << "    }\n";
     if (!buffered) {
         return;
@@ -5595,7 +5797,10 @@ static void emit_keep_commands(std::ostringstream& out,
     out << "    for (const auto& cactus_row : cactus_rows) {\n";
     emit_reduce_row_bindings(out, reduce, "        ");
     const auto present = keep.condition != nullptr ? rewrite(*keep.condition) : "cactus_row.cactus_witnessed";
-    out << "        if (" << rejects(present) << ") { continue; }\n";
+    const auto* literal = keep.condition != nullptr ? std::get_if<LiteralExpr>(&keep.condition->expr) : nullptr;
+    if (literal == nullptr || literal->kind != LiteralExpr::Kind::Bool || literal->value != "true") {
+        out << "        if (" << rejects(present) << ") { continue; }\n";
+    }
     out << "        cactus_kept[cactus_positions_" << group << ".find(cactus_row.cactus_group)] = 1;\n";
     emit_keep_add(out, keep, group, rewrite, program, "        ");
     out << "    }\n";
@@ -6673,6 +6878,163 @@ static bool emit_equality_pair_activation_if_planned(std::ostringstream& out,
     return true;
 }
 
+// ── Grid-region passes ───────────────────────────────────────────────────────
+// A pair pass whose `where:` bounds the right binding's ranged cell fields by
+// values of the left binding keeps those members in a DenseKeyIndex addressed
+// by every ranged field. Each left entity visits only the slots inside its
+// bounds, members oldest first; every predicate is still checked.
+
+static std::string grid_index_type(const GridRegionPlan& plan) {
+    return "cactus::runtime::entt_backend::DenseKeyIndex<" + std::to_string(plan.axes.size()) + ">";
+}
+
+static void emit_grid_index_sync(std::ostringstream& out,
+                                 const GridRegionPlan& plan,
+                                 const PairBindingCodegen& binding,
+                                 const DecoratedProgram& program) {
+    const auto* trait = EnttCodegenUtils::find_trait(program, make_canonical_id(plan.trait));
+    if (trait == nullptr) {
+        throw CodegenError({}, "unknown grid region trait '" + plan.trait.local_name + "'");
+    }
+    const auto trait_cpp    = EnttCodegenUtils::trait_cpp_name(plan.trait, plan.trait.local_name, program);
+    const auto& name        = binding.scope.binding_name;
+    const auto index        = "cactus_index_" + name;
+    const auto index_type   = grid_index_type(plan);
+    const auto member_types = join_strings(binding.cpp_types, ", ");
+    std::vector<const ResolvedFieldRange*> ranges;
+    std::vector<std::string> values;
+    for (const auto& axis : plan.axes) {
+        const auto field = std::ranges::find(trait->fields, axis.field, &ResolvedField::name);
+        if (field == trait->fields.end() || !field->range.has_value()) {
+            throw CodegenError({}, "grid region field '" + axis.field + "' has no range");
+        }
+        ranges.push_back(&*field->range);
+        values.push_back("cactus::runtime::entt_backend::dense_key_part(cactus_cell." + cpp_escaped(axis.field) + ")");
+    }
+    const auto block = plan.container.empty() ? std::string{"entt::null"} : "cactus_cell." + cpp_escaped(plan.container);
+    std::ostringstream sync;
+    emit_index_refresh(sync, index, "", member_types, member_types);
+    sync << "    " << index << ".catch_up(\n";
+    sync << "        registry,\n";
+    sync << "        [&](entt::entity " << name << ") -> std::optional<" << index_type << "::Key> {\n";
+    sync << "            if (!registry.all_of<" << member_types << ">(" << name << ")) {\n";
+    sync << "                return std::nullopt;\n";
+    sync << "            }\n";
+    sync << "            const auto& cactus_cell = registry.get<const " << trait_cpp << ">(" << name << ");\n";
+    sync << "            return " << index_type << "::Key{.block = " << block << ", .values = {" << join_strings(values, ", ")
+         << "}};\n";
+    sync << "        },\n";
+    const auto extents = emit_container_extents(ranges, "cactus_block", "return std::nullopt;", "            ", program);
+    std::vector<std::string> bounds;
+    bounds.reserve(extents.bounds.size());
+    for (const auto& [lo, hi] : extents.bounds) {
+        bounds.push_back(std::format("std::pair<std::int64_t, std::int64_t>{{{}, {}}}", lo, hi));
+    }
+    sync << "        [&]([[maybe_unused]] entt::entity cactus_block) -> std::optional<" << index_type << "::Extents> {\n";
+    sync << extents.lookups;
+    sync << "            return " << index_type << "::Extents{" << join_strings(bounds, ", ") << "};\n";
+    sync << "        });\n";
+    emit_shared_index(out, index_type, index, sync.str());
+}
+
+// Sets `cactus_lo`/`cactus_hi` to the slots the current left entity's bounds can reach.
+static void emit_grid_bounds(std::ostringstream& out,
+                             const GridRegionPlan& plan,
+                             const PairCodegenScope& scope,
+                             const DecoratedProgram& program,
+                             const std::string& indent) {
+    const auto value = [&](const std::shared_ptr<const ExprNode>& expr) {
+        return "static_cast<double>(" + rewrite_expr(*expr, {}, program, {}, {}, &scope) + ")";
+    };
+    if (plan.radius_sq != nullptr) {
+        out << indent << "const double cactus_reach = std::sqrt(std::max(0.0, " << value(plan.radius_sq) << "));\n";
+    }
+    for (std::size_t index = 0; index < plan.axes.size(); ++index) {
+        const auto& axis = plan.axes[index];
+        const auto slot  = std::to_string(index);
+        std::string lo   = "std::numeric_limits<std::int64_t>::min()";
+        std::string hi   = "std::numeric_limits<std::int64_t>::max()";
+        if (axis.center != nullptr && plan.radius_sq != nullptr) {
+            lo = "static_cast<std::int64_t>(std::floor(" + value(axis.center) + " - cactus_reach))";
+            hi = "static_cast<std::int64_t>(std::ceil(" + value(axis.center) + " + cactus_reach))";
+        } else {
+            if (axis.lo != nullptr) {
+                lo = "static_cast<std::int64_t>(std::floor(" + value(axis.lo) + "))";
+            }
+            if (axis.hi != nullptr) {
+                hi = "static_cast<std::int64_t>(std::ceil(" + value(axis.hi) + "))";
+            }
+        }
+        out << indent << "cactus_lo[" << slot << "] = " << lo << ";\n";
+        out << indent << "cactus_hi[" << slot << "] = " << hi << ";\n";
+    }
+}
+
+static const GridRegionPlan* grid_region_plan(const HandlerContract* contract, const DecoratedProgram& program) {
+    const auto* planned = planned_pass(contract, program, PairPlanKind::GridRegion);
+    return planned == nullptr || !planned->grid.has_value() || planned->grid->region_binding != 1 ||
+                   program.force_hashed_keys
+               ? nullptr
+               : &*planned->grid;
+}
+
+// The right binding's index and the buffers every visit reuses.
+static void emit_grid_region_setup(std::ostringstream& out,
+                                   const GridRegionPlan& plan,
+                                   const PairBindingCodegen& binding,
+                                   const DecoratedProgram& program) {
+    const auto count = std::to_string(plan.axes.size());
+    emit_grid_index_sync(out, plan, binding, program);
+    out << "        std::vector<entt::entity> cactus_region;\n";
+    out << "        std::array<std::int64_t, " << count << "> cactus_lo{};\n";
+    out << "        std::array<std::int64_t, " << count << "> cactus_hi{};\n";
+}
+
+// Invokes `dispatch_name` for every right-binding member inside the bound left
+// entity's region, oldest first.
+static void emit_grid_region_visit(std::ostringstream& out,
+                                   const GridRegionPlan& plan,
+                                   const std::vector<PairBindingCodegen>& pair_binding_codegens,
+                                   const PairCodegenScope& pair_codegen_scope,
+                                   const DecoratedProgram& program,
+                                   const std::string& member_keep,
+                                   const std::string& dispatch_name,
+                                   const std::string& indent) {
+    const auto& left  = pair_binding_codegens[0].scope.binding_name;
+    const auto& right = pair_binding_codegens[1].scope.binding_name;
+    emit_grid_bounds(out, plan, pair_codegen_scope, program, indent);
+    out << indent << "cactus_index_" << right << ".find_region(registry, cactus_lo, cactus_hi, cactus_region);\n";
+    out << indent << "for (const auto " << right << " : cactus_region) {\n";
+    const auto call = dispatch_name + "(" + left + ", " + right + ");";
+    out << indent << "    " << (member_keep.empty() ? call : "if (" + member_keep + "(" + right + ")) { " + call + " }")
+        << "\n";
+    out << indent << "}\n";
+}
+
+// Invokes `dispatch_name` for every right-binding member inside each left
+// entity's region, in (left, right) snapshot order.
+static bool emit_grid_region_pair_activation_if_planned(std::ostringstream& out,
+                                                        const HandlerContract* contract,
+                                                        const std::vector<PairBindingCodegen>& pair_binding_codegens,
+                                                        const PairCodegenScope& pair_codegen_scope,
+                                                        const DecoratedProgram& program,
+                                                        const std::array<std::string, 2>& keeps,
+                                                        const std::string& dispatch_name) {
+    const auto* plan = grid_region_plan(contract, program);
+    if (plan == nullptr) {
+        return false;
+    }
+    const auto& left = pair_binding_codegens[0].scope.binding_name;
+    out << "        {\n";
+    emit_grid_region_setup(out, *plan, pair_binding_codegens[1], program);
+    out << "        for (const auto " << left << " : " << left << "_snapshot) {\n";
+    emit_grid_region_visit(out, *plan, pair_binding_codegens, pair_codegen_scope, program, keeps[1], dispatch_name,
+                           "            ");
+    out << "        }\n";
+    out << "        }\n";
+    return true;
+}
+
 // The `where:` predicates the fold checks per row: not group filters, not the
 // gate, and not the binding filters that already ran.
 static std::vector<const ExprNode*> fold_row_predicates(const ReduceClause& reduce,
@@ -7557,6 +7919,16 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
         out << "    " << ns << "render_voxel_volumes<" << volume << ", " << renderer << ", " << cell << ", " << cutaway
             << ", " << solid << ", " << issue << "::Valid, " << style << "::Smooth>(registry, "
             << hidden_check() << ");\n";
+        out << "}\n\n";
+        return out.str();
+    }
+
+    if (is_flipbook_player(sys)) {
+        const auto flipbook = EnttCodegenUtils::trait_cpp_name("std.voxel.volume.TextureFlipbook", program);
+        out << tick_signature;
+        out << "    for (const auto [entity, flipbook] : registry.view<const " << flipbook << ">().each()) {\n";
+        out << "        cactus::runtime::entt_backend::submit_texture_flipbook(entity, flipbook.texture, flipbook.fps);\n";
+        out << "    }\n";
         out << "}\n\n";
         return out.str();
     }

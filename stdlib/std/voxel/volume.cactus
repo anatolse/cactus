@@ -303,6 +303,26 @@ pub trait VolumeRenderer:
     var roughness: float = 0.25
     var seed: int = 0
 
+# Plays `texture` as a vertical strip of square frames on every volume face
+# drawn with it, at `fps` frames per second; the image's height over its width
+# is the frame count. Playback is visual only: cells, saves and surfaces stay
+# as they are.
+pub trait TextureFlipbook:
+    let texture: texture_id
+    let fps: float = 8.0
+
+extern rule PlayFlipbooks:
+    each:
+        TextureFlipbook
+    group: layers.volumes
+    before: RenderVolumes
+
+    on core.render:
+        reads:
+            TextureFlipbook
+        effects:
+            graphics
+
 # On a camera's viewport entity: that camera hides the cells of `volume` above
 # layer `top` and shows the cut surface. Collision, probes and saves still see
 # every cell, and other cameras show the whole volume.

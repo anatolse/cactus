@@ -3,6 +3,7 @@
 #include "common/error_reporter.hpp"
 #include "frontend/lexer.hpp"
 #include "frontend/module_artifact.hpp"
+#include "frontend/pair_plans.hpp"
 #include "frontend/parser.hpp"
 #include "frontend/semantic_analyzer.hpp"
 
@@ -68,7 +69,8 @@ Analysis analyze_source(const std::string& source, const std::string& module, co
     INFO(module << ": " << (errors.diagnostics().empty() ? std::string() : errors.diagnostics().front().message));
     REQUIRE_FALSE(errors.has_errors());
     SemanticAnalyzer analyzer(errors);
-    analysis.program     = analyzer.analyze(*analysis.ast, imports);
+    analysis.program = analyzer.analyze(*analysis.ast, imports);
+    finalize_pair_plans(analysis.program, errors);
     analysis.diagnostics = errors.diagnostics();
     return analysis;
 }

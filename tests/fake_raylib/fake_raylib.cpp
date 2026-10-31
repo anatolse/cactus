@@ -16,6 +16,7 @@ struct FakeState {
     Vector2 mouse_position{.x = 0.0F, .y = 0.0F};
     Vector2 mouse_delta{.x = 0.0F, .y = 0.0F};
     float mouse_wheel_move{0.0F};
+    double time{0.0};
     bool cursor_captured{false};
     std::vector<bool> cursor_capture_transitions;
 
@@ -163,6 +164,14 @@ void EnableCursor() noexcept {
 
 bool IsWindowReady() noexcept {
     return state().window_ready;
+}
+
+void set_time(double seconds) noexcept {
+    state().time = seconds;
+}
+
+double GetTime() noexcept {
+    return state().time;
 }
 
 int GetScreenWidth() noexcept {

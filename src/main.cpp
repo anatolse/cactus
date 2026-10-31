@@ -4,6 +4,7 @@
 #include "frontend/archetype_reachability.hpp"
 #include "frontend/lexer.hpp"
 #include "frontend/module_artifact.hpp"
+#include "frontend/pair_plans.hpp"
 #include "frontend/ranged_fields.hpp"
 #include "frontend/module_resolver.hpp"
 #include "frontend/parser.hpp"
@@ -117,113 +118,6 @@ static bool validate_root_module_declaration(const std::string& input_file,
     return validator.validate_module_name(root_prog, inferred_name, canonical_input);
 }
 
-/// Build ImportedSymbols (pub only) from a compiled DecoratedProgram.
-static cactus::ImportedSymbols extract_pub_symbols(const std::string& module_name,
-                                                   const cactus::DecoratedProgram& prog) {
-    cactus::ImportedSymbols syms;
-    syms.module_name = module_name;
-    syms.entities    = prog.pub_entities;
-    syms.assets      = prog.pub_assets;
-    for (const auto& [name, trait] : prog.traits) {
-        if (!trait.is_pub) {
-            continue;
-        }
-        auto exported = trait;
-        if (!exported.symbol_id.has_value()) {
-            exported.symbol_id = cactus::make_symbol_id(cactus::SymbolKind::Trait, module_name, name);
-        }
-        exported.module_name  = exported.symbol_id->module.name;
-        exported.canonical_id = cactus::make_canonical_id(*exported.symbol_id);
-        exported.name         = exported.symbol_id->local_name;
-        syms.traits[name]     = std::move(exported);
-    }
-    syms.relations = prog.relations;
-    std::erase_if(syms.relations, [](const auto& entry) { return !entry.second.is_pub; });
-    for (const auto& [name, strct] : prog.structs) {
-        auto exported = strct;
-        if (!exported.symbol_id.has_value()) {
-            exported.symbol_id = cactus::make_symbol_id(cactus::SymbolKind::Struct, module_name, name);
-        }
-        exported.module_name  = exported.symbol_id->module.name;
-        exported.canonical_id = cactus::make_canonical_id(*exported.symbol_id);
-        exported.name         = exported.symbol_id->local_name;
-        syms.structs[name]    = std::move(exported);
-    }
-    for (const auto& [name, enm] : prog.enums) {
-        auto exported = enm;
-        if (!exported.symbol_id.has_value()) {
-            exported.symbol_id = cactus::make_symbol_id(cactus::SymbolKind::Enum, module_name, name);
-        }
-        exported.module_name  = exported.symbol_id->module.name;
-        exported.canonical_id = cactus::make_canonical_id(*exported.symbol_id);
-        exported.name         = exported.symbol_id->local_name;
-        syms.enums[name]      = std::move(exported);
-    }
-    for (const auto& [name, func] : prog.funcs) {
-        if (!func.is_pub) {
-            continue;
-        }
-        auto exported = func;
-        if (!exported.symbol_id.has_value()) {
-            exported.symbol_id = cactus::make_symbol_id(cactus::SymbolKind::Func, module_name, name);
-        }
-        exported.module_name  = exported.symbol_id->module.name;
-        exported.canonical_id = cactus::make_canonical_id(*exported.symbol_id);
-        exported.name         = exported.symbol_id->local_name;
-        syms.funcs[name]      = std::move(exported);
-    }
-    for (const auto& name : prog.pub_templates) {
-        syms.templates[name] = cactus::exported_template(prog, module_name, name);
-    }
-    syms.consts = prog.consts;
-    for (const auto& dep : prog.dependency_graph) {
-        const auto symbol = cactus::make_symbol_id(cactus::SymbolKind::Rule, module_name, dep.rule_name);
-        cactus::ImportedRule rule;
-        rule.name                 = symbol.local_name;
-        rule.module_name          = symbol.module.name;
-        rule.canonical_id         = cactus::make_canonical_id(symbol);
-        rule.symbol_id            = symbol;
-        rule.after_rules          = dep.after_rules;
-        syms.rules[dep.rule_name] = rule;
-    }
-    // Export public runtime declarations with their typed canonical identity
-    // and external-event provenance intact.
-    for (const auto& [name, event] : prog.events) {
-        if (!event.is_pub) {
-            continue;
-        }
-        const auto symbol =
-            event.symbol_id.value_or(cactus::make_symbol_id(cactus::SymbolKind::Event, module_name, name));
-        syms.events.insert(name);
-        syms.event_symbols[name] = cactus::ImportedEvent{.name         = symbol.local_name,
-                                                         .module_name  = symbol.module.name,
-                                                         .canonical_id = cactus::make_canonical_id(symbol),
-                                                         .symbol_id    = symbol,
-                                                         .fields       = event.fields,
-                                                         .is_external  = event.is_external};
-    }
-    for (const auto& [name, phase] : prog.phases) {
-        if (!phase.is_pub) {
-            continue;
-        }
-        const auto symbol =
-            phase.symbol_id.value_or(cactus::make_symbol_id(cactus::SymbolKind::Phase, module_name, name));
-        syms.phase_symbols[name] = cactus::ImportedPhase{.name            = symbol.local_name,
-                                                         .module_name     = symbol.module.name,
-                                                         .canonical_id    = cactus::make_canonical_id(symbol),
-                                                         .symbol_id       = symbol,
-                                                         .fields          = phase.fields,
-                                                         .upstream_phases = phase.upstream_phases,
-                                                         .runtime_root    = phase.runtime_root,
-                                                         .every_seconds   = phase.every_seconds,
-                                                         .max_repetitions = phase.max_repetitions};
-    }
-    for (const auto& group : prog.execution_graph.group_declarations) {
-        syms.groups[group.group.local_name] = group;
-    }
-    return syms;
-}
-
 static bool compile_implicit_std_core(const fs::path& build_dir,
                                       const std::vector<fs::path>& search_paths,
                                       std::unordered_map<std::string, cactus::DecoratedProgram>& compiled,
@@ -298,7 +192,7 @@ static bool compile_module(const cactus::ModuleInfo& mod,
     cactus::ModuleImports imports;
     auto std_core_it = compiled.find("std.core");
     if (std_core_it != compiled.end() && mod.qualified_name != "std.core") {
-        auto syms = extract_pub_symbols("std.core", std_core_it->second);
+        auto syms = cactus::ModuleArtifact::extract_pub_symbols("std.core", std_core_it->second);
         imports.add("std.core", std::move(syms), {}, std_core_it->second.non_pub_templates);
     }
     auto qualifiers_for_dependency = [&mod_prog](const std::string& dep_name) {
@@ -320,7 +214,7 @@ static bool compile_module(const cactus::ModuleInfo& mod,
             continue;
         }
         for (const auto& qualifier : qualifiers_for_dependency(dep_name)) {
-            auto syms = extract_pub_symbols(dep_name, it->second);
+            auto syms = cactus::ModuleArtifact::extract_pub_symbols(dep_name, it->second);
             imports.add(qualifier, std::move(syms), {}, it->second.non_pub_templates);
         }
     }
@@ -647,6 +541,7 @@ int main(int argc, char* argv[]) try {
         decorated = analyzer.analyze(*root_prog);
         if (!errors.has_errors()) {
             cactus::derive_archetype_reachability(decorated, errors);
+            cactus::finalize_pair_plans(decorated, errors);
             cactus::validate_container_traits(decorated, errors);
         }
         print_errors(errors);

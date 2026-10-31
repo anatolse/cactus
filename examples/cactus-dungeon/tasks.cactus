@@ -1,9 +1,14 @@
 module tasks
 
 use std.core
+use session
 use world
 use territory
+use units
 use std.math as math
+use std.math.quat as quat
+use std.math.vec3 as vectors
+use std.random as random
 use std.physics.volume as physics
 use std.transform.volume as tv
 use std.voxel.volume as voxel
@@ -18,12 +23,22 @@ pub relation DigMark:
     to: world.Tile
 
 pub relation Located:
-    from: world.Robot
+    from: units.Unit
     to: world.Tile
 
 pub relation Commands:
-    from: world.Robot one
+    from: units.Unit one
     to: world.Player
+
+pub relation Heading:
+    from: units.Unit
+    to: world.Tile
+
+trait Placed
+
+trait Restless:
+    var time: float = 0.0
+    var draws: int = 0
 
 pub relation Claim:
     from: world.Robot one
@@ -44,14 +59,19 @@ relation Approach:
 
 relation Route = shortest(Approach, by = cost)
 
-event Step:
+pub event Step:
     tile: entity_id
 
 event Position:
     at: vec3
 
-event Dig:
-    worker: entity_id
+event Wander:
+    tile: entity_id
+
+pub event Advance:
+    tile: entity_id
+    at: vec3
+    dt: float
 
 event Earned:
     amount: int
@@ -62,13 +82,16 @@ event Credit:
 event ClaimFloor:
     tile: entity_id
 
+group eligibility:
+    phase: input
+
 pub func diggable(kind: world.Kind) bool:
     return kind == world.Kind.Earth or kind == world.Kind.Gold or kind == world.Kind.InfiniteGold
 
 rule PlaceWorkers:
     pairs:
         robot:
-            world.Robot
+            units.Unit
             tv.WorldTransform as pose
         tile:
             world.Tile
@@ -116,21 +139,29 @@ rule DigTasks:
 
 rule EligibleWorkers:
     pairs:
-        robot: world.Robot
-        tile: world.Tile
-    group: territory.links
+        robot:
+            world.Robot
+            units.Order.Auto
+            units.OrderRequest.None
+        job: Job
+    group: eligibility
+    before: units.orders
     where:
-        (Commands(robot, world.Human) and Job(world.Human, tile)) or (Commands(robot, world.Enemy) and Job(world.Enemy, tile))
-    keep CanWork(robot, tile)
+        Commands(robot, job.from)
+    keep CanWork(robot, job.to)
 
 rule BeginWork:
     each: Task
+    without: Work
 
     on added Task:
         add Work
 
 rule EndWork:
-    each: world.Tile
+    each: world.Tile as ground
+    where:
+        not diggable(ground.kind) or not DigMark(_, self)
+        ground.kind != world.Kind.Floor or world.OwnedBy(self, _)
 
     on removed Task:
         remove Work
@@ -139,6 +170,7 @@ rule ReleaseClaims:
     each: Claim as claim
     where:
         not CanWork(claim.from, claim.to)
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
 
     on fixed_tick:
         remove Claim(claim.from, claim.to)
@@ -148,11 +180,12 @@ rule ApproachLinks:
         a:
             world.Tile
             territory.Walkable
-        b: world.Tile
+        neighbor: territory.Neighbor
     group: territory.links
     where:
-        territory.Walk(a, b) or (territory.Neighbor(a, b) and Job(_, b))
-    keep Approach(a, b)
+        neighbor.from == a
+        territory.Walk(a, neighbor.to) or Job(_, neighbor.to)
+    keep Approach(a, neighbor.to)
 
 rule AssignTasks:
     pairs:
@@ -167,6 +200,8 @@ rule AssignTasks:
         not Claim(_, route.to)
     limit: 1 per place.from, 1 per route.to
 
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
     on fixed_tick:
         add Claim(place.from, route.to)
 
@@ -180,22 +215,177 @@ rule FollowRoute:
         Located(claim.from, route.from)
         CanWork(claim.from, claim.to)
 
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
     on fixed_tick:
         if route.next == claim.to:
-            emit Dig to claim.to:
-                worker = claim.from
+            emit units.WorkRequested to claim.from:
+                tile = claim.to
+                dt = fixed_tick.dt
         else:
             emit Step to claim.from:
                 tile = route.next
 
 rule MoveWorker:
-    each: world.Robot
+    each:
+        units.Unit
+        units.OrderRequest.None
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
 
     on Step as step:
+        remove Heading(self, _)
+        add Heading(self, step.tile)
+
+pub func center(cell: voxel.Cell) vec3:
+    return vec3(cell.x + 0.5, 1.25, cell.z + 0.5)
+
+rule Stride:
+    pairs:
+        heading: Heading
+        tile:
+            world.Tile
+            voxel.Cell as cell
+    after:
+        FinishMove
+        WanderTargets
+    where:
+        tile == heading.to
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on fixed_tick:
+        emit Advance to heading.from:
+            tile = tile
+            at = center(cell)
+            dt = fixed_tick.dt
+
+rule WalkToHeading:
+    each:
+        units.Unit as unit
+        tv.WorldTransform as pose
+    where: unit.health > 0.0
+
+    on Advance as step:
+        let offset = step.at - pose.position
+        let distance = vectors.length(offset)
+        let reach = units.stats_for(unit).move_speed * step.dt
+        if distance > 0.001:
+            pose.rotation = quat.from_euler(0.0, math.atan2(offset.x, offset.z), 0.0)
+        if distance > reach:
+            pose.position += offset * (reach / distance)
+            return
+        pose.position = step.at
+        remove Heading(self, _)
         remove Located(self, _)
         add Located(self, step.tile)
 
-rule WorkerPositions:
+rule PrepareRestless:
+    each: world.Robot
+    without: Restless
+
+    on input:
+        add Restless
+
+rule GrowRestless:
+    each:
+        world.Robot
+        Restless as idle
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on fixed_tick:
+        idle.time += fixed_tick.dt
+
+rule RestAfterWalking:
+    each: Restless as idle
+
+    on Advance:
+        idle.time = 0.0
+
+rule RestAfterWork:
+    each: Restless as idle
+
+    on units.WorkRequested:
+        idle.time = 0.0
+
+rule WanderTargets:
+    pairs:
+        place: Located
+        step: territory.Walk
+    after: FinishMove
+    where:
+        step.from == place.to
+        Friendly(place.from, step.to)
+        not Claim(place.from, _)
+        not Heading(place.from, _)
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on fixed_tick:
+        emit Wander to place.from:
+            tile = step.to
+
+rule ChooseWander:
+    each:
+        world.Robot
+        units.Order.Auto
+        units.OrderRequest.None
+        Restless as idle
+        tv.WorldTransform as pose
+
+    on Wander as request:
+        if idle.time < 2.0:
+            return
+        idle.draws += 1
+        if not random.chance(random.seeded(idle.draws * 7919 + math.floor(pose.position.x) * 31 + math.floor(pose.position.z)), 0.4):
+            return
+        idle.time = 0.0
+        emit Step to self:
+            tile = request.tile
+
+rule SuspendWork:
+    each: world.Robot
+
+    on units.OrderChanged:
+        remove Claim(self, _)
+
+rule MoveOrders:
+    pairs:
+        actor:
+            units.Unit
+            units.Order.Move as order
+        route: territory.Route
+    after: FollowRoute
+    where:
+        route.to == order.target
+        Located(actor, route.from)
+    limit: 1 per actor
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on fixed_tick:
+        emit Step to actor:
+            tile = route.next
+
+rule FinishMove:
+    pairs:
+        place: Located
+        actor:
+            units.Unit
+            units.Order.Move as order
+    after: MoveOrders
+    where:
+        place.from == actor
+        not territory.Route(place.to, order.target)
+    limit: 1 per actor
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on fixed_tick:
+        add units.Order.Auto to actor
+
+rule PlaceRestoredUnits:
     pairs:
         place: Located
         tile:
@@ -206,15 +396,17 @@ rule WorkerPositions:
 
     on tick:
         emit Position to place.from:
-            at = vec3(cell.x + 0.5, 1.25, cell.z + 0.5)
+            at = center(cell)
 
 rule ShowWorkerPosition:
     each:
-        world.Robot
+        units.Unit
         tv.WorldTransform as pose
+    without: Placed
 
     on Position as request:
         pose.position = request.at
+        add Placed
 
 rule DigTile:
     each:
@@ -222,12 +414,14 @@ rule DigTile:
         Work as work
         voxel.Cell as cell
 
-    on Dig as dig:
-        work.progress += 1.0 / 60.0
+    on units.WorkPerformed as dig:
+        work.progress += dig.amount
         let required = if tile.kind == world.Kind.InfiniteGold: 2.0 else: 1.0
         if work.progress < required:
             return
         work.progress -= required
+        emit units.GainXP to dig.worker:
+            activity = if tile.kind == world.Kind.Floor: units.Activity.Claim else: if tile.kind == world.Kind.Earth: units.Activity.Dig else: units.Activity.Mine
         if tile.kind == world.Kind.Floor:
             emit ClaimFloor to dig.worker:
                 tile = self
@@ -251,6 +445,8 @@ rule PayWorkers:
     where:
         Commands(robot, player)
 
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
     on Earned as earned:
         emit Credit to player:
             amount = earned.amount
@@ -262,11 +458,42 @@ rule ClaimWorkedFloor:
     where:
         Commands(robot, player)
 
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
     on ClaimFloor as request:
         add world.OwnershipRequest(request.tile, player)
 
 rule PayPlayer:
     each: world.Player as player
 
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
     on Credit as credit:
         player.gold += credit.amount
+
+pub relation Friendly:
+    from: units.Unit
+    to: world.Tile
+
+pub relation Ally:
+    from: units.Unit
+    to: units.Unit
+
+group factions:
+    phase: input
+
+rule FriendlyTiles:
+    pairs:
+        command: Commands
+        owner: world.OwnedBy
+    group: factions
+    where: command.to == owner.to
+    keep Friendly(command.from, owner.from)
+
+rule Allies:
+    pairs:
+        first: Commands
+        second: Commands
+    group: factions
+    where: first.to == second.to
+    keep Ally(first.from, second.from)

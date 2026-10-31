@@ -1,0 +1,261 @@
+module units
+
+use std.core
+use session
+
+struct LevelStep:
+    level: int
+    xp: int
+
+struct BaseStats:
+    health: float
+    attack: float
+    defense: float
+
+const:
+    MAX_XP = 4500
+    LEVELS: list[LevelStep] = [
+        LevelStep(level = 1, xp = 0),
+        LevelStep(level = 2, xp = 100),
+        LevelStep(level = 3, xp = 300),
+        LevelStep(level = 4, xp = 600),
+        LevelStep(level = 5, xp = 1000),
+        LevelStep(level = 6, xp = 1500),
+        LevelStep(level = 7, xp = 2100),
+        LevelStep(level = 8, xp = 2800),
+        LevelStep(level = 9, xp = 3600),
+        LevelStep(level = 10, xp = MAX_XP),
+    ]
+    ROBOT_STATS = BaseStats(health = 100.0, attack = 5.0, defense = 1.0)
+    KNIGHT_STATS = BaseStats(health = 300.0, attack = 30.0, defense = 8.0)
+
+pub enum UnitKind:
+    Robot
+    Knight
+
+pub enum Activity:
+    Dig
+    Mine
+    Build
+    Claim
+    Combat
+    Train
+
+pub struct Profile:
+    level: int
+    max_health: float
+    attack: float
+    defense: float
+    work_speed: float
+    move_speed: float
+
+pub trait Unit:
+    persist var kind: UnitKind = UnitKind.Robot
+    persist var xp: int = 0
+    persist var health: float = ROBOT_STATS.health
+
+pub state Order:
+    Auto
+    Move:
+        let target: entity_id
+    Attack:
+        let target: entity_id
+    Defend:
+        let target: entity_id
+
+pub state OrderRequest:
+    None
+    Move:
+        let target: entity_id
+    Attack:
+        let target: entity_id
+    Defend:
+        let target: entity_id
+    Cancel
+
+pub group orders:
+    phase: input
+
+pub event GainXP:
+    activity: Activity
+
+pub event WorkRequested:
+    tile: entity_id
+    dt: float
+
+pub event WorkPerformed:
+    worker: entity_id
+    amount: float
+
+pub event OrderChanged
+
+pub event MoveRequested:
+    target: entity_id
+
+pub event AttackRequested:
+    target: entity_id
+
+pub event DefendRequested:
+    target: entity_id
+
+pub event CancelRequested
+
+rule QueueMove:
+    each: Unit
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on MoveRequested as request:
+        add OrderRequest.Move:
+            target = request.target
+
+rule QueueAttack:
+    each: Unit
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on AttackRequested as request:
+        add OrderRequest.Attack:
+            target = request.target
+
+rule QueueDefend:
+    each: Unit
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on DefendRequested as request:
+        add OrderRequest.Defend:
+            target = request.target
+
+rule QueueCancel:
+    each: Unit
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on CancelRequested:
+        add OrderRequest.Cancel
+
+pub func level_for(xp: int) int:
+    var level = 1
+    for step in LEVELS:
+        if xp >= step.xp:
+            level = step.level
+    return level
+
+pub func xp_progress(unit: Unit) float:
+    if unit.xp <= 0:
+        return 0.0
+    if unit.xp >= MAX_XP:
+        return 1.0
+    var lower = 0
+    for step in LEVELS:
+        if unit.xp < step.xp:
+            return 1.0 * (unit.xp - lower) / (step.xp - lower)
+        lower = step.xp
+    return 1.0
+
+pub func stats_for(unit: Unit) Profile:
+    let kind = unit.kind
+    let level = level_for(unit.xp)
+    let growth = 1.0 * (level - 1)
+    let base = if kind == UnitKind.Robot: ROBOT_STATS else: KNIGHT_STATS
+    return Profile(
+        level = level,
+        max_health = base.health + growth * (if kind == UnitKind.Robot: 20.0 else: 40.0),
+        attack = base.attack + growth * (if kind == UnitKind.Robot: 2.0 else: 5.0),
+        defense = base.defense + growth * (if kind == UnitKind.Robot: 1.0 else: 2.0),
+        work_speed = if kind == UnitKind.Robot: 1.0 + growth * 0.2 else: 1.0,
+        move_speed = (if kind == UnitKind.Robot: 2.0 else: 1.6) + growth * 0.1,
+    )
+
+pub func xp_for(kind: UnitKind, activity: Activity) int:
+    if (kind == UnitKind.Robot and activity == Activity.Train) or (kind == UnitKind.Knight and activity != Activity.Combat and activity != Activity.Train):
+        return 0
+    return match activity:
+        Activity.Dig => 10
+        Activity.Mine => 12
+        Activity.Build => 15
+        Activity.Claim => 8
+        Activity.Combat => 20
+        Activity.Train => 5
+
+rule PerformWork:
+    each:
+        Unit as unit
+        Order.Auto
+        OrderRequest.None
+    where: unit.health > 0.0
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on WorkRequested as request:
+        let profile = stats_for(unit)
+        emit WorkPerformed to request.tile:
+            worker = self
+            amount = profile.work_speed * request.dt
+
+rule AwardExperience:
+    each: Unit as unit
+    after: PerformWork
+    where: unit.health > 0.0
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on GainXP as gained:
+        let reward = xp_for(unit.kind, gained.activity)
+        if reward == 0:
+            return
+        let previous = stats_for(unit)
+        unit.xp = if unit.xp >= MAX_XP - reward: MAX_XP else: unit.xp + reward
+        let current = stats_for(unit)
+        unit.health += current.max_health - previous.max_health
+
+rule ApplyMove:
+    each: OrderRequest.Move as request
+    group: orders
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on input:
+        add Order.Move:
+            target = request.target
+        add OrderRequest.None
+        emit OrderChanged to self
+
+rule ApplyAttack:
+    each: OrderRequest.Attack as request
+    group: orders
+    after: ApplyMove
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on input:
+        add Order.Attack:
+            target = request.target
+        add OrderRequest.None
+        emit OrderChanged to self
+
+rule ApplyDefend:
+    each: OrderRequest.Defend as request
+    group: orders
+    after: ApplyAttack
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on input:
+        add Order.Defend:
+            target = request.target
+        add OrderRequest.None
+        emit OrderChanged to self
+
+rule ApplyCancel:
+    each: OrderRequest.Cancel
+    group: orders
+    after: ApplyDefend
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on input:
+        add Order.Auto
+        add OrderRequest.None
+        emit OrderChanged to self

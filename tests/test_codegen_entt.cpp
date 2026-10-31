@@ -862,7 +862,7 @@ TEST_CASE("Codegen EnTT: full pipeline", "[codegen-entt]") {
     CHECK(code.contains("#include <raylib.h>"));
     CHECK(code.contains("struct Pos"));
     CHECK(code.contains("backends/cpp-entt/runtime.hpp"));
-    CHECK(code.contains("generated_project_config() noexcept"));
+    CHECK(code.contains("ProjectConfig generated_project_config() {"));
     CHECK(code.contains("generated_init_project(entt::registry& registry)"));
     CHECK(code.contains("generated_update_project(entt::registry& registry, entt::dispatcher& dispatcher, float dt)"));
     CHECK(!code.contains("move_tick(registry"));
@@ -2887,6 +2887,28 @@ TEST_CASE("Codegen EnTT: nested control flow mutates visible lexical locals with
     CHECK(code.contains("maximum = value;"));
     CHECK(code.contains("cursor = cactus::num::add(cursor, 1);"));
     CHECK(code.contains("sum = cactus::num::add(sum, boss->rank);"));
+}
+
+TEST_CASE("Codegen EnTT: a let local shadows a trait field of the same name", "[codegen-entt][lexical-locals]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event Ping\n"
+        "trait Motion:\n"
+        "    var pose: int = 0\n"
+        "    var speed: int = 0\n"
+        "rule Animate:\n"
+        "    each: Motion as motion\n"
+        "    on Ping:\n"
+        "        let pose = motion.speed + 1\n"
+        "        if pose == motion.pose:\n"
+        "            return\n"
+        "        motion.pose = pose\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.contains("if (pose == motion.pose)"));
+    CHECK(code.contains("motion.pose = pose;"));
+    CHECK_FALSE(code.contains("_comp.pose == motion.pose"));
 }
 
 TEST_CASE("Codegen EnTT: unsupported generic extern scaffold is rejected", "[codegen-entt][extern-rule]") {
@@ -6472,9 +6494,12 @@ TEST_CASE("Codegen EnTT: pair handler snapshots both bindings and iterates their
             // Recipient-targeted delivery: incident tuples only, tested via an
             // O(1) all_of<> membership check against the recipient.
             CHECK(code.contains("if (cactus_recipient.has_value()) {"));
-            CHECK(code.contains("const auto target = *cactus_recipient;"));
-            CHECK(code.contains("if (registry.all_of<::cactus_gen::DynamicBody, ::cactus_gen::Transform>(target)) {"));
-            CHECK(code.contains("if (body == target) { continue; }"));
+            const auto recipient = extract_temp_name(code, "cactus_gen_recipient_");
+            REQUIRE_FALSE(recipient.empty());
+            CHECK(code.contains("const auto " + recipient + " = *cactus_recipient;"));
+            CHECK(code.contains("if (registry.all_of<::cactus_gen::DynamicBody, ::cactus_gen::Transform>(" + recipient +
+                                ")) {"));
+            CHECK(code.contains("if (body == " + recipient + ") { continue; }"));
             // Pair-bound trait reads are const.
             CHECK(code.contains("registry.get<const ::cactus_gen::Transform>(body).x"));
             CHECK(code.contains("registry.get<const ::cactus_gen::Collider>(wall).mask"));
@@ -6955,7 +6980,9 @@ TEST_CASE("Codegen EnTT: emits and dispatch follow the routes the graph implies"
         code, "void generated_emit_targeted_event(::cactus_gen::KnockEvent occurrence, entt::entity target) {");
     CHECK(targeted.contains("switch (activation.current_component) {"));
     CHECK(targeted.contains("DeliveryRoute::ImmediateOnly"));
-    CHECK(targeted.contains("emit_delayed_targeted_event(activation, std::move(occurrence), target, DeliveryRoute::DelayedOnly"));
+    CHECK(targeted.contains("emit_delayed_targeted_event(activation, occurrence, target, DeliveryRoute::DelayedOnly"));
+    CHECK(targeted.contains("emit_targeted_event(activation, occurrence, target);"));
+    CHECK_FALSE(targeted.contains("std::move(occurrence)"));
     CHECK(targeted.contains("default:"));
 
     const auto dispatch = generated_function(
@@ -9011,8 +9038,10 @@ TEST_CASE("Codegen EnTT: binding predicates filter snapshots and only row predic
     CHECK(!body.contains("== 0"));
     CHECK(!body.contains("> 1"));
     // A targeted recipient must pass its own binding's filter.
-    CHECK(code.contains("&& cactus_keep_actor(target)"));
-    CHECK(code.contains("&& cactus_keep_surface(target)"));
+    const auto recipient = extract_temp_name(code, "cactus_gen_recipient_");
+    REQUIRE_FALSE(recipient.empty());
+    CHECK(code.contains("&& cactus_keep_actor(" + recipient + ")"));
+    CHECK(code.contains("&& cactus_keep_surface(" + recipient + ")"));
 }
 
 TEST_CASE("Codegen EnTT: a limited pair rule filters only row predicates at collection", "[codegen-entt][staging]") {
@@ -9957,6 +9986,43 @@ TEST_CASE("Codegen EnTT: a lone per-row accumulation stays a plain +=", "[codege
     CHECK(!code.contains("generated_accumulation__Body__x"));
 }
 
+TEST_CASE("Codegen EnTT: pair recipients do not shadow target bindings", "[codegen-entt][dungeon-regression]") {
+    for (const bool target_first : {false, true}) {
+        ProgramNode program;
+        const std::string bindings = target_first ? "        target: Body\n        other: Body\n"
+                                                  : "        other: Body\n        target: Body\n";
+        const auto decorated =
+            full_pipeline(lifecycle_program_prefix() + "trait Body\nevent Touch\nrule Visit:\n    pairs:\n" + bindings +
+                              "    where: target != other\n    on tick:\n        emit Touch to target\n"
+                              "rule Receive:\n    each: Body\n    on Touch:\n        return\n",
+                          program);
+        const auto code      = CppEnttCodegen::generate(decorated);
+        const auto visit     = generated_function(code, "void visit_on(entt::registry& registry");
+        const auto recipient = extract_temp_name(visit, "cactus_gen_recipient_");
+        REQUIRE_FALSE(recipient.empty());
+        CHECK(visit.contains("auto target = " + recipient + ";"));
+        CHECK_FALSE(visit.contains("auto target = target;"));
+    }
+}
+
+TEST_CASE("Codegen EnTT: pair predicates settle buffered fields through mutable cells",
+          "[codegen-entt][dungeon-regression][write-kinds]") {
+    ProgramNode program;
+    const auto decorated =
+        full_pipeline(lifecycle_program_prefix() +
+                          "trait Body:\n    var health: float = 10.0\n    let code: int = 0\n"
+                          "event Hit\nrule Hurt:\n    each: Body as body\n    on Hit:\n        body.health -= 1.0\n"
+                          "rule Observe:\n    pairs:\n        a: Body\n        b: Body\n"
+                          "    where:\n        a != b\n        b[Body].health > 0.0\n        b[Body].code >= 0\n"
+                          "    limit: 1 per a\n    on tick:\n        emit Hit to b\n",
+                      program);
+    const auto code    = CppEnttCodegen::generate(decorated);
+    const auto observe = generated_function(code, "void observe_on(entt::registry& registry");
+    CHECK(observe.contains("health().settle(registry.get<::cactus_gen::Body>(b).health)"));
+    CHECK_FALSE(observe.contains("health().settle(registry.get<const ::cactus_gen::Body>(b).health)"));
+    CHECK(observe.contains("registry.get<const ::cactus_gen::Body>(b).code"));
+}
+
 TEST_CASE("Codegen EnTT: accumulations that can meet are buffered", "[codegen-entt][write-kinds]") {
     const auto code = accumulation_codegen();
     // Many rows add to one named entity.
@@ -10546,7 +10612,9 @@ TEST_CASE("Codegen EnTT: string constants are views read into std::string where 
     const auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.contains("inline constexpr std::string_view GREETING = \"hello\";"));
     CHECK(code.contains("inline constexpr std::string_view ALIAS = ::cactus_gen::test::GREETING;"));
-    CHECK(code.contains("inline const std::string LOUD = ::cactus_gen::test::shout(std::string{::cactus_gen::test::GREETING});"));
+    CHECK(code.contains("inline const std::string& LOUD()"));
+    CHECK(code.contains(
+        "static const std::string value = ::cactus_gen::test::shout(std::string{::cactus_gen::test::GREETING});"));
     CHECK(code.contains("return std::string{::cactus_gen::test::GREETING};"));
     CHECK(code.contains("= std::string{::cactus_gen::test::ALIAS};"));
     CHECK(code.contains("::cactus_gen::test::shout(std::string{::cactus_gen::test::GREETING})"));
@@ -10585,6 +10653,103 @@ TEST_CASE("Codegen EnTT: an end-key join looks rows up by end instead of a produ
     CHECK(code.contains("cactus_rows.for_each_from(registry.get<const ::cactus_gen::Walker>(w).tile"));
     CHECK_FALSE(code.contains("for (const auto& cactus_row : cactus_rows.rows())"));
     CHECK(code.contains("registry.valid(r.to)"));
+}
+
+static std::string tested_pair_rule(const std::string& test) {
+    return relation_traits() +
+           "relation Next:\n"
+           "    from: Tile\n"
+           "    to: Tile\n"
+           "rule Linked:\n"
+           "    pairs:\n"
+           "        a: Tile\n"
+           "        b: Tile\n"
+           "    where:\n"
+           "        " + test + "\n"
+           "    on tick:\n"
+           "        emit Done to b\n";
+}
+
+TEST_CASE("Codegen EnTT: a relation test over both entity bindings walks the left end's rows",
+          "[codegen-entt][relations]") {
+    const auto code = emit_named_rule(tested_pair_rule("Next(a, b)"), "Linked");
+    CHECK(code.contains("cactus::runtime::entt_backend::relation_partners<true>(registry, "));
+    CHECK(code.contains("Next>(registry), a, "));
+    CHECK_FALSE(code.contains("        for (auto a : a_snapshot) {\n            for (auto b : b_snapshot) {"));
+
+    const auto reversed = emit_named_rule(tested_pair_rule("Next(b, a)"), "Linked");
+    CHECK(reversed.contains("cactus::runtime::entt_backend::relation_partners<false>(registry, "));
+}
+
+TEST_CASE("Codegen EnTT: a relation test that does not fix both bindings stays a product",
+          "[codegen-entt][relations]") {
+    for (const std::string test : {"not Next(a, b)", "Next(a, _)", "Next(a, a)", "Next(a, b) or a[Tile].code > 0"}) {
+        INFO(test);
+        const auto code = emit_named_rule(tested_pair_rule(test), "Linked");
+        CHECK_FALSE(code.contains("relation_partners"));
+        CHECK(code.contains("        for (auto a : a_snapshot) {\n            for (auto b : b_snapshot) {"));
+    }
+    const auto unindexed = emit_named_rule(tested_pair_rule("Next(a, b)"), "Linked", false);
+    CHECK_FALSE(unindexed.contains("relation_partners"));
+}
+
+TEST_CASE("Codegen EnTT: a union of identity and relation branches merges their partners once",
+          "[codegen-entt][relations][union]") {
+    for (const std::string test : {"Next(a, b) or a == b", "b == a or (Next(b, a) and a[Tile].code > 0)"}) {
+        INFO(test);
+        const auto code = emit_named_rule(tested_pair_rule(test), "Linked");
+        CHECK(code.contains("cactus::runtime::entt_backend::relation_partners<"));
+        CHECK(code.contains("registry.valid(cactus_member) && "));
+        CHECK(code.contains("cactus::runtime::entt_backend::sort_unique_in_creation_order(registry, "));
+        CHECK_FALSE(code.contains("        for (auto a : a_snapshot) {\n            for (auto b : b_snapshot) {"));
+    }
+    const auto unindexed = emit_named_rule(tested_pair_rule("Next(a, b) or a == b"), "Linked", false);
+    CHECK_FALSE(unindexed.contains("sort_unique_in_creation_order"));
+}
+
+static std::string grid_rule(const std::string& predicate) {
+    return "event tick:\n"
+           "    dt: float\n"
+           "event Hit\n"
+           "trait Board:\n"
+           "    let size: int = 8\n"
+           "trait Spot:\n"
+           "    let board: entity_id\n"
+           "    let x: int in range(0, board[Board].size)\n"
+           "    let z: int in range(0, board[Board].size)\n"
+           "trait Probe:\n"
+           "    var lo: int = 0\n"
+           "    var hi: int = 3\n"
+           "    var x: float = 0.0\n"
+           "    var z: float = 0.0\n"
+           "rule Sense:\n"
+           "    pairs:\n"
+           "        probe: Probe as p\n"
+           "        spot: Spot as s\n"
+           "    where:\n"
+           "        " + predicate + "\n"
+           "    on tick:\n"
+           "        emit Hit to spot\n";
+}
+
+TEST_CASE("Codegen EnTT: bounds on ranged cell fields visit a grid region", "[codegen-entt][grid-region]") {
+    const auto box = emit_named_rule(grid_rule("s.x >= p.lo and s.x <= p.hi and p.lo <= s.z"), "Sense");
+    CHECK(box.contains("cactus::runtime::entt_backend::DenseKeyIndex<2>"));
+    CHECK(box.contains(".find_region(registry, cactus_lo, cactus_hi, cactus_region);"));
+    CHECK(box.contains("cactus_lo[0] = static_cast<std::int64_t>(std::floor("));
+    CHECK(box.contains("cactus_hi[1] = std::numeric_limits<std::int64_t>::max();"));
+    CHECK(box.contains(".block = cactus_cell.board"));
+    CHECK_FALSE(box.contains("        for (auto probe : probe_snapshot) {\n            for (auto spot : spot_snapshot) {"));
+
+    const auto disk = emit_named_rule(
+        grid_rule("(p.x - s.x) * (p.x - s.x) + (s.z - p.z) * (s.z - p.z) < 9.0"), "Sense");
+    CHECK(disk.contains("const double cactus_reach = std::sqrt(std::max(0.0, "));
+    CHECK(disk.contains(" - cactus_reach))"));
+    CHECK(disk.contains(" + cactus_reach))"));
+    CHECK(disk.contains(".find_region("));
+
+    const auto unindexed = emit_named_rule(grid_rule("s.x >= p.lo"), "Sense", false);
+    CHECK_FALSE(unindexed.contains("find_region"));
 }
 
 TEST_CASE("Codegen EnTT: a row binding without an end-key join is a product", "[codegen-entt][relations]") {
@@ -10769,6 +10934,156 @@ TEST_CASE("Codegen EnTT: derived rows name their source and own no store", "[cod
     CHECK(code.contains("connect_relation_ends<::cactus_gen::test::Route>"));
     CHECK_FALSE(code.contains("connect_relation_ends<::cactus_gen::test::Path>"));
     CHECK_FALSE(code.contains("::cactus_gen::test::Reach>(registry).compact()"));
+}
+
+
+TEST_CASE("Codegen EnTT: delegated scene transforms select the camera dimension",
+          "[codegen-entt][dungeon-regression]") {
+    const auto usage_for = [](const std::string& owner, const std::string& transform) {
+        ProgramNode ast;
+        EntityNode entity;
+        entity.name               = "View";
+        entity.resolved_entity_id = make_symbol_id(SymbolKind::Entity, owner, entity.name);
+        entity.traits.push_back(
+            ArchetypeTraitEntry{.trait_name        = "WorldTransform",
+                                .resolved_trait_id = make_symbol_id(SymbolKind::Trait, transform, "WorldTransform")});
+        ast.declarations.emplace_back(std::move(entity));
+        DecoratedProgram program;
+        program.ast         = &ast;
+        program.module_name = "main";
+        for (const auto* module : {"std.transform.flat", "std.transform.volume"}) {
+            ResolvedTrait trait;
+            trait.name         = "WorldTransform";
+            trait.symbol_id    = make_symbol_id(SymbolKind::Trait, module, trait.name);
+            trait.canonical_id = make_canonical_id(*trait.symbol_id);
+            program.traits.emplace(trait.canonical_id, std::move(trait));
+        }
+        return EnttCodegenUtils::world_transform_usage(program);
+    };
+    const auto volume = usage_for("controls", "std.transform.volume");
+    CHECK(volume.volume);
+    CHECK_FALSE(volume.flat);
+    const auto flat = usage_for("game.view", "std.transform.flat");
+    CHECK(flat.flat);
+    CHECK_FALSE(flat.volume);
+    const auto standard = usage_for("std.editor", "std.transform.volume");
+    CHECK_FALSE(standard.flat);
+    CHECK_FALSE(standard.volume);
+    const auto root = usage_for("main", "std.transform.flat");
+    CHECK(root.flat);
+    CHECK_FALSE(root.volume);
+}
+
+TEST_CASE("Codegen EnTT: runtime constants initialize inside their accessor",
+          "[codegen-entt][dungeon-regression][lint]") {
+    ProgramNode ast;
+    const auto program =
+        full_pipeline("const:\n    VALUES: list[int] = [1, 2, 3]\nfunc values() list[int]:\n    return VALUES\n", ast);
+    const auto code = CppEnttCodegen::generate(program);
+    CHECK(code.contains("inline const std::vector<int>& VALUES()"));
+    CHECK(code.contains("static const std::vector<int> value = {1, 2, 3};"));
+    CHECK(code.contains("return ::cactus_gen::test::VALUES();"));
+}
+
+TEST_CASE("Codegen EnTT: comparisons promote integer operands explicitly", "[codegen-entt][dungeon-regression][lint]") {
+    ProgramNode ast;
+    const auto program = full_pipeline("func above(value: int, bound: float) bool:\n    return value >= bound\n", ast);
+    const auto code    = CppEnttCodegen::generate(program);
+    CHECK(code.contains("(static_cast<float>(value) >= bound)"));
+}
+
+TEST_CASE("Codegen EnTT: queued string values remain movable", "[codegen-entt][dungeon-regression][lint]") {
+    ProgramNode ast;
+    const auto program = full_pipeline(
+        "pub extern event frame:\n    dt: float\npub phase tick:\n    from:\n        frame\ntrait Label:\n    var "
+        "text: string = \"\"\nentity A:\n    Label\nrule SetLabel:\n    each: Label\n    on tick:\n        add "
+        "Label:\n            text = \"\"\n",
+        ast);
+    const auto body = generated_function(CppEnttCodegen::generate(program), "void set_label_on");
+    CHECK_FALSE(body.contains("const decltype("));
+    CHECK_FALSE(body.contains(" = \"\";"));
+    CHECK(body.contains("decltype("));
+}
+
+TEST_CASE("Codegen EnTT: string match values use owning string locals", "[codegen-entt][dungeon-regression][lint]") {
+    ProgramNode ast;
+    const auto program = full_pipeline(
+        "pub event tick\nenum Mode:\n    A\n    B\ntrait Label:\n    var mode: Mode = Mode.A\n    var text: string = "
+        "\"\"\nentity A:\n    Label\nrule Show:\n    each: Label as label\n    on tick:\n        let heading = match "
+        "label.mode:\n            Mode.A => \"first\"\n            Mode.B => \"second\"\n        label.text = "
+        "heading\n",
+        ast);
+    const auto body = generated_function(CppEnttCodegen::generate(program), "void show_on");
+    CHECK(body.contains("std::string heading ="));
+    CHECK_FALSE(body.contains("auto heading ="));
+}
+
+TEST_CASE("Codegen EnTT: an unconditional reduced keep has no boolean literal guard",
+          "[codegen-entt][dungeon-regression][lint]") {
+    const std::string source =
+        "pub extern event frame:\n    dt: float\npub phase tick:\n    from:\n        frame\ntrait Owner\ntrait "
+        "Item\ntrait Total:\n    let count: int = 0\nentity A:\n    Owner\ngroup totals:\n    phase: tick\nrule "
+        "Count:\n    pairs:\n        owner: Owner\n        item: Item\n    group: totals\n    reduce per owner:\n      "
+        "  n = count()\n    keep Total on owner if true:\n        count = n\n";
+    const auto body = emit_named_rule(source, "Count");
+    CHECK_FALSE(body.contains("if (!true)"));
+    CHECK(body.contains("apply_kept<"));
+}
+
+TEST_CASE("Codegen EnTT: leading returning trait matches share their guard",
+          "[codegen-entt][dungeon-regression][lint]") {
+    ProgramNode ast;
+    const auto program = full_pipeline(
+        "pub event tick\ntrait First\ntrait Second\ntrait Result:\n    var hits: int = 0\nentity A:\n    Result\nrule "
+        "Choose:\n    each: Result as result\n    on tick:\n        match self:\n            First =>\n                "
+        "return\n            Second =>\n                return\n            _ =>\n                result.hits += 1\n",
+        ast);
+    const auto body = generated_function(CppEnttCodegen::generate(program), "void choose_on");
+    CHECK(body.contains("|| registry.all_of<"));
+    const auto start = body.find("if (registry.valid(");
+    REQUIRE(start != std::string::npos);
+    const auto match = body.substr(start, body.find("};", start) - start);
+    CHECK_FALSE(match.contains("else"));
+}
+
+TEST_CASE("Codegen EnTT: negated compound branches name their predicate", "[codegen-entt][dungeon-regression][lint]") {
+    ProgramNode ast;
+    const auto program = full_pipeline(
+        "pub event tick\ntrait Gate:\n    var a: bool = false\n    var b: bool = false\n    var hits: int = 0\nentity "
+        "A:\n    Gate\nrule Guard:\n    each: Gate as g\n    on tick:\n        let cactus_admitted = g.a\n        if "
+        "not (cactus_admitted or g.b):\n            "
+        "g.hits += 1\n",
+        ast);
+    const auto body      = generated_function(CppEnttCodegen::generate(program), "void guard_on");
+    const auto predicate = extract_temp_name(body, "cactus_gen_admitted_");
+    CHECK(body.contains("const bool " + predicate + " = (cactus_admitted || g.b); !" + predicate));
+    CHECK_FALSE(body.contains("if (!("));
+}
+
+TEST_CASE("Codegen EnTT: restore dispatch size stays bounded as trait count grows",
+          "[codegen-entt][dungeon-regression][lint]") {
+    const auto restore_size = [](int count) {
+        std::string source;
+        for (int index = 0; index < count; ++index) {
+            source += "trait Fact" + std::to_string(index) + ":\n    persist var value: int = 0\n";
+        }
+        source += "entity A:\n";
+        for (int index = 0; index < count; ++index) {
+            source += "    Fact" + std::to_string(index) + "\n";
+        }
+        ProgramNode ast;
+        auto program        = full_pipeline(source, ast);
+        program.module_name = "test";
+        for (auto& [name, trait] : program.traits) {
+            trait.module_name = "test";
+            trait.symbol_id   = make_symbol_id(SymbolKind::Trait, "test", trait.name);
+        }
+        const auto function =
+            generated_function(CppEnttCodegen::generate(program), "inline void generated_restore_node_traits(");
+        return std::ranges::count(function, '\n');
+    };
+    const auto small = restore_size(1);
+    CHECK(restore_size(80) <= small + 10);
 }
 
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

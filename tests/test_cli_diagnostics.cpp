@@ -5,6 +5,8 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
+#include <ranges>
 #include <string>
 #include <vector>
 
@@ -32,12 +34,12 @@ fs::path stage_fixture(const std::string& name) {
     return staged;
 }
 
-CliResult run_cactus(const fs::path& input) {
+CliResult run_cactus(const fs::path& input, const std::string& flags = "") {
     const fs::path work_dir    = fs::path{CACTUS_TEST_BINARY_DIR} / "cli_diagnostics";
     const fs::path output_file = work_dir / (input.stem().string() + ".out.cpp");
     const fs::path stderr_file = work_dir / (input.stem().string() + ".stderr.txt");
     const std::string command = quote(fs::path{CACTUS_COMPILER_PATH}) + " " + quote(input) + " -o " +
-                                quote(output_file) + " 2> " + quote(stderr_file);
+                                quote(output_file) + flags + " 2> " + quote(stderr_file);
     // NOLINTNEXTLINE(bugprone-command-processor,concurrency-mt-unsafe) -- the test drives the real CLI binary.
     const int raw_exit = std::system(("\"" + command + "\"").c_str());
 
@@ -72,11 +74,21 @@ TEST_CASE("CLI: a warning on a successful compile is printed once", "[cli][diagn
     CHECK(result.stderr_lines[0].contains("warning: pair rule 'P' is not accelerated"));
 }
 
+TEST_CASE("CLI: a planned pair rule does not warn, even with indexed joins off", "[cli][diagnostics][pair-plans]") {
+    for (const std::string flags : {"", " --no-indexed-joins"}) {
+        INFO(flags);
+        const auto result = run_cactus(stage_fixture("relation_rows.cactus"), flags);
+        CHECK(result.exit_code == 0);
+        CHECK(result.stderr_lines.empty());
+    }
+}
+
 TEST_CASE("CLI: a call to a function a module does not declare is rejected", "[cli][diagnostics]") {
     const auto result = run_cactus(stage_fixture("removed_camera_helper.cactus"));
     CHECK(result.exit_code == 1);
-    REQUIRE(result.stderr_lines.size() == 1);
-    CHECK(result.stderr_lines[0].contains("error: unknown function 'screen_to_plane' in module 'std.camera.volume'"));
+    auto errors = result.stderr_lines | std::views::filter([](const auto& line) { return line.contains(": error: "); });
+    REQUIRE(std::ranges::distance(errors) == 1);
+    CHECK(errors.front().contains("error: unknown function 'screen_to_plane' in module 'std.camera.volume'"));
 }
 
 TEST_CASE("CLI: a parse error in an imported module is printed once", "[cli][diagnostics]") {
@@ -85,6 +97,21 @@ TEST_CASE("CLI: a parse error in an imported module is printed once", "[cli][dia
     CHECK(result.exit_code == 1);
     REQUIRE(result.stderr_lines.size() == 1);
     CHECK(result.stderr_lines[0].contains("broken.cactus:4:11: error: expected ':'"));
+}
+
+TEST_CASE("CLI: public imported states resolve in archetypes and handlers", "[cli][diagnostics][exclusive-states]") {
+    const auto project = stage_fixture("imported_states");
+    const auto result  = run_cactus(project / "main.cactus");
+    for (const auto& diagnostic : result.stderr_lines) {
+        INFO(diagnostic);
+    }
+    REQUIRE(result.exit_code == 0);
+    REQUIRE(result.stderr_lines.empty());
+    const auto output = fs::path{CACTUS_TEST_BINARY_DIR} / "cli_diagnostics" / "main.out.cpp";
+    std::ifstream stream(output);
+    const std::string generated((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+    CHECK(generated.contains("enter_state<::cactus_gen::orders::Mode, 0>"));
+    CHECK(generated.contains("enter_state<::cactus_gen::orders::Mode, 1>"));
 }
 
 TEST_CASE("CLI: adding a container trait that another module ranges against is rejected at link",

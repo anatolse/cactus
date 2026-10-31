@@ -1,0 +1,23 @@
+module main
+
+use std.core
+use orders
+
+entity Bare:
+    orders.Mode
+
+entity Explicit:
+    orders.Mode.Auto
+
+rule Start:
+    each: orders.Mode.Auto
+
+    on load:
+        add orders.Mode.Move:
+            target = Explicit
+
+rule Finish:
+    each: orders.Mode.Move
+
+    on fixed_tick:
+        add orders.Mode.Auto

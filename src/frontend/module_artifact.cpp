@@ -556,6 +556,16 @@ void ModuleArtifact::write_expr_path(std::ostream& out, const ExprPath& path) {
     }
 }
 
+void ModuleArtifact::write_equality_key(std::ostream& out, const EqualityJoinKey& key) {
+    write_u64(out, static_cast<uint64_t>(key.predicate_index));
+    write_expr_path(out, key.member);
+    write_expr_path(out, key.query);
+    write_u8(out, static_cast<uint8_t>(key.layout));
+    write_optional_symbol_id(out, key.trait);
+    write_str(out, key.field);
+    write_str(out, key.container);
+}
+
 void ModuleArtifact::write_equality_join(std::ostream& out, const std::optional<EqualityJoinPlan>& join) {
     write_bool(out, join.has_value());
     if (!join.has_value()) {
@@ -566,13 +576,7 @@ void ModuleArtifact::write_equality_join(std::ostream& out, const std::optional<
     const auto write_keys = [&](const std::vector<EqualityJoinKey>& keys) {
         write_u32(out, static_cast<uint32_t>(keys.size()));
         for (const auto& key : keys) {
-            write_u64(out, static_cast<uint64_t>(key.predicate_index));
-            write_expr_path(out, key.member);
-            write_expr_path(out, key.query);
-            write_u8(out, static_cast<uint8_t>(key.layout));
-            write_optional_symbol_id(out, key.trait);
-            write_str(out, key.field);
-            write_str(out, key.container);
+            write_equality_key(out, key);
         }
     };
     write_keys(plan.keys);
@@ -580,6 +584,55 @@ void ModuleArtifact::write_equality_join(std::ostream& out, const std::optional<
     for (const auto& branch : plan.branches) {
         write_keys(branch);
     }
+}
+
+void ModuleArtifact::write_pair_plan(std::ostream& out, const PairPlan& plan) {
+    write_u8(out, static_cast<uint8_t>(plan.kind));
+    const auto write_rows = [&](const std::optional<RelationRowsPlan>& rows) {
+        write_bool(out, rows.has_value());
+        if (rows.has_value()) {
+            write_u64(out, static_cast<uint64_t>(rows->predicate_index));
+            write_expr_path(out, rows->test);
+            write_bool(out, rows->left_is_from);
+        }
+    };
+    const auto write_optional_expression = [&](const std::shared_ptr<const ExprNode>& expression) {
+        write_bool(out, expression != nullptr);
+        if (expression != nullptr) {
+            write_expression(out, *expression);
+        }
+    };
+    write_rows(plan.rows);
+    write_u32(out, static_cast<uint32_t>(plan.union_branches.size()));
+    for (const auto& branch : plan.union_branches) {
+        write_bool(out, branch.identity.has_value());
+        if (branch.identity.has_value()) {
+            write_equality_key(out, *branch.identity);
+        }
+        write_rows(branch.rows);
+    }
+    write_bool(out, plan.grid.has_value());
+    if (plan.grid.has_value()) {
+        write_u64(out, static_cast<uint64_t>(plan.grid->region_binding));
+        write_symbol_id(out, plan.grid->trait);
+        write_str(out, plan.grid->container);
+        write_u32(out, static_cast<uint32_t>(plan.grid->axes.size()));
+        for (const auto& axis : plan.grid->axes) {
+            write_str(out, axis.field);
+            write_u8(out, static_cast<uint8_t>(axis.layout));
+            write_optional_expression(axis.lo);
+            write_optional_expression(axis.hi);
+            write_optional_expression(axis.center);
+        }
+        write_optional_expression(plan.grid->radius_sq);
+    }
+    write_bool(out, plan.bounded.has_value());
+    if (plan.bounded.has_value()) {
+        write_u64(out, static_cast<uint64_t>(plan.bounded->binding));
+        write_u64(out, static_cast<uint64_t>(plan.bounded->bound));
+    }
+    write_location(out, plan.location);
+    write_bool(out, plan.warned);
 }
 
 void ModuleArtifact::write_contract(std::ostream& out, const HandlerContract& contract) {
@@ -650,6 +703,7 @@ void ModuleArtifact::write_contract(std::ostream& out, const HandlerContract& co
     }
 
     write_equality_join(out, contract.equality_join);
+    write_pair_plan(out, contract.pair_plan);
 
     write_bool(out, contract.reduction.has_value());
     if (contract.reduction.has_value()) {
@@ -1326,6 +1380,18 @@ ExprPath ModuleArtifact::read_expr_path(std::istream& in) {
     return path;
 }
 
+EqualityJoinKey ModuleArtifact::read_equality_key(std::istream& in) {
+    EqualityJoinKey key;
+    key.predicate_index = static_cast<std::size_t>(read_u64(in));
+    key.member          = read_expr_path(in);
+    key.query           = read_expr_path(in);
+    key.layout          = static_cast<EqualityKeyLayout>(read_u8(in));
+    key.trait           = read_optional_symbol_id(in);
+    key.field           = read_str(in);
+    key.container       = read_str(in);
+    return key;
+}
+
 std::optional<EqualityJoinPlan> ModuleArtifact::read_equality_join(std::istream& in) {
     if (!read_bool(in)) {
         return std::nullopt;
@@ -1335,13 +1401,7 @@ std::optional<EqualityJoinPlan> ModuleArtifact::read_equality_join(std::istream&
     const auto read_keys = [&](std::vector<EqualityJoinKey>& keys) {
         keys.resize(read_u32(in));
         for (auto& key : keys) {
-            key.predicate_index = static_cast<std::size_t>(read_u64(in));
-            key.member          = read_expr_path(in);
-            key.query           = read_expr_path(in);
-            key.layout          = static_cast<EqualityKeyLayout>(read_u8(in));
-            key.trait           = read_optional_symbol_id(in);
-            key.field           = read_str(in);
-            key.container       = read_str(in);
+            key = read_equality_key(in);
         }
     };
     read_keys(plan.keys);
@@ -1349,6 +1409,57 @@ std::optional<EqualityJoinPlan> ModuleArtifact::read_equality_join(std::istream&
     for (auto& branch : plan.branches) {
         read_keys(branch);
     }
+    return plan;
+}
+
+PairPlan ModuleArtifact::read_pair_plan(std::istream& in) {
+    PairPlan plan;
+    plan.kind            = static_cast<PairPlanKind>(read_u8(in));
+    const auto read_rows = [&]() -> std::optional<RelationRowsPlan> {
+        if (!read_bool(in)) {
+            return std::nullopt;
+        }
+        RelationRowsPlan rows;
+        rows.predicate_index = static_cast<std::size_t>(read_u64(in));
+        rows.test            = read_expr_path(in);
+        rows.left_is_from    = read_bool(in);
+        return rows;
+    };
+    const auto read_optional_expression = [&]() -> std::shared_ptr<const ExprNode> {
+        return read_bool(in) ? std::shared_ptr<const ExprNode>(read_expression(in)) : nullptr;
+    };
+    plan.rows = read_rows();
+    plan.union_branches.resize(read_u32(in));
+    for (auto& branch : plan.union_branches) {
+        if (read_bool(in)) {
+            branch.identity = read_equality_key(in);
+        }
+        branch.rows = read_rows();
+    }
+    if (read_bool(in)) {
+        GridRegionPlan grid;
+        grid.region_binding = static_cast<std::size_t>(read_u64(in));
+        grid.trait          = read_symbol_id(in);
+        grid.container      = read_str(in);
+        grid.axes.resize(read_u32(in));
+        for (auto& axis : grid.axes) {
+            axis.field  = read_str(in);
+            axis.layout = static_cast<EqualityKeyLayout>(read_u8(in));
+            axis.lo     = read_optional_expression();
+            axis.hi     = read_optional_expression();
+            axis.center = read_optional_expression();
+        }
+        grid.radius_sq = read_optional_expression();
+        plan.grid      = std::move(grid);
+    }
+    if (read_bool(in)) {
+        BoundedProductPlan bounded;
+        bounded.binding = static_cast<std::size_t>(read_u64(in));
+        bounded.bound   = static_cast<std::size_t>(read_u64(in));
+        plan.bounded    = bounded;
+    }
+    plan.location = read_location(in);
+    plan.warned   = read_bool(in);
     return plan;
 }
 
@@ -1436,6 +1547,7 @@ HandlerContract ModuleArtifact::read_contract(std::istream& in) {
     }
 
     contract.equality_join = read_equality_join(in);
+    contract.pair_plan     = read_pair_plan(in);
 
     if (read_bool(in)) {
         ReductionPlan plan;
@@ -1795,23 +1907,23 @@ std::optional<DecoratedProgram> ModuleArtifact::load(const fs::path& path, std::
 
 namespace {
 template <bool PublicOnly, typename Declarations>
-void export_declarations(Declarations& source, Declarations& target, SymbolKind kind, const std::string& module_name) {
-    for (auto& [name, declaration] : source) {
+void export_declarations(const Declarations& source,
+                         Declarations& target,
+                         SymbolKind kind,
+                         const std::string& module_name) {
+    for (const auto& [name, original] : source) {
         if constexpr (PublicOnly) {
-            if (!declaration.is_pub) {
+            if (!original.is_pub) {
                 continue;
             }
         }
-        if (declaration.canonical_id.empty()) {
-            declaration.canonical_id = make_canonical_id(module_name, declaration.name);
-        }
-        if (declaration.module_name.empty()) {
-            declaration.module_name = module_name;
-        }
-        if (!declaration.symbol_id.has_value()) {
-            declaration.symbol_id = make_symbol_id(kind, declaration.module_name, declaration.name);
-        }
-        target[name] = declaration;
+        auto declaration         = original;
+        const auto symbol        = declaration.symbol_id.value_or(make_symbol_id(kind, module_name, name));
+        declaration.symbol_id    = symbol;
+        declaration.module_name  = symbol.module.name;
+        declaration.canonical_id = make_canonical_id(symbol);
+        declaration.name         = symbol.local_name;
+        target[name]             = std::move(declaration);
     }
 }
 }  // namespace
@@ -1823,25 +1935,29 @@ std::optional<ImportedSymbols> ModuleArtifact::extract_pub_symbols(const fs::pat
         return std::nullopt;
     }
 
+    return extract_pub_symbols(module_name, *program);
+}
+
+ImportedSymbols ModuleArtifact::extract_pub_symbols(const std::string& module_name, const DecoratedProgram& program) {
     ImportedSymbols symbols;
     symbols.module_name = module_name;
-    symbols.consts      = program->consts;
-    symbols.assets      = program->pub_assets;
+    symbols.consts      = program.consts;
+    symbols.assets      = program.pub_assets;
 
-    export_declarations<true>(program->traits, symbols.traits, SymbolKind::Trait, module_name);
-    symbols.states = program->states;
+    export_declarations<true>(program.traits, symbols.traits, SymbolKind::Trait, module_name);
+    symbols.states = program.states;
     std::erase_if(symbols.states, [](const auto& entry) { return !entry.second.is_pub; });
-    symbols.relations = program->relations;
+    symbols.relations = program.relations;
     std::erase_if(symbols.relations, [](const auto& entry) { return !entry.second.is_pub; });
-    export_declarations<false>(program->structs, symbols.structs, SymbolKind::Struct, module_name);
-    export_declarations<false>(program->enums, symbols.enums, SymbolKind::Enum, module_name);
-    export_declarations<true>(program->funcs, symbols.funcs, SymbolKind::Func, module_name);
+    export_declarations<false>(program.structs, symbols.structs, SymbolKind::Struct, module_name);
+    export_declarations<false>(program.enums, symbols.enums, SymbolKind::Enum, module_name);
+    export_declarations<true>(program.funcs, symbols.funcs, SymbolKind::Func, module_name);
 
-    for (const auto& tmpl_name : program->pub_templates) {
-        symbols.templates[tmpl_name] = exported_template(*program, module_name, tmpl_name);
+    for (const auto& tmpl_name : program.pub_templates) {
+        symbols.templates[tmpl_name] = exported_template(program, module_name, tmpl_name);
     }
 
-    for (const auto& dep : program->dependency_graph) {
+    for (const auto& dep : program.dependency_graph) {
         const auto symbol = dep.rule_id.value_or(make_symbol_id(SymbolKind::Rule, module_name, dep.rule_name));
         ImportedRule rule;
         rule.name                    = symbol.local_name;
@@ -1852,9 +1968,9 @@ std::optional<ImportedSymbols> ModuleArtifact::extract_pub_symbols(const fs::pat
         symbols.rules[dep.rule_name] = rule;
     }
 
-    symbols.entities = program->pub_entities;
+    symbols.entities = program.pub_entities;
 
-    for (const auto& [name, event] : program->events) {
+    for (const auto& [name, event] : program.events) {
         if (!event.is_pub) {
             continue;
         }
@@ -1868,7 +1984,7 @@ std::optional<ImportedSymbols> ModuleArtifact::extract_pub_symbols(const fs::pat
                                                     .is_external  = event.is_external};
     }
 
-    for (const auto& [name, phase] : program->phases) {
+    for (const auto& [name, phase] : program.phases) {
         if (!phase.is_pub) {
             continue;
         }
@@ -1884,7 +2000,7 @@ std::optional<ImportedSymbols> ModuleArtifact::extract_pub_symbols(const fs::pat
                                                     .max_repetitions = phase.max_repetitions};
     }
 
-    for (const auto& group : program->execution_graph.group_declarations) {
+    for (const auto& group : program.execution_graph.group_declarations) {
         symbols.groups[group.group.local_name] = group;
     }
 

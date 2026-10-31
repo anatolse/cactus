@@ -106,19 +106,25 @@ pub trait CameraView:
 pub group views:
     phase: core.late_tick
 
-func pixel_min(port: vp.Viewport, screen: vp.ScreenSize) vec2:
-    return vec2(port.x * screen.size.x, port.y * screen.size.y)
+func pixel_min(port: vp.Viewport, window_size: vec2) vec2:
+    return vec2(port.x * window_size.x, port.y * window_size.y)
 
-func pixel_size(port: vp.Viewport, screen: vp.ScreenSize) vec2:
-    return vec2(port.width * screen.size.x, port.height * screen.size.y)
+func pixel_size(port: vp.Viewport, window_size: vec2) vec2:
+    return vec2(port.width * window_size.x, port.height * window_size.y)
 
 rule KeepCameraViews:
-    each:
-        Camera as cam
-        vp.Viewport as port
-        tv.WorldTransform as pose
+    pairs:
+        observer:
+            Camera as cam
+            vp.Viewport as port
+            tv.WorldTransform as pose
+        window: vp.ScreenSize as dimensions
     group: views
-    keep CameraView:
+    reduce per observer:
+        window_width = max(dimensions.size.x, default = 0.0)
+        window_height = max(dimensions.size.y, default = 0.0)
+        screens = count()
+    keep CameraView on observer if screens > 0:
         position = pose.position
         forward = camera_basis(pose.rotation).forward
         right = camera_basis(pose.rotation).right
@@ -128,8 +134,8 @@ rule KeepCameraViews:
         far = cam.far
         projection = cam.projection
         ortho_height = cam.ortho_height
-        rect_min = pixel_min(port, vp.Screen[vp.ScreenSize])
-        rect_size = pixel_size(port, vp.Screen[vp.ScreenSize])
+        rect_min = pixel_min(port, vec2(window_width, window_height))
+        rect_size = pixel_size(port, vec2(window_width, window_height))
 
 # ── Projection ────────────────────────────────────────────────────────────────
 

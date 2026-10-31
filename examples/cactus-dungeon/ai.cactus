@@ -1,0 +1,182 @@
+module ai
+
+use std.core
+use session
+use std.voxel.volume as voxel
+use world
+use territory
+use tasks
+use rooms
+use knights
+use units
+use statistics
+use hud
+
+pub trait Brain:
+    persist var elapsed: float = 0.0
+    let attack_threshold: int = 4
+
+pub trait Configuration:
+    var enabled: bool = false
+
+pub event Decision:
+    player: entity_id
+
+event Assault:
+    player: entity_id
+    target: entity_id
+
+relation Edge:
+    from: world.Player
+    to: world.Tile
+
+trait BuildSite
+
+group borders:
+    phase: input
+
+rule PrepareOpponent:
+    each: Configuration as config
+    where: config.enabled
+
+    on load:
+        add Brain to world.Enemy
+
+rule Think:
+    each: Brain as brain
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on tick:
+        brain.elapsed += tick.dt
+        if brain.elapsed < 0.5:
+            return
+        brain.elapsed = 0.0
+        emit Decision:
+            player = self
+
+rule BorderCells:
+    pairs:
+        owner: world.OwnedBy
+        step: territory.Neighbor
+    group: borders
+    where:
+        owner.from == step.from
+        not world.OwnedBy(step.to, _)
+    keep Edge(owner.to, step.to)
+
+rule DigFrontier:
+    pairs:
+        player: Brain
+        tile:
+            world.Tile as ground
+            voxel.Cell as cell
+    order by: (if player == world.Enemy: cell.x + cell.z else: -cell.x - cell.z) - (if ground.kind == world.Kind.Gold: 5 else: 0) asc
+    where:
+        Edge(player, tile)
+        hud.Explored(player, tile)
+        ground.kind == world.Kind.Earth or ground.kind == world.Kind.Gold
+        not tasks.DigMark(player, tile)
+    limit: 1 per player
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on Decision as request:
+        if request.player != player:
+            return
+        add tasks.DigMark(player, tile)
+
+rule BuildRooms:
+    pairs:
+        player:
+            Brain
+            world.Player as treasury
+            statistics.RoomCounts as counts
+        tile:
+            BuildSite
+            world.Tile as ground
+            territory.Connected
+    where:
+        ground.kind == world.Kind.Floor
+        world.OwnedBy(tile, player)
+        hud.Explored(player, tile)
+        not rooms.RoomPlan(player, tile)
+    limit: 1 per player
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on Decision as request:
+        if request.player != player:
+            return
+        let kind = if counts.beds < 5: rooms.RoomKind.Lair else: if counts.farms < 1: rooms.RoomKind.Farm else: rooms.RoomKind.Training
+        if counts.beds >= 5 and counts.farms >= 1 and counts.training >= 2:
+            return
+        if treasury.gold < rooms.price(kind):
+            return
+        add rooms.RoomPlan(player, tile):
+            kind = kind
+
+rule EmptyRoomTiles:
+    each:
+        world.Tile
+        territory.Connected
+    without: rooms.RoomTile, world.Heart
+    group: borders
+    keep BuildSite
+
+rule RecruitArmy:
+    each:
+        Brain
+        statistics.UnitCounts as army
+        statistics.RoomCounts as capacity
+    where:
+        army.knights < 5
+        army.knights < capacity.beds
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on Decision as request:
+        if request.player != self:
+            return
+        emit knights.RecruitRequested to self
+
+rule ChooseHeart:
+    pairs:
+        player:
+            Brain as brain
+            statistics.UnitCounts as army
+        heart:
+            world.Tile
+            world.Heart
+    where:
+        army.knights > brain.attack_threshold
+        hud.Explored(player, heart)
+        world.OwnedBy(heart, _)
+        not world.OwnedBy(heart, player)
+    limit: 1 per player
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on Decision as request:
+        if request.player != player:
+            return
+        emit Assault:
+            player = player
+            target = heart
+
+rule SendArmy:
+    pairs:
+        knight:
+            knights.Knight
+            units.Order.Auto
+            units.OrderRequest.None
+        command: tasks.Commands
+    where: command.from == knight
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on Assault as request:
+        if command.to != request.player:
+            return
+        emit units.AttackRequested to knight:
+            target = request.target

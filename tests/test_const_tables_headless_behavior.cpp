@@ -11,6 +11,8 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <string_view>
+
 namespace {
 
 using Readings = cactus_gen::const_tables::Readings;
@@ -74,7 +76,12 @@ TEST_CASE("const expressions and const tables hold their values at runtime", "[r
     }
 
     SECTION("window configuration reads a computed constant") {
-        CHECK(cactus::runtime::entt_backend::generated_project_config().window_width == 1280);
+        const auto config = cactus::runtime::entt_backend::generated_project_config();
+        CHECK(config.window_width == 1280);
+        CHECK(config.window_height == 640);
+        CHECK(config.target_fps == 60);
+        CHECK(std::string_view{config.window_title} == "Computed constant window");
+        CHECK_FALSE(noexcept(cactus::runtime::entt_backend::generated_project_config()));
     }
 
     SECTION("a field of a constructed value is readable") {

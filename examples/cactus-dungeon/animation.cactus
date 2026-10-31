@@ -1,0 +1,107 @@
+module animation
+
+use std.core
+use std.render.models as models
+use session
+use units
+use tasks
+use combat
+
+pub struct Clips:
+    idle: int
+    walk: int
+    work: int
+    attack: int
+    hit: int
+    die: int
+
+const:
+    ACTIVITY_HOLD = 0.25
+    ROBOT_CLIPS = Clips(idle = 2, walk = 10, work = 5, attack = 5, hit = 4, die = 1)
+    KNIGHT_CLIPS = Clips(idle = 2, walk = 24, work = 21, attack = 22, hit = 16, die = 8)
+
+pub enum Pose:
+    Idle
+    Walk
+    Work
+    Attack
+    Hit
+    Die
+
+pub trait Motion:
+    var pose: Pose = Pose.Idle
+    var walk: float = 0.0
+    var work: float = 0.0
+    var attack: float = 0.0
+    var hit: float = 0.0
+
+pub func pose_for(unit: units.Unit, motion: Motion) Pose:
+    if unit.health <= 0.0:
+        return Pose.Die
+    if motion.hit > 0.0:
+        return Pose.Hit
+    if motion.attack > 0.0:
+        return Pose.Attack
+    if motion.work > 0.0:
+        return Pose.Work
+    if motion.walk > 0.0:
+        return Pose.Walk
+    return Pose.Idle
+
+pub func clip_for(kind: units.UnitKind, pose: Pose) int:
+    let clips = if kind == units.UnitKind.Robot: ROBOT_CLIPS else: KNIGHT_CLIPS
+    return match pose:
+        Pose.Idle => clips.idle
+        Pose.Walk => clips.walk
+        Pose.Work => clips.work
+        Pose.Attack => clips.attack
+        Pose.Hit => clips.hit
+        Pose.Die => clips.die
+
+rule MarkWalking:
+    each: Motion as motion
+
+    on tasks.Advance:
+        motion.walk = ACTIVITY_HOLD
+
+rule MarkWorking:
+    each: Motion as motion
+
+    on units.WorkRequested:
+        motion.work = ACTIVITY_HOLD
+
+rule MarkAttacking:
+    each: Motion as motion
+
+    on combat.Swing:
+        motion.attack = ACTIVITY_HOLD
+
+rule MarkHit:
+    each: Motion as motion
+
+    on combat.Hit:
+        motion.hit = ACTIVITY_HOLD
+
+rule Animate:
+    each:
+        units.Unit as unit
+        Motion as motion
+        models.ModelAnimator as animator
+        models.ModelPlayback as playback
+    before: models.animate
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on tick:
+        motion.walk -= tick.dt
+        motion.work -= tick.dt
+        motion.attack -= tick.dt
+        motion.hit -= tick.dt
+        let pose = pose_for(unit, motion)
+        if pose == motion.pose:
+            return
+        motion.pose = pose
+        animator.clip = clip_for(unit.kind, pose)
+        animator.time = 0.0
+        playback.mode = if pose == Pose.Die: models.PlaybackMode.Once else: models.PlaybackMode.Loop
+        playback.revision += 1

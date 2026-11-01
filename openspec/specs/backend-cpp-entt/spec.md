@@ -1701,3 +1701,59 @@ The backend SHALL preserve the logical row orders, field values, filtering, sort
 #### Scenario: Generated join code passes static checks
 - **WHEN** the row-join fixture's generated C++ is compiled and checked with the repository clang-tidy configuration
 - **THEN** it builds and passes all enabled checks without a file-wide or newly added local suppression
+
+### Requirement: A keep pass queues its result as one batched command
+
+The cpp-entt backend SHALL queue the result of one keep pass as a single structural command per kind of change, not one command per kept row or kept entity. A relation keep pass SHALL queue one command that starts the keep run, keeps every row the pass selected, and drops the rows it did not keep. A trait keep pass SHALL queue at most one command that adds or updates every kept entity and at most one command that removes the trait from every leaving carrier, in that order. Batching SHALL NOT change what the program observes: the commit position of the keep run, the creation order of the rows it creates, field values, `one`-end checks, and the order of `on added` and `on removed` deliveries SHALL be the same as when each row or entity is applied by its own command.
+
+#### Scenario: Command count does not grow with kept rows
+- **WHEN** a `keep Neighbor(a, b)` pass over an 85×85 grid selects 28,564 rows in one activation
+- **THEN** that pass adds exactly one structural command to the activation's command buffer
+
+#### Scenario: New rows keep tuple order
+- **WHEN** one keep run creates rows for the tuples `(a, c)`, `(b, a)` and `(b, c)` in that pass order
+- **THEN** a later pass that reads the relation's rows in creation order sees them in that same order
+
+#### Scenario: Lifecycle order is unchanged
+- **WHEN** a trait keep pass adds a watched trait to entities `e2` and `e1`, in that tuple order, and removes it from `e3`
+- **THEN** `on removed` and `on added` deliveries arrive in the same order as when each change is its own command
+
+#### Scenario: Batched keep commits in place
+- **WHEN** a keep pass runs between two handlers of the same activation that each queue `remove Tile` on different entities
+- **THEN** the keep run is applied between those two removals at commit, as before
+
+### Requirement: Reduced and kept pair passes use the pass plan
+
+When a pair pass with `reduce` or a trait `keep` has an equality, relation-rows, union or grid-region plan, the cpp-entt backend SHALL feed the fold only the tuples that plan yields. It SHALL NOT fold the full directed product. Each group SHALL fold the same tuples, in the same left-binding-major creation order, and produce the same reducer results and kept set as a fold over the full product.
+
+#### Scenario: Union with a closure test walks rows from each heart
+- **WHEN** a rule pairs 2 `Heart` tiles with 2,000 `Tile` entities, reads `where: tile == heart or Reach(heart, tile)`, and keeps `Connected on tile`, and `Territory` changed since the last pass
+- **THEN** the pass runs at most 2 closure searches, checks no heart × tile pair outside the identity and `Reach` rows, and keeps `Connected` on the same tiles as the product fold
+
+#### Scenario: Equality-planned reduction matches the product
+- **WHEN** a `reduce per tile: bridges = count()` pass joins tiles to bridges with `bridge == tile`
+- **THEN** every tile's count equals the count from folding the full product
+
+### Requirement: A derived relation test keys its search by the end that changes least often
+
+When a pass tests `R(x, y)` per tuple, `R` is a `closure` or `shortest` relation, and the test does not drive the pass's plan, the cpp-entt backend SHALL key the cached search by the end whose argument stays fixed for more consecutive tuples: a constant or named entity first, then the outer (left) binding. It SHALL NOT always key by the `to` end. The test result SHALL be the same whichever end keys the search.
+
+#### Scenario: Outer binding keys the search
+- **WHEN** a product pass with left binding `heart` (2 members) and right binding `tile` (2,000 members) filters by `Reach(heart, tile)` after `Territory` changed
+- **THEN** the pass builds at most 2 cached reach searches, not one per tile
+
+#### Scenario: Named goal keys the search
+- **WHEN** a pass with left binding `walker` tests `Route(walker, Goal)` where `Goal` is a named entity
+- **THEN** the pass builds one cached search keyed by `Goal`
+
+### Requirement: Binding membership order is reused while membership is unchanged
+
+The cpp-entt backend SHALL reuse a binding's creation-ordered membership across passes and activations while no entity has gained or lost any trait the binding requires. A pass SHALL NOT sort a binding membership whose required traits have not changed since its last ordering. The order a pass observes SHALL remain stable creation order.
+
+#### Scenario: Unchanged membership is not re-sorted
+- **WHEN** ten activations run passes over the `Tile` + `Cell` membership and no entity gains or loses `Tile` or `Cell`
+- **THEN** that membership is ordered once, and every pass iterates it in creation order
+
+#### Scenario: Membership change is seen by the next pass
+- **WHEN** an activation's commit adds `Tile` to a new entity
+- **THEN** the next pass over that membership includes the entity at its creation-order position

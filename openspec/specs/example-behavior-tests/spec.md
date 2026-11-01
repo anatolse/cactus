@@ -154,3 +154,46 @@ The build SHALL provide a single target that builds every executable registered 
 #### Scenario: Coverage gate uses the same set
 - **WHEN** the coverage gate runs
 - **THEN** it builds exactly the executables the test target builds
+
+### Requirement: Generated-code performance regression benchmarks
+
+The test suite SHALL include a set of small performance benchmarks. Each benchmark is a `.cactus` fixture of one rule shape, compiled and driven headlessly at a fixed entity count. The set SHALL cover at least these shapes: a static relation keep over a grid, a union fold with a `closure` test, an equality-planned reduction, a grid-region pair pass, a two-row relation join, and a plain per-entity update rule as a baseline.
+
+Each benchmark SHALL check two kinds of thresholds:
+
+- **Work thresholds**: deterministic counts, such as structural commands queued per frame, derived-relation searches built, membership orderings and candidate tuples checked. They SHALL run in every build, including Debug and coverage builds, as ordinary test cases.
+- **Time thresholds**: the median milliseconds per frame over a fixed number of frames after warm-up, at the fixed size and at twice that size. The time at twice the size SHALL also stay within a stated growth ratio of the base time, so that a quadratic regression fails on any machine. Time thresholds SHALL run only in optimized builds; Debug and coverage builds SHALL skip them with a reported skip. An environment variable SHALL scale all absolute time limits for slower machines. Ratio limits SHALL NOT be scaled.
+
+Each benchmark SHALL also report its timings through Catch2 `BENCHMARK` so runs can be compared. Thresholds SHALL live next to their benchmark. A change that raises a threshold SHALL record the reason in its design.
+
+#### Scenario: Command regression fails in a Debug build
+- **WHEN** a change makes the static relation keep queue one command per kept row again
+- **THEN** the benchmark's work threshold fails in the default Debug test run
+
+#### Scenario: Quadratic regression fails by ratio
+- **WHEN** a change makes the union fold run one closure search per tile
+- **THEN** the median frame time at twice the grid size exceeds the growth ratio, and the benchmark fails in the optimized build
+
+#### Scenario: Debug build skips time limits
+- **WHEN** the benchmarks run in the Debug or coverage build
+- **THEN** the work thresholds are checked and the time thresholds are reported as skipped
+
+#### Scenario: Slower machine scales time limits
+- **WHEN** the scaling variable is set to 2
+- **THEN** every absolute time limit doubles, and the growth ratios are unchanged
+
+### Requirement: Performance benchmarks are part of development and final verification
+
+The change-lifecycle guidance in `CLAUDE.md` SHALL require a substantive change that adds or changes rule evaluation, pass planning, keep or fold code, or a runtime path that runs every frame to add or extend a benchmark that covers the new or changed shape. The benchmark SHALL be written before the implementation, as with other tests. The guidance SHALL require the Verify step to build the benchmark executable in the optimized preset and run the `perf`-labelled tests, and SHALL state that a failing limit is fixed by fixing the regression; a limit is raised only with the reason recorded in the change's design. `openspec/config.yaml` SHALL carry a `tasks` rule requiring each change's `tasks.md` to include that verification run before the coverage-gate task.
+
+#### Scenario: Lifecycle guidance names the benchmark run
+- **WHEN** `CLAUDE.md`'s change-lifecycle Verify step is read
+- **THEN** it requires a passing optimized `perf` run and states that a failing limit means fixing the regression, not raising the limit
+
+#### Scenario: Development guidance asks for a benchmark
+- **WHEN** `CLAUDE.md`'s Testing section is read
+- **THEN** it requires a new or extended benchmark, written first, for a change to rule evaluation, planning, keep or fold code, or a per-frame runtime path
+
+#### Scenario: Generated task lists include the benchmark run
+- **WHEN** `openspec/config.yaml` is read
+- **THEN** its `rules.tasks` entries require a task that runs the optimized `perf` tests before the final coverage-gate task

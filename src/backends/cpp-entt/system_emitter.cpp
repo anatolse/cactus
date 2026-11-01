@@ -19,6 +19,7 @@
 #include <format>
 #include <functional>
 #include <iterator>
+#include <map>
 #include <numeric>
 #include <optional>
 #include <ranges>
@@ -569,7 +570,13 @@ struct PairCodegenBinding {
     // A row binding: a relation row, not an entity.
     bool row = false;
     std::optional<SymbolId> relation;
+    // Traits the enclosing code read once into `hoisted_read_name` locals.
+    std::vector<SymbolId> hoisted;
 };
+
+static std::string hoisted_read_name(const PairCodegenBinding& binding, std::size_t index) {
+    return "cactus_read_" + binding.binding_name + "_" + std::to_string(index);
+}
 
 struct PairCodegenScope {
     std::vector<PairCodegenBinding> bindings;  // exactly two, source order
@@ -730,19 +737,14 @@ PairBindingCodegen build_pair_binding_codegen(const PairBindingNode& binding, co
     return result;
 }
 
-void emit_pair_binding_snapshot(std::ostringstream& out, const PairBindingCodegen& binding, int indent) {
+// The binding's creation-ordered membership, cached across passes. A pass
+// that narrows the snapshot copies it; every other pass reads it in place.
+void emit_pair_binding_snapshot(std::ostringstream& out, const PairBindingCodegen& binding, int indent, bool narrowed) {
     const std::string ind(static_cast<std::size_t>(indent) * 4U, ' ');
     const std::string& name = binding.scope.binding_name;
-    out << ind << "std::vector<entt::entity> " << name << "_snapshot;\n";
-    out << ind << "{\n";
-    out << ind << "    auto " << name << "_view = registry.view<";
-    for (std::size_t i = 0; i < binding.cpp_types.size(); ++i) {
-        out << (i == 0 ? "" : ", ") << binding.cpp_types[i];
-    }
-    out << ">();\n";
-    out << ind << "    " << name << "_snapshot = cactus::runtime::entt_backend::creation_ordered(registry, "
-        << name << "_view);\n";
-    out << ind << "}\n";
+    out << ind << (narrowed ? "std::vector<entt::entity> " : "[[maybe_unused]] const auto& ") << name
+        << "_snapshot = cactus::runtime::entt_backend::ordered_membership<" << join_strings(binding.cpp_types, ", ")
+        << ">(registry);\n";
 }
 
 bool is_flat_transform_propagation(const ExternRuleNode& sys, const DecoratedProgram& program) {
@@ -2577,9 +2579,34 @@ static std::string lower_query_call_expr(const QueryCallExpr& qcall,
     return "/* unrecognized query module: " + module + " */";
 }
 
+// A relation test argument that is the same for every tuple of the pass.
+static bool fixed_relation_end(const ExprNode& argument) {
+    if (std::holds_alternative<LiteralExpr>(argument.expr)) {
+        return true;
+    }
+    const auto* ident = std::get_if<IdentExpr>(&argument.expr);
+    return ident != nullptr && (ident->resolved_entity_id.has_value() || ident->resolved_const_id.has_value());
+}
+
+static bool outer_relation_end(const ExprNode& argument, const PairCodegenScope* pair_scope) {
+    const auto* ident = std::get_if<IdentExpr>(&argument.expr);
+    return ident != nullptr && pair_scope != nullptr && !pair_scope->bindings.empty() &&
+           ident->name == pair_scope->bindings.front().binding_name;
+}
+
+// A keyed derived relation caches one search per key, so the key is the end
+// that changes least often: a fixed value, then the outer binding, else `to`.
+static bool keys_by_from(const RelationTestExpr& test, const PairCodegenScope* pair_scope) {
+    if (fixed_relation_end(*test.from) || fixed_relation_end(*test.to)) {
+        return fixed_relation_end(*test.from);
+    }
+    return outer_relation_end(*test.from, pair_scope);
+}
+
 // `R(x, y)` is a pair lookup; `R(x, _)` and `R(_, y)` look up one end's index.
 static std::string lower_relation_test(const RelationTestExpr& test,
                                        const DecoratedProgram& program,
+                                       const PairCodegenScope* pair_scope,
                                        const std::function<std::string(const ExprNode&)>& rewrite) {
     const auto store = EnttCodegenUtils::relation_reader_cpp(program, test.relation);
     if (test.from == nullptr) {
@@ -2588,7 +2615,10 @@ static std::string lower_relation_test(const RelationTestExpr& test,
     if (test.to == nullptr) {
         return store + ".has_from(" + rewrite(*test.from) + ")";
     }
-    return store + ".contains(" + rewrite(*test.from) + ", " + rewrite(*test.to) + ")";
+    const auto* declaration = EnttCodegenUtils::find_relation(program, test.relation);
+    const bool keyed        = declaration != nullptr && declaration->derived_by_key();
+    const auto lookup       = !keyed ? ".contains(" : keys_by_from(test, pair_scope) ? ".contains_by_from(" : ".contains_by_to(";
+    return store + lookup + rewrite(*test.from) + ", " + rewrite(*test.to) + ")";
 }
 
 // An immediately invoked lambda evaluates the subject once and only the selected arm.
@@ -2646,8 +2676,13 @@ static std::string lower_trait_field_path(const TraitAccessExpr& access,
         const auto* plan = AccumulationScope::active();
         const bool settles =
             !fields.empty() && plan != nullptr && plan->buffered({.trait = trait_id, .field = fields.front()});
-        base = "registry.get<" + std::string(binding->writable || settles ? "" : "const ") +
-               EnttCodegenUtils::trait_cpp_name(trait_id, access.trait_name, program) + ">(" + ident->name + ")";
+        const auto hoisted = std::ranges::find(binding->hoisted, trait_id);
+        if (!binding->writable && !settles && hoisted != binding->hoisted.end()) {
+            base = hoisted_read_name(*binding, static_cast<std::size_t>(hoisted - binding->hoisted.begin()));
+        } else {
+            base = "registry.get<" + std::string(binding->writable || settles ? "" : "const ") +
+                   EnttCodegenUtils::trait_cpp_name(trait_id, access.trait_name, program) + ">(" + ident->name + ")";
+        }
     }
     const auto* trait = EnttCodegenUtils::find_trait(program, make_canonical_id(trait_id));
     if (fields.size() == 2 && trait != nullptr && EnttCodegenUtils::is_color_component_member(fields[1])) {
@@ -2996,7 +3031,7 @@ static std::string rewrite_expr_node(  // NOLINT(readability-function-cognitive-
             } else if constexpr (std::is_same_v<E, TraitAccessExpr>) {
                 return lower_trait_field_path(e, {}, program, pair_scope);
             } else if constexpr (std::is_same_v<E, RelationTestExpr>) {
-                return lower_relation_test(e, program, [&](const ExprNode& child) {
+                return lower_relation_test(e, program, pair_scope, [&](const ExprNode& child) {
                     return rewrite_expr(child, trait_names, program, pointer_aliases, cpp_overrides, pair_scope,
                                         local_kinds);
                 });
@@ -5024,6 +5059,54 @@ static void emit_unrecipient_pair_activation(std::ostringstream& out,
     out << "        }\n";
 }
 
+static std::optional<std::vector<const ExprNode*>> equality_residual(const RuleNode& sys,
+                                                                     const HandlerContract* contract,
+                                                                     const DecoratedProgram& program,
+                                                                     const std::vector<const ExprNode*>& predicates,
+                                                                     bool right_indexed);
+
+// Reads each trait `exprs` read through `binding` once into a local, and has
+// `scope` lower those reads to it. Only pure clause code is hoisted: a handler
+// body may write, and a write can move a component the local refers to.
+static std::string hoist_reads(PairCodegenScope& scope,
+                               std::size_t binding,
+                               const std::vector<const ExprNode*>& exprs,
+                               const DecoratedProgram& program,
+                               const std::string& indent) {
+    auto& target = scope.bindings.at(binding);
+    if (target.writable || target.row) {
+        return {};
+    }
+    std::vector<std::pair<SymbolId, std::string>> traits;
+    for (const auto* expr : exprs) {
+        visit_expression(*expr, [&](const ExprNode& node) {
+            const auto* access = std::get_if<TraitAccessExpr>(&node.expr);
+            if (access == nullptr || access->pair_binding_index != binding || !access->resolved_trait_id.has_value() ||
+                access->named_ref().has_value() ||
+                std::ranges::contains(traits, *access->resolved_trait_id, &std::pair<SymbolId, std::string>::first)) {
+                return;
+            }
+            traits.emplace_back(*access->resolved_trait_id, access->trait_name);
+        });
+    }
+    std::string reads;
+    for (const auto& [trait, name] : traits) {
+        target.hoisted.push_back(trait);
+        reads += indent + "[[maybe_unused]] const auto& " + hoisted_read_name(target, target.hoisted.size() - 1) +
+                 " = registry.get<const " +
+                 EnttCodegenUtils::trait_cpp_name(trait, name, program) + ">(" + target.binding_name + ");\n";
+    }
+    return reads;
+}
+
+// `hoist_reads` for both bindings of a pair tuple.
+static std::string hoist_pair_reads(PairCodegenScope& scope,
+                                    const std::vector<const ExprNode*>& exprs,
+                                    const DecoratedProgram& program,
+                                    const std::string& indent) {
+    return hoist_reads(scope, 0, exprs, program, indent) + hoist_reads(scope, 1, exprs, program, indent);
+}
+
 // A pair handler snapshots both bindings' live memberships up
 // front (deterministic, creation-ordinal order), then iterates
 // their directed Cartesian product left-binding-major without
@@ -5038,8 +5121,9 @@ static void emit_pair_handler_body(std::ostringstream& out,
                                    const DecoratedProgram& program,
                                    const HandlerContract* contract,
                                    const std::string* tuple_body = nullptr) {
-    for (const auto& binding : pair_binding_codegens) {
-        emit_pair_binding_snapshot(out, binding, 1);
+    for (std::size_t index = 0; index < pair_binding_codegens.size(); ++index) {
+        emit_pair_binding_snapshot(
+            out, pair_binding_codegens[index], 1, !where_at(sys, contract, binding_stage(index)).empty());
     }
     const std::array<std::string, 2> keeps{
         emit_binding_filter(out, sys, contract, 0, pair_codegen_scope, program),
@@ -5084,15 +5168,41 @@ static void emit_pair_handler_body(std::ostringstream& out,
     // binding names, so the lambda's parameters are those same two names —
     // no per-site parameter mapping is needed.
     const auto row_predicates = where_at(sys, contract, ClauseStage::Row);
-    out << "    auto " << pair_body_name << " = [&]([[maybe_unused]] entt::entity " << left.scope.binding_name
-        << ", [[maybe_unused]] entt::entity " << right.scope.binding_name << ") {\n";
-    if (!limited) {
-        emit_where_guard(out, row_predicates, [&](const ExprNode& predicate) {
-            return rewrite_expr(predicate, {}, program, {}, {}, &pair_codegen_scope);
-        });
+    auto guard_scope             = pair_codegen_scope;
+    const auto rewrite_predicate = [&](const ExprNode& predicate) {
+        return rewrite_expr(predicate, {}, program, {}, {}, &guard_scope);
+    };
+    const auto emit_guard = [&](const std::vector<const ExprNode*>& predicates) {
+        guard_scope = pair_codegen_scope;
+        out << hoist_pair_reads(guard_scope, predicates, program, "        ");
+        emit_where_guard(out, predicates, rewrite_predicate);
+    };
+    const auto lambda_head = [&](const std::string& name) {
+        out << "    auto " << name << " = [&]([[maybe_unused]] entt::entity " << left.scope.binding_name
+            << ", [[maybe_unused]] entt::entity " << right.scope.binding_name << ") {\n";
+    };
+    // An equality lookup proves part of `where:`, so the tuples it yields check
+    // only the rest; recipient tuples come from the snapshot and check it all.
+    const auto residual =
+        buffered ? std::nullopt : equality_residual(sys, contract, program, row_predicates, true);
+    const bool planned      = residual.has_value() && *residual != row_predicates;
+    const auto planned_name = gen_temp_name("pair_planned", handler.location);
+    lambda_head(planned ? planned_name : pair_body_name);
+    out << "        cactus::runtime::entt_backend::count_candidate();\n";
+    if (planned) {
+        emit_guard(*residual);
+    } else if (!limited) {
+        emit_guard(row_predicates);
     }
     out << pair_body;
     out << "    };\n";
+    if (planned) {
+        lambda_head(pair_body_name);
+        emit_guard(row_predicates);
+        out << "        " << planned_name << "(" << left.scope.binding_name << ", " << right.scope.binding_name
+            << ");\n";
+        out << "    };\n";
+    }
     // A limited rule's row predicates run here, at collection, so a rejected
     // candidate never reaches the buffer and therefore can never occupy a
     // slot truncation would otherwise have given it (dsl-rule-limit).
@@ -5144,7 +5254,7 @@ static void emit_pair_handler_body(std::ostringstream& out,
     out << "        }\n";
     out << "    } else {\n";
     emit_unrecipient_pair_activation(out, sys, contract, pair_binding_codegens, pair_codegen_scope, program, keeps,
-                                     dispatch_name);
+                                     planned ? planned_name : dispatch_name);
     out << "    }\n";
     if (!buffered) {
         return;
@@ -5735,7 +5845,7 @@ static void emit_collider_shape_cache(std::ostringstream& out, const PairCodegen
     out << "    };\n";
 }
 
-// `apply_kept<T, tracked>` or `apply_unkept<T, tracked>`, as the queued command calls it.
+// `apply_kept_batch<T, tracked>` or `apply_unkept_batch<T, tracked>`, as the queued command calls it.
 static std::string kept_command(const char* function, const KeepClause& keep, const DecoratedProgram& program) {
     const auto cpp = EnttCodegenUtils::trait_cpp_name(keep.resolved_target, keep.target_name, program);
     const bool tracked =
@@ -5744,42 +5854,68 @@ static std::string kept_command(const char* function, const KeepClause& keep, co
            ">";
 }
 
-// Queues `T` on `recipient` with this run's field values, at the activation's commit.
+// With no assigned fields the value is all defaults, so a present trait needs no patch.
+static bool keep_patches(const KeepClause& keep) {
+    return !keep.fields.empty();
+}
+
+// The pass's kept targets, with their field values when the keep assigns any.
+static void emit_keep_buffer(std::ostringstream& out, const KeepClause& keep, const DecoratedProgram& program) {
+    if (keep_patches(keep)) {
+        out << "    std::vector<std::pair<entt::entity, "
+            << EnttCodegenUtils::trait_cpp_name(keep.resolved_target, keep.target_name, program)
+            << ">> cactus_kept_targets;\n";
+    } else {
+        out << "    std::vector<entt::entity> cactus_kept_targets;\n";
+    }
+}
+
+// Buffers `T` on `recipient` with this run's field values.
 static void emit_keep_add(std::ostringstream& out,
                           const KeepClause& keep,
                           const std::string& recipient,
                           const std::function<std::string(const ExprNode&)>& rewrite,
                           const DecoratedProgram& program,
                           const std::string& ind) {
-    // With no assigned fields the value is all defaults, so a present trait needs no patch.
-    const bool patches = !keep.fields.empty();
-    if (patches) {
-        out << ind << EnttCodegenUtils::trait_cpp_name(keep.resolved_target, keep.target_name, program)
-            << " cactus_value{};\n";
+    if (!keep_patches(keep)) {
+        out << ind << "cactus_kept_targets.push_back(" << recipient << ");\n";
+        return;
     }
+    out << ind << EnttCodegenUtils::trait_cpp_name(keep.resolved_target, keep.target_name, program)
+        << " cactus_value{};\n";
     for (const auto& field : keep.fields) {
         out << ind << "cactus_value." << field.name << " = " << rewrite(*field.value) << ";\n";
     }
-    out << ind << "cactus::runtime::entt_backend::generated_queue_structural_command(\n";
-    out << ind << "    cactus::runtime::entt_backend::StructuralCommand::Kind::Add,\n";
-    out << ind << "    [cactus_target = " << recipient << (patches ? ", cactus_value" : "")
-        << "](entt::registry& registry) {\n";
-    out << ind << "        " << kept_command("apply_kept", keep, program) << "(registry, cactus_target"
-        << (patches ? ", cactus_value" : "") << ");\n";
-    out << ind << "    });\n";
+    out << ind << "cactus_kept_targets.emplace_back(" << recipient << ", cactus_value);\n";
 }
 
-// Queues the removal of `T` from every carrier `cactus_is_kept` rejects, oldest first.
-static void emit_keep_removals(std::ostringstream& out, const KeepClause& keep, const DecoratedProgram& program) {
-    const auto cpp = EnttCodegenUtils::trait_cpp_name(keep.resolved_target, keep.target_name, program);
-    out << "    for (const auto cactus_entity : cactus::runtime::entt_backend::leaving_carriers<" << cpp
-        << ">(registry, cactus_is_kept)) {\n";
+// Queues `targets` as one `kind` command running `function` at the activation's commit.
+static void emit_keep_batch_command(std::ostringstream& out,
+                                    const KeepClause& keep,
+                                    const char* kind,
+                                    const char* function,
+                                    const std::string& targets,
+                                    const DecoratedProgram& program) {
+    out << "    if (!" << targets << ".empty()) {\n";
     out << "        cactus::runtime::entt_backend::generated_queue_structural_command(\n";
-    out << "            cactus::runtime::entt_backend::StructuralCommand::Kind::Remove,\n";
-    out << "            [cactus_target = cactus_entity](entt::registry& registry) {\n";
-    out << "                " << kept_command("apply_unkept", keep, program) << "(registry, cactus_target);\n";
+    out << "            cactus::runtime::entt_backend::StructuralCommand::Kind::" << kind << ",\n";
+    out << "            [cactus_batch = std::move(" << targets << ")](entt::registry& registry) {\n";
+    out << "                " << kept_command(function, keep, program) << "(registry, cactus_batch);\n";
     out << "            });\n";
     out << "    }\n";
+}
+
+// Queues every add buffered in `added`, then the removal of `T` from every
+// carrier `cactus_is_kept` rejects, oldest first: two commands at most.
+static void emit_keep_removals(std::ostringstream& out,
+                               const KeepClause& keep,
+                               const DecoratedProgram& program,
+                               const std::string& added = "cactus_kept_targets") {
+    emit_keep_batch_command(out, keep, "Add", "apply_kept_batch", added, program);
+    const auto cpp = EnttCodegenUtils::trait_cpp_name(keep.resolved_target, keep.target_name, program);
+    out << "    auto cactus_leaving = cactus::runtime::entt_backend::leaving_carriers<" << cpp
+        << ">(registry, cactus_is_kept);\n";
+    emit_keep_batch_command(out, keep, "Remove", "apply_unkept_batch", "cactus_leaving", program);
 }
 
 // `keep T on b [if c]`: every group with rows, or whose condition holds, gets
@@ -5794,6 +5930,7 @@ static void emit_keep_commands(std::ostringstream& out,
         return rewrite_expr(expr, {}, program, {}, {}, &group_scope);
     };
     out << "    std::vector<char> cactus_kept(" << group << "_snapshot.size(), 0);\n";
+    emit_keep_buffer(out, keep, program);
     out << "    for (const auto& cactus_row : cactus_rows) {\n";
     emit_reduce_row_bindings(out, reduce, "        ");
     const auto present = keep.condition != nullptr ? rewrite(*keep.condition) : "cactus_row.cactus_witnessed";
@@ -5815,6 +5952,8 @@ static void emit_keep_commands(std::ostringstream& out,
 // The group binding first: with no groups there is nothing to run, unless the
 // rule keeps a trait and so must still remove every carrier.
 static void emit_reduced_pair_snapshots(std::ostringstream& out,
+                                        const RuleNode& sys,
+                                        const HandlerContract* contract,
                                         const ReduceClause& reduce,
                                         const std::vector<PairBindingCodegen>& pair_binding_codegens,
                                         bool keeps,
@@ -5822,8 +5961,13 @@ static void emit_reduced_pair_snapshots(std::ostringstream& out,
     const auto is_group = [&](const PairBindingCodegen& binding) {
         return reduce.per_binding == binding.scope.binding_name;
     };
+    // Only a filtered binding other than the group narrows its snapshot.
+    const auto narrowed = [&](const PairBindingCodegen& binding) {
+        const auto index = static_cast<std::size_t>(&binding - pair_binding_codegens.data());
+        return !is_group(binding) && !where_at(sys, contract, binding_stage(index)).empty();
+    };
     for (const auto& binding : pair_binding_codegens | std::views::filter(is_group)) {
-        emit_pair_binding_snapshot(out, binding, 1);
+        emit_pair_binding_snapshot(out, binding, 1, false);
         if (!keeps) {
             out << "    if (" << binding.scope.binding_name << "_snapshot.empty()) {\n";
             out << "        return;\n";
@@ -5832,7 +5976,7 @@ static void emit_reduced_pair_snapshots(std::ostringstream& out,
     }
     for (const auto& binding : pair_binding_codegens | std::views::filter(std::not_fn(is_group))) {
         if (binding.scope.binding_name != indexed) {
-            emit_pair_binding_snapshot(out, binding, 1);
+            emit_pair_binding_snapshot(out, binding, 1, narrowed(binding));
         }
     }
 }
@@ -5944,14 +6088,17 @@ static void emit_group_table(std::ostringstream& out,
 }
 
 // Folds one accepted row into its group's (or the total's) accumulator.
+// `reads` declares the trait reads the fold's clauses share.
 static void emit_fold_lambda(std::ostringstream& out,
                              const ReduceClause& reduce,
                              bool witness,
                              const PairCodegenScope& fold_scope,
                              const std::vector<const ExprNode*>& row_predicates,
-                             const std::function<std::string(const ExprNode&)>& rewrite) {
+                             const std::function<std::string(const ExprNode&)>& rewrite,
+                             const std::string& reads) {
     out << "    auto cactus_fold = [&]([[maybe_unused]] entt::entity " << fold_scope.bindings[0].binding_name
         << ", [[maybe_unused]] entt::entity " << fold_scope.bindings[1].binding_name << ") {\n";
+    out << "        cactus::runtime::entt_backend::count_candidate();\n";
     if (reduce.per_binding.has_value()) {
         const auto& group = *reduce.per_binding;
         out << "        const auto cactus_slot = cactus_positions_" << group << ".find(" << group << ");\n";
@@ -5964,6 +6111,7 @@ static void emit_fold_lambda(std::ostringstream& out,
     } else {
         out << "        auto& cactus_acc = cactus_total;\n";
     }
+    out << reads;
     for (const auto* predicate : row_predicates) {
         out << "        if (" << rejects(rewrite(*predicate)) << ") { return; }\n";
     }
@@ -5971,15 +6119,17 @@ static void emit_fold_lambda(std::ostringstream& out,
     out << "    };\n";
 }
 
-// Feeds every row, from the broad phase when one applies, to the fold; a false
-// activation gate feeds none.
+// Feeds every row to the fold, from the broad phase or the pass's plan when
+// one applies, else the full product; a false activation gate feeds none.
+// `filtered` marks the bindings whose snapshots the binding filters narrowed.
 static void emit_fold_dispatch(std::ostringstream& out,
                                const RuleNode& sys,
                                const HandlerContract* contract,
                                bool gated,
                                const std::vector<PairBindingCodegen>& pair_binding_codegens,
                                const PairCodegenScope& fold_scope,
-                               const DecoratedProgram& program) {
+                               const DecoratedProgram& program,
+                               const std::array<bool, 2>& filtered) {
     if (gated) {
         out << "    if (cactus_active) {\n";
     }
@@ -5988,13 +6138,14 @@ static void emit_fold_dispatch(std::ostringstream& out,
         emit_sap_pair_activation(
             out, *contract->spatial_join, *spatial_root, pair_binding_codegens, fold_scope, program, "cactus_fold");
     } else {
-        const auto& left  = fold_scope.bindings[0].binding_name;
-        const auto& right = fold_scope.bindings[1].binding_name;
-        out << "    for (auto " << left << " : " << left << "_snapshot) {\n";
-        out << "        for (auto " << right << " : " << right << "_snapshot) {\n";
-        out << "            cactus_fold(" << left << ", " << right << ");\n";
-        out << "        }\n";
-        out << "    }\n";
+        std::array<std::string, 2> keeps;
+        for (std::size_t index = 0; index < keeps.size(); ++index) {
+            if (filtered[index]) {
+                keeps[index] = "cactus_keep_" + fold_scope.bindings[index].binding_name;
+            }
+        }
+        emit_unrecipient_pair_activation(
+            out, sys, contract, pair_binding_codegens, fold_scope, program, keeps, "cactus_fold");
     }
     if (gated) {
         out << "    }\n";
@@ -6606,6 +6757,84 @@ static std::optional<EqualityFoldPlan> equality_fold_plan(const RuleNode& sys,
     return plan;
 }
 
+// The `==` comparison a key part reads its member side from.
+static ExprPath key_comparison(const EqualityJoinKey& key) {
+    return {key.member.begin(), key.member.end() - 1};
+}
+
+// The `where:` conjuncts an equality lookup's key fully proves, by predicate
+// index: every key comparison, and each `or` whose disjuncts are exactly one
+// branch's key comparisons.
+static std::map<std::size_t, std::vector<ExprPath>> equality_proven_conjuncts(const RuleNode& sys,
+                                                                             const EqualityJoinPlan& join) {
+    std::map<std::size_t, std::vector<ExprPath>> proven;
+    for (const auto& key : join.keys) {
+        proven[key.predicate_index].push_back(key_comparison(key));
+    }
+    if (join.branches.empty()) {
+        return proven;
+    }
+    const auto index = join.branches.front().front().predicate_index;
+    const auto& root = *sys.where_clause->predicates.at(index);
+    const auto exact = [&](const std::vector<ExprPath>& disjuncts) {
+        for (std::size_t branch = 0; branch < disjuncts.size(); ++branch) {
+            auto atoms = chain_paths(root, disjuncts[branch], "and");
+            std::vector<ExprPath> keyed;
+            for (const auto& key : join.branches[branch]) {
+                if (key.predicate_index != index) {
+                    return false;
+                }
+                keyed.push_back(key_comparison(key));
+            }
+            std::ranges::sort(atoms);
+            std::ranges::sort(keyed);
+            if (atoms != keyed) {
+                return false;
+            }
+        }
+        return true;
+    };
+    for (const auto& conjunct : chain_paths(root, {}, "and")) {
+        const auto disjuncts = chain_paths(root, conjunct, "or");
+        if (disjuncts.size() == join.branches.size() && exact(disjuncts)) {
+            proven[index].push_back(conjunct);
+        }
+    }
+    return proven;
+}
+
+// The conjuncts of `predicates` left to check on the tuples an equality lookup
+// yields, in order; nullopt when no lookup drives the pass. A lookup by the
+// member itself, or of a left-indexed handler pass, proves nothing.
+static std::optional<std::vector<const ExprNode*>> equality_residual(const RuleNode& sys,
+                                                                     const HandlerContract* contract,
+                                                                     const DecoratedProgram& program,
+                                                                     const std::vector<const ExprNode*>& predicates,
+                                                                     bool right_indexed) {
+    const auto plan = equality_fold_plan(sys, contract, program);
+    if (!plan.has_value() || plan->identity.has_value() || (right_indexed && plan->indexed != 1)) {
+        return std::nullopt;
+    }
+    const auto proven = equality_proven_conjuncts(sys, *contract->equality_join);
+    std::vector<const ExprNode*> residual;
+    const auto& all = sys.where_clause->predicates;
+    for (const auto* predicate : predicates) {
+        const auto index =
+            static_cast<std::size_t>(std::ranges::find(all, predicate, &std::unique_ptr<ExprNode>::get) - all.begin());
+        const auto found = proven.find(index);
+        if (found == proven.end()) {
+            residual.push_back(predicate);
+            continue;
+        }
+        for (const auto& conjunct : chain_paths(*predicate, {}, "and")) {
+            if (!std::ranges::contains(found->second, conjunct)) {
+                residual.push_back(resolve_expr_path(*predicate, conjunct));
+            }
+        }
+    }
+    return residual;
+}
+
 static std::string equality_index_type(const EqualityFoldPlan& plan) {
     return plan.dense.has_value()
                ? "cactus::runtime::entt_backend::DenseKeyIndex<" + std::to_string(plan.dense->values.size()) + ">"
@@ -6820,6 +7049,15 @@ static void emit_equality_member_loop(std::ostringstream& out,
     out << indent << "for (const auto " << member << " : cactus_matches) {\n";
 }
 
+// Every lookup value of `plan`, for hoisting the reads they share.
+static std::vector<const ExprNode*> equality_queries(const EqualityFoldPlan& plan) {
+    std::vector<const ExprNode*> queries;
+    for (const auto& lookup : plan.lookups) {
+        queries.insert(queries.end(), lookup.begin(), lookup.end());
+    }
+    return queries;
+}
+
 static void emit_equality_fold_dispatch(std::ostringstream& out,
                                         const EqualityFoldPlan& plan,
                                         bool gated,
@@ -6833,12 +7071,16 @@ static void emit_equality_fold_dispatch(std::ostringstream& out,
         out << "    if (cactus_active) {\n";
     }
     emit_equality_buffers(out, plan, "    ");
-    out << "    for (std::size_t cactus_i = 0; cactus_i < " << group << "_snapshot.size(); ++cactus_i) {\n";
     if (grouped) {
+        out << "    for (std::size_t cactus_i = 0; cactus_i < " << group << "_snapshot.size(); ++cactus_i) {\n";
         out << "        if (cactus_group_live[cactus_i] == 0) { continue; }\n";
+        out << "        const auto " << group << " = " << group << "_snapshot[cactus_i];\n";
+    } else {
+        out << "    for (const auto " << group << " : " << group << "_snapshot) {\n";
     }
-    out << "        const auto " << group << " = " << group << "_snapshot[cactus_i];\n";
-    emit_equality_member_loop(out, plan, pair_binding_codegens[plan.indexed], fold_scope, program, "        ");
+    auto key_scope = fold_scope;
+    out << hoist_reads(key_scope, 1 - plan.indexed, equality_queries(plan), program, "        ");
+    emit_equality_member_loop(out, plan, pair_binding_codegens[plan.indexed], key_scope, program, "        ");
     out << "            cactus_fold(" << (plan.indexed == 0 ? member + ", " + group : group + ", " + member) << ");\n";
     out << "        }\n";
     out << "    }\n";
@@ -6868,7 +7110,9 @@ static bool emit_equality_pair_activation_if_planned(std::ostringstream& out,
     emit_equality_index_sync(out, *plan, pair_binding_codegens[1], pair_codegen_scope, program);
     emit_equality_buffers(out, *plan, "        ");
     out << "        for (const auto " << left << " : " << left << "_snapshot) {\n";
-    emit_equality_member_loop(out, *plan, pair_binding_codegens[1], pair_codegen_scope, program, "            ");
+    auto key_scope = pair_codegen_scope;
+    out << hoist_reads(key_scope, 0, equality_queries(*plan), program, "            ");
+    emit_equality_member_loop(out, *plan, pair_binding_codegens[1], key_scope, program, "            ");
     const auto call = dispatch_name + "(" + left + ", " + right + ");";
     out << "                " << (member_keep.empty() ? call : "if (" + member_keep + "(" + right + ")) { " + call + " }")
         << "\n";
@@ -7075,7 +7319,7 @@ static void emit_reduced_pair_handler_body(std::ostringstream& out,
     } else if (equality.has_value()) {
         indexed = pair_binding_codegens[equality->indexed].scope.binding_name;
     }
-    emit_reduced_pair_snapshots(out, reduce, pair_binding_codegens, keeps, indexed);
+    emit_reduced_pair_snapshots(out, sys, contract, reduce, pair_binding_codegens, keeps, indexed);
     if (index.has_value()) {
         emit_binding_index_sync(out, *index, *spatial_join_root(sys, contract), pair_binding_codegens[index->indexed],
                                 pair_codegen_scope, program);
@@ -7108,7 +7352,23 @@ static void emit_reduced_pair_handler_body(std::ostringstream& out,
     } else {
         out << "    cactus_reduce_acc cactus_total{};\n";
     }
-    emit_fold_lambda(out, reduce, witness, fold_scope, fold_row_predicates(reduce, predicates, contract, filtered), rewrite);
+    auto row_predicates = fold_row_predicates(reduce, predicates, contract, filtered);
+    if (equality.has_value()) {
+        row_predicates = equality_residual(sys, contract, program, row_predicates, false).value_or(row_predicates);
+    }
+    auto fold_exprs = row_predicates;
+    for (const auto& reducer : reduce.reducers) {
+        for (const auto* input : {reducer.input.get(), reducer.key.get()}) {
+            if (input != nullptr) {
+                fold_exprs.push_back(input);
+            }
+        }
+    }
+    const auto reads = hoist_pair_reads(fold_scope, fold_exprs, program, "        ");
+    emit_fold_lambda(out, reduce, witness, fold_scope, row_predicates, rewrite, reads);
+    for (auto& binding : fold_scope.bindings) {
+        binding.hoisted.clear();
+    }
     if (index.has_value()) {
         emit_indexed_fold_dispatch(out, *index, *spatial_join_root(sys, contract), !active.empty(),
                                    pair_binding_codegens, fold_scope, program);
@@ -7116,7 +7376,7 @@ static void emit_reduced_pair_handler_body(std::ostringstream& out,
         emit_equality_fold_dispatch(out, *equality, !active.empty(), reduce.per_binding.has_value(),
                                     pair_binding_codegens, fold_scope, program);
     } else {
-        emit_fold_dispatch(out, sys, contract, !active.empty(), pair_binding_codegens, fold_scope, program);
+        emit_fold_dispatch(out, sys, contract, !active.empty(), pair_binding_codegens, fold_scope, program, filtered);
     }
 
     if (reduce.per_binding.has_value()) {
@@ -7178,7 +7438,12 @@ static void emit_unary_keep_handler_body(std::ostringstream& out,
                                          const DecoratedProgram& program,
                                          const HandlerContract* contract) {
     const auto& keep = *sys.keep;
+    // A fieldless keep adds exactly the kept entities, so it needs no second buffer.
+    const bool patches = keep_patches(keep);
     out << "    std::vector<entt::entity> cactus_kept_entities;\n";
+    if (patches) {
+        emit_keep_buffer(out, keep, program);
+    }
     const auto active = activation_condition(sys, contract, program);
     out << (active.empty() ? "    {\n" : "    if (" + active + ") {\n");
     emit_view_declaration(out, domain.filter_cpp_types, domain.exclude_cpp_types, 2);
@@ -7192,25 +7457,30 @@ static void emit_unary_keep_handler_body(std::ostringstream& out,
         out << "            if (" << rejects(rewrite(*predicate)) << ") { continue; }\n";
     }
     out << "            cactus_kept_entities.push_back(entity);\n";
-    emit_keep_add(out, keep, "entity", rewrite, program, "            ");
+    if (patches) {
+        emit_keep_add(out, keep, "entity", rewrite, program, "            ");
+    }
     out << "        }\n";
     out << "    }\n";
     out << "    const cactus::runtime::entt_backend::SnapshotPositions cactus_kept(cactus_kept_entities);\n";
     out << "    auto cactus_is_kept = [&](entt::entity cactus_carrier) {\n";
     out << "        return cactus_kept.find(cactus_carrier) != cactus::runtime::entt_backend::SnapshotPositions::kAbsent;\n";
     out << "    };\n";
-    emit_keep_removals(out, keep, program);
+    emit_keep_removals(out, keep, program, patches ? "cactus_kept_targets" : "cactus_kept_entities");
 }
 
-// `keep R(a, b)`: one run stamps a row per tuple passing `where:`, then drops
-// the rows it did not stamp, all at the activation's commit.
-static void emit_relation_keep_boundary(std::ostringstream& out,
-                                        const KeepClause& keep,
-                                        const std::string& call) {
-    const auto store = EnttCodegenUtils::uncompacted_relation_store_cpp(*keep.resolved_target);
+// `keep R(a, b)`: the pass buffers a row per tuple passing `where:`; one
+// command at the activation's commit keeps them and drops every other row.
+static void emit_relation_keep_buffer(std::ostringstream& out, const KeepClause& keep) {
+    out << "    cactus::runtime::entt_backend::KeptRows<" << EnttCodegenUtils::relation_cpp_name(*keep.resolved_target)
+        << "> cactus_kept_rows;\n";
+}
+
+static void emit_relation_keep_run(std::ostringstream& out) {
     out << "    cactus::runtime::entt_backend::generated_queue_structural_command(\n";
     out << "        cactus::runtime::entt_backend::StructuralCommand::Kind::Add,\n";
-    out << "        [](entt::registry& registry) { " << store << "." << call << "; });\n";
+    out << "        [cactus_keep_run = std::move(cactus_kept_rows)](entt::registry& registry) { "
+           "cactus::runtime::entt_backend::apply_relation_keep_run(registry, cactus_keep_run); });\n";
 }
 
 static std::string relation_keep_tuple_body(const KeepClause& keep,
@@ -7230,11 +7500,8 @@ static std::string relation_keep_tuple_body(const KeepClause& keep,
         }
         return argument.spelling + (*argument.from_endpoint ? ".from" : ".to");
     };
-    body << "        cactus::runtime::entt_backend::generated_queue_structural_command(\n";
-    body << "            cactus::runtime::entt_backend::StructuralCommand::Kind::Add,\n";
-    body << "            [cactus_from = " << key(0) << ", cactus_to = " << key(1)
-         << ", cactus_row_value](entt::registry& registry) { "
-         << "cactus::runtime::entt_backend::keep_relation_row(registry, cactus_from, cactus_to, cactus_row_value); });\n";
+    body << "        cactus_kept_rows.push_back({.from = " << key(0) << ", .to = " << key(1)
+         << ", .row = cactus_row_value});\n";
     return body.str();
 }
 
@@ -7246,10 +7513,10 @@ static void emit_relation_keep_handler_body(std::ostringstream& out,
                                             const DecoratedProgram& program,
                                             const HandlerContract* contract) {
     const auto& keep  = *sys.keep;
-    emit_relation_keep_boundary(out, keep, "begin_run()");
+    emit_relation_keep_buffer(out, keep);
     const auto tuple_body = relation_keep_tuple_body(keep, pair_codegen_scope, program);
     emit_pair_handler_body(out, sys, handler, pair_binding_codegens, pair_codegen_scope, program, contract, &tuple_body);
-    emit_relation_keep_boundary(out, keep, "drop_unstamped()");
+    emit_relation_keep_run(out);
 }
 
 // ── Relation row passes ─────────────────────────────────────
@@ -7419,6 +7686,7 @@ static void emit_row_callbacks(std::ostringstream& out,
                                 : rewrite_stmt_block(handler.body, 2, {}, program, {}, false, {}, &scope, locals, kinds));
     out << "    };\n";
     out << "    auto cactus_row_passes = [&](" << params << ") {\n";
+    out << "        cactus::runtime::entt_backend::count_candidate();\n";
     if (guards.empty()) {
         out << "        return true;\n";
     } else {
@@ -7451,7 +7719,7 @@ static void emit_row_pass(std::ostringstream& out,
         out << "    if (cactus_recipient.has_value()) { return; }\n";
     } else {
         entity_name = pair_binding_codegens[entity_index].scope.binding_name;
-        emit_pair_binding_snapshot(out, pair_binding_codegens[entity_index], 1);
+        emit_pair_binding_snapshot(out, pair_binding_codegens[entity_index], 1, true);
         (void)emit_binding_filter(out, sys, contract, entity_index, scope, program);
         out << "    if (cactus_recipient.has_value()) {\n";
         out << "        std::erase_if(" << entity_name
@@ -7640,7 +7908,7 @@ static void emit_handler_body(std::ostringstream& out,
     if (row_pass && !handler.has_lifecycle_trigger()) {
         emit_activation_gate(out, sys, contract, program);
         if (sys.keep.has_value()) {
-            emit_relation_keep_boundary(out, *sys.keep, "begin_run()");
+            emit_relation_keep_buffer(out, *sys.keep);
         }
         if (pairs.size() == 2 && pairs[0].scope.row && pairs[1].scope.row) {
             emit_joined_row_pass(out, sys, handler, scope, program, contract);
@@ -7648,7 +7916,7 @@ static void emit_handler_body(std::ostringstream& out,
             emit_row_pass(out, sys, handler, pairs, scope, program, contract);
         }
         if (sys.keep.has_value()) {
-            emit_relation_keep_boundary(out, *sys.keep, "drop_unstamped()");
+            emit_relation_keep_run(out);
         }
         return;
     }

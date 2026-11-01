@@ -53,7 +53,7 @@ hit and die clips. The knight has no death clip, so it plays its
 | G15: A probe output must be initialized as an input | Attach `RayProbe` with its volume and ray, then read only a valid hit. | `PreparePicking` initializes `cell` with the volume handle, matching robot-sandbox. The probe overwrites this unused output before consumers run, and consumers check `hit`. | Output-field initialization analysis remains a language/stdlib design question; no extension implemented here. |
 | G16: Delegated scenes selected the wrong camera dimension | Keep game transforms in imported game modules while the entry point declares configuration. | The backend now scans authored modules when the entry point has no transform references, preserving entry-point priority and excluding stdlib implementation details. | Regression checks cover flat, volume, stdlib-only and entry-point scenes. |
 | G17: Billboard rendering is a stub | Draw minimap cells and camera-facing health/XP bars. | The public trait has no standard renderer rule, and its runtime submission function only increments a counter. The example uses one shared two-triangle GLB plane, per-view model visibility and derived camera-facing transforms instead. | A complete native billboard renderer and batching remain a backend/stdlib change; no language extension is required. |
-| G18: Frame time still grows with territory | Hold 60 FPS on the full map through a ten-minute game. | No workaround. Per-rule timing finds no single hotspot: `ConnectedTiles` (`tile == heart or Reach(heart, tile)`, a disjunction the planner cannot index) grows from 2.4 to 7.7 ms by minute 4, and `BridgeSites`, `AssignTasks`, `AttackTargets` and `BorderCells` each add about 1 ms. `NeighborLinks` re-keeps static adjacency every frame (about 7 ms) and `SenseCells` pairs every unit with every tile (about 7 ms). | Backend opportunities, not yet proposed: skip re-keeping relations whose inputs did not change, and plan relation tests inside disjunctions. No language extension. |
+| G18: Frame time still grows with territory | Hold 60 FPS on the full map through a ten-minute game. | No workaround. Per-rule timing finds no single hotspot: `ConnectedTiles` (`tile == heart or Reach(heart, tile)`, a disjunction the planner cannot index) grows from 2.4 to 7.7 ms by minute 4, and `BridgeSites`, `AssignTasks`, `AttackTargets` and `BorderCells` each add about 1 ms. `NeighborLinks` re-keeps static adjacency every frame (about 7 ms) and `SenseCells` pairs every unit with every tile (about 7 ms). | Partly fixed in the backend: keep passes queue one command per run, folds use the pass plan, and `Reach(heart, tile)` searches once per heart. Full-map AI frames are 11.6 ms in minute 1 and 26.4 ms in minute 10 (see below). Frame time still grows with territory: `AssignTasks` and the commit grow most. Skipping keep passes whose inputs did not change remains a backend opportunity. No language extension. |
 | G19: Standard UI painted only inside active viewports | Show the main menu while both game viewports are inactive. | None possible in game code. The game's own `main()` drew nothing but the white window clear at startup; the rooms and map captures came from a test harness that started play directly, and the earlier menu capture was blank. | Fixed in the backend: a frame with no active viewport still runs the standard UI render rule once in window space. A headless case checks that the menu submits UI primitives. |
 
 The minimal routing join is:
@@ -120,6 +120,34 @@ XP and stats share one threshold table;
 manual movement interrupts work and returns to automatic tasks. Attack and
 defend orders drive the shared routing and combat systems. Recruitment reserves a bed and food; knights eat, rest, train for paid XP and
 identify intruders. Combat and victory/defeat outcomes are implemented. HUD, minimap, AI, menu flow and persistence behavior are implemented. Generated-code lint, the full suite and the coverage gate pass.
+
+### Full-map AI performance (2026-10-31)
+
+85-by-85 map, two AI players, ten simulated minutes, measured with the hidden
+`[.dungeon-ai-performance]` test after the `speed-up-keep-and-join-evaluation`
+backend change. Same hardware and `clang-o3-release` build as below.
+
+| Window | Before | After |
+| --- | ---: | ---: |
+| Game minutes 1-2 | 33.7-37.2 ms | 11.6-13.2 ms |
+| Game minute 10 | not measured | 26.4 ms |
+| Ten-minute mean / 95th percentile | 47.5 / 64.0 ms | 19.0 / 30.0 ms |
+| Structural commands per frame, minutes 1-2 | 37,143 | 72 |
+
+Top rules per fixed tick in minute 2, from timers around each rule call:
+commit 2.1 ms, `FloorSurfaces` 1.9 ms, `NeighborLinks` 1.3 ms (was 11 ms),
+`WalkableTiles` 0.9 ms, `DigTasks` 0.9 ms, `ConnectedTiles` 0.8 ms (was 2.8-3.4 ms).
+By minute 10, `AssignTasks` (4.2 ms) and the commit (4.2 ms) lead; `BorderCells`
+and `ClaimableFloor` reach about 1.1-1.4 ms. The game runs at about 50-85 FPS
+headless, but frame time still grows with territory, so 60 FPS is not held for
+the whole ten minutes.
+
+Reproduce with:
+
+```powershell
+cmake --build --preset clang-o3-release --target test_cactus_dungeon_headless_behavior
+./build-clang-o3-release/tests/test_cactus_dungeon_headless_behavior.exe '[.dungeon-ai-performance]'
+```
 
 ### Worker performance (2026-10-29)
 

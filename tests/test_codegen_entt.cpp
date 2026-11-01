@@ -6476,11 +6476,10 @@ TEST_CASE("Codegen EnTT: pair handler snapshots both bindings and iterates their
         if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
             // Two independent typed snapshots, not a materialized tuple list.
-            CHECK(code.contains("std::vector<entt::entity> body_snapshot;"));
-            CHECK(code.contains("registry.view<::cactus_gen::DynamicBody, ::cactus_gen::Transform>()"));
-            CHECK(code.contains("std::vector<entt::entity> wall_snapshot;"));
-            CHECK(code.contains("registry.view<::cactus_gen::Solid, ::cactus_gen::Collider>()"));
-            CHECK(code.contains("body_snapshot = cactus::runtime::entt_backend::creation_ordered(registry, body_view);"));
+            CHECK(code.contains("const auto& body_snapshot = cactus::runtime::entt_backend::ordered_membership<"
+                                "::cactus_gen::DynamicBody, ::cactus_gen::Transform>(registry);"));
+            CHECK(code.contains("const auto& wall_snapshot = cactus::runtime::entt_backend::ordered_membership<"
+                                "::cactus_gen::Solid, ::cactus_gen::Collider>(registry);"));
             // Left-binding-major nested iteration over the snapshots, in the
             // untargeted (broadcast) branch — the recipient-targeted branch
             // precedes it and has its own incident-tuple loop shapes.
@@ -6823,8 +6822,7 @@ TEST_CASE("Codegen EnTT: pair binding on a marker (zero-field) trait still snaps
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            CHECK(code.contains("registry.view<::cactus_gen::Solid>()"));
-            CHECK(code.contains("std::vector<entt::entity> wall_snapshot;"));
+            CHECK(code.contains("wall_snapshot = cactus::runtime::entt_backend::ordered_membership<::cactus_gen::Solid>(registry);"));
             CHECK(code.contains("for (auto wall : wall_snapshot)"));
         }
     }
@@ -7639,7 +7637,7 @@ TEST_CASE("Codegen EnTT: a pair predicate passes a large trait without copying i
                                       "    on tick:\n"
                                       "        emit Seen\n",
                                       "Look");
-    CHECK(code.contains("::sees(registry.get<const ::cactus_gen::"));
+    CHECK(code.contains("::sees(cactus_read_camera_0, "));
     CHECK_FALSE(code.contains("View cv"));
     CHECK_FALSE(code.contains("View{"));
 }
@@ -8122,7 +8120,7 @@ TEST_CASE("Codegen EnTT: an equality join with an unranged int key uses a flat h
     const auto var_field = emit_indexed_join(equality_join_source("var"));
     CHECK(var_field.contains("DenseKeyIndex<0>"));
     CHECK(var_field.contains(".block = registry.get<const ::cactus_gen::Cell>(cell).owner"));
-    CHECK(var_field.contains(".block = registry.get<const ::cactus_gen::Probe>(probe).owner"));
+    CHECK(var_field.contains(".block = cactus_read_probe_0.owner"));
 
     CHECK_FALSE(emit_indexed_join(equality_join_source("let"), false).contains("KeyIndex"));
 }
@@ -8173,8 +8171,8 @@ TEST_CASE("Codegen EnTT: ranged, enum and bool keys use a dense index within eac
     CHECK(code.contains("shared_binding_index<cactus::runtime::entt_backend::DenseKeyIndex<4>, "));
     CHECK_FALSE(code.contains("FlatKeyIndex"));
     CHECK(code.contains(".block = registry.get<const ::cactus_gen::Cell>(cell).volume"));
-    CHECK(code.contains(".block = registry.get<const ::cactus_gen::Probe>(probe).volume"));
-    CHECK(code.contains("dense_key_part(registry.get<const ::cactus_gen::Probe>(probe).x)"));
+    CHECK(code.contains(".block = cactus_read_probe_0.volume"));
+    CHECK(code.contains("dense_key_part(cactus_read_probe_0.x)"));
     // Extents come from the container's fields, constants, and the enum's size.
     CHECK(code.contains("registry.try_get<::cactus_gen::Volume>(cactus_block)"));
     CHECK(code.contains("->min_x"));
@@ -10911,7 +10909,7 @@ TEST_CASE("Codegen EnTT: derived relation tests read the cache", "[codegen-entt]
                                                               "    on tick:\n"
                                                               "        emit Done to a\n"),
                                       "Probe");
-    CHECK(code.contains("derived_relation<::cactus_gen::test::Reach>(registry).contains(a, b)"));
+    CHECK(code.contains("derived_relation<::cactus_gen::test::Reach>(registry).contains_by_from(a, b)"));
     CHECK(code.contains("derived_relation<::cactus_gen::test::Path>(registry).has_from(a)"));
     CHECK(code.contains("derived_relation<::cactus_gen::test::Group>(registry).has_to(b)"));
 }
@@ -11027,7 +11025,286 @@ TEST_CASE("Codegen EnTT: an unconditional reduced keep has no boolean literal gu
         "  n = count()\n    keep Total on owner if true:\n        count = n\n";
     const auto body = emit_named_rule(source, "Count");
     CHECK_FALSE(body.contains("if (!true)"));
-    CHECK(body.contains("apply_kept<"));
+    CHECK(body.contains("apply_kept_batch<"));
+}
+
+TEST_CASE("Codegen EnTT: a keep pass queues one command per kind of change", "[codegen-entt][keep]") {
+    const std::string prelude = R"(pub extern event frame:
+    dt: float
+pub phase tick:
+    from:
+        frame
+trait Tile:
+    let x: int = 0
+trait Near
+relation Next:
+    from: Tile
+    to: Tile
+entity A:
+    Tile
+group links:
+    phase: tick
+)";
+    const auto count = [](const std::string& body, const std::string& text) {
+        std::size_t found = 0;
+        for (auto at = body.find(text); at != std::string::npos; at = body.find(text, at + 1)) {
+            ++found;
+        }
+        return found;
+    };
+    SECTION("relation keep") {
+        const auto body = emit_named_rule(prelude + R"(rule Links:
+    pairs:
+        a: Tile
+        b: Tile
+    group: links
+    where:
+        b[Tile].x == a[Tile].x + 1
+    keep Next(a, b)
+)",
+                                          "Links");
+        CHECK(count(body, "generated_queue_structural_command") == 1);
+        CHECK(body.contains("cactus_kept_rows.push_back({.from = a, .to = b, .row = cactus_row_value});"));
+        CHECK(body.contains("apply_relation_keep_run(registry, cactus_keep_run)"));
+        CHECK_FALSE(body.contains("keep_relation_row"));
+    }
+    SECTION("trait keep") {
+        const auto body = emit_named_rule(prelude + R"(rule Close:
+    pairs:
+        a: Tile
+        b: Tile
+    group: links
+    where:
+        b[Tile].x == a[Tile].x + 1
+    keep Near on a
+)",
+                                          "Close");
+        CHECK(count(body, "generated_queue_structural_command") == 2);
+        CHECK(body.contains("apply_kept_batch<"));
+        CHECK(body.contains("apply_unkept_batch<"));
+        CHECK(body.find("Kind::Add") < body.find("Kind::Remove"));
+    }
+}
+
+TEST_CASE("Codegen EnTT: reduced and kept pair passes fold only the plan's tuples", "[codegen-entt][planned-fold]") {
+    const std::string prelude = R"(pub extern event frame:
+    dt: float
+pub phase tick:
+    from:
+        frame
+trait Board:
+    let size: int = 4
+trait Tile:
+    let board: entity_id
+    let x: int in range(0, board[Board].size)
+    let z: int in range(0, board[Board].size)
+    var n: int = 0
+trait Heart
+trait Probe:
+    var x: float = 0.0
+    var z: float = 0.0
+    var n: int = 0
+trait Connected
+relation Link:
+    from: Tile
+    to: Tile
+relation Reach = closure(Link)
+entity Field:
+    Board
+entity A:
+    Heart
+    Tile:
+        board = Field
+entity P:
+    Probe
+group links:
+    phase: tick
+)";
+    const auto product = [](const std::string& body, const std::string& left, const std::string& right) {
+        return body.contains("for (auto " + left + " : " + left + "_snapshot) {\n        for (auto " + right + " : " +
+                             right + "_snapshot) {");
+    };
+    SECTION("union witness") {
+        const auto body = emit_named_rule(prelude + R"(rule Connect:
+    pairs:
+        heart:
+            Tile
+            Heart
+        tile: Tile
+    group: links
+    where:
+        tile == heart or Reach(heart, tile)
+    keep Connected on tile
+)",
+                                          "Connect");
+        CHECK_FALSE(product(body, "heart", "tile"));
+        CHECK(body.contains("relation_partners<true>"));
+        CHECK(body.contains("cactus_fold(heart, tile);"));
+    }
+    SECTION("relation-rows count") {
+        const auto body = emit_named_rule(prelude + R"(rule Count:
+    pairs:
+        a: Tile
+        b: Tile
+    where:
+        Link(a, b)
+    reduce per a:
+        n = count()
+    on tick:
+        a[Tile].n = n
+)",
+                                          "Count");
+        CHECK_FALSE(product(body, "a", "b"));
+        CHECK(body.contains("relation_partners<true>"));
+    }
+    SECTION("grid-region count") {
+        const auto body = emit_named_rule(prelude + R"(rule Look:
+    pairs:
+        probe: Probe as p
+        tile: Tile as cell
+    where:
+        (p.x - cell.x - 0.5) * (p.x - cell.x - 0.5) + (p.z - cell.z - 0.5) * (p.z - cell.z - 0.5) <= 2.0
+    reduce per probe:
+        n = count()
+    on tick:
+        p.n = n
+)",
+                                          "Look");
+        CHECK_FALSE(product(body, "probe", "tile"));
+        CHECK(body.contains("DenseKeyIndex<2>"));
+    }
+}
+
+TEST_CASE("Codegen EnTT: equality-planned passes check only the residual where", "[codegen-entt][residual]") {
+    const std::string prelude = R"(pub extern event frame:
+    dt: float
+pub phase tick:
+    from:
+        frame
+pub event Touch
+trait Board:
+    let size: int = 4
+trait Tile:
+    let board: entity_id
+    let x: int in range(0, board[Board].size)
+    let z: int in range(0, board[Board].size)
+    var weight: int = 0
+    var n: int = 0
+relation Next:
+    from: Tile
+    to: Tile
+entity Field:
+    Board
+entity A:
+    Tile:
+        board = Field
+group links:
+    phase: tick
+)";
+    // The lambda named by `prefix`, from its declaration to its closing brace.
+    const auto lambda = [](const std::string& body, const std::string& prefix) {
+        const auto start = body.find("auto " + prefix);
+        REQUIRE(start != std::string::npos);
+        return body.substr(start, body.find("\n    };\n", start) - start);
+    };
+    SECTION("a single key leaves the other conjuncts") {
+        const auto body = emit_named_rule(prelude + R"(rule Step:
+    pairs:
+        a: Tile
+        b: Tile
+    where:
+        b[Tile].x == a[Tile].x + 1 and b[Tile].weight > a[Tile].weight
+    on tick:
+        emit Touch to a
+)",
+                                          "Step");
+        const auto planned = lambda(body, "cactus_gen_pair_planned");
+        CHECK(planned.contains(".weight >"));
+        CHECK_FALSE(planned.contains(".x =="));
+        // Each binding's trait is read once, before the guard.
+        CHECK(planned.contains("const auto& cactus_read_a_0 = registry.get<const"));
+        CHECK(planned.contains("cactus_read_b_0.weight > cactus_read_a_0.weight"));
+        // Recipient tuples come from the full snapshot and still check every conjunct.
+        const auto full = lambda(body, "cactus_gen_pair_body");
+        CHECK(full.contains(".x =="));
+    }
+    SECTION("a union of equality branches leaves nothing to check") {
+        const auto body = emit_named_rule(prelude + R"(rule Links:
+    pairs:
+        a: Tile
+        b: Tile
+    group: links
+    where:
+        b[Tile].board == a[Tile].board
+        (b[Tile].x == a[Tile].x + 1 and b[Tile].z == a[Tile].z) or (b[Tile].z == a[Tile].z + 1 and b[Tile].x == a[Tile].x)
+    keep Next(a, b)
+)",
+                                          "Links");
+        const auto planned = lambda(body, "cactus_gen_pair_planned");
+        CHECK_FALSE(planned.contains("cactus_admitted"));
+        CHECK(body.contains("merge_equality_candidates"));
+        // The lookup keys read the outer tile once per entity.
+        const auto loop = body.substr(body.find("for (const auto a : a_snapshot) {"));
+        CHECK(loop.find("registry.get<const") == loop.find("const auto& cactus_read_a_0 = registry.get<const") +
+                                                     std::string("const auto& cactus_read_a_0 = ").size());
+    }
+    SECTION("a branch with a non-key atom is checked") {
+        const auto body = emit_named_rule(prelude + R"(rule Links:
+    pairs:
+        a: Tile
+        b: Tile
+    group: links
+    where:
+        (b[Tile].x == a[Tile].x + 1 and b[Tile].z == a[Tile].z) or (b[Tile].x == a[Tile].x and b[Tile].z == a[Tile].z and b[Tile].weight > 0)
+    keep Next(a, b)
+)",
+                                          "Links");
+        CHECK_FALSE(body.contains("cactus_gen_pair_planned"));
+    }
+    SECTION("an equality fold checks only the residual") {
+        const auto body = emit_named_rule(prelude + R"(rule Count:
+    pairs:
+        a: Tile
+        b: Tile
+    where:
+        b[Tile].x == a[Tile].x
+        b[Tile].weight > 0
+    reduce per a:
+        n = count()
+    on tick:
+        a[Tile].n = n
+)",
+                                          "Count");
+        const auto fold = lambda(body, "cactus_fold");
+        CHECK(fold.contains("cactus_read_b_0.weight > 0"));
+        CHECK_FALSE(fold.contains(".x =="));
+    }
+}
+
+TEST_CASE("Codegen EnTT: spatial passes check their whole where", "[codegen-entt][residual]") {
+    const auto body = emit_named_rule(R"(pub extern event frame:
+    dt: float
+pub phase tick:
+    from:
+        frame
+pub event Touch
+trait Dot:
+    var x: float = 0.0
+    var r: float = 1.0
+entity A:
+    Dot
+rule Touching:
+    pairs:
+        a: Dot
+        b: Dot
+    where:
+        (a[Dot].x - b[Dot].x) * (a[Dot].x - b[Dot].x) <= a[Dot].r * a[Dot].r
+    on tick:
+        emit Touch to a
+)",
+                                      "Touching");
+    CHECK_FALSE(body.contains("cactus_gen_pair_planned"));
+    CHECK(body.contains("cactus_admitted"));
 }
 
 TEST_CASE("Codegen EnTT: leading returning trait matches share their guard",

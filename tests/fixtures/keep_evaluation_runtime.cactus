@@ -1,0 +1,353 @@
+module keep_evaluation_runtime
+
+use std.core
+use std.text as text
+
+# Tiles on a 4x4 board. Tests change weights, links and territory between
+# ticks; each rule below is one way a pair pass finds its tuples.
+
+trait Board:
+    let size: int = 4
+
+trait Tile:
+    let board: entity_id
+    let id: int = 0
+    let x: int in range(0, board[Board].size)
+    let z: int in range(0, board[Board].size)
+    var weight: int = 0
+    var column: int = 0
+    var linked: int = 0
+    var reach: int = 0
+    var reach_any: int = 0
+    var pinged: int = -1
+    var ping: bool = false
+    var doom_early: bool = false
+    var doom_late: bool = false
+
+trait Heart
+
+trait Probe:
+    let id: int = 0
+    var x: float = 0.0
+    var z: float = 0.0
+    var seen: int = 0
+
+# The best-weighted partner each count found, ties to the earliest row.
+trait ColumnTop:
+    var top: entity_id
+
+trait LinkTop:
+    var top: entity_id
+
+trait ReachTop:
+    var top: entity_id
+
+trait SeenTop:
+    var top: entity_id
+
+# Witnesses kept by pair keeps, one per plan.
+trait Columned
+trait Linked
+trait Connected
+trait Spotted
+
+# Kept by a unary keep; its lifecycle is traced.
+trait Lit
+
+trait RoutedTo
+trait RoutedFrom
+
+trait Log:
+    var trace: string = ""
+    var lit_trace: string = ""
+
+relation Link:
+    from: Tile
+    to: Tile
+
+relation Territory:
+    from: Tile
+    to: Tile
+
+relation Reach = closure(Territory)
+
+relation Walk:
+    from: Tile
+    to: Tile
+    let cost: int = 1
+
+relation Route = shortest(Walk, by = cost)
+
+relation Neighbor:
+    from: Tile
+    to: Tile
+
+event Ping
+event LitChanged
+
+group links:
+    phase: fixed_tick
+
+entity Field:
+    Board
+
+entity Book:
+    Log
+
+template Place(id: int, x: int, z: int):
+    Tile:
+        board = Field
+        id = id
+        x = x
+        z = z
+
+template HeartPlace(id: int, x: int, z: int):
+    use Place(id = id, x = x, z = z)
+    Heart
+
+template Looker(id: int, x: float, z: float):
+    Probe:
+        id = id
+        x = x
+        z = z
+
+# Created out of id order, so creation order and id order differ.
+entity Goal from Place(id = 15, x = 3, z = 3)
+
+rule Fill:
+    on load:
+        for i in range(0, 15):
+            let id = (i * 7) % 15
+            if id == 0 or id == 10:
+                spawn HeartPlace(id = id, x = id % 4, z = id / 4)
+            else:
+                spawn Place(id = id, x = id % 4, z = id / 4)
+        spawn Looker(id = 1, x = 1.5, z = 1.5)
+        spawn Looker(id = 2, x = 3.5, z = 0.5)
+
+# Tiles lose their Tile before or after the keep group runs.
+rule RemoveEarly:
+    each:
+        Tile as t
+    before: links
+    where:
+        t.doom_early
+    on fixed_tick:
+        remove Tile from self
+
+rule RemoveLate:
+    each:
+        Tile as t
+    after: links
+    where:
+        t.doom_late
+    on fixed_tick:
+        remove Tile from self
+
+rule TraceGone:
+    on removed Tile as old:
+        Book[Log].trace += text.format("-T{};", old.id)
+
+rule TraceLit:
+    each:
+        Tile as t
+    on added Lit:
+        Book[Log].trace += text.format("+L{};", t.id)
+
+rule TraceUnlit:
+    each:
+        Tile as t
+    on removed Lit:
+        Book[Log].trace += text.format("-L{};", t.id)
+
+# Runs between commit rounds: its pass must see the round's Lit changes.
+rule AnnounceLit:
+    each:
+        Tile
+    on added Lit:
+        emit LitChanged
+
+rule CountLit:
+    pairs:
+        lit:
+            Tile
+            Lit
+        same: Tile
+    where:
+        same == lit
+    reduce:
+        n = count()
+    on LitChanged:
+        Book[Log].lit_trace += text.format("{};", n)
+
+rule LitTiles:
+    each:
+        Tile as t
+    group: links
+    where:
+        t.weight > 0
+    keep Lit
+
+rule NeighborLinks:
+    pairs:
+        a: Tile
+        b: Tile
+    group: links
+    where:
+        b[Tile].board == a[Tile].board
+        (b[Tile].x == a[Tile].x + 1 and b[Tile].z == a[Tile].z) or (b[Tile].x == a[Tile].x - 1 and b[Tile].z == a[Tile].z) or (b[Tile].z == a[Tile].z + 1 and b[Tile].x == a[Tile].x) or (b[Tile].z == a[Tile].z - 1 and b[Tile].x == a[Tile].x)
+    keep Neighbor(a, b)
+
+# Equality plan.
+rule ColumnCounts:
+    pairs:
+        a: Tile
+        b: Tile
+    where:
+        b[Tile].x == a[Tile].x
+    reduce per a:
+        n = count()
+        top = best(b, by = b[Tile].weight)
+    on fixed_tick:
+        a[Tile].column = n
+        add ColumnTop to a:
+            top = top
+
+rule HeavyColumns:
+    pairs:
+        a: Tile
+        b: Tile
+    group: links
+    where:
+        b[Tile].x == a[Tile].x
+        b[Tile].weight > 5
+    keep Columned on a
+
+# A targeted event folds only the recipient's group.
+rule SendPing:
+    each:
+        Tile as t
+    where:
+        t.ping
+    on fixed_tick:
+        emit Ping to self
+
+rule ColumnPing:
+    pairs:
+        a: Tile
+        b: Tile
+    where:
+        b[Tile].x == a[Tile].x
+        b[Tile].weight > 0
+    reduce per a:
+        n = count()
+    on Ping:
+        a[Tile].pinged = n
+
+# Relation-rows plan.
+rule LinkCounts:
+    pairs:
+        a: Tile
+        b: Tile
+    where:
+        Link(a, b)
+    reduce per a:
+        n = count()
+        top = best(b, by = b[Tile].weight)
+    on fixed_tick:
+        a[Tile].linked = n
+        add LinkTop to a:
+            top = top
+
+rule LinkedTiles:
+    pairs:
+        a: Tile
+        b: Tile
+    group: links
+    where:
+        Link(a, b)
+        a[Tile].weight >= 0
+    keep Linked on b
+
+# Union plan.
+rule ReachCounts:
+    pairs:
+        heart:
+            Tile
+            Heart
+        tile: Tile
+    where:
+        tile == heart or Reach(heart, tile)
+    reduce per heart:
+        n = count()
+        top = best(tile, by = tile[Tile].weight)
+    on fixed_tick:
+        heart[Tile].reach = n
+        add ReachTop to heart:
+            top = top
+
+rule ConnectedTiles:
+    pairs:
+        heart:
+            Tile
+            Heart
+        tile: Tile
+    group: links
+    where:
+        tile == heart or Reach(heart, tile)
+    keep Connected on tile
+
+# A product: the closure test does not drive the pass.
+rule ReachAny:
+    pairs:
+        heart:
+            Tile
+            Heart
+        tile: Tile
+    where:
+        tile[Tile].weight > 100 or Reach(heart, tile)
+    reduce per heart:
+        n = count()
+    on fixed_tick:
+        heart[Tile].reach_any = n
+
+# Grid-region plan.
+rule ProbeCounts:
+    pairs:
+        probe: Probe as p
+        tile: Tile as cell
+    where:
+        (p.x - cell.x - 0.5) * (p.x - cell.x - 0.5) + (p.z - cell.z - 0.5) * (p.z - cell.z - 0.5) <= 2.0
+    reduce per probe:
+        n = count()
+        top = best(tile, by = cell.weight)
+    on fixed_tick:
+        p.seen = n
+        add SeenTop to probe:
+            top = top
+
+rule SpottedTiles:
+    pairs:
+        probe: Probe as p
+        tile: Tile as cell
+    group: links
+    where:
+        (p.x - cell.x - 0.5) * (p.x - cell.x - 0.5) + (p.z - cell.z - 0.5) * (p.z - cell.z - 0.5) <= 2.0
+    keep Spotted on tile
+
+# Named-entity ends of a shortest-path test.
+rule RouteToGoal:
+    each:
+        Tile
+    group: links
+    where:
+        Route(self, Goal)
+    keep RoutedTo
+
+rule RouteFromGoal:
+    each:
+        Tile
+    group: links
+    where:
+        Route(Goal, self)
+    keep RoutedFrom

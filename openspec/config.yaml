@@ -28,6 +28,17 @@ context: |
 rules:
   tasks:
     - >-
+      When the change touches rule evaluation, pass planning, keep or fold code, or
+      a runtime path that runs every frame, add an early task that adds or extends a
+      benchmark in `test_generated_performance_benchmarks`, written before the
+      implementation.
+    - >-
+      Before the coverage-gate task, add a task that builds
+      `test_generated_performance_benchmarks` in the `clang-o3-release` preset and
+      runs `ctest --preset clang-o3-release -L perf`; every work and time limit
+      must pass. A failing limit is fixed by fixing the regression; a limit is
+      raised only with the reason recorded in the change's design.
+    - >-
       End every tasks.md with a final task that runs the coverage gate
       (`cmake --preset clang-coverage` then
       `cmake --build --preset clang-coverage --target coverage_check`). If it

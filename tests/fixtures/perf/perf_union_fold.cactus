@@ -1,0 +1,59 @@
+module perf_union_fold
+
+use std.core
+
+# Two hearts on a size x size grid keep `Connected` on every tile they reach
+# through `Territory`. The test adds `Territory` rows between ticks.
+
+trait Board:
+    let size: int = 45
+
+trait Tile:
+    let board: entity_id
+    let x: int in range(0, board[Board].size)
+    let z: int in range(0, board[Board].size)
+
+trait Heart
+trait Connected
+
+relation Territory:
+    from: Tile
+    to: Tile
+
+relation Reach = closure(Territory)
+
+group links:
+    phase: fixed_tick
+
+entity Field:
+    Board
+
+template Place(x: int, z: int):
+    Tile:
+        board = Field
+        x = x
+        z = z
+
+template HeartPlace(x: int, z: int):
+    use Place(x = x, z = z)
+    Heart
+
+rule Fill:
+    on load:
+        spawn HeartPlace(x = 0, z = 0)
+        spawn HeartPlace(x = Field[Board].size - 1, z = Field[Board].size - 1)
+        for x in range(0, Field[Board].size):
+            for z in range(0, Field[Board].size):
+                if (x != 0 or z != 0) and (x != Field[Board].size - 1 or z != Field[Board].size - 1):
+                    spawn Place(x = x, z = z)
+
+rule ConnectedTiles:
+    pairs:
+        heart:
+            Tile
+            Heart
+        tile: Tile
+    group: links
+    where:
+        tile == heart or Reach(heart, tile)
+    keep Connected on tile

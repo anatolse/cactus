@@ -1,0 +1,33 @@
+module perf_baseline
+
+use std.core
+
+# A plain per-entity update: every mover steps by its velocity.
+
+trait Board:
+    let size: int = 85
+
+trait Mover:
+    var x: float = 0.0
+    var vx: float = 1.0
+
+group motion:
+    phase: fixed_tick
+
+entity Field:
+    Board
+
+template Body(vx: float):
+    Mover:
+        vx = vx
+
+rule Fill:
+    on load:
+        for i in range(0, Field[Board].size * Field[Board].size):
+            spawn Body(vx = 0.25 * (i % 4))
+
+rule Step:
+    each: Mover as m
+    group: motion
+    on fixed_tick:
+        m.x += m.vx

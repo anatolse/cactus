@@ -1,5 +1,7 @@
 #pragma once
 
+#include "backends/cpp-entt/perf_counters.hpp"
+
 #include <entt/entt.hpp>
 
 #include <algorithm>
@@ -35,6 +37,7 @@ template <typename Range>
     for (const auto entity : range) {
         ordered.emplace_back(creation_ordinal(registry, entity), entity);
     }
+    count_ordering();
     std::ranges::sort(ordered);
     std::vector<entt::entity> result;
     result.reserve(ordered.size());

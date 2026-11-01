@@ -975,4 +975,66 @@ TEST_CASE("candidates merge static and dynamic members oldest first", "[runtime]
     CHECK(std::ranges::is_sorted(found));
     CHECK(found.size() == 5);
 }
+TEST_CASE("an ordered membership sorts once while its traits do not change", "[runtime][binding-index][membership]") {
+    entt::registry registry;
+    advance_binding_index_epoch();
+    std::vector<entt::entity> made;
+    for (int index = 0; index < 4; ++index) {
+        made.push_back(make_ordered(registry));
+    }
+    for (const auto entity : {made[2], made[0], made[3]}) {
+        registry.emplace<Mover>(entity);
+    }
+    auto& membership   = shared_ordered_membership<Mover>();
+    const auto builds  = membership.builds();
+    const auto& sorted = ordered_membership<Mover>(registry);
+    CHECK(sorted == std::vector<entt::entity>{made[0], made[2], made[3]});
+    for (int activation = 0; activation < 10; ++activation) {
+        CHECK(ordered_membership<Mover>(registry) == std::vector<entt::entity>{made[0], made[2], made[3]});
+    }
+    CHECK(membership.builds() == builds + 1);
+
+    SECTION("gaining a required trait is seen in creation order") {
+        registry.emplace<Mover>(made[1]);
+        CHECK(ordered_membership<Mover>(registry) == std::vector<entt::entity>{made[0], made[1], made[2], made[3]});
+    }
+    SECTION("losing a required trait is seen") {
+        registry.remove<Mover>(made[2]);
+        CHECK(ordered_membership<Mover>(registry) == std::vector<entt::entity>{made[0], made[3]});
+    }
+    SECTION("a destroyed member is gone") {
+        registry.destroy(made[0]);
+        CHECK(ordered_membership<Mover>(registry) == std::vector<entt::entity>{made[2], made[3]});
+    }
+    SECTION("an unrelated trait changes nothing") {
+        registry.emplace<Solid>(made[1]);
+        CHECK(ordered_membership<Mover>(registry).size() == 3);
+        CHECK(membership.builds() == builds + 1);
+    }
+    SECTION("a restored world rebuilds") {
+        advance_binding_index_epoch();
+        registry.remove<Mover>(made[3]);
+        CHECK(ordered_membership<Mover>(registry) == std::vector<entt::entity>{made[0], made[2]});
+    }
+    SECTION("another world has its own members") {
+        entt::registry other;
+        const auto lone = make_ordered(other);
+        other.emplace<Mover>(lone);
+        CHECK(ordered_membership<Mover>(other) == std::vector<entt::entity>{lone});
+        CHECK(ordered_membership<Mover>(registry) == std::vector<entt::entity>{made[0], made[2], made[3]});
+    }
+}
+
+TEST_CASE("an ordered membership of several traits needs all of them", "[runtime][binding-index][membership]") {
+    entt::registry registry;
+    advance_binding_index_epoch();
+    const auto first  = make_ordered(registry);
+    const auto second = make_ordered(registry);
+    registry.emplace<Mover>(first);
+    registry.emplace<Mover>(second);
+    registry.emplace<Solid>(second);
+    CHECK(ordered_membership<Mover, Solid>(registry) == std::vector<entt::entity>{second});
+    registry.emplace<Solid>(first);
+    CHECK(ordered_membership<Mover, Solid>(registry) == std::vector<entt::entity>{first, second});
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity)

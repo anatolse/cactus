@@ -1,0 +1,46 @@
+module perf_static_keep
+
+use std.core
+
+# A size x size grid keeps each tile's four edge neighbors. Nothing changes
+# between ticks, so every tick re-derives the same rows.
+
+trait Board:
+    let size: int = 85
+
+trait Tile:
+    let board: entity_id
+    let x: int in range(0, board[Board].size)
+    let z: int in range(0, board[Board].size)
+
+relation Neighbor:
+    from: Tile
+    to: Tile
+
+group links:
+    phase: fixed_tick
+
+entity Field:
+    Board
+
+template Place(x: int, z: int):
+    Tile:
+        board = Field
+        x = x
+        z = z
+
+rule Fill:
+    on load:
+        for x in range(0, Field[Board].size):
+            for z in range(0, Field[Board].size):
+                spawn Place(x = x, z = z)
+
+rule NeighborLinks:
+    pairs:
+        a: Tile
+        b: Tile
+    group: links
+    where:
+        b[Tile].board == a[Tile].board
+        (b[Tile].x == a[Tile].x + 1 and b[Tile].z == a[Tile].z) or (b[Tile].x == a[Tile].x - 1 and b[Tile].z == a[Tile].z) or (b[Tile].z == a[Tile].z + 1 and b[Tile].x == a[Tile].x) or (b[Tile].z == a[Tile].z - 1 and b[Tile].x == a[Tile].x)
+    keep Neighbor(a, b)

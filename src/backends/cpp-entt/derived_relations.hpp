@@ -174,6 +174,15 @@ public:
 
     // With both ends fixed the `to` end keys the lookup: games have fewer goals than walkers.
     [[nodiscard]] bool contains(entt::entity from, entt::entity to) {
+        return contains_by_to(from, to);
+    }
+
+    // The same test, keyed by the end that stays fixed across the caller's tuples.
+    [[nodiscard]] bool contains_by_from(entt::entity from, entt::entity to) {
+        return this->registry().valid(from) && this->registry().valid(to) && keyed(from, true).has(to);
+    }
+
+    [[nodiscard]] bool contains_by_to(entt::entity from, entt::entity to) {
         return this->registry().valid(from) && this->registry().valid(to) && keyed(to, false).has(from);
     }
 

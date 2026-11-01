@@ -498,6 +498,206 @@ generalized_keep.cactus examples generalized_keep.SupportedFact/on std.core.fixe
     named_writes:
     named_requirements:
     iteration_order: free
+grid_region_joins.cactus examples grid_region_joins.BoxPairs/on std.core.fixed_tick
+    reads: grid_region_joins.Control grid_region_joins.Probe grid_region_joins.Spot
+    read_fields: grid_region_joins.Control{query,trace} grid_region_joins.Probe{hi,lo,name} grid_region_joins.Spot{x,z}
+    write_fields: grid_region_joins.Control{trace}
+    write_kinds: grid_region_joins.Control.trace=3/0
+    bound_reads: 0:grid_region_joins.Probe 1:grid_region_joins.Spot
+    named_reads: [grid_region_joins.Settings: grid_region_joins.Control{query,trace}]
+    named_writes: [grid_region_joins.Settings: grid_region_joins.Control{trace}]
+    named_requirements: grid_region_joins.Settings/grid_region_joins.Control
+    iteration_order: free
+grid_region_joins.cactus examples grid_region_joins.DiskPairs/on std.core.fixed_tick
+    reads: grid_region_joins.Control grid_region_joins.Probe grid_region_joins.Spot
+    read_fields: grid_region_joins.Control{query,trace} grid_region_joins.Probe{name,x,z} grid_region_joins.Spot{x,z}
+    write_fields: grid_region_joins.Control{trace}
+    write_kinds: grid_region_joins.Control.trace=3/0
+    bound_reads: 0:grid_region_joins.Probe 1:grid_region_joins.Spot
+    named_reads: [grid_region_joins.Settings: grid_region_joins.Control{query,trace}]
+    named_writes: [grid_region_joins.Settings: grid_region_joins.Control{trace}]
+    named_requirements: grid_region_joins.Settings/grid_region_joins.Control
+    iteration_order: free
+keep_evaluation_runtime.cactus fixtures keep_evaluation_runtime.ColumnCounts/on std.core.fixed_tick
+    reads: keep_evaluation_runtime.Tile
+    read_fields: keep_evaluation_runtime.Tile{column,weight,x}
+    write_fields: keep_evaluation_runtime.Tile{column}
+    write_kinds: keep_evaluation_runtime.Tile.column=0/0
+    bound_reads: 0:keep_evaluation_runtime.Tile 1:keep_evaluation_runtime.Tile
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+keep_evaluation_runtime.cactus fixtures keep_evaluation_runtime.ColumnPing/on keep_evaluation_runtime.Ping
+    reads: keep_evaluation_runtime.Tile
+    read_fields: keep_evaluation_runtime.Tile{pinged,weight,x}
+    write_fields: keep_evaluation_runtime.Tile{pinged}
+    write_kinds: keep_evaluation_runtime.Tile.pinged=0/0
+    bound_reads: 0:keep_evaluation_runtime.Tile 1:keep_evaluation_runtime.Tile
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+keep_evaluation_runtime.cactus fixtures keep_evaluation_runtime.ConnectedTiles/on std.core.fixed_tick
+    reads: keep_evaluation_runtime.Reach keep_evaluation_runtime.Territory
+    read_fields: keep_evaluation_runtime.Reach{} keep_evaluation_runtime.Territory{}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+keep_evaluation_runtime.cactus fixtures keep_evaluation_runtime.CountLit/on keep_evaluation_runtime.LitChanged
+    reads: keep_evaluation_runtime.Log
+    read_fields: keep_evaluation_runtime.Log{lit_trace}
+    write_fields: keep_evaluation_runtime.Log{lit_trace}
+    write_kinds: keep_evaluation_runtime.Log.lit_trace=3/0
+    bound_reads:
+    named_reads: [keep_evaluation_runtime.Book: keep_evaluation_runtime.Log{lit_trace}]
+    named_writes: [keep_evaluation_runtime.Book: keep_evaluation_runtime.Log{lit_trace}]
+    named_requirements: keep_evaluation_runtime.Book/keep_evaluation_runtime.Log
+    iteration_order: free
+keep_evaluation_runtime.cactus fixtures keep_evaluation_runtime.HeavyColumns/on std.core.fixed_tick
+    reads: keep_evaluation_runtime.Tile
+    read_fields: keep_evaluation_runtime.Tile{weight,x}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:keep_evaluation_runtime.Tile 1:keep_evaluation_runtime.Tile
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+keep_evaluation_runtime.cactus fixtures keep_evaluation_runtime.LinkCounts/on std.core.fixed_tick
+    reads: keep_evaluation_runtime.Link keep_evaluation_runtime.Tile
+    read_fields: keep_evaluation_runtime.Link{} keep_evaluation_runtime.Tile{linked,weight}
+    write_fields: keep_evaluation_runtime.Tile{linked}
+    write_kinds: keep_evaluation_runtime.Tile.linked=0/0
+    bound_reads: 0:keep_evaluation_runtime.Tile 1:keep_evaluation_runtime.Tile
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+keep_evaluation_runtime.cactus fixtures keep_evaluation_runtime.LinkedTiles/on std.core.fixed_tick
+    reads: keep_evaluation_runtime.Link keep_evaluation_runtime.Tile
+    read_fields: keep_evaluation_runtime.Link{} keep_evaluation_runtime.Tile{weight}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:keep_evaluation_runtime.Tile
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+keep_evaluation_runtime.cactus fixtures keep_evaluation_runtime.LitTiles/on std.core.fixed_tick
+    reads: keep_evaluation_runtime.Tile
+    read_fields: keep_evaluation_runtime.Tile{weight}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: creation
+keep_evaluation_runtime.cactus fixtures keep_evaluation_runtime.NeighborLinks/on std.core.fixed_tick
+    reads: keep_evaluation_runtime.Tile
+    read_fields: keep_evaluation_runtime.Tile{board,x,z}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:keep_evaluation_runtime.Tile 1:keep_evaluation_runtime.Tile
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+keep_evaluation_runtime.cactus fixtures keep_evaluation_runtime.ProbeCounts/on std.core.fixed_tick
+    reads: keep_evaluation_runtime.Probe keep_evaluation_runtime.Tile
+    read_fields: keep_evaluation_runtime.Probe{seen,x,z} keep_evaluation_runtime.Tile{weight,x,z}
+    write_fields: keep_evaluation_runtime.Probe{seen}
+    write_kinds: keep_evaluation_runtime.Probe.seen=0/0
+    bound_reads: 0:keep_evaluation_runtime.Probe 1:keep_evaluation_runtime.Tile
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+keep_evaluation_runtime.cactus fixtures keep_evaluation_runtime.ReachAny/on std.core.fixed_tick
+    reads: keep_evaluation_runtime.Reach keep_evaluation_runtime.Territory keep_evaluation_runtime.Tile
+    read_fields: keep_evaluation_runtime.Reach{} keep_evaluation_runtime.Territory{} keep_evaluation_runtime.Tile{reach_any,weight}
+    write_fields: keep_evaluation_runtime.Tile{reach_any}
+    write_kinds: keep_evaluation_runtime.Tile.reach_any=0/0
+    bound_reads: 0:keep_evaluation_runtime.Tile 1:keep_evaluation_runtime.Tile
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+keep_evaluation_runtime.cactus fixtures keep_evaluation_runtime.ReachCounts/on std.core.fixed_tick
+    reads: keep_evaluation_runtime.Reach keep_evaluation_runtime.Territory keep_evaluation_runtime.Tile
+    read_fields: keep_evaluation_runtime.Reach{} keep_evaluation_runtime.Territory{} keep_evaluation_runtime.Tile{reach,weight}
+    write_fields: keep_evaluation_runtime.Tile{reach}
+    write_kinds: keep_evaluation_runtime.Tile.reach=0/0
+    bound_reads: 0:keep_evaluation_runtime.Tile 1:keep_evaluation_runtime.Tile
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+keep_evaluation_runtime.cactus fixtures keep_evaluation_runtime.RemoveEarly/on std.core.fixed_tick
+    reads: keep_evaluation_runtime.Tile
+    read_fields: keep_evaluation_runtime.Tile{doom_early}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: creation
+keep_evaluation_runtime.cactus fixtures keep_evaluation_runtime.RemoveLate/on std.core.fixed_tick
+    reads: keep_evaluation_runtime.Tile
+    read_fields: keep_evaluation_runtime.Tile{doom_late}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: creation
+keep_evaluation_runtime.cactus fixtures keep_evaluation_runtime.RouteFromGoal/on std.core.fixed_tick
+    reads: keep_evaluation_runtime.Route keep_evaluation_runtime.Walk
+    read_fields: keep_evaluation_runtime.Route{} keep_evaluation_runtime.Walk{cost}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: creation
+keep_evaluation_runtime.cactus fixtures keep_evaluation_runtime.RouteToGoal/on std.core.fixed_tick
+    reads: keep_evaluation_runtime.Route keep_evaluation_runtime.Walk
+    read_fields: keep_evaluation_runtime.Route{} keep_evaluation_runtime.Walk{cost}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: creation
+keep_evaluation_runtime.cactus fixtures keep_evaluation_runtime.SendPing/on std.core.fixed_tick
+    reads: keep_evaluation_runtime.Tile
+    read_fields: keep_evaluation_runtime.Tile{ping}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: creation
+keep_evaluation_runtime.cactus fixtures keep_evaluation_runtime.SpottedTiles/on std.core.fixed_tick
+    reads: keep_evaluation_runtime.Probe keep_evaluation_runtime.Tile
+    read_fields: keep_evaluation_runtime.Probe{x,z} keep_evaluation_runtime.Tile{x,z}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:keep_evaluation_runtime.Probe 1:keep_evaluation_runtime.Tile
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
 main.cactus bouncy-balls-3d main.DetectBallContact/on std.core.fixed_tick
     reads: main.Ball main.SphereCollider std.transform.volume.WorldTransform
     read_fields: main.Ball{velocity} main.SphereCollider{radius} std.transform.volume.WorldTransform{position}
@@ -976,6 +1176,16 @@ relation_row_joins.cactus examples relation_row_joins.ToTo/on std.core.fixed_tic
     bound_reads:
     named_reads: [relation_row_joins.Settings: relation_row_joins.Control{active,query}]
     named_writes:
+    named_requirements: relation_row_joins.Settings/relation_row_joins.Control
+    iteration_order: free
+relation_row_joins.cactus examples relation_row_joins.UnionPairs/on std.core.fixed_tick
+    reads: relation_row_joins.Control relation_row_joins.Tile relation_row_joins.Walk
+    read_fields: relation_row_joins.Control{active,query,trace} relation_row_joins.Tile{label} relation_row_joins.Walk{}
+    write_fields: relation_row_joins.Control{trace}
+    write_kinds: relation_row_joins.Control.trace=3/0
+    bound_reads: 0:relation_row_joins.Tile 1:relation_row_joins.Tile
+    named_reads: [relation_row_joins.Settings: relation_row_joins.Control{active,query,trace}]
+    named_writes: [relation_row_joins.Settings: relation_row_joins.Control{trace}]
     named_requirements: relation_row_joins.Settings/relation_row_joins.Control
     iteration_order: free
 relation_row_projection.cactus examples relation_row_projection.Claimable/on std.core.tick

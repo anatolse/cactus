@@ -1,0 +1,52 @@
+module perf_equality_reduce
+
+use std.core
+
+# Each tile counts the bridges on it and keeps `Walkable` when it is floor or
+# has a bridge.
+
+enum Kind:
+    Floor
+    Rock
+
+trait Tile:
+    let kind: Kind = Kind.Rock
+
+trait Bridge
+trait Walkable
+
+trait Board:
+    let size: int = 85
+
+group links:
+    phase: fixed_tick
+
+entity Field:
+    Board
+
+template Place(kind: Kind):
+    Tile:
+        kind = kind
+
+template BridgePlace:
+    use Place(kind = Kind.Rock)
+    Bridge
+
+rule Fill:
+    on load:
+        for i in range(0, Field[Board].size * Field[Board].size):
+            if i % 7 == 0:
+                spawn BridgePlace()
+            else:
+                spawn Place(kind = if i % 2 == 0: Kind.Floor else: Kind.Rock)
+
+rule WalkableTiles:
+    pairs:
+        tile: Tile
+        bridge: Bridge
+    group: links
+    where:
+        bridge == tile
+    reduce per tile:
+        bridges = count()
+    keep Walkable on tile if tile[Tile].kind == Kind.Floor or bridges > 0

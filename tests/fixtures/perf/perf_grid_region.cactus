@@ -1,0 +1,55 @@
+module perf_grid_region
+
+use std.core
+
+# Units see every tile within six cells of them.
+
+trait Board:
+    let size: int = 85
+
+trait Tile:
+    let board: entity_id
+    let x: int in range(0, board[Board].size)
+    let z: int in range(0, board[Board].size)
+
+trait Unit:
+    var x: float = 0.0
+    var z: float = 0.0
+
+relation Seen:
+    from: Unit
+    to: Tile
+
+group eyes:
+    phase: fixed_tick
+
+entity Field:
+    Board
+
+template Place(x: int, z: int):
+    Tile:
+        board = Field
+        x = x
+        z = z
+
+template Walker(x: float, z: float):
+    Unit:
+        x = x
+        z = z
+
+rule Fill:
+    on load:
+        for x in range(0, Field[Board].size):
+            for z in range(0, Field[Board].size):
+                spawn Place(x = x, z = z)
+        for i in range(0, Field[Board].size / 4):
+            spawn Walker(x = 4.0 * i + 0.5, z = 2.0 * i + 0.5)
+
+rule SenseCells:
+    pairs:
+        unit: Unit as pose
+        tile: Tile as cell
+    group: eyes
+    where:
+        (pose.x - cell.x - 0.5) * (pose.x - cell.x - 0.5) + (pose.z - cell.z - 0.5) * (pose.z - cell.z - 0.5) <= 36.0
+    keep Seen(unit, tile)

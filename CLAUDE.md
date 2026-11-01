@@ -29,7 +29,10 @@ A substantive change goes through, in order:
 3. **Apply** (`/opsx:apply`) — implement the tasks, TDD per "Testing" below.
 4. **Clean up** — run `/simplify` in subagent.
 5. **Verify** (`/opsx:verify`) — confirm the cleanup pass didn't drift from
-   the artifacts or regress behavior. Also run the coverage gate:
+   the artifacts or regress behavior. Build `test_generated_performance_benchmarks`
+   in the `clang-o3-release` preset and run `ctest --preset clang-o3-release -L perf`;
+   every limit must pass. A failing limit means fixing the regression. Raise a limit
+   only with the reason recorded in the change's `design.md`. Then run the coverage gate:
    `cmake --preset clang-coverage` then
    `cmake --build --preset clang-coverage --target coverage_check`. It must pass.
    If gated line coverage is below the threshold, add test cases for the uncovered
@@ -56,6 +59,11 @@ existing `test_*.cpp` naming and structure in `tests/`.
 
 Build the `cactus_tests` target before running `ctest`; most test executables are
 `EXCLUDE_FROM_ALL`, so a plain build leaves stale binaries for `ctest` to run.
+
+A change to rule evaluation, pass planning, keep or fold code, or a runtime path that
+runs every frame adds or extends a benchmark in `test_generated_performance_benchmarks`
+(`tests/test_perf_*_benchmark.cpp` + `tests/fixtures/perf/*.cactus`), written before the
+implementation. Work limits run in every build; time limits only in optimized builds.
 
 A new DSL/stdlib feature additionally needs a `.cactus` sample fixture plus a failing
 headless-behavior Catch2 test written first, mirroring the existing

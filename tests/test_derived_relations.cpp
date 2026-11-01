@@ -259,6 +259,8 @@ TEST_CASE("Derived closure: forward and reverse match the brute force", "[runtim
             std::vector<Pair> reverse;
             for (std::size_t b = 0; b < n; ++b) {
                 CHECK(reach.contains(world.tiles[a], world.tiles[b]) == ref.reach[a][b]);
+                CHECK(reach.contains_by_from(world.tiles[a], world.tiles[b]) == ref.reach[a][b]);
+                CHECK(reach.contains_by_to(world.tiles[a], world.tiles[b]) == ref.reach[a][b]);
                 if (ref.reach[a][b]) {
                     forward.emplace_back(world.tiles[a], world.tiles[b]);
                 }
@@ -354,9 +356,18 @@ TEST_CASE("Derived shortest: forward and reverse give the brute-force rows", "[r
                 reverse.emplace(entry.from, entry.to, entry.row.next, entry.row.distance);
             });
             for (std::size_t b = 0; b < n; ++b) {
-                if (a == b || ref.cost[a][b] == kUnreached) {
+                const bool reached = a != b && ref.cost[a][b] != kUnreached;
+                CHECK(route.contains_by_from(world.tiles[a], world.tiles[b]) == reached);
+                CHECK(route.contains_by_to(world.tiles[a], world.tiles[b]) == reached);
+                const auto* by_from = route.find_entry(world.tiles[a], world.tiles[b], true);
+                const auto* by_to   = route.find_entry(world.tiles[a], world.tiles[b], false);
+                CHECK((by_from != nullptr) == reached);
+                CHECK((by_to != nullptr) == reached);
+                if (!reached) {
                     continue;
                 }
+                CHECK(by_from->row.next == by_to->row.next);
+                CHECK(by_from->row.distance == by_to->row.distance);
                 expected.emplace(world.tiles[a],
                                  world.tiles[b],
                                  reference_next(world, ref, a, b),

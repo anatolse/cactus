@@ -1,0 +1,60 @@
+module perf_row_join
+
+use std.core
+
+# Walk steps between owned tiles of the same owner become `Territory` rows.
+# The test fills `Walk` and `OwnedBy` after load.
+
+trait Board:
+    let size: int = 85
+
+trait Tile:
+    let x: int = 0
+    let z: int = 0
+
+trait Player
+
+relation Walk:
+    from: Tile
+    to: Tile
+
+relation OwnedBy:
+    from: Tile
+    to: Player
+
+relation Territory:
+    from: Tile
+    to: Tile
+
+group links:
+    phase: fixed_tick
+
+entity Field:
+    Board
+
+template Place(x: int, z: int):
+    Tile:
+        x = x
+        z = z
+
+entity Red:
+    Player
+
+entity Blue:
+    Player
+
+rule Fill:
+    on load:
+        for x in range(0, Field[Board].size):
+            for z in range(0, Field[Board].size):
+                spawn Place(x = x, z = z)
+
+rule TerritoryLinks:
+    pairs:
+        step: Walk
+        owner: OwnedBy
+    group: links
+    where:
+        step.to == owner.from
+        OwnedBy(step.from, owner.to)
+    keep Territory(step.from, step.to)

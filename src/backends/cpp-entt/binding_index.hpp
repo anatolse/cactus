@@ -165,6 +165,63 @@ void watch_binding_traits(entt::registry& registry, BindingIndexTracker& tracker
         ...);
 }
 
+// The entities carrying every trait in Required, oldest first, kept across
+// passes. Construction or destruction of a required trait marks it stale, as
+// does a new world, and the next read sorts again. Structural changes apply
+// only at commit, so a membership never changes while a pass iterates it.
+template <typename... Required>
+class OrderedMembership {
+public:
+    [[nodiscard]] const std::vector<entt::entity>& members(entt::registry& registry) {
+        if (built_.stale(registry)) {
+            built_.stamp(registry);
+            (
+                [&] {
+                    registry.on_construct<Required>().disconnect(this);
+                    registry.on_destroy<Required>().disconnect(this);
+                    registry.on_construct<Required>().template connect<&OrderedMembership::on_signal>(*this);
+                    registry.on_destroy<Required>().template connect<&OrderedMembership::on_signal>(*this);
+                }(),
+                ...);
+            dirty_ = true;
+        }
+        if (dirty_) {
+            members_ = creation_ordered(registry, registry.view<Required...>());
+            dirty_   = false;
+            ++builds_;
+        }
+        return members_;
+    }
+
+    // How many times the members were sorted.
+    [[nodiscard]] std::size_t builds() const noexcept {
+        return builds_;
+    }
+
+    void on_signal(entt::registry& registry, entt::entity /*entity*/) noexcept {
+        if (&registry == built_.registry) {
+            dirty_ = true;
+        }
+    }
+
+private:
+    WorldStamp built_;
+    std::vector<entt::entity> members_;
+    std::size_t builds_ = 0;
+    bool dirty_         = true;
+};
+
+template <typename... Required>
+[[nodiscard]] OrderedMembership<Required...>& shared_ordered_membership() {
+    static OrderedMembership<Required...> membership;
+    return membership;
+}
+
+template <typename... Required>
+[[nodiscard]] const std::vector<entt::entity>& ordered_membership(entt::registry& registry) {
+    return shared_ordered_membership<Required...>().members(registry);
+}
+
 // A paged map from an entity's index to a uint32 value, with pages made on
 // demand, as in EnTT's sparse sets. Versions are not compared: callers check
 // the handle they stored.

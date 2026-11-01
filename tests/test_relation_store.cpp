@@ -426,4 +426,79 @@ TEST_CASE("Relation binding sort keys are evaluated once per snapshot row", "[ru
     CHECK(calls == 2);
 }
 
+
+TEST_CASE("RelationStore: a batched keep run keeps rows in buffer order", "[runtime][relations][keep]") {
+    using cactus::runtime::entt_backend::apply_relation_keep_run;
+    using cactus::runtime::entt_backend::KeptRows;
+    entt::registry registry;
+    connect_relation_ends<WalkRow>(registry);
+    const auto e = make_entities(registry, 4);
+    for (const auto entity : e) {
+        registry.emplace<Tile>(entity);
+    }
+    auto& store = relation_store<WalkRow>(registry);
+    store.add(e[3], e[0], WalkRow{});
+
+    const KeptRows<WalkRow> first{{.from = e[0], .to = e[2], .row = WalkRow{}},
+                                  {.from = e[1], .to = e[0], .row = WalkRow{.cost = 2.0F}},
+                                  {.from = e[1], .to = e[2], .row = WalkRow{}}};
+    apply_relation_keep_run(registry, first);
+    store.compact();
+    CHECK(pairs_of(store) == std::vector<std::pair<entt::entity, entt::entity>>{{e[0], e[2]}, {e[1], e[0]}, {e[1], e[2]}});
+    CHECK(store.find(e[1], e[0])->cost == 2.0F);
+
+    SECTION("a run that keeps every row drops none") {
+        apply_relation_keep_run(registry, first);
+        store.compact();
+        CHECK(store.size() == 3);
+    }
+    SECTION("a run that keeps a subset drops the rest") {
+        apply_relation_keep_run(registry, KeptRows<WalkRow>{{.from = e[1], .to = e[2], .row = WalkRow{}}});
+        store.compact();
+        CHECK(pairs_of(store) == std::vector<std::pair<entt::entity, entt::entity>>{{e[1], e[2]}});
+    }
+    SECTION("a row erased after its stamp does not hide an unstamped row") {
+        store.begin_run();
+        store.keep(e[0], e[2], WalkRow{});
+        store.keep(e[1], e[0], WalkRow{.cost = 2.0F});
+        store.erase(e[0], e[2]);
+        store.drop_unstamped();
+        store.compact();
+        CHECK(pairs_of(store) == std::vector<std::pair<entt::entity, entt::entity>>{{e[1], e[0]}});
+    }
+    SECTION("a row whose end lost its trait is not kept") {
+        registry.remove<Tile>(e[2]);
+        apply_relation_keep_run(registry, first);
+        store.compact();
+        CHECK(pairs_of(store) == std::vector<std::pair<entt::entity, entt::entity>>{{e[1], e[0]}});
+    }
+}
+
+namespace {
+struct Lit {};
+struct Glow {
+    int level = 0;
+};
+}  // namespace
+
+TEST_CASE("Kept trait batches add, patch and remove in buffer order", "[runtime][keep]") {
+    using cactus::runtime::entt_backend::apply_kept_batch;
+    using cactus::runtime::entt_backend::apply_unkept_batch;
+    entt::registry registry;
+    const auto e = make_entities(registry, 3);
+    std::vector<entt::entity> added;
+    registry.on_construct<Lit>().connect<[](std::vector<entt::entity>& into, entt::registry&, entt::entity entity) {
+        into.push_back(entity);
+    }>(added);
+    apply_kept_batch<Lit, false>(registry, std::vector<entt::entity>{e[2], e[0], e[2]});
+    CHECK(added == std::vector<entt::entity>{e[2], e[0]});
+    apply_unkept_batch<Lit, false>(registry, std::vector<entt::entity>{e[0], e[1]});
+    CHECK(registry.all_of<Lit>(e[2]));
+    CHECK_FALSE(registry.all_of<Lit>(e[0]));
+
+    registry.emplace<Glow>(e[1], Glow{.level = 1});
+    apply_kept_batch<Glow, false>(registry, std::vector<std::pair<entt::entity, Glow>>{{e[1], Glow{.level = 4}}, {e[0], Glow{.level = 2}}});
+    CHECK(registry.get<Glow>(e[1]).level == 4);
+    CHECK(registry.get<Glow>(e[0]).level == 2);
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity)

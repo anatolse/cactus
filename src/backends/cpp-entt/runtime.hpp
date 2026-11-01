@@ -988,6 +988,28 @@ void apply_unkept(entt::registry& registry, entt::entity target) {
     }
 }
 
+// One keep pass's adds or removals, in tuple order, as one commit command.
+template <typename Trait, bool Tracked>
+void apply_kept_batch(entt::registry& registry, std::span<const entt::entity> targets) {
+    for (const auto target : targets) {
+        apply_kept<Trait, Tracked>(registry, target);
+    }
+}
+
+template <typename Trait, bool Tracked>
+void apply_kept_batch(entt::registry& registry, std::span<const std::pair<entt::entity, Trait>> targets) {
+    for (const auto& [target, value] : targets) {
+        apply_kept<Trait, Tracked>(registry, target, value);
+    }
+}
+
+template <typename Trait, bool Tracked>
+void apply_unkept_batch(entt::registry& registry, std::span<const entt::entity> targets) {
+    for (const auto target : targets) {
+        apply_unkept<Trait, Tracked>(registry, target);
+    }
+}
+
 // The carriers of `Trait` this run doesn't keep, oldest first.
 template <typename Trait, typename Kept>
 [[nodiscard]] std::vector<entt::entity> leaving_carriers(const entt::registry& registry, const Kept& kept) {
@@ -2248,6 +2270,7 @@ void commit_activation(ActivationRuntime<Occurrence>& activation,
                   "event types (the generated EventOccurrence alias)");
     auto commands = std::move(activation.commands);
     activation.commands.clear();
+    count_commands(commands.size());
     for (auto& command : commands) {
         command.apply(registry);
     }
@@ -2269,6 +2292,7 @@ void commit_activation(ActivationRuntime<Occurrence>& activation,
     while (!activation.commands.empty()) {
         auto commands = std::move(activation.commands);
         activation.commands.clear();
+        count_commands(commands.size());
         lifecycle.set_recording(true);
         for (auto& command : commands) {
             lifecycle.begin_command(command.kind, command.component);

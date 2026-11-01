@@ -1296,6 +1296,45 @@ cactus_add_headless_behavior_test(test_generated_names_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_generated_names_headless_behavior.cpp
 )
 
+# The unindexed and row-stage variants must give the same results as the planned build.
+cactus_add_headless_behavior_test(test_keep_evaluation_headless_behavior
+    CACTUS_SOURCE tests/fixtures/keep_evaluation_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_keep_evaluation_headless_behavior.cpp
+)
+cactus_add_headless_behavior_test(test_keep_evaluation_unindexed_headless_behavior
+    CACTUS_SOURCE tests/fixtures/keep_evaluation_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_keep_evaluation_headless_behavior.cpp
+    NO_INDEXED_JOINS
+)
+target_compile_definitions(test_keep_evaluation_unindexed_headless_behavior PRIVATE CACTUS_NO_INDEXED_JOINS)
+cactus_add_headless_behavior_test(test_keep_evaluation_row_stage_headless_behavior
+    CACTUS_SOURCE tests/fixtures/keep_evaluation_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_keep_evaluation_headless_behavior.cpp
+    FORCE_ROW_STAGE
+)
+
+# Generated-code performance benchmarks: one rule shape per fixture, each in
+# its own executable because generated programs share global names. Work
+# limits run in every build; time limits only in optimized builds
+# (`ctest --preset clang-o3-release -L perf`).
+add_custom_target(test_generated_performance_benchmarks)
+foreach(shape IN ITEMS static_keep union_fold equality_reduce grid_region row_join baseline)
+    set(perf_target test_perf_${shape}_benchmark)
+    cactus_add_headless_behavior_test(${perf_target}
+        CACTUS_SOURCE tests/fixtures/perf/perf_${shape}.cactus
+        BACKEND cpp-entt
+        TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/${perf_target}.cpp
+    )
+    if(CACTUS_ENABLE_COVERAGE)
+        target_compile_definitions(${perf_target} PRIVATE CACTUS_PERF_COVERAGE)
+    endif()
+    set_tests_properties(${perf_target} PROPERTIES LABELS perf)
+    add_dependencies(test_generated_performance_benchmarks ${perf_target})
+endforeach()
+
 # Every executable defined in this directory is a test or a test subprocess, so
 # collecting them here keeps cactus_tests and coverage_check in step with new tests.
 get_directory_property(cactus_test_dir_targets BUILDSYSTEM_TARGETS)

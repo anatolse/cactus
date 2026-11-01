@@ -185,13 +185,21 @@ public:
     // A keep run: rows it keeps carry its stamp, `drop_unstamped` erases the rest.
     void begin_run() noexcept {
         ++run_;
+        stamped_ = 0;
     }
 
     void keep(entt::entity from, entt::entity to, const Row& row) {
-        stamps_[place(from, to, row)] = run_;
+        auto& stamp = stamps_[place(from, to, row)];
+        if (stamp != run_) {
+            stamp = run_;
+            ++stamped_;
+        }
     }
 
     void drop_unstamped() noexcept {
+        if (stamped_ == size()) {
+            return;
+        }
         for (std::uint32_t slot = 0; slot < entries_.size(); ++slot) {
             if (alive_[slot] != 0 && stamps_[slot] != run_) {
                 kill(slot);
@@ -315,6 +323,9 @@ private:
         (links.next_to == kNone ? to.tail : links_[links.next_to].prev_to) = links.prev_to;
         links                                                              = Links{};
         pairs_.erase(entry.from, entry.to);
+        if (stamps_[slot] == run_ && stamped_ > 0) {
+            --stamped_;
+        }
         alive_[slot] = 0;
         ++dead_;
         changed_ = true;
@@ -329,6 +340,7 @@ private:
     PairSlotTable pairs_;
     std::uint32_t dead_             = 0;
     std::uint32_t run_              = 0;
+    std::size_t stamped_            = 0;  // live rows stamped by the current run
     mutable std::uint64_t revision_ = 0;
     mutable bool changed_           = true;
 };
@@ -389,6 +401,25 @@ void keep_relation_row(entt::registry& registry, entt::entity from, entt::entity
         return;
     }
     uncompacted_relation_store<Row>(registry).keep(from, to, row);
+}
+
+// The rows one keep pass selected, in tuple order.
+template <typename Row>
+using KeptRows = std::vector<typename RelationStore<Row>::Entry>;
+
+// A keep pass's whole run at its commit position: the rows it selected, in
+// tuple order, then the drop of every row it did not select.
+template <typename Entry>
+void apply_relation_keep_run(entt::registry& registry, const std::vector<Entry>& rows) {
+    using Row   = decltype(Entry::row);
+    auto& store = uncompacted_relation_store<Row>(registry);
+    store.begin_run();
+    for (const auto& kept : rows) {
+        if (valid_relation_ends<Row>(registry, kept.from, kept.to)) {
+            store.keep(kept.from, kept.to, kept.row);
+        }
+    }
+    store.drop_unstamped();
 }
 
 // A row lives while both ends carry their end traits: EnTT signals the

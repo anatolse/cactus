@@ -110,6 +110,13 @@
             "output": {
                 "outputOnFailure": true
             }
+        },
+        {
+            "name": "clang-o3-release",
+            "configurePreset": "clang-o3-release",
+            "output": {
+                "outputOnFailure": true
+            }
         }
     ]
 }

@@ -427,6 +427,10 @@ No class is known today. The order of every result that crosses the native bound
 - **WHEN** one `tick` rule writes `WorldTransform.position` and another, with no order between them, reads it through `transform.world_position`
 - **THEN** this requirement lists no gap for that class, because `handler-contracts` adds the native's field reads to the caller's contract, so the writer runs first
 
+#### Scenario: Observers of a projection are listed
+- **WHEN** one `tick` rule runs `project A` and another, with no order between them, has `without: A` or calls `query.exists[A]()`
+- **THEN** this requirement lists no gap for that class, because `handler-contracts` orders the projector before every membership observer
+
 ### Requirement: Delayed occurrences belong to the producing clock
 Every activation SHALL have a clock. A phase activation's clock is its phase: a non-periodic phase has one activation per batch, and a periodic phase has one activation per repetition. Every other activation — the load and unload boundaries, the startup arrival activation, and an activation of an event that no phase claims as its root — SHALL belong to the host clock.
 

@@ -428,3 +428,71 @@ A handler over two row bindings SHALL record reads of both relations for members
 #### Scenario: Derived keep dependencies remain visible
 - **WHEN** a source relation is kept and a joined handler reads a relation derived from it
 - **THEN** dependency analysis records that source read, and the join sees the source rows committed before its pass rather than uncommitted keep commands
+
+### Requirement: Projection orders every membership observer
+A handler observes the membership of a trait when its result can depend on which entities carry that trait. A handler SHALL observe membership of every trait named by its `each:` or `without:` clauses, by a pair binding, or by the filter of a native query call in its body, whether that filter entry is positive or negated. Observing membership SHALL NOT add a trait read, as "Selection does not imply trait access" requires.
+
+For one activation, a handler that projects a trait SHALL be ordered before every other handler that observes the membership of that trait. An external `projects:` entry SHALL count as a projection. Two handlers that each observe the membership of a trait the other projects SHALL be an unorientable conflict, reported as a compile error naming both handlers, unless the existing rule for conflicts with an imported `pub group` orders them. A handler SHALL still be ordered as an observer when it also projects the same trait.
+
+#### Scenario: Excluding filter runs after the projector
+- **WHEN** one rule runs `project A` and another rule has `without: A`, with no explicit order, in the same phase
+- **THEN** the projector runs first, and the result is the same in either declaration order
+
+#### Scenario: Native query runs after the projector
+- **WHEN** one rule runs `project A` and another rule calls `query.exists[A]()`, with no explicit order, in the same phase
+- **THEN** the projector runs first, and the result is the same in either declaration order
+
+#### Scenario: Pair binding runs after the projector
+- **WHEN** one rule runs `project A` and a pair rule has a binding that requires `A`, with no explicit order, in the same phase
+- **THEN** the projector runs first
+
+#### Scenario: Observing a projector that also projects
+- **WHEN** one rule runs `project A` and another rule has `each: A` and also runs `project A`
+- **THEN** the first rule runs before the second
+
+#### Scenario: Mutual negation is rejected
+- **WHEN** one rule has `without: B` and runs `project A`, and another has `without: A` and runs `project B`, in the same phase with no explicit order
+- **THEN** the compiler reports an unorientable conflict naming both handlers
+
+#### Scenario: An explicit order that disagrees is a cycle
+- **WHEN** the rule that projects `A` declares `after:` a rule with `without: A`
+- **THEN** the compiler reports a schedule cycle naming both handlers
+
+#### Scenario: An explicit order cannot settle mutual observation
+- **WHEN** two rules each observe what the other projects, and one declares `after:` the other
+- **THEN** the compiler reports a schedule cycle naming both handlers
+
+#### Scenario: An observer that feeds its projector needs an explicit order
+- **WHEN** a rule observes `A` and writes a field that the rule projecting `A` reads, with no explicit order
+- **THEN** the compiler reports an unorientable conflict that suggests only running the observer after the projector
+
+#### Scenario: A public group member projects what an importer observes
+- **WHEN** an importing rule observes a trait projected by a member of an imported `pub group`, and also writes what another member reads
+- **THEN** the projecting member runs before the importing rule, and the importing rule runs before the other member
+
+#### Scenario: The importer rule cannot run an observer ahead of its projector
+- **WHEN** an importing rule observes a trait projected by a member of an imported `pub group`, and also writes what that member reads
+- **THEN** the compiler reports a schedule cycle naming both handlers
+
+#### Scenario: Commuting writes do not remove the order
+- **WHEN** a projector and an observer of the same trait only accumulate into the same field of that trait
+- **THEN** the projector still runs first
+
+#### Scenario: Two external producers of one trait are rejected
+- **WHEN** two external handlers in one activation each select and project the same trait
+- **THEN** the compiler reports an unorientable conflict naming both handlers
+
+#### Scenario: Observation adds no read
+- **WHEN** a handler has `without: A` and never accesses a field of `A`
+- **THEN** `A` is absent from the handler's reads
+
+### Requirement: A pass that observes its own projection fixes its rows
+A unary pass that projects a trait whose membership it observes SHALL choose its rows at pass start and run them in creation order. A projection made by one row SHALL NOT change which rows of that pass run.
+
+#### Scenario: A projection does not drop a later row
+- **WHEN** a pass has `without: A`, two entities match at pass start, and the first entity's row runs `project A to` the second entity
+- **THEN** both rows run, in creation order, and the result does not depend on storage order
+
+#### Scenario: A pass with no `each:` keeps its rows
+- **WHEN** a pass has only a `without: A` filter, and a row runs `project A to` an entity whose row has not run yet
+- **THEN** that entity's row still runs

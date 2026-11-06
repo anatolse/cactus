@@ -8230,6 +8230,11 @@ void collect_stage_roots(const ExprNode& expr, const PairScope* pair_scope, Stag
         expr.expr);
 }
 
+const BinaryExpr* binary_at(const ExprNode& root, const ExprPath& path, std::string_view op) {
+    const auto* binary = std::get_if<BinaryExpr>(&resolve_expr_path(root, path)->expr);
+    return binary != nullptr && binary->op == op ? binary : nullptr;
+}
+
 ClauseStage classify_stage(const ExprNode& expr, const PairScope* pair_scope) {
     StageRoots roots;
     collect_stage_roots(expr, pair_scope, roots);
@@ -8271,6 +8276,39 @@ static ClauseStage reducer_stage(const ReducerDecl& reducer, const PairScope* sc
         stage = stage == ClauseStage::Activation || stage == input_stage ? input_stage : ClauseStage::Row;
     }
     return stage;
+}
+
+// The name of the row key `expr` reads directly: `self`, or a field of the domain.
+static std::optional<std::string> row_key(const ExprNode& expr) {
+    if (std::holds_alternative<SelfExpr>(expr.expr)) {
+        return "self";
+    }
+    if (const auto* member = std::get_if<MemberExpr>(&expr.expr)) {
+        return member->member;
+    }
+    const auto* ident = std::get_if<IdentExpr>(&expr.expr);
+    return ident == nullptr ? std::nullopt : std::optional{ident->name};
+}
+
+static void record_key_lookups(const RuleNode& rule, InferredHandlerContract& contract) {
+    if (contract.domain_kind != HandlerDomainKind::Unary || !rule.where_clause.has_value()) {
+        return;
+    }
+    const auto record = [&](const ExprNode& row, const ExprNode& value, const SourceLocation& location) {
+        const auto key = row_key(row);
+        if (key.has_value() && classify_stage(row, nullptr) == ClauseStage::Row &&
+            classify_stage(value, nullptr) == ClauseStage::Activation) {
+            contract.key_lookups.push_back(KeyLookup{.key = *key, .location = location});
+        }
+    };
+    for (const auto& predicate : rule.where_clause->predicates) {
+        for (const auto& conjunct : chain_paths(*predicate, {}, "and")) {
+            if (const auto* equality = binary_at(*predicate, conjunct, "==")) {
+                record(*equality->left, *equality->right, equality->location);
+                record(*equality->right, *equality->left, equality->location);
+            }
+        }
+    }
 }
 
 // Only an unlimited, unreduced rule checks `where:` between invocations, so
@@ -8379,6 +8417,7 @@ void SemanticAnalyzer::collect_rule_dependency(const RuleNode& rule, std::size_t
             inferred.iteration_order =
                 derive_iteration_order(inferred, rule.limit.has_value() && rule.order_by.empty());
             stage_rule_clauses(rule, pair_scope, inferred);
+            record_key_lookups(rule, inferred);
             if (rule.pairs.has_value()) {
                 inferred.pair_plan        = plan_pair_pass(rule, pair_scope, inferred);
                 inferred.pair_plan.warned = distance_warned;
@@ -8914,6 +8953,22 @@ void SemanticAnalyzer::add_contract_command(HandlerContract& contract,
     }
 }
 
+static void record_world_scan(HandlerContract& contract,
+                              const std::optional<SymbolId>& callee,
+                              const std::vector<QueryFilterPredicate>& filters,
+                              const SourceLocation& location) {
+    if (!callee.has_value() || native_is_world_scan(make_canonical_id(*callee)) != true) {
+        return;
+    }
+    WorldScan scan{.callee = *callee, .location = location};
+    for (const auto& filter : filters) {
+        if (filter.resolved_trait_id.has_value() && !filter.negated) {
+            scan.filter.push_back(*filter.resolved_trait_id);
+        }
+    }
+    contract.world_scans.push_back(std::move(scan));
+}
+
 void SemanticAnalyzer::add_contract_call_effects(HandlerContract& contract,
                                                  const std::optional<SymbolId>& callee) const {
     if (!callee.has_value()) {
@@ -8993,6 +9048,7 @@ void SemanticAnalyzer::walk_expression_reads(  // NOLINT(readability-function-co
                 visit(*node.operand, locals);
             } else if constexpr (std::is_same_v<E, CallExpr>) {
                 add_contract_call_effects(contract, node.resolved_callee_id);
+                record_world_scan(contract, node.resolved_callee_id, {}, node.location);
                 const auto* function =
                     node.resolved_callee_id.has_value() ? find_resolved_func(*node.resolved_callee_id) : nullptr;
                 const auto params = function == nullptr ? std::span<const ResolvedParam>{} : function->params;
@@ -9033,6 +9089,7 @@ void SemanticAnalyzer::walk_expression_reads(  // NOLINT(readability-function-co
                 visit_child_overrides(node.child_overrides, locals);
             } else if constexpr (std::is_same_v<E, QueryCallExpr>) {
                 add_contract_call_effects(contract, node.resolved_callee_id);
+                record_world_scan(contract, node.resolved_callee_id, node.filters, node.location);
                 for (const auto& filter : node.filters) {
                     if (filter.resolved_trait_id.has_value()) {
                         contract.observed_membership.insert(*filter.resolved_trait_id);
@@ -9157,12 +9214,34 @@ struct SemanticAnalyzer::HandlerBodyVisitor {
     std::reference_wrapper<const std::function<void(const SymbolId&)>> on_project_trait;
     // Handler-wide: a name bound more than once maps to nullopt.
     std::unordered_map<std::string, std::optional<SymbolId>>* spawned_locals;
+    // Handler-wide: an immutable local holding one scan's result, by scan index.
+    std::unordered_map<std::string, std::size_t>* scan_locals;
 
     template <typename Node>
     void operator()(const Node& /*node*/) const {}
 
+    // The world scan `expr` yields, when the walk of `expr` just recorded it at `first`.
+    [[nodiscard]] std::optional<std::size_t> scan_result(const ExprNode& expr, std::size_t first) const {
+        if (const auto* ident = std::get_if<IdentExpr>(&expr.expr)) {
+            const auto local = scan_locals->find(ident->name);
+            return local == scan_locals->end() ? std::nullopt : std::optional{local->second};
+        }
+        const auto* query = std::get_if<QueryCallExpr>(&expr.expr);
+        const auto* call  = std::get_if<CallExpr>(&expr.expr);
+        if ((query == nullptr && call == nullptr) || first == contract->world_scans.size()) {
+            return std::nullopt;
+        }
+        const auto& location = query != nullptr ? query->location : call->location;
+        return contract->world_scans[first].location == location ? std::optional{first} : std::nullopt;
+    }
+
     void operator()(const LetStmt& node) const {
+        const auto first_scan = contract->world_scans.size();
         visit_expr(*node.value, *locals);
+        scan_locals->erase(node.name);
+        if (const auto scan = scan_result(*node.value, first_scan); scan.has_value() && !node.is_mutable) {
+            scan_locals->emplace(node.name, *scan);
+        }
         locals->insert(node.name);
         const auto* spawn = std::get_if<SpawnExpr>(&node.value->expr);
         bind_local(node.name, spawn != nullptr && !node.is_mutable ? spawn->resolved_template_id : std::nullopt);
@@ -9336,11 +9415,18 @@ struct SemanticAnalyzer::HandlerBodyVisitor {
     }
 
     void operator()(const ForeachStmt& node) const {
+        const auto first_scan = contract->world_scans.size();
         visit_expr(*node.iterable, *locals);
         auto loop_locals = *locals;
         loop_locals.insert(node.var_name);
         bind_local(node.var_name, std::nullopt);
+        scan_locals->erase(node.var_name);
+        const auto loop       = scan_result(*node.iterable, first_scan);
+        const auto first_body = contract->world_scans.size();
         visit_stmts(node.body, std::move(loop_locals));
+        for (auto& scan : contract->world_scans | std::views::drop(first_body)) {
+            scan.enclosing = scan.enclosing.has_value() ? scan.enclosing : loop;
+        }
     }
 
     // A relation row command lands at the commit: a command, not a read or write.
@@ -9420,6 +9506,7 @@ void SemanticAnalyzer::walk_handler_body(  // NOLINT(readability-function-cognit
         }
     };
     std::unordered_map<std::string, std::optional<SymbolId>> spawned_locals;
+    std::unordered_map<std::string, std::size_t> scan_locals;
     visit_stmts = [&](const std::vector<std::unique_ptr<StmtNode>>& stmts, LocalNames locals) {
         for (const auto& stmt : stmts) {
             std::visit(HandlerBodyVisitor{.analyzer              = this,
@@ -9431,7 +9518,8 @@ void SemanticAnalyzer::walk_handler_body(  // NOLINT(readability-function-cognit
                                           .resolve_read          = resolve_read,
                                           .handle_var_assign     = handle_var_assign,
                                           .on_project_trait      = on_project_trait,
-                                          .spawned_locals        = &spawned_locals},
+                                          .spawned_locals        = &spawned_locals,
+                                          .scan_locals           = &scan_locals},
                        stmt->stmt);
         }
     };
@@ -10370,11 +10458,6 @@ bool reads_pair_binding(const ExprNode& expr, const PairScope& pair_scope, std::
         }
     });
     return read;
-}
-
-const BinaryExpr* binary_at(const ExprNode& root, const ExprPath& path, std::string_view op) {
-    const auto* binary = std::get_if<BinaryExpr>(&resolve_expr_path(root, path)->expr);
-    return binary != nullptr && binary->op == op ? binary : nullptr;
 }
 
 bool same_key_field(const EqualityJoinKey& left, const EqualityJoinKey& right) {

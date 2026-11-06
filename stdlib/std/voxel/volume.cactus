@@ -112,19 +112,23 @@ pub func cell_center(origin: vec3, cell_size: float, x: int, y: int, z: int) vec
 pub group fill:
     phase: core.tick
 
+# A volume whose issue is not Valid; it never fills.
+trait InvalidVolume
+
 rule CheckVolume:
     each:
         Volume as v
 
     on added Volume:
         v.issue = volume_issue(v.origin, v.cell_size, v.min_x, v.min_y, v.min_z, v.max_x, v.max_y, v.max_z)
+        if v.issue != VolumeIssue.Valid:
+            add InvalidVolume
 
 rule FillVolume:
     each:
         Volume as v
+    without: InvalidVolume
     group: fill
-    where:
-        v.issue == VolumeIssue.Valid
 
     on core.tick:
         let size_y = extent(v.min_y, v.max_y)

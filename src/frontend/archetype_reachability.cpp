@@ -12,6 +12,34 @@
 
 namespace cactus {
 
+std::optional<std::size_t> named_bound(const ReachabilityFacts& facts, std::span<const SymbolId> required_traits) {
+    if (!facts.derived) {
+        return std::nullopt;
+    }
+    std::vector<SymbolId> required;
+    std::ranges::copy_if(required_traits, std::back_inserter(required), [&](const SymbolId& trait) {
+        return !std::ranges::contains(facts.free_traits, trait);
+    });
+    std::size_t bound = 0;
+    for (const auto& origin : facts.origins) {
+        const bool holds = std::ranges::any_of(origin.trait_sets, [&](const ReachableTraitSet& traits) {
+            return std::ranges::all_of(required, [&](const SymbolId& trait) { return std::ranges::contains(traits, trait); });
+        });
+        if (!holds) {
+            continue;
+        }
+        if (origin.node.archetype.kind != SymbolKind::Entity) {
+            return std::nullopt;
+        }
+        ++bound;
+    }
+    return bound;
+}
+
+std::optional<std::size_t> named_bound(const ReachabilityFacts& facts, const RelationBinding& binding) {
+    return binding.relation.has_value() ? std::nullopt : named_bound(facts, binding.required_traits);
+}
+
 const NativeCreation* native_creation(std::string_view function) {
     static const std::map<std::string, NativeCreation, std::less<>> table{
         {"std.editor.spawn_template", NativeCreation{.pub_templates = true}},

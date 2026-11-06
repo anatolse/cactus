@@ -4,6 +4,8 @@
 #include "frontend/semantic_analyzer.hpp"
 
 #include <cstddef>
+#include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -18,6 +20,12 @@ struct NativeCreation {
 
 // Null unless the function, by canonical id, creates entities.
 [[nodiscard]] const NativeCreation* native_creation(std::string_view function);
+
+// How many entities can carry every required trait when only named entities can;
+// nullopt when a template can, or when `facts` were not derived.
+[[nodiscard]] std::optional<std::size_t> named_bound(const ReachabilityFacts& facts,
+                                                     std::span<const SymbolId> required_traits);
+[[nodiscard]] std::optional<std::size_t> named_bound(const ReachabilityFacts& facts, const RelationBinding& binding);
 
 struct ReachabilityOptions {
     // Past this many abstract entities, the trait that splits the most is made free.

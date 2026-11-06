@@ -30,4 +30,30 @@ const std::vector<NativeFieldRead>* native_field_reads(std::string_view canonica
     return found == table.end() ? nullptr : &found->second;
 }
 
+std::optional<bool> native_is_world_scan(std::string_view canonical) {
+    static const std::map<std::string, bool, std::less<>> table{
+        {"std.query.exists", false},
+        {"std.query.parent", false},
+        {"std.query.children", false},
+        {"std.query.count", true},
+        {"std.query.first", true},
+        {"std.query.all", true},
+        {"std.query.hierarchy_preorder", true},
+        {"std.query.hierarchy_postorder", true},
+        {"std.physics.flat.query.nearest", true},
+        {"std.physics.flat.query.overlap_box", true},
+        {"std.physics.flat.query.overlap_circle", true},
+        {"std.physics.flat.query.raycast", true},
+        {"std.physics.volume.query.nearest", true},
+        {"std.physics.volume.query.overlap_box", true},
+        {"std.physics.volume.query.overlap_sphere", true},
+        {"std.physics.volume.query.raycast", true},
+        {"std.physics.flat.query_cast_nearest", true},
+        {"std.physics.flat.query_overlap_deepest", true},
+        {"std.physics.flat.query_overlap_all", true},
+    };
+    const auto found = table.find(canonical);
+    return found == table.end() ? std::nullopt : std::optional<bool>{found->second};
+}
+
 }  // namespace cactus

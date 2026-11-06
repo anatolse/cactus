@@ -66,4 +66,6 @@ private:
     std::unordered_set<std::string> merged_modules_;
 };
 
+void run_whole_program_passes(DecoratedProgram& program, ErrorReporter& errors);
+
 }  // namespace cactus

@@ -1,5 +1,7 @@
 #include "frontend/pair_plans.hpp"
 
+#include "frontend/archetype_reachability.hpp"
+
 #include <algorithm>
 #include <optional>
 #include <set>
@@ -7,31 +9,6 @@
 namespace cactus {
 
 namespace {
-
-// How many entities can fill `binding` when only named entities can.
-std::optional<std::size_t> named_bound(const ReachabilityFacts& facts, const RelationBinding& binding) {
-    if (!facts.derived || binding.relation.has_value()) {
-        return std::nullopt;
-    }
-    std::vector<SymbolId> required;
-    std::ranges::copy_if(binding.required_traits, std::back_inserter(required), [&](const SymbolId& trait) {
-        return !std::ranges::contains(facts.free_traits, trait);
-    });
-    std::size_t bound = 0;
-    for (const auto& origin : facts.origins) {
-        const bool holds = std::ranges::any_of(origin.trait_sets, [&](const ReachableTraitSet& traits) {
-            return std::ranges::all_of(required, [&](const SymbolId& trait) { return std::ranges::contains(traits, trait); });
-        });
-        if (!holds) {
-            continue;
-        }
-        if (origin.node.archetype.kind != SymbolKind::Entity) {
-            return std::nullopt;
-        }
-        ++bound;
-    }
-    return bound;
-}
 
 void bound_product(const ReachabilityFacts& facts, HandlerContract& contract) {
     auto& plan = contract.pair_plan;

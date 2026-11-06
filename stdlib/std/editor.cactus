@@ -512,23 +512,6 @@ rule EditorSelection3D:
             previous = previous
             current = hit
 
-rule EditorTranslate3D:
-    pairs:
-        selection:
-            EditorSelected
-        rig:
-            EditorCamera3D
-            camera3d.CameraView as cv
-
-    after:
-        models.animate
-
-    on tick:
-        let mouse = input.mouse_position()
-        let now = camera3d.ray_plane(camera3d.ray(cv, mouse), vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0))
-        let before = camera3d.ray_plane(camera3d.ray(cv, mouse - input.mouse_delta()), vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0))
-        let delta = if now.hit and before.hit: now.point - before.point else: vec3(0.0, 0.0, 0.0)
-
 rule EditorPlace3D:
     pairs:
         editor:
@@ -756,7 +739,7 @@ rule EditorCameraNav2D:
             zoom = math.clamp(zoom * (1.0 - zoom_speed), min_zoom, max_zoom)
 
         if input.pressed(EditorFrameSelected):
-            let sel = query.first[EditorSelected]()
+            let sel = Editor[EditorState].selected
             if exists(sel):
                 view_center = transform2d.world_position(sel)
 
@@ -801,7 +784,7 @@ rule EditorCameraNav3D:
             distance = math.clamp(distance * (1.0 + zoom_speed), min_distance, max_distance)
 
         if input.pressed(EditorFrameSelected):
-            let sel = query.first[EditorSelected]()
+            let sel = Editor[EditorState].selected
             if exists(sel):
                 focus = transform3d.world_position(sel)
 

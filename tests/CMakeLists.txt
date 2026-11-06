@@ -237,6 +237,14 @@ add_executable(test_semantic_relations test_semantic_relations.cpp)
 target_link_libraries(test_semantic_relations PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticRelationsTests COMMAND test_semantic_relations)
 
+add_executable(test_query_cost_diagnostics test_query_cost_diagnostics.cpp)
+target_link_libraries(test_query_cost_diagnostics PRIVATE cactus_frontend Catch2::Catch2WithMain)
+target_compile_definitions(test_query_cost_diagnostics PRIVATE
+    CACTUS_TEST_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    CACTUS_TEST_BINARY_DIR="${CMAKE_BINARY_DIR}"
+)
+add_test(NAME QueryCostDiagnosticsTests COMMAND test_query_cost_diagnostics)
+
 add_executable(test_pair_plans test_pair_plans.cpp)
 target_link_libraries(test_pair_plans PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME PairPlanTests COMMAND test_pair_plans)

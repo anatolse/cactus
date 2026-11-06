@@ -135,7 +135,57 @@ std::vector<std::string> unsummarized_world_natives(const std::vector<ParsedModu
     return missing;
 }
 
+bool is_query_module(const std::string& module) {
+    return module == "std.query" || (module.starts_with("std.physics.") && module.ends_with(".query"));
+}
+
+bool is_physics_query(const std::string& module, const std::string& function) {
+    return module.starts_with("std.physics.") && function.starts_with("query_");
+}
+
+std::vector<std::string> unclassified_queries(const std::vector<ParsedModule>& modules) {
+    std::vector<std::string> missing;
+    for (const auto& module : modules) {
+        for (const auto& declaration : module.program.declarations) {
+            const auto* func = std::get_if<FuncNode>(&declaration);
+            if (func == nullptr || !func->is_extern ||
+                !(is_query_module(module.name) || is_physics_query(module.name, func->name))) {
+                continue;
+            }
+            if (auto canonical = module.name + "." + func->name; !native_is_world_scan(canonical).has_value()) {
+                missing.push_back(std::move(canonical));
+            }
+        }
+    }
+    return missing;
+}
+
 }  // namespace
+
+TEST_CASE("Native world scans: every query native is classified", "[native-field-reads]") {
+    const auto modules = parse_stdlib();
+    REQUIRE(modules.size() > 10);
+    CHECK(unclassified_queries(modules).empty());
+}
+
+TEST_CASE("Native world scans: an unclassified query native is named", "[native-field-reads]") {
+    std::vector<ParsedModule> modules;
+    modules.push_back(parse_module("module std.query\n"
+                                   "pub extern func exists() bool\n"
+                                   "pub extern func newest() entity_id\n",
+                                   "query.cactus"));
+    CHECK(unclassified_queries(modules) == std::vector<std::string>{"std.query.newest"});
+}
+
+TEST_CASE("Native world scans: the table classifies scans", "[native-field-reads]") {
+    CHECK(native_is_world_scan("std.query.count") == true);
+    CHECK(native_is_world_scan("std.query.hierarchy_preorder") == true);
+    CHECK(native_is_world_scan("std.physics.volume.query.overlap_sphere") == true);
+    CHECK(native_is_world_scan("std.physics.flat.query_cast_nearest") == true);
+    CHECK(native_is_world_scan("std.query.exists") == false);
+    CHECK(native_is_world_scan("std.query.children") == false);
+    CHECK_FALSE(native_is_world_scan("std.math.vec3.length").has_value());
+}
 
 TEST_CASE("Native field reads: every world native declares its reads", "[native-field-reads]") {
     const auto modules = parse_stdlib();

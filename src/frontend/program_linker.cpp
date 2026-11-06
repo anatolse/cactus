@@ -5,6 +5,7 @@
 #include "frontend/execution_graph_scheduler.hpp"
 #include "frontend/module_artifact.hpp"
 #include "frontend/pair_plans.hpp"
+#include "frontend/query_costs.hpp"
 #include "frontend/ranged_fields.hpp"
 #include "frontend/symbol_identity.hpp"
 
@@ -339,9 +340,7 @@ std::optional<DecoratedProgram> ProgramLinker::link(const std::vector<std::files
     if (!rebuild_execution_graph(merged, true)) {
         return std::nullopt;
     }
-    derive_archetype_reachability(merged, errors_);
-    finalize_pair_plans(merged, errors_);
-    validate_container_traits(merged, errors_);
+    run_whole_program_passes(merged, errors_);
 
     validate_persistence_requires_graph_scheduler(merged);
     validate_set_requires_graph_scheduler(merged);
@@ -350,6 +349,13 @@ std::optional<DecoratedProgram> ProgramLinker::link(const std::vector<std::files
         return std::nullopt;
     }
     return merged;
+}
+
+void run_whole_program_passes(DecoratedProgram& program, ErrorReporter& errors) {
+    derive_archetype_reachability(program, errors);
+    finalize_pair_plans(program, errors);
+    check_query_costs(program, errors);
+    validate_container_traits(program, errors);
 }
 
 bool ProgramLinker::merge_imported_keepers(DecoratedProgram& target, const DecoratedProgram& src) {

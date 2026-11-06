@@ -551,6 +551,24 @@ struct PairPlan {
     bool warned = false;      // a more specific warning already covers a product
 };
 
+// A call whose cost grows with the entities its filter can match.
+struct WorldScan {
+    SymbolId callee;
+    std::vector<SymbolId> filter;  // positive traits; empty when the native takes no filter
+    SourceLocation location;
+    std::optional<std::size_t> enclosing;  // the scan a surrounding `for` iterates, by index
+
+    friend bool operator==(const WorldScan&, const WorldScan&) = default;
+};
+
+// A unary `where:` conjunct that tests `key` against a value the row does not decide.
+struct KeyLookup {
+    std::string key;
+    SourceLocation location;
+
+    friend bool operator==(const KeyLookup&, const KeyLookup&) = default;
+};
+
 struct HandlerContract {
     HandlerDomainKind domain_kind = HandlerDomainKind::Selectionless;
     std::vector<SymbolId> selection;             // Unary domain: positive traits
@@ -596,6 +614,8 @@ struct HandlerContract {
     std::unordered_set<std::string> effects;
     std::unordered_set<std::string> effect_acts;  // the domains in `effects` it acts on, not only observes
     IterationOrder iteration_order = IterationOrder::Free;
+    std::vector<WorldScan> world_scans;  // source order
+    std::vector<KeyLookup> key_lookups;
 
     // A handler that writes a named entity runs as one sequential pass.
     [[nodiscard]] bool splittable_per_entity() const {

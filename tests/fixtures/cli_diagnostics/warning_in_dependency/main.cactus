@@ -1,0 +1,10 @@
+module main
+
+use noisy
+
+template Grunt:
+    noisy.Enemy
+
+rule Spawn:
+    on noisy.tick:
+        spawn Grunt()

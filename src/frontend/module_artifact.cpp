@@ -684,6 +684,21 @@ void ModuleArtifact::write_contract(std::ostream& out, const HandlerContract& co
     write_string_set(out, contract.effects);
     write_string_set(out, contract.effect_acts);
     write_u8(out, static_cast<uint8_t>(contract.iteration_order));
+    write_u32(out, static_cast<uint32_t>(contract.world_scans.size()));
+    for (const auto& scan : contract.world_scans) {
+        write_symbol_id(out, scan.callee);
+        write_symbol_vector(out, scan.filter);
+        write_location(out, scan.location);
+        write_bool(out, scan.enclosing.has_value());
+        if (scan.enclosing.has_value()) {
+            write_u64(out, static_cast<uint64_t>(*scan.enclosing));
+        }
+    }
+    write_u32(out, static_cast<uint32_t>(contract.key_lookups.size()));
+    for (const auto& lookup : contract.key_lookups) {
+        write_str(out, lookup.key);
+        write_location(out, lookup.location);
+    }
 
     write_bool(out, contract.spatial_join.has_value());
     if (contract.spatial_join.has_value()) {
@@ -1526,6 +1541,24 @@ HandlerContract ModuleArtifact::read_contract(std::istream& in) {
     contract.effects         = read_string_set(in);
     contract.effect_acts     = read_string_set(in);
     contract.iteration_order = static_cast<IterationOrder>(read_u8(in));
+    const auto scan_count = read_u32(in);
+    for (uint32_t i = 0; i < scan_count && in.good(); ++i) {
+        WorldScan scan;
+        scan.callee   = read_symbol_id(in);
+        scan.filter   = read_symbol_vector(in);
+        scan.location = read_location(in);
+        if (read_bool(in)) {
+            scan.enclosing = static_cast<std::size_t>(read_u64(in));
+        }
+        contract.world_scans.push_back(std::move(scan));
+    }
+    const auto lookup_count = read_u32(in);
+    for (uint32_t i = 0; i < lookup_count && in.good(); ++i) {
+        KeyLookup lookup;
+        lookup.key      = read_str(in);
+        lookup.location = read_location(in);
+        contract.key_lookups.push_back(std::move(lookup));
+    }
 
     if (read_bool(in)) {
         const auto read_shape = [&in]() {

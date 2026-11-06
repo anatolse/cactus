@@ -1,11 +1,8 @@
 #include "common/codegen_error.hpp"
 #include "common/error_reporter.hpp"
 #include "common/template_metadata.hpp"
-#include "frontend/archetype_reachability.hpp"
 #include "frontend/lexer.hpp"
 #include "frontend/module_artifact.hpp"
-#include "frontend/pair_plans.hpp"
-#include "frontend/ranged_fields.hpp"
 #include "frontend/module_resolver.hpp"
 #include "frontend/parser.hpp"
 #include "frontend/program_linker.hpp"
@@ -40,6 +37,7 @@ static void print_usage(const char* program) {
               << "  --backend <cpp-entt>                Code generation backend (default: cpp-entt)\n"
               << "  --output <file>                      Output file (default: stdout)\n"
               << "  --module-path <dir>                  Additional module search directory (repeatable)\n"
+              << "  --warnings-as-errors                 Fail the build, generating nothing, if any warning is reported\n"
               << "  --force-row-stage                    Test only: evaluate every clause expression per row\n"
               << "  --no-indexed-joins                   Test only: rebuild every pair pass from full snapshots\n"
               << "  --force-hashed-keys                  Test only: hash every equality index key\n"
@@ -61,7 +59,13 @@ static const char* level_name(cactus::DiagnosticLevel level) {
     std::unreachable();
 }
 
+static int& printed_warnings() {
+    static int count = 0;
+    return count;
+}
+
 static void print_errors(const cactus::ErrorReporter& errors) {
+    printed_warnings() += errors.warning_count();
     for (const auto& d : errors.diagnostics()) {
         std::cerr << d.location.filename << ":" << d.location.line << ":" << d.location.column << ": "
                   << level_name(d.level) << ": " << d.message << "\n";
@@ -264,6 +268,7 @@ struct CliArgs {
     bool force_hashed_keys = false;
     bool no_shared_stores = false;
     bool retain_all_construction = false;
+    bool warnings_as_errors = false;
     std::optional<std::string> grid_cell_size_text;
     std::optional<float> grid_cell_size;
 };
@@ -295,6 +300,10 @@ static std::optional<int> read_grid_cell_size(CliArgs& out) {
 
 // Sets the flag an option without a value names; false for any other argument.
 static bool set_switch(const char* arg, CliArgs& out) {
+    if (std::strcmp(arg, "--warnings-as-errors") == 0) {
+        out.warnings_as_errors = true;
+        return true;
+    }
     if (std::strcmp(arg, "--force-row-stage") == 0) {
         out.force_row_stage = true;
         return true;
@@ -540,14 +549,16 @@ int main(int argc, char* argv[]) try {
         cactus::SemanticAnalyzer analyzer(errors);
         decorated = analyzer.analyze(*root_prog);
         if (!errors.has_errors()) {
-            cactus::derive_archetype_reachability(decorated, errors);
-            cactus::finalize_pair_plans(decorated, errors);
-            cactus::validate_container_traits(decorated, errors);
+            cactus::run_whole_program_passes(decorated, errors);
         }
         print_errors(errors);
         if (errors.has_errors()) {
             return 1;
         }
+    }
+    if (const auto warnings = printed_warnings(); args.warnings_as_errors && warnings > 0) {
+        std::cerr << "error: " << warnings << (warnings == 1 ? " warning" : " warnings") << " treated as an error\n";
+        return 1;
     }
     decorated.ast = merged_codegen_prog ? merged_codegen_prog.get() : root_prog.get();
     if (args.force_row_stage) {

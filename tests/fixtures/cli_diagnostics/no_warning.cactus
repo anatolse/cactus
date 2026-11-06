@@ -1,0 +1,14 @@
+module no_warning
+
+pub extern event tick:
+    dt: float
+
+trait Enemy:
+    var hp: int = 1
+
+template Grunt:
+    Enemy
+
+rule Spawn:
+    on tick:
+        spawn Grunt()

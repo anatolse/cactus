@@ -17,6 +17,8 @@ namespace {
 struct CliResult {
     int exit_code = -1;
     std::vector<std::string> stderr_lines;
+    std::string stderr_text;
+    bool wrote_output = false;
 };
 
 std::string quote(fs::path value) {
@@ -38,6 +40,7 @@ CliResult run_cactus(const fs::path& input, const std::string& flags = "") {
     const fs::path work_dir    = fs::path{CACTUS_TEST_BINARY_DIR} / "cli_diagnostics";
     const fs::path output_file = work_dir / (input.stem().string() + ".out.cpp");
     const fs::path stderr_file = work_dir / (input.stem().string() + ".stderr.txt");
+    fs::remove(output_file);
     const std::string command = quote(fs::path{CACTUS_COMPILER_PATH}) + " " + quote(input) + " -o " +
                                 quote(output_file) + flags + " 2> " + quote(stderr_file);
     // NOLINTNEXTLINE(bugprone-command-processor,concurrency-mt-unsafe) -- the test drives the real CLI binary.
@@ -51,10 +54,12 @@ CliResult run_cactus(const fs::path& input, const std::string& flags = "") {
 #endif
     std::ifstream stream(stderr_file);
     for (std::string line; std::getline(stream, line);) {
+        result.stderr_text += line + "\n";
         if (line.contains(": error: ") || line.contains(": warning: ")) {
             result.stderr_lines.push_back(line);
         }
     }
+    result.wrote_output = fs::exists(output_file);
     return result;
 }
 
@@ -72,6 +77,48 @@ TEST_CASE("CLI: a warning on a successful compile is printed once", "[cli][diagn
     CHECK(result.exit_code == 0);
     REQUIRE(result.stderr_lines.size() == 1);
     CHECK(result.stderr_lines[0].contains("warning: pair rule 'P' is not accelerated"));
+}
+
+TEST_CASE("CLI: --warnings-as-errors fails a build with a warning and writes nothing", "[cli][diagnostics]") {
+    const auto result = run_cactus(stage_fixture("one_warning.cactus"), " --warnings-as-errors");
+    CHECK(result.exit_code != 0);
+    REQUIRE(result.stderr_lines.size() == 1);
+    CHECK(result.stderr_lines[0].contains("warning: pair rule 'P' is not accelerated"));
+    CHECK(result.stderr_text.contains("error: 1 warning treated as an error"));
+    CHECK_FALSE(result.wrote_output);
+}
+
+TEST_CASE("CLI: --warnings-as-errors passes a clean program", "[cli][diagnostics]") {
+    const auto result = run_cactus(stage_fixture("no_warning.cactus"), " --warnings-as-errors");
+    CHECK(result.exit_code == 0);
+    CHECK(result.stderr_lines.empty());
+    CHECK(result.wrote_output);
+}
+
+TEST_CASE("CLI: warnings do not fail a build by default", "[cli][diagnostics]") {
+    const auto result = run_cactus(stage_fixture("one_warning.cactus"));
+    CHECK(result.exit_code == 0);
+    CHECK(result.wrote_output);
+}
+
+TEST_CASE("CLI: --warnings-as-errors counts a warning from a dependency", "[cli][diagnostics]") {
+    const auto project = stage_fixture("warning_in_dependency");
+    CHECK(run_cactus(project / "main.cactus").exit_code == 0);
+    const auto result = run_cactus(project / "main.cactus", " --warnings-as-errors");
+    CHECK(result.exit_code != 0);
+    CHECK(result.stderr_text.contains("treated as an error"));
+    CHECK_FALSE(result.wrote_output);
+}
+
+TEST_CASE("CLI: the 3D editor example compiles with --warnings-as-errors", "[cli][diagnostics]") {
+    const fs::path staged = fs::path{CACTUS_TEST_BINARY_DIR} / "cli_diagnostics" / "editor_3d";
+    fs::remove_all(staged);
+    fs::create_directories(staged);
+    const fs::path source = fs::path{CACTUS_TEST_SOURCE_DIR} / "examples" / "editor-3d" / "main.cactus";
+    fs::copy_file(source, staged / "main.cactus");
+    const auto result = run_cactus(staged / "main.cactus", " --warnings-as-errors");
+    CHECK(result.exit_code == 0);
+    CHECK(result.stderr_lines.empty());
 }
 
 TEST_CASE("CLI: a planned pair rule does not warn, even with indexed joins off", "[cli][diagnostics][pair-plans]") {

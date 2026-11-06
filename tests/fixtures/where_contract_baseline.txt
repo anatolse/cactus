@@ -1488,16 +1488,6 @@ smooth_volume.cactus stdlib-fixtures std.physics.volume.Snap/on std.core.fixed_t
     named_writes:
     named_requirements:
     iteration_order: free
-smooth_volume.cactus stdlib-fixtures std.voxel.volume.FillVolume/on std.core.tick
-    reads: std.voxel.volume.Volume
-    read_fields: std.voxel.volume.Volume{batch,cell_size,cells_built,issue,max_x,max_y,max_z,min_x,min_y,min_z,origin}
-    write_fields: std.voxel.volume.Volume{cells_built}
-    write_kinds: std.voxel.volume.Volume.cells_built=3/0
-    bound_reads:
-    named_reads:
-    named_writes:
-    named_requirements:
-    iteration_order: creation
 smooth_volume.cactus stdlib-fixtures std.voxel.volume.LocateRayCell/on std.core.input
     reads: std.voxel.volume.Cell std.voxel.volume.RayProbe
     read_fields: std.voxel.volume.Cell{x,y,z} std.voxel.volume.RayProbe{adjacent_x,adjacent_y,adjacent_z,cell,normal,x,y,z}
@@ -1868,16 +1858,6 @@ voxel_volume.cactus stdlib-fixtures std.physics.volume.Snap/on std.core.fixed_ti
     named_writes:
     named_requirements:
     iteration_order: free
-voxel_volume.cactus stdlib-fixtures std.voxel.volume.FillVolume/on std.core.tick
-    reads: std.voxel.volume.Volume
-    read_fields: std.voxel.volume.Volume{batch,cell_size,cells_built,issue,max_x,max_y,max_z,min_x,min_y,min_z,origin}
-    write_fields: std.voxel.volume.Volume{cells_built}
-    write_kinds: std.voxel.volume.Volume.cells_built=3/0
-    bound_reads:
-    named_reads:
-    named_writes:
-    named_requirements:
-    iteration_order: creation
 voxel_volume.cactus stdlib-fixtures std.voxel.volume.LocateRayCell/on std.core.input
     reads: std.voxel.volume.Cell std.voxel.volume.RayProbe
     read_fields: std.voxel.volume.Cell{x,y,z} std.voxel.volume.RayProbe{adjacent_x,adjacent_y,adjacent_z,cell,normal,x,y,z}

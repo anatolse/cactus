@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <string_view>
 #include <vector>
 
@@ -20,5 +21,9 @@ struct NativeFieldRead {
 // The trait fields a stdlib extern function reads natively, by canonical id;
 // null when no summary is declared.
 [[nodiscard]] const std::vector<NativeFieldRead>* native_field_reads(std::string_view canonical);
+
+// Whether a stdlib query native visits every match, by canonical id; nullopt
+// when the function is not a query.
+[[nodiscard]] std::optional<bool> native_is_world_scan(std::string_view canonical);
 
 }  // namespace cactus

@@ -169,6 +169,7 @@ add_library(cactus_frontend STATIC
     src/frontend/execution_graph_scheduler.cpp
     src/frontend/archetype_reachability.cpp
     src/frontend/pair_plans.cpp
+    src/frontend/query_costs.cpp
     src/frontend/hierarchy_forest.cpp
     src/frontend/delivery_cycles.cpp
     src/frontend/native_result_ordering.cpp

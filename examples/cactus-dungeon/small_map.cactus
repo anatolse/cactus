@@ -18,6 +18,6 @@ entity Settings:
     ai.Configuration:
         enabled = false
     world.WorldConfig:
-        size = 24
+        size = 16
         height = 3
-        batch = 2304
+        batch = 1024

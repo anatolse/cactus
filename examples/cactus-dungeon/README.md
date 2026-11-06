@@ -10,7 +10,7 @@ cmake --build --preset clang-o3-release --target example_cactus_dungeon_generate
 ./build-clang-o3-release/example_cactus_dungeon_generated.exe
 ```
 
-The 24-by-24 test entry shares its modules with the 85-by-85 game:
+The 16-by-16 test entry shares its modules with the 85-by-85 game:
 
 ```
 cmake --build --preset clang-o3-release --target test_cactus_dungeon_headless_behavior

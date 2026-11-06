@@ -205,10 +205,9 @@ The `std.editor` module SHALL declare:
 - **WHEN** an entity has `EditorSelected` and `std.transform.flat.WorldTransform`
 - **THEN** `EditorGizmoRenderer2D` emits a `DrawDebugRectOutline2D` event around the entity's AABB every render frame, in addition to any mode-specific geometry
 
-### Requirement: std.editor module provides 3D selection and transform rules
+### Requirement: std.editor module provides 3D selection and placement rules
 The `std.editor` module SHALL declare:
 - `rule EditorSelection3D` with filter requiring `std.transform.volume.WorldTransform`, excluding `EditorLocked`, that on input click calls `editor_raycast_3d` and adds `EditorSelected` to the hit entity
-- `rule EditorTranslate3D`, a pair rule over `EditorSelected` entities and the editor rig camera (`EditorCamera3D` with `std.camera.volume.CameraView as cv`), that on tick computes the ground-plane delta as the difference of `ray_plane(ray(cv, …), (0,0,0), (0,1,0))` hits at the mouse position and at the mouse position minus the mouse delta, or zero when either misses
 - `rule EditorPlace3D`, a pair rule over `EditorState` and the editor rig camera (`EditorCamera3D` with `std.camera.volume.CameraView as cv`) with `limit: 1 per` the editor binding, that on input click in `GizmoMode.Place` mode calls `editor_spawn_template` with the editor's `active_template` and the point of `ray_plane(ray(cv, mouse), (0,0,0), (0,1,0))` (the origin when it misses), then adds `EditorSelected` to the spawned entity
 - `rule EditorGizmoRenderer3D` with filter requiring `std.transform.volume.WorldTransform` and `EditorSelected`, that on render reads `active_mode()`, projects `EditorGizmo3D` with that mode, color `#00FF00FF`, and size `1.0`, and emits the `std.debug` primitive events (per `editor-debug-draw`) corresponding to that mode's gizmo geometry: an always-drawn wire box, plus mode-specific axis lines (Translate), a circle (Rotate), or axis lines with tip markers (Scale). Like `EditorGizmoRenderer2D`, it uses `on render:` so its emitted events are drained within the render-frame flush boundary using that frame's camera.
 
@@ -228,11 +227,6 @@ The `std.editor` module SHALL declare:
 - **WHEN** `EditorState.mode` is `GizmoMode.Place` and `EditorState.use_3d` is `false`
 - **AND** user clicks in the world
 - **THEN** `EditorPlace3D` spawns no entity
-
-#### Scenario: Drag translates a 3D entity
-- **WHEN** an entity has `EditorSelected` and `std.transform.volume.WorldTransform`
-- **AND** mouse is held
-- **THEN** the entity's `WorldTransform.position` changes by the mouse delta each frame
 
 #### Scenario: Gizmo mode follows EditorState.mode
 - **WHEN** an entity has `EditorSelected` and `std.transform.volume.WorldTransform`, and `EditorState.mode` is `GizmoMode.Scale`

@@ -293,7 +293,7 @@ introduce a real choice does not introduce such a marker to express it.
 ### Requirement: Performance is a backend obligation
 The generated backend SHALL produce the most performant code derivable from the author's declarations. Authors SHALL NOT be required to hand-tune or annotate gameplay-core declarations for performance.
 
-Because every rule domain, predicate, and write is declared, the backend sees the whole program: every query, every archetype, and which data is ever written. The choice of acceleration structures, specializations, and data layout SHALL belong to the backend, derived from that whole-program knowledge. The language SHALL NOT expose author-facing controls for these choices. When the backend cannot accelerate a declared query, the compiler SHALL say so with a diagnostic rather than degrade silently.
+Because every rule domain, predicate, and write is declared, the backend sees the whole program: every query, every archetype, and which data is ever written. The choice of acceleration structures, specializations, and data layout SHALL belong to the backend, derived from that whole-program knowledge. The language SHALL NOT expose author-facing controls for these choices. When the backend cannot accelerate a declared query, the compiler SHALL say so with a diagnostic rather than degrade silently. A query is unaccelerated when its cost is superlinear in the entities it can match, or when it scans a whole domain for one key, as `query-cost-diagnostics` specifies. A pass that visits each row of its domain once is the cost of that pass, not a fallback.
 
 #### Scenario: Filter generates typed view, not dynamic query
 - **WHEN** a rule declares `each: Position as p, Velocity as v`
@@ -316,6 +316,10 @@ Because every rule domain, predicate, and write is declared, the backend sees th
 #### Scenario: Unaccelerated queries are diagnosed
 - **WHEN** a declared query has no acceleration the backend can apply
 - **THEN** the compiler emits a warning naming the query, instead of silently falling back to a full scan
+
+#### Scenario: A linear pass is not a fallback
+- **WHEN** a rule has `each: Health as hp` and `where: hp.current < 30.0`
+- **THEN** no acceleration diagnostic is reported, because the pass visits each row once
 
 ### Requirement: Feature evaluation criteria
 All proposed changes to the language SHALL be evaluated against the following criteria, in order:

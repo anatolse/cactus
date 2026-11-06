@@ -79,3 +79,21 @@ The CLI SHALL exit with code 0 on success and code 1 on any compilation error.
 - **WHEN** compilation fails due to errors
 - **THEN** the process exits with code 1
 
+### Requirement: Warnings can fail the build
+The CLI SHALL accept a `--warnings-as-errors` flag. With the flag, when any stage reports a warning, the CLI SHALL print every diagnostic as usual, generate no output, print one summary line with the warning count, and exit with non-zero status. Info diagnostics SHALL NOT count. Without the flag, warnings SHALL NOT change the exit status.
+
+#### Scenario: A warning fails the build
+- **WHEN** the user runs `cactus game.cactus --warnings-as-errors --output game.cpp` and compilation reports one warning
+- **THEN** the warning is printed once, `game.cpp` is not written, and the exit status is non-zero
+
+#### Scenario: A clean program compiles
+- **WHEN** the user runs `cactus game.cactus --warnings-as-errors` and compilation reports no warning
+- **THEN** the CLI generates output and exits with zero status
+
+#### Scenario: Warnings pass by default
+- **WHEN** the user runs `cactus game.cactus` and compilation reports one warning
+- **THEN** the CLI generates output and exits with zero status
+
+#### Scenario: A warning from a dependency counts
+- **WHEN** a module the program imports reports a warning and the flag is set
+- **THEN** the build fails

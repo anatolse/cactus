@@ -656,6 +656,7 @@ void ModuleArtifact::write_contract(std::ostream& out, const HandlerContract& co
     write_field_table(out, contract.write_fields);
     write_write_kinds(out, contract.write_kinds);
     write_symbol_set(out, contract.projects);
+    write_symbol_set(out, contract.observed_membership);
     write_named_field_table(out, contract.named_reads);
     write_named_field_table(out, contract.named_writes);
     write_u32(out, static_cast<uint32_t>(contract.named_requirements.size()));
@@ -1495,6 +1496,7 @@ HandlerContract ModuleArtifact::read_contract(std::istream& in) {
     contract.write_fields    = read_field_table(in);
     contract.write_kinds     = read_write_kinds(in);
     contract.projects        = read_symbol_set(in);
+    contract.observed_membership = read_symbol_set(in);
     contract.named_reads     = read_named_field_table(in);
     contract.named_writes    = read_named_field_table(in);
     const auto requirement_count = read_u32(in);

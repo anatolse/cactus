@@ -1044,6 +1044,24 @@ cactus_add_headless_behavior_test(test_lifecycle_route_pong_first_headless_behav
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_lifecycle_route_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_projection_observers_projector_first_headless_behavior
+    CACTUS_SOURCE tests/fixtures/projection_observers/projector_first/projection_observers.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_projection_observers_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_projection_observers_observer_first_headless_behavior
+    CACTUS_SOURCE tests/fixtures/projection_observers/observer_first/projection_observers.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_projection_observers_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_projection_rows_headless_behavior
+    CACTUS_SOURCE tests/fixtures/projection_rows/projection_rows.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_projection_rows_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_accumulation_storage_move_headless_behavior
     CACTUS_SOURCE tests/fixtures/accumulation_storage_move/accumulation_storage_move.cactus
     BACKEND cpp-entt
@@ -1321,7 +1339,7 @@ cactus_add_headless_behavior_test(test_keep_evaluation_row_stage_headless_behavi
 # limits run in every build; time limits only in optimized builds
 # (`ctest --preset clang-o3-release -L perf`).
 add_custom_target(test_generated_performance_benchmarks)
-foreach(shape IN ITEMS static_keep union_fold equality_reduce grid_region row_join baseline)
+foreach(shape IN ITEMS static_keep union_fold equality_reduce grid_region row_join baseline own_projection)
     set(perf_target test_perf_${shape}_benchmark)
     cactus_add_headless_behavior_test(${perf_target}
         CACTUS_SOURCE tests/fixtures/perf/perf_${shape}.cactus

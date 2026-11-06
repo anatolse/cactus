@@ -2386,13 +2386,7 @@ TEST_CASE("handler graph orders external project producers before same-activatio
         "    on input:\n"
         "        reads:\n"
         "            PointerHit\n"
-        "extern rule ProducerOne:\n"
-        "    each:\n"
-        "        PointerHit\n"
-        "    on input:\n"
-        "        projects:\n"
-        "            PointerHit\n"
-        "extern rule ProducerTwo:\n"
+        "extern rule Producer:\n"
         "    each:\n"
         "        PointerHit\n"
         "    on input:\n"
@@ -2420,37 +2414,50 @@ TEST_CASE("handler graph orders external project producers before same-activatio
         });
     };
 
-    const auto producer_one = identity("ProducerOne");
-    const auto producer_two = identity("ProducerTwo");
-    const auto match        = identity("MatchConsumer");
-    const auto reader       = identity("ReadConsumer");
-    const auto other        = identity("OtherActivationConsumer", "tick");
-    const auto projected    = make_symbol_id(SymbolKind::Trait, "game.project_graph", "PointerHit");
+    const auto producer  = identity("Producer");
+    const auto match     = identity("MatchConsumer");
+    const auto reader    = identity("ReadConsumer");
+    const auto other     = identity("OtherActivationConsumer", "tick");
+    const auto projected = make_symbol_id(SymbolKind::Trait, "game.project_graph", "PointerHit");
 
-    for (const auto& producer : {producer_one, producer_two}) {
-        const auto match_edge = edge_between(producer, match);
-        REQUIRE(match_edge != decorated.execution_graph.schedule_edges.end());
-        CHECK(match_edge->orientation == ScheduleEdgeOrientation::WriterBeforeReader);
-        CHECK(match_edge->trait_provenance == std::vector<SymbolId>{projected});
+    const auto match_edge = edge_between(producer, match);
+    REQUIRE(match_edge != decorated.execution_graph.schedule_edges.end());
+    CHECK(match_edge->orientation == ScheduleEdgeOrientation::WriterBeforeReader);
+    CHECK(match_edge->trait_provenance == std::vector<SymbolId>{projected});
 
-        const auto read_edge = edge_between(producer, reader);
-        REQUIRE(read_edge != decorated.execution_graph.schedule_edges.end());
-        CHECK(read_edge->orientation == ScheduleEdgeOrientation::WriterBeforeReader);
-        CHECK(read_edge->trait_provenance == std::vector<SymbolId>{projected});
-    }
+    const auto read_edge = edge_between(producer, reader);
+    REQUIRE(read_edge != decorated.execution_graph.schedule_edges.end());
+    CHECK(read_edge->orientation == ScheduleEdgeOrientation::WriterBeforeReader);
+    CHECK(read_edge->trait_provenance == std::vector<SymbolId>{projected});
 
     CHECK(std::ranges::none_of(decorated.execution_graph.schedule_edges, [&](const auto& edge) {
-        return (edge.before == producer_one && edge.after == producer_two) ||
-               (edge.before == producer_two && edge.after == producer_one) || edge.before == other ||
-               edge.after == other;
+        return edge.before == other || edge.after == other;
     }));
-    for (const auto& producer : {producer_one, producer_two}) {
-        const auto node = std::ranges::find_if(decorated.execution_graph.handlers,
-                                               [&](const auto& item) { return item.identity == producer; });
-        REQUIRE(node != decorated.execution_graph.handlers.end());
-        CHECK(node->contract.projects == std::unordered_set<SymbolId>{projected});
-        CHECK(node->contract.writes.empty());
-    }
+    const auto node = std::ranges::find_if(decorated.execution_graph.handlers,
+                                           [&](const auto& item) { return item.identity == producer; });
+    REQUIRE(node != decorated.execution_graph.handlers.end());
+    CHECK(node->contract.projects == std::unordered_set<SymbolId>{projected});
+    CHECK(node->contract.writes.empty());
+}
+
+TEST_CASE("handler graph rejects two external producers that select the trait they project",
+          "[semantic][handler-graph][extern-rule][projects]") {
+    const auto [decorated, diagnostics] = analyze_source("module game.project_graph\n"
+                                                         "event input\n"
+                                                         "trait PointerHit\n"
+                                                         "extern rule ProducerOne:\n"
+                                                         "    each:\n"
+                                                         "        PointerHit\n"
+                                                         "    on input:\n"
+                                                         "        projects:\n"
+                                                         "            PointerHit\n"
+                                                         "extern rule ProducerTwo:\n"
+                                                         "    each:\n"
+                                                         "        PointerHit\n"
+                                                         "    on input:\n"
+                                                         "        projects:\n"
+                                                         "            PointerHit\n");
+    CHECK(first_error(diagnostics).contains("each observes what the other projects"));
 }
 
 // ── Pair relations in the execution graph (dsl-pair-relations, 3.4) ─────────

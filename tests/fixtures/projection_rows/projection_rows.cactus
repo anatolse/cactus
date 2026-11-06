@@ -1,0 +1,80 @@
+module projection_rows
+
+use std.core
+use std.query as query
+
+# Each row projects onto the other entity. The rows are fixed at pass start, so
+# no projection drops a row of the same pass.
+
+trait Mark
+trait Seen
+trait Row:
+    let next: entity_id
+    var runs: int = 0
+trait Done
+trait Probe:
+    let next: entity_id
+    var saw_mark: bool = false
+trait Ranked:
+    let next: entity_id
+    let rank: int
+    var runs: int = 0
+trait Flagged
+trait Tally:
+    var rows: int = 0
+
+entity Counter:
+    Tally
+    KeepOnLoad
+
+entity First:
+    Row:
+        next = Second
+    Probe:
+        next = Second
+    Ranked:
+        next = Second
+        rank = 1
+    KeepOnLoad
+
+entity Second:
+    Row:
+        next = First
+    Probe:
+        next = First
+    Ranked:
+        next = First
+        rank = 2
+    KeepOnLoad
+
+rule Step:
+    each:
+        Row as r
+    without: Mark
+    on tick:
+        r.runs += 1
+        project Mark to r.next
+
+rule Observe:
+    each:
+        Probe as p
+    without: Seen
+    on tick:
+        p.saw_mark = query.exists[Seen]()
+        project Seen to p.next
+
+rule Sorted:
+    each:
+        Ranked as r
+    without: Done
+    order by:
+        r.rank desc
+    on tick:
+        r.runs += 1
+        project Done to r.next
+
+rule Bare:
+    without: Flagged
+    on tick:
+        Counter[Tally].rows += 1
+        project Flagged to Counter

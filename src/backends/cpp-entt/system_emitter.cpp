@@ -1491,9 +1491,14 @@ void emit_keyed_sort(std::ostringstream& out,
     out << ind << "}\n";
 }
 
-// Returns the anchor trait it sorted by (see primary_sort_trait), or empty
-// when the rule isn't ordered — the caller reuses this to pin the matching
-// view's drive_from instead of re-deriving the same anchor a second time.
+struct SortedRows {
+    std::string anchor;
+    std::string snapshot;
+};
+
+// Returns the anchor trait it sorted by (see primary_sort_trait) and the sorted
+// snapshot, or empty when the rule isn't ordered — the caller reuses the anchor to
+// pin the matching view's drive_from instead of re-deriving it a second time.
 //
 // The key extractors read every filter trait unconditionally (see
 // emit_sort_key_extractors), so they are only safe to call on an entity that
@@ -1509,13 +1514,13 @@ void emit_keyed_sort(std::ostringstream& out,
 // it reorders entities present in both the pool and the given range to agree
 // with that range's order, skipping anything else in the pool, without
 // invoking a comparator over the pool's other entities.
-std::string emit_sort_call(std::ostringstream& out,
-                           const RuleNode& sys,
-                           const std::vector<FilterBinding>& bindings,
-                           const std::vector<std::string>& trait_names,
-                           const DecoratedProgram& program,
-                           const std::unordered_map<std::string, std::string>& cpp_overrides,
-                           int indent = 1) {
+SortedRows emit_sort_call(std::ostringstream& out,
+                          const RuleNode& sys,
+                          const std::vector<FilterBinding>& bindings,
+                          const std::vector<std::string>& trait_names,
+                          const DecoratedProgram& program,
+                          const std::unordered_map<std::string, std::string>& cpp_overrides,
+                          int indent = 1) {
     auto anchor = primary_sort_trait(sys, program);
     if (sys.order_by.empty() || anchor.empty()) {
         return {};
@@ -1559,7 +1564,7 @@ std::string emit_sort_call(std::ostringstream& out,
                         snapshot_name + "[cactus_rhs]).value");
     out << ind << "registry.storage<" << anchor << ">().sort_as(" << snapshot_name << ".begin(), " << snapshot_name
         << ".end());\n";
-    return anchor;
+    return {.anchor = anchor, .snapshot = snapshot_name};
 }
 
 // Rewrites a vec2/vec3 constructor argument, promoting an `int`-kind result
@@ -5456,10 +5461,18 @@ static void emit_filtered_handler_body(std::ostringstream& out,
         return;
     }
     out << "    } else {\n";
-    const auto sort_anchor = emit_sort_call(out, sys, filter_bindings_list, filter_traits, program, filter_cpp_overrides, 2);
-    emit_view_declaration(out, filter_cpp_types, exclude_cpp_types, 2, sort_anchor);
-    const bool creation_ordered = iterate_in_creation_order && sort_anchor.empty();
-    if (!limited && !creation_ordered) {
+    const auto sorted = emit_sort_call(out, sys, filter_bindings_list, filter_traits, program, filter_cpp_overrides, 2);
+    std::string rows  = "view";
+    if (iterate_in_creation_order && sorted.anchor.empty()) {
+        rows = "cactus::runtime::entt_backend::creation_ordered(registry, view)";
+    } else if (!sorted.anchor.empty() && contract != nullptr && contract->observes_own_projection()) {
+        // A sorted pass keeps its declared order, but a projection still must not change its rows.
+        rows = sorted.snapshot;
+    }
+    if (rows != sorted.snapshot) {
+        emit_view_declaration(out, filter_cpp_types, exclude_cpp_types, 2, sorted.anchor);
+    }
+    if (!limited && rows == "view") {
         emit_view_each_header(out, filter_bindings_list, 2, program);
         out << "        " << handler_body_name << "(entity";
         call_args(out);
@@ -5475,8 +5488,7 @@ static void emit_filtered_handler_body(std::ostringstream& out,
         taken_name = gen_temp_name("taken", sys.limit->location);
         out << "        int " << taken_name << " = 0;\n";
     }
-    out << "        for (auto entity : "
-        << (creation_ordered ? "cactus::runtime::entt_backend::creation_ordered(registry, view)" : "view") << ") {\n";
+    out << "        for (auto entity : " << rows << ") {\n";
     if (limited) {
         out << "            if (" << taken_name << " >= " << limit_name << ") { break; }\n";
     }
@@ -5533,11 +5545,23 @@ static void emit_fallback_handler_body(std::ostringstream& out,
                                        const std::vector<FilterBinding>& filter_bindings_list,
                                        const std::vector<std::string>& filter_traits,
                                        const DecoratedProgram& program,
-                                       const std::unordered_map<std::string, std::string>& filter_cpp_overrides) {
+                                       const std::unordered_map<std::string, std::string>& filter_cpp_overrides,
+                                       const HandlerContract* contract) {
     emit_sort_call(out, sys, filter_bindings_list, filter_traits, program, filter_cpp_overrides);
+    const bool fixed_rows = contract != nullptr && contract->observes_own_projection();
+    if (fixed_rows) {
+        out << "    std::vector<entt::entity> cactus_rows;\n";
+    }
     out << "    for (auto entity : registry.storage<entt::entity>()) {\n";
     out << "        (void)entity;\n";
     emit_storage_filter_skip(out, sys.filter, sys.exclude, program, 2);
+    if (fixed_rows) {
+        // The filter must not see this pass's own projections, so the rows are taken first.
+        out << "        cactus_rows.push_back(entity);\n";
+        out << "    }\n";
+        out << "    for (auto entity : cactus::runtime::entt_backend::creation_ordered(registry, cactus_rows)) {\n";
+        out << "        (void)entity;\n";
+    }
     auto lexical_locals = handler_lexical_locals(handler);
     LocalNumericKinds local_kinds;
     // Wrapped in a per-invocation lambda for the same reason as
@@ -7958,7 +7982,8 @@ static void emit_handler_body(std::ostringstream& out,
                                    domain.filter_bindings_list,
                                    domain.filter_traits,
                                    program,
-                                   domain.filter_cpp_overrides);
+                                   domain.filter_cpp_overrides,
+                                   contract);
     }
 }
 

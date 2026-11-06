@@ -1,0 +1,36 @@
+module perf_own_projection
+
+use std.core
+
+# Every mover marks itself. The pass selects without that mark, so it observes
+# its own projection and runs its rows from a snapshot in creation order.
+
+trait Board:
+    let size: int = 85
+
+trait Mover:
+    var x: float = 0.0
+
+trait Moved
+
+group motion:
+    phase: fixed_tick
+
+entity Field:
+    Board
+
+template Body():
+    Mover
+
+rule Fill:
+    on load:
+        for i in range(0, Field[Board].size * Field[Board].size):
+            spawn Body()
+
+rule Step:
+    each: Mover as m
+    without: Moved
+    group: motion
+    on fixed_tick:
+        m.x += 1.0
+        project Moved

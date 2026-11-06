@@ -7047,6 +7047,299 @@ TEST_CASE("Semantic: two assignments that nothing orders are rejected", "[semant
     CHECK(messages[0].starts_with("unorientable conflict between 'test.First/on test.tick' and 'test.Second/on test.tick'"));
 }
 
+static const std::string& projection_world() {
+    static const std::string value = "use std.query as query\n" + stdlib_events() +
+                                     "trait Mark\n"
+                                     "trait Other\n"
+                                     "trait Body:\n"
+                                     "    var c: int = 0\n"
+                                     "    var x: float = 0.0\n"
+                                     "entity Game:\n"
+                                     "    Body\n";
+    return value;
+}
+
+static const std::string& projection_prelude() {
+    static const std::string value = projection_world() + "rule Project:\n"
+                                                          "    each:\n"
+                                                          "        Body\n"
+                                                          "    on tick:\n"
+                                                          "        project Mark\n";
+    return value;
+}
+
+static std::string mutual_observers(const std::string& second_clause = {}) {
+    return projection_world() + "rule First:\n"
+                                "    each:\n"
+                                "        Body\n"
+                                "    without: Other\n"
+                                "    on tick:\n"
+                                "        project Mark\n"
+                                "rule Second:\n"
+                                "    each:\n"
+                                "        Body\n"
+                                "    without: Mark\n" +
+           second_clause +
+           "    on tick:\n"
+           "        project Other\n";
+}
+
+static bool has_cycle_between(const std::vector<std::string>& messages,
+                              const std::string& first,
+                              const std::string& second) {
+    return std::ranges::any_of(messages, [&](const std::string& message) {
+        return message.starts_with("handler cycle: ") && message.contains(first) && message.contains(second);
+    });
+}
+
+static bool data_edge_from_project(const DecoratedProgram& program) {
+    return has_reason(edges_from(program, "Project", "Observer"), ScheduleEdgeOrientation::WriterBeforeReader);
+}
+
+TEST_CASE("Projection orders membership observers", "[semantic][handler-execution-graph][projected-traits]") {
+    SECTION("an each: selection, the control") {
+        CHECK(data_edge_from_project(analyze(projection_prelude() + "rule Observer:\n"
+                                                                    "    each:\n"
+                                                                    "        Mark\n"
+                                                                    "        Body as b\n"
+                                                                    "    on tick:\n"
+                                                                    "        b.c += 1\n")));
+    }
+    SECTION("a without: clause") {
+        CHECK(data_edge_from_project(analyze(projection_prelude() + "rule Observer:\n"
+                                                                    "    each:\n"
+                                                                    "        Body as b\n"
+                                                                    "    without: Mark\n"
+                                                                    "    on tick:\n"
+                                                                    "        b.c += 1\n")));
+    }
+    SECTION("a pair binding") {
+        CHECK(data_edge_from_project(analyze(projection_prelude() + "rule Observer:\n"
+                                                                    "    pairs:\n"
+                                                                    "        left:\n"
+                                                                    "            Body\n"
+                                                                    "        right:\n"
+                                                                    "            Mark\n"
+                                                                    "    on tick:\n"
+                                                                    "        let seen = left != right\n")));
+    }
+    SECTION("a positive query filter") {
+        CHECK(data_edge_from_project(analyze(projection_prelude() + "rule Observer:\n"
+                                                                    "    on tick:\n"
+                                                                    "        let seen = query.exists[Mark]()\n")));
+    }
+    SECTION("a negated query filter") {
+        CHECK(data_edge_from_project(analyze(projection_prelude() + "rule Observer:\n"
+                                                                    "    on tick:\n"
+                                                                    "        let seen = query.exists[Body, not Mark]()\n")));
+    }
+    SECTION("a physics query filter") {
+        CHECK(data_edge_from_project(analyze("use std.physics.flat.query as physics\n" + projection_prelude() +
+                                             "rule Observer:\n"
+                                             "    on tick:\n"
+                                             "        let seen = physics.nearest[Mark](from = vec2(0.0, 0.0))\n")));
+    }
+    SECTION("an external projects: entry") {
+        const auto program = analyze(projection_world() + "extern rule Project:\n"
+                                                          "    each: Body, Mark\n"
+                                                          "    on tick:\n"
+                                                          "        projects: Mark\n"
+                                                          "rule Observer:\n"
+                                                          "    each:\n"
+                                                          "        Body as b\n"
+                                                          "    without: Mark\n"
+                                                          "    on tick:\n"
+                                                          "        b.c += 1\n");
+        CHECK(data_edge_from_project(program));
+    }
+    SECTION("two ordinary rules, where only one observes") {
+        const auto program = analyze(projection_prelude() + "rule Observer:\n"
+                                                            "    each:\n"
+                                                            "        Mark\n"
+                                                            "        Body\n"
+                                                            "    on tick:\n"
+                                                            "        project Mark\n");
+        CHECK(data_edge_from_project(program));
+        CHECK(edges_from(program, "Observer", "Project").empty());
+    }
+    SECTION("an observer that also projects") {
+        const auto program = analyze(projection_world() + "rule Project:\n"
+                                                          "    pairs:\n"
+                                                          "        left:\n"
+                                                          "            Body\n"
+                                                          "        right:\n"
+                                                          "            Body\n"
+                                                          "    on tick:\n"
+                                                          "        project Mark to left\n"
+                                                          "rule Observer:\n"
+                                                          "    each:\n"
+                                                          "        Mark\n"
+                                                          "        Body\n"
+                                                          "    on tick:\n"
+                                                          "        project Mark\n");
+        CHECK(data_edge_from_project(program));
+        CHECK(edges_from(program, "Observer", "Project").empty());
+    }
+}
+
+TEST_CASE("Mutual membership observation is an unorientable conflict",
+          "[semantic][handler-execution-graph][projected-traits]") {
+    const auto messages = analyze_error_messages(mutual_observers());
+    REQUIRE(messages.size() == 1);
+    CHECK(messages[0].starts_with("unorientable conflict between 'test.First/on test.tick' and 'test.Second/on test.tick'"));
+    CHECK(messages[0].contains("each observes what the other projects"));
+    CHECK_FALSE(messages[0].contains("add 'after:"));
+}
+
+TEST_CASE("An after: cannot settle mutual membership observation",
+          "[semantic][handler-execution-graph][projected-traits]") {
+    const auto messages = analyze_error_messages(mutual_observers("    after:\n"
+                                                                  "        First\n"));
+    CHECK(has_cycle_between(messages, "First", "Second"));
+}
+
+TEST_CASE("An after: that agrees with a membership observation is accepted",
+          "[semantic][handler-execution-graph][projected-traits]") {
+    const auto program = analyze(projection_prelude() + "rule Observer:\n"
+                                                        "    each:\n"
+                                                        "        Body as b\n"
+                                                        "    without: Mark\n"
+                                                        "    after:\n"
+                                                        "        Project\n"
+                                                        "    on tick:\n"
+                                                        "        b.c += 1\n");
+    CHECK_FALSE(edges_from(program, "Project", "Observer").empty());
+    CHECK(edges_from(program, "Observer", "Project").empty());
+}
+
+TEST_CASE("An after: that disagrees with a membership observation is a cycle",
+          "[semantic][handler-execution-graph][projected-traits]") {
+    const auto messages = analyze_error_messages(projection_world() + "rule Project:\n"
+                                                                      "    each:\n"
+                                                                      "        Body\n"
+                                                                      "    after:\n"
+                                                                      "        Observer\n"
+                                                                      "    on tick:\n"
+                                                                      "        project Mark\n"
+                                                                      "rule Observer:\n"
+                                                                      "    each:\n"
+                                                                      "        Body as b\n"
+                                                                      "    without: Mark\n"
+                                                                      "    on tick:\n"
+                                                                      "        b.c += 1\n");
+    CHECK(has_cycle_between(messages, "Project", "Observer"));
+}
+
+static std::string observer_feeding_projector(const std::string& observer_clause = {}) {
+    return projection_world() + "rule Project:\n"
+                                "    each:\n"
+                                "        Body as b\n"
+                                "    on tick:\n"
+                                "        if b.x > 0.5:\n"
+                                "            project Mark\n"
+                                "rule Observer:\n"
+                                "    each:\n"
+                                "        Mark\n"
+                                "        Body as b\n" +
+           observer_clause +
+           "    on tick:\n"
+           "        b.x = 1.0\n";
+}
+
+TEST_CASE("An observer that writes what its projector reads is an unorientable conflict",
+          "[semantic][handler-execution-graph][projected-traits]") {
+    const auto messages = analyze_error_messages(observer_feeding_projector());
+    REQUIRE(messages.size() == 1);
+    CHECK(messages[0].starts_with("unorientable conflict between 'test.Observer/on test.tick' and 'test.Project/on test.tick'"));
+    CHECK(messages[0].ends_with("add 'after: Project/on tick' to the Observer/on tick handler"));
+}
+
+TEST_CASE("An unorientable conflict only suggests running an observer after its projector",
+          "[semantic][handler-execution-graph][projected-traits]") {
+    const auto messages = analyze_error_messages(projection_world() + "rule Aardvark:\n"
+                                                                      "    each:\n"
+                                                                      "        Body as b\n"
+                                                                      "    on tick:\n"
+                                                                      "        if b.x > 0.5:\n"
+                                                                      "            project Mark\n"
+                                                                      "rule Zebra:\n"
+                                                                      "    each:\n"
+                                                                      "        Mark\n"
+                                                                      "        Body as b\n"
+                                                                      "    on tick:\n"
+                                                                      "        b.x = 1.0\n");
+    REQUIRE(messages.size() == 1);
+    CHECK(messages[0].ends_with("add 'after: Aardvark/on tick' to the Zebra/on tick handler"));
+}
+
+TEST_CASE("An after: settles an observer that writes what its projector reads",
+          "[semantic][handler-execution-graph][projected-traits]") {
+    const auto program = analyze(observer_feeding_projector("    after:\n"
+                                                            "        Project\n"));
+    CHECK_FALSE(edges_from(program, "Project", "Observer").empty());
+    CHECK(edges_from(program, "Observer", "Project").empty());
+}
+
+TEST_CASE("Commuting writes to a projected trait still order its observer",
+          "[semantic][handler-execution-graph][projected-traits]") {
+    CHECK(data_edge_from_project(analyze("use std.query as query\n" + stdlib_events() +
+                                         "trait Tally:\n"
+                                         "    var n: int = 0\n"
+                                         "trait Body\n"
+                                         "entity Game:\n"
+                                         "    Tally\n"
+                                         "    Body\n"
+                                         "rule Observer:\n"
+                                         "    each:\n"
+                                         "        Tally as t\n"
+                                         "    on tick:\n"
+                                         "        t.n += 1\n"
+                                         "rule Project:\n"
+                                         "    pairs:\n"
+                                         "        left:\n"
+                                         "            Tally\n"
+                                         "        right:\n"
+                                         "            Body\n"
+                                         "    on tick:\n"
+                                         "        Game[Tally].n += 1\n"
+                                         "        project Tally to left\n")));
+}
+
+TEST_CASE("Observing membership adds no trait read", "[semantic][handler-execution-graph][projected-traits]") {
+    const auto program = analyze(projection_prelude() + "rule Observer:\n"
+                                                        "    each:\n"
+                                                        "        Body as b\n"
+                                                        "    without: Other\n"
+                                                        "    on tick:\n"
+                                                        "        if query.exists[Mark]():\n"
+                                                        "            b.c += 1\n");
+    const auto& contract = named_contract(program, "Observer");
+    const auto mark      = make_symbol_id(SymbolKind::Trait, "test", "Mark");
+    const auto other     = make_symbol_id(SymbolKind::Trait, "test", "Other");
+    CHECK(contract.observes_membership(mark));
+    CHECK(contract.observes_membership(other));
+    CHECK_FALSE(contract.reads.contains(mark));
+    CHECK_FALSE(contract.reads.contains(other));
+}
+
+TEST_CASE("A pass that observes its own projection runs in creation order",
+          "[semantic][handler-execution-graph][projected-traits]") {
+    CHECK(iteration_order_of("trait Mark\n"
+                             "rule R:\n"
+                             "    each:\n"
+                             "        Pos\n"
+                             "    without: Mark\n"
+                             "    on tick:\n"
+                             "        project Mark\n") == IterationOrder::Creation);
+    CHECK(iteration_order_of("trait Mark\n"
+                             "rule R:\n"
+                             "    each:\n"
+                             "        Pos as p\n"
+                             "    without: Mark\n"
+                             "    on tick:\n"
+                             "        p.x = 1.0\n") == IterationOrder::Free);
+}
+
 static std::map<std::string, std::uint64_t> levels_of(const std::vector<std::string>& rules) {
     std::string source = edge_reason_prelude() + "trait Clock:\n    var t: float\n";
     for (const auto& rule : rules) {

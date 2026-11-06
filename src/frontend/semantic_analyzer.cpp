@@ -8722,7 +8722,8 @@ IterationOrder derive_iteration_order(const HandlerContract& contract, bool unor
         });
     });
     const bool observes = unordered_limit || !contract.emits.empty() || !contract.commands.empty() ||
-                          !contract.effects.empty() || !contract.named_writes.empty() || reads_own_write;
+                          !contract.effects.empty() || !contract.named_writes.empty() || reads_own_write ||
+                          contract.observes_own_projection();
     return observes ? IterationOrder::Creation : IterationOrder::Free;
 }
 
@@ -9032,6 +9033,11 @@ void SemanticAnalyzer::walk_expression_reads(  // NOLINT(readability-function-co
                 visit_child_overrides(node.child_overrides, locals);
             } else if constexpr (std::is_same_v<E, QueryCallExpr>) {
                 add_contract_call_effects(contract, node.resolved_callee_id);
+                for (const auto& filter : node.filters) {
+                    if (filter.resolved_trait_id.has_value()) {
+                        contract.observed_membership.insert(*filter.resolved_trait_id);
+                    }
+                }
                 for (const auto& arg : node.named_args) {
                     visit(*arg.value, locals);
                 }

@@ -1,0 +1,35 @@
+module projection_observers
+
+use std.core
+use std.query as query
+
+# Observers of a projected trait must see it whatever the declaration order.
+
+trait Mark
+trait Body:
+    var unmarked: int = 0
+    var found: int = 0
+
+entity Target:
+    Body
+    KeepOnLoad
+
+rule Project:
+    each:
+        Body
+    on tick:
+        project Mark
+
+rule Unmarked:
+    each:
+        Body as b
+    without: Mark
+    on tick:
+        b.unmarked += 1
+
+rule Found:
+    each:
+        Body as b
+    on tick:
+        if query.exists[Mark]():
+            b.found += 1

@@ -989,6 +989,7 @@ options to resolve it, and their impact. A finding that needs a behavior change 
 its own proposal. `list-activation-semantics-gaps` listed F1 and F2 as known gaps and
 resolved F4 and F5. `flush-accumulation-per-cell` resolved F3.
 `route-merged-lifecycle-changes` resolved F1. `declare-native-field-reads` resolved F2.
+`order-projected-membership-observers` resolved F6.
 
 ### F1. One net lifecycle change from two producers takes the first producer's route
 
@@ -1219,9 +1220,85 @@ none. Behavior: none (matches the backend). Authoring: none.
 **Resolved.** `dsl-numeric-semantics` and DSL spec §4.7 now end an interval at "the
 start of the activation or of a commit round".
 
+### F6. Observers of a projected trait are not ordered after its projector
+
+**Gap.** `add` and `remove` apply at commit, so membership is fixed during a round. Only
+`project` changes membership inside a round. A rule that projects a trait was ordered
+before a rule that names the trait in `each:`, but not before one that excludes it with
+`without:`, binds it in a pair, or filters on it in a native query. Those rules get no
+schedule edge, so declaration order decides the result. S2 fails for these rules.
+
+**Witness (Probe).**
+
+```cactus
+module projection_observers
+
+use std.core
+use std.query as query
+
+trait Mark
+trait Body:
+    var unmarked: int = 0
+    var found: int = 0
+
+entity Target:
+    Body
+    KeepOnLoad
+
+rule Project:
+    each:
+        Body
+    on tick:
+        project Mark
+
+rule Unmarked:
+    each:
+        Body as b
+    without: Mark
+    on tick:
+        b.unmarked += 1
+
+rule Found:
+    each:
+        Body as b
+    on tick:
+        if query.exists[Mark]():
+            b.found += 1
+```
+
+**Evidence.** After one frame with `Project` declared first, `unmarked = 0` and
+`found = 1`. With `Project` declared last, `unmarked = 1` and `found = 0`, with no
+schedule edge in either program. The mutual form ("project A unless B", "project B
+unless A") also compiled, and the rule declared first won.
+
+**Claim limited.** S2, and "Source layout does not change behavior".
+
+**Options.**
+
+1. Treat every membership observer as a consumer of the projection. Syntax: none.
+   Behavior: more edges, and mutual observation becomes a compile error. Authoring: a
+   rejected pair must change its rules; an `after:` can't settle it.
+2. Record observed traits as reads. Syntax: none. Behavior: as option 1, but it also
+   changes accumulation flushes, and it contradicts "Selection does not imply trait
+   access".
+
+**Resolved.** `order-projected-membership-observers` took option 1. A contract also
+records the traits its query filters name, positive or negated, and a projector runs
+before every other handler that observes the trait through `each:`, `without:`, a pair
+binding or a query filter. Two handlers that each observe what the other projects are
+an unorientable conflict, unless the rule for an imported `pub group` orders them. An
+observer that also writes what its projector reads is an unorientable conflict too, until
+an `after:` runs it second. Any other order that puts an observer ahead of its projector,
+from an `after:` or from the `pub group` rule, is a handler cycle. A unary pass that projects a trait it observes fixes its rows at pass start and runs them
+in creation order, or in its `order by:` order. The witness gives `unmarked = 0` and
+`found = 1` in both orders. Tested: `test_projection_observers_projector_first_headless_behavior`,
+`test_projection_observers_observer_first_headless_behavior`,
+`test_projection_rows_headless_behavior`, `test_semantic` "Projection orders membership
+observers", `test_program_linker` for the imported group.
+
 ### Note on the known gaps list
 
 `language-philosophy` ("Known correctness gaps are listed") says that an accepted class
 that may break a correctness property, once found, is listed until a change closes it.
-F1 and F2 were such classes (determinacy). Both are resolved, and that requirement lists
-no row for either.
+F1, F2 and F6 were such classes (determinacy). All are resolved, and that requirement
+lists no row for any of them.

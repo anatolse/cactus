@@ -1164,8 +1164,17 @@ TEST_CASE("program_linker: an importing module's handler runs before another mod
             "    var grounded: bool = false\n"
             "pub trait Spot:\n"
             "    var x: float = 0.0\n"
+            "pub trait Hidden\n"
+            "pub trait Shown\n"
             "pub group solve:\n"
             "    phase: fixed_tick\n"
+            "rule Hide:\n"
+            "    each:\n"
+            "        Spot\n"
+            "    without: Shown\n"
+            "    group: solve\n"
+            "    on fixed_tick:\n"
+            "        project Hidden\n"
             "rule Helper:\n"
             "    each:\n"
             "        Body as body\n"
@@ -1219,6 +1228,12 @@ TEST_CASE("program_linker: an importing module's handler runs before another mod
             "    Clock\n"
             "    Score\n"
             "    mid.Marker\n"
+            "rule Reveal:\n"
+            "    each:\n"
+            "        lib.Spot\n"
+            "    without: lib.Hidden\n"
+            "    on fixed_tick:\n"
+            "        project lib.Shown\n"
             "rule Push:\n"
             "    each:\n"
             "        lib.Body as body\n"
@@ -1293,6 +1308,10 @@ TEST_CASE("program_linker: an importing module's handler runs before another mod
     // Reciprocal conflict with an imported module's public group: the importer runs first.
     CHECK(position(handler("game", "Push")) < position(step));
     CHECK(oriented(handler("game", "Push"), step) == ScheduleEdgeOrientation::ImporterBeforePublicGroup);
+    // Mutual membership observation with a public group member follows the same rule.
+    CHECK(position(handler("game", "Reveal")) < position(handler("lib", "Hide")));
+    CHECK(oriented(handler("game", "Reveal"), handler("lib", "Hide")) ==
+          ScheduleEdgeOrientation::ImporterBeforePublicGroup);
     // The whole group decides: Aim only reads what Place writes, but it also writes what Step reads.
     CHECK(position(handler("game", "Aim")) < position(step));
     CHECK(position(handler("game", "Aim")) < position(handler("lib", "Place")));
@@ -1495,6 +1514,87 @@ TEST_CASE("program_linker: link records reachable archetypes across modules", "[
 
     std::error_code ec;
     fs::remove_all(linker_build_dir() / "reachability_facts", ec);
+}
+
+namespace {
+
+std::string lit_group_source(const std::string& glow_body) {
+    return "module lib\n"
+           "use std.core\n"
+           "pub trait Lit\n"
+           "pub trait Beam:\n"
+           "    var power: float = 0.0\n"
+           "pub group solve:\n"
+           "    phase: tick\n"
+           "rule Glow:\n"
+           "    each:\n"
+           "        Beam as beam\n"
+           "    group: solve\n"
+           "    on tick:\n" +
+           glow_body +
+           "rule Fade:\n"
+           "    each:\n"
+           "        Beam as beam\n"
+           "    group: solve\n"
+           "    on tick:\n"
+           "        let seen = beam.power\n";
+}
+
+const std::string& lit_watcher_source() {
+    static const std::string value = "module game\n"
+                                     "use std.core\n"
+                                     "use lib\n"
+                                     "entity Rig:\n"
+                                     "    lib.Beam\n"
+                                     "rule Watch:\n"
+                                     "    each:\n"
+                                     "        lib.Beam as beam\n"
+                                     "    without: lib.Lit\n"
+                                     "    on tick:\n"
+                                     "        beam.power = 1.0\n";
+    return value;
+}
+
+}  // namespace
+
+TEST_CASE("program_linker: an importer that observes a group member's projection runs after that member",
+          "[linker][rule-groups][projected-traits]") {
+    ModuleSet modules(linker_build_dir() / "group_observer");
+    modules.compile("std.core", {}, core_source());
+    modules.compile("lib", {"std.core"}, lit_group_source("        project Lit\n"));
+    modules.compile("game", {"std.core", "lib"}, lit_watcher_source());
+
+    ErrorReporter errors;
+    const auto linked = modules.link(errors);
+    INFO((errors.diagnostics().empty() ? "" : errors.diagnostics().front().message));
+    REQUIRE(linked.has_value());
+    const auto edges = edge_directions(*linked);
+    CHECK(edges.contains({"Glow", "Watch", ScheduleEdgeKind::DataConflict}));
+    CHECK(edges.contains({"Watch", "Fade", ScheduleEdgeKind::DataConflict}));
+
+    std::error_code ec;
+    fs::remove_all(linker_build_dir() / "group_observer", ec);
+}
+
+TEST_CASE("program_linker: the group rule cannot run an observer ahead of its projector",
+          "[linker][rule-groups][projected-traits]") {
+    ModuleSet modules(linker_build_dir() / "group_observer_cycle");
+    modules.compile("std.core", {}, core_source());
+    modules.compile("lib",
+                    {"std.core"},
+                    lit_group_source("        if beam.power > 0.5:\n"
+                                     "            project Lit\n"));
+    modules.compile("game", {"std.core", "lib"}, lit_watcher_source());
+
+    ErrorReporter errors;
+    CHECK_FALSE(modules.link(errors).has_value());
+    CHECK(std::ranges::any_of(errors.diagnostics(), [](const auto& diagnostic) {
+        return diagnostic.message.starts_with("handler cycle: ") && diagnostic.message.contains("Glow") &&
+               diagnostic.message.contains("Watch");
+    }));
+
+    std::error_code ec;
+    fs::remove_all(linker_build_dir() / "group_observer_cycle", ec);
 }
 
 TEST_CASE("program_linker: a cross-module ambiguity is a link error", "[linker][handler-execution-graph][unorientable]") {

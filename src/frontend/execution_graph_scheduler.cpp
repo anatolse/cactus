@@ -68,19 +68,24 @@ std::unordered_map<std::string, std::unordered_set<std::string>> import_closure(
 }
 
 // The fields of `trait` that `producer` makes and `consumer` observes, if any.
+bool observes_projected(const HandlerNode& producer, const HandlerNode& consumer, const SymbolId& trait) {
+    return producer.contract.projects.contains(trait) && consumer.contract.observes_membership(trait);
+}
+
 std::optional<FieldAccess> produced_overlap(const HandlerNode& producer,
                                             const HandlerNode& consumer,
                                             const SymbolId& trait) {
     const bool projected = producer.contract.projects.contains(trait);
-    if (projected && !consumer.contract.projects.contains(trait) &&
-        std::ranges::find(consumer.contract.selection, trait) != consumer.contract.selection.end()) {
+    if (consumer.contract.reads.contains(trait)) {
+        const FieldAccess& produced = projected ? all_fields() : field_access(producer.contract.write_fields, trait);
+        if (auto overlap = overlapping_fields(produced, field_access(consumer.contract.read_fields, trait))) {
+            return overlap;
+        }
+    }
+    if (observes_projected(producer, consumer, trait)) {
         return all_fields();
     }
-    if (!consumer.contract.reads.contains(trait)) {
-        return std::nullopt;
-    }
-    const FieldAccess& produced = projected ? all_fields() : field_access(producer.contract.write_fields, trait);
-    return overlapping_fields(produced, field_access(consumer.contract.read_fields, trait));
+    return std::nullopt;
 }
 
 // produced_overlap without the fields both handlers only write with commuting kinds.
@@ -94,7 +99,11 @@ std::optional<FieldAccess> conflicting_overlap(const HandlerNode& producer,
     std::erase_if(overlap->fields, [&](const std::string& field) {
         return writes_commute(write_kind(producer.contract, trait, field), write_kind(consumer.contract, trait, field));
     });
-    return overlap->fields.empty() ? std::nullopt : overlap;
+    if (!overlap->fields.empty()) {
+        return overlap;
+    }
+    // Commuting writes don't order a membership observer: its rows still depend on the projection.
+    return observes_projected(producer, consumer, trait) ? std::optional<FieldAccess>(all_fields()) : std::nullopt;
 }
 
 bool writes_any(const HandlerNode& producer, const HandlerNode& consumer, const std::unordered_set<SymbolId>& produced) {
@@ -635,11 +644,25 @@ std::string unorientable_message(const UnorientableConflict& conflict) {
     const auto& first  = *conflict.first;
     const auto& second = *conflict.second;
     const auto listed  = joined(conflict_reasons(first, second, conflict.fields, conflict.channels, conflict.effects), ", ");
-    return "unorientable conflict between '" + first.identity.canonical_id() + "' and '" +
-           second.identity.canonical_id() + "' on " + listed + "; nothing orders them: add 'after: " +
-           handler_reference(second, first) + "' to the " + handler_reference(first, second) +
-           " handler, or 'after: " + handler_reference(first, second) + "' to the " +
-           handler_reference(second, first) + " handler";
+    const auto between = "unorientable conflict between '" + first.identity.canonical_id() + "' and '" +
+                         second.identity.canonical_id() + "' on " + listed;
+    const bool first_observes  = first.contract.observes_projection_of(second.contract);
+    const bool second_observes = second.contract.observes_projection_of(first.contract);
+    if (first_observes && second_observes) {
+        return between + "; each observes what the other projects, so no order satisfies both";
+    }
+    const auto run_after = [](const HandlerNode& earlier, const HandlerNode& later) {
+        return "'after: " + handler_reference(earlier, later) + "' to the " + handler_reference(later, earlier) +
+               " handler";
+    };
+    const auto prefix = between + "; nothing orders them: add ";
+    if (first_observes) {
+        return prefix + run_after(second, first);
+    }
+    if (second_observes) {
+        return prefix + run_after(first, second);
+    }
+    return prefix + run_after(second, first) + ", or " + run_after(first, second);
 }
 
 }  // namespace
@@ -739,6 +762,14 @@ bool compute_handler_schedule(ExecutionGraph& graph, const TemplateTraitLookup& 
         bool left_first = false;
         ScheduleEdgeOrientation reason;
     };
+    // Co-projected traits don't count: a projection records a read of its own trait.
+    const auto feeds_beyond_projection = [&](std::size_t writer, std::size_t reader) {
+        const auto& source = graph.handlers[writer];
+        const auto& target = graph.handlers[reader];
+        return std::ranges::any_of(produced_by_handler[writer], [&](const SymbolId& trait) {
+            return !target.contract.projects.contains(trait) && conflicting_overlap(source, target, trait).has_value();
+        });
+    };
     const auto orient = [&](std::size_t left_index,
                             std::size_t right_index,
                             bool left_writes_right,
@@ -756,6 +787,13 @@ bool compute_handler_schedule(ExecutionGraph& graph, const TemplateTraitLookup& 
         }
         if (explicitly_precedes(right.identity, left.identity)) {
             return Orientation{.left_first = false, .reason = ScheduleEdgeOrientation::Explicit};
+        }
+        const bool left_projects_first  = right.contract.observes_projection_of(left.contract);
+        const bool right_projects_first = left.contract.observes_projection_of(right.contract);
+        if (left_projects_first != right_projects_first &&
+            !feeds_beyond_projection(left_projects_first ? right_index : left_index,
+                                     left_projects_first ? left_index : right_index)) {
+            return Orientation{.left_first = left_projects_first, .reason = ScheduleEdgeOrientation::WriterBeforeReader};
         }
         if (const auto decision = public_group_order.decide(left_index, right_index)) {
             return Orientation{.left_first = decision->left_first, .reason = decision->orientation};
@@ -804,13 +842,25 @@ bool compute_handler_schedule(ExecutionGraph& graph, const TemplateTraitLookup& 
             const auto* before     = oriented->left_first ? &left : &right;
             const auto* after      = oriented->left_first ? &right : &left;
             const auto orientation = oriented->reason;
-            if (!trait_provenance.empty()) {
-                graph.schedule_edges.push_back(ScheduleEdge{.before           = before->identity,
-                                                            .after            = after->identity,
+            const auto add_data_edge = [&](const HandlerNode& from,
+                                           const HandlerNode& to,
+                                           ScheduleEdgeOrientation reason) {
+                graph.schedule_edges.push_back(ScheduleEdge{.before           = from.identity,
+                                                            .after            = to.identity,
                                                             .kind             = ScheduleEdgeKind::DataConflict,
-                                                            .orientation      = orientation,
-                                                            .trait_provenance = std::move(trait_provenance),
-                                                            .field_provenance = std::move(field_provenance)});
+                                                            .orientation      = reason,
+                                                            .trait_provenance = trait_provenance,
+                                                            .field_provenance = field_provenance});
+            };
+            // Only the importer rule settles a mutual pair; any other order that runs an observer
+            // ahead of its projector keeps both edges as a cycle.
+            const bool settled_by_group = orientation == ScheduleEdgeOrientation::ImporterBeforePublicGroup &&
+                                          after->contract.observes_projection_of(before->contract);
+            if (before->contract.observes_projection_of(after->contract) && !settled_by_group) {
+                add_data_edge(*after, *before, ScheduleEdgeOrientation::WriterBeforeReader);
+            }
+            if (!trait_provenance.empty()) {
+                add_data_edge(*before, *after, orientation);
             }
             if (!effect_provenance.empty()) {
                 graph.schedule_edges.push_back(ScheduleEdge{.before            = before->identity,

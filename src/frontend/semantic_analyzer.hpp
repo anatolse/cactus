@@ -585,6 +585,7 @@ struct HandlerContract {
     std::vector<TraitFieldRef> untracked_accesses;
     std::unordered_set<SymbolId> projects;  // projected (transient) trait outputs
     std::vector<InferredProjection> projections;  // `projects` with their targets, first-use order
+    std::unordered_set<SymbolId> observed_membership;  // traits named by query filters, positive or negated
     // Named-entity access (`Game.Match.over`); every entry is also in reads/writes above.
     NamedFieldTable named_reads;
     NamedFieldTable named_writes;
@@ -600,6 +601,21 @@ struct HandlerContract {
     [[nodiscard]] bool splittable_per_entity() const {
         return named_writes.empty();
     }
+
+    // Whether the handler's result can depend on which entities carry `trait`; this is not a read.
+    [[nodiscard]] bool observes_membership(const SymbolId& trait) const {
+        const auto requires_trait = [&](const RelationBinding& binding) {
+            return std::ranges::contains(binding.required_traits, trait);
+        };
+        return std::ranges::contains(selection, trait) || std::ranges::contains(exclusion, trait) ||
+               observed_membership.contains(trait) || std::ranges::any_of(pair_bindings, requires_trait);
+    }
+
+    [[nodiscard]] bool observes_projection_of(const HandlerContract& producer) const {
+        return std::ranges::any_of(producer.projects, [&](const SymbolId& trait) { return observes_membership(trait); });
+    }
+
+    [[nodiscard]] bool observes_own_projection() const { return observes_projection_of(*this); }
 
     // Conflict detection treats a projected trait as production of that trait
     // for ordering purposes, same as a durable write, without collapsing the

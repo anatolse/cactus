@@ -473,6 +473,67 @@ For each connected group of delayed edges in the linked program, the compiler SH
 - **WHEN** a program has a delayed cycle and no error or warning
 - **THEN** the compiler generates output and exits with zero status
 
+### Requirement: Cycles that can multiply are warned
+For a handler on a delayed cycle, its gain SHALL be the largest number of deliveries to handlers of that cycle, along delayed edges, that one run can cause. Gain SHALL be computed from the handler body with every guard ignored:
+
+- Statements in sequence add their gains.
+- Branches of an `if` or a `match` take the largest gain of any branch.
+- A branch that always returns SHALL be an alternative to the statements after it in its block, not added to them.
+- A `for` loop whose body has a gain above zero SHALL have a gain of many.
+- An `emit` feeds each consumer of its event on the cycle once.
+- A broadcast `emit` to a consumer with an entity domain SHALL feed it many times, unless that domain is bounded to one named entity.
+- A `spawn`, `add` or `remove` feeds each lifecycle consumer on the cycle that its change can trigger once.
+
+The compiler SHALL report a warning for every cycle with a handler of gain above 1. The warning SHALL say the cycle can multiply its work each activation and SHALL name a handler of gain above 1. It SHALL be located at the first such handler in sorted canonical order that is declared outside the standard library, or at the first handler of the cycle in that order that is declared outside the standard library when no such handler exists. A cycle with no handler declared outside the standard library SHALL NOT be reported. A cycle in which every handler has a gain of 1 or less SHALL NOT be warned. The warning SHALL NOT change delivery or generated code.
+
+#### Scenario: Two emits in one body
+- **WHEN** a handler on `Knock` runs `emit Knock` twice
+- **THEN** the compiler warns and names that handler
+
+#### Scenario: One emit in a simple cycle
+- **WHEN** a handler on `Ping` emits `Pong` once, and a handler on `Pong` emits `Ping` once
+- **THEN** no multiplication warning is reported
+
+#### Scenario: Exclusive branches do not add
+- **WHEN** a handler on `Knock` has `if` and `else` branches that each run `emit Knock` once
+- **THEN** its gain is 1 and no multiplication warning is reported
+
+#### Scenario: A guard does not lower the gain
+- **WHEN** a handler on `Knock` runs `emit Knock` twice inside an `if`
+- **THEN** the compiler warns
+
+#### Scenario: A returning branch does not add to the rest
+- **WHEN** a handler on `Knock` runs `emit Knock` and `return` inside an `if`, and `emit Knock` after it
+- **THEN** its gain is 1 and no multiplication warning is reported
+
+#### Scenario: An emit in a loop
+- **WHEN** a handler on `Knock` runs `emit Knock` inside `for x in items:`
+- **THEN** the compiler warns
+
+#### Scenario: One event reaches two handlers on the cycle
+- **WHEN** a handler emits `Knock` once, and two handlers of the same cycle consume `Knock`
+- **THEN** the compiler warns
+
+#### Scenario: A broadcast reaches many rows
+- **WHEN** a rule with `each: Unit` on `Ping` runs `emit Ping` with no target, and spawned entities carry `Unit`
+- **THEN** the compiler warns
+
+#### Scenario: A targeted emit reaches one row
+- **WHEN** a rule with `each: Unit` on `Ping` runs `emit Ping to` one entity
+- **THEN** no multiplication warning is reported
+
+#### Scenario: A spawn feeds a lifecycle cycle twice
+- **WHEN** an `on added Offspring` handler spawns two templates that carry `Offspring`
+- **THEN** the compiler warns
+
+#### Scenario: An emit off the cycle does not count
+- **WHEN** a handler on a cycle emits once into the cycle and once to a logger off the cycle
+- **THEN** its gain is 1 and no multiplication warning is reported
+
+#### Scenario: Multiplication does not fail the build by default
+- **WHEN** a program has a multiplying cycle and no error
+- **THEN** the compiler generates output and exits with zero status
+
 ### Requirement: Activation cascade depth is static
 After delayed edges are removed, the delivery graph is acyclic. For every activation root — each phase, each event that can start an activation of its own, the load and unload boundaries, and the startup arrival activation — the compiler SHALL record the longest chain of immediate edges that can run in one activation started by that root, counting the root's own handlers as depth 1. Handlers that can receive a delayed occurrence in an activation of that root SHALL count as starting handlers of it. The recorded depth SHALL be finite for every program and SHALL NOT depend on any configured bound.
 

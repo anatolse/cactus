@@ -210,4 +210,21 @@ TEST_CASE("CLI: a cycle across modules is reported once", "[cli][diagnostics][de
     CHECK(result.info_lines[0].contains("echo.PingSide/on echo.Ping, main.PongSide/on echo.Pong"));
 }
 
+TEST_CASE("CLI: a multiplying cycle warns and does not fail the build", "[cli][diagnostics][delivery-cycles]") {
+    const auto result = run_cactus(stage_fixture("multiplying_cycle.cactus"));
+    CHECK(result.exit_code == 0);
+    CHECK(result.wrote_output);
+    REQUIRE(result.stderr_lines.size() == 1);
+    CHECK(result.stderr_lines[0].contains("warning: this cycle can multiply its work each activation"));
+    CHECK(result.stderr_lines[0].contains("multiplying_cycle.Echo/on multiplying_cycle.Knock"));
+}
+
+TEST_CASE("CLI: a multiplying handler in a dependency is warned", "[cli][diagnostics][delivery-cycles]") {
+    const auto project = stage_fixture("multiplying_across_modules");
+    const auto result  = run_cactus(project / "main.cactus");
+    CHECK(result.exit_code == 0);
+    REQUIRE(result.stderr_lines.size() == 1);
+    CHECK(result.stderr_lines[0].contains("echo.PingSide/on echo.Ping"));
+}
+
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

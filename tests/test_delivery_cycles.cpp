@@ -1,6 +1,7 @@
 // NOLINTBEGIN(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)
 // -- Catch2 assertion macros intentionally expand through do-while and expression decomposition.
 #include "common/error_reporter.hpp"
+#include "frontend/archetype_reachability.hpp"
 #include "frontend/delivery_cycles.hpp"
 #include "frontend/lexer.hpp"
 #include "frontend/parser.hpp"
@@ -675,5 +676,349 @@ TEST_CASE("Delayed cycle report: handler and edge order do not change the report
     backward.execution_graph.handlers = {cycle_handler(right, 2), cycle_handler(left, 1)};
     delayed_ring(backward.execution_graph, {right, left});
     CHECK(cycle_reports(forward) == cycle_reports(backward));
+}
+
+// ── Multiplying cycles ───────────────────────────────────────────────────────
+
+namespace {
+
+const std::string kMultiplies = "this cycle can multiply its work each activation";
+
+std::vector<Diagnostic> multiplying_warnings(DecoratedProgram& program) {
+    ErrorReporter errors;
+    derive_archetype_reachability(program, errors);
+    ErrorReporter reported;
+    report_delayed_cycles(program, reported);
+    std::vector<Diagnostic> warnings;
+    std::ranges::copy_if(reported.diagnostics(), std::back_inserter(warnings), [](const Diagnostic& d) {
+        return d.level == DiagnosticLevel::Warning;
+    });
+    for (const auto& warning : warnings) {
+        CHECK(warning.message.starts_with(kMultiplies));
+    }
+    return warnings;
+}
+
+std::vector<Diagnostic> multiplying_warnings(const std::string& body) {
+    auto analysis = analyze(body);
+    return multiplying_warnings(analysis.program);
+}
+
+const std::string kKnocker =
+    "rule Knocker:\n"
+    "    on tick:\n"
+    "        emit Knock\n";
+
+FeedNode emit_site(const SymbolId& event) {
+    return FeedNode{.kind = FeedKind::Emit, .symbol = event};
+}
+
+}  // namespace
+
+TEST_CASE("Multiplying cycles: two emits in one body", "[delivery-cycles][gain]") {
+    const auto warnings = multiplying_warnings(kKnocker +
+                                               "rule Echo:\n"
+                                               "    on Knock:\n"
+                                               "        emit Knock\n"
+                                               "        emit Knock\n");
+    REQUIRE(warnings.size() == 1);
+    CHECK(warnings[0].message.contains("game.Echo/on game.Knock"));
+    CHECK(warnings[0].location.filename == "game.cactus");
+    CHECK(warnings[0].location.line > 0);
+}
+
+TEST_CASE("Multiplying cycles: one emit in a simple cycle", "[delivery-cycles][gain]") {
+    CHECK(multiplying_warnings(kServe + kPingSide + kPongSide).empty());
+}
+
+TEST_CASE("Multiplying cycles: exclusive branches do not add", "[delivery-cycles][gain]") {
+    CHECK(multiplying_warnings(kKnocker +
+                               "rule Echo:\n"
+                               "    each:\n"
+                               "        Door as door\n"
+                               "    on Knock:\n"
+                               "        if door.knocks > 3:\n"
+                               "            emit Knock to self\n"
+                               "        else:\n"
+                               "            emit Knock to self\n")
+              .empty());
+}
+
+TEST_CASE("Multiplying cycles: a guard does not lower the gain", "[delivery-cycles][gain]") {
+    const auto warnings = multiplying_warnings(kKnocker +
+                                               "rule Echo:\n"
+                                               "    each:\n"
+                                               "        Door as door\n"
+                                               "    on Knock:\n"
+                                               "        if door.knocks > 3:\n"
+                                               "            emit Knock to self\n"
+                                               "            emit Knock to self\n");
+    REQUIRE(warnings.size() == 1);
+    CHECK(warnings[0].message.contains("game.Echo/on game.Knock"));
+}
+
+TEST_CASE("Multiplying cycles: a returning branch does not add to the rest", "[delivery-cycles][gain]") {
+    CHECK(multiplying_warnings(kKnocker +
+                               "rule Echo:\n"
+                               "    each:\n"
+                               "        Door as door\n"
+                               "    on Knock:\n"
+                               "        if door.knocks > 3:\n"
+                               "            emit Knock to self\n"
+                               "            return\n"
+                               "        emit Knock to self\n")
+              .empty());
+}
+
+TEST_CASE("Multiplying cycles: a returning branch adds to what ran before it", "[delivery-cycles][gain]") {
+    const auto warnings = multiplying_warnings(kKnocker +
+                                               "rule Echo:\n"
+                                               "    each:\n"
+                                               "        Door as door\n"
+                                               "    on Knock:\n"
+                                               "        emit Knock to self\n"
+                                               "        if door.knocks > 3:\n"
+                                               "            emit Knock to self\n"
+                                               "            return\n");
+    REQUIRE(warnings.size() == 1);
+}
+
+TEST_CASE("Multiplying cycles: match arms do not add", "[delivery-cycles][gain]") {
+    CHECK(multiplying_warnings(kKnocker +
+                               "rule Echo:\n"
+                               "    each:\n"
+                               "        Door as door\n"
+                               "    on Knock:\n"
+                               "        match door.knocks:\n"
+                               "            1 =>\n"
+                               "                emit Knock to self\n"
+                               "            _ =>\n"
+                               "                emit Knock to self\n")
+              .empty());
+}
+
+TEST_CASE("Multiplying cycles: an emit in a loop", "[delivery-cycles][gain]") {
+    const auto warnings = multiplying_warnings(kKnocker +
+                                               "rule Echo:\n"
+                                               "    on Knock:\n"
+                                               "        for i in range(0, 3):\n"
+                                               "            emit Knock\n");
+    REQUIRE(warnings.size() == 1);
+    CHECK(warnings[0].message.contains("game.Echo/on game.Knock"));
+}
+
+TEST_CASE("Multiplying cycles: one event reaches two handlers on the cycle", "[delivery-cycles][gain]") {
+    const auto warnings = multiplying_warnings(kKnocker +
+                                               "rule Echo:\n"
+                                               "    on Knock:\n"
+                                               "        emit Knock\n"
+                                               "rule Answer:\n"
+                                               "    on Knock:\n"
+                                               "        emit Knock\n");
+    REQUIRE(warnings.size() == 1);
+    CHECK(warnings[0].message.contains("game.Answer/on game.Knock"));
+}
+
+TEST_CASE("Multiplying cycles: a broadcast reaches many rows", "[delivery-cycles][gain]") {
+    const auto warnings = multiplying_warnings(
+        "trait Unit\n"
+        "template Soldier:\n"
+        "    Unit\n"
+        "rule Recruit:\n"
+        "    on tick:\n"
+        "        spawn Soldier()\n"
+        "        emit Ping\n"
+        "rule Rally:\n"
+        "    each:\n"
+        "        Unit\n"
+        "    on Ping:\n"
+        "        emit Ping\n");
+    REQUIRE(warnings.size() == 1);
+    CHECK(warnings[0].message.contains("game.Rally/on game.Ping"));
+}
+
+TEST_CASE("Multiplying cycles: a targeted emit reaches one row", "[delivery-cycles][gain]") {
+    CHECK(multiplying_warnings("trait Unit\n"
+                               "template Soldier:\n"
+                               "    Unit\n"
+                               "rule Recruit:\n"
+                               "    on tick:\n"
+                               "        spawn Soldier()\n"
+                               "        emit Ping\n"
+                               "rule Rally:\n"
+                               "    each:\n"
+                               "        Unit\n"
+                               "    on Ping:\n"
+                               "        emit Ping to self\n")
+              .empty());
+}
+
+TEST_CASE("Multiplying cycles: a broadcast to one named entity reaches one row", "[delivery-cycles][gain]") {
+    CHECK(multiplying_warnings(kKnocker +
+                               "rule Echo:\n"
+                               "    each:\n"
+                               "        Door\n"
+                               "    on Knock:\n"
+                               "        emit Knock\n")
+              .empty());
+}
+
+TEST_CASE("Multiplying cycles: a broadcast reaches many relation rows", "[delivery-cycles][gain]") {
+    const auto warnings = multiplying_warnings(
+        "relation Link:\n"
+        "    from: Door\n"
+        "    to: Door\n"
+        "rule Wire:\n"
+        "    on tick:\n"
+        "        add Link(Front, Front)\n"
+        "        emit Ping\n"
+        "rule Relay:\n"
+        "    each: Link as link\n"
+        "    on Ping:\n"
+        "        emit Ping\n");
+    REQUIRE(warnings.size() == 1);
+    CHECK(warnings[0].message.contains("game.Relay/on game.Ping"));
+}
+
+TEST_CASE("Multiplying cycles: a broadcast reaches many pairs", "[delivery-cycles][gain]") {
+    const auto warnings = multiplying_warnings(
+        "trait Unit\n"
+        "template Soldier:\n"
+        "    Unit\n"
+        "rule Recruit:\n"
+        "    on tick:\n"
+        "        spawn Soldier()\n"
+        "        emit Ping\n"
+        "rule Muster:\n"
+        "    pairs:\n"
+        "        a:\n"
+        "            Unit\n"
+        "        b:\n"
+        "            Unit\n"
+        "    on Ping:\n"
+        "        emit Ping\n");
+    REQUIRE(warnings.size() == 1);
+    CHECK(warnings[0].message.contains("game.Muster/on game.Ping"));
+}
+
+TEST_CASE("Multiplying cycles: a broadcast to one named pair reaches one row", "[delivery-cycles][gain]") {
+    CHECK(multiplying_warnings(kKnocker +
+                               "rule Muster:\n"
+                               "    pairs:\n"
+                               "        a:\n"
+                               "            Door\n"
+                               "        b:\n"
+                               "            Door\n"
+                               "    on Knock:\n"
+                               "        emit Knock\n")
+              .empty());
+}
+
+TEST_CASE("Multiplying cycles: two native spawns feed a lifecycle cycle twice", "[delivery-cycles][gain]") {
+    const auto offspring = make_symbol_id(SymbolKind::Trait, "game", "Offspring");
+    const HandlerIdentity breed{.rule    = make_symbol_id(SymbolKind::Rule, "game", "Breed"),
+                                .trigger = {.kind = HandlerTriggerKind::TraitAdded, .symbol = offspring}};
+    const FeedNode native{.kind = FeedKind::NativeSpawn, .symbol = make_symbol_id(SymbolKind::Func, "std.editor", "spawn_template")};
+    auto handler                   = cycle_handler(breed, 4);
+    handler.contract.feed.children = {native, native};
+    DecoratedProgram program;
+    program.execution_graph.handlers = {handler};
+    program.execution_graph.lifecycle_flows.push_back(
+        LifecycleFlowEdge{.producer = breed, .trait = offspring, .added = true, .consumer = breed, .delayed = true});
+    const auto warnings = multiplying_warnings(program);
+    REQUIRE(warnings.size() == 1);
+    CHECK(warnings[0].message.contains("game.Breed/on added game.Offspring"));
+}
+
+TEST_CASE("Multiplying cycles: a spawn feeds a lifecycle cycle twice", "[delivery-cycles][gain]") {
+    const auto warnings = multiplying_warnings(
+        "template Child:\n"
+        "    Offspring\n"
+        "entity Adam:\n"
+        "    Offspring\n"
+        "rule Breed:\n"
+        "    on added Offspring:\n"
+        "        spawn Child()\n"
+        "        spawn Child()\n");
+    REQUIRE(warnings.size() == 1);
+    CHECK(warnings[0].message.contains("game.Breed/on added game.Offspring"));
+}
+
+TEST_CASE("Multiplying cycles: an emit off the cycle does not count", "[delivery-cycles][gain]") {
+    CHECK(multiplying_warnings(kKnocker +
+                               "rule Echo:\n"
+                               "    on Knock:\n"
+                               "        emit Knock\n"
+                               "        emit Ignite\n"
+                               "rule Log:\n"
+                               "    on Ignite:\n"
+                               "        return\n")
+              .empty());
+}
+
+TEST_CASE("Multiplying cycles: adding one trait twice in one run delivers once", "[delivery-cycles][gain]") {
+    CHECK(multiplying_warnings("entity Torch:\n"
+                               "    Burning\n"
+                               "rule Douse:\n"
+                               "    on added Burning:\n"
+                               "        remove Burning\n"
+                               "rule Relight:\n"
+                               "    on removed Burning:\n"
+                               "        add Burning\n"
+                               "        add Burning\n")
+              .empty());
+}
+
+TEST_CASE("Multiplying cycles: an extern rule on a cycle is not warned", "[delivery-cycles][gain]") {
+    CHECK(multiplying_warnings(kKnocker +
+                               "extern rule HostEcho:\n"
+                               "    on Knock:\n"
+                               "        emits: Knock, Ping\n"
+                               "rule PingBack:\n"
+                               "    on Ping:\n"
+                               "        emit Knock\n")
+              .empty());
+}
+
+TEST_CASE("Multiplying cycles: a stdlib handler counts inside a mixed cycle", "[delivery-cycles][gain]") {
+    const auto stdlib = cycle_identity("std.net", "Send", "Sent");
+    const auto author = cycle_identity("game", "Reply", "Replied");
+    DecoratedProgram program;
+    auto sender = cycle_handler(stdlib, 3);
+    sender.contract.feed.children = {emit_site(author.trigger.symbol), emit_site(author.trigger.symbol)};
+    auto replier = cycle_handler(author, 5);
+    replier.contract.feed.children = {emit_site(stdlib.trigger.symbol)};
+    program.execution_graph.handlers = {sender, replier};
+    delayed_ring(program.execution_graph, {stdlib, author});
+    const auto warnings = multiplying_warnings(program);
+    REQUIRE(warnings.size() == 1);
+    CHECK(warnings[0].location.filename == "game.cactus");
+    CHECK(warnings[0].location.line == 5);
+    CHECK(warnings[0].message.contains("std.net.Send/on std.net.Sent"));
+}
+
+TEST_CASE("Multiplying cycles: a stdlib-only cycle is not warned", "[delivery-cycles][gain]") {
+    const auto first  = cycle_identity("std.net", "Send", "Sent");
+    const auto second = cycle_identity("std.net", "Receive", "Received");
+    DecoratedProgram program;
+    auto sender = cycle_handler(first, 1);
+    sender.contract.feed.children = {emit_site(second.trigger.symbol), emit_site(second.trigger.symbol)};
+    program.execution_graph.handlers = {sender, cycle_handler(second, 2)};
+    delayed_ring(program.execution_graph, {first, second});
+    CHECK(multiplying_warnings(program).empty());
+}
+
+TEST_CASE("Multiplying cycles: the warning follows the cycle info", "[delivery-cycles][gain]") {
+    auto analysis = analyze(kKnocker +
+                            "rule Echo:\n"
+                            "    on Knock:\n"
+                            "        emit Knock\n"
+                            "        emit Knock\n");
+    ErrorReporter errors;
+    report_delayed_cycles(analysis.program, errors);
+    const auto& reported = errors.diagnostics();
+    REQUIRE(reported.size() == 2);
+    CHECK(reported[0].level == DiagnosticLevel::Info);
+    CHECK(reported[1].level == DiagnosticLevel::Warning);
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

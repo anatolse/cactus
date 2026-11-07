@@ -1,0 +1,11 @@
+module main
+
+use echo
+
+rule Serve:
+    on echo.tick:
+        emit echo.Ping
+
+rule PongSide:
+    on echo.Pong:
+        emit echo.Ping

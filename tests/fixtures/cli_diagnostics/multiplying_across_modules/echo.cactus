@@ -1,0 +1,12 @@
+module echo
+
+pub extern event tick:
+    dt: float
+
+pub event Ping
+pub event Pong
+
+rule PingSide:
+    on Ping:
+        for i in range(0, 2):
+            emit Pong

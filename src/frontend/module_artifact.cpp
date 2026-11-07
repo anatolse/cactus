@@ -456,6 +456,18 @@ void ModuleArtifact::write_entity_targets(std::ostream& out, const std::vector<E
     }
 }
 
+void ModuleArtifact::write_feed(std::ostream& out, const FeedNode& node) {  // NOLINT(misc-no-recursion) -- the tree mirrors the handler body
+    write_u8(out, static_cast<uint8_t>(node.kind));
+    write_optional_symbol_id(out, node.symbol);
+    write_u8(out, static_cast<uint8_t>(node.command));
+    write_bool(out, node.targeted);
+    write_bool(out, node.returns);
+    write_u32(out, static_cast<uint32_t>(node.children.size()));
+    for (const auto& child : node.children) {
+        write_feed(out, child);
+    }
+}
+
 void ModuleArtifact::write_field_access(std::ostream& out, const FieldAccess& access) {
     write_bool(out, access.all);
     write_u32(out, static_cast<uint32_t>(access.fields.size()));
@@ -676,6 +688,7 @@ void ModuleArtifact::write_contract(std::ostream& out, const HandlerContract& co
         write_entity_targets(out, command.entities);
     }
     write_symbol_vector(out, contract.native_spawns);
+    write_feed(out, contract.feed);
     write_u32(out, static_cast<uint32_t>(contract.projections.size()));
     for (const auto& projection : contract.projections) {
         write_symbol_id(out, projection.trait);
@@ -1283,6 +1296,19 @@ std::vector<EntityTarget> ModuleArtifact::read_entity_targets(std::istream& in) 
     return targets;
 }
 
+FeedNode ModuleArtifact::read_feed(std::istream& in) {  // NOLINT(misc-no-recursion) -- the tree mirrors the handler body
+    FeedNode node{.kind = static_cast<FeedKind>(read_u8(in))};
+    node.symbol      = read_optional_symbol_id(in);
+    node.command     = static_cast<HandlerCommandKind>(read_u8(in));
+    node.targeted    = read_bool(in);
+    node.returns     = read_bool(in);
+    const auto count = read_u32(in);
+    for (uint32_t i = 0; i < count && in.good(); ++i) {
+        node.children.push_back(read_feed(in));
+    }
+    return node;
+}
+
 FieldAccess ModuleArtifact::read_field_access(std::istream& in) {
     FieldAccess access;
     access.all       = read_bool(in);
@@ -1532,6 +1558,7 @@ HandlerContract ModuleArtifact::read_contract(std::istream& in) {
         contract.commands.push_back(std::move(command));
     }
     contract.native_spawns      = read_symbol_vector(in);
+    contract.feed               = read_feed(in);
     const auto projection_count = read_u32(in);
     for (uint32_t i = 0; i < projection_count && in.good(); ++i) {
         InferredProjection projection{.trait = read_symbol_id(in)};

@@ -536,6 +536,23 @@ activation, and a lifecycle cycle that spawns two entities per round doubles the
 population every activation. No frame-time bound follows from this claim. There is no
 configured cascade limit in the model or in the normative text.
 
+The compiler warns about the first kind of growth (`handler-execution-graph`: "Cycles
+that can multiply are warned"; Code: `report_delayed_cycles`; Tested:
+`test_delivery_cycles` "Multiplying cycles"). The *gain* of a handler on a cycle is the
+largest number of deliveries into that cycle one run can cause, read from its body with
+guards ignored: a sequence adds, branches take the largest, a loop counts as many, a
+branch that always returns is an alternative to the rest of its block, and a broadcast
+counts once per row the consumer can select. Read the cycle as a graph whose edge
+weights are gains (Model). If every handler has gain at most 1, each occurrence in
+flight yields at most one successor, so the occurrences one root starts never increase.
+If some handler has gain above 1, a walk can pass through it again and again, and the
+count can grow exponentially. So gain above 1 at one handler is the exact condition on
+this abstraction. A guard may still prevent the growth at runtime; the warning is about
+the shape. An `extern rule` has no body to count and is taken to have gain at most 1.
+
+Linear growth is not warned: a `tick` handler that feeds a cycle that never ends, or
+one spawn per run that grows a population, adds work at a constant rate per activation.
+
 ### 7.3 Schedule independence
 
 **Domain.** One dispatch set `D` with its relation `≺_D`, and the rest of the

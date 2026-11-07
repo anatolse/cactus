@@ -25,7 +25,8 @@ void classify_delivery_cycles(ExecutionGraph& graph, const TemplateTraitLookup& 
 [[nodiscard]] std::unordered_map<HandlerIdentity, std::uint32_t, HandlerIdentityHash> delivery_components(
     const ExecutionGraph& graph);
 
-// One info per delivery cycle with a handler declared outside the stdlib. Run on the
+// One info per delivery cycle with a handler declared outside the stdlib, then a
+// warning when one run of a handler can feed its cycle more than once. Run on the
 // whole program: a module graph holds only part of a cycle.
 void report_delayed_cycles(const DecoratedProgram& program, ErrorReporter& errors);
 

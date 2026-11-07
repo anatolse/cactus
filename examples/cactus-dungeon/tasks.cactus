@@ -435,6 +435,10 @@ rule DigTile:
         tile.kind = world.Kind.Floor
         cell.texture = world.FloorTexture
         remove physics.Solid
+        emit world.Excavated:
+            volume = cell.volume
+            x = cell.x
+            z = cell.z
         remove DigMark(_, self)
         remove Claim(_, self)
 

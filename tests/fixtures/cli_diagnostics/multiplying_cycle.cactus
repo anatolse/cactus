@@ -1,0 +1,15 @@
+module multiplying_cycle
+
+pub extern event tick:
+    dt: float
+
+event Knock
+
+rule Knocker:
+    on tick:
+        emit Knock
+
+rule Echo:
+    on Knock:
+        emit Knock
+        emit Knock

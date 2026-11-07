@@ -569,6 +569,21 @@ struct KeyLookup {
     friend bool operator==(const KeyLookup&, const KeyLookup&) = default;
 };
 
+// Serialized by numeric value: append new kinds, never reorder.
+enum class FeedKind : std::uint8_t { Seq, Alt, Many, Emit, Command, NativeSpawn };
+
+// What one run of a handler can deliver, shaped by its control flow with guards ignored.
+struct FeedNode {
+    FeedKind kind = FeedKind::Seq;
+    std::vector<FeedNode> children;                            // Seq, Alt, Many
+    std::optional<SymbolId> symbol;                            // the event, command target or native function
+    HandlerCommandKind command = HandlerCommandKind::Destroy;  // Command
+    bool targeted              = false;                        // Emit: `emit E to x`
+    bool returns               = false;                        // an Alt branch that always ends the run
+
+    friend bool operator==(const FeedNode&, const FeedNode&) = default;
+};
+
 struct HandlerContract {
     HandlerDomainKind domain_kind = HandlerDomainKind::Selectionless;
     std::vector<SymbolId> selection;             // Unary domain: positive traits
@@ -611,6 +626,9 @@ struct HandlerContract {
     std::unordered_set<SymbolId> emits;
     std::vector<InferredHandlerCommand> commands;
     std::vector<SymbolId> native_spawns;  // called stdlib functions that create entities, sorted
+    FeedNode feed;                        // not counted for an extern rule
+    // Inference only: how many nodes of `feed` are open; each is the last child of the one before.
+    std::size_t open_feed_depth = 0;
     std::unordered_set<std::string> effects;
     std::unordered_set<std::string> effect_acts;  // the domains in `effects` it acts on, not only observes
     IterationOrder iteration_order = IterationOrder::Free;
@@ -682,6 +700,10 @@ void record_assignment(HandlerContract& contract,
                        const SymbolId& trait,
                        const std::optional<std::string>& field,
                        bool own_row);
+// Feed tree construction during inference: a site goes into the innermost open node.
+void add_feed_site(HandlerContract& contract, FeedNode site);
+void begin_feed(HandlerContract& contract, FeedKind kind);
+void end_feed(HandlerContract& contract, bool returns = false);
 // Records that the contract projects `trait` onto `entity`.
 void add_projection(HandlerContract& contract, const SymbolId& trait, EntityTarget entity);
 // A field read outside its own updates becomes General; an assignment keeps its

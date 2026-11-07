@@ -8363,17 +8363,20 @@ void SemanticAnalyzer::add_keep_effects(const RuleNode& rule, InferredHandlerCon
         return;
     }
     const auto& kept = *rule.keep->resolved_target;
+    // One kept row is added or removed, never both.
+    begin_feed(contract, FeedKind::Alt);
     if (kept.kind == SymbolKind::Relation) {
         const auto fields = declared_fields(find_resolved_relation(kept));
         add_contract_command(contract, HandlerCommandKind::Add, kept, std::nullopt, fields);
         add_contract_command(contract, HandlerCommandKind::Remove, kept, std::nullopt, fields);
-        return;
+    } else {
+        const auto entity = rule.keep->binding.has_value() ? pair_binding_target(contract, *rule.keep->binding)
+                                                           : EntityTarget{.kind = EntityTargetKind::Self};
+        for (const auto kind : {HandlerCommandKind::Add, HandlerCommandKind::Set, HandlerCommandKind::Remove}) {
+            add_contract_command(contract, kind, kept, entity, declared_fields(find_resolved_trait(kept)));
+        }
     }
-    const auto entity = rule.keep->binding.has_value() ? pair_binding_target(contract, *rule.keep->binding)
-                                                       : EntityTarget{.kind = EntityTargetKind::Self};
-    for (const auto kind : {HandlerCommandKind::Add, HandlerCommandKind::Set, HandlerCommandKind::Remove}) {
-        add_contract_command(contract, kind, kept, entity, declared_fields(find_resolved_trait(kept)));
-    }
+    end_feed(contract);
 }
 
 void SemanticAnalyzer::collect_rule_dependency(const RuleNode& rule, std::size_t declaration_index) {
@@ -8913,7 +8916,46 @@ auto entity_target_key(const EntityTarget& target) {
                       target.symbol.has_value() ? make_canonical_id(*target.symbol) : std::string{});
 }
 
+FeedNode& innermost_feed(HandlerContract& contract) {
+    auto* open = &contract.feed;
+    for (std::size_t depth = 0; depth < contract.open_feed_depth; ++depth) {
+        open = &open->children.back();
+    }
+    return *open;
+}
+
 }  // namespace
+
+void add_feed_site(HandlerContract& contract, FeedNode site) {
+    auto& open = innermost_feed(contract);
+    // Adding or removing a trait a second time in one sequence delivers nothing new.
+    const bool idempotent = site.kind == FeedKind::Command &&
+                            (site.command == HandlerCommandKind::Add || site.command == HandlerCommandKind::Remove);
+    if (idempotent && open.kind != FeedKind::Alt && std::ranges::contains(open.children, site)) {
+        return;
+    }
+    open.children.push_back(std::move(site));
+}
+
+void begin_feed(HandlerContract& contract, FeedKind kind) {
+    auto& open = innermost_feed(contract);
+    open.children.push_back(FeedNode{.kind = kind});
+    ++contract.open_feed_depth;
+}
+
+void end_feed(HandlerContract& contract, bool returns) {
+    --contract.open_feed_depth;
+    auto& parent   = innermost_feed(contract);
+    auto& closed   = parent.children.back();
+    closed.returns = returns;
+    // An empty branch still marks a path through its Alt; an Alt with only empty branches feeds nothing.
+    const bool empty = std::ranges::all_of(closed.children, [](const FeedNode& child) {
+        return child.kind == FeedKind::Seq && child.children.empty();
+    });
+    if (empty && parent.kind != FeedKind::Alt) {
+        parent.children.pop_back();
+    }
+}
 
 void add_projection(HandlerContract& contract, const SymbolId& trait, EntityTarget entity) {
     auto& projections = contract.projections;
@@ -8951,6 +8993,9 @@ void SemanticAnalyzer::add_contract_command(HandlerContract& contract,
     if (entity.has_value()) {
         insert_entity_target(existing->entities, std::move(*entity));
     }
+    if (kind == HandlerCommandKind::Spawn || kind == HandlerCommandKind::Add || kind == HandlerCommandKind::Remove) {
+        add_feed_site(contract, FeedNode{.kind = FeedKind::Command, .symbol = existing->target, .command = kind});
+    }
 }
 
 static void record_world_scan(HandlerContract& contract,
@@ -8982,6 +9027,7 @@ void SemanticAnalyzer::add_contract_call_effects(HandlerContract& contract,
         if (position == spawns.end() || *position != *callee) {
             spawns.insert(position, *callee);
         }
+        add_feed_site(contract, FeedNode{.kind = FeedKind::NativeSpawn, .symbol = callee});
     }
     const auto* function = find_resolved_func(*callee);
     if (function == nullptr || !function->is_extern) {
@@ -9306,6 +9352,10 @@ struct SemanticAnalyzer::HandlerBodyVisitor {
     void operator()(const EmitStmt& node) const {
         if (node.resolved_event_id.has_value()) {
             contract->emits.insert(*node.resolved_event_id);
+            add_feed_site(*contract,
+                          FeedNode{.kind     = FeedKind::Emit,
+                                   .symbol   = node.resolved_event_id,
+                                   .targeted = node.target.has_value()});
         }
         if (node.target.has_value()) {
             visit_expr(**node.target, *locals);
@@ -9406,12 +9456,20 @@ struct SemanticAnalyzer::HandlerBodyVisitor {
 
     void operator()(const IfStmt& node) const {
         visit_expr(*node.condition, *locals);
-        visit_stmts(node.then_body, *locals);
+        begin_feed(*contract, FeedKind::Alt);
+        visit_branch(node.then_body);
         for (const auto& branch : node.else_if_branches) {
             visit_expr(*branch.condition, *locals);
-            visit_stmts(branch.body, *locals);
+            visit_branch(branch.body);
         }
-        visit_stmts(node.else_body, *locals);
+        visit_branch(node.else_body);
+        end_feed(*contract);
+    }
+
+    void visit_branch(const std::vector<std::unique_ptr<StmtNode>>& body) const {
+        begin_feed(*contract, FeedKind::Seq);
+        visit_stmts(body, *locals);
+        end_feed(*contract, block_always_returns(body));
     }
 
     void operator()(const ForeachStmt& node) const {
@@ -9423,7 +9481,9 @@ struct SemanticAnalyzer::HandlerBodyVisitor {
         scan_locals->erase(node.var_name);
         const auto loop       = scan_result(*node.iterable, first_scan);
         const auto first_body = contract->world_scans.size();
+        begin_feed(*contract, FeedKind::Many);
         visit_stmts(node.body, std::move(loop_locals));
+        end_feed(*contract);
         for (auto& scan : contract->world_scans | std::views::drop(first_body)) {
             scan.enclosing = scan.enclosing.has_value() ? scan.enclosing : loop;
         }
@@ -9459,24 +9519,34 @@ struct SemanticAnalyzer::HandlerBodyVisitor {
 
     void operator()(const MatchStmt& node) const {
         visit_expr(*node.subject, *locals);
+        begin_feed(*contract, FeedKind::Alt);
         for (const auto& arm : node.arms) {
-            if (node.kind == MatchKind::Trait && arm.resolved_trait_id.has_value()) {
-                record_read(*contract, *arm.resolved_trait_id, std::nullopt, nullptr);
-            }
-            if (node.kind == MatchKind::Value) {
-                visit_expr(*arm.pattern, *locals);
-            }
-            if (analyzer->walk_state_arm(
-                    node, arm, *locals, *contract, resolve_read, handle_var_assign, on_project_trait)) {
-                continue;
-            }
-            auto arm_locals = *locals;
-            if (arm.alias.has_value()) {
-                arm_locals.insert(*arm.alias);
-                bind_local(*arm.alias, std::nullopt);
-            }
-            visit_stmts(arm.body, std::move(arm_locals));
+            begin_feed(*contract, FeedKind::Seq);
+            visit_arm(node, arm);
+            end_feed(*contract, block_always_returns(arm.body));
         }
+        // No arm may match.
+        begin_feed(*contract, FeedKind::Seq);
+        end_feed(*contract);
+        end_feed(*contract);
+    }
+
+    void visit_arm(const MatchStmt& node, const MatchStmtArm& arm) const {
+        if (node.kind == MatchKind::Trait && arm.resolved_trait_id.has_value()) {
+            record_read(*contract, *arm.resolved_trait_id, std::nullopt, nullptr);
+        }
+        if (node.kind == MatchKind::Value) {
+            visit_expr(*arm.pattern, *locals);
+        }
+        if (analyzer->walk_state_arm(node, arm, *locals, *contract, resolve_read, handle_var_assign, on_project_trait)) {
+            return;
+        }
+        auto arm_locals = *locals;
+        if (arm.alias.has_value()) {
+            arm_locals.insert(*arm.alias);
+            bind_local(*arm.alias, std::nullopt);
+        }
+        visit_stmts(arm.body, std::move(arm_locals));
     }
 };
 

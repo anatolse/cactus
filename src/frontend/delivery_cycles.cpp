@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <limits>
 #include <optional>
+#include <span>
 #include <string>
 
 namespace cactus {
@@ -31,38 +32,51 @@ public:
     explicit LifecycleProducers(const TemplateTraitLookup& templates) : templates_(&templates) {}
 
     [[nodiscard]] bool adds(const HandlerContract& contract, const SymbolId& trait) const {
-        const auto state = state_of_variant_trait(trait);
-        const bool by_command = std::ranges::any_of(contract.commands, [&](const InferredHandlerCommand& command) {
-            switch (command.kind) {
-                case HandlerCommandKind::Add:
-                    return command.target.has_value() && (*command.target == trait || slot_entered(*command.target, trait));
-                case HandlerCommandKind::Spawn:
-                    return spawn_adds(command.target, trait, state);
-                case HandlerCommandKind::Destroy:
-                case HandlerCommandKind::Remove:
-                case HandlerCommandKind::Set:
-                    return false;
-            }
-            std::unreachable();
-        });
-        return by_command || std::ranges::any_of(contract.native_spawns, [&](const SymbolId& function) {
-                   return native_adds(function, trait);
-               });
+        return std::ranges::any_of(contract.commands,
+                                   [&](const InferredHandlerCommand& command) { return adds(command, trait); }) ||
+               std::ranges::any_of(contract.native_spawns,
+                                   [&](const SymbolId& function) { return native_adds(function, trait); });
+    }
+
+    [[nodiscard]] bool adds(const InferredHandlerCommand& command, const SymbolId& trait) const {
+        switch (command.kind) {
+            case HandlerCommandKind::Add:
+                return command.target.has_value() && (*command.target == trait || slot_entered(*command.target, trait));
+            case HandlerCommandKind::Spawn:
+                return spawn_adds(command.target, trait, state_of_variant_trait(trait));
+            case HandlerCommandKind::Destroy:
+            case HandlerCommandKind::Remove:
+            case HandlerCommandKind::Set:
+                return false;
+        }
+        std::unreachable();
     }
 
     [[nodiscard]] static bool removes(const HandlerContract& contract, const SymbolId& trait) {
-        const auto state = state_of_variant_trait(trait);
-        return std::ranges::any_of(contract.commands, [&](const InferredHandlerCommand& command) {
-            if (!command.target.has_value()) {
-                return false;
-            }
-            const auto& target = *command.target;
-            if (command.kind == HandlerCommandKind::Remove) {
-                return target == trait || (state.has_value() && is_slot_of(target, *state));
-            }
-            // Entering one variant leaves every other variant of its state.
-            return command.kind == HandlerCommandKind::Add && target != trait && same_state(target, trait);
-        });
+        return std::ranges::any_of(contract.commands,
+                                   [&](const InferredHandlerCommand& command) { return removes(command, trait); });
+    }
+
+    [[nodiscard]] static bool removes(const InferredHandlerCommand& command, const SymbolId& trait) {
+        if (!command.target.has_value()) {
+            return false;
+        }
+        const auto& target = *command.target;
+        if (command.kind == HandlerCommandKind::Remove) {
+            const auto state = state_of_variant_trait(trait);
+            return target == trait || (state.has_value() && is_slot_of(target, *state));
+        }
+        // Entering one variant leaves every other variant of its state.
+        return command.kind == HandlerCommandKind::Add && target != trait && same_state(target, trait);
+    }
+
+    // Whether one feed site, a command or a native spawn, can deliver this lifecycle edge.
+    [[nodiscard]] bool delivers(const FeedNode& site, const LifecycleFlowEdge& edge) const {
+        if (site.kind == FeedKind::NativeSpawn) {
+            return edge.added && site.symbol.has_value() && native_adds(*site.symbol, edge.trait);
+        }
+        const InferredHandlerCommand command{.kind = site.command, .target = site.symbol};
+        return edge.added ? adds(command, edge.trait) : removes(command, edge.trait);
     }
 
 private:
@@ -294,6 +308,170 @@ void record_activation_depths(ExecutionGraph& graph) {
     graph.activation_depths = std::move(recorded);
 }
 
+// Deliveries into its own cycle that one run of a handler can cause, saturating at many.
+using Gain                = std::uint32_t;
+constexpr Gain kManyGain = 2;
+
+Gain add_gains(Gain left, Gain right) {
+    return std::min(left + right, kManyGain);
+}
+
+// A broadcast runs once per row the consumer selects; one named entity is one row.
+Gain broadcast_rows(const ReachabilityFacts& facts, const HandlerContract& consumer) {
+    const auto one_row = [](const std::optional<std::size_t>& bound) { return bound == 1; };
+    switch (consumer.domain_kind) {
+        case HandlerDomainKind::Selectionless:
+            return 1;
+        case HandlerDomainKind::Rows:
+            return kManyGain;
+        case HandlerDomainKind::Unary:
+            return one_row(named_bound(facts, consumer.selection)) ? 1 : kManyGain;
+        case HandlerDomainKind::Pair:
+            return std::ranges::all_of(
+                       consumer.pair_bindings,
+                       [&](const RelationBinding& binding) { return one_row(named_bound(facts, binding)); })
+                       ? 1
+                       : kManyGain;
+    }
+    std::unreachable();
+}
+
+bool authored(const HandlerNode* handler) {
+    return !module_name_is_stdlib(handler->identity.rule.module.name);
+}
+
+class CycleGain {
+public:
+    explicit CycleGain(const DecoratedProgram& program)
+        : templates_(template_trait_lookup(program.persistence)), producers_(templates_) {
+        const auto& graph = program.execution_graph;
+        std::unordered_map<HandlerIdentity, const HandlerContract*, HandlerIdentityHash> contracts;
+        for (const auto& handler : graph.handlers) {
+            contracts.emplace(handler.identity, &handler.contract);
+        }
+        for (const auto& edge : graph.event_flows) {
+            if (edge.delayed) {
+                feeds_[edge.producer].events.push_back(
+                    {.edge = &edge, .rows = broadcast_rows(program.reachability, *contracts.at(edge.consumer))});
+            }
+        }
+        for (const auto& edge : graph.lifecycle_flows) {
+            if (edge.delayed) {
+                feeds_[edge.producer].lifecycles.push_back(&edge);
+            }
+        }
+    }
+
+    CycleGain(const CycleGain&)            = delete;
+    CycleGain& operator=(const CycleGain&) = delete;
+    CycleGain(CycleGain&&)                 = delete;
+    CycleGain& operator=(CycleGain&&)      = delete;
+    ~CycleGain()                           = default;
+
+    // An extern rule has no body to count, so it never multiplies alone.
+    [[nodiscard]] Gain of(const HandlerNode& handler) const {
+        const auto found = feeds_.find(handler.identity);
+        if (handler.implementation == HandlerImplementationKind::External || found == feeds_.end()) {
+            return 0;
+        }
+        return sequence(found->second, handler.contract.feed.children);
+    }
+
+private:
+    struct EventFeed {
+        const EventFlowEdge* edge;
+        Gain rows;
+    };
+
+    // A producer's delayed edges.
+    struct Outgoing {
+        std::vector<EventFeed> events;
+        std::vector<const LifecycleFlowEdge*> lifecycles;
+    };
+
+    // A branch that always returns skips the rest of its sequence.
+    [[nodiscard]] Gain sequence(const Outgoing& out,  // NOLINT(misc-no-recursion) -- mirrors the handler body
+                                std::span<const FeedNode> children) const {
+        Gain total = 0;
+        for (std::size_t index = 0; index < children.size(); ++index) {
+            const auto& child = children[index];
+            if (child.kind != FeedKind::Alt) {
+                total = add_gains(total, node(out, child));
+                continue;
+            }
+            Gain leave = 0;
+            Gain stay  = 0;
+            for (const auto& branch : child.children) {
+                auto& path = branch.returns ? leave : stay;
+                path       = std::max(path, node(out, branch));
+            }
+            return add_gains(total, std::max(leave, add_gains(stay, sequence(out, children.subspan(index + 1)))));
+        }
+        return total;
+    }
+
+    [[nodiscard]] Gain node(const Outgoing& out,  // NOLINT(misc-no-recursion) -- mirrors the handler body
+                            const FeedNode& feed) const {
+        switch (feed.kind) {
+            case FeedKind::Seq:
+                return sequence(out, feed.children);
+            case FeedKind::Alt:
+                return sequence(out, std::span<const FeedNode>{&feed, 1});
+            case FeedKind::Many:
+                return sequence(out, feed.children) == 0 ? 0 : kManyGain;
+            case FeedKind::Emit:
+                return emitted(out, feed);
+            case FeedKind::Command:
+            case FeedKind::NativeSpawn:
+                return committed(out, feed);
+        }
+        std::unreachable();
+    }
+
+    [[nodiscard]] static Gain emitted(const Outgoing& out, const FeedNode& site) {
+        Gain total = 0;
+        for (const auto& [edge, rows] : out.events) {
+            if (edge->event == site.symbol) {
+                total = add_gains(total, site.targeted ? 1 : rows);
+            }
+        }
+        return total;
+    }
+
+    [[nodiscard]] Gain committed(const Outgoing& out, const FeedNode& site) const {
+        Gain total = 0;
+        for (const auto* edge : out.lifecycles) {
+            if (producers_.delivers(site, *edge)) {
+                total = add_gains(total, 1);
+            }
+        }
+        return total;
+    }
+
+    TemplateTraitLookup templates_;
+    LifecycleProducers producers_;  // points into templates_, so CycleGain does not copy or move
+    std::unordered_map<HandlerIdentity, Outgoing, HandlerIdentityHash> feeds_;
+};
+
+void report_multiplying_cycle(const std::vector<const HandlerNode*>& cycle,
+                              const HandlerNode& author,
+                              const CycleGain& gains,
+                              ErrorReporter& errors) {
+    std::vector<const HandlerNode*> multiplying;
+    std::ranges::copy_if(cycle, std::back_inserter(multiplying), [&](const HandlerNode* handler) {
+        return gains.of(*handler) > 1;
+    });
+    if (multiplying.empty()) {
+        return;
+    }
+    const auto named = std::ranges::find_if(multiplying, authored);
+    const auto& location = named == multiplying.end() ? author.location : (*named)->location;
+    const auto* culprit  = named == multiplying.end() ? multiplying.front() : *named;
+    errors.warning(location,
+                   "this cycle can multiply its work each activation: one run of " +
+                       culprit->identity.canonical_id() + " can feed it more than once");
+}
+
 }  // namespace
 
 TemplateTraitLookup template_trait_lookup(const ModulePersistenceMetadata& persistence) {
@@ -364,11 +542,10 @@ void report_delayed_cycles(const DecoratedProgram& program, ErrorReporter& error
         }
         cycles[found->second].push_back(&handler);
     }
+    std::optional<CycleGain> gains;
     for (auto& cycle : cycles) {
         std::ranges::sort(cycle, {}, [](const HandlerNode* handler) { return handler->identity.canonical_id(); });
-        const auto author = std::ranges::find_if(cycle, [](const HandlerNode* handler) {
-            return !module_name_is_stdlib(handler->identity.rule.module.name);
-        });
+        const auto author = std::ranges::find_if(cycle, authored);
         if (author == cycle.end()) {
             continue;
         }
@@ -377,6 +554,10 @@ void report_delayed_cycles(const DecoratedProgram& program, ErrorReporter& error
             handlers += (handlers.empty() ? "" : ", ") + handler->identity.canonical_id();
         }
         errors.info((*author)->location, "deliveries in this cycle are delayed to the next activation: " + handlers);
+        if (!gains.has_value()) {
+            gains.emplace(program);
+        }
+        report_multiplying_cycle(cycle, **author, *gains, errors);
     }
 }
 

@@ -353,4 +353,31 @@ std::unordered_map<HandlerIdentity, std::uint32_t, HandlerIdentityHash> delivery
     return components;
 }
 
+void report_delayed_cycles(const DecoratedProgram& program, ErrorReporter& errors) {
+    const auto& graph     = program.execution_graph;
+    const auto components = delivery_components(graph);
+    std::vector<std::vector<const HandlerNode*>> cycles(components.size());
+    for (const auto& handler : graph.handlers) {
+        const auto found = components.find(handler.identity);
+        if (found == components.end()) {
+            continue;
+        }
+        cycles[found->second].push_back(&handler);
+    }
+    for (auto& cycle : cycles) {
+        std::ranges::sort(cycle, {}, [](const HandlerNode* handler) { return handler->identity.canonical_id(); });
+        const auto author = std::ranges::find_if(cycle, [](const HandlerNode* handler) {
+            return !module_name_is_stdlib(handler->identity.rule.module.name);
+        });
+        if (author == cycle.end()) {
+            continue;
+        }
+        std::string handlers;
+        for (const auto* handler : cycle) {
+            handlers += (handlers.empty() ? "" : ", ") + handler->identity.canonical_id();
+        }
+        errors.info((*author)->location, "deliveries in this cycle are delayed to the next activation: " + handlers);
+    }
+}
+
 }  // namespace cactus

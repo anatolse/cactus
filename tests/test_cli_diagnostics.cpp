@@ -17,6 +17,7 @@ namespace {
 struct CliResult {
     int exit_code = -1;
     std::vector<std::string> stderr_lines;
+    std::vector<std::string> info_lines;
     std::string stderr_text;
     bool wrote_output = false;
 };
@@ -57,6 +58,9 @@ CliResult run_cactus(const fs::path& input, const std::string& flags = "") {
         result.stderr_text += line + "\n";
         if (line.contains(": error: ") || line.contains(": warning: ")) {
             result.stderr_lines.push_back(line);
+        }
+        if (line.contains(": info: ")) {
+            result.info_lines.push_back(line);
         }
     }
     result.wrote_output = fs::exists(output_file);
@@ -180,6 +184,30 @@ TEST_CASE("CLI: a volume's geometry cannot change after it is made", "[cli][diag
     CHECK(add.exit_code == 1);
     REQUIRE(add.stderr_lines.size() == 1);
     CHECK(add.stderr_lines[0].contains("error: rule 'Regrow' can't add container trait 'Volume'"));
+}
+
+TEST_CASE("CLI: a delayed cycle prints one info line and does not fail the build", "[cli][diagnostics][delivery-cycles]") {
+    const auto result = run_cactus(stage_fixture("delayed_cycle.cactus"));
+    CHECK(result.exit_code == 0);
+    CHECK(result.wrote_output);
+    CHECK(result.stderr_lines.empty());
+    REQUIRE(result.info_lines.size() == 1);
+    CHECK(result.info_lines[0].contains("delayed_cycle.PingSide/on delayed_cycle.Ping, delayed_cycle.PongSide/on delayed_cycle.Pong"));
+}
+
+TEST_CASE("CLI: --warnings-as-errors does not count a delayed cycle", "[cli][diagnostics][delivery-cycles]") {
+    const auto result = run_cactus(stage_fixture("delayed_cycle.cactus"), " --warnings-as-errors");
+    CHECK(result.exit_code == 0);
+    CHECK(result.wrote_output);
+    CHECK(result.info_lines.size() == 1);
+}
+
+TEST_CASE("CLI: a cycle across modules is reported once", "[cli][diagnostics][delivery-cycles]") {
+    const auto project = stage_fixture("cycle_across_modules");
+    const auto result  = run_cactus(project / "main.cactus");
+    CHECK(result.exit_code == 0);
+    REQUIRE(result.info_lines.size() == 1);
+    CHECK(result.info_lines[0].contains("echo.PingSide/on echo.Ping, main.PongSide/on echo.Pong"));
 }
 
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

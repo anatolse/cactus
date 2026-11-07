@@ -1,0 +1,19 @@
+module delayed_cycle
+
+pub extern event tick:
+    dt: float
+
+event Ping
+event Pong
+
+rule Serve:
+    on tick:
+        emit Ping
+
+rule PingSide:
+    on Ping:
+        emit Pong
+
+rule PongSide:
+    on Pong:
+        emit Ping

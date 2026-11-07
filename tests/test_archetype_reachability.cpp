@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <iterator>
 #include <map>
 #include <set>
 
@@ -1069,6 +1070,48 @@ TEST_CASE("Reachability: spawners in different phases compile", "[archetype-reac
                                   kLimitReader);
     INFO(analysis.describe());
     CHECK(analysis.error_count() == 0);
+}
+
+TEST_CASE("Delayed cycle report: link order does not change the report", "[archetype-reachability][delivery-cycles]") {
+    ModuleSet modules(reachability_build_dir("delayed_cycle_link_order"));
+    modules.compile("signals",
+                    {},
+                    "module signals\n"
+                    "pub extern event frame:\n"
+                    "    dt: float\n"
+                    "pub event Ping\n"
+                    "pub event Pong\n"
+                    "rule Serve:\n"
+                    "    on frame:\n"
+                    "        emit Ping\n");
+    modules.compile("left",
+                    {"signals"},
+                    "module left\n"
+                    "use signals\n"
+                    "rule PingSide:\n"
+                    "    on signals.Ping:\n"
+                    "        emit signals.Pong\n");
+    modules.compile("right",
+                    {"signals"},
+                    "module right\n"
+                    "use signals\n"
+                    "rule PongSide:\n"
+                    "    on signals.Pong:\n"
+                    "        emit signals.Ping\n");
+    const auto infos = [&](const std::vector<std::string>& order) {
+        ErrorReporter errors;
+        REQUIRE(modules.link(order, errors).has_value());
+        std::vector<Diagnostic> found;
+        std::ranges::copy_if(errors.diagnostics(), std::back_inserter(found), [](const Diagnostic& d) {
+            return d.level == DiagnosticLevel::Info;
+        });
+        return found;
+    };
+    const auto forward = infos({"signals", "left", "right"});
+    REQUIRE(forward.size() == 1);
+    CHECK(forward[0].message.ends_with(": left.PingSide/on signals.Ping, right.PongSide/on signals.Pong"));
+    CHECK(forward[0].location.filename == "left.cactus");
+    CHECK(forward == infos({"signals", "right", "left"}));
 }
 
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

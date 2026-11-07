@@ -1,0 +1,11 @@
+module echo
+
+pub extern event tick:
+    dt: float
+
+pub event Ping
+pub event Pong
+
+rule PingSide:
+    on Ping:
+        emit Pong

@@ -547,4 +547,133 @@ TEST_CASE("Delivery cycles: classification leaves the schedule unchanged", "[del
     }
     CHECK(std::ranges::any_of(graph.lifecycle_flows, &LifecycleFlowEdge::delayed));
 }
+
+// ── Reporting ────────────────────────────────────────────────────────────────
+
+namespace {
+
+std::vector<Diagnostic> cycle_reports(const DecoratedProgram& program) {
+    ErrorReporter errors;
+    report_delayed_cycles(program, errors);
+    CHECK(std::ranges::all_of(errors.diagnostics(),
+                              [](const Diagnostic& d) { return d.level == DiagnosticLevel::Info; }));
+    return errors.diagnostics();
+}
+
+const std::string kPingSide =
+    "rule PingSide:\n"
+    "    on Ping:\n"
+    "        emit Pong\n";
+
+const std::string kPongSide =
+    "rule PongSide:\n"
+    "    on Pong:\n"
+    "        emit Ping\n";
+
+const std::string kServe =
+    "rule Serve:\n"
+    "    on tick:\n"
+    "        emit Ping\n";
+
+HandlerIdentity cycle_identity(const std::string& module, const std::string& rule, const std::string& event) {
+    return {.rule    = make_symbol_id(SymbolKind::Rule, module, rule),
+            .trigger = {.kind = HandlerTriggerKind::Event, .symbol = make_symbol_id(SymbolKind::Event, module, event)}};
+}
+
+HandlerNode cycle_handler(const HandlerIdentity& identity, int line) {
+    return HandlerNode{.identity = identity, .location = SourceLocation(identity.rule.module.name + ".cactus", line, 1)};
+}
+
+void delayed_ring(ExecutionGraph& graph, const std::vector<HandlerIdentity>& ring) {
+    for (std::size_t index = 0; index < ring.size(); ++index) {
+        const auto& next = ring[(index + 1) % ring.size()];
+        graph.event_flows.push_back(EventFlowEdge{
+            .producer = ring[index], .event = next.trigger.symbol, .consumer = next, .delayed = true});
+    }
+}
+
+}  // namespace
+
+TEST_CASE("Delayed cycle report: a two-handler cycle is reported once", "[delivery-cycles][report]") {
+    const auto reports = cycle_reports(analyze(kServe + kPingSide + kPongSide).program);
+    REQUIRE(reports.size() == 1);
+    CHECK(reports[0].message ==
+          "deliveries in this cycle are delayed to the next activation: "
+          "game.PingSide/on game.Ping, game.PongSide/on game.Pong");
+    CHECK(reports[0].location.filename == "game.cactus");
+    CHECK(reports[0].location.line > 0);
+}
+
+TEST_CASE("Delayed cycle report: a self-loop is reported", "[delivery-cycles][report]") {
+    const auto reports = cycle_reports(analyze(kStarter + kAnswer).program);
+    REQUIRE(reports.size() == 1);
+    CHECK(reports[0].message.ends_with(": game.Answer/on game.Knock"));
+}
+
+TEST_CASE("Delayed cycle report: a lifecycle cycle is reported", "[delivery-cycles][report]") {
+    const auto reports = cycle_reports(analyze("rule Douse:\n"
+                                               "    on added Burning:\n"
+                                               "        remove Burning\n"
+                                               "rule Relight:\n"
+                                               "    on removed Burning:\n"
+                                               "        add Burning\n")
+                                           .program);
+    REQUIRE(reports.size() == 1);
+    CHECK(reports[0].message.contains("game.Douse/on added game.Burning"));
+    CHECK(reports[0].message.contains("game.Relight/on removed game.Burning"));
+}
+
+TEST_CASE("Delayed cycle report: an acyclic program reports nothing", "[delivery-cycles][report]") {
+    CHECK(cycle_reports(analyze(kStarter + kLogger).program).empty());
+}
+
+TEST_CASE("Delayed cycle report: separate cycles are reported separately", "[delivery-cycles][report]") {
+    const auto reports = cycle_reports(analyze(kStarter + kAnswer + kServe + kPingSide + kPongSide).program);
+    REQUIRE(reports.size() == 2);
+    CHECK(reports[0].message.ends_with(": game.Answer/on game.Knock"));
+    CHECK(reports[1].message.ends_with(": game.PingSide/on game.Ping, game.PongSide/on game.Pong"));
+}
+
+TEST_CASE("Delayed cycle report: declaration order does not change the report", "[delivery-cycles][report]") {
+    const auto forward  = cycle_reports(analyze(kServe + kPingSide + kPongSide).program);
+    const auto backward = cycle_reports(analyze(kPongSide + kPingSide + kServe).program);
+    REQUIRE(forward.size() == 1);
+    REQUIRE(backward.size() == 1);
+    CHECK(forward[0].message == backward[0].message);
+}
+
+TEST_CASE("Delayed cycle report: a stdlib cycle is not reported", "[delivery-cycles][report]") {
+    const auto first  = cycle_identity("std.net", "Send", "Sent");
+    const auto second = cycle_identity("std.net", "Receive", "Received");
+    DecoratedProgram program;
+    program.execution_graph.handlers = {cycle_handler(first, 1), cycle_handler(second, 2)};
+    delayed_ring(program.execution_graph, {first, second});
+    CHECK(cycle_reports(program).empty());
+}
+
+TEST_CASE("Delayed cycle report: a mixed cycle is located at the first author handler", "[delivery-cycles][report]") {
+    const auto stdlib = cycle_identity("std.net", "Send", "Sent");
+    const auto later  = cycle_identity("zoo", "Listen", "Heard");
+    const auto first  = cycle_identity("game", "Reply", "Replied");
+    DecoratedProgram program;
+    program.execution_graph.handlers = {cycle_handler(later, 7), cycle_handler(stdlib, 3), cycle_handler(first, 5)};
+    delayed_ring(program.execution_graph, {stdlib, later, first});
+    const auto reports = cycle_reports(program);
+    REQUIRE(reports.size() == 1);
+    CHECK(reports[0].location.filename == "game.cactus");
+    CHECK(reports[0].location.line == 5);
+    CHECK(reports[0].message.ends_with(": game.Reply/on game.Replied, std.net.Send/on std.net.Sent, zoo.Listen/on zoo.Heard"));
+}
+
+TEST_CASE("Delayed cycle report: handler and edge order do not change the report", "[delivery-cycles][report]") {
+    const auto left  = cycle_identity("a", "Left", "L");
+    const auto right = cycle_identity("b", "Right", "R");
+    DecoratedProgram forward;
+    forward.execution_graph.handlers = {cycle_handler(left, 1), cycle_handler(right, 2)};
+    delayed_ring(forward.execution_graph, {left, right});
+    DecoratedProgram backward;
+    backward.execution_graph.handlers = {cycle_handler(right, 2), cycle_handler(left, 1)};
+    delayed_ring(backward.execution_graph, {right, left});
+    CHECK(cycle_reports(forward) == cycle_reports(backward));
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

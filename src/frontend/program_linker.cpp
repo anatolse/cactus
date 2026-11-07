@@ -356,6 +356,7 @@ void run_whole_program_passes(DecoratedProgram& program, ErrorReporter& errors) 
     finalize_pair_plans(program, errors);
     check_query_costs(program, errors);
     validate_container_traits(program, errors);
+    report_delayed_cycles(program, errors);
 }
 
 bool ProgramLinker::merge_imported_keepers(DecoratedProgram& target, const DecoratedProgram& src) {

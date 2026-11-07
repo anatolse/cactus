@@ -434,6 +434,45 @@ The compiler SHALL compute the strongly connected components of this graph. A co
 - **WHEN** a handler in module `a` emits an event consumed by a handler in module `b` that emits an event consumed by the first handler
 - **THEN** the linked program's graph marks both edges delayed
 
+### Requirement: Delayed cycles are reported
+For each connected group of delayed edges in the linked program, the compiler SHALL report one `info` diagnostic that says its deliveries are delayed to the next activation, and lists the canonical identity of every handler in the group in sorted order. The diagnostic SHALL be located at the first handler in that order that is declared outside the standard library. A group with no such handler SHALL NOT be reported. The diagnostic SHALL NOT change the exit status, delivery timing or generated code, and SHALL NOT depend on declaration order or module link order.
+
+#### Scenario: A two-handler cycle is reported once
+- **WHEN** one handler on `Ping` emits `Pong`, and one handler on `Pong` emits `Ping`
+- **THEN** the compiler reports one `info` diagnostic that names both handlers
+
+#### Scenario: A self-loop is reported
+- **WHEN** a handler on `Knock` emits `Knock`
+- **THEN** the compiler reports one `info` diagnostic that names that handler
+
+#### Scenario: A lifecycle cycle is reported
+- **WHEN** an `on added X` handler runs `remove X`, and an `on removed X` handler runs `add X`
+- **THEN** the compiler reports one `info` diagnostic that names both handlers
+
+#### Scenario: A cycle across modules is reported once
+- **WHEN** a cycle spans two modules of a linked program
+- **THEN** the compiler reports one `info` diagnostic that names its handlers from both modules
+
+#### Scenario: A stdlib cycle is not reported
+- **WHEN** every handler of a cycle is declared in the standard library
+- **THEN** the compiler reports nothing for that cycle
+
+#### Scenario: An acyclic program reports nothing
+- **WHEN** a program has no delayed edge
+- **THEN** the compiler reports no cycle diagnostic
+
+#### Scenario: Two separate cycles are reported separately
+- **WHEN** a program has two cycles that share no delayed edge
+- **THEN** the compiler reports two `info` diagnostics
+
+#### Scenario: Reporting does not depend on source layout
+- **WHEN** a module's rules are reordered, or the modules are linked in another order, with no other change
+- **THEN** the diagnostic lists the same handlers in the same order
+
+#### Scenario: A cycle does not fail the build
+- **WHEN** a program has a delayed cycle and no error or warning
+- **THEN** the compiler generates output and exits with zero status
+
 ### Requirement: Activation cascade depth is static
 After delayed edges are removed, the delivery graph is acyclic. For every activation root — each phase, each event that can start an activation of its own, the load and unload boundaries, and the startup arrival activation — the compiler SHALL record the longest chain of immediate edges that can run in one activation started by that root, counting the root's own handlers as depth 1. Handlers that can receive a delayed occurrence in an activation of that root SHALL count as starting handlers of it. The recorded depth SHALL be finite for every program and SHALL NOT depend on any configured bound.
 

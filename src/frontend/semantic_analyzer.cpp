@@ -1360,6 +1360,36 @@ bool SemanticAnalyzer::declare_module_scope_symbol(SymbolKind kind,
     return false;
 }
 
+void SemanticAnalyzer::validate_state_arrows(const StateNode& state) {
+    const bool has_arrows =
+        std::ranges::any_of(state.variants, [](const StateVariantNode& variant) { return !variant.exits.empty(); });
+    if (!has_arrows) {
+        return;
+    }
+    const auto of_state = "' of state '" + state.name + "'";
+    for (const auto& variant : state.variants) {
+        if (variant.is_final && !variant.exits.empty()) {
+            errors_.error(variant.location, "final variant '" + variant.name + of_state + " can't declare an arrow");
+        }
+        if (!variant.is_final && variant.exits.empty()) {
+            errors_.error(variant.location,
+                          "variant '" + variant.name + of_state +
+                              " has no arrow; declare its exits with `->` or mark it `final`");
+        }
+        std::unordered_set<std::string> seen;
+        for (const auto& exit : variant.exits) {
+            if (exit.variant == variant.name) {
+                errors_.error(variant.location, "variant '" + variant.name + of_state + " can't declare an arrow to itself");
+            } else if (!std::ranges::contains(state.variants, exit.variant, &StateVariantNode::name)) {
+                errors_.error(exit.location, "arrow to unknown variant '" + exit.variant + of_state);
+            } else if (!seen.insert(exit.variant).second) {
+                errors_.error(exit.location,
+                              "duplicate arrow to '" + exit.variant + "' from variant '" + variant.name + of_state);
+            }
+        }
+    }
+}
+
 void SemanticAnalyzer::synthesize_state_traits(ProgramNode& program) {
     const auto already_synthesized = std::ranges::any_of(program.declarations, [](const Declaration& decl) {
         const auto* trait = std::get_if<TraitNode>(&decl);
@@ -1405,10 +1435,13 @@ void SemanticAnalyzer::synthesize_state_traits(ProgramNode& program) {
                                        .fields   = std::move(variant.fields),
                                        .location = variant.location,
                                        .state    = state->name});
-            variants.push_back(
-                StateVariantNode{.name = variant.name, .is_final = variant.is_final, .location = variant.location});
+            variants.push_back(StateVariantNode{.name     = variant.name,
+                                                .is_final = variant.is_final,
+                                                .exits    = std::move(variant.exits),
+                                                .location = variant.location});
         }
         state->variants = std::move(variants);
+        validate_state_arrows(*state);
         declarations.push_back(std::move(decl));
         for (auto& trait : traits) {
             declarations.emplace_back(std::move(trait));
@@ -1480,7 +1513,10 @@ void SemanticAnalyzer::collect_types(ProgramNode& program) {
                     state.is_pub = node.is_pub;
                     assign_canonical_identity(state, state_id);
                     for (const auto& variant : node.variants) {
-                        state.variants.push_back({.name = variant.name, .is_final = variant.is_final});
+                        state.variants.push_back({.name     = variant.name,
+                                                  .is_final = variant.is_final,
+                                                  .exits    = variant.exits,
+                                                  .location = variant.location});
                     }
                     result_.states[node.name] = std::move(state);
                 } else if constexpr (std::is_same_v<T, EventNode>) {
@@ -8553,6 +8589,12 @@ void SemanticAnalyzer::collect_extern_rule_dependency(const ExternRuleNode& rule
                                      ? std::nullopt
                                      : std::optional(EntityTarget{.kind = EntityTargetKind::Unknown}),
                                  declared_fields(declaration));
+            if (command.kind == HandlerCommandKind::Add && command.resolved_target_id.has_value()) {
+                record_transition_sources(
+                    contract,
+                    *command.resolved_target_id,
+                    transition_sources(*command.resolved_target_id, {}, {}, nullptr, command.location));
+            }
         }
         contract.effects.insert(handler.resolved_effects.begin(), handler.resolved_effects.end());
         contract.effect_acts.insert(handler.resolved_effects.begin(), handler.resolved_effects.end());
@@ -9386,13 +9428,18 @@ struct SemanticAnalyzer::HandlerBodyVisitor {
     }
 
     void operator()(const AddTraitStmt& node) const {
+        const auto entity = entity_of(node.target_expr);
         add_contract_command(*contract,
                              HandlerCommandKind::Add,
                              node.resolved_trait_id,
-                             entity_of(node.target_expr),
+                             entity,
                              declared_fields(node.resolved_trait_id.has_value()
                                                  ? analyzer->find_resolved_trait(*node.resolved_trait_id)
                                                  : nullptr));
+        if (node.resolved_trait_id.has_value()) {
+            analyzer->record_transition_sources(
+                *contract, *node.resolved_trait_id, transition_sources(*node.resolved_trait_id, entity, node.location));
+        }
         analyzer->record_state_writes(*contract, node.resolved_trait_id);
         for (const auto& field : node.args) {
             visit_expr(*field.value, *locals);
@@ -9400,6 +9447,26 @@ struct SemanticAnalyzer::HandlerBodyVisitor {
         if (node.target_expr.has_value()) {
             visit_expr(**node.target_expr, *locals);
         }
+    }
+
+    // Only an `add` to the row's own entity or to a pair binding is narrowed by what the domain requires.
+    [[nodiscard]] std::vector<TransitionSource> transition_sources(const SymbolId& variant,
+                                                                   const EntityTarget& entity,
+                                                                   const SourceLocation& location) const {
+        if (entity.kind == EntityTargetKind::PairBinding) {
+            const auto& binding = contract->pair_bindings.at(entity.binding_index);
+            return analyzer->transition_sources(variant, binding.required_traits, {}, nullptr, location);
+        }
+        if (entity.kind != EntityTargetKind::Self) {
+            return analyzer->transition_sources(variant, {}, {}, nullptr, location);
+        }
+        const auto state = state_of_variant_trait(variant);
+        const auto arm   = state.has_value() ? contract->arm_variants.find(*state) : contract->arm_variants.end();
+        return analyzer->transition_sources(variant,
+                                            contract->selection,
+                                            contract->exclusion,
+                                            arm == contract->arm_variants.end() ? nullptr : &arm->second,
+                                            location);
     }
 
     void operator()(const RemoveTraitStmt& node) const {
@@ -9520,15 +9587,71 @@ struct SemanticAnalyzer::HandlerBodyVisitor {
     void operator()(const MatchStmt& node) const {
         visit_expr(*node.subject, *locals);
         begin_feed(*contract, FeedKind::Alt);
+        const auto* state = matched_state(node);
+        std::vector<std::string> named;
         for (const auto& arm : node.arms) {
             begin_feed(*contract, FeedKind::Seq);
-            visit_arm(node, arm);
+            visit_narrowed_arm(node, arm, state, named);
             end_feed(*contract, block_always_returns(arm.body));
         }
         // No arm may match.
         begin_feed(*contract, FeedKind::Seq);
         end_feed(*contract);
         end_feed(*contract);
+    }
+
+    // The variants of `state` an arm leaves the row's entity in; `named` collects the arms seen so far.
+    static std::vector<std::string> arm_variants_of(const ResolvedState& state,
+                                                    const MatchStmtArm& arm,
+                                                    std::vector<std::string>& named) {
+        if (!arm.is_wildcard()) {
+            named.push_back(variant_name_of_trait(*arm.resolved_trait_id));
+            return {named.back()};
+        }
+        std::vector<std::string> allowed;
+        for (const auto& variant : state.variants) {
+            if (!std::ranges::contains(named, variant.name)) {
+                allowed.push_back(variant.name);
+            }
+        }
+        return allowed;
+    }
+
+    [[nodiscard]] const ResolvedState* matched_state(const MatchStmt& node) const {
+        if (node.kind != MatchKind::State) {
+            return nullptr;
+        }
+        const auto named_arm = std::ranges::find_if(node.arms, [](const MatchStmtArm& candidate) {
+            return candidate.resolved_trait_id.has_value();
+        });
+        const auto* state =
+            named_arm == node.arms.end() ? nullptr : analyzer->state_of_trait(named_arm->resolved_trait_id);
+        return state != nullptr && state->symbol_id.has_value() ? state : nullptr;
+    }
+
+    // A state match subject is the row's own slot, so inside an arm its entity is in one of the arm's variants.
+    void visit_narrowed_arm(const MatchStmt& node,
+                            const MatchStmtArm& arm,
+                            const ResolvedState* state,
+                            std::vector<std::string>& named) const {
+        if (state == nullptr || (!arm.is_wildcard() && !arm.resolved_trait_id.has_value())) {
+            visit_arm(node, arm);
+            return;
+        }
+        auto allowed    = arm_variants_of(*state, arm, named);
+        auto& narrowing = contract->arm_variants;
+        const auto& key = *state->symbol_id;
+        auto outer      = narrowing.extract(key);
+        if (!outer.empty()) {
+            std::erase_if(allowed,
+                          [&](const std::string& variant) { return !std::ranges::contains(outer.mapped(), variant); });
+        }
+        narrowing.emplace(key, std::move(allowed));
+        visit_arm(node, arm);
+        narrowing.erase(key);
+        if (!outer.empty()) {
+            narrowing.insert(std::move(outer));
+        }
     }
 
     void visit_arm(const MatchStmt& node, const MatchStmtArm& arm) const {
@@ -9640,6 +9763,53 @@ bool SemanticAnalyzer::walk_state_arm(const MatchStmt& match,
     };
     walk_handler_body(arm.body, locals, contract, arm_read, arm_assign, on_project_trait);
     return true;
+}
+
+std::vector<TransitionSource> SemanticAnalyzer::transition_sources(const SymbolId& variant,
+                                                                   std::span<const SymbolId> required,
+                                                                   std::span<const SymbolId> excluded,
+                                                                   const std::vector<std::string>* arm_variants,
+                                                                   const SourceLocation& location) const {
+    const auto state_id = state_of_variant_trait(variant);
+    const auto* state   = state_of_trait(variant);
+    if (!state_id.has_value() || state == nullptr || std::ranges::contains(excluded, state_slot_trait(*state_id))) {
+        return {};
+    }
+    const auto in_state = [&](const SymbolId& trait) { return state_of_variant_trait(trait) == state_id; };
+    const auto required_variant = std::ranges::find_if(required, in_state);
+    const auto target           = variant_name_of_trait(variant);
+    std::vector<TransitionSource> sources;
+    for (const auto& candidate : state->variants) {
+        const auto trait    = state_variant_trait(*state_id, candidate.name);
+        const bool possible = !candidate.is_final && candidate.name != target &&
+                              (required_variant == required.end() || *required_variant == trait) &&
+                              !std::ranges::contains(excluded, trait) &&
+                              (arm_variants == nullptr || std::ranges::contains(*arm_variants, candidate.name));
+        if (possible) {
+            sources.push_back(TransitionSource{.variant = candidate.name, .location = location});
+        }
+    }
+    return sources;
+}
+
+void SemanticAnalyzer::record_transition_sources(HandlerContract& contract,
+                                                 const SymbolId& variant,
+                                                 const std::vector<TransitionSource>& sources) const {
+    const auto command = std::ranges::find_if(contract.commands, [&](const InferredHandlerCommand& candidate) {
+        return candidate.kind == HandlerCommandKind::Add && candidate.target == variant;
+    });
+    const auto* state = state_of_trait(variant);
+    if (sources.empty() || command == contract.commands.end() || state == nullptr) {
+        return;
+    }
+    for (const auto& source : sources) {
+        if (!std::ranges::contains(command->sources, source.variant, &TransitionSource::variant)) {
+            command->sources.push_back(source);
+        }
+    }
+    std::ranges::sort(command->sources, {}, [&](const TransitionSource& source) {
+        return state->variant_index(source.variant);
+    });
 }
 
 void SemanticAnalyzer::record_state_writes(HandlerContract& contract, const std::optional<SymbolId>& trait) const {

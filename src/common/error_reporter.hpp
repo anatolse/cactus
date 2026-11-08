@@ -2,10 +2,28 @@
 
 #include "common/source_location.hpp"
 
+#include <cstddef>
+#include <ranges>
 #include <string>
 #include <vector>
 
 namespace cactus {
+
+// Joins the spelled items as "a", "a and b" or "a, b and c".
+template <std::ranges::sized_range Range, typename Spell>
+[[nodiscard]] std::string spelled_list(const Range& items, Spell spell) {
+    std::string text;
+    const auto count     = std::ranges::size(items);
+    std::size_t position = 0;
+    for (const auto& item : items) {
+        if (position > 0) {
+            text += position + 1 == count ? " and " : ", ";
+        }
+        text += spell(item);
+        ++position;
+    }
+    return text;
+}
 
 enum class DiagnosticLevel { Error, Warning, Info };
 

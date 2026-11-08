@@ -962,9 +962,18 @@ struct RelationNode {
     SourceLocation location;
 };
 
+// One `-> V` arrow of a state variant: a variant it may move to.
+struct StateExit {
+    std::string variant;
+    SourceLocation location;
+
+    friend bool operator==(const StateExit&, const StateExit&) = default;
+};
+
 struct StateVariantNode {
     std::string name;
     bool is_final = false;
+    std::vector<StateExit> exits;
     std::vector<FieldNode> fields;
     SourceLocation location;
 };

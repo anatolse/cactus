@@ -110,7 +110,7 @@ fixed_tick late_tick
 
 `one` is contextual: it marks a relation end (§3.6.2) only right after the end's trait name.
 
-`state` and `final` are contextual words too. `state` starts a state declaration (§3.6.1) only at top-level declaration position when an identifier follows. `final` marks a variant only right after a variant name. Both stay ordinary identifiers elsewhere, so a field named `state` keeps working.
+`state` and `final` are contextual words too. `state` starts a state declaration (§3.6.1) only at top-level declaration position when an identifier follows. `final` marks a variant only right after a variant name or its arrows. Both stay ordinary identifiers elsewhere, so a field named `state` keeps working.
 
 ### 2.5 Literals
 
@@ -274,16 +274,17 @@ A state is a set of variants. An entity that carries the state is in exactly one
 state_decl    = [ "pub" ] "state" IDENTIFIER ":" NEWLINE INDENT
                 state_variant { state_variant }
                 DEDENT ;
-state_variant = IDENTIFIER [ "final" ]
+state_variant = IDENTIFIER [ "final" | variant_exits ]
                 ( ":" NEWLINE INDENT { field_decl } DEDENT | NEWLINE ) ;
+variant_exits = "->" IDENTIFIER { "," IDENTIFIER } ;
 ```
 
 ```cactus
 state EnemyMode:
-    Idle
-    Chasing:
+    Idle -> Chasing, Dying
+    Chasing -> Attacking, Idle, Dying:
         let target: entity_id
-    Attacking:
+    Attacking -> Chasing, Dying:
         var windup: float = 0.3
     Dying final:
         var elapsed: float = 0.0
@@ -295,6 +296,16 @@ state EnemyMode:
 - An entity or template body places an archetype in a variant by naming `S.V` (with an optional field block), or the bare `S`, which means the first declared variant with its field defaults. An archetype names at most one variant of each state. An entity's variant replaces its template's.
 - `add S.V` swaps the variant, `remove S` drops the whole state, and `remove S.V` is an error (§4.4). A `final` variant is never left.
 - Variants cannot declare `persist` fields, and cannot be targets of `project` or `keep`. A save does not record states.
+- Outside the standard library, a variant that no entity or template starts in and no reachable `add` enters is a compile error.
+
+**Transitions.** A variant may list its exits after `->`: the other variants of the same state it may move to, written bare. A state where any variant has arrows is a *state with arrows*; a state with none allows any order. In a state with arrows:
+
+- Every variant that is not `final` declares at least one arrow, and a `final` variant declares none. An arrow cannot name its own variant, an unknown variant, or the same variant twice.
+- `add S.V` compiles only if every *possible source* of the command has an arrow to `V`. The possible sources are every variant except `V` and the `final` ones, narrowed when the `add` acts on the row's own entity or on a pair binding: a domain that requires `S.W` (through `each:`, `on added S.W` or the binding's traits) leaves only `W`; `without: S.X` or `on removed S.X` removes `X`; a state `match` arm on `S.W` leaves only `W`, and its `_` arm removes the variants named by earlier arms. An `add` to any other entity, and an `extern rule` command, is not narrowed. Narrow with `each:` or a `match` arm; an `if` does not narrow.
+- An entity without `S` enters `V` with no source, so `without: S` makes any `add S.V` legal. `remove S` is an exit, not a transition: the entity can enter again later.
+- Outside the standard library, an arrow that no reachable `add` can take is a compile error.
+
+Arrows are a fact about the model, like a field's range: the compiler checks the handlers against them and derives everything else.
 
 Use a state when rules select by it or react to entering and leaving it. Use an enum field when the value is only read.
 

@@ -1,0 +1,7 @@
+module orders
+
+pub state Mode:
+    Auto -> Move
+    Move -> Hold:
+        let target: entity_id
+    Hold -> Auto

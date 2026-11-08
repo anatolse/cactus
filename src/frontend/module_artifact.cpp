@@ -237,6 +237,12 @@ void ModuleArtifact::write_states(std::ostream& out, const std::unordered_map<st
         for (const auto& variant : state.variants) {
             write_str(out, variant.name);
             write_bool(out, variant.is_final);
+            write_location(out, variant.location);
+            write_u32(out, static_cast<uint32_t>(variant.exits.size()));
+            for (const auto& exit : variant.exits) {
+                write_str(out, exit.variant);
+                write_location(out, exit.location);
+            }
         }
     }
 }
@@ -254,8 +260,16 @@ std::unordered_map<std::string, ResolvedState> ModuleArtifact::read_states(std::
         state.is_pub       = read_bool(in);
         const auto variant_count = read_u32(in);
         for (uint32_t j = 0; j < variant_count && in.good(); ++j) {
-            auto name = read_str(in);
-            state.variants.push_back({.name = std::move(name), .is_final = read_bool(in)});
+            ResolvedStateVariant variant;
+            variant.name           = read_str(in);
+            variant.is_final       = read_bool(in);
+            variant.location       = read_location(in);
+            const auto exit_count  = read_u32(in);
+            for (uint32_t k = 0; k < exit_count && in.good(); ++k) {
+                auto target = read_str(in);
+                variant.exits.push_back(StateExit{.variant = std::move(target), .location = read_location(in)});
+            }
+            state.variants.push_back(std::move(variant));
         }
         states[state.name] = std::move(state);
     }
@@ -686,6 +700,11 @@ void ModuleArtifact::write_contract(std::ostream& out, const HandlerContract& co
             write_field_access(out, *command.patched);
         }
         write_entity_targets(out, command.entities);
+        write_u32(out, static_cast<uint32_t>(command.sources.size()));
+        for (const auto& source : command.sources) {
+            write_str(out, source.variant);
+            write_location(out, source.location);
+        }
     }
     write_symbol_vector(out, contract.native_spawns);
     write_feed(out, contract.feed);
@@ -1554,7 +1573,12 @@ HandlerContract ModuleArtifact::read_contract(std::istream& in) {
         if (read_bool(in)) {
             command.patched = read_field_access(in);
         }
-        command.entities = read_entity_targets(in);
+        command.entities   = read_entity_targets(in);
+        const auto sources = read_u32(in);
+        for (uint32_t j = 0; j < sources && in.good(); ++j) {
+            auto variant = read_str(in);
+            command.sources.push_back(TransitionSource{.variant = std::move(variant), .location = read_location(in)});
+        }
         contract.commands.push_back(std::move(command));
     }
     contract.native_spawns      = read_symbol_vector(in);

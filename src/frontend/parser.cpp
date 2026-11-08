@@ -2412,9 +2412,20 @@ StateVariantNode Parser::parse_state_variant() {
     StateVariantNode variant;
     variant.location = peek().location;
     variant.name     = consume(TokenType::IDENTIFIER, "expected state variant name").value;
-    if (check(TokenType::IDENTIFIER) && peek().value == "final") {
-        advance();
-        variant.is_final = true;
+    // `final` and arrows may come in either order, so semantic analysis can reject the pair at the variant.
+    while (true) {
+        if (check(TokenType::IDENTIFIER) && peek().value == "final") {
+            advance();
+            variant.is_final = true;
+            continue;
+        }
+        if (!match(TokenType::ARROW)) {
+            break;
+        }
+        for (bool more = true; more; more = match(TokenType::COMMA)) {
+            const auto& target = consume(TokenType::IDENTIFIER, "expected a variant name after '->'");
+            variant.exits.push_back(StateExit{.variant = target.value, .location = target.location});
+        }
     }
     if (!match(TokenType::COLON)) {
         expect_newline();

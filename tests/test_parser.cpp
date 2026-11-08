@@ -4274,6 +4274,53 @@ TEST_CASE("Parser: a final marker variant needs no body", "[parser][exclusive-st
     CHECK(state.variants[1].fields.empty());
 }
 
+TEST_CASE("Parser: a state variant declares its exits", "[parser][exclusive-states]") {
+    auto prog = parse(
+        "state EnemyMode:\n"
+        "    Idle -> Chasing, Dying\n"
+        "    Chasing -> Idle:\n"
+        "        let target: entity_id\n"
+        "    Dying final\n");
+    const auto& state = std::get<StateNode>(prog.declarations[0]);
+    REQUIRE(state.variants.size() == 3);
+    const auto& idle = state.variants[0];
+    REQUIRE(idle.exits.size() == 2);
+    CHECK(idle.exits[0].variant == "Chasing");
+    CHECK(idle.exits[1].variant == "Dying");
+    CHECK(idle.exits[0].location.line == idle.location.line);
+    CHECK(idle.exits[1].location.column > idle.exits[0].location.column);
+    const auto& chasing = state.variants[1];
+    REQUIRE(chasing.exits.size() == 1);
+    CHECK(chasing.exits[0].variant == "Idle");
+    REQUIRE(chasing.fields.size() == 1);
+    CHECK(chasing.fields[0].name == "target");
+    CHECK(state.variants[2].exits.empty());
+}
+
+TEST_CASE("Parser: final and arrows on one variant parse in either order", "[parser][exclusive-states]") {
+    auto prog = parse(
+        "state Mode:\n"
+        "    Idle -> Gone\n"
+        "    Gone final -> Idle\n"
+        "    Left -> Idle final\n");
+    const auto& state = std::get<StateNode>(prog.declarations[0]);
+    REQUIRE(state.variants.size() == 3);
+    CHECK(state.variants[1].is_final);
+    REQUIRE(state.variants[1].exits.size() == 1);
+    CHECK(state.variants[1].exits[0].variant == "Idle");
+    CHECK(state.variants[2].is_final);
+    REQUIRE(state.variants[2].exits.size() == 1);
+    CHECK(state.variants[2].exits[0].variant == "Idle");
+}
+
+TEST_CASE("Parser: an arrow needs a variant name", "[parser][exclusive-states]") {
+    auto errors = parse_expect_errors(
+        "state Mode:\n"
+        "    Idle ->\n"
+        "    Busy -> Idle\n");
+    CHECK(has_diagnostic_containing(errors, "expected a variant name after '->'"));
+}
+
 TEST_CASE("Parser: an identifier named state is not a declaration", "[parser][exclusive-states]") {
     auto prog = parse(
         "trait Ctrl:\n"

@@ -165,6 +165,19 @@ TEST_CASE("CLI: public imported states resolve in archetypes and handlers", "[cl
     CHECK(generated.contains("enter_state<::cactus_gen::orders::Mode, 1>"));
 }
 
+TEST_CASE("CLI: an add of an imported state variant is checked against its arrows at link",
+          "[cli][diagnostics][state-transitions]") {
+    const auto project = stage_fixture("imported_state_transitions");
+    const auto result  = run_cactus(project / "main.cactus");
+    for (const auto& diagnostic : result.stderr_lines) {
+        INFO(diagnostic);
+    }
+    CHECK(result.exit_code == 1);
+    REQUIRE(result.stderr_lines.size() == 1);
+    CHECK(result.stderr_lines[0].contains(
+        "main.cactus:21:9: error: `add Mode.Hold` can move an entity out of 'Auto', which has no arrow to 'Hold'"));
+}
+
 TEST_CASE("CLI: adding a container trait that another module ranges against is rejected at link",
           "[cli][diagnostics][ranged-fields]") {
     const auto project = stage_fixture("container_add_cross_module");

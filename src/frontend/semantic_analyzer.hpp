@@ -15,6 +15,7 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -149,12 +150,19 @@ struct ResolvedRelation : CanonicalIdentity {
 struct ResolvedStateVariant {
     std::string name;
     bool is_final = false;
+    std::vector<StateExit> exits;
+    SourceLocation location;
 };
 
 struct ResolvedState : CanonicalIdentity {
     std::string name;
     bool is_pub = false;
     std::vector<ResolvedStateVariant> variants;
+
+    // A state with arrows allows only the transitions they declare.
+    [[nodiscard]] bool has_arrows() const {
+        return std::ranges::any_of(variants, [](const ResolvedStateVariant& variant) { return !variant.exits.empty(); });
+    }
 
     [[nodiscard]] std::optional<std::size_t> variant_index(const std::string& variant) const {
         for (std::size_t index = 0; index < variants.size(); ++index) {
@@ -248,11 +256,20 @@ struct EntityTarget {
     friend bool operator==(const EntityTarget&, const EntityTarget&) = default;
 };
 
+// A variant an `add` of a state variant can move its entity out of, and the first `add` that can.
+struct TransitionSource {
+    std::string variant;
+    SourceLocation location;
+
+    friend bool operator==(const TransitionSource&, const TransitionSource&) = default;
+};
+
 struct InferredHandlerCommand {
     HandlerCommandKind kind = HandlerCommandKind::Destroy;
     std::optional<SymbolId> target;
     std::optional<FieldAccess> patched;  // Add and Set: the fields it assigns (none for a marker trait)
     std::vector<EntityTarget> entities;  // every entity class it acts on; empty for Spawn
+    std::vector<TransitionSource> sources;  // Add of a state variant: possible sources, in declaration order
 
     friend bool operator==(const InferredHandlerCommand&, const InferredHandlerCommand&) = default;
 };
@@ -727,6 +744,8 @@ struct InferredHandlerContract : HandlerContract {
     ResolvedHandlerTrigger trigger;
     // Inference only: the fields each streaming `where:` predicate reads, for staging.
     std::unordered_map<const ExprNode*, std::unordered_map<SymbolId, FieldAccess>> clause_reads;
+    // Inference only: per state, the variants the enclosing state `match` arms leave the row's entity in.
+    std::unordered_map<SymbolId, std::vector<std::string>> arm_variants;
 };
 
 enum class HandlerImplementationKind : std::uint8_t { Cactus, External };
@@ -1222,6 +1241,7 @@ private:
     // Phase 1: Collect type declarations
     // Inserts, after each state, one trait per variant (`S.V`) and its slot trait (`S`).
     void synthesize_state_traits(ProgramNode& program);
+    void validate_state_arrows(const StateNode& state);
     void collect_types(ProgramNode& program);
     bool declare_module_scope_symbol(SymbolKind kind, const std::string& name, const SourceLocation& loc);
 
@@ -2098,6 +2118,16 @@ private:
                         const std::function<void(const SymbolId&)>& on_project_trait) const;
     // `add S.V` and `remove S` may replace any variant, so they write the slot and every variant.
     void record_state_writes(HandlerContract& contract, const std::optional<SymbolId>& trait) const;
+    // The variants an `add` of `variant` can move its entity out of; empty unless `variant` is a state variant.
+    [[nodiscard]] std::vector<TransitionSource> transition_sources(const SymbolId& variant,
+                                                                   std::span<const SymbolId> required,
+                                                                   std::span<const SymbolId> excluded,
+                                                                   const std::vector<std::string>* arm_variants,
+                                                                   const SourceLocation& location) const;
+    // Merges `sources` into the contract's `add` of `variant`, in declaration order.
+    void record_transition_sources(HandlerContract& contract,
+                                   const SymbolId& variant,
+                                   const std::vector<TransitionSource>& sources) const;
 
     // walk_handler_body's per-expression half, callable on its own. An
     // `order by:` sort key is a bare expression with no enclosing statement,

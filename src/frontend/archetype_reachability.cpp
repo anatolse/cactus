@@ -753,14 +753,7 @@ private:
     }
 
     [[nodiscard]] std::string joined(const std::vector<TraitIndexValue>& traits) const {
-        std::string text;
-        for (std::size_t position = 0; position < traits.size(); ++position) {
-            if (position > 0) {
-                text += position + 1 == traits.size() ? " and " : ", ";
-            }
-            text += canonical(traits[position]);
-        }
-        return text;
+        return spelled_list(traits, [this](TraitIndexValue trait) { return canonical(trait); });
     }
 
     [[nodiscard]] std::optional<std::string> dead_domain(const HandlerModel& handler, const Domain& domain) const {

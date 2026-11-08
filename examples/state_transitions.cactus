@@ -1,0 +1,71 @@
+module state_transitions
+
+use std.core
+
+# A guard's mode changes only along the arrows its state declares. Each rule
+# says which mode it leaves, with `each:` or a `match` arm, so the compiler
+# can check every move. A test sets the senses and the trap, then drives a frame.
+
+state GuardMode:
+    Idle -> Alert, Down
+    Alert -> Chasing, Idle, Down
+    Chasing -> Idle, Down
+    Down final
+
+trait Senses:
+    var noise: bool = false
+    var sees: bool = false
+
+trait Trap:
+    var victim: entity_id
+    var sprung: bool = false
+
+entity Sentry:
+    GuardMode
+    Senses
+
+entity Snare:
+    Trap
+
+# `each:` names the mode it leaves: only Idle.
+rule Hear:
+    each:
+        GuardMode.Idle
+        Senses as s
+
+    on tick:
+        if s.noise:
+            add GuardMode.Alert
+
+# Each `match` arm names the mode it leaves.
+rule React:
+    each:
+        GuardMode as mode
+        Senses as s
+    after:
+        Hear
+
+    on tick:
+        match mode:
+            GuardMode.Alert =>
+                if s.sees:
+                    add GuardMode.Chasing
+                else if not s.noise:
+                    add GuardMode.Idle
+            GuardMode.Chasing =>
+                if not s.sees:
+                    add GuardMode.Idle
+            _ =>
+                return
+
+# The victim can be in any mode, so every mode that is not final needs an arrow to Down.
+rule Spring:
+    each:
+        Trap as t
+    after:
+        React
+
+    on tick:
+        if t.sprung:
+            t.sprung = false
+            add GuardMode.Down to t.victim

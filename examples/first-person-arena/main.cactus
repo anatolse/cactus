@@ -150,7 +150,7 @@ pub trait Enemy:
 # A hunting enemy seeks the player. A hit puts it in Dying, which plays its
 # death animation and is never left.
 pub state EnemyLife:
-    Hunting
+    Hunting -> Dying
     Dying final:
         var elapsed: float = 0.0
 

@@ -175,6 +175,7 @@ add_library(cactus_frontend STATIC
     src/frontend/native_result_ordering.cpp
     src/frontend/native_field_reads.cpp
     src/frontend/ranged_fields.cpp
+    src/frontend/state_transitions.cpp
     src/frontend/relations.cpp
 )
 target_include_directories(cactus_frontend PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)

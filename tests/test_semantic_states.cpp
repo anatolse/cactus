@@ -3,6 +3,7 @@
 #include "common/error_reporter.hpp"
 #include "frontend/lexer.hpp"
 #include "frontend/parser.hpp"
+#include "frontend/program_linker.hpp"
 #include "frontend/semantic_analyzer.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -538,5 +539,564 @@ TEST_CASE("Semantic: the statement match subject diagnostic lists state slots", 
         "                b.x = 0.0\n");
     CHECK(analysis.has(
         "statement-level `match` subject must be `entity_id`, an enum, `int`, `bool` or a state slot, got `float`"));
+}
+
+// ── Transitions: declarations ───────────────────────────────────────────────
+
+TEST_CASE("Semantic: a state with arrows is accepted", "[semantic][exclusive-states][state-transitions]") {
+    const auto analysis = analyze(
+        "state Guard:\n"
+        "    Idle -> Chasing, Dying\n"
+        "    Chasing -> Attacking, Idle, Dying:\n"
+        "        let target: entity_id\n"
+        "    Attacking -> Chasing, Dying:\n"
+        "        var windup: float = 0.3\n"
+        "    Dying final:\n"
+        "        var elapsed: float = 0.0\n");
+    INFO(describe(analysis));
+    REQUIRE(analysis.clean());
+    const auto& guard = analysis.program.states.at("Guard");
+    CHECK(guard.has_arrows());
+    REQUIRE(guard.variants[1].exits.size() == 3);
+    CHECK(guard.variants[1].exits[0].variant == "Attacking");
+    CHECK(guard.variants[1].location.line > guard.variants[0].location.line);
+    CHECK_FALSE(analysis.program.states.at("EnemyMode").has_arrows());
+}
+
+TEST_CASE("Semantic: a non-final variant with no exit is rejected", "[semantic][exclusive-states][state-transitions]") {
+    const auto analysis = analyze(
+        "state Guard:\n"
+        "    Idle -> Busy\n"
+        "    Busy\n"
+        "    Gone final\n");
+    CHECK(analysis.has("variant 'Busy' of state 'Guard' has no arrow; declare its exits with `->` or mark it `final`"));
+    CHECK_FALSE(analysis.has("variant 'Gone'"));
+}
+
+TEST_CASE("Semantic: a final variant with an arrow is rejected", "[semantic][exclusive-states][state-transitions]") {
+    for (const auto* line : {"    Gone final -> Idle\n", "    Gone -> Idle final\n"}) {
+        const auto analysis = analyze(std::string("state Guard:\n    Idle -> Gone\n") + line);
+        CHECK(analysis.has("final variant 'Gone' of state 'Guard' can't declare an arrow"));
+    }
+}
+
+TEST_CASE("Semantic: a self arrow is rejected", "[semantic][exclusive-states][state-transitions]") {
+    const auto analysis = analyze(
+        "state Guard:\n"
+        "    Idle -> Idle\n");
+    CHECK(analysis.has("variant 'Idle' of state 'Guard' can't declare an arrow to itself"));
+}
+
+TEST_CASE("Semantic: an arrow to an unknown variant is rejected", "[semantic][exclusive-states][state-transitions]") {
+    const auto analysis = analyze(
+        "state Guard:\n"
+        "    Idle -> Stunned\n"
+        "    Gone final\n");
+    CHECK(analysis.has("arrow to unknown variant 'Stunned' of state 'Guard'"));
+}
+
+TEST_CASE("Semantic: a duplicate arrow is rejected", "[semantic][exclusive-states][state-transitions]") {
+    const auto analysis = analyze(
+        "state Guard:\n"
+        "    Idle -> Chasing, Chasing\n"
+        "    Chasing -> Idle\n");
+    CHECK(analysis.has("duplicate arrow to 'Chasing' from variant 'Idle' of state 'Guard'"));
+}
+
+TEST_CASE("Semantic: an arrow error points at its variant", "[semantic][exclusive-states][state-transitions]") {
+    const auto analysis = analyze(
+        "state Guard:\n"
+        "    Idle -> Idle\n");
+    const auto found = std::ranges::find_if(analysis.diagnostics, [](const Diagnostic& d) {
+        return d.message.contains("an arrow to itself");
+    });
+    REQUIRE(found != analysis.diagnostics.end());
+    CHECK(found->location.line == 1 + static_cast<int>(std::ranges::count(kPrelude, '\n')) + 2);
+}
+
+// ── Transitions: possible sources ───────────────────────────────────────────
+
+namespace {
+
+// The possible sources recorded on the handler's `add` of `variant`, by variant name.
+std::vector<std::string> sources_of(const Analysis& analysis, const std::string& rule, const std::string& variant) {
+    const auto& commands = analysis.contract(rule).commands;
+    const auto found     = std::ranges::find_if(commands, [&](const InferredHandlerCommand& command) {
+        return command.kind == HandlerCommandKind::Add && command.target == trait_id(variant);
+    });
+    REQUIRE(found != commands.end());
+    std::vector<std::string> names;
+    for (const auto& source : found->sources) {
+        names.push_back(source.variant);
+    }
+    return names;
+}
+
+using Names = std::vector<std::string>;
+
+}  // namespace
+
+TEST_CASE("Semantic: a filter narrows the source", "[semantic][exclusive-states][state-transitions]") {
+    const auto analysis = analyze(
+        "rule Spot:\n"
+        "    each:\n"
+        "        EnemyMode.Idle\n"
+        "    on tick:\n"
+        "        add EnemyMode.Chasing:\n"
+        "            target = Player\n");
+    INFO(describe(analysis));
+    REQUIRE(analysis.clean());
+    CHECK(sources_of(analysis, "Spot", "EnemyMode.Chasing") == Names{"Idle"});
+}
+
+TEST_CASE("Semantic: an unnarrowed add can leave every other non-final variant",
+          "[semantic][exclusive-states][state-transitions]") {
+    const auto analysis = analyze(
+        "rule Spot:\n"
+        "    each:\n"
+        "        EnemyMode as m\n"
+        "    on tick:\n"
+        "        add EnemyMode.Chasing:\n"
+        "            target = Player\n");
+    INFO(describe(analysis));
+    REQUIRE(analysis.clean());
+    CHECK(sources_of(analysis, "Spot", "EnemyMode.Chasing") == Names{"Idle", "Attacking"});
+    const auto& command = analysis.contract("Spot").commands.front();
+    CHECK(command.sources.front().location.line > 0);
+}
+
+TEST_CASE("Semantic: without narrows the source", "[semantic][exclusive-states][state-transitions]") {
+    const auto analysis = analyze(
+        "rule Spot:\n"
+        "    each:\n"
+        "        EnemyMode as m\n"
+        "    without:\n"
+        "        EnemyMode.Attacking\n"
+        "    on tick:\n"
+        "        add EnemyMode.Chasing:\n"
+        "            target = Player\n");
+    INFO(describe(analysis));
+    REQUIRE(analysis.clean());
+    CHECK(sources_of(analysis, "Spot", "EnemyMode.Chasing") == Names{"Idle"});
+}
+
+TEST_CASE("Semantic: a lifecycle trigger narrows the source", "[semantic][exclusive-states][state-transitions]") {
+    const auto analysis = analyze(
+        "rule Spot:\n"
+        "    on added EnemyMode.Idle:\n"
+        "        add EnemyMode.Attacking\n"
+        "rule Resume:\n"
+        "    each:\n"
+        "        EnemyMode as m\n"
+        "    on removed EnemyMode.Chasing:\n"
+        "        add EnemyMode.Idle\n");
+    INFO(describe(analysis));
+    REQUIRE(analysis.clean());
+    CHECK(sources_of(analysis, "Spot", "EnemyMode.Attacking") == Names{"Idle"});
+    CHECK(sources_of(analysis, "Resume", "EnemyMode.Idle") == Names{"Attacking"});
+}
+
+TEST_CASE("Semantic: a match arm narrows the source", "[semantic][exclusive-states][state-transitions]") {
+    const auto analysis = analyze(
+        "rule Step:\n"
+        "    each:\n"
+        "        EnemyMode as m\n"
+        "    on tick:\n"
+        "        match m:\n"
+        "            EnemyMode.Chasing as c =>\n"
+        "                add EnemyMode.Attacking\n"
+        "            EnemyMode.Idle =>\n"
+        "                add EnemyMode.Chasing:\n"
+        "                    target = Player\n"
+        "            _ =>\n"
+        "                add EnemyMode.Dying\n");
+    INFO(describe(analysis));
+    REQUIRE(analysis.clean());
+    CHECK(sources_of(analysis, "Step", "EnemyMode.Attacking") == Names{"Chasing"});
+    CHECK(sources_of(analysis, "Step", "EnemyMode.Chasing") == Names{"Idle"});
+    CHECK(sources_of(analysis, "Step", "EnemyMode.Dying") == Names{"Attacking"});
+}
+
+TEST_CASE("Semantic: sources of one add in two arms are merged", "[semantic][exclusive-states][state-transitions]") {
+    const auto analysis = analyze(
+        "rule Step:\n"
+        "    each:\n"
+        "        EnemyMode as m\n"
+        "    on tick:\n"
+        "        match m:\n"
+        "            EnemyMode.Attacking =>\n"
+        "                add EnemyMode.Dying\n"
+        "            EnemyMode.Idle =>\n"
+        "                add EnemyMode.Dying\n"
+        "            _ =>\n"
+        "                return\n");
+    INFO(describe(analysis));
+    REQUIRE(analysis.clean());
+    CHECK(sources_of(analysis, "Step", "EnemyMode.Dying") == Names{"Idle", "Attacking"});
+    const auto& sources = analysis.contract("Step").commands.front().sources;
+    CHECK(sources[0].location.line > sources[1].location.line);
+}
+
+TEST_CASE("Semantic: a pair binding narrows the source", "[semantic][exclusive-states][state-transitions]") {
+    const auto analysis = analyze(
+        "rule Retreat:\n"
+        "    pairs:\n"
+        "        actor:\n"
+        "            Body\n"
+        "            EnemyMode.Attacking\n"
+        "        other: Log\n"
+        "    on tick:\n"
+        "        add EnemyMode.Idle to actor\n");
+    INFO(describe(analysis));
+    REQUIRE(analysis.clean());
+    CHECK(sources_of(analysis, "Retreat", "EnemyMode.Idle") == Names{"Attacking"});
+}
+
+TEST_CASE("Semantic: another entity is not narrowed", "[semantic][exclusive-states][state-transitions]") {
+    const auto analysis = analyze(
+        "rule Alert:\n"
+        "    each:\n"
+        "        EnemyMode.Idle\n"
+        "    on tick:\n"
+        "        add EnemyMode.Chasing to Player:\n"
+        "            target = Player\n");
+    INFO(describe(analysis));
+    REQUIRE(analysis.clean());
+    CHECK(sources_of(analysis, "Alert", "EnemyMode.Chasing") == Names{"Idle", "Attacking"});
+}
+
+TEST_CASE("Semantic: entering a state has no source", "[semantic][exclusive-states][state-transitions]") {
+    const auto analysis = analyze(
+        "rule Wake:\n"
+        "    each:\n"
+        "        Body\n"
+        "    without:\n"
+        "        EnemyMode\n"
+        "    on tick:\n"
+        "        add EnemyMode.Attacking\n");
+    INFO(describe(analysis));
+    REQUIRE(analysis.clean());
+    CHECK(sources_of(analysis, "Wake", "EnemyMode.Attacking").empty());
+}
+
+TEST_CASE("Semantic: an extern rule add is not narrowed", "[semantic][exclusive-states][state-transitions]") {
+    const auto analysis = analyze(
+        "extern rule HostStep:\n"
+        "    each:\n"
+        "        EnemyMode.Idle\n"
+        "    on tick:\n"
+        "        commands:\n"
+        "            add EnemyMode.Attacking\n");
+    INFO(describe(analysis));
+    REQUIRE(analysis.clean());
+    const auto& handlers = analysis.program.execution_graph.handlers;
+    const auto host      = std::ranges::find_if(handlers, [](const HandlerNode& handler) {
+        return handler.identity.rule.local_name == "HostStep";
+    });
+    REQUIRE(host != handlers.end());
+    REQUIRE(host->contract.commands.size() == 1);
+    Names names;
+    for (const auto& source : host->contract.commands.front().sources) {
+        names.push_back(source.variant);
+    }
+    CHECK(names == Names{"Idle", "Chasing"});
+}
+
+// ── Transitions: the whole-program check ────────────────────────────────────
+
+namespace {
+
+const std::string kTransitionPrelude =
+    "module game\n"
+    "extern event frame:\n"
+    "    dt: float\n"
+    "phase tick:\n"
+    "    from:\n"
+    "        frame\n"
+    "trait Log:\n"
+    "    var n: int = 0\n"
+    "state Mode:\n"
+    "    Idle -> Chasing, Dying\n"
+    "    Chasing -> Attacking, Idle, Dying\n"
+    "    Attacking -> Chasing, Dying\n"
+    "    Dying final\n"
+    "entity Grunt:\n"
+    "    Mode\n"
+    "    Log\n"
+    "entity Boss:\n"
+    "    Log\n";
+
+Analysis analyze_program(const std::string& source) {
+    Analysis analysis = analyze_source(source);
+    ErrorReporter errors;
+    if (analysis.clean()) {
+        run_whole_program_passes(analysis.program, errors);
+    }
+    std::ranges::copy(errors.diagnostics(), std::back_inserter(analysis.diagnostics));
+    return analysis;
+}
+
+std::vector<std::string> transition_errors(const Analysis& analysis) {
+    std::vector<std::string> messages;
+    for (const auto& d : analysis.diagnostics) {
+        if (d.level == DiagnosticLevel::Error && d.message.contains("no arrow to")) {
+            messages.push_back(d.message);
+        }
+    }
+    return messages;
+}
+
+}  // namespace
+
+TEST_CASE("Semantic: a state without arrows is unrestricted", "[semantic][exclusive-states][state-transitions]") {
+    const auto analysis = analyze_program(
+        "module game\n"
+        "extern event frame:\n"
+        "    dt: float\n"
+        "phase tick:\n"
+        "    from:\n"
+        "        frame\n"
+        "state Door:\n"
+        "    Shut\n"
+        "    Open\n"
+        "entity Gate:\n"
+        "    Door\n"
+        "rule Flip:\n"
+        "    each:\n"
+        "        Door as d\n"
+        "    on tick:\n"
+        "        add Door.Open\n"
+        "rule Flop:\n"
+        "    each:\n"
+        "        Door as d\n"
+        "    after:\n"
+        "        Flip\n"
+        "    on tick:\n"
+        "        add Door.Shut\n");
+    INFO(describe(analysis));
+    CHECK(analysis.clean());
+}
+
+TEST_CASE("Semantic: a declared transition compiles", "[semantic][exclusive-states][state-transitions]") {
+    const auto analysis = analyze_program(kTransitionPrelude +
+                                          "rule Spot:\n"
+                                          "    each:\n"
+                                          "        Mode.Idle\n"
+                                          "    on tick:\n"
+                                          "        add Mode.Chasing\n");
+    INFO(describe(analysis));
+    CHECK(transition_errors(analysis).empty());
+}
+
+TEST_CASE("Semantic: an undeclared transition is rejected", "[semantic][exclusive-states][state-transitions]") {
+    const auto analysis = analyze_program(kTransitionPrelude +
+                                          "rule Strike:\n"
+                                          "    each:\n"
+                                          "        Mode.Idle\n"
+                                          "    on tick:\n"
+                                          "        add Mode.Attacking\n");
+    INFO(describe(analysis));
+    REQUIRE(transition_errors(analysis).size() == 1);
+    CHECK(transition_errors(analysis)[0] ==
+          "`add Mode.Attacking` can move an entity out of 'Idle', which has no arrow to 'Attacking'; narrow the "
+          "source with `each:` or a state `match` arm, or declare the arrow");
+    const auto found = std::ranges::find_if(analysis.diagnostics, [](const Diagnostic& d) {
+        return d.message.contains("no arrow to");
+    });
+    CHECK(found->location.line == 1 + static_cast<int>(std::ranges::count(kTransitionPrelude, '\n')) + 4);
+}
+
+TEST_CASE("Semantic: an unknown source needs every arrow", "[semantic][exclusive-states][state-transitions]") {
+    const auto analysis = analyze_program(kTransitionPrelude +
+                                          "rule Doom:\n"
+                                          "    each:\n"
+                                          "        Log\n"
+                                          "    on tick:\n"
+                                          "        add Mode.Dying to Grunt\n");
+    INFO(describe(analysis));
+    CHECK(transition_errors(analysis).empty());
+}
+
+TEST_CASE("Semantic: an unknown source with one missing arrow is rejected",
+          "[semantic][exclusive-states][state-transitions]") {
+    const auto analysis = analyze_program(kTransitionPrelude +
+                                          "rule Provoke:\n"
+                                          "    each:\n"
+                                          "        Log\n"
+                                          "    on tick:\n"
+                                          "        add Mode.Attacking to Grunt\n");
+    INFO(describe(analysis));
+    REQUIRE(transition_errors(analysis).size() == 1);
+    CHECK(transition_errors(analysis)[0].starts_with("`add Mode.Attacking` can move an entity out of 'Idle', which"));
+    CHECK(transition_errors(analysis)[0].contains("narrow the source"));
+}
+
+TEST_CASE("Semantic: a transition error lists every source without an arrow",
+          "[semantic][exclusive-states][state-transitions]") {
+    const auto analysis = analyze_program(kTransitionPrelude +
+                                          "rule Reset:\n"
+                                          "    each:\n"
+                                          "        Mode as m\n"
+                                          "    on tick:\n"
+                                          "        add Mode.Idle\n");
+    INFO(describe(analysis));
+    REQUIRE(transition_errors(analysis).size() == 1);
+    CHECK(transition_errors(analysis)[0].starts_with(
+        "`add Mode.Idle` can move an entity out of 'Attacking', which has no arrow to 'Idle'"));
+
+    const auto two = analyze_program(kTransitionPrelude +
+                                     "rule Strike:\n"
+                                     "    each:\n"
+                                     "        Mode as m\n"
+                                     "    without:\n"
+                                     "        Mode.Chasing\n"
+                                     "    on tick:\n"
+                                     "        add Mode.Attacking\n");
+    REQUIRE(transition_errors(two).size() == 1);
+    CHECK(transition_errors(two)[0].starts_with(
+        "`add Mode.Attacking` can move an entity out of 'Idle', which has no arrow to 'Attacking'"));
+}
+
+TEST_CASE("Semantic: entering a state with arrows is allowed", "[semantic][exclusive-states][state-transitions]") {
+    const auto analysis = analyze_program(kTransitionPrelude +
+                                          "rule Recruit:\n"
+                                          "    each:\n"
+                                          "        Log\n"
+                                          "    without:\n"
+                                          "        Mode\n"
+                                          "    on tick:\n"
+                                          "        add Mode.Attacking\n");
+    INFO(describe(analysis));
+    CHECK(transition_errors(analysis).empty());
+}
+
+TEST_CASE("Semantic: an extern rule add is checked with no narrowing", "[semantic][exclusive-states][state-transitions]") {
+    const auto analysis = analyze_program(kTransitionPrelude +
+                                          "extern rule HostStrike:\n"
+                                          "    each:\n"
+                                          "        Mode.Idle\n"
+                                          "    on tick:\n"
+                                          "        commands:\n"
+                                          "            add Mode.Attacking\n");
+    INFO(describe(analysis));
+    REQUIRE(transition_errors(analysis).size() == 1);
+    CHECK(transition_errors(analysis)[0].contains("out of 'Idle', which has no arrow to 'Attacking'"));
+}
+
+TEST_CASE("Semantic: an unreachable add is not checked", "[semantic][exclusive-states][state-transitions]") {
+    const auto analysis = analyze_program(kTransitionPrelude +
+                                          "trait Ghost\n"
+                                          "rule Haunt:\n"
+                                          "    each:\n"
+                                          "        Mode.Idle\n"
+                                          "        Ghost\n"
+                                          "    on tick:\n"
+                                          "        add Mode.Attacking\n");
+    INFO(describe(analysis));
+    CHECK(analysis.has("rule 'game.Haunt' never runs"));
+    CHECK(transition_errors(analysis).empty());
+}
+
+// ── Transitions: non-vacuity ────────────────────────────────────────────────
+
+namespace {
+
+const std::string kDoorPrelude =
+    "module game\n"
+    "extern event frame:\n"
+    "    dt: float\n"
+    "phase tick:\n"
+    "    from:\n"
+    "        frame\n"
+    "state Door:\n"
+    "    Shut -> Open\n"
+    "    Open -> Shut, Broken\n"
+    "    Broken final\n"
+    "entity Gate:\n"
+    "    Door\n"
+    "rule OpenIt:\n"
+    "    each:\n"
+    "        Door.Shut\n"
+    "    on tick:\n"
+    "        add Door.Open\n"
+    "rule ShutIt:\n"
+    "    each:\n"
+    "        Door.Open\n"
+    "    after:\n"
+    "        OpenIt\n"
+    "    on tick:\n"
+    "        add Door.Shut\n";
+
+}  // namespace
+
+TEST_CASE("Semantic: every arrow and variant in use compiles", "[semantic][exclusive-states][state-transitions]") {
+    const auto analysis = analyze_program(kDoorPrelude +
+                                          "rule BreakIt:\n"
+                                          "    each:\n"
+                                          "        Door.Open\n"
+                                          "    after:\n"
+                                          "        ShutIt\n"
+                                          "    on tick:\n"
+                                          "        add Door.Broken\n");
+    INFO(describe(analysis));
+    CHECK(analysis.clean());
+}
+
+TEST_CASE("Semantic: an unused arrow and a variant nothing enters are rejected",
+          "[semantic][exclusive-states][state-transitions]") {
+    const auto analysis = analyze_program(kDoorPrelude);
+    INFO(describe(analysis));
+    CHECK(analysis.has(
+        "arrow 'Open -> Broken' of state 'Door' is never taken: no reachable `add Door.Broken` can leave 'Open'"));
+    CHECK(analysis.has("variant 'Broken' of state 'Door' is never entered: no entity starts in it and no reachable "
+                       "`add` enters it"));
+    CHECK_FALSE(analysis.has("'Shut -> Open'"));
+    CHECK_FALSE(analysis.has("variant 'Shut'"));
+    const auto arrow = std::ranges::find_if(analysis.diagnostics, [](const Diagnostic& d) {
+        return d.message.contains("'Open -> Broken'");
+    });
+    CHECK(arrow->location.line == 9);
+    CHECK(arrow->location.column > 10);
+    const auto variant = std::ranges::find_if(analysis.diagnostics, [](const Diagnostic& d) {
+        return d.message.contains("variant 'Broken'");
+    });
+    CHECK(variant->location.line == 10);
+}
+
+TEST_CASE("Semantic: a variant nothing can enter is rejected in a state without arrows",
+          "[semantic][exclusive-states][state-transitions]") {
+    const auto analysis = analyze_program(
+        "module game\n"
+        "extern event frame:\n"
+        "    dt: float\n"
+        "phase tick:\n"
+        "    from:\n"
+        "        frame\n"
+        "state Mood:\n"
+        "    Calm\n"
+        "    Angry\n"
+        "    Stunned\n"
+        "entity Hero:\n"
+        "    Mood\n"
+        "rule Rage:\n"
+        "    each:\n"
+        "        Mood.Calm\n"
+        "    on tick:\n"
+        "        add Mood.Angry\n");
+    INFO(describe(analysis));
+    CHECK(analysis.has("variant 'Stunned' of state 'Mood' is never entered"));
+    CHECK_FALSE(analysis.has("variant 'Calm'"));
+    CHECK_FALSE(analysis.has("variant 'Angry'"));
+}
+
+TEST_CASE("Semantic: an unreached stdlib state is not an error", "[semantic][exclusive-states][state-transitions]") {
+    const auto analysis = analyze_program(
+        "module std.doors\n"
+        "pub state Door:\n"
+        "    Shut -> Open\n"
+        "    Open -> Shut, Broken\n"
+        "    Broken final\n");
+    INFO(describe(analysis));
+    CHECK(analysis.clean());
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

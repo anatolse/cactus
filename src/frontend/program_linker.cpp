@@ -7,6 +7,7 @@
 #include "frontend/pair_plans.hpp"
 #include "frontend/query_costs.hpp"
 #include "frontend/ranged_fields.hpp"
+#include "frontend/state_transitions.hpp"
 #include "frontend/symbol_identity.hpp"
 
 #include <algorithm>
@@ -356,6 +357,7 @@ void run_whole_program_passes(DecoratedProgram& program, ErrorReporter& errors) 
     finalize_pair_plans(program, errors);
     check_query_costs(program, errors);
     validate_container_traits(program, errors);
+    validate_state_transitions(program, errors);
     report_delayed_cycles(program, errors);
 }
 

@@ -313,6 +313,192 @@ state WideMode:
 entity WideCarrier:
     WideMode.V63
 
+entity WideV1:
+    WideMode.V1
+
+entity WideV2:
+    WideMode.V2
+
+entity WideV3:
+    WideMode.V3
+
+entity WideV4:
+    WideMode.V4
+
+entity WideV5:
+    WideMode.V5
+
+entity WideV6:
+    WideMode.V6
+
+entity WideV7:
+    WideMode.V7
+
+entity WideV8:
+    WideMode.V8
+
+entity WideV9:
+    WideMode.V9
+
+entity WideV10:
+    WideMode.V10
+
+entity WideV11:
+    WideMode.V11
+
+entity WideV12:
+    WideMode.V12
+
+entity WideV13:
+    WideMode.V13
+
+entity WideV14:
+    WideMode.V14
+
+entity WideV15:
+    WideMode.V15
+
+entity WideV16:
+    WideMode.V16
+
+entity WideV17:
+    WideMode.V17
+
+entity WideV18:
+    WideMode.V18
+
+entity WideV19:
+    WideMode.V19
+
+entity WideV20:
+    WideMode.V20
+
+entity WideV21:
+    WideMode.V21
+
+entity WideV22:
+    WideMode.V22
+
+entity WideV23:
+    WideMode.V23
+
+entity WideV24:
+    WideMode.V24
+
+entity WideV25:
+    WideMode.V25
+
+entity WideV26:
+    WideMode.V26
+
+entity WideV27:
+    WideMode.V27
+
+entity WideV28:
+    WideMode.V28
+
+entity WideV29:
+    WideMode.V29
+
+entity WideV30:
+    WideMode.V30
+
+entity WideV31:
+    WideMode.V31
+
+entity WideV32:
+    WideMode.V32
+
+entity WideV33:
+    WideMode.V33
+
+entity WideV34:
+    WideMode.V34
+
+entity WideV35:
+    WideMode.V35
+
+entity WideV36:
+    WideMode.V36
+
+entity WideV37:
+    WideMode.V37
+
+entity WideV38:
+    WideMode.V38
+
+entity WideV39:
+    WideMode.V39
+
+entity WideV40:
+    WideMode.V40
+
+entity WideV41:
+    WideMode.V41
+
+entity WideV42:
+    WideMode.V42
+
+entity WideV43:
+    WideMode.V43
+
+entity WideV44:
+    WideMode.V44
+
+entity WideV45:
+    WideMode.V45
+
+entity WideV46:
+    WideMode.V46
+
+entity WideV47:
+    WideMode.V47
+
+entity WideV48:
+    WideMode.V48
+
+entity WideV49:
+    WideMode.V49
+
+entity WideV50:
+    WideMode.V50
+
+entity WideV51:
+    WideMode.V51
+
+entity WideV52:
+    WideMode.V52
+
+entity WideV53:
+    WideMode.V53
+
+entity WideV54:
+    WideMode.V54
+
+entity WideV55:
+    WideMode.V55
+
+entity WideV56:
+    WideMode.V56
+
+entity WideV57:
+    WideMode.V57
+
+entity WideV58:
+    WideMode.V58
+
+entity WideV59:
+    WideMode.V59
+
+entity WideV60:
+    WideMode.V60
+
+entity WideV61:
+    WideMode.V61
+
+entity WideV62:
+    WideMode.V62
+
 rule FinishWideState:
     each:
         WideMode.V63

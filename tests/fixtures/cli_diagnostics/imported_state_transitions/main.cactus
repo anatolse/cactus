@@ -1,0 +1,34 @@
+module main
+
+use std.core
+use orders
+
+entity Unit:
+    orders.Mode
+
+rule Start:
+    each: orders.Mode.Auto
+
+    on fixed_tick:
+        add orders.Mode.Move:
+            target = Unit
+
+rule Pause:
+    each: orders.Mode.Auto
+    after: Start
+
+    on fixed_tick:
+        add orders.Mode.Hold
+
+rule Step:
+    each: orders.Mode as mode
+    after: Pause
+
+    on fixed_tick:
+        match mode:
+            orders.Mode.Move =>
+                add orders.Mode.Hold
+            orders.Mode.Hold =>
+                add orders.Mode.Auto
+            _ =>
+                return

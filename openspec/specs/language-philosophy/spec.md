@@ -459,3 +459,14 @@ An occurrence travelling along a delayed edge SHALL keep its recipient and SHALL
 #### Scenario: Teardown discards delayed occurrences
 - **WHEN** the frame loop exits while a delayed occurrence is pending
 - **THEN** no handler runs for it, before or after the unload activation
+
+### Requirement: Allowed transitions are domain facts
+A state's declared transitions SHALL be treated as a domain fact, like a field's range: they state what the model allows, which the compiler cannot derive because the handlers are what they constrain. They SHALL be optional per state. They are not proof annotations, because no correctness property of the four depends on them; they support model correctness. The compiler SHALL derive everything else about a transition, such as its possible sources.
+
+#### Scenario: A correct program needs no arrows
+- **WHEN** a state declares no transitions
+- **THEN** a program that uses it can still be correct by the four properties
+
+#### Scenario: Sources are derived, not declared
+- **WHEN** an author writes `add S.V` in a rule with `each: S.W`
+- **THEN** the author writes nothing else to say which variant the entity leaves

@@ -7,7 +7,7 @@ Exclusive states let an entity be in exactly one of a set of named variants. Eac
 ## Requirements
 
 ### Requirement: State declaration
-A `state S:` declaration SHALL declare a state `S` with one or more variants, one per indented line. A variant SHALL be a name, optionally followed by `final`, optionally followed by `:` and an indented block of field declarations with the same grammar and rules as a trait body. `pub state` SHALL export the state and all its variants. Variant names within one state SHALL be unique. A state with no variants SHALL be a compile error.
+A `state S:` declaration SHALL declare a state `S` with one or more variants, one per indented line. A variant SHALL be a name, optionally followed by `final` or by arrows (see "Variants declare their exits"), optionally followed by `:` and an indented block of field declarations with the same grammar and rules as a trait body. `pub state` SHALL export the state and all its variants. Variant names within one state SHALL be unique. A state with no variants SHALL be a compile error.
 
 ```cactus
 state EnemyMode:
@@ -169,3 +169,124 @@ A variant SHALL NOT declare a `persist` field. A variant or a state SHALL NOT be
 #### Scenario: Persist field in a variant is rejected
 - **WHEN** a variant declares `persist var elapsed: float`
 - **THEN** the semantic analyzer reports that state variants cannot declare `persist` fields
+
+### Requirement: Variants declare their exits
+A variant MAY declare `-> W1, W2, ...`, where each name is another variant of the same state, written bare. A state in which any variant has an arrow SHALL be a state with arrows. In a state with arrows, every variant that is not `final` SHALL declare at least one arrow. A `final` variant SHALL NOT declare an arrow. An arrow SHALL NOT name its own variant, an unknown variant, or the same variant twice. Each violation SHALL be a compile error at the variant.
+
+```cactus
+state EnemyMode:
+    Idle -> Chasing, Dying
+    Chasing -> Attacking, Idle, Dying:
+        let target: entity_id
+    Attacking -> Chasing, Dying:
+        var windup: float = 0.3
+    Dying final:
+        var elapsed: float = 0.0
+```
+
+#### Scenario: A state with arrows is accepted
+- **WHEN** a module declares the `EnemyMode` state above
+- **THEN** compilation succeeds
+
+#### Scenario: A state without arrows is unrestricted
+- **WHEN** a state declares no arrow and a handler adds any variant from any source
+- **THEN** no transition error is reported
+
+#### Scenario: A non-final variant with no exit is rejected
+- **WHEN** a state with arrows has a variant that is not `final` and declares no arrow
+- **THEN** the compiler reports an error at that variant that suggests `final` or an arrow
+
+#### Scenario: A final variant with an arrow is rejected
+- **WHEN** a variant is written `Dying final -> Idle` or `Dying -> Idle final`
+- **THEN** the compiler reports an error at that variant
+
+#### Scenario: A self arrow is rejected
+- **WHEN** a variant is written `Idle -> Idle`
+- **THEN** the compiler reports an error at that variant
+
+#### Scenario: An unknown target is rejected
+- **WHEN** a variant is written `Idle -> Stunned` and `Stunned` is not a variant of the state
+- **THEN** the compiler reports an error that names `Stunned`
+
+#### Scenario: A duplicate target is rejected
+- **WHEN** a variant is written `Idle -> Chasing, Chasing`
+- **THEN** the compiler reports an error that names `Chasing`
+
+### Requirement: Possible sources of a transition
+The possible sources of an `add S.V` SHALL be every variant of `S` except `V` and the `final` variants, narrowed as follows when the `add` acts on the row's own entity or on a pair binding:
+
+- a domain that requires variant `W`, including through `on added S.W` or a pair binding, leaves only `W`;
+- a `without: S.X` clause, or an `on removed S.X` trigger, removes `X`;
+- a state `match` arm on `W` leaves only `W`, and a `_` arm removes every variant named by an earlier arm.
+
+An `add` that acts on any other entity SHALL NOT be narrowed. An entity that carries no `S` enters `V` without a source, so entering is not a transition. `add` of the variant the entity is in, and `remove S`, are not transitions. A `final` variant is not a source because `add` is a no-op there.
+
+#### Scenario: A filter narrows the source
+- **WHEN** a rule has `each: EnemyMode.Idle` and adds `EnemyMode.Chasing`
+- **THEN** the only possible source is `Idle`
+
+#### Scenario: Without narrows the source
+- **WHEN** a rule has `each: EnemyMode as m`, `without: EnemyMode.Attacking`, and adds `EnemyMode.Chasing`
+- **THEN** `Attacking` is not a possible source
+
+#### Scenario: A match arm narrows the source
+- **WHEN** a state match on `m` has an arm `EnemyMode.Chasing =>` that adds `EnemyMode.Attacking` to the same entity
+- **THEN** the only possible source is `Chasing`
+
+#### Scenario: A wildcard arm narrows the source
+- **WHEN** a state match has arms for `Idle` and `Chasing`, then `_ =>` that adds `EnemyMode.Dying`
+- **THEN** `Idle` and `Chasing` are not possible sources
+
+#### Scenario: A pair binding narrows the source
+- **WHEN** a pair rule's binding `actor` requires `Order.Move`, and it runs `add Order.Auto to actor`
+- **THEN** the only possible source is `Order.Move`
+
+#### Scenario: Another entity is not narrowed
+- **WHEN** a rule has `each: EnemyMode.Idle` and runs `add EnemyMode.Chasing to Boss`
+- **THEN** every variant except `Chasing` and the final ones is a possible source
+
+### Requirement: A transition needs an arrow from every possible source
+In a state with arrows, an `add S.V` SHALL be a compile error unless every possible source has an arrow to `V`. The error SHALL name the `add` location, the variant and each source with no arrow. Its help SHALL suggest narrowing the source with `each:` or a `match` arm, or declaring the arrow. An `extern rule` that declares `add S.V` SHALL be checked with no narrowing. In every committed world, a net change of an entity from variant `W` to variant `V` of a state with arrows SHALL follow a declared arrow, unless the entity left the state with `remove S` first.
+
+#### Scenario: A declared transition compiles
+- **WHEN** a rule has `each: EnemyMode.Idle` and adds `EnemyMode.Chasing`, and `Idle` declares `-> Chasing`
+- **THEN** compilation succeeds
+
+#### Scenario: An undeclared transition is rejected
+- **WHEN** a rule has `each: EnemyMode.Idle` and adds `EnemyMode.Attacking`, and `Idle` has no arrow to `Attacking`
+- **THEN** the compiler reports an error that names `Idle`
+
+#### Scenario: An unknown source needs every arrow
+- **WHEN** a handler adds `EnemyMode.Dying` to another entity, and every non-final variant has an arrow to `Dying`
+- **THEN** compilation succeeds
+
+#### Scenario: An unknown source with one missing arrow is rejected
+- **WHEN** a handler adds `EnemyMode.Attacking` to another entity, and `Idle` has no arrow to `Attacking`
+- **THEN** the compiler reports an error that names `Idle` and suggests narrowing the source
+
+#### Scenario: A cross-module add is checked
+- **WHEN** a module adds a variant of an imported `pub state` that has arrows, and a possible source has no arrow to it
+- **THEN** the linked program reports the error
+
+#### Scenario: Entering a state is allowed
+- **WHEN** a rule has `each: Enemy`, `without: EnemyMode`, and adds any variant
+- **THEN** no transition error is reported
+
+#### Scenario: An extern rule is not narrowed
+- **WHEN** an `extern rule` with `each: EnemyMode.Idle` declares `add EnemyMode.Attacking` in `commands:`, and any non-final variant has no arrow to `Attacking`
+- **THEN** the compiler reports an error
+
+### Requirement: Declared transitions and variants must be usable
+Outside the standard library, an arrow from `W` to `V` that no reachable `add S.V` has `W` as a possible source for SHALL be a compile error at the arrow. Outside the standard library, in any state with or without arrows, a variant that no template or entity starts in and no reachable `add` can enter SHALL be a compile error at the variant. These errors enforce non-vacuity. A bare state in a template or entity body SHALL count as starting in its first variant.
+
+#### Scenario: An unused arrow is rejected
+- **WHEN** `Idle` declares `-> Dying` and no reachable `add EnemyMode.Dying` has `Idle` as a possible source
+- **THEN** the compiler reports an error at that arrow
+
+#### Scenario: A variant nothing can enter is rejected
+- **WHEN** no template starts in `Stunned` and no reachable handler adds it
+- **THEN** the compiler reports an error at `Stunned`
+
+#### Scenario: An unreached stdlib state is not an error
+- **WHEN** a stdlib state has arrows that the program never uses
+- **THEN** no error is reported

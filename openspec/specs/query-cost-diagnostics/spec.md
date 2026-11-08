@@ -5,7 +5,7 @@ Define which query shapes the compiler reports as unaccelerated, so a superlinea
 ## Requirements
 
 ### Requirement: A world scan is any call that visits every match
-A world scan SHALL be a call whose cost grows with the number of entities its filter can match: `query.all`, `query.first`, `query.count`, `query.hierarchy_preorder`, `query.hierarchy_postorder`, and the `nearest`, `overlap_*` and `raycast` queries of the physics modules. `query.exists`, `query.parent` and `query.children` SHALL NOT be world scans. A scan SHALL count as bounded when only named entities can match its filter.
+A world scan SHALL be a call whose cost grows with the number of entities its filter can match: `query.all`, `query.first`, `query.count`, `query.hierarchy_preorder`, `query.hierarchy_postorder`, and the `nearest`, `overlap_*` and `raycast` queries of the physics modules. `query.exists`, `query.parent` and `query.children` SHALL NOT be world scans. A scan SHALL count as bounded when only named entities can match its filter, or when its filter requires a `single` trait.
 
 #### Scenario: Count is a world scan
 - **WHEN** a handler calls `query.count[Unit]()` and `Unit` can be carried by spawned entities
@@ -15,9 +15,13 @@ A world scan SHALL be a call whose cost grows with the number of entities its fi
 - **WHEN** a handler calls `query.first[Session]()` and only named entities can carry `Session`
 - **THEN** the call is a bounded scan
 
+#### Scenario: A singleton filter is bounded
+- **WHEN** a handler calls `query.first[Terrain]()`, `Terrain` is declared `single`, and spawned entities carry it
+- **THEN** the call is a bounded scan
+
 ### Requirement: Superlinear scans are warned
 The compiler SHALL warn, naming the rule and the scan's source location, when an unbounded world scan runs on either of these paths:
-1. Once per row of a unary or pair pass triggered by a phase, when the pass's domain is not bounded by named entities.
+1. Once per row of a unary or pair pass triggered by a phase, when the pass's domain is not bounded by named entities or a `single` trait.
 2. Inside a `for` loop over another unbounded world scan, for any trigger.
 
 A warning SHALL be reported once per scan call. The check SHALL run on the whole linked program, because boundedness depends on every template and spawn.
@@ -43,7 +47,7 @@ A warning SHALL be reported once per scan call. The check SHALL run on the whole
 - **THEN** no warning is reported, because the rows depend on how the event is delivered
 
 ### Requirement: A full scan for a key is warned
-The compiler SHALL warn, naming the rule and the predicate, when a unary `where:` has a top-level conjunct that compares `self` or a field of a domain trait with `==` to an expression that does not read the row, and the domain is not bounded by named entities. A unary `where:` with no such conjunct SHALL NOT be warned, because one visit per row is the cost of the pass.
+The compiler SHALL warn, naming the rule and the predicate, when a unary `where:` has a top-level conjunct that compares `self` or a field of a domain trait with `==` to an expression that does not read the row, and the domain is not bounded by named entities or a `single` trait. A unary `where:` with no such conjunct SHALL NOT be warned, because one visit per row is the cost of the pass.
 
 #### Scenario: Key lookup
 - **WHEN** a rule has `each: Unit as u` and `where: u.id == W[Want].id`, and spawned entities carry `Unit`

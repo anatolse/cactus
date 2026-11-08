@@ -470,3 +470,14 @@ A state's declared transitions SHALL be treated as a domain fact, like a field's
 #### Scenario: Sources are derived, not declared
 - **WHEN** an author writes `add S.V` in a rule with `each: S.W`
 - **THEN** the author writes nothing else to say which variant the entity leaves
+
+### Requirement: A declared singleton is a domain fact
+`single trait` SHALL state what the model allows, like a field's range. It SHALL NOT be a performance control: it names no structure or strategy, and it changes what programs are legal by making a second carrier a fault. The compiler MAY use it as a size bound, because the runtime enforces it. An author SHALL NOT be required to write it, and a program without it SHALL stay correct and only keep its cost warnings.
+
+#### Scenario: A singleton is chosen for its meaning
+- **WHEN** a trait marks the one terrain of a game
+- **THEN** `single` is valid because a second terrain would be a bug, and the bound is a consequence
+
+#### Scenario: A singleton is not a tuning knob
+- **WHEN** a proposal adds a keyword that only tells the backend how to store or search data
+- **THEN** it is rejected under "Performance is a backend obligation", and `single` is no precedent for it

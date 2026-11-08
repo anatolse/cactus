@@ -218,7 +218,7 @@ An enum names values that rules only read. When rules select entities by the val
 Traits are data-only. They represent ECS-style gameplay state attached to entities.
 
 ```ebnf
-trait_decl      = [ "pub" ] "trait" IDENTIFIER
+trait_decl      = [ "pub" ] [ "single" ] "trait" IDENTIFIER
                   [ ":" NEWLINE INDENT
                     { field_decl }
                     DEDENT ] ;
@@ -263,6 +263,16 @@ trait Cell:
 A container trait gets its value only when its entity is made: from an entity or template body, a `spawn` override block, or a `children:` override block. An `add T:` or `project T:` of a container trait anywhere in the program, including an extern rule's `add` capability, is a compile error that names the trait and a ranged field that reads it. So the bounds a range reads never change. Removing a container trait or destroying its entity stays allowed and leaves values already made unchanged.
 
 A ranged value is checked whenever a value of its trait is made (§4.4, §5.3). A range is a domain fact, not a performance control; the backend may use it to choose storage.
+
+A `single` trait states that at most one live entity carries it, in every committed world. `single` is a modifier only directly before `trait`; elsewhere it is an ordinary identifier, and a state cannot be `single`.
+
+```cactus
+pub single trait Terrain
+```
+
+At a commit round, a `spawn` or `add` that would give `T` to a second entity fails: it has no effect, fires no lifecycle trigger, and reports a fault that names `T`. A failed `spawn` creates no entity, including its children, so its handle is stale. A carrier that leaves in the same round has already left, wherever its command falls: a `destroy` of it or of an owner it is destroyed with, or a `remove T`. So replacing or moving the one carrier in one round works in either command order. `add T` on the carrier itself replaces its fields like any `add`.
+
+Two handlers of one activation that can each give `T`, through `add T` or a `spawn` whose tree carries `T`, conflict and need an order (§3.8). It is a compile error for two named entities to carry `T`, for one template or entity tree to carry `T` on more than one node, and for `T` to be the target of `project` or `keep`. Restoring a save with two carriers is rejected (§7.6). A pair binding, domain or query filter that requires `T` counts as bounded to one entity in query cost diagnostics. Like a range, `single` is a domain fact, not a performance control.
 
 `persist` marks a field as durable game-save state; it carries no format, storage, or scene-survival meaning of its own — see §7.6 for what it makes eligible and how a save is produced.
 

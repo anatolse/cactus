@@ -2,6 +2,7 @@
 #include "common/ast_expressions.hpp"
 #include "common/codegen_error.hpp"
 
+#include "frontend/single_traits.hpp"
 #include "frontend/symbol_identity.hpp"
 
 #include <algorithm>
@@ -800,6 +801,26 @@ bool EnttCodegenUtils::checks_reparent(const DecoratedProgram& program) {
     return !program.hierarchy.derived || program.hierarchy.has_reparent;
 }
 
+std::vector<const ResolvedTrait*> EnttCodegenUtils::single_traits(const DecoratedProgram& program) {
+    std::vector<const ResolvedTrait*> singles;
+    for (const auto& trait : single_trait_ids(program)) {
+        singles.push_back(find_trait(program, make_canonical_id(trait)));
+    }
+    return singles;
+}
+
+std::vector<const ResolvedTrait*> EnttCodegenUtils::single_traits_of(const DecoratedProgram& program,
+                                                                     const SymbolId& archetype) {
+    auto singles = single_traits(program);
+    std::erase_if(singles, [&](const ResolvedTrait* trait) {
+        return std::ranges::none_of(program.persistence.archetypes, [&](const PersistenceArchetypeDescriptor& node) {
+            return node.node.archetype == archetype &&
+                   std::ranges::contains(node.baseline_traits, *trait->symbol_id, &PersistenceBaselineTrait::trait);
+        });
+    });
+    return singles;
+}
+
 std::string EnttCodegenUtils::hierarchy_strategy_cpp(const DecoratedProgram& program) {
     return std::string("cactus::runtime::entt_backend::HierarchyStrategy::") +
            (checks_reparent(program) ? "DepthOrder" : "CreationSweep");
@@ -931,6 +952,12 @@ const ResolvedTrait* EnttCodegenUtils::find_trait(const DecoratedProgram& progra
         }
     }
     return match;
+}
+
+const ResolvedTrait* EnttCodegenUtils::find_trait(const DecoratedProgram& program,
+                                                  const std::optional<SymbolId>& resolved,
+                                                  const std::string& spelling) {
+    return find_trait(program, resolved.has_value() ? make_canonical_id(*resolved) : spelling);
 }
 
 const ResolvedState* EnttCodegenUtils::find_state(const DecoratedProgram& program, const SymbolId& state) {

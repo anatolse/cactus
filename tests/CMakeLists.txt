@@ -280,6 +280,10 @@ add_executable(test_semantic_states test_semantic_states.cpp)
 target_link_libraries(test_semantic_states PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticStatesTests COMMAND test_semantic_states)
 
+add_executable(test_semantic_single_traits test_semantic_single_traits.cpp)
+target_link_libraries(test_semantic_single_traits PRIVATE cactus_frontend Catch2::Catch2WithMain)
+add_test(NAME SemanticSingleTraitsTests COMMAND test_semantic_single_traits)
+
 add_executable(test_semantic_let_fields test_semantic_let_fields.cpp)
 target_link_libraries(test_semantic_let_fields PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticLetFieldsTests COMMAND test_semantic_let_fields)
@@ -1184,6 +1188,18 @@ cactus_add_headless_behavior_test(test_state_transitions_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_state_transitions_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_singleton_traits_headless_behavior
+    CACTUS_SOURCE examples/singleton_traits.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_singleton_traits_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_singleton_traits_immediate_headless_behavior
+    CACTUS_SOURCE tests/fixtures/singleton_traits_immediate.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_singleton_traits_immediate_headless_behavior.cpp
+)
+
 # Real-GL visual test (example-behavior-tests capability's render-pass
 # extension): proves per-instance rendering actually holds on a real GPU,
 # which CACTUS_RAYLIB_FAKE structurally cannot exercise (see
@@ -1353,7 +1369,8 @@ cactus_add_headless_behavior_test(test_keep_evaluation_row_stage_headless_behavi
 # limits run in every build; time limits only in optimized builds
 # (`ctest --preset clang-o3-release -L perf`).
 add_custom_target(test_generated_performance_benchmarks)
-foreach(shape IN ITEMS static_keep union_fold equality_reduce grid_region row_join baseline own_projection)
+foreach(shape IN ITEMS static_keep union_fold equality_reduce grid_region row_join baseline own_projection
+        single_commit plain_commit)
     set(perf_target test_perf_${shape}_benchmark)
     cactus_add_headless_behavior_test(${perf_target}
         CACTUS_SOURCE tests/fixtures/perf/perf_${shape}.cactus

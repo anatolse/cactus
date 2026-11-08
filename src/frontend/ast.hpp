@@ -913,6 +913,7 @@ struct TraitNode {
     std::string name;
     bool is_pub    = false;
     bool is_stdlib = false;
+    bool is_single = false;  // `single trait`: at most one live entity carries it
     std::vector<FieldNode> fields;
     SourceLocation location;
     // Set on the traits semantic analysis synthesizes for a state: its variants (`S.V`) and its slot (`S`).

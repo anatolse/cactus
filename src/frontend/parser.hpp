@@ -47,6 +47,8 @@ private:
     StructNode parse_struct();
     EnumNode parse_enum();
     TraitNode parse_trait();
+    [[nodiscard]] bool at_single_modifier() const;
+    Declaration parse_single_trait(bool is_pub);
     RelationNode parse_relation(bool is_pub);
     void parse_relation_end(RelationNode& node, RelationEndNode& end, const char* label, bool& seen);
     RelationDerivationNode parse_relation_derivation(const std::string& relation);

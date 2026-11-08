@@ -1,6 +1,7 @@
 #include "frontend/archetype_reachability.hpp"
 
 #include "frontend/hierarchy_forest.hpp"
+#include "frontend/single_traits.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -15,6 +16,10 @@ namespace cactus {
 std::optional<std::size_t> named_bound(const ReachabilityFacts& facts, std::span<const SymbolId> required_traits) {
     if (!facts.derived) {
         return std::nullopt;
+    }
+    if (std::ranges::any_of(required_traits,
+                            [&](const SymbolId& trait) { return std::ranges::contains(facts.single_traits, trait); })) {
+        return 1;
     }
     std::vector<SymbolId> required;
     std::ranges::copy_if(required_traits, std::back_inserter(required), [&](const SymbolId& trait) {
@@ -490,6 +495,7 @@ public:
         for (const auto trait : widened) {
             facts.widened_traits.push_back(traits_.symbol(trait));
         }
+        facts.single_traits = single_trait_ids(*program_);
         for (std::size_t handler = 0; handler < handlers_.size(); ++handler) {
             if (!reachable_[handler]) {
                 facts.unreachable_handlers.push_back(handlers_[handler].node->identity);

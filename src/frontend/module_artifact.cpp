@@ -183,6 +183,7 @@ void ModuleArtifact::write_traits(std::ostream& out,
         write_optional_symbol_id(out, trait.symbol_id);
         write_bool(out, trait.is_pub);
         write_bool(out, trait.is_stdlib);
+        write_bool(out, trait.is_single);
         write_bool(out, trait.kept_by.has_value());
         if (trait.kept_by.has_value()) {
             write_str(out, *trait.kept_by);
@@ -1083,6 +1084,7 @@ std::unordered_map<std::string, ResolvedTrait> ModuleArtifact::read_traits(std::
         trait.symbol_id      = read_optional_symbol_id(in);
         trait.is_pub         = read_bool(in);
         trait.is_stdlib      = read_bool(in);
+        trait.is_single      = read_bool(in);
         if (read_bool(in)) {
             trait.kept_by = read_str(in);
         }

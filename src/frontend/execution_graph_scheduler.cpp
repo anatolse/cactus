@@ -1,5 +1,6 @@
 #include "frontend/execution_graph_scheduler.hpp"
 
+#include "frontend/archetype_reachability.hpp"
 #include "frontend/delivery_cycles.hpp"
 #include "frontend/native_result_ordering.hpp"
 
@@ -144,6 +145,59 @@ std::vector<std::string> command_conflicts(const HandlerContract& left, const Ha
         }
     }
     return conflicts;
+}
+
+// The single traits each handler can give to an entity, by `add` or by a
+// spawned template tree.
+using SingleGives = std::vector<std::vector<SymbolId>>;
+
+// The single traits one native function call can give; every one when the function is not known.
+std::vector<SymbolId> native_single_gives(const SymbolId& function, const SingleTraitFacts& singles) {
+    const auto* creation = native_creation(make_canonical_id(function));
+    if (creation == nullptr) {
+        return singles.traits;
+    }
+    auto given = creation->pub_templates ? singles.pub_template_traits : std::vector<SymbolId>{};
+    for (const auto& trait : singles.traits) {
+        const auto canonical = make_canonical_id(trait);
+        if (std::ranges::any_of(creation->trait_sets, [&](const auto& set) { return std::ranges::contains(set, canonical); })) {
+            given.push_back(trait);
+        }
+    }
+    return given;
+}
+
+SingleGives single_gives_by_handler(const std::vector<HandlerNode>& handlers,
+                                    const TemplateTraitLookup& templates,
+                                    const SingleTraitFacts& singles) {
+    SingleGives gives(handlers.size());
+    if (singles.traits.empty()) {
+        return gives;
+    }
+    for (std::size_t index = 0; index < handlers.size(); ++index) {
+        auto& given    = gives[index];
+        const auto add = [&](const SymbolId& trait) {
+            if (std::ranges::contains(singles.traits, trait) && !std::ranges::contains(given, trait)) {
+                given.push_back(trait);
+            }
+        };
+        const auto& contract = handlers[index].contract;
+        for (const auto& command : contract.commands) {
+            if (command.kind == HandlerCommandKind::Add && command.target.has_value()) {
+                add(*command.target);
+            }
+            if (command.kind != HandlerCommandKind::Spawn) {
+                continue;
+            }
+            // A spawn whose template is not known may give any single trait.
+            const auto tree = command.target.has_value() ? templates.find(*command.target) : templates.end();
+            std::ranges::for_each(tree == templates.end() ? singles.traits : tree->second, add);
+        }
+        for (const auto& function : contract.native_spawns) {
+            std::ranges::for_each(native_single_gives(function, singles), add);
+        }
+    }
+    return gives;
 }
 
 // Whether two executions of one handler can give different results in
@@ -308,7 +362,9 @@ struct PairConflict {
 PairConflict pair_conflict(const HandlerNode& left,
                            const HandlerNode& right,
                            const std::unordered_set<SymbolId>& left_produced,
-                           const std::unordered_set<SymbolId>& right_produced) {
+                           const std::unordered_set<SymbolId>& right_produced,
+                           const std::vector<SymbolId>& left_gives,
+                           const std::vector<SymbolId>& right_gives) {
     PairConflict conflict;
     const auto add_overlaps = [&](const HandlerNode& producer,
                                   const HandlerNode& consumer,
@@ -340,6 +396,11 @@ PairConflict pair_conflict(const HandlerNode& left,
     }
     std::ranges::sort(conflict.effects);
     conflict.commands = command_conflicts(left.contract, right.contract);
+    for (const auto& trait : left_gives) {
+        if (std::ranges::contains(right_gives, trait)) {
+            conflict.commands.push_back("single trait " + make_canonical_id(trait) + ": both give it");
+        }
+    }
     std::ranges::sort(conflict.commands);
     return conflict;
 }
@@ -385,8 +446,11 @@ std::string joined(const std::vector<std::string>& parts, std::string_view separ
 // own event consumers, which act on their effect in arrival order.
 class ConflictNodes {
 public:
-    ConflictNodes(const ExecutionGraph& graph, const std::vector<std::unordered_set<SymbolId>>& produced)
-        : produced_(&produced) {
+    ConflictNodes(const ExecutionGraph& graph,
+                  const std::vector<std::unordered_set<SymbolId>>& produced,
+                  const SingleGives& gives)
+        : produced_(&produced),
+          gives_(&gives) {
         for (const auto& handler : graph.handlers) {
             nodes_.push_back(&handler);
         }
@@ -405,6 +469,10 @@ public:
     [[nodiscard]] const std::unordered_set<SymbolId>& produced(std::size_t index) const {
         static const std::unordered_set<SymbolId> none;
         return index < produced_->size() ? (*produced_)[index] : none;
+    }
+    [[nodiscard]] const std::vector<SymbolId>& gives(std::size_t index) const {
+        static const std::vector<SymbolId> none;
+        return index < gives_->size() ? (*gives_)[index] : none;
     }
     // (producer, native consumer) for every emit of a runtime-consumed event.
     [[nodiscard]] const std::vector<std::pair<std::size_t, std::size_t>>& native_flows() const {
@@ -441,6 +509,7 @@ private:
 
     std::vector<const HandlerNode*> nodes_;
     const std::vector<std::unordered_set<SymbolId>>* produced_;
+    const SingleGives* gives_;
     std::deque<HandlerNode> native_;
     std::vector<std::pair<std::size_t, std::size_t>> native_flows_;
 };
@@ -463,10 +532,11 @@ private:
     [[nodiscard]] std::string compute(std::size_t left, std::size_t right) const {
         const auto& first  = nodes_->node(left);
         const auto& second = nodes_->node(right);
-        if (left == right && !executions_conflict(first.contract)) {
+        if (left == right && !executions_conflict(first.contract) && nodes_->gives(left).empty()) {
             return {};
         }
-        const auto conflict = pair_conflict(first, second, nodes_->produced(left), nodes_->produced(right));
+        const auto conflict = pair_conflict(
+            first, second, nodes_->produced(left), nodes_->produced(right), nodes_->gives(left), nodes_->gives(right));
         auto reasons        = conflict_reasons(first, second, conflict.fields, conflict.commands, conflict.effects);
         if (reasons.empty() && left == right) {
             reasons.emplace_back("its runs do not commute");
@@ -670,7 +740,10 @@ std::string unorientable_message(const UnorientableConflict& conflict) {
 // The single consolidated home for what used to be two independently-duplicated
 // ~250-line scheduling algorithms; see design.md D1-D5.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-bool compute_handler_schedule(ExecutionGraph& graph, const TemplateTraitLookup& templates, ErrorReporter& errors) {
+bool compute_handler_schedule(ExecutionGraph& graph,
+                              const TemplateTraitLookup& templates,
+                              const SingleTraitFacts& singles,
+                              ErrorReporter& errors) {
     std::unordered_map<HandlerIdentity, const HandlerNode*, HandlerIdentityHash> nodes;
     for (const auto& handler : graph.handlers) {
         nodes.emplace(handler.identity, &handler);
@@ -751,9 +824,10 @@ bool compute_handler_schedule(ExecutionGraph& graph, const TemplateTraitLookup& 
     };
 
     const auto produced_by_handler = precompute_produced_by_handler(graph.handlers);
+    const auto gives_by_handler    = single_gives_by_handler(graph.handlers, templates, singles);
 
     const PublicGroupOrder public_group_order(graph, produced_by_handler);
-    const ConflictNodes conflict_nodes(graph, produced_by_handler);
+    const ConflictNodes conflict_nodes(graph, produced_by_handler, gives_by_handler);
     RunConflicts run_conflicts(conflict_nodes);
     OccurrenceReach occurrence_reach(graph, conflict_nodes, run_conflicts);
     std::vector<UnorientableConflict> unorientable;
@@ -812,8 +886,12 @@ bool compute_handler_schedule(ExecutionGraph& graph, const TemplateTraitLookup& 
                 continue;
             }
 
-            auto conflict =
-                pair_conflict(left, right, produced_by_handler[left_index], produced_by_handler[right_index]);
+            auto conflict = pair_conflict(left,
+                                          right,
+                                          produced_by_handler[left_index],
+                                          produced_by_handler[right_index],
+                                          gives_by_handler[left_index],
+                                          gives_by_handler[right_index]);
             auto field_provenance = std::move(conflict.fields);
             std::vector<SymbolId> trait_provenance;
             trait_provenance.reserve(field_provenance.size());

@@ -89,7 +89,7 @@ trait RoomChoice
 pub trait TileMarker
 pub trait UnitMarker
 trait MapMarker
-pub trait MapClick
+pub single trait MapClick
 
 pub enum BarKind:
     Health
@@ -628,7 +628,9 @@ rule PlaceMinimap:
             camera.Camera as cam
             tv.WorldTransform as pose
             layers.ViewLayer as layer
-        terrain: voxel.Volume as volume
+        terrain:
+            voxel.Volume as volume
+            world.WorldVolume
     where: layer.minimap
     limit: 1 per port
 

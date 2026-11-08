@@ -1,0 +1,41 @@
+module perf_plain_commit
+
+use std.core
+
+# The same churn as perf_single_commit, with no singleton, as its baseline.
+
+trait Board:
+    let size: int = 60
+
+trait Terrain
+
+trait Mover:
+    var x: float = 0.0
+
+entity Field:
+    Board
+
+template Body():
+    Mover
+
+template Ground():
+    Terrain
+
+rule Fill:
+    on load:
+        for i in range(0, Field[Board].size * Field[Board].size):
+            spawn Body()
+        spawn Ground()
+
+rule Churn:
+    each: Mover
+    on tick:
+        destroy
+        spawn Body()
+
+rule Replace:
+    each: Terrain
+    after: Churn
+    on tick:
+        destroy
+        spawn Ground()

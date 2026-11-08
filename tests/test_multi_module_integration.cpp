@@ -950,6 +950,40 @@ TEST_CASE("integration: linked 2D editor program emits hit-test/spawn glue and 2
     fs::remove_all(build_dir, ec);
 }
 
+TEST_CASE("integration: the editor's spawn refuses a second carrier of a single trait",
+          "[integration][editor][single-traits]") {
+    auto build_dir = integration_build_dir() / "editor_single_trait";
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    const std::string source =
+        "module editor_single\n"
+        "use std.transform.flat as tf\n"
+        "use std.editor as editor\n"
+        "\n"
+        "single trait Board\n"
+        "\n"
+        "pub template Plain:\n"
+        "    tf.WorldTransform\n"
+        "\n"
+        "pub template Boarded:\n"
+        "    tf.WorldTransform\n"
+        "    Board\n";
+
+    ProgramNode merged_ast;
+    auto merged = link_with_stdlib(source, "editor_single", build_dir, merged_ast);
+    REQUIRE(merged.has_value());
+
+    const auto code = CppEnttCodegen::generate(*merged);
+
+    CHECK(code.contains("if (index == 1 && !cactus::runtime::entt_backend::admits_single_now<"
+                        "::cactus_gen::editor_single::Board>(reg, entt::entity{entt::null}, \"Board\")) "
+                        "{ return entt::entity{entt::null}; }"));
+    CHECK(!code.contains("if (index == 0 &&"));
+
+    fs::remove_all(build_dir, ec);
+}
+
 TEST_CASE("integration: a handler on a dotted cross-module event trigger resolves self and reads event fields",
           "[integration][pointer][handler-event]") {
     // Regression test for a real bug found while writing add-standard-ui's

@@ -226,6 +226,25 @@ TEST_CASE("a reachable trait set check honors unchecked traits and absent rows",
     missing.add_absent_trait("game.Gear");
     CHECK(has(validate_document(schema, std::move(missing).finish()), "game.Hero[1]", "illegal trait combination"));
 }
+TEST_CASE("a single trait admits one carrier in a restored world", "[persistence][validation][single-traits]") {
+    static constexpr std::array<std::string_view, 1> kSingle{"game.Gear"};
+    auto schema          = kSchema;
+    schema.single_traits = kSingle;
+
+    auto one = hero_builder();
+    one.add_trait("game.Gear", kLevel, gear_persisted());
+    one.add_entity(2, "game.Hero");
+    one.add_absent_trait("game.Gear");
+    CHECK(validate_document(schema, std::move(one).finish()).empty());
+
+    auto two = hero_builder();
+    two.add_trait("game.Gear", kLevel, gear_persisted());
+    two.add_entity(2, "game.Hero");
+    two.add_trait("game.Gear", kLevel, gear_persisted());
+    CHECK(has(validate_document(schema, std::move(two).finish()), "game.Hero[2]",
+              "a second entity carries single trait 'game.Gear'"));
+}
+
 // ── Relation rows (dsl-relations) ───────────────────────────────────────────
 
 namespace {

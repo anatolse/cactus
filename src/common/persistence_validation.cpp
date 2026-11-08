@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <map>
 #include <optional>
+#include <ranges>
 #include <set>
 #include <string>
 #include <string_view>
@@ -87,6 +88,7 @@ public:
         if (schema_->parents_first) {
             require_parents_first();
         }
+        validate_single_carriers();
         validate_relation_rows();
     }
 
@@ -561,6 +563,18 @@ private:
         }
         if (!record_carries(document_->entity_rows()[record], trait)) {
             report(path, std::string("the ") + end + " end does not carry '" + std::string(trait) + "'");
+        }
+    }
+
+    void validate_single_carriers() {
+        const auto rows = document_->entity_rows();
+        for (const auto trait : schema_->single_traits) {
+            const auto carries = [&](const EntityRow& row) { return record_carries(row, trait); };
+            for (const auto& row : rows | std::views::filter(carries) | std::views::drop(1)) {
+                const auto base = root(row);
+                report(PathStep{.parent = &base, .index = row.id},
+                       "a second entity carries single trait '" + std::string(trait) + "'");
+            }
         }
     }
 

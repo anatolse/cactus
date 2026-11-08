@@ -186,6 +186,9 @@ Declaration Parser::parse_declaration() {  // NOLINT(readability-function-cognit
     if (tok.type == TokenType::TRAIT) {
         return parse_trait();
     }
+    if (at_single_modifier()) {
+        return parse_single_trait(false);
+    }
     if (tok.type == TokenType::RELATION) {
         return parse_relation(false);
     }
@@ -225,6 +228,9 @@ Declaration Parser::parse_declaration() {  // NOLINT(readability-function-cognit
             auto t   = parse_trait();
             t.is_pub = true;
             return t;
+        }
+        if (at_single_modifier()) {
+            return parse_single_trait(true);
         }
         if (check(TokenType::RELATION)) {
             return parse_relation(true);
@@ -509,6 +515,27 @@ EnumNode Parser::parse_enum() {
 }
 
 // ── Trait ────────────────────────────────────────────────────────────────────
+
+// `single` is contextual: a declaration modifier only directly before `trait` or `state`.
+bool Parser::at_single_modifier() const {
+    if (!check(TokenType::IDENTIFIER) || peek().value != "single") {
+        return false;
+    }
+    const auto& next = peek_next();
+    return next.type == TokenType::TRAIT || (next.type == TokenType::IDENTIFIER && next.value == "state");
+}
+
+Declaration Parser::parse_single_trait(bool is_pub) {
+    const auto single = advance().location;
+    if (at_state_declaration()) {
+        errors_.error(single, "only a trait can be single, not a state");
+        return parse_state(is_pub);
+    }
+    auto node      = parse_trait();
+    node.is_pub    = is_pub;
+    node.is_single = true;
+    return node;
+}
 
 TraitNode Parser::parse_trait() {
     auto loc = peek().location;

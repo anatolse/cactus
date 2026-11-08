@@ -16,6 +16,7 @@ use std.camera.viewport as viewport
 use std.voxel.volume as voxel
 use game
 use robot
+use world
 
 asset SphereMesh: mesh = "models/sphere.mesh"
 asset GlowMaterial: material = "materials/glow.mat"
@@ -107,6 +108,7 @@ rule PlaceSkyBodies:
             tv.WorldTransform
         terrain:
             voxel.Volume
+            world.WorldVolume
     after:
         robot.ComposeFirstPerson
         robot.ComposeStrategy

@@ -167,6 +167,26 @@ TEST_CASE("Query costs: a named-only filter is a bounded scan", "[query-costs]")
                        "        let n = query.first[Session]()\n") == 0);
 }
 
+TEST_CASE("Query costs: a single filter is a bounded scan", "[query-costs][single-traits]") {
+    const std::string land =
+        "single trait Land\n"
+        "template Plot:\n"
+        "    Land\n"
+        "rule MakeLand:\n"
+        "    on frame:\n"
+        "        spawn Plot()\n";
+    CHECK(cost_warnings(diagnose(land + "rule R:\n"
+                                        "    each: Unit\n"
+                                        "    on tick:\n"
+                                        "        let n = query.first[Land]()\n"),
+                        "R") == 0);
+    CHECK(cost_warnings(diagnose(land + "rule R:\n"
+                                        "    each: Land\n"
+                                        "    on tick:\n"
+                                        "        let n = query.count[Unit]()\n"),
+                        "R") == 0);
+}
+
 TEST_CASE("Query costs: exists, parent and children are not world scans", "[query-costs]") {
     CHECK(warnings_for("    each: Unit\n"
                        "    on tick:\n"

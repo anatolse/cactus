@@ -71,7 +71,7 @@ input Recover: button
 # The robot's look and the last saved checkpoint of everything a save needs
 # that is not a persistent field elsewhere. The checkpoint is written only
 # while saving and applied only after loading.
-pub trait Robot:
+pub single trait Robot:
     var yaw: float = 0.0
     var pitch: float = 0.0
     persist var saved_position: vec3 = vec3(0.0, 0.0, 0.0)
@@ -82,9 +82,9 @@ pub trait Robot:
 # A camera that looks at the world, whose backdrop is the sky.
 pub trait WorldView
 
-pub trait FirstPersonView
+pub single trait FirstPersonView
 
-pub trait StrategyView:
+pub single trait StrategyView:
     var target: vec3 = vec3(0.0, 0.0, 0.0)
     var zoom: float = DEFAULT_ZOOM
 
@@ -238,7 +238,7 @@ rule AimProbe:
         voxel.probes
 
     on input:
-        probe.volume = query.first[voxel.Volume]()
+        probe.volume = query.first[world.WorldVolume]()
         probe.enabled = game.Game[game.Session].mode == game.Mode.Playing and game.Game[game.Session].camera == game.View.FirstPerson
         probe.origin = eye_of(transform.position)
         probe.direction = quat.forward(look_rotation(robot.yaw, robot.pitch))
@@ -288,7 +288,7 @@ rule ShowStrategy:
 
     on tick:
         vp.active = game.Game[game.Session].camera == game.View.Strategy
-        cut.volume = query.first[voxel.Volume]()
+        cut.volume = query.first[world.WorldVolume]()
         cut.enabled = game.Game[game.Session].cutaway
         cut.top = game.Game[game.Session].layer
 

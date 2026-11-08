@@ -56,7 +56,8 @@ void reset_quit_request() noexcept;
 // makes its command do nothing. The host reads why from this log; game code
 // only observes that nothing happened. Native code that creates entities
 // directly, bypassing commands, is not checked.
-enum class RangeFaultReason : std::uint8_t { OutOfRange, StaleContainer, MissingContainerTrait };
+// A command that would give a `single` trait a second carrier faults the same way.
+enum class RangeFaultReason : std::uint8_t { OutOfRange, StaleContainer, MissingContainerTrait, SecondCarrier };
 
 struct RangeFault {
     std::string_view trait;
@@ -1745,9 +1746,83 @@ enum class DeliveryRoute : std::uint8_t { All, ImmediateOnly, DelayedOnly };
 struct StructuralCommand {
     enum class Kind : std::uint8_t { Spawn, Destroy, Add, Remove, Set };
     Kind kind{};
-    std::function<void(entt::registry&)> apply;
     std::uint32_t component = kNoComponent;  // the delivery cycle of the handler that queued it
+    std::function<void(entt::registry&)> apply;
+    // Set only where a single trait can depart: a Destroy's entity, or a Remove's entity and trait.
+    entt::entity subject{entt::null};
+    entt::id_type removed{};
 };
+
+// Called with each commit round's commands before they apply, and with null after.
+using CommitRoundHook = void (*)(entt::registry&, const std::vector<StructuralCommand>*);
+
+class HierarchyIndex;
+
+// A `single` trait's commit round; a departure counts wherever it falls, so the check ignores command order.
+struct SingleRound {
+    entt::id_type trait{};
+    entt::entity carrier{entt::null};
+    std::vector<entt::entity> owners;  // the carrier's ancestors when the round began
+    const std::vector<StructuralCommand>* commands = nullptr;
+    std::optional<bool> departs;
+    entt::entity given{entt::null};
+    bool given_fresh = false;  // `given` is a spawned entity
+};
+
+template <typename T>
+SingleRound& single_round() noexcept {
+    static SingleRound round;
+    return round;
+}
+
+[[nodiscard]] std::vector<entt::entity> owners_of(const HierarchyIndex* hierarchy, entt::entity entity);
+
+// Starts T's round over `commands`, or ends it when `commands` is null.
+template <typename T>
+void track_single_round(entt::registry& registry,
+                        const std::vector<StructuralCommand>* commands,
+                        const HierarchyIndex* hierarchy) {
+    auto& round = single_round<T>();
+    if (commands == nullptr) {
+        round = {};
+        return;
+    }
+    count_carrier_lookup();
+    const auto view    = registry.view<T>();
+    const auto carrier = view.empty() ? entt::entity{entt::null} : *view.begin();
+    round              = SingleRound{.trait    = entt::type_hash<T>::value(),
+                                     .carrier  = carrier,
+                                     .owners   = owners_of(hierarchy, carrier),
+                                     .commands = commands};
+}
+
+// Whether `receiver` may get the trait in this round; reports a fault naming
+// `trait` when not. A `fresh` receiver is an entity the command spawns.
+[[nodiscard]] bool admits_single(SingleRound& round, entt::entity receiver, bool fresh, std::string_view trait);
+// Records that `receiver` got the trait.
+void give_single(SingleRound& round, entt::entity receiver, bool fresh);
+
+template <typename T>
+[[nodiscard]] bool admits_single(entt::entity receiver, bool fresh, std::string_view trait) {
+    return admits_single(single_round<T>(), receiver, fresh, trait);
+}
+
+template <typename T>
+void give_single(entt::entity receiver, bool fresh) {
+    give_single(single_round<T>(), receiver, fresh);
+}
+
+// Whether `receiver` may get T by a change that applies at once, outside a commit round.
+template <typename T>
+[[nodiscard]] bool admits_single_now(entt::registry& registry, entt::entity receiver, std::string_view trait) {
+    count_carrier_lookup();
+    const auto view = registry.view<T>();
+    if (view.empty() || view.contains(receiver)) {
+        return true;
+    }
+    report_range_fault(RangeFault{.trait = trait, .reason = RangeFaultReason::SecondCarrier});
+    return false;
+}
 
 // ── Exclusive states ──────────────────────────────────────────────────────────
 // A state's slot component holds `index`, the entity's current variant, and a
@@ -1844,6 +1919,7 @@ struct ActivationRuntime {
     DeliveryRoute delivery_route     = DeliveryRoute::All;
     std::uint32_t delivery_component = kNoComponent;
     bool active{};
+    CommitRoundHook commit_round = nullptr;  // set by programs with a single trait
 };
 
 // Queues a structural command (spawn/destroy/add/remove/set) to apply once the
@@ -1852,12 +1928,35 @@ struct ActivationRuntime {
 template <typename Occurrence>
 void queue_structural_command(ActivationRuntime<Occurrence>& activation,
                               StructuralCommand::Kind kind,
-                              std::function<void(entt::registry&)> apply) {
+                              std::function<void(entt::registry&)> apply,
+                              entt::entity subject  = entt::null,
+                              entt::id_type removed = {}) {
     if (!activation.active) {
         throw std::runtime_error("cactus structural command queued outside an activation");
     }
     auto& command     = activation.commands.emplace_back(StructuralCommand{.kind = kind, .apply = std::move(apply)});
     command.component = activation.current_component;
+    command.subject   = subject;
+    command.removed   = removed;
+}
+
+// Applies one commit round's commands in queue order.
+template <typename Occurrence, typename Apply>
+void apply_commit_round(ActivationRuntime<Occurrence>& activation,
+                        entt::registry& registry,
+                        std::vector<StructuralCommand>& commands,
+                        Apply apply) {
+    count_commands(commands.size());
+    const bool tracked = activation.commit_round != nullptr && !commands.empty();
+    if (tracked) {
+        activation.commit_round(registry, &commands);
+    }
+    for (auto& command : commands) {
+        apply(command);
+    }
+    if (tracked) {
+        activation.commit_round(registry, nullptr);
+    }
 }
 
 // Enqueues `occurrence` (any alternative of the program's EventOccurrence
@@ -2270,10 +2369,7 @@ void commit_activation(ActivationRuntime<Occurrence>& activation,
                   "event types (the generated EventOccurrence alias)");
     auto commands = std::move(activation.commands);
     activation.commands.clear();
-    count_commands(commands.size());
-    for (auto& command : commands) {
-        command.apply(registry);
-    }
+    apply_commit_round(activation, registry, commands, [&](StructuralCommand& command) { command.apply(registry); });
 }
 
 // With lifecycle trackers, commit runs in rounds: apply the batch, deliver its
@@ -2292,12 +2388,11 @@ void commit_activation(ActivationRuntime<Occurrence>& activation,
     while (!activation.commands.empty()) {
         auto commands = std::move(activation.commands);
         activation.commands.clear();
-        count_commands(commands.size());
         lifecycle.set_recording(true);
-        for (auto& command : commands) {
+        apply_commit_round(activation, registry, commands, [&](StructuralCommand& command) {
             lifecycle.begin_command(command.kind, command.component);
             command.apply(registry);
-        }
+        });
         lifecycle.set_recording(false);
         lifecycle.deliver(activation, registry, routes);
         drain_cascade(registry);

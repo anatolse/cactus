@@ -4455,19 +4455,20 @@ RangeFaultLog& range_fault_log() noexcept {
 }  // namespace
 
 std::string describe_range_fault(const RangeFault& fault) {
-    auto text = std::string{fault.trait} + "." + std::string{fault.field} + " = " + std::to_string(fault.value);
+    const auto write = [&] {
+        return std::string{fault.trait} + "." + std::string{fault.field} + " = " + std::to_string(fault.value);
+    };
     switch (fault.reason) {
         case RangeFaultReason::OutOfRange:
-            text += " is outside range(" + std::to_string(fault.lo) + ", " + std::to_string(fault.hi) + ")";
-            break;
+            return write() + " is outside range(" + std::to_string(fault.lo) + ", " + std::to_string(fault.hi) + ")";
         case RangeFaultReason::StaleContainer:
-            text += " reads a container that no longer exists";
-            break;
+            return write() + " reads a container that no longer exists";
         case RangeFaultReason::MissingContainerTrait:
-            text += " reads a container entity that lacks its container trait";
-            break;
+            return write() + " reads a container entity that lacks its container trait";
+        case RangeFaultReason::SecondCarrier:
+            return "single trait " + std::string{fault.trait} + " would get a second carrier";
     }
-    return text;
+    std::unreachable();
 }
 
 void report_range_fault(const RangeFault& fault) {
@@ -4478,6 +4479,71 @@ void report_range_fault(const RangeFault& fault) {
     log.faults.push_back(fault);
     ++log.count;
     std::clog << "cactus: warning: " << describe_range_fault(fault) << "; the command did nothing" << '\n';
+}
+
+std::vector<entt::entity> owners_of(const HierarchyIndex* hierarchy, entt::entity entity) {
+    std::vector<entt::entity> owners;
+    if (hierarchy == nullptr || entity == entt::null) {
+        return owners;
+    }
+    // The bound only matters for a host-made cycle.
+    for (auto owner = hierarchy->parent_of(entity); owner != entt::null && owners.size() <= hierarchy->node_count();
+         owner      = hierarchy->parent_of(owner)) {
+        owners.push_back(owner);
+    }
+    return owners;
+}
+
+namespace {
+
+bool carrier_departs(SingleRound& round) {
+    if (round.departs.has_value()) {
+        return *round.departs;
+    }
+    const auto departs = [&](const StructuralCommand& command) {
+        switch (command.kind) {
+            case StructuralCommand::Kind::Destroy:
+                return command.subject == round.carrier || std::ranges::contains(round.owners, command.subject);
+            case StructuralCommand::Kind::Remove:
+                return command.subject == round.carrier && command.removed == round.trait;
+            case StructuralCommand::Kind::Spawn:
+            case StructuralCommand::Kind::Add:
+            case StructuralCommand::Kind::Set:
+                return false;
+        }
+        std::unreachable();
+    };
+    round.departs = round.carrier != entt::null && round.commands != nullptr &&
+                    std::ranges::any_of(*round.commands, departs);
+    return *round.departs;
+}
+
+// Re-adding to a carrier that stays changes nothing about who carries the trait.
+bool readds_staying_carrier(SingleRound& round, entt::entity receiver, bool fresh) {
+    return !fresh && receiver == round.carrier && !carrier_departs(round);
+}
+
+}  // namespace
+
+bool admits_single(SingleRound& round, entt::entity receiver, bool fresh, std::string_view trait) {
+    if (readds_staying_carrier(round, receiver, fresh)) {
+        return true;
+    }
+    const bool given = round.given != entt::null && (fresh || round.given_fresh || round.given != receiver);
+    const bool held  = round.carrier != entt::null && receiver != round.carrier && !carrier_departs(round);
+    if (!given && !held) {
+        return true;
+    }
+    report_range_fault(RangeFault{.trait = trait, .reason = RangeFaultReason::SecondCarrier});
+    return false;
+}
+
+void give_single(SingleRound& round, entt::entity receiver, bool fresh) {
+    if (readds_staying_carrier(round, receiver, fresh)) {
+        return;
+    }
+    round.given       = receiver;
+    round.given_fresh = fresh;
 }
 
 bool passes_range_check(const std::optional<RangeFault>& fault) {

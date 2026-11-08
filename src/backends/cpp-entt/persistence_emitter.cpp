@@ -22,12 +22,6 @@ namespace {
 
 constexpr const char* kRuntime = "cactus::runtime::entt_backend::";
 
-const ResolvedTrait* find_resolved_trait(const DecoratedProgram& program,
-                                         const std::optional<SymbolId>& resolved,
-                                         const std::string& source_name) {
-    return EnttCodegenUtils::find_trait(program, resolved.has_value() ? make_canonical_id(*resolved) : source_name);
-}
-
 std::vector<SymbolId> symbols_of(const ResolvedTrait& declaration) {
     return declaration.symbol_id.has_value() ? std::vector{*declaration.symbol_id} : std::vector<SymbolId>{};
 }
@@ -66,7 +60,7 @@ bool EnttPersistenceEmitter::node_keeps_construction_copy(const DecoratedProgram
                                                           std::optional<std::uint32_t> node,
                                                           const std::optional<SymbolId>& resolved,
                                                           const std::string& source_name) {
-    const auto* declaration = find_resolved_trait(program, resolved, source_name);
+    const auto* declaration = EnttCodegenUtils::find_trait(program, resolved, source_name);
     return node.has_value() && declaration != nullptr && !declaration->fields.empty() &&
            ConstructionRetention(program, symbols_of(*declaration)).retains(*node, declaration->symbol_id);
 }
@@ -74,7 +68,7 @@ bool EnttPersistenceEmitter::node_keeps_construction_copy(const DecoratedProgram
 bool EnttPersistenceEmitter::structural_site_tracks_construction(const DecoratedProgram& program,
                                                                  const std::optional<SymbolId>& resolved,
                                                                  const std::string& source_name) {
-    const auto* declaration = find_resolved_trait(program, resolved, source_name);
+    const auto* declaration = EnttCodegenUtils::find_trait(program, resolved, source_name);
     return declaration != nullptr && !declaration->fields.empty() &&
            ConstructionRetention(program, symbols_of(*declaration)).retains_anywhere(declaration->symbol_id);
 }
@@ -500,6 +494,11 @@ std::string EnttPersistenceEmitter::emit_schema_descriptor(const DecoratedProgra
 
     const auto unchecked = unchecked_traits(program);
     emit_string_array(out, "generated_unchecked_traits", unchecked);
+    std::vector<std::string> singles;
+    for (const auto* trait : EnttCodegenUtils::single_traits(program)) {
+        singles.push_back(make_canonical_id(*trait->symbol_id));
+    }
+    emit_string_array(out, "generated_single_traits", singles);
     for (const auto* archetype : model.archetypes) {
         const auto node = canonical_node_string(archetype->node);
         emit_reachable_sets(out, array_name_for(node) + "_reachable", reachable_sets(program, archetype->node, unchecked));
@@ -535,6 +534,7 @@ std::string EnttPersistenceEmitter::emit_schema_descriptor(const DecoratedProgra
     out << "    .checks_trait_sets = " << (program.reachability.derived ? "true" : "false") << ",\n";
     out << "    .unchecked_traits = generated_unchecked_traits,\n";
     out << "    .parents_first = " << (EnttCodegenUtils::checks_reparent(program) ? "false" : "true") << ",\n";
+    out << "    .single_traits = generated_single_traits,\n";
     out << "};\n\n";
     out << "}  // namespace cactus::runtime::entt_backend\n\n";
     return out.str();

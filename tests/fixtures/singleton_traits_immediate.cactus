@@ -1,0 +1,31 @@
+module singleton_traits_immediate
+
+# No phases: a spawn or add applies at once, so the live registry decides
+# whether it would make a second Terrain carrier.
+
+single trait Terrain:
+    var size: int = 1
+
+trait Spare
+
+template Ground():
+    Terrain
+
+extern event poke
+
+extern event give
+
+entity First:
+    Terrain
+
+entity Other:
+    Spare
+
+rule Make:
+    on poke:
+        spawn Ground()
+
+rule Give:
+    on give:
+        add Terrain to Other:
+            size = 5

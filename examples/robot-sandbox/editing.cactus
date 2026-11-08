@@ -44,7 +44,7 @@ input CancelKey: button
 # On the robot: edit requests and the strategy-view selection.
 # start_*/end_*: the dragged corners, in cell coordinates on the current layer
 # total/solid/bedrock/robot_*: what the selection covers now
-pub trait Editor:
+pub single trait Editor:
     var build_pending: bool = false
     var target_x: int = 0
     var target_y: int = 0

@@ -58,9 +58,10 @@ template <typename Step>
     const auto before = backend::perf_counters();
     std::forward<Step>(step)();
     const auto& after = backend::perf_counters();
-    return {.commands   = after.commands - before.commands,
-                .orderings  = after.orderings - before.orderings,
-                .candidates = after.candidates - before.candidates};
+    return {.commands        = after.commands - before.commands,
+            .orderings       = after.orderings - before.orderings,
+            .candidates      = after.candidates - before.candidates,
+            .carrier_lookups = after.carrier_lookups - before.carrier_lookups};
 }
 
 // Median milliseconds per call of `step`, after a warm-up.

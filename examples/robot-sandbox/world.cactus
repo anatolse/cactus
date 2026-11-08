@@ -61,8 +61,12 @@ pub entity Generator:
 # A bedrock cell: never dug.
 pub trait Bedrock
 
+# Marks the volume of the current world.
+pub single trait WorldVolume
+
 # The volume of the current world.
 pub template Terrain(size_x: int, min_y: int, max_y: int, size_z: int, batch: int):
+    WorldVolume
     voxel.Volume:
         min_y = min_y
         max_x = size_x - 1

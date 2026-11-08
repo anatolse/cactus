@@ -88,7 +88,11 @@ pub template Worker(at: vec3):
     tv.WorldTransform:
         position = at
 
+# Marks the volume of the current world.
+pub single trait WorldVolume
+
 pub template Terrain(size: int, height: int, seed: int, robots: int, batch: int):
+    WorldVolume
     voxel.Volume:
         max_x = size - 1
         max_y = height

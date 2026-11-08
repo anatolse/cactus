@@ -2011,6 +2011,69 @@ static std::string emit_spawn_range_guard(const std::string& precheck,
     return precheck + ind + "if (!" + ok_name + ") { " + on_fail + " }\n";
 }
 
+// Skips the command unless `receiver` may get every one of `singles`, then records the gifts.
+static std::string emit_single_guard(const std::vector<const ResolvedTrait*>& singles,
+                                     const std::string& receiver,
+                                     bool fresh,
+                                     const std::string& ind) {
+    if (singles.empty()) {
+        return {};
+    }
+    std::vector<std::string> admits;
+    std::string gives;
+    for (const auto* trait : singles) {
+        const auto cpp = EnttCodegenUtils::trait_cpp_name(*trait->symbol_id);
+        admits.push_back(std::format(
+            "cactus::runtime::entt_backend::admits_single<{}>({}, {}, \"{}\")", cpp, receiver, fresh, trait->name));
+        gives += std::format(
+            "{}cactus::runtime::entt_backend::give_single<{}>({}, {});\n", ind, cpp, receiver, fresh);
+    }
+    const auto admitted = admits.size() == 1 ? admits.front() : "(" + join_strings(admits, " && ") + ")";
+    return ind + "if (!" + admitted + ") { return; }\n" + gives;
+}
+
+static const ResolvedTrait* find_single_trait(const DecoratedProgram& program,
+                                              const std::optional<SymbolId>& resolved,
+                                              const std::string& spelling) {
+    const auto* trait = EnttCodegenUtils::find_trait(program, resolved, spelling);
+    return trait != nullptr && trait->is_single ? trait : nullptr;
+}
+
+static std::string emit_single_spawn_guard(const SymbolId& template_id,
+                                           const std::string& receiver,
+                                           const std::string& ind,
+                                           const DecoratedProgram& program) {
+    return emit_single_guard(EnttCodegenUtils::single_traits_of(program, template_id), receiver, true, ind);
+}
+
+// For a change that applies at once: one check per trait that `receiver` may get it.
+static std::vector<std::string> single_now_checks(const std::vector<const ResolvedTrait*>& singles,
+                                                  const std::string& receiver) {
+    std::vector<std::string> admits;
+    admits.reserve(singles.size());
+    for (const auto* trait : singles) {
+        admits.push_back(std::format("cactus::runtime::entt_backend::admits_single_now<{}>(registry, {}, \"{}\")",
+                                     EnttCodegenUtils::trait_cpp_name(*trait->symbol_id),
+                                     receiver,
+                                     trait->name));
+    }
+    return admits;
+}
+
+// Skips an immediate spawn of `template_id` that would make a second carrier.
+static std::string emit_single_spawn_now_guard(const SymbolId& template_id,
+                                               const std::string& ind,
+                                               const std::string& on_fail,
+                                               const DecoratedProgram& program) {
+    const auto admits =
+        single_now_checks(EnttCodegenUtils::single_traits_of(program, template_id), "entt::entity{entt::null}");
+    if (admits.empty()) {
+        return {};
+    }
+    const auto refused = admits.size() == 1 ? "!" + admits.front() : "!(" + join_strings(admits, " && ") + ")";
+    return ind + "if (" + refused + ") { " + on_fail + " }\n";
+}
+
 static OverrideValue spawn_override_value(bool deferred,
                                           const std::vector<std::string>& trait_names,
                                           const DecoratedProgram& program,
@@ -2173,12 +2236,14 @@ static std::string emit_hierarchical_spawn_expansion(const SymbolId& template_id
         out << "        cactus::runtime::entt_backend::StructuralCommand::Kind::Spawn,\n";
         out << "        [=](entt::registry& registry) mutable {\n";
         out << emit_spawn_range_guard(precheck("            "), ranges_ok, "            ", "return;");
+        out << emit_single_spawn_guard(template_id, spawned_name, "            ", program);
         out << "            auto " << committed_name << " = "
             << archetype_node_create_at_function_name(tmpl_module, tmpl_local, role_path).ref() << "(registry, "
             << spawned_name << arguments << ");\n";
         out << overrides(committed_name, 3);
     } else {
         out << emit_spawn_range_guard(precheck("    "), ranges_ok, "    ", "return entt::entity{entt::null};");
+        out << emit_single_spawn_now_guard(template_id, "    ", "return entt::entity{entt::null};", program);
         out << "    auto " << spawned_name << " = "
             << archetype_node_create_function_name(tmpl_module, tmpl_local, role_path).ref() << "(registry" << arguments
             << ");\n";
@@ -2292,12 +2357,14 @@ static std::string emit_spawn_expression(const SpawnExpr& spawn,
         out << "        cactus::runtime::entt_backend::StructuralCommand::Kind::Spawn,\n";
         out << "        [=](entt::registry& registry) mutable {\n";
         out << emit_spawn_range_guard(precheck("            "), ranges_ok, "            ", "return;");
+        out << emit_single_spawn_guard(tmpl_id, spawned_name, "            ", program);
         out << "            " << template_create_at_ref(tmpl_id, program) << "(registry, " << spawned_name << arguments
             << ");\n";
         out << overrides(3);
         out << "        });\n";
     } else {
         out << emit_spawn_range_guard(precheck("    "), ranges_ok, "    ", "return entt::entity{entt::null};");
+        out << emit_single_spawn_now_guard(tmpl_id, "    ", "return entt::entity{entt::null};", program);
         out << "    auto " << spawned_name << " = " << template_create_ref(tmpl_id, program) << "(registry" << arguments
             << ");\n";
         out << overrides(1);
@@ -3445,6 +3512,7 @@ static std::string emit_spawn_stmt(const SpawnStmt& s,
         result << ind << "        cactus::runtime::entt_backend::StructuralCommand::Kind::Spawn,\n";
         result << ind << "        [=](entt::registry& registry) mutable {\n";
         result << emit_spawn_range_guard(precheck(ind + "            "), ranges_ok, ind + "            ", "return;");
+        result << emit_single_spawn_guard(tmpl_id, spawned_name, ind + "            ", program);
         result << ind << "            " << template_create_at_ref(tmpl_id, program) << "(registry, " << spawned_name
                << arguments << ");\n";
         result << overrides(indent + 3);
@@ -3452,13 +3520,18 @@ static std::string emit_spawn_stmt(const SpawnStmt& s,
     } else {
         const auto check = precheck(ind + "    ");
         result << check;
+        auto passes =
+            single_now_checks(EnttCodegenUtils::single_traits_of(program, tmpl_id), "entt::entity{entt::null}");
         if (!check.empty()) {
-            result << ind << "    if (" << ranges_ok << ") {\n";
+            passes.insert(passes.begin(), ranges_ok);
         }
-        result << ind << "    auto " << spawned_name << " = " << template_create_ref(tmpl_id, program) << "(registry"
+        if (!passes.empty()) {
+            result << ind << "    if (" << join_strings(passes, " && ") << ") {\n";
+        }
+        result << ind << "    [[maybe_unused]] auto " << spawned_name << " = " << template_create_ref(tmpl_id, program) << "(registry"
                << arguments << ");\n";
         result << overrides(indent + 1);
-        if (!check.empty()) {
+        if (!passes.empty()) {
             result << ind << "    }\n";
         }
     }
@@ -3497,6 +3570,7 @@ static std::string emit_deferred_add_write(const AddTraitStmt& s,
                                            const std::string& cpp,
                                            const std::optional<EnttCodegenUtils::StateVariant>& variant,
                                            const ResolvedTrait* ranged,
+                                           const ResolvedTrait* single,
                                            const std::string& target_name,
                                            const std::string& ind) {
     const std::string existing_name = gen_temp_name("existing", s.location);
@@ -3514,6 +3588,9 @@ static std::string emit_deferred_add_write(const AddTraitStmt& s,
     const auto value = s.args.empty() ? std::string{} : value_name;
     if (ranged != nullptr) {
         result << emit_range_check_statement(*ranged, value.empty() ? cpp + "{}" : value, "return;", ind);
+    }
+    if (single != nullptr) {
+        result << emit_single_guard({single}, target_name, false, ind);
     }
     result << ind << "::cactus_gen::detail::cancel_projected<" << cpp << ">(" << target_name << ");\n";
     result << ind << emit_trait_write(cpp, variant, target_name, value);
@@ -3563,7 +3640,7 @@ static std::string emit_immediate_ranged_add(const AddTraitStmt& s,
     return result.str();
 }
 
-static std::string emit_add_trait_stmt(const AddTraitStmt& s,
+static std::string emit_add_trait_body(const AddTraitStmt& s,
                                        int indent,
                                        const std::vector<std::string>& trait_names,
                                        const DecoratedProgram& program,
@@ -3610,7 +3687,8 @@ static std::string emit_add_trait_stmt(const AddTraitStmt& s,
                    << EnttCodegenUtils::hierarchy_index_expr(program) << ", " << target_name << ", "
                    << deferred_field_value_name(*parent) << ")) { return; }\n";
         }
-        result << emit_deferred_add_write(s, cpp, variant, ranged, target_name, ind + "            ");
+        result << emit_deferred_add_write(
+            s, cpp, variant, ranged, find_single_trait(program, s.resolved_trait_id, s.trait_name), target_name, ind + "            ");
         result << retain_line(target_name, ind + "            ");
         result << ind << "        });\n";
         result << ind << "}\n";
@@ -3655,6 +3733,28 @@ static std::string emit_add_trait_stmt(const AddTraitStmt& s,
     return result.str();
 }
 
+// Without phases an `add` applies at once, so the live registry decides whether it makes a second carrier.
+static std::string emit_add_trait_stmt(const AddTraitStmt& s,
+                                       int indent,
+                                       const std::vector<std::string>& trait_names,
+                                       const DecoratedProgram& program,
+                                       const std::unordered_set<std::string>& pointer_aliases,
+                                       const std::unordered_map<std::string, std::string>& cpp_overrides,
+                                       const PairCodegenScope* pair_scope) {
+    const auto* single = find_single_trait(program, s.resolved_trait_id, s.trait_name);
+    if (single == nullptr || !program.execution_graph.phases.empty()) {
+        return emit_add_trait_body(s, indent, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
+    }
+    const std::string ind(static_cast<size_t>(indent) * 4, ' ');
+    const std::string target =
+        s.target_expr.has_value()
+            ? rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
+            : "entity";
+    return ind + "if (" + single_now_checks({single}, target).front() + ") {\n" +
+           emit_add_trait_body(s, indent + 1, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) +
+           ind + "}\n";
+}
+
 // `remove S` leaves the state through leave_state, which also removes the current variant.
 static std::string emit_remove_state_stmt(const RemoveTraitStmt& s,
                                           const std::string& slot_cpp,
@@ -3696,13 +3796,15 @@ static std::string emit_remove_trait_stmt(const RemoveTraitStmt& s,
         return discard ? EnttPersistenceEmitter::emit_discard_construction(cpp, entity_expr, indentation)
                        : std::string{};
     };
-    if (const auto* slot = EnttCodegenUtils::find_trait(
-            program, s.resolved_trait_id.has_value() ? make_canonical_id(*s.resolved_trait_id) : s.trait_name);
-        slot != nullptr && slot->is_state_slot()) {
+    const auto* trait = EnttCodegenUtils::find_trait(program, s.resolved_trait_id, s.trait_name);
+    if (trait != nullptr && trait->is_state_slot()) {
         return emit_remove_state_stmt(s, cpp, target, ind, !program.execution_graph.phases.empty());
     }
     if (!program.execution_graph.phases.empty()) {
         const std::string target_name = gen_temp_name("target", s.location);
+        const std::string removed_single = trait != nullptr && trait->is_single
+                                               ? std::format(", {}, entt::type_hash<{}>::value()", target_name, cpp)
+                                               : std::string{};
         return ind + "{\n" + ind + "    const auto " + target_name + " = " + target + ";\n" + ind +
                "    cactus::runtime::entt_backend::generated_queue_structural_command(\n" + ind +
                "        cactus::runtime::entt_backend::StructuralCommand::Kind::Remove,\n" + ind +
@@ -3710,8 +3812,8 @@ static std::string emit_remove_trait_stmt(const RemoveTraitStmt& s,
                ")) { return; }\n" + ind + "            ::cactus_gen::detail::cancel_projected<" + cpp + ">(" +
                target_name + ");\n" + ind + "            if (registry.all_of<" + cpp + ">(" + target_name + ")) {\n" +
                ind + "                registry.remove<" + cpp + ">(" + target_name + ");\n" +
-               discard_line(target_name, ind + "                ") + ind + "            }\n" + ind + "        });\n" +
-               ind + "}\n";
+               discard_line(target_name, ind + "                ") + ind + "            }\n" + ind + "        }" +
+               removed_single + ");\n" + ind + "}\n";
     }
     if (s.target_expr.has_value()) {
         return ind + "if (registry.valid(" + target + ")) {\n" + ind + "    ::cactus_gen::detail::cancel_projected<" +
@@ -4151,7 +4253,9 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                            "        [=](entt::registry& registry) {\n" + ind + "            if (registry.valid(" +
                            target_name + ")) {\n" + ind +
                            "                ::cactus_gen::detail::cactus_destroy_entity_recursive(registry, " +
-                           target_name + ");\n" + ind + "            }\n" + ind + "        });\n" + ind + "}\n";
+                           target_name + ");\n" + ind + "            }\n" + ind + "        }" +
+                           (EnttCodegenUtils::single_traits(program).empty() ? "" : ", " + target_name) + ");\n" +
+                           ind + "}\n";
                 }
                 if (s.target_expr.has_value()) {
                     std::string target = rewrite_expr(

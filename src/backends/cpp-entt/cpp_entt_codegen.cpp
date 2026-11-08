@@ -589,7 +589,7 @@ void emit_external_destroy_capability(std::ostringstream& out,
     } else {
         out << "                cactus::runtime::entt_backend::release_entity(registry, target);\n";
     }
-    out << "            });\n";
+    out << "            }" << (EnttCodegenUtils::single_traits(program).empty() ? "" : ", target") << ");\n";
     out << "    }\n";
 }
 
@@ -1309,8 +1309,14 @@ void emit_scheduler_state_struct(std::ostringstream& out,
         out << "template <class Phase>\n";
         out << "struct PhaseDelayedQueue : DelayedQueue<EventOccurrence> {};\n\n";
     }
+    const bool singles = !EnttCodegenUtils::single_traits(program).empty();
+    if (singles) {
+        out << "void generated_single_commit_round(entt::registry& registry, const std::vector<StructuralCommand>* "
+               "commands);\n\n";
+    }
     out << "struct SchedulerState {\n";
-    out << "    ActivationRuntime<EventOccurrence> activation;\n";
+    out << "    ActivationRuntime<EventOccurrence> activation"
+        << (singles ? "{.commit_round = &generated_single_commit_round}" : "") << ";\n";
     out << "    std::tuple<" << join_strings(phases, ", ") << "> phases;\n";
     if (!delayed.empty()) {
         out << "    std::tuple<" << join_strings(delayed, ", ") << "> delayed;\n";
@@ -1373,6 +1379,45 @@ void emit_host_clock_entry_points(std::ostringstream& out, const DeliveryPlan& d
     // itself guards against the reentrant nested call this makes when it
     // delivers each outcome as its own activation.
     out << "    generated_process_persistence_boundary(registry);\n";
+    out << "}\n\n";
+}
+
+// The editor's spawn creates at once, so it checks the live registry: per
+// palette index, a refusal for each `single` trait that template's tree carries.
+std::string emit_native_spawn_single_guards(const DecoratedProgram& program) {
+    std::ostringstream out;
+    int index = 0;
+    for (const auto& decl : program.ast->declarations) {
+        const auto* tmpl = std::get_if<TemplateNode>(&decl);
+        if (tmpl == nullptr || !tmpl->is_pub) {
+            continue;
+        }
+        const auto id =
+            resolved_or_local_symbol(SymbolKind::Template, tmpl->resolved_template_id, program.module_name, tmpl->name);
+        for (const auto* trait : EnttCodegenUtils::single_traits_of(program, id)) {
+            out << "            if (index == " << index << " && !cactus::runtime::entt_backend::admits_single_now<"
+                << EnttCodegenUtils::trait_cpp_name(*trait->symbol_id) << ">(reg, entt::entity{entt::null}, \""
+                << trait->name << "\")) { return entt::entity{entt::null}; }\n";
+        }
+        ++index;
+    }
+    return out.str();
+}
+
+void emit_single_commit_round(std::ostringstream& out, const DecoratedProgram& program) {
+    const auto singles = EnttCodegenUtils::single_traits(program);
+    if (singles.empty()) {
+        return;
+    }
+    const auto hierarchy = EnttCodegenUtils::find_trait(program, "Parent") != nullptr
+                               ? "&" + EnttCodegenUtils::hierarchy_index_expr(program)
+                               : std::string{"nullptr"};
+    out << "void generated_single_commit_round(entt::registry& registry, const std::vector<StructuralCommand>* "
+           "commands) {\n";
+    for (const auto* trait : singles) {
+        out << "    track_single_round<" << EnttCodegenUtils::trait_cpp_name(*trait->symbol_id)
+            << ">(registry, commands, " << hierarchy << ");\n";
+    }
     out << "}\n\n";
 }
 
@@ -1489,9 +1534,13 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program,
     out << "}\n\n";
 
     out << "void generated_queue_structural_command(StructuralCommand::Kind kind,\n";
-    out << "                                        std::function<void(entt::registry&)> apply) {\n";
-    out << "    queue_structural_command(generated_scheduler_state().activation, kind, std::move(apply));\n";
+    out << "                                        std::function<void(entt::registry&)> apply,\n";
+    out << "                                        entt::entity subject = entt::null,\n";
+    out << "                                        entt::id_type removed = {}) {\n";
+    out << "    queue_structural_command(generated_scheduler_state().activation, kind, std::move(apply), subject, "
+           "removed);\n";
     out << "}\n\n";
+    emit_single_commit_round(out, program);
 
     // The generated_drain_event_cascade forward declaration precedes
     // generated_commit_activation, which passes it to the runtime commit.
@@ -4276,6 +4325,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
             << ") -> entt::entity {\n";
         out << "            const int index = cactus::runtime::entt_backend::editor_template_index(name);\n";
         out << "            if (index < 0) { return entt::entity{entt::null}; }\n";
+        out << emit_native_spawn_single_guards(program);
         out << "            auto entity = "
                "::cactus_gen::detail::cactus_template_registry[static_cast<std::size_t>(index)].create(reg);\n";
         // The editor places an entity at a runtime-chosen position, the same

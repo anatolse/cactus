@@ -1,0 +1,42 @@
+module perf_single_commit
+
+use std.core
+
+# Every frame each body is replaced and the one terrain is replaced, so each
+# commit round checks a singleton spawn against many commands.
+
+trait Board:
+    let size: int = 60
+
+single trait Terrain
+
+trait Mover:
+    var x: float = 0.0
+
+entity Field:
+    Board
+
+template Body():
+    Mover
+
+template Ground():
+    Terrain
+
+rule Fill:
+    on load:
+        for i in range(0, Field[Board].size * Field[Board].size):
+            spawn Body()
+        spawn Ground()
+
+rule Churn:
+    each: Mover
+    on tick:
+        destroy
+        spawn Body()
+
+rule Replace:
+    each: Terrain
+    after: Churn
+    on tick:
+        destroy
+        spawn Ground()

@@ -701,6 +701,7 @@ struct SchemaDescriptor {
     // Set when the program never reparents, so every parent was created before
     // its children; restore then rejects a child recorded before its parent.
     bool parents_first = false;
+    std::span<const std::string_view> single_traits;  // sorted; restore rejects a second carrier
 };
 
 [[nodiscard]] const TraitDescriptor* find_trait_descriptor(const SchemaDescriptor& schema, std::string_view trait);

@@ -97,6 +97,10 @@ public:
     static bool checks_reparent(const DecoratedProgram& program);
     // The propagation strategy the hierarchy facts allow.
     static std::string hierarchy_strategy_cpp(const DecoratedProgram& program);
+    // The program's `single` traits, by canonical id.
+    static std::vector<const ResolvedTrait*> single_traits(const DecoratedProgram& program);
+    // The `single` traits a template tree carries on any node, by canonical id.
+    static std::vector<const ResolvedTrait*> single_traits_of(const DecoratedProgram& program, const SymbolId& archetype);
     static std::string trait_cpp_name(const SymbolId& symbol);
     static std::string struct_cpp_name(const SymbolId& symbol);
     static std::string enum_cpp_name(const SymbolId& symbol);
@@ -140,7 +144,11 @@ public:
     // matching two traits with different canonical ids throws an internal
     // codegen error — such call sites must pass a canonical id.
     static const ResolvedTrait*  find_trait(const DecoratedProgram& program, const std::string& name);
-    static bool                  has_trait(const DecoratedProgram& program, const std::string& name);
+    // By `resolved`'s canonical id when set, else by `spelling`.
+    static const ResolvedTrait*  find_trait(const DecoratedProgram& program,
+                                            const std::optional<SymbolId>& resolved,
+                                            const std::string& spelling);
+    static bool                 has_trait(const DecoratedProgram& program, const std::string& name);
     static const ResolvedEnum*   find_enum(const DecoratedProgram& program, const std::string& simple_name);
     static const ResolvedStruct* find_struct(const DecoratedProgram& program, const std::string& simple_name);
     static const ResolvedStruct* find_struct(const DecoratedProgram& program, const SymbolId& symbol);

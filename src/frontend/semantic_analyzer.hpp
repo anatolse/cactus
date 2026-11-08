@@ -104,6 +104,7 @@ struct ResolvedTrait : CanonicalIdentity {
     std::vector<ResolvedField> fields;
     bool is_pub    = false;
     bool is_stdlib = false;
+    bool is_single = false;
     std::optional<std::string> kept_by;  // the rule whose keep clause owns this trait
     std::optional<SymbolId> state;       // set on a state's variant traits and its slot
 
@@ -956,6 +957,7 @@ struct ReachabilityFacts {
     // subset made free only to bound the analysis.
     std::vector<SymbolId> free_traits;
     std::vector<SymbolId> widened_traits;
+    std::vector<SymbolId> single_traits;                // at most one live entity carries each
     std::vector<HandlerIdentity> unreachable_handlers;  // sorted by canonical id
     bool derived = false;                               // the pass ran on this program
 

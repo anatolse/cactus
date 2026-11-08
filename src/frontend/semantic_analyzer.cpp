@@ -11,6 +11,7 @@
 #include "frontend/execution_graph_scheduler.hpp"
 #include "frontend/hierarchy_forest.hpp"
 #include "frontend/native_field_reads.hpp"
+#include "frontend/single_traits.hpp"
 #include "frontend/symbol_identity.hpp"
 
 #include <algorithm>
@@ -1673,6 +1674,7 @@ void SemanticAnalyzer::resolve_declaration_types(T& node) {
         assign_canonical_identity(rt, trait_id);
         rt.is_pub    = node.is_pub;
         rt.is_stdlib = node.is_stdlib;
+        rt.is_single = node.is_single;
         rt.state     = node.state.transform(
             [this](const std::string& state) { return make_symbol_id(SymbolKind::State, current_module_id_, state); });
         for (auto& f : node.fields) {
@@ -4875,6 +4877,10 @@ SemanticAnalyzer::KeepClauses SemanticAnalyzer::collect_keep_clauses(const Progr
             continue;
         }
         const auto& table = *rule->keep->resolved_target;
+        if (const auto* trait = find_resolved_trait(table); trait != nullptr && trait->is_single) {
+            errors_.error(rule->keep->location, "single trait '" + rule->keep->target_name + "' can't be kept");
+            continue;
+        }
         clauses.rule_tables.emplace_back(*rule->resolved_rule_id, table);
         const auto [existing, fresh] = clauses.keepers.emplace(table, rule->name);
         if (!fresh) {
@@ -7328,6 +7334,10 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
         }
         if (trait->state.has_value()) {
             errors_.error(project.location, "state variant '" + project.trait_name + "' cannot be projected");
+                return;
+            }
+            if (trait->is_single) {
+                errors_.error(project.location, "single trait '" + project.trait_name + "' can't be projected");
                 return;
             }
 
@@ -15606,7 +15616,8 @@ void SemanticAnalyzer::validate_after_clauses(ProgramNode& program) {
     // also performs the phase-barrier/event-flow construction that
     // build_dependency_graph used to do inline (see execution_graph_scheduler.hpp).
     expand_group_orderings(result_.execution_graph);
-    (void)compute_handler_schedule(result_.execution_graph, template_trait_lookup(result_.persistence), errors_);
+    (void)compute_handler_schedule(
+        result_.execution_graph, template_trait_lookup(result_.persistence), single_trait_facts(result_), errors_);
     validate_lifecycle_trigger_traits(result_.execution_graph, errors_);
 }
 

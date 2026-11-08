@@ -1,0 +1,98 @@
+module singleton_traits
+
+use std.core
+
+# One terrain at a time. A spawn or add that would make a second carrier is a
+# fault and does nothing. A carrier that leaves in the same commit round,
+# wherever its command falls, has already left.
+
+single trait Terrain:
+    var size: int = 1
+
+trait Arrived
+
+trait Spare
+
+trait Seed:
+    var made: entity_id
+
+trait Log:
+    var step: int = 0
+    var second: entity_id
+    var replaced: entity_id
+    var moved_to: entity_id
+    var holder: entity_id
+    var after_owner: entity_id
+
+template Ground():
+    Terrain
+
+template Holder():
+    Spare
+    children:
+        entity Plot:
+            Terrain
+
+entity Recorder:
+    Log
+
+entity First:
+    Terrain
+
+entity Other:
+    Spare
+
+entity SeedA:
+    Seed
+
+entity SeedB:
+    Seed
+
+entity SeedC:
+    Seed
+
+rule MarkArrival:
+    each: Terrain
+    on added Terrain:
+        add Arrived
+
+rule Advance:
+    each: Log as log
+    on tick:
+        log.step += 1
+        if log.step == 1:
+            log.second = spawn Ground()
+        if log.step == 2:
+            add Terrain to Other:
+                size = 5
+        if log.step == 3:
+            add Terrain to First:
+                size = 7
+        if log.step == 4:
+            log.replaced = spawn Ground()
+            destroy First
+        if log.step == 5:
+            destroy log.replaced
+            log.moved_to = spawn Ground()
+        if log.step == 6:
+            add Terrain to Other:
+                size = 6
+            remove Terrain from log.moved_to
+        if log.step == 7:
+            remove Terrain from Other
+            add Terrain to log.moved_to:
+                size = 8
+        if log.step == 8:
+            destroy log.moved_to
+            log.holder = spawn Holder()
+        if log.step == 9:
+            destroy log.holder
+            log.after_owner = spawn Ground()
+        if log.step == 10:
+            destroy log.after_owner
+
+rule SpawnPerRow:
+    each: Seed as seed
+    on tick:
+        if Recorder[Log].step == 11:
+            seed.made = spawn Ground()

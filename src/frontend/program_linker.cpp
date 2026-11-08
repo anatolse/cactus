@@ -7,6 +7,7 @@
 #include "frontend/pair_plans.hpp"
 #include "frontend/query_costs.hpp"
 #include "frontend/ranged_fields.hpp"
+#include "frontend/single_traits.hpp"
 #include "frontend/state_transitions.hpp"
 #include "frontend/symbol_identity.hpp"
 
@@ -304,7 +305,7 @@ bool ProgramLinker::rebuild_execution_graph(DecoratedProgram& program, bool vali
     }
 
     expand_group_orderings(graph);
-    const bool schedule_ok = compute_handler_schedule(graph, template_trait_lookup(program.persistence), errors_);
+    const bool schedule_ok = compute_handler_schedule(graph, template_trait_lookup(program.persistence), single_trait_facts(program), errors_);
     check_phase_lineage_cycles(graph.phases, errors_);
     validate_lifecycle_trigger_traits(graph, errors_);
 
@@ -358,6 +359,7 @@ void run_whole_program_passes(DecoratedProgram& program, ErrorReporter& errors) 
     check_query_costs(program, errors);
     validate_container_traits(program, errors);
     validate_state_transitions(program, errors);
+    validate_single_traits(program, errors);
     report_delayed_cycles(program, errors);
 }
 

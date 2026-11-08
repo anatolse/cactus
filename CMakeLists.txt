@@ -175,6 +175,7 @@ add_library(cactus_frontend STATIC
     src/frontend/native_result_ordering.cpp
     src/frontend/native_field_reads.cpp
     src/frontend/ranged_fields.cpp
+    src/frontend/single_traits.cpp
     src/frontend/state_transitions.cpp
     src/frontend/relations.cpp
 )

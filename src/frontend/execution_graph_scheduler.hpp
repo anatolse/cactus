@@ -20,8 +20,18 @@ namespace cactus {
 //   - handler dependency cycles (each distinct cycle reported once)
 //   - per-activation topological dependency levels
 //
+// The program's `single` traits, as the scheduler needs them.
+struct SingleTraitFacts {
+    std::vector<SymbolId> traits;               // sorted by canonical id
+    std::vector<SymbolId> pub_template_traits;  // the ones some `pub template` tree carries
+};
+
+// Two handlers that can each give one of `singles.traits` to an entity conflict.
 // Returns false if any error was reported to `errors` during scheduling.
-bool compute_handler_schedule(ExecutionGraph& graph, const TemplateTraitLookup& templates, ErrorReporter& errors);
+bool compute_handler_schedule(ExecutionGraph& graph,
+                              const TemplateTraitLookup& templates,
+                              const SingleTraitFacts& singles,
+                              ErrorReporter& errors);
 
 // Adds one ExplicitGroup edge per member handler for each of graph.group_orderings.
 // Run before compute_handler_schedule, on a module graph or on the linked program.

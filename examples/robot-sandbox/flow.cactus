@@ -106,7 +106,7 @@ rule WatchGeneration:
         game.Game[game.Session].settle = 0
         let start = robot.spawn_position(world.Generator[world.Generation].spawn_x, world.Generator[world.Generation].spawn_z, world.Generator[world.Generation].spawn_floor)
         let scale = robot.model_scale(models.bounds_size(robot.RobotModel))
-        let terrain = query.first[voxel.Volume]()
+        let terrain = query.first[world.WorldVolume]()
         spawn PlayerRobot(position = start, model_scale = scale, terrain = terrain)
         emit game.WorldReady:
             fresh = true

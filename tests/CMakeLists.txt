@@ -1370,7 +1370,7 @@ cactus_add_headless_behavior_test(test_keep_evaluation_row_stage_headless_behavi
 # (`ctest --preset clang-o3-release -L perf`).
 add_custom_target(test_generated_performance_benchmarks)
 foreach(shape IN ITEMS static_keep union_fold equality_reduce grid_region row_join baseline own_projection
-        single_commit plain_commit)
+        single_commit plain_commit sweep)
     set(perf_target test_perf_${shape}_benchmark)
     cactus_add_headless_behavior_test(${perf_target}
         CACTUS_SOURCE tests/fixtures/perf/perf_${shape}.cactus

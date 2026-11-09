@@ -1,0 +1,60 @@
+module perf_sweep
+
+use std.core
+use std.math as math
+use std.math.quat as quat
+use std.transform.volume as tv
+use std.physics.volume as physics
+
+# Each cell holds a wedge of two rotated walls and a body pressed into it, so
+# every tick sweeps against boxes and uses all three slides.
+
+const:
+    SPACING = 6.0
+    ARM = 1.5
+
+trait Crowd:
+    let size: int = 20
+
+entity Pen:
+    Crowd
+
+template Wall(position: vec3, yaw: float):
+    tv.WorldTransform:
+        position = position
+        rotation = quat.from_euler(0.0, yaw, 0.0)
+    physics.Collider
+    physics.BoxCollider:
+        size = vec3(2.0 * ARM, 3.0, 0.2)
+    physics.Solid
+
+template Walker(position: vec3):
+    tv.WorldTransform:
+        position = position
+    physics.Collider
+    physics.CapsuleCollider:
+        radius = 0.4
+        height = 2.0
+    physics.CharacterBody:
+        velocity = vec3(3.0, 0.0, 0.4)
+        grounded = true
+
+# One floor tile per cell, so the broadphase grid is sized to a cell.
+template Tile(position: vec3):
+    tv.WorldTransform:
+        position = position
+    physics.Collider
+    physics.BoxCollider:
+        size = vec3(SPACING, 1.0, SPACING)
+    physics.Solid
+
+rule Fill:
+    on load:
+        let arm = ARM * math.cos(math.radians(45.0))
+        for x in range(0, Pen[Crowd].size):
+            for z in range(0, Pen[Crowd].size):
+                let apex = vec3(SPACING * x + 3.0, 1.5, SPACING * z)
+                spawn Wall(position = apex + vec3(0.0 - arm, 0.0, arm), yaw = math.radians(45.0))
+                spawn Wall(position = apex + vec3(0.0 - arm, 0.0, 0.0 - arm), yaw = math.radians(-45.0))
+                spawn Tile(position = vec3(SPACING * x + 1.0, -0.5, SPACING * z))
+                spawn Walker(position = vec3(SPACING * x, 1.0, SPACING * z))

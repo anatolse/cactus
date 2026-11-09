@@ -16,8 +16,6 @@ namespace cactus::runtime::physics {
 namespace {
 
 constexpr Vector3 kUp{.x = 0.0F, .y = 1.0F, .z = 0.0F};
-constexpr int kMaxAdvanceSteps  = 32;
-constexpr int kMaxGjkIterations = 32;
 // Below this core distance the GJK direction is too short to trust as a normal.
 constexpr float kCoreContact = 1e-6F;
 constexpr float kTinySquared = 1e-12F;
@@ -102,6 +100,45 @@ Vector3 nearest_core_point(const ColliderShape& shape, Vector3 target) noexcept 
 }
 
 // ── GJK ─────────────────────────────────────────────────────────────────────
+// The simplex solve runs in double so its rounding stays far below the float support points'.
+
+struct Wide {
+    double x;
+    double y;
+    double z;
+};
+
+Wide wide(Vector3 v) noexcept {
+    return Wide{.x = v.x, .y = v.y, .z = v.z};
+}
+
+Vector3 narrow(Wide v) noexcept {
+    return Vector3{.x = static_cast<float>(v.x), .y = static_cast<float>(v.y), .z = static_cast<float>(v.z)};
+}
+
+Wide operator+(Wide a, Wide b) noexcept {
+    return Wide{.x = a.x + b.x, .y = a.y + b.y, .z = a.z + b.z};
+}
+
+Wide operator-(Wide a, Wide b) noexcept {
+    return Wide{.x = a.x - b.x, .y = a.y - b.y, .z = a.z - b.z};
+}
+
+Wide operator*(Wide v, double s) noexcept {
+    return Wide{.x = v.x * s, .y = v.y * s, .z = v.z * s};
+}
+
+Wide operator-(Wide v) noexcept {
+    return Wide{.x = -v.x, .y = -v.y, .z = -v.z};
+}
+
+double dot(Wide a, Wide b) noexcept {
+    return (a.x * b.x) + (a.y * b.y) + (a.z * b.z);
+}
+
+Wide cross(Wide a, Wide b) noexcept {
+    return Wide{.x = (a.y * b.z) - (a.z * b.y), .y = (a.z * b.x) - (a.x * b.z), .z = (a.x * b.y) - (a.y * b.x)};
+}
 
 struct Vertex {
     Vector3 w;  // a - b
@@ -111,10 +148,14 @@ struct Vertex {
 
 struct Simplex {
     std::array<Vertex, 4> vertices{};
-    std::array<float, 4> weights{};
+    std::array<double, 4> weights{};
     int size = 0;
 
-    void keep(std::initializer_list<std::pair<int, float>> kept) noexcept {
+    [[nodiscard]] Wide w(int index) const noexcept {
+        return wide(vertices[static_cast<std::size_t>(index)].w);
+    }
+
+    void keep(std::initializer_list<std::pair<int, double>> kept) noexcept {
         std::array<Vertex, 4> next{};
         int count = 0;
         for (const auto& [index, weight] : kept) {
@@ -126,10 +167,10 @@ struct Simplex {
         size     = count;
     }
 
-    [[nodiscard]] Vector3 point() const noexcept {
-        Vector3 sum{};
+    [[nodiscard]] Wide point() const noexcept {
+        Wide sum{};
         for (int i = 0; i < size; ++i) {
-            sum = sum + scaled(vertices[static_cast<std::size_t>(i)].w, weights[static_cast<std::size_t>(i)]);
+            sum = sum + (w(i) * weights[static_cast<std::size_t>(i)]);
         }
         return sum;
     }
@@ -144,34 +185,35 @@ Vertex minkowski_support(const ColliderShape& a, const ColliderShape& b, Vector3
 // Each reducer below keeps only the simplex feature nearest the origin, with
 // barycentric weights, following Ericson's closest-point routines.
 void reduce_segment(Simplex& simplex) noexcept {
-    const Vector3 a  = simplex.vertices[0].w;
-    const Vector3 ab = simplex.vertices[1].w - a;
-    const float denom = dot(ab, ab);
+    const Wide a       = simplex.w(0);
+    const Wide ab      = simplex.w(1) - a;
+    const double denom = dot(ab, ab);
     if (denom <= kTinySquared) {
-        simplex.keep({{0, 1.0F}});
+        simplex.keep({{0, 1.0}});
         return;
     }
-    const float t = std::clamp(-dot(a, ab) / denom, 0.0F, 1.0F);
-    if (t <= 0.0F) {
-        simplex.keep({{0, 1.0F}});
-    } else if (t >= 1.0F) {
-        simplex.keep({{1, 1.0F}});
+    const double t = std::clamp(-dot(a, ab) / denom, 0.0, 1.0);
+    if (t <= 0.0) {
+        simplex.keep({{0, 1.0}});
+    } else if (t >= 1.0) {
+        simplex.keep({{1, 1.0}});
     } else {
-        simplex.keep({{0, 1.0F - t}, {1, t}});
+        simplex.keep({{0, 1.0 - t}, {1, t}});
     }
 }
 
 // Picks whichever edge of a degenerate (collinear) triangle lies nearest the origin.
 void reduce_degenerate_triangle(Simplex& simplex) noexcept {
     Simplex best;
-    float best_distance = std::numeric_limits<float>::max();
+    double best_distance = std::numeric_limits<double>::max();
     for (const auto& [i, j] : std::array<std::pair<int, int>, 3>{{{0, 1}, {1, 2}, {0, 2}}}) {
         Simplex edge;
         edge.vertices[0] = simplex.vertices[static_cast<std::size_t>(i)];
         edge.vertices[1] = simplex.vertices[static_cast<std::size_t>(j)];
         edge.size        = 2;
         reduce_segment(edge);
-        const float distance = Vector3LengthSqr(edge.point());
+        const Wide point      = edge.point();
+        const double distance = dot(point, point);
         if (distance < best_distance) {
             best_distance = distance;
             best          = edge;
@@ -181,74 +223,73 @@ void reduce_degenerate_triangle(Simplex& simplex) noexcept {
 }
 
 void reduce_triangle(Simplex& simplex) noexcept {
-    const Vector3 a  = simplex.vertices[0].w;
-    const Vector3 b  = simplex.vertices[1].w;
-    const Vector3 c  = simplex.vertices[2].w;
-    const Vector3 ab = b - a;
-    const Vector3 ac = c - a;
-    const Vector3 ap = Vector3Negate(a);
-    const float d1   = dot(ab, ap);
-    const float d2   = dot(ac, ap);
-    if (d1 <= 0.0F && d2 <= 0.0F) {
-        simplex.keep({{0, 1.0F}});
+    const Wide a     = simplex.w(0);
+    const Wide b     = simplex.w(1);
+    const Wide c     = simplex.w(2);
+    const Wide ab    = b - a;
+    const Wide ac    = c - a;
+    const Wide ap    = -a;
+    const double d1  = dot(ab, ap);
+    const double d2  = dot(ac, ap);
+    if (d1 <= 0.0 && d2 <= 0.0) {
+        simplex.keep({{0, 1.0}});
         return;
     }
-    const Vector3 bp = Vector3Negate(b);
-    const float d3   = dot(ab, bp);
-    const float d4   = dot(ac, bp);
-    if (d3 >= 0.0F && d4 <= d3) {
-        simplex.keep({{1, 1.0F}});
+    const Wide bp   = -b;
+    const double d3 = dot(ab, bp);
+    const double d4 = dot(ac, bp);
+    if (d3 >= 0.0 && d4 <= d3) {
+        simplex.keep({{1, 1.0}});
         return;
     }
-    const float vc = (d1 * d4) - (d3 * d2);
-    if (vc <= 0.0F && d1 >= 0.0F && d3 <= 0.0F) {
-        const float v = d1 / (d1 - d3);
-        simplex.keep({{0, 1.0F - v}, {1, v}});
+    const double vc = (d1 * d4) - (d3 * d2);
+    if (vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0) {
+        const double v = d1 / (d1 - d3);
+        simplex.keep({{0, 1.0 - v}, {1, v}});
         return;
     }
-    const Vector3 cp = Vector3Negate(c);
-    const float d5   = dot(ab, cp);
-    const float d6   = dot(ac, cp);
-    if (d6 >= 0.0F && d5 <= d6) {
-        simplex.keep({{2, 1.0F}});
+    const Wide cp   = -c;
+    const double d5 = dot(ab, cp);
+    const double d6 = dot(ac, cp);
+    if (d6 >= 0.0 && d5 <= d6) {
+        simplex.keep({{2, 1.0}});
         return;
     }
-    const float vb = (d5 * d2) - (d1 * d6);
-    if (vb <= 0.0F && d2 >= 0.0F && d6 <= 0.0F) {
-        const float w = d2 / (d2 - d6);
-        simplex.keep({{0, 1.0F - w}, {2, w}});
+    const double vb = (d5 * d2) - (d1 * d6);
+    if (vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0) {
+        const double w = d2 / (d2 - d6);
+        simplex.keep({{0, 1.0 - w}, {2, w}});
         return;
     }
-    const float va = (d3 * d6) - (d5 * d4);
-    if (va <= 0.0F && (d4 - d3) >= 0.0F && (d5 - d6) >= 0.0F) {
-        const float w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
-        simplex.keep({{1, 1.0F - w}, {2, w}});
+    const double va = (d3 * d6) - (d5 * d4);
+    if (va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0) {
+        const double w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        simplex.keep({{1, 1.0 - w}, {2, w}});
         return;
     }
-    const float sum = va + vb + vc;
+    const double sum = va + vb + vc;
     if (sum <= kTinySquared) {
         reduce_degenerate_triangle(simplex);
         return;
     }
-    const float v = vb / sum;
-    const float w = vc / sum;
-    simplex.keep({{0, 1.0F - v - w}, {1, v}, {2, w}});
+    const double v = vb / sum;
+    const double w = vc / sum;
+    simplex.keep({{0, 1.0 - v - w}, {1, v}, {2, w}});
 }
 
 // Returns false when the origin lies inside the tetrahedron.
 bool reduce_tetrahedron(Simplex& simplex) noexcept {
     static constexpr std::array<std::array<int, 4>, 4> kFaces{{{0, 1, 2, 3}, {0, 2, 3, 1}, {0, 3, 1, 2}, {1, 3, 2, 0}}};
     Simplex best;
-    float best_distance = std::numeric_limits<float>::max();
-    bool outside_any    = false;
+    double best_distance = std::numeric_limits<double>::max();
+    bool outside_any     = false;
     for (const auto& face : kFaces) {
-        const Vector3 a      = simplex.vertices[static_cast<std::size_t>(face[0])].w;
-        const Vector3 normal = Vector3CrossProduct(simplex.vertices[static_cast<std::size_t>(face[1])].w - a,
-                                                   simplex.vertices[static_cast<std::size_t>(face[2])].w - a);
-        const float origin_side   = dot(Vector3Negate(a), normal);
-        const float opposite_side = dot(simplex.vertices[static_cast<std::size_t>(face[3])].w - a, normal);
-        const bool degenerate     = std::abs(opposite_side) <= kTinySquared;
-        if (!degenerate && origin_side * opposite_side >= 0.0F) {
+        const Wide a                = simplex.w(face[0]);
+        const Wide normal           = cross(simplex.w(face[1]) - a, simplex.w(face[2]) - a);
+        const double origin_side    = dot(-a, normal);
+        const double opposite_side  = dot(simplex.w(face[3]) - a, normal);
+        const bool degenerate       = std::abs(opposite_side) <= kTinySquared;
+        if (!degenerate && origin_side * opposite_side >= 0.0) {
             continue;
         }
         outside_any = true;
@@ -258,7 +299,8 @@ bool reduce_tetrahedron(Simplex& simplex) noexcept {
         }
         triangle.size = 3;
         reduce_triangle(triangle);
-        const float distance = Vector3LengthSqr(triangle.point());
+        const Wide point      = triangle.point();
+        const double distance = dot(point, point);
         if (distance < best_distance) {
             best_distance = distance;
             best          = triangle;
@@ -275,7 +317,7 @@ bool reduce_tetrahedron(Simplex& simplex) noexcept {
 bool reduce(Simplex& simplex) noexcept {
     switch (simplex.size) {
         case 1:
-            simplex.weights[0] = 1.0F;
+            simplex.weights[0] = 1.0;
             return true;
         case 2:
             reduce_segment(simplex);
@@ -438,6 +480,12 @@ std::optional<Vector3> single_box_face(const ColliderShape& box, Vector3 point) 
     return faces == 1 ? found : std::nullopt;
 }
 
+// A zero-thickness box has two opposite faces at every point; keep one facing `outward`.
+Vector3 facing_box_face(const ColliderShape& box, Vector3 point, Vector3 outward) noexcept {
+    const auto face = single_box_face(box, point);
+    return face.has_value() && dot(*face, outward) > 0.0F ? *face : outward;
+}
+
 // The box face containing `point` that `delta` meets head-on; with no motion,
 // the face closest to `normal`.
 Vector3 box_surface(const ColliderShape& box, Vector3 point, Vector3 normal, Vector3 delta) noexcept {
@@ -468,7 +516,7 @@ bool layers_collide(const ColliderShape& subject, const ColliderShape& target) n
     return (subject.mask & target.layer) != 0;
 }
 
-SweepResult sweep_shapes(const ColliderShape& subject, Vector3 delta, const ColliderShape& target) noexcept {
+SweepResult sweep_shapes(const ColliderShape& subject, Vector3 delta, const ColliderShape& target, int max_steps) noexcept {
     ColliderShape moving = subject;
     float t              = 0.0F;
     Separation gap;
@@ -480,7 +528,7 @@ SweepResult sweep_shapes(const ColliderShape& subject, Vector3 delta, const Coll
                            .surface = surface_normal(target, gap.point, gap.normal, delta),
                            .steps   = steps};
     };
-    for (int step = 1; step <= kMaxAdvanceSteps; ++step) {
+    for (int step = 1; step <= max_steps; ++step) {
         moving.center = subject.center + scaled(delta, t);
         gap           = separation(moving, target);
         const float closing = -dot(delta, gap.normal);
@@ -498,7 +546,7 @@ SweepResult sweep_shapes(const ColliderShape& subject, Vector3 delta, const Coll
             return SweepResult{.steps = step};
         }
     }
-    return hit_at(kMaxAdvanceSteps);
+    return hit_at(max_steps);
 }
 
 Bounds bounds_around(Vector3 center, Vector3 extent) noexcept {
@@ -530,55 +578,83 @@ ColliderShape capsule_shape(Vector3 center, float radius, float height, int laye
                          .mask         = mask};
 }
 
-CoreDistance core_distance(const ColliderShape& a, const ColliderShape& b) noexcept {
+CoreDistance core_distance(const ColliderShape& a, const ColliderShape& b, int max_iterations) noexcept {
     Vector3 direction = a.center - b.center;
     if (Vector3LengthSqr(direction) <= kTinySquared) {
         direction = unit_axis(0);
     }
     Simplex simplex;
     simplex.vertices[0] = minkowski_support(a, b, direction);
-    simplex.weights[0]  = 1.0F;
+    simplex.weights[0]  = 1.0;
     simplex.size        = 1;
-    Vector3 closest     = simplex.vertices[0].w;
-    bool overlap        = false;
-    for (int iteration = 0; iteration < kMaxGjkIterations; ++iteration) {
-        const float distance_sq = Vector3LengthSqr(closest);
+    Wide closest        = simplex.w(0);
+    enum class Stop : std::uint8_t { Limit, Overlap, Settled };
+    Stop stop      = Stop::Limit;
+    int iterations = 0;
+    while (iterations < max_iterations) {
+        ++iterations;
+        const double distance_sq = dot(closest, closest);
         if (distance_sq <= kTinySquared) {
-            overlap = true;
+            stop = Stop::Overlap;
             break;
         }
-        const Vertex next = minkowski_support(a, b, Vector3Negate(closest));
-        if (distance_sq - dot(closest, next.w) <= kGjkRelativeTolerance * distance_sq || contains_vertex(simplex, next.w)) {
+        const Vertex next = minkowski_support(a, b, narrow(-closest));
+        if (distance_sq - dot(closest, wide(next.w)) <= kGjkRelativeTolerance * distance_sq || contains_vertex(simplex, next.w)) {
+            stop = Stop::Settled;
             break;
         }
+        const Simplex previous = simplex;
         simplex.vertices[static_cast<std::size_t>(simplex.size)] = next;
         ++simplex.size;
         if (!reduce(simplex)) {
-            overlap = true;
+            stop = Stop::Overlap;
             break;
         }
-        closest = simplex.point();
+        const Wide nearer = simplex.point();
+        // Rounding can stop the distance from shrinking; the previous simplex is then the answer.
+        if (dot(nearer, nearer) >= distance_sq) {
+            simplex = previous;
+            stop    = Stop::Settled;
+            break;
+        }
+        closest = nearer;
     }
-    CoreDistance result{.overlap = overlap};
+    CoreDistance result{.overlap = stop == Stop::Overlap, .iterations = iterations, .limited = stop == Stop::Limit};
+    Wide on_a{};
+    Wide on_b{};
     for (int i = 0; i < simplex.size; ++i) {
         const auto index = static_cast<std::size_t>(i);
-        result.on_a      = result.on_a + scaled(simplex.vertices[index].a, simplex.weights[index]);
-        result.on_b      = result.on_b + scaled(simplex.vertices[index].b, simplex.weights[index]);
+        on_a             = on_a + (wide(simplex.vertices[index].a) * simplex.weights[index]);
+        on_b             = on_b + (wide(simplex.vertices[index].b) * simplex.weights[index]);
     }
-    result.distance = overlap ? 0.0F : Vector3Length(closest);
+    result.on_a = narrow(on_a);
+    result.on_b = narrow(on_b);
+    if (result.overlap) {
+        return result;
+    }
+    const double distance = std::sqrt(dot(closest, closest));
+    if (!result.limited || distance <= 0.0) {
+        result.distance = static_cast<float>(distance);
+        return result;
+    }
+    // The plane through the support point facing the origin bounds the true distance from below.
+    const Vertex next = minkowski_support(a, b, narrow(-closest));
+    result.distance   = static_cast<float>(std::max(0.0, dot(closest, wide(next.w)) / distance));
     return result;
 }
 
 Separation separation(const ColliderShape& a, const ColliderShape& b) noexcept {
     const CoreDistance cores = core_distance(a, b);
     const float radii        = a.radius + b.radius;
-    if (!cores.overlap && cores.distance > kCoreContact) {
+    const Vector3 between    = cores.on_a - cores.on_b;
+    const float span         = Vector3Length(between);
+    if (!cores.overlap && span > kCoreContact) {
         // On a box face the face normal is exact; GJK's closest points carry small tilts.
-        Vector3 normal = scaled(cores.on_a - cores.on_b, 1.0F / cores.distance);
+        Vector3 normal = scaled(between, 1.0F / span);
         if (b.kind == ShapeKind::Box) {
-            normal = single_box_face(b, cores.on_b).value_or(normal);
+            normal = facing_box_face(b, cores.on_b, normal);
         } else if (a.kind == ShapeKind::Box) {
-            normal = Vector3Negate(single_box_face(a, cores.on_a).value_or(Vector3Negate(normal)));
+            normal = Vector3Negate(facing_box_face(a, cores.on_a, Vector3Negate(normal)));
         }
         return Separation{
             .distance = cores.distance - radii, .normal = normal, .point = cores.on_b + scaled(normal, b.radius)};
@@ -603,11 +679,12 @@ bool touching(const std::optional<ColliderShape>& subject,
 SweepResult sweep(const std::optional<ColliderShape>& subject,
                   Vector3 delta,
                   const std::optional<ColliderShape>& target,
-                  bool same_entity) noexcept {
+                  bool same_entity,
+                  int max_steps) noexcept {
     if (same_entity || !subject.has_value() || !target.has_value() || !layers_collide(*subject, *target)) {
         return sweep_miss();
     }
-    return sweep_shapes(*subject, delta, *target);
+    return sweep_shapes(*subject, delta, *target, max_steps);
 }
 
 Vector3 push_out(const std::optional<ColliderShape>& subject,

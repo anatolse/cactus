@@ -15,6 +15,7 @@ namespace {
 
 using Body      = cactus_gen::stdlib::physics::volume::CharacterBody;
 using Transform = cactus_gen::stdlib::transform::volume::WorldTransform;
+using cactus::runtime::physics::kSkin;
 
 constexpr float kDt    = 1.0F / 60.0F;
 constexpr float kRest  = 1.0F;
@@ -208,6 +209,62 @@ TEST_CASE("a corner stops the body without jitter", "[runtime][codegen-entt][std
     world.tick(10);
     CHECK(world.position(runner).x == near(rest.x, 1e-6));
     CHECK(world.position(runner).z == near(rest.z, 1e-6));
+}
+
+// ── Slide limit ─────────────────────────────────────────────────────────────
+
+TEST_CASE("a convex corner stops the body with no overlap", "[runtime][codegen-entt][stdlib-character-body][limits]") {
+    World world;
+    const auto runner = slots().character_body.CornerRunner;
+    const auto east   = slots().character_body.CornerEast;
+    const auto north  = slots().character_body.CornerNorth;
+    for (int i = 0; i < 60; ++i) {
+        world.tick();
+        CHECK(world.gap(runner, east) >= -kSkin);
+        CHECK(world.gap(runner, north) >= -kSkin);
+        CHECK(world.gap(runner, slots().character_body.Floor) >= -kSkin);
+    }
+    CHECK(world.gap(runner, east) <= 1e-3F);
+    CHECK(world.gap(runner, north) <= 1e-3F);
+}
+
+TEST_CASE("a body in an acute wedge never passes a wall", "[runtime][codegen-entt][stdlib-character-body][limits]") {
+    World world;
+    const auto runner = slots().character_body.WedgeRunner;
+    for (int i = 0; i < 120; ++i) {
+        world.tick();
+        CHECK(world.gap(runner, slots().character_body.WedgeNorth) >= -kSkin);
+        CHECK(world.gap(runner, slots().character_body.WedgeSouth) >= -kSkin);
+    }
+    CHECK(world.position(runner).x > 17.0F);
+    CHECK(world.position(runner).x < 20.0F);
+}
+
+TEST_CASE("a fourth contact drops the rest of the tick's motion", "[runtime][codegen-entt][stdlib-character-body][limits]") {
+    World world;
+    const auto runner = slots().character_body.WedgeRunner;
+    world.tick(60);
+    const Vector3 rest = world.position(runner);
+    world.tick();
+    CHECK(Vector3Length(world.body(runner).motion) > 1e-3F);
+    CHECK(world.position(runner).x == near(rest.x, 1e-4));
+    CHECK(world.position(runner).z == near(rest.z, 1e-4));
+    CHECK(world.gap(runner, slots().character_body.WedgeNorth) <= 1e-3F);
+    CHECK(world.gap(runner, slots().character_body.WedgeSouth) <= 1e-3F);
+}
+
+TEST_CASE("dropped motion does not return in the next tick", "[runtime][codegen-entt][stdlib-character-body][limits]") {
+    World world;
+    const auto runner = slots().character_body.WedgeRunner;
+    world.tick(60);
+    REQUIRE(Vector3Length(world.body(runner).motion) > 1e-3F);
+    const Vector3 rest = world.position(runner);
+    world.registry.remove<cactus_gen::character_body::Driven>(runner);
+    world.body(runner).velocity = Vector3{};
+    world.tick();
+    CHECK(world.position(runner).x == near(rest.x, 1e-6));
+    CHECK(world.position(runner).z == near(rest.z, 1e-6));
+    CHECK(Vector3Length(world.body(runner).motion) == 0.0F);
 }
 
 // ── Grounding ───────────────────────────────────────────────────────────────

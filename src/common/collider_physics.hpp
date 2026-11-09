@@ -28,16 +28,23 @@ struct ColliderShape {
 [[nodiscard]] ColliderShape capsule_shape(Vector3 center, float radius, float height, int layer, int mask) noexcept;
 
 inline constexpr float kSkin = 1e-4F;
+inline constexpr int kMaxGjkIterations = 32;
+inline constexpr int kMaxAdvanceSteps  = 32;
 
 // Closest points between two cores, radii ignored.
 struct CoreDistance {
-    float distance{0.0F};
+    float distance{0.0F};  // When `limited`, a lower bound and not |on_a - on_b|.
     Vector3 on_a{};
     Vector3 on_b{};
     bool overlap{false};
+    int iterations{0};
+    bool limited{false};
 };
 
-[[nodiscard]] CoreDistance core_distance(const ColliderShape& a, const ColliderShape& b) noexcept;
+// `max_iterations` is lowered only by tests that force the limit.
+[[nodiscard]] CoreDistance core_distance(const ColliderShape& a,
+                                         const ColliderShape& b,
+                                         int max_iterations = kMaxGjkIterations) noexcept;
 
 // Signed gap between the shapes: negative when they overlap. `normal` is unit
 // length and points from `b` toward `a`; `point` lies on `b`'s surface.
@@ -72,11 +79,13 @@ struct SweepResult {
                             bool same_entity) noexcept;
 
 // Where `subject` first touches `target` when moved by `delta`, by
-// conservative advancement over the separating plane.
+// conservative advancement over the separating plane. At `max_steps` it
+// reports a hit at the last `t` reached, which is short of any contact.
 [[nodiscard]] SweepResult sweep(const std::optional<ColliderShape>& subject,
                                 Vector3 delta,
                                 const std::optional<ColliderShape>& target,
-                                bool same_entity) noexcept;
+                                bool same_entity,
+                                int max_steps = kMaxAdvanceSteps) noexcept;
 
 // Shortest translation that moves `subject` out of `target`, zero when they
 // don't overlap; two bodies whose masks select each other's layers split it.

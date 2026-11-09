@@ -5,10 +5,16 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <raymath.h>
+
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <numbers>
 #include <optional>
+#include <random>
+#include <utility>
+#include <vector>
 
 using namespace cactus::runtime::physics;
 
@@ -52,6 +58,183 @@ void check_vec(Vector3 actual, Vector3 expected) {
     CHECK(actual.x == near(expected.x));
     CHECK(actual.y == near(expected.y));
     CHECK(actual.z == near(expected.z));
+}
+
+using CorePairs = std::vector<std::pair<ColliderShape, ColliderShape>>;
+
+// A seeded spread of core pairs: every kind pair, varied sizes, free and
+// axis-aligned rotations, and offsets from deep overlap to well apart.
+CorePairs sampled_core_pairs(int count, std::uint32_t seed = 20261108U) {
+    std::mt19937 random(seed);
+    std::uniform_real_distribution<float> unit(0.0F, 1.0F);
+    std::normal_distribution<float> gauss(0.0F, 1.0F);
+    const auto pick = [&](std::size_t n) {
+        return std::min(static_cast<std::size_t>(unit(random) * static_cast<float>(n)), n - 1);
+    };
+    const auto rotation = [&]() {
+        static constexpr std::array<float, 5> kAngles{0.0F, 1e-3F, 0.3F, std::numbers::pi_v<float> / 4.0F, std::numbers::pi_v<float> / 2.0F};
+        if (unit(random) < 0.5F) {
+            const float pitch = kAngles[pick(kAngles.size())];
+            const float yaw   = kAngles[pick(kAngles.size())];
+            const float roll  = kAngles[pick(kAngles.size())];
+            return QuaternionFromEuler(pitch, yaw, roll);
+        }
+        return QuaternionNormalize(
+            Quaternion{.x = gauss(random), .y = gauss(random), .z = gauss(random), .w = gauss(random)});
+    };
+    const auto core = [&](Vector3 center) {
+        static constexpr std::array<Vector3, 4> kSizes{{{.x = 2.0F, .y = 2.0F, .z = 2.0F},
+                                                        {.x = 4.0F, .y = 0.2F, .z = 4.0F},
+                                                        {.x = 0.1F, .y = 3.0F, .z = 0.1F},
+                                                        {.x = 2.0F, .y = 0.0F, .z = 2.0F}}};
+        static constexpr std::array<float, 3> kSegments{0.0F, 0.05F, 1.0F};
+        switch (pick(3)) {
+            case 0: {
+                const Vector3 size = kSizes[pick(kSizes.size())];
+                return box_at(center, size, rotation());
+            }
+            case 1:
+                return point_at(center);
+            default:
+                return segment_at(center, kSegments[pick(kSegments.size())]);
+        }
+    };
+    const auto direction = [&]() {
+        static constexpr std::array<Vector3, 4> kAligned{{{.x = 1.0F, .y = 0.0F, .z = 0.0F},
+                                                          {.x = 0.0F, .y = 1.0F, .z = 0.0F},
+                                                          {.x = 1.0F, .y = 1.0F, .z = 0.0F},
+                                                          {.x = 1.0F, .y = 1.0F, .z = 1.0F}}};
+        if (unit(random) < 0.3F) {
+            return Vector3Normalize(kAligned[pick(kAligned.size())]);
+        }
+        return Vector3Normalize(Vector3{.x = gauss(random), .y = gauss(random), .z = gauss(random)});
+    };
+    CorePairs pairs;
+    pairs.reserve(static_cast<std::size_t>(count));
+    for (int i = 0; i < count; ++i) {
+        const ColliderShape a  = core({});
+        const Vector3 toward   = direction();
+        const float separation = 6.0F * unit(random);
+        pairs.emplace_back(a, core(Vector3Scale(toward, separation)));
+    }
+    return pairs;
+}
+
+// The apart pairs of `pairs`, each moved along its closest direction to a gap
+// between 1e-8 and 0.1, where rounding matters most.
+CorePairs near_contact(const CorePairs& pairs) {
+    std::mt19937 random(7U);
+    std::uniform_real_distribution<float> exponent(-8.0F, -1.0F);
+    CorePairs moved;
+    for (auto [a, b] : pairs) {
+        const auto apart = core_distance(a, b);
+        if (apart.overlap || apart.distance < 1e-6F) {
+            continue;
+        }
+        const Vector3 toward = Vector3Scale(apart.on_a - apart.on_b, 1.0F / apart.distance);
+        b.center             = b.center + Vector3Scale(toward, apart.distance - std::pow(10.0F, exponent(random)));
+        moved.emplace_back(a, b);
+    }
+    return moved;
+}
+
+CorePairs with_near_contact(CorePairs pairs) {
+    const CorePairs moved = near_contact(pairs);
+    pairs.insert(pairs.end(), moved.begin(), moved.end());
+    return pairs;
+}
+
+struct Point3 {
+    double x;
+    double y;
+    double z;
+};
+
+double dot3(Point3 a, Point3 b) {
+    return (a.x * b.x) + (a.y * b.y) + (a.z * b.z);
+}
+
+Point3 cross3(Point3 a, Point3 b) {
+    return Point3{.x = (a.y * b.z) - (a.z * b.y), .y = (a.z * b.x) - (a.x * b.z), .z = (a.x * b.y) - (a.y * b.x)};
+}
+
+Point3 along(Point3 a, Point3 b, double s) {
+    return Point3{.x = a.x + (b.x * s), .y = a.y + (b.y * s), .z = a.z + (b.z * s)};
+}
+
+std::vector<Point3> core_vertices(const ColliderShape& shape) {
+    const Point3 center{.x = shape.center.x, .y = shape.center.y, .z = shape.center.z};
+    switch (shape.kind) {
+        case ShapeKind::Sphere:
+            return {center};
+        case ShapeKind::Capsule:
+            return {along(center, {.x = 0.0, .y = 1.0, .z = 0.0}, shape.half_segment),
+                    along(center, {.x = 0.0, .y = 1.0, .z = 0.0}, -shape.half_segment)};
+        case ShapeKind::Box:
+            break;
+    }
+    const Point3 q{.x = shape.rotation.x, .y = shape.rotation.y, .z = shape.rotation.z};
+    const double w = shape.rotation.w;
+    std::vector<Point3> corners;
+    for (const double sx : {-1.0, 1.0}) {
+        for (const double sy : {-1.0, 1.0}) {
+            for (const double sz : {-1.0, 1.0}) {
+                const Point3 local{.x = sx * shape.half_extents.x, .y = sy * shape.half_extents.y, .z = sz * shape.half_extents.z};
+                const Point3 t = along({}, cross3(q, local), 2.0);
+                corners.push_back(along(along(along(center, local, 1.0), t, w), cross3(q, t), 1.0));
+            }
+        }
+    }
+    return corners;
+}
+
+// The core distance bracketed in double precision: pairwise Frank-Wolfe over
+// the Minkowski difference's vertices, `lower` from its supporting plane.
+struct Bracket {
+    double lower;
+    double upper;
+};
+
+Bracket reference_core_distance(const ColliderShape& a, const ColliderShape& b) {
+    std::vector<Point3> points;
+    for (const Point3 p : core_vertices(a)) {
+        for (const Point3 q : core_vertices(b)) {
+            points.push_back(along(p, q, -1.0));
+        }
+    }
+    std::vector<double> weights(points.size(), 0.0);
+    weights[0] = 1.0;
+    Point3 x   = points[0];
+    double lower = 0.0;
+    for (int iteration = 0; iteration < 200'000; ++iteration) {
+        std::size_t toward = 0;
+        std::size_t away   = 0;
+        double toward_dot  = dot3(x, points[0]);
+        double away_dot    = toward_dot;
+        for (std::size_t i = 1; i < points.size(); ++i) {
+            const double along_x = dot3(x, points[i]);
+            if (along_x < toward_dot) {
+                toward     = i;
+                toward_dot = along_x;
+            }
+            if (weights[i] > 0.0 && (weights[away] == 0.0 || along_x > away_dot)) {
+                away     = i;
+                away_dot = along_x;
+            }
+        }
+        const double norm = std::sqrt(dot3(x, x));
+        lower             = norm > 0.0 ? std::max(lower, toward_dot / norm) : 0.0;
+        const Point3 step = along(points[toward], points[away], -1.0);
+        const double span = dot3(step, step);
+        if (norm <= 1e-12 || norm - lower <= 1e-12 || span == 0.0) {
+            break;
+        }
+        const double gamma = std::clamp(-dot3(x, step) / span, 0.0, weights[away]);
+        x                  = along(x, step, gamma);
+        weights[toward] += gamma;
+        weights[away] -= gamma;
+    }
+    return Bracket{.lower = lower, .upper = std::sqrt(dot3(x, x))};
 }
 
 }  // namespace
@@ -181,6 +364,75 @@ TEST_CASE("core distance handles degenerate cores", "[runtime][physics][gjk]") {
     }
 }
 
+TEST_CASE("an ordinary core distance query reaches no iteration limit", "[runtime][physics][gjk][limits]") {
+    int most    = 0;
+    int limited = 0;
+    for (const auto& [a, b] : with_near_contact(sampled_core_pairs(60'000))) {
+        const auto result = core_distance(a, b);
+        most              = std::max(most, result.iterations);
+        limited += result.limited ? 1 : 0;
+    }
+    INFO("most iterations " << most << " of " << kMaxGjkIterations);
+    CHECK(limited == 0);
+    CHECK(most <= kMaxGjkIterations / 2);
+}
+
+TEST_CASE("core distance is accurate near contact", "[runtime][physics][gjk][limits]") {
+    for (const auto& [a, b] : near_contact(sampled_core_pairs(150, 3U))) {
+        const auto result    = core_distance(a, b);
+        const auto reference = reference_core_distance(a, b);
+        const double found   = result.overlap ? 0.0 : result.distance;
+        CHECK(found <= reference.upper + 1e-5);
+        CHECK(found >= reference.lower - 1e-5);
+    }
+}
+
+TEST_CASE("core distance stops when rounding stops it getting closer", "[runtime][physics][gjk][limits]") {
+    // The point lies 3.6e-6 below the slab; this case's distance stops shrinking before it settles.
+    const auto slab   = box_shape({0.0F, 0.1000036F, 0.0F},
+                                {.x = 7.45058149e-09F, .y = 0.707106829F, .z = -7.45058149e-09F, .w = 0.707106829F},
+                                {4.0F, 0.2F, 4.0F},
+                                1,
+                                1);
+    const auto result = core_distance(point_at({0.0F, 0.0F, 0.0F}), slab);
+    CHECK_FALSE(result.limited);
+    CHECK_FALSE(result.overlap);
+    CHECK(result.distance == Catch::Approx(3.6e-6).margin(1e-6));
+}
+
+TEST_CASE("touching holds at the distance limit for shapes in contact", "[runtime][physics][gjk][limits]") {
+    int limited = 0;
+    for (auto [a, b] : near_contact(sampled_core_pairs(400, 5U))) {
+        const float gap = core_distance(a, b).distance;
+        a.radius        = gap / 2.0F + 1e-4F;
+        b.radius        = gap / 2.0F;
+        for (int limit = 0; limit <= 3; ++limit) {
+            const auto cores = core_distance(a, b, limit);
+            limited += cores.limited ? 1 : 0;
+            CHECK((cores.overlap || cores.distance <= a.radius + b.radius));
+        }
+    }
+    CHECK(limited > 400);
+}
+
+TEST_CASE("a distance stopped at its limit is not too large", "[runtime][physics][gjk][limits]") {
+    int limited = 0;
+    for (const auto& [a, b] : with_near_contact(sampled_core_pairs(60, 9U))) {
+        const auto settled  = core_distance(a, b);
+        const double truest = settled.overlap ? 0.0 : reference_core_distance(a, b).upper;
+        for (int limit = 0; limit <= 4; ++limit) {
+            const auto result = core_distance(a, b, limit);
+            if (!result.limited) {
+                CHECK(result.distance == settled.distance);
+                continue;
+            }
+            ++limited;
+            CHECK(result.distance <= truest + 1e-6);
+        }
+    }
+    CHECK(limited > 200);
+}
+
 // ── touching ────────────────────────────────────────────────────────────────
 
 TEST_CASE("touching works across all shape pairs", "[runtime][physics][touching]") {
@@ -258,6 +510,49 @@ TEST_CASE("sweep does not tunnel through a thin box at high speed", "[runtime][p
     REQUIRE(hit.hit);
     CHECK(hit.t == near(0.44F / 50.0F));
     check_vec(hit.normal, {-1.0F, 0.0F, 0.0F});
+}
+
+TEST_CASE("a sweep stopped at its step limit stops before contact", "[runtime][physics][sweep][limits]") {
+    // The spheres first touch where their centers are 1 apart.
+    const float height        = 0.99F;
+    const float first_contact = (5.0F - std::sqrt(1.0F - (height * height))) / 10.0F;
+    for (int limit = 1; limit <= 5; ++limit) {
+        const auto hit =
+            sweep(sphere_at({-5.0F, height, 0.0F}, 0.5F), {10.0F, 0.0F, 0.0F}, sphere_at({0.0F, 0.0F, 0.0F}, 0.5F), false, limit);
+        REQUIRE(hit.hit);
+        CHECK(hit.steps == limit);
+        CHECK(hit.t <= first_contact);
+    }
+}
+
+TEST_CASE("a sweep never passes through a target", "[runtime][physics][sweep][limits]") {
+    std::mt19937 random(11U);
+    std::uniform_real_distribution<float> unit(0.0F, 1.0F);
+    std::normal_distribution<float> gauss(0.0F, 1.0F);
+    const auto rounded = [&](ColliderShape shape) {
+        shape.radius = shape.kind == ShapeKind::Box ? 0.0F : 0.3F * unit(random);
+        return shape;
+    };
+    int hits = 0;
+    for (const auto& [a, b] : sampled_core_pairs(300, 13U)) {
+        const ColliderShape subject = rounded(a);
+        const ColliderShape target  = rounded(b);
+        const Vector3 jitter{.x = gauss(random), .y = gauss(random), .z = gauss(random)};
+        const Vector3 delta = Vector3Scale(target.center - subject.center, 2.0F * unit(random)) + jitter;
+        if (separation(subject, target).distance < 0.0F) {
+            continue;
+        }
+        for (const int limit : {kMaxAdvanceSteps, 1, 2, 3}) {
+            const auto result = sweep(subject, delta, target, false, limit);
+            hits += result.hit ? 1 : 0;
+            for (int i = 0; i <= 16; ++i) {
+                ColliderShape moved = subject;
+                moved.center        = subject.center + Vector3Scale(delta, result.t * static_cast<float>(i) / 16.0F);
+                CHECK(separation(moved, target).distance >= -kSkin);
+            }
+        }
+    }
+    CHECK(hits > 200);
 }
 
 TEST_CASE("sweep exits quickly when grazing parallel to a face", "[runtime][physics][sweep]") {

@@ -18,6 +18,7 @@ const:
     # Resting on the 30-degree slope: the cap's center sits radius away from its face.
     SLOPE_SIT_Y = 1.0 + (0.5 + BODY_RADIUS) / math.cos(SLOPE_30) + BODY_HALF_SEGMENT + 0.00001
     STEEP_DROP_Y = 6.0 + (0.5 + BODY_RADIUS) / math.cos(SLOPE_60) + BODY_HALF_SEGMENT + 0.05
+    WEDGE_HALF = math.radians(15.0)
 
 # A game rule writes this body's velocity every tick, with no order against solve.
 trait Driven:
@@ -93,6 +94,12 @@ template Slope(position: vec3, size: vec3, angle: float):
     tv.WorldTransform:
         rotation = quat.from_euler(0.0, 0.0, angle)
 
+# A wall turned about Y; its length runs along X before the turn.
+template TurnedWall(position: vec3, size: vec3, yaw: float):
+    use Block(position = position, size = size)
+    tv.WorldTransform:
+        rotation = quat.from_euler(0.0, yaw, 0.0)
+
 entity Floor from Block(position = vec3(200.0, -0.5, 0.0), size = vec3(500.0, 1.0, 40.0))
 
 entity Clock:
@@ -130,6 +137,16 @@ entity LongWall from Block(position = vec3(100.0, 1.5, -1.0), size = vec3(20.0, 
 entity CornerRunner from GroundedBody(position = vec3(120.0, 1.0, 0.0), velocity = vec3(2.0, 0.0, -2.0))
 entity CornerEast from Block(position = vec3(121.5, 1.5, 0.0), size = vec3(0.2, 3.0, 6.0))
 entity CornerNorth from Block(position = vec3(120.0, 1.5, -1.0), size = vec3(6.0, 3.0, 0.2))
+
+# ── Slide limit ──────────────────────────────────────────────────────────────
+# On their own row, z = -12. Two walls meet at 30 degrees at x = 20, so a body
+# driven into the wedge still has motion left after its three contacts.
+entity WedgeRunner:
+    use GroundedBody(position = vec3(15.0, 1.0, -12.0))
+    Driven:
+        speed = 6.0
+entity WedgeNorth from TurnedWall(position = vec3(20.0 - 2.0 * math.cos(WEDGE_HALF), 1.5, -12.0 - 2.0 * math.sin(WEDGE_HALF)), size = vec3(4.0, 3.0, 0.2), yaw = 0.0 - WEDGE_HALF)
+entity WedgeSouth from TurnedWall(position = vec3(20.0 - 2.0 * math.cos(WEDGE_HALF), 1.5, -12.0 + 2.0 * math.sin(WEDGE_HALF)), size = vec3(4.0, 3.0, 0.2), yaw = WEDGE_HALF)
 
 # ── Landing, ledges and jumps ────────────────────────────────────────────────
 entity Lander from Body(position = vec3(140.0, 3.0, 0.0))

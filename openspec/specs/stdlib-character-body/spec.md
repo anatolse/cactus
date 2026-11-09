@@ -178,3 +178,22 @@ CharacterBody SHALL expose paused: bool = false. While paused, solve SHALL leave
 #### Scenario: Default compatibility
 - **WHEN** an existing program does not set paused
 - **THEN** its character bodies behave as before
+
+### Requirement: The slide limit has a defined result
+When a body has used its three contacts in a tick and motion remains, the remaining motion SHALL be dropped for that tick. The body SHALL stay where the last contact left it, and SHALL NOT overlap a solid by more than the contact skin because of this limit. `velocity` SHALL keep the result of the three contacts. In an acute wedge that velocity can still point into a surface met earlier in the tick; the next tick's sweeps stop it there. Dropped motion SHALL NOT carry over to a later tick.
+
+#### Scenario: A convex corner stops the body
+- **WHEN** a body moves into a corner of three solid planes
+- **THEN** it stops at the corner with no overlap beyond the contact skin
+
+#### Scenario: A fourth contact drops the rest
+- **WHEN** a body's motion in one tick would reach a fourth contact
+- **THEN** it stops at the third contact, and its position does not include the remaining motion
+
+#### Scenario: Dropped motion does not return
+- **WHEN** a tick drops remaining motion and the next tick has no input
+- **THEN** the next tick's motion comes from `velocity` alone
+
+#### Scenario: An acute wedge does not push through a wall
+- **WHEN** a body moves into a wedge of two planes that meet at an acute angle
+- **THEN** it does not pass through either plane, in any tick

@@ -360,3 +360,30 @@ An entity with `Collider` and a shape collider SHALL be solid when it also has `
 #### Scenario: All-overlap contacts are in creation order
 - **WHEN** colliders A, B and C, created in that order, all overlap the subject
 - **THEN** `query_overlap_all` returns contacts for A, B, C in that order
+
+### Requirement: Solver limits have safe results
+The distance computation behind `physics.sweep` and `physics.touching` SHALL stop after a fixed number of iterations. When it stops at that limit, its distance SHALL be a lower bound on the true distance between the shapes, so `touching` never misses a contact and a sweep never advances past one. A sweep SHALL stop after a fixed number of advance steps. When it stops at that limit, it SHALL report a hit at the last `t` it reached, and that `t` SHALL be no later than the true first contact. When the distance computation settles before its limit, its distance SHALL be within 1e-5 of the true distance over the tested set of shape pairs.
+
+#### Scenario: Touching at the distance limit
+- **WHEN** the distance computation stops at its limit for two shapes that are in contact
+- **THEN** `touching` is true
+
+#### Scenario: A distance at the limit is not too large
+- **WHEN** the distance computation stops at its limit
+- **THEN** the distance it returns is no larger than the true distance
+
+#### Scenario: A sweep at the step limit stops before contact
+- **WHEN** a grazing sweep reaches the advance step limit
+- **THEN** it reports a hit whose `t` is no later than the true first contact
+
+#### Scenario: A sweep never passes through a target
+- **WHEN** a sweep runs for any pair of supported shapes and any motion
+- **THEN** the moved shape at the reported `t` does not overlap the target by more than the contact skin
+
+#### Scenario: A settled distance is accurate
+- **WHEN** the distance computation settles before its limit, for the tested set of shape pairs, near contact included
+- **THEN** its distance is within 1e-5 of the true distance
+
+#### Scenario: An ordinary query reaches no limit
+- **WHEN** queries run over the tested set of shape pairs
+- **THEN** no query reaches the distance limit

@@ -97,3 +97,18 @@ The CLI SHALL accept a `--warnings-as-errors` flag. With the flag, when any stag
 #### Scenario: A warning from a dependency counts
 - **WHEN** a module the program imports reports a warning and the flag is set
 - **THEN** the build fails
+
+### Requirement: Parallel handler option
+The CLI SHALL accept a `--parallel-handlers` flag that selects the parallel handler build. Without the flag, generated code SHALL run on one thread. The flag SHALL NOT change which programs compile or any diagnostic.
+
+#### Scenario: Off by default
+- **WHEN** the user runs `cactus game.cactus --output game.cpp`
+- **THEN** the generated code runs on one thread
+
+#### Scenario: Option selects the parallel build
+- **WHEN** the user runs `cactus game.cactus --parallel-handlers --output game.cpp`
+- **THEN** the generated code runs eligible handlers on worker threads
+
+#### Scenario: Diagnostics do not change
+- **WHEN** one program is compiled with and without the flag
+- **THEN** the same diagnostics are reported

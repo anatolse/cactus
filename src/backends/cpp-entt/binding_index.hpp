@@ -309,6 +309,12 @@ public:
     // Appends every member held by one of `owners` whose bounds overlap
     // [min, max], in no order and possibly more than once.
     void query(Vector3 min, Vector3 max, std::vector<entt::entity>& out, std::uint32_t owners = kAllOwners);
+    // Lets concurrent queries only read until the next insert.
+    void settle() {
+        if (merge_due()) {
+            merge();
+        }
+    }
     [[nodiscard]] bool contains(entt::entity entity) const noexcept { return find(entity) != SparseSlots::kNone; }
     [[nodiscard]] std::size_t size() const noexcept { return live_; }
     [[nodiscard]] float cell_size() const noexcept { return cell_size_; }
@@ -446,19 +452,23 @@ public:
     using Bounds        = std::pair<Vector3, Vector3>;
     using BoundedMember = std::pair<OrderedEntity, Bounds>;
 
+    void settle() { grid_->settle(); }
+
     // Appends the static members whose bounds overlap [min, max], each once, oldest first.
     void query_static(const entt::registry& registry, Vector3 min, Vector3 max, std::vector<OrderedEntity>& out) {
-        found_.clear();
-        grid_->query(min, max, found_, StaticGrid3D::owner_mask(owner_));
-        std::ranges::sort(found_);
-        const auto duplicates = std::ranges::unique(found_).begin();
+        // Per thread: handlers of a parallel batch may query one shared index at once.
+        thread_local std::vector<entt::entity> found;
+        found.clear();
+        grid_->query(min, max, found, StaticGrid3D::owner_mask(owner_));
+        std::ranges::sort(found);
+        const auto duplicates = std::ranges::unique(found).begin();
         const auto first      = std::ssize(out);
-        for (auto entity = found_.begin(); entity != duplicates; ++entity) {
+        for (auto entity = found.begin(); entity != duplicates; ++entity) {
             out.emplace_back(creation_ordinal(registry, *entity), *entity);
         }
         std::sort(out.begin() + first, out.end());
-        if (found_.capacity() > kKeptScratch) {
-            found_ = std::vector<entt::entity>{};
+        if (found.capacity() > kKeptScratch) {
+            found = std::vector<entt::entity>{};
         }
     }
 
@@ -505,7 +515,6 @@ private:
     std::size_t owner_        = 0;
     std::size_t static_count_ = 0;
     std::vector<OrderedEntity> dynamic_;
-    std::vector<entt::entity> found_;
 };
 
 // Forgets every marked entity, then files each one that is still a member,

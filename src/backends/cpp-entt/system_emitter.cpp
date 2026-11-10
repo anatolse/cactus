@@ -439,6 +439,8 @@ struct HandlerBodyCodegen {
     const HandlerContract* contract = nullptr;
     bool structure_deferred         = false;  // structural commands wait for commit
     bool uses_paint_order           = false;  // the body reads the pass's paint-order cache
+    // In a parallel level, shared-structure sync runs here, once on the main thread, not in the body.
+    std::ostringstream* prepare = nullptr;
 };
 
 // The payload parameter when `expr` spells the active handler's trigger name.
@@ -451,6 +453,51 @@ std::optional<std::string> lowered_trigger_reference(const ExprNode& expr) {
         return std::nullopt;
     }
     return trigger->binding;
+}
+
+std::ostringstream* active_prepare_sink() {
+    const auto* body = active_scope<HandlerBodyCodegen>();
+    return body == nullptr ? nullptr : body->prepare;
+}
+
+// Settles every relation store and derived cache `contract` reads, so the handler only reads them.
+void emit_relation_prepares(std::ostringstream& out, const HandlerContract& contract, const DecoratedProgram& program) {
+    std::vector<const ResolvedRelation*> relations;
+    for (const auto& read : contract.reads) {
+        if (read.kind != SymbolKind::Relation) {
+            continue;
+        }
+        if (const auto* relation = EnttCodegenUtils::find_relation(program, read); relation != nullptr) {
+            relations.push_back(relation);
+        }
+    }
+    std::ranges::sort(relations, {}, [](const ResolvedRelation* relation) { return relation->canonical_id; });
+    for (const auto* relation : relations) {
+        const auto reader = EnttCodegenUtils::relation_reader_cpp(program, *relation->symbol_id);
+        if (!relation->derivation.has_value()) {
+            out << "    (void)" << reader << ".revision();\n";
+        } else if (relation->derivation->kind == DerivationKind::Components) {
+            out << "    (void)" << reader << ".rows();\n";
+        } else {
+            out << "    (void)" << reader << ";\n";
+        }
+    }
+}
+
+void emit_prepare_function(std::ostringstream& out,
+                           const RuleNode& sys,
+                           const EventHandlerNode& handler,
+                           const HandlerContract* contract,
+                           std::ostringstream& prepare,
+                           const DecoratedProgram& program) {
+    if (contract != nullptr) {
+        emit_relation_prepares(prepare, *contract, program);
+    }
+    out << "void " << system_function_name(program.module_name, sys.name, "on").name
+        << "_prepare(entt::registry& registry, const " << handler_trigger_cpp_type(handler, program) << "&) {\n";
+    out << "    (void)registry;\n";
+    out << prepare.str();
+    out << "}\n\n";
 }
 
 const HandlerContract* graph_handler_contract(const RuleNode& rule,
@@ -742,9 +789,15 @@ PairBindingCodegen build_pair_binding_codegen(const PairBindingNode& binding, co
 void emit_pair_binding_snapshot(std::ostringstream& out, const PairBindingCodegen& binding, int indent, bool narrowed) {
     const std::string ind(static_cast<std::size_t>(indent) * 4U, ' ');
     const std::string& name = binding.scope.binding_name;
+    const auto membership =
+        "cactus::runtime::entt_backend::ordered_membership<" + join_strings(binding.cpp_types, ", ") + ">(registry);\n";
     out << ind << (narrowed ? "std::vector<entt::entity> " : "[[maybe_unused]] const auto& ") << name
-        << "_snapshot = cactus::runtime::entt_backend::ordered_membership<" << join_strings(binding.cpp_types, ", ")
-        << ">(registry);\n";
+        << "_snapshot = " << membership;
+    auto* prepare = active_prepare_sink();
+    const auto settle = "    (void)" + membership;
+    if (prepare != nullptr && !prepare->view().contains(settle)) {
+        *prepare << settle;
+    }
 }
 
 bool is_flat_transform_propagation(const ExternRuleNode& sys, const DecoratedProgram& program) {
@@ -6486,10 +6539,17 @@ static std::uint64_t stable_hash(std::string_view text) {
 static void emit_shared_index(std::ostringstream& out,
                               const std::string& index_type,
                               const std::string& index,
-                              const std::string& sync) {
-    out << "    auto& " << index << " = cactus::runtime::entt_backend::shared_binding_index<" << index_type << ", "
-        << stable_hash(index_type + sync) << "ULL>();\n";
-    out << sync;
+                              const std::string& sync,
+                              bool spatial = false) {
+    const auto declaration = "    auto& " + index + " = cactus::runtime::entt_backend::shared_binding_index<" +
+                             index_type + ", " + std::to_string(stable_hash(index_type + sync)) + "ULL>();\n";
+    out << declaration;
+    auto* prepare = active_prepare_sink();
+    if (prepare == nullptr) {
+        out << sync;
+        return;
+    }
+    *prepare << "    {\n" << declaration << sync << (spatial ? "    " + index + ".settle();\n" : "") << "    }\n";
 }
 
 // The grid cell size a spatial index starts from; 0 lets the index choose it when first built.
@@ -6634,7 +6694,7 @@ static void emit_binding_index_sync(std::ostringstream& out,
     sync << bounds.str();
     sync << "        return cactus_found;\n";
     sync << "    });\n";
-    emit_shared_index(out, ns + "SpatialBindingIndex3D", index, sync.str());
+    emit_shared_index(out, ns + "SpatialBindingIndex3D", index, sync.str(), true);
 }
 
 // Emits a walk over every group entity bound by `group_loop` (which opens the
@@ -8129,6 +8189,11 @@ std::string EnttSystemEmitter::emit_system(const RuleNode& sys, const DecoratedP
             continue;
         }
         const auto* contract = graph_handler_contract(sys, handler, program);
+        const bool prepared =
+            sys.resolved_rule_id.has_value() && handler.resolved_trigger.has_value() &&
+            EnttCodegenUtils::in_parallel_level(
+                program, HandlerIdentity{.rule = *sys.resolved_rule_id, .trigger = *handler.resolved_trigger});
+        std::ostringstream prepare;
         const bool is_pair = is_pair_system && contract != nullptr && contract->domain_kind == HandlerDomainKind::Pair;
         const bool selectionless   = !is_pair && contract != nullptr && contract->is_selectionless();
         const bool lifecycle       = handler.has_lifecycle_trigger();
@@ -8149,7 +8214,8 @@ std::string EnttSystemEmitter::emit_system(const RuleNode& sys, const DecoratedP
         emit_named_requirements(out, contract, program);
         emit_when_gate(out, sys, program);
         HandlerBodyCodegen body_codegen{.contract           = contract,
-                                        .structure_deferred = !program.execution_graph.phases.empty()};
+                                        .structure_deferred = !program.execution_graph.phases.empty(),
+                                        .prepare            = prepared ? &prepare : nullptr};
         std::ostringstream body;
         {
             const ActiveScope<HandlerBodyCodegen> body_scope(body_codegen);
@@ -8171,6 +8237,9 @@ std::string EnttSystemEmitter::emit_system(const RuleNode& sys, const DecoratedP
         }
         out << body.str();
         out << "}\n\n";
+        if (prepared) {
+            emit_prepare_function(out, sys, handler, contract, prepare, program);
+        }
     }
 
     return out.str();

@@ -302,6 +302,9 @@ std::string EnttRestoreEmitter::emit_world_restore(const DecoratedProgram& progr
     if (tracks_lifecycle) {
         out << "void generated_connect_lifecycle_trackers(entt::registry& registry);\n\n";
     }
+    if (program.parallel_handlers.has_value()) {
+        out << "void generated_prepare_parallel_world(entt::registry& registry);\n\n";
+    }
 
     emit_restore_struct_functions(out, program);
     emit_restore_trait_functions(out, program, traits);
@@ -426,6 +429,9 @@ std::string EnttRestoreEmitter::emit_world_restore(const DecoratedProgram& progr
     }
     if (!program.relations.empty()) {
         out << "    generated_connect_relations(registry);\n";
+    }
+    if (program.parallel_handlers.has_value()) {
+        out << "    generated_prepare_parallel_world(registry);\n";
     }
     if (!EnttCodegenUtils::declared_entities(program).empty()) {
         out << "    ::cactus_gen::detail::generated_rebind_named_slots(registry);\n";

@@ -145,6 +145,45 @@ target_compile_definitions(test_construction_copy_equivalence PRIVATE
 add_dependencies(test_construction_copy_equivalence ${construction_equivalence_targets})
 add_test(NAME ConstructionCopyEquivalenceTests COMMAND test_construction_copy_equivalence)
 
+# Each fixture built without and with --parallel-handlers; both must give the
+# same world digest after every frame, on any worker count.
+set(parallel_equivalence_fixtures
+    "parallel_handlers|tests/fixtures/parallel_handlers_runtime.cactus"
+)
+set(parallel_equivalence_pairs)
+set(parallel_equivalence_targets)
+foreach(fixture IN LISTS parallel_equivalence_fixtures)
+    string(REPLACE "|" ";" parts "${fixture}")
+    list(GET parts 0 name)
+    list(GET parts 1 source)
+    cactus_add_persistence_roundtrip_subprocess(parallel_equivalence_${name}_sequential
+        CACTUS_SOURCE "${source}"
+        BACKEND cpp-entt
+        MAIN_SOURCE parallel_equivalence_main.cpp
+        DEFINITIONS CACTUS_WORLD_DIGEST
+    )
+    cactus_add_persistence_roundtrip_subprocess(parallel_equivalence_${name}_parallel
+        CACTUS_SOURCE "${source}"
+        BACKEND cpp-entt
+        MAIN_SOURCE parallel_equivalence_main.cpp
+        CODEGEN_FLAGS --parallel-handlers
+        DEFINITIONS CACTUS_WORLD_DIGEST
+    )
+    list(APPEND parallel_equivalence_targets
+        parallel_equivalence_${name}_sequential parallel_equivalence_${name}_parallel)
+    list(APPEND parallel_equivalence_pairs
+        "${name}|$<TARGET_FILE:parallel_equivalence_${name}_sequential>|$<TARGET_FILE:parallel_equivalence_${name}_parallel>")
+endforeach()
+list(JOIN parallel_equivalence_pairs "," parallel_equivalence_pair_text)
+add_executable(test_parallel_equivalence EXCLUDE_FROM_ALL test_parallel_equivalence.cpp)
+target_include_directories(test_parallel_equivalence PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(test_parallel_equivalence PRIVATE Catch2::Catch2WithMain)
+target_compile_definitions(test_parallel_equivalence PRIVATE
+    CACTUS_PARALLEL_PAIRS="${parallel_equivalence_pair_text}"
+)
+add_dependencies(test_parallel_equivalence ${parallel_equivalence_targets})
+add_test(NAME ParallelEquivalenceTests COMMAND test_parallel_equivalence)
+
 # Coverage gate threshold evaluation (no instrumented build needed)
 function(cactus_add_coverage_threshold_case CASE_NAME)
     cmake_parse_arguments(CASE "TESTS_FAILED" "SUMMARY;THRESHOLD;EXPECT;EXPECT_OUTPUT" "" ${ARGN})
@@ -276,6 +315,10 @@ add_executable(test_delivery_cycles test_delivery_cycles.cpp)
 target_link_libraries(test_delivery_cycles PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME DeliveryCyclesTests COMMAND test_delivery_cycles)
 
+add_executable(test_parallel_batches test_parallel_batches.cpp)
+target_link_libraries(test_parallel_batches PRIVATE cactus_frontend Catch2::Catch2WithMain)
+add_test(NAME ParallelBatchesTests COMMAND test_parallel_batches)
+
 add_executable(test_semantic_states test_semantic_states.cpp)
 target_link_libraries(test_semantic_states PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticStatesTests COMMAND test_semantic_states)
@@ -305,6 +348,10 @@ add_test(NAME NameResolutionTests COMMAND test_name_resolution)
 add_executable(test_codegen_entt test_codegen_entt.cpp)
 target_link_libraries(test_codegen_entt PRIVATE cactus_backend_cpp_entt Catch2::Catch2WithMain)
 add_test(NAME CodegenEnttTests COMMAND test_codegen_entt)
+
+add_executable(test_codegen_parallel test_codegen_parallel.cpp)
+target_link_libraries(test_codegen_parallel PRIVATE cactus_backend_cpp_entt Catch2::Catch2WithMain)
+add_test(NAME CodegenParallelTests COMMAND test_codegen_parallel)
 
 add_executable(test_codegen_const test_codegen_const.cpp)
 target_link_libraries(test_codegen_const PRIVATE cactus_backend_cpp_entt Catch2::Catch2WithMain)
@@ -940,6 +987,13 @@ cactus_add_headless_behavior_test(test_robot_sandbox_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_robot_sandbox_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_parallel_handlers_headless_behavior
+    CACTUS_SOURCE tests/fixtures/parallel_handlers_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_parallel_handlers_headless_behavior.cpp
+    CODEGEN_FLAGS --parallel-handlers
+)
+
 cactus_add_headless_behavior_test(test_cactus_dungeon_headless_behavior
     CACTUS_SOURCE examples/cactus-dungeon/small_map.cactus
     BACKEND cpp-entt
@@ -1370,12 +1424,17 @@ cactus_add_headless_behavior_test(test_keep_evaluation_row_stage_headless_behavi
 # (`ctest --preset clang-o3-release -L perf`).
 add_custom_target(test_generated_performance_benchmarks)
 foreach(shape IN ITEMS static_keep union_fold equality_reduce grid_region row_join baseline own_projection
-        single_commit plain_commit sweep)
+        single_commit plain_commit sweep wide_level)
     set(perf_target test_perf_${shape}_benchmark)
+    set(perf_codegen_flags)
+    if(shape STREQUAL "wide_level")
+        set(perf_codegen_flags --parallel-handlers)
+    endif()
     cactus_add_headless_behavior_test(${perf_target}
         CACTUS_SOURCE tests/fixtures/perf/perf_${shape}.cactus
         BACKEND cpp-entt
         TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/${perf_target}.cpp
+        CODEGEN_FLAGS ${perf_codegen_flags}
     )
     if(CACTUS_ENABLE_COVERAGE)
         target_compile_definitions(${perf_target} PRIVATE CACTUS_PERF_COVERAGE)

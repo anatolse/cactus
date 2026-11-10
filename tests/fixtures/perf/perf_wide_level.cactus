@@ -1,0 +1,85 @@
+module perf_wide_level
+
+use std.core
+
+# One wide dependency level: eight rules, each updating its own trait, so no
+# rule reads or writes what another writes.
+
+trait Board:
+    let size: int = 85
+
+trait A:
+    var x: float = 1.0
+trait B:
+    var x: float = 1.0
+trait C:
+    var x: float = 1.0
+trait D:
+    var x: float = 1.0
+trait E:
+    var x: float = 1.0
+trait F:
+    var x: float = 1.0
+trait G:
+    var x: float = 1.0
+trait H:
+    var x: float = 1.0
+
+entity Field:
+    Board
+
+template Body:
+    A
+    B
+    C
+    D
+    E
+    F
+    G
+    H
+
+rule Fill:
+    on load:
+        for i in range(0, Field[Board].size * Field[Board].size):
+            spawn Body()
+
+rule StepA:
+    each: A as v
+    on fixed_tick:
+        for i in range(0, 32):
+            v.x = v.x * 0.999 + 0.001
+rule StepB:
+    each: B as v
+    on fixed_tick:
+        for i in range(0, 32):
+            v.x = v.x * 0.999 + 0.001
+rule StepC:
+    each: C as v
+    on fixed_tick:
+        for i in range(0, 32):
+            v.x = v.x * 0.999 + 0.001
+rule StepD:
+    each: D as v
+    on fixed_tick:
+        for i in range(0, 32):
+            v.x = v.x * 0.999 + 0.001
+rule StepE:
+    each: E as v
+    on fixed_tick:
+        for i in range(0, 32):
+            v.x = v.x * 0.999 + 0.001
+rule StepF:
+    each: F as v
+    on fixed_tick:
+        for i in range(0, 32):
+            v.x = v.x * 0.999 + 0.001
+rule StepG:
+    each: G as v
+    on fixed_tick:
+        for i in range(0, 32):
+            v.x = v.x * 0.999 + 0.001
+rule StepH:
+    each: H as v
+    on fixed_tick:
+        for i in range(0, 32):
+            v.x = v.x * 0.999 + 0.001

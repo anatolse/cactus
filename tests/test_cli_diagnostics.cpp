@@ -20,6 +20,7 @@ struct CliResult {
     std::vector<std::string> info_lines;
     std::string stderr_text;
     bool wrote_output = false;
+    std::string output_text;
 };
 
 std::string quote(fs::path value) {
@@ -64,6 +65,10 @@ CliResult run_cactus(const fs::path& input, const std::string& flags = "") {
         }
     }
     result.wrote_output = fs::exists(output_file);
+    if (result.wrote_output) {
+        std::ifstream output(output_file);
+        result.output_text.assign(std::istreambuf_iterator<char>(output), std::istreambuf_iterator<char>());
+    }
     return result;
 }
 
@@ -132,6 +137,28 @@ TEST_CASE("CLI: a planned pair rule does not warn, even with indexed joins off",
         CHECK(result.exit_code == 0);
         CHECK(result.stderr_lines.empty());
     }
+}
+
+TEST_CASE("CLI: generated code runs on one thread by default", "[cli][parallel-handlers]") {
+    const auto result = run_cactus(stage_fixture("parallel_levels.cactus"));
+    REQUIRE(result.exit_code == 0);
+    CHECK_FALSE(result.output_text.contains("run_parallel_batch"));
+    CHECK_FALSE(result.output_text.contains("thread"));
+}
+
+TEST_CASE("CLI: --parallel-handlers runs eligible handlers on workers", "[cli][parallel-handlers]") {
+    const auto result = run_cactus(stage_fixture("parallel_levels.cactus"), " --parallel-handlers");
+    REQUIRE(result.exit_code == 0);
+    CHECK(result.output_text.contains("run_parallel_batch"));
+}
+
+TEST_CASE("CLI: --parallel-handlers reports the same diagnostics", "[cli][parallel-handlers]") {
+    const auto plain    = run_cactus(stage_fixture("parallel_levels.cactus"));
+    const auto parallel = run_cactus(stage_fixture("parallel_levels.cactus"), " --parallel-handlers");
+    CHECK(plain.exit_code == parallel.exit_code);
+    CHECK_FALSE(plain.stderr_lines.empty());
+    CHECK(plain.stderr_lines == parallel.stderr_lines);
+    CHECK(plain.info_lines == parallel.info_lines);
 }
 
 TEST_CASE("CLI: a call to a function a module does not declare is rejected", "[cli][diagnostics]") {

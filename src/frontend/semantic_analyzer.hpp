@@ -863,6 +863,26 @@ struct DependencyLevel {
     std::vector<HandlerIdentity> handlers;
 };
 
+// Handlers that may run at the same moment: none reads or writes a field another writes.
+struct ParallelBatch {
+    std::vector<HandlerIdentity> handlers;
+};
+
+// One phase dependency level split into batches that run one after another.
+struct ParallelLevel {
+    std::uint64_t index = 0;
+    std::vector<ParallelBatch> batches;
+};
+
+struct ParallelPlan {
+    // Handlers that may run on a worker thread; every other handler runs on the main thread.
+    std::unordered_set<HandlerIdentity, HandlerIdentityHash> eligible;
+    // Only levels where some batch runs a worker handler next to another handler.
+    std::vector<ParallelLevel> levels;
+
+    [[nodiscard]] const ParallelLevel* level_of(const HandlerIdentity& handler) const;
+};
+
 // dsl-render-passes, "Render-pass synthetic pass-local edges": represents the
 // backend-owned, non-authored rasterization step between a render-pass
 // phase's vertex- and fragment-stage handlers — vertex-handler node ->
@@ -1021,6 +1041,8 @@ struct DecoratedProgram {
     std::optional<float> grid_cell_size;
     // Test only: keep every construction copy, written or not.
     bool retain_all_construction = false;
+    // Set by --parallel-handlers: which phase handlers run on worker threads, and in which batches.
+    std::optional<ParallelPlan> parallel_handlers;
     HierarchyFacts hierarchy;        // likewise
     ModulePersistenceMetadata persistence;
     std::vector<ResolvedSourceModule> source_modules;

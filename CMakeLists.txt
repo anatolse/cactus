@@ -178,6 +178,7 @@ add_library(cactus_frontend STATIC
     src/frontend/single_traits.cpp
     src/frontend/state_transitions.cpp
     src/frontend/relations.cpp
+    src/frontend/parallel_batches.cpp
 )
 target_include_directories(cactus_frontend PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(cactus_frontend PUBLIC cactus_common)

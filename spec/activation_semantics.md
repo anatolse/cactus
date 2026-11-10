@@ -634,6 +634,15 @@ they imply local commutation for every accepted program is not done here. §10 l
 no open accepted class where the obligation fails; F1 and F2 were such classes and are
 resolved.
 
+**Note: order does not matter is not data is separate.** Local commutation says that
+two unordered handlers give equivalent results in either *order*. It does not say that
+they touch separate cells: by C1, two Accum writers or two Join writers of one operator
+share a cell and still commute. So a dependency level, a set of handlers that `≺_D`
+leaves unordered, may be run in any sequence, but not at the same moment. A build that
+runs handlers of one level at the same moment (`parallel-handler-execution`) needs the
+stronger condition that no handler reads or writes a cell another writes, and checks it
+separately per level.
+
 ### 7.4 Non-vacuity boundary
 
 **What the structural analysis establishes (Code, Tested).** The reachable-archetype

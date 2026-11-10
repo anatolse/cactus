@@ -73,4 +73,14 @@ inline void drive_frame(entt::registry& registry, float dt = 1.0F / 60.0F) {
     cactus::runtime::entt_backend::generated_drain_external_events(registry);
 }
 
+// Sets the parallel worker count for one scope, then restores the default.
+struct WorkerCount {
+    explicit WorkerCount(std::size_t count) { cactus::runtime::entt_backend::set_parallel_workers(count); }
+    WorkerCount(const WorkerCount&)            = delete;
+    WorkerCount& operator=(const WorkerCount&) = delete;
+    WorkerCount(WorkerCount&&)                 = delete;
+    WorkerCount& operator=(WorkerCount&&)      = delete;
+    ~WorkerCount() { cactus::runtime::entt_backend::set_parallel_workers(std::nullopt); }
+};
+
 }  // namespace cactus_headless_test

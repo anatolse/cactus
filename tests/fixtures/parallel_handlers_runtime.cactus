@@ -1,0 +1,148 @@
+module parallel_handlers_runtime
+
+use std.core
+
+# One wide tick level with every case a parallel build must keep: disjoint
+# writers, two commuting writers of one field, emissions and adds from parallel
+# handlers, a join through a shared index, and a spawning handler that stays on
+# the main thread.
+
+trait Board:
+    let size: int = 24
+
+trait Log:
+    var events: int = 0
+
+trait Mover:
+    var x: float = 0.0
+    var vx: float = 0.5
+    var lit: int = 0
+
+trait Spinner:
+    var angle: float = 0.0
+    var tagged: int = 0
+
+trait Counter:
+    var total: int = 0
+
+trait Seeker:
+    let key: int = 0
+    var found: int = 0
+
+trait Spot:
+    let key: int = 0
+
+trait Lit
+trait Tagged
+
+trait Spark:
+    let k: int = 0
+
+event Ping:
+    k: int
+
+event Found
+
+entity Field:
+    Board
+    Log
+    Counter
+
+template Body(i: int):
+    Mover:
+        vx = 0.25 * (i % 4)
+    Spinner
+    Seeker:
+        key = i % 7
+    Spot:
+        key = i % 5
+
+template Flash(k: int):
+    Spark:
+        k = k
+
+rule Fill:
+    on load:
+        for i in range(0, Field[Board].size * Field[Board].size):
+            spawn Body(i = i)
+
+rule Move:
+    each: Mover as m
+    on tick:
+        m.x = m.x + m.vx
+
+rule Spin:
+    each: Spinner as s
+    on tick:
+        s.angle = s.angle + 0.1
+
+rule CountOne:
+    each: Counter as c
+    on tick:
+        c.total += 1
+
+rule CountTwo:
+    each: Counter as c
+    on tick:
+        c.total += 2
+
+rule Match:
+    pairs:
+        a: Seeker
+        b: Spot
+    where:
+        a[Seeker].key == b[Spot].key
+    on tick:
+        emit Found to a
+
+rule PingMovers:
+    each: Mover as m
+    where: m.x > 20.0 and m.x < 21.0
+    on tick:
+        emit Ping:
+            k = 3
+
+rule PingSpinners:
+    each: Spinner as s
+    where: s.angle > 5.0 and s.angle < 5.15
+    on tick:
+        emit Ping:
+            k = 5
+
+rule LightMovers:
+    each: Mover as m
+    where: m.x > 30.0 and m.x < 30.6
+    on tick:
+        add Lit to self
+
+rule TagSpinners:
+    each: Spinner as s
+    where: s.angle > 8.0 and s.angle < 8.15
+    on tick:
+        add Tagged to self
+
+rule Sparkle:
+    each: Board as b
+    where: Field[Counter].total % 30 == 0
+    on tick:
+        spawn Flash(k = 0)
+
+rule CollectPings:
+    each: Log as log
+    on Ping:
+        log.events += ping.k
+
+rule CollectLit:
+    each: Mover as m
+    on added Lit:
+        m.lit += 1
+
+rule CollectTagged:
+    each: Spinner as s
+    on added Tagged:
+        s.tagged += 1
+
+rule CountFound:
+    each: Seeker as s
+    on Found:
+        s.found += 1

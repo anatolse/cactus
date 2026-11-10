@@ -908,6 +908,66 @@ pairs_order_by_runtime.cactus fixtures pairs_order_by_runtime.RankPairsByGap/on 
     named_writes:
     named_requirements:
     iteration_order: free
+parallel_handlers_runtime.cactus fixtures parallel_handlers_runtime.LightMovers/on std.core.tick
+    reads: parallel_handlers_runtime.Mover
+    read_fields: parallel_handlers_runtime.Mover{x}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: creation
+parallel_handlers_runtime.cactus fixtures parallel_handlers_runtime.Match/on std.core.tick
+    reads: parallel_handlers_runtime.Seeker parallel_handlers_runtime.Spot
+    read_fields: parallel_handlers_runtime.Seeker{key} parallel_handlers_runtime.Spot{key}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:parallel_handlers_runtime.Seeker 1:parallel_handlers_runtime.Spot
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+parallel_handlers_runtime.cactus fixtures parallel_handlers_runtime.PingMovers/on std.core.tick
+    reads: parallel_handlers_runtime.Mover
+    read_fields: parallel_handlers_runtime.Mover{x}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: creation
+parallel_handlers_runtime.cactus fixtures parallel_handlers_runtime.PingSpinners/on std.core.tick
+    reads: parallel_handlers_runtime.Spinner
+    read_fields: parallel_handlers_runtime.Spinner{angle}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: creation
+parallel_handlers_runtime.cactus fixtures parallel_handlers_runtime.Sparkle/on std.core.tick
+    reads: parallel_handlers_runtime.Counter
+    read_fields: parallel_handlers_runtime.Counter{total}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads: [parallel_handlers_runtime.Field: parallel_handlers_runtime.Counter{total}]
+    named_writes:
+    named_requirements: parallel_handlers_runtime.Field/parallel_handlers_runtime.Counter
+    iteration_order: creation
+parallel_handlers_runtime.cactus fixtures parallel_handlers_runtime.TagSpinners/on std.core.tick
+    reads: parallel_handlers_runtime.Spinner
+    read_fields: parallel_handlers_runtime.Spinner{angle}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: creation
 relation_endpoint_limits.cactus examples relation_endpoint_limits.Allocate/on std.core.fixed_tick
     reads: relation_endpoint_limits.Candidate relation_endpoint_limits.Claim relation_endpoint_limits.Control
     read_fields: relation_endpoint_limits.Candidate{score} relation_endpoint_limits.Claim{} relation_endpoint_limits.Control{mode}

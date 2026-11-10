@@ -1,0 +1,44 @@
+module parallel_levels
+
+use std.core
+
+# Two disjoint tick rules share a dependency level, and a pair rule warns.
+
+trait Enemy:
+    var hp: int = 1
+
+trait Mover:
+    var x: float = 0.0
+
+template Grunt:
+    Enemy
+    Mover
+
+entity First:
+    Enemy
+    Mover
+
+rule Heal:
+    each: Enemy as e
+    on tick:
+        e.hp = e.hp + 1
+
+rule Move:
+    each: Mover as m
+    on tick:
+        m.x = m.x + 1.0
+
+rule Spawn:
+    each: Enemy as e
+    where: e.hp == 3
+    on tick:
+        spawn Grunt()
+
+rule P:
+    pairs:
+        a:
+            Enemy
+        b:
+            Enemy
+    on tick:
+        let total = a[Enemy].hp + b[Enemy].hp

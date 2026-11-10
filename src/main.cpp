@@ -4,6 +4,7 @@
 #include "frontend/lexer.hpp"
 #include "frontend/module_artifact.hpp"
 #include "frontend/module_resolver.hpp"
+#include "frontend/parallel_batches.hpp"
 #include "frontend/parser.hpp"
 #include "frontend/program_linker.hpp"
 #include "frontend/semantic_analyzer.hpp"
@@ -38,6 +39,7 @@ static void print_usage(const char* program) {
               << "  --output <file>                      Output file (default: stdout)\n"
               << "  --module-path <dir>                  Additional module search directory (repeatable)\n"
               << "  --warnings-as-errors                 Fail the build, generating nothing, if any warning is reported\n"
+              << "  --parallel-handlers                  Run independent phase handlers on worker threads\n"
               << "  --force-row-stage                    Test only: evaluate every clause expression per row\n"
               << "  --no-indexed-joins                   Test only: rebuild every pair pass from full snapshots\n"
               << "  --force-hashed-keys                  Test only: hash every equality index key\n"
@@ -269,6 +271,7 @@ struct CliArgs {
     bool no_shared_stores = false;
     bool retain_all_construction = false;
     bool warnings_as_errors = false;
+    bool parallel_handlers  = false;
     std::optional<std::string> grid_cell_size_text;
     std::optional<float> grid_cell_size;
 };
@@ -302,6 +305,10 @@ static std::optional<int> read_grid_cell_size(CliArgs& out) {
 static bool set_switch(const char* arg, CliArgs& out) {
     if (std::strcmp(arg, "--warnings-as-errors") == 0) {
         out.warnings_as_errors = true;
+        return true;
+    }
+    if (std::strcmp(arg, "--parallel-handlers") == 0) {
+        out.parallel_handlers = true;
         return true;
     }
     if (std::strcmp(arg, "--force-row-stage") == 0) {
@@ -463,6 +470,22 @@ static std::unique_ptr<cactus::ProgramNode> compile_multi_module_pipeline(const 
     return merged_codegen_prog;
 }
 
+static void apply_codegen_options(const CliArgs& args, cactus::DecoratedProgram& decorated) {
+    if (args.force_row_stage) {
+        for (auto& handler : decorated.execution_graph.handlers) {
+            handler.contract.staging = {};
+        }
+    }
+    decorated.index_pair_joins    = !args.no_indexed_joins;
+    decorated.force_hashed_keys   = args.force_hashed_keys;
+    decorated.share_static_stores = !args.no_shared_stores;
+    decorated.grid_cell_size      = args.grid_cell_size;
+    decorated.retain_all_construction = args.retain_all_construction;
+    if (args.parallel_handlers) {
+        decorated.parallel_handlers = cactus::plan_parallel_handlers(decorated);
+    }
+}
+
 static bool generate_cpp(const cactus::DecoratedProgram& decorated, std::string& generated) {
     try {
         generated = cactus::CppEnttCodegen::generate(decorated);
@@ -561,16 +584,7 @@ int main(int argc, char* argv[]) try {
         return 1;
     }
     decorated.ast = merged_codegen_prog ? merged_codegen_prog.get() : root_prog.get();
-    if (args.force_row_stage) {
-        for (auto& handler : decorated.execution_graph.handlers) {
-            handler.contract.staging = {};
-        }
-    }
-    decorated.index_pair_joins    = !args.no_indexed_joins;
-    decorated.force_hashed_keys   = args.force_hashed_keys;
-    decorated.share_static_stores = !args.no_shared_stores;
-    decorated.grid_cell_size      = args.grid_cell_size;
-    decorated.retain_all_construction = args.retain_all_construction;
+    apply_codegen_options(args, decorated);
     std::string generated;
     if (!generate_cpp(decorated, generated) || !write_generated_output(generated, output_file, backend)) {
         return 1;

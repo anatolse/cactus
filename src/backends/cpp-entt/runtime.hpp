@@ -2022,6 +2022,100 @@ void deliver_delayed_events(ActivationRuntime<Occurrence>& activation) {
     clock.clear();
 }
 
+// ── Parallel handlers ─────────────────────────────────────────────────────────
+// Each parallel handler writes to its own TaskOutputs; merging them in stable order matches a sequential build.
+
+// Test only: the number of worker threads besides the main thread; nullopt
+// restores the default, one per core besides the main thread.
+void set_parallel_workers(std::optional<std::size_t> count);
+void start_parallel_workers();
+// Runs `main_work` on the calling thread while the pool runs `worker_tasks`;
+// returns when all are done. A task's exception is rethrown here.
+void run_parallel_batch(std::span<const std::function<void()>> worker_tasks, const std::function<void()>& main_work);
+
+// While a parallel handler runs, faults it reports collect here.
+[[nodiscard]] std::vector<RangeFault>*& task_range_faults() noexcept;
+
+template <typename Occurrence>
+struct TaskOutputs {
+    ActivationRuntime<Occurrence> activation;
+    std::vector<RangeFault> faults;
+    PerfCounters counters;
+};
+
+template <typename Occurrence>
+[[nodiscard]] ActivationRuntime<Occurrence>*& task_activation() noexcept {
+    thread_local ActivationRuntime<Occurrence>* current = nullptr;
+    return current;
+}
+
+// The activation a handler's events and commands go to: its task's, or `main`.
+template <typename Occurrence>
+[[nodiscard]] ActivationRuntime<Occurrence>& output_activation(ActivationRuntime<Occurrence>& main) noexcept {
+    auto* task = task_activation<Occurrence>();
+    return task != nullptr ? *task : main;
+}
+
+// Sends the calling thread's events, commands, faults and work counts to `outputs` while it lives.
+template <typename Occurrence>
+class OutputRedirect {
+public:
+    explicit OutputRedirect(TaskOutputs<Occurrence>& outputs)
+        : activation_(std::exchange(task_activation<Occurrence>(), &outputs.activation)),
+          faults_(std::exchange(task_range_faults(), &outputs.faults))
+#ifdef CACTUS_RAYLIB_FAKE
+          ,
+          counters_(std::exchange(task_perf_counters(), &outputs.counters))
+#endif
+    {
+    }
+    OutputRedirect(const OutputRedirect&)            = delete;
+    OutputRedirect& operator=(const OutputRedirect&) = delete;
+    OutputRedirect(OutputRedirect&&)                 = delete;
+    OutputRedirect& operator=(OutputRedirect&&)      = delete;
+    ~OutputRedirect() {
+        task_activation<Occurrence>() = activation_;
+        task_range_faults()           = faults_;
+#ifdef CACTUS_RAYLIB_FAKE
+        task_perf_counters() = counters_;
+#endif
+    }
+
+private:
+    ActivationRuntime<Occurrence>* activation_;
+    std::vector<RangeFault>* faults_;
+#ifdef CACTUS_RAYLIB_FAKE
+    PerfCounters* counters_;
+#endif
+};
+
+// Runs `body` with its outputs sent to `outputs`; `component` is the handler's delivery cycle.
+template <typename Occurrence, typename Body>
+void run_with_outputs(TaskOutputs<Occurrence>& outputs, std::uint32_t component, const Body& body) {
+    outputs.activation.active            = true;
+    outputs.activation.current_component = component;
+    const OutputRedirect<Occurrence> redirect(outputs);
+    body();
+}
+
+template <typename Occurrence, std::size_t Count>
+void merge_task_outputs(ActivationRuntime<Occurrence>& main, std::array<TaskOutputs<Occurrence>, Count>& outputs) {
+    for (auto& task : outputs) {
+        main.event_queue.insert(main.event_queue.end(),
+                                std::make_move_iterator(task.activation.event_queue.begin()),
+                                std::make_move_iterator(task.activation.event_queue.end()));
+        main.commands.insert(main.commands.end(),
+                             std::make_move_iterator(task.activation.commands.begin()),
+                             std::make_move_iterator(task.activation.commands.end()));
+        for (const auto& fault : task.faults) {
+            report_range_fault(fault);
+        }
+#ifdef CACTUS_RAYLIB_FAKE
+        perf_counters() += task.counters;
+#endif
+    }
+}
+
 // A late lifecycle delivery runs only while the change still holds.
 template <typename T>
 [[nodiscard]] bool lifecycle_change_holds(const entt::registry& registry,

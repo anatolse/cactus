@@ -59,27 +59,41 @@ static void check_boundary_activation_order(const std::string& code) {
     CHECK(commit < settle);
 }
 
-// Drops every harness-only region, leaving what a build without the macro compiles.
-static std::string without_linearization_harness(const std::string& code) {
+// Drops each block between `begin` and `end`, keeping what follows an `#else` marker inside it.
+static std::string without_blocks(const std::string& code,
+                                  const std::string& begin,
+                                  const std::string& otherwise,
+                                  const std::string& end_marker) {
     std::string result;
     std::size_t position = 0;
     while (true) {
-        const auto start = code.find("#ifdef CACTUS_LINEARIZATION_HARNESS\n", position);
+        const auto start = code.find(begin, position);
         if (start == std::string::npos) {
             result += code.substr(position);
             return result;
         }
         result += code.substr(position, start - position);
-        const auto end_marker = std::string("#endif  // CACTUS_LINEARIZATION_HARNESS\n");
-        const auto end        = code.find(end_marker, start);
+        const auto end = code.find(end_marker, start);
         REQUIRE(end != std::string::npos);
-        const auto else_marker = code.find("#else  // CACTUS_LINEARIZATION_HARNESS\n", start);
+        const auto else_marker = code.find(otherwise, start);
         if (else_marker != std::string::npos && else_marker < end) {
-            const auto kept_start = else_marker + std::string("#else  // CACTUS_LINEARIZATION_HARNESS\n").size();
+            const auto kept_start = else_marker + otherwise.size();
             result += code.substr(kept_start, end - kept_start);
         }
         position = end + end_marker.size();
     }
+}
+
+// The code a build without CACTUS_LINEARIZATION_HARNESS and CACTUS_WORLD_DIGEST compiles.
+static std::string without_linearization_harness(const std::string& code) {
+    const auto digest = without_blocks(code,
+                                       "#if defined(CACTUS_LINEARIZATION_HARNESS) || defined(CACTUS_WORLD_DIGEST)\n",
+                                       "#else  // CACTUS_LINEARIZATION_HARNESS || CACTUS_WORLD_DIGEST\n",
+                                       "#endif  // CACTUS_LINEARIZATION_HARNESS || CACTUS_WORLD_DIGEST\n");
+    return without_blocks(digest,
+                          "#ifdef CACTUS_LINEARIZATION_HARNESS\n",
+                          "#else  // CACTUS_LINEARIZATION_HARNESS\n",
+                          "#endif  // CACTUS_LINEARIZATION_HARNESS\n");
 }
 
 // The payload parameter name of a generated handler function, whatever its spelling.

@@ -5,6 +5,16 @@
 #include <raylib.h>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
+#include <stop_token>
+#include <thread>
+
+#if defined(_M_X64) || defined(__x86_64__)
+#include <immintrin.h>
+#endif
 #include <iostream>
 #include <iterator>
 #include <map>
@@ -4471,7 +4481,16 @@ std::string describe_range_fault(const RangeFault& fault) {
     std::unreachable();
 }
 
+std::vector<RangeFault>*& task_range_faults() noexcept {
+    thread_local std::vector<RangeFault>* faults = nullptr;
+    return faults;
+}
+
 void report_range_fault(const RangeFault& fault) {
+    if (auto* task = task_range_faults(); task != nullptr) {
+        task->push_back(fault);
+        return;
+    }
     auto& log = range_fault_log();
     if (log.faults.size() == RUNTIME_FAULT_LOG_CAPACITY) {
         log.faults.pop_front();
@@ -4479,6 +4498,217 @@ void report_range_fault(const RangeFault& fault) {
     log.faults.push_back(fault);
     ++log.count;
     std::clog << "cactus: warning: " << describe_range_fault(fault) << "; the command did nothing" << '\n';
+}
+
+// ── Parallel handlers ─────────────────────────────────────────────────────────
+
+namespace {
+
+// Spins briefly before sleeping: batches of one frame follow each other within
+// microseconds, and a condition-variable wake-up costs more than a short handler.
+template <typename Ready>
+bool spin_until(const Ready& ready) {
+    constexpr auto kSpin = std::chrono::microseconds{200};
+    const auto deadline  = std::chrono::steady_clock::now() + kSpin;
+    for (std::uint32_t round = 1;; ++round) {
+        if (ready()) {
+            return true;
+        }
+        if (round % 64U == 0 && std::chrono::steady_clock::now() > deadline) {
+            return false;
+        }
+#if defined(_M_X64) || defined(__x86_64__)
+        _mm_pause();
+#else
+        std::this_thread::yield();
+#endif
+    }
+}
+
+// Workers claim a batch's tasks by index; the caller helps after its own work
+// and returns once every task is done and no worker still holds the batch.
+class WorkerPool {
+public:
+    explicit WorkerPool(std::size_t workers) {
+        threads_.reserve(workers);
+        for (std::size_t index = 0; index < workers; ++index) {
+            threads_.emplace_back([this](const std::stop_token& stop) { work(stop); });
+        }
+    }
+    WorkerPool(const WorkerPool&)            = delete;
+    WorkerPool& operator=(const WorkerPool&) = delete;
+    WorkerPool(WorkerPool&&)                 = delete;
+    WorkerPool& operator=(WorkerPool&&)      = delete;
+    ~WorkerPool() {
+        for (auto& thread : threads_) {
+            thread.request_stop();
+        }
+        {
+            const std::scoped_lock lock(mutex_);
+            published_.store(++generation_, std::memory_order_release);
+        }
+        wake_.notify_all();
+    }
+
+    void run(std::span<const std::function<void()>> tasks, const std::function<void()>& main_work) {
+        if (threads_.empty() || tasks.empty()) {
+            main_work();
+            for (const auto& task : tasks) {
+                task();
+            }
+            return;
+        }
+        Batch batch{.tasks = tasks, .next = 0, .remaining = tasks.size()};
+        bool sleeping = false;
+        {
+            const std::scoped_lock lock(mutex_);
+            batch_   = &batch;
+            failure_ = nullptr;
+            published_.store(++generation_, std::memory_order_release);
+            sleeping = sleepers_ > 0;
+        }
+        if (sleeping) {
+            wake_.notify_all();
+        }
+        std::exception_ptr main_failure;
+        try {
+            main_work();
+        } catch (...) {
+            main_failure = std::current_exception();
+        }
+        claim(batch);
+        const auto done = [&] {
+            return batch.remaining.load(std::memory_order_acquire) == 0 &&
+                   active_.load(std::memory_order_acquire) == 0;
+        };
+        (void)spin_until(done);
+        std::exception_ptr task_failure;
+        {
+            std::unique_lock lock(mutex_);
+            main_waiting_ = true;
+            done_.wait(lock, done);
+            main_waiting_ = false;
+            batch_        = nullptr;
+            task_failure  = failure_;
+        }
+        if (main_failure) {
+            std::rethrow_exception(main_failure);
+        }
+        if (task_failure) {
+            std::rethrow_exception(task_failure);
+        }
+    }
+
+private:
+    struct Batch {
+        std::span<const std::function<void()>> tasks;
+        std::atomic<std::size_t> next;
+        std::atomic<std::size_t> remaining;
+    };
+
+    void claim(Batch& batch) {
+        for (auto index = batch.next.fetch_add(1, std::memory_order_relaxed); index < batch.tasks.size();
+             index      = batch.next.fetch_add(1, std::memory_order_relaxed)) {
+            try {
+                batch.tasks[index]();
+            } catch (...) {
+                const std::scoped_lock lock(mutex_);
+                if (!failure_) {
+                    failure_ = std::current_exception();
+                }
+            }
+            batch.remaining.fetch_sub(1, std::memory_order_acq_rel);
+        }
+    }
+
+    void work(const std::stop_token& stop) {
+        std::uint64_t seen = 0;
+        while (true) {
+            (void)spin_until([&] { return published_.load(std::memory_order_acquire) != seen; });
+            Batch* batch = nullptr;
+            {
+                std::unique_lock lock(mutex_);
+                if (generation_ == seen) {
+                    ++sleepers_;
+                    wake_.wait(lock, [&] { return generation_ != seen; });
+                    --sleepers_;
+                }
+                seen = generation_;
+                if (stop.stop_requested()) {
+                    return;
+                }
+                if (batch_ == nullptr) {
+                    continue;
+                }
+                batch = batch_;
+                active_.fetch_add(1, std::memory_order_acq_rel);
+            }
+            claim(*batch);
+            {
+                const std::scoped_lock lock(mutex_);
+                active_.fetch_sub(1, std::memory_order_acq_rel);
+                if (main_waiting_) {
+                    done_.notify_one();
+                }
+            }
+        }
+    }
+
+    std::mutex mutex_;
+    std::condition_variable wake_;
+    std::condition_variable done_;
+    Batch* batch_ = nullptr;  // guarded by mutex_
+    // Workers holding batch_; changed only under mutex_, read without it while spinning.
+    std::atomic<std::size_t> active_{0};
+    std::exception_ptr failure_;    // guarded by mutex_
+    std::uint64_t generation_ = 0;  // guarded by mutex_
+    std::atomic<std::uint64_t> published_{0};  // generation_, for workers spinning without the lock
+    std::size_t sleepers_ = 0;                 // guarded by mutex_
+    bool main_waiting_    = false;             // guarded by mutex_
+    std::vector<std::jthread> threads_;
+};
+
+struct ParallelWorkers {
+    std::optional<std::size_t> requested;
+    std::unique_ptr<WorkerPool> pool;
+};
+
+ParallelWorkers& parallel_workers() {
+    static ParallelWorkers workers;
+    return workers;
+}
+
+// Hyperthreads sharing a core slowed levels down, so count cores as half the hardware threads.
+std::size_t default_worker_count() {
+    const auto cores = std::thread::hardware_concurrency() / 2;
+    return cores > 1 ? cores - 1 : 0;
+}
+
+WorkerPool& worker_pool() {
+    auto& workers = parallel_workers();
+    if (!workers.pool) {
+        workers.pool = std::make_unique<WorkerPool>(workers.requested.value_or(default_worker_count()));
+    }
+    return *workers.pool;
+}
+
+}  // namespace
+
+void set_parallel_workers(std::optional<std::size_t> count) {
+    auto& workers = parallel_workers();
+    workers.pool.reset();
+    workers.requested = count;
+}
+
+void start_parallel_workers() {
+    (void)worker_pool();
+}
+
+void run_parallel_batch(std::span<const std::function<void()>> worker_tasks, const std::function<void()>& main_work) {
+    if (!worker_tasks.empty()) {
+        count_parallel_batch(worker_tasks.size());
+    }
+    worker_pool().run(worker_tasks, main_work);
 }
 
 std::vector<entt::entity> owners_of(const HierarchyIndex* hierarchy, entt::entity entity) {

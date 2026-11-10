@@ -153,6 +153,8 @@ public:
     static const ResolvedStruct* find_struct(const DecoratedProgram& program, const std::string& simple_name);
     static const ResolvedStruct* find_struct(const DecoratedProgram& program, const SymbolId& symbol);
     static const ResolvedFunc*   find_func(const DecoratedProgram& program, const SymbolId& symbol);
+    // Built with --parallel-handlers and planned into a parallel level.
+    static bool in_parallel_level(const DecoratedProgram& program, const HandlerIdentity& handler);
     static const ResolvedConst*  find_const(const DecoratedProgram& program, const SymbolId& symbol);
     static const ExprNode*       find_const_initializer(const ProgramNode& ast, const SymbolId& symbol);
     // Emitted `inline constexpr` (strings as `std::string_view`); other constants stay `inline const`.

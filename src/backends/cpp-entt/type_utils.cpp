@@ -1032,6 +1032,10 @@ const ResolvedStruct* EnttCodegenUtils::find_struct(const DecoratedProgram& prog
     return nullptr;
 }
 
+bool EnttCodegenUtils::in_parallel_level(const DecoratedProgram& program, const HandlerIdentity& handler) {
+    return program.parallel_handlers.has_value() && program.parallel_handlers->level_of(handler) != nullptr;
+}
+
 const ResolvedFunc* EnttCodegenUtils::find_func(const DecoratedProgram& program, const SymbolId& symbol) {
     const auto canonical = make_canonical_id(symbol);
     if (const auto found = program.funcs.find(canonical); found != program.funcs.end()) {

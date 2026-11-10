@@ -106,7 +106,10 @@ public:
 protected:
     // True when the cached rows are stale and must be dropped.
     bool sync(entt::registry& registry) {
-        registry_          = &registry;
+        // Concurrent readers reach here; an unchanged pointer must not be written.
+        if (registry_ != &registry) {
+            registry_ = &registry;
+        }
         const auto current = source_rows<typename Row::Source>(registry).revision();
         if (current == source_revision_ && !members_changed_) {
             return false;

@@ -148,6 +148,108 @@ void visit_expression(Expression& expression, const Visitor& visitor) {
         expression.expr);
 }
 
+namespace statement_children {
+
+template <typename Visit>
+void visit_child(const std::unique_ptr<ExprNode>& child, const Visit& visit) {
+    if (child != nullptr) {
+        visit(*child);
+    }
+}
+
+template <typename Visit>
+void visit_child(const std::optional<std::unique_ptr<ExprNode>>& child, const Visit& visit) {
+    if (child.has_value()) {
+        visit_child(*child, visit);
+    }
+}
+
+template <typename Visit>
+void visit_children(const std::vector<FieldAssignment>& assignments, const Visit& visit) {
+    for (const auto& assignment : assignments) {
+        visit_child(assignment.value, visit);
+    }
+}
+
+// The expressions a statement holds itself, not those of its nested blocks.
+template <typename Node, typename Visit>
+void visit_statement_expressions(const Node& node, const Visit& visit) {
+    if constexpr (requires { node.value; }) {
+        visit_child(node.value, visit);
+    }
+    if constexpr (requires { node.target_expr; }) {
+        visit_child(node.target_expr, visit);
+    }
+    if constexpr (requires { node.target; }) {
+        visit_child(node.target, visit);
+    }
+    if constexpr (requires { node.payload; }) {
+        visit_children(node.payload, visit);
+    }
+    if constexpr (requires { node.args; }) {
+        visit_children(node.args, visit);
+    }
+    if constexpr (requires {
+                      node.from;
+                      node.to;
+                  }) {
+        visit_child(node.from, visit);
+        visit_child(node.to, visit);
+    }
+    if constexpr (requires { node.expr; }) {
+        visit_child(node.expr, visit);
+    }
+    if constexpr (requires { node.iterable; }) {
+        visit_child(node.iterable, visit);
+    }
+    if constexpr (requires { node.condition; }) {
+        visit_child(node.condition, visit);
+    }
+    if constexpr (requires { node.subject; }) {
+        visit_child(node.subject, visit);
+    }
+}
+
+}  // namespace statement_children
+
+// Calls `visit` on every expression a statement list holds, statements nested included.
+template <typename Visit>
+void for_each_statement_expression(const std::vector<std::unique_ptr<StmtNode>>& stmts, const Visit& visit) {
+    for (const auto& stmt : stmts) {
+        std::visit(
+            [&](const auto& node) {
+                statement_children::visit_statement_expressions(node, visit);
+                if constexpr (requires { node.iterable; }) {
+                    for_each_statement_expression(node.body, visit);
+                }
+                if constexpr (requires { node.then_body; }) {
+                    for_each_statement_expression(node.then_body, visit);
+                    for (const auto& branch : node.else_if_branches) {
+                        statement_children::visit_child(branch.condition, visit);
+                        for_each_statement_expression(branch.body, visit);
+                    }
+                    for_each_statement_expression(node.else_body, visit);
+                }
+                if constexpr (requires { node.arms; }) {
+                    for (const auto& arm : node.arms) {
+                        for_each_statement_expression(arm.body, visit);
+                    }
+                }
+            },
+            stmt->stmt);
+    }
+}
+
+[[nodiscard]] inline const FuncNode* find_func_decl(const ProgramNode& ast, const SymbolId& symbol) {
+    for (const auto& decl : ast.declarations) {
+        const auto* func = std::get_if<FuncNode>(&decl);
+        if (func != nullptr && func->resolved_func_id.has_value() && *func->resolved_func_id == symbol) {
+            return func;
+        }
+    }
+    return nullptr;
+}
+
 inline void collect_chain_paths(const ExprNode& expr, std::string_view op, ExprPath& path, std::vector<ExprPath>& out) {
     const auto* binary = std::get_if<BinaryExpr>(&expr.expr);
     if (binary == nullptr || binary->op != op) {

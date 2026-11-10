@@ -1,6 +1,7 @@
 #include "backends/cpp-entt/render_pass_emitter.hpp"
 
 #include "backends/cpp-entt/type_utils.hpp"
+#include "common/ast_expressions.hpp"
 #include "common/codegen_error.hpp"
 #include "common/render_pass_builtin_fields.hpp"
 #include "common/render_pass_intrinsics.hpp"
@@ -196,16 +197,6 @@ std::string hex_color_literal_to_glsl(const std::string& raw_hex) {
         return out.str();
     };
     return "vec4(" + channel(0) + ", " + channel(2) + ", " + channel(4) + ", " + channel(6) + ")";
-}
-
-const FuncNode* find_func_decl(const ProgramNode& ast, const SymbolId& symbol) {
-    for (const auto& decl : ast.declarations) {
-        const auto* func = std::get_if<FuncNode>(&decl);
-        if (func != nullptr && func->resolved_func_id.has_value() && *func->resolved_func_id == symbol) {
-            return func;
-        }
-    }
-    return nullptr;
 }
 
 TranslatedExpr translate_expr(const ExprNode& expr, GlslCtx& ctx);

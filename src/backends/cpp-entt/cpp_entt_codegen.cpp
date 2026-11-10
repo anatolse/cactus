@@ -180,11 +180,42 @@ std::vector<SymbolId> sorted_symbols(const std::unordered_set<SymbolId>& symbols
     return result;
 }
 
+// Creates every pool and context entry up front, so no handler of a parallel level inserts into shared maps.
+void emit_parallel_world(std::ostringstream& out, const DecoratedProgram& program) {
+    out << "ActivationRuntime<EventOccurrence>& generated_output_activation() {\n";
+    out << "    return output_activation(generated_scheduler_state().activation);\n";
+    out << "}\n\n";
+    out << "void generated_prepare_parallel_world(entt::registry& registry) {\n";
+    out << "    (void)cactus::runtime::entt_backend::entity_allocator(registry);\n";
+    out << "    (void)registry.storage<CreationOrdinal>();\n";
+    out << "    (void)registry.storage<ArchetypeOrigin>();\n";
+    for (const auto* trait : sorted_by_canonical_id(program.traits)) {
+        out << "    (void)registry.storage<" << cpp_type_ref(SymbolKind::Trait, trait->module_name, trait->name)
+            << ">();\n";
+    }
+    for (const auto* relation : sorted_by_canonical_id(program.relations)) {
+        if (relation->symbol_id.has_value() && relation->derivation.has_value()) {
+            out << "    (void)" << EnttCodegenUtils::relation_reader_cpp(program, *relation->symbol_id) << ";\n";
+        }
+    }
+    out << "    cactus::runtime::entt_backend::start_parallel_workers();\n";
+    out << "}\n\n";
+}
+
+// The activation that handlers send outputs to; in a parallel build, each task has its own buffer.
+std::string emit_output_activation(std::ostringstream& out, const DecoratedProgram& program) {
+    if (!program.parallel_handlers.has_value()) {
+        return "generated_scheduler_state().activation";
+    }
+    emit_parallel_world(out, program);
+    return "generated_output_activation()";
+}
+
 // Harness-only: one hash of every entity's traits, entities in creation order
 // and traits in canonical order, so two worlds compare by value.
 std::string emit_world_digest(const DecoratedProgram& program) {
     std::ostringstream out;
-    out << "#ifdef CACTUS_LINEARIZATION_HARNESS\n";
+    out << "#if defined(CACTUS_LINEARIZATION_HARNESS) || defined(CACTUS_WORLD_DIGEST)\n";
     out << "namespace cactus::runtime::entt_backend {\n";
     for (const auto* declaration : sorted_by_canonical_id(program.structs)) {
         out << "inline void digest_value(WorldDigest& digest, const "
@@ -223,7 +254,7 @@ std::string emit_world_digest(const DecoratedProgram& program) {
     out << "    return digest.value();\n";
     out << "}\n";
     out << "}  // namespace cactus::runtime::entt_backend\n";
-    out << "#endif  // CACTUS_LINEARIZATION_HARNESS\n";
+    out << "#endif  // CACTUS_LINEARIZATION_HARNESS || CACTUS_WORLD_DIGEST\n";
     return out.str();
 }
 
@@ -1533,12 +1564,13 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program,
     out << "    return reserve_entity(registry);\n";
     out << "}\n\n";
 
+    const std::string output_activation = emit_output_activation(out, program);
     out << "void generated_queue_structural_command(StructuralCommand::Kind kind,\n";
     out << "                                        std::function<void(entt::registry&)> apply,\n";
     out << "                                        entt::entity subject = entt::null,\n";
     out << "                                        entt::id_type removed = {}) {\n";
-    out << "    queue_structural_command(generated_scheduler_state().activation, kind, std::move(apply), subject, "
-           "removed);\n";
+    out << "    queue_structural_command(" << output_activation
+        << ", kind, std::move(apply), subject, removed);\n";
     out << "}\n\n";
     emit_single_commit_round(out, program);
 
@@ -1546,7 +1578,7 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program,
     // generated_commit_activation, which passes it to the runtime commit.
     out << "template <typename Occurrence>\n";
     out << "void generated_emit_event(Occurrence occurrence) {\n";
-    out << "    emit_event(generated_scheduler_state().activation, std::move(occurrence));\n";
+    out << "    emit_event(" << output_activation << ", std::move(occurrence));\n";
     out << "}\n\n";
 
     // Targeted counterpart of generated_emit_event (targeted-event-delivery):
@@ -1557,7 +1589,7 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program,
     // broadcast dispatch.
     out << "template <typename Occurrence>\n";
     out << "void generated_emit_targeted_event(Occurrence occurrence, entt::entity target) {\n";
-    out << "    emit_targeted_event(generated_scheduler_state().activation, std::move(occurrence), target);\n";
+    out << "    emit_targeted_event(" << output_activation << ", std::move(occurrence), target);\n";
     out << "}\n\n";
     emit_delayed_emit_overloads(out, program, delivery, all_events);
 
@@ -1722,7 +1754,111 @@ bool emit_phase_handler_call(std::ostringstream& out,
 struct DispatchCall {
     HandlerIdentity identity;
     std::string text;
+    std::string prepare;  // call of the handler's prepare function, in a parallel level
 };
+
+void emit_parallel_batch(std::ostringstream& out,
+                         const std::vector<const DispatchCall*>& workers,
+                         const std::vector<const DispatchCall*>& main_thread,
+                         const std::function<std::string(const DispatchCall&)>& task) {
+    out << "    {\n";
+    out << "    const std::array<std::function<void()>, " << workers.size() << "> cactus_workers{";
+    if (!workers.empty()) {
+        out << "{\n";
+        for (const auto* worker : workers) {
+            out << "        [&] {\n" << task(*worker) << "        },\n";
+        }
+        out << "    }";
+    }
+    out << "};\n";
+    out << "    cactus::runtime::entt_backend::run_parallel_batch(cactus_workers, [&] {\n";
+    for (const auto* call : main_thread) {
+        out << task(*call);
+    }
+    out << "    });\n";
+    out << "    }\n";
+}
+
+// Prepares every member's shared structures, runs the batches in order, then merges outputs in stable order.
+void emit_parallel_level(std::ostringstream& out,
+                         const ParallelLevel& level,
+                         const ParallelPlan& plan,
+                         const AccumulationPlan& accumulation,
+                         const DeliveryPlan& delivery,
+                         const std::vector<DispatchCall>& calls) {
+    std::vector<const DispatchCall*> members;
+    for (const auto& call : calls) {
+        const auto* found = plan.level_of(call.identity);
+        if (found == &level) {
+            members.push_back(&call);
+        }
+    }
+    const auto slot_of = [&](const HandlerIdentity& identity) {
+        return static_cast<std::size_t>(
+            std::ranges::find(members, identity, [](const DispatchCall* call) { return call->identity; }) -
+            members.begin());
+    };
+    const auto outputs   = "cactus_outputs_" + std::to_string(level.index);
+    const auto component = [&](const HandlerIdentity& identity) {
+        return delivery.cyclic() ? delivery.component_literal(identity) : std::string{"kNoComponent"};
+    };
+    const auto task = [&](const DispatchCall& call) {
+        return "        cactus::runtime::entt_backend::run_with_outputs(" + outputs + "[" +
+               std::to_string(slot_of(call.identity)) + "], " + component(call.identity) + ", [&] {\n" + call.text +
+               "        });\n";
+    };
+    out << "    {\n";
+    for (const auto* member : members) {
+        out << accumulation.entry_flushes(member->identity) << member->prepare;
+    }
+    out << "    std::array<cactus::runtime::entt_backend::TaskOutputs<EventOccurrence>, " << members.size() << "> "
+        << outputs << "{};\n";
+    for (const auto& batch : level.batches) {
+        std::vector<const DispatchCall*> workers;
+        std::vector<const DispatchCall*> main_thread;
+        for (const auto& identity : batch.handlers) {
+            const auto slot = slot_of(identity);
+            if (slot == members.size()) {
+                continue;
+            }
+            (plan.eligible.contains(identity) ? workers : main_thread).push_back(members[slot]);
+        }
+        // A lone handler gains nothing from a worker; the main thread runs it.
+        if (workers.size() == 1 && main_thread.empty()) {
+            main_thread.swap(workers);
+        }
+        emit_parallel_batch(out, workers, main_thread, task);
+        for (const auto& identity : batch.handlers) {
+            out << accumulation.exit_rebase(identity);
+        }
+    }
+    out << "    cactus::runtime::entt_backend::merge_task_outputs(generated_scheduler_state().activation, " << outputs
+        << ");\n";
+    out << "    }\n";
+}
+
+// The dispatch of `calls` in stable order, with each planned parallel level run as batches.
+void emit_parallel_dispatch(std::ostringstream& out,
+                            const DecoratedProgram& program,
+                            const AccumulationPlan& accumulation,
+                            const DeliveryPlan& delivery,
+                            const std::vector<DispatchCall>& calls,
+                            const std::function<std::string(const DispatchCall&)>& sequential) {
+    const auto& plan = *program.parallel_handlers;
+    std::vector<const ParallelLevel*> emitted;
+    for (const auto& call : calls) {
+        const auto* level = plan.level_of(call.identity);
+        if (level == nullptr) {
+            out << sequential(call);
+            continue;
+        }
+        if (std::ranges::contains(emitted, level)) {
+            continue;
+        }
+        emitted.push_back(level);
+        emit_parallel_level(out, *level, plan, accumulation, delivery, calls);
+    }
+}
 
 // A set of two or more calls runs, under CACTUS_LINEARIZATION_HARNESS, in a
 // seeded linear extension of the schedule edges inside the set.
@@ -1735,7 +1871,8 @@ void emit_dispatch_calls(std::ostringstream& out,
                          const std::vector<DispatchCall>& calls,
                          bool routed = false) {
     const auto text = [&](const DispatchCall& call) {
-        auto body = accumulation.entry_flushes(call.identity) + call.text + accumulation.exit_rebase(call.identity);
+        auto body =
+            accumulation.entry_flushes(call.identity) + call.prepare + call.text + accumulation.exit_rebase(call.identity);
         if (!delivery.cyclic()) {
             return body;
         }
@@ -1786,8 +1923,12 @@ void emit_dispatch_calls(std::ostringstream& out,
     out << "        }\n";
     out << "    });\n";
     out << "#else  // CACTUS_LINEARIZATION_HARNESS\n";
-    for (const auto& call : calls) {
-        out << text(call);
+    if (program.parallel_handlers.has_value()) {
+        emit_parallel_dispatch(out, program, accumulation, delivery, calls, text);
+    } else {
+        for (const auto& call : calls) {
+            out << text(call);
+        }
     }
     out << "#endif  // CACTUS_LINEARIZATION_HARNESS\n";
 }
@@ -1803,9 +1944,16 @@ bool emit_phase_handler_calls(std::ostringstream& out,
     for (const auto& identity : program.execution_graph.stable_topological_order) {
         std::ostringstream call;
         emitted |= emit_phase_handler_call(call, program, phase, identity, emitted_callees);
-        if (!call.view().empty()) {
-            calls.push_back(DispatchCall{.identity = identity, .text = std::move(call).str()});
+        if (call.view().empty()) {
+            continue;
         }
+        const auto callee = EnttCodegenUtils::in_parallel_level(program, identity)
+                                ? cactus_handler_callee(program, identity)
+                                : std::nullopt;
+        calls.push_back(DispatchCall{.identity = identity,
+                                     .text     = std::move(call).str(),
+                                     .prepare  = callee.has_value() ? "    " + *callee + "_prepare(registry, phase);\n"
+                                                                    : std::string{}});
     }
     emit_dispatch_calls(out, program, accumulation, delivery, calls);
     return emitted;
@@ -3794,9 +3942,9 @@ static void emit_headers(std::ostringstream& out, const DecoratedProgram& progra
     out << "// Generated C++ mirrors authored DSL constants, declarations, and system control flow.\n\n";
     out << "#include \"common/float_mode.hpp\"\n\n";
     out << "#include \"backends/cpp-entt/runtime.hpp\"\n";
-    out << "#ifdef CACTUS_LINEARIZATION_HARNESS\n";
+    out << "#if defined(CACTUS_LINEARIZATION_HARNESS) || defined(CACTUS_WORLD_DIGEST)\n";
     out << "#include \"backends/cpp-entt/linearization_harness.hpp\"\n";
-    out << "#endif  // CACTUS_LINEARIZATION_HARNESS\n";
+    out << "#endif  // CACTUS_LINEARIZATION_HARNESS || CACTUS_WORLD_DIGEST\n";
     if (program_uses_persistence(program)) {
         out << "#include \"backends/cpp-entt/persistence_file_adapter.hpp\"\n";
     }
@@ -4246,6 +4394,9 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "    generated_connect_lifecycle_trackers(registry);\n";
     }
     out << (program.relations.empty() ? "" : "    generated_connect_relations(registry);\n");
+    if (program.parallel_handlers.has_value()) {
+        out << "    generated_prepare_parallel_world(registry);\n";
+    }
     if (program.ast != nullptr) {
         for (auto& decl : program.ast->declarations) {
             if (auto* asset = std::get_if<AssetDeclNode>(&decl)) {

@@ -269,7 +269,7 @@ rule LinkedTiles:
         a[Tile].weight >= 0
     keep Linked on b
 
-# Union plan.
+# Union plan: both branches hold the heart itself.
 rule ReachCounts:
     pairs:
         heart:
@@ -277,7 +277,7 @@ rule ReachCounts:
             Heart
         tile: Tile
     where:
-        tile == heart or Reach(heart, tile)
+        Reach(heart, tile) or Reach(tile, heart)
     reduce per heart:
         n = count()
         top = best(tile, by = tile[Tile].weight)
@@ -294,7 +294,7 @@ rule ConnectedTiles:
         tile: Tile
     group: links
     where:
-        tile == heart or Reach(heart, tile)
+        Reach(heart, tile)
     keep Connected on tile
 
 # A product: the closure test does not drive the pass.

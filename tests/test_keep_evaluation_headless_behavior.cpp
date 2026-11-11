@@ -132,10 +132,10 @@ struct World {
         return fold;
     }
 
-    // Tiles `heart` reaches through Territory, itself excluded unless on a cycle.
-    std::vector<entt::entity> reached(entt::entity heart) {
-        std::vector<entt::entity> found;
-        std::vector<entt::entity> frontier{heart};
+    // Tiles `start` reaches through Territory, itself included.
+    std::vector<entt::entity> reached(entt::entity start) {
+        std::vector<entt::entity> found{start};
+        std::vector<entt::entity> frontier{start};
         const auto& territory = backend::relation_store<game::Territory>(registry);
         while (!frontier.empty()) {
             const auto from = frontier.back();
@@ -150,9 +150,9 @@ struct World {
         return found;
     }
 
-    bool reaches(entt::entity heart, entt::entity tile) {
-        const auto found = reached(heart);
-        return std::ranges::find(found, tile) != found.end();
+    bool reaches(entt::entity from, entt::entity to) {
+        const auto found = reached(from);
+        return std::ranges::find(found, to) != found.end();
     }
 
     bool sees(entt::entity probe, entt::entity tile) {
@@ -201,8 +201,7 @@ struct World {
             CHECK(top_of(a, game::LinkTop{}) == linked.top);
             const bool linked_to = std::ranges::any_of(live, [&](entt::entity from) { return links.contains(from, a); });
             CHECK(registry.all_of<game::Linked>(a) == linked_to);
-            const bool connected =
-                std::ranges::any_of(hearts(), [&](entt::entity heart) { return a == heart || reaches(heart, a); });
+            const bool connected = std::ranges::any_of(hearts(), [&](entt::entity heart) { return reaches(heart, a); });
             CHECK(registry.all_of<game::Connected>(a) == connected);
             bool spotted = false;
             for (const auto probe : registry.view<game::Probe>()) {
@@ -211,7 +210,7 @@ struct World {
             CHECK(registry.all_of<game::Spotted>(a) == spotted);
         }
         for (const auto heart : hearts()) {
-            const auto reach = fold_tiles([&](entt::entity b) { return b == heart || reaches(heart, b); });
+            const auto reach = fold_tiles([&](entt::entity b) { return reaches(heart, b) || reaches(b, heart); });
             CHECK(registry.get<game::Tile>(heart).reach == reach.count);
             CHECK(top_of(heart, game::ReachTop{}) == reach.top);
             const auto any = fold_tiles([&](entt::entity b) {
@@ -327,11 +326,12 @@ TEST_CASE("keep evaluation: batched keeps, planned folds and cached membership",
             }
         }
     }
-    {  // a derived relation test keys its search by the end that stays fixed
+    {  // a derived relation test keys its search by the end that stays fixed: one per heart and direction
         world.territory(7, 15);
         const auto reach_before = backend::derived_relation<game::Reach>(world.registry).builds();
         world.tick();
-        CHECK(backend::derived_relation<game::Reach>(world.registry).builds() - reach_before <= world.hearts().size());
+        CHECK(backend::derived_relation<game::Reach>(world.registry).builds() - reach_before <=
+              2 * world.hearts().size());
         world.check_folds();
 
         for (const auto& [from, to] : {std::pair{12, 13}, std::pair{13, 14}, std::pair{14, 15}, std::pair{15, 11}}) {

@@ -384,9 +384,21 @@ derived_form     = "closure" "(" dotted_name ")"
                  | "components" "(" dotted_name ")" ;
 ```
 
-- `relation Reach = closure(R)` holds `(a, b)` exactly when a chain of one or more `R` rows leads from `a` to `b`. `(a, a)` holds only when a chain leads back to `a`.
-- `relation Route = shortest(R, by = cost)` holds `(a, b)` for every `b ≠ a` that a chain reaches with total cost at most `2147483647`. `cost` must be an `int` field of `R`; a negative cost counts as `0`. A row has fields `distance: int`, the least total cost, and `next: entity_id`, the first step of a cheapest chain. When several cheapest chains start with different steps, `next` is the oldest of them (lowest creation order).
-- `relation Room = components(R)` treats `R`'s rows as two-way links over every entity that carries `R`'s end trait. It holds one row `(m, root)` per such entity, where `root` is the oldest member of `m`'s connected group; an entity with no rows is its own group. The `from` end is `one`. When groups merge, the older name survives; when a group splits, the part without the old root takes its own oldest member.
+The three forms are one family. Each reads the paths over `R`: chains of zero or more `R` rows between entities that carry `R`'s end trait. A chain of zero rows, the empty path, leads from an entity to itself.
+
+- `relation Reach = closure(R)` asks whether a path exists. It holds `(a, b)` exactly when a chain of `R` rows leads from `a` to `b`, or when `b` is `a` and `a` carries the end trait. So every carrier reaches itself; an entity without the trait reaches nothing. To ask whether `a` lies on a cycle, write `R(a, n) and Reach(n, a)`.
+- `relation Route = shortest(R, by = cost)` asks for the cheapest path. It holds `(a, b)` for every `b ≠ a` that a chain reaches with total cost at most `2147483647`. `cost` must be an `int` field of `R`; a negative cost counts as `0`. A row has fields `distance: int`, the least total cost, and `next: entity_id`, the first step of a cheapest chain. When several cheapest chains start with different steps, `next` is the oldest of them (lowest creation order).
+- `relation Room = components(R)` asks which connected group an entity is in. It treats `R`'s rows as two-way links over every entity that carries `R`'s end trait, and holds one row `(m, root)` per such entity, where `root` is the oldest member of `m`'s connected group; an entity with no rows is its own group. The `from` end is `one`. When groups merge, the older name survives; when a group splits, the part without the old root takes its own oldest member.
+
+They differ on purpose in three ways:
+
+| | `closure` | `shortest` | `components` |
+|---|---|---|---|
+| Identity rows | `(a, a)` for every carrier | none | `(a, a)` when `a` is its group's oldest |
+| Path witness | none | `next` and `distance` | none |
+| Grouping | none | none | one `root` per group, links taken both ways |
+
+`shortest` has no `(a, a)` row because the empty path has no first step for `next`. A missing route from a walker's position to its goal therefore means it has arrived.
 
 A derived relation has both ends on `R`'s end trait. It is read-only (`keep`, `add` and `remove` of it are errors), it is never saved, and every pass reads it as a function of `R`'s rows in that pass's snapshot, including right after a restore. `R` may itself be derived. A row binding of a `closure` or `shortest` relation must fix one end with a top-level `where:` conjunct `r.from == e` or `r.to == e`, where `e` doesn't read the row, so a pass never lists all pairs; `components` row bindings and every relation test need no such conjunct. Derived rows are ordered by the creation order of their `from` end, then of their `to` end.
 
@@ -415,7 +427,7 @@ rule ConnectedFact:
     each: Tile
     group: links
     where:
-        Reach(Heart, self) or self == Heart
+        Reach(Heart, self)
     keep Connected
 
 # Each walker takes the first step of a cheapest route to its target.
@@ -444,7 +456,7 @@ rule RoomSizes:
         size = n
 ```
 
-The backend computes only the rows that rules ask for and caches them until `R` changes: a reach set per fixed end for `closure`, a cheapest-route table per goal (for `r.to ==`) or per source for `shortest`, and one union-find for `components`.
+The backend computes only the rows that rules ask for and caches them until `R` or, for `closure` and `components`, the set of end-trait carriers changes: a reach set per fixed end for `closure`, a cheapest-route table per goal (for `r.to ==`) or per source for `shortest`, and one union-find for `components`.
 
 ### 3.7 Entities and Templates
 

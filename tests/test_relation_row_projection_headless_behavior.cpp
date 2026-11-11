@@ -223,6 +223,9 @@ TEST_CASE("Right-driven derived projection agrees with a product reference", "[h
     const std::array nodes{s.Start, s.Other, s.Goal, s.Last};
     const std::array edges{Pair{s.Start, s.Goal}, Pair{s.Last, s.Other}, Pair{s.Other, s.Last}, Pair{s.Goal, s.Last}};
     std::array<std::array<bool, 4>, 4> reachable{};
+    for (std::size_t i = 0; i < nodes.size(); ++i) {
+        reachable[i][i] = true;
+    }
     for (const auto& [from, to] : edges) {
         world.rows<game::Walk>().add(from, to, {});
         const auto i    = static_cast<std::size_t>(std::ranges::find(nodes, from) - nodes.begin());

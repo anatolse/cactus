@@ -10,6 +10,8 @@
 
 #include <catch2/benchmark/catch_benchmark.hpp>
 
+#include <vector>
+
 namespace {
 
 namespace game    = cactus_gen::perf_union_fold;
@@ -67,6 +69,16 @@ struct World {
     [[nodiscard]] std::size_t connected() {
         return registry.view<game::Connected>().size();
     }
+
+    // Each heart's `Reach` rows, oldest heart first.
+    [[nodiscard]] std::vector<std::size_t> reach_rows() {
+        std::vector<std::size_t> rows;
+        for (const auto heart : cactus_perf::oldest_first<game::Heart>(registry)) {
+            auto& count = rows.emplace_back(0);
+            backend::derived_relation<game::Reach>(registry).for_each_from(heart, [&](const auto&) { ++count; });
+        }
+        return rows;
+    }
 };
 
 }  // namespace
@@ -75,11 +87,14 @@ TEST_CASE("perf: a union fold with a closure test searches once per heart", "[pe
     World world(kSize);
     // The claimed prefix of the path, plus the second heart, which only reaches itself.
     CHECK(world.connected() == world.claimed + 2);
+    // Each heart's reach set holds the heart itself.
+    CHECK(world.reach_rows() == std::vector<std::size_t>{world.claimed + 1, 1});
     const auto builds_before = world.builds();
     const auto work          = cactus_perf::work_of([&] { world.grow(); });
     CHECK(world.connected() == world.claimed + 2);
     CHECK(world.builds() - builds_before <= kReachBuildsPerFrame);
-    // Only identity tuples and Reach rows: each heart with itself, the first with its claimed path.
+    CHECK(world.reach_rows() == std::vector<std::size_t>{world.claimed + 1, 1});
+    // Only Reach rows: each heart with itself, the first with its claimed path.
     CHECK(work.candidates == world.claimed + 2);
 }
 

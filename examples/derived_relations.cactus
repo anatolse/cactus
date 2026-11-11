@@ -18,7 +18,7 @@ trait Floor
 
 trait Lair
 
-# Kept on each tile that links lead to from the heart, and on the heart.
+# Kept on each tile that links lead to from the heart; the heart reaches itself.
 trait Connected
 
 # Kept on the oldest tile of each room.
@@ -34,6 +34,7 @@ trait Walker:
 trait Gate:
     persist var uses: int = 0
 
+# Kept on the first gate and on each gate its portals lead to.
 trait Linked
 
 trait Ticks:
@@ -83,7 +84,7 @@ rule ConnectedFact:
     each: Tile
     group: links
     where:
-        Reach(Heart, self) or self == Heart
+        Reach(Heart, self)
     keep Connected
 
 rule SameRoomLinks:

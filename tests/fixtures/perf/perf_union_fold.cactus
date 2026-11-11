@@ -55,5 +55,5 @@ rule ConnectedTiles:
         tile: Tile
     group: links
     where:
-        tile == heart or Reach(heart, tile)
+        Reach(heart, tile)
     keep Connected on tile

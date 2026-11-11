@@ -146,11 +146,18 @@ TEST_CASE("Derived self joins retain rows across cache keys", "[headless][row-jo
     world.run(game::Query::ReachChain);
     const auto& slots    = World::slots();
     const auto& observed = backend::relation_store<game::Observed>(world.registry);
+    // Every tile reaches itself, so each chain may also stay in place.
+    CHECK(observed.contains(slots.Start, slots.Start));
+    CHECK(observed.contains(slots.Start, slots.Goal));
+    CHECK(observed.contains(slots.Middle, slots.Middle));
     CHECK(observed.contains(slots.Middle, slots.Goal));
     CHECK(observed.contains(slots.Other, slots.Goal));
-    CHECK(observed.size() == 2);
-    CHECK(world.registry.get<game::Tile>(slots.Middle).hits == 1);
-    CHECK(world.registry.get<game::Tile>(slots.Other).hits == 1);
+    CHECK(observed.contains(slots.Goal, slots.Goal));
+    CHECK(observed.size() == 9);
+    CHECK(world.registry.get<game::Tile>(slots.Start).hits == 4);
+    CHECK(world.registry.get<game::Tile>(slots.Middle).hits == 2);
+    CHECK(world.registry.get<game::Tile>(slots.Other).hits == 2);
+    CHECK(world.registry.get<game::Tile>(slots.Goal).hits == 1);
     CHECK(backend::derived_relation<game::Reach>(world.registry).cached_keys() == 4);
 }
 

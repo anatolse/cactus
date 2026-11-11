@@ -126,32 +126,32 @@ std::vector<Pair> to_rows(Cache& cache, entt::entity to) {
 constexpr std::int64_t kUnreached = std::numeric_limits<std::int64_t>::max();
 
 struct Reference {
-    std::vector<std::vector<bool>> reach;          // one or more rows
-    std::vector<std::vector<std::int64_t>> cost;   // least cost of one or more rows
-    std::vector<std::vector<std::int64_t>> walk;   // least cost of zero or more rows
+    std::vector<std::vector<std::int64_t>> cost;  // least cost of one or more rows
+    std::vector<std::vector<std::int64_t>> walk;  // least cost of zero or more rows
+
+    [[nodiscard]] bool reaches(std::size_t a, std::size_t b) const {
+        return walk[a][b] != kUnreached;
+    }
 };
 
 Reference reference(World& world) {
     const auto n = world.tiles.size();
-    Reference ref{.reach = std::vector(n, std::vector<bool>(n, false)),
-                  .cost  = std::vector(n, std::vector<std::int64_t>(n, kUnreached)),
-                  .walk  = std::vector(n, std::vector<std::int64_t>(n, kUnreached))};
+    Reference ref{.cost = std::vector(n, std::vector<std::int64_t>(n, kUnreached)),
+                  .walk = std::vector(n, std::vector<std::int64_t>(n, kUnreached))};
     std::map<entt::entity, std::size_t> index;
     for (std::size_t i = 0; i < n; ++i) {
         index[world.tiles[i]] = i;
         ref.walk[i][i]        = 0;
     }
     world.steps().for_each_live([&](const auto& entry) {
-        const auto a = index.at(entry.from);
-        const auto b = index.at(entry.to);
-        ref.reach[a][b] = true;
-        ref.cost[a][b]  = std::min(ref.cost[a][b], std::int64_t{std::max(entry.row.cost, 0)});
-        ref.walk[a][b]  = std::min(ref.walk[a][b], ref.cost[a][b]);
+        const auto a   = index.at(entry.from);
+        const auto b   = index.at(entry.to);
+        ref.cost[a][b] = std::min(ref.cost[a][b], std::int64_t{std::max(entry.row.cost, 0)});
+        ref.walk[a][b] = std::min(ref.walk[a][b], ref.cost[a][b]);
     });
     for (std::size_t k = 0; k < n; ++k) {
         for (std::size_t i = 0; i < n; ++i) {
             for (std::size_t j = 0; j < n; ++j) {
-                ref.reach[i][j] = ref.reach[i][j] || (ref.reach[i][k] && ref.reach[k][j]);
                 if (ref.walk[i][k] != kUnreached && ref.walk[k][j] != kUnreached) {
                     ref.walk[i][j] = std::min(ref.walk[i][j], ref.walk[i][k] + ref.walk[k][j]);
                 }
@@ -258,13 +258,13 @@ TEST_CASE("Derived closure: forward and reverse match the brute force", "[runtim
             std::vector<Pair> forward;
             std::vector<Pair> reverse;
             for (std::size_t b = 0; b < n; ++b) {
-                CHECK(reach.contains(world.tiles[a], world.tiles[b]) == ref.reach[a][b]);
-                CHECK(reach.contains_by_from(world.tiles[a], world.tiles[b]) == ref.reach[a][b]);
-                CHECK(reach.contains_by_to(world.tiles[a], world.tiles[b]) == ref.reach[a][b]);
-                if (ref.reach[a][b]) {
+                CHECK(reach.contains(world.tiles[a], world.tiles[b]) == ref.reaches(a, b));
+                CHECK(reach.contains_by_from(world.tiles[a], world.tiles[b]) == ref.reaches(a, b));
+                CHECK(reach.contains_by_to(world.tiles[a], world.tiles[b]) == ref.reaches(a, b));
+                if (ref.reaches(a, b)) {
                     forward.emplace_back(world.tiles[a], world.tiles[b]);
                 }
-                if (ref.reach[b][a]) {
+                if (ref.reaches(b, a)) {
                     reverse.emplace_back(world.tiles[b], world.tiles[a]);
                 }
             }
@@ -284,14 +284,57 @@ TEST_CASE("Derived closure: forward and reverse match the brute force", "[runtim
     }
 }
 
-TEST_CASE("Derived closure: a row (a, a) needs a chain back to a", "[runtime][relations][derived]") {
+TEST_CASE("Derived closure: a chain holds every step and each entity with itself", "[runtime][relations][derived]") {
     World world(3);
     world.link(0, 1);
+    world.link(1, 2);
+    auto& reach      = derived_relation<Reach>(world.registry);
+    const auto& tile = world.tiles;
+    CHECK(from_rows(reach, tile[0]) == std::vector<Pair>{{tile[0], tile[0]}, {tile[0], tile[1]}, {tile[0], tile[2]}});
+    CHECK(from_rows(reach, tile[1]) == std::vector<Pair>{{tile[1], tile[1]}, {tile[1], tile[2]}});
+    CHECK(to_rows(reach, tile[2]) == std::vector<Pair>{{tile[0], tile[2]}, {tile[1], tile[2]}, {tile[2], tile[2]}});
+    CHECK_FALSE(reach.contains(tile[2], tile[0]));
+}
+
+TEST_CASE("Derived closure: an end-trait carrier reaches itself without rows", "[runtime][relations][derived]") {
+    World world(2);
     auto& reach = derived_relation<Reach>(world.registry);
-    CHECK_FALSE(reach.contains(world.tiles[0], world.tiles[0]));
-    CHECK_FALSE(reach.contains(world.tiles[2], world.tiles[2]));
-    world.link(1, 0);
+    CHECK(reach.contains(world.tiles[0], world.tiles[0]));
+    CHECK(reach.contains_by_from(world.tiles[0], world.tiles[0]));
+    CHECK(reach.has_from(world.tiles[0]));
+    CHECK(reach.has_to(world.tiles[0]));
+    REQUIRE(reach.find_entry(world.tiles[0], world.tiles[0], true) != nullptr);
+    CHECK_FALSE(reach.contains(world.tiles[0], world.tiles[1]));
+}
+
+TEST_CASE("Derived closure: an entity without the end trait reaches nothing", "[runtime][relations][derived]") {
+    World world(1);
+    const auto bare = world.registry.create();
+    world.registry.emplace<CreationOrdinal>(bare, std::uint64_t{10});
+    CHECK_FALSE(derived_relation<Reach>(world.registry).contains(bare, bare));
+    CHECK_FALSE(derived_relation<Reach>(world.registry).has_from(bare));
+    world.registry.emplace<Tile>(bare);
+    CHECK(derived_relation<Reach>(world.registry).contains(bare, bare));
+    world.registry.remove<Tile>(bare);
+    CHECK_FALSE(derived_relation<Reach>(world.registry).contains(bare, bare));
     CHECK(derived_relation<Reach>(world.registry).contains(world.tiles[0], world.tiles[0]));
+}
+
+TEST_CASE("Derived closure: a cycle test is a step and a chain back", "[runtime][relations][derived]") {
+    World world(3);
+    world.link(0, 1);
+    world.link(1, 0);
+    world.link(1, 2);
+    const auto on_cycle = [&](std::size_t a) {
+        bool found = false;
+        world.steps().for_each_from(world.tiles[a], [&](const auto& entry) {
+            found = found || derived_relation<Reach>(world.registry).contains(entry.to, world.tiles[a]);
+        });
+        return found;
+    };
+    CHECK(on_cycle(0));
+    CHECK(on_cycle(1));
+    CHECK_FALSE(on_cycle(2));
 }
 
 TEST_CASE("Derived closure: an unchanged source rebuilds nothing", "[runtime][relations][derived]") {
@@ -318,7 +361,8 @@ TEST_CASE("Derived closure: links that disappear drop their rows", "[runtime][re
     world.steps().compact();
     CHECK_FALSE(derived_relation<Reach>(world.registry).contains(world.tiles[0], world.tiles[2]));
     world.registry.destroy(world.tiles[1]);
-    CHECK_FALSE(derived_relation<Reach>(world.registry).has_from(world.tiles[0]));
+    CHECK(from_rows(derived_relation<Reach>(world.registry), world.tiles[0]) ==
+          std::vector<Pair>{{world.tiles[0], world.tiles[0]}});
 }
 
 TEST_CASE("Derived closure: over a derived source", "[runtime][relations][derived]") {

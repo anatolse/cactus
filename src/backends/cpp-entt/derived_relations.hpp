@@ -81,7 +81,7 @@ void sort_by_other_end(const entt::registry& registry, std::vector<Entry>& rows,
 }  // namespace derived_detail
 
 // Revision bookkeeping shared by every derived cache: a cache is current
-// while its source's revision and, for components, its members are unchanged.
+// while its source's revision and, for closure and components, its members are unchanged.
 template <typename Row>
 class DerivedCacheBase {
 public:
@@ -104,6 +104,14 @@ public:
     }
 
 protected:
+    // Members come and go with the end trait, not only with links.
+    template <typename Cache>
+    static void watch_members(entt::registry& registry) {
+        using Member = Row::FromTrait;
+        registry.on_construct<Member>().template connect<&DerivedCacheBase::mark_members<Cache>>();
+        registry.on_destroy<Member>().template connect<&DerivedCacheBase::mark_members<Cache>>();
+    }
+
     // True when the cached rows are stale and must be dropped.
     bool sync(entt::registry& registry) {
         // Concurrent readers reach here; an unchanged pointer must not be written.
@@ -133,6 +141,13 @@ protected:
     }
 
 private:
+    template <typename Cache>
+    static void mark_members(entt::registry& registry, entt::entity /*entity*/) {
+        if (auto* cache = registry.ctx().find<Cache>()) {
+            cache->members_changed();
+        }
+    }
+
     entt::registry* registry_      = nullptr;
     std::uint64_t source_revision_ = 0;
     std::uint64_t revision_        = 0;
@@ -254,13 +269,22 @@ private:
     friend Cache;
 };
 
-// `closure(R)`: breadth-first reach per key, over `R`'s links or their reverse.
+// `closure(R)`: reach per key over `R`'s links or their reverse, the empty
+// path included, so every end-trait carrier reaches itself.
 template <typename Row>
 class ClosureCache : public KeyedDerivedCache<Row, ClosureCache<Row>> {
 public:
+    static void connect(entt::registry& registry) {
+        ClosureCache::template watch_members<ClosureCache>(registry);
+    }
+
     void compute(entt::entity key, bool forward, std::vector<DerivedEntry<Row>>& rows) const {
         const auto& source = this->source();
         std::vector<std::uint8_t> seen;
+        derived_detail::slot(seen, key, std::uint8_t{0}) = 1;
+        if (this->registry().template all_of<typename Row::FromTrait>(key)) {
+            rows.push_back(DerivedEntry<Row>{key, key, Row{}});
+        }
         std::vector<entt::entity> frontier{key};
         while (!frontier.empty()) {
             const auto at = frontier.back();
@@ -428,11 +452,8 @@ public:
         }
     }
 
-    // Members come and go with the end trait, not only with links.
     static void connect(entt::registry& registry) {
-        using Member = Row::FromTrait;
-        registry.on_construct<Member>().template connect<&ComponentCache::mark>();
-        registry.on_destroy<Member>().template connect<&ComponentCache::mark>();
+        ComponentCache::template watch_members<ComponentCache>(registry);
     }
 
     [[nodiscard]] std::span<const Entry> rows() {
@@ -477,12 +498,6 @@ public:
     }
 
 private:
-    static void mark(entt::registry& registry, entt::entity /*entity*/) {
-        if (auto* cache = registry.ctx().find<ComponentCache>()) {
-            cache->members_changed();
-        }
-    }
-
     [[nodiscard]] std::uint32_t position(entt::entity entity) const {
         const auto index = derived_detail::at(positions_, entity, derived_detail::kNone);
         return index != derived_detail::kNone && entries_[index].from == entity ? index : derived_detail::kNone;

@@ -102,11 +102,13 @@ TEST_CASE("derived relations: closure, shortest and components", "[runtime][rela
         CHECK_FALSE(world.connected(slots.Wall));
     }
 
-    {  // cutting the heart's links disconnects everything but the heart
+    {  // cutting the heart's links disconnects everything but the heart, which reaches itself
         registry.remove<game::Floor>(slots.East);
         registry.remove<game::Floor>(slots.North);
         world.tick(2);
         CHECK(world.connected(slots.Heart));
+        CHECK(derived_relation<game::Reach>(registry).contains(slots.Heart, slots.Heart));
+        CHECK_FALSE(derived_relation<game::Reach>(registry).contains(slots.Runner, slots.Runner));
         CHECK_FALSE(world.connected(slots.FarEast));
         CHECK_FALSE(world.connected(slots.Goal));
         registry.emplace<game::Floor>(slots.East);
@@ -130,6 +132,7 @@ TEST_CASE("derived relations: closure, shortest and components", "[runtime][rela
         world.tick();
         CHECK(registry.get<game::Walker>(slots.Runner).at == slots.Goal);
         CHECK(registry.get<game::Walker>(slots.Runner).steps == 4);
+        CHECK_FALSE(world.route(slots.Goal, slots.Goal).has_value());
     }
 
     {  // a tick that changes no link rebuilds no route
@@ -189,7 +192,7 @@ TEST_CASE("derived relations: closure, shortest and components", "[runtime][rela
         portals.add(slots.FirstGate, slots.SecondGate, game::Portal{});
         portals.add(slots.SecondGate, slots.ThirdGate, game::Portal{});
         world.tick();
-        CHECK_FALSE(registry.all_of<game::Linked>(slots.FirstGate));
+        CHECK(registry.all_of<game::Linked>(slots.FirstGate));
         CHECK(registry.all_of<game::Linked>(slots.SecondGate));
         CHECK(registry.all_of<game::Linked>(slots.ThirdGate));
     }
@@ -207,8 +210,8 @@ TEST_CASE("derived relations: closure, shortest and components", "[runtime][rela
         const auto outcome = cactus::runtime::entt_backend::generated_restore_world(registry, snapshot);
         REQUIRE(outcome.ok);
         CHECK(derived_relation<game::PortalReach>(registry).contains(slots.FirstGate, slots.ThirdGate));
-        CHECK(derived_relation<game::PortalReach>(registry).has_to(slots.SecondGate));
-        CHECK_FALSE(derived_relation<game::PortalReach>(registry).has_to(slots.FirstGate));
+        CHECK(derived_relation<game::PortalReach>(registry).contains(slots.FirstGate, slots.FirstGate));
+        CHECK_FALSE(derived_relation<game::PortalReach>(registry).contains(slots.SecondGate, slots.FirstGate));
     }
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity)

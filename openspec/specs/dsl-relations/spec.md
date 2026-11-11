@@ -265,24 +265,34 @@ derived_form     = "closure" "(" dotted_name ")"
 - **THEN** the compiler reports that `Reach` is derived from `Walk` and is read-only
 
 ### Requirement: Closure rows are reachability
-`closure(R)` SHALL hold the row `(a, b)` exactly when there are rows `(a, x1), (x1, x2), …, (xk, b)` of `R` with `k ≥ 0`. A row `(a, a)` SHALL exist only when such a chain leads from `a` back to `a`.
+`closure(R)` SHALL hold the row `(a, b)` exactly when there are rows `(a, x1), (x1, x2), …, (xk, b)` of `R` with `k ≥ 0`, or when `b` is `a` and `a` carries `R`'s end trait. Every entity that carries the end trait SHALL therefore reach itself, with or without rows.
 
 #### Scenario: Chain
 - **WHEN** `Walk` holds `(a, b)` and `(b, c)`
-- **THEN** `Reach` holds `(a, b)`, `(b, c)` and `(a, c)`, and not `(c, a)`
+- **THEN** `Reach` holds `(a, b)`, `(b, c)`, `(a, c)`, `(a, a)`, `(b, b)` and `(c, c)`, and not `(c, a)`
+
+#### Scenario: Reflexive without rows
+- **WHEN** `a` carries `Walk`'s end trait and has no `Walk` rows
+- **THEN** `Reach(a, a)` is true
 
 #### Scenario: Not reflexive
-- **WHEN** `a` has no `Walk` rows
-- **THEN** `Reach(a, a)` is false
+- **WHEN** `x` does not carry `Walk`'s end trait
+- **THEN** `Reach(x, x)` is false
 
 #### Scenario: Territory connected to the heart
-- **WHEN** a keep rule over `heart` and `t` declares `where: Reach(heart, t) or t == heart` and `keep Connected on t`
-- **THEN** exactly the tiles linked to the heart by `Walk` chains carry `Connected`
+- **WHEN** a keep rule over `heart` and `t` declares `where: Reach(heart, t)` and `keep Connected on t`
+- **THEN** the heart and exactly the tiles linked to it by `Walk` chains carry `Connected`
+
+#### Scenario: A node on a cycle
+- **WHEN** a rule tests `Walk(a, n) and Reach(n, a)` and `Walk` holds `(a, b)` and `(b, a)`
+- **THEN** the test is true for `a`, and false for a node with no chain back to itself
 
 ### Requirement: Shortest rows carry the first step and the cost
 In `shortest(R, by = f)`, `f` SHALL be an `int` field of `R`. A row's cost SHALL be `f`, or `0` when `f` is negative. The cost of a chain SHALL be the exact sum of its rows' costs. `shortest(R, by = f)` SHALL hold the row `(a, b)` for every `b ≠ a` that a chain leads to whose cost is at most `2147483647`, with fields:
 - `distance: int`, the least cost of such a chain;
 - `next: entity_id`, the second entity of a least-cost chain. When several least-cost chains have different second entities, `next` SHALL be the one with the lowest creation order.
+
+`shortest` SHALL hold no `(a, a)` row, unlike `closure` and `components`: the empty path has no second entity for `next`, so a missing route from `a` to its own goal means it has arrived.
 
 #### Scenario: Cheapest step
 - **WHEN** `Walk` links `a→b` (cost 1), `b→d` (cost 1), `a→c` (cost 1) and `c→d` (cost 5)
@@ -295,6 +305,10 @@ In `shortest(R, by = f)`, `f` SHALL be an `int` field of `R`. A row's cost SHALL
 #### Scenario: Unreachable goal
 - **WHEN** no chain leads from `a` to `d`
 - **THEN** `Route` has no row `(a, d)`, and a rule joining a walker at `a` with goal `d` runs no tuple for it
+
+#### Scenario: Arrived walker
+- **WHEN** a walker's position and goal are the same tile
+- **THEN** `Route` has no row for it, and a rule joining the walker with its route runs no tuple for it
 
 #### Scenario: Float cost field
 - **WHEN** a module declares `shortest(Walk, by = cost)` and `cost` is a `float`

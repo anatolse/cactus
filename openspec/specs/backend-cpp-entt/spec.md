@@ -1726,9 +1726,13 @@ The cpp-entt backend SHALL queue the result of one keep pass as a single structu
 
 When a pair pass with `reduce` or a trait `keep` has an equality, relation-rows, union or grid-region plan, the cpp-entt backend SHALL feed the fold only the tuples that plan yields. It SHALL NOT fold the full directed product. Each group SHALL fold the same tuples, in the same left-binding-major creation order, and produce the same reducer results and kept set as a fold over the full product.
 
+#### Scenario: A closure test walks rows from each heart
+- **WHEN** a rule pairs 2 `Heart` tiles with 2,000 `Tile` entities, reads `where: Reach(heart, tile)`, and keeps `Connected on tile`, and `Territory` changed since the last pass
+- **THEN** the pass runs at most 2 closure searches, checks no heart × tile pair outside the `Reach` rows, which include each heart with itself, and keeps `Connected` on the same tiles as the product fold
+
 #### Scenario: Union with a closure test walks rows from each heart
-- **WHEN** a rule pairs 2 `Heart` tiles with 2,000 `Tile` entities, reads `where: tile == heart or Reach(heart, tile)`, and keeps `Connected on tile`, and `Territory` changed since the last pass
-- **THEN** the pass runs at most 2 closure searches, checks no heart × tile pair outside the identity and `Reach` rows, and keeps `Connected` on the same tiles as the product fold
+- **WHEN** a `reduce per heart: n = count()` pass reads `where: Reach(heart, tile) or Reach(tile, heart)`
+- **THEN** each heart's count equals the count from folding the full product, and the heart itself, which both branches yield, is counted once
 
 #### Scenario: Equality-planned reduction matches the product
 - **WHEN** a `reduce per tile: bridges = count()` pass joins tiles to bridges with `bridge == tile`

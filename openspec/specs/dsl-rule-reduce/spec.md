@@ -6,7 +6,7 @@ Define deterministic, typed global and outer-grouped aggregation over rule domai
 ## Requirements
 ### Requirement: Typed reduction clauses
 
-A regular unary or pair rule SHALL accept one `reduce:` clause. It SHALL declare immutable, uniquely named aggregate values using `count()`, `count(binding)`, `sum(expression)`, `min(expression, default = value)`, `max(expression, default = value)`, `any(expression)`, `first_hit(expression)` or `best(binding, by = expression)`. `count(binding)` SHALL count rows, not distinct entities, and SHALL require a declared pair binding; `count()` SHALL count rows in either domain form. `sum` input SHALL be `int`, `float`, `vec2` or `vec3` and SHALL preserve its type; a `float` `sum` SHALL be exact, and a vector `sum` SHALL be exact per component (see "Reduction numeric edge behavior"). `min`/`max` inputs SHALL be `int` or `float` and preserve their type, and `min`/`max` SHALL require a default of exactly that type. `any` input SHALL be `bool` and its result SHALL be `bool`. `first_hit` input SHALL be `std.physics.volume.SweepHit` and its result SHALL be `SweepHit`. `best` SHALL require a declared pair binding other than the `per` binding, its `by` key SHALL be `int` or `float`, and its result SHALL be `entity_id`: the binding's entity in the row with the highest key; among equal keys, the row first in stable fold order; rows whose key is NaN SHALL be ignored; with no eligible row, a stale `entity_id`. Reducer expressions SHALL be pure; they MAY read the rule's bindings, constants and named entity fields. Selectionless and extern rules SHALL reject `reduce:`.
+A regular unary or pair rule SHALL accept one `reduce:` clause. It SHALL declare immutable, uniquely named aggregate values using `count()`, `count(binding)`, `sum(expression)`, `min(expression [, default = value])`, `max(expression [, default = value])`, `any(expression)`, `first_hit(expression)` or `best(binding, by = expression)`. `count(binding)` SHALL count rows, not distinct entities, and SHALL require a declared pair binding; `count()` SHALL count rows in either domain form. `sum` input SHALL be `int`, `float`, `vec2` or `vec3` and SHALL preserve its type; a `float` `sum` SHALL be exact, and a vector `sum` SHALL be exact per component (see "Reduction numeric edge behavior"). `min`/`max` inputs SHALL be `int` or `float` and preserve their type, and a `min`/`max` default SHALL have exactly that type. A `min`/`max` SHALL require a default unless every read of it is a field of a keep clause whose recipients are only groups with at least one row: the reduced form without a condition (`dsl-rule-keep`) or a reduced relation keep (`dsl-relations`). An omitted default anywhere else SHALL be a source-located error that names one read that can see an empty group. `any` input SHALL be `bool` and its result SHALL be `bool`. `first_hit` input SHALL be `std.physics.volume.SweepHit` and its result SHALL be `SweepHit`. `best` SHALL require a declared pair binding other than the `per` binding, its `by` key SHALL be `int` or `float`, and its result SHALL be `entity_id`: the binding's entity in the row with the highest key; among equal keys, the row first in stable fold order; rows whose key is NaN SHALL be ignored; with no eligible row, a stale `entity_id`. Reducer expressions SHALL be pure; they MAY read the rule's bindings, constants and named entity fields. Selectionless and extern rules SHALL reject `reduce:`.
 
 #### Scenario: Count and sum
 - **WHEN** three input rows have integer scores 2, 3 and 5
@@ -31,6 +31,18 @@ A regular unary or pair rule SHALL accept one `reduce:` clause. It SHALL declare
 #### Scenario: Best tie and empty input
 - **WHEN** two rows share the highest key, or a group has no row
 - **THEN** `best` yields the earlier row's entity in stable fold order, or a stale `entity_id` for the empty group
+
+#### Scenario: Default omitted where no empty group is read
+- **WHEN** a rule with `reduce per body:` declares `deepest = max(lava[Lava].depth)` and reads it only in the fields of `keep InLava on body:` with no `if`
+- **THEN** compilation accepts it
+
+#### Scenario: Default omitted where an empty group is read
+- **WHEN** a rule with `reduce per team:` declares `fastest = max(player[Player].speed)` and its handler reads `fastest`
+- **THEN** the compiler reports an error at `fastest` that names the handler read and asks for `default =`
+
+#### Scenario: Default omitted under a keep condition
+- **WHEN** a keep clause with `if n == 0` assigns a field from a `max` without a default
+- **THEN** the compiler reports an error, because the condition keeps the trait on empty groups
 
 #### Scenario: Bad reducer
 - **WHEN** `collect`, an unknown reducer, a mismatched default, a vector `min`/`max` input, a non-bool `any` input, a non-`SweepHit` `first_hit` input, a `best` over the `per` binding or with a non-numeric key, or an impure expression is used

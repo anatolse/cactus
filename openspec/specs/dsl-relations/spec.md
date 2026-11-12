@@ -72,7 +72,7 @@ A row SHALL be removed when its `from` or `to` entity is destroyed, or loses the
 
 ### Requirement: A relation is kept or stored
 
-A relation that a `keep R(a, b)` clause names SHALL be a kept relation. Every other relation SHALL be a stored relation. A program SHALL have at most one `keep` clause per relation; a second one SHALL be an error that names both rules. `add R` and `remove R` of a kept relation SHALL be compile errors that name its keep rule. A kept relation SHALL NOT mark an end `one`; the error's help SHALL say to store the relation, or to keep a trait with `reduce per` and `best(...)`.
+A relation that a `keep R(...)` clause names SHALL be a kept relation. Every other relation SHALL be a stored relation. A program SHALL have at most one `keep` clause per relation; a second one SHALL be an error that names both rules. `add R` and `remove R` of a kept relation SHALL be compile errors that name its keep rule. A kept relation SHALL NOT mark an end `one`, except the end that the `per` binding fills in a reduced relation keep ("Reduced relation keeps follow the winner"). Any other kept `one` end SHALL be an error whose help says to store the relation, or to keep it from `reduce per` with `best(...)`.
 
 #### Scenario: Add of a kept relation
 - **WHEN** `WalkLinks` keeps `Walk` and a handler writes `add Walk(a, b)`
@@ -83,8 +83,16 @@ A relation that a `keep R(a, b)` clause names SHALL be a kept relation. Every ot
 - **THEN** the compiler reports an error naming both rules
 
 #### Scenario: One end on a kept relation
-- **WHEN** a relation with `from: Robot one` is named by a `keep` clause
-- **THEN** the compiler reports an error at `one` whose help suggests storing the relation
+- **WHEN** a relation with `from: Robot one` is named by an unreduced `keep` clause
+- **THEN** the compiler reports an error at `one` whose help suggests storing the relation or a reduced `best` keep
+
+#### Scenario: One end filled by the per binding
+- **WHEN** `AtCheckpoint` has `from: Player one` and is kept by `keep AtCheckpoint(player, top)` on a rule with `reduce per player:`
+- **THEN** compilation accepts it
+
+#### Scenario: One end filled by the winner
+- **WHEN** `AtCheckpoint` has `to: Checkpoint one` and is kept by `keep AtCheckpoint(player, top)` on a rule with `reduce per player:`
+- **THEN** the compiler reports an error at `one`, because two players can share a winner
 
 ### Requirement: Kept relation rows follow the rule's tuples
 
@@ -495,3 +503,18 @@ Every existing relation-keep restriction SHALL remain in force except the explic
 #### Scenario: Projection participates in keep cycles
 - **WHEN** the target relation is read directly or through a derived input or another keeper in a cycle
 - **THEN** compilation rejects the cycle and names its keepers
+### Requirement: Reduced relation keeps follow the winner
+
+`keep R(b, t)` or `keep R(t, b)` on a pair rule with `reduce per b:`, where `t` is a `best` reducer over the other binding, SHALL keep relation `R`. `b` SHALL select the end trait of the end it fills, and the binding `t` ranges over SHALL select the end trait of the other end. At each run, `R` SHALL hold exactly one row for each group whose `t` names an entity, between `b` and that entity, with the field values the clause assigns from the aggregates, `b`, constants and named entity fields. A group whose `t` is stale SHALL hold no row. When a group's winner changes, its old row SHALL be removed and the new row added at the run's commit. A row whose winner and fields are unchanged SHALL keep its position. Changes SHALL apply in creation order of the `per` entities. Every other kept relation rule (one keeper, `group:`, `when:`, no handler, unsaved rows) SHALL apply.
+
+#### Scenario: Winner row
+- **WHEN** a player touches checkpoints with orders 1 and 3
+- **THEN** after the run, `AtCheckpoint` holds one row from the player to the checkpoint with order 3
+
+#### Scenario: Winner changes
+- **WHEN** the player then touches a checkpoint with order 5
+- **THEN** after the next run, the row to order 3 is gone and a row to order 5 exists
+
+#### Scenario: Empty group
+- **WHEN** the player touches no checkpoint
+- **THEN** `AtCheckpoint` holds no row from that player

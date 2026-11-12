@@ -508,7 +508,8 @@ FieldAccess declared_fields(const ResolvedRelation* relation) {
     return access;
 }
 
-// `keep R(a, b)`: `R` holds one row per tuple of an unreduced pair rule.
+// `keep R(a, b)`: `R` holds one row per tuple of an unreduced pair rule, or,
+// reduced `per b`, one row per group from `b` to its `best` winner.
 void SemanticAnalyzer::validate_relation_keep(const RuleNode& rule) {
     const auto& keep = *rule.keep;
     reject_keep_rule_clauses(rule);
@@ -519,13 +520,18 @@ void SemanticAnalyzer::validate_relation_keep(const RuleNode& rule) {
         errors_.error(keep.location, derived_read_only_message(*relation, *relation->derivation));
         return;
     }
-    if ((!rule.pairs.has_value() && !rule.rows.has_value()) || rule.reduce.has_value()) {
-        errors_.error(keep.location, prefix + "a relation keep needs an unreduced `pairs:` rule");
+    if (!rule.pairs.has_value() && !rule.rows.has_value()) {
+        errors_.error(keep.location, prefix + "a relation keep needs a `pairs:` rule");
+        return;
+    }
+    if (rule.reduce.has_value() && !rule.reduce->per_binding.has_value()) {
+        errors_.error(keep.location,
+                      prefix + "`keep` can't follow a global `reduce:`; use `reduce per <binding>:` on a `pairs:` rule");
         return;
     }
     if (keep.condition != nullptr) {
         errors_.error(keep.condition->location,
-                      prefix + "`if` works only on a `reduce per` keep; use `where:` to choose which pairs '" +
+                      prefix + "`if` works only on a `reduce per` keep of a trait; use `where:` to choose which pairs '" +
                           keep.target_name + "' holds");
     }
     if (keep.binding.has_value()) {
@@ -547,9 +553,15 @@ void SemanticAnalyzer::validate_relation_keep(const RuleNode& rule) {
     if (imported && (relation->from.one || relation->to.one)) {
         errors_.error(keep.location, prefix + "can't keep '" + keep.target_name + "': it marks an end `one`");
     }
-    if (!validate_relation_keep_arguments(keep, rule, *relation)) {
-        return;
+    if (validate_relation_keep_arguments(keep, rule, *relation)) {
+        validate_relation_keep_fields(rule, *relation);
     }
+}
+
+// Fields read both bindings, or after `reduce per` the aggregates and the `per`
+// binding, or over rows no domain name; plus constants and named entity fields.
+void SemanticAnalyzer::validate_relation_keep_fields(const RuleNode& rule, const ResolvedRelation& relation) {
+    const auto& keep = *rule.keep;
     for (const auto& field : keep.fields) {
         check_clause_purity_expr(*field.value, "keep: field values must be pure");
     }
@@ -564,13 +576,15 @@ void SemanticAnalyzer::validate_relation_keep(const RuleNode& rule) {
             });
         }
         validate_trait_field_supply(
-            relation->fields, keep.fields, "`keep " + keep.target_name + "`", keep.location, {}, {}, nullptr, nullptr);
+            relation.fields, keep.fields, "`keep " + keep.target_name + "`", keep.location, {}, {}, nullptr, nullptr);
         return;
     }
-    const auto scope = rule_scope(rule).value_or(PairScope{});
+    const auto scope = rule.reduce.has_value() ? build_single_binding_scope(rule, *rule.reduce->per_binding)
+                                               : rule_scope(rule).value_or(PairScope{});
     const auto desc =
         "`keep " + keep.target_name + "(" + keep.arguments[0].spelling + ", " + keep.arguments[1].spelling + ")`";
-    validate_trait_field_supply(relation->fields, keep.fields, desc, keep.location, {}, {}, nullptr, &scope);
+    validate_trait_field_supply(
+        relation.fields, keep.fields, desc, keep.location, {}, reducer_locals(rule), nullptr, &scope);
 }
 
 bool SemanticAnalyzer::binding_key_selects_trait(const RuleNode& rule,
@@ -630,6 +644,9 @@ bool SemanticAnalyzer::validate_relation_keep_arguments(const KeepClause& keep,
     if (row_binding_name(rule) != nullptr) {
         return validate_projected_keep_arguments(keep, rule, relation);
     }
+    if (rule.reduce.has_value()) {
+        return validate_reduced_keep_arguments(keep, rule, relation);
+    }
     const auto& pairs    = *rule.pairs;
     const auto& bindings = pairs.bindings;
     if (bindings.size() != 2 || keep.arguments.size() != 2) {
@@ -645,38 +662,117 @@ bool SemanticAnalyzer::validate_relation_keep_arguments(const KeepClause& keep,
                           names.first + "' and '" + names.second + "'");
         return false;
     }
-    bool valid = true;
+    return keep_arguments_select_ends(keep, rule, relation, {from, to});
+}
+
+// `keep R(b, t)` or `keep R(t, b)`: `b` is the `per` binding, `t` a `best` reducer over the other binding.
+bool SemanticAnalyzer::validate_reduced_keep_arguments(const KeepClause& keep,
+                                                       const RuleNode& rule,
+                                                       const ResolvedRelation& relation) {
+    if (keep.arguments.size() != 2) {
+        return false;  // the parser reported the shape
+    }
+    const auto& per      = *rule.reduce->per_binding;
+    const auto& reducers = rule.reduce->reducers;
+    // The binding a `best` argument ranges over, or null.
+    const auto winner_of = [&](const KeepArgument& argument) -> const std::string* {
+        const auto reducer = std::ranges::find(reducers, argument.spelling, &ReducerDecl::name);
+        if (argument.from_endpoint.has_value() || reducer == reducers.end() || reducer->kind != ReducerKind::Best) {
+            return nullptr;
+        }
+        const auto* ident = std::get_if<IdentExpr>(&reducer->input->expr);
+        return ident == nullptr ? nullptr : &ident->name;
+    };
+    const auto is_per = [&](const KeepArgument& argument) {
+        return !argument.from_endpoint.has_value() && argument.spelling == per;
+    };
+    const auto* winner_second = is_per(keep.arguments[0]) ? winner_of(keep.arguments[1]) : nullptr;
+    const auto* winner_first  = is_per(keep.arguments[1]) ? winner_of(keep.arguments[0]) : nullptr;
+    if (winner_second == nullptr && winner_first == nullptr) {
+        errors_.error(keep.location,
+                      "a reduced relation keep needs the `per` binding '" + per + "' and a `best` reducer: `keep " +
+                          keep.target_name + "(" + per + ", <winner>)` or `keep " + keep.target_name + "(<winner>, " +
+                          per + ")`");
+        return false;
+    }
+    const auto bindings = winner_first != nullptr ? std::array{*winner_first, per} : std::array{per, *winner_second};
+    return keep_arguments_select_ends(keep, rule, relation, bindings);
+}
+
+// Each argument's binding selects the end trait of the end it fills.
+bool SemanticAnalyzer::keep_arguments_select_ends(const KeepClause& keep,
+                                                  const RuleNode& rule,
+                                                  const ResolvedRelation& relation,
+                                                  const std::array<std::string, 2>& bindings) {
+    const auto& pairs = rule.pairs->bindings;
+    bool valid        = true;
     for (const bool from_end : {true, false}) {
-        const auto& argument = keep.arguments[from_end ? 0 : 1];
+        const auto index     = from_end ? 0 : 1;
+        const auto& argument = keep.arguments[index];
         const auto& end      = from_end ? relation.from : relation.to;
-        const auto binding   = std::ranges::find(bindings, argument.spelling, &PairBindingNode::name);
-        if (std::ranges::contains(binding->traits, std::optional(end.trait), &FilterEntry::resolved_trait_id)) {
+        const auto binding   = std::ranges::find(pairs, bindings[index], &PairBindingNode::name);
+        if (binding != pairs.end() &&
+            std::ranges::contains(binding->traits, std::optional(end.trait), &FilterEntry::resolved_trait_id)) {
             continue;
         }
         errors_.error(argument.location,
                       "'" + argument.spelling + "' must select `" + end.trait.local_name + "` to be the `" +
-                          end_label(from_end) + "` end of `" + keep.target_name + "`");
+                          end_label(from_end) + "` end of `" + keep.target_name + "`" +
+                          (argument.spelling == bindings[index] ? "" : "; it names a '" + bindings[index] + "'"));
         valid = false;
     }
     return valid;
 }
 
-// A keep run makes one row per tuple, and nothing bounds the tuples per entity.
+// The end a reduced relation keep's `per` binding fills: true for `from`.
+static std::optional<bool> per_filled_end(const RuleNode& rule) {
+    const auto& arguments = rule.keep->arguments;
+    if (!rule.reduce.has_value() || !rule.reduce->per_binding.has_value() || arguments.size() != 2) {
+        return std::nullopt;
+    }
+    const auto& per = *rule.reduce->per_binding;
+    if (arguments[0].spelling == per) {
+        return true;
+    }
+    if (arguments[1].spelling == per) {
+        return false;
+    }
+    return std::nullopt;
+}
+
+// A keep run makes one row per tuple, and nothing bounds the tuples per entity,
+// except a reduced keep's `per` end: one group per entity, one winner per group.
 void SemanticAnalyzer::reject_one_on_kept_relations(const ProgramNode& program, const KeepClauses& clauses) {
+    std::unordered_map<std::string, std::optional<bool>> per_ends;
+    for (const auto& decl : program.declarations) {
+        const auto* rule = std::get_if<RuleNode>(&decl);
+        if (rule != nullptr && rule->keep.has_value() && !rule->keep->arguments.empty()) {
+            per_ends.try_emplace(rule->keep->target_name, per_filled_end(*rule));
+        }
+    }
     for (const auto& decl : program.declarations) {
         const auto* node = std::get_if<RelationNode>(&decl);
         if (node == nullptr ||
             !clauses.keepers.contains(make_symbol_id(SymbolKind::Relation, current_module_id_, node->name))) {
             continue;
         }
-        for (const auto* end : {&node->from, &node->to}) {
-            if (!end->one) {
+        const auto found   = per_ends.find(node->name);
+        const auto per_end = found != per_ends.end() ? found->second : std::nullopt;
+        for (const bool from : {true, false}) {
+            const auto& end = from ? node->from : node->to;
+            if (!end.one || per_end == from) {
                 continue;
             }
-            errors_.error(end->location,
+            if (per_end.has_value()) {
+                errors_.error(end.location,
+                              "kept relation '" + node->name + "' can't mark its `" + end_label(from) +
+                                  "` end `one`: two groups can share a winner; drop `one` or store the relation");
+                continue;
+            }
+            errors_.error(end.location,
                           "kept relation '" + node->name +
                               "' can't mark an end `one`; store the relation and add rows from a rule that proves "
-                              "the limit, or keep a trait with `reduce per` and `best(...)`");
+                              "the limit, or keep it from `reduce per` with `best(...)`");
         }
     }
 }

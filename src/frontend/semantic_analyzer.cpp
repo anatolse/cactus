@@ -4371,6 +4371,7 @@ void SemanticAnalyzer::validateReduceClause(RuleNode& rule) {
         validate_reducer(reducer, rule, filter_bindings, row_scope_ptr);
     }
     reject_unused_reducers(rule);
+    check_default_free_reads(rule);
     split_group_predicates(rule);
 }
 
@@ -4494,8 +4495,13 @@ void SemanticAnalyzer::reject_unused_reducers(const RuleNode& rule) {
         walk_handler_body(
             handler.body, {}, scratch, note, [](const VarAssign&, const LocalNames&) {}, [](const SymbolId&) {});
     }
+    const auto* keep = rule.keep.has_value() ? &*rule.keep : nullptr;
+    if (keep != nullptr) {
+        for (const auto& argument : keep->arguments) {
+            read.insert(argument.spelling);
+        }
+    }
     const auto& reducers = rule.reduce->reducers;
-    const auto* keep     = rule.keep.has_value() ? &*rule.keep : nullptr;
     const bool keep_only =
         keep != nullptr && std::ranges::none_of(reducers, [&](const ReducerDecl& r) { return read.contains(r.name); });
     for (const auto& reducer : reducers) {
@@ -4506,6 +4512,60 @@ void SemanticAnalyzer::reject_unused_reducers(const RuleNode& rule) {
                       "reducer '" + reducer.name + "' is never read; " +
                           (keep_only ? "remove `reduce:` to keep '" + keep->target_name + "' while any row matches"
                                      : std::string("read it in a handler, a sort key or the keep clause, or remove it")));
+    }
+}
+
+// A `min`/`max` without a default may be read only where every group has rows:
+// the fields of a `reduce per` keep without a condition.
+void SemanticAnalyzer::check_default_free_reads(const RuleNode& rule) {
+    std::unordered_set<std::string> default_free;
+    for (const auto& reducer : rule.reduce->reducers) {
+        if (reducer_has_default(reducer.kind) && reducer.default_value == nullptr) {
+            default_free.insert(reducer.name);
+        }
+    }
+    if (default_free.empty()) {
+        return;
+    }
+    std::unordered_map<std::string, std::string> first_read;
+    std::string reader;
+    const auto note = [&](const ExprNode& expr, const LocalNames& locals) {
+        const auto* ident = std::get_if<IdentExpr>(&expr.expr);
+        if (ident != nullptr && default_free.contains(ident->name) && !locals.contains(ident->name)) {
+            first_read.try_emplace(ident->name, reader + " reads it at line " + std::to_string(expr.location.line));
+        }
+        return false;
+    };
+    InferredHandlerContract scratch;
+    for (const auto& handler : rule.handlers) {
+        reader = "the handler on '" + handler.event_name + "'";
+        walk_handler_body(
+            handler.body, {}, scratch, note, [](const VarAssign&, const LocalNames&) {}, [](const SymbolId&) {});
+    }
+    reader = "a sort key";
+    for (const auto& key : rule.order_by) {
+        walk_expression_reads(*key.expression, {}, scratch, note);
+    }
+    if (rule.keep.has_value()) {
+        const auto& keep     = *rule.keep;
+        const bool every_row = rule.reduce->per_binding.has_value() && keep.condition == nullptr;
+        if (keep.condition != nullptr) {
+            reader = "the keep condition";
+            walk_expression_reads(*keep.condition, {}, scratch, note);
+        }
+        for (const auto& field : every_row ? std::span<const FieldAssignment>{} : std::span(keep.fields)) {
+            reader = "the keep field '" + field.name + "'" + (keep.condition != nullptr ? " under `if`" : "");
+            walk_expression_reads(*field.value, {}, scratch, note);
+        }
+    }
+    for (const auto& reducer : rule.reduce->reducers) {
+        const auto found = first_read.find(reducer.name);
+        if (found == first_read.end()) {
+            continue;
+        }
+        errors_.error(reducer.location,
+                      std::string(reducer_kind_name(reducer.kind)) + "(...) '" + reducer.name +
+                          "' needs `default = <value>`: " + found->second + ", where a group can have no rows");
     }
 }
 
@@ -4585,8 +4645,7 @@ void SemanticAnalyzer::validate_reducer(ReducerDecl& reducer,
     reducer.result_type = input.kind == TypeKind::Int ? make_int_type() : make_float_type();
 
     if (reducer.default_value == nullptr) {
-        errors_.error(reducer.location, kind_name + "(...) needs `default = <value>` for groups with no rows");
-        return;
+        return;  // check_default_free_reads decides whether an empty group can be read
     }
     const auto default_errors = errors_.error_count();
     check_clause_purity_expr(*reducer.default_value, "reduce: reducer defaults must be pure");

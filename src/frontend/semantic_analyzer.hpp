@@ -1334,6 +1334,14 @@ private:
     [[nodiscard]] bool validate_projected_keep_arguments(const KeepClause& keep,
                                                          const RuleNode& rule,
                                                          const ResolvedRelation& relation);
+    [[nodiscard]] bool validate_reduced_keep_arguments(const KeepClause& keep,
+                                                       const RuleNode& rule,
+                                                       const ResolvedRelation& relation);
+    [[nodiscard]] bool keep_arguments_select_ends(const KeepClause& keep,
+                                                  const RuleNode& rule,
+                                                  const ResolvedRelation& relation,
+                                                  const std::array<std::string, 2>& bindings);
+    void validate_relation_keep_fields(const RuleNode& rule, const ResolvedRelation& relation);
 
     // Import-aware type resolution helpers
     TypeInfo resolve_qualified_type(const std::string& qualifier,
@@ -2232,6 +2240,7 @@ private:
     bool validate_keep_recipient(const RuleNode& rule);
     void validate_keep_values(const RuleNode& rule, const ResolvedTrait& trait);
     void reject_unused_reducers(const RuleNode& rule);
+    void check_default_free_reads(const RuleNode& rule);
     void validate_count_reducer(ReducerDecl& reducer, const RuleNode& rule, const PairScope* row_scope);
     void validate_best_reducer(ReducerDecl& reducer, const RuleNode& rule, const PairScope* row_scope);
     void add_keep_effects(const RuleNode& rule, InferredHandlerContract& contract);

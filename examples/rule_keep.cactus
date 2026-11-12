@@ -2,8 +2,9 @@ module rule_keep
 
 # `keep` puts a trait on each group entity while its group has rows, so
 # entering and leaving a relation are ordinary `on added` / `on removed`
-# triggers. Walkers stand on a line; a walker is in a lava pool while it is
-# within the pool's radius. Tests move walkers and pools between ticks.
+# triggers. `keep R(walker, top)` links each walker to its `best` pool.
+# Walkers stand on a line; a walker is in a lava pool while it is within the
+# pool's radius. Tests move walkers and pools between ticks.
 
 use std.core
 
@@ -26,7 +27,11 @@ trait Lava:
 trait InLava:
     var zones: int = 0
     var heat: float = 0.0
-    var hottest: entity_id
+
+# The pool of highest priority a walker is in; a walker is in at most one.
+relation TopPool:
+    from: Walker one
+    to: Lava
 
 trait Control:
     var frozen: bool = false
@@ -50,13 +55,24 @@ rule TouchLava:
     reduce per walker:
         n = count()
         total = sum(lava[Lava].heat)
-        top = best(lava, by = lava[Lava].priority)
     keep InLava on walker:
         zones = n
         heat = total
-        hottest = top
     when:
         not Settings[Control].frozen
+
+rule RankTopPool:
+    pairs:
+        walker:
+            Walker
+        lava:
+            Lava
+    group: contacts
+    where:
+        (walker[Walker].x - lava[Lava].x) * (walker[Walker].x - lava[Lava].x) <= lava[Lava].radius * lava[Lava].radius
+    reduce per walker:
+        top = best(lava, by = lava[Lava].priority)
+    keep TopPool(walker, top)
 
 # best() on its own, recorded on the walker so empty groups are visible too.
 rule RankPools:

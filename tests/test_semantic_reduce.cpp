@@ -159,11 +159,33 @@ TEST_CASE("Reduce: aggregate types are checked in the handler", "[semantic][rule
 
 TEST_CASE("Reduce: min and max need a default of the input type", "[semantic][rule-reduce]") {
     CHECK(analyze(grouped_rule("team", "        low = min(player[Member].points, default = 0.0)\n",
-                                       "        let x = 1\n"))
-              .has("default"));
-    CHECK(analyze(grouped_rule("team", "        low = max(player[Member].speed)\n",
-                                       "        let x = 1\n"))
-              .has("default"));
+                                       "        let x = low\n"))
+              .has("min(...) default must be of type 'int'"));
+}
+
+TEST_CASE("Reduce: a handler read of a default-free min or max needs a default", "[semantic][rule-reduce]") {
+    const auto analysis = analyze(grouped_rule("team", "        fastest = max(player[Member].speed)\n",
+                                               "        team[Team].best = fastest\n",
+                                               "        player[Member].team == team\n"));
+    CHECK(analysis.has("max(...) 'fastest' needs `default = <value>`: the handler on 'tick' reads it at line"));
+    CHECK(analysis.has("where a group can have no rows"));
+}
+
+TEST_CASE("Reduce: a sort key read of a default-free min or max needs a default", "[semantic][rule-reduce]") {
+    const auto analysis = analyze("rule TeamScore:\n" + kTeamPairs +
+                                  "    reduce per team:\n"
+                                  "        slowest = min(player[Member].points)\n"
+                                  "        n = count()\n"
+                                  "    order by:\n"
+                                  "        slowest desc\n"
+                                  "    on tick:\n"
+                                  "        team[Team].total = n\n");
+    CHECK(analysis.has("min(...) 'slowest' needs `default = <value>`: a sort key reads it at line"));
+}
+
+TEST_CASE("Reduce: a global min or max always needs a default", "[semantic][rule-reduce]") {
+    CHECK(analyze(team_rule("        fastest = max(player[Member].speed)\n", "        let x = fastest\n"))
+              .has("max(...) 'fastest' needs `default = <value>`: the handler on 'tick' reads it"));
 }
 
 TEST_CASE("Reduce: sum, min and max take int or float", "[semantic][rule-reduce]") {

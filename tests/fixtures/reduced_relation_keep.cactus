@@ -1,0 +1,89 @@
+module reduced_relation_keep
+
+# `keep R(b, t)` holds one row per group, from `b` to its `best` winner `t`.
+# Players stand on a line and touch every checkpoint within reach. The same
+# winner is also kept the old way, as an entity_id field of a kept trait.
+
+use std.core
+
+trait Player:
+    var x: float = 0.0
+
+trait Checkpoint:
+    var x: float = 0.0
+    var order: int = 0
+
+relation AtCheckpoint:
+    from: Player one
+    to: Checkpoint
+    let highest: int = 0
+    let touched: int = 0
+
+trait Reached:
+    var checkpoint: entity_id
+    var highest: int = 0
+
+trait Tally:
+    var ticks: int = 0
+
+group contacts:
+    phase: fixed_tick
+
+# No default on `max`: only groups with rows get a row.
+rule StandOnCheckpoint:
+    pairs:
+        player: Player
+        point: Checkpoint
+    group: contacts
+    where:
+        (player[Player].x - point[Checkpoint].x) * (player[Player].x - point[Checkpoint].x) <= 1.0
+    reduce per player:
+        top = best(point, by = point[Checkpoint].order)
+        highest = max(point[Checkpoint].order)
+        n = count()
+    keep AtCheckpoint(player, top):
+        highest = highest
+        touched = n
+
+rule ReachCheckpoint:
+    pairs:
+        player: Player
+        point: Checkpoint
+    group: contacts
+    where:
+        (player[Player].x - point[Checkpoint].x) * (player[Player].x - point[Checkpoint].x) <= 1.0
+    reduce per player:
+        top = best(point, by = point[Checkpoint].order)
+        highest = max(point[Checkpoint].order)
+    keep Reached on player:
+        checkpoint = top
+        highest = highest
+
+rule Count:
+    on fixed_tick:
+        Clock[Tally].ticks += 1
+
+entity Clock:
+    Tally
+
+template Runner(x: float = 0.0):
+    Player:
+        x = x
+
+template Point(x: float, order: int):
+    Checkpoint:
+        x = x
+        order = order
+
+# Touches First and Third.
+entity Lead from Runner()
+
+# Touches Third only.
+entity Second from Runner(x = -1.0)
+
+# Touches nothing.
+entity Idler from Runner(x = 100.0)
+
+entity First from Point(x = 0.5, order = 1)
+entity Third from Point(x = -0.5, order = 3)
+entity Fifth from Point(x = 50.0, order = 5)

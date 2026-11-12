@@ -5896,7 +5896,7 @@ static void emit_reduce_row(std::ostringstream& out,
     }
     for (const auto& reducer : reduce.reducers) {
         out << ind << "cactus_row." << reducer.name << " = ";
-        if (reducer_has_default(reducer.kind)) {
+        if (reducer.default_value != nullptr) {
             out << "cactus_acc." << reducer.name << "_seen ? cactus_acc." << reducer.name << " : "
                 << rewrite_expr(*reducer.default_value, {}, program) << ";\n";
         } else if (reducer.kind == ReducerKind::Sum) {
@@ -6130,8 +6130,62 @@ static void emit_keep_commands(std::ostringstream& out,
     emit_keep_removals(out, keep, program);
 }
 
+// The pass buffers each kept row; one command at the activation's commit
+// keeps them and drops every other row.
+static void emit_relation_keep_buffer(std::ostringstream& out, const KeepClause& keep) {
+    out << "    cactus::runtime::entt_backend::KeptRows<" << EnttCodegenUtils::relation_cpp_name(*keep.resolved_target)
+        << "> cactus_kept_rows;\n";
+}
+
+static void emit_relation_keep_run(std::ostringstream& out) {
+    out << "    cactus::runtime::entt_backend::generated_queue_structural_command(\n";
+    out << "        cactus::runtime::entt_backend::StructuralCommand::Kind::Add,\n";
+    out << "        [cactus_keep_run = std::move(cactus_kept_rows)](entt::registry& registry) { "
+           "cactus::runtime::entt_backend::apply_relation_keep_run(registry, cactus_keep_run); });\n";
+}
+
+static std::string relation_keep_tuple_body(const KeepClause& keep,
+                                            const PairCodegenScope& scope,
+                                            const DecoratedProgram& program) {
+    const auto row = EnttCodegenUtils::relation_cpp_name(*keep.resolved_target);
+    std::ostringstream body;
+    body << "        " << row << " cactus_row_value{};\n";
+    for (const auto& field : keep.fields) {
+        body << "        cactus_row_value." << cpp_escaped(field.name) << " = "
+             << rewrite_expr(*field.value, {}, program, {}, {}, &scope) << ";\n";
+    }
+    const auto key = [&](std::size_t index) {
+        const auto& argument = keep.arguments[index];
+        if (!argument.from_endpoint.has_value()) {
+            return argument.spelling;
+        }
+        return argument.spelling + (*argument.from_endpoint ? ".from" : ".to");
+    };
+    body << "        cactus_kept_rows.push_back({.from = " << key(0) << ", .to = " << key(1)
+         << ", .row = cactus_row_value});\n";
+    return body.str();
+}
+
+// `keep R(b, t)`: a row from each group to its `best` winner; a stale winner keeps none.
+static void emit_reduced_relation_keep(std::ostringstream& out,
+                                       const KeepClause& keep,
+                                       const ReduceClause& reduce,
+                                       const PairCodegenScope& group_scope,
+                                       const DecoratedProgram& program) {
+    const auto& per    = *reduce.per_binding;
+    const auto& winner = keep.arguments[0].spelling == per ? keep.arguments[1].spelling : keep.arguments[0].spelling;
+    emit_relation_keep_buffer(out, keep);
+    out << "    cactus_kept_rows.reserve(cactus_rows.size());\n";
+    out << "    for (const auto& cactus_row : cactus_rows) {\n";
+    out << "        if (cactus_row." << winner << " == entt::null) { continue; }\n";
+    emit_reduce_row_bindings(out, reduce, "        ");
+    out << relation_keep_tuple_body(keep, group_scope, program);
+    out << "    }\n";
+    emit_relation_keep_run(out);
+}
+
 // The group binding first: with no groups there is nothing to run, unless the
-// rule keeps a trait and so must still remove every carrier.
+// rule keeps a trait or relation and so must still remove every carrier or row.
 static void emit_reduced_pair_snapshots(std::ostringstream& out,
                                         const RuleNode& sys,
                                         const HandlerContract* contract,
@@ -7498,7 +7552,7 @@ static void emit_reduced_pair_handler_body(std::ostringstream& out,
                                            const HandlerContract* contract) {
     const auto& reduce  = *sys.reduce;
     const bool keeps    = sys.keep.has_value();
-    const bool witness  = keeps && sys.keep->condition == nullptr;
+    const bool witness  = keeps && sys.keep->arguments.empty() && sys.keep->condition == nullptr;
     const auto index    = indexed_fold_plan(sys, contract, program);
     const auto equality = equality_fold_plan(sys, contract, program);
     std::optional<std::string> indexed;
@@ -7577,7 +7631,9 @@ static void emit_reduced_pair_handler_body(std::ostringstream& out,
     } else {
         emit_total_reduce_rows(out, reduce, program);
     }
-    if (keeps && group_scope.has_value()) {
+    if (keeps && group_scope.has_value() && !sys.keep->arguments.empty()) {
+        emit_reduced_relation_keep(out, *sys.keep, reduce, *group_scope, program);
+    } else if (keeps && group_scope.has_value()) {
         emit_keep_commands(out, *sys.keep, reduce, *group_scope, program);
     }
     if (handler.body.empty()) {
@@ -7655,42 +7711,6 @@ static void emit_unary_keep_handler_body(std::ostringstream& out,
     out << "        return cactus_kept.find(cactus_carrier) != cactus::runtime::entt_backend::SnapshotPositions::kAbsent;\n";
     out << "    };\n";
     emit_keep_removals(out, keep, program, patches ? "cactus_kept_targets" : "cactus_kept_entities");
-}
-
-// `keep R(a, b)`: the pass buffers a row per tuple passing `where:`; one
-// command at the activation's commit keeps them and drops every other row.
-static void emit_relation_keep_buffer(std::ostringstream& out, const KeepClause& keep) {
-    out << "    cactus::runtime::entt_backend::KeptRows<" << EnttCodegenUtils::relation_cpp_name(*keep.resolved_target)
-        << "> cactus_kept_rows;\n";
-}
-
-static void emit_relation_keep_run(std::ostringstream& out) {
-    out << "    cactus::runtime::entt_backend::generated_queue_structural_command(\n";
-    out << "        cactus::runtime::entt_backend::StructuralCommand::Kind::Add,\n";
-    out << "        [cactus_keep_run = std::move(cactus_kept_rows)](entt::registry& registry) { "
-           "cactus::runtime::entt_backend::apply_relation_keep_run(registry, cactus_keep_run); });\n";
-}
-
-static std::string relation_keep_tuple_body(const KeepClause& keep,
-                                            const PairCodegenScope& scope,
-                                            const DecoratedProgram& program) {
-    const auto row = EnttCodegenUtils::relation_cpp_name(*keep.resolved_target);
-    std::ostringstream body;
-    body << "        " << row << " cactus_row_value{};\n";
-    for (const auto& field : keep.fields) {
-        body << "        cactus_row_value." << cpp_escaped(field.name) << " = "
-             << rewrite_expr(*field.value, {}, program, {}, {}, &scope) << ";\n";
-    }
-    const auto key = [&](std::size_t index) {
-        const auto& argument = keep.arguments[index];
-        if (!argument.from_endpoint.has_value()) {
-            return argument.spelling;
-        }
-        return argument.spelling + (*argument.from_endpoint ? ".from" : ".to");
-    };
-    body << "        cactus_kept_rows.push_back({.from = " << key(0) << ", .to = " << key(1)
-         << ", .row = cactus_row_value});\n";
-    return body.str();
 }
 
 static void emit_relation_keep_handler_body(std::ostringstream& out,
@@ -8108,7 +8128,7 @@ static void emit_handler_body(std::ostringstream& out,
         }
         return;
     }
-    if (sys.keep.has_value() && !sys.keep->arguments.empty()) {
+    if (sys.keep.has_value() && !sys.keep->arguments.empty() && !sys.reduce.has_value()) {
         emit_relation_keep_handler_body(out, sys, handler, pairs, scope, program, contract);
         return;
     }

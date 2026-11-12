@@ -968,6 +968,26 @@ parallel_handlers_runtime.cactus fixtures parallel_handlers_runtime.TagSpinners/
     named_writes:
     named_requirements:
     iteration_order: creation
+reduced_relation_keep.cactus fixtures reduced_relation_keep.ReachCheckpoint/on std.core.fixed_tick
+    reads: reduced_relation_keep.Checkpoint reduced_relation_keep.Player
+    read_fields: reduced_relation_keep.Checkpoint{order,x} reduced_relation_keep.Player{x}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:reduced_relation_keep.Player 1:reduced_relation_keep.Checkpoint
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+reduced_relation_keep.cactus fixtures reduced_relation_keep.StandOnCheckpoint/on std.core.fixed_tick
+    reads: reduced_relation_keep.Checkpoint reduced_relation_keep.Player
+    read_fields: reduced_relation_keep.Checkpoint{order,x} reduced_relation_keep.Player{x}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:reduced_relation_keep.Player 1:reduced_relation_keep.Checkpoint
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
 relation_endpoint_limits.cactus examples relation_endpoint_limits.Allocate/on std.core.fixed_tick
     reads: relation_endpoint_limits.Candidate relation_endpoint_limits.Claim relation_endpoint_limits.Control
     read_fields: relation_endpoint_limits.Candidate{score} relation_endpoint_limits.Claim{} relation_endpoint_limits.Control{mode}
@@ -1438,9 +1458,19 @@ rule_keep.cactus examples rule_keep.RankPools/on std.core.fixed_tick
     named_writes:
     named_requirements:
     iteration_order: free
+rule_keep.cactus examples rule_keep.RankTopPool/on std.core.fixed_tick
+    reads: rule_keep.Lava rule_keep.Walker
+    read_fields: rule_keep.Lava{priority,radius,x} rule_keep.Walker{x}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:rule_keep.Walker 1:rule_keep.Lava
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
 rule_keep.cactus examples rule_keep.TouchLava/on std.core.fixed_tick
     reads: rule_keep.Control rule_keep.Lava rule_keep.Walker
-    read_fields: rule_keep.Control{frozen} rule_keep.Lava{heat,priority,radius,x} rule_keep.Walker{x}
+    read_fields: rule_keep.Control{frozen} rule_keep.Lava{heat,radius,x} rule_keep.Walker{x}
     write_fields:
     write_kinds:
     bound_reads: 0:rule_keep.Walker 1:rule_keep.Lava

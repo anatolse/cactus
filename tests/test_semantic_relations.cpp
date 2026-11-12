@@ -64,6 +64,13 @@ const std::string kPrelude =
     "relation Seen:\n"
     "    from: Robot\n"
     "    to: Task\n"
+    "relation Assigned:\n"
+    "    from: Robot one\n"
+    "    to: Task\n"
+    "    let score: float = 0.0\n"
+    "relation Assignee:\n"
+    "    from: Task\n"
+    "    to: Robot one\n"
     "entity Boss:\n"
     "    Player\n";
 
@@ -667,7 +674,7 @@ TEST_CASE("Relations: relation keep errors", "[semantic][relations][rule-keep]")
             "    reduce per a:\n"
             "        n = count()\n"
             "    keep Walk(a, b)\n");
-        CHECK(analysis.has("a relation keep needs an unreduced `pairs:` rule"));
+        CHECK(analysis.has("a reduced relation keep needs the `per` binding 'a' and a `best` reducer"));
     }
     SECTION("unary rule") {
         const auto analysis = analyze(
@@ -675,7 +682,7 @@ TEST_CASE("Relations: relation keep errors", "[semantic][relations][rule-keep]")
             "    each: Tile\n"
             "    group: links\n"
             "    keep Walk(a, b)\n");
-        CHECK(analysis.has("a relation keep needs an unreduced `pairs:` rule"));
+        CHECK(analysis.has("a relation keep needs a `pairs:` rule"));
     }
     SECTION("a kept relation can't mark one") {
         const auto analysis = analyze(
@@ -719,6 +726,66 @@ TEST_CASE("Relations: relation keep errors", "[semantic][relations][rule-keep]")
     SECTION("condition") {
         const auto analysis = analyze(walk_keeper("    keep Walk(a, b) if true\n"));
         CHECK(analysis.has("`if` works only on a `reduce per` keep"));
+    }
+}
+
+namespace {
+
+// Each robot's nearest task by `best`, kept as the given clause lines.
+std::string winner_keeper(const std::string& keep_lines, const std::string& reducers = "") {
+    return "rule Nearest:\n" + kClaimPairs +
+           "    group: links\n"
+           "    where:\n"
+           "        task[Task].x >= robot[Robot].x\n"
+           "    reduce per robot:\n"
+           "        top = best(task, by = 0.0 - task[Task].x)\n" +
+           reducers + keep_lines;
+}
+
+}  // namespace
+
+TEST_CASE("Relations: a reduced rule keeps the best winner as a relation", "[semantic][relations][rule-keep]") {
+    SECTION("per binding first, with fields from the aggregates") {
+        const auto analysis = analyze(winner_keeper("    keep Assigned(robot, top):\n"
+                                                    "        score = nearest\n",
+                                                    "        nearest = min(task[Task].x)\n"));
+        INFO(describe(analysis));
+        REQUIRE(analysis.clean());
+        CHECK(analysis.program.relations.at("Assigned").kept_by == "Nearest");
+        const auto& contract = analysis.contract("Nearest");
+        CHECK(has_command(contract, HandlerCommandKind::Add, "Assigned"));
+        CHECK(has_command(contract, HandlerCommandKind::Remove, "Assigned"));
+    }
+    SECTION("winner first, `one` on the per end") {
+        const auto analysis = analyze(winner_keeper("    keep Assignee(top, robot)\n"));
+        INFO(describe(analysis));
+        CHECK(analysis.clean());
+    }
+    SECTION("`one` on the winner end") {
+        const auto analysis = analyze(winner_keeper("    keep Claim(robot, top)\n"));
+        CHECK(analysis.has("kept relation 'Claim' can't mark its `to` end `one`: two groups can share a winner"));
+        CHECK_FALSE(analysis.has("can't mark its `from` end"));
+    }
+    SECTION("both bindings") {
+        const auto analysis = analyze(winner_keeper("    keep Seen(robot, task)\n"));
+        CHECK(analysis.has("a reduced relation keep needs the `per` binding 'robot' and a `best` reducer"));
+    }
+    SECTION("an aggregate that is not best") {
+        const auto analysis = analyze(winner_keeper("    keep Seen(robot, n)\n", "        n = count()\n"));
+        CHECK(analysis.has("a reduced relation keep needs the `per` binding 'robot' and a `best` reducer"));
+    }
+    SECTION("the winner's binding lacks the end trait") {
+        const auto analysis = analyze(winner_keeper("    keep Seen(top, robot)\n"));
+        CHECK(analysis.has("'top' must select `Robot` to be the `from` end of `Seen`"));
+    }
+    SECTION("a field reads the eliminated binding") {
+        const auto analysis = analyze(winner_keeper("    keep Assigned(robot, top):\n"
+                                                    "        score = task[Task].x\n"));
+        CHECK(analysis.has("'task' is not available after `reduce:`"));
+    }
+    SECTION("condition") {
+        const auto analysis = analyze(winner_keeper("    keep Seen(robot, top) if true\n"));
+        CHECK(analysis.has("`if` works only on a `reduce per` keep of a trait"));
     }
 }
 

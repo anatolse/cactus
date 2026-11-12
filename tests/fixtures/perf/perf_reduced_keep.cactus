@@ -1,0 +1,63 @@
+module perf_reduced_keep
+
+use std.core
+
+# size x size runners, each on its own lane with four gates. A runner's best
+# gate rotates every tick, so every tick replaces every kept row.
+
+trait Board:
+    let size: int = 85
+
+trait Runner:
+    let lane: int = 0
+    var step: int = 0
+
+trait Gate:
+    let lane: int = 0
+    let order: int = 0
+
+relation AtGate:
+    from: Runner one
+    to: Gate
+    let order: int = 0
+
+group gates:
+    phase: fixed_tick
+
+entity Field:
+    Board
+
+template Lane(lane: int):
+    Runner:
+        lane = lane
+
+template Post(lane: int, order: int):
+    Gate:
+        lane = lane
+        order = order
+
+rule Fill:
+    on load:
+        for lane in range(0, Field[Board].size * Field[Board].size):
+            spawn Lane(lane = lane)
+            for order in range(0, 4):
+                spawn Post(lane = lane, order = order)
+
+rule Advance:
+    each:
+        Runner as r
+    on fixed_tick:
+        r.step += 1
+
+rule Lead:
+    pairs:
+        runner: Runner
+        gate: Gate
+    group: gates
+    where:
+        gate[Gate].lane == runner[Runner].lane
+    reduce per runner:
+        top = best(gate, by = (gate[Gate].order + runner[Runner].step) % 4)
+        last = max(gate[Gate].order)
+    keep AtGate(runner, top):
+        order = last

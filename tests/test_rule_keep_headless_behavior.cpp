@@ -20,6 +20,7 @@ using Lava    = cactus_gen::rule_keep::Lava;
 using Ranked  = cactus_gen::rule_keep::Ranked;
 using Tally   = cactus_gen::rule_keep::Tally;
 using Control = cactus_gen::rule_keep::Control;
+using TopPool = cactus_gen::rule_keep::TopPool;
 
 constexpr float kDt = 1.0F / 60.0F;
 
@@ -50,6 +51,9 @@ struct World {
     bool in_lava(entt::entity entity) {
         return registry.all_of<InLava>(entity);
     }
+    bool top_pool(entt::entity walker, entt::entity pool) {
+        return cactus::runtime::entt_backend::relation_store<TopPool>(registry).contains(walker, pool);
+    }
 };
 
 }  // namespace
@@ -74,7 +78,8 @@ TEST_CASE("keep adds, patches and removes a trait as its group gains and loses r
         REQUIRE(world.in_lava(hiker));
         CHECK(registry.get<InLava>(hiker).zones == 1);
         CHECK(registry.get<InLava>(hiker).heat == 2.0F);
-        CHECK(registry.get<InLava>(hiker).hottest == slots.rule_keep.PoolA);
+        CHECK(world.top_pool(hiker, slots.rule_keep.PoolA));
+        CHECK_FALSE(cactus::runtime::entt_backend::relation_store<TopPool>(registry).has_from(slots.rule_keep.Loner));
         CHECK(world.walker(hiker).enters == 1);
         CHECK_FALSE(world.in_lava(slots.rule_keep.Loner));
         world.tick(2);
@@ -100,7 +105,8 @@ TEST_CASE("keep adds, patches and removes a trait as its group gains and loses r
         world.tick();
         CHECK(registry.get<InLava>(hiker).zones == 2);
         CHECK(registry.get<InLava>(hiker).heat == 5.0F);
-        CHECK(registry.get<InLava>(hiker).hottest == slots.rule_keep.PoolB);
+        CHECK(world.top_pool(hiker, slots.rule_keep.PoolB));
+        CHECK_FALSE(world.top_pool(hiker, slots.rule_keep.PoolA));
         world.walker(hiker).x = 2.0F;
         world.tick();
         CHECK(registry.get<InLava>(hiker).zones == 1);

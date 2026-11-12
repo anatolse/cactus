@@ -410,6 +410,26 @@ TEST_CASE("Best: names the winning entity of a binding", "[semantic][rule-reduce
     CHECK(reducers[2].key_type.kind == TypeKind::Float);
 }
 
+TEST_CASE("Keep: a reduced keep without a condition reads a default-free max", "[semantic][rule-reduce][rule-keep]") {
+    const auto analysis = analyze(touch_rule(kReducePerBody + "        deepest = max(zone[Zone].dps)\n",
+                                             "    keep InZone on body:\n"
+                                             "        zones = n\n"
+                                             "        dps = deepest\n"));
+    INFO(describe(analysis));
+    CHECK(analysis.clean());
+}
+
+TEST_CASE("Keep: a keep condition makes a default-free max readable on empty groups", "[semantic][rule-reduce][rule-keep]") {
+    const auto in_field = analyze(touch_rule(kReducePerBody + "        deepest = max(zone[Zone].dps)\n",
+                                             "    keep InZone on body if n == 0:\n"
+                                             "        dps = deepest\n"));
+    CHECK(in_field.has("max(...) 'deepest' needs `default = <value>`: the keep field 'dps' under `if` reads it at line"));
+    const auto in_condition = analyze(touch_rule(kReducePerBody + "        deepest = max(zone[Zone].dps)\n",
+                                                 "    keep InZone on body if deepest > 1.0:\n"
+                                                 "        zones = n\n"));
+    CHECK(in_condition.has("max(...) 'deepest' needs `default = <value>`: the keep condition reads it at line"));
+}
+
 TEST_CASE("Best: the per binding is rejected", "[semantic][rule-reduce][rule-keep]") {
     CHECK(analyze(touch_rule(kReducePerBody + "        top = best(body, by = body[Body].x)\n", "    keep Seen on body\n"))
               .has("best(...) takes a pair binding other than the `per` binding 'body'"));

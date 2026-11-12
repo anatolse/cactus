@@ -347,7 +347,7 @@ relation Claim:
 - A row lives only while both ends are valid. It is removed at the commit position of the command that destroys an end or removes its end trait (§4.4), so no row ever names a dead entity.
 - A self row `R(a, a)` is allowed. `R(a, b)` and `R(b, a)` are different rows. Rows are ordered by creation: the commit position of the command or keep run that created them. Replacing a row keeps its position.
 - A relation is **kept** when a `keep R(a, b)` clause names it (§3.8.6), and **stored** otherwise. A stored relation changes only through `add R` and `remove R` (§4.4). A program has at most one keeper per relation, and `add`/`remove` of a kept relation is an error.
-- **`one` ends.** An end marked `one` holds at most one row per entity on that end; no mark means many. The compiler accepts an `add R(x, y)` of such a relation only when it proves the limit: the end argument is `self` of a unary entity rule, an entity pair binding limited to one, or a direct row endpoint with an exactly matching statically-one partition key (§3.8.3); the other argument is an entity binding, a direct bound row endpoint, `self`, a named entity or a constant; the handler runs on a phase; the rule's `where:` holds `not R(e, _)` (from end) or `not R(_, e)` (to end) as a top-level conjunct; and no other rule adds `R` in the same phase. Any other `add` is an error that names the failing condition and shows the proven form. A kept relation can't mark an end `one`.
+- **`one` ends.** An end marked `one` holds at most one row per entity on that end; no mark means many. The compiler accepts an `add R(x, y)` of such a relation only when it proves the limit: the end argument is `self` of a unary entity rule, an entity pair binding limited to one, or a direct row endpoint with an exactly matching statically-one partition key (§3.8.3); the other argument is an entity binding, a direct bound row endpoint, `self`, a named entity or a constant; the handler runs on a phase; the rule's `where:` holds `not R(e, _)` (from end) or `not R(_, e)` (to end) as a top-level conjunct; and no other rule adds `R` in the same phase. Any other `add` is an error that names the failing condition and shows the proven form. A kept relation can't mark an end `one`, except the end that the `per` binding fills in a reduced relation keep (§3.8.6): each `per` entity has one group and each group at most one winner, so the compiler proves the limit. The winner's end can repeat across groups and can't be `one`.
 
 **Reading relations.** `R(x, y)` is a pure `bool` test, true when `R` holds the row `(x, y)` in the snapshot of the current pass. Either argument may be `_`, which matches any entity; `R(_, _)` is rejected. Tests are allowed only in `where:` and `when:`; `and`, `or` and `not` compose them into intersection, union and difference. A rule can also bind rows (§3.8.1): `r: R` in `pairs:`, or `each: R as r`. A row binding exposes `r.from`, `r.to` and `r.<field>`, is read-only, and can't be used with brackets or as a command or `emit` target. Both `pairs:` bindings may name rows when a top-level endpoint equality joins them, such as `a.to == b.from`; each binding still names only one relation.
 
@@ -1052,8 +1052,8 @@ reducer_decl    = IDENTIFIER "=" reducer NEWLINE ;
 
 reducer         = "count" "(" [ IDENTIFIER ] ")"
                 | "sum" "(" expression ")"
-                | "min" "(" expression "," "default" "=" expression ")"
-                | "max" "(" expression "," "default" "=" expression ")"
+                | "min" "(" expression [ "," "default" "=" expression ] ")"
+                | "max" "(" expression [ "," "default" "=" expression ] ")"
                 | "any" "(" expression ")"
                 | "first_hit" "(" expression ")"
                 | "best" "(" IDENTIFIER "," "by" "=" expression ")" ;
@@ -1090,11 +1090,13 @@ binding and a nonempty reducer block.
 Sorting follows the reduction, and empty-group identities, retained writes, and
 `keep` commit visibility are unchanged.
 
-**Reducers are typed and pure.** `count()` counts rows; `count(binding)` also counts rows (not distinct entities) and requires a pair binding. `sum` takes `int`, `float`, `vec2` or `vec3` and keeps that type; a vector sum adds per component. `min` and `max` take `int` or `float`, keep that type, and require a `default` of exactly that type. `any` takes `bool` and yields `bool`. `first_hit` takes and yields `std.physics.volume.SweepHit` (§7.7): it ignores misses and keeps the hit with the smallest `t`, and on equal `t` the row that comes first in fold order. `best(binding, by = key)` names a pair binding other than the `per` binding and an `int` or `float` key, and yields `entity_id`: that binding's entity in the row with the highest key, the earlier row in fold order on a tie; rows whose key is NaN are skipped. Reducer inputs have the purity class of a `where:` predicate (§3.8.2) and read the domain's bindings, constants and named entity fields. Reducer names are unique and must not reuse a pair binding name.
+**Reducers are typed and pure.** `count()` counts rows; `count(binding)` also counts rows (not distinct entities) and requires a pair binding. `sum` takes `int`, `float`, `vec2` or `vec3` and keeps that type; a vector sum adds per component. `min` and `max` take `int` or `float` and keep that type; a `default` has exactly that type. `any` takes `bool` and yields `bool`. `first_hit` takes and yields `std.physics.volume.SweepHit` (§7.7): it ignores misses and keeps the hit with the smallest `t`, and on equal `t` the row that comes first in fold order. `best(binding, by = key)` names a pair binding other than the `per` binding and an `int` or `float` key, and yields `entity_id`: that binding's entity in the row with the highest key, the earlier row in fold order on a tie; rows whose key is NaN are skipped. Reducer inputs have the purity class of a `where:` predicate (§3.8.2) and read the domain's bindings, constants and named entity fields. Reducer names are unique and must not reuse a pair binding name.
+
+**Defaults only where an empty group is read.** A `min` or `max` needs `default =` unless every read of it is a field of a keep whose recipients are only groups with rows: `keep T on b` without `if`, or a reduced relation keep (§3.8.6). Any other read, in a handler, a sort key, a keep condition or a field under `if`, can see an empty group, so a missing default there is an error at the reducer that names that read. A global `reduce:` always has a group that may be empty.
 
 **Every reducer is read.** A reducer must be read by a handler body, a sort key, a keep field or a keep condition. A reducer that nothing reads is an error at its declaration. When a keep rule reads none of its reducers, the error asks to remove `reduce:`, so the trait is kept while any row matches (§3.8.6).
 
-**Groups are outer.** Without `per`, the whole domain is one group, so the handler runs exactly once, even for empty input. `reduce per binding:` names a pair binding and creates one group for every entity in that binding's membership snapshot that passes the group filters, whether or not any row survives for it. An empty group gets identity values: `count` and `sum` are `0` (the zero vector for a vector `sum`), `min`/`max` their default, `any` is `false`, `first_hit` is the miss value `sweep` itself returns (`hit = false`, `t = 1.0`), and `best` is a stale `entity_id`. Defaults apply only to empty input.
+**Groups are outer.** Without `per`, the whole domain is one group, so the handler runs exactly once, even for empty input. `reduce per binding:` names a pair binding and creates one group for every entity in that binding's membership snapshot that passes the group filters, whether or not any row survives for it. An empty group gets identity values: `count` and `sum` are `0` (the zero vector for a vector `sum`), `min`/`max` their default (unread without one), `any` is `false`, `first_hit` is the miss value `sweep` itself returns (`hit = false`, `t = 1.0`), and `best` is a stale `entity_id`. Defaults apply only to empty input.
 
 **`where:` splits into group and row filters.** With `reduce per b:`, a `where:` predicate whose pair-binding reads all root at `b` filters groups: an entity that fails it gets no group and no activation. Every other predicate filters rows. Without `per`, every predicate filters rows. The split is syntactic.
 
@@ -1123,9 +1125,12 @@ The forms depend on the domain:
 | `pairs:` + `keep T on b` | each entity of `b` | it has at least one row after `where:` |
 | `pairs:` + `reduce per b:` + `keep T on b [if c]` | each group entity `b` | its group has rows, or `c` is true |
 | `pairs:` + `keep R(a, b)` | one row of relation `R` per tuple | the tuple passes `where:` |
+| `pairs:` + `reduce per b:` + `keep R(b, t)` | one row of `R` per group, from `b` to its `best` winner `t` | the group's `t` names an entity |
 | unary row or `pairs:` containing rows + `keep R(k1, k2)` | one row per distinct projected pair | at least one passing tuple supports the pair |
 
-`keep R(a, b)` keeps a relation (§3.6.2) instead of a trait. `a` and `b` are the rule's two entity bindings, in either order; the one passed for `from` must select `R`'s `from` end trait, and the one passed for `to` its `to` end trait. The field block may read both bindings, constants and named entity fields. Each run makes `R` hold exactly the rows of that run's tuples, added, updated and removed at its commit; `when:` false leaves every row as it was. The rule can't declare `reduce:` or `if`. A keep rule that tests or binds its own relation is a keep loop. `R` may come from an imported module that doesn't keep it, such as `std.render.visibility.HiddenIn`, if it marks no end `one`; the linked program still has one keeper per relation, and no other rule of any module may `add` or `remove` its rows.
+`keep R(a, b)` keeps a relation (§3.6.2) instead of a trait. `a` and `b` are the rule's two entity bindings, in either order; the one passed for `from` must select `R`'s `from` end trait, and the one passed for `to` its `to` end trait. The field block may read both bindings, constants and named entity fields. Each run makes `R` hold exactly the rows of that run's tuples, added, updated and removed at its commit; `when:` false leaves every row as it was. The rule can't declare `if`, and with `reduce:` only the form below. A keep rule that tests or binds its own relation is a keep loop. `R` may come from an imported module that doesn't keep it, such as `std.render.visibility.HiddenIn`, if it marks no end `one`; the linked program still has one keeper per relation, and no other rule of any module may `add` or `remove` its rows.
+
+**Reduced relation keep.** With `reduce per b:`, `keep R(b, t)` or `keep R(t, b)` names the `per` binding and a `best` reducer `t` over the other binding. `b` must select the end trait of the end it fills, and the binding `t` ranges over the end trait of the other end. Each run makes `R` hold one row per group whose `t` names an entity, with the field values the block assigns from the aggregates, `b`, constants and named entity fields; a group whose `t` is stale holds no row. When a group's winner changes, its old row is removed and the new row added at the commit, so the new row goes to the end of the creation order; a row whose winner stays keeps its position, even when its fields change. Changes apply in the `per` entities' creation order. `if` is rejected. The end `b` fills may be marked `one` (§3.6.2). Rows have no lifecycle triggers: to react when a player enters a checkpoint, keep a marker trait as well.
 
 A row-domain relation keep means: keep every output pair supported by the query. Keys are direct row endpoints (`edge.from` or `edge.to`) or entity bindings of a mixed pair; at least one is a row endpoint. Both keys may name the same endpoint when its declared trait fits both target ends. Bare rows, payload fields, nested paths and arbitrary expressions are rejected. Typing uses source declarations, without assuming extra runtime traits.
 
@@ -1237,9 +1242,13 @@ rule Burn:
 
 **No loops.** A keep rule depends on another keep rule when any of its clauses reads the trait the other keeps: the domain (`each:`, `without:`, a pair binding's traits), `where:`, a reducer input, a field, the condition or `when:`, including named entity reads. These dependencies must form no cycle, so a kept trait is always a function of other data. A rule that reads its own kept trait is an error that names it; a longer cycle is one error that names every rule in it. A chain, such as a keeper of `CanEscape` that filters on `LowHealth`, is accepted.
 
-**One writer.** At most one `keep` clause names a trait. Every other change to a kept trait is a compile error in any module: field assignment, `set`, `add`, `remove`, `project`, and declaring an entity or template with it. Reading it, filtering on it and reacting to it with `on added` / `on removed` are allowed. `best` names the winning entity of a relation, for example the checkpoint a player last stands in:
+**One writer.** At most one `keep` clause names a trait. Every other change to a kept trait is a compile error in any module: field assignment, `set`, `add`, `remove`, `project`, and declaring an entity or template with it. Reading it, filtering on it and reacting to it with `on added` / `on removed` are allowed. `best` names a winning entity; keep it as a relation, so the link can't outlive either end. For example, the checkpoint of highest order a player stands in:
 
 ```cactus
+relation AtCheckpoint:
+    from: Player one
+    to: Checkpoint
+
 rule StandOnCheckpoint:
     pairs:
         player:
@@ -1253,8 +1262,7 @@ rule StandOnCheckpoint:
         physics.touching(player, point)
     reduce per player:
         top = best(point, by = point[Checkpoint].order)
-    keep AtCheckpoint on player:
-        checkpoint = top
+    keep AtCheckpoint(player, top)
 ```
 
 ### 3.9 Event Handlers

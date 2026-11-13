@@ -112,8 +112,8 @@ Records SHALL carry parent links between included entities and SHALL preserve re
 - **WHEN** an included entity was reparented at runtime to another included entity
 - **THEN** the record carries the current parent, not the archetype's parent
 
-### Requirement: The typed schema exposes exact backend representation
-Capture SHALL produce a canonical schema descriptor and a typed snapshot without imposing a byte format. The descriptor SHALL cover reconstructible archetypes, baseline values, field identities and exact value kinds including integer and floating widths and vector lanes, persistence masks, enum identities, and nested structs and lists. It SHALL exclude function bodies unrelated to construction. Ordering SHALL be canonicalized before fingerprinting so that declaration reordering and import aliasing produce an identical descriptor. Scalars, nested structs and lists, enums, strings, entity references, and declared asset and input references SHALL be representable without silent narrowing or raw native handle encoding. Raw resource pointers, registry handles, and padding SHALL NEVER be portable payloads. Unsupported reconstruction or persistent field types SHALL produce actionable field-path diagnostics rather than silently omitting values. Configured collection and depth limits SHALL be enforced during capture.
+### Requirement: The typed schema describes value meaning
+Capture SHALL produce a canonical schema descriptor and a typed snapshot without imposing a byte format. The descriptor SHALL cover reconstructible archetypes, baseline values, field identities, and each field's meaning: its language type with integer and floating widths and vector lanes as the language defines them, and every meaning fact declared on the field. It SHALL also cover persistence masks, enum identities, and nested structs and lists. It SHALL NOT depend on how a backend stores a value, on codegen options, or on the compiler's analysis of how the program uses a field. It SHALL exclude function bodies unrelated to construction. Ordering SHALL be canonicalized before fingerprinting so that declaration reordering and import aliasing produce an identical descriptor. Scalars, nested structs and lists, enums, strings, entity references, and declared asset and input references SHALL be representable without silent narrowing or raw native handle encoding. Raw resource pointers, registry handles, and padding SHALL NEVER be portable payloads. Unsupported reconstruction or persistent field types SHALL produce actionable field-path diagnostics rather than silently omitting values. Configured collection and depth limits SHALL be enforced during capture.
 
 #### Scenario: Nested values are representable
 - **WHEN** a persistent field contains a list of structs with enums, strings, and entity references
@@ -126,6 +126,10 @@ Capture SHALL produce a canonical schema descriptor and a typed snapshot without
 #### Scenario: Unsupported field type is diagnosed
 - **WHEN** a persist field has a type the schema cannot represent
 - **THEN** compilation reports the field path and the unsupported type instead of omitting the value
+
+#### Scenario: Backend options do not change the descriptor
+- **WHEN** one program is compiled with and without `--parallel-handlers`
+- **THEN** the canonical descriptor and its fingerprint are identical
 
 ### Requirement: Capture observes a committed, consistent world
 Capture SHALL run outside any activation, after the originating activation's complete handler and event cascade and its structural and lifecycle commit drain. It SHALL produce an owned snapshot that no later gameplay mutation can alter, and SHALL NOT run ordinary gameplay handlers, mutate the live world, or create entities.

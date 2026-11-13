@@ -143,3 +143,14 @@ Within one activation, take the Accum writes (`+=`, `-=`) to one `float` field o
 #### Scenario: Signed zeros order the same both ways
 - **WHEN** a handler computes `math.max(-0.0, 0.0)` and `math.max(0.0, -0.0)`
 - **THEN** both results are `0.0` with a positive sign bit
+
+### Requirement: Integer wrapping keeps accumulation commuting
+Integer arithmetic SHALL stay wrapping. A program that needs an integer to stay inside bounds SHALL say so with a meaning fact on the field, not by a different arithmetic. The reason is a correctness requirement: Accum writes to one field (`+=`, `-=`) commute without schedule edges only if their combined effect does not depend on order, which holds for the group ℤ/2³² and fails for saturating arithmetic.
+
+#### Scenario: Wrapped deltas give one result in either order
+- **WHEN** an `int` field holds 2147483647 and two unordered handlers add 1 and -1
+- **THEN** the field holds 2147483647 after both, in either order
+
+#### Scenario: Saturation would depend on order
+- **WHEN** the same deltas were applied with saturation at 2147483647
+- **THEN** one order would give 2147483646 and the other 2147483647, which is why the language does not saturate

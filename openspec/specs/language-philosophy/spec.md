@@ -481,3 +481,18 @@ A state's declared transitions SHALL be treated as a domain fact, like a field's
 #### Scenario: A singleton is not a tuning knob
 - **WHEN** a proposal adds a keyword that only tells the backend how to store or search data
 - **THEN** it is rejected under "Performance is a backend obligation", and `single` is no precedent for it
+
+### Requirement: Meaning, memory and format are separate layers
+Every value SHALL be described in three layers. Its *meaning* is the set of values it can hold and how operations on it round; the program text states it and the spec fixes it. Its *memory* is how a backend stores it; a backend MAY choose any storage, from any whole-program fact, that gives the same meaning bit for bit. Its *format* is how a save or any other message outside the running program encodes it; the format SHALL be a function of the meaning alone. The compiler SHALL NOT derive a value's meaning from how the program uses it. An encoding that holds fewer values than the meaning SHALL be used only for a value its receiver only presents.
+
+#### Scenario: A storage choice does not change a save
+- **WHEN** a backend stores an `int` field whose range fits in 16 bits in 16 bits
+- **THEN** the field's meaning, its save encoding and the schema fingerprint are the same as with 32-bit storage
+
+#### Scenario: Use does not change meaning
+- **WHEN** a `float` field is only ever increased by a phase's constant `dt`
+- **THEN** its meaning stays binary32 `float`; only an explicit type such as a duration gives it another meaning
+
+#### Scenario: A lossy encoding for a gameplay value is rejected
+- **WHEN** a proposal sends a gameplay position in fewer bits than its meaning to a receiver that simulates with it
+- **THEN** the proposal is revised, because the receiver would compute with a different meaning

@@ -19,7 +19,10 @@ namespace cactus {
 [[nodiscard]] std::string emit_range_check_functions(const DecoratedProgram& program);
 
 // A bool expression: whether `value` of `trait` passes its check, reporting the fault when not.
-[[nodiscard]] std::string emit_range_check_passes(const ResolvedTrait& trait, const std::string& value);
+// Without `check_links`, its required links are taken as given, as when declared entities load together.
+[[nodiscard]] std::string emit_range_check_passes(const ResolvedTrait& trait,
+                                                  const std::string& value,
+                                                  bool check_links = true);
 
 // Reports and runs `on_fault` when `value` of `trait` fails its check.
 [[nodiscard]] std::string emit_range_check_statement(const ResolvedTrait& trait,

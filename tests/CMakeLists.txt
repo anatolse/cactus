@@ -327,6 +327,10 @@ add_executable(test_semantic_single_traits test_semantic_single_traits.cpp)
 target_link_libraries(test_semantic_single_traits PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticSingleTraitsTests COMMAND test_semantic_single_traits)
 
+add_executable(test_semantic_required_links test_semantic_required_links.cpp)
+target_link_libraries(test_semantic_required_links PRIVATE cactus_frontend Catch2::Catch2WithMain)
+add_test(NAME SemanticRequiredLinksTests COMMAND test_semantic_required_links)
+
 add_executable(test_semantic_let_fields test_semantic_let_fields.cpp)
 target_link_libraries(test_semantic_let_fields PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticLetFieldsTests COMMAND test_semantic_let_fields)
@@ -792,6 +796,12 @@ cactus_add_headless_behavior_test(test_camera_view_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_camera_view_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_follow_cameras_headless_behavior
+    CACTUS_SOURCE examples/stdlib-fixtures/follow_cameras.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_follow_cameras_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_camera_projection_headless_behavior
     CACTUS_SOURCE examples/stdlib-fixtures/camera_projection.cactus
     BACKEND cpp-entt
@@ -1242,6 +1252,18 @@ cactus_add_headless_behavior_test(test_exclusive_states_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_exclusive_states_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_required_links_headless_behavior
+    CACTUS_SOURCE examples/required_links.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_required_links_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_required_link_faults_headless_behavior
+    CACTUS_SOURCE tests/fixtures/required_link_faults.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_required_link_faults_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_state_transitions_headless_behavior
     CACTUS_SOURCE examples/state_transitions.cactus
     BACKEND cpp-entt
@@ -1430,7 +1452,7 @@ cactus_add_headless_behavior_test(test_keep_evaluation_row_stage_headless_behavi
 # (`ctest --preset clang-o3-release -L perf`).
 add_custom_target(test_generated_performance_benchmarks)
 foreach(shape IN ITEMS static_keep union_fold equality_reduce grid_region row_join baseline own_projection
-        single_commit plain_commit sweep wide_level reduced_keep)
+        single_commit plain_commit sweep wide_level reduced_keep required_links)
     set(perf_target test_perf_${shape}_benchmark)
     set(perf_codegen_flags)
     if(shape STREQUAL "wide_level")

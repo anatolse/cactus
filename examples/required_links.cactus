@@ -1,0 +1,88 @@
+module required_links
+
+use std.core
+
+# A fighter in `Order.Attack` holds a required link to its target: a field
+# whose type is the trait `Unit`. While the order holds, the link names a live
+# unit, so rules read the target's `Unit` fields through it. When the target
+# dies the link is lost, and `on lost` decides what the attacker does next.
+
+trait Unit:
+    var x: float = 0.0
+    var health: float = 10.0
+
+trait Bowstring
+
+trait Log:
+    var hits: int = 0
+    var lost: int = 0
+
+state Order:
+    Patrol
+    Attack:
+        let target: Unit
+
+event Hit:
+    damage: float
+
+template Fighter(x: float = 0.0):
+    Unit:
+        x = x
+    Order
+    Log
+
+template Archer(x: float = 0.0):
+    use Fighter(x = x)
+    Bowstring
+
+entity Goblin from Fighter(x = 8.0)
+
+entity Hero from Fighter(x = -8.0):
+    Unit:
+        health = 1000.0
+
+entity Knight from Fighter:
+    Order.Attack:
+        target = Goblin
+
+entity Bowman from Archer(x = 2.0):
+    Order.Attack:
+        target = Goblin
+
+# Read the target's position through the link and close in on it.
+rule Chase:
+    each: Unit as me, Order.Attack as order
+    on tick:
+        me.x += (order.target[Unit].x - me.x) * 0.5
+
+rule Strike:
+    each: Order.Attack as order, Log as log
+    where: order.target[Unit].health > 0.0
+    on tick:
+        log.hits += 1
+        emit Hit to order.target:
+            damage = 3.0
+
+rule Hurt:
+    each: Unit as unit
+    on Hit as hit:
+        unit.health -= hit.damage
+
+rule Die:
+    each: Unit as unit
+    where: unit.health <= 0.0
+    on tick:
+        destroy
+
+# Every path of an `on lost` handler must leave the lost state: an archer
+# picks the hero next, anyone else goes back to patrol.
+rule Retarget:
+    each: Unit, Log as log
+    on lost Order.Attack.target:
+        log.lost += 1
+        match self:
+            Bowstring =>
+                add Order.Attack:
+                    target = Hero
+            _ =>
+                add Order.Patrol

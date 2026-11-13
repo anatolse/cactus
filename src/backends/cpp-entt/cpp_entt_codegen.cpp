@@ -1340,14 +1340,14 @@ void emit_scheduler_state_struct(std::ostringstream& out,
         out << "template <class Phase>\n";
         out << "struct PhaseDelayedQueue : DelayedQueue<EventOccurrence> {};\n\n";
     }
-    const bool singles = !EnttCodegenUtils::single_traits(program).empty();
-    if (singles) {
-        out << "void generated_single_commit_round(entt::registry& registry, const std::vector<StructuralCommand>* "
+    const bool hooked = !EnttCodegenUtils::single_traits(program).empty() || EnttCodegenUtils::has_link_indices(program);
+    if (hooked) {
+        out << "void generated_commit_round(entt::registry& registry, const std::vector<StructuralCommand>* "
                "commands);\n\n";
     }
     out << "struct SchedulerState {\n";
     out << "    ActivationRuntime<EventOccurrence> activation"
-        << (singles ? "{.commit_round = &generated_single_commit_round}" : "") << ";\n";
+        << (hooked ? "{.commit_round = &generated_commit_round}" : "") << ";\n";
     out << "    std::tuple<" << join_strings(phases, ", ") << "> phases;\n";
     if (!delayed.empty()) {
         out << "    std::tuple<" << join_strings(delayed, ", ") << "> delayed;\n";
@@ -1435,19 +1435,58 @@ std::string emit_native_spawn_single_guards(const DecoratedProgram& program) {
     return out.str();
 }
 
-void emit_single_commit_round(std::ostringstream& out, const DecoratedProgram& program) {
+// Single traits track each round's carriers; a lost link left unresolved faults at the round's end.
+void emit_commit_round_hook(std::ostringstream& out, const DecoratedProgram& program) {
     const auto singles = EnttCodegenUtils::single_traits(program);
-    if (singles.empty()) {
+    const bool links   = EnttCodegenUtils::has_link_indices(program);
+    if (singles.empty() && !links) {
         return;
     }
     const auto hierarchy = EnttCodegenUtils::find_trait(program, "Parent") != nullptr
                                ? "&" + EnttCodegenUtils::hierarchy_index_expr(program)
                                : std::string{"nullptr"};
-    out << "void generated_single_commit_round(entt::registry& registry, const std::vector<StructuralCommand>* "
+    out << "void generated_commit_round(entt::registry& registry, const std::vector<StructuralCommand>* "
            "commands) {\n";
     for (const auto* trait : singles) {
         out << "    track_single_round<" << EnttCodegenUtils::trait_cpp_name(*trait->symbol_id)
             << ">(registry, commands, " << hierarchy << ");\n";
+    }
+    if (links) {
+        out << "    if (commands != nullptr) {\n";
+        out << "        return;\n";
+        out << "    }\n";
+        out << "    auto& indices = generated_link_indices(registry);\n";
+    }
+    for (std::size_t index = 0; links && index < program.losable_links.size(); ++index) {
+        const auto& link = program.losable_links[index];
+        out << "    indices.index" << index << ".end_round(registry, \"" << link.holder.local_name << "\", \""
+            << link.field << "\");\n";
+    }
+    out << "}\n\n";
+}
+
+// Each registry holds its own indices in its context, so signals of one world never reach another's.
+void emit_link_indices(std::ostringstream& out, const DecoratedProgram& program) {
+    if (!EnttCodegenUtils::has_link_indices(program)) {
+        return;
+    }
+    out << "struct GeneratedLinkIndices {\n";
+    for (std::size_t index = 0; index < program.losable_links.size(); ++index) {
+        const auto& link  = program.losable_links[index];
+        const auto holder = EnttCodegenUtils::trait_cpp_name(link.holder);
+        out << "    LinkIndex<" << holder << ", " << EnttCodegenUtils::trait_cpp_name(link.target) << ", "
+            << EnttCodegenUtils::trait_cpp_name(link.marker) << ", &" << holder << "::" << cpp_escaped(link.field)
+            << "> index" << index << ";\n";
+    }
+    out << "};\n\n";
+    out << "GeneratedLinkIndices& generated_link_indices(entt::registry& registry) {\n";
+    out << "    auto* indices = registry.ctx().find<GeneratedLinkIndices>();\n";
+    out << "    return indices != nullptr ? *indices : registry.ctx().emplace<GeneratedLinkIndices>();\n";
+    out << "}\n\n";
+    out << "void generated_connect_link_indices(entt::registry& registry) {\n";
+    out << "    auto& indices = generated_link_indices(registry);\n";
+    for (std::size_t index = 0; index < program.losable_links.size(); ++index) {
+        out << "    indices.index" << index << ".connect(registry);\n";
     }
     out << "}\n\n";
 }
@@ -1559,6 +1598,7 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program,
         out << "    generated_lifecycle_trackers().connect(registry);\n";
         out << "}\n\n";
     }
+    emit_link_indices(out, program);
 
     out << "entt::entity generated_reserve_entity(entt::registry& registry) {\n";
     out << "    return reserve_entity(registry);\n";
@@ -1572,7 +1612,7 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program,
     out << "    queue_structural_command(" << output_activation
         << ", kind, std::move(apply), subject, removed);\n";
     out << "}\n\n";
-    emit_single_commit_round(out, program);
+    emit_commit_round_hook(out, program);
 
     // The generated_drain_event_cascade forward declaration precedes
     // generated_commit_activation, which passes it to the runtime commit.
@@ -3180,7 +3220,7 @@ std::string emit_range_value_functions(const std::string& archetype_name,
         out << bound_slots.str();
         emit_component_value(out, *node.entry, cpp, program, "    ");
         out << "    return component;\n}\n";
-        checks.push_back(emit_range_check_passes(*node.trait, name.name + call_arguments));
+        checks.push_back(emit_range_check_passes(*node.trait, name.name + call_arguments, false));
     }
     out << "[[maybe_unused]] static bool " << precheck.name << "([[maybe_unused]] entt::registry& registry"
         << (parameter_list.empty() ? "" : ", " + parameter_list) << ") {\n";
@@ -4392,6 +4432,9 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << "    cactus::runtime::entt_backend::advance_binding_index_epoch();\n";
     if (tracks_lifecycle) {
         out << "    generated_connect_lifecycle_trackers(registry);\n";
+    }
+    if (EnttCodegenUtils::has_link_indices(program)) {
+        out << "    generated_connect_link_indices(registry);\n";
     }
     out << (program.relations.empty() ? "" : "    generated_connect_relations(registry);\n");
     if (program.parallel_handlers.has_value()) {

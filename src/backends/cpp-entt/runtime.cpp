@@ -4477,6 +4477,12 @@ std::string describe_range_fault(const RangeFault& fault) {
             return write() + " reads a container entity that lacks its container trait";
         case RangeFaultReason::SecondCarrier:
             return "single trait " + std::string{fault.trait} + " would get a second carrier";
+        case RangeFaultReason::DeadLink:
+            return "link " + std::string{fault.trait} + "." + std::string{fault.field} +
+                   " names an entity that is gone or lacks its target trait";
+        case RangeFaultReason::UnresolvedLink:
+            return "lost link " + std::string{fault.trait} + "." + std::string{fault.field} +
+                   " stayed unresolved after its `on lost` handler";
     }
     std::unreachable();
 }

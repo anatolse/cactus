@@ -63,7 +63,9 @@ template <typename Step>
             .candidates       = after.candidates - before.candidates,
             .carrier_lookups  = after.carrier_lookups - before.carrier_lookups,
             .parallel_batches = after.parallel_batches - before.parallel_batches,
-            .parallel_tasks   = after.parallel_tasks - before.parallel_tasks};
+            .parallel_tasks   = after.parallel_tasks - before.parallel_tasks,
+            .link_updates     = after.link_updates - before.link_updates,
+            .lost_links       = after.lost_links - before.lost_links};
 }
 
 // Median milliseconds per call of `step`, after a warm-up.

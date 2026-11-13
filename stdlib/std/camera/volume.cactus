@@ -29,12 +29,12 @@ pub trait Camera:
     var projection: Projection = Projection.Perspective
     var ortho_height: float = 10.0
 
-# Smooth-follow camera that tracks a target entity's position in 3D.
-# follow_entity: entity_id of the entity to follow
-# offset:        positional offset from the target (in world space)
-# smoothing:     lerp speed (higher = snappier; 0 = instant)
+# Smooth-follow camera that tracks a target entity's position in 3D and looks at it.
+# target:    the entity to follow, a required link to its WorldTransform
+# offset:    positional offset from the target (in world space)
+# smoothing: lerp speed (higher = snappier; 0 = instant)
 pub trait FollowCamera:
-    var follow_entity: entity_id
+    var target: tv.WorldTransform
     var offset: vec3 = vec3(0.0, 2.0, -6.0)
     var smoothing: float = 8.0
 
@@ -47,22 +47,68 @@ pub trait FirstPersonCamera:
     var yaw: float = 0.0
     var sensitivity: float = 0.002
 
-# Third-person camera that orbits around a target entity.
-# follow_entity: entity_id of the entity to orbit
-# distance:      orbit radius in world units
-# height:        vertical offset above the target
-# smoothing:     lerp speed (higher = snappier; 0 = instant)
+# Third-person camera that stays behind a target entity and looks at it.
+# target:    the entity to orbit, a required link to its WorldTransform
+# distance:  how far behind the target's facing the camera stays
+# height:    vertical offset above the target
+# smoothing: lerp speed (higher = snappier; 0 = instant)
 pub trait ThirdPersonCamera:
-    var follow_entity: entity_id
+    var target: tv.WorldTransform
     var distance: float = 6.0
     var height: float = 2.0
     var smoothing: float = 8.0
 
-# Rules to drive FollowCamera, FirstPersonCamera, and ThirdPersonCamera
-# automatically are not yet implemented — they require entity-by-id field
-# access (to read the followed/target entity's WorldTransform), which is not
-# yet available in the language. Until then, attach Camera + Viewport
-# (std.camera.viewport) to an entity whose own WorldTransform drives the 3D view.
+# The share of the remaining distance a smoothed follow covers in one step; smoothing 0 snaps.
+func follow_blend(smoothing: float, dt: float) float:
+    if smoothing <= 0.0:
+        return 1.0
+    return math.min(1.0, smoothing * dt)
+
+# A rotation whose forward points along direction; level when direction is vertical.
+pub func look_along(direction: vec3) quat:
+    let flat = math.sqrt(direction.x * direction.x + direction.z * direction.z)
+    let yaw = math.atan2(-direction.x, -direction.z)
+    let pitch = math.atan2(direction.y, flat)
+    return quat.from_euler(pitch, yaw, 0.0)
+
+# Follow cameras move after the game's own late_tick moves, so they see where
+# targets ended up. A camera moves its own WorldTransform, so the camera entity
+# is a pose root: give it WorldTransform without LocalTransform.
+pub group follow:
+    phase: core.late_tick
+
+rule FollowTarget:
+    each: FollowCamera as follow, tv.WorldTransform as pose
+    group: follow
+    on core.late_tick as step:
+        let aim = follow.target[tv.WorldTransform].position
+        pose.position += (aim + follow.offset - pose.position) * follow_blend(follow.smoothing, step.dt)
+        pose.rotation = look_along(aim - pose.position)
+
+# Both cameras write WorldTransform and may follow each other, so one order is fixed.
+rule OrbitTarget:
+    each: ThirdPersonCamera as orbit, tv.WorldTransform as pose
+    group: follow
+    after: FollowTarget
+    on core.late_tick as step:
+        let aim = follow_point(orbit.target[tv.WorldTransform].position, orbit.height)
+        let behind = quat.forward(orbit.target[tv.WorldTransform].rotation) * -orbit.distance
+        pose.position += (aim + behind - pose.position) * follow_blend(orbit.smoothing, step.dt)
+        pose.rotation = look_along(aim - pose.position)
+
+func follow_point(position: vec3, height: float) vec3:
+    return position + vec3(0.0, height, 0.0)
+
+# A camera whose target is gone stays where it is.
+rule StopFollowing:
+    each: FollowCamera
+    on lost FollowCamera.target:
+        remove FollowCamera
+
+rule StopOrbiting:
+    each: ThirdPersonCamera
+    on lost ThirdPersonCamera.target:
+        remove ThirdPersonCamera
 
 # ── Camera View ───────────────────────────────────────────────────────────────
 

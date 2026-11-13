@@ -2,6 +2,7 @@ module units
 
 use std.core
 use session
+use world
 
 struct LevelStep:
     level: int
@@ -57,11 +58,13 @@ pub trait Unit:
 pub state Order:
     Auto
     Move:
-        let target: entity_id
-    Attack:
-        let target: entity_id
+        let target: world.Tile
+    AttackUnit:
+        let target: Unit
+    AttackHeart:
+        let target: world.Heart
     Defend:
-        let target: entity_id
+        let target: world.Tile
 
 pub state OrderRequest:
     None
@@ -210,43 +213,65 @@ rule AwardExperience:
         let current = stats_for(unit)
         unit.health += current.max_health - previous.max_health
 
+# A request names its target by id; joining the target proves it before it becomes an order.
 rule ApplyMove:
-    each: OrderRequest.Move as request
+    pairs:
+        unit: OrderRequest.Move as request
+        target: world.Tile
     group: orders
+    where: target == request.target
 
     when: session.Game[session.Session].mode == session.SessionMode.Playing
 
     on input:
-        add Order.Move:
-            target = request.target
-        add OrderRequest.None
-        emit OrderChanged to self
+        add Order.Move to unit:
+            target = target
+        emit OrderChanged to unit
 
-rule ApplyAttack:
-    each: OrderRequest.Attack as request
+rule ApplyAttackUnit:
+    pairs:
+        unit: OrderRequest.Attack as request
+        target: Unit
     group: orders
     after: ApplyMove
+    where: target == request.target
 
     when: session.Game[session.Session].mode == session.SessionMode.Playing
 
     on input:
-        add Order.Attack:
-            target = request.target
-        add OrderRequest.None
-        emit OrderChanged to self
+        add Order.AttackUnit to unit:
+            target = target
+        emit OrderChanged to unit
+
+rule ApplyAttackHeart:
+    pairs:
+        unit: OrderRequest.Attack as request
+        target: world.Heart
+    group: orders
+    after: ApplyAttackUnit
+    where: target == request.target
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on input:
+        add Order.AttackHeart to unit:
+            target = target
+        emit OrderChanged to unit
 
 rule ApplyDefend:
-    each: OrderRequest.Defend as request
+    pairs:
+        unit: OrderRequest.Defend as request
+        target: world.Tile
     group: orders
-    after: ApplyAttack
+    after: ApplyAttackHeart
+    where: target == request.target
 
     when: session.Game[session.Session].mode == session.SessionMode.Playing
 
     on input:
-        add Order.Defend:
-            target = request.target
-        add OrderRequest.None
-        emit OrderChanged to self
+        add Order.Defend to unit:
+            target = target
+        emit OrderChanged to unit
 
 rule ApplyCancel:
     each: OrderRequest.Cancel
@@ -257,5 +282,32 @@ rule ApplyCancel:
 
     on input:
         add Order.Auto
-        add OrderRequest.None
         emit OrderChanged to self
+
+# A request whose target is gone is dropped and the current order stays.
+rule ClearRequests:
+    each: OrderRequest
+    without: OrderRequest.None
+    group: orders
+    after: ApplyCancel
+
+    when: session.Game[session.Session].mode == session.SessionMode.Playing
+
+    on input:
+        add OrderRequest.None
+
+# A unit whose target is gone goes back to automatic work.
+rule DropLostTargets:
+    each: Unit
+
+    on lost Order.Move.target:
+        add Order.Auto
+
+    on lost Order.AttackUnit.target:
+        add Order.Auto
+
+    on lost Order.AttackHeart.target:
+        add Order.Auto
+
+    on lost Order.Defend.target:
+        add Order.Auto

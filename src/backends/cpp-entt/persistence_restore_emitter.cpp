@@ -268,7 +268,7 @@ void emit_staged_range_checks(std::ostringstream& out,
         }
         out << "    for (const auto entity : staged.view<" << trait.cpp_name << ">()) {\n";
         out << "        const auto fault = " << range_check_function_name(ranged->module_name, ranged->name).ref()
-            << "(staged, staged.get<" << trait.cpp_name << ">(entity));\n";
+            << "(staged, staged.get<" << trait.cpp_name << ">(entity), false);\n";
         out << "        if (fault.has_value() && fault->reason != RangeFaultReason::StaleContainer) {\n";
         out << "            return RestoreOutcome{\n";
         out << "                .ok = false, .code = \"invalid_data\", .message = describe_range_fault(*fault)};\n";
@@ -301,6 +301,9 @@ std::string EnttRestoreEmitter::emit_world_restore(const DecoratedProgram& progr
     const bool tracks_lifecycle = EnttCodegenUtils::tracks_lifecycle(program);
     if (tracks_lifecycle) {
         out << "void generated_connect_lifecycle_trackers(entt::registry& registry);\n\n";
+    }
+    if (EnttCodegenUtils::has_link_indices(program)) {
+        out << "void generated_connect_link_indices(entt::registry& registry);\n\n";
     }
     if (program.parallel_handlers.has_value()) {
         out << "void generated_prepare_parallel_world(entt::registry& registry);\n\n";
@@ -426,6 +429,9 @@ std::string EnttRestoreEmitter::emit_world_restore(const DecoratedProgram& progr
     // no lifecycle trigger itself (recording is off outside a commit).
     if (tracks_lifecycle) {
         out << "    generated_connect_lifecycle_trackers(registry);\n";
+    }
+    if (EnttCodegenUtils::has_link_indices(program)) {
+        out << "    generated_connect_link_indices(registry);\n";
     }
     if (!program.relations.empty()) {
         out << "    generated_connect_relations(registry);\n";

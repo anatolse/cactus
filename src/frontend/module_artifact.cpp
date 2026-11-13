@@ -189,6 +189,11 @@ void ModuleArtifact::write_traits(std::ostream& out,
             write_str(out, *trait.kept_by);
         }
         write_optional_symbol_id(out, trait.state);
+        write_bool(out, trait.lost_link.has_value());
+        if (trait.lost_link.has_value()) {
+            write_symbol_id(out, trait.lost_link->holder);
+            write_str(out, trait.lost_link->field);
+        }
         write_u32(out, static_cast<uint32_t>(trait.fields.size()));
         for (const auto& field : trait.fields) {
             write_field(out, field);
@@ -1089,6 +1094,10 @@ std::unordered_map<std::string, ResolvedTrait> ModuleArtifact::read_traits(std::
             trait.kept_by = read_str(in);
         }
         trait.state          = read_optional_symbol_id(in);
+        if (read_bool(in)) {
+            auto holder     = read_symbol_id(in);
+            trait.lost_link = LostLink{.holder = std::move(holder), .field = read_str(in)};
+        }
         uint32_t field_count = read_u32(in);
         trait.fields.reserve(field_count);
         for (uint32_t j = 0; j < field_count; ++j) {

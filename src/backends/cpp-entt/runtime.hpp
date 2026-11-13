@@ -57,7 +57,15 @@ void reset_quit_request() noexcept;
 // only observes that nothing happened. Native code that creates entities
 // directly, bypassing commands, is not checked.
 // A command that would give a `single` trait a second carrier faults the same way.
-enum class RangeFaultReason : std::uint8_t { OutOfRange, StaleContainer, MissingContainerTrait, SecondCarrier };
+// A required link made to a dead target, or lost and left unresolved, faults the same way.
+enum class RangeFaultReason : std::uint8_t {
+    OutOfRange,
+    StaleContainer,
+    MissingContainerTrait,
+    SecondCarrier,
+    DeadLink,
+    UnresolvedLink
+};
 
 struct RangeFault {
     std::string_view trait;
@@ -2491,6 +2499,127 @@ void commit_activation(ActivationRuntime<Occurrence>& activation,
         lifecycle.deliver(activation, registry, routes);
         drain_cascade(registry);
     }
+}
+
+// ── Required links ────────────────────────────────────────────────────────────
+// A link field `Field` of `Holder` names an entity carrying `Target`. For a link
+// the program can lose, the index finds a lost target's holders without a scan
+// and gives each the `Marker` component: passes that read through the link skip
+// it, and its `on added Marker` is the link's `on lost`. Any new value of
+// `Holder` on the holder, or its removal, takes the marker away.
+template <typename Holder, typename Target, typename Marker, auto Field>
+class LinkIndex {
+public:
+    LinkIndex()                            = default;
+    ~LinkIndex()                           = default;
+    LinkIndex(const LinkIndex&)            = delete;
+    LinkIndex& operator=(const LinkIndex&) = delete;
+    LinkIndex(LinkIndex&&)                 = delete;
+    LinkIndex& operator=(LinkIndex&&)      = delete;
+
+    void connect(entt::registry& registry) {
+        holders_.clear();
+        target_of_.clear();
+        awaiting_.clear();
+        // Created now so marking never adds a pool while a destroy walks the pools.
+        (void)registry.storage<Marker>();
+        registry.on_construct<Holder>().template connect<&LinkIndex::on_holder_set>(*this);
+        registry.on_update<Holder>().template connect<&LinkIndex::on_holder_set>(*this);
+        registry.on_destroy<Holder>().template connect<&LinkIndex::on_holder_gone>(*this);
+        registry.on_destroy<Target>().template connect<&LinkIndex::on_target_gone>(*this);
+    }
+
+    // An `on lost` handler ran for `holder`; its commands must resolve the link by the end of the next round.
+    void await(entt::entity holder) {
+        awaiting_.push_back(holder);
+    }
+
+    // Reports a fault for each awaited holder still marked after a commit round.
+    void end_round(const entt::registry& registry, std::string_view holder, std::string_view field) {
+        for (const auto entity : awaiting_) {
+            if (registry.valid(entity) && registry.all_of<Marker>(entity)) {
+                report_range_fault(
+                    RangeFault{.trait = holder, .field = field, .reason = RangeFaultReason::UnresolvedLink});
+            }
+        }
+        awaiting_.clear();
+    }
+
+private:
+    void link(entt::entity holder, entt::entity target) {
+        target_of_.insert_or_assign(holder, target);
+        holders_[target].push_back(holder);
+        count_link_update();
+    }
+
+    void unlink(entt::entity holder) {
+        const auto found = target_of_.find(holder);
+        if (found == target_of_.end()) {
+            return;
+        }
+        if (const auto list = holders_.find(found->second); list != holders_.end()) {
+            std::erase(list->second, holder);
+            if (list->second.empty()) {
+                holders_.erase(list);
+            }
+        }
+        target_of_.erase(found);
+        count_link_update();
+    }
+
+    void on_holder_set(entt::registry& registry, entt::entity holder) {
+        const entt::entity target = registry.get<Holder>(holder).*Field;
+        const auto found          = target_of_.find(holder);
+        if (found == target_of_.end() || found->second != target) {
+            unlink(holder);
+            link(holder, target);
+        }
+        registry.remove<Marker>(holder);
+    }
+
+    void on_holder_gone(entt::registry& registry, entt::entity holder) {
+        unlink(holder);
+        registry.remove<Marker>(holder);
+    }
+
+    void on_target_gone(entt::registry& registry, entt::entity target) {
+        const auto found = holders_.find(target);
+        if (found == holders_.end()) {
+            return;
+        }
+        for (const auto holder : found->second) {
+            target_of_.erase(holder);
+            count_link_update();
+            if (holder != target && registry.valid(holder)) {
+                registry.emplace_or_replace<Marker>(holder);
+                count_lost_link();
+            }
+        }
+        holders_.erase(found);
+    }
+
+    std::unordered_map<entt::entity, std::vector<entt::entity>> holders_;
+    std::unordered_map<entt::entity, entt::entity> target_of_;
+    std::vector<entt::entity> awaiting_;
+};
+
+// Whether a link value names a live entity carrying `Target`.
+template <typename Target>
+[[nodiscard]] bool link_live(const entt::registry& registry, entt::entity target) {
+    return registry.valid(target) && registry.all_of<Target>(target);
+}
+
+// link_live, reporting a fault naming the holder when not.
+template <typename Target>
+[[nodiscard]] bool link_target_live(const entt::registry& registry,
+                                    entt::entity target,
+                                    std::string_view holder,
+                                    std::string_view field) {
+    if (link_live<Target>(registry, target)) {
+        return true;
+    }
+    report_range_fault(RangeFault{.trait = holder, .field = field, .reason = RangeFaultReason::DeadLink});
+    return false;
 }
 
 // ── Projected-trait tracking (backend-cpp-entt registry-based projected traits)

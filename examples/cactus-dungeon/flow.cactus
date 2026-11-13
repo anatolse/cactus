@@ -9,6 +9,7 @@ use std.app as app
 use std.persistence as storage
 use std.camera.viewport as viewport
 use world
+use tasks
 use units
 use knights
 use combat
@@ -193,7 +194,7 @@ rule QueueNewGame:
 
 rule NewGame:
     each: world.WorldConfig as config
-    after: world.GenerateCell, session.Clock
+    after: world.GenerateCell, tasks.FoundBase, session.Clock
     where: session.Game[session.Session].new_game
 
     on tick:

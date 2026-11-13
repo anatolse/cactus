@@ -31,7 +31,7 @@ pub trait BedFill:
     let count: int = 0
 
 trait Birth:
-    let bed: entity_id
+    let bed: rooms.RoomTile
 
 pub relation Sleeps:
     from: Knight one
@@ -74,13 +74,16 @@ pub event RecruitRequested
 event SpawnRecruit:
     bed: entity_id
 
+event Hatch:
+    at: vec3
+
 event Train:
     knight: entity_id
 
 group decisions:
     phase: input
 
-pub template Recruit(at: vec3, bed: entity_id):
+pub template Recruit(at: vec3, bed: rooms.RoomTile):
     Knight
     Birth:
         bed = bed
@@ -212,7 +215,15 @@ rule Arrive:
     limit: 1 per player
 
     on SpawnRecruit as request:
-        spawn Recruit(at = vec3(cell.x + 0.5, 1.25, cell.z + 0.5), bed = request.bed)
+        emit Hatch to request.bed:
+            at = vec3(cell.x + 0.5, 1.25, cell.z + 0.5)
+
+# The bed spawns its own knight, which proves the knight's bed link.
+rule HatchRecruit:
+    each: rooms.RoomTile
+
+    on Hatch as hatch:
+        spawn Recruit(at = hatch.at, bed = self)
 
 rule AssignBed:
     pairs:
@@ -232,6 +243,13 @@ rule AssignBed:
     on fixed_tick:
         add Sleeps(knight, bed)
         remove Birth from knight
+
+# A knight whose bed is gone before it moves in stays without one.
+rule LoseBed:
+    each: Knight
+
+    on lost Birth.bed:
+        remove Birth
 
 rule ReleaseReservations:
     each: Reserved as reservation
@@ -480,6 +498,7 @@ rule Defend:
         knight:
             Knight
             units.Order.Auto
+            units.OrderRequest.None
         intruder: Intruder
     after: tasks.FinishMove
     where:
@@ -490,5 +509,5 @@ rule Defend:
     when: session.Game[session.Session].mode == session.SessionMode.Playing
 
     on fixed_tick:
-        add units.Order.Attack to knight:
+        emit units.AttackRequested to knight:
             target = intruder.to

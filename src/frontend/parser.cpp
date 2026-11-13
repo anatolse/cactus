@@ -829,8 +829,11 @@ EventHandlerNode Parser::parse_event_handler() {
     consume(TokenType::ON, "expected 'on'");
     auto trigger_form = HandlerTriggerForm::Event;
     if (check(TokenType::IDENTIFIER) && peek_next().type == TokenType::IDENTIFIER &&
-        (peek().value == "added" || peek().value == "removed")) {
-        trigger_form = advance().value == "added" ? HandlerTriggerForm::Added : HandlerTriggerForm::Removed;
+        (peek().value == "added" || peek().value == "removed" || peek().value == "lost")) {
+        const auto word = advance().value;
+        trigger_form    = word == "added"     ? HandlerTriggerForm::Added
+                          : word == "removed" ? HandlerTriggerForm::Removed
+                                              : HandlerTriggerForm::Lost;
     }
     const auto trigger_location = peek().location;
     auto event_name             = parse_lifecycle_event_name();

@@ -1,0 +1,81 @@
+module perf_required_links
+
+use std.core
+
+# size x size hunters, each chasing the prey of its slot through a required
+# link. Every tick a tenth of the prey die and respawn: their hunters lose the
+# link, go idle in `on lost`, and link to the new prey on the next tick.
+
+trait Board:
+    let size: int = 70
+    var frame: int = 0
+
+trait Prey:
+    let slot: int = 0
+    var x: float = 0.0
+
+trait Hunter:
+    let slot: int = 0
+    var x: float = 0.0
+
+state Hunt:
+    Idle
+    Chase:
+        let target: Prey
+
+entity Field:
+    Board
+
+template Quarry(slot: int):
+    Prey:
+        slot = slot
+
+template Stalker(slot: int):
+    Hunter:
+        slot = slot
+    Hunt
+
+rule Fill:
+    on load:
+        for slot in range(0, Field[Board].size * Field[Board].size):
+            spawn Quarry(slot = slot)
+            spawn Stalker(slot = slot)
+
+rule Count:
+    each: Board as board
+    on fixed_tick:
+        board.frame += 1
+
+rule Run:
+    each: Prey as prey
+    on fixed_tick:
+        prey.x += 1.0
+
+rule Cull:
+    each: Prey as prey
+    after: Count
+    where: (prey.slot + Field[Board].frame) % 10 == 0
+    on fixed_tick:
+        spawn Quarry(slot = prey.slot)
+        destroy
+
+rule Assign:
+    pairs:
+        hunter:
+            Hunter
+            Hunt.Idle
+        prey: Prey
+    where: prey[Prey].slot == hunter[Hunter].slot
+    on fixed_tick:
+        add Hunt.Chase to hunter:
+            target = prey
+
+rule Follow:
+    each: Hunter as hunter, Hunt.Chase as hunt
+    on fixed_tick:
+        hunter.x += (hunt.target[Prey].x - hunter.x) * 0.5
+
+rule GiveUp:
+    each: Hunter
+    on lost Hunt.Chase.target:
+        add Hunt.Idle

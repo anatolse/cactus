@@ -821,12 +821,47 @@ TEST_CASE("Dungeon attack requests keep their target and release work", "[cactus
     commands.add(destination, cactus_gen::detail::generated_named_slots().world.Enemy, {});
     backend::generated_process_root_event(world.registry, units::AttackRequestedEvent{destination}, robot);
     world.frame(2);
-    REQUIRE(world.registry.all_of<units::Order::Attack>(robot));
-    REQUIRE(world.registry.get<units::Order::Attack>(robot).target == destination);
+    REQUIRE(world.registry.all_of<units::Order::AttackUnit>(robot));
+    REQUIRE(world.registry.get<units::Order::AttackUnit>(robot).target == destination);
     REQUIRE_FALSE(backend::relation_store<tasks::Claim>(world.registry).has_from(robot));
     backend::generated_process_root_event(world.registry, units::CancelRequestedEvent{}, robot);
     world.frame(3);
     REQUIRE(world.registry.all_of<units::Order::Auto>(robot));
+}
+
+TEST_CASE("Dungeon attack orders end when their target is gone", "[cactus-dungeon][headless][orders]") {
+    World world;
+    world.remove_workers();
+    const auto robot = world.worker(6, 4);
+    world.frame(2);
+    SECTION("a request whose target can't be attacked is dropped") {
+        backend::generated_process_root_event(world.registry, units::AttackRequestedEvent{world.tile(5, 4)}, robot);
+        world.frame(2);
+        REQUIRE(world.registry.all_of<units::Order::Auto>(robot));
+        REQUIRE(world.registry.all_of<units::OrderRequest::None>(robot));
+    }
+    SECTION("a destroyed unit") {
+        const auto enemy = world.worker(kEnemy + 1, kEnemy + 1);
+        backend::generated_process_root_event(world.registry, units::AttackRequestedEvent{enemy}, robot);
+        world.frame(2);
+        REQUIRE(world.registry.get<units::Order::AttackUnit>(robot).target == enemy);
+        world.registry.get<units::Unit>(enemy).health = 0.0F;
+        world.frames_until(600, [&] { return !world.registry.valid(enemy); });
+        REQUIRE_FALSE(world.registry.valid(enemy));
+        world.frame(3);
+        REQUIRE(world.registry.all_of<units::Order::Auto>(robot));
+    }
+    SECTION("a fallen heart") {
+        const auto heart = world.tile(kSize - 5, kSize - 5);
+        backend::generated_process_root_event(world.registry, units::AttackRequestedEvent{heart}, robot);
+        world.frame(2);
+        REQUIRE(world.registry.get<units::Order::AttackHeart>(robot).target == heart);
+        world.registry.get<game::Heart>(heart).health = 0.0F;
+        world.frame(3);
+        REQUIRE_FALSE(world.registry.all_of<game::Heart>(heart));
+        REQUIRE(world.registry.all_of<units::Order::Auto>(robot));
+    }
+    REQUIRE(backend::runtime_fault_count() == 0);
 }
 
 TEST_CASE("Dungeon larger starting crews stay on owned walkable tiles", "[cactus-dungeon][headless][crews]") {
@@ -1115,7 +1150,7 @@ TEST_CASE("Dungeon knights defend their own territory", "[cactus-dungeon][knight
     commands.erase_from(enemy);
     commands.add(enemy, cactus_gen::detail::generated_named_slots().world.Enemy, {});
     world.frame(12);
-    using Attack = units::Order::Attack;
+    using Attack = units::Order::AttackUnit;
     REQUIRE(world.registry.all_of<Attack>(defender));
     REQUIRE(world.registry.get<Attack>(defender).target == enemy);
 }

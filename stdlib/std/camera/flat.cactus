@@ -1,5 +1,9 @@
 module std.camera.flat
 
+use std.core as core
+use std.math as math
+use std.transform.flat as tf
+
 # ── 2D Camera Traits & Rules ──────────────────────────────────────────────────
 
 # 2D orthographic camera configuration.
@@ -13,16 +17,32 @@ pub trait Camera:
     var rotation: float = 0.0
 
 # Smooth-follow camera that tracks a target entity's position.
-# follow_entity: entity_id of the entity to follow
-# offset:        additional offset from the target's position
-# smoothing:     lerp speed (higher = snappier; 0 = instant)
+# target:    the entity to follow, a required link to its WorldTransform
+# offset:    additional offset from the target's position
+# smoothing: lerp speed (higher = snappier; 0 = instant)
 pub trait FollowCamera:
-    var follow_entity: entity_id
+    var target: tf.WorldTransform
     var offset: vec2 = vec2(0.0, 0.0)
     var smoothing: float = 8.0
 
-# A rule to drive FollowCamera automatically is not yet implemented — it
-# requires entity-by-id field access which is not yet available in the language.
+# Follow cameras move after the game's own late_tick moves.
+pub group follow:
+    phase: core.late_tick
+
+# Centers the camera on its target after the frame's movement; smoothing 0 snaps.
+rule FollowFlatTarget:
+    each: Camera as cam, FollowCamera as follow
+    group: follow
+    on core.late_tick as step:
+        let goal = follow.target[tf.WorldTransform].position + follow.offset
+        let blend = if follow.smoothing <= 0.0: 1.0 else: math.min(1.0, follow.smoothing * step.dt)
+        cam.offset += (goal - cam.offset) * blend
+
+# A camera whose target is gone stays where it is.
+rule StopFollowingFlat:
+    each: FollowCamera
+    on lost FollowCamera.target:
+        remove FollowCamera
 
 # ── Screen/World Projection Helpers ──────────────────────────────────────────
 # Converts screen-space coordinates through the active 2D camera.

@@ -234,11 +234,11 @@ TEST_CASE("trait parameter: a trait or event is not a value type elsewhere", "[t
         INFO(describe(analysis));
         CHECK(analysis.has_all({"'Health'", "not a value type"}));
     }
-    SECTION("trait field") {
+    SECTION("trait field is a required link") {
         const auto analysis = analyze("trait Holder:\n"
                                       "    var h: Health\n");
         INFO(describe(analysis));
-        CHECK(analysis.has_all({"'Health'", "not a value type"}));
+        CHECK_FALSE(analysis.has_all({"'Health'", "not a value type"}));
     }
 }
 

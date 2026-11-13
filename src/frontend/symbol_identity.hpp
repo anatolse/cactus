@@ -149,6 +149,12 @@ struct SymbolIdHash {
     return SymbolId{.kind = SymbolKind::State, .module = trait.module, .local_name = trait.local_name.substr(0, dot)};
 }
 
+// Both traits are variants of one state.
+[[nodiscard]] inline bool same_state(const SymbolId& left, const SymbolId& right) {
+    const auto state = state_of_variant_trait(left);
+    return state.has_value() && state == state_of_variant_trait(right);
+}
+
 // The `V` of a variant trait `S.V`.
 [[nodiscard]] inline std::string variant_name_of_trait(const SymbolId& trait) {
     return trait.local_name.substr(trait.local_name.find('.') + 1);

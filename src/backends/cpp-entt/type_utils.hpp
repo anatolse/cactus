@@ -135,6 +135,10 @@ public:
     static std::vector<SymbolId> watched_lifecycle_traits(const DecoratedProgram& program);
     // Whether generated code tracks trait lifecycle (graph-driven programs with a trigger only).
     static bool tracks_lifecycle(const DecoratedProgram& program);
+    // Whether generated code keeps a link index, one per entry of `losable_links` (graph-driven programs only).
+    static bool has_link_indices(const DecoratedProgram& program);
+    // `generated_link_indices().indexN` for a losable link's marker; nullopt for any other trait.
+    static std::optional<std::string> link_index_ref(const DecoratedProgram& program, const SymbolId& marker);
     static std::string struct_cpp_name(const std::string& source_name, const DecoratedProgram& program);
     static std::string enum_cpp_name(const std::string& source_name, const DecoratedProgram& program);
 

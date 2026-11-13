@@ -21,12 +21,6 @@ bool is_slot_of(const SymbolId& slot, const SymbolId& state) {
     return slot.module == state.module && slot.local_name == state.local_name;
 }
 
-bool same_state(const SymbolId& left, const SymbolId& right) {
-    const auto left_state  = state_of_variant_trait(left);
-    const auto right_state = state_of_variant_trait(right);
-    return left_state.has_value() && right_state.has_value() && *left_state == *right_state;
-}
-
 class LifecycleProducers {
 public:
     explicit LifecycleProducers(const TemplateTraitLookup& templates) : templates_(&templates) {}
@@ -34,6 +28,7 @@ public:
     [[nodiscard]] bool adds(const HandlerContract& contract, const SymbolId& trait) const {
         return std::ranges::any_of(contract.commands,
                                    [&](const InferredHandlerCommand& command) { return adds(command, trait); }) ||
+               std::ranges::contains(contract.lost_markers, trait) ||
                std::ranges::any_of(contract.native_spawns,
                                    [&](const SymbolId& function) { return native_adds(function, trait); });
     }

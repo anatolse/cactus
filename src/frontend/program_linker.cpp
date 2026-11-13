@@ -7,6 +7,7 @@
 #include "frontend/pair_plans.hpp"
 #include "frontend/query_costs.hpp"
 #include "frontend/ranged_fields.hpp"
+#include "frontend/required_links.hpp"
 #include "frontend/single_traits.hpp"
 #include "frontend/state_transitions.hpp"
 #include "frontend/symbol_identity.hpp"
@@ -305,6 +306,7 @@ bool ProgramLinker::rebuild_execution_graph(DecoratedProgram& program, bool vali
     }
 
     expand_group_orderings(graph);
+    derive_link_losses(graph.handlers, program.traits);
     const bool schedule_ok = compute_handler_schedule(graph, template_trait_lookup(program.persistence), single_trait_facts(program), errors_);
     check_phase_lineage_cycles(graph.phases, errors_);
     validate_lifecycle_trigger_traits(graph, errors_);
@@ -355,6 +357,7 @@ std::optional<DecoratedProgram> ProgramLinker::link(const std::vector<std::files
 
 void run_whole_program_passes(DecoratedProgram& program, ErrorReporter& errors) {
     derive_archetype_reachability(program, errors);
+    validate_required_links(program, errors);
     finalize_pair_plans(program, errors);
     check_query_costs(program, errors);
     validate_container_traits(program, errors);

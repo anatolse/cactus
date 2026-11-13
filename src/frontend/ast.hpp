@@ -268,6 +268,11 @@ struct TraitAccessExpr {
     std::optional<SymbolId> resolved_trait_id;
     std::optional<SymbolId> resolved_entity_id;
     std::optional<std::size_t> pair_binding_index;
+    // Set by semantic analysis on a read through a required link (`order.target[Unit]`):
+    // the target trait, and the link's holder trait and field.
+    mutable std::optional<SymbolId> link_target;
+    mutable std::optional<SymbolId> link_holder;
+    mutable std::string link_field;
 
     [[nodiscard]] std::optional<NamedTraitRef> named_ref() const {
         if (!resolved_entity_id.has_value() || !resolved_trait_id.has_value()) {
@@ -460,7 +465,10 @@ inline std::unique_ptr<ExprNode> clone_reference_argument(const ExprNode& arg) {
                                                                         .location           = access->location,
                                                                         .resolved_trait_id  = access->resolved_trait_id,
                                                                         .resolved_entity_id = access->resolved_entity_id,
-                                                                        .pair_binding_index = access->pair_binding_index}},
+                                                                        .pair_binding_index = access->pair_binding_index,
+                                                                        .link_target        = access->link_target,
+                                                                        .link_holder        = access->link_holder,
+                                                                        .link_field         = access->link_field}},
                                       arg.location);
 }
 
@@ -561,6 +569,12 @@ struct MatchStmt {
     // Set by semantic analysis, which only sees the tree by const reference.
     mutable MatchKind kind = MatchKind::Trait;
     SourceLocation location;
+
+    // A trait match can miss an entity that carries none of its arms' traits.
+    [[nodiscard]] bool covers_every_case() const {
+        return !arms.empty() &&
+               (kind != MatchKind::Trait || std::ranges::any_of(arms, &MatchStmtArm::is_wildcard));
+    }
 };
 
 // spawn TemplateName: Trait: field = expr
@@ -782,11 +796,12 @@ struct ResolvedHandlerTrigger {
     }
 };
 
-enum class HandlerTriggerForm : std::uint8_t { Event, Added, Removed };
+// Lost: `on lost H.f`, delivered as `on added` of the link's lost marker trait.
+enum class HandlerTriggerForm : std::uint8_t { Event, Added, Removed, Lost };
 
 struct EventHandlerNode {
     HandlerTriggerForm trigger_form = HandlerTriggerForm::Event;
-    std::string event_name;  // the trait spelling for Added/Removed
+    std::string event_name;  // the trait spelling for Added/Removed; `H.f` for Lost
     SourceLocation trigger_location;
     std::optional<ResolvedHandlerTrigger> resolved_trigger;
     std::optional<std::string> alias;                  // optional 'as alias' clause

@@ -17,8 +17,27 @@ namespace {
 
 constexpr const char* VALUE = "value";
 
+// A ranged field or a required link: either is checked where its value is made.
 bool has_ranged_fields(const ResolvedTrait& trait) {
-    return std::ranges::any_of(trait.fields, [](const ResolvedField& field) { return field.range.has_value(); });
+    return std::ranges::any_of(trait.fields, [](const ResolvedField& field) {
+        return field.range.has_value() || is_link_type(field.type);
+    });
+}
+
+void emit_link_check(std::ostringstream& out,
+                     const ResolvedTrait& trait,
+                     const ResolvedField& field,
+                     const DecoratedProgram& program) {
+    if (!field.type.symbol_id.has_value()) {
+        return;
+    }
+    const auto value = std::string{VALUE} + "." + cpp_escaped(field.name);
+    out << "    if (check_links && !cactus::runtime::entt_backend::link_live<"
+        << EnttCodegenUtils::trait_cpp_name(*field.type.symbol_id, field.type.symbol_id->local_name, program)
+        << ">(registry, " << value << ")) {\n";
+    out << "        return cactus::runtime::entt_backend::RangeFault{.trait = \"" << trait.name << "\", .field = \""
+        << field.name << "\", .reason = cactus::runtime::entt_backend::RangeFaultReason::DeadLink};\n";
+    out << "    }\n";
 }
 
 std::string trait_cpp(const ResolvedTrait& trait, const DecoratedProgram& program) {
@@ -166,10 +185,13 @@ std::string emit_range_check_functions(const DecoratedProgram& program) {
         std::ostringstream out;
         out << "[[maybe_unused]] std::optional<cactus::runtime::entt_backend::RangeFault> " << name.name
             << "([[maybe_unused]] const entt::registry& registry, const " << trait_cpp(*trait, program) << "& " << VALUE
-            << ") {\n";
+            << ", [[maybe_unused]] bool check_links = true) {\n";
         for (const auto& field : trait->fields) {
             if (field.range.has_value()) {
                 emit_field_check(out, *trait, field, *field.range, program);
+            }
+            if (is_link_type(field.type)) {
+                emit_link_check(out, *trait, field, program);
             }
         }
         out << "    return std::nullopt;\n";
@@ -220,8 +242,9 @@ ContainerExtents emit_container_extents(const std::vector<const ResolvedFieldRan
     return extents;
 }
 
-std::string emit_range_check_passes(const ResolvedTrait& trait, const std::string& value) {
-    return "cactus::runtime::entt_backend::passes_range_check(" + check_ref(trait) + "(registry, " + value + "))";
+std::string emit_range_check_passes(const ResolvedTrait& trait, const std::string& value, bool check_links) {
+    return "cactus::runtime::entt_backend::passes_range_check(" + check_ref(trait) + "(registry, " + value +
+           (check_links ? "" : ", false") + "))";
 }
 
 }  // namespace cactus

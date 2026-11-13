@@ -112,6 +112,8 @@ fixed_tick late_tick
 
 `state` and `final` are contextual words too. `state` starts a state declaration (§3.6.1) only at top-level declaration position when an identifier follows. `final` marks a variant only right after a variant name or its arrows. Both stay ordinary identifiers elsewhere, so a field named `state` keeps working.
 
+`added`, `removed` and `lost` are contextual only directly after `on` (§4.4), so a field or local named `lost` keeps working.
+
 ### 2.5 Literals
 
 - integers: `0`, `42`
@@ -275,6 +277,25 @@ At a commit round, a `spawn` or `add` that would give `T` to a second entity fai
 Two handlers of one activation that can each give `T`, through `add T` or a `spawn` whose tree carries `T`, conflict and need an order (§3.8). It is a compile error for two named entities to carry `T`, for one template or entity tree to carry `T` on more than one node, and for `T` to be the target of `project` or `keep`. Restoring a save with two carriers is rejected (§7.6). A pair binding, domain or query filter that requires `T` counts as bounded to one entity in query cost diagnostics. Like a range, `single` is a domain fact, not a performance control.
 
 `persist` marks a field as durable game-save state; it carries no format, storage, or scene-survival meaning of its own — see §7.6 for what it makes eligible and how a save is produced.
+
+**Required links.** A field of a trait or of a state variant, and a template parameter, may have a trait type. Such a field is a *required link* to that *target trait*: whenever a rule can read it, it names a live entity carrying the trait. The target may be a durable trait or a state variant, local or through an import alias.
+
+```cactus
+state Order:
+    Auto
+    Attack:
+        let target: Unit
+
+template Recruit(bed: RoomTile):
+    Birth:
+        bed = bed
+```
+
+A link field has no default, and every place that makes a value of its trait assigns it. A link type is a compile error on a `persist` field, a relation, event or phase field, a `func` return type, a struct field and a `const`. A trait type on a `func` parameter is a read-only trait parameter, not a link. A projected trait can't be a target, and a trait that holds a link can't be projected.
+
+A link value comes only from a source the compiler proves carries the target trait: a pair binding that requires it, `self` in a rule whose `each:` requires it, a named entity that declares it, another link of the same target, or a `best(b, by = ...)` over a binding `b` that requires it. A variant `S.V` satisfies only a link to `S.V`. Any other value, such as an `entity_id` local, event field or call result, is a compile error whose help suggests joining the target in `pairs:`. A link stands wherever an `entity_id` value is accepted: `emit ... to`, a relation argument, `==`, an `entity_id` field.
+
+A rule reads the target's declared trait through a link of its own row: `order.target[Unit].health`, where `order` is an `each:` alias. Only the target trait can be read this way, and only for reading; a write suggests `set Unit on order.target:`, and another trait still needs a `pairs:` join. A link is checked, lost and resolved as §4.4 describes.
 
 #### 3.6.1 States
 
@@ -1275,7 +1296,7 @@ event_handler   = "on" ( lifecycle_trigger | event_name ) [ "as" IDENTIFIER ] ":
                   { statement }
                   DEDENT ;
 
-lifecycle_trigger = ( "added" | "removed" ) dotted_name ;
+lifecycle_trigger = ( "added" | "removed" | "lost" ) dotted_name ;  (* `lost` names a link field H.f *)
 
 event_name      = dotted_name ;
 
@@ -1906,6 +1927,8 @@ rule CollectCoins:
 
 `entity_id` is an opaque handle. There is no null sentinel in the language surface. Operations using `entity_id` are total: stale handles produce safe no-ops or no-match behavior rather than forcing author-side null checks. A stale handle stays stale for the life of its world: it never names an entity created later. An `entity_id` field with no initializer starts stale.
 
+A required link (§3.6) is an `entity_id` with a target trait. A rule that can read it sees only a live target that carries that trait; §4.4 describes how a link is checked, lost and resolved.
+
 An entity's name (§3.7) is an `entity_id` bound to its current instance. It binds when its module's entities are instantiated (program start for the entry module), and after a restore it binds to the restored record whose origin is that declaration. Once the instance is destroyed — including by scene cleanup — or when a restored document has no record for it, the name is stale: `set` and `emit` targeting it do nothing, and handlers that access its fields by name do not run. Using a name only as a value adds no requirement.
 
 ### 4.4 Runtime Trait Mutation
@@ -1967,6 +1990,21 @@ For ranged `let` fields (§3.6):
 - The check fails when a container handle is stale, when it names an entity without the container trait, or when the value is out of range.
 - A failed check makes the whole operation do nothing: a spawn creates no entity and no children, so its handle stays stale and no trigger fires; an `add` leaves the entity as it was; a `project` leaves the trait unprojected; a declared entity is not created and its named handle is stale. The runtime reports a fault naming the trait, the field, the value and the evaluated range. Game code observes only that the command had no effect.
 - Native code that creates entities directly, bypassing commands, is outside the check.
+
+For required links (§3.6):
+
+- A link value is checked where its holder's value is made or the link is written: when a `spawn` or `children:` entity is created at commit, when an `add H:` applies, and when a `var` link field is assigned. It passes when the target is live and carries the target trait at that point. A failed check makes the operation do nothing, like a range fault, and reports a fault naming the holder trait and the field. Declared entities load together, so their links to named entities are taken as given.
+- A link is *lost* at the commit position of the command that destroys its target, destroys an owner its target is destroyed with, removes the target trait, or swaps a variant target away. A holder destroyed at or before that position loses nothing.
+- `on lost H.f` is delivered to the holder after the round that lost its link, with the timing, net-change and cycle-delay rules of `on added`. A new value of `H` on the holder before the round ends resolves the link and fires nothing. `on lost H.f as old` binds a read-only copy of `H`, which still names the lost target. The trigger is a compile error in a `pairs:` rule.
+- When the program can lose a link (a reachable `destroy`, `remove` of the target trait, or swap away from a target variant), every reachable archetype carrying `H` must match some `on lost H.f` handler, and each handler must, on every path, swap `H`'s variant, give a new target with `add H:`, remove `H` or its state, or destroy the holder. An `if` counts only with an `else`, and a loop never does.
+- From the losing position until a resolving command applies, a rule that reads through the link does not see the holder; other rules still do. A handler's resolving commands that all have no effect leave the holder hidden and report a fault at the end of their round.
+
+```cactus
+rule Retarget:
+    each: Unit
+    on lost Order.Attack.target:
+        add Order.Auto
+```
 
 **Relation commands.** `add R(x, y)`, optionally with a field block, and `remove R(x, y)` change a stored relation (§3.6.2). Both are structural commands: the ends and field values are evaluated in the handler, and the change applies at the activation commit in command order, like `add T` and `remove T`. At its position, `add` creates the row, or replaces the field values of the existing one (fields the block leaves out take their defaults); it does nothing when either end is stale or lacks its end trait. `remove` deletes every matching row; `_` on either side matches any entity, and no match is no change. `_` is not allowed in `add`. Relation commands are commands in the handler contract, with the same ordering and race rules as trait commands. Destroying an entity or removing an end trait removes every row on that end at the same position, so a later command in the same commit already sees them gone.
 

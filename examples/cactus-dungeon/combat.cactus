@@ -65,7 +65,7 @@ rule AttackIntents:
     pairs:
         actor:
             units.Unit
-            units.Order.Attack as order
+            units.Order.AttackUnit as order
         target: units.Unit
     group: territory.links
     where: target == order.target
@@ -83,7 +83,7 @@ rule HeartTargets:
     pairs:
         actor:
             units.Unit
-            units.Order.Attack as order
+            units.Order.AttackHeart as order
         heart:
             world.Tile
             world.Heart
@@ -95,7 +95,6 @@ rule AttackTargets:
     pairs:
         actor:
             units.Unit
-            units.Order.Attack
             units.OrderRequest.None
         tile: world.Tile
     group: territory.links
@@ -138,24 +137,6 @@ rule Guard:
     on fixed_tick:
         emit tasks.Step to actor:
             tile = route.next
-
-rule FinishAttack:
-    each:
-        units.Unit
-        units.Order.Attack as order
-    after:
-        Guard
-        knights.Defend
-    when: session.Game[session.Session].mode == session.SessionMode.Playing
-
-    on fixed_tick:
-        match order.target:
-            units.Unit =>
-                return
-            world.Heart =>
-                return
-            _ =>
-                add units.Order.Auto
 
 rule FightUnits:
     pairs:
@@ -265,7 +246,9 @@ rule RemoveDead:
 
 rule FallenHearts:
     each: world.Heart as heart
-    after: FightHearts
+    after:
+        FightHearts
+        RemoveDead
     where: heart.health <= 0.0
 
     when: session.Game[session.Session].mode == session.SessionMode.Playing

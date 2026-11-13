@@ -99,6 +99,30 @@ inline bool has_reference_params(const ResolvedFunc& func) {
     return std::ranges::any_of(func.params, [](const ResolvedParam& param) { return is_reference_type(param.type); });
 }
 
+// The link a lost marker stands for: field `field` of trait or variant `holder`.
+struct LostLink {
+    SymbolId holder;
+    std::string field;
+
+    friend bool operator==(const LostLink&, const LostLink&) = default;
+};
+
+// A required link field (`let target: Unit`) and the marker its holder carries while the link is lost.
+struct LinkField {
+    SymbolId holder;
+    std::string field;
+    SymbolId target;
+    SymbolId marker;
+};
+
+// The internal marker trait a holder carries from the commit position that loses
+// its link `holder.field` until a resolving command applies; `on lost` is its `on added`.
+[[nodiscard]] inline SymbolId lost_marker_symbol(const SymbolId& holder, const std::string& field) {
+    std::string name = holder.local_name;
+    std::ranges::replace(name, '.', '_');
+    return make_symbol_id(SymbolKind::Trait, holder.module.name, name + "_" + field + "_lost");
+}
+
 struct ResolvedTrait : CanonicalIdentity {
     std::string name;
     std::vector<ResolvedField> fields;
@@ -107,6 +131,7 @@ struct ResolvedTrait : CanonicalIdentity {
     bool is_single = false;
     std::optional<std::string> kept_by;  // the rule whose keep clause owns this trait
     std::optional<SymbolId> state;       // set on a state's variant traits and its slot
+    std::optional<LostLink> lost_link;   // set on a link's lost marker
 
     [[nodiscard]] bool is_state_slot() const {
         return state.has_value() && state->local_name == name;
@@ -643,6 +668,8 @@ struct HandlerContract {
     std::vector<NamedRequirement> named_requirements;  // first-use order, no duplicates
     std::unordered_set<SymbolId> emits;
     std::vector<InferredHandlerCommand> commands;
+    // Lost markers of the links its commands may lose; derived before scheduling, never stored.
+    std::vector<SymbolId> lost_markers;
     std::vector<SymbolId> native_spawns;  // called stdlib functions that create entities, sorted
     FeedNode feed;                        // not counted for an extern rule
     // Inference only: how many nodes of `feed` are open; each is the last child of the one before.
@@ -981,6 +1008,11 @@ struct ReachabilityFacts {
     std::vector<HandlerIdentity> unreachable_handlers;  // sorted by canonical id
     bool derived = false;                               // the pass ran on this program
 
+    // An entity with trait set `set` may carry `trait`: the set has it, or the trait is free.
+    [[nodiscard]] bool may_carry(const ReachableTraitSet& set, const SymbolId& trait) const {
+        return std::ranges::contains(set, trait) || std::ranges::contains(free_traits, trait);
+    }
+
     friend bool operator==(const ReachabilityFacts&, const ReachabilityFacts&) = default;
 };
 
@@ -1031,6 +1063,8 @@ struct DecoratedProgram {
     std::vector<InferredHandlerContract> handler_contracts;
     ExecutionGraph execution_graph;
     ReachabilityFacts reachability;  // set on the whole program, never stored in module artifacts
+    // The links the reachable program can lose, sorted by marker; set on the whole program, never stored.
+    std::vector<LinkField> losable_links;
     std::map<std::string, TypeKind> pub_assets;  // this module's pub assets and their handle types
     // Codegen may keep pair-binding indexes across passes; tests turn it off to
     // compare against the full product.
@@ -1271,7 +1305,14 @@ private:
 
     // Phase 2: Resolve types in fields
     void resolve_all_types(ProgramNode& program);
+    // One lost marker trait per link field of a local trait or variant.
+    void synthesize_lost_markers();
+    [[nodiscard]] std::optional<ResolvedHandlerTrigger> try_resolve_lost_trigger(const EventHandlerNode& handler) const;
+    // The link an `on lost` handler names; none for any other trigger.
+    [[nodiscard]] std::optional<LostLink> lost_link_of(const EventHandlerNode& handler) const;
     TypeInfo resolve_type_ref(const TypeRef& ref);
+    // A trait name is a required link here; anything else resolves like resolve_type_ref.
+    TypeInfo resolve_field_type(const TypeRef& ref);
     void resolve_trait_references(ProgramNode& program);
     void resolve_relation_declarations(ProgramNode& program);
     [[nodiscard]] ResolvedRelation declared_relation(const RelationNode& node) const;
@@ -1903,6 +1944,34 @@ private:
                                      const ResolvedStruct* handler_event,
                                      const PairScope* pair_scope);
 
+    // Whether `value` provably names an entity carrying link target `target`: a binding or `self`
+    // that requires it, a named entity that declares it, a link to it, or a `best` over such a binding.
+    [[nodiscard]] bool proves_link(const ExprNode& value,
+                                   const SymbolId& target,
+                                   const TypeInfo& inferred,
+                                   const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                                   const PairScope* pair_scope) const;
+    [[nodiscard]] bool entity_carries(const SymbolId& entity, const SymbolId& trait) const;
+    void report_unproven_link(const std::string& field, const SymbolId& target, const SourceLocation& location) const;
+    [[nodiscard]] static std::optional<SymbolId> link_holder_of(
+        const ExprNode& object,
+        const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+        const PairScope* pair_scope);
+    TypeInfo infer_link_read_type(const TraitAccessExpr& access,
+                                  const TypeInfo& link,
+                                  const std::vector<std::string>& fields,
+                                  const SourceLocation& location,
+                                  const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                                  const std::unordered_map<std::string, TypeInfo>& local_bindings,
+                                  const PairScope* pair_scope) const;
+    // A unary rule that reads through a link of its own row skips holders whose link is lost.
+    static void exclude_lost_link_holders(ProgramNode& program);
+    // Every link field of each archetype trait entry is assigned a proven value.
+    void validate_archetype_links(const ProgramNode& program);
+    void validate_archetype_link_entries(const std::vector<ArchetypeTraitEntry>& entries,
+                                         const std::string& context_desc,
+                                         const std::unordered_set<SymbolId>& inherited);
+
     /// validate_trait_field_values plus required-field coverage, for blocks
     /// that construct the trait (`add`, `project`).
     void validate_trait_field_supply(const std::vector<ResolvedField>& fields,
@@ -2423,6 +2492,8 @@ private:
     std::unordered_map<std::string, const FuncNode*> func_nodes_;
     // Local entities with their composed trait sets, filled after template flattening.
     std::unordered_map<std::string, ImportedEntity> named_entities_;
+    // The rule whose handler or clause is being validated; reads its `best` reducers for link proofs.
+    const RuleNode* link_rule_ = nullptr;
 
     // Module names/aliases declared via `use` (for `load` reachability check)
     std::unordered_set<std::string> use_names_;

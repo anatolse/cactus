@@ -230,8 +230,18 @@ DetailName archetype_node_create_function_name(const std::string& module_name,
                       .name = name};
 }
 
+namespace {
+
+// A state variant's trait name `S.V` as one identifier.
+std::string undotted(std::string name) {
+    std::erase(name, '.');
+    return name;
+}
+
+}  // namespace
+
 DetailName range_check_function_name(const std::string& module_name, const std::string& trait_name) {
-    return detail_name(module_name, "check_ranges_" + snake_case(trait_name));
+    return detail_name(module_name, "check_ranges_" + snake_case(undotted(trait_name)));
 }
 
 DetailName range_value_function_name(const std::string& module_name,
@@ -239,7 +249,7 @@ DetailName range_value_function_name(const std::string& module_name,
                                      const std::vector<std::string>& role_path,
                                      const std::string& trait_name) {
     auto name = archetype_node_create_function_name(module_name, archetype_name, role_path);
-    name.name = "range_value_" + name.name.substr(std::string_view{"create_"}.size()) + "_" + snake_case(trait_name);
+    name.name = "range_value_" + name.name.substr(std::string_view{"create_"}.size()) + "_" + snake_case(undotted(trait_name));
     return name;
 }
 
@@ -908,6 +918,22 @@ std::vector<SymbolId> EnttCodegenUtils::watched_lifecycle_traits(const Decorated
 
 bool EnttCodegenUtils::tracks_lifecycle(const DecoratedProgram& program) {
     return !program.execution_graph.phases.empty() && !watched_lifecycle_traits(program).empty();
+}
+
+bool EnttCodegenUtils::has_link_indices(const DecoratedProgram& program) {
+    return !program.execution_graph.phases.empty() && !program.losable_links.empty();
+}
+
+std::optional<std::string> EnttCodegenUtils::link_index_ref(const DecoratedProgram& program, const SymbolId& marker) {
+    if (program.execution_graph.phases.empty()) {
+        return std::nullopt;
+    }
+    const auto found = std::ranges::find(program.losable_links, marker, &LinkField::marker);
+    if (found == program.losable_links.end()) {
+        return std::nullopt;
+    }
+    return "cactus::runtime::entt_backend::generated_link_indices(registry).index" +
+           std::to_string(found - program.losable_links.begin());
 }
 
 std::string EnttCodegenUtils::struct_cpp_name(const std::string& source_name, const DecoratedProgram& program) {

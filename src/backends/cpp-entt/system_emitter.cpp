@@ -2781,16 +2781,24 @@ static std::string lower_match_expr(const MatchExpr& match_expr,
 
 // `X[T].a.b`: the named slot reference or the pair binding's component, then
 // the field path. A color field's channel reads as a normalized float.
+// `x.f[T].a` reads the link target's T, which a holder a pass sees always carries.
 static std::string lower_trait_field_path(const TraitAccessExpr& access,
                                           const std::vector<std::string>& fields,
                                           const DecoratedProgram& program,
-                                          const PairCodegenScope* pair_scope) {
-    if (!access.resolved_trait_id.has_value()) {
+                                          const PairCodegenScope* pair_scope,
+                                          const std::function<std::string(const ExprNode&)>& rewrite) {
+    const auto& resolved = access.link_target.has_value() ? access.link_target : access.resolved_trait_id;
+    if (!resolved.has_value()) {
         throw CodegenError(access.location, "unresolved trait access '" + access.trait_name + "' reached code generation");
     }
-    const auto& trait_id = *access.resolved_trait_id;
+    const auto& trait_id = *resolved;
     std::string base;
-    if (const auto named = access.named_ref(); named.has_value()) {
+    if (access.link_target.has_value()) {
+        const auto* plan    = AccumulationScope::active();
+        const bool settles  = !fields.empty() && plan != nullptr && plan->buffered({.trait = trait_id, .field = fields.front()});
+        base = "registry.get<" + std::string(settles ? "" : "const ") + EnttCodegenUtils::trait_cpp_name(trait_id) + ">(" +
+               rewrite(*access.object) + ")";
+    } else if (const auto named = access.named_ref(); named.has_value()) {
         base = EnttCodegenUtils::named_trait_ref_name(*named);
     } else {
         const auto* ident   = std::get_if<IdentExpr>(&access.object->expr);
@@ -2832,7 +2840,10 @@ static std::string rewrite_expr_node(  // NOLINT(readability-function-cognitive-
     const std::unordered_map<std::string, std::string>& cpp_overrides,
     const PairCodegenScope* pair_scope,
     const LocalNumericKinds* local_kinds) {
-    auto known_fields = collect_trait_fields(trait_names, program);
+    auto known_fields        = collect_trait_fields(trait_names, program);
+    const auto rewrite_child = [&](const ExprNode& child) {
+        return rewrite_expr(child, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds);
+    };
 
     return std::visit(
         [&](auto& e) -> std::string {  // NOLINT(readability-function-cognitive-complexity) -- still 198, same reason
@@ -3080,7 +3091,7 @@ static std::string rewrite_expr_node(  // NOLINT(readability-function-cognitive-
                     return *std::move(lowered) + "." + cpp_escaped(e.member);
                 }
                 if (const auto path = trait_field_path(e); path.has_value()) {
-                    return lower_trait_field_path(*path->first, path->second, program, pair_scope);
+                    return lower_trait_field_path(*path->first, path->second, program, pair_scope, rewrite_child);
                 }
                 if (const auto* owner = std::get_if<IdentExpr>(&e.object->expr); owner != nullptr && pair_scope != nullptr) {
                     if (const auto* binding = pair_scope->find(owner->name); binding != nullptr && binding->row) {
@@ -3149,23 +3160,14 @@ static std::string rewrite_expr_node(  // NOLINT(readability-function-cognitive-
                     return rewrite_expr(arg, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
                 });
             } else if constexpr (std::is_same_v<E, IfExpr>) {
-                return EnttCodegenUtils::emit_if_ternary(e, [&](const ExprNode& child) {
-                    return rewrite_expr(child, trait_names, program, pointer_aliases, cpp_overrides, pair_scope,
-                                        local_kinds);
-                });
+                return EnttCodegenUtils::emit_if_ternary(e, rewrite_child);
             } else if constexpr (std::is_same_v<E, TraitAccessExpr>) {
-                return lower_trait_field_path(e, {}, program, pair_scope);
+                return lower_trait_field_path(e, {}, program, pair_scope, rewrite_child);
             } else if constexpr (std::is_same_v<E, RelationTestExpr>) {
-                return lower_relation_test(e, program, pair_scope, [&](const ExprNode& child) {
-                    return rewrite_expr(child, trait_names, program, pointer_aliases, cpp_overrides, pair_scope,
-                                        local_kinds);
-                });
+                return lower_relation_test(e, program, pair_scope, rewrite_child);
             } else {
                 static_assert(std::is_same_v<E, MatchExpr>, "every expression form needs a C++ lowering");
-                return lower_match_expr(e, [&](const ExprNode& child) {
-                    return rewrite_expr(child, trait_names, program, pointer_aliases, cpp_overrides, pair_scope,
-                                        local_kinds);
-                });
+                return lower_match_expr(e, rewrite_child);
             }
         },
         expr.expr);
@@ -3193,6 +3195,45 @@ static std::string rewrite_expr(const ExprNode& expr,
         expr.field_read,
         rewrite_expr_node(expr, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds),
         program);
+}
+
+// The link field an assignment writes: the holder trait and the field's declaration.
+static std::optional<std::pair<SymbolId, const ResolvedField*>> written_link(const VarAssign& assign,
+                                                                            const DecoratedProgram& program) {
+    if (!assign.field_write.has_value() || !assign.field_write->field.has_value()) {
+        return std::nullopt;
+    }
+    const auto* holder = EnttCodegenUtils::find_trait(program, make_canonical_id(assign.field_write->trait));
+    if (holder == nullptr) {
+        return std::nullopt;
+    }
+    const auto field = std::ranges::find(holder->fields, *assign.field_write->field, &ResolvedField::name);
+    if (field == holder->fields.end() || !is_link_type(field->type)) {
+        return std::nullopt;
+    }
+    return std::pair{assign.field_write->trait, &*field};
+}
+
+// A new link value takes effect only when it names a live target; an indexed link moves its holder.
+static std::string emit_link_write(const VarAssign& assign,
+                                   const std::pair<SymbolId, const ResolvedField*>& link,
+                                   const std::string& lhs,
+                                   const std::string& value,
+                                   const std::string& entity,
+                                   const std::string& ind,
+                                   const DecoratedProgram& program) {
+    const auto& [holder, field] = link;
+    const auto name             = gen_temp_name("link_value", assign.location);
+    std::string out = ind + "{\n" + ind + "    const entt::entity " + name + " = " + value + ";\n";
+    out += ind + "    if (cactus::runtime::entt_backend::link_target_live<" +
+           EnttCodegenUtils::trait_cpp_name(*field->type.symbol_id) + ">(registry, " + name + ", \"" +
+           holder.local_name + "\", \"" + field->name + "\")) {\n";
+    out += ind + "        " + lhs + " = " + name + ";\n";
+    if (EnttCodegenUtils::link_index_ref(program, lost_marker_symbol(holder, field->name)).has_value()) {
+        out += ind + "        registry.patch<" + EnttCodegenUtils::trait_cpp_name(holder) + ">(" + entity + ");\n";
+    }
+    out += ind + "    }\n" + ind + "}\n";
+    return out;
 }
 
 // The entity an accumulating assignment adds to: a named or pair-bound trait's owner, else the row.
@@ -4233,6 +4274,11 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                            accumulation_component(s, *s.accumulation) + ");\n";
                 }
                 lhs = settled_access(s.field_write, std::move(lhs), program);
+                if (const auto link = written_link(s, program); link.has_value()) {
+                    return emit_link_write(
+                        s, *link, lhs, rewrite_expr(*s.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds),
+                        accumulation_entity(s, trait_names, program, pair_scope), ind, program);
+                }
                 if (const auto* call = std::get_if<CallExpr>(&s.value->expr)) {
                     if (const auto* ident = std::get_if<IdentExpr>(&call->callee->expr);
                         ident != nullptr && ident->name == "vec2" && call->args.size() == 2) {
@@ -5686,10 +5732,26 @@ static void emit_lifecycle_handler_body(std::ostringstream& out,
     clause.entries.push_back(entry);
     clause.resolved_trait_ids.push_back(trigger.symbol);
 
+    const auto* marker = EnttCodegenUtils::find_trait(program, make_canonical_id(trigger.symbol));
+    const auto lost    = marker != nullptr && handler.trigger_form == HandlerTriggerForm::Lost
+                             ? marker->lost_link
+                             : std::nullopt;
+    if (lost.has_value()) {
+        // `as old` names the holder's trait, unchanged since the loss, or the marker would be gone.
+        filter.entries.back().alias = std::nullopt;
+        filter.entries.push_back(FilterEntry{.qualified_name    = make_canonical_id(lost->holder),
+                                             .resolved_trait_id = lost->holder,
+                                             .alias             = handler.alias,
+                                             .location          = handler.trigger_location});
+        filter.resolved_trait_ids.push_back(lost->holder);
+    }
     auto domain           = build_handler_domain(filter, exclude, program);
     domain.recipient_only = true;
     if (trigger.kind == HandlerTriggerKind::TraitRemoved && handler.alias.has_value()) {
         domain.prelude = "        [[maybe_unused]] const auto& " + *handler.alias + " = " + trigger_binding + ".old;\n";
+    }
+    if (const auto index = EnttCodegenUtils::link_index_ref(program, trigger.symbol); lost.has_value() && index) {
+        domain.prelude += "        " + *index + ".await(entity);\n";
     }
     emit_filtered_handler_body(out, sys, handler, domain, program, contract, false);
 }

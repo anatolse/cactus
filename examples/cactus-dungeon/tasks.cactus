@@ -88,6 +88,28 @@ group eligibility:
 pub func diggable(kind: world.Kind) bool:
     return kind == world.Kind.Earth or kind == world.Kind.Gold or kind == world.Kind.InfiniteGold
 
+pub template Worker(at: vec3):
+    world.Robot
+    units.Unit
+    units.Order.Auto
+    units.OrderRequest.None
+    tv.WorldTransform:
+        position = at
+
+rule FoundBase:
+    pairs:
+        terrain: world.Generation as recipe
+        base:
+            world.Founding
+            voxel.Cell as cell
+    after: world.GenerateCell
+    where: cell.volume == terrain
+
+    on tick:
+        remove world.Founding from base
+        for i in range(0, recipe.starting_robots):
+            spawn Worker(at = vec3(cell.x + 0.75 + (i % 2) * 0.5, 1.25, cell.z + 0.75 + (i / 2) * 0.5))
+
 rule PlaceWorkers:
     pairs:
         robot:

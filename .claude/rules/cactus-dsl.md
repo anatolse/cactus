@@ -84,6 +84,11 @@ exception — see `examples/CLAUDE.md`).
   `relation` with `from:`/`to:` ends instead of an entity, or a trait, holding `entity_id`
   fields. A relation can't hold a duplicate pair or a row to a dead entity, and rules read it
   with `R(x, y)` tests in `where:` or a row binding (`r: R`, `each: R as r`).
+- When a trait or a state variant points at exactly one entity it reads, such as an attack target
+  or a camera's follow target, declare a required link field typed by the target's trait
+  (`let target: Unit`). Read it with `order.target[Unit].health` and handle its end with
+  `on lost Order.Attack.target:`. Its value must come from a binding, `self`, a named entity or
+  another link that carries the trait.
 - Keep a relation (`keep R(a, b)` on a `pairs:` rule) when its rows follow from the world, like
   adjacency. Store it (`add R` / `remove R`) when the rows are history or decisions, like claims.
 - For "at most one per entity", mark the end `one` and add rows from one phase rule with the

@@ -1448,6 +1448,26 @@ relations.cactus examples std.physics.volume.Snap/on std.core.fixed_tick
     named_writes:
     named_requirements:
     iteration_order: free
+required_links.cactus examples required_links.Die/on std.core.tick
+    reads: required_links.Unit
+    read_fields: required_links.Unit{health}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: creation
+required_links.cactus examples required_links.Strike/on std.core.tick
+    reads: required_links.Log required_links.Order.Attack required_links.Unit
+    read_fields: required_links.Log{hits} required_links.Order.Attack{target} required_links.Unit{health}
+    write_fields: required_links.Log{hits}
+    write_kinds: required_links.Log.hits=1/0
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: creation
 rule_keep.cactus examples rule_keep.RankPools/on std.core.fixed_tick
     reads: rule_keep.Lava rule_keep.Walker
     read_fields: rule_keep.Lava{heat,priority,radius,x} rule_keep.Walker{x}

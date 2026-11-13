@@ -11,6 +11,7 @@
 #include "frontend/execution_graph_scheduler.hpp"
 #include "frontend/hierarchy_forest.hpp"
 #include "frontend/native_field_reads.hpp"
+#include "frontend/required_links.hpp"
 #include "frontend/single_traits.hpp"
 #include "frontend/symbol_identity.hpp"
 
@@ -659,7 +660,10 @@ std::unique_ptr<ExprNode> clone_expr(const ExprNode& expr) {
                                      .location           = e.location,
                                      .resolved_trait_id  = e.resolved_trait_id,
                                      .resolved_entity_id = e.resolved_entity_id,
-                                     .pair_binding_index = e.pair_binding_index};
+                                     .pair_binding_index = e.pair_binding_index,
+                                     .link_target        = e.link_target,
+                                     .link_holder        = e.link_holder,
+                                     .link_field         = e.link_field};
                 return std::make_unique<ExprNode>(ExprNode::Variant{std::move(copy)}, expr.location);
             } else if constexpr (std::is_same_v<E, MatchExpr>) {
                 MatchExpr copy;
@@ -1269,6 +1273,7 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
 
     // Phase 2: Resolve types in fields
     resolve_all_types(program);
+    synthesize_lost_markers();
     resolve_trait_references(program);
     resolve_relation_declarations(program);
     resolve_declaration_const_refs(program);
@@ -1291,6 +1296,7 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     flatten_template_compositions(program);
     validate_collider_shapes(program);
     collect_named_entities(program);
+    validate_archetype_links(program);
     resolve_named_entity_access(program);
     validate_rule_filters(program);
     validate_where_clauses(program);
@@ -1323,6 +1329,8 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     validate_trait_default_values(program);
     validate_ranged_fields(program);
     validate_trait_modifier_rules(program);
+
+    exclude_lost_link_holders(program);
 
     // Scheduling reads template trait sets for lifecycle deliveries.
     build_persistence_metadata(program);
@@ -1680,12 +1688,15 @@ void SemanticAnalyzer::resolve_declaration_types(T& node) {
         for (auto& f : node.fields) {
             ResolvedField rf;
             rf.name        = f.name;
-            rf.type        = resolve_type_ref(f.type);
+            rf.type        = resolve_field_type(f.type);
             rf.is_let      = f.modifiers.is_let;
             rf.is_var      = f.modifiers.is_var;
             rf.is_persist  = f.modifiers.is_persist;
             rf.is_pub      = f.modifiers.is_pub;
             rf.has_default = f.default_value.has_value();
+            if (is_link_type(rf.type) && rf.is_persist) {
+                errors_.error(f.location, "link field '" + f.name + "' can't be `persist`");
+            }
             rt.fields.push_back(std::move(rf));
         }
         result_.traits[node.name] = std::move(rt);
@@ -2056,7 +2067,7 @@ void SemanticAnalyzer::resolve_trait_references(ProgramNode& program) {
                         if (parameter.default_value.has_value()) {
                             resolve_expr(**parameter.default_value);
                         }
-                        template_scope.emplace(parameter.name, std::pair{template_scope.size(), resolve_type_ref(parameter.type)});
+                        template_scope.emplace(parameter.name, std::pair{template_scope.size(), resolve_field_type(parameter.type)});
                     }
                     for (auto& trait : node.traits) {
                         resolve_trait_entry(trait);
@@ -2221,11 +2232,22 @@ TypeInfo SemanticAnalyzer::resolve_param_type(const FuncParam& param, bool is_ex
     return resolve_type_ref(ref);
 }
 
+TypeInfo SemanticAnalyzer::resolve_field_type(const TypeRef& ref) {
+    if (const auto trait = ref.param.has_value() ? std::nullopt : try_resolve_trait_ref_to_symbol(ref.name)) {
+        return make_link_type(*trait);
+    }
+    return resolve_type_ref(ref);
+}
+
 TypeInfo SemanticAnalyzer::resolve_type_ref(const TypeRef& ref) {
     if (const auto type = ref.param.has_value() ? std::nullopt : reference_type(ref.name)) {
-        errors_.error(ref.location,
-                      reference_kind_name(*type) + " '" + ref.name +
-                          "' is not a value type; only a func parameter can name it");
+        const auto message = type->kind == TypeKind::TraitRef
+                                 ? "trait '" + ref.name +
+                                       "' is not a value type here; a link to it is allowed only on trait, state "
+                                       "variant and template parameter fields"
+                                 : reference_kind_name(*type) + " '" + ref.name +
+                                       "' is not a value type; only a func parameter can name it";
+        errors_.error(ref.location, message);
         return make_unknown_type();
     }
     // ── Qualified name: "module.Symbol" or "alias.Symbol" ──────────────────
@@ -2800,7 +2822,11 @@ void SemanticAnalyzer::validate_trait_default_values(ProgramNode& program) {
                 if (!field.default_value.has_value()) {
                     continue;
                 }
-                auto expected = resolve_type_ref(field.type);
+                auto expected = resolve_field_type(field.type);
+                if (is_link_type(expected)) {
+                    errors_.error(field.location, "link field '" + field.name + "' can't have a default");
+                    continue;
+                }
                 auto actual   = infer_expr_type(**field.default_value, {}, {}, nullptr);
                 if (actual.kind != TypeKind::Unknown && expected.kind != TypeKind::Unknown &&
                     actual.kind != expected.kind) {
@@ -3597,7 +3623,12 @@ bool SemanticAnalyzer::reject_trait_access_write(
         return true;
     }
     const auto object = infer_expr_type(*access.object, filter_bindings, locals, handler_event, pair_scope);
-    if (object.kind == TypeKind::EntityId) {
+    if (is_link_type(object)) {
+        const auto spelling = entity_id_object_spelling(*access.object);
+        errors_.error(stmt.location,
+                      "can't write through link '" + spelling + "'; use 'set " + access.trait_name + " on " +
+                          spelling + ":'");
+    } else if (object.kind == TypeKind::EntityId) {
         errors_.error(stmt.location, entity_id_write_message(access.trait_name, entity_id_object_spelling(*access.object)));
     } else if (object.kind != TypeKind::Unknown) {
         errors_.error(stmt.location, non_entity_trait_message(*access.object, object));
@@ -3928,8 +3959,10 @@ void SemanticAnalyzer::bind_lifecycle_trigger_alias(
     if (!handler.alias.has_value() || !handler.resolved_trigger.has_value() || !handler.has_lifecycle_trigger()) {
         return;
     }
-    const auto& trait_symbol = handler.resolved_trigger->symbol;
-    if (handler.resolved_trigger->kind == HandlerTriggerKind::TraitAdded) {
+    auto trait_symbol = handler.resolved_trigger->symbol;
+    if (const auto lost = lost_link_of(handler); lost.has_value()) {
+        trait_symbol = lost->holder;
+    } else if (handler.resolved_trigger->kind == HandlerTriggerKind::TraitAdded) {
         if (const auto* trait = find_resolved_trait(make_canonical_id(trait_symbol)); trait != nullptr) {
             filter_bindings[*handler.alias] = trait;
         }
@@ -4821,6 +4854,7 @@ bool SemanticAnalyzer::validate_keep_recipient(const RuleNode& rule) {
 
 // Fields (and a reduced keep's condition) read only what the form's recipient sees.
 void SemanticAnalyzer::validate_keep_values(const RuleNode& rule, const ResolvedTrait& trait) {
+    link_rule_       = &rule;
     const auto& keep = *rule.keep;
     std::unordered_set<std::string> assigned;
     for (const auto& field : keep.fields) {
@@ -6361,8 +6395,7 @@ void SemanticAnalyzer::resolve_named_trait_access(TraitAccessExpr& access,
                                                   NamedAccessContext context) {
     access.resolved_entity_id = entity;
     const auto trait          = try_resolve_trait_ref_to_symbol(access.trait_name);
-    const auto* declared      = find_named_entity(entity);
-    const bool declares = trait.has_value() && declared != nullptr && std::ranges::contains(declared->traits, *trait);
+    const bool declares       = trait.has_value() && entity_carries(entity, *trait);
     if (declares) {
         access.resolved_trait_id = trait;
     }
@@ -7037,9 +7070,7 @@ bool always_returns(const StmtNode& stmt) {
                                    [](const ElseIfBranch& else_if) { return block_always_returns(else_if.body); });
     }
     if (const auto* match = std::get_if<MatchStmt>(&stmt.stmt)) {
-        const bool exhaustive =
-            match->kind != MatchKind::Trait || std::ranges::any_of(match->arms, &MatchStmtArm::is_wildcard);
-        return exhaustive && !match->arms.empty() &&
+        return match->covers_every_case() &&
                std::ranges::all_of(match->arms, [](const MatchStmtArm& arm) { return block_always_returns(arm.body); });
     }
     return false;
@@ -7117,6 +7148,7 @@ void SemanticAnalyzer::validate_event_usage(  // NOLINT(readability-function-cog
                 pair_scope_ptr = &pair_scope;
             }
             const auto aggregates = reducer_locals(*rule);
+            link_rule_            = rule;
 
             for (auto& handler : rule->handlers) {
                 auto filter_bindings =
@@ -7129,13 +7161,25 @@ void SemanticAnalyzer::validate_event_usage(  // NOLINT(readability-function-cog
                 const bool render_stage_trigger = handler.resolved_trigger.has_value() &&
                                                   handler.resolved_trigger->kind == HandlerTriggerKind::RenderStage;
                 const bool lifecycle_trigger = handler.has_lifecycle_trigger();
-                if (handler.trigger_form != HandlerTriggerForm::Event && !lifecycle_trigger) {
+                if (handler.trigger_form == HandlerTriggerForm::Lost && !lifecycle_trigger) {
+                    errors_.error(handler.trigger_location, "'" + handler.event_name + "' is not a link field");
+                } else if (handler.trigger_form != HandlerTriggerForm::Event && !lifecycle_trigger) {
                     errors_.error(handler.trigger_location, "unknown trait '" + handler.event_name + "'");
                 } else if (!event_trigger && !phase_trigger && !render_stage_trigger && !lifecycle_trigger) {
                     diagnose_unresolved_handler_trigger("rule '" + rule->name + "'", handler.event_name, handler.location);
                 }
+                if (const auto lost = lost_link_of(handler);
+                    lost.has_value() && !resolves_on_every_path(handler.body, *lost)) {
+                    errors_.error(handler.trigger_location,
+                                  "`on lost " + handler.event_name +
+                                      "` may finish without resolving the link; on every path swap the variant, "
+                                      "give a new target with `add`, remove the holder trait, or `destroy`");
+                }
                 if (lifecycle_trigger && rule->pairs.has_value()) {
-                    errors_.error(handler.trigger_location, "lifecycle triggers are not allowed in pair rules");
+                    errors_.error(handler.trigger_location,
+                                  handler.trigger_form == HandlerTriggerForm::Lost
+                                      ? "`on lost` can't be used in a `pairs:` rule; it is delivered to the holder"
+                                      : "lifecycle triggers are not allowed in pair rules");
                 }
                 // Task 3.4: Validate handler alias doesn't conflict with filter aliases in scope
                 if (handler.alias.has_value() && filter_bound.contains(*handler.alias)) {
@@ -7187,6 +7231,9 @@ void SemanticAnalyzer::validate_event_usage(  // NOLINT(readability-function-cog
                         make_resolved_user_type(TypeKind::Struct, symbol, handler_event->name);
                 }
                 bind_lifecycle_trigger_alias(handler, filter_bindings, local_bindings);
+                if (lifecycle_trigger && pair_scope_ptr == nullptr) {
+                    local_bindings.emplace("__self_context", make_entity_id_type());
+                }
                 local_bindings.insert(aggregates.begin(), aggregates.end());
 
                 bare_field_traits_ = reduced ? std::vector<const ResolvedTrait*>{} : filter_trait_order(rule->filter);
@@ -7239,6 +7286,11 @@ void SemanticAnalyzer::validate_trait_field_supply(
     validate_trait_field_values(fields, args, context_desc, filter_bindings, locals, handler_event, pair_scope);
     for (const auto& field : fields) {
         const bool supplied = std::ranges::any_of(args, [&](const auto& arg) { return arg.name == field.name; });
+        if (is_link_type(field.type) && !supplied) {
+            errors_.error(required_field_location,
+                          "link field '" + field.name + "' must be assigned in " + context_desc);
+            break;
+        }
         if (!field.has_default && !supplied) {
             errors_.error(required_field_location,
                           "required field '" + field.name + "' must be supplied in " + context_desc);
@@ -7271,8 +7323,144 @@ void SemanticAnalyzer::validate_trait_field_values(
         const auto& expected = it->second->type;
         if (actual.kind != TypeKind::Unknown && expected.kind != TypeKind::Unknown && actual.kind != expected.kind) {
             errors_.error(arg.location, "type mismatch for field '" + arg.name + "' in " + context_desc);
+            continue;
+        }
+        if (is_link_type(expected) && actual.kind != TypeKind::Unknown &&
+            !proves_link(*arg.value, *expected.symbol_id, actual, filter_bindings, pair_scope)) {
+            report_unproven_link(arg.name, *expected.symbol_id, arg.location);
         }
     }
+}
+
+void SemanticAnalyzer::report_unproven_link(const std::string& field,
+                                            const SymbolId& target,
+                                            const SourceLocation& location) const {
+    const auto trait = "'" + target.local_name + "'";
+    errors_.error(location,
+                  "link field '" + field + "' needs a value that carries " + trait +
+                      "; join the target in `pairs:` with " + trait +
+                      " required, or use `self`, a named entity or another link to " + trait);
+}
+
+void SemanticAnalyzer::validate_archetype_link_entries(const std::vector<ArchetypeTraitEntry>& entries,
+                                                       const std::string& context_desc,
+                                                       const std::unordered_set<SymbolId>& inherited) {
+    for (const auto& entry : entries) {
+        const auto* trait = find_resolved_trait(entry.resolved_trait_id, entry.trait_name);
+        if (trait == nullptr) {
+            continue;
+        }
+        for (const auto& field : trait->fields) {
+            if (!is_link_type(field.type)) {
+                continue;
+            }
+            const auto& target = *field.type.symbol_id;
+            const auto assigned =
+                std::ranges::find(entry.assignments, field.name, &FieldAssignment::name);
+            if (assigned == entry.assignments.end()) {
+                if (!trait->symbol_id.has_value() || !inherited.contains(*trait->symbol_id)) {
+                    errors_.error(entry.location,
+                                  "link field '" + field.name + "' must be assigned in " + context_desc);
+                }
+                continue;
+            }
+            const auto* ident = std::get_if<IdentExpr>(&assigned->value->expr);
+            const bool slot   = ident != nullptr && ident->template_slot.has_value() &&
+                              is_link_type(ident->template_type) && *ident->template_type.symbol_id == target;
+            if (!slot && !proves_link(*assigned->value, target, make_unknown_type(), {}, nullptr)) {
+                report_unproven_link(field.name, target, assigned->location);
+            }
+        }
+    }
+}
+
+void SemanticAnalyzer::validate_archetype_links(const ProgramNode& program) {
+    const auto symbols_of = [](const std::vector<ArchetypeTraitEntry>& entries) {
+        std::unordered_set<SymbolId> symbols;
+        for (const auto& entry : entries) {
+            if (entry.resolved_trait_id.has_value()) {
+                symbols.insert(*entry.resolved_trait_id);
+            }
+        }
+        return symbols;
+    };
+    const auto check_children = [&](this auto&& self,
+                                    const std::vector<ChildArchetypeNode>& children,
+                                    const std::string& owner) -> void {
+        for (const auto& child : children) {
+            const auto desc = "child '" + child.role + "' of " + owner;
+            validate_archetype_link_entries(child.traits, desc, child.template_ref.has_value() ? symbols_of(child.traits)
+                                                                                               : std::unordered_set<SymbolId>{});
+            self(child.children, desc);
+        }
+    };
+    for (const auto& decl : program.declarations) {
+        if (const auto* entity = std::get_if<EntityNode>(&decl)) {
+            const auto desc = "entity '" + entity->name + "'";
+            validate_archetype_link_entries(entity->traits, desc, {});
+            check_children(entity->children, desc);
+        } else if (const auto* tmpl = std::get_if<TemplateNode>(&decl)) {
+            const auto desc = "template '" + tmpl->name + "'";
+            validate_archetype_link_entries(tmpl->traits, desc, {});
+            check_children(tmpl->children, desc);
+        }
+    }
+}
+
+bool SemanticAnalyzer::entity_carries(const SymbolId& entity, const SymbolId& trait) const {
+    const auto* named = find_named_entity(entity);
+    return named != nullptr && std::ranges::contains(named->traits, trait);
+}
+
+bool SemanticAnalyzer::proves_link(const ExprNode& value,
+                                   const SymbolId& target,
+                                   const TypeInfo& inferred,
+                                   const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                                   const PairScope* pair_scope) const {
+    if (is_link_type(inferred) && *inferred.symbol_id == target) {
+        return true;
+    }
+    const auto binding_requires = [&](const std::string& name) {
+        if (pair_scope == nullptr) {
+            return false;
+        }
+        const auto binding = pair_scope->find(name);
+        return binding != pair_scope->end() &&
+               std::ranges::contains(binding->second.trait_by_access_key | std::views::values, target);
+    };
+    if (std::holds_alternative<SelfExpr>(value.expr)) {
+        return std::ranges::any_of(filter_bindings | std::views::values, [&](const ResolvedTrait* trait) {
+            return trait != nullptr && trait->symbol_id == target;
+        });
+    }
+    if (const auto* member = std::get_if<MemberExpr>(&value.expr)) {
+        return member->resolved_entity_id.has_value() && entity_carries(*member->resolved_entity_id, target);
+    }
+    const auto* ident = std::get_if<IdentExpr>(&value.expr);
+    if (ident == nullptr) {
+        return false;
+    }
+    if (ident->resolved_entity_id.has_value()) {
+        return entity_carries(*ident->resolved_entity_id, target);
+    }
+    if (binding_requires(ident->name)) {
+        return true;
+    }
+    if (link_rule_ == nullptr || !link_rule_->reduce.has_value() || !link_rule_->pairs.has_value()) {
+        return false;
+    }
+    const auto rule_binding_requires = [&](const std::string& name) {
+        return std::ranges::any_of(link_rule_->pairs->bindings, [&](const PairBindingNode& binding) {
+            return binding.name == name && std::ranges::any_of(binding.traits, [&](const FilterEntry& entry) {
+                       return entry.resolved_trait_id == target;
+                   });
+        });
+    };
+    return std::ranges::any_of(link_rule_->reduce->reducers, [&](const ReducerDecl& reducer) {
+        const auto* input = reducer.input == nullptr ? nullptr : std::get_if<IdentExpr>(&reducer.input->expr);
+        return reducer.name == ident->name && reducer.kind == ReducerKind::Best && input != nullptr &&
+               rule_binding_requires(input->name);
+    });
 }
 
 void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cognitive-complexity) -- still 108 after
@@ -7582,6 +7770,12 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
                 errors_.error(assign_stmt->location,
                               "type mismatch: cannot assign '" + type_display_name(value_type) + "' to '" +
                                   type_display_name(target_type) + "'");
+            }
+            if (!target_rejected && is_link_type(target_type) && value_type.kind != TypeKind::Unknown &&
+                !proves_link(*assign_stmt->value, *target_type.symbol_id, value_type, filter_bindings, pair_scope)) {
+                report_unproven_link(assign_stmt->path.empty() ? assign_stmt->name : assign_stmt->path.back(),
+                                     *target_type.symbol_id,
+                                     assign_stmt->location);
             }
 
             // Compound-assignment operator/type validation for vec2/vec3-typed targets,
@@ -9170,6 +9364,9 @@ void SemanticAnalyzer::walk_expression_reads(  // NOLINT(readability-function-co
     const std::function<bool(const ExprNode&, const LocalNames&)>& resolve_read) const {
     if (const auto path = trait_field_path(expr);
         path.has_value() && record_trait_access_read(contract, *path->first, path->second, expr)) {
+        if (path->first->link_target.has_value()) {
+            walk_expression_reads(*path->first->object, locals, contract, resolve_read);
+        }
         return;
     }
     if (const auto* access = std::get_if<TraitAccessExpr>(&expr.expr)) {
@@ -9341,6 +9538,11 @@ bool SemanticAnalyzer::record_trait_access_read(HandlerContract& contract,
                                                 const TraitAccessExpr& access,
                                                 const std::vector<std::string>& fields,
                                                 const ExprNode& site) const {
+    if (access.link_target.has_value()) {
+        record_read(contract, *access.link_target, segment_at(fields, 0), find_resolved_trait(*access.link_target), &site);
+        contract.observed_membership.insert(*access.link_target);
+        return true;
+    }
     if (!access.resolved_trait_id.has_value()) {
         return false;
     }
@@ -9917,6 +10119,45 @@ static std::vector<const ExprNode*> rule_clause_read_roots(const RuleNode& rule)
     return roots;
 }
 
+void SemanticAnalyzer::exclude_lost_link_holders(ProgramNode& program) {
+    for (auto& decl : program.declarations) {
+        auto* rule = std::get_if<RuleNode>(&decl);
+        if (rule == nullptr || rule->pairs.has_value() || rule->rows.has_value()) {
+            continue;
+        }
+        std::vector<SymbolId> markers;
+        const auto note = [&](const ExprNode& root) {
+            visit_expression(root, [&](const ExprNode& node) {
+                const auto* access = std::get_if<TraitAccessExpr>(&node.expr);
+                if (access == nullptr || !access->link_holder.has_value() ||
+                    !std::ranges::contains(rule->filter.resolved_trait_ids, *access->link_holder)) {
+                    return;
+                }
+                auto marker = lost_marker_symbol(*access->link_holder, access->link_field);
+                if (!std::ranges::contains(markers, marker)) {
+                    markers.push_back(std::move(marker));
+                }
+            });
+        };
+        for (const auto* root : rule_clause_read_roots(*rule)) {
+            note(*root);
+        }
+        for (const auto& handler : rule->handlers) {
+            for_each_statement_expression(handler.body, note);
+        }
+        for (auto& marker : markers) {
+            if (std::ranges::contains(rule->exclude.resolved_trait_ids, marker)) {
+                continue;
+            }
+            rule->exclude.entries.push_back(FilterEntry{.qualified_name    = make_canonical_id(marker),
+                                                        .resolved_trait_id = marker,
+                                                        .alias             = std::nullopt,
+                                                        .location          = rule->location});
+            rule->exclude.resolved_trait_ids.push_back(std::move(marker));
+        }
+    }
+}
+
 void SemanticAnalyzer::walk_clause_reads(
     const RuleNode& rule,
     const LocalNames& locals,
@@ -9956,6 +10197,10 @@ SemanticAnalyzer::infer_regular_handler_contract(  // NOLINT(readability-functio
             implied.push_back(trigger.symbol);
         }
     }
+    const auto lost = lost_link_of(handler);
+    if (lost.has_value() && !std::ranges::contains(contract.selection, lost->holder)) {
+        contract.selection.push_back(lost->holder);
+    }
     contract.domain_kind = contract.selection.empty() && contract.exclusion.empty() ? HandlerDomainKind::Selectionless
                                                                                     : HandlerDomainKind::Unary;
 
@@ -9982,7 +10227,7 @@ SemanticAnalyzer::infer_regular_handler_contract(  // NOLINT(readability-functio
     bind_clause(rule.filter);
     const bool added_alias = handler.alias.has_value() && trigger.kind == HandlerTriggerKind::TraitAdded;
     if (added_alias) {
-        aliases[*handler.alias] = trigger.symbol;
+        aliases[*handler.alias] = lost.has_value() ? lost->holder : trigger.symbol;
     }
 
     auto trait_for_field = [this, &aliases](const std::string& field) -> std::optional<SymbolId> {
@@ -11990,8 +12235,49 @@ std::optional<ResolvedHandlerTrigger> SemanticAnalyzer::try_resolve_handler_trig
     return try_resolve_render_stage_trigger(ref);
 }
 
+void SemanticAnalyzer::synthesize_lost_markers() {
+    for (const auto& link : link_fields(result_.traits)) {
+        const auto* holder = find_resolved_trait(link.holder);
+        ResolvedTrait marker;
+        marker.name = link.marker.local_name;
+        assign_canonical_identity(marker, link.marker);
+        marker.is_pub    = holder != nullptr && holder->is_pub;
+        marker.is_stdlib = holder != nullptr && holder->is_stdlib;
+        marker.lost_link = LostLink{.holder = link.holder, .field = link.field};
+        if (!result_.traits.emplace(link.marker.local_name, std::move(marker)).second) {
+            errors_.error({}, "trait '" + link.marker.local_name + "' has the name of a link's lost marker; rename it");
+        }
+    }
+}
+
+std::optional<LostLink> SemanticAnalyzer::lost_link_of(const EventHandlerNode& handler) const {
+    if (handler.trigger_form != HandlerTriggerForm::Lost || !handler.resolved_trigger.has_value()) {
+        return std::nullopt;
+    }
+    const auto* marker = find_resolved_trait(handler.resolved_trigger->symbol);
+    return marker == nullptr ? std::nullopt : marker->lost_link;
+}
+
+// `on lost H.f`: the `on added` of the lost marker of link field `f` of trait or variant `H`.
+std::optional<ResolvedHandlerTrigger> SemanticAnalyzer::try_resolve_lost_trigger(const EventHandlerNode& handler) const {
+    const auto dot = handler.event_name.rfind('.');
+    if (dot == std::string::npos) {
+        return std::nullopt;
+    }
+    const auto holder = try_resolve_trait_ref_to_symbol(handler.event_name.substr(0, dot));
+    const auto* trait = holder.has_value() ? find_resolved_trait(*holder) : nullptr;
+    const auto* field = trait == nullptr ? nullptr : find_field_in(trait->fields, handler.event_name.substr(dot + 1));
+    if (field == nullptr || !is_link_type(field->type)) {
+        return std::nullopt;
+    }
+    return ResolvedHandlerTrigger{.kind = HandlerTriggerKind::TraitAdded, .symbol = lost_marker_symbol(*holder, field->name)};
+}
+
 std::optional<ResolvedHandlerTrigger> SemanticAnalyzer::try_resolve_lifecycle_trigger(
     const EventHandlerNode& handler) const {
+    if (handler.trigger_form == HandlerTriggerForm::Lost) {
+        return try_resolve_lost_trigger(handler);
+    }
     auto trait = try_resolve_trait_ref_to_symbol(handler.event_name);
     if (!trait.has_value()) {
         return std::nullopt;
@@ -13263,12 +13549,71 @@ TypeInfo SemanticAnalyzer::infer_trait_access_type(
                                                     : make_unknown_type();
     }
     const auto object = infer_expr_type(*access.object, filter_bindings, local_bindings, handler_event, pair_scope);
+    if (is_link_type(object)) {
+        return infer_link_read_type(access, object, fields, location, filter_bindings, local_bindings, pair_scope);
+    }
     if (object.kind == TypeKind::EntityId) {
         report_entity_id_trait_read(*access.object, access.trait_name, nullptr, location);
     } else if (object.kind != TypeKind::Unknown) {
         errors_.error(location, non_entity_trait_message(*access.object, object));
     }
     return make_unknown_type();
+}
+
+// `x.f[T]` through an `each:` alias `x`: the holder trait whose link field `f` the object reads.
+// Only the row's own holder can be hidden from the pass while its link is lost.
+std::optional<SymbolId> SemanticAnalyzer::link_holder_of(
+    const ExprNode& object,
+    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+    const PairScope* pair_scope) {
+    const auto* member = std::get_if<MemberExpr>(&object.expr);
+    const auto* ident  = member == nullptr ? nullptr : std::get_if<IdentExpr>(&member->object->expr);
+    if (ident == nullptr || pair_scope != nullptr) {
+        return std::nullopt;
+    }
+    const auto found = filter_bindings.find(ident->name);
+    return found == filter_bindings.end() || found->second == nullptr ? std::nullopt : found->second->symbol_id;
+}
+
+TypeInfo SemanticAnalyzer::infer_link_read_type(
+    const TraitAccessExpr& access,
+    const TypeInfo& link,
+    const std::vector<std::string>& fields,
+    const SourceLocation& location,
+    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+    const std::unordered_map<std::string, TypeInfo>& local_bindings,
+    const PairScope* pair_scope) const {
+    const auto spelling = entity_id_object_spelling(*access.object);
+    const auto& target  = *link.symbol_id;
+    const auto in_func  = std::ranges::any_of(local_bindings | std::views::values,
+                                             [](const TypeInfo& type) { return type.kind == TypeKind::TraitRef; });
+    if (in_func) {
+        errors_.error(location,
+                      "can't read through link '" + spelling +
+                          "' in a `func`; read it in the rule and pass the value or the target's trait");
+        return make_unknown_type();
+    }
+    const auto trait = try_resolve_trait_ref_to_symbol(access.trait_name);
+    if (trait.has_value() && *trait != target) {
+        errors_.error(location,
+                      "can't read '" + access.trait_name + "' through link '" + spelling + "', which links to '" +
+                          target.local_name + "'; join the target in `pairs:` with '" + access.trait_name +
+                          "' required");
+        return make_unknown_type();
+    }
+    const auto holder = link_holder_of(*access.object, filter_bindings, pair_scope);
+    const auto* field = std::get_if<MemberExpr>(&access.object->expr);
+    if (!trait.has_value() || !holder.has_value() || field == nullptr) {
+        errors_.error(location,
+                      "a read through link '" + spelling +
+                          "' needs the link field of the rule's own row, read through its `each:` alias, such as "
+                          "'order.target[Unit].health'; in a `pairs:` rule join the target as a binding");
+        return make_unknown_type();
+    }
+    access.link_target = target;
+    access.link_holder = holder;
+    access.link_field  = field->member;
+    return trait_field_type(target, fields);
 }
 
 std::optional<TypeInfo> SemanticAnalyzer::infer_filter_member_type(
@@ -13595,6 +13940,17 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
                 !find_std_core_provider(imports_, provider_it->second).has_value()) {
                 errors_.error(expr.location,
                               imported_reference_diagnostic(imports_, "function", ident->name, provider_it->second));
+            }
+        }
+        // An argument that reads through a link is typed here, which marks the read for later passes.
+        for (const auto& arg : call->args) {
+            bool through_entity = false;
+            visit_expression(*arg, [&](const ExprNode& node) {
+                const auto* access = std::get_if<TraitAccessExpr>(&node.expr);
+                through_entity     = through_entity || (access != nullptr && !access->resolved_trait_id.has_value());
+            });
+            if (through_entity) {
+                (void)infer_expr_type(*arg, filter_bindings, local_bindings, handler_event, pair_scope);
             }
         }
         const auto* function =
@@ -14272,7 +14628,7 @@ void SemanticAnalyzer::collect_template_signature(const TemplateNode& node) {
     auto& signature = result_.template_parameters[node.name];
     std::unordered_map<std::string, TypeInfo> earlier;
     for (const auto& parameter : node.parameters) {
-        auto type = resolve_type_ref(parameter.type);
+        auto type = resolve_field_type(parameter.type);
         if (earlier.contains(parameter.name)) {
             errors_.error(parameter.location, "duplicate template parameter '" + parameter.name + "'");
             continue;
@@ -14361,6 +14717,9 @@ void SemanticAnalyzer::validate_template_arguments(
         const auto actual = infer_expr_type(*argument.value, filters, scope, event, pairs);
         if (!same_type(parameter->second->type, actual)) {
             errors_.error(argument.location, "template argument '" + argument.name + "' must have type '" + parameter->second->type.name + "'");
+        } else if (const auto& expected = parameter->second->type;
+                   is_link_type(expected) && !proves_link(*argument.value, *expected.symbol_id, actual, filters, pairs)) {
+            report_unproven_link(argument.name, *expected.symbol_id, argument.location);
         }
         const auto index = static_cast<std::size_t>(parameter->second - found->second.data());
         arguments.bindings.push_back({.index = index, .type = parameter->second->type,
@@ -15675,6 +16034,7 @@ void SemanticAnalyzer::validate_after_clauses(ProgramNode& program) {
     // also performs the phase-barrier/event-flow construction that
     // build_dependency_graph used to do inline (see execution_graph_scheduler.hpp).
     expand_group_orderings(result_.execution_graph);
+    derive_link_losses(result_.execution_graph.handlers, result_.traits);
     (void)compute_handler_schedule(
         result_.execution_graph, template_trait_lookup(result_.persistence), single_trait_facts(result_), errors_);
     validate_lifecycle_trigger_traits(result_.execution_graph, errors_);

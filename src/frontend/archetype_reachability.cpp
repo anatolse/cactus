@@ -551,6 +551,13 @@ private:
             traits_.collect(*parent_trait_);
         }
         traits_.finish(*program_);
+        for (const auto& [_, trait] : program_->traits) {
+            if (const auto marker = trait.lost_link.has_value() && trait.symbol_id.has_value()
+                                        ? traits_.find(*trait.symbol_id)
+                                        : std::nullopt) {
+                lost_markers_.push_back(*marker);
+            }
+        }
     }
 
     void build_origins() {
@@ -672,6 +679,12 @@ private:
             }
             for (const auto& command : contract.commands) {
                 add_command(model, command);
+            }
+            // A lost link marks its holder, which may be any entity.
+            for (const auto& marker : contract.lost_markers) {
+                model.changes.push_back(StructuralChange{.kind    = HandlerCommandKind::Add,
+                                                         .trait   = traits_.find(marker),
+                                                         .targets = {ResolvedTarget{}}});
             }
             for (const auto& projection : contract.projections) {
                 model.changes.push_back(StructuralChange{.kind    = HandlerCommandKind::Add,
@@ -800,6 +813,9 @@ private:
         std::vector<TraitIndexValue> dead;
         const Domain selected{.required = handler.unary.required};
         for (const auto excluded : handler.authored.excluded) {
+            if (std::ranges::contains(lost_markers_, excluded)) {
+                continue;
+            }
             const auto carried = std::ranges::any_of(entities_, [&](const AbstractEntity& entity) {
                 return matches(entity.traits, selected) && may_carry(entity.traits, excluded);
             });
@@ -1167,6 +1183,7 @@ private:
     ReachabilityOptions options_;
     TraitIndex traits_;
     std::optional<SymbolId> parent_trait_;
+    std::vector<TraitIndexValue> lost_markers_;  // a link's lost marker comes and goes at run time
     std::map<std::string, SymbolId> native_functions_;  // called functions that create entities
     std::vector<Origin> origins_;
     std::vector<HandlerModel> handlers_;

@@ -1,0 +1,72 @@
+module follow_cameras
+
+use std.core
+use std.camera.flat as flat
+use std.camera.volume as cam
+use std.transform.flat as tf
+use std.transform.volume as tv
+
+# Cameras follow targets through required links. Runners move each tick; the
+# bait burns out after a few ticks, and its watcher stops following.
+
+trait Runner:
+    var speed: float = 2.0
+
+trait Fuse:
+    var ticks: int = 3
+
+entity Hero:
+    tv.WorldTransform:
+        position = vec3(1.0, 0.0, 0.0)
+    Runner
+
+entity Bait:
+    tv.WorldTransform:
+        position = vec3(-4.0, 0.0, 0.0)
+    Fuse
+
+entity Chaser:
+    tv.WorldTransform
+    cam.FollowCamera:
+        target = Hero
+        smoothing = 0.0
+
+entity Orbiter:
+    tv.WorldTransform
+    cam.ThirdPersonCamera:
+        target = Hero
+        smoothing = 0.0
+
+entity Watcher:
+    tv.WorldTransform
+    cam.FollowCamera:
+        target = Bait
+        smoothing = 0.0
+
+entity Sprite:
+    tf.WorldTransform
+    Runner
+
+entity Overview:
+    flat.Camera
+    flat.FollowCamera:
+        target = Sprite
+        offset = vec2(0.0, 1.0)
+        smoothing = 0.0
+
+rule Run:
+    each: Runner as runner, tv.WorldTransform as pose
+    on tick as step:
+        pose.position.x += runner.speed * step.dt
+
+rule RunFlat:
+    each: Runner as runner, tf.WorldTransform as pose
+    on tick as step:
+        pose.position.x += runner.speed * step.dt
+
+rule Burn:
+    each: Fuse as fuse
+    on tick:
+        fuse.ticks -= 1
+        if fuse.ticks <= 0:
+            destroy

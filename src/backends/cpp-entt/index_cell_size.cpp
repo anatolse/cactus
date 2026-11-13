@@ -131,9 +131,7 @@ std::vector<SymbolId> collider_shape_traits() {
 std::vector<std::size_t> member_origins(const DecoratedProgram& program, const std::vector<SymbolId>& required) {
     const auto& facts = program.reachability;
     const auto carries = [&](const ReachableTraitSet& set) {
-        return std::ranges::all_of(required, [&](const SymbolId& trait) {
-            return std::ranges::contains(set, trait) || std::ranges::contains(facts.free_traits, trait);
-        });
+        return std::ranges::all_of(required, [&](const SymbolId& trait) { return facts.may_carry(set, trait); });
     };
     std::vector<std::size_t> origins;
     for (std::size_t index = 0; index < facts.origins.size(); ++index) {

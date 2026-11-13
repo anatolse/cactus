@@ -148,6 +148,15 @@ inline std::string reference_kind_name(const TypeInfo& type) {
     return type.kind == TypeKind::EventRef ? "event" : "trait";
 }
 
+// A required link: an entity handle that names a live entity carrying `trait` whenever a rule can read it.
+inline TypeInfo make_link_type(const SymbolId& trait) {
+    return {.kind = TypeKind::EntityId, .name = "entity_id", .symbol_id = trait};
+}
+
+inline bool is_link_type(const TypeInfo& type) {
+    return type.kind == TypeKind::EntityId && type.symbol_id.has_value();
+}
+
 inline TypeInfo make_list_type(TypeInfo element_type) {
     TypeInfo t;
     t.kind    = TypeKind::List;

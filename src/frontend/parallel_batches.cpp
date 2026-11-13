@@ -150,13 +150,25 @@ const ParallelLevel* ParallelPlan::level_of(const HandlerIdentity& handler) cons
     return found == levels.end() ? nullptr : &*found;
 }
 
+// A write of a link field moves its holder in the link's shared index.
+bool writes_link(const HandlerContract& contract, const DecoratedProgram& program) {
+    return std::ranges::any_of(program.traits | std::views::values, [&](const ResolvedTrait& trait) {
+        const auto written = trait.symbol_id.has_value() ? contract.write_fields.find(*trait.symbol_id)
+                                                         : contract.write_fields.end();
+        return written != contract.write_fields.end() &&
+               std::ranges::any_of(trait.fields, [&](const ResolvedField& field) {
+                   return is_link_type(field.type) && written->second.covers(field.name);
+               });
+    });
+}
+
 bool parallel_eligible(const HandlerNode& handler, const DecoratedProgram& program) {
     const auto& contract = handler.contract;
     const bool spawns    = !contract.native_spawns.empty() ||
                         std::ranges::contains(contract.commands, HandlerCommandKind::Spawn, &InferredHandlerCommand::kind);
     return !runs_alone(handler) && handler.identity.trigger.kind == HandlerTriggerKind::Phase &&
            contract.effects.empty() && !spawns && !looks_up_keyed_relation(contract, program) &&
-           !calls_host_facade(handler, program);
+           !calls_host_facade(handler, program) && !writes_link(contract, program);
 }
 
 ParallelPlan plan_parallel_handlers(const DecoratedProgram& program) {

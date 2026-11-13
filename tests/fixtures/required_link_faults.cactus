@@ -1,0 +1,74 @@
+module required_link_faults
+
+use std.core
+
+# A script on the attacker: tick 1 destroys the victim and then tries to
+# attack it and to spawn a hunter of it; tick 2 attacks the spare and destroys
+# the quarry together with the stalker that targets it; tick 3 destroys the
+# spare, so the link is lost and `on lost` tries the dead victim again.
+
+trait Unit
+
+trait Script:
+    var tick: int = 0
+    var lost: int = 0
+
+state Order:
+    Idle
+    Attack:
+        let target: Unit
+
+template Hunter(prey: Unit):
+    Unit
+    Order.Attack:
+        target = prey
+
+entity Victim:
+    Unit
+
+entity Spare:
+    Unit
+
+entity Quarry:
+    Unit
+
+entity Stalker:
+    Unit
+    Order.Attack:
+        target = Quarry
+
+entity Attacker:
+    Unit
+    Order
+    Script
+
+rule Run:
+    each: Script as script
+    on tick:
+        script.tick += 1
+        if script.tick == 1:
+            destroy Victim
+            add Order.Attack:
+                target = Victim
+            spawn Hunter(prey = Victim)
+        else if script.tick == 2:
+            add Order.Attack:
+                target = Spare
+            destroy Quarry
+            destroy Stalker
+        else if script.tick == 3:
+            destroy Spare
+
+rule Retry:
+    each: Script as script
+    on lost Order.Attack.target:
+        script.lost += 1
+        add Order.Attack:
+            target = Victim
+
+rule GiveUp:
+    each: Unit
+    without: Script
+    after: Retry
+    on lost Order.Attack.target:
+        add Order.Idle

@@ -10,9 +10,8 @@
 
 namespace cactus {
 
-// Exact backend representation of a persistable value. Widths and lane counts
-// are reported alongside (PersistenceValueType) rather than folded into the
-// kind, so a document records what the backend actually stores.
+// The meaning of a persistable value. Its widths and lane counts, the language
+// type's, sit alongside in PersistenceValueType rather than in the kind.
 enum class PersistenceValueKind : std::uint8_t {
     Bool,
     Int,

@@ -50,8 +50,7 @@ void sort_archetype_descriptors(std::vector<PersistenceArchetypeDescriptor>& arc
                       });
 }
 
-// Widths mirror the C++ types the backend actually emits, so a document reports
-// what is stored rather than what the language nominally promises.
+// Widths are the language type's, never the storage's, so saves survive storage changes.
 PersistenceValueType describe_persistence_value(const TypeInfo& type) {
     switch (type.kind) {
         case TypeKind::Bool:
@@ -59,9 +58,6 @@ PersistenceValueType describe_persistence_value(const TypeInfo& type) {
         case TypeKind::Int:
             return scalar(PersistenceValueKind::Int, 32);
         case TypeKind::Float:
-            // dsl-type-system describes `float` as 64-bit; the cpp-entt backend
-            // has always stored a 32-bit C++ float here. 32 is not a typo: see
-            // runtime.hpp's ABI static_asserts and design.md decision 3.
             return scalar(PersistenceValueKind::Float, 32);
         case TypeKind::String:
             return scalar(PersistenceValueKind::String, 0);

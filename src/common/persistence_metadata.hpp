@@ -38,7 +38,7 @@ struct ArchetypeNodeId {
                                                 const std::string& module_name,
                                                 const std::string& local_name);
 
-// Exact backend representation of one value, resolved from a declared TypeInfo.
+// The meaning of one value, resolved from its declared TypeInfo alone.
 // `element` holds 0 or 1 entries (a list's element type) so the whole record
 // stays comparable by value.
 struct PersistenceValueType {

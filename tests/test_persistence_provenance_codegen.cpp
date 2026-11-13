@@ -2,6 +2,7 @@
 // -- Catch2 assertion macros intentionally expand through do-while and expression decomposition.
 #include "common/error_reporter.hpp"
 #include "frontend/lexer.hpp"
+#include "frontend/parallel_batches.hpp"
 #include "frontend/parser.hpp"
 #include "frontend/semantic_analyzer.hpp"
 
@@ -13,6 +14,7 @@
 
 #include <memory>
 #include <string>
+#include <type_traits>
 
 using namespace cactus;
 
@@ -823,6 +825,53 @@ entity Boss:
     // declaration.
     CHECK(contains(under_alias->code, "\"lib.Health\""));
     CHECK_FALSE(contains(under_alias->code, "\"hp.Health\""));
+}
+
+// ── The schema follows meaning, not storage ─────────────────────────────────
+
+// A value's description reads only its language type, never a codegen option.
+static_assert(std::is_same_v<decltype(&describe_persistence_value), PersistenceValueType (*)(const TypeInfo&)>);
+
+TEST_CASE("building with --parallel-handlers leaves the schema unchanged", "[codegen-entt][persistence][schema]") {
+    auto unit = generate(R"(module world
+
+extern event frame:
+    dt: float
+phase tick:
+    from:
+        frame
+
+trait Health:
+    persist var current: int = 100
+
+trait Stamina:
+    persist var current: float = 1.0
+
+entity Boss:
+    Health
+    Stamina
+
+rule Heal:
+    each: Health as h
+    on tick:
+        h.current = h.current + 1
+
+rule Rest:
+    each: Stamina as s
+    on tick:
+        s.current = s.current + 0.5
+)");
+    unit->program.ast      = &unit->ast;
+    const auto sequential  = EnttPersistenceEmitter::canonical_schema_text(unit->program);
+    const auto descriptor  = EnttPersistenceEmitter::emit_schema_descriptor(unit->program);
+    const auto fingerprint = fingerprint_of(*unit);
+
+    unit->program.parallel_handlers = plan_parallel_handlers(unit->program);
+    REQUIRE_FALSE(unit->program.parallel_handlers->levels.empty());
+
+    CHECK(EnttPersistenceEmitter::canonical_schema_text(unit->program) == sequential);
+    CHECK(EnttPersistenceEmitter::emit_schema_descriptor(unit->program) == descriptor);
+    CHECK(fingerprint_of(*unit) == fingerprint);
 }
 
 // ── Canonical asset and input references ────────────────────────────────────

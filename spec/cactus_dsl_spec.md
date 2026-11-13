@@ -1870,6 +1870,8 @@ rule Think:
 - **rules** define behavior over filtered entities
 - **events** define typed gameplay messages
 
+Every value has three layers. Its *meaning* is the set of values it can hold and how operations on it round; the program states it (type, range) and this spec fixes it. Its *memory* is how a backend stores it; the backend may pick any storage, from any whole-program fact, that keeps the meaning bit for bit. Its *format* is how a save or any other message outside the program encodes it, and depends on the meaning alone (§7.6). The compiler never derives a value's meaning from how the program uses it. Integers wrap rather than saturate for this reason: wrapping keeps unordered `+=` writes to one field giving one result in any order.
+
 Template composition is static blueprint reuse: a body-level `use TemplateName` inside an `entity` or `template` is resolved and flattened before runtime. Runtime `spawn TemplateName:` is separate; it creates an entity from the flattened template and applies spawn-site overrides.
 
 ### 4.2 Field Access and Handler Bindings
@@ -2453,6 +2455,8 @@ World persistence is a small gameplay request surface plus a generated, format-i
 **Construction baseline vs. current value.** For an eligible entity, fields without `persist` are recorded at the value they held immediately after construction — the archetype default, or the evaluated `spawn`/template argument — never a later mutation. `persist` fields are recorded at their current value at capture time. A field only changes what a save reports at all if it carries `persist`; everything else is baseline provenance for reconstructing the same starting point.
 
 **Runtime structure.** The compiler generates one canonical schema descriptor and typed snapshot per program: entity records in creation order, document-local entity identities (so cycles and forward references need no live handle), canonical archetype/trait identity, final trait membership with reconstruction data, and parent links. This is generated data, not something authored in Cactus, and it excludes anything not reachable from a `persist` field or construction argument — event queues, physics solver internals, and random state are not implicitly captured.
+
+**The schema follows meaning.** The descriptor records each field's meaning: its language type, with the widths and lanes the language defines, and every meaning fact declared on it, such as a range. It never records how a backend stores a field, a codegen option, or how the program uses the field (§4.1). So a backend that stores a field in fewer bits, or a build with `--parallel-handlers`, gives the same descriptor and fingerprint, and older saves still load.
 
 **Relation rows.** A snapshot records every row of every stored relation whose two ends it records, after the entity records and in row creation order, with document-local end identities and all field values. A row with an unrecorded end is left out. Kept relations are not recorded: after a restore their rows are empty until their keep rule runs. Restore rebuilds each row between the fresh handles of its ends and fires no trigger. Validation rejects, before the world changes, a row whose end has no record, an end record without the end trait, two rows with the same pair, an unknown relation or field, and rows that break a `one` end.
 

@@ -496,3 +496,14 @@ A unary pass that projects a trait whose membership it observes SHALL choose its
 #### Scenario: A pass with no `each:` keeps its rows
 - **WHEN** a pass has only a `without: A` filter, and a row runs `project A to` an entity whose row has not run yet
 - **THEN** that entity's row still runs
+
+### Requirement: Reads through a link are recorded as target trait reads
+A read `x.f[T].g` through a required link (`dsl-required-links`) SHALL add to the handler's contract a read of the link field `H.f` and a read of `T.g` on any entity, not only the row's own entity. It SHALL order the handler against writers of `T.g` like any other read of `T.g`, and against commands that can lose the link like a read of membership in `T`. Reads through a link in `where:`, `when:`, `order by:`, reducer inputs and keep fields SHALL be folded into the contract like other reads of those clauses.
+
+#### Scenario: Writer before a reader through a link
+- **WHEN** one `tick` handler writes `Unit.health` and another, with no explicit order, reads `order.target[Unit].health`
+- **THEN** the writer runs first
+
+#### Scenario: Keep through a link depends on the target trait
+- **WHEN** a keep rule's `where:` reads `follow.target[tf.WorldTransform].position`
+- **THEN** its contract records a read of `WorldTransform.position`, and the keep dependency analysis counts it

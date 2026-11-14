@@ -507,3 +507,25 @@ A read `x.f[T].g` through a required link (`dsl-required-links`) SHALL add to th
 #### Scenario: Keep through a link depends on the target trait
 - **WHEN** a keep rule's `where:` reads `follow.target[tf.WorldTransform].position`
 - **THEN** its contract records a read of `WorldTransform.position`, and the keep dependency analysis counts it
+
+### Requirement: Contracts are audited against real accesses
+The repository SHALL provide an audit build mode for generated programs. In that mode, while a handler runs, every field read and write it performs in generated code, every event it emits, every structural command it issues and every effect it uses SHALL be checked against its contract, including write kinds; and every trait a native function accesses during a call from the handler SHALL be checked against that native's field-read summary. Every other component access during the handler SHALL be checked at trait level against the traits its contract selects, reads, writes, projects or commands. An access outside the contract or summary SHALL fail the test and report the handler's canonical identity, the access and the source location of the statement or native call, when the access has one. Audit mode SHALL NOT change the program's results, and normal builds SHALL contain no audit code.
+
+#### Scenario: A missing native read fails
+- **WHEN** a stdlib native reads `WorldTransform` during a call and its field-read summary lists no field of `WorldTransform`
+- **THEN** the audited test fails and names the native, the calling handler and `WorldTransform`
+
+#### Scenario: A write of another kind fails
+- **WHEN** a handler's contract records an Accum write of `Health.hp` and the handler's code performs an Assign write of it
+- **THEN** the audited test fails and names the handler, `Health.hp` and both kinds
+
+#### Scenario: Selection is not a read
+- **WHEN** a handler with `each: Unit` never reads a `Unit` field
+- **THEN** the audit reports nothing for `Unit`
+
+### Requirement: Every summarized native runs under audit
+The audited test set SHALL together call every stdlib extern function that has a field-read summary. A test SHALL fail when such a function was never called under audit, naming the function.
+
+#### Scenario: A new native without an audited call
+- **WHEN** a stdlib native gains a field-read summary and no audited fixture calls it
+- **THEN** the native coverage test fails and names the function

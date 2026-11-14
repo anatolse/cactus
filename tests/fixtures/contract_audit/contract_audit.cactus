@@ -1,0 +1,146 @@
+module contract_audit
+
+use std.core
+use std.query as query
+use std.transform.flat as flat
+use std.transform.volume as volume
+
+# Run under the contract audit: every access a handler makes must be in its
+# contract, and the natives Look calls may touch only their summarized traits.
+
+trait Health:
+    var hp: int = 10
+    var regen: int = 2
+
+trait Tally:
+    var healed: int = 0
+    var heard: int = 0
+    var stamps: int = 0
+
+trait Lookup:
+    var count: int = 0
+    var found: bool = false
+    var first: entity_id
+    var all: list[entity_id]
+    var up: entity_id
+    var kids: list[entity_id]
+    var pre: list[entity_id]
+    var post: list[entity_id]
+    var flat_x: float = 0.0
+    var volume_x: float = 0.0
+
+trait Node
+
+event Healed:
+    amount: int
+
+entity Patient:
+    Health
+    Tally
+
+entity Grove:
+    Node
+    Lookup
+    children:
+        entity Leaf:
+            Node
+
+entity FlatMarker:
+    flat.WorldTransform:
+        position = vec2(3.0, 0.0)
+
+entity SolidMarker:
+    volume.WorldTransform:
+        position = vec3(5.0, 0.0, 0.0)
+
+rule Heal:
+    each:
+        Health as h
+        Tally as t
+    on tick:
+        h.hp = h.regen * 5
+        t.healed += h.regen
+        emit Healed:
+            amount = h.regen
+
+rule Hear:
+    each:
+        Tally as t
+    on Healed:
+        t.heard += Healed.amount
+
+# Health is selected and never read.
+rule Stamp:
+    each:
+        Tally as t
+        Health
+    on tick:
+        t.stamps = 1
+
+rule Look:
+    each:
+        Lookup as l
+    on tick:
+        l.count = query.count[Node]()
+        l.found = query.exists[Node]()
+        l.first = query.first[Node]()
+        l.all = query.all[Node]()
+        l.kids = query.children[Node](of = self)
+        l.up = query.parent(of = query.first[Node]())
+        l.pre = query.hierarchy_preorder[Node]()
+        l.post = query.hierarchy_postorder[Node]()
+        l.flat_x = flat.world_position(FlatMarker).x
+        l.volume_x = volume.world_position(SolidMarker).x
+
+entity Slider:
+    volume.LocalTransform
+    volume.WorldTransform
+
+# Writes what volume TransformPropagation reads, so propagation runs after it.
+rule Slide:
+    each:
+        volume.LocalTransform as local
+    on late_tick:
+        local.position.x = local.position.x + 1.0
+
+# The index of Pick reads Grid.size, the let bound of Tile.x, which Pick does not read itself.
+trait Grid:
+    let size: int = 4
+    var visits: int = 0
+
+trait Tile:
+    let grid: entity_id
+    let x: int in range(0, grid[Grid].size)
+
+trait Cursor:
+    var x: int = 2
+    var hits: int = 0
+
+entity Board:
+    Grid
+
+entity Arrow:
+    Cursor
+
+template TileAt(board: entity_id, at: int):
+    Tile:
+        grid = board
+        x = at
+
+rule LayTiles:
+    on load:
+        for i in range(0, 4):
+            spawn TileAt(board = Board, at = i)
+
+rule Pick:
+    pairs:
+        cursor:
+            Cursor
+        tile:
+            Tile
+    where:
+        tile[Tile].x == cursor[Cursor].x
+    reduce per cursor:
+        found = count()
+    on tick:
+        cursor[Cursor].hits = found

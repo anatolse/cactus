@@ -22,6 +22,9 @@ struct NativeFieldRead {
 // null when no summary is declared.
 [[nodiscard]] const std::vector<NativeFieldRead>* native_field_reads(std::string_view canonical);
 
+// The canonical ids of every stdlib extern function with a field-read summary, sorted.
+[[nodiscard]] std::vector<std::string_view> summarized_natives();
+
 // Whether a stdlib query native visits every match, by canonical id; nullopt
 // when the function is not a query.
 [[nodiscard]] std::optional<bool> native_is_world_scan(std::string_view canonical);

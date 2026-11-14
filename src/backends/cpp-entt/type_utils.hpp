@@ -165,6 +165,7 @@ public:
     static bool is_constexpr_const(const DecoratedProgram& program, const SymbolId& symbol);
     // The constant `expr` reads when it is a bare constant name, else null.
     static const SymbolId* named_const(const ExprNode& expr);
+    static std::string string_literal_cpp(std::string_view value);
     // A float literal, by `std::numbers` name when its float value is exactly that constant's.
     static std::string float_literal_cpp(const std::string& value);
     // Holds no string or list, so moving a value of it is a plain copy.

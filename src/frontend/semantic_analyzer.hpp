@@ -512,6 +512,12 @@ struct FieldWriteKind {
 // Adds `target` to `targets`, which stays sorted and free of duplicates.
 void insert_entity_target(std::vector<EntityTarget>& targets, EntityTarget target);
 
+// "Assign", "Accum", "Join max", ... or "General".
+[[nodiscard]] std::string write_kind_name(const FieldWriteKind& kind);
+
+// The kind of write one assignment statement makes on its own.
+[[nodiscard]] FieldWriteKind assignment_write_kind(const VarAssign& assign);
+
 // Two writes to one field commute: both Accum, or both Join with one operator.
 [[nodiscard]] bool writes_commute(const FieldWriteKind& left, const FieldWriteKind& right);
 
@@ -760,6 +766,15 @@ void finalize_write_kinds(HandlerContract& contract);
 // Whether a call to this stdlib extern function changes the state of its
 // effect domains instead of only observing it.
 [[nodiscard]] bool stdlib_function_acts(const SymbolId& function);
+
+struct CallEffects {
+    std::unordered_set<std::string> observes;
+    std::unordered_set<std::string> acts;
+};
+
+// The effect domains a call to an extern function adds to its caller's contract;
+// "external" for both when the function declares no summary.
+[[nodiscard]] CallEffects extern_call_effects(const SymbolId& callee, const ResolvedFunc& function);
 
 // Whether a pass with this contract can observe its row order; `unordered_limit`
 // is a `limit:` without `order by:`.
@@ -1075,6 +1090,8 @@ struct DecoratedProgram {
     std::optional<float> grid_cell_size;
     // Test only: keep every construction copy, written or not.
     bool retain_all_construction = false;
+    // Test only: check every access a handler makes against its contract.
+    bool contract_audit = false;
     // Set by --parallel-handlers: which phase handlers run on worker threads, and in which batches.
     std::optional<ParallelPlan> parallel_handlers;
     HierarchyFacts hierarchy;        // likewise

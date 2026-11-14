@@ -607,12 +607,14 @@ cactus_add_headless_behavior_test(test_deferred_field_evaluation_headless_behavi
     CACTUS_SOURCE examples/deferred_field_evaluation.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_deferred_field_evaluation_headless_behavior.cpp
+    CONTRACT_AUDIT
 )
 
 cactus_add_headless_behavior_test(test_deferred_set_headless_behavior
     CACTUS_SOURCE examples/deferred_set.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_deferred_set_headless_behavior.cpp
+    CONTRACT_AUDIT
 )
 
 cactus_add_headless_behavior_test(test_const_tables_headless_behavior
@@ -649,6 +651,7 @@ cactus_add_headless_behavior_test(test_hierarchy_query_headless_behavior
     CACTUS_SOURCE tests/fixtures/hierarchy_query_runtime.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_hierarchy_query_headless_behavior.cpp
+    CONTRACT_AUDIT
 )
 
 cactus_add_headless_behavior_test(test_lexical_local_mutation_headless_behavior
@@ -679,6 +682,7 @@ cactus_add_headless_behavior_test(test_hierarchy_child_loop_headless_behavior
     CACTUS_SOURCE tests/fixtures/hierarchy_child_loop_runtime.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_hierarchy_child_loop_headless_behavior.cpp
+    CONTRACT_AUDIT
 )
 
 cactus_add_headless_behavior_test(test_standard_ui_render_headless_behavior
@@ -812,6 +816,7 @@ cactus_add_headless_behavior_test(test_trait_lifecycle_headless_behavior
     CACTUS_SOURCE examples/stdlib-fixtures/trait_lifecycle.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_trait_lifecycle_headless_behavior.cpp
+    CONTRACT_AUDIT
 )
 
 cactus_add_headless_behavior_test(test_ranged_fields_headless_behavior
@@ -848,24 +853,28 @@ cactus_add_headless_behavior_test(test_reduced_relation_keep_headless_behavior
     CACTUS_SOURCE tests/fixtures/reduced_relation_keep.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_reduced_relation_keep_headless_behavior.cpp
+    CONTRACT_AUDIT
 )
 
 cactus_add_headless_behavior_test(test_relations_headless_behavior
     CACTUS_SOURCE examples/relations.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_relations_headless_behavior.cpp
+    CONTRACT_AUDIT
 )
 
 cactus_add_headless_behavior_test(test_derived_relations_headless_behavior
     CACTUS_SOURCE examples/derived_relations.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_derived_relations_headless_behavior.cpp
+    CONTRACT_AUDIT
 )
 
 cactus_add_headless_behavior_test(test_relation_row_joins_headless_behavior
     CACTUS_SOURCE examples/relation_row_joins.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_relation_row_joins_headless_behavior.cpp
+    CONTRACT_AUDIT
 )
 
 cactus_add_headless_behavior_test(test_grid_region_joins_headless_behavior
@@ -878,12 +887,14 @@ cactus_add_headless_behavior_test(test_relation_row_projection_headless_behavior
     CACTUS_SOURCE examples/relation_row_projection.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_relation_row_projection_headless_behavior.cpp
+    CONTRACT_AUDIT
 )
 
 cactus_add_headless_behavior_test(test_relation_endpoint_limits_headless_behavior
     CACTUS_SOURCE examples/relation_endpoint_limits.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_relation_endpoint_limits_headless_behavior.cpp
+    CONTRACT_AUDIT
 )
 
 cactus_add_headless_behavior_test(test_neighbor_joins_headless_behavior
@@ -1056,6 +1067,7 @@ cactus_add_headless_behavior_test(test_creation_order_iteration_headless_behavio
     CACTUS_SOURCE tests/fixtures/creation_order_iteration_runtime.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_creation_order_iteration_headless_behavior.cpp
+    CONTRACT_AUDIT
 )
 
 cactus_add_headless_behavior_test(test_spawn_order_headless_behavior
@@ -1082,73 +1094,107 @@ cactus_add_headless_behavior_test(test_exact_accumulation_headless_behavior
     CACTUS_SOURCE examples/exact_accumulation.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_exact_accumulation_headless_behavior.cpp
+    CONTRACT_AUDIT
 )
 
 cactus_add_headless_behavior_test(test_exact_accumulation_swapped_headless_behavior
     CACTUS_SOURCE tests/fixtures/exact_accumulation_swapped/exact_accumulation.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_exact_accumulation_headless_behavior.cpp
+    CONTRACT_AUDIT
 )
 
 cactus_add_headless_behavior_test(test_native_field_reads_headless_behavior
     CACTUS_SOURCE examples/native_field_reads.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_native_field_reads_headless_behavior.cpp
+    CONTRACT_AUDIT
 )
 
 cactus_add_headless_behavior_test(test_native_field_reads_swapped_headless_behavior
     CACTUS_SOURCE tests/fixtures/native_field_reads_swapped/native_field_reads.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_native_field_reads_headless_behavior.cpp
+    CONTRACT_AUDIT
 )
 
 cactus_add_headless_behavior_test(test_accumulation_commit_round_headless_behavior
     CACTUS_SOURCE tests/fixtures/accumulation_commit_round.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_accumulation_commit_round_headless_behavior.cpp
+    CONTRACT_AUDIT
 )
 
 cactus_add_headless_behavior_test(test_accumulation_per_cell_headless_behavior
     CACTUS_SOURCE tests/fixtures/accumulation_per_cell/accumulation_per_cell.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_accumulation_per_cell_headless_behavior.cpp
+    CONTRACT_AUDIT
 )
 
 cactus_add_headless_behavior_test(test_lifecycle_route_ping_first_headless_behavior
     CACTUS_SOURCE tests/fixtures/lifecycle_route/ping_first/lifecycle_route.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_lifecycle_route_headless_behavior.cpp
+    CONTRACT_AUDIT
 )
 
 cactus_add_headless_behavior_test(test_lifecycle_route_pong_first_headless_behavior
     CACTUS_SOURCE tests/fixtures/lifecycle_route/pong_first/lifecycle_route.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_lifecycle_route_headless_behavior.cpp
+    CONTRACT_AUDIT
 )
 
 cactus_add_headless_behavior_test(test_projection_observers_projector_first_headless_behavior
     CACTUS_SOURCE tests/fixtures/projection_observers/projector_first/projection_observers.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_projection_observers_headless_behavior.cpp
+    CONTRACT_AUDIT
 )
 
 cactus_add_headless_behavior_test(test_projection_observers_observer_first_headless_behavior
     CACTUS_SOURCE tests/fixtures/projection_observers/observer_first/projection_observers.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_projection_observers_headless_behavior.cpp
+    CONTRACT_AUDIT
 )
 
 cactus_add_headless_behavior_test(test_projection_rows_headless_behavior
     CACTUS_SOURCE tests/fixtures/projection_rows/projection_rows.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_projection_rows_headless_behavior.cpp
+    CONTRACT_AUDIT
 )
 
 cactus_add_headless_behavior_test(test_accumulation_storage_move_headless_behavior
     CACTUS_SOURCE tests/fixtures/accumulation_storage_move/accumulation_storage_move.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_accumulation_storage_move_headless_behavior.cpp
+    CONTRACT_AUDIT
 )
+
+# Checks each access a handler makes against its contract.
+cactus_add_headless_behavior_test(test_contract_audit_headless_behavior
+    CACTUS_SOURCE tests/fixtures/contract_audit/contract_audit.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_contract_audit_headless_behavior.cpp
+    CONTRACT_AUDIT
+)
+
+# Runs after every audited test; fails when a summarized native was never audited.
+add_executable(test_contract_audit_native_coverage test_contract_audit_native_coverage.cpp)
+target_link_libraries(test_contract_audit_native_coverage PRIVATE cactus_frontend Catch2::Catch2WithMain)
+target_compile_definitions(test_contract_audit_native_coverage PRIVATE
+    CACTUS_TEST_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    CACTUS_CONTRACT_AUDIT_DIR="${CACTUS_CONTRACT_AUDIT_DIR}"
+)
+add_test(NAME ContractAuditNativeCoverageTests COMMAND test_contract_audit_native_coverage)
+set_tests_properties(ContractAuditNativeCoverageTests PROPERTIES FIXTURES_REQUIRED contract_audit)
+add_test(NAME ContractAuditUntakenFailureTests
+    COMMAND test_contract_audit_headless_behavior "[.contract-audit-untaken]"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+set_tests_properties(ContractAuditUntakenFailureTests PROPERTIES WILL_FAIL TRUE)
 
 cactus_add_headless_behavior_test(test_deterministic_target_selection_headless_behavior
     CACTUS_SOURCE examples/deterministic_target_selection.cactus

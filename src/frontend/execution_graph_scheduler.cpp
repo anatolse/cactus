@@ -316,30 +316,6 @@ private:
     std::vector<const std::string*> group_modules_;
 };
 
-std::string write_kind_name(const FieldWriteKind& kind) {
-    switch (kind.kind) {
-        case WriteKind::Assign:
-            return "Assign";
-        case WriteKind::Accum:
-            return "Accum";
-        case WriteKind::General:
-            return "General";
-        case WriteKind::Join:
-            break;
-    }
-    switch (kind.op) {
-        case JoinOp::Max:
-            return "Join max";
-        case JoinOp::Min:
-            return "Join min";
-        case JoinOp::Or:
-            return "Join or";
-        case JoinOp::And:
-            return "Join and";
-    }
-    std::unreachable();
-}
-
 // How `handler` touches the field, or the whole trait when `field` is unset.
 std::string access_text(const HandlerNode& handler, const SymbolId& trait, const std::optional<std::string>& field) {
     const auto& contract = handler.contract;

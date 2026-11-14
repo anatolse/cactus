@@ -1,61 +1,25 @@
 // NOLINTBEGIN(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,bugprone-unchecked-optional-access)
 // -- Catch2 assertion macros intentionally expand through do-while and expression decomposition.
-#include "common/error_reporter.hpp"
 #include "frontend/ast.hpp"
-#include "frontend/lexer.hpp"
 #include "frontend/native_field_reads.hpp"
 #include "frontend/native_result_ordering.hpp"
-#include "frontend/parser.hpp"
+#include "stdlib_modules.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
-#include <filesystem>
-#include <fstream>
 #include <map>
-#include <sstream>
 #include <string>
 #include <utility>
 #include <variant>
 #include <vector>
 
 using namespace cactus;
+using cactus_test::parse_module;
+using cactus_test::parse_stdlib;
+using cactus_test::ParsedModule;
 
 namespace {
-
-struct ParsedModule {
-    std::string name;
-    ProgramNode program;
-};
-
-ParsedModule parse_module(const std::string& source, const std::string& filename) {
-    ErrorReporter errors;
-    Lexer lexer(source, filename, errors);
-    Parser parser(lexer.tokenize(), errors);
-    ParsedModule parsed{.program = parser.parse_program()};
-    REQUIRE_FALSE(errors.has_errors());
-    for (const auto& declaration : parsed.program.declarations) {
-        if (const auto* module = std::get_if<ModuleNode>(&declaration)) {
-            parsed.name = module->name;
-        }
-    }
-    return parsed;
-}
-
-std::vector<ParsedModule> parse_stdlib() {
-    std::vector<ParsedModule> modules;
-    const auto root = std::filesystem::path(CACTUS_TEST_SOURCE_DIR) / "stdlib";
-    for (const auto& entry : std::filesystem::recursive_directory_iterator(root)) {
-        if (entry.path().extension() != ".cactus" || entry.path().string().find("build") != std::string::npos) {
-            continue;
-        }
-        std::ifstream file(entry.path());
-        std::stringstream source;
-        source << file.rdbuf();
-        modules.push_back(parse_module(source.str(), entry.path().string()));
-    }
-    return modules;
-}
 
 // The canonical ids of every extern function, native emitter or native
 // consumer whose result has an order but no declared one.
@@ -118,18 +82,9 @@ private:
 // with no field-read summary.
 std::vector<std::string> unsummarized_world_natives(const std::vector<ParsedModule>& modules) {
     std::vector<std::string> missing;
-    for (const auto& module : modules) {
-        if (!stdlib_module_observes_world(module.name)) {
-            continue;
-        }
-        for (const auto& declaration : module.program.declarations) {
-            const auto* func = std::get_if<FuncNode>(&declaration);
-            if (func == nullptr || !func->is_extern) {
-                continue;
-            }
-            if (auto canonical = module.name + "." + func->name; native_field_reads(canonical) == nullptr) {
-                missing.push_back(std::move(canonical));
-            }
+    for (auto& native : cactus_test::world_natives(modules)) {
+        if (native_field_reads(native) == nullptr) {
+            missing.push_back(std::move(native));
         }
     }
     return missing;
@@ -213,6 +168,14 @@ TEST_CASE("Native field reads: declared summaries", "[native-field-reads]") {
     REQUIRE(native_field_reads("std.query.children") != nullptr);
     CHECK(native_field_reads("std.query.children")->empty());
     CHECK(native_field_reads("std.math.vec3.length") == nullptr);
+}
+
+TEST_CASE("Native field reads: the summarized natives are listed in order", "[native-field-reads]") {
+    const auto natives = summarized_natives();
+    CHECK(std::ranges::is_sorted(natives));
+    CHECK(std::ranges::contains(natives, "std.query.count"));
+    CHECK(std::ranges::contains(natives, "std.transform.volume.world_position"));
+    CHECK(std::ranges::all_of(natives, [](std::string_view native) { return native_field_reads(native) != nullptr; }));
 }
 
 TEST_CASE("Native result ordering: every ordered stdlib native declares its order", "[native-result-ordering]") {

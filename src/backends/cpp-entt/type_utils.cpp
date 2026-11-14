@@ -1189,6 +1189,36 @@ const SymbolId* EnttCodegenUtils::named_const(const ExprNode& expr) {
     return resolved != nullptr && resolved->has_value() ? &**resolved : nullptr;
 }
 
+std::string EnttCodegenUtils::string_literal_cpp(std::string_view value) {
+    std::string escaped;
+    escaped.reserve(value.size() + 2);
+    escaped.push_back('"');
+    for (const char ch : value) {
+        switch (ch) {
+            case '\\':
+                escaped += "\\\\";
+                break;
+            case '"':
+                escaped += "\\\"";
+                break;
+            case '\n':
+                escaped += "\\n";
+                break;
+            case '\r':
+                escaped += "\\r";
+                break;
+            case '\t':
+                escaped += "\\t";
+                break;
+            default:
+                escaped.push_back(ch);
+                break;
+        }
+    }
+    escaped.push_back('"');
+    return escaped;
+}
+
 std::string EnttCodegenUtils::float_literal_cpp(const std::string& value) {
     struct NamedConstant {
         float value;

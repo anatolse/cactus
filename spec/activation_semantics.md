@@ -211,12 +211,18 @@ These describe the compiler data the rules consume. Each is labeled.
   component graph of any directed graph is acyclic. Tested: `test_delivery_cycles`
   ("an acyclic program has no delayed edge", "a two-handler event cycle delays both
   edges").
-- **S2 (Open).** Contracts are sound: every field a handler's execution reads or
-  writes, every event it emits, every command it issues and every effect it uses is in
-  its contract with the right kind. For stdlib natives that observe `world`, each call
-  adds the fields of its read summary to the caller's contract (§10 F2, resolved). A
-  guard test fails when such a native has no summary; that each summary is complete is
-  checked by review of the native code only.
+- **S2 (Tested, partly Open).** Contracts are sound: every field a handler's execution
+  reads or writes, every event it emits, every command it issues and every effect it
+  uses is in its contract with the right kind. For stdlib natives that observe `world`,
+  each call adds the fields of its read summary to the caller's contract (§10 F2,
+  resolved). Generated code: Tested by the contract audit (`handler-contracts`:
+  "Contracts are audited against real accesses"), which checks each field read and
+  write with its kind, emit, command and effect use against the contract, and every
+  component access at trait level. Natives: Tested at trait level, since the audit
+  checks each trait a native touches against its summary, and
+  `ContractAuditNativeCoverageTests` fails when a summarized native never ran under the
+  audit. Open: that a native reads only the summarized fields of a listed trait, which
+  is checked by review; and accesses in programs outside the audited set.
 - **S3 (Code).** A spawn whose template the compiler cannot resolve is recorded as
   adding every watched trait, so the lifecycle edges cover it (`delivery_cycles.cpp`:
   `build_lifecycle_flows`).
@@ -456,7 +462,11 @@ DSL spec §5.1 and §5.3. Code: `deliver_delayed_events` (`runtime.hpp`) and
   binary32 with one rounding per operation, and total float-to-int conversion.
 - (A2) User `func`s are pure, and their call graph has no cycle. Code: the analyzer
   rejects any call path from a `func` back to itself inside a module
-  (`check_no_recursion`). A call cycle across modules is Open.
+  (`check_no_recursion`). No call cycle crosses modules (Model): a call from a `func`
+  in module A to one in module B needs A to import B, directly or through an alias,
+  because a call names its callee and the type syntax has no function type, so a
+  function is never a value. `module-resolver` rejects import cycles ("Circular
+  dependency detection"), so a call cycle across modules would need an import cycle.
 - (A3) Native calls terminate and return a value of their declared type (host
   contract, §3.4).
 - (A4) Operations on `entity_id` are total: on a stale handle they are no-ops or
@@ -976,6 +986,7 @@ The backend gives the same values (Tested: `test_accumulation_per_cell_headless_
 | §7.2 depth `H` | handler-execution-graph: "Activation cascade depth is static" | `record_activation_depths` | Tested: `test_delivery_cycles` depth cases |
 | §7.3 C1 | handler-execution-graph: "Contract conflict edges are oriented only by meaningful rules", "Commuting writes add no edge" | `pair_conflict`, `conflict_reasons` | Tested: `test_semantic` "Commuting writes: …" |
 | S2 native reads | handler-contracts: "Native stdlib reads are part of the caller's contract" | `native_field_reads` (`native_field_reads.cpp`), `add_contract_call_effects` (`semantic_analyzer.cpp`) | Tested: `test_semantic` "Native field reads: …", `test_native_result_ordering` "Native field reads: …", `test_native_field_reads_headless_behavior`, `test_native_field_reads_swapped_headless_behavior`, codegen "a native read of a buffered field flushes it on entry" (F2) |
+| S2 contract audit | handler-contracts: "Contracts are audited against real accesses", "Every summarized native runs under audit" | `contract_audit_emitter.cpp`, `contract_audit.hpp` | Tested: `test_contract_audit_headless_behavior`, `ContractAuditNativeCoverageTests`, `ContractAuditUntakenFailureTests`, and every headless test built with `CONTRACT_AUDIT` |
 | §7.3 C2, C3, C4 | handler-execution-graph: "Channel conflicts", "Unorientable conflicts are compile errors" | `command_conflicts`, `OccurrenceReach`, `RunConflicts`, `ConflictNodes` | Tested: `test_semantic` "Channel conflicts: …", "Unorientable conflicts: …"; `test_program_linker` "a cross-module occurrence race is a link error" |
 | §7.3 spawn order | archetype-reachability: "Observable spawn order must be defined" | `archetype_reachability.cpp` | Tested: `test_archetype_reachability` "[spawn-order]" |
 | §7.4 structural liveness | archetype-reachability; handler-execution-graph: "A trigger with no producer is a compile error" | `archetype_reachability.cpp` | Tested: `test_archetype_reachability` |

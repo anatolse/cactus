@@ -6448,6 +6448,43 @@ TEST_CASE(
     CHECK(count_occurrences(dispatch, "transform_propagation_tick(registry);") == 1);
 }
 
+TEST_CASE("Codegen EnTT: the contract audit adds code only when asked", "[codegen-entt][contract-audit]") {
+    ProgramNode program;
+    auto decorated = full_pipeline("trait Health:\n"
+                                   "    var hp: int = 10\n"
+                                   "    var regen: int = 1\n"
+                                   "    var healed: int = 0\n"
+                                   "trait Mark\n"
+                                   "event Healed:\n"
+                                   "    amount: int\n"
+                                   "pub extern event Tick\n"
+                                   "rule Heal:\n"
+                                   "    each:\n"
+                                   "        Health as h\n"
+                                   "    on Tick:\n"
+                                   "        h.hp = h.regen\n"
+                                   "        h.healed += 1\n"
+                                   "        add Mark\n"
+                                   "        emit Healed:\n"
+                                   "            amount = h.regen\n",
+                                   program);
+    const auto plain = CppEnttCodegen::generate(decorated);
+    CHECK_FALSE(plain.contains("contract_audit"));
+    CHECK_FALSE(plain.contains("audit_"));
+
+    decorated.contract_audit = true;
+    const auto audited = CppEnttCodegen::generate(decorated);
+    CHECK(audited.contains("#include \"backends/cpp-entt/contract_audit.hpp\""));
+    CHECK(audited.contains("contract_audit_trait_name<"));
+    CHECK(audited.contains("ContractAuditHandlerScope cactus_audit_scope("));
+    CHECK(audited.contains(".hp\", \"Assign\", \"test.cactus:14:9\")"));
+    CHECK(audited.contains(".healed\", \"Accum\", \"test.cactus:15:9\")"));
+    CHECK(audited.contains("audit_command(\"add "));
+    CHECK(audited.contains("audit_emit(\""));
+    CHECK(audited.contains("audit_read(\""));
+    CHECK(audited.contains("contract.writes = {"));
+}
+
 // ── Pair relations (dsl-pair-relations, 5.5) ─────────────────────────────────
 
 static const std::string& pair_codegen_traits() {

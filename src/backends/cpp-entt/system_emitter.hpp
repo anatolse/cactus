@@ -15,6 +15,8 @@ public:
     static std::string emit_func_declaration(const FuncNode& func, const DecoratedProgram& program, bool reference_params);
     static std::string emit_system(const RuleNode& sys, const DecoratedProgram& program);
     static std::string emit_extern_system(const ExternRuleNode& sys, const DecoratedProgram& program);
+    // False for a TransformPropagation of the dimension the program does not use: its body is not emitted.
+    static bool emits_extern_system(const ExternRuleNode& sys, const DecoratedProgram& program);
     static bool requires_entt_hierarchy_helpers(const DecoratedProgram& program);
     static std::string emit_entt_hierarchy_helpers(const DecoratedProgram& program);
     // Names each spatial index's static store; same bounds code and overlapping archetypes share one.

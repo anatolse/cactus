@@ -3,6 +3,7 @@
 #include <functional>
 #include <map>
 #include <string>
+#include <vector>
 
 namespace cactus {
 
@@ -10,9 +11,13 @@ bool stdlib_module_observes_world(std::string_view module) {
     return module == "std.query" || module == "std.transform" || module.starts_with("std.transform.");
 }
 
-const std::vector<NativeFieldRead>* native_field_reads(std::string_view canonical) {
+namespace {
+
+using NativeFieldReadTable = std::map<std::string, std::vector<NativeFieldRead>, std::less<>>;
+
+const NativeFieldReadTable& native_field_read_table() {
     // std.query filters test membership only, and Parent.parent is `let`: both change only at commit.
-    static const std::map<std::string, std::vector<NativeFieldRead>, std::less<>> table{
+    static const NativeFieldReadTable table{
         {"std.query.exists", {}},
         {"std.query.count", {}},
         {"std.query.first", {}},
@@ -26,8 +31,23 @@ const std::vector<NativeFieldRead>* native_field_reads(std::string_view canonica
         {"std.transform.volume.world_position",
          {{.module = "std.transform.volume", .trait = "WorldTransform", .field = "position"}}},
     };
-    const auto found = table.find(canonical);
+    return table;
+}
+
+}  // namespace
+
+const std::vector<NativeFieldRead>* native_field_reads(std::string_view canonical) {
+    const auto& table = native_field_read_table();
+    const auto found  = table.find(canonical);
     return found == table.end() ? nullptr : &found->second;
+}
+
+std::vector<std::string_view> summarized_natives() {
+    std::vector<std::string_view> natives;
+    for (const auto& entry : native_field_read_table()) {
+        natives.emplace_back(entry.first);
+    }
+    return natives;
 }
 
 std::optional<bool> native_is_world_scan(std::string_view canonical) {

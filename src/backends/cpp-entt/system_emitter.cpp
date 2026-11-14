@@ -6,6 +6,7 @@
 #include "frontend/symbol_identity.hpp"
 
 #include "backends/cpp-entt/accumulation_plan.hpp"
+#include "backends/cpp-entt/contract_audit_emitter.hpp"
 #include "backends/cpp-entt/persistence_emitter.hpp"
 #include "backends/cpp-entt/index_cell_size.hpp"
 #include "backends/cpp-entt/range_checks.hpp"
@@ -800,27 +801,18 @@ void emit_pair_binding_snapshot(std::ostringstream& out, const PairBindingCodege
     }
 }
 
+bool is_propagation_of(const ExternRuleNode& sys, std::string_view module) {
+    return symbol_is(sys.resolved_rule_id, SymbolKind::Rule, module, "TransformPropagation");
+}
+
+// std.editor imports both transform modules, so both TransformPropagation rules can
+// appear; only the one matching the program's WorldTransform dimension is emitted.
 bool is_flat_transform_propagation(const ExternRuleNode& sys, const DecoratedProgram& program) {
-    // When std.editor is used it transitively imports both transform modules,
-    // so both flat and volume TransformPropagation can appear in the merged AST.
-    // Only emit the variant that matches the program's actual WorldTransform dimensionality.
-    if (symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.transform.flat", "TransformPropagation")) {
-        return !world_transform_is_volume(program);
-    }
-    if (symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.transform.volume", "TransformPropagation")) {
-        return false;
-    }
-    return false;
+    return is_propagation_of(sys, "std.transform.flat") && !world_transform_is_volume(program);
 }
 
 bool is_volume_transform_propagation(const ExternRuleNode& sys, const DecoratedProgram& program) {
-    if (symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.transform.volume", "TransformPropagation")) {
-        return world_transform_is_volume(program);
-    }
-    if (symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.transform.flat", "TransformPropagation")) {
-        return false;
-    }
-    return false;
+    return is_propagation_of(sys, "std.transform.volume") && world_transform_is_volume(program);
 }
 
 enum class TransformDimension : std::uint8_t { Flat, Volume };
@@ -3191,9 +3183,12 @@ static std::string rewrite_expr(const ExprNode& expr,
                                 const std::unordered_map<std::string, std::string>& cpp_overrides,
                                 const PairCodegenScope* pair_scope,
                                 const LocalNumericKinds* local_kinds) {
-    return settled_access(
-        expr.field_read,
-        rewrite_expr_node(expr, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds),
+    return contract_audit::audited_expr(
+        expr,
+        settled_access(
+            expr.field_read,
+            rewrite_expr_node(expr, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds),
+            program),
         program);
 }
 
@@ -4207,7 +4202,7 @@ static std::string rewrite_stmt(const StmtNode& stmt,
     auto known_fields = collect_trait_fields(trait_names, program);
     std::string ind(static_cast<size_t>(indent) * 4, ' ');
 
-    return std::visit(
+    return contract_audit::statement_checks(stmt, ind, program) + std::visit(
         // Still 57 after task 6.7's extraction; remaining branches (LetStmt/VarAssign/
         // DestroyStmt/ReturnStmt/ExprStmt/IfStmt/MatchStmt/ForeachStmt) are the
         // exhaustive AST-dispatch arms, an inherent shape.
@@ -8271,10 +8266,11 @@ std::string EnttSystemEmitter::emit_system(const RuleNode& sys, const DecoratedP
             continue;
         }
         const auto* contract = graph_handler_contract(sys, handler, program);
-        const bool prepared =
-            sys.resolved_rule_id.has_value() && handler.resolved_trigger.has_value() &&
-            EnttCodegenUtils::in_parallel_level(
-                program, HandlerIdentity{.rule = *sys.resolved_rule_id, .trigger = *handler.resolved_trigger});
+        std::optional<HandlerIdentity> identity;
+        if (sys.resolved_rule_id.has_value() && handler.resolved_trigger.has_value()) {
+            identity = HandlerIdentity{.rule = *sys.resolved_rule_id, .trigger = *handler.resolved_trigger};
+        }
+        const bool prepared = identity.has_value() && EnttCodegenUtils::in_parallel_level(program, *identity);
         std::ostringstream prepare;
         const bool is_pair = is_pair_system && contract != nullptr && contract->domain_kind == HandlerDomainKind::Pair;
         const bool selectionless   = !is_pair && contract != nullptr && contract->is_selectionless();
@@ -8293,6 +8289,9 @@ std::string EnttSystemEmitter::emit_system(const RuleNode& sys, const DecoratedP
         out << ") {\n";
         out << "    (void)" << trigger_binding << ";\n";
         out << "    (void)cactus_recipient;\n";
+        if (program.contract_audit && identity.has_value()) {
+            out << contract_audit::emit_handler_scope(*identity);
+        }
         emit_named_requirements(out, contract, program);
         emit_when_gate(out, sys, program);
         HandlerBodyCodegen body_codegen{.contract           = contract,
@@ -8431,6 +8430,9 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
                                         // further in scope here
     const ExternRuleNode& sys,
     const DecoratedProgram& program) {
+    if (!emits_extern_system(sys, program)) {
+        return "";
+    }
     for (const auto& spec : single_view_renderer_specs()) {
         if (spec.matches(sys)) {
             return emit_single_view_renderer_body(sys, program, spec);
@@ -8907,19 +8909,14 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
         return out.str();
     }
 
-    // When std.editor is imported it pulls in both std.transform.flat and
-    // std.transform.volume, adding both TransformPropagation ExternRuleNodes
-    // to the merged AST. The dimension-matching variant is handled above (early
-    // return). The non-matching variant falls here and must be dropped so that
-    // the generic emit path does not produce a duplicate function definition.
-    if (symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.transform.flat", "TransformPropagation") ||
-        symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.transform.volume", "TransformPropagation")) {
-        return "";
-    }
-
     throw std::runtime_error("cpp-entt has no compiler-owned implementation for external rule '" +
                              (sys.resolved_rule_id.has_value() ? make_canonical_id(*sys.resolved_rule_id) : sys.name) +
                              "'; user external handlers must be lowered through their per-handler callback ABI");
+}
+
+bool EnttSystemEmitter::emits_extern_system(const ExternRuleNode& sys, const DecoratedProgram& program) {
+    const bool propagation = is_propagation_of(sys, "std.transform.flat") || is_propagation_of(sys, "std.transform.volume");
+    return !propagation || is_flat_transform_propagation(sys, program) || is_volume_transform_propagation(sys, program);
 }
 
 bool EnttSystemEmitter::requires_entt_hierarchy_helpers(const DecoratedProgram& program) {

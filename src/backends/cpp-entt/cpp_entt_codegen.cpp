@@ -9,6 +9,7 @@
 
 #include "backends/cpp-entt/accumulation_plan.hpp"
 #include "backends/cpp-entt/component_emitter.hpp"
+#include "backends/cpp-entt/contract_audit_emitter.hpp"
 #include "backends/cpp-entt/event_emitter.hpp"
 #include "backends/cpp-entt/persistence_emitter.hpp"
 #include "backends/cpp-entt/persistence_restore_emitter.hpp"
@@ -1772,8 +1773,17 @@ bool emit_phase_handler_call(std::ostringstream& out,
         if (rule == nullptr || !rule->is_stdlib) {
             return false;
         }
+        if (!EnttSystemEmitter::emits_extern_system(*rule, program)) {
+            return true;
+        }
         const auto callee = system_function_name(program.module_name, rule->name, "tick").ref();
-        if (emitted_callees.insert(callee).second) {
+        if (!emitted_callees.insert(callee).second) {
+            return true;
+        }
+        if (program.contract_audit) {
+            out << "    {\n" << contract_audit::emit_handler_scope(graph_node->identity) << "    " << callee
+                << "(registry);\n    }\n";
+        } else {
             out << "    " << callee << "(registry);\n";
         }
         return true;
@@ -2407,36 +2417,6 @@ std::string input_action_constant_name(const std::string& input_name) {
     return "K_" + upper_copy(snake_case(input_name));
 }
 
-std::string cpp_string_literal(const std::string& value) {
-    std::string escaped;
-    escaped.reserve(value.size() + 2);
-    escaped.push_back('"');
-    for (const char ch : value) {
-        switch (ch) {
-            case '\\':
-                escaped += "\\\\";
-                break;
-            case '"':
-                escaped += "\\\"";
-                break;
-            case '\n':
-                escaped += "\\n";
-                break;
-            case '\r':
-                escaped += "\\r";
-                break;
-            case '\t':
-                escaped += "\\t";
-                break;
-            default:
-                escaped.push_back(ch);
-                break;
-        }
-    }
-    escaped.push_back('"');
-    return escaped;
-}
-
 // Asset paths are module-relative (dsl-model-assets D5): join the declaring
 // module's directory with the declared path and normalize. Absolute module
 // paths (e.g. from build tooling) are relativized against the compiler's
@@ -2461,7 +2441,7 @@ std::string normalized_asset_path(const AssetDeclNode& asset) {
 }
 
 std::string asset_register_call(const AssetDeclNode& asset) {
-    const auto path_literal = cpp_string_literal(normalized_asset_path(asset));
+    const auto path_literal = EnttCodegenUtils::string_literal_cpp(normalized_asset_path(asset));
     switch (asset.asset_kind) {
         case AssetKind::Mesh:
             return "shared_asset_registry().register_mesh(" + asset.name + ", " + path_literal + ", static_cast<int>(" +
@@ -3985,6 +3965,9 @@ static void emit_headers(std::ostringstream& out, const DecoratedProgram& progra
     out << "#if defined(CACTUS_LINEARIZATION_HARNESS) || defined(CACTUS_WORLD_DIGEST)\n";
     out << "#include \"backends/cpp-entt/linearization_harness.hpp\"\n";
     out << "#endif  // CACTUS_LINEARIZATION_HARNESS || CACTUS_WORLD_DIGEST\n";
+    if (program.contract_audit) {
+        out << "#include \"backends/cpp-entt/contract_audit.hpp\"\n";
+    }
     if (program_uses_persistence(program)) {
         out << "#include \"backends/cpp-entt/persistence_file_adapter.hpp\"\n";
     }
@@ -4136,6 +4119,8 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         }
         out << EnttComponentEmitter::emit_component(t, program) << "\n";
     }
+    out << contract_audit::emit_trait_names(program);
+    out << contract_audit::emit_tables(program);
     out << EnttComponentEmitter::emit_state_helpers(program);
     out << emit_relation_declarations(program);
     out << emit_world_digest(program);

@@ -46,6 +46,7 @@ static void print_usage(const char* program) {
               << "  --no-shared-stores                   Test only: give each spatial index its own static store\n"
               << "  --grid-cell-size=<v>                 Test only: use this cell size for every spatial index\n"
               << "  --retain-all-construction            Test only: keep a construction copy of every trait\n"
+              << "  --contract-audit                     Test only: check each handler access against its contract\n"
               << "  --help                               Show this help message\n";
 }
 
@@ -270,6 +271,7 @@ struct CliArgs {
     bool force_hashed_keys = false;
     bool no_shared_stores = false;
     bool retain_all_construction = false;
+    bool contract_audit          = false;
     bool warnings_as_errors = false;
     bool parallel_handlers  = false;
     std::optional<std::string> grid_cell_size_text;
@@ -329,6 +331,10 @@ static bool set_switch(const char* arg, CliArgs& out) {
     }
     if (std::strcmp(arg, "--retain-all-construction") == 0) {
         out.retain_all_construction = true;
+        return true;
+    }
+    if (std::strcmp(arg, "--contract-audit") == 0) {
+        out.contract_audit = true;
         return true;
     }
     if (std::string_view{arg}.starts_with(kGridCellSizeOption)) {
@@ -481,6 +487,7 @@ static void apply_codegen_options(const CliArgs& args, cactus::DecoratedProgram&
     decorated.share_static_stores = !args.no_shared_stores;
     decorated.grid_cell_size      = args.grid_cell_size;
     decorated.retain_all_construction = args.retain_all_construction;
+    decorated.contract_audit          = args.contract_audit;
     if (args.parallel_handlers) {
         decorated.parallel_handlers = cactus::plan_parallel_handlers(decorated);
     }

@@ -1082,6 +1082,14 @@ bool stdlib_function_acts(const SymbolId& function) {
     return function.kind == SymbolKind::Func && acting.contains(make_canonical_id(function));
 }
 
+CallEffects extern_call_effects(const SymbolId& callee, const ResolvedFunc& function) {
+    if (!function.effect_summary.has_value()) {
+        return {.observes = {"external"}, .acts = {"external"}};
+    }
+    const auto& domains = *function.effect_summary;
+    return {.observes = domains, .acts = stdlib_function_acts(callee) ? domains : std::unordered_set<std::string>{}};
+}
+
 // ── ModuleImports::add ──────────────────────────────────────────────────────
 
 static void prepare_import_identities(ImportedSymbols& pub_syms) {
@@ -9106,6 +9114,34 @@ bool accumulates(const ResolvedTrait* declaration, const std::string& field) {
 
 }  // namespace
 
+std::string write_kind_name(const FieldWriteKind& kind) {
+    switch (kind.kind) {
+        case WriteKind::Assign:
+            return "Assign";
+        case WriteKind::Accum:
+            return "Accum";
+        case WriteKind::General:
+            return "General";
+        case WriteKind::Join:
+            break;
+    }
+    switch (kind.op) {
+        case JoinOp::Max:
+            return "Join max";
+        case JoinOp::Min:
+            return "Join min";
+        case JoinOp::Or:
+            return "Join or";
+        case JoinOp::And:
+            return "Join and";
+    }
+    std::unreachable();
+}
+
+FieldWriteKind assignment_write_kind(const VarAssign& assign) {
+    return classify_assignment(assign).kind;
+}
+
 bool writes_commute(const FieldWriteKind& left, const FieldWriteKind& right) {
     return left == right && (left.kind == WriteKind::Accum || left.kind == WriteKind::Join);
 }
@@ -9338,20 +9374,17 @@ void SemanticAnalyzer::add_contract_call_effects(HandlerContract& contract,
     if (function == nullptr || !function->is_extern) {
         return;
     }
+    const auto effects = extern_call_effects(*callee, *function);
+    contract.effects.insert(effects.observes.begin(), effects.observes.end());
+    contract.effect_acts.insert(effects.acts.begin(), effects.acts.end());
     if (!function->effect_summary.has_value()) {
-        contract.effects.insert("external");
-        contract.effect_acts.insert("external");
         return;
     }
-    contract.effects.insert(function->effect_summary->begin(), function->effect_summary->end());
     if (const auto* reads = native_field_reads(callee_id); reads != nullptr) {
         for (const auto& read : *reads) {
             const auto trait = make_symbol_id(SymbolKind::Trait, std::string(read.module), std::string(read.trait));
             record_read(contract, trait, std::string(read.field), find_resolved_trait(trait), nullptr);
         }
-    }
-    if (stdlib_function_acts(*callee)) {
-        contract.effect_acts.insert(function->effect_summary->begin(), function->effect_summary->end());
     }
 }
 

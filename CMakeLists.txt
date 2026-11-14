@@ -188,6 +188,7 @@ target_link_libraries(cactus_frontend PUBLIC cactus_common)
 add_library(cactus_backend_cpp_entt STATIC
     src/backends/cpp-entt/accumulation_plan.cpp
     src/backends/cpp-entt/component_emitter.cpp
+    src/backends/cpp-entt/contract_audit_emitter.cpp
     src/backends/cpp-entt/type_utils.cpp
     src/backends/cpp-entt/system_emitter.cpp
     src/backends/cpp-entt/trait_writers.cpp
@@ -236,6 +237,9 @@ endforeach()
 # ── Generated Example Executables ─────────────────────────────────────────────
 set(CACTUS_GENERATED_EXAMPLES_DIR "${CMAKE_BINARY_DIR}/generated_examples")
 file(MAKE_DIRECTORY "${CACTUS_GENERATED_EXAMPLES_DIR}")
+# Audited headless tests write the natives they called here.
+set(CACTUS_CONTRACT_AUDIT_DIR "${CMAKE_BINARY_DIR}/contract_audit")
+file(MAKE_DIRECTORY "${CACTUS_CONTRACT_AUDIT_DIR}")
 
 # The .cactus files a generated program reads: the entry's sibling modules and
 # the whole stdlib.
@@ -337,7 +341,7 @@ endfunction()
 function(cactus_add_headless_behavior_test TARGET_NAME)
     set(oneValueArgs CACTUS_SOURCE BACKEND TEST_SOURCE)
     cmake_parse_arguments(CACTUS_HEADLESS_TEST
-        "LINEARIZATION_HARNESS;FORCE_ROW_STAGE;NO_INDEXED_JOINS"
+        "LINEARIZATION_HARNESS;FORCE_ROW_STAGE;NO_INDEXED_JOINS;CONTRACT_AUDIT"
         "${oneValueArgs}"
         "CODEGEN_FLAGS"
         ${ARGN}
@@ -363,6 +367,9 @@ function(cactus_add_headless_behavior_test TARGET_NAME)
     endif()
     if(CACTUS_HEADLESS_TEST_NO_INDEXED_JOINS)
         list(APPEND codegen_flags --no-indexed-joins)
+    endif()
+    if(CACTUS_HEADLESS_TEST_CONTRACT_AUDIT)
+        list(APPEND codegen_flags --contract-audit)
     endif()
     list(APPEND codegen_flags ${CACTUS_HEADLESS_TEST_CODEGEN_FLAGS})
 
@@ -394,6 +401,12 @@ function(cactus_add_headless_behavior_test TARGET_NAME)
     if(CACTUS_HEADLESS_TEST_LINEARIZATION_HARNESS)
         target_compile_definitions(${TARGET_NAME} PRIVATE CACTUS_LINEARIZATION_HARNESS)
     endif()
+    if(CACTUS_HEADLESS_TEST_CONTRACT_AUDIT)
+        target_compile_definitions(${TARGET_NAME} PRIVATE
+            CACTUS_CONTRACT_AUDIT
+            CACTUS_CONTRACT_AUDIT_NATIVES_FILE="${CACTUS_CONTRACT_AUDIT_DIR}/${TARGET_NAME}.natives"
+        )
+    endif()
     if(CACTUS_HEADLESS_TEST_FORCE_ROW_STAGE)
         target_compile_definitions(${TARGET_NAME} PRIVATE CACTUS_FORCE_ROW_STAGE)
     endif()
@@ -417,6 +430,9 @@ function(cactus_add_headless_behavior_test TARGET_NAME)
     # where add_test was called, i.e. build/tests) — run from the source
     # root so any example needing real file-backed assets resolves them.
     add_test(NAME ${TARGET_NAME} COMMAND ${TARGET_NAME} WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+    if(CACTUS_HEADLESS_TEST_CONTRACT_AUDIT)
+        set_tests_properties(${TARGET_NAME} PROPERTIES FIXTURES_SETUP contract_audit)
+    endif()
 endfunction()
 
 # ── Save/restore round-trip subprocess executables ─────────────────────────

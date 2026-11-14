@@ -46,3 +46,6 @@ __pycache__/
 build-clang-coverage/
 *.profraw
 *.profdata
+
+# Schedule-independence fuzzer failures (tools/fuzz/run.py)
+fuzz-failures/

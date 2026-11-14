@@ -341,9 +341,9 @@ endfunction()
 function(cactus_add_headless_behavior_test TARGET_NAME)
     set(oneValueArgs CACTUS_SOURCE BACKEND TEST_SOURCE)
     cmake_parse_arguments(CACTUS_HEADLESS_TEST
-        "LINEARIZATION_HARNESS;FORCE_ROW_STAGE;NO_INDEXED_JOINS;CONTRACT_AUDIT"
+        "LINEARIZATION_HARNESS;FORCE_ROW_STAGE;NO_INDEXED_JOINS;CONTRACT_AUDIT;NO_CTEST"
         "${oneValueArgs}"
-        "CODEGEN_FLAGS"
+        "CODEGEN_FLAGS;TEST_ARGS"
         ${ARGN}
     )
 
@@ -357,8 +357,14 @@ function(cactus_add_headless_behavior_test TARGET_NAME)
         message(FATAL_ERROR "cactus_add_headless_behavior_test(${TARGET_NAME}) requires TEST_SOURCE")
     endif()
 
-    set_property(GLOBAL APPEND PROPERTY CACTUS_HEADLESS_FIXTURES "${TARGET_NAME}|${CACTUS_HEADLESS_TEST_CACTUS_SOURCE}")
-    set(cactus_source "${CMAKE_SOURCE_DIR}/${CACTUS_HEADLESS_TEST_CACTUS_SOURCE}")
+    if(NOT CACTUS_HEADLESS_TEST_LINEARIZATION_HARNESS)
+        set_property(GLOBAL APPEND PROPERTY CACTUS_HEADLESS_FIXTURES "${TARGET_NAME}|${CACTUS_HEADLESS_TEST_CACTUS_SOURCE}")
+    endif()
+    if(IS_ABSOLUTE "${CACTUS_HEADLESS_TEST_CACTUS_SOURCE}")
+        set(cactus_source "${CACTUS_HEADLESS_TEST_CACTUS_SOURCE}")
+    else()
+        set(cactus_source "${CMAKE_SOURCE_DIR}/${CACTUS_HEADLESS_TEST_CACTUS_SOURCE}")
+    endif()
     cactus_dsl_inputs(cactus_inputs "${cactus_source}")
     set(generated_output "${CACTUS_GENERATED_EXAMPLES_DIR}/${TARGET_NAME}.headless.generated.cpp")
     set(codegen_flags)
@@ -429,7 +435,11 @@ function(cactus_add_headless_behavior_test TARGET_NAME)
     # root, not ctest's default per-test working directory (the binary dir
     # where add_test was called, i.e. build/tests) — run from the source
     # root so any example needing real file-backed assets resolves them.
-    add_test(NAME ${TARGET_NAME} COMMAND ${TARGET_NAME} WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+    if(CACTUS_HEADLESS_TEST_NO_CTEST)
+        return()
+    endif()
+    add_test(NAME ${TARGET_NAME} COMMAND ${TARGET_NAME} ${CACTUS_HEADLESS_TEST_TEST_ARGS}
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
     if(CACTUS_HEADLESS_TEST_CONTRACT_AUDIT)
         set_tests_properties(${TARGET_NAME} PROPERTIES FIXTURES_SETUP contract_audit)
     endif()

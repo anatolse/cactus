@@ -1,14 +1,17 @@
 #pragma once
 
 // Include after CACTUS_HEADLESS_GENERATED_CPP in a target built with
-// LINEARIZATION_HARNESS. Runs one fixture in its stable order and under a
-// fixed list of seeds, digesting the world after every frame.
+// LINEARIZATION_HARNESS. Runs one fixture in its stable order, under a fixed
+// list of seeds, or with one unordered pair swapped, digesting the world after
+// every frame.
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <iostream>
 #include <optional>
 #include <vector>
 
@@ -52,6 +55,45 @@ void require_linearizations_match(int frames, const Setup& setup) {
         INFO("seed " << seed);
         CHECK(linearization_digests(seed, frames, setup) == baseline);
     }
+}
+
+// The stable order with `pair` adjacent: `first, second`, or swapped.
+template <typename Setup>
+std::vector<std::uint64_t> pair_swap_digests(const cactus::runtime::entt_backend::LinearizationPair& pair,
+                                             bool swapped,
+                                             int frames,
+                                             const Setup& setup) {
+    namespace backend = cactus::runtime::entt_backend;
+    backend::set_linearization_swap(pair, swapped);
+    auto digests = linearization_digests(std::nullopt, frames, setup);
+    backend::set_linearization_swap(std::nullopt);
+    return digests;
+}
+
+// Every unordered pair of every dispatch set that runs must give the same
+// digests in both orders. Pairs of sets first reached in a swapped run are
+// checked too. Returns the number of pairs checked.
+template <typename Setup>
+std::size_t require_pair_swaps_match(int frames, const Setup& setup) {
+    namespace backend = cactus::runtime::entt_backend;
+    backend::clear_linearization_pairs();
+    (void)linearization_digests(std::nullopt, frames, setup);
+    std::size_t checked = 0;
+    while (checked < backend::linearization_pairs().size()) {
+        const auto pair = backend::linearization_pairs()[checked++];
+        const auto in_order = pair_swap_digests(pair, false, frames, setup);
+        const auto swapped  = pair_swap_digests(pair, true, frames, setup);
+        const auto frame    = std::ranges::mismatch(in_order, swapped).in1 - in_order.begin() + 1;
+        INFO("pair " << pair.first << " | " << pair.second);
+        INFO("first differing frame " << frame);
+        CHECK(in_order == swapped);
+        if (in_order != swapped) {
+            // One unwrapped line for tools/fuzz/run.py.
+            std::cout << "pair swap differs: " << pair.first << " | " << pair.second << " | frame " << frame << '\n';
+        }
+    }
+    std::cout << "unordered pairs: " << checked << '\n';
+    return checked;
 }
 
 }  // namespace cactus::test

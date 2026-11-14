@@ -7074,6 +7074,40 @@ TEST_CASE("Codegen EnTT: a lifecycle cycle passes its route table to commit", "[
     CHECK(routes.contains("return {.immediate = false, .delayed = true};"));
 }
 
+TEST_CASE("Codegen EnTT: an event cycle with no delayed lifecycle trigger passes no route table",
+          "[codegen-entt][delivery-cycles]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "pub extern event frame:\n"
+        "    dt: float\n"
+        "phase tick:\n"
+        "    from:\n"
+        "        frame\n"
+        "event Knock\n"
+        "trait Door\n"
+        "trait Mark\n"
+        "entity Front:\n"
+        "    Door\n"
+        "rule First:\n"
+        "    on tick:\n"
+        "        emit Knock to Front\n"
+        "rule Answer:\n"
+        "    each:\n"
+        "        Door\n"
+        "    on Knock:\n"
+        "        add Mark\n"
+        "        emit Knock to self\n"
+        "rule Count:\n"
+        "    on added Mark:\n"
+        "        remove Mark from Front\n",
+        program);
+    const auto code = CppEnttCodegen::generate(decorated);
+
+    CHECK_FALSE(code.contains("GeneratedLifecycleRoutes"));
+    const auto commit = generated_function(code, "void generated_commit_activation(entt::registry& registry) {");
+    CHECK(commit.contains("generated_lifecycle_trackers());"));
+}
+
 TEST_CASE("Codegen EnTT: selectionless event handler accepts and ignores an optional recipient",
           "[codegen-entt][targeted-event-delivery]") {
     ProgramNode program;
@@ -9272,18 +9306,22 @@ TEST_CASE("Codegen EnTT: each dispatch set gets a harness call table with predec
 
     const auto tick = generated_function(
         code, "void generated_dispatch_phase(entt::registry& registry, const ::cactus_gen::test::TickPhase& phase)");
-    CHECK(tick.contains("dispatch_linear_extension(3, kLinearizationEdges, [&](std::size_t cactus_index) {"));
+    CHECK(tick.contains("dispatch_linear_extension(kLinearizationHandlers, kLinearizationEdges, "
+                        "[&](std::size_t cactus_index) {"));
+    // Canonical identities in stable order, for listing and swapping unordered pairs.
+    CHECK(tick.contains("static constexpr std::array<std::string_view, 3> kLinearizationHandlers{{"
+                        "\"test.Heat/on test.tick\", \"test.Age/on test.tick\", \"test.Spread/on test.tick\"}};"));
     // Heat writes what Spread reads: one edge, from Heat's slot to Spread's.
     CHECK(tick.contains("std::array<cactus::runtime::entt_backend::LinearizationEdge, 1> kLinearizationEdges{{"));
     CHECK(tick.contains("{0, 2}"));
 
     const auto hit = generated_function(
         code, "void generated_dispatch_event(entt::registry& registry, const ::cactus_gen::HitEvent&");
-    CHECK(hit.contains("dispatch_linear_extension(2, kLinearizationEdges,"));
+    CHECK(hit.contains("dispatch_linear_extension(kLinearizationHandlers, kLinearizationEdges,"));
     CHECK(hit.contains("{0, 1}"));
 
     const auto added = generated_function(code, "TraitAdded<::cactus_gen::Burning>& occurrence");
-    CHECK(added.contains("dispatch_linear_extension(2, kLinearizationEdges,"));
+    CHECK(added.contains("dispatch_linear_extension(kLinearizationHandlers, kLinearizationEdges,"));
     CHECK(added.contains("std::array<cactus::runtime::entt_backend::LinearizationEdge, 0> kLinearizationEdges{};"));
 }
 

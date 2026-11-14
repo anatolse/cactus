@@ -11,8 +11,11 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <bit>
 #include <cstdint>
+#include <string>
+#include <string_view>
 
 namespace {
 
@@ -23,6 +26,24 @@ using Spin = cactus_gen::linearization_sample_runtime::Spin;
 TEST_CASE("every linear extension of the sample gives the stable order's world",
           "[runtime][codegen-entt][handler-execution-graph]") {
     cactus::test::require_linearizations_match(8, cactus::test::no_setup());
+}
+
+TEST_CASE("every unordered pair of the sample gives the same world in both orders",
+          "[runtime][codegen-entt][handler-execution-graph]") {
+    namespace backend = cactus::runtime::entt_backend;
+    CHECK(cactus::test::require_pair_swaps_match(8, cactus::test::no_setup()) > 0);
+    const auto tick_handler = [](std::string_view rule) {
+        return "linearization_sample_runtime." + std::string(rule) + "/on std.core.tick";
+    };
+    const auto listed = [&](std::string_view first, std::string_view second) {
+        return std::ranges::contains(
+            backend::linearization_pairs(),
+            backend::LinearizationPair{.first = tick_handler(first), .second = tick_handler(second)});
+    };
+    CHECK(listed("Rotate", "Move"));
+    // Warm writes the level Shine reads, so the schedule orders them.
+    CHECK_FALSE(listed("Warm", "Shine"));
+    CHECK_FALSE(listed("Shine", "Warm"));
 }
 
 TEST_CASE("the sample's world changes across frames", "[runtime][codegen-entt][handler-execution-graph]") {

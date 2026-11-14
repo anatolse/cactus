@@ -1,0 +1,42 @@
+module lifecycle_without_delay_runtime
+
+use std.core
+
+# An event cycle and a lifecycle trigger that no cycle delays. Found by the
+# schedule-independence fuzzer: the program compiled to C++ that did not.
+
+event Knock
+
+trait Door:
+    var knocks: int = 0
+
+trait Mark
+
+trait Tally:
+    var marks: int = 0
+
+entity Front:
+    Door
+
+entity Board:
+    Tally
+
+rule First:
+    on tick:
+        emit Knock to Front
+
+rule Answer:
+    each:
+        Door as door
+
+    on Knock:
+        if door.knocks >= 3:
+            return
+        door.knocks += 1
+        add Mark
+        emit Knock to self
+
+rule Count:
+    on added Mark:
+        Board[Tally].marks += 1
+        remove Mark from Front

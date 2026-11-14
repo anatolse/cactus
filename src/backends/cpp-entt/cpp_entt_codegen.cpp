@@ -1497,8 +1497,8 @@ void emit_link_indices(std::ostringstream& out, const DecoratedProgram& program)
 void emit_commit_activation(std::ostringstream& out,
                             const DecoratedProgram& program,
                             const AccumulationPlan& accumulation,
-                            const DeliveryPlan& delivery,
-                            bool tracks_lifecycle) {
+                            bool tracks_lifecycle,
+                            bool routes_lifecycle) {
     const bool relations = !program.relations.empty();
     const auto* drain    = relations ? "&generated_compact_and_drain" : "&generated_drain_event_cascade";
     if (relations) {
@@ -1514,7 +1514,7 @@ void emit_commit_activation(std::ostringstream& out,
     out << "    auto& activation = generated_scheduler_state().activation;\n";
     if (!tracks_lifecycle) {
         out << "    commit_activation(activation, registry, " << drain << ");\n";
-    } else if (delivery.cyclic()) {
+    } else if (routes_lifecycle) {
         out << "    commit_activation(activation, registry, " << drain
             << ", generated_lifecycle_trackers(), GeneratedLifecycleRoutes{});\n";
     } else {
@@ -1636,10 +1636,12 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program,
 
     out << "void generated_drain_event_cascade(entt::registry& registry);\n\n";
 
-    if (!lifecycle_triggers.empty() && delivery.cyclic()) {
+    const bool routes_lifecycle = std::ranges::any_of(
+        lifecycle_triggers, [&](const auto& trigger) { return delivery.delayed(trigger) != nullptr; });
+    if (routes_lifecycle) {
         emit_lifecycle_routes(out, program, delivery);
     }
-    emit_commit_activation(out, program, accumulation, delivery, !lifecycle_triggers.empty());
+    emit_commit_activation(out, program, accumulation, !lifecycle_triggers.empty(), routes_lifecycle);
 
     for (const auto* event : external_events) {
         emit_external_event_injector(out, *event, program);
@@ -1957,11 +1959,18 @@ void emit_dispatch_calls(std::ostringstream& out,
         edges += std::string(edge_count++ == 0 ? "" : ", ") + "{" + std::to_string(before - calls.begin()) + ", " +
                  std::to_string(after - calls.begin()) + "}";
     }
+    std::vector<std::string> handlers;
+    handlers.reserve(calls.size());
+    for (const auto& call : calls) {
+        handlers.push_back(EnttCodegenUtils::string_literal_cpp(call.identity.canonical_id()));
+    }
     out << "#ifdef CACTUS_LINEARIZATION_HARNESS\n";
+    out << "    static constexpr std::array<std::string_view, " << calls.size() << "> kLinearizationHandlers{{"
+        << join_strings(handlers, ", ") << "}};\n";
     out << "    static constexpr std::array<cactus::runtime::entt_backend::LinearizationEdge, " << edge_count
         << "> kLinearizationEdges{" << (edges.empty() ? "" : "{" + edges + "}") << "};\n";
-    out << "    cactus::runtime::entt_backend::dispatch_linear_extension(" << calls.size()
-        << ", kLinearizationEdges, [&](std::size_t cactus_index) {\n";
+    out << "    cactus::runtime::entt_backend::dispatch_linear_extension(kLinearizationHandlers, kLinearizationEdges, "
+           "[&](std::size_t cactus_index) {\n";
     out << "        switch (cactus_index) {\n";
     for (std::size_t index = 0; index < calls.size(); ++index) {
         out << "            case " << index << ":\n";

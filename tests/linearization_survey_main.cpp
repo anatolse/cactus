@@ -11,8 +11,14 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-TEST_CASE("every linear extension of the fixture gives the stable order's world", "[linearization-survey]") {
+TEST_CASE("every linear extension of the fixture gives the stable order's world",
+          "[linearization-survey][linearization-seeds]") {
     cactus::test::require_linearizations_match(30, cactus::test::no_setup());
+}
+
+TEST_CASE("every unordered pair of the fixture gives the same world in both orders",
+          "[linearization-survey][linearization-pairs]") {
+    cactus::test::require_pair_swaps_match(8, cactus::test::no_setup());
 }
 
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

@@ -459,6 +459,11 @@ add_executable(test_runtime_activation_scheduler test_runtime_activation_schedul
 target_link_libraries(test_runtime_activation_scheduler PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
 add_test(NAME RuntimeActivationSchedulerTests COMMAND test_runtime_activation_scheduler)
 
+add_executable(test_linearization_harness test_linearization_harness.cpp)
+target_include_directories(test_linearization_harness PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(test_linearization_harness PRIVATE raylib Catch2::Catch2WithMain)
+add_test(NAME LinearizationHarnessTests COMMAND test_linearization_harness)
+
 add_executable(test_runtime_entity_allocator test_runtime_entity_allocator.cpp)
 target_link_libraries(test_runtime_entity_allocator PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
 add_test(NAME RuntimeEntityAllocatorTests COMMAND test_runtime_entity_allocator)
@@ -1132,6 +1137,12 @@ cactus_add_headless_behavior_test(test_accumulation_per_cell_headless_behavior
     CONTRACT_AUDIT
 )
 
+cactus_add_headless_behavior_test(test_lifecycle_without_delay_headless_behavior
+    CACTUS_SOURCE tests/fixtures/lifecycle_without_delay_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_lifecycle_without_delay_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_lifecycle_route_ping_first_headless_behavior
     CACTUS_SOURCE tests/fixtures/lifecycle_route/ping_first/lifecycle_route.cactus
     BACKEND cpp-entt
@@ -1517,6 +1528,51 @@ foreach(shape IN ITEMS static_keep union_fold equality_reduce grid_region row_jo
     add_dependencies(test_generated_performance_benchmarks ${perf_target})
 endforeach()
 
+# Generated programs checked for schedule independence: every pair of handlers
+# a schedule leaves unordered must give the same world in both orders.
+# tools/fuzz/run.py checks longer seed ranges through fuzz_schedule_slot.
+find_package(Python3 COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+    set(cactus_fuzz_generator "${CMAKE_SOURCE_DIR}/tools/fuzz/generate_program.py")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${cactus_fuzz_generator}")
+    add_test(NAME FuzzToolTests COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/tools/fuzz/test_fuzz.py")
+    set_tests_properties(FuzzToolTests PROPERTIES ENVIRONMENT "CACTUS_BUILD_DIR=${CMAKE_BINARY_DIR}")
+    foreach(cactus_fuzz_seed IN ITEMS 1 6 18 26)
+        set(cactus_fuzz_program "${CMAKE_BINARY_DIR}/fuzz/seed_${cactus_fuzz_seed}/fuzz_seed_${cactus_fuzz_seed}.cactus")
+        execute_process(
+            COMMAND "${Python3_EXECUTABLE}" "${cactus_fuzz_generator}" ${cactus_fuzz_seed}
+                    --output "${cactus_fuzz_program}"
+            COMMAND_ERROR_IS_FATAL ANY
+        )
+        cactus_add_headless_behavior_test(test_fuzz_schedule_seed_${cactus_fuzz_seed}
+            CACTUS_SOURCE "${cactus_fuzz_program}"
+            BACKEND cpp-entt
+            TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/linearization_survey_main.cpp
+            LINEARIZATION_HARNESS
+            TEST_ARGS "[linearization-pairs]"
+        )
+    endforeach()
+    set(cactus_fuzz_slot "${CMAKE_BINARY_DIR}/fuzz/slot/fuzz_slot.cactus")
+    if(NOT EXISTS "${cactus_fuzz_slot}")
+        execute_process(
+            COMMAND "${Python3_EXECUTABLE}" "${cactus_fuzz_generator}" 1 --module fuzz_slot
+                    --output "${cactus_fuzz_slot}"
+            COMMAND_ERROR_IS_FATAL ANY
+        )
+    endif()
+    cactus_add_headless_behavior_test(fuzz_schedule_slot
+        CACTUS_SOURCE "${cactus_fuzz_slot}"
+        BACKEND cpp-entt
+        TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/linearization_survey_main.cpp
+        LINEARIZATION_HARNESS
+        NO_CTEST
+    )
+    # Long runs rebuild this once per program; optimizing it costs more than it saves.
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        target_compile_options(fuzz_schedule_slot PRIVATE -O0 -g0)
+    endif()
+endif()
+
 # Every executable defined in this directory is a test or a test subprocess, so
 # collecting them here keeps cactus_tests and coverage_check in step with new tests.
 get_directory_property(cactus_test_dir_targets BUILDSYSTEM_TARGETS)
@@ -1524,7 +1580,8 @@ get_directory_property(cactus_test_dir_targets BUILDSYSTEM_TARGETS)
 add_custom_target(cactus_tests)
 foreach(target_name IN LISTS cactus_test_dir_targets)
     get_target_property(target_type ${target_name} TYPE)
-    if(target_type STREQUAL "EXECUTABLE")
+    # The fuzz slot holds whatever program the last fuzz run left there.
+    if(target_type STREQUAL "EXECUTABLE" AND NOT target_name STREQUAL "fuzz_schedule_slot")
         cactus_enable_coverage(${target_name})
         set_property(GLOBAL APPEND PROPERTY CACTUS_TEST_EXECUTABLES ${target_name})
         add_dependencies(cactus_tests ${target_name})
@@ -1540,9 +1597,6 @@ if(CACTUS_LINEARIZATION_SURVEY)
         string(REPLACE "|" ";" cactus_survey_parts "${cactus_survey_entry}")
         list(GET cactus_survey_parts 0 cactus_survey_name)
         list(GET cactus_survey_parts 1 cactus_survey_source)
-        if(cactus_survey_name MATCHES "^(test_linearization_|survey_)")
-            continue()
-        endif()
         cactus_add_headless_behavior_test(survey_${cactus_survey_name}
             CACTUS_SOURCE ${cactus_survey_source}
             BACKEND cpp-entt

@@ -356,6 +356,41 @@ Handlers eligible in the same activation SHALL also conflict through shared chan
 - **WHEN** one handler calls `input.pressed(Fire)`, another calls `input.consume(Fire)`, and nothing orders them
 - **THEN** compilation fails with an unorientable-conflict error naming both handlers and the `input` domain
 
+### Requirement: Own-row accesses on disjoint domains do not conflict
+An access is an *own-row access* when a handler of a unary rule reads or writes a trait field through `self` or an `each:` alias, or issues `add`, `remove`, `set` or `destroy` on `self`. Every other access SHALL NOT be an own-row access: a named entity read or write, a read through a link or a relation end, a pair binding, a world query, and a command on any other entity.
+
+The domains of two unary rules SHALL be *disjoint* when no reachable archetype (`archetype-reachability`) carries every trait of both rules' `each:` clauses and none of the traits of their `without:` clauses. Two domains that require different variants of the same state SHALL be disjoint without consulting reachability. `where:` SHALL NOT take part in this test.
+
+When the domains of two handlers' rules are disjoint, a trait field that both handlers touch only through own-row accesses SHALL NOT contribute a data conflict between them, and their own-row commands SHALL NOT contribute a command conflict between them. Every other overlap SHALL conflict as before, and occurrence conflicts SHALL be decided as before. When the domains are not proven disjoint, nothing SHALL change.
+
+#### Scenario: Different archetypes write one field
+- **WHEN** `HealHero` over `each: Hero, Health` assigns `h.hp = 10`, `HurtEnemy` over `each: Enemy, Health` assigns `h.hp = 1`, both on `fixed_tick`, and no reachable archetype carries `Hero` and `Enemy`
+- **THEN** compilation succeeds and no schedule edge connects the two handlers
+
+#### Scenario: Variants of one state
+- **WHEN** three rules over `Alert.Calm`, `Alert.Curious` and `Alert.Hunting` each run `add Alert.<another variant>` on `self` and write fields of their own variant
+- **THEN** compilation needs no `after:` between them
+
+#### Scenario: Without proves the split
+- **WHEN** one rule declares `each: Unit` with `without: Frozen` and another declares `each: Unit, Frozen`, and both assign `Unit.speed`
+- **THEN** no conflict is reported between them
+
+#### Scenario: An archetype carries both
+- **WHEN** an entity or template of the program carries `Hero` and `Enemy` together
+- **THEN** the unorientable-conflict error on `Health.hp` is reported as before
+
+#### Scenario: A read through another route
+- **WHEN** the domains are disjoint but one handler also reads `Boss[Health].hp` by name
+- **THEN** the overlap on `Health.hp` conflicts as before
+
+#### Scenario: Observable order still conflicts
+- **WHEN** two handlers over disjoint domains each run `add Marked` on `self`, and an `on added Marked` handler assigns one shared field from the entity that fired it
+- **THEN** the occurrence conflict is reported as before
+
+#### Scenario: Both linearizations agree
+- **WHEN** a program accepted by this requirement is run with the two handlers in either order
+- **THEN** the resulting world is the same
+
 ### Requirement: Unorientable conflicts are compile errors
 When two handlers conflict and no meaningful orientation from "Contract conflict edges are oriented only by meaningful rules" orders them, compilation SHALL fail. The diagnostic SHALL be located at one of the two handlers and SHALL name both canonical handlers; for a data conflict, each overlapping field with both handlers' write kinds (or "read"); for a command or effect conflict, the commands or effect domain; for an occurrence conflict, the two reached runs that do not commute, and the events or lifecycle triggers through which each producer reaches its run. It SHALL suggest adding `after:` naming either handler to the other. The compiler SHALL report every unorientable conflict in the program, not only the first. A conflict that crosses modules SHALL be reported when the program is linked.
 

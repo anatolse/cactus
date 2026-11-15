@@ -9,6 +9,7 @@
 #include <set>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace cactus {
@@ -1201,14 +1202,46 @@ private:
 
 }  // namespace
 
+ReachabilityFacts reachable_trait_sets(const DecoratedProgram& program, const ReachabilityOptions& options) {
+    ReachabilityAnalysis analysis(program, options);
+    analysis.run();
+    return analysis.facts();
+}
+
+struct ArchetypeReachability::State {
+    DecoratedProgram* program;
+    ReachabilityAnalysis analysis;
+    ReachabilityFacts facts;
+
+    State(DecoratedProgram& target, const ReachabilityOptions& options)
+        : program(&target),
+          analysis(target, options) {
+        analysis.run();
+        facts = analysis.facts();
+    }
+};
+
+ArchetypeReachability::ArchetypeReachability(DecoratedProgram& program, const ReachabilityOptions& options)
+    : state_(std::make_unique<State>(program, options)) {}
+
+ArchetypeReachability::ArchetypeReachability(ArchetypeReachability&&) noexcept            = default;
+ArchetypeReachability& ArchetypeReachability::operator=(ArchetypeReachability&&) noexcept = default;
+ArchetypeReachability::~ArchetypeReachability()                                           = default;
+
+const ReachabilityFacts& ArchetypeReachability::facts() const {
+    return state_->facts;
+}
+
+void ArchetypeReachability::finish(ErrorReporter& errors) {
+    state_->analysis.report(errors);
+    state_->program->reachability = std::move(state_->facts);
+    derive_hierarchy_facts(*state_->program);
+}
+
 void derive_archetype_reachability(DecoratedProgram& program,
                                    ErrorReporter& errors,
                                    const ReachabilityOptions& options) {
-    ReachabilityAnalysis analysis(program, options);
-    analysis.run();
-    analysis.report(errors);
-    program.reachability = analysis.facts();
-    derive_hierarchy_facts(program);
+    ArchetypeReachability(program, options).finish(errors);
 }
 
 }  // namespace cactus

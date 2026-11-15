@@ -130,11 +130,88 @@ bool commands_conflict(const InferredHandlerCommand& left, const InferredHandler
     return overlapping_fields(left.patched.value_or(all_fields()), right.patched.value_or(all_fields())).has_value();
 }
 
-std::vector<std::string> command_conflicts(const HandlerContract& left, const HandlerContract& right) {
+bool own_row_command(const InferredHandlerCommand& command) {
+    return !command.entities.empty() && std::ranges::all_of(command.entities, [](const EntityTarget& entity) {
+        return entity.kind == EntityTargetKind::Self;
+    });
+}
+
+// Only such handlers can lose a conflict to disjoint domains.
+bool touches_own_row(const HandlerContract& contract) {
+    return !contract.own_row_traits.empty() || std::ranges::any_of(contract.commands, own_row_command);
+}
+
+// One domain requires a trait the other excludes, or another variant of one state.
+bool domains_exclude(const HandlerContract& left, const HandlerContract& right) {
+    const auto excludes = [](const HandlerContract& required, const HandlerContract& excluding) {
+        return std::ranges::any_of(required.selection, [&](const SymbolId& trait) {
+            const auto state = state_of_variant_trait(trait);
+            return std::ranges::contains(excluding.exclusion, trait) ||
+                   (state.has_value() && std::ranges::contains(excluding.exclusion, state_slot_trait(*state)));
+        });
+    };
+    const auto other_variant = std::ranges::any_of(left.selection, [&](const SymbolId& trait) {
+        return std::ranges::any_of(right.selection,
+                                   [&](const SymbolId& other) { return other != trait && same_state(trait, other); });
+    });
+    return excludes(left, right) || excludes(right, left) || other_variant;
+}
+
+bool matches_both(const ReachabilityFacts& facts,
+                  const ReachableTraitSet& set,
+                  const HandlerContract& left,
+                  const HandlerContract& right) {
+    return facts.may_match(set, left.selection, left.exclusion) && facts.may_match(set, right.selection, right.exclusion);
+}
+
+// Some reachable entity can match the domain, so its rule can run.
+bool live_domain(const ReachabilityFacts& facts, const HandlerContract& domain) {
+    return std::ranges::any_of(facts.trait_sets, [&](const ReachableTraitSet& set) {
+        return facts.may_match(set, domain.selection, domain.exclusion);
+    });
+}
+
+// Every entity `inner` matches, `outer` matches too.
+bool nested_domains(const HandlerContract& outer, const HandlerContract& inner) {
+    const auto within = [](const std::vector<SymbolId>& part, const std::vector<SymbolId>& whole) {
+        return std::ranges::all_of(part, [&](const SymbolId& trait) { return std::ranges::contains(whole, trait); });
+    };
+    return within(outer.selection, inner.selection) && within(outer.exclusion, inner.exclusion);
+}
+
+bool unary_pair(const HandlerContract& left, const HandlerContract& right) {
+    return left.domain_kind == HandlerDomainKind::Unary && right.domain_kind == HandlerDomainKind::Unary;
+}
+
+// No entity can match both handlers' domains; `where:` is not consulted. `live`: both
+// domains match some reachable entity, since a rule that never runs proves nothing.
+bool domains_disjoint(const ReachabilityFacts* facts,
+                      const HandlerContract& left,
+                      const HandlerContract& right,
+                      bool live) {
+    if (!unary_pair(left, right)) {
+        return false;
+    }
+    if (domains_exclude(left, right)) {
+        return true;
+    }
+    if (nested_domains(left, right) || nested_domains(right, left)) {
+        return false;
+    }
+    if (facts == nullptr) {
+        return true;
+    }
+    return facts->derived && live && std::ranges::none_of(facts->trait_sets, [&](const ReachableTraitSet& set) {
+               return matches_both(*facts, set, left, right);
+           });
+}
+
+// With `disjoint` domains, two commands on each handler's own entity never meet.
+std::vector<std::string> command_conflicts(const HandlerContract& left, const HandlerContract& right, bool disjoint) {
     std::vector<std::string> conflicts;
     for (const auto& first : left.commands) {
         for (const auto& second : right.commands) {
-            if (!commands_conflict(first, second)) {
+            if (!commands_conflict(first, second) || (disjoint && own_row_command(first) && own_row_command(second))) {
                 continue;
             }
             auto text = "commands " + make_canonical_id(*first.target) + ": " + handler_command_kind_name(first.kind) +
@@ -333,20 +410,30 @@ struct PairConflict {
     bool right_writes_left = false;
     std::vector<std::string> effects;   // sorted
     std::vector<std::string> commands;  // sorted
+
+    [[nodiscard]] bool empty() const {
+        return fields.empty() && effects.empty() && commands.empty();
+    }
 };
 
+// With `disjoint` domains, a trait both handlers touch only through their own rows doesn't conflict.
 PairConflict pair_conflict(const HandlerNode& left,
                            const HandlerNode& right,
                            const std::unordered_set<SymbolId>& left_produced,
                            const std::unordered_set<SymbolId>& right_produced,
                            const std::vector<SymbolId>& left_gives,
-                           const std::vector<SymbolId>& right_gives) {
+                           const std::vector<SymbolId>& right_gives,
+                           bool disjoint = false) {
     PairConflict conflict;
     const auto add_overlaps = [&](const HandlerNode& producer,
                                   const HandlerNode& consumer,
                                   const std::unordered_set<SymbolId>& produced) {
         bool found_any = false;
         for (const auto& trait : produced) {
+            if (disjoint && producer.contract.own_row_traits.contains(trait) &&
+                consumer.contract.own_row_traits.contains(trait)) {
+                continue;
+            }
             const auto overlap = conflicting_overlap(producer, consumer, trait);
             if (!overlap.has_value()) {
                 continue;
@@ -371,7 +458,7 @@ PairConflict pair_conflict(const HandlerNode& left,
         }
     }
     std::ranges::sort(conflict.effects);
-    conflict.commands = command_conflicts(left.contract, right.contract);
+    conflict.commands = command_conflicts(left.contract, right.contract, disjoint);
     for (const auto& trait : left_gives) {
         if (std::ranges::contains(right_gives, trait)) {
             conflict.commands.push_back("single trait " + make_canonical_id(trait) + ": both give it");
@@ -670,6 +757,7 @@ struct UnorientableConflict {
     std::vector<FieldProvenance> fields;
     std::vector<std::string> effects;
     std::vector<std::string> channels;
+    std::string joining;  // the one archetype that joins otherwise disjoint domains, if that is all
 };
 
 // How `from`'s module names `handler` in an `after:` entry.
@@ -691,7 +779,7 @@ std::string unorientable_message(const UnorientableConflict& conflict) {
     const auto& second = *conflict.second;
     const auto listed  = joined(conflict_reasons(first, second, conflict.fields, conflict.channels, conflict.effects), ", ");
     const auto between = "unorientable conflict between '" + first.identity.canonical_id() + "' and '" +
-                         second.identity.canonical_id() + "' on " + listed;
+                         second.identity.canonical_id() + "' on " + listed + conflict.joining;
     const bool first_observes  = first.contract.observes_projection_of(second.contract);
     const bool second_observes = second.contract.observes_projection_of(first.contract);
     if (first_observes && second_observes) {
@@ -711,6 +799,37 @@ std::string unorientable_message(const UnorientableConflict& conflict) {
     return prefix + run_after(second, first) + ", or " + run_after(first, second);
 }
 
+// Names the trait set, and where it comes from, when it alone joins two otherwise disjoint domains.
+std::string joining_archetype(const ReachabilityFacts& facts, const HandlerContract& left, const HandlerContract& right) {
+    if (!facts.derived || !unary_pair(left, right) || nested_domains(left, right) || nested_domains(right, left)) {
+        return {};
+    }
+    const ReachableTraitSet* joint = nullptr;
+    for (const auto& set : facts.trait_sets) {
+        if (!matches_both(facts, set, left, right)) {
+            continue;
+        }
+        if (joint != nullptr) {
+            return {};
+        }
+        joint = &set;
+    }
+    if (joint == nullptr) {
+        return {};
+    }
+    const auto& set = *joint;
+    std::vector<std::string> traits;
+    std::ranges::transform(set, std::back_inserter(traits), [](const SymbolId& trait) { return make_canonical_id(trait); });
+    std::vector<std::string> origins;
+    for (const auto& origin : facts.origins) {
+        if (std::ranges::contains(origin.trait_sets, set)) {
+            origins.push_back(canonical_node_string(origin.node));
+        }
+    }
+    auto text = "; the two domains meet only in entities with " + joined(traits, ", ");
+    return origins.empty() ? text : text + " (" + joined(origins, ", ") + ")";
+}
+
 }  // namespace
 
 // The single consolidated home for what used to be two independently-duplicated
@@ -719,6 +838,7 @@ std::string unorientable_message(const UnorientableConflict& conflict) {
 bool compute_handler_schedule(ExecutionGraph& graph,
                               const TemplateTraitLookup& templates,
                               const SingleTraitFacts& singles,
+                              const ReachabilityFacts* reachability,
                               ErrorReporter& errors) {
     std::unordered_map<HandlerIdentity, const HandlerNode*, HandlerIdentityHash> nodes;
     for (const auto& handler : graph.handlers) {
@@ -801,6 +921,14 @@ bool compute_handler_schedule(ExecutionGraph& graph,
 
     const auto produced_by_handler = precompute_produced_by_handler(graph.handlers);
     const auto gives_by_handler    = single_gives_by_handler(graph.handlers, templates, singles);
+    std::vector<bool> own_row(graph.handlers.size());
+    std::vector<bool> live(graph.handlers.size());
+    for (std::size_t index = 0; index < graph.handlers.size(); ++index) {
+        const auto& contract = graph.handlers[index].contract;
+        own_row[index]       = touches_own_row(contract);
+        live[index] = own_row[index] && reachability != nullptr && reachability->derived &&
+                      live_domain(*reachability, contract);
+    }
 
     const PublicGroupOrder public_group_order(graph, produced_by_handler);
     const ConflictNodes conflict_nodes(graph, produced_by_handler, gives_by_handler);
@@ -862,12 +990,21 @@ bool compute_handler_schedule(ExecutionGraph& graph,
                 continue;
             }
 
-            auto conflict = pair_conflict(left,
-                                          right,
-                                          produced_by_handler[left_index],
-                                          produced_by_handler[right_index],
-                                          gives_by_handler[left_index],
-                                          gives_by_handler[right_index]);
+            const auto pair = [&](bool disjoint) {
+                return pair_conflict(left,
+                                     right,
+                                     produced_by_handler[left_index],
+                                     produced_by_handler[right_index],
+                                     gives_by_handler[left_index],
+                                     gives_by_handler[right_index],
+                                     disjoint);
+            };
+            const bool may_split = own_row[left_index] && own_row[right_index];
+            const bool disjoint  = may_split && domains_disjoint(reachability,
+                                                                left.contract,
+                                                                right.contract,
+                                                                live[left_index] && live[right_index]);
+            auto conflict        = pair(disjoint);
             auto field_provenance = std::move(conflict.fields);
             std::vector<SymbolId> trait_provenance;
             trait_provenance.reserve(field_provenance.size());
@@ -886,11 +1023,15 @@ bool compute_handler_schedule(ExecutionGraph& graph,
                 orient(left_index, right_index, conflict.left_writes_right, conflict.right_writes_left);
             if (!oriented.has_value()) {
                 const bool left_smaller = left.identity.canonical_id() < right.identity.canonical_id();
-                unorientable.push_back(UnorientableConflict{.first    = left_smaller ? &left : &right,
-                                                            .second   = left_smaller ? &right : &left,
-                                                            .fields   = std::move(field_provenance),
-                                                            .effects  = std::move(effect_provenance),
-                                                            .channels = std::move(channel_provenance)});
+                const bool only_rows    = may_split && !disjoint && reachability != nullptr &&
+                                       effect_provenance.empty() && channel_provenance.empty() && pair(true).empty();
+                unorientable.push_back(UnorientableConflict{
+                    .first    = left_smaller ? &left : &right,
+                    .second   = left_smaller ? &right : &left,
+                    .fields   = std::move(field_provenance),
+                    .effects  = std::move(effect_provenance),
+                    .channels = std::move(channel_provenance),
+                    .joining  = only_rows ? joining_archetype(*reachability, left.contract, right.contract) : ""});
                 continue;
             }
             const auto* before     = oriented->left_first ? &left : &right;

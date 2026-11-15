@@ -585,11 +585,16 @@ permutations C2 to C4 allow. No rule looks at raw identities or at the order ins
   `V(x) := op(V(x), e)` where `e` does not read `x` (`handler-contracts`); `op` is
   commutative and associative (`dsl-numeric-semantics`: "Float min and max are
   commutative"; `or` and `and` on `bool`), so two Joins give `op(op(v, a), b) =
-  op(op(v, b), a)`. Every other shared access can change a value the other reads or
-  leaves.
+  op(op(v, b), a)`. Also when `h` and `k` are unary and their domains are disjoint
+  (`handler-execution-graph`: "Own-row accesses on disjoint domains do not conflict"),
+  and each touches the cell's trait only through its own row: each visits only the
+  entities its domain matches, membership changes only at commits, and both run in one
+  generation, so no entity's cell is accessed by both. Every other shared access can
+  change a value the other reads or leaves.
 - **C2, commands.** Each command of `h` and each command of `k` commute by the command
-  table of `handler-execution-graph` ("Channel conflicts"). Then the commit gives the
-  same `L`, `M` and `V` in either order. Spawns commute only up to `π`; their ordinals
+  table of `handler-execution-graph` ("Channel conflicts"), or both act only on their
+  own entity under disjoint domains, as in C1, so they change different entities. Then
+  the commit gives the same `L`, `M` and `V` in either order. Spawns commute only up to `π`; their ordinals
   swap, so this gives `≈`, and `≈_ord` needs the spawn-order check (Open).
 - **C3, occurrences.** At every position (round, generation), each run reached from
   `h` and each run reached from `k` at that position commute, and so do all runs
@@ -984,10 +989,10 @@ The backend gives the same values (Tested: `test_accumulation_per_cell_headless_
 | R12 teardown | same | no drain after `unload` | Tested: `test_delivery_clocks_headless_behavior` (unload step) |
 | Startup arrival | dsl-trait-lifecycle-triggers: "Load-time entities fire added before load" | `LifecycleTrackers::deliver_arrivals` | Tested: `test_runtime_activation_scheduler` "Lifecycle: arrivals follow creation order, then trait order" |
 | §7.2 depth `H` | handler-execution-graph: "Activation cascade depth is static" | `record_activation_depths` | Tested: `test_delivery_cycles` depth cases |
-| §7.3 C1 | handler-execution-graph: "Contract conflict edges are oriented only by meaningful rules", "Commuting writes add no edge" | `pair_conflict`, `conflict_reasons` | Tested: `test_semantic` "Commuting writes: …" |
+| §7.3 C1 | handler-execution-graph: "Contract conflict edges are oriented only by meaningful rules", "Commuting writes add no edge", "Own-row accesses on disjoint domains do not conflict" | `pair_conflict`, `conflict_reasons`, `domains_disjoint`, `own_row_traits` | Tested: `test_semantic` "Commuting writes: …"; `test_semantic_disjoint_domains`; `test_linearization_disjoint_headless_behavior` |
 | S2 native reads | handler-contracts: "Native stdlib reads are part of the caller's contract" | `native_field_reads` (`native_field_reads.cpp`), `add_contract_call_effects` (`semantic_analyzer.cpp`) | Tested: `test_semantic` "Native field reads: …", `test_native_result_ordering` "Native field reads: …", `test_native_field_reads_headless_behavior`, `test_native_field_reads_swapped_headless_behavior`, codegen "a native read of a buffered field flushes it on entry" (F2) |
 | S2 contract audit | handler-contracts: "Contracts are audited against real accesses", "Every summarized native runs under audit" | `contract_audit_emitter.cpp`, `contract_audit.hpp` | Tested: `test_contract_audit_headless_behavior`, `ContractAuditNativeCoverageTests`, `ContractAuditUntakenFailureTests`, and every headless test built with `CONTRACT_AUDIT` |
-| §7.3 C2, C3, C4 | handler-execution-graph: "Channel conflicts", "Unorientable conflicts are compile errors" | `command_conflicts`, `OccurrenceReach`, `RunConflicts`, `ConflictNodes` | Tested: `test_semantic` "Channel conflicts: …", "Unorientable conflicts: …"; `test_program_linker` "a cross-module occurrence race is a link error" |
+| §7.3 C2, C3, C4 | handler-execution-graph: "Channel conflicts", "Unorientable conflicts are compile errors", "Own-row accesses on disjoint domains do not conflict" | `command_conflicts`, `own_row_command`, `OccurrenceReach`, `RunConflicts`, `ConflictNodes` | Tested: `test_semantic` "Channel conflicts: …", "Unorientable conflicts: …"; `test_program_linker` "a cross-module occurrence race is a link error" |
 | §7.3 spawn order | archetype-reachability: "Observable spawn order must be defined" | `archetype_reachability.cpp` | Tested: `test_archetype_reachability` "[spawn-order]" |
 | §7.4 structural liveness | archetype-reachability; handler-execution-graph: "A trigger with no producer is a compile error" | `archetype_reachability.cpp` | Tested: `test_archetype_reachability` |
 | Trace 8.1 | as R2, R3, R8 | — | Probe. Missing test: none checks a live value read next to an unchanged membership in one activation |

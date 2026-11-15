@@ -357,8 +357,6 @@ rule Patrol:
     each:
         tf.WorldTransform
         PatrolMotion
-    after:
-        Move
 
     on tick:
         position = vec2(position.x + patrol_speed * direction * tick.dt, position.y)

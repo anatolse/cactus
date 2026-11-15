@@ -4,6 +4,7 @@
 #include "frontend/semantic_analyzer.hpp"
 
 #include <cstddef>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -31,6 +32,33 @@ struct NativeCreation {
 struct ReachabilityOptions {
     // Past this many abstract entities, the trait that splits the most is made free.
     std::size_t widening_bound = 4096;
+};
+
+// The trait sets derive_archetype_reachability finds, with no reports and
+// nothing stored. Scheduling uses it, since it runs before the whole-program passes.
+[[nodiscard]] ReachabilityFacts reachable_trait_sets(const DecoratedProgram& program,
+                                                     const ReachabilityOptions& options = {});
+
+// One run of derive_archetype_reachability, split so the schedule can use its
+// facts before the reports, which read the schedule's edges. `program` must
+// outlive it and keep its handlers unchanged until finish().
+class ArchetypeReachability {
+public:
+    explicit ArchetypeReachability(DecoratedProgram& program, const ReachabilityOptions& options = {});
+    ArchetypeReachability(ArchetypeReachability&&) noexcept;
+    ArchetypeReachability& operator=(ArchetypeReachability&&) noexcept;
+    ArchetypeReachability(const ArchetypeReachability&)            = delete;
+    ArchetypeReachability& operator=(const ArchetypeReachability&) = delete;
+    ~ArchetypeReachability();
+
+    [[nodiscard]] const ReachabilityFacts& facts() const;
+    // Reports declarations that can never act, moves the facts into the
+    // program and derives its hierarchy.
+    void finish(ErrorReporter& errors);
+
+private:
+    struct State;
+    std::unique_ptr<State> state_;
 };
 
 // Computes which trait sets entities of the whole program can carry, stores

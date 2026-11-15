@@ -135,8 +135,7 @@ public:
     [[nodiscard]] bool matches(const ReachableTraitSet& set,
                                const std::vector<SymbolId>& required,
                                const std::vector<SymbolId>& excluded) const {
-        return std::ranges::all_of(required, [&](const SymbolId& trait) { return may_have(set, trait); }) &&
-               std::ranges::none_of(excluded, [&](const SymbolId& trait) { return std::ranges::contains(set, trait); });
+        return facts_->may_match(set, required, excluded);
     }
 
     // Some reachable set matching the domain may carry `trait`.

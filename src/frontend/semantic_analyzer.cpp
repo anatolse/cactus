@@ -8724,6 +8724,7 @@ void SemanticAnalyzer::collect_rule_dependency(const RuleNode& rule, std::size_t
             expand_derived_reads(inferred);
             add_keep_effects(rule, inferred);
             finalize_write_kinds(inferred);
+            finalize_own_row_traits(inferred);
             inferred.iteration_order =
                 derive_iteration_order(inferred, rule.limit.has_value() && rule.order_by.empty());
             stage_rule_clauses(rule, pair_scope, inferred);
@@ -8870,6 +8871,7 @@ void SemanticAnalyzer::collect_extern_rule_dependency(const ExternRuleNode& rule
         contract.effects.insert(handler.resolved_effects.begin(), handler.resolved_effects.end());
         contract.effect_acts.insert(handler.resolved_effects.begin(), handler.resolved_effects.end());
         finalize_write_kinds(contract);
+        finalize_own_row_traits(contract);
 
         HandlerNode node;
         node.identity       = HandlerIdentity{.rule = *rule.resolved_rule_id, .trigger = *handler.resolved_trigger};
@@ -9150,8 +9152,10 @@ void record_read(HandlerContract& contract,
                  const SymbolId& trait,
                  const std::optional<std::string>& field,
                  const ResolvedTrait* declaration,
-                 const ExprNode* site) {
+                 const ExprNode* site,
+                 bool own_row) {
     record_unobserved_read(contract, trait, field, declaration);
+    (own_row ? contract.own_row_traits : contract.other_row_traits).insert(trait);
     add_field_access(contract.observed_reads[trait], field, declaration);
     if (site != nullptr && field.has_value()) {
         site->field_read = TraitFieldRef{.trait = trait, .field = field};
@@ -9164,8 +9168,10 @@ void record_write(HandlerContract& contract,
                   const SymbolId& trait,
                   const std::optional<std::string>& field,
                   const ResolvedTrait* declaration,
-                  FieldWriteKind kind) {
+                  FieldWriteKind kind,
+                  bool own_row) {
     record_unobserved_read(contract, trait, field, declaration);
+    (own_row ? contract.own_row_traits : contract.other_row_traits).insert(trait);
     if (!field.has_value()) {
         contract.untracked_accesses.push_back(TraitFieldRef{.trait = trait, .field = std::nullopt});
     }
@@ -9238,6 +9244,13 @@ void finalize_write_kinds(HandlerContract& contract) {
         }
     }
     contract.assignment_sites.clear();
+}
+
+void finalize_own_row_traits(HandlerContract& contract) {
+    std::erase_if(contract.own_row_traits, [&](const SymbolId& trait) {
+        return contract.other_row_traits.contains(trait) || contract.projects.contains(trait);
+    });
+    contract.other_row_traits.clear();
 }
 
 FieldWriteKind write_kind(const HandlerContract& contract, const SymbolId& trait, const std::string& field) {
@@ -9744,7 +9757,7 @@ struct SemanticAnalyzer::HandlerBodyVisitor {
             analyzer->record_transition_sources(
                 *contract, *node.resolved_trait_id, transition_sources(*node.resolved_trait_id, entity, node.location));
         }
-        analyzer->record_state_writes(*contract, node.resolved_trait_id);
+        analyzer->record_state_writes(*contract, node.resolved_trait_id, entity.kind == EntityTargetKind::Self);
         for (const auto& field : node.args) {
             visit_expr(*field.value, *locals);
         }
@@ -9774,8 +9787,9 @@ struct SemanticAnalyzer::HandlerBodyVisitor {
     }
 
     void operator()(const RemoveTraitStmt& node) const {
-        add_contract_command(*contract, HandlerCommandKind::Remove, node.resolved_trait_id, entity_of(node.target_expr));
-        analyzer->record_state_writes(*contract, node.resolved_trait_id);
+        const auto entity = entity_of(node.target_expr);
+        add_contract_command(*contract, HandlerCommandKind::Remove, node.resolved_trait_id, entity);
+        analyzer->record_state_writes(*contract, node.resolved_trait_id, entity.kind == EntityTargetKind::Self);
         if (node.target_expr.has_value()) {
             visit_expr(**node.target_expr, *locals);
         }
@@ -10039,18 +10053,20 @@ bool SemanticAnalyzer::walk_state_arm(const MatchStmt& match,
     const auto& alias       = *arm.alias;
     const auto& variant     = *arm.resolved_trait_id;
     const auto* declaration = find_resolved_trait(variant);
+    // The subject is a filter alias: the row's own state in a unary handler, a pair binding's otherwise.
+    const bool own_row      = contract.domain_kind == HandlerDomainKind::Unary;
     const auto arm_read     = [&](const ExprNode& expr, const LocalNames& names) {
         if (names.contains(alias)) {
             return resolve_read(expr, names);
         }
         if (const auto* ident = std::get_if<IdentExpr>(&expr.expr); ident != nullptr && ident->name == alias) {
-            record_read(contract, variant, std::nullopt, declaration);
+            record_read(contract, variant, std::nullopt, declaration, nullptr, own_row);
             return true;
         }
         const auto* member = std::get_if<MemberExpr>(&expr.expr);
         const auto* owner  = member == nullptr ? nullptr : std::get_if<IdentExpr>(&member->object->expr);
         if (owner != nullptr && owner->name == alias) {
-            record_read(contract, variant, member->member, declaration, &expr);
+            record_read(contract, variant, member->member, declaration, &expr, own_row);
             return true;
         }
         return resolve_read(expr, names);
@@ -10059,7 +10075,7 @@ bool SemanticAnalyzer::walk_state_arm(const MatchStmt& match,
         if (assign.name == alias && !names.contains(alias)) {
             const auto kind  = classify_assignment(assign).kind;
             const auto field = segment_at(assign.path, 0);
-            record_write(contract, variant, field, declaration, kind);
+            record_write(contract, variant, field, declaration, kind, own_row);
             record_assignment(contract, assign, variant, field, true);
             return;
         }
@@ -10116,16 +10132,19 @@ void SemanticAnalyzer::record_transition_sources(HandlerContract& contract,
     });
 }
 
-void SemanticAnalyzer::record_state_writes(HandlerContract& contract, const std::optional<SymbolId>& trait) const {
+void SemanticAnalyzer::record_state_writes(HandlerContract& contract,
+                                           const std::optional<SymbolId>& trait,
+                                           bool own_row) const {
     const auto* state = state_of_trait(trait);
     if (state == nullptr || !state->symbol_id.has_value()) {
         return;
     }
     const auto slot = state_slot_trait(*state->symbol_id);
-    record_write(contract, slot, std::nullopt, find_resolved_trait(slot), FieldWriteKind{});
+    record_write(contract, slot, std::nullopt, find_resolved_trait(slot), FieldWriteKind{}, own_row);
     for (const auto& variant : state->variants) {
         const auto variant_trait = state_variant_trait(*state->symbol_id, variant.name);
-        record_write(contract, variant_trait, std::nullopt, find_resolved_trait(variant_trait), FieldWriteKind{});
+        record_write(
+            contract, variant_trait, std::nullopt, find_resolved_trait(variant_trait), FieldWriteKind{}, own_row);
     }
 }
 
@@ -10279,18 +10298,23 @@ SemanticAnalyzer::infer_regular_handler_contract(  // NOLINT(readability-functio
         }
         return match;
     };
+    // A filter alias or a bare field name names the row's own entity.
     auto add_read = [this, &contract](
                         const SymbolId& symbol, const std::optional<std::string>& field, const ExprNode& site) {
-        record_read(contract, symbol, field, find_resolved_trait(symbol), &site);
+        record_read(contract, symbol, field, find_resolved_trait(symbol), &site, true);
     };
-    auto add_write = [this, &contract](
-                         const SymbolId& symbol, const std::optional<std::string>& field, FieldWriteKind kind) {
-        record_write(contract, symbol, field, find_resolved_trait(symbol), kind);
+    auto add_write = [this, &contract](const SymbolId& symbol,
+                                       const std::optional<std::string>& field,
+                                       FieldWriteKind kind,
+                                       bool own_row) {
+        record_write(contract, symbol, field, find_resolved_trait(symbol), kind, own_row);
     };
-    auto add_assignment = [&contract, &add_write](
-                              const VarAssign& node, const SymbolId& symbol, const std::optional<std::string>& field) {
+    auto add_assignment = [&contract, &add_write](const VarAssign& node,
+                                                  const SymbolId& symbol,
+                                                  const std::optional<std::string>& field,
+                                                  bool own_row) {
         const auto kind = classify_assignment(node).kind;
-        add_write(symbol, field, kind);
+        add_write(symbol, field, kind, own_row);
         record_assignment(contract, node, symbol, field, true);
     };
 
@@ -10320,7 +10344,7 @@ SemanticAnalyzer::infer_regular_handler_contract(  // NOLINT(readability-functio
             return;
         }
         if (auto alias = aliases.find(node.name); alias != aliases.end()) {
-            add_assignment(node, alias->second, segment_at(node.path, 0));
+            add_assignment(node, alias->second, segment_at(node.path, 0), true);
         } else if (!node.path.empty()) {
             // Dotted assignment whose base identifier isn't itself a bound
             // filter alias (e.g. a binding-relative trait path, per
@@ -10336,18 +10360,19 @@ SemanticAnalyzer::infer_regular_handler_contract(  // NOLINT(readability-functio
             // (the binding-relative-trait-path idiom), then fall back to
             // treating the trailing segment as a field name on one of the
             // rule's aliased traits.
+            // The root is not a filter alias, so the row it writes is not proven to be its own.
             if (auto trait = try_resolve_trait_ref_to_symbol(node.path.front()); trait.has_value()) {
-                add_assignment(node, *trait, segment_at(node.path, 1));
+                add_assignment(node, *trait, segment_at(node.path, 1), false);
             } else if (auto field_trait = trait_for_field(node.path.back()); field_trait.has_value()) {
                 // The trailing segment only guesses the trait, so the field is unproven.
-                add_assignment(node, *field_trait, std::nullopt);
+                add_assignment(node, *field_trait, std::nullopt, false);
             }
         } else if (auto trait = trait_for_field(node.name); trait.has_value()) {
-            add_assignment(node, *trait, node.name);
+            add_assignment(node, *trait, node.name, true);
         }
     };
     auto add_projection = [&add_write, &contract](const SymbolId& symbol) {
-        add_write(symbol, std::nullopt, FieldWriteKind{});
+        add_write(symbol, std::nullopt, FieldWriteKind{}, false);
         contract.projects.insert(symbol);
     };
 
@@ -16068,8 +16093,14 @@ void SemanticAnalyzer::validate_after_clauses(ProgramNode& program) {
     // build_dependency_graph used to do inline (see execution_graph_scheduler.hpp).
     expand_group_orderings(result_.execution_graph);
     derive_link_losses(result_.execution_graph.handlers, result_.traits);
-    (void)compute_handler_schedule(
-        result_.execution_graph, template_trait_lookup(result_.persistence), single_trait_facts(result_), errors_);
+    // A module that imports others is linked later, and the link decides what its own archetypes can't.
+    const auto reachability =
+        imports_.modules.empty() ? std::optional(reachable_trait_sets(result_)) : std::optional<ReachabilityFacts>{};
+    (void)compute_handler_schedule(result_.execution_graph,
+                                   template_trait_lookup(result_.persistence),
+                                   single_trait_facts(result_),
+                                   reachability.has_value() ? &*reachability : nullptr,
+                                   errors_);
     validate_lifecycle_trigger_traits(result_.execution_graph, errors_);
 }
 

@@ -1631,6 +1631,83 @@ TEST_CASE("program_linker: a cross-module ambiguity is a link error", "[linker][
     fs::remove_all(linker_build_dir() / "cross_module_ambiguity", ec);
 }
 
+namespace {
+
+// `fight` imports, so its own analysis has no reachability facts; only the link sees `world`'s entities.
+void compile_split_fight(ModuleSet& modules, const std::string& world_entities) {
+    modules.compile("std.core", {}, core_source() + "pub trait Hero\npub trait Enemy\n");
+    modules.compile("fight",
+                    {"std.core"},
+                    "module fight\n"
+                    "use std.core\n"
+                    "rule HealHero:\n"
+                    "    each:\n"
+                    "        Hero\n"
+                    "        Score as s\n"
+                    "    on tick:\n"
+                    "        s.value = 10\n"
+                    "rule HurtEnemy:\n"
+                    "    each:\n"
+                    "        Enemy\n"
+                    "        Score as s\n"
+                    "    on tick:\n"
+                    "        s.value = 1\n");
+    modules.compile("world",
+                    {"std.core"},
+                    "module world\n"
+                    "use std.core\n"
+                    "entity Knight:\n"
+                    "    Hero\n"
+                    "    Score\n"
+                    "entity Orc:\n"
+                    "    Enemy\n"
+                    "    Score\n" +
+                        world_entities);
+}
+
+}  // namespace
+
+TEST_CASE("program_linker: disjoint domains split across modules link with no edge",
+          "[linker][handler-execution-graph][disjoint-domains]") {
+    ModuleSet modules(linker_build_dir() / "disjoint_domains_split");
+    compile_split_fight(modules, "");
+
+    ErrorReporter errors;
+    const auto linked = modules.link(errors);
+    INFO((errors.diagnostics().empty() ? "" : errors.diagnostics().front().message));
+    REQUIRE(linked.has_value());
+    const auto edges = edge_directions(*linked);
+    CHECK(std::ranges::none_of(edges, [](const auto& edge) {
+        const auto& [before, after, kind] = edge;
+        return (before == "HealHero" && after == "HurtEnemy") || (before == "HurtEnemy" && after == "HealHero");
+    }));
+
+    std::error_code ec;
+    fs::remove_all(linker_build_dir() / "disjoint_domains_split", ec);
+}
+
+TEST_CASE("program_linker: an archetype from another module that joins the domains is a link error",
+          "[linker][handler-execution-graph][disjoint-domains][unorientable]") {
+    ModuleSet modules(linker_build_dir() / "disjoint_domains_joined");
+    compile_split_fight(modules,
+                        "entity Traitor:\n"
+                        "    Hero\n"
+                        "    Enemy\n"
+                        "    Score\n");
+
+    ErrorReporter errors;
+    CHECK_FALSE(modules.link(errors).has_value());
+    CHECK(std::ranges::any_of(errors.diagnostics(), [](const auto& diagnostic) {
+        return diagnostic.message.starts_with("unorientable conflict between 'fight.HealHero/on std.core.tick' and "
+                                              "'fight.HurtEnemy/on std.core.tick'") &&
+               diagnostic.message.contains("the two domains meet only in entities with std.core.Enemy, std.core.Hero, "
+                                           "std.core.Score (world.Traitor)");
+    }));
+
+    std::error_code ec;
+    fs::remove_all(linker_build_dir() / "disjoint_domains_joined", ec);
+}
+
 TEST_CASE("program_linker: a cross-module occurrence race is a link error",
           "[linker][handler-execution-graph][unorientable]") {
     ModuleSet modules(linker_build_dir() / "cross_module_occurrence_race");

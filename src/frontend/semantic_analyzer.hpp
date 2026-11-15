@@ -668,6 +668,10 @@ struct HandlerContract {
     std::unordered_set<SymbolId> projects;  // projected (transient) trait outputs
     std::vector<InferredProjection> projections;  // `projects` with their targets, first-use order
     std::unordered_set<SymbolId> observed_membership;  // traits named by query filters, positive or negated
+    // Traits read or written only through the handler's own row: `self` or an `each:` alias.
+    std::unordered_set<SymbolId> own_row_traits;
+    // Inference only: traits read or written another way; finalize_own_row_traits() uses and clears it.
+    std::unordered_set<SymbolId> other_row_traits;
     // Named-entity access (`Game.Match.over`); every entry is also in reads/writes above.
     NamedFieldTable named_reads;
     NamedFieldTable named_writes;
@@ -725,14 +729,16 @@ void record_read(HandlerContract& contract,
                  const SymbolId& trait,
                  const std::optional<std::string>& field,
                  const ResolvedTrait* declaration,
-                 const ExprNode* site = nullptr);
+                 const ExprNode* site = nullptr,
+                 bool own_row         = false);
 // A relation read: its rows' existence, plus `field` when one is read.
 void record_relation_read(HandlerContract& contract, const SymbolId& relation, const std::optional<std::string>& field);
 void record_write(HandlerContract& contract,
                   const SymbolId& trait,
                   const std::optional<std::string>& field,
                   const ResolvedTrait* declaration,
-                  FieldWriteKind kind);
+                  FieldWriteKind kind,
+                  bool own_row = false);
 // Named access: records the requirement, the named table entry, and the
 // ordinary trait read/write.
 void record_named_read(HandlerContract& contract,
@@ -760,6 +766,8 @@ void add_projection(HandlerContract& contract, const SymbolId& trait, EntityTarg
 // A field read outside its own updates becomes General; an assignment keeps its
 // AccumulationTarget only while its field stays Accum, and otherwise gets a field_write.
 void finalize_write_kinds(HandlerContract& contract);
+// Drops from own_row_traits every projected trait and every trait the handler also touches another way.
+void finalize_own_row_traits(HandlerContract& contract);
 // General for a field the contract doesn't write by name.
 [[nodiscard]] FieldWriteKind write_kind(const HandlerContract& contract, const SymbolId& trait, const std::string& field);
 
@@ -1026,6 +1034,13 @@ struct ReachabilityFacts {
     // An entity with trait set `set` may carry `trait`: the set has it, or the trait is free.
     [[nodiscard]] bool may_carry(const ReachableTraitSet& set, const SymbolId& trait) const {
         return std::ranges::contains(set, trait) || std::ranges::contains(free_traits, trait);
+    }
+    // An entity with trait set `set` may match a domain that requires `required` and excludes `excluded`.
+    [[nodiscard]] bool may_match(const ReachableTraitSet& set,
+                                 std::span<const SymbolId> required,
+                                 std::span<const SymbolId> excluded) const {
+        return std::ranges::all_of(required, [&](const SymbolId& trait) { return may_carry(set, trait); }) &&
+               std::ranges::none_of(excluded, [&](const SymbolId& trait) { return std::ranges::contains(set, trait); });
     }
 
     friend bool operator==(const ReachabilityFacts&, const ReachabilityFacts&) = default;
@@ -2235,7 +2250,7 @@ private:
                         const std::function<void(const VarAssign&, const LocalNames&)>& handle_var_assign,
                         const std::function<void(const SymbolId&)>& on_project_trait) const;
     // `add S.V` and `remove S` may replace any variant, so they write the slot and every variant.
-    void record_state_writes(HandlerContract& contract, const std::optional<SymbolId>& trait) const;
+    void record_state_writes(HandlerContract& contract, const std::optional<SymbolId>& trait, bool own_row) const;
     // The variants an `add` of `variant` can move its entity out of; empty unless `variant` is a state variant.
     [[nodiscard]] std::vector<TransitionSource> transition_sources(const SymbolId& variant,
                                                                    std::span<const SymbolId> required,

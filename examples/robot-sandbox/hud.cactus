@@ -319,9 +319,6 @@ rule ShowMenuCamera:
     each:
         MenuView
         viewport.Viewport as vp
-    after:
-        robot.ShowFirstPerson
-        robot.ShowStrategy
 
     on tick:
         vp.active = not query.exists[robot.FirstPersonView]()

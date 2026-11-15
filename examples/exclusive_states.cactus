@@ -510,8 +510,6 @@ rule FinishWideState:
 rule KeepWideStateFinal:
     each:
         WideMode.Done
-    after:
-        FinishWideState
     on tick:
         add WideMode.Done:
             elapsed = 0.0

@@ -27,10 +27,14 @@ struct SingleTraitFacts {
 };
 
 // Two handlers that can each give one of `singles.traits` to an entity conflict.
+// Unary handlers whose domains no reachable trait set joins don't conflict on what
+// they touch only through their own rows. A null `reachability` means more modules
+// are still to be linked: unary pairs count as disjoint unless nested, and the final link reports the rest.
 // Returns false if any error was reported to `errors` during scheduling.
 bool compute_handler_schedule(ExecutionGraph& graph,
                               const TemplateTraitLookup& templates,
                               const SingleTraitFacts& singles,
+                              const ReachabilityFacts* reachability,
                               ErrorReporter& errors);
 
 // Adds one ExplicitGroup edge per member handler for each of graph.group_orderings.

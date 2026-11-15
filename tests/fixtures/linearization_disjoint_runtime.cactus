@@ -1,0 +1,38 @@
+module linearization_disjoint_runtime
+
+use std.core
+
+# Nothing orders the two handlers. No entity is both a hero and an enemy, so
+# each handler assigns rows the other never visits, and every order gives the
+# same world.
+
+trait Health:
+    var hp: int = 5
+
+trait Hero
+
+trait Enemy
+
+entity Knight:
+    Hero
+    Health
+
+entity Orc:
+    Enemy
+    Health
+
+rule HealHero:
+    each:
+        Hero
+        Health as h
+
+    on tick:
+        h.hp = h.hp * 2 + 1
+
+rule HurtEnemy:
+    each:
+        Enemy
+        Health as h
+
+    on tick:
+        h.hp = h.hp * 3 - 7

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/error_reporter.hpp"
+#include "frontend/archetype_reachability.hpp"
 #include "frontend/semantic_analyzer.hpp"
 
 #include <filesystem>
@@ -39,7 +40,8 @@ public:
     bool merge_into(DecoratedProgram& target, const DecoratedProgram& src, const std::string& src_module_name);
 
 private:
-    bool rebuild_execution_graph(DecoratedProgram& program, bool validate_references);
+    // Only the final link passes `final_run`; it receives the reachability run the schedule used.
+    bool rebuild_execution_graph(DecoratedProgram& program, std::optional<ArchetypeReachability>* final_run);
     // Save operations occur at deterministic boundaries defined only for the
     // graph-driven scheduler (dsl-stdlib-persistence): the legacy
     // update_project/render_project path has no such boundary, so a request
@@ -66,6 +68,9 @@ private:
     std::unordered_set<std::string> merged_modules_;
 };
 
-void run_whole_program_passes(DecoratedProgram& program, ErrorReporter& errors);
+// `reachability`, when given, is a run over `program` that has not been finished.
+void run_whole_program_passes(DecoratedProgram& program,
+                              ErrorReporter& errors,
+                              ArchetypeReachability* reachability = nullptr);
 
 }  // namespace cactus

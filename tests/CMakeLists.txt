@@ -327,6 +327,10 @@ add_executable(test_semantic_single_traits test_semantic_single_traits.cpp)
 target_link_libraries(test_semantic_single_traits PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticSingleTraitsTests COMMAND test_semantic_single_traits)
 
+add_executable(test_semantic_disjoint_domains test_semantic_disjoint_domains.cpp)
+target_link_libraries(test_semantic_disjoint_domains PRIVATE cactus_frontend Catch2::Catch2WithMain)
+add_test(NAME SemanticDisjointDomainsTests COMMAND test_semantic_disjoint_domains)
+
 add_executable(test_semantic_required_links test_semantic_required_links.cpp)
 target_link_libraries(test_semantic_required_links PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticRequiredLinksTests COMMAND test_semantic_required_links)
@@ -1095,6 +1099,13 @@ cactus_add_headless_behavior_test(test_linearization_commuting_headless_behavior
     LINEARIZATION_HARNESS
 )
 
+cactus_add_headless_behavior_test(test_linearization_disjoint_headless_behavior
+    CACTUS_SOURCE tests/fixtures/linearization_disjoint_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_linearization_disjoint_headless_behavior.cpp
+    LINEARIZATION_HARNESS
+)
+
 cactus_add_headless_behavior_test(test_exact_accumulation_headless_behavior
     CACTUS_SOURCE examples/exact_accumulation.cactus
     BACKEND cpp-entt
@@ -1307,6 +1318,12 @@ cactus_add_headless_behavior_test(test_exclusive_states_headless_behavior
     CACTUS_SOURCE examples/exclusive_states.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_exclusive_states_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_disjoint_rule_domains_headless_behavior
+    CACTUS_SOURCE examples/disjoint_rule_domains.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_disjoint_rule_domains_headless_behavior.cpp
 )
 
 cactus_add_headless_behavior_test(test_required_links_headless_behavior

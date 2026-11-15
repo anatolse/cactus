@@ -252,12 +252,13 @@ bool ProgramLinker::merge_into(DecoratedProgram& target,
     ok = ok && apply_imported_keepers(target);
     if (ok) {
         merged_modules_.insert(src_module_name);
-        ok = rebuild_execution_graph(target, false);
+        ok = rebuild_execution_graph(target, nullptr);
     }
     return ok;
 }
 
-bool ProgramLinker::rebuild_execution_graph(DecoratedProgram& program, bool validate_references) {
+bool ProgramLinker::rebuild_execution_graph(DecoratedProgram& program,
+                                           std::optional<ArchetypeReachability>* final_run) {
     auto& graph = program.execution_graph;
     graph.schedule_edges.clear();
     graph.phase_barriers.clear();
@@ -292,7 +293,7 @@ bool ProgramLinker::rebuild_execution_graph(DecoratedProgram& program, bool vali
             continue;
         }
         if (!nodes.contains(edge.before)) {
-            if (validate_references && edge.kind == ScheduleEdgeKind::ExplicitHandler) {
+            if (final_run != nullptr && edge.kind == ScheduleEdgeKind::ExplicitHandler) {
                 const auto& dependent = *nodes.at(edge.after);
                 errors_.error(dependent.location,
                               "unknown linked handler '" + edge.before.canonical_id() + "' required by '" +
@@ -307,7 +308,15 @@ bool ProgramLinker::rebuild_execution_graph(DecoratedProgram& program, bool vali
 
     expand_group_orderings(graph);
     derive_link_losses(graph.handlers, program.traits);
-    const bool schedule_ok = compute_handler_schedule(graph, template_trait_lookup(program.persistence), single_trait_facts(program), errors_);
+    // Only the final link sees every module; reachability is costly, so earlier rebuilds defer to it.
+    if (final_run != nullptr) {
+        final_run->emplace(program);
+    }
+    const bool schedule_ok = compute_handler_schedule(graph,
+                                                      template_trait_lookup(program.persistence),
+                                                      single_trait_facts(program),
+                                                      final_run != nullptr ? &(*final_run)->facts() : nullptr,
+                                                      errors_);
     check_phase_lineage_cycles(graph.phases, errors_);
     validate_lifecycle_trigger_traits(graph, errors_);
 
@@ -341,10 +350,11 @@ std::optional<DecoratedProgram> ProgramLinker::link(const std::vector<std::files
         }
     }
 
-    if (!rebuild_execution_graph(merged, true)) {
+    std::optional<ArchetypeReachability> reachability;
+    if (!rebuild_execution_graph(merged, &reachability)) {
         return std::nullopt;
     }
-    run_whole_program_passes(merged, errors_);
+    run_whole_program_passes(merged, errors_, &*reachability);
 
     validate_persistence_requires_graph_scheduler(merged);
     validate_set_requires_graph_scheduler(merged);
@@ -355,8 +365,14 @@ std::optional<DecoratedProgram> ProgramLinker::link(const std::vector<std::files
     return merged;
 }
 
-void run_whole_program_passes(DecoratedProgram& program, ErrorReporter& errors) {
-    derive_archetype_reachability(program, errors);
+void run_whole_program_passes(DecoratedProgram& program,
+                              ErrorReporter& errors,
+                              ArchetypeReachability* reachability) {
+    if (reachability != nullptr) {
+        reachability->finish(errors);
+    } else {
+        derive_archetype_reachability(program, errors);
+    }
     validate_required_links(program, errors);
     finalize_pair_plans(program, errors);
     check_query_costs(program, errors);

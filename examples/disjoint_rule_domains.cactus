@@ -1,0 +1,79 @@
+module disjoint_rule_domains
+
+use std.core
+
+# Two rules may write the same field with no `after:` when no entity can match
+# both. No entity is a hero and an enemy at once, so healing heroes and hurting
+# enemies don't depend on each other. A guard is in exactly one mood, so each
+# mood's rule moves the guard on its own row. A test drives frames and reads
+# health and mood.
+
+trait Health:
+    var hp: int = 5
+
+trait Hero
+
+trait Enemy
+
+state Mood:
+    Calm -> Curious:
+        var rest: int = 0
+    Curious -> Hunting:
+        var looks: int = 0
+    Hunting -> Calm:
+        var chase: int = 0
+
+entity Knight:
+    Hero
+    Health
+
+entity Orc:
+    Enemy
+    Health
+
+entity Watchman:
+    Mood
+
+rule HealHero:
+    each:
+        Hero
+        Health as h
+
+    on tick:
+        h.hp = 10
+
+rule HurtEnemy:
+    each:
+        Enemy
+        Health as h
+
+    on tick:
+        if h.hp > 0:
+            h.hp -= 1
+
+rule Rest:
+    each:
+        Mood.Calm as c
+
+    on tick:
+        c.rest += 1
+        if c.rest >= 2:
+            add Mood.Curious
+
+rule Look:
+    each:
+        Mood.Curious as c
+
+    on tick:
+        c.looks += 1
+        if c.looks >= 2:
+            add Mood.Hunting
+
+rule Chase:
+    each:
+        Mood.Hunting as h
+
+    on tick:
+        h.chase += 1
+        if h.chase >= 2:
+            add Mood.Calm

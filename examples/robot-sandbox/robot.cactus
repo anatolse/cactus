@@ -283,8 +283,6 @@ rule ShowStrategy:
         StrategyView
         viewport.Viewport as vp
         voxel.Cutaway as cut
-    after:
-        ShowFirstPerson
 
     on tick:
         vp.active = game.Game[game.Session].camera == game.View.Strategy

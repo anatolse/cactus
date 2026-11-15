@@ -162,7 +162,6 @@ rule SecondWriter:
         Probe as probe
     after:
         FirstWriter
-        TakeSnapshot
 
     on tick:
         if probe.done:

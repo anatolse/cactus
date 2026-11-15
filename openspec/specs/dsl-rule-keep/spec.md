@@ -242,4 +242,35 @@ A keep rule that reads a derived relation SHALL depend on every keep rule that k
 
 #### Scenario: Chain through a closure
 - **WHEN** `WalkLinks` keeps `Walk`, and `Connected` keeps a trait from `Reach(heart, t)` where `Reach = closure(Walk)`
-- **THEN** compilation accepts both, and `Connected` follows the `Walk` rows that `WalkLinks`'s last run committed, as it would by testing `Walk` itself
+- **THEN** compilation accepts both, and when both run in one phase `Connected` follows the `Walk` rows that `WalkLinks` committed in the same activation, as it would by testing `Walk` itself
+
+### Requirement: Dependent keep rules read the current activation
+Within one phase, the *depth* of a keep rule SHALL be 0 when it depends on no keep rule of that phase, and otherwise one more than the greatest depth among the keep rules of that phase it depends on, with dependencies as defined by "Keep rules don't depend on themselves" and "Keep dependencies pass through derived relations".
+
+A keep rule of depth 0 SHALL run in its group's place, as before. A keep rule of depth `d >= 1` SHALL run in commit round `d` of the same activation, after that round's commands are applied and before that round's lifecycle deliveries, and SHALL read the presence, field values and rows that the keep rules it depends on produced in this activation. Its own changes SHALL be applied in the next commit round, where their `on added` and `on removed` triggers fire. Keep rules of one round SHALL run in a fixed order that does not depend on declaration or link order. The `group:` of a keep rule of depth one or more SHALL still name its phase.
+
+A dependency on a keep rule of another phase SHALL NOT add depth: the rule reads what that keeper last committed. When a keeper's `when:` is false it does not run, its rows stay, and the rules that depend on it SHALL run and read those rows.
+
+#### Scenario: A chain settles in one activation
+- **WHEN** `AnchoredFact` keeps `Anchored` from `Bedrock`, `HeldFact` keeps `Held(m, root)` over roots with `Anchored`, and `FloatingFact` keeps `Floating` where `not Held(self, _)`, all in one phase, and the world starts with every cell joined to bedrock
+- **THEN** after the first activation no cell carries `Floating`, and `on added Floating` has fired for no cell
+
+#### Scenario: Depth follows the longest path
+- **WHEN** `C` depends on `A` and on `B`, and `B` depends on `A`
+- **THEN** `A` has depth 0, `B` depth 1 and `C` depth 2
+
+#### Scenario: Triggers of a dependent fact fire in the same activation
+- **WHEN** a change makes `LowHealth` appear on an entity and `CanEscapeFact` filters on `LowHealth`
+- **THEN** `on added CanEscape` fires in the activation in which `LowHealth` was computed
+
+#### Scenario: Dependency across phases
+- **WHEN** `A` is kept in a `fixed_tick` group and `B`, in a `tick` group, filters on `A`
+- **THEN** `B` has depth 0 and reads the `A` that the last `fixed_tick` activation committed
+
+#### Scenario: A gated keeper
+- **WHEN** `A`'s `when:` is false in an activation and `B` depends on `A`
+- **THEN** `A`'s rows stay as they were and `B` runs against them
+
+#### Scenario: Each keep rule still runs once
+- **WHEN** a phase with a chain of three keep rules is activated once
+- **THEN** each of the three rules runs exactly once

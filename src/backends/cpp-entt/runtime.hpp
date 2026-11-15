@@ -1909,6 +1909,19 @@ struct QueuedEvent {
 template <typename Occurrence>
 using DelayedQueue = std::deque<QueuedEvent<Occurrence>>;
 
+// The keep rules one phase activation runs in commit rounds: those of depth d
+// run in round d, after its commands apply and before its lifecycle deliveries.
+struct KeepRounds {
+    std::size_t depth                                       = 0;
+    void (*run)(entt::registry& registry, std::size_t round) = nullptr;
+
+    void operator()(entt::registry& registry, std::size_t round) const {
+        if (round <= depth) {
+            run(registry, round);
+        }
+    }
+};
+
 // Per-activation scheduler state: queued events, pending structural commands,
 // and the running clock's delayed queue. `Occurrence` is the program's
 // `EventOccurrence` variant; codegen declares
@@ -1928,6 +1941,7 @@ struct ActivationRuntime {
     std::uint32_t delivery_component = kNoComponent;
     bool active{};
     CommitRoundHook commit_round = nullptr;  // set by programs with a single trait
+    KeepRounds keep_rounds;  // set by a phase activation just before its commit, which uses them up
 };
 
 // Queues a structural command (spawn/destroy/add/remove/set) to apply once the
@@ -2459,9 +2473,10 @@ private:
     std::tuple<LifecycleTracker<Traits>...> trackers_;
 };
 
-// Applies every queued structural command in one pass. A program with no
-// lifecycle trigger calls this overload, so no tracking code is instantiated.
-// `drain_cascade` keeps the signature shared with the overload below.
+// Applies the queued structural commands. A program with no lifecycle trigger
+// calls this overload, so no tracking code is instantiated; only keep rounds
+// queue commands during it. `drain_cascade` keeps the signature shared with
+// the overload below.
 template <typename Occurrence, typename DrainCascade>
 void commit_activation(ActivationRuntime<Occurrence>& activation,
                        entt::registry& registry,
@@ -2469,14 +2484,20 @@ void commit_activation(ActivationRuntime<Occurrence>& activation,
     static_assert(is_event_occurrence_variant_v<Occurrence>,
                   "ActivationRuntime<Occurrence>'s Occurrence must be a std::variant<...> of the program's concrete "
                   "event types (the generated EventOccurrence alias)");
-    auto commands = std::move(activation.commands);
-    activation.commands.clear();
-    apply_commit_round(activation, registry, commands, [&](StructuralCommand& command) { command.apply(registry); });
+    const auto keeps = std::exchange(activation.keep_rounds, {});
+    for (std::size_t round = 1; !activation.commands.empty() || round <= keeps.depth; ++round) {
+        count_commit_round();
+        auto commands = std::move(activation.commands);
+        activation.commands.clear();
+        apply_commit_round(activation, registry, commands, [&](StructuralCommand& command) { command.apply(registry); });
+        keeps(registry, round);
+    }
 }
 
-// With lifecycle trackers, commit runs in rounds: apply the batch, deliver its
-// net trait changes, drain the cascade, and repeat while that cascade queued
-// more commands. The loop ends because immediate deliveries form no cycle.
+// With lifecycle trackers, commit runs in rounds: apply the batch, run the
+// round's keep rules, deliver its net trait changes, drain the cascade, and
+// repeat while commands or keep rounds remain. The loop ends because
+// immediate deliveries form no cycle and keep rounds are finite.
 // `drain_cascade` is a callable rather than drain_event_cascade itself so
 // codegen can pass the forward-declared `&generated_drain_event_cascade`.
 template <typename Occurrence, typename DrainCascade, typename Routes = ImmediateLifecycle, typename... Traits>
@@ -2487,7 +2508,9 @@ void commit_activation(ActivationRuntime<Occurrence>& activation,
                        const Routes& routes = {}) {
     static_assert(std::is_invocable_v<DrainCascade&, entt::registry&>,
                   "commit_activation's DrainCascade must be callable as drain_cascade(registry)");
-    while (!activation.commands.empty()) {
+    const auto keeps = std::exchange(activation.keep_rounds, {});
+    for (std::size_t round = 1; !activation.commands.empty() || round <= keeps.depth; ++round) {
+        count_commit_round();
         auto commands = std::move(activation.commands);
         activation.commands.clear();
         lifecycle.set_recording(true);
@@ -2496,6 +2519,7 @@ void commit_activation(ActivationRuntime<Occurrence>& activation,
             command.apply(registry);
         });
         lifecycle.set_recording(false);
+        keeps(registry, round);
         lifecycle.deliver(activation, registry, routes);
         drain_cascade(registry);
     }

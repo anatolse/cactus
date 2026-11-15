@@ -406,7 +406,8 @@ TEST_CASE("Dungeon robots dig and mine through route steps", "[cactus-dungeon][h
     const auto initial_gold = world.registry.get<game::Player>(world.human()).gold;
     world.mark(7, 4);
     world.mark(8, 4, game::Kind::Gold);
-    world.frames_until(240, [&] { return world.registry.get<game::Tile>(world.tile(8, 4)).kind == game::Kind::Floor; });
+    // The dug floor at (7, 4) is claimable at once, so the robot claims it before it mines (8, 4).
+    world.frames_until(360, [&] { return world.registry.get<game::Tile>(world.tile(8, 4)).kind == game::Kind::Floor; });
     world.frame(2);
     REQUIRE(world.registry.get<game::Tile>(world.tile(7, 4)).kind == game::Kind::Floor);
     REQUIRE(world.registry.get<game::Tile>(world.tile(8, 4)).kind == game::Kind::Floor);
@@ -414,7 +415,7 @@ TEST_CASE("Dungeon robots dig and mine through route steps", "[cactus-dungeon][h
     REQUIRE(world.registry.get<game::Player>(world.human()).gold > initial_gold);
     REQUIRE(world.registry.get<units::Unit>(robot).xp > 0);
     REQUIRE(backend::relation_store<tasks::Located>(world.registry).contains(robot, world.tile(7, 4)));
-    REQUIRE_FALSE(backend::relation_store<tasks::Claim>(world.registry).contains(robot, world.tile(8, 4)));
+    REQUIRE_FALSE(backend::relation_store<tasks::DigMark>(world.registry).contains(world.human(), world.tile(8, 4)));
 }
 
 TEST_CASE("Dungeon infinite gold pays repeatedly without disappearing", "[cactus-dungeon][headless]") {

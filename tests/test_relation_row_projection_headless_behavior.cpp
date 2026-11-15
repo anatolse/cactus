@@ -195,8 +195,7 @@ TEST_CASE("Projection retains authored order with reversed and derived lookup pl
     CHECK(pairs(world.rows<game::ReverseFrontier>()) == std::vector<Pair>{{s.Red, s.Goal}, {s.Blue, s.Last}});
     CHECK(world.rows<game::Reachable>().contains(s.Start, s.Last));
     CHECK(world.rows<game::ReverseReachable>().contains(s.Start, s.Last));
-    CHECK(world.rows<game::Copied>().size() == 0);
-    world.tick();
+    // Copied keeps Reverse's rows of the same tick.
     CHECK(pairs(world.rows<game::Copied>()) == pairs(world.rows<game::Reverse>()));
     CHECK(backend::derived_relation<game::Reach>(world.registry).cached_keys() <= 4);
 }

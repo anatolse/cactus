@@ -852,6 +852,12 @@ cactus_add_headless_behavior_test(test_rule_keep_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_rule_keep_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_keep_chains_headless_behavior
+    CACTUS_SOURCE examples/keep_chains.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_keep_chains_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_generalized_keep_headless_behavior
     CACTUS_SOURCE examples/generalized_keep.cactus
     BACKEND cpp-entt
@@ -1526,7 +1532,7 @@ cactus_add_headless_behavior_test(test_keep_evaluation_row_stage_headless_behavi
 # (`ctest --preset clang-o3-release -L perf`).
 add_custom_target(test_generated_performance_benchmarks)
 foreach(shape IN ITEMS static_keep union_fold equality_reduce grid_region row_join baseline own_projection
-        single_commit plain_commit sweep wide_level reduced_keep required_links)
+        single_commit plain_commit sweep wide_level reduced_keep required_links keep_chain)
     set(perf_target test_perf_${shape}_benchmark)
     set(perf_codegen_flags)
     if(shape STREQUAL "wide_level")

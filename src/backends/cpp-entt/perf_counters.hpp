@@ -16,6 +16,8 @@ struct PerfCounters {
     std::uint64_t parallel_tasks   = 0;  // handlers handed to the worker pool
     std::uint64_t link_updates     = 0;  // holders a link index added or dropped
     std::uint64_t lost_links       = 0;  // holders marked because their link target was lost
+    std::uint64_t keep_runs        = 0;  // keep rule passes run
+    std::uint64_t commit_rounds    = 0;  // commit rounds that applied commands or ran keep rules
 
     PerfCounters& operator+=(const PerfCounters& other) noexcept {
         commands += other.commands;
@@ -26,6 +28,8 @@ struct PerfCounters {
         parallel_tasks += other.parallel_tasks;
         link_updates += other.link_updates;
         lost_links += other.lost_links;
+        keep_runs += other.keep_runs;
+        commit_rounds += other.commit_rounds;
         return *this;
     }
 };
@@ -75,6 +79,14 @@ inline void count_link_update() noexcept {
 inline void count_lost_link() noexcept {
     ++counting_target().lost_links;
 }
+
+inline void count_keep_run() noexcept {
+    ++counting_target().keep_runs;
+}
+
+inline void count_commit_round() noexcept {
+    ++counting_target().commit_rounds;
+}
 #else
 inline void count_commands(std::size_t /*count*/) noexcept {}
 inline void count_ordering() noexcept {}
@@ -83,6 +95,8 @@ inline void count_carrier_lookup() noexcept {}
 inline void count_parallel_batch(std::size_t /*tasks*/) noexcept {}
 inline void count_link_update() noexcept {}
 inline void count_lost_link() noexcept {}
+inline void count_keep_run() noexcept {}
+inline void count_commit_round() noexcept {}
 #endif
 
 }  // namespace cactus::runtime::entt_backend

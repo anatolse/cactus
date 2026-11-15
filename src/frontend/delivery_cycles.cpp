@@ -275,7 +275,10 @@ void record_activation_depths(ExecutionGraph& graph) {
     std::vector<ActivationDepth> recorded;
     for (const auto& phase : graph.phases) {
         const ResolvedHandlerTrigger trigger{.kind = HandlerTriggerKind::Phase, .symbol = phase.phase};
-        recorded.push_back(depths.measure(ActivationRootKind::Phase, phase.phase, depths.handlers_of(trigger)));
+        auto depth = depths.measure(ActivationRootKind::Phase, phase.phase, depths.handlers_of(trigger));
+        // Each keep round adds a commit round before the cascades it starts.
+        depth.depth += deepest_keep_round(graph, phase.phase);
+        recorded.push_back(depth);
     }
     std::vector<SymbolId> events;
     for (const auto& handler : graph.handlers) {

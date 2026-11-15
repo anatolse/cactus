@@ -518,6 +518,36 @@ grid_region_joins.cactus examples grid_region_joins.DiskPairs/on std.core.fixed_
     named_writes: [grid_region_joins.Settings: grid_region_joins.Control{trace}]
     named_requirements: grid_region_joins.Settings/grid_region_joins.Control
     iteration_order: free
+keep_chains.cactus examples keep_chains.AnchoredFact/on std.core.fixed_tick
+    reads: keep_chains.Cell keep_chains.Control
+    read_fields: keep_chains.Cell{grounded} keep_chains.Control{frozen}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads: [keep_chains.Settings: keep_chains.Control{frozen}]
+    named_writes:
+    named_requirements: keep_chains.Settings/keep_chains.Control
+    iteration_order: creation
+keep_chains.cactus examples keep_chains.FloatingFact/on std.core.fixed_tick
+    reads: keep_chains.Held
+    read_fields: keep_chains.Held{}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: creation
+keep_chains.cactus examples keep_chains.HeldFact/on std.core.fixed_tick
+    reads: keep_chains.Cell
+    read_fields: keep_chains.Cell{x}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:keep_chains.Cell 1:keep_chains.Cell
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
 keep_evaluation_runtime.cactus fixtures keep_evaluation_runtime.ColumnCounts/on std.core.fixed_tick
     reads: keep_evaluation_runtime.Tile
     read_fields: keep_evaluation_runtime.Tile{column,weight,x}

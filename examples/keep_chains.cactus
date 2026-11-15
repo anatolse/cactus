@@ -1,0 +1,103 @@
+module keep_chains
+
+# A keep rule that reads another kept fact sees this activation's result, so
+# a chain of facts is consistent after one tick, whatever its length.
+# Cells stand on a line. A grounded cell is Anchored; a cell within reach of
+# an anchored cell is Held by it; any other cell is Floating and falls.
+# Tests move cells and ground them between ticks.
+
+use std.core
+
+trait Cell:
+    var x: int = 0
+    var grounded: bool = false
+    var falls: int = 0
+
+trait Anchored
+
+trait Floating
+
+trait Shown
+
+relation Held:
+    from: Cell
+    to: Cell
+
+trait Control:
+    var frozen: bool = false
+
+trait Tally:
+    var ticks: int = 0
+
+group support:
+    phase: fixed_tick
+
+group display:
+    phase: tick
+
+rule AnchoredFact:
+    each: Cell as c
+    group: support
+    where:
+        c.grounded
+    keep Anchored
+    when:
+        not Settings[Control].frozen
+
+rule HeldFact:
+    pairs:
+        cell: Cell
+        root:
+            Cell
+            Anchored
+    group: support
+    where:
+        cell[Cell].x - root[Cell].x <= 2 and root[Cell].x - cell[Cell].x <= 2
+    keep Held(cell, root)
+
+rule FloatingFact:
+    each: Cell
+    without:
+        Anchored
+    group: support
+    where:
+        not Held(self, _)
+    keep Floating
+
+# Another phase reads what the last fixed tick committed.
+rule ShownFact:
+    each:
+        Cell
+        Floating
+    group: display
+    keep Shown
+
+rule Fall:
+    each: Cell as c
+
+    on added Floating:
+        c.falls += 1
+
+rule Count:
+    on fixed_tick:
+        Clock[Tally].ticks += 1
+
+entity Settings:
+    Control
+
+entity Clock:
+    Tally
+
+template Spot(x: int = 0):
+    Cell:
+        x = x
+
+entity Base:
+    Cell:
+        grounded = true
+
+entity Near from Spot(x = 1)
+
+entity Edge from Spot(x = 2)
+
+entity Loose from Spot(x = 10)

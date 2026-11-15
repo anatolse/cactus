@@ -1,0 +1,69 @@
+module perf_keep_chain
+
+use std.core
+
+# A chain of three keep rules over a size x size grid: a trait, a relation
+# that reads it, and a trait that reads both. Nothing changes between ticks.
+
+trait Board:
+    let size: int = 60
+
+trait Tile:
+    let board: entity_id
+    let x: int in range(0, board[Board].size)
+    let z: int in range(0, board[Board].size)
+
+trait Lit
+
+trait Dark
+
+relation Near:
+    from: Tile
+    to: Tile
+
+group links:
+    phase: fixed_tick
+
+entity Field:
+    Board
+
+template Place(x: int, z: int):
+    Tile:
+        board = Field
+        x = x
+        z = z
+
+rule Fill:
+    on load:
+        for x in range(0, Field[Board].size):
+            for z in range(0, Field[Board].size):
+                spawn Place(x = x, z = z)
+
+rule LitFact:
+    each: Tile as t
+    group: links
+    where:
+        t.x % 3 == 0
+    keep Lit
+
+rule NearLinks:
+    pairs:
+        a: Tile
+        b:
+            Tile
+            Lit
+    group: links
+    where:
+        b[Tile].board == a[Tile].board
+        b[Tile].x == a[Tile].x + 1
+        b[Tile].z == a[Tile].z
+    keep Near(a, b)
+
+rule DarkFact:
+    each: Tile
+    without:
+        Lit
+    group: links
+    where:
+        not Near(self, _)
+    keep Dark

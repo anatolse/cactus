@@ -65,7 +65,9 @@ template <typename Step>
             .parallel_batches = after.parallel_batches - before.parallel_batches,
             .parallel_tasks   = after.parallel_tasks - before.parallel_tasks,
             .link_updates     = after.link_updates - before.link_updates,
-            .lost_links       = after.lost_links - before.lost_links};
+            .lost_links       = after.lost_links - before.lost_links,
+            .keep_runs        = after.keep_runs - before.keep_runs,
+            .commit_rounds    = after.commit_rounds - before.commit_rounds};
 }
 
 // Median milliseconds per call of `step`, after a warm-up.

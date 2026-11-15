@@ -830,6 +830,62 @@ std::string joining_archetype(const ReachabilityFacts& facts, const HandlerContr
     return origins.empty() ? text : text + " (" + joined(origins, ", ") + ")";
 }
 
+// Round d = the longest chain of same-phase keep reads below a rule; loops are rejected elsewhere.
+void record_keep_rounds(ExecutionGraph& graph) {
+    const auto count = graph.handlers.size();
+    std::unordered_map<TableRef, std::size_t> keeper;
+    for (std::size_t index = 0; index < count; ++index) {
+        const auto& handler = graph.handlers[index];
+        if (handler.kept.has_value() && handler.identity.trigger.kind == HandlerTriggerKind::Phase) {
+            keeper.emplace(*handler.kept, index);
+        }
+    }
+    std::vector<std::vector<std::size_t>> readers(count);
+    std::vector<std::size_t> waiting(count, 0);
+    for (const auto& [table, index] : keeper) {
+        const auto& handler = graph.handlers[index];
+        for (const auto& read : tables_read_by(handler.contract)) {
+            const auto input = keeper.find(read);
+            if (input == keeper.end() || input->second == index ||
+                graph.handlers[input->second].identity.trigger != handler.identity.trigger) {
+                continue;
+            }
+            readers[input->second].push_back(index);
+            ++waiting[index];
+        }
+    }
+    std::vector<std::uint32_t> depth(count, 0);
+    std::vector<std::size_t> ready;
+    for (const auto& [table, index] : keeper) {
+        if (waiting[index] == 0) {
+            ready.push_back(index);
+        }
+    }
+    std::map<std::pair<std::string, std::uint32_t>, KeepRound> rounds;
+    while (!ready.empty()) {
+        const auto index = ready.back();
+        ready.pop_back();
+        const auto& handler = graph.handlers[index];
+        if (depth[index] > 0) {
+            auto& round = rounds[{make_canonical_id(handler.identity.trigger.symbol), depth[index]}];
+            round.phase = handler.identity.trigger.symbol;
+            round.depth = depth[index];
+            round.handlers.push_back(handler.identity);
+        }
+        for (const auto reader : readers[index]) {
+            depth[reader] = std::max(depth[reader], depth[index] + 1);
+            if (--waiting[reader] == 0) {
+                ready.push_back(reader);
+            }
+        }
+    }
+    graph.keep_rounds.clear();
+    for (auto& [key, round] : rounds) {
+        std::ranges::sort(round.handlers, {}, &HandlerIdentity::canonical_id);
+        graph.keep_rounds.push_back(std::move(round));
+    }
+}
+
 }  // namespace
 
 // The single consolidated home for what used to be two independently-duplicated
@@ -882,6 +938,7 @@ bool compute_handler_schedule(ExecutionGraph& graph,
         }
     }
 
+    record_keep_rounds(graph);
     classify_delivery_cycles(graph, templates);
 
     // ── Conflict-edge detection ──────────────────────────────────────────────

@@ -1484,6 +1484,11 @@ TEST_CASE("Derived relations: keep loops pass through derived relations", "[sema
         INFO(describe(analysis));
         REQUIRE(analysis.clean());
         CHECK(analysis.contract("ConnectedFact").reads.contains(relation_id("Walk")));
+        const auto& rounds = analysis.program.execution_graph.keep_rounds;
+        REQUIRE(rounds.size() == 1);
+        CHECK(rounds[0].depth == 1);
+        REQUIRE(rounds[0].handlers.size() == 1);
+        CHECK(rounds[0].handlers[0].rule.local_name == "ConnectedFact");
     }
 }
 

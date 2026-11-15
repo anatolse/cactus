@@ -72,7 +72,7 @@ TEST_CASE("derived relations: closure, shortest and components", "[runtime][rela
     auto& registry    = world.registry;
     const auto& slots = World::slots();
 
-    world.tick(2);
+    world.tick();
 
     {  // every floor tile links lead to from the heart is connected
         for (const auto tile : {slots.Heart,
@@ -90,22 +90,20 @@ TEST_CASE("derived relations: closure, shortest and components", "[runtime][rela
         CHECK(derived_relation<game::Reach>(registry).contains(slots.Goal, slots.Heart));
     }
 
-    {  // a keep rule reads the links the last run committed, so Connected follows one tick later
+    {  // a keep rule reads the links kept earlier in the same tick, so Connected follows at once
         registry.emplace<game::Floor>(slots.Wall);
         world.tick();
         CHECK(derived_relation<game::Reach>(registry).contains(slots.Heart, slots.Wall));
-        CHECK_FALSE(world.connected(slots.Wall));
-        world.tick();
         CHECK(world.connected(slots.Wall));
         registry.remove<game::Floor>(slots.Wall);
-        world.tick(2);
+        world.tick();
         CHECK_FALSE(world.connected(slots.Wall));
     }
 
     {  // cutting the heart's links disconnects everything but the heart, which reaches itself
         registry.remove<game::Floor>(slots.East);
         registry.remove<game::Floor>(slots.North);
-        world.tick(2);
+        world.tick();
         CHECK(world.connected(slots.Heart));
         CHECK(derived_relation<game::Reach>(registry).contains(slots.Heart, slots.Heart));
         CHECK_FALSE(derived_relation<game::Reach>(registry).contains(slots.Runner, slots.Runner));
@@ -113,7 +111,7 @@ TEST_CASE("derived relations: closure, shortest and components", "[runtime][rela
         CHECK_FALSE(world.connected(slots.Goal));
         registry.emplace<game::Floor>(slots.East);
         registry.emplace<game::Floor>(slots.North);
-        world.tick(2);
+        world.tick();
         CHECK(world.connected(slots.Goal));
     }
 
@@ -171,7 +169,7 @@ TEST_CASE("derived relations: closure, shortest and components", "[runtime][rela
 
     {  // a joining tile merges the rooms under the older name
         registry.emplace<game::Lair>(slots.L2);
-        world.tick(2);
+        world.tick();
         CHECK(derived_relation<game::Room>(registry).contains(slots.L4, slots.L0));
         CHECK(world.room_size(slots.L0) == 5);
         CHECK_FALSE(world.room_size(slots.L3).has_value());
@@ -179,7 +177,7 @@ TEST_CASE("derived relations: closure, shortest and components", "[runtime][rela
 
     {  // a removed tile splits the room: the part without the old name takes its oldest tile
         registry.remove<game::Lair>(slots.L1);
-        world.tick(2);
+        world.tick();
         auto& room = derived_relation<game::Room>(registry);
         CHECK(room.contains(slots.L0, slots.L0));
         CHECK(room.contains(slots.L4, slots.L2));

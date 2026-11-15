@@ -1400,6 +1400,47 @@ TEST_CASE("program_linker: a group's after: orders members from every module", "
           std::vector<HandlerIdentity>{mover.identity, toucher.identity});
 }
 
+TEST_CASE("program_linker: keepers of one round run in an order that ignores link order",
+          "[linker][rule-keep][keep-depth]") {
+    const auto tick = linked_symbol(SymbolKind::Phase, "runtime", "tick");
+    const ResolvedHandlerTrigger trigger{.kind = HandlerTriggerKind::Phase, .symbol = tick};
+    const auto base = linked_symbol(SymbolKind::Trait, "lib", "Base");
+    // A keep rule of `module` that keeps `kept` and filters on `reads`.
+    const auto keeper = [&](const std::string& module, const std::string& rule, const std::string& kept,
+                            std::vector<SymbolId> reads) {
+        auto handler                = linked_handler(linked_symbol(SymbolKind::Rule, module, rule), trigger, 0);
+        handler.kept                = linked_symbol(SymbolKind::Trait, module, kept);
+        handler.contract.selection  = std::move(reads);
+        handler.contract.domain_kind = HandlerDomainKind::Unary;
+        DecoratedProgram program;
+        program.execution_graph.handlers.push_back(handler);
+        return program;
+    };
+    const auto lib = keeper("lib", "BaseFact", "Base", {});
+    const auto app = keeper("app", "Zone", "Zoned", {base});
+    const auto aux = keeper("aux", "Mark", "Marked", {base});
+
+    const auto rounds = [&](const std::vector<std::pair<const DecoratedProgram*, std::string>>& order) {
+        ErrorReporter errors;
+        ProgramLinker linker(errors);
+        DecoratedProgram merged;
+        for (const auto& [program, module] : order) {
+            REQUIRE(linker.merge_into(merged, *program, module));
+        }
+        REQUIRE_FALSE(errors.has_errors());
+        return merged.execution_graph.keep_rounds;
+    };
+    const auto forward  = rounds({{&lib, "lib"}, {&app, "app"}, {&aux, "aux"}});
+    const auto backward = rounds({{&aux, "aux"}, {&app, "app"}, {&lib, "lib"}});
+    REQUIRE(forward.size() == 1);
+    CHECK(forward[0].phase == tick);
+    CHECK(forward[0].depth == 1);
+    CHECK(forward[0].handlers ==
+          std::vector<HandlerIdentity>{app.execution_graph.handlers[0].identity, aux.execution_graph.handlers[0].identity});
+    REQUIRE(backward.size() == 1);
+    CHECK(backward[0].handlers == forward[0].handlers);
+}
+
 // ── Unorientable conflicts across modules ─────────────────────────────────────
 
 namespace {

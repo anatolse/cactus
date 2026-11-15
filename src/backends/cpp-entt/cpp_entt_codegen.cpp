@@ -1002,6 +1002,17 @@ void emit_viewport_phase_dispatch(std::ostringstream& out,
     out << indent << "}\n";
 }
 
+// The commit rounds that run keep rules of `phase`, shallowest first.
+std::vector<const KeepRound*> keep_rounds_of(const DecoratedProgram& program, const SymbolId& phase) {
+    std::vector<const KeepRound*> rounds;
+    for (const auto& round : program.execution_graph.keep_rounds) {
+        if (round.phase == phase) {
+            rounds.push_back(&round);
+        }
+    }
+    return rounds;
+}
+
 // A phase's runtime state in the scheduler, keyed by its type.
 std::string phase_state(const std::string& phase_type) {
     return "std::get<" + phase_type + ">(scheduler.phases)";
@@ -1068,6 +1079,7 @@ void emit_phase_batch(std::ostringstream& out,
     const auto root_type             = event_runtime_cpp_type(program, *phase->runtime_root);
     const bool is_render_phase_batch = phase == render_phase;
     const bool delays                = delivery.phase_delays(phase->phase);
+    const auto keep_depth            = deepest_keep_round(program.execution_graph, phase->phase);
     // One activation of the phase: one tick of its clock.
     const auto emit_activation = [&](const std::string& indent) {
         out << indent << "scheduler.activation.active = true;\n";
@@ -1086,10 +1098,21 @@ void emit_phase_batch(std::ostringstream& out,
             out << indent << "deliver_delayed_events(scheduler.activation);\n";
         }
         out << indent << "generated_drain_event_cascade(registry);\n";
+        if (keep_depth > 0) {
+            out << indent << "scheduler.activation.keep_rounds = {.depth = " << keep_depth
+                << ", .run = [](entt::registry& registry, std::size_t round) {\n";
+            out << indent << "    generated_keep_round(registry, std::get<" << phase_type
+                << ">(generated_scheduler_state().phases), round);\n";
+            out << indent << "}};\n";
+        }
         out << indent << "generated_commit_activation(registry);\n";
         out << indent << "scheduler.activation.active = false;\n";
     };
     out << "void generated_dispatch_phase(entt::registry& registry, const " << phase_type << "& phase);\n\n";
+    if (keep_depth > 0) {
+        out << "void generated_keep_round(entt::registry& registry, const " << phase_type
+            << "& phase, std::size_t round);\n\n";
+    }
     out << "void generated_run_phase_batch(entt::registry& registry, const " << root_type << "& root_event, "
         << "[[maybe_unused]] " << phase_batch_tag(phase_type) << " tag) {\n";
     out << "    auto& scheduler = generated_scheduler_state();\n";
@@ -1797,9 +1820,13 @@ bool emit_phase_handler_call(std::ostringstream& out,
     if (!callee.has_value()) {
         return false;
     }
-    if (emitted_callees.insert(*callee).second) {
-        out << "    " << *callee << "(registry, phase);\n";
+    if (!emitted_callees.insert(*callee).second) {
+        return true;
     }
+    if (graph_node->kept.has_value()) {
+        out << "    cactus::runtime::entt_backend::count_keep_run();\n";
+    }
+    out << "    " << *callee << "(registry, phase);\n";
     return true;
 }
 
@@ -1992,15 +2019,14 @@ void emit_dispatch_calls(std::ostringstream& out,
     out << "#endif  // CACTUS_LINEARIZATION_HARNESS\n";
 }
 
-bool emit_phase_handler_calls(std::ostringstream& out,
-                              const DecoratedProgram& program,
-                              const AccumulationPlan& accumulation,
-                              const DeliveryPlan& delivery,
-                              const auto& phase) {
-    bool emitted = false;
+// `emitted` records whether any of `identities` is a handler of `phase`.
+std::vector<DispatchCall> phase_dispatch_calls(const DecoratedProgram& program,
+                                               const auto& phase,
+                                               std::ranges::input_range auto&& identities,
+                                               bool& emitted) {
     std::unordered_set<std::string> emitted_callees;
     std::vector<DispatchCall> calls;
-    for (const auto& identity : program.execution_graph.stable_topological_order) {
+    for (const auto& identity : identities) {
         std::ostringstream call;
         emitted |= emit_phase_handler_call(call, program, phase, identity, emitted_callees);
         if (call.view().empty()) {
@@ -2014,8 +2040,53 @@ bool emit_phase_handler_calls(std::ostringstream& out,
                                      .prepare  = callee.has_value() ? "    " + *callee + "_prepare(registry, phase);\n"
                                                                     : std::string{}});
     }
+    return calls;
+}
+
+bool emit_phase_handler_calls(std::ostringstream& out,
+                              const DecoratedProgram& program,
+                              const AccumulationPlan& accumulation,
+                              const DeliveryPlan& delivery,
+                              const auto& phase) {
+    bool emitted         = false;
+    const auto in_rounds = keep_round_handlers(program.execution_graph);
+    const auto calls     = phase_dispatch_calls(
+        program, phase,
+        program.execution_graph.stable_topological_order |
+            std::views::filter([&](const HandlerIdentity& identity) { return !in_rounds.contains(identity); }),
+        emitted);
     emit_dispatch_calls(out, program, accumulation, delivery, calls);
     return emitted;
+}
+
+// Keep rules of depth d run in commit round d; erased relation rows are compacted before they read.
+void emit_keep_round_dispatch(std::ostringstream& out,
+                              const DecoratedProgram& program,
+                              const AccumulationPlan& accumulation,
+                              const DeliveryPlan& delivery,
+                              const auto& phase) {
+    const auto rounds = keep_rounds_of(program, phase.phase);
+    if (rounds.empty()) {
+        return;
+    }
+    out << "void generated_keep_round(entt::registry& registry, const " << cpp_type_ref(phase.phase)
+        << "& phase, std::size_t round) {\n";
+    if (!program.relations.empty()) {
+        out << "    generated_compact_relations(registry);\n";
+    }
+    out << "    switch (round) {\n";
+    for (const auto* round : rounds) {
+        bool emitted     = false;
+        const auto calls = phase_dispatch_calls(program, phase, round->handlers, emitted);
+        out << "    case " << round->depth << ": {\n";
+        emit_dispatch_calls(out, program, accumulation, delivery, calls);
+        out << "        break;\n";
+        out << "    }\n";
+    }
+    out << "    default:\n";
+    out << "        break;\n";
+    out << "    }\n";
+    out << "}\n\n";
 }
 
 void emit_phase_handler_dispatch(std::ostringstream& out,
@@ -2046,6 +2117,7 @@ void emit_phase_handler_dispatch(std::ostringstream& out,
         out << "    (void)phase;\n";
     }
     out << "}\n\n";
+    emit_keep_round_dispatch(out, program, accumulation, delivery, phase);
 }
 
 // The runtime queue a native consumer's occurrences join.

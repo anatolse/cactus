@@ -687,6 +687,110 @@ TEST_CASE("Keep: a chain of keepers is accepted", "[semantic][rule-keep]") {
     CHECK(analysis.clean());
 }
 
+// ── Keep depth ──────────────────────────────────────────────────────────────
+
+namespace {
+
+// The commit round a keep rule runs in; 0 is its group's place.
+std::uint32_t depth_of(const Analysis& analysis, const std::string& rule) {
+    for (const auto& round : analysis.program.execution_graph.keep_rounds) {
+        if (std::ranges::any_of(round.handlers,
+                                [&](const HandlerIdentity& handler) { return handler.rule.local_name == rule; })) {
+            return round.depth;
+        }
+    }
+    return 0;
+}
+
+std::uint32_t phase_depth(const Analysis& analysis, const std::string& phase) {
+    for (const auto& depth : analysis.program.execution_graph.activation_depths) {
+        if (depth.kind == ActivationRootKind::Phase && depth.symbol.has_value() && depth.symbol->local_name == phase) {
+            return depth.depth;
+        }
+    }
+    FAIL("no activation depth for phase " + phase);
+    std::unreachable();
+}
+
+// A keep rule named `name` over Body that needs `reads` and keeps `kept`.
+std::string keeper(const std::string& name,
+                   const std::vector<std::string>& reads,
+                   const std::string& kept,
+                   const std::string& group = "contacts") {
+    std::string text = "rule " + name + ":\n    each:\n        Body\n";
+    for (const auto& read : reads) {
+        text += "        " + read + "\n";
+    }
+    return text + "    group: " + group + "\n    keep " + kept + "\n";
+}
+
+const std::string kLatePhase =
+    "phase late:\n"
+    "    from:\n"
+    "        frame\n"
+    "group later:\n"
+    "    phase: late\n";
+
+}  // namespace
+
+TEST_CASE("Keep depth: a keeper with no keep input runs in its group's place", "[semantic][rule-keep][keep-depth]") {
+    const auto analysis = analyze(keeper("AFact", {}, "A"));
+    INFO(describe(analysis));
+    REQUIRE(analysis.clean());
+    CHECK(depth_of(analysis, "AFact") == 0);
+    CHECK(analysis.program.execution_graph.keep_rounds.empty());
+}
+
+TEST_CASE("Keep depth: each link of a chain runs one round later", "[semantic][rule-keep][keep-depth]") {
+    const auto analysis =
+        analyze(keeper("AFact", {}, "A") + keeper("BFact", {"A"}, "B") + keeper("CFact", {"B"}, "Lit"));
+    INFO(describe(analysis));
+    REQUIRE(analysis.clean());
+    CHECK(depth_of(analysis, "AFact") == 0);
+    CHECK(depth_of(analysis, "BFact") == 1);
+    CHECK(depth_of(analysis, "CFact") == 2);
+    // Two more commit rounds than the chain's first keeper alone.
+    const auto alone = analyze(keeper("AFact", {}, "A"));
+    REQUIRE(alone.clean());
+    CHECK(phase_depth(analysis, "fixed_tick") == phase_depth(alone, "fixed_tick") + 2);
+}
+
+TEST_CASE("Keep depth: a diamond takes the longest path", "[semantic][rule-keep][keep-depth]") {
+    const auto analysis =
+        analyze(keeper("CFact", {"A", "B"}, "Lit") + keeper("BFact", {"A"}, "B") + keeper("AFact", {}, "A"));
+    INFO(describe(analysis));
+    REQUIRE(analysis.clean());
+    CHECK(depth_of(analysis, "AFact") == 0);
+    CHECK(depth_of(analysis, "BFact") == 1);
+    CHECK(depth_of(analysis, "CFact") == 2);
+}
+
+TEST_CASE("Keep depth: a keeper of another phase adds no depth", "[semantic][rule-keep][keep-depth]") {
+    const auto analysis = analyze(kLatePhase + keeper("AFact", {}, "A") + keeper("BFact", {"A"}, "B", "later"));
+    INFO(describe(analysis));
+    REQUIRE(analysis.clean());
+    CHECK(depth_of(analysis, "BFact") == 0);
+    CHECK(analysis.program.execution_graph.keep_rounds.empty());
+}
+
+TEST_CASE("Keep depth: keepers of one round run in an order that ignores declaration order",
+          "[semantic][rule-keep][keep-depth]") {
+    const auto round_of = [](const Analysis& analysis) {
+        REQUIRE(analysis.clean());
+        REQUIRE(analysis.program.execution_graph.keep_rounds.size() == 1);
+        std::vector<std::string> rules;
+        for (const auto& handler : analysis.program.execution_graph.keep_rounds[0].handlers) {
+            rules.push_back(handler.rule.local_name);
+        }
+        return rules;
+    };
+    const auto first  = analyze(keeper("AFact", {}, "A") + keeper("ZFact", {"A"}, "B") + keeper("MFact", {"A"}, "Lit"));
+    const auto second = analyze(keeper("MFact", {"A"}, "Lit") + keeper("ZFact", {"A"}, "B") + keeper("AFact", {}, "A"));
+    INFO(describe(first) + describe(second));
+    CHECK(round_of(first) == std::vector<std::string>{"MFact", "ZFact"});
+    CHECK(round_of(second) == round_of(first));
+}
+
 // ── Unused reducers ─────────────────────────────────────────────────────────
 
 TEST_CASE("Reduce: a keep rule must read its reducers", "[semantic][rule-reduce][rule-keep]") {

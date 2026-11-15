@@ -5006,8 +5006,7 @@ SemanticAnalyzer::KeepClauses SemanticAnalyzer::collect_keep_clauses(const Progr
     return clauses;
 }
 
-// Every table a handler's domain and clauses depend on.
-static std::unordered_set<TableRef> tables_read_by(const HandlerContract& contract) {
+std::unordered_set<TableRef> tables_read_by(const HandlerContract& contract) {
     std::unordered_set<TableRef> read(contract.reads.begin(), contract.reads.end());
     read.insert(contract.selection.begin(), contract.selection.end());
     read.insert(contract.exclusion.begin(), contract.exclusion.end());
@@ -5018,6 +5017,24 @@ static std::unordered_set<TableRef> tables_read_by(const HandlerContract& contra
         }
     }
     return read;
+}
+
+std::uint32_t deepest_keep_round(const ExecutionGraph& graph, const SymbolId& phase) {
+    std::uint32_t deepest = 0;
+    for (const auto& round : graph.keep_rounds) {
+        if (round.phase == phase) {
+            deepest = std::max(deepest, round.depth);
+        }
+    }
+    return deepest;
+}
+
+std::unordered_set<HandlerIdentity, HandlerIdentityHash> keep_round_handlers(const ExecutionGraph& graph) {
+    std::unordered_set<HandlerIdentity, HandlerIdentityHash> handlers;
+    for (const auto& round : graph.keep_rounds) {
+        handlers.insert(round.handlers.begin(), round.handlers.end());
+    }
+    return handlers;
 }
 
 namespace {
@@ -8743,6 +8760,9 @@ void SemanticAnalyzer::collect_rule_dependency(const RuleNode& rule, std::size_t
             node.declaration_order = DeclarationOrder{
                 .module_index = 0, .declaration_index = declaration_index, .handler_index = handler_index};
             node.location = handler.location;
+            if (rule.keep.has_value()) {
+                node.kept = rule.keep->resolved_target;
+            }
             result_.execution_graph.handlers.push_back(std::move(node));
         }
     }

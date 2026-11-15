@@ -117,7 +117,7 @@ TEST_CASE("relations: kept and stored relations", "[runtime][relations]") {
 
     {  // union: Passable holds walks and bridges
         world.rows<game::Bridge>().add(slots.Third, slots.Island, game::Bridge{});
-        world.tick(2);
+        world.tick();
         auto& passable = world.rows<game::Passable>();
         CHECK(passable.contains(slots.Third, slots.Island));
         CHECK(passable.contains(slots.Heart, slots.Second));
@@ -127,7 +127,7 @@ TEST_CASE("relations: kept and stored relations", "[runtime][relations]") {
     {  // a row dies with its end
         registry.destroy(slots.Island);
         CHECK(world.rows<game::Bridge>().size() == 0);
-        world.tick(2);
+        world.tick();
         CHECK(world.rows<game::Passable>().size() == world.rows<game::Walk>().size());
     }
 
@@ -137,7 +137,7 @@ TEST_CASE("relations: kept and stored relations", "[runtime][relations]") {
         world.tick();
         CHECK(world.rows<game::Walk>().contains(slots.Heart, slots.Second));
         registry.get<game::Control>(slots.Settings).frozen = false;
-        world.tick(2);
+        world.tick();
         auto& walk = world.rows<game::Walk>();
         CHECK(walk.size() == 2);
         CHECK_FALSE(walk.contains(slots.Heart, slots.Second));

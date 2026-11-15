@@ -173,16 +173,20 @@ bool parallel_eligible(const HandlerNode& handler, const DecoratedProgram& progr
 
 ParallelPlan plan_parallel_handlers(const DecoratedProgram& program) {
     const auto& graph = program.execution_graph;
+    // A keep rule that runs in a commit round is not part of its phase's dispatch.
+    const auto in_rounds = keep_round_handlers(graph);
     ParallelPlan plan;
     for (const auto& handler : graph.handlers) {
-        if (parallel_eligible(handler, program)) {
+        if (parallel_eligible(handler, program) && !in_rounds.contains(handler.identity)) {
             plan.eligible.insert(handler.identity);
         }
     }
-    for (const auto& level : graph.dependency_levels) {
-        if (level.activation.kind != HandlerTriggerKind::Phase) {
+    for (const auto& graph_level : graph.dependency_levels) {
+        if (graph_level.activation.kind != HandlerTriggerKind::Phase) {
             continue;
         }
+        auto level = graph_level;
+        std::erase_if(level.handlers, [&](const HandlerIdentity& handler) { return in_rounds.contains(handler); });
         auto batches          = split_level(level, graph);
         const auto concurrent = [&](const ParallelBatch& batch) {
             return batch.handlers.size() > 1 && std::ranges::any_of(batch.handlers, [&](const HandlerIdentity& member) {

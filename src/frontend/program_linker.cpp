@@ -265,6 +265,7 @@ bool ProgramLinker::rebuild_execution_graph(DecoratedProgram& program,
     graph.event_flows.clear();
     graph.lifecycle_flows.clear();
     graph.activation_depths.clear();
+    graph.keep_rounds.clear();
     graph.stable_topological_order.clear();
     graph.dependency_levels.clear();
 

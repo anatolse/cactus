@@ -373,7 +373,15 @@ occurrences enter the cascade ahead of the activation's own emissions").
 ### 6.6 Commit rounds
 
 **R7. End a cascade.** When the dispatch set has finished and `Q = ε`, flush every
-cell. If `K = ε`, the activation completes (R9). Otherwise run a commit round (R8).
+cell. If `K = ε` and no keep rule of the activation's phase has depth above `r`, the
+activation completes (R9). Otherwise run a commit round (R8).
+
+A keep rule's *depth* is 0 when it depends on no keep rule of its phase, and otherwise
+one more than the greatest depth among the keep rules of its phase it depends on (DSL
+spec §3.8.6, "Chains settle in one activation"; `dsl-rule-keep`: "Dependent keep rules
+read the current activation"). Keep rules of depth 0 are ordinary members of `D₀`.
+Keep rules of depth `d ≥ 1` are not in `D₀`; they run in the keep step of commit round
+`d` (the round that starts with `r = d − 1`). Host activations have no keep rules.
 
 **R8. Commit round.** Let `w⁻` be the world before the round. Apply the entries of `K`
 in order; each acts on the world left by the previous one:
@@ -387,6 +395,13 @@ in order; each acts on the world left by the previous one:
 | `set T on t: vals` | when `T ∈ M(t)`: overwrite only the named fields | no-op |
 
 Sources: DSL spec §4.4 and §5.3, `dsl-deferred-set`, `dsl-entity-id-total-semantics`.
+
+Then set `K := ε`, and run the *keep step*: when the activation is of a phase, run
+the passes (R2, R3) of its keep rules of depth `r + 1`, one after another in canonical
+handler order. They read the world the round just produced, so they see what the keep
+rules they depend on kept in this activation. Their commands form the new `K`; a keep
+rule queues no event. A keep rule whose `when:` is false runs no row, and its kept
+rows stay.
 
 Then compute the round's net lifecycle changes. For each watched trait `T` and each
 `e` live after the round:
@@ -413,13 +428,21 @@ share a delivery cycle, so the backend folds the cycles of `S` into one common c
 none once two differ, and gives that to the route table (Code: `CommonCycle`,
 `LifecycleTracker`).
 
-Finally set `K := ε` and `r := r + 1`. The deliveries just queued are generation 0 of
-round `r`; R5 continues the cascade. Commands that round's handlers issue form the next
-round (`dsl-trait-lifecycle-triggers`: "Lifecycle cycles are delayed").
+Finally set `r := r + 1`. The deliveries just queued are generation 0 of round `r`;
+R5 continues the cascade. Commands that round's handlers issue join the keep step's
+commands in `K` and form the next round (`dsl-trait-lifecycle-triggers`: "Lifecycle
+cycles are delayed"). A round with no command to apply and no keep step is not run.
 
 Inside one round no rule changes `L` or `M`. This is the precise form of "structural
 changes do not alter entity selection within one commit round" (DSL spec §5.3);
-see §10 F4.
+see §10 F4. A keep rule of depth `d` therefore can't run in generation 0: the facts it
+needs are committed only by round `d`.
+
+Code: `commit_activation` runs the keep step through `ActivationRuntime::keep_rounds`,
+which a phase activation sets before its commit; the compiler records the rounds in
+`ExecutionGraph::keep_rounds` (`record_keep_rounds`). Tested:
+`test_keep_chains_headless_behavior`, `test_runtime_activation_scheduler` ("a keep round
+runs after its round applies and before its deliveries").
 
 ### 6.7 Completion
 
@@ -513,16 +536,23 @@ Dershowitz–Manna multiset order are well-founded. Group the steps into macro-s
 2. *Delivering an entry.* Dropping it removes ranks. Running it replaces each
    `2·ht(c)` by the pass of `c` with the same rank; together with step 1 for those
    passes, every added rank is below a removed one.
-3. *A commit round.* It removes every command. A delivery it queues for consumer `c`
+3. *A keep step* runs finitely many passes, each finite, and adds finitely many
+   commands, whose ranks may be large. It lowers the number of keep steps left, at most
+   `D` per activation (`D`, the deepest keep depth of the phase, is a compile-time
+   number), and no step raises that number. So compare pending work by the pair
+   (keep steps left, `μ`), lexicographically; the order is well-founded, every other
+   macro-step keeps the first part and lowers `μ`.
+4. *A commit round.* It removes every command. A delivery it queues for consumer `c`
    has `src = p`, the producer of the first command that touched `(e, T)`, and
    `p → c` immediate (R6). That first touch changed `T` in the direction of the net
    change: `T` was absent before a net addition and present before a net removal. So
    `p`'s contract records a command that may add or remove `T` (S2, S3), the edge
    `p → c` exists, and `2·ht(c) ≤ 2·ht(p) − 2 < 2·ht(p) − 1`.
-4. *A flush* changes no rank and is finite.
+5. *A flush* changes no rank and is finite.
 
-Each macro-step removes at least one element and adds only finitely many elements, each
-smaller than a removed one. So `μ` decreases strictly, and the activation ends. Its
+Each macro-step other than a keep step removes at least one element and adds only
+finitely many elements, each smaller than a removed one. So the pair decreases
+strictly, and the activation ends. Its
 first `μ` is finite: `D₀` is finite, and the delayed entries that join it are finite
 by assumption.
 
@@ -532,12 +562,14 @@ root reaches.
 - Every cascade of one round has at most `H + 1` generations. From generation 2 on,
   each generation's consumers have a smaller height than the producers of the
   previous one; generation 1 can hold delayed entries of any height up to `H`.
-- An activation has at most `H` commit rounds: a delivery in round `r + 1` goes to a
-  smaller height than some handler that ran in round `r`.
+- An activation has at most `H + D` commit rounds: a delivery in round `r + 1` goes to
+  a smaller height than some handler that ran in round `r`, and each of the `D` keep
+  steps can start the chain again.
 
-`H` is the depth the compiler records per root (`handler-execution-graph`: "Activation
-cascade depth is static"; Code: `record_activation_depths`; Tested: `test_delivery_cycles`
-"an acyclic chain records its length").
+`H + D` is the depth the compiler records per root (`handler-execution-graph`:
+"Activation cascade depth is static"; Code: `record_activation_depths`; Tested:
+`test_delivery_cycles` "an acyclic chain records its length", `test_semantic_keep`
+"each link of a chain runs one round later").
 
 **Limits.** Finite work per activation is not bounded work. Rows multiply work by the
 number of entities, and spawns add entities. Across activations work can grow without

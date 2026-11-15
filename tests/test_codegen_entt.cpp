@@ -11452,4 +11452,46 @@ TEST_CASE("Codegen EnTT: restore dispatch size stays bounded as trait count grow
     CHECK(restore_size(80) <= small + 10);
 }
 
+TEST_CASE("Codegen EnTT: a dependent keep rule runs in its commit round, not in the phase dispatch",
+          "[codegen-entt][rule-keep][keep-depth]") {
+    ProgramNode program;
+    const auto decorated = full_pipeline("extern event frame:\n"
+                                         "    dt: float\n"
+                                         "phase fixed_tick:\n"
+                                         "    from:\n"
+                                         "        frame\n"
+                                         "group contacts:\n"
+                                         "    phase: fixed_tick\n"
+                                         "trait Body:\n"
+                                         "    var x: float = 0.0\n"
+                                         "trait A\n"
+                                         "trait B\n"
+                                         "rule AFact:\n"
+                                         "    each: Body as b\n"
+                                         "    group: contacts\n"
+                                         "    where:\n"
+                                         "        b.x < 30.0\n"
+                                         "    keep A\n"
+                                         "rule BFact:\n"
+                                         "    each:\n"
+                                         "        Body\n"
+                                         "        A\n"
+                                         "    group: contacts\n"
+                                         "    keep B\n"
+                                         "entity One:\n"
+                                         "    Body\n",
+                                         program);
+    const auto code     = CppEnttCodegen::generate(decorated);
+    const auto dispatch = generated_function(code, "void generated_dispatch_phase(entt::registry& registry, const");
+    CHECK(dispatch.contains("a_fact_on(registry, phase);"));
+    CHECK_FALSE(dispatch.contains("b_fact_on(registry, phase);"));
+    const auto round = generated_function(code, "void generated_keep_round(entt::registry& registry, const");
+    CHECK(round.contains("case 1:"));
+    CHECK(round.contains("b_fact_on(registry, phase);"));
+    CHECK_FALSE(round.contains("a_fact_on(registry, phase);"));
+    CHECK(code.contains("activation.keep_rounds = {.depth = 1, .run = "));
+    // Every keep rule run is counted, in its group's place and in its round.
+    CHECK(count_occurrences(code, "count_keep_run();") == 2);
+}
+
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

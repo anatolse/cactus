@@ -361,6 +361,75 @@ struct LifecycleHarness {
 
 }  // namespace
 
+// ── Keep rounds ─────────────────────────────────────────────────────────────
+
+namespace {
+
+// What the keep rounds of one commit saw; a plain function can't capture.
+struct KeepRoundLog {
+    std::vector<std::size_t> rounds;
+    std::vector<std::size_t> deliveries_seen;
+    std::vector<bool> dying_seen;
+    std::function<void(entt::registry&, std::size_t)> on_round;
+};
+
+KeepRoundLog& keep_round_log() {
+    static KeepRoundLog log;
+    return log;
+}
+
+void logged_keep_round(entt::registry& registry, std::size_t round) {
+    keep_round_log().rounds.push_back(round);
+    if (keep_round_log().on_round) {
+        keep_round_log().on_round(registry, round);
+    }
+}
+
+}  // namespace
+
+TEST_CASE("commit_activation runs each keep round once, even with nothing to apply",
+          "[runtime][activation][scheduler][keep-depth]") {
+    keep_round_log() = {};
+    entt::registry registry;
+    ActivationRuntime<TestOccurrence> activation;
+    activation.active      = true;
+    activation.keep_rounds = {.depth = 2, .run = &logged_keep_round};
+    int applied            = 0;
+    keep_round_log().on_round = [&](entt::registry&, std::size_t round) {
+        if (round == 2) {
+            queue_structural_command(activation, StructuralCommand::Kind::Add, [&](entt::registry&) { ++applied; });
+        }
+    };
+
+    commit_activation(activation, registry, [](entt::registry&) {});
+
+    CHECK(keep_round_log().rounds == std::vector<std::size_t>{1, 2});
+    CHECK(applied == 1);  // the last keep round's result applies in the round after it
+    CHECK(activation.commands.empty());
+    CHECK(activation.keep_rounds.depth == 0);  // one commit uses them up
+}
+
+TEST_CASE("Lifecycle: a keep round runs after its round applies and before its deliveries",
+          "[runtime][activation][trait-lifecycle][keep-depth]") {
+    keep_round_log() = {};
+    LifecycleHarness h;
+    const auto entity = h.registry.create();
+    keep_round_log().on_round = [&](entt::registry& registry, std::size_t) {
+        keep_round_log().deliveries_seen.push_back(h.deliveries.size());
+        keep_round_log().dying_seen.push_back(registry.all_of<Dying>(entity));
+        h.queue(StructuralCommand::Kind::Add, [entity](entt::registry& reg) { reg.emplace<Burning>(entity); });
+    };
+    h.activation.keep_rounds = {.depth = 1, .run = &logged_keep_round};
+    h.queue(StructuralCommand::Kind::Add, [entity](entt::registry& reg) { reg.emplace<Dying>(entity); });
+
+    h.commit();
+
+    CHECK(keep_round_log().rounds == std::vector<std::size_t>{1});
+    CHECK(keep_round_log().dying_seen == std::vector<bool>{true});
+    CHECK(keep_round_log().deliveries_seen == std::vector<std::size_t>{0});
+    CHECK(h.kinds() == std::vector<std::string>{"added Dying", "added Burning"});
+}
+
 TEST_CASE("Lifecycle: add delivers added to the changed entity only", "[runtime][activation][trait-lifecycle]") {
     LifecycleHarness h;
     const auto changed = h.registry.create();

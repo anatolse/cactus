@@ -823,6 +823,7 @@ void ModuleArtifact::write_execution_graph(std::ostream& out, const ExecutionGra
             write_handler_identity(out, identity);
         }
         write_optional_symbol_id(out, handler.group);
+        write_optional_symbol_id(out, handler.kept);
         write_declaration_order(out, handler.declaration_order);
         write_location(out, handler.location);
     }
@@ -1726,6 +1727,7 @@ ExecutionGraph ModuleArtifact::read_execution_graph(std::istream& in) {
             handler.explicit_after.push_back(read_handler_identity(in));
         }
         handler.group             = read_optional_symbol_id(in);
+        handler.kept              = read_optional_symbol_id(in);
         handler.declaration_order = read_declaration_order(in);
         handler.location          = read_location(in);
         graph.handlers.push_back(std::move(handler));

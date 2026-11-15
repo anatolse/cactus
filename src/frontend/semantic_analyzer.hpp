@@ -807,9 +807,13 @@ struct HandlerNode {
     HandlerContract contract;
     std::vector<HandlerIdentity> explicit_after;
     std::optional<SymbolId> group;  // set when this handler is its rule group's member handler
+    std::optional<TableRef> kept;   // the trait or relation a keep rule keeps
     DeclarationOrder declaration_order;
     SourceLocation location;
 };
+
+// Every table a handler's domain and clauses depend on.
+[[nodiscard]] std::unordered_set<TableRef> tables_read_by(const HandlerContract& contract);
 
 // Precomputes each handler's produced_traits() once, indexed the same as
 // `handlers`, so O(handlers^2) conflict-detection passes don't recompute it
@@ -907,6 +911,16 @@ struct ActivationDepth {
     friend bool operator==(const ActivationDepth&, const ActivationDepth&) = default;
 };
 
+// Keep rules of one phase that run in commit round `depth` of its activation:
+// each reads a keep rule of that phase, and the longest such chain below it has `depth` links.
+struct KeepRound {
+    SymbolId phase;
+    std::uint32_t depth = 1;
+    std::vector<HandlerIdentity> handlers;  // by canonical id
+
+    friend bool operator==(const KeepRound&, const KeepRound&) = default;
+};
+
 struct DependencyLevel {
     ResolvedHandlerTrigger activation;
     std::uint64_t index = 0;
@@ -985,12 +999,17 @@ struct ExecutionGraph {
     std::vector<EventFlowEdge> event_flows;
     std::vector<LifecycleFlowEdge> lifecycle_flows;
     std::vector<ActivationDepth> activation_depths;
+    std::vector<KeepRound> keep_rounds;  // by phase canonical id, then depth
     std::vector<HandlerIdentity> stable_topological_order;
     std::vector<DependencyLevel> dependency_levels;
     std::vector<GroupDeclaration> group_declarations;
     std::vector<GroupOrdering> group_orderings;
     std::vector<ModuleImport> module_imports;
 };
+
+// The deepest commit round that runs keep rules of `phase`, or 0 when none does.
+[[nodiscard]] std::uint32_t deepest_keep_round(const ExecutionGraph& graph, const SymbolId& phase);
+[[nodiscard]] std::unordered_set<HandlerIdentity, HandlerIdentityHash> keep_round_handlers(const ExecutionGraph& graph);
 
 struct ResolvedTemplateParameter {
     std::string name;

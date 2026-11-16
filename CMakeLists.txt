@@ -171,6 +171,7 @@ add_library(cactus_frontend STATIC
     src/frontend/pair_plans.cpp
     src/frontend/query_costs.cpp
     src/frontend/hierarchy_forest.cpp
+    src/frontend/keep_inputs.cpp
     src/frontend/delivery_cycles.cpp
     src/frontend/native_result_ordering.cpp
     src/frontend/native_field_reads.cpp
@@ -187,6 +188,7 @@ target_link_libraries(cactus_frontend PUBLIC cactus_common)
 # ── Backend: C++ EnTT ───────────────────────────────────────────────────────────
 add_library(cactus_backend_cpp_entt STATIC
     src/backends/cpp-entt/accumulation_plan.cpp
+    src/backends/cpp-entt/keep_slots.cpp
     src/backends/cpp-entt/component_emitter.cpp
     src/backends/cpp-entt/contract_audit_emitter.cpp
     src/backends/cpp-entt/type_utils.cpp

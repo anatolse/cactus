@@ -18,11 +18,11 @@ constexpr int kSize       = 60;
 constexpr int kDoubleSize = 85;  // about twice the tiles of kSize
 
 // Limits at kSize. Work counts are exact; times are O3 measurements x 1.5.
-constexpr std::uint64_t kKeepRunsPerFrame = 3;
-// Round 1 runs the relation keeper, round 2 the last trait keeper, round 3 applies its result.
-constexpr std::uint64_t kCommitRoundsPerFrame = 3;
-// The two trait keepers sort their recipients into creation order.
-constexpr std::uint64_t kOrderingsPerFrame = 4;
+// Nothing changes after the first frame, so no keeper runs again.
+constexpr std::uint64_t kKeepRunsPerFrame = 0;
+// Rounds 1 and 2 still call their keepers, which find nothing changed.
+constexpr std::uint64_t kCommitRoundsPerFrame = 2;
+constexpr std::uint64_t kOrderingsPerFrame = 0;
 constexpr cactus_perf::TimeLimits kTimes{.base_ms = 1.5, .growth = 2.6};
 
 struct World {
@@ -69,7 +69,7 @@ struct World {
 
 }  // namespace
 
-TEST_CASE("perf: a keep chain settles in one frame and runs each keeper once", "[perf][keep-chain]") {
+TEST_CASE("perf: a keep chain settles in one frame and then runs no keeper", "[perf][keep-chain]") {
     World world(kSize);
     CHECK(world.near_rows() == near_rows(kSize));
     CHECK(world.dark() == dark_tiles(kSize));

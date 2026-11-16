@@ -1,5 +1,7 @@
 #include "backends/cpp-entt/persistence_restore_emitter.hpp"
 
+#include "backends/cpp-entt/keep_slots.hpp"
+
 #include "backends/cpp-entt/construction_retention.hpp"
 #include "backends/cpp-entt/persistence_emitter.hpp"
 #include "backends/cpp-entt/range_checks.hpp"
@@ -435,6 +437,9 @@ std::string EnttRestoreEmitter::emit_world_restore(const DecoratedProgram& progr
     }
     if (!program.relations.empty()) {
         out << "    generated_connect_relations(registry);\n";
+    }
+    if (const auto* plan = KeepSlotScope::active(); plan != nullptr && !plan->empty()) {
+        out << "    generated_connect_keep_inputs(registry);\n";
     }
     if (program.parallel_handlers.has_value()) {
         out << "    generated_prepare_parallel_world(registry);\n";

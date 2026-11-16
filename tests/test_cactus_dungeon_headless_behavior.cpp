@@ -117,7 +117,7 @@ struct World {
     void floor(int x, int z) {
         const auto entity = tile(x, z);
         REQUIRE((entity != entt::null));
-        registry.get<game::Tile>(entity).kind = game::Kind::Floor;
+        registry.patch<game::Tile>(entity, [&](game::Tile& cactus_value) { cactus_value.kind = game::Kind::Floor; });
         registry.remove<Solid>(entity);
     }
 
@@ -127,7 +127,7 @@ struct World {
 
     void mark(int x, int z, game::Kind kind = game::Kind::Earth) {
         const auto target = tile(x, z);
-        registry.get<game::Tile>(target).kind = kind;
+        registry.patch<game::Tile>(target, [&](game::Tile& cactus_value) { cactus_value.kind = kind; });
         registry.emplace_or_replace<Solid>(target);
         backend::relation_store<tasks::DigMark>(registry).add(human(), target, tasks::DigMark{});
     }
@@ -147,6 +147,16 @@ struct World {
             registry.destroy(entity);
         }
     }
+};
+
+// Timing runs measure skipped keep runs, not check mode's full evaluation of each.
+struct KeepCheckOff {
+    KeepCheckOff() { backend::keep_check_enabled() = false; }
+    KeepCheckOff(const KeepCheckOff&)            = delete;
+    KeepCheckOff& operator=(const KeepCheckOff&) = delete;
+    KeepCheckOff(KeepCheckOff&&)                 = delete;
+    KeepCheckOff& operator=(KeepCheckOff&&)      = delete;
+    ~KeepCheckOff() { backend::keep_check_enabled() = true; }
 };
 
 TEST_CASE("Dungeon seed repeats tiles, bases and robots", "[cactus-dungeon][headless]") {
@@ -352,7 +362,7 @@ TEST_CASE("Dungeon bridge removal disconnects and rebuilding reconnects", "[cact
     const auto player                           = cactus_gen::detail::generated_named_slots().world.Human;
     const auto bridge                           = world.tile(7, 4);
     const auto island                           = world.tile(8, 4);
-    world.registry.get<game::Tile>(bridge).kind = game::Kind::Water;
+    world.registry.patch<game::Tile>(bridge, [&](game::Tile& cactus_value) { cactus_value.kind = game::Kind::Water; });
     world.registry.remove<Solid>(bridge);
     world.floor(8, 4);
     auto& owned = backend::relation_store<game::OwnedBy>(world.registry);
@@ -589,11 +599,13 @@ TEST_CASE("Dungeon level ups grow health and keep XP bounded", "[cactus-dungeon]
     const auto robot  = world.worker(4, 4);
     auto& unit        = world.registry.get<units::Unit>(robot);
     unit.xp           = 99;
+    world.registry.patch<units::Unit>(robot);
     const auto before = unit.health;
     cactus_headless_test::dispatch_boundary_event(world.registry, units::GainXPEvent{.activity = units::Activity::Dig});
     REQUIRE(units::stats_for(unit).level == 2);
     REQUIRE(unit.health > before);
     unit.xp = 4499;
+    world.registry.patch<units::Unit>(robot);
     for (int i = 0; i < 3; ++i) {
         cactus_headless_test::dispatch_boundary_event(world.registry,
                                                       units::GainXPEvent{.activity = units::Activity::Combat});
@@ -608,7 +620,9 @@ TEST_CASE("Dungeon knights gain XP from combat and training", "[cactus-dungeon][
     const auto robot = world.worker(4, 4);
     auto& unit       = world.registry.get<units::Unit>(robot);
     unit.kind        = units::UnitKind::Knight;
+    world.registry.patch<units::Unit>(robot);
     unit.health      = 300.0F;
+    world.registry.patch<units::Unit>(robot);
     cactus_headless_test::dispatch_boundary_event(world.registry,
                                                   units::GainXPEvent{.activity = units::Activity::Combat});
     const auto combat = unit.xp;
@@ -626,7 +640,7 @@ TEST_CASE("Dungeon working grants XP and higher levels work faster", "[cactus-du
         World world;
         world.remove_workers();
         const auto robot                          = world.worker(6, 4);
-        world.registry.get<units::Unit>(robot).xp = xp;
+        world.registry.patch<units::Unit>(robot, [&](units::Unit& cactus_value) { cactus_value.xp = xp; });
         world.mark(7, 4);
         world.frame(20);
         return world.registry.get<tasks::Work>(world.tile(7, 4)).progress;
@@ -846,7 +860,7 @@ TEST_CASE("Dungeon attack orders end when their target is gone", "[cactus-dungeo
         backend::generated_process_root_event(world.registry, units::AttackRequestedEvent{enemy}, robot);
         world.frame(2);
         REQUIRE(world.registry.get<units::Order::AttackUnit>(robot).target == enemy);
-        world.registry.get<units::Unit>(enemy).health = 0.0F;
+        world.registry.patch<units::Unit>(enemy, [&](units::Unit& cactus_value) { cactus_value.health = 0.0F; });
         world.frames_until(600, [&] { return !world.registry.valid(enemy); });
         REQUIRE_FALSE(world.registry.valid(enemy));
         world.frame(3);
@@ -857,7 +871,7 @@ TEST_CASE("Dungeon attack orders end when their target is gone", "[cactus-dungeo
         backend::generated_process_root_event(world.registry, units::AttackRequestedEvent{heart}, robot);
         world.frame(2);
         REQUIRE(world.registry.get<units::Order::AttackHeart>(robot).target == heart);
-        world.registry.get<game::Heart>(heart).health = 0.0F;
+        world.registry.patch<game::Heart>(heart, [&](game::Heart& cactus_value) { cactus_value.health = 0.0F; });
         world.frame(3);
         REQUIRE_FALSE(world.registry.all_of<game::Heart>(heart));
         REQUIRE(world.registry.all_of<units::Order::Auto>(robot));
@@ -911,7 +925,7 @@ TEST_CASE("Dungeon room plans charge once and reject invalid ground", "[cactus-d
     world.frame(3);
     REQUIRE(world.registry.get<rooms::RoomTile>(valid).kind == rooms::RoomKind::Lair);
     REQUIRE(world.registry.get<game::Player>(world.human()).gold == gold - rooms::price(rooms::RoomKind::Lair));
-    world.registry.get<game::Player>(world.human()).gold = 0;
+    world.registry.patch<game::Player>(world.human(), [&](game::Player& cactus_value) { cactus_value.gold = 0; });
     plans.add(world.human(), world.tile(3, 4), rooms::RoomPlan{.kind = rooms::RoomKind::Farm});
     world.frame(3);
     REQUIRE_FALSE(world.registry.all_of<rooms::RoomTile>(world.tile(3, 4)));
@@ -958,7 +972,7 @@ TEST_CASE("Dungeon disconnected rooms stay built but inactive", "[cactus-dungeon
     namespace rooms                             = cactus_gen::rooms;
     const auto bridge                           = world.tile(7, 4);
     const auto island                           = world.tile(8, 4);
-    world.registry.get<game::Tile>(bridge).kind = game::Kind::Water;
+    world.registry.patch<game::Tile>(bridge, [&](game::Tile& cactus_value) { cactus_value.kind = game::Kind::Water; });
     world.registry.remove<Solid>(bridge);
     world.floor(8, 4);
     backend::relation_store<game::OwnedBy>(world.registry).add(island, world.human(), {});
@@ -985,7 +999,7 @@ TEST_CASE("Dungeon painted bridges cost gold and refund half on sale", "[cactus-
     const auto bridge  = world.tile(7, 4);
     const auto distant = world.tile(10, 4);
     for (const auto tile : {bridge, distant}) {
-        world.registry.get<game::Tile>(tile).kind = game::Kind::Water;
+        world.registry.patch<game::Tile>(tile, [&](game::Tile& cactus_value) { cactus_value.kind = game::Kind::Water; });
         world.registry.remove<Solid>(tile);
     }
     world.frame(2);
@@ -1043,7 +1057,7 @@ TEST_CASE("Dungeon recruitment requires a free bed and food", "[cactus-dungeon][
     REQUIRE(world.registry.view<knights::Knight>().size() == 0);
     plans.add(world.human(), world.tile(5, 3), rooms::RoomPlan{.kind = rooms::RoomKind::Farm});
     world.frame(8);
-    world.registry.get<knights::FarmStock>(world.tile(5, 3)).food = 2;
+    world.registry.patch<knights::FarmStock>(world.tile(5, 3), [&](knights::FarmStock& cactus_value) { cactus_value.food = 2; });
     world.frame(12);
     REQUIRE(world.registry.view<knights::Knight>().size() == 1);
     for (const auto knight : world.registry.view<knights::Knight>()) {
@@ -1070,13 +1084,16 @@ TEST_CASE("Dungeon knights travel to food and their beds", "[cactus-dungeon][kni
     world.frame(8);
     auto& food  = world.registry.get<knights::FarmStock>(world.tile(6, 6));
     food.food   = 3;
+    world.registry.patch<knights::FarmStock>(world.tile(6, 6));
     food.growth = -1000.0F;
+    world.registry.patch<knights::FarmStock>(world.tile(6, 6));
     backend::generated_process_root_event(world.registry, knights::RecruitRequestedEvent{}, world.human());
     world.frame(12);
     REQUIRE(world.registry.view<knights::Knight>().size() == 1);
     const auto knight = *world.registry.view<knights::Knight>().begin();
     auto& needs       = world.registry.get<knights::Knight>(knight);
     needs.hunger      = 6.0F;
+    world.registry.patch<knights::Knight>(knight);
     REQUIRE(food.food == 2);
     float hungry = needs.hunger;
     for (int i = 0; i < 360 && food.food == 2; ++i) {
@@ -1087,7 +1104,8 @@ TEST_CASE("Dungeon knights travel to food and their beds", "[cactus-dungeon][kni
     REQUIRE(needs.hunger < hungry - 4.9F);
     REQUIRE(backend::relation_store<tasks::Located>(world.registry).contains(knight, world.tile(6, 6)));
     needs.fatigue                                  = 11.0F;
-    world.registry.get<units::Unit>(knight).health = 200.0F;
+    world.registry.patch<knights::Knight>(knight);
+    world.registry.patch<units::Unit>(knight, [&](units::Unit& cactus_value) { cactus_value.health = 200.0F; });
     backend::generated_process_root_event(world.registry, units::DefendRequestedEvent{world.tile(6, 6)}, knight);
     world.frame(12);
     REQUIRE(backend::relation_store<tasks::Located>(world.registry).contains(knight, world.tile(6, 6)));
@@ -1095,12 +1113,13 @@ TEST_CASE("Dungeon knights travel to food and their beds", "[cactus-dungeon][kni
     backend::generated_process_root_event(world.registry, units::CancelRequestedEvent{}, knight);
     for (int i = 0; i < 900 && needs.fatigue >= 10.0F; ++i) {
         needs.hunger = 0.0F;
+        world.registry.patch<knights::Knight>(knight);
         world.frame();
     }
     REQUIRE(needs.fatigue < 10.0F);
     REQUIRE(backend::relation_store<tasks::Located>(world.registry).contains(knight, world.tile(2, 2)));
     REQUIRE(world.registry.get<units::Unit>(knight).health > 200.0F);
-    world.registry.get<units::Unit>(knight).health = 0.0F;
+    world.registry.patch<units::Unit>(knight, [&](units::Unit& cactus_value) { cactus_value.health = 0.0F; });
     world.frames_until(100, [&] { return !world.registry.valid(knight); });
     REQUIRE_FALSE(world.registry.valid(knight));
 }
@@ -1118,6 +1137,7 @@ TEST_CASE("Dungeon training pays gold for XP and disconnected farms stop growing
     world.frame(8);
     auto& stock = world.registry.get<knights::FarmStock>(world.tile(5, 3));
     stock.food  = 2;
+    world.registry.patch<knights::FarmStock>(world.tile(5, 3));
     backend::generated_process_root_event(world.registry, knights::RecruitRequestedEvent{}, world.human());
     world.frame(12);
     const auto knight = *world.registry.view<knights::Knight>().begin();
@@ -1129,12 +1149,13 @@ TEST_CASE("Dungeon training pays gold for XP and disconnected farms stop growing
     REQUIRE(world.registry.get<units::Unit>(knight).xp >= 5);
     REQUIRE(world.registry.get<game::Player>(world.human()).gold < gold);
     REQUIRE(stock.food >= 2);
-    world.registry.get<game::Player>(world.human()).gold = 0;
+    world.registry.patch<game::Player>(world.human(), [&](game::Player& cactus_value) { cactus_value.gold = 0; });
     const auto xp                                        = world.registry.get<units::Unit>(knight).xp;
     world.frame(90);
     REQUIRE(world.registry.get<units::Unit>(knight).xp == xp);
     REQUIRE(world.registry.get<game::Player>(world.human()).gold == 0);
     stock.food = 0;
+    world.registry.patch<knights::FarmStock>(world.tile(5, 3));
     backend::relation_store<game::OwnedBy>(world.registry).erase_from(world.tile(5, 3));
     world.frame(90);
     REQUIRE(stock.food == 0);
@@ -1187,7 +1208,7 @@ TEST_CASE("Dungeon equal level knights beat robots and death loses XP", "[cactus
     const auto knight =
         cactus_gen::detail::small_map::create_recruit(world.registry, Vector3{4.5F, 1.25F, 4.5F}, world.tile(3, 3));
     const auto robot                          = world.worker(5, 4);
-    world.registry.get<units::Unit>(robot).xp = 80;
+    world.registry.patch<units::Unit>(robot, [&](units::Unit& cactus_value) { cactus_value.xp = 80; });
     auto& commands                            = backend::relation_store<tasks::Commands>(world.registry);
     commands.erase_from(robot);
     commands.add(robot, cactus_gen::detail::generated_named_slots().world.Enemy, {});
@@ -1199,7 +1220,7 @@ TEST_CASE("Dungeon equal level knights beat robots and death loses XP", "[cactus
     REQUIRE(world.registry.get<units::Unit>(knight).xp >= 20);
     const auto replacement = world.worker(6, 6);
     REQUIRE(world.registry.get<units::Unit>(replacement).xp == 0);
-    world.registry.get<units::Unit>(replacement).health = 0.0F;
+    world.registry.patch<units::Unit>(replacement, [&](units::Unit& cactus_value) { cactus_value.health = 0.0F; });
     world.frames_until(100, [&] { return !world.registry.valid(replacement); });
     REQUIRE_FALSE(world.registry.valid(replacement));
 }
@@ -1232,7 +1253,9 @@ TEST_CASE("Dungeon simultaneous kills cannot restore dead units through a level 
     for (const auto unit : {first, second}) {
         auto& stats  = world.registry.get<units::Unit>(unit);
         stats.xp     = 80;
+        world.registry.patch<units::Unit>(unit);
         stats.health = 0.01F;
+        world.registry.patch<units::Unit>(unit);
     }
     world.frames_until(100, [&] { return !world.registry.valid(first) && !world.registry.valid(second); });
     REQUIRE_FALSE(world.registry.valid(first));
@@ -1245,7 +1268,7 @@ TEST_CASE("Dungeon a fallen heart records victory and defeat", "[cactus-dungeon]
     world.frame(8);
     const auto enemy = cactus_gen::detail::generated_named_slots().world.Enemy;
     SECTION("human heart falls") {
-        world.registry.get<game::Heart>(world.tile(4, 4)).health = 0.0F;
+        world.registry.patch<game::Heart>(world.tile(4, 4), [&](game::Heart& cactus_value) { cactus_value.health = 0.0F; });
         world.frame(2);
         REQUIRE(world.registry.get<combat::Outcome>(world.human()).status == combat::BattleResult::Lost);
         REQUIRE(world.registry.get<combat::Outcome>(enemy).status == combat::BattleResult::Won);
@@ -1254,7 +1277,7 @@ TEST_CASE("Dungeon a fallen heart records victory and defeat", "[cactus-dungeon]
         REQUIRE(world.registry.all_of<game::Tile>(world.tile(4, 4)));
     }
     SECTION("enemy heart falls") {
-        world.registry.get<game::Heart>(world.tile(kSize - 5, kSize - 5)).health = 0.0F;
+        world.registry.patch<game::Heart>(world.tile(kSize - 5, kSize - 5), [&](game::Heart& cactus_value) { cactus_value.health = 0.0F; });
         world.frame(2);
         REQUIRE(world.registry.get<combat::Outcome>(world.human()).status == combat::BattleResult::Won);
         REQUIRE(world.registry.get<combat::Outcome>(enemy).status == combat::BattleResult::Lost);
@@ -1279,9 +1302,13 @@ Vector2 screen_at(World& world, entt::entity entity) {
 void select_at(World& world, Vector2 start, Vector2 end, bool additive = false, bool box = false) {
     auto& selector = world.registry.get<controls::Selector>(overview());
     selector.start = start;
+    world.registry.patch<controls::Selector>(overview());
     selector.point = end;
+    world.registry.patch<controls::Selector>(overview());
     selector.shift = additive;
+    world.registry.patch<controls::Selector>(overview());
     selector.box   = box;
+    world.registry.patch<controls::Selector>(overview());
     backend::generated_process_root_event(world.registry, controls::SelectionCommitEvent{}, overview());
     world.frame(2);
 }
@@ -1295,8 +1322,11 @@ void context_at(World& world, Vector2 point, bool defend = false) {
     world.frame(2);
     auto& selector  = world.registry.get<controls::Selector>(overview());
     selector.point  = point;
+    world.registry.patch<controls::Selector>(overview());
     selector.defend = defend;
+    world.registry.patch<controls::Selector>(overview());
     selector.taken  = false;
+    world.registry.patch<controls::Selector>(overview());
     backend::generated_process_root_event(world.registry, controls::ContextCommitEvent{}, overview());
 }
 
@@ -1312,7 +1342,9 @@ TEST_CASE("Dungeon click and shift click select only friendly units", "[cactus-d
     commands.add(enemy, cactus_gen::detail::generated_named_slots().world.Enemy, {});
     auto& rig = world.registry.get<controls::Rig>(overview());
     rig.focus = Vector3{kMiddle - 0.5F, 0.0F, kMiddle - 0.5F};
+    world.registry.patch<controls::Rig>(overview());
     rig.zoom  = 40.0F;
+    world.registry.patch<controls::Rig>(overview());
     world.frame(8);
     const auto robot_pixel  = screen_at(world, robot);
     const auto knight_pixel = screen_at(world, knight);
@@ -1388,7 +1420,7 @@ TEST_CASE("Dungeon context orders move, defend and attack for mixed selections",
         cactus_gen::detail::small_map::create_recruit(world.registry, Vector3{5.5F, 1.25F, 4.5F}, world.tile(2, 2));
     world.frame(8);
     for (const auto unit : {robot, knight}) {
-        world.registry.get<controls::SelectionStatus>(unit).active = true;
+        world.registry.patch<controls::SelectionStatus>(unit, [&](controls::SelectionStatus& cactus_value) { cactus_value.active = true; });
     }
     const auto destination = world.tile(2, 2);
     context_at(world, screen_at(world, destination));
@@ -1415,7 +1447,9 @@ TEST_CASE("Dungeon context orders move, defend and attack for mixed selections",
     }
     auto& rig = world.registry.get<controls::Rig>(overview());
     rig.focus = Vector3{kMiddle - 0.5F, 0.0F, kMiddle - 0.5F};
+    world.registry.patch<controls::Rig>(overview());
     rig.zoom  = 40.0F;
+    world.registry.patch<controls::Rig>(overview());
     world.frame(3);
     const auto heart = world.tile(kSize - 5, kSize - 5);
     context_at(world, screen_at(world, heart));
@@ -1498,7 +1532,7 @@ TEST_CASE("Dungeon mouse orders stop automatic work in their input frame", "[cac
     const auto robot = world.worker(6, 4);
     world.mark(7, 4, game::Kind::InfiniteGold);
     world.frame(12);
-    world.registry.get<controls::SelectionStatus>(robot).active = true;
+    world.registry.patch<controls::SelectionStatus>(robot, [&](controls::SelectionStatus& cactus_value) { cactus_value.active = true; });
     const auto target                                           = world.tile(7, 4);
     REQUIRE(backend::relation_store<tasks::Claim>(world.registry).contains(robot, target));
     const auto progress = world.registry.get<tasks::Work>(target).progress;
@@ -1521,7 +1555,7 @@ TEST_CASE("Dungeon visible floor surfaces follow room and bridge appearance", "[
     const auto bridge = world.tile(7, 4);
     const auto water  = world.tile(8, 4);
     for (const auto tile : {bridge, water}) {
-        world.registry.get<game::Tile>(tile).kind = game::Kind::Water;
+        world.registry.patch<game::Tile>(tile, [&](game::Tile& cactus_value) { cactus_value.kind = game::Kind::Water; });
         world.registry.remove<Solid>(tile);
     }
     world.frame(3);
@@ -1545,7 +1579,7 @@ TEST_CASE("Dungeon visible floor surfaces follow room and bridge appearance", "[
         }
     }
     REQUIRE(surfaces == 2);
-    world.registry.get<Cell>(room).texture = {};
+    world.registry.patch<Cell>(room, [&](Cell& cactus_value) { cactus_value.texture = {}; });
     world.frame(2);
     REQUIRE(world.registry.get<Cell>(room).texture == room_texture);
 }
@@ -1594,7 +1628,7 @@ TEST_CASE("Dungeon top bar reports the human economy and unit counts", "[cactus-
     REQUIRE(label.find("Gold: 1000") != std::string::npos);
     REQUIRE(label.find("Robots: 4") != std::string::npos);
     REQUIRE(label.find("Knights: 0") != std::string::npos);
-    world.registry.get<game::Player>(world.human()).gold = 777;
+    world.registry.patch<game::Player>(world.human(), [&](game::Player& cactus_value) { cactus_value.gold = 777; });
     cactus_gen::detail::small_map::create_recruit(world.registry, Vector3{4.5F, 1.25F, 4.5F}, world.tile(3, 3));
     world.frame(8);
     label = world.registry.get<ui::Text>(hud_caption(world, hud::CaptionKind::Top)).value;
@@ -1611,12 +1645,18 @@ TEST_CASE("Dungeon toolbar sends dig, construction, sale and recruitment designa
     const auto designate = [&](entt::entity tile) {
         auto& selector      = world.registry.get<controls::Selector>(overview());
         selector.start      = screen_at(world, tile);
+        world.registry.patch<controls::Selector>(overview());
         selector.point      = selector.start;
+        world.registry.patch<controls::Selector>(overview());
         const auto& cell    = world.registry.get<Cell>(tile);
         selector.cell_start = Vector2{static_cast<float>(cell.x), static_cast<float>(cell.z)};
+        world.registry.patch<controls::Selector>(overview());
         selector.cell_end   = selector.cell_start;
+        world.registry.patch<controls::Selector>(overview());
         selector.grounded   = true;
+        world.registry.patch<controls::Selector>(overview());
         selector.digging    = world.registry.all_of<controls::Tool::Dig>(overview());
+        world.registry.patch<controls::Selector>(overview());
         backend::generated_process_root_event(world.registry, controls::DesignationCommitEvent{}, overview());
     };
     press(world, hud_button(world, hud::Action::Lair));
@@ -1627,7 +1667,7 @@ TEST_CASE("Dungeon toolbar sends dig, construction, sale and recruitment designa
     REQUIRE(world.registry.get<rooms::RoomTile>(world.tile(3, 3)).kind == rooms::RoomKind::Lair);
     press(world, hud_button(world, hud::Action::Dig));
     REQUIRE(world.registry.all_of<controls::Tool::Dig>(overview()));
-    world.registry.get<game::Tile>(world.tile(7, 4)).kind = game::Kind::Earth;
+    world.registry.patch<game::Tile>(world.tile(7, 4), [&](game::Tile& cactus_value) { cactus_value.kind = game::Kind::Earth; });
     designate(world.tile(7, 4));
     world.frame();
     REQUIRE(backend::relation_store<tasks::DigMark>(world.registry).contains(world.human(), world.tile(7, 4)));
@@ -1679,7 +1719,9 @@ TEST_CASE("Dungeon unit health, XP and level displays follow current stats", "[c
     const auto robot = world.worker(4, 4);
     auto& unit       = world.registry.get<units::Unit>(robot);
     unit.xp          = 150;
+    world.registry.patch<units::Unit>(robot);
     unit.health      = 60.0F;
+    world.registry.patch<units::Unit>(robot);
     world.frame(8);
     using Draw        = cactus_gen::stdlib::render::models::ModelRenderer;
     using Local       = cactus_gen::stdlib::transform::volume::LocalTransform;
@@ -1703,6 +1745,7 @@ TEST_CASE("Dungeon unit health, XP and level displays follow current stats", "[c
     REQUIRE(health);
     REQUIRE(xp);
     unit.xp = 4500;
+    world.registry.patch<units::Unit>(robot);
     world.frame(2);
     REQUIRE(world.registry.get<ScreenLabel>(robot).text.find("L10") != std::string::npos);
 }
@@ -1764,6 +1807,7 @@ TEST_CASE("Dungeon minimap click moves the main camera target", "[cactus-dungeon
 }
 
 TEST_CASE("Dungeon full map with twenty working robots", "[.dungeon-performance]") {
+    const KeepCheckOff timed;
     World world(7, 0, 85);
     const auto kind = GENERATE(game::Kind::Earth, game::Kind::InfiniteGold);
     for (int coordinate = 2; coordinate <= 6; ++coordinate) {
@@ -1883,7 +1927,7 @@ TEST_CASE("Dungeon menu starts a fresh game and accepts game-over return", "[cac
     REQUIRE(state.mode == session::SessionMode::Playing);
     REQUIRE(world.registry.view<game::Tile>().size() == kSize * kSize);
     REQUIRE(world.registry.view<game::Heart>().size() == 2);
-    world.registry.get<game::Heart>(world.tile(4, 4)).health = 0.0F;
+    world.registry.patch<game::Heart>(world.tile(4, 4), [&](game::Heart& cactus_value) { cactus_value.health = 0.0F; });
     world.frame(4);
     REQUIRE(state.mode == session::SessionMode::GameOver);
     backend::generated_process_root_event(world.registry, flow::MenuRequestedEvent{});
@@ -1945,24 +1989,30 @@ TEST_CASE("Dungeon save restores gameplay facts and rebuilds its views",
         cactus_gen::detail::small_map::create_recruit(world.registry, Vector3{4.5F, 1.25F, 4.5F}, world.tile(3, 3));
     world.frame(8);
     backend::generated_process_root_event(world.registry, hud::PauseRequestedEvent{});
-    world.registry.get<units::Unit>(worker).xp               = 321;
-    world.registry.get<units::Unit>(worker).health           = 77.0F;
-    world.registry.get<game::Player>(world.human()).gold     = 4321;
-    world.registry.get<game::Heart>(world.tile(4, 4)).health = 1777.0F;
+    world.registry.patch<units::Unit>(worker, [&](units::Unit& cactus_value) { cactus_value.xp = 321; });
+    world.registry.patch<units::Unit>(worker, [&](units::Unit& cactus_value) { cactus_value.health = 77.0F; });
+    world.registry.patch<game::Player>(world.human(), [&](game::Player& cactus_value) { cactus_value.gold = 4321; });
+    world.registry.patch<game::Heart>(world.tile(4, 4), [&](game::Heart& cactus_value) { cactus_value.health = 1777.0F; });
     const auto enemy                                         = cactus_gen::detail::generated_named_slots().world.Enemy;
     world.registry.emplace<ai::Brain>(enemy).elapsed         = 0.3F;
     auto& explored                                           = backend::relation_store<hud::Explored>(world.registry);
     explored.add(world.human(), world.tile(kEnemy + 1, kEnemy + 1), {});
     auto& needs                                    = world.registry.get<cactus_gen::knights::Knight>(knight);
     needs.hunger                                   = 2.0F;
+    world.registry.patch<cactus_gen::knights::Knight>(knight);
     needs.fatigue                                  = 3.0F;
+    world.registry.patch<cactus_gen::knights::Knight>(knight);
     needs.training                                 = 0.4F;
+    world.registry.patch<cactus_gen::knights::Knight>(knight);
     needs.resting                                  = true;
-    world.registry.get<units::Unit>(knight).xp     = 654;
-    world.registry.get<units::Unit>(knight).health = 171.0F;
+    world.registry.patch<cactus_gen::knights::Knight>(knight);
+    world.registry.patch<units::Unit>(knight, [&](units::Unit& cactus_value) { cactus_value.xp = 654; });
+    world.registry.patch<units::Unit>(knight, [&](units::Unit& cactus_value) { cactus_value.health = 171.0F; });
     auto& farm  = world.registry.get<cactus_gen::knights::FarmStock>(world.tile(3, 4));
     farm.food   = 3;
+    world.registry.patch<cactus_gen::knights::FarmStock>(world.tile(3, 4));
     farm.growth = 0.2F;
+    world.registry.patch<cactus_gen::knights::FarmStock>(world.tile(3, 4));
     const auto seconds =
         world.registry.get<session::Session>(cactus_gen::detail::generated_named_slots().session.Game).seconds;
     const auto explored_count = explored.size();
@@ -1974,9 +2024,9 @@ TEST_CASE("Dungeon save restores gameplay facts and rebuilds its views",
     cactus_headless_test::dispatch_boundary_event(world.registry, hud::SaveRequestedEvent{});
     world.frame(2);
     REQUIRE(writes == 1);
-    world.registry.get<game::Player>(world.human()).gold  = 1;
-    world.registry.get<units::Unit>(worker).xp            = 0;
-    world.registry.get<game::Tile>(world.tile(7, 4)).kind = game::Kind::Earth;
+    world.registry.patch<game::Player>(world.human(), [&](game::Player& cactus_value) { cactus_value.gold = 1; });
+    world.registry.patch<units::Unit>(worker, [&](units::Unit& cactus_value) { cactus_value.xp = 0; });
+    world.registry.patch<game::Tile>(world.tile(7, 4), [&](game::Tile& cactus_value) { cactus_value.kind = game::Kind::Earth; });
     world.registry.remove<rooms::RoomTile>(world.tile(3, 3));
     explored.erase_from(world.human());
     cactus_headless_test::dispatch_boundary_event(world.registry, hud::LoadRequestedEvent{});
@@ -2191,9 +2241,11 @@ TEST_CASE("Dungeon HUD blocks world context orders under the minimap", "[cactus-
     const auto worker = world.worker(kMiddle - 1, kMiddle - 1);
     auto& rig         = world.registry.get<controls::Rig>(overview());
     rig.focus         = Vector3{kMiddle - 0.5F, 0.0F, kMiddle - 0.5F};
+    world.registry.patch<controls::Rig>(overview());
     rig.zoom          = 8.0F;
+    world.registry.patch<controls::Rig>(overview());
     world.frame(4);
-    world.registry.get<controls::SelectionStatus>(worker).active = true;
+    world.registry.patch<controls::SelectionStatus>(worker, [&](controls::SelectionStatus& cactus_value) { cactus_value.active = true; });
     cactus_raylib_fake::set_mouse_position(Vector2{1000.0F, 200.0F});
     cactus_raylib_fake::set_mouse_button_down(MOUSE_BUTTON_RIGHT, true);
     cactus_raylib_fake::set_mouse_button_pressed_this_frame(MOUSE_BUTTON_RIGHT, true);
@@ -2207,8 +2259,11 @@ TEST_CASE("Dungeon rendering uses cameras declared by imported modules", "[cactu
     world.frame(8);
     auto& rig = world.registry.get<controls::Rig>(overview());
     rig.focus = Vector3{kMiddle - 0.5F, 0.0F, kMiddle - 0.5F};
+    world.registry.patch<controls::Rig>(overview());
     rig.zoom  = 30.0F;
+    world.registry.patch<controls::Rig>(overview());
     rig.yaw   = 0.3F;
+    world.registry.patch<controls::Rig>(overview());
     world.frame(3);
     const auto main_position = world.registry.get<Transform>(overview()).position;
     const auto map_position  = world.registry.get<Transform>(minimap(world)).position;
@@ -2225,6 +2280,7 @@ TEST_CASE("Dungeon rendering uses cameras declared by imported modules", "[cactu
 }
 
 TEST_CASE("Dungeon full-map AI versus AI for ten simulated minutes", "[.dungeon-ai-performance]") {
+    const KeepCheckOff timed;
     cactus_test::ScopedPersistenceAdapter scoped(backend::make_example_file_adapter("build/dungeon-benchmark-saves"));
     World world(7, 4, 85);
     world.frame(12);

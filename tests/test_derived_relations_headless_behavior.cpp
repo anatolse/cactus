@@ -146,7 +146,7 @@ TEST_CASE("derived relations: closure, shortest and components", "[runtime][rela
     }
 
     {  // a dearer tile moves the cheapest route to the other side
-        registry.get<game::Tile>(slots.East).cost = 5;
+        registry.patch<game::Tile>(slots.East, [&](game::Tile& cactus_value) { cactus_value.cost = 5; });
         world.tick();
         CHECK(world.route(slots.Heart, slots.Goal) == std::pair{slots.North, 4});
         CHECK(world.route(slots.FarNorth, slots.FarEast) == std::pair{slots.Top, 4});

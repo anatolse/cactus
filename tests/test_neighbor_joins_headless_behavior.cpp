@@ -116,17 +116,17 @@ TEST_CASE("neighbor joins: four-neighbor rules on a grid", "[runtime][neighbor-j
         CHECK(world.cell(slots.Corner0).ahead == 1);
         CHECK(world.cell(slots.Center).ahead == 1);
         CHECK(world.cell(slots.Corner2).ahead == 0);
-        world.cell(slots.Corner0).reach = 2;
+        world.registry.patch<game::Cell>(slots.Corner0, [&](game::Cell& cactus_value) { cactus_value.reach = 2; });
         world.tick();
         CHECK(world.cell(slots.Corner0).ahead == 2);
-        world.cell(slots.Corner0).reach = 1;
+        world.registry.patch<game::Cell>(slots.Corner0, [&](game::Cell& cactus_value) { cactus_value.reach = 1; });
         world.tick();
         CHECK(world.cell(slots.Corner0).ahead == 1);
     }
 
     {  // cells next to an open cell are kept as they open and close
         CHECK(registry.view<game::NextToOpen>().empty());
-        world.cell(slots.Center).open = true;
+        world.registry.patch<game::Cell>(slots.Center, [&](game::Cell& cactus_value) { cactus_value.open = true; });
         world.tick();
         for (const auto entity : {slots.Edge1, slots.Edge3, slots.Edge5, slots.Edge7}) {
             CHECK(registry.all_of<game::NextToOpen>(entity));
@@ -134,14 +134,14 @@ TEST_CASE("neighbor joins: four-neighbor rules on a grid", "[runtime][neighbor-j
         CHECK_FALSE(registry.all_of<game::NextToOpen>(slots.Center));
         CHECK_FALSE(registry.all_of<game::NextToOpen>(slots.Corner0));
 
-        world.cell(slots.Center).open = false;
-        world.cell(slots.Corner8).open = true;
+        world.registry.patch<game::Cell>(slots.Center, [&](game::Cell& cactus_value) { cactus_value.open = false; });
+        world.registry.patch<game::Cell>(slots.Corner8, [&](game::Cell& cactus_value) { cactus_value.open = true; });
         world.tick();
         CHECK(registry.all_of<game::NextToOpen>(slots.Edge5));
         CHECK(registry.all_of<game::NextToOpen>(slots.Edge7));
         CHECK_FALSE(registry.all_of<game::NextToOpen>(slots.Edge1));
         CHECK_FALSE(registry.all_of<game::NextToOpen>(slots.Edge3));
-        world.cell(slots.Corner8).open = false;
+        world.registry.patch<game::Cell>(slots.Corner8, [&](game::Cell& cactus_value) { cactus_value.open = false; });
         world.tick();
         CHECK(registry.view<game::NextToOpen>().empty());
     }

@@ -103,7 +103,7 @@ TEST_CASE("Duplicate support preserves membership and creation order", "[headles
     const auto revision = world.rows<game::Frontier>().revision();
     world.tick();
     CHECK(world.rows<game::Frontier>().revision() == revision);
-    world.registry.get<game::Control>(s.Settings).cost = 9;
+    world.registry.patch<game::Control>(s.Settings, [&](game::Control& cactus_value) { cactus_value.cost = 9; });
     world.tick();
     const auto* updated = world.rows<game::Frontier>().find(s.Red, s.Goal);
     REQUIRE(updated != nullptr);
@@ -160,8 +160,8 @@ TEST_CASE("Paused projections and restore rebuild only on a scheduled run", "[he
         CHECK(snapshot.relation_name(row) != "relation_row_projection.Frontier");
         CHECK(snapshot.relation_name(row) != "relation_row_projection.Reverse");
     }
-    world.registry.get<game::Control>(s.Settings).active = false;
-    world.registry.get<game::Control>(s.Settings).cost   = 42;
+    world.registry.patch<game::Control>(s.Settings, [&](game::Control& cactus_value) { cactus_value.active = false; });
+    world.registry.patch<game::Control>(s.Settings, [&](game::Control& cactus_value) { cactus_value.cost = 42; });
     world.rows<game::Walk>().clear();
     world.rows<game::Walk>().compact();
     world.tick();
@@ -169,7 +169,7 @@ TEST_CASE("Paused projections and restore rebuild only on a scheduled run", "[he
     const auto* paused = world.rows<game::Frontier>().find(s.Red, s.Goal);
     REQUIRE(paused != nullptr);
     CHECK(paused->priority == 7);
-    world.registry.get<game::Control>(s.Settings).active = true;
+    world.registry.patch<game::Control>(s.Settings, [&](game::Control& cactus_value) { cactus_value.active = true; });
     CHECK(world.rows<game::Frontier>().contains(s.Red, s.Goal));
     world.tick();
     CHECK(world.rows<game::Frontier>().size() == 0);
@@ -259,10 +259,10 @@ TEST_CASE("Projected rows cannot outlive an endpoint retired earlier in the comm
     const auto& s = World::slots();
     world.rows<game::OwnedBy>().add(s.Start, s.Red, {});
     world.rows<game::Walk>().add(s.Start, s.Goal, {});
-    world.registry.get<game::Control>(s.Settings).retire = true;
+    world.registry.patch<game::Control>(s.Settings, [&](game::Control& cactus_value) { cactus_value.retire = true; });
     SECTION("destroy endpoint") {}
     SECTION("remove endpoint trait") {
-        world.registry.get<game::Control>(s.Settings).strip = true;
+        world.registry.patch<game::Control>(s.Settings, [&](game::Control& cactus_value) { cactus_value.strip = true; });
     }
     world.tick();
     CHECK_FALSE(world.rows<game::Frontier>().contains(s.Red, s.Goal));

@@ -518,6 +518,26 @@ grid_region_joins.cactus examples grid_region_joins.DiskPairs/on std.core.fixed_
     named_writes: [grid_region_joins.Settings: grid_region_joins.Control{trace}]
     named_requirements: grid_region_joins.Settings/grid_region_joins.Control
     iteration_order: free
+incremental_keep_runtime.cactus fixtures incremental_keep_runtime.KeepCaught/on std.core.fixed_tick
+    reads: incremental_keep_runtime.Unit
+    read_fields: incremental_keep_runtime.Unit{x}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: creation
+incremental_keep_runtime.cactus fixtures incremental_keep_runtime.KeepOver/on std.core.fixed_tick
+    reads: incremental_keep_runtime.Spot incremental_keep_runtime.Unit
+    read_fields: incremental_keep_runtime.Spot{id,x} incremental_keep_runtime.Unit{id,x}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:incremental_keep_runtime.Unit 1:incremental_keep_runtime.Spot
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
 keep_chains.cactus examples keep_chains.AnchoredFact/on std.core.fixed_tick
     reads: keep_chains.Cell keep_chains.Control
     read_fields: keep_chains.Cell{grounded} keep_chains.Control{frozen}

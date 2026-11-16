@@ -303,6 +303,10 @@ add_executable(test_archetype_reachability test_archetype_reachability.cpp)
 target_link_libraries(test_archetype_reachability PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME ArchetypeReachabilityTests COMMAND test_archetype_reachability)
 
+add_executable(test_keep_inputs test_keep_inputs.cpp)
+target_link_libraries(test_keep_inputs PRIVATE cactus_frontend Catch2::Catch2WithMain)
+add_test(NAME KeepInputsTests COMMAND test_keep_inputs)
+
 add_executable(test_hierarchy_forest test_hierarchy_forest.cpp)
 target_link_libraries(test_hierarchy_forest PRIVATE cactus_frontend Catch2::Catch2WithMain)
 target_compile_definitions(test_hierarchy_forest PRIVATE
@@ -863,6 +867,14 @@ cactus_add_headless_behavior_test(test_generalized_keep_headless_behavior
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_generalized_keep_headless_behavior.cpp
 )
+
+# Every keep run is also evaluated fully and compared (CACTUS_KEEP_CHECK).
+cactus_add_headless_behavior_test(test_incremental_keep_headless_behavior
+    CACTUS_SOURCE tests/fixtures/incremental_keep_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_incremental_keep_headless_behavior.cpp
+)
+target_compile_definitions(test_incremental_keep_headless_behavior PRIVATE CACTUS_KEEP_CHECK)
 
 cactus_add_headless_behavior_test(test_reduced_relation_keep_headless_behavior
     CACTUS_SOURCE tests/fixtures/reduced_relation_keep.cactus
@@ -1526,13 +1538,32 @@ cactus_add_headless_behavior_test(test_keep_evaluation_row_stage_headless_behavi
     FORCE_ROW_STAGE
 )
 
+# Every program with a keep rule evaluates each keep run both incrementally
+# and fully, and fails on any difference.
+foreach(keep_check_target IN ITEMS
+        test_rule_keep_headless_behavior test_keep_chains_headless_behavior
+        test_generalized_keep_headless_behavior test_reduced_relation_keep_headless_behavior
+        test_relations_headless_behavior test_derived_relations_headless_behavior
+        test_relation_row_joins_headless_behavior test_relation_row_projection_headless_behavior
+        test_neighbor_joins_headless_behavior test_neighbor_joins_unindexed_headless_behavior
+        test_keep_evaluation_headless_behavior test_keep_evaluation_unindexed_headless_behavior
+        test_keep_evaluation_row_stage_headless_behavior test_concise_rule_notation_headless_behavior
+        test_camera_projection_headless_behavior test_character_body_headless_behavior
+        test_character_body_unindexed_headless_behavior test_minimap_headless_behavior
+        test_per_view_visibility_headless_behavior test_staged_predicates_headless_behavior
+        test_staged_predicates_row_headless_behavior test_cactus_dungeon_headless_behavior
+        test_robot_sandbox_headless_behavior test_first_person_arena_headless_behavior)
+    target_compile_definitions(${keep_check_target} PRIVATE CACTUS_KEEP_CHECK)
+endforeach()
+
 # Generated-code performance benchmarks: one rule shape per fixture, each in
 # its own executable because generated programs share global names. Work
 # limits run in every build; time limits only in optimized builds
 # (`ctest --preset clang-o3-release -L perf`).
 add_custom_target(test_generated_performance_benchmarks)
 foreach(shape IN ITEMS static_keep union_fold equality_reduce grid_region row_join baseline own_projection
-        single_commit plain_commit sweep wide_level reduced_keep required_links keep_chain)
+        single_commit plain_commit sweep wide_level reduced_keep required_links keep_chain
+        incremental_keep)
     set(perf_target test_perf_${shape}_benchmark)
     set(perf_codegen_flags)
     if(shape STREQUAL "wide_level")

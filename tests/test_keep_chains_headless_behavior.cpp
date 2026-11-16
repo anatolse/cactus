@@ -55,7 +55,7 @@ struct World {
     }
 
     void freeze(bool frozen) {
-        registry.get<game::Control>(cactus_gen::detail::generated_named_slots().keep_chains.Settings).frozen = frozen;
+        registry.patch<game::Control>(cactus_gen::detail::generated_named_slots().keep_chains.Settings, [&](game::Control& cactus_value) { cactus_value.frozen = frozen; });
     }
 };
 
@@ -95,7 +95,7 @@ TEST_CASE("a keep chain settles in one activation", "[runtime][rule-keep][keep-c
     }
 
     {  // a change to the base reaches the last fact after one activation
-        world.cell(base).grounded = false;
+        world.registry.patch<game::Cell>(base, [&](game::Cell& cactus_value) { cactus_value.grounded = false; });
         world.frame();
         CHECK_FALSE(world.anchored(base));
         CHECK_FALSE(world.held(near, base));
@@ -108,7 +108,7 @@ TEST_CASE("a keep chain settles in one activation", "[runtime][rule-keep][keep-c
     }
 
     {  // and back
-        world.cell(base).grounded = true;
+        world.registry.patch<game::Cell>(base, [&](game::Cell& cactus_value) { cactus_value.grounded = true; });
         world.frame();
         CHECK(world.anchored(base));
         CHECK_FALSE(world.floating(base));
@@ -122,8 +122,8 @@ TEST_CASE("a keep chain settles in one activation", "[runtime][rule-keep][keep-c
 
     {  // a gated keeper keeps its rows, and the rules after it still run
         world.freeze(true);
-        world.cell(base).grounded = false;
-        world.cell(edge).x        = 20;
+        world.registry.patch<game::Cell>(base, [&](game::Cell& cactus_value) { cactus_value.grounded = false; });
+        world.registry.patch<game::Cell>(edge, [&](game::Cell& cactus_value) { cactus_value.x = 20; });
         world.frame();
         CHECK(world.anchored(base));
         CHECK(world.held(near, base));

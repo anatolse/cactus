@@ -10,6 +10,7 @@
 #include <limits>
 #include <span>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace cactus::runtime::entt_backend {
@@ -156,30 +157,40 @@ public:
         (void)place(from, to, row);
     }
 
-    void erase(entt::entity from, entt::entity to) noexcept {
+    void erase(entt::entity from, entt::entity to) {
         if (const auto slot = pairs_.find(from, to); slot != kNone) {
             kill(slot);
         }
     }
 
-    void erase_from(entt::entity from) noexcept {
+    void erase_from(entt::entity from) {
         while (has_from(from)) {
             kill(head_of(from_ends_, from));
         }
     }
 
-    void erase_to(entt::entity to) noexcept {
+    void erase_to(entt::entity to) {
         while (has_to(to)) {
             kill(head_of(to_ends_, to));
         }
     }
 
-    void clear() noexcept {
+    void clear() {
         for (std::uint32_t slot = 0; slot < entries_.size(); ++slot) {
             if (alive_[slot] != 0) {
                 kill(slot);
             }
         }
+    }
+
+    // A reader's journal holds the ends of every row added, changed or erased since it last took it.
+    [[nodiscard]] std::size_t watch() {
+        journals_.emplace_back();
+        return journals_.size() - 1;
+    }
+
+    [[nodiscard]] std::vector<std::pair<entt::entity, entt::entity>> take_changes(std::size_t reader) {
+        return std::exchange(journals_[reader], {});
     }
 
     // A keep run: rows it keeps carry its stamp, `drop_unstamped` erases the rest.
@@ -196,13 +207,27 @@ public:
         }
     }
 
-    void drop_unstamped() noexcept {
+    void drop_unstamped() {
         if (stamped_ == size()) {
             return;
         }
         for (std::uint32_t slot = 0; slot < entries_.size(); ++slot) {
             if (alive_[slot] != 0 && stamps_[slot] != run_) {
                 kill(slot);
+            }
+        }
+    }
+
+    // Drops only the unstamped rows whose `from` (or `to`) end is one of `ends`.
+    void drop_unstamped_of(std::span<const entt::entity> ends, bool from_end) {
+        for (const auto end : ends) {
+            auto slot = head_of(from_end ? from_ends_ : to_ends_, end);
+            while (slot != kNone) {
+                const auto next = from_end ? links_[slot].next_from : links_[slot].next_to;
+                if (stamps_[slot] != run_) {
+                    kill(slot);
+                }
+                slot = next;
             }
         }
     }
@@ -285,9 +310,11 @@ private:
             }
             entries_[slot].row = row;
             changed_           = true;
+            note(from, to);
             return slot;
         }
-        changed_        = true;
+        changed_ = true;
+        note(from, to);
         const auto slot = static_cast<std::uint32_t>(entries_.size());
         entries_.push_back(Entry{.from = from, .to = to, .row = row});
         stamps_.push_back(0);
@@ -312,8 +339,15 @@ private:
         pairs_.insert(entry.from, entry.to, slot);
     }
 
-    void kill(std::uint32_t slot) noexcept {
+    void note(entt::entity from, entt::entity to) {
+        for (auto& journal : journals_) {
+            journal.emplace_back(from, to);
+        }
+    }
+
+    void kill(std::uint32_t slot) {
         const auto& entry = entries_[slot];
+        note(entry.from, entry.to);
         auto& links       = links_[slot];
         auto& from        = from_ends_[static_cast<std::size_t>(entt::to_entity(entry.from))];
         (links.prev_from == kNone ? from.head : links_[links.prev_from].next_from) = links.next_from;
@@ -338,6 +372,7 @@ private:
     std::vector<Ends> from_ends_;
     std::vector<Ends> to_ends_;
     PairSlotTable pairs_;
+    std::vector<std::vector<std::pair<entt::entity, entt::entity>>> journals_;
     std::uint32_t dead_             = 0;
     std::uint32_t run_              = 0;
     std::size_t stamped_            = 0;  // live rows stamped by the current run
@@ -407,10 +442,9 @@ void keep_relation_row(entt::registry& registry, entt::entity from, entt::entity
 template <typename Row>
 using KeptRows = std::vector<typename RelationStore<Row>::Entry>;
 
-// A keep pass's whole run at its commit position: the rows it selected, in
-// tuple order, then the drop of every row it did not select.
+// Starts a keep run that stamps `rows`, in tuple order; the caller drops what is left unstamped.
 template <typename Entry>
-void apply_relation_keep_run(entt::registry& registry, const std::vector<Entry>& rows) {
+[[nodiscard]] auto& stamp_relation_keep_rows(entt::registry& registry, const std::vector<Entry>& rows) {
     using Row   = decltype(Entry::row);
     auto& store = uncompacted_relation_store<Row>(registry);
     store.begin_run();
@@ -419,7 +453,42 @@ void apply_relation_keep_run(entt::registry& registry, const std::vector<Entry>&
             store.keep(kept.from, kept.to, kept.row);
         }
     }
-    store.drop_unstamped();
+    return store;
+}
+
+// A keep pass's whole run at its commit position: the rows it selected, in
+// tuple order, then the drop of every row it did not select.
+template <typename Entry>
+void apply_relation_keep_run(entt::registry& registry, const std::vector<Entry>& rows) {
+    stamp_relation_keep_rows(registry, rows).drop_unstamped();
+}
+
+// A keep run over some of its rows: `rows` are every current row whose `from`
+// (or `to`) end is in `ends`, plus any others; other rows of `ends` are dropped.
+template <typename Entry>
+void apply_relation_keep_partial(entt::registry& registry,
+                                 const std::vector<Entry>& rows,
+                                 std::span<const entt::entity> ends,
+                                 bool from_end) {
+    stamp_relation_keep_rows(registry, rows).drop_unstamped_of(ends, from_end);
+}
+
+// A row-domain keep's changes: rows that lost their last witness, then rows
+// that gained their first, in the order a whole run would add them.
+template <typename Entry>
+void apply_relation_keep_changes(entt::registry& registry,
+                                 const std::vector<Entry>& added,
+                                 const std::vector<std::pair<entt::entity, entt::entity>>& removed) {
+    using Row   = decltype(Entry::row);
+    auto& store = uncompacted_relation_store<Row>(registry);
+    for (const auto& [from, to] : removed) {
+        store.erase(from, to);
+    }
+    for (const auto& kept : added) {
+        if (valid_relation_ends<Row>(registry, kept.from, kept.to)) {
+            store.add(kept.from, kept.to, kept.row);
+        }
+    }
 }
 
 // A row lives while both ends carry their end traits: EnTT signals the

@@ -1,0 +1,96 @@
+module perf_incremental_keep
+
+use std.core
+
+# size movers, one per lane, each with four posts. The first `moving` movers
+# step every tick. Each keep reads only some of this, so its work should
+# follow what changed, not the number of movers.
+
+trait Board:
+    let size: int = 4096
+    var moving: int = 0
+
+trait Mover:
+    let id: int = 0
+    let lane: int = 0
+    var x: int = 0
+
+trait Post:
+    let lane: int = 0
+    let slot: int = 0
+
+trait Even
+
+trait Posted
+
+trait Beacon
+
+relation Near:
+    from: Mover
+    to: Post
+
+relation Wire:
+    from: Beacon
+    to: Beacon
+
+relation Wired = closure(Wire)
+
+group keeps:
+    phase: fixed_tick
+
+entity Field:
+    Board
+
+entity Lamp:
+    Beacon
+
+template Runner(id: int):
+    Mover:
+        id = id
+        lane = id
+
+template Stake(lane: int, slot: int):
+    Post:
+        lane = lane
+        slot = slot
+
+rule Fill:
+    on load:
+        for id in range(0, Field[Board].size):
+            spawn Runner(id = id)
+            for slot in range(0, 4):
+                spawn Stake(lane = id, slot = slot)
+
+rule Move:
+    each: Mover as m
+    before: keeps
+    on fixed_tick:
+        if m.id < Field[Board].moving:
+            m.x += 1
+
+# Unary: reads only its own mover's x.
+rule EvenMovers:
+    each: Mover as m
+    group: keeps
+    where:
+        m.x % 2 == 0
+    keep Even
+
+# Pair: each mover is near the post of its lane whose slot matches x.
+rule NearPosts:
+    pairs:
+        a: Mover
+        b: Post
+    group: keeps
+    where:
+        b[Post].lane == a[Mover].lane
+        b[Post].slot == a[Mover].x % 4
+    keep Near(a, b)
+
+# Reads a derived relation, so it can only run whole, but nothing it reads ever changes.
+rule PostedBoard:
+    each: Board
+    group: keeps
+    where:
+        Wired(Lamp, Lamp)
+    keep Posted

@@ -11,6 +11,7 @@
 #include "backends/cpp-entt/component_emitter.hpp"
 #include "backends/cpp-entt/contract_audit_emitter.hpp"
 #include "backends/cpp-entt/event_emitter.hpp"
+#include "backends/cpp-entt/keep_slots.hpp"
 #include "backends/cpp-entt/persistence_emitter.hpp"
 #include "backends/cpp-entt/persistence_restore_emitter.hpp"
 #include "backends/cpp-entt/relation_emitter.hpp"
@@ -801,6 +802,12 @@ std::string emit_graph_external_handler_abi(const DecoratedProgram& program) {
         out << namespace_block(external_rule_namespace(rule), body.str()) << "\n";
     }
     return out.str();
+}
+
+// An extern rule's writes have no site in Cactus code: its tracked fields change after each call.
+std::string keep_touches_after(const HandlerNode& node, const std::string& indent) {
+    const auto* plan = KeepSlotScope::active();
+    return plan == nullptr ? std::string{} : KeepSlotPlan::touches(plan->contract_write_slots(node.contract), indent);
 }
 
 // target_expr, when non-empty, names a `std::optional<entt::entity>` C++
@@ -1790,6 +1797,7 @@ bool emit_phase_handler_call(std::ostringstream& out,
     if (is_user_external_handler(program, *graph_node)) {
         if (emitted_callees.insert(make_canonical_id(graph_node->identity.rule)).second) {
             emit_external_handler_call(out, program, *graph_node, "phase", "    ");
+            out << keep_touches_after(*graph_node, "    ");
         }
         return true;
     }
@@ -1811,6 +1819,7 @@ bool emit_phase_handler_call(std::ostringstream& out,
         } else {
             out << "    " << callee << "(registry);\n";
         }
+        out << keep_touches_after(*graph_node, "    ");
         return true;
     }
     if (graph_node->implementation != HandlerImplementationKind::Cactus) {
@@ -1822,9 +1831,6 @@ bool emit_phase_handler_call(std::ostringstream& out,
     }
     if (!emitted_callees.insert(*callee).second) {
         return true;
-    }
-    if (graph_node->kept.has_value()) {
-        out << "    cactus::runtime::entt_backend::count_keep_run();\n";
     }
     out << "    " << *callee << "(registry, phase);\n";
     return true;
@@ -2164,6 +2170,7 @@ void emit_event_handler_dispatch(std::ostringstream& out,
         std::ostringstream call;
         if (is_user_external_handler(program, *graph_node)) {
             emit_external_handler_call(call, program, *graph_node, "occurrence", "    ", "target");
+            call << keep_touches_after(*graph_node, "    ");
             calls.push_back(DispatchCall{.identity = identity, .text = std::move(call).str()});
             continue;
         }
@@ -2176,6 +2183,7 @@ void emit_event_handler_dispatch(std::ostringstream& out,
                 // filter/view extern rules use — see emit_event_renderer_body in system_emitter.cpp.
                 call << "    " << system_function_name(program.module_name, rule->name, "tick").ref()
                      << "(registry, occurrence);\n";
+                call << keep_touches_after(*graph_node, "    ");
                 calls.push_back(DispatchCall{.identity = identity, .text = std::move(call).str()});
             }
             continue;
@@ -4096,6 +4104,8 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     // Before any system is emitted: it marks the statements that buffer.
     const AccumulationPlan accumulation(program);
     const AccumulationScope accumulation_scope(accumulation);
+    const KeepSlotPlan keep_slots(program);
+    const KeepSlotScope keep_slot_scope(keep_slots);
     const DeliveryPlan delivery(program);
 
     const bool uses_flat     = module_uses_camera_flat(program);
@@ -4204,6 +4214,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << contract_audit::emit_tables(program);
     out << EnttComponentEmitter::emit_state_helpers(program);
     out << emit_relation_declarations(program);
+    out << keep_slots.emit_setup(program);
     out << emit_world_digest(program);
 
     if (const auto collider_helpers = emit_collider_query_helpers(program); !collider_helpers.empty()) {
@@ -4503,6 +4514,9 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "    generated_connect_link_indices(registry);\n";
     }
     out << (program.relations.empty() ? "" : "    generated_connect_relations(registry);\n");
+    if (const auto* plan = KeepSlotScope::active(); plan != nullptr && !plan->empty()) {
+        out << "    generated_connect_keep_inputs(registry);\n";
+    }
     if (program.parallel_handlers.has_value()) {
         out << "    generated_prepare_parallel_world(registry);\n";
     }

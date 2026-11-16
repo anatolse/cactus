@@ -9,6 +9,7 @@
 #include "backends/cpp-entt/contract_audit_emitter.hpp"
 #include "backends/cpp-entt/persistence_emitter.hpp"
 #include "backends/cpp-entt/index_cell_size.hpp"
+#include "backends/cpp-entt/keep_slots.hpp"
 #include "backends/cpp-entt/range_checks.hpp"
 #include "backends/cpp-entt/trait_writers.hpp"
 #include "backends/cpp-entt/type_utils.hpp"
@@ -442,6 +443,13 @@ struct HandlerBodyCodegen {
     bool uses_paint_order           = false;  // the body reads the pass's paint-order cache
     // In a parallel level, shared-structure sync runs here, once on the main thread, not in the body.
     std::ostringstream* prepare = nullptr;
+    std::string keep_check_rule;     // a keep whose run may be skipped: the name check mode reports
+    std::string keep_output_record;  // run by its commands once applied: what it now keeps
+    std::string keep_self_call;      // check mode runs the keep again in full through this call
+    const KeepSlotPlan::Keep* keep_plan = nullptr;
+    bool keep_restricted     = false;  // pair snapshots read `cactus_restrict_<binding>` when it is set
+    bool keep_units_from_end = true;   // a delta relation keep's units are its rows' `from` ends
+    bool keep_row_witnessed  = false;  // a delta row-domain keep: `cactus_row_changes` holds its changes
 };
 
 // The payload parameter when `expr` spells the active handler's trigger name.
@@ -791,11 +799,16 @@ void emit_pair_binding_snapshot(std::ostringstream& out, const PairBindingCodege
     const std::string ind(static_cast<std::size_t>(indent) * 4U, ' ');
     const std::string& name = binding.scope.binding_name;
     const auto membership =
-        "cactus::runtime::entt_backend::ordered_membership<" + join_strings(binding.cpp_types, ", ") + ">(registry);\n";
+        "cactus::runtime::entt_backend::ordered_membership<" + join_strings(binding.cpp_types, ", ") + ">(registry)";
+    const auto* body  = active_scope<HandlerBodyCodegen>();
+    const auto source = body != nullptr && body->keep_restricted
+                            ? "(cactus_restrict_" + name + ".has_value() ? *cactus_restrict_" + name + " : " +
+                                  membership + ")"
+                            : membership;
     out << ind << (narrowed ? "std::vector<entt::entity> " : "[[maybe_unused]] const auto& ") << name
-        << "_snapshot = " << membership;
+        << "_snapshot = " << source << ";\n";
     auto* prepare = active_prepare_sink();
-    const auto settle = "    (void)" + membership;
+    const auto settle = "    (void)" + membership + ";\n";
     if (prepare != nullptr && !prepare->view().contains(settle)) {
         *prepare << settle;
     }
@@ -3985,6 +3998,46 @@ static std::string emit_remove_relation_stmt(const RemoveRelationStmt& s,
     return result.str();
 }
 
+// The keep input slots one assignment changes.
+static std::vector<std::uint32_t> assignment_keep_slots(const KeepSlotPlan& plan, const VarAssign& assign) {
+    if (assign.accumulation.has_value()) {
+        return plan.write_slots(assign.accumulation->trait, assign.accumulation->field);
+    }
+    if (assign.field_write.has_value()) {
+        return plan.write_slots(assign.field_write->trait, assign.field_write->field);
+    }
+    return {};
+}
+
+static std::vector<std::uint32_t> set_keep_slots(const KeepSlotPlan& plan, const SetTraitStmt& set) {
+    std::vector<std::uint32_t> slots;
+    if (!set.resolved_trait_id.has_value()) {
+        return slots;
+    }
+    for (const auto& arg : set.args) {
+        std::ranges::copy(plan.write_slots(*set.resolved_trait_id, arg.name), std::back_inserter(slots));
+    }
+    return slots;
+}
+
+// Right after a field assignment: the keep inputs it changed.
+static std::string keep_write_touches(const StmtNode& stmt,
+                                      const std::string& ind,
+                                      const std::vector<std::string>& trait_names,
+                                      const DecoratedProgram& program,
+                                      const PairCodegenScope* pair_scope) {
+    const auto* plan   = KeepSlotScope::active();
+    const auto* assign = std::get_if<VarAssign>(&stmt.stmt);
+    if (plan == nullptr || assign == nullptr) {
+        return {};
+    }
+    const auto slots = assignment_keep_slots(*plan, *assign);
+    if (slots.empty()) {
+        return {};
+    }
+    return KeepSlotPlan::touches(slots, ind, accumulation_entity(*assign, trait_names, program, pair_scope));
+}
+
 // A pure patch: no attach, no projection cancel, no construction baseline.
 static std::string emit_set_trait_stmt(const SetTraitStmt& s,
                                        int indent,
@@ -4015,6 +4068,9 @@ static std::string emit_set_trait_stmt(const SetTraitStmt& s,
     for (const auto& arg : s.args) {
         result << ind << "            " << value_name << "->" << arg.name << " = " << deferred_field_value_name(arg)
                << ";\n";
+    }
+    if (const auto* plan = KeepSlotScope::active()) {
+        result << KeepSlotPlan::touches(set_keep_slots(*plan, s), ind + "            ", target_name);
     }
     result << ind << "        });\n";
     result << ind << "}\n";
@@ -4536,7 +4592,7 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                 return ind + "/* unsupported stmt */\n";
             }
         },
-        stmt.stmt);
+        stmt.stmt) + keep_write_touches(stmt, ind, trait_names, program, pair_scope);
 }
 
 static std::string rewrite_stmt_block(const std::vector<std::unique_ptr<StmtNode>>& stmts,
@@ -6083,6 +6139,123 @@ static void emit_collider_shape_cache(std::ostringstream& out, const PairCodegen
     out << "    };\n";
 }
 
+static void emit_keep_slot_array(std::ostringstream& out, std::string_view name, const std::vector<std::uint32_t>& slots) {
+    out << "    static constexpr std::array<std::uint32_t, " << slots.size() << "> " << name << "{";
+    for (std::size_t index = 0; index < slots.size(); ++index) {
+        out << (index == 0 ? "" : ", ") << slots[index];
+    }
+    out << "};\n";
+}
+
+// A keep run whose inputs did not change since its last run is skipped. In
+// check mode it runs anyway and its result is compared with the world.
+// Records in `body` the name check mode reports and what the keep's commands run once applied.
+static void emit_keep_skip_check(std::ostringstream& out,
+                                 const RuleNode& sys,
+                                 const std::optional<HandlerIdentity>& identity,
+                                 HandlerBodyCodegen& body,
+                                 const std::string& self_call) {
+    const auto* plan = KeepSlotScope::active();
+    const auto* keep =
+        plan == nullptr || !identity.has_value() || !sys.keep.has_value() ? nullptr : plan->keep(*identity);
+    if (keep == nullptr) {
+        return;
+    }
+    const bool delta = keep->evaluation.level == KeepLevel::Delta;
+    out << "    // keep level: " << (delta ? std::string("delta") : "full, " + keep->evaluation.reason) << "\n";
+    const auto output = keep->output_relation.has_value()
+                            ? "cactus::runtime::entt_backend::uncompacted_relation_store<" +
+                                  EnttCodegenUtils::relation_cpp_name(*keep->output_relation) +
+                                  ">(registry).revision()"
+                            : "cactus::runtime::entt_backend::generated_keep_versions(registry).version(" +
+                                  std::to_string(*keep->output_slot) + ")";
+    const auto index        = std::to_string(keep->index);
+    body.keep_plan          = keep;
+    body.keep_self_call     = self_call;
+    body.keep_check_rule    = make_canonical_id(*sys.resolved_rule_id);
+    body.keep_output_record = "cactus::runtime::entt_backend::generated_keep_versions(registry).record_output(" + index +
+                              ", " + output + ");";
+    out << "#ifdef CACTUS_KEEP_CHECK\n";
+    out << "    const bool cactus_full_check = cactus::runtime::entt_backend::keep_full_check_active();\n";
+    out << "#else\n";
+    out << "    constexpr bool cactus_full_check = false;\n";
+    out << "#endif\n";
+    emit_keep_slot_array(out, "cactus_keep_inputs", keep->slots);
+    std::vector<std::string> relations;
+    relations.reserve(keep->relations.size());
+    for (const auto& relation : keep->relations) {
+        relations.push_back(EnttCodegenUtils::relation_cpp_name(relation));
+    }
+    out << (delta ? "    auto" : "    const auto") << " cactus_keep_start = cactus::runtime::entt_backend::start_keep_run<" << join_strings(relations, ", ")
+        << ">(\n";
+    out << "        registry, cactus::runtime::entt_backend::generated_keep_versions(registry), " << index
+        << ", cactus_keep_inputs, [&] { return " << output << "; }, " << (delta ? "true" : "false")
+        << ", cactus_full_check);\n";
+    out << "    [[maybe_unused]] const bool cactus_keep_whole = cactus_keep_start.whole;\n";
+    out << "    const bool cactus_keep_unchanged = cactus_keep_start.unchanged;\n";
+    out << "#ifdef CACTUS_KEEP_CHECK\n";
+    out << "    if (cactus_keep_unchanged && !cactus::runtime::entt_backend::keep_check_enabled()) {\n";
+    out << "#else\n";
+    out << "    if (cactus_keep_unchanged) {\n";
+    out << "#endif\n";
+    out << "        return;\n";
+    out << "    }\n";
+    out << "    [[maybe_unused]] std::optional<std::vector<entt::entity>> cactus_units;\n";
+    if (delta) {
+        out << "    [[maybe_unused]] auto& cactus_dirty = cactus_keep_start.dirty;\n";
+    }
+}
+
+// Writes the handler makes outside any assignment or `set` (natives, whole
+// values) change their keep inputs when the handler returns.
+static void emit_uncovered_write_touches(std::ostringstream& out,
+                                         const HandlerContract* contract,
+                                         const EventHandlerNode& handler) {
+    const auto* plan = KeepSlotScope::active();
+    if (plan == nullptr || contract == nullptr) {
+        return;
+    }
+    auto slots = plan->contract_write_slots(*contract);
+    std::vector<std::uint32_t> covered;
+    std::vector<const VarAssign*> assignments;
+    collect_statements(handler.body, assignments);
+    for (const auto* assign : assignments) {
+        std::ranges::copy(assignment_keep_slots(*plan, *assign), std::back_inserter(covered));
+    }
+    std::vector<const SetTraitStmt*> sets;
+    collect_statements(handler.body, sets);
+    for (const auto* set : sets) {
+        std::ranges::copy(set_keep_slots(*plan, *set), std::back_inserter(covered));
+    }
+    std::erase_if(slots, [&](std::uint32_t slot) { return std::ranges::contains(covered, slot); });
+    if (slots.empty()) {
+        return;
+    }
+    emit_keep_slot_array(out, "cactus_keep_writes", slots);
+    out << "    const cactus::runtime::entt_backend::KeepTouchOnExit cactus_keep_touch(\n";
+    out << "        cactus::runtime::entt_backend::generated_keep_versions(registry), cactus_keep_writes);\n";
+}
+
+// What a keep's command runs once it applied, so that its own change does not wake it.
+static std::string keep_output_record() {
+    const auto* body = active_scope<HandlerBodyCodegen>();
+    return body == nullptr ? std::string{} : body->keep_output_record;
+}
+
+// The name check mode reports for the keep being emitted, or empty when its run is never skipped.
+static std::string keep_check_rule() {
+    const auto* body = active_scope<HandlerBodyCodegen>();
+    return body == nullptr ? std::string{} : body->keep_check_rule;
+}
+
+// The handler body being emitted, when it is a delta keep's.
+static HandlerBodyCodegen* delta_keep_body() {
+    auto* body = active_scope<HandlerBodyCodegen>();
+    const bool delta =
+        body != nullptr && body->keep_plan != nullptr && body->keep_plan->evaluation.level == KeepLevel::Delta;
+    return delta ? body : nullptr;
+}
+
 // `apply_kept_batch<T, tracked>` or `apply_unkept_batch<T, tracked>`, as the queued command calls it.
 static std::string kept_command(const char* function, const KeepClause& keep, const DecoratedProgram& program) {
     const auto cpp = EnttCodegenUtils::trait_cpp_name(keep.resolved_target, keep.target_name, program);
@@ -6139,8 +6312,67 @@ static void emit_keep_batch_command(std::ostringstream& out,
     out << "            cactus::runtime::entt_backend::StructuralCommand::Kind::" << kind << ",\n";
     out << "            [cactus_batch = std::move(" << targets << ")](entt::registry& registry) {\n";
     out << "                " << kept_command(function, keep, program) << "(registry, cactus_batch);\n";
+    const auto* plan = KeepSlotScope::active();
+    if (plan != nullptr && keep_patches(keep) && keep.resolved_target.has_value()) {
+        if (const auto slot = plan->trait_slot(*keep.resolved_target)) {
+            out << KeepSlotPlan::touches({*slot}, "                ");
+        }
+    }
+    if (const auto record = keep_output_record(); !record.empty()) {
+        out << "                " << record << "\n";
+    }
     out << "            });\n";
     out << "    }\n";
+}
+
+// Check mode, for a skipped run: the world already holds what it keeps.
+static void emit_kept_check(std::ostringstream& out,
+                            const KeepClause& keep,
+                            const DecoratedProgram& program,
+                            const std::string& added) {
+    const auto rule = keep_check_rule();
+    const auto* body = active_scope<HandlerBodyCodegen>();
+    if (rule.empty() || body == nullptr) {
+        return;
+    }
+    const auto cpp    = EnttCodegenUtils::trait_cpp_name(keep.resolved_target, keep.target_name, program);
+    const auto result = "cactus::runtime::entt_backend::KeptTraitResult<std::ranges::range_value_t<decltype(" + added +
+                        ")>>";
+    out << "#ifdef CACTUS_KEEP_CHECK\n";
+    out << "    {\n";
+    out << "        const auto cactus_same = [](const " << cpp << "& " << (keep.fields.empty() ? "" : "cactus_left")
+        << ", const " << cpp << "& " << (keep.fields.empty() ? "" : "cactus_right") << ") {\n";
+    out << "            return ";
+    for (std::size_t index = 0; index < keep.fields.size(); ++index) {
+        const auto field = cpp_escaped(keep.fields[index].name);
+        out << (index == 0 ? "" : " &&\n                   ")
+            << "cactus::runtime::entt_backend::same_kept_value(cactus_left." << field << ", cactus_right." << field
+            << ")";
+    }
+    out << (keep.fields.empty() ? "true;\n" : ";\n");
+    out << "        };\n";
+    out << "        if (cactus_full_check) {\n";
+    out << "            cactus::runtime::entt_backend::keep_check_expected() = " << result << "{.kept = " << added
+        << ", .leaving = cactus_leaving};\n";
+    out << "            return;\n";
+    out << "        }\n";
+    out << "        if (cactus_keep_unchanged) {\n";
+    out << "            cactus::runtime::entt_backend::check_kept_unchanged<" << cpp << ">(registry, " << added
+        << ", cactus_leaving, \"" << rule << "\", cactus_same);\n";
+    out << "            return;\n";
+    out << "        }\n";
+    out << "        if (cactus_units.has_value() && cactus::runtime::entt_backend::keep_check_enabled()) {\n";
+    out << "            {\n";
+    out << "                const cactus::runtime::entt_backend::KeepFullCheck cactus_full;\n";
+    out << "                " << body->keep_self_call << ";\n";
+    out << "            }\n";
+    out << "            const auto cactus_full_run = std::any_cast<" << result
+        << ">(cactus::runtime::entt_backend::keep_check_expected());\n";
+    out << "            cactus::runtime::entt_backend::check_kept_delta<" << cpp << ">(registry, cactus_full_run, " << result
+        << "{.kept = " << added << ", .leaving = cactus_leaving}, *cactus_units, \"" << rule << "\", cactus_same);\n";
+    out << "        }\n";
+    out << "    }\n";
+    out << "#endif\n";
 }
 
 // Queues every add buffered in `added`, then the removal of `T` from every
@@ -6149,10 +6381,19 @@ static void emit_keep_removals(std::ostringstream& out,
                                const KeepClause& keep,
                                const DecoratedProgram& program,
                                const std::string& added = "cactus_kept_targets") {
-    emit_keep_batch_command(out, keep, "Add", "apply_kept_batch", added, program);
     const auto cpp = EnttCodegenUtils::trait_cpp_name(keep.resolved_target, keep.target_name, program);
-    out << "    auto cactus_leaving = cactus::runtime::entt_backend::leaving_carriers<" << cpp
-        << ">(registry, cactus_is_kept);\n";
+    if (keep_check_rule().empty()) {
+        out << "    auto cactus_leaving = cactus::runtime::entt_backend::leaving_carriers<" << cpp
+            << ">(registry, cactus_is_kept);\n";
+    } else {
+        out << "    auto cactus_leaving =\n";
+        out << "        cactus_units.has_value()\n";
+        out << "            ? cactus::runtime::entt_backend::leaving_carriers_among<" << cpp
+            << ">(registry, cactus_is_kept, *cactus_units)\n";
+        out << "            : cactus::runtime::entt_backend::leaving_carriers<" << cpp << ">(registry, cactus_is_kept);\n";
+    }
+    emit_kept_check(out, keep, program, added);
+    emit_keep_batch_command(out, keep, "Add", "apply_kept_batch", added, program);
     emit_keep_batch_command(out, keep, "Remove", "apply_unkept_batch", "cactus_leaving", program);
 }
 
@@ -6195,10 +6436,72 @@ static void emit_relation_keep_buffer(std::ostringstream& out, const KeepClause&
 }
 
 static void emit_relation_keep_run(std::ostringstream& out) {
+    const auto* body = active_scope<HandlerBodyCodegen>();
+    auto record = keep_output_record();
+    if (!record.empty()) {
+        record += " ";
+    }
+    if (const auto rule = keep_check_rule(); !rule.empty() && body != nullptr) {
+        const auto* const from_end = body->keep_units_from_end ? "true" : "false";
+        out << "#ifdef CACTUS_KEEP_CHECK\n";
+        out << "    if (cactus_full_check) {\n";
+        out << "        cactus::runtime::entt_backend::keep_check_expected() = cactus_kept_rows;\n";
+        out << "        return;\n";
+        out << "    }\n";
+        out << "    if (cactus_keep_unchanged) {\n";
+        out << "        cactus::runtime::entt_backend::check_relation_keep_unchanged(registry, cactus_kept_rows, \""
+            << rule << "\");\n";
+        out << "        return;\n";
+        out << "    }\n";
+        const auto* const delta = body->keep_row_witnessed ? "cactus_row_changes" : "cactus_units";
+        out << "    if (" << delta << ".has_value() && cactus::runtime::entt_backend::keep_check_enabled()) {\n";
+        out << "        {\n";
+        out << "            const cactus::runtime::entt_backend::KeepFullCheck cactus_full;\n";
+        out << "            " << body->keep_self_call << ";\n";
+        out << "        }\n";
+        out << "        const auto cactus_full_run = std::any_cast<std::remove_cvref_t<decltype(cactus_kept_rows)>>(\n";
+        out << "            cactus::runtime::entt_backend::keep_check_expected());\n";
+        if (body->keep_row_witnessed) {
+            out << "        cactus::runtime::entt_backend::check_relation_changes(registry, cactus_full_run, "
+                   "*cactus_row_changes, \""
+                << rule << "\");\n";
+        } else {
+            out << "        cactus::runtime::entt_backend::check_relation_delta(registry, cactus_full_run, "
+                   "cactus_kept_rows, *cactus_units, "
+                << from_end << ", \"" << rule << "\");\n";
+        }
+        out << "    }\n";
+        out << "#endif\n";
+        if (body->keep_row_witnessed) {
+            out << "    if (cactus_row_changes.has_value()) {\n";
+            out << "        cactus::runtime::entt_backend::generated_queue_structural_command(\n";
+            out << "            cactus::runtime::entt_backend::StructuralCommand::Kind::Add,\n";
+            out << "            [cactus_changes = std::move(*cactus_row_changes)](entt::registry& registry) {\n";
+            out << "                cactus::runtime::entt_backend::apply_relation_keep_changes(registry, "
+                   "cactus_changes.added, cactus_changes.removed);\n";
+            out << "                " << record << "\n";
+            out << "            });\n";
+            out << "        return;\n";
+            out << "    }\n";
+        }
+        out << "    if (cactus_units.has_value()) {\n";
+        out << "        cactus::runtime::entt_backend::generated_queue_structural_command(\n";
+        out << "            cactus::runtime::entt_backend::StructuralCommand::Kind::Add,\n";
+        out << "            [cactus_keep_run = std::move(cactus_kept_rows), cactus_keep_units = std::move(*cactus_units)]"
+               "(entt::registry& registry) {\n";
+        out << "                cactus::runtime::entt_backend::apply_relation_keep_partial(registry, cactus_keep_run, "
+               "cactus_keep_units, "
+            << from_end << ");\n";
+        out << "                " << record << "\n";
+        out << "            });\n";
+        out << "        return;\n";
+        out << "    }\n";
+    }
     out << "    cactus::runtime::entt_backend::generated_queue_structural_command(\n";
     out << "        cactus::runtime::entt_backend::StructuralCommand::Kind::Add,\n";
     out << "        [cactus_keep_run = std::move(cactus_kept_rows)](entt::registry& registry) { "
-           "cactus::runtime::entt_backend::apply_relation_keep_run(registry, cactus_keep_run); });\n";
+           "cactus::runtime::entt_backend::apply_relation_keep_run(registry, cactus_keep_run); "
+        << record << "});\n";
 }
 
 static std::string relation_keep_tuple_body(const KeepClause& keep,
@@ -7597,6 +7900,124 @@ static std::vector<const ExprNode*> fold_row_predicates(const ReduceClause& redu
     return row_predicates;
 }
 
+// The binding whose rows a delta pair keep recomputes: the `per` binding of a
+// reduction, else the binding at the kept relation's `from` end. Sets whether
+// that binding fills the kept relation's `from` end.
+static std::optional<std::size_t> keep_unit_binding(const RuleNode& sys, bool& from_end) {
+    const auto& keep = *sys.keep;
+    const auto index_of = [&](const std::string& name) -> std::optional<std::size_t> {
+        const auto& bindings = sys.pairs->bindings;
+        const auto found     = std::ranges::find(bindings, name, &PairBindingNode::name);
+        return found == bindings.end() ? std::nullopt
+                                       : std::optional{static_cast<std::size_t>(found - bindings.begin())};
+    };
+    from_end = true;
+    if (sys.reduce.has_value() && sys.reduce->per_binding.has_value()) {
+        from_end = keep.arguments.empty() || keep.arguments[0].spelling == *sys.reduce->per_binding;
+        return index_of(*sys.reduce->per_binding);
+    }
+    if (keep.arguments.empty() || keep.arguments[0].from_endpoint.has_value()) {
+        return std::nullopt;
+    }
+    return index_of(keep.arguments[0].spelling);
+}
+
+// A delta pair keep finds the units it recomputes through the keys of its
+// equality join, kept per binding between runs, and restricts both snapshots:
+// the units, and the other binding's entities that match them.
+static void emit_keep_pair_delta_setup(std::ostringstream& out,
+                                       const RuleNode& sys,
+                                       const HandlerContract* contract,
+                                       const std::vector<PairBindingCodegen>& bindings,
+                                       const PairCodegenScope& scope,
+                                       const DecoratedProgram& program) {
+    auto* body = delta_keep_body();
+    if (body == nullptr) {
+        return;
+    }
+    // classify_keep promised delta, so the plan below must exist; falling back to full would hide its cost.
+    bool from_end   = true;
+    const auto unit = keep_unit_binding(sys, from_end);
+    if (contract == nullptr || !contract->equality_join.has_value() || !sys.where_clause.has_value() ||
+        bindings.size() != 2 || !unit.has_value()) {
+        throw CodegenError(sys.location, "delta keep rule '" + sys.name + "' has no equality join on its units");
+    }
+    const auto other = 1 - *unit;
+    const auto& join = *contract->equality_join;
+    auto clean_scope = scope;
+    for (auto& binding : clean_scope.bindings) {
+        binding.hoisted.clear();
+    }
+    std::vector<std::string> unit_keys;
+    std::vector<std::string> other_keys;
+    for (const auto& key : join.keys) {
+        const auto& predicate = *sys.where_clause->predicates.at(key.predicate_index);
+        const auto* member    = resolve_expr_path(predicate, key.member);
+        const auto* query     = resolve_expr_path(predicate, key.query);
+        if (member == nullptr || query == nullptr) {
+            throw CodegenError(predicate.location, "delta keep rule '" + sys.name + "' has an unresolved join key");
+        }
+        const bool unit_indexed = *unit == join.indexed_binding;
+        unit_keys.push_back(rewrite_expr(unit_indexed ? *member : *query, {}, program, {}, {}, &clean_scope));
+        other_keys.push_back(rewrite_expr(unit_indexed ? *query : *member, {}, program, {}, {}, &clean_scope));
+    }
+    body->keep_restricted     = true;
+    body->keep_units_from_end = from_end;
+    const auto& unit_name     = bindings[*unit].scope.binding_name;
+    const auto& other_name    = bindings[other].scope.binding_name;
+    const auto unit_types     = join_strings(bindings[*unit].cpp_types, ", ");
+    const auto other_types    = join_strings(bindings[other].cpp_types, ", ");
+    const auto keep_index     = std::to_string(body->keep_plan->index);
+    out << "    auto cactus_unit_key = [&]([[maybe_unused]] entt::entity " << unit_name << ") {\n";
+    out << "        return std::make_tuple(" << join_strings(unit_keys, ", ") << ");\n";
+    out << "    };\n";
+    out << "    using cactus_keep_key = decltype(cactus_unit_key(entt::null));\n";
+    out << "    auto cactus_other_key = [&]([[maybe_unused]] entt::entity " << other_name << ") {\n";
+    out << "        return cactus_keep_key{";
+    for (std::size_t index = 0; index < other_keys.size(); ++index) {
+        out << (index == 0 ? "" : ", ") << "static_cast<std::tuple_element_t<" << index << ", cactus_keep_key>>("
+            << other_keys[index] << ")";
+    }
+    out << "};\n";
+    out << "    };\n";
+    out << "    const auto cactus_in_unit = [&](entt::entity cactus_entity) {\n";
+    out << "        return registry.valid(cactus_entity) && registry.all_of<" << unit_types << ">(cactus_entity);\n";
+    out << "    };\n";
+    out << "    const auto cactus_in_other = [&](entt::entity cactus_entity) {\n";
+    out << "        return registry.valid(cactus_entity) && registry.all_of<" << other_types << ">(cactus_entity);\n";
+    out << "    };\n";
+    out << "    auto& cactus_keep_keys = cactus::runtime::entt_backend::keep_state<" << keep_index
+        << ", cactus::runtime::entt_backend::KeepPairIndexes<cactus_keep_key>>(registry);\n";
+    out << "    std::optional<std::vector<entt::entity>> cactus_restrict_" << unit_name << ";\n";
+    out << "    std::optional<std::vector<entt::entity>> cactus_restrict_" << other_name << ";\n";
+    // Keys follow every run with few changes; a run with many leaves them stale
+    // until a run with few changes rebuilds them, so a world that moves whole pays no upkeep.
+    out << "    const auto cactus_unit_domain = cactus::runtime::entt_backend::ordered_membership<" << unit_types
+        << ">(registry).size();\n";
+    out << "    const bool cactus_few_changes =\n";
+    out << "        cactus_dirty.has_value() && !cactus::runtime::entt_backend::keep_delta_too_large("
+           "cactus_dirty->size(), cactus_unit_domain);\n";
+    out << "    if (cactus_few_changes && cactus_keep_keys.built) {\n";
+    out << "        auto cactus_found = cactus::runtime::entt_backend::keep_pair_units(\n";
+    out << "            registry, cactus_keep_keys, *cactus_dirty, cactus_in_unit, cactus_unit_key, cactus_in_other, "
+           "cactus_other_key);\n";
+    out << "        if (!cactus::runtime::entt_backend::keep_delta_too_large(cactus_found.size(), cactus_unit_domain)) {\n";
+    out << "            cactus_restrict_" << unit_name
+        << " = cactus::runtime::entt_backend::keep_units_where(cactus_found, cactus_in_unit);\n";
+    out << "            cactus_restrict_" << other_name << " = cactus::runtime::entt_backend::keep_pair_partners(\n";
+    out << "                registry, cactus_keep_keys, *cactus_restrict_" << unit_name << ", cactus_unit_key);\n";
+    out << "            cactus_units = std::move(cactus_found);\n";
+    out << "        }\n";
+    out << "    } else if (cactus_few_changes || (cactus_keep_whole && !cactus_full_check)) {\n";
+    out << "        cactus::runtime::entt_backend::rebuild_keep_pair_indexes(cactus_keep_keys,\n";
+    out << "            cactus::runtime::entt_backend::ordered_membership<" << unit_types << ">(registry),\n";
+    out << "            cactus::runtime::entt_backend::ordered_membership<" << other_types << ">(registry),\n";
+    out << "            cactus_unit_key, cactus_other_key);\n";
+    out << "    } else if (!cactus_full_check && !cactus_keep_unchanged) {\n";
+    out << "        cactus_keep_keys.built = false;\n";
+    out << "    }\n";
+}
+
 // A reduced pair rule: snapshot both bindings, filter every binding but the
 // group binding, build the groups, fold every accepted row in snapshot order,
 // then dispatch per group. A false activation gate folds no row.
@@ -7618,6 +8039,7 @@ static void emit_reduced_pair_handler_body(std::ostringstream& out,
     } else if (equality.has_value()) {
         indexed = pair_binding_codegens[equality->indexed].scope.binding_name;
     }
+    emit_keep_pair_delta_setup(out, sys, contract, pair_binding_codegens, pair_codegen_scope, program);
     emit_reduced_pair_snapshots(out, sys, contract, reduce, pair_binding_codegens, keeps, indexed);
     if (index.has_value()) {
         emit_binding_index_sync(out, *index, *spatial_join_root(sys, contract), pair_binding_codegens[index->indexed],
@@ -7748,7 +8170,22 @@ static void emit_unary_keep_handler_body(std::ostringstream& out,
     const auto active = activation_condition(sys, contract, program);
     out << (active.empty() ? "    {\n" : "    if (" + active + ") {\n");
     emit_view_declaration(out, domain.filter_cpp_types, domain.exclude_cpp_types, 2);
-    out << "        for (auto entity : cactus::runtime::entt_backend::creation_ordered(registry, view)) {\n";
+    if (delta_keep_body() != nullptr) {
+        out << "        if (cactus_dirty.has_value() && !cactus::runtime::entt_backend::keep_delta_too_large(\n";
+        out << "                                            cactus_dirty->size(), "
+               "cactus::runtime::entt_backend::view_size_hint(view))) {\n";
+        out << "            cactus_units = cactus::runtime::entt_backend::live_oldest_first(registry, "
+               "std::move(*cactus_dirty));\n";
+        out << "        }\n";
+        out << "        for (auto entity :\n";
+        out << "             cactus_units.has_value()\n";
+        out << "                 ? cactus::runtime::entt_backend::keep_units_where(\n";
+        out << "                       *cactus_units, [&](entt::entity cactus_unit) { return view.contains(cactus_unit); })\n";
+        out << "                 : cactus::runtime::entt_backend::creation_ordered(registry, view)) {\n";
+    } else {
+        out << "        for (auto entity : cactus::runtime::entt_backend::creation_ordered(registry, view)) {\n";
+    }
+    out << "            cactus::runtime::entt_backend::count_candidate();\n";
     emit_component_bindings_from_entity(out, domain.filter_bindings_list, "entity", 3, program);
     emit_filter_alias_bindings(out, domain.filter, program, 3);
     const auto rewrite = [&](const ExprNode& expr) {
@@ -7778,6 +8215,7 @@ static void emit_relation_keep_handler_body(std::ostringstream& out,
                                             const DecoratedProgram& program,
                                             const HandlerContract* contract) {
     const auto& keep  = *sys.keep;
+    emit_keep_pair_delta_setup(out, sys, contract, pair_binding_codegens, pair_codegen_scope, program);
     emit_relation_keep_buffer(out, keep);
     const auto tuple_body = relation_keep_tuple_body(keep, pair_codegen_scope, program);
     emit_pair_handler_body(out, sys, handler, pair_binding_codegens, pair_codegen_scope, program, contract, &tuple_body);
@@ -7961,6 +8399,33 @@ static void emit_row_callbacks(std::ostringstream& out,
     out << "    };\n";
 }
 
+// A delta row-domain keep re-evaluates only the source rows its relation's
+// journal names since the last run, and counts each kept row's witnesses.
+static void emit_keep_row_delta(std::ostringstream& out, const SymbolId& relation, std::uint32_t keep) {
+    out << "    std::optional<cactus::runtime::entt_backend::KeepRowChanges<"
+           "std::ranges::range_value_t<decltype(cactus_kept_rows)>>> cactus_row_changes;\n";
+    out << "    auto& cactus_row_state = cactus::runtime::entt_backend::keep_state<" << keep
+        << ", cactus::runtime::entt_backend::KeepRowState>(registry);\n";
+    out << "    auto& cactus_witnesses = cactus_row_state.witnesses;\n";
+    out << "    if (!cactus_full_check) {\n";
+    out << "        auto& cactus_source = cactus::runtime::entt_backend::uncompacted_relation_store<"
+        << EnttCodegenUtils::relation_cpp_name(relation) << ">(registry);\n";
+    out << "        if (!cactus_row_state.reader.has_value()) {\n";
+    out << "            cactus_row_state.reader = cactus_source.watch();\n";
+    out << "        }\n";
+    out << "        auto cactus_changed = cactus_source.take_changes(*cactus_row_state.reader);\n";
+    out << "        if (!cactus_keep_whole && !cactus_keep_unchanged && cactus_row_state.built &&\n";
+    out << "            !cactus::runtime::entt_backend::keep_delta_too_large(cactus_changed.size(), cactus_rows.size())) {\n";
+    out << "            cactus_row_changes = cactus::runtime::entt_backend::keep_row_delta(\n";
+    out << "                cactus_rows, cactus_witnesses, std::move(cactus_changed), cactus_row_passes, cactus_row_body, "
+           "cactus_kept_rows);\n";
+    out << "        } else {\n";
+    out << "            cactus_witnesses.clear();\n";
+    out << "            cactus_row_state.built = true;\n";
+    out << "        }\n";
+    out << "    }\n";
+}
+
 // `each: R as r`, or a pair rule with one row binding. The rows are the
 // store's live span, already in creation order.
 static void emit_row_pass(std::ostringstream& out,
@@ -8003,11 +8468,29 @@ static void emit_row_pass(std::ostringstream& out,
     const auto rewrite = [&](const ExprNode& expr) { return rewrite_expr(expr, {}, program, {}, {}, &scope); };
     emit_row_callbacks(out, sys, handler, params, guards, scope, program);
     const RowPassShape shape{.unary = unary, .row_first = row_index == 0, .entity_name = entity_name};
+    auto* body           = delta_keep_body();
+    const bool witnessed = unary && sys.keep.has_value() && body != nullptr;
+    if (witnessed) {
+        body->keep_row_witnessed = true;
+        emit_keep_row_delta(out, relation, body->keep_plan->index);
+        out << "    if (!cactus_row_changes.has_value()) {\n";
+    }
     out << "    std::vector<std::pair<entt::entity, const cactus_row_entry*>> cactus_row_tuples;\n";
     emit_row_tuple_collection(out, sys, shape, keyed, rewrite);
     emit_row_tuple_order_and_limit(out, sys, contract, params, shape.tuple_args("cactus_row"), scope, program);
     out << "    for (const auto& cactus_tuple : cactus_row_tuples) {\n";
+    if (!witnessed) {
+        out << "        cactus_row_body(" << shape.tuple_args("cactus_tuple") << ");\n";
+        out << "    }\n";
+        return;
+    }
+    out << "        const auto cactus_before = cactus_kept_rows.size();\n";
     out << "        cactus_row_body(" << shape.tuple_args("cactus_tuple") << ");\n";
+    out << "        if (!cactus_full_check) {\n";
+    out << "            cactus::runtime::entt_backend::witness_kept_row(cactus_witnesses, *cactus_tuple.second, "
+           "cactus_kept_rows, cactus_before);\n";
+    out << "        }\n";
+    out << "    }\n";
     out << "    }\n";
 }
 
@@ -8294,9 +8777,13 @@ std::string EnttSystemEmitter::emit_system(const RuleNode& sys, const DecoratedP
         }
         emit_named_requirements(out, contract, program);
         emit_when_gate(out, sys, program);
+        emit_uncovered_write_touches(out, contract, handler);
         HandlerBodyCodegen body_codegen{.contract           = contract,
                                         .structure_deferred = !program.execution_graph.phases.empty(),
                                         .prepare            = prepared ? &prepare : nullptr};
+        emit_keep_skip_check(out, sys, identity, body_codegen,
+                             system_function_name(program.module_name, sys.name, "on").name + "(registry, " +
+                                 trigger_binding + ", cactus_recipient)");
         std::ostringstream body;
         {
             const ActiveScope<HandlerBodyCodegen> body_scope(body_codegen);

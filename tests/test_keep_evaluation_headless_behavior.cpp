@@ -96,7 +96,7 @@ struct World {
     void set_weights(int weight) {
         for (const auto& [id, entity] : tiles) {
             if (registry.all_of<game::Tile>(entity)) {
-                registry.get<game::Tile>(entity).weight = weight;
+                registry.patch<game::Tile>(entity, [&](game::Tile& cactus_value) { cactus_value.weight = weight; });
             }
         }
     }
@@ -247,7 +247,7 @@ TEST_CASE("keep evaluation: batched keeps, planned folds and cached membership",
     {  // a trait keep queues one add and one remove command, whatever it keeps
         world.set_weights(0);
         world.tick();
-        world.tile(1).weight = 1;
+        world.registry.patch<game::Tile>(world.tiles.at(1), [&](game::Tile& cactus_value) { cactus_value.weight = 1; });
         world.link(1, 2);
         world.tick();
         const auto few = world.commands_of_tick();
@@ -263,11 +263,11 @@ TEST_CASE("keep evaluation: batched keeps, planned folds and cached membership",
     {  // lifecycle deliveries keep per-entity command order: adds by tuple order, then removals
         world.set_weights(0);
         world.tick();
-        world.tile(3).weight = 1;
+        world.registry.patch<game::Tile>(world.tiles.at(3), [&](game::Tile& cactus_value) { cactus_value.weight = 1; });
         world.tick();
-        world.tile(3).weight = 0;
-        world.tile(2).weight = 1;
-        world.tile(9).weight = 1;
+        world.registry.patch<game::Tile>(world.tiles.at(3), [&](game::Tile& cactus_value) { cactus_value.weight = 0; });
+        world.registry.patch<game::Tile>(world.tiles.at(2), [&](game::Tile& cactus_value) { cactus_value.weight = 1; });
+        world.registry.patch<game::Tile>(world.tiles.at(9), [&](game::Tile& cactus_value) { cactus_value.weight = 1; });
         const int first  = created_before(2, 9);
         const int second = first == 2 ? 9 : 2;
         CHECK(world.traced_tick() == "+L" + std::to_string(first) + ";+L" + std::to_string(second) + ";-L3;");
@@ -276,9 +276,9 @@ TEST_CASE("keep evaluation: batched keeps, planned folds and cached membership",
     {  // the keep run commits between the removals queued before and after it
         world.set_weights(0);
         world.tick();
-        world.tile(5).doom_early = true;
-        world.tile(6).doom_late  = true;
-        world.tile(7).weight     = 1;
+        world.registry.patch<game::Tile>(world.tiles.at(5), [&](game::Tile& cactus_value) { cactus_value.doom_early = true; });
+        world.registry.patch<game::Tile>(world.tiles.at(6), [&](game::Tile& cactus_value) { cactus_value.doom_late = true; });
+        world.registry.patch<game::Tile>(world.tiles.at(7), [&](game::Tile& cactus_value) { cactus_value.weight = 1; });
         CHECK(world.traced_tick() == "-T5;+L7;-T6;");
         // A row whose end lost its Tile earlier in the commit is not kept.
         const auto rows = world.neighbor_rows();
@@ -291,7 +291,7 @@ TEST_CASE("keep evaluation: batched keeps, planned folds and cached membership",
     {  // planned folds fold the same rows in the same order as the full product
         for (const auto& [id, entity] : world.tiles) {
             if (world.registry.all_of<game::Tile>(entity)) {
-                world.registry.get<game::Tile>(entity).weight = (id * 5) % 9;
+                world.registry.patch<game::Tile>(entity, [&](game::Tile& cactus_value) { cactus_value.weight = (id * 5) % 9; });
             }
         }
         world.link(4, 8);
@@ -305,15 +305,15 @@ TEST_CASE("keep evaluation: batched keeps, planned folds and cached membership",
         world.tick();
         world.check_folds();
         world.territory(7, 3);
-        world.tile(9).weight = 9;
+        world.registry.patch<game::Tile>(world.tiles.at(9), [&](game::Tile& cactus_value) { cactus_value.weight = 9; });
         world.tick();
         world.check_folds();
     }
 
     {  // a targeted event folds only the recipient's group
-        world.tile(4).ping = true;
+        world.registry.patch<game::Tile>(world.tiles.at(4), [&](game::Tile& cactus_value) { cactus_value.ping = true; });
         world.tick();
-        world.tile(4).ping = false;
+        world.registry.patch<game::Tile>(world.tiles.at(4), [&](game::Tile& cactus_value) { cactus_value.ping = false; });
         int expected = 0;
         for (const auto b : world.oldest_tiles()) {
             const auto& other = world.registry.get<game::Tile>(b);
@@ -355,8 +355,8 @@ TEST_CASE("keep evaluation: batched keeps, planned folds and cached membership",
         world.tick();
         auto& lit_trace = world.registry.get<game::Log>(World::slots().Book).lit_trace;
         lit_trace.clear();
-        world.tile(1).weight = 1;
-        world.tile(3).weight = 1;
+        world.registry.patch<game::Tile>(world.tiles.at(1), [&](game::Tile& cactus_value) { cactus_value.weight = 1; });
+        world.registry.patch<game::Tile>(world.tiles.at(3), [&](game::Tile& cactus_value) { cactus_value.weight = 1; });
         world.tick();
         CHECK(lit_trace == "2;2;");
         lit_trace.clear();

@@ -17,8 +17,7 @@ namespace game = cactus_gen::perf_static_keep;
 constexpr int kSize       = 85;
 constexpr int kDoubleSize = 120;  // about twice the tiles of kSize
 
-// Limits at kSize. Work counts are exact; times are O3 measurements x 1.5.
-constexpr std::uint64_t kCommandsPerFrame = 1;
+// Limits at kSize. Times are O3 measurements x 1.5.
 constexpr cactus_perf::TimeLimits kTimes{.base_ms = 4.6, .growth = 2.6};
 
 struct World {
@@ -46,12 +45,14 @@ struct World {
 
 }  // namespace
 
-TEST_CASE("perf: a static relation keep re-derives its rows with bounded work", "[perf][static-keep]") {
+TEST_CASE("perf: a static relation keep evaluates no rows after its first run", "[perf][static-keep]") {
     World world(kSize);
     REQUIRE(world.rows() == edge_rows(kSize));
     const auto work = cactus_perf::work_of([&] { world.tick(); });
     CHECK(world.rows() == edge_rows(kSize));
-    CHECK(work.commands <= kCommandsPerFrame);
+    CHECK(work.keep_runs == 0);
+    CHECK(work.candidates == 0);
+    CHECK(work.commands == 0);
     CHECK(work.orderings == 0);
 }
 

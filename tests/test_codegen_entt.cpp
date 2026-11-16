@@ -11491,7 +11491,7 @@ TEST_CASE("Codegen EnTT: a dependent keep rule runs in its commit round, not in 
     CHECK_FALSE(round.contains("a_fact_on(registry, phase);"));
     CHECK(code.contains("activation.keep_rounds = {.depth = 1, .run = "));
     // Every keep rule run is counted, in its group's place and in its round.
-    CHECK(count_occurrences(code, "count_keep_run();") == 2);
+    CHECK(count_occurrences(code, "start_keep_run<") == 2);
 }
 
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

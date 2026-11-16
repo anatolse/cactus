@@ -53,7 +53,7 @@ hit and die clips. The knight has no death clip, so it plays its
 | G15: A probe output must be initialized as an input | Attach `RayProbe` with its volume and ray, then read only a valid hit. | `PreparePicking` initializes `cell` with the volume handle, matching robot-sandbox. The probe overwrites this unused output before consumers run, and consumers check `hit`. | Output-field initialization analysis remains a language/stdlib design question; no extension implemented here. |
 | G16: Delegated scenes selected the wrong camera dimension | Keep game transforms in imported game modules while the entry point declares configuration. | The backend now scans authored modules when the entry point has no transform references, preserving entry-point priority and excluding stdlib implementation details. | Regression checks cover flat, volume, stdlib-only and entry-point scenes. |
 | G17: Billboard rendering is a stub | Draw minimap cells and camera-facing health/XP bars. | The public trait has no standard renderer rule, and its runtime submission function only increments a counter. The example uses one shared two-triangle GLB plane, per-view model visibility and derived camera-facing transforms instead. | A complete native billboard renderer and batching remain a backend/stdlib change; no language extension is required. |
-| G18: Frame time still grows with territory | Hold 60 FPS on the full map through a ten-minute game. | No workaround. Per-rule timing finds no single hotspot: `ConnectedTiles` (`tile == heart or Reach(heart, tile)`, a disjunction the planner cannot index) grows from 2.4 to 7.7 ms by minute 4, and `BridgeSites`, `AssignTasks`, `AttackTargets` and `BorderCells` each add about 1 ms. `NeighborLinks` re-keeps static adjacency every frame (about 7 ms) and `SenseCells` pairs every unit with every tile (about 7 ms). | Partly fixed in the backend: keep passes queue one command per run, folds use the pass plan, and `Reach(heart, tile)` searches once per heart. Full-map AI frames are 11.6 ms in minute 1 and 26.4 ms in minute 10 (see below). Frame time still grows with territory: `AssignTasks` and the commit grow most. Skipping keep passes whose inputs did not change remains a backend opportunity. No language extension. |
+| G18: Frame time still grows with territory | Hold 60 FPS on the full map through a ten-minute game. | No workaround. Per-rule timing finds no single hotspot: `ConnectedTiles` (`tile == heart or Reach(heart, tile)`, a disjunction the planner cannot index) grows from 2.4 to 7.7 ms by minute 4, and `BridgeSites`, `AssignTasks`, `AttackTargets` and `BorderCells` each add about 1 ms. `NeighborLinks` re-keeps static adjacency every frame (about 7 ms) and `SenseCells` pairs every unit with every tile (about 7 ms). | Partly fixed in the backend: keep passes queue one command per run, folds use the pass plan, and `Reach(heart, tile)` searches once per heart. Full-map AI frames are 11.6 ms in minute 1 and 26.4 ms in minute 10 (see below). Frame time still grows with territory: `AssignTasks` and the commit grew most. Keep passes whose inputs did not change are now skipped, which halves the frame (12.5 ms mean, 18.5 ms in minute 10); `AssignTasks` still grows. No language extension. |
 | G19: Standard UI painted only inside active viewports | Show the main menu while both game viewports are inactive. | None possible in game code. The game's own `main()` drew nothing but the white window clear at startup; the rooms and map captures came from a test harness that started play directly, and the earlier menu capture was blank. | Fixed in the backend: a frame with no active viewport still runs the standard UI render rule once in window space. A headless case checks that the menu submits UI primitives. |
 
 The minimal routing join is:
@@ -120,6 +120,26 @@ XP and stats share one threshold table;
 manual movement interrupts work and returns to automatic tasks. Attack and
 defend orders drive the shared routing and combat systems. Recruitment reserves a bed and food; knights eat, rest, train for paid XP and
 identify intruders. Combat and victory/defeat outcomes are implemented. HUD, minimap, AI, menu flow and persistence behavior are implemented. Generated-code lint, the full suite and the coverage gate pass.
+
+### Full-map AI performance with incremental keeps (2026-11-16)
+
+Same test after the `evaluate-keeps-incrementally` backend change. Both columns
+come from one build of the same code: "every keep runs" forces each keep rule
+to evaluate in full every tick, as before the change; "incremental" skips a keep
+whose inputs did not change and re-evaluates only changed entities where it can.
+
+| Window | Every keep runs | Incremental |
+| --- | ---: | ---: |
+| Game minute 1 | 18.5 ms | 7.1 ms |
+| Game minute 2 | 20.1 ms | 8.2 ms |
+| Game minute 10 | 38.6 ms | 18.5 ms |
+| Ten-minute mean / 95th percentile | 28.3 / 43.4 ms | 12.5 / 25.0 ms |
+
+Keep rules no longer appear among the costliest rules; the commit fell from
+about 1.6 to 0.2 ms per call. Of the 46 keep rules, 8 evaluate by changes; the
+rest read relation tests, row bindings or derived relations, so they evaluate
+in full, but only in ticks where an input changed. By minute 10 the frame is led by
+`AssignTasks` (4.0 ms) and `FloorSurfaces` (2.6 ms), which are handler rules.
 
 ### Full-map AI performance (2026-10-31)
 

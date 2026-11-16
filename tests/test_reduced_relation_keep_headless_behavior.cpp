@@ -90,13 +90,13 @@ TEST_CASE("a reduced relation keep holds one row per group to its best winner", 
     }
 
     {  // the same winner with new fields keeps its row in place
-        registry.get<game::Player>(slots.Second).x = -0.2F;
+        registry.patch<game::Player>(slots.Second, [&](game::Player& cactus_value) { cactus_value.x = -0.2F; });
         world.tick();
         CHECK(world.rows() == std::vector<Row>{{slots.Lead, slots.Third, 3, 2}, {slots.Second, slots.Third, 3, 2}});
     }
 
     {  // a new winner removes the old row and adds a new one at the end
-        registry.get<game::Checkpoint>(slots.Fifth).x = 1.0F;
+        registry.patch<game::Checkpoint>(slots.Fifth, [&](game::Checkpoint& cactus_value) { cactus_value.x = 1.0F; });
         world.tick();
         CHECK(world.rows() == std::vector<Row>{{slots.Second, slots.Third, 3, 2}, {slots.Lead, slots.Fifth, 5, 3}});
         CHECK(world.reached(slots.Lead) == slots.Fifth);
@@ -111,7 +111,7 @@ TEST_CASE("a reduced relation keep holds one row per group to its best winner", 
     }
 
     {  // leaving every checkpoint empties the group and drops its row
-        registry.get<game::Player>(slots.Lead).x = 100.0F;
+        registry.patch<game::Player>(slots.Lead, [&](game::Player& cactus_value) { cactus_value.x = 100.0F; });
         world.tick();
         CHECK(world.rows() == std::vector<Row>{{slots.Second, slots.First, 1, 1}});
         CHECK_FALSE(registry.all_of<game::Reached>(slots.Lead));

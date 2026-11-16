@@ -95,19 +95,19 @@ TEST_CASE("keep adds, patches and removes a trait as its group gains and loses r
     }
 
     {  // best skips a NaN key
-        registry.get<Lava>(slots.rule_keep.PoolD).heat = std::numeric_limits<float>::quiet_NaN();
+        registry.patch<Lava>(slots.rule_keep.PoolD, [&](Lava& cactus_value) { cactus_value.heat = std::numeric_limits<float>::quiet_NaN(); });
         world.tick();
         CHECK(registry.get<Ranked>(judge).hot == slots.rule_keep.PoolE);
     }
 
     {  // overlapping zones patch the fields and fire nothing
-        world.walker(hiker).x = 0.75F;
+        world.registry.patch<Walker>(hiker, [&](Walker& cactus_value) { cactus_value.x = 0.75F; });
         world.tick();
         CHECK(registry.get<InLava>(hiker).zones == 2);
         CHECK(registry.get<InLava>(hiker).heat == 5.0F);
         CHECK(world.top_pool(hiker, slots.rule_keep.PoolB));
         CHECK_FALSE(world.top_pool(hiker, slots.rule_keep.PoolA));
-        world.walker(hiker).x = 2.0F;
+        world.registry.patch<Walker>(hiker, [&](Walker& cactus_value) { cactus_value.x = 2.0F; });
         world.tick();
         CHECK(registry.get<InLava>(hiker).zones == 1);
         CHECK(world.walker(hiker).enters == 1);
@@ -115,7 +115,7 @@ TEST_CASE("keep adds, patches and removes a trait as its group gains and loses r
     }
 
     {  // leaving the last zone fires on removed with the last kept value
-        world.walker(hiker).x = 5.0F;
+        world.registry.patch<Walker>(hiker, [&](Walker& cactus_value) { cactus_value.x = 5.0F; });
         world.tick();
         CHECK_FALSE(world.in_lava(hiker));
         CHECK(world.walker(hiker).exits == 1);
@@ -148,25 +148,25 @@ TEST_CASE("keep adds, patches and removes a trait as its group gains and loses r
     }
 
     {  // when: false freezes presence until the rule runs again
-        world.walker(hiker).x = 0.0F;
+        world.registry.patch<Walker>(hiker, [&](Walker& cactus_value) { cactus_value.x = 0.0F; });
         world.tick();
         REQUIRE(world.in_lava(hiker));
         CHECK(world.walker(hiker).enters == 2);
-        registry.get<Control>(slots.rule_keep.Settings).frozen = true;
-        world.walker(hiker).x = 5.0F;
+        registry.patch<Control>(slots.rule_keep.Settings, [&](Control& cactus_value) { cactus_value.frozen = true; });
+        world.registry.patch<Walker>(hiker, [&](Walker& cactus_value) { cactus_value.x = 5.0F; });
         world.tick();
         CHECK(world.in_lava(hiker));
-        registry.get<Control>(slots.rule_keep.Settings).frozen = false;
+        registry.patch<Control>(slots.rule_keep.Settings, [&](Control& cactus_value) { cactus_value.frozen = false; });
         world.tick();
         CHECK_FALSE(world.in_lava(hiker));
         CHECK(world.walker(hiker).exits == 2);
     }
 
     {  // a frame with no fixed step changes nothing
-        world.walker(hiker).x = 0.0F;
+        world.registry.patch<Walker>(hiker, [&](Walker& cactus_value) { cactus_value.x = 0.0F; });
         world.tick();
         REQUIRE(world.in_lava(hiker));
-        world.walker(hiker).x = 5.0F;
+        world.registry.patch<Walker>(hiker, [&](Walker& cactus_value) { cactus_value.x = 5.0F; });
         const int ticks = world.ticks();
         cactus_headless_test::drive_frame(registry, 0.0F);
         CHECK(world.ticks() == ticks);
@@ -176,7 +176,7 @@ TEST_CASE("keep adds, patches and removes a trait as its group gains and loses r
     }
 
     {  // restored state is reconciled by the next run
-        world.walker(hiker).x = 0.0F;
+        world.registry.patch<Walker>(hiker, [&](Walker& cactus_value) { cactus_value.x = 0.0F; });
         world.tick();
         REQUIRE(world.in_lava(hiker));
         const int enters = world.walker(hiker).enters;

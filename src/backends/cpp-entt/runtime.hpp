@@ -8,6 +8,7 @@
 #include "backends/cpp-entt/binding_index.hpp"
 #include "backends/cpp-entt/creation_order.hpp"
 #include "backends/cpp-entt/derived_relations.hpp"
+#include "backends/cpp-entt/keep_versions.hpp"
 #include "backends/cpp-entt/raylib_io.hpp"
 #include "backends/cpp-entt/relation_store.hpp"
 #include "backends/cpp-entt/spatial_query.hpp"
@@ -2952,13 +2953,6 @@ void relation_partners(const entt::registry& registry,
         rows.for_each_to(entity, visit);
     }
     std::ranges::sort(partners, {}, [&](entt::entity partner) { return creation_ordinal(registry, partner); });
-}
-
-// Sorts `entities` oldest first and drops repeats.
-inline void sort_unique_in_creation_order(const entt::registry& registry, std::vector<entt::entity>& entities) {
-    std::ranges::sort(entities, {}, [&](entt::entity entity) { return creation_ordinal(registry, entity); });
-    const auto repeats = std::ranges::unique(entities);
-    entities.erase(repeats.begin(), repeats.end());
 }
 
 // The children of `of` that `matching` contains, oldest first.

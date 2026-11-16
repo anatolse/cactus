@@ -1,0 +1,108 @@
+module incremental_keep_runtime
+
+use std.core
+use std.text as text
+
+# Units step on a line of spots. Tests set `step` and `doomed` between ticks;
+# rules turn them into moves and destroys, which the keeps below must follow.
+
+trait Unit:
+    let id: int = 0
+    var x: int = 0
+    var step: int = 0
+
+trait Spot:
+    let id: int = 0
+    let x: int = 0
+    var doomed: bool = false
+
+trait Caught
+
+trait Log:
+    var trace: string = ""
+
+relation Over:
+    from: Unit
+    to: Spot
+    let depth: int = 0
+
+relation Link:
+    from: Unit
+    to: Spot
+
+relation Source:
+    from: Unit
+    to: Unit
+
+group keeps:
+    phase: fixed_tick
+
+entity Book:
+    Log
+
+template Walker(id: int, x: int):
+    Unit:
+        id = id
+        x = x
+
+template Place(id: int, x: int):
+    Spot:
+        id = id
+        x = x
+
+# Created in this order: B before A, so B is older.
+entity B from Walker(id = 2, x = 5)
+entity A from Walker(id = 1, x = 6)
+entity C from Walker(id = 3, x = 1)
+
+entity S1 from Place(id = 1, x = 1)
+entity S2 from Place(id = 2, x = 2)
+entity S3 from Place(id = 3, x = 3)
+
+rule Fill:
+    on load:
+        add Link(C, S1)
+        add Link(C, S2)
+
+rule Walk:
+    each: Unit as u
+    before: keeps
+    on fixed_tick:
+        if u.step != 0:
+            u.x += u.step
+            u.step = 0
+
+rule Doom:
+    each: Spot as s
+    before: keeps
+    on fixed_tick:
+        if s.doomed:
+            destroy self
+
+rule KeepOver:
+    pairs:
+        u: Unit
+        s: Spot
+    group: keeps
+    where:
+        s[Spot].x == u[Unit].x
+    keep Over(u, s):
+        depth = u[Unit].id * 10 + s[Spot].id
+
+rule KeepCaught:
+    each: Unit as u
+    group: keeps
+    where:
+        u.x == 0
+    keep Caught
+
+# Each link from a unit witnesses the same Source row.
+rule KeepSource:
+    each: Link as l
+    group: keeps
+    keep Source(l.from, l.from)
+
+rule TraceCaught:
+    each: Unit as u
+    on added Caught:
+        Book[Log].trace += text.format("+C{};", u.id)

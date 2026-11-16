@@ -110,7 +110,7 @@ TEST_CASE("a keep rule whose gate turns false removes every kept trait", "[runti
     };
     CHECK(per_lava(registry, kept) == std::map<int, int>{{1, 2}, {2, 2}, {3, 2}});
 
-    single<cactus_gen::staged_predicates::Match>(registry).keeping = false;
+    registry.patch<cactus_gen::staged_predicates::Match>(registry.view<cactus_gen::staged_predicates::Match>().front(), [&](cactus_gen::staged_predicates::Match& cactus_value) { cactus_value.keeping = false; });
     drive_frame(registry);
     CHECK(per_lava(registry, kept) == std::map<int, int>{{1, -1}, {2, -1}, {3, -1}});
     CHECK(single<cactus_gen::staged_predicates::Tally>(registry).cooled == 3);

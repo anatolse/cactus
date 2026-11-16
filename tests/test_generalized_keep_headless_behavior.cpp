@@ -62,15 +62,15 @@ TEST_CASE("generalized keep: unary, unreduced pair and conditional facts", "[run
     }
 
     {  // unary: in, patched, then out
-        registry.get<game::Health>(slots.Healthy).current = 25.0F;
+        registry.patch<game::Health>(slots.Healthy, [&](game::Health& cactus_value) { cactus_value.current = 25.0F; });
         world.tick();
         REQUIRE(world.has<game::LowHealth>(slots.Healthy));
         CHECK(world.log().lows == 3);
-        registry.get<game::Health>(slots.Healthy).current = 15.0F;
+        registry.patch<game::Health>(slots.Healthy, [&](game::Health& cactus_value) { cactus_value.current = 15.0F; });
         world.tick();
         CHECK(registry.get<game::LowHealth>(slots.Healthy).missing == 85.0F);
         CHECK(world.log().lows == 3);
-        registry.get<game::Health>(slots.Healthy).current = 50.0F;
+        registry.patch<game::Health>(slots.Healthy, [&](game::Health& cactus_value) { cactus_value.current = 50.0F; });
         world.tick();
         CHECK_FALSE(world.has<game::LowHealth>(slots.Healthy));
         CHECK(world.log().recoveries == 1);
@@ -86,11 +86,11 @@ TEST_CASE("generalized keep: unary, unreduced pair and conditional facts", "[run
 
     {  // unreduced pair: two witnesses give one fact
         CHECK_FALSE(world.has<game::Caught>(slots.Sprinter));
-        registry.get<game::Runner>(slots.Sprinter).x = 10.5F;
+        registry.patch<game::Runner>(slots.Sprinter, [&](game::Runner& cactus_value) { cactus_value.x = 10.5F; });
         world.tick();
         REQUIRE(world.has<game::Caught>(slots.Sprinter));
         CHECK(world.log().caught == 1);
-        registry.get<game::Runner>(slots.Sprinter).x = 9.5F;
+        registry.patch<game::Runner>(slots.Sprinter, [&](game::Runner& cactus_value) { cactus_value.x = 9.5F; });
         world.tick();
         CHECK(world.has<game::Caught>(slots.Sprinter));
         CHECK(world.log().caught == 1);
@@ -98,7 +98,7 @@ TEST_CASE("generalized keep: unary, unreduced pair and conditional facts", "[run
     }
 
     {  // unreduced pair: losing the last witness ends the fact
-        registry.get<game::Runner>(slots.Sprinter).x = 5.0F;
+        registry.patch<game::Runner>(slots.Sprinter, [&](game::Runner& cactus_value) { cactus_value.x = 5.0F; });
         world.tick();
         CHECK_FALSE(world.has<game::Caught>(slots.Sprinter));
         CHECK(world.log().released == 1);
@@ -108,7 +108,7 @@ TEST_CASE("generalized keep: unary, unreduced pair and conditional facts", "[run
         CHECK(world.has<game::EmptyBag>(slots.Pack));
         CHECK_FALSE(world.has<game::EmptyBag>(slots.Pouch));
         const int emptied = world.log().emptied;
-        registry.get<game::Item>(slots.Coin).bag = 1;
+        registry.patch<game::Item>(slots.Coin, [&](game::Item& cactus_value) { cactus_value.bag = 1; });
         world.tick();
         CHECK_FALSE(world.has<game::EmptyBag>(slots.Pack));
         CHECK(world.has<game::EmptyBag>(slots.Pouch));
@@ -118,7 +118,7 @@ TEST_CASE("generalized keep: unary, unreduced pair and conditional facts", "[run
 
     {  // threshold: two allies are not enough, three are
         CHECK_FALSE(world.has<game::Supported>(slots.First));
-        registry.get<game::Soldier>(slots.Straggler).x = 2.0F;
+        registry.patch<game::Soldier>(slots.Straggler, [&](game::Soldier& cactus_value) { cactus_value.x = 2.0F; });
         world.tick();
         REQUIRE(world.has<game::Supported>(slots.First));
         CHECK(registry.get<game::Supported>(slots.First).allies == 3);
@@ -131,7 +131,7 @@ TEST_CASE("generalized keep: unary, unreduced pair and conditional facts", "[run
     {  // all conditions false: every carrier loses the fact
         float x = 0.0F;
         for (const auto soldier : {slots.First, slots.Second, slots.Third, slots.Straggler}) {
-            registry.get<game::Soldier>(soldier).x = x;
+            registry.patch<game::Soldier>(soldier, [&](game::Soldier& cactus_value) { cactus_value.x = x; });
             x += 10.0F;
         }
         world.tick();
@@ -143,12 +143,12 @@ TEST_CASE("generalized keep: unary, unreduced pair and conditional facts", "[run
 
     {  // when: false pauses updates; the fact keeps its presence and value
         REQUIRE(world.has<game::LowHealth>(slots.Wounded));
-        registry.get<game::Control>(slots.Settings).frozen = true;
-        registry.get<game::Health>(slots.Wounded).current = 90.0F;
+        registry.patch<game::Control>(slots.Settings, [&](game::Control& cactus_value) { cactus_value.frozen = true; });
+        registry.patch<game::Health>(slots.Wounded, [&](game::Health& cactus_value) { cactus_value.current = 90.0F; });
         world.tick();
         CHECK(world.has<game::LowHealth>(slots.Wounded));
         CHECK(registry.get<game::LowHealth>(slots.Wounded).missing == 80.0F);
-        registry.get<game::Control>(slots.Settings).frozen = false;
+        registry.patch<game::Control>(slots.Settings, [&](game::Control& cactus_value) { cactus_value.frozen = false; });
         world.tick();
         CHECK_FALSE(world.has<game::LowHealth>(slots.Wounded));
     }

@@ -47,6 +47,22 @@ template <typename Range>
     return result;
 }
 
+// Sorts `entities` oldest first and drops repeats.
+inline void sort_unique_in_creation_order(const entt::registry& registry, std::vector<entt::entity>& entities) {
+    std::vector<std::pair<std::uint64_t, entt::entity>> ordered;
+    ordered.reserve(entities.size());
+    for (const auto entity : entities) {
+        ordered.emplace_back(creation_ordinal(registry, entity), entity);
+    }
+    std::ranges::sort(ordered);
+    const auto repeats = std::ranges::unique(ordered);
+    ordered.erase(repeats.begin(), repeats.end());
+    entities.clear();
+    for (const auto& [ordinal, entity] : ordered) {
+        entities.push_back(entity);
+    }
+}
+
 // The oldest entity `range` yields, or null when it yields none.
 template <typename Range>
 [[nodiscard]] entt::entity oldest(const entt::registry& registry, const Range& range) {

@@ -177,3 +177,28 @@ overwrite or bleed into an earlier instance's already-queued draw.
 
 - **WHEN** a vertex-stage handler's filter selects `N` entities
 - **THEN** the render pass produces `N` independently-positioned instances, not fewer
+
+### Requirement: A render pass draws exactly its vertex handler's domain
+A render pass SHALL draw one quad for each entity in its vertex handler's domain and for no other entity. The domain SHALL be the one an ordinary unary rule with the same clauses has: the entity carries every `each:` trait, carries no `without:` trait, and passes `where:`. Quads SHALL be drawn in `order by:` order when the clause is present, else in creation order.
+
+A per-instance value read through an `each:` alias SHALL come from the trait that alias names, for any number of `each:` traits. A program whose vertex handler reads fields of several `each:` traits SHALL produce generated code that compiles.
+
+#### Scenario: Fields of two traits
+- **WHEN** a vertex handler with `each: WorldTransform as xf, Particle as particle` reads `xf.position` and `particle.age`
+- **THEN** the program compiles to working code and each quad uses its own entity's position and age
+
+#### Scenario: Entity with only the first trait
+- **WHEN** an entity carries `WorldTransform` but not `Particle`
+- **THEN** the pass draws no quad for it
+
+#### Scenario: Excluded trait
+- **WHEN** the vertex handler declares `without: Hidden` and a particle carries `Hidden`
+- **THEN** the pass draws no quad for it
+
+#### Scenario: Value filter
+- **WHEN** the vertex handler declares `where: particle.age < 1.0` and a particle's age is 2.0
+- **THEN** the pass draws no quad for it
+
+#### Scenario: Draw order
+- **WHEN** the vertex handler declares `order by: particle.depth asc`
+- **THEN** quads are drawn from the lowest `depth` to the highest, so a later quad covers an earlier one

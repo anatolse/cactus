@@ -3766,7 +3766,9 @@ void draw_shape_circle(const Vector2 position, const float diameter, const Vecto
         Vector2{.x = position.x - origin.x, .y = position.y - origin.y}, diameter / 2.0F, color);
 }
 
-Shader* ensure_render_pass_shader(RenderPassShaderState& state, const char* vertex_src, const char* fragment_src) {
+Shader* ensure_render_pass_shader(RenderPassShaderState& state,
+                                  [[maybe_unused]] const char* vertex_src,
+                                  [[maybe_unused]] const char* fragment_src) {
     if (state.loaded) {
         return &state.shader;
     }
@@ -3776,14 +3778,8 @@ Shader* ensure_render_pass_shader(RenderPassShaderState& state, const char* vert
         return nullptr;
     }
     state.attempted = true;
-#ifdef CACTUS_RAYLIB_FAKE
-    // LoadShaderFromMemory needs a real GL context, which headless behavioral
-    // tests never create — the render-pass phase's draw step simply never
-    // runs under the fake, same disclosed limitation as the lighting shader.
-    (void)vertex_src;
-    (void)fragment_src;
-    return nullptr;
-#else
+    // Headless tests have no GL context; they get a stand-in shader so the domain loop still runs.
+#ifndef CACTUS_RAYLIB_FAKE
     if (!cactus::runtime::raylib::IsWindowReady()) {
         return nullptr;
     }
@@ -3792,12 +3788,55 @@ Shader* ensure_render_pass_shader(RenderPassShaderState& state, const char* vert
         state.shader = {};
         return nullptr;
     }
+#endif
     state.loaded = true;
     return &state.shader;
+}
+
+void begin_render_pass([[maybe_unused]] const Shader& shader) noexcept {
+    cactus::runtime::raylib::BeginMode2D(get_active_camera_2d());
+#ifndef CACTUS_RAYLIB_FAKE
+    BeginShaderMode(shader);
 #endif
 }
 
+void end_render_pass() noexcept {
+#ifndef CACTUS_RAYLIB_FAKE
+    EndShaderMode();
+#endif
+    cactus::runtime::raylib::EndMode2D();
+}
+
+int render_pass_uniform_location([[maybe_unused]] const Shader& shader, [[maybe_unused]] const char* name) noexcept {
+#ifdef CACTUS_RAYLIB_FAKE
+    // raylib's SetShaderValue ignores location -1, so headless uploads never reach GL.
+    return -1;
+#else
+    return GetShaderLocation(shader, name);
+#endif
+}
+
+void set_render_pass_uniform(const Shader& shader, int location, float value) noexcept {
+    SetShaderValue(shader, location, &value, SHADER_UNIFORM_FLOAT);
+}
+
+void set_render_pass_uniform(const Shader& shader, int location, Vector2 value) noexcept {
+    const std::array<float, 2> components = {value.x, value.y};
+    SetShaderValue(shader, location, components.data(), SHADER_UNIFORM_VEC2);
+}
+
+void set_render_pass_uniform(const Shader& shader, int location, Color value) noexcept {
+    constexpr float kChannelMax = 255.0F;
+    const std::array<float, 4> components = {static_cast<float>(value.r) / kChannelMax,
+                                             static_cast<float>(value.g) / kChannelMax,
+                                             static_cast<float>(value.b) / kChannelMax,
+                                             static_cast<float>(value.a) / kChannelMax};
+    SetShaderValue(shader, location, components.data(), SHADER_UNIFORM_VEC4);
+}
+
 void draw_render_pass_quad_instance() noexcept {
+    count_pass_quad();
+#ifndef CACTUS_RAYLIB_FAKE
     // Corner/uv per vertex, matching render_pass_emitter.cpp's Quads layout.
     // Fed through raylib's own vertexPosition/vertexTexCoord attributes
     // (rlVertex2f/rlTexCoord2f), not gl_VertexID: rlgl is a batching
@@ -3839,6 +3878,7 @@ void draw_render_pass_quad_instance() noexcept {
     // current at the batch's eventual flush — the *last* entity's, not its
     // own.
     rlDrawRenderBatchActive();
+#endif
 }
 
 // ── Editor extern func implementations (std.editor) ──────────────────────────

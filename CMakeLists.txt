@@ -515,8 +515,8 @@ endfunction()
 # backend (no CACTUS_RAYLIB_FAKE) so LoadShaderFromMemory/BeginShaderMode
 # actually run against a live GL context — needed to catch render-pass bugs
 # (rlgl batching semantics, GLSL compile errors) that CACTUS_RAYLIB_FAKE
-# structurally can't reach: ensure_render_pass_shader() (runtime.cpp) returns
-# nullptr unconditionally under the fake, before ever calling
+# structurally can't reach: under the fake, ensure_render_pass_shader()
+# (runtime.cpp) returns a stand-in shader and never calls
 # LoadShaderFromMemory. Needs a live display session to create a GL context;
 # on headless Linux CI that means wrapping the test invocation in e.g.
 # xvfb-run — a CI-runner concern, not something this function models.
@@ -619,6 +619,7 @@ set(STANDARD_UI_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/standard-ui.gene
 set(EXTERNAL_HANDLER_LINK_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/external-handler-link.generated.cpp")
 set(PARTICLE_BURST_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/particle-burst.generated.cpp")
 set(GRADIENT_SQUARE_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/gradient-square.generated.cpp")
+set(RENDER_PASS_DOMAIN_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/render-pass-domain.generated.cpp")
 
 add_custom_command(
     OUTPUT "${EXTERNAL_HANDLER_LINK_GENERATED_CPP}"
@@ -792,6 +793,12 @@ cactus_add_example(example_gradient_square_generated
     SOURCE "examples/gradient-square/gradient_square.cactus"
     BACKEND "cpp-entt"
     OUTPUT "${GRADIENT_SQUARE_GENERATED_CPP}"
+)
+
+cactus_add_example(example_render_pass_domain_generated
+    SOURCE "examples/render-pass-domain/render_pass_domain.cactus"
+    BACKEND "cpp-entt"
+    OUTPUT "${RENDER_PASS_DOMAIN_GENERATED_CPP}"
 )
 
 # ── Tests ───────────────────────────────────────────────────────────────────────

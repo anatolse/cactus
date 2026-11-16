@@ -19,9 +19,9 @@
 #include <string>
 
 // dsl-render-passes "Instances drawn by a vertex-stage handler render
-// independently": CACTUS_RAYLIB_FAKE makes ensure_render_pass_shader()
-// return nullptr unconditionally (runtime.cpp), so no headless behavioral
-// test can ever reach the real draw path this requirement is about. This
+// independently": under CACTUS_RAYLIB_FAKE the render pass binds a stand-in
+// shader and skips GL (runtime.cpp), so no headless behavioral test can ever
+// reach the real draw path this requirement is about. This
 // test links the real raylib backend and drives an actual GL context
 // instead — see cactus_add_render_pass_visual_test in CMakeLists.txt.
 //

@@ -1,5 +1,6 @@
 #include "backends/cpp-entt/render_pass_emitter.hpp"
 
+#include "backends/cpp-entt/system_emitter.hpp"
 #include "backends/cpp-entt/type_utils.hpp"
 #include "common/ast_expressions.hpp"
 #include "common/codegen_error.hpp"
@@ -60,8 +61,12 @@ struct TranslatedExpr {
 struct NeededUniform {
     std::string glsl_name;  // "u_xf_position"
     GlslType type{};
-    SymbolId trait;
-    std::string field_name;
+    std::string cpp_value;  // "world_transform_comp.position"
+};
+
+struct FilterTrait {
+    SymbolId symbol;
+    std::string component_local;  // as the domain walk binds it
 };
 
 struct GlslCtx {
@@ -72,7 +77,7 @@ struct GlslCtx {
     // vertex only: filter alias -> resolved trait (exactly the traits the
     // vertex handler's `filter:` bound; dsl-render-passes 2.4 guarantees a
     // vertex handler has a non-empty filter and a fragment handler has none).
-    std::unordered_map<std::string, SymbolId> filter_traits;
+    std::unordered_map<std::string, FilterTrait> filter_traits;
     std::unordered_map<std::string, GlslType> locals;
     // Names of `let`-bound locals specifically (a subset of `locals`, which
     // also holds the stage's built-in fields, pre-seeded under their own
@@ -285,11 +290,11 @@ TranslatedExpr translate_builtin_field_access(const std::string& field_name, con
 // `owner.field` where `owner` is a vertex-handler filter alias: reads a
 // per-instance trait field, registering (and deduplicating) the uniform that
 // carries it into the shader.
-TranslatedExpr translate_filter_trait_access(const SymbolId& trait_symbol,
+TranslatedExpr translate_filter_trait_access(const FilterTrait& filter_trait,
                                              const std::string& owner_name,
                                              const std::string& field_name,
                                              GlslCtx& ctx) {
-    const auto* trait = EnttCodegenUtils::find_trait(*ctx.program, make_canonical_id(trait_symbol));
+    const auto* trait = EnttCodegenUtils::find_trait(*ctx.program, make_canonical_id(filter_trait.symbol));
     const auto* field  = find_trait_field(trait, field_name);
     if (field == nullptr) {
         throw std::runtime_error("render-pass GLSL codegen: unknown trait field '" + owner_name + "." + field_name +
@@ -299,8 +304,9 @@ TranslatedExpr translate_filter_trait_access(const SymbolId& trait_symbol,
     const auto uniform_name = "u_" + owner_name + "_" + field_name;
     if (std::ranges::none_of(
             ctx.uniforms, [&](const NeededUniform& existing) { return existing.glsl_name == uniform_name; })) {
-        ctx.uniforms.push_back(NeededUniform{
-            .glsl_name = uniform_name, .type = glsl_type, .trait = trait_symbol, .field_name = field->name});
+        ctx.uniforms.push_back(NeededUniform{.glsl_name = uniform_name,
+                                             .type      = glsl_type,
+                                             .cpp_value = filter_trait.component_local + "." + field->name});
     }
     return {.text = uniform_name, .type = glsl_type};
 }
@@ -672,14 +678,17 @@ std::optional<StageHandlerRef> find_stage_handler(const ProgramNode& ast, const 
     return std::nullopt;
 }
 
-std::unordered_map<std::string, SymbolId> vertex_filter_traits(const RuleNode& rule) {
-    std::unordered_map<std::string, SymbolId> traits;
+std::unordered_map<std::string, FilterTrait> vertex_filter_traits(const RuleNode& rule,
+                                                                 const DecoratedProgram& program) {
+    std::unordered_map<std::string, FilterTrait> traits;
     for (const auto& entry : rule.filter.entries) {
         if (!entry.resolved_trait_id.has_value()) {
             continue;
         }
-        const auto& name    = entry.alias.value_or(entry.resolved_trait_id->local_name);
-        traits[name] = *entry.resolved_trait_id;
+        traits[entry.alias.value_or(entry.resolved_trait_id->local_name)] = FilterTrait{
+            .symbol          = *entry.resolved_trait_id,
+            .component_local = component_local(
+                EnttCodegenUtils::trait_cpp_name(entry.resolved_trait_id, entry.qualified_name, program))};
     }
     return traits;
 }
@@ -705,7 +714,7 @@ std::optional<std::string> emit_render_pass_dispatch_body(const DecoratedProgram
         throw std::runtime_error("render-pass GLSL codegen: phase '" + phase.name + "' stage handler has no alias");
     }
 
-    const auto filter_traits = vertex_filter_traits(*vertex_ref->rule);
+    const auto filter_traits = vertex_filter_traits(*vertex_ref->rule, program);
     if (filter_traits.empty()) {
         throw std::runtime_error("render-pass GLSL codegen: phase '" + phase.name +
                                  "' vertex handler has no resolved filter trait");
@@ -722,26 +731,6 @@ std::optional<std::string> emit_render_pass_dispatch_body(const DecoratedProgram
         .program = &program, .ast = program.ast, .alias = *fragment_ref->handler->alias, .is_vertex = false};
     const std::string fragment_glsl = build_fragment_shader(fragment_ref->handler->body, fragment_ctx);
 
-    // A render-pass phase is only ever recognized (recognize_render_pass_phases)
-    // after collect_types has assigned it a canonical symbol_id, so this is
-    // always present for a well-formed program — checked explicitly rather
-    // than via optional::value_or, whose fallback argument would otherwise be
-    // eagerly constructed (and, with an empty module name, throw) even when
-    // unused.
-    if (!phase.symbol_id.has_value()) {
-        throw std::runtime_error("render-pass GLSL codegen: phase '" + phase.name + "' has no resolved symbol");
-    }
-    // dsl-render-passes' vertex handler is unary: exactly one filtered trait
-    // drives the per-instance view (further filter traits, if any, would need
-    // a multi-component view — not needed by either shipped example).
-    const auto& primary_alias_and_trait = *filter_traits.begin();
-    const auto* filter_trait = EnttCodegenUtils::find_trait(program, make_canonical_id(primary_alias_and_trait.second));
-    if (filter_trait == nullptr) {
-        throw std::runtime_error("render-pass GLSL codegen: phase '" + phase.name +
-                                 "' vertex handler's filter trait could not be resolved");
-    }
-    const std::string trait_cpp = EnttCodegenUtils::trait_cpp_name(primary_alias_and_trait.second);
-
     std::ostringstream out;
     // Statics of the phase's own dispatch function, so they need no per-phase name.
     out << "    static const char* kVertexShader = R\"GLSL(\n" << vertex_glsl << ")GLSL\";\n";
@@ -752,61 +741,26 @@ std::optional<std::string> emit_render_pass_dispatch_body(const DecoratedProgram
     out << "    if (render_pass_shader == nullptr) {\n";
     out << "        return;\n";
     out << "    }\n";
+    // The shader loads once, so its uniform locations never change.
     for (const auto& uniform : vertex_ctx.uniforms) {
-        out << "    const int loc_" << uniform.glsl_name << " = GetShaderLocation(*render_pass_shader, \""
+        out << "    static const int loc_" << uniform.glsl_name
+            << " = cactus::runtime::entt_backend::render_pass_uniform_location(*render_pass_shader, \""
             << uniform.glsl_name << "\");\n";
     }
-    out << "    cactus::runtime::raylib::BeginMode2D(cactus::runtime::entt_backend::get_active_camera_2d());\n";
-    out << "    BeginShaderMode(*render_pass_shader);\n";
-    out << "    for (auto entity : registry.view<" << trait_cpp << ">()) {\n";
-    out << "        (void)entity;\n";
-    out << "        const auto& " << component_local(trait_cpp) << " = registry.get<" << trait_cpp << ">(entity);\n";
+    std::ostringstream draw;
     for (const auto& uniform : vertex_ctx.uniforms) {
-        switch (uniform.type) {
-            case GlslType::Float:
-                out << "        {\n";
-                out << "            const float value = " << component_local(trait_cpp) << "." << uniform.field_name
-                    << ";\n";
-                out << "            SetShaderValue(*render_pass_shader, loc_" << uniform.glsl_name
-                    << ", &value, SHADER_UNIFORM_FLOAT);\n";
-                out << "        }\n";
-                break;
-            case GlslType::Vec2:
-                out << "        {\n";
-                out << "            const std::array<float, 2> value = {" << component_local(trait_cpp) << "."
-                    << uniform.field_name << ".x, " << component_local(trait_cpp) << "." << uniform.field_name
-                    << ".y};\n";
-                out << "            SetShaderValue(*render_pass_shader, loc_" << uniform.glsl_name
-                    << ", value.data(), SHADER_UNIFORM_VEC2);\n";
-                out << "        }\n";
-                break;
-            case GlslType::Color:
-                out << "        {\n";
-                out << "            const std::array<float, 4> value = {\n";
-                out << "                static_cast<float>(" << component_local(trait_cpp) << "." << uniform.field_name
-                    << ".r) / 255.0F,\n";
-                out << "                static_cast<float>(" << component_local(trait_cpp) << "." << uniform.field_name
-                    << ".g) / 255.0F,\n";
-                out << "                static_cast<float>(" << component_local(trait_cpp) << "." << uniform.field_name
-                    << ".b) / 255.0F,\n";
-                out << "                static_cast<float>(" << component_local(trait_cpp) << "." << uniform.field_name
-                    << ".a) / 255.0F,\n";
-                out << "            };\n";
-                out << "            SetShaderValue(*render_pass_shader, loc_" << uniform.glsl_name
-                    << ", value.data(), SHADER_UNIFORM_VEC4);\n";
-                out << "        }\n";
-                break;
-            case GlslType::Bool:
-                // glsl_type_from() never maps a trait field to Bool — no
-                // ResolvedField's TypeInfo::kind produces it — so a uniform
-                // can't reach this case for a well-formed program.
-                throw std::runtime_error("render-pass GLSL codegen: a bool-typed uniform is not supported");
+        if (uniform.type == GlslType::Bool) {
+            // glsl_type_from() never maps a trait field to Bool.
+            throw std::runtime_error("render-pass GLSL codegen: a bool-typed uniform is not supported");
         }
+        draw << "        cactus::runtime::entt_backend::set_render_pass_uniform(*render_pass_shader, loc_"
+             << uniform.glsl_name << ", " << uniform.cpp_value << ");\n";
     }
-    out << "        cactus::runtime::entt_backend::draw_render_pass_quad_instance();\n";
-    out << "    }\n";
-    out << "    EndShaderMode();\n";
-    out << "    cactus::runtime::raylib::EndMode2D();\n";
+    draw << "        cactus::runtime::entt_backend::draw_render_pass_quad_instance();\n";
+    out << "    cactus::runtime::entt_backend::begin_render_pass(*render_pass_shader);\n";
+    out << EnttSystemEmitter::emit_domain_rows(
+        *vertex_ref->rule, program, "        cactus::runtime::entt_backend::count_pass_row();\n", draw.str());
+    out << "    cactus::runtime::entt_backend::end_render_pass();\n";
     return out.str();
 }
 

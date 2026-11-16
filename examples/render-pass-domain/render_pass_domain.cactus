@@ -1,0 +1,78 @@
+module render_pass_domain
+
+use std.render.passes as passes
+use std.transform.flat as tf
+
+# A render pass draws exactly its vertex handler's domain. Of the six entities
+# below, only Young, Front and Back are drawn. Front and Back overlap; Back has
+# the larger depth, so it is drawn last and covers Front.
+
+const:
+    SQUARE_SIZE = 30.0
+    MAX_AGE = 1.0
+    ROW_Y = 300.0
+    AGE_SHRINK = 5.0
+
+trait Particle:
+    var age: float = 0.0
+    var depth: float = 0.0
+    var tint: color = #00FF00FF
+
+trait Hidden
+
+pub phase domain_pass:
+    after:
+        render
+    pipeline: passes.Pass = passes.Pass.Quads
+    output: passes.Target = passes.Target.Screen
+
+template Dot(x: float):
+    tf.WorldTransform:
+        position = vec2(x, ROW_Y)
+    Particle
+
+template HiddenDot(x: float):
+    use Dot(x = x)
+    Hidden
+
+pub entity Young from Dot(x = 100.0):
+    Particle:
+        age = 0.5
+
+pub entity Bare:
+    tf.WorldTransform:
+        position = vec2(250.0, ROW_Y)
+
+pub entity Concealed from HiddenDot(x = 400.0)
+
+pub entity Old from Dot(x = 550.0):
+    Particle:
+        age = 2.0
+
+pub entity Back from Dot(x = 700.0):
+    Particle:
+        depth = 2.0
+        tint = #FF0000FF
+
+pub entity Front from Dot(x = 700.0):
+    Particle:
+        depth = 1.0
+        tint = #0000FFFF
+
+rule DomainVertex:
+    each:
+        tf.WorldTransform as xf
+        Particle as particle
+    without: Hidden
+    order by: particle.depth asc
+    where: particle.age < MAX_AGE
+
+    on domain_pass.vertex as v:
+        let half = SQUARE_SIZE - particle.age * AGE_SHRINK
+        v.screen_position = xf.position + v.corner * half
+        v.uv_out = v.uv
+        v.tint_out = particle.tint
+
+rule DomainFragment:
+    on domain_pass.fragment as f:
+        f.frag_color = f.tint

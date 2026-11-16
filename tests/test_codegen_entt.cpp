@@ -8446,18 +8446,7 @@ TEST_CASE("Codegen EnTT: initializing a project starts a new binding-index epoch
     CHECK(generated_function(code, "void generated_init_project").contains("advance_binding_index_epoch();"));
 }
 
-// dsl-render-passes: a stage handler's `let`-bound local is an ordinary
-// Cactus identifier the author is free to choose without knowing anything
-// about GLSL — but GLSL reserves a set of words (e.g. `half`) whether or not
-// the corresponding feature is used, and headless test builds never actually
-// compile the embedded GLSL (CACTUS_RAYLIB_FAKE makes LoadShaderFromMemory a
-// no-op), so a collision like this has no path to failing any existing
-// automated test. This test locks in the fix directly against the generated
-// GLSL text instead: every `let` local must be emitted under a mangled name,
-// unconditionally, so no Cactus identifier can ever collide with a GLSL
-// keyword regardless of which one a future example happens to pick.
-TEST_CASE("Codegen EnTT: render-pass stage handler's `let` locals are mangled to avoid GLSL reserved words",
-          "[codegen-entt][render-passes]") {
+static ModuleImports render_pass_imports() {
     ImportedSymbols passes_syms;
     passes_syms.module_name = "std.render.passes";
     ResolvedEnum pass_enum;
@@ -8470,6 +8459,22 @@ TEST_CASE("Codegen EnTT: render-pass stage handler's `let` locals are mangled to
     passes_syms.enums["Target"] = target_enum;
     ModuleImports imports;
     imports.add("passes", std::move(passes_syms));
+    return imports;
+}
+
+// dsl-render-passes: a stage handler's `let`-bound local is an ordinary
+// Cactus identifier the author is free to choose without knowing anything
+// about GLSL — but GLSL reserves a set of words (e.g. `half`) whether or not
+// the corresponding feature is used, and headless test builds never actually
+// compile the embedded GLSL (CACTUS_RAYLIB_FAKE makes LoadShaderFromMemory a
+// no-op), so a collision like this has no path to failing any existing
+// automated test. This test locks in the fix directly against the generated
+// GLSL text instead: every `let` local must be emitted under a mangled name,
+// unconditionally, so no Cactus identifier can ever collide with a GLSL
+// keyword regardless of which one a future example happens to pick.
+TEST_CASE("Codegen EnTT: render-pass stage handler's `let` locals are mangled to avoid GLSL reserved words",
+          "[codegen-entt][render-passes]") {
+    const auto imports = render_pass_imports();
 
     ProgramNode program;
     auto decorated = full_pipeline(
@@ -8518,18 +8523,7 @@ TEST_CASE("Codegen EnTT: render-pass stage handler's `let` locals are mangled to
 // render_pass_emitter.cpp's own narrower same-type-or-float-promotion rule.
 TEST_CASE("Codegen EnTT: render-pass stage handler accepts vec2 + vec2 * float, matching an ordinary handler body",
           "[codegen-entt][render-passes]") {
-    ImportedSymbols passes_syms;
-    passes_syms.module_name = "std.render.passes";
-    ResolvedEnum pass_enum;
-    pass_enum.name            = "Pass";
-    pass_enum.variants        = {"Quads"};
-    passes_syms.enums["Pass"] = pass_enum;
-    ResolvedEnum target_enum;
-    target_enum.name            = "Target";
-    target_enum.variants        = {"Screen"};
-    passes_syms.enums["Target"] = target_enum;
-    ModuleImports imports;
-    imports.add("passes", std::move(passes_syms));
+    const auto imports = render_pass_imports();
 
     ProgramNode program;
     auto decorated = full_pipeline(
@@ -8578,18 +8572,7 @@ TEST_CASE("Codegen EnTT: render-pass stage handler accepts vec2 + vec2 * float, 
 // translation ever runs — so this deliberately doesn't use full_pipeline
 // (which hard-asserts a clean compile) or reach CppEnttCodegen::generate.
 TEST_CASE("Codegen EnTT: render-pass stage handler still rejects Vec2 + Color", "[codegen-entt][render-passes]") {
-    ImportedSymbols passes_syms;
-    passes_syms.module_name = "std.render.passes";
-    ResolvedEnum pass_enum;
-    pass_enum.name            = "Pass";
-    pass_enum.variants        = {"Quads"};
-    passes_syms.enums["Pass"] = pass_enum;
-    ResolvedEnum target_enum;
-    target_enum.name            = "Target";
-    target_enum.variants        = {"Screen"};
-    passes_syms.enums["Target"] = target_enum;
-    ModuleImports imports;
-    imports.add("passes", std::move(passes_syms));
+    const auto imports = render_pass_imports();
 
     const std::string source =
         "module render_pass_vector_ops_invalid\n"
@@ -8631,6 +8614,100 @@ TEST_CASE("Codegen EnTT: render-pass stage handler still rejects Vec2 + Color", 
     SemanticAnalyzer analyzer(errors);
     (void)analyzer.analyze(program, imports);
     CHECK(errors.has_errors());
+}
+
+// A pass whose vertex handler selects two traits, with `clauses` between `each:` and the handler.
+static std::string render_pass_domain_dispatch(const std::string& clauses) {
+    const auto imports = render_pass_imports();
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "module render_pass_domain_codegen\n"
+        "\n"
+        "use std.render.passes as passes\n"
+        "\n"
+        "extern event Tick:\n"
+        "    dt: float\n"
+        "\n"
+        "trait WorldTransform:\n"
+        "    var position: vec2\n"
+        "\n"
+        "trait Particle:\n"
+        "    var age: float\n"
+        "    var depth: float\n"
+        "\n"
+        "trait Hidden\n"
+        "\n"
+        "entity Spark:\n"
+        "    WorldTransform\n"
+        "    Particle\n"
+        "\n"
+        "entity Veiled:\n"
+        "    WorldTransform\n"
+        "    Particle\n"
+        "    Hidden\n"
+        "\n"
+        "pub phase my_pass:\n"
+        "    from:\n"
+        "        Tick\n"
+        "    pipeline: passes.Pass = passes.Pass.Quads\n"
+        "    output: passes.Target = passes.Target.Screen\n"
+        "\n"
+        "rule MyVertex:\n"
+        "    each:\n"
+        "        WorldTransform as xf\n"
+        "        Particle as particle\n" +
+            clauses +
+            "\n"
+            "    on my_pass.vertex as v:\n"
+            "        v.screen_position = xf.position + v.corner * particle.age\n"
+            "        v.uv_out = v.uv\n"
+            "        v.tint_out = #FFFFFFFF\n"
+            "\n"
+            "rule MyFragment:\n"
+            "    on my_pass.fragment as f:\n"
+            "        f.frag_color = f.tint\n",
+        program,
+        imports);
+    const auto code = CppEnttCodegen::generate(decorated);
+    return generated_function(code, "MyPassPhase& phase) {");
+}
+
+TEST_CASE("Codegen EnTT: a render pass reads each per-instance value from its own trait",
+          "[codegen-entt][render-passes]") {
+    const auto dispatch = render_pass_domain_dispatch("");
+    CHECK(dispatch.contains("particle_comp.age"));
+    CHECK(dispatch.contains("world_transform_comp.position"));
+    CHECK(!dispatch.contains("world_transform_comp.age"));
+}
+
+TEST_CASE("Codegen EnTT: a render pass draws only entities with every each: trait, oldest first",
+          "[codegen-entt][render-passes]") {
+    const auto dispatch = render_pass_domain_dispatch("");
+    CHECK(dispatch.contains("registry.view<::cactus_gen::WorldTransform, ::cactus_gen::Particle>()"));
+    CHECK(dispatch.contains("cactus::runtime::entt_backend::creation_ordered(registry, view)"));
+}
+
+TEST_CASE("Codegen EnTT: a render pass skips entities with a without: trait", "[codegen-entt][render-passes]") {
+    const auto dispatch = render_pass_domain_dispatch("    without: Hidden\n");
+    CHECK(dispatch.contains("entt::exclude<::cactus_gen::Hidden>"));
+}
+
+TEST_CASE("Codegen EnTT: a render pass skips rows that fail where: before setting any uniform",
+          "[codegen-entt][render-passes]") {
+    const auto dispatch = render_pass_domain_dispatch("    where: particle.age < 1.0\n");
+    const auto guard    = dispatch.find("particle.age < 1.0");
+    const auto upload   = dispatch.find("set_render_pass_uniform(");
+    REQUIRE(guard != std::string::npos);
+    REQUIRE(upload != std::string::npos);
+    CHECK(guard < upload);
+    CHECK(dispatch.contains("continue;"));
+}
+
+TEST_CASE("Codegen EnTT: a render pass draws in order by: order", "[codegen-entt][render-passes]") {
+    const auto dispatch = render_pass_domain_dispatch("    order by: particle.depth asc\n");
+    const auto sorted   = extract_temp_name(dispatch, "cactus_gen_sort_entities_");
+    CHECK(dispatch.contains("for (auto entity : " + sorted + ")"));
+    CHECK(!dispatch.contains("creation_ordered(registry, view)"));
 }
 
 // ── Conditional expressions and value match ────────────────────────────────
@@ -8791,18 +8868,7 @@ TEST_CASE("Codegen EnTT: an expression form with no lowering is a located error,
 }
 
 static std::string conditional_render_pass_codegen(const std::string& fragment_body) {
-    ImportedSymbols passes_syms;
-    passes_syms.module_name = "std.render.passes";
-    ResolvedEnum pass_enum;
-    pass_enum.name            = "Pass";
-    pass_enum.variants        = {"Quads"};
-    passes_syms.enums["Pass"] = pass_enum;
-    ResolvedEnum target_enum;
-    target_enum.name            = "Target";
-    target_enum.variants        = {"Screen"};
-    passes_syms.enums["Target"] = target_enum;
-    ModuleImports imports;
-    imports.add("passes", std::move(passes_syms));
+    const auto imports = render_pass_imports();
 
     ProgramNode program;
     auto decorated = full_pipeline(

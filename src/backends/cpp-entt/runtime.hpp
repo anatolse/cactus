@@ -145,10 +145,7 @@ void draw_shape_rectangle(Vector2 position, Vector2 size, Vector2 origin, float 
 void draw_shape_circle(Vector2 position, float diameter, Vector2 origin, Color color) noexcept;
 
 // ── Render-pass rendering (dsl-render-passes Quads pass kind) ──────────────────
-// Generic, program-independent shader load/cache plus the fixed 6-vertex quad
-// submission every Quads render-pass phase issues once per matching instance;
-// GLSL source text, uniform names/values, and the per-instance filter loop are
-// all program-specific and therefore generated, not part of this runtime.
+// Shader cache, uniform upload and quad submission for Quads render passes.
 struct RenderPassShaderState {
     Shader shader{};
     bool loaded{false};
@@ -160,17 +157,22 @@ struct RenderPassShaderState {
 // was never attempted successfully (no real GL context, or a shader compile
 // error) — callers treat nullptr as "skip this render-pass phase's draw step
 // this frame," mirroring the lighting shader's ensure/nullptr contract.
+// Headless test builds return a stand-in shader, so the domain loop still runs.
 [[nodiscard]] Shader* ensure_render_pass_shader(RenderPassShaderState& state,
                                                 const char* vertex_src,
                                                 const char* fragment_src);
 
-// Submits one Quads instance's fixed 6-vertex quad (2 triangles) to whichever
-// shader is currently bound via BeginShaderMode. The generated render-pass
-// vertex shader derives `corner`/`uv` from gl_VertexID (Decision 2's fixed
-// corner table is baked into the shader itself) and reads per-instance data
-// from uniforms the caller sets before this call, so the vertex *positions*
-// submitted here are unused placeholders — this call exists only to advance
-// gl_VertexID six times per instance.
+// Binds `shader` under the active 2D camera until end_render_pass.
+void begin_render_pass(const Shader& shader) noexcept;
+void end_render_pass() noexcept;
+
+[[nodiscard]] int render_pass_uniform_location(const Shader& shader, const char* name) noexcept;
+void set_render_pass_uniform(const Shader& shader, int location, float value) noexcept;
+void set_render_pass_uniform(const Shader& shader, int location, Vector2 value) noexcept;
+void set_render_pass_uniform(const Shader& shader, int location, Color value) noexcept;
+
+// Submits one instance's quad to the shader begin_render_pass bound; the
+// vertex shader reads the row's values from the uniforms set just before.
 void draw_render_pass_quad_instance() noexcept;
 
 struct RuntimeBinding {

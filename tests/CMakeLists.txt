@@ -1384,6 +1384,13 @@ cactus_add_render_pass_visual_test(test_particle_burst_visual
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_particle_burst_visual.cpp
 )
 
+# Real-GL visual test: a render pass draws exactly its vertex handler's domain, in order.
+cactus_add_render_pass_visual_test(test_render_pass_domain_visual
+    CACTUS_SOURCE examples/render-pass-domain/render_pass_domain.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_render_pass_domain_visual.cpp
+)
+
 # Real-GL visual test (stdlib-render-models capability): proves a
 # ModelRenderer.color alpha below 255 actually renders dimmer/more
 # transparent, which CACTUS_RAYLIB_FAKE structurally cannot exercise.
@@ -1480,6 +1487,10 @@ target_compile_definitions(test_example_cpp_compilation PRIVATE
     CACTUS_EXAMPLE_GRADIENT_SQUARE_GENERATED_CPP="${GRADIENT_SQUARE_GENERATED_CPP}"
     CACTUS_EXAMPLE_GRADIENT_SQUARE_TARGET="example_gradient_square_generated"
 
+    CACTUS_EXAMPLE_RENDER_PASS_DOMAIN_SOURCE="examples/render-pass-domain/render_pass_domain.cactus"
+    CACTUS_EXAMPLE_RENDER_PASS_DOMAIN_GENERATED_CPP="${RENDER_PASS_DOMAIN_GENERATED_CPP}"
+    CACTUS_EXAMPLE_RENDER_PASS_DOMAIN_TARGET="example_render_pass_domain_generated"
+
     CACTUS_EXTERNAL_HANDLER_LINK_TARGET="example_external_handler_user_library"
     CACTUS_EXTERNAL_HANDLER_MISSING_TARGET="example_external_handler_missing_implementations"
     CACTUS_EXTERNAL_HANDLER_PARTIAL_TARGET="example_external_handler_partial_implementations"
@@ -1563,7 +1574,7 @@ endforeach()
 add_custom_target(test_generated_performance_benchmarks)
 foreach(shape IN ITEMS static_keep union_fold equality_reduce grid_region row_join baseline own_projection
         single_commit plain_commit sweep wide_level reduced_keep required_links keep_chain
-        incremental_keep)
+        incremental_keep render_pass)
     set(perf_target test_perf_${shape}_benchmark)
     set(perf_codegen_flags)
     if(shape STREQUAL "wide_level")

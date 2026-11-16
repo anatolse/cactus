@@ -1498,6 +1498,16 @@ relations.cactus examples std.physics.volume.Snap/on std.core.fixed_tick
     named_writes:
     named_requirements:
     iteration_order: free
+render_pass_domain.cactus render-pass-domain render_pass_domain.DomainVertex/on render_pass_domain.domain_pass__vertex
+    reads: render_pass_domain.Particle std.transform.flat.WorldTransform
+    read_fields: render_pass_domain.Particle{age,depth,tint} std.transform.flat.WorldTransform{position}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
 required_links.cactus examples required_links.Die/on std.core.tick
     reads: required_links.Unit
     read_fields: required_links.Unit{health}

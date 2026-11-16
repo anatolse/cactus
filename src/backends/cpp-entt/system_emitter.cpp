@@ -1578,7 +1578,8 @@ SortedRows emit_sort_call(std::ostringstream& out,
                           const std::vector<std::string>& trait_names,
                           const DecoratedProgram& program,
                           const std::unordered_map<std::string, std::string>& cpp_overrides,
-                          int indent = 1) {
+                          int indent          = 1,
+                          bool permute_anchor = true) {
     auto anchor = primary_sort_trait(sys, program);
     if (sys.order_by.empty() || anchor.empty()) {
         return {};
@@ -1620,8 +1621,10 @@ SortedRows emit_sort_call(std::ostringstream& out,
                     "registry.get<cactus::runtime::entt_backend::CreationOrdinal>(" + snapshot_name +
                         "[cactus_lhs]).value < registry.get<cactus::runtime::entt_backend::CreationOrdinal>(" +
                         snapshot_name + "[cactus_rhs]).value");
-    out << ind << "registry.storage<" << anchor << ">().sort_as(" << snapshot_name << ".begin(), " << snapshot_name
-        << ".end());\n";
+    if (permute_anchor) {
+        out << ind << "registry.storage<" << anchor << ">().sort_as(" << snapshot_name << ".begin(), "
+            << snapshot_name << ".end());\n";
+    }
     return {.anchor = anchor, .snapshot = snapshot_name};
 }
 
@@ -4801,14 +4804,15 @@ static void emit_where_predicate_conjunction(std::ostringstream& out,
     out << "        return " << where_conjunction(predicates, rewrite) << ";\n";
 }
 
-// Checks `predicates` at the start of an invocation, against live values.
+// Checks `predicates` at the start of an invocation, against live values; `exit` leaves a rejected row.
 static void emit_where_guard(std::ostringstream& out,
                              const std::vector<const ExprNode*>& predicates,
-                             const std::function<std::string(const ExprNode&)>& rewrite) {
+                             const std::function<std::string(const ExprNode&)>& rewrite,
+                             std::string_view exit = "return") {
     if (predicates.empty()) {
         return;
     }
-    out << "        if (" << rejects(where_conjunction(predicates, rewrite)) << ") { return; }\n";
+    out << "        if (" << rejects(where_conjunction(predicates, rewrite)) << ") { " << exit << "; }\n";
 }
 
 // The conjunction of `predicates`, lowered outside any entity binding.
@@ -5760,6 +5764,35 @@ static void emit_filtered_handler_body(std::ostringstream& out,
     out << ");\n";
     out << "        }\n";
     out << "    }\n";
+}
+
+std::string EnttSystemEmitter::emit_domain_rows(const RuleNode& rule,
+                                                const DecoratedProgram& program,
+                                                const std::string& on_row,
+                                                const std::string& body) {
+    std::ostringstream out;
+    const auto domain = build_handler_domain(rule.filter, rule.exclude, program);
+    const auto sorted = emit_sort_call(
+        out, rule, domain.filter_bindings_list, domain.filter_traits, program, domain.filter_cpp_overrides, 1, false);
+    std::string rows = sorted.snapshot;
+    if (sorted.anchor.empty()) {
+        emit_view_declaration(out, domain.filter_cpp_types, domain.exclude_cpp_types, 1);
+        rows = "cactus::runtime::entt_backend::creation_ordered(registry, view)";
+    }
+    out << "    for (auto entity : " << rows << ") {\n";
+    emit_component_bindings_from_entity(out, domain.filter_bindings_list, "entity", 2, program);
+    emit_filter_alias_bindings(out, domain.filter, program, 2);
+    out << on_row;
+    emit_where_guard(
+        out,
+        where_at(rule, nullptr, ClauseStage::Row),
+        [&](const ExprNode& predicate) {
+            return rewrite_expr(predicate, domain.filter_traits, program, {}, domain.filter_cpp_overrides);
+        },
+        "continue");
+    out << body;
+    out << "    }\n";
+    return out.str();
 }
 
 // A lifecycle trigger is delivered only to the entity whose trait set changed:

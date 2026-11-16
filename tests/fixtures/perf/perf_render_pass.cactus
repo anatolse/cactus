@@ -1,0 +1,62 @@
+module perf_render_pass
+
+use std.core
+use std.render.passes as passes
+use std.transform.flat as tf
+
+# A render pass over two traits with a without: and a where:. Each step spawns
+# one entity of each kind; only Young is in the drawn domain, Young and Old are
+# the rows its draw loop visits.
+
+trait Board:
+    let size: int = 1000
+
+trait Particle:
+    var age: float = 0.0
+
+trait Hidden
+
+pub phase particle_pass:
+    after:
+        render
+    pipeline: passes.Pass = passes.Pass.Quads
+    output: passes.Target = passes.Target.Screen
+
+entity Field:
+    Board
+
+template Bare():
+    tf.WorldTransform
+
+template Spark(age: float = 0.0):
+    use Bare()
+    Particle:
+        age = age
+
+template Veiled():
+    use Spark()
+    Hidden
+
+rule Fill:
+    on load:
+        for i in range(0, Field[Board].size):
+            spawn Bare()
+            spawn Spark()
+            spawn Spark(age = 2.0)
+            spawn Veiled()
+
+rule ParticleVertex:
+    each:
+        tf.WorldTransform as xf
+        Particle as particle
+    without: Hidden
+    where: particle.age < 1.0
+
+    on particle_pass.vertex as v:
+        v.screen_position = xf.position + v.corner * (4.0 - particle.age)
+        v.uv_out = v.uv
+        v.tint_out = #FFFFFFFF
+
+rule ParticleFragment:
+    on particle_pass.fragment as f:
+        f.frag_color = f.tint

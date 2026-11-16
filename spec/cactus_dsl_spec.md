@@ -1440,7 +1440,7 @@ A render pass is a phase that draws instanced quads with its own vertex and frag
 
 **Stage triggers.** A render-pass phase exposes two derived triggers, `<phase>.vertex` and `<phase>.fragment`, used with the ordinary `on ... as alias:` handler syntax. The alias is required, since the stage's built-in fields are reached through it. They don't exist on other phases; `on tick.vertex:` is an error. Each render-pass phase needs exactly one vertex handler and exactly one fragment handler.
 
-**Domains.** The vertex handler is unary: it needs an `each:` (and may use `without:`, `where:`, and `order by:`; `pairs:` is rejected). Each matching entity is drawn as one quad. The fragment handler is selectionless: no `each:`, `without:`, `pairs:`, or `where:`, and it reads no durable trait.
+**Domains.** The vertex handler is unary: it needs an `each:` (and may use `without:`, `where:`, and `order by:`; `pairs:` is rejected). Each matching entity is drawn as one quad, and no other entity is: matching means what it means for an ordinary unary rule (every `each:` trait, no `without:` trait, passes `where:`). Quads are drawn in `order by:` order, else in creation order, so a later quad covers an earlier one. The fragment handler is selectionless: no `each:`, `without:`, `pairs:`, or `where:`, and it reads no durable trait.
 
 **Built-in stage fields** (the `Quads` pass kind), reached through the trigger alias:
 

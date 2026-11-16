@@ -496,3 +496,22 @@ Every value SHALL be described in three layers. Its *meaning* is the set of valu
 #### Scenario: A lossy encoding for a gameplay value is rejected
 - **WHEN** a proposal sends a gameplay position in fewer bits than its meaning to a receiver that simulates with it
 - **THEN** the proposal is revised, because the receiver would compute with a different meaning
+
+### Requirement: A kept fact costs what changes
+A keep rule's evaluation work SHALL follow changes to its inputs, not the size of the world. A keep rule whose inputs did not change since its last run SHALL evaluate no rows. A keep rule whose rows read only the fields of their own bindings SHALL evaluate, per run, a number of rows that grows with the entities whose inputs changed and the rows they take part in, not with the size of its domain. Other keep rules SHALL evaluate fully only in runs where an input changed. Authors SHALL write nothing to obtain this. The compiler SHALL record, for every keep rule, which of the two cases it is in and, for a rule that evaluates fully, the construct that makes it so, and the cost report SHALL show both.
+
+#### Scenario: A static keep does no work
+- **WHEN** a keep rule derives `Neighbor` rows from `let` tile coordinates and no tile is spawned or destroyed
+- **THEN** after its first run it evaluates no rows in later activations
+
+#### Scenario: One moved entity
+- **WHEN** one of 10,000 entities moves and a unary keep reads only that entity's position
+- **THEN** the next run evaluates the rows of that entity only
+
+#### Scenario: The reason for full evaluation is shown
+- **WHEN** a keep's `where:` tests the derived relation `Reach(Root, u)` and the program is compiled with `--report-cost`
+- **THEN** the report shows that keep as `full` and names the derived relation `Reach`
+
+#### Scenario: A keep that reads the world
+- **WHEN** a keep's `where:` tests a derived relation and nothing it reads changed
+- **THEN** the run evaluates no rows

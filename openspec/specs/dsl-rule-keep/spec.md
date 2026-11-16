@@ -274,3 +274,22 @@ A dependency on a keep rule of another phase SHALL NOT add depth: the rule reads
 #### Scenario: Each keep rule still runs once
 - **WHEN** a phase with a chain of three keep rules is activated once
 - **THEN** each of the three rules runs exactly once
+
+### Requirement: Incremental evaluation is unobservable
+However a backend evaluates a keep rule, the result of each run SHALL equal the result of evaluating the rule over the whole world: the same kept traits with the same field values, the same relation rows with the same values and positions, and the same `on added` / `on removed` deliveries in the same order. A skipped run SHALL leave everything as the previous run left it. The repository SHALL provide a test build mode that evaluates every keep run both incrementally and fully and fails on any difference, naming the rule and the first differing row.
+
+#### Scenario: Delta and full agree on rows
+- **WHEN** a pair keep is evaluated incrementally after two entities moved
+- **THEN** its rows, their values and their positions equal those of a full evaluation of the same run
+
+#### Scenario: Delivery order is unchanged
+- **WHEN** an incremental run adds `Caught` to two entities created in the order B, A
+- **THEN** `on added Caught` is delivered in the order a full evaluation would deliver it
+
+#### Scenario: Last witness leaves
+- **WHEN** a row-domain relation keep has two witnesses for one row and both disappear in one tick
+- **THEN** the row is removed at that keeper's commit, as in a full evaluation
+
+#### Scenario: Check mode catches a stale keep
+- **WHEN** the check mode runs and an incremental run misses a changed row
+- **THEN** the test fails and names the keep rule and the row

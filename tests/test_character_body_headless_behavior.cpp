@@ -7,6 +7,8 @@
 #define CACTUS_GENERATED_NO_MAIN
 #include CACTUS_HEADLESS_GENERATED_CPP
 
+#include <array>
+
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
@@ -240,24 +242,24 @@ TEST_CASE("a body in an acute wedge never passes a wall", "[runtime][codegen-ent
     CHECK(world.position(runner).x < 20.0F);
 }
 
-TEST_CASE("a fourth contact drops the rest of the tick's motion", "[runtime][codegen-entt][stdlib-character-body][limits]") {
+TEST_CASE("an acute wedge makes no third contact", "[runtime][codegen-entt][stdlib-character-body][limits]") {
     World world;
     const auto runner = slots().character_body.WedgeRunner;
     world.tick(60);
     const Vector3 rest = world.position(runner);
     world.tick();
-    CHECK(Vector3Length(world.body(runner).motion) > 1e-3F);
+    CHECK(world.body(runner).contacts == 2);
+    CHECK(Vector3Length(world.body(runner).motion) < 1e-4F);
     CHECK(world.position(runner).x == near(rest.x, 1e-4));
     CHECK(world.position(runner).z == near(rest.z, 1e-4));
     CHECK(world.gap(runner, slots().character_body.WedgeNorth) <= 1e-3F);
     CHECK(world.gap(runner, slots().character_body.WedgeSouth) <= 1e-3F);
 }
 
-TEST_CASE("dropped motion does not return in the next tick", "[runtime][codegen-entt][stdlib-character-body][limits]") {
+TEST_CASE("motion stopped in a tick does not return in the next tick", "[runtime][codegen-entt][stdlib-character-body][limits]") {
     World world;
     const auto runner = slots().character_body.WedgeRunner;
     world.tick(60);
-    REQUIRE(Vector3Length(world.body(runner).motion) > 1e-3F);
     const Vector3 rest = world.position(runner);
     world.registry.remove<cactus_gen::character_body::Driven>(runner);
     world.body(runner).velocity = Vector3{};
@@ -265,6 +267,84 @@ TEST_CASE("dropped motion does not return in the next tick", "[runtime][codegen-
     CHECK(world.position(runner).x == near(rest.x, 1e-6));
     CHECK(world.position(runner).z == near(rest.z, 1e-6));
     CHECK(Vector3Length(world.body(runner).motion) == 0.0F);
+}
+
+// ── Contact planes ──────────────────────────────────────────────────────────
+
+TEST_CASE("two walls leave motion along their crease", "[runtime][codegen-entt][stdlib-character-body][limits]") {
+    World world;
+    const auto faller = slots().character_body.CreaseFaller;
+    world.tick(30);
+    for (int i = 0; i < 10; ++i) {
+        world.tick();
+        const auto& body = world.body(faller);
+        CHECK(body.contacts == 2);
+        CHECK(body.velocity.x == near(0.0F, 1e-4));
+        CHECK(body.velocity.z == near(0.0F, 1e-4));
+        CHECK(body.velocity.y < 0.0F);
+        CHECK(world.gap(faller, slots().character_body.CreaseNorth) >= -kSkin);
+        CHECK(world.gap(faller, slots().character_body.CreaseSouth) >= -kSkin);
+    }
+}
+
+TEST_CASE("contact planes do not carry over to the next tick", "[runtime][codegen-entt][stdlib-character-body][limits]") {
+    World world;
+    const auto slider = slots().character_body.PressedSlider;
+    world.tick(30);
+    REQUIRE(world.body(slider).contacts >= 1);
+    world.registry.remove<cactus_gen::character_body::Pressed>(slider);
+    world.body(slider).velocity = Vector3{.x = 2.0F, .y = 0.0F, .z = 2.0F};
+    const Vector3 before = world.position(slider);
+    world.tick();
+    CHECK(world.body(slider).contacts == 0);
+    CHECK(world.position(slider).x == near(before.x + (2.0F * kDt), 1e-4));
+    CHECK(world.position(slider).z == near(before.z + (2.0F * kDt), 1e-4));
+}
+
+TEST_CASE("a corner of a steep ramp and a wall gives no upward speed", "[runtime][codegen-entt][stdlib-character-body][limits]") {
+    World world;
+    const auto walker = slots().character_body.SteepCornerWalker;
+    for (int i = 0; i < 120; ++i) {
+        world.tick();
+        CHECK(world.body(walker).velocity.y <= 1e-4F);
+        CHECK(world.position(walker).y < kRest + 0.1F);
+        CHECK(world.gap(walker, slots().character_body.SteepCornerRamp) >= -kSkin);
+        CHECK(world.gap(walker, slots().character_body.SteepCornerWall) >= -kSkin);
+    }
+    CHECK(world.gap(walker, slots().character_body.SteepCornerWall) <= 1e-3F);
+    CHECK(world.gap(walker, slots().character_body.SteepCornerRamp) <= 0.05F);
+}
+
+TEST_CASE("a body pressed into a pocket of walls stops without jitter", "[runtime][codegen-entt][stdlib-character-body][limits]") {
+    World world;
+    const auto presser = slots().character_body.PocketPresser;
+    const std::array walls{slots().character_body.PocketFar, slots().character_body.PocketLeft,
+                           slots().character_body.PocketRight, slots().character_body.PocketNear};
+    world.tick(60);
+    const Vector3 rest = world.position(presser);
+    for (int i = 0; i < 10; ++i) {
+        world.tick();
+        CHECK(world.position(presser).x == near(rest.x, 1e-5));
+        CHECK(world.position(presser).z == near(rest.z, 1e-5));
+        CHECK(world.body(presser).velocity.x == near(0.0F, 1e-4));
+        CHECK(world.body(presser).velocity.z == near(0.0F, 1e-4));
+        for (const auto wall : walls) {
+            CHECK(world.gap(presser, wall) >= -kSkin);
+        }
+    }
+}
+
+TEST_CASE("a body pressed along a wall slides on past an obtuse bend", "[runtime][codegen-entt][stdlib-character-body][limits]") {
+    World world;
+    const auto slider = slots().character_body.BendSlider;
+    for (int i = 0; i < 180; ++i) {
+        world.tick();
+        CHECK(world.gap(slider, slots().character_body.BendStraight) >= -kSkin);
+        CHECK(world.gap(slider, slots().character_body.BendTurned) >= -kSkin);
+    }
+    CHECK(world.position(slider).x > 123.5F);
+    CHECK(world.position(slider).z > -11.0F);
+    CHECK(world.gap(slider, slots().character_body.BendTurned) <= 1e-3F);
 }
 
 // ── Grounding ───────────────────────────────────────────────────────────────

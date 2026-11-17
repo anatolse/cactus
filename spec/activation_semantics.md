@@ -533,6 +533,10 @@ Dershowitz–Manna multiset order are well-founded. Group the steps into macro-s
    commands. An entry it adds to `Q` holds only consumers `c` with `h → c` immediate
    (R6), so `ht(c) < ht(h)` and `2·ht(c) < 2·ht(h)`. A command gets
    `2·ht(h) − 1 < 2·ht(h)`. Entries added to `Δ` leave the activation and get no rank.
+   A rule with `repeat: N` (spec §3.8.7) runs `N` passes one after another in one run
+   of `h`; this is one macro-step of this kind. `N` is a compile-time constant and each
+   pass is finite, so the step is finite, and the passes add no entries or commands
+   (a repeating rule may only write fields).
 2. *Delivering an entry.* Dropping it removes ranks. Running it replaces each
    `2·ht(c)` by the pass of `c` with the same rank; together with step 1 for those
    passes, every added rank is below a removed one.

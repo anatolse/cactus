@@ -20,6 +20,7 @@ struct PerfCounters {
     std::uint64_t commit_rounds    = 0;  // commit rounds that applied commands or ran keep rules
     std::uint64_t pass_rows        = 0;  // domain rows a render pass's draw loop visited
     std::uint64_t pass_quads       = 0;  // quads a render pass drew
+    std::uint64_t repeat_passes    = 0;  // passes run by rules with `repeat:`
 
     PerfCounters& operator+=(const PerfCounters& other) noexcept {
         commands += other.commands;
@@ -34,6 +35,7 @@ struct PerfCounters {
         commit_rounds += other.commit_rounds;
         pass_rows += other.pass_rows;
         pass_quads += other.pass_quads;
+        repeat_passes += other.repeat_passes;
         return *this;
     }
 };
@@ -99,6 +101,10 @@ inline void count_pass_row() noexcept {
 inline void count_pass_quad() noexcept {
     ++counting_target().pass_quads;
 }
+
+inline void count_repeat_pass() noexcept {
+    ++counting_target().repeat_passes;
+}
 #else
 inline void count_commands(std::size_t /*count*/) noexcept {}
 inline void count_ordering() noexcept {}
@@ -111,6 +117,7 @@ inline void count_keep_run() noexcept {}
 inline void count_commit_round() noexcept {}
 inline void count_pass_row() noexcept {}
 inline void count_pass_quad() noexcept {}
+inline void count_repeat_pass() noexcept {}
 #endif
 
 }  // namespace cactus::runtime::entt_backend

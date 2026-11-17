@@ -57,6 +57,25 @@ namespace {
     return nullptr;
 }
 
+// A repeating rule's shared indexes must catch up with its own writes before every pass, not once per level.
+void add_repeating_handlers(const DecoratedProgram& program,
+                            std::unordered_set<HandlerIdentity, HandlerIdentityHash>& handlers) {
+    if (program.ast == nullptr) {
+        return;
+    }
+    for (const auto& declaration : program.ast->declarations) {
+        const auto* rule = std::get_if<RuleNode>(&declaration);
+        if (rule == nullptr || !rule->repeat.has_value()) {
+            continue;
+        }
+        for (const auto& handler : program.execution_graph.handlers) {
+            if (handler.identity.rule == rule->resolved_rule_id) {
+                handlers.insert(handler.identity);
+            }
+        }
+    }
+}
+
 // Whether `body`, or a function it calls, calls a host facade such as `input.pressed(Jump)`.
 [[nodiscard]] bool calls_host_facade(const std::vector<std::unique_ptr<StmtNode>>& body,
                                      const ProgramNode& ast,
@@ -173,11 +192,12 @@ bool parallel_eligible(const HandlerNode& handler, const DecoratedProgram& progr
 
 ParallelPlan plan_parallel_handlers(const DecoratedProgram& program) {
     const auto& graph = program.execution_graph;
-    // A keep rule that runs in a commit round is not part of its phase's dispatch.
-    const auto in_rounds = keep_round_handlers(graph);
+    // A keep rule in a commit round is not part of its phase's dispatch; a repeating rule runs on its own.
+    auto outside_levels = keep_round_handlers(graph);
+    add_repeating_handlers(program, outside_levels);
     ParallelPlan plan;
     for (const auto& handler : graph.handlers) {
-        if (parallel_eligible(handler, program) && !in_rounds.contains(handler.identity)) {
+        if (parallel_eligible(handler, program) && !outside_levels.contains(handler.identity)) {
             plan.eligible.insert(handler.identity);
         }
     }
@@ -186,7 +206,7 @@ ParallelPlan plan_parallel_handlers(const DecoratedProgram& program) {
             continue;
         }
         auto level = graph_level;
-        std::erase_if(level.handlers, [&](const HandlerIdentity& handler) { return in_rounds.contains(handler); });
+        std::erase_if(level.handlers, [&](const HandlerIdentity& handler) { return outside_levels.contains(handler); });
         auto batches          = split_level(level, graph);
         const auto concurrent = [&](const ParallelBatch& batch) {
             return batch.handlers.size() > 1 && std::ranges::any_of(batch.handlers, [&](const HandlerIdentity& member) {

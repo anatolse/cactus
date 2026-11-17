@@ -158,8 +158,10 @@ private:
     std::vector<std::unique_ptr<ExprNode>> parse_predicate_block(const SourceLocation& loc, const char* clause_name);
     LimitClause parse_limit_clause();
     [[nodiscard]] bool at_limit_clause() const;
+    RepeatClause parse_repeat_clause();
     ReduceClause parse_reduce_clause();
     void parse_reduce_and_order_by(RuleNode& node);
+    void parse_rule_late_clauses(RuleNode& node);
     std::optional<ReducerDecl> parse_reducer_decl();
     [[nodiscard]] bool at_keep_clause() const;
     KeepClause parse_keep_clause();

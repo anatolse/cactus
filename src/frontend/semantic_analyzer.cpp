@@ -2145,6 +2145,9 @@ void SemanticAnalyzer::resolve_trait_references(ProgramNode& program) {
                     if (node.reduce.has_value()) {
                         for_each_reducer_expr(*node.reduce, resolve_expr);
                     }
+                    if (node.repeat.has_value()) {
+                        resolve_expr(*node.repeat->count);
+                    }
                     if (node.keep.has_value()) {
                         node.keep->resolved_target =
                             node.keep->arguments.empty()
@@ -6037,6 +6040,7 @@ void SemanticAnalyzer::validate_rule_filters(ProgramNode& program) {
             }
             validateOrderByClause(*rule);
             validateLimitClause(*rule);
+            validate_repeat_clause(*rule);
         }
         if (auto* rule = std::get_if<ExternRuleNode>(&decl)) {
             validate_filter_clause_traits(rule->filter, "extern rule '" + rule->name + "'");
@@ -6251,6 +6255,9 @@ void SemanticAnalyzer::resolve_named_rule_access(RuleNode& rule) {
     }
     if (rule.limit.has_value()) {
         for_each_limit_count(*rule.limit, clause);
+    }
+    if (rule.repeat.has_value()) {
+        clause(*rule.repeat->count);
     }
     auto scope = bindings;
     if (rule.reduce.has_value()) {
@@ -8740,6 +8747,7 @@ void SemanticAnalyzer::collect_rule_dependency(const RuleNode& rule, std::size_t
             fold_when_clause_named_reads(rule, inferred);
             expand_derived_reads(inferred);
             add_keep_effects(rule, inferred);
+            reject_repeating_effects(rule, handler, inferred);
             finalize_write_kinds(inferred);
             finalize_own_row_traits(inferred);
             inferred.iteration_order =

@@ -69,7 +69,8 @@ template <typename Step>
             .keep_runs        = after.keep_runs - before.keep_runs,
             .commit_rounds    = after.commit_rounds - before.commit_rounds,
             .pass_rows        = after.pass_rows - before.pass_rows,
-            .pass_quads       = after.pass_quads - before.pass_quads};
+            .pass_quads       = after.pass_quads - before.pass_quads,
+            .repeat_passes    = after.repeat_passes - before.repeat_passes};
 }
 
 // Median milliseconds per call of `step`, after a warm-up.

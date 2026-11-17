@@ -27,16 +27,25 @@ constexpr int kDoubleSize  = 28;  // about twice the bodies of kSize
 constexpr int kSettleTicks = 50;
 
 // Work counts are exact at kWorkSize; times are O3 measurements at kSize x 1.5.
-constexpr std::uint64_t kCandidatesPerFrame = 960;
-constexpr std::uint64_t kCommandsPerFrame   = 0;
+constexpr std::uint64_t kCandidatesPerFrame      = 960;
+constexpr std::uint64_t kFreeCandidatesPerFrame  = 192;
+// A body stopped in an acute crease plans no step lift, so its floor tile stays a candidate of each slide pass.
+constexpr std::uint64_t kAcuteCandidatesPerFrame = 1152;
+constexpr std::uint64_t kCommandsPerFrame        = 0;
+// The slide rule sweeps every body once per pass, so this is its sweeps per body per tick.
+constexpr std::uint64_t kSlidePassesPerFrame = 3;
+constexpr float kAcuteHalfAngle              = 20.0F;
 constexpr cactus_perf::TimeLimits kTimes{.base_ms = 8.5, .growth = 2.6};
 
 struct World {
     entt::registry registry;
 
-    explicit World(int size) {
+    explicit World(int size, float half_angle = 45.0F, bool walls = true) {
         cactus_perf::load_sized(registry, [&](entt::registry& reg) {
-            reg.get<game::Crowd>(cactus_gen::detail::generated_named_slots().perf_sweep.Pen).size = size;
+            auto& crowd      = reg.get<game::Crowd>(cactus_gen::detail::generated_named_slots().perf_sweep.Pen);
+            crowd.size       = size;
+            crowd.half_angle = half_angle;
+            crowd.walls      = walls;
         });
         for (int i = 0; i < kSettleTicks; ++i) {
             tick();
@@ -65,6 +74,17 @@ struct World {
         return deepest;
     }
 
+    // Whether every body has stopped moving and plans no step lift.
+    [[nodiscard]] bool all_stopped() {
+        for (const auto body : registry.view<Body>()) {
+            const auto& state = registry.get<Body>(body);
+            if (state.velocity.x != 0.0F || state.velocity.z != 0.0F || state.lift != 0.0F) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     // Whether every body rests inside its wedge, short of the apex.
     [[nodiscard]] bool all_wedged() {
         for (const auto body : registry.view<Body>()) {
@@ -89,6 +109,28 @@ TEST_CASE("perf: bodies pressed into wedges sweep and slide without overlap", "[
     CHECK(world.deepest_gap() >= -physics::kSkin);
     CHECK(work.candidates <= kCandidatesPerFrame);
     CHECK(work.commands <= kCommandsPerFrame);
+    CHECK(work.repeat_passes == kSlidePassesPerFrame);
+}
+
+TEST_CASE("perf: freely moving bodies sweep three times per tick", "[perf][sweep]") {
+    World world(kWorkSize, 45.0F, false);
+    const auto work = cactus_perf::work_of([&] { world.tick(); });
+    CHECK(world.deepest_gap() >= -physics::kSkin);
+    CHECK(work.candidates <= kFreeCandidatesPerFrame);
+    CHECK(work.commands <= kCommandsPerFrame);
+    CHECK(work.repeat_passes == kSlidePassesPerFrame);
+}
+
+TEST_CASE("perf: bodies pressed into acute wedges sweep three times per tick", "[perf][sweep]") {
+    World world(kWorkSize, kAcuteHalfAngle);
+    REQUIRE(world.all_wedged());
+    const auto work = cactus_perf::work_of([&] { world.tick(); });
+    CHECK(world.all_wedged());
+    CHECK(world.all_stopped());
+    CHECK(world.deepest_gap() >= -physics::kSkin);
+    CHECK(work.candidates <= kAcuteCandidatesPerFrame);
+    CHECK(work.commands <= kCommandsPerFrame);
+    CHECK(work.repeat_passes == kSlidePassesPerFrame);
 }
 
 TEST_CASE("perf: bodies pressed into wedges stay within their frame time", "[perf][sweep][time]") {

@@ -23,6 +23,9 @@ use std.transform.volume as tv
 # lift:                stdlib-owned: how far the step-up raised the body this tick
 # drop:                stdlib-owned: how far below the body the snap looks for ground
 # ground_offset:       stdlib-owned: height of the body's center above its last ground contact
+# heading:             stdlib-owned: the motion this tick started with
+# contacts:            stdlib-owned: how many contact planes hold the rest of this tick's motion
+# plane_a, plane_b:    stdlib-owned: the normals of those planes
 # paused:              when true, solve leaves every field and the pose unchanged; the
 #                      body still blocks others, which take the whole overlap correction
 pub trait CharacterBody:
@@ -37,6 +40,10 @@ pub trait CharacterBody:
     var lift: float = 0.0
     var drop: float = 0.0
     var ground_offset: float = 0.0
+    var heading: vec3 = vec3(0.0, 0.0, 0.0)
+    var contacts: int = 0
+    var plane_a: vec3 = vec3(0.0, 0.0, 0.0)
+    var plane_b: vec3 = vec3(0.0, 0.0, 0.0)
     var paused: bool = false
 
 # Shared 3D collision participation/filtering data. An entity with Collider
@@ -104,10 +111,10 @@ pub extern func push_out(a: entity_id, b: entity_id) vec3
 
 # ── Character controller ──────────────────────────────────────────────────────
 # Each stage runs once per body, in declaration order, against solid colliders
-# only. A body that was grounded lifts by step_height, slides at that height,
-# then snaps back down, which climbs steps and follows descents. Game rules
-# that write velocity run before the group; `after: solve` reads this tick's
-# results.
+# only; the slide runs three times. A body that was grounded lifts by
+# step_height, slides at that height, then snaps back down, which climbs steps
+# and follows descents. Game rules that write velocity run before the group;
+# `after: solve` reads this tick's results.
 
 pub group solve:
     phase: core.fixed_tick
@@ -136,6 +143,72 @@ func slide_along(v: vec3, hit: SweepHit, max_slope: float) vec3:
     let wall = clip(v, v3.normalize(vec3(hit.normal.x, 0.0, hit.normal.z)))
     return clip(wall, hit.normal)
 
+# Rounding can tilt a plane hit twice; normals this close count as one plane.
+func parallel(a: vec3, b: vec3) bool:
+    return math.abs(v3.dot(a, b)) > 0.999
+
+# Whether `v` moves into `plane`, a plane other than the one `hit` touched.
+func presses(v: vec3, plane: vec3, hit: SweepHit) bool:
+    return v3.dot(v, plane) < -0.0001 * v3.length(v) and not parallel(plane, hit.normal)
+
+# The part of `v` along the line where `held` and the surface `hit` touched
+# meet. Nothing is left when that line climbs a surface the body can't stand
+# on, or moves into `other`, the third plane when `has_other`.
+func slide_along_crease(v: vec3, hit: SweepHit, held: vec3, other: vec3, has_other: bool, max_slope: float) vec3:
+    let line = v3.normalize(v3.cross(held, hit.normal))
+    let slid = line * v3.dot(v, line)
+    let climbs = slid.y > math.max(v.y, 0.0) and not (walkable(hit.surface, max_slope) and walkable(held, max_slope))
+    if climbs or (has_other and presses(slid, other, hit)):
+        return vec3(0.0, 0.0, 0.0)
+    return slid
+
+# Removes the part of `v` that moves into the surface `hit` touched, or into a
+# plane `body` hit earlier in this tick. Held by two planes, `v` keeps only its
+# part along the line where they meet; held by three, nothing. Each new plane
+# takes one dimension, so three slides use up the motion of a tick. A slide
+# never turns back against the tick's heading: in a pocket of walls, where no
+# single plane or crease explains the stop, the body stops.
+func slide_along_all(v: vec3, hit: SweepHit, body: CharacterBody) vec3:
+    if not hit.hit:
+        return v
+    let held = slide_along_held(v, hit, body)
+    if v3.dot(held, body.heading) <= 0.0:
+        return vec3(0.0, 0.0, 0.0)
+    return held
+
+func slide_along_held(v: vec3, hit: SweepHit, body: CharacterBody) vec3:
+    let slid = slide_along(v, hit, body.max_slope)
+    let on_a = body.contacts >= 1 and presses(slid, body.plane_a, hit)
+    let on_b = body.contacts >= 2 and presses(slid, body.plane_b, hit)
+    if on_a and on_b:
+        return vec3(0.0, 0.0, 0.0)
+    if on_a:
+        return slide_along_crease(v, hit, body.plane_a, body.plane_b, body.contacts >= 2, body.max_slope)
+    if on_b:
+        return slide_along_crease(v, hit, body.plane_b, body.plane_a, true, body.max_slope)
+    return slid
+
+# The planes that hold the rest of a tick's motion: how many, then their normals.
+struct ContactPlanes:
+    count: int
+    a: vec3
+    b: vec3
+
+# The contact planes after `hit` stopped `rest`: an earlier plane the slid
+# motion still presses, then the hit's own. A hit that stops no motion, or
+# repeats a plane, adds none.
+func planes_after(rest: vec3, hit: SweepHit, body: CharacterBody) ContactPlanes:
+    let kept = ContactPlanes(count = body.contacts, a = body.plane_a, b = body.plane_b)
+    let repeated = (body.contacts >= 1 and parallel(body.plane_a, hit.normal)) or (body.contacts >= 2 and parallel(body.plane_b, hit.normal))
+    if not hit.hit or v3.dot(rest, hit.normal) >= 0.0 or repeated:
+        return kept
+    let slid = slide_along(rest, hit, body.max_slope)
+    if body.contacts >= 1 and presses(slid, body.plane_a, hit):
+        return ContactPlanes(count = 2, a = body.plane_a, b = hit.normal)
+    if body.contacts >= 2 and presses(slid, body.plane_b, hit):
+        return ContactPlanes(count = 2, a = body.plane_b, b = hit.normal)
+    return ContactPlanes(count = 1, a = hit.normal, b = body.plane_b)
+
 rule Integrate:
     each:
         CharacterBody as body
@@ -152,9 +225,11 @@ rule Integrate:
         body.motion = body.velocity * step.dt
         body.lift = 0.0
         body.drop = 0.0
+        body.contacts = 0
         if supported:
             body.motion.y = 0.0
             body.drop = body.step_height
+        body.heading = body.motion
         if supported and (body.motion.x != 0.0 or body.motion.z != 0.0):
             body.lift = body.step_height
         body.grounded = false
@@ -182,7 +257,7 @@ rule Lift:
         body[tv.WorldTransform].position.y += rise
         body[CharacterBody].lift = rise
 
-rule Slide1:
+rule Slide:
     pairs:
         body:
             CharacterBody
@@ -198,66 +273,18 @@ rule Slide1:
         not body[CharacterBody].paused
     reduce per body:
         hit = first_hit(sweep(body, body[CharacterBody].motion, other))
+    repeat: 3
 
     on core.fixed_tick:
         let max_slope = body[CharacterBody].max_slope
+        let rest = body[CharacterBody].motion * (1.0 - hit.t)
+        let planes = planes_after(rest, hit, body[CharacterBody])
         body[tv.WorldTransform].position += body[CharacterBody].motion * hit.t
-        body[CharacterBody].motion = slide_along(body[CharacterBody].motion * (1.0 - hit.t), hit, max_slope)
-        body[CharacterBody].velocity = slide_along(body[CharacterBody].velocity, hit, max_slope)
-        if hit.hit and walkable(hit.surface, max_slope):
-            body[CharacterBody].grounded = true
-            body[CharacterBody].ground_normal = hit.surface
-            body[CharacterBody].ground_offset = body[tv.WorldTransform].position.y - hit.point.y
-
-rule Slide2:
-    pairs:
-        body:
-            CharacterBody
-            Collider
-            tv.WorldTransform
-        other:
-            Collider
-            Solid
-    group: solve
-    after:
-        Slide1
-    where:
-        not body[CharacterBody].paused
-    reduce per body:
-        hit = first_hit(sweep(body, body[CharacterBody].motion, other))
-
-    on core.fixed_tick:
-        let max_slope = body[CharacterBody].max_slope
-        body[tv.WorldTransform].position += body[CharacterBody].motion * hit.t
-        body[CharacterBody].motion = slide_along(body[CharacterBody].motion * (1.0 - hit.t), hit, max_slope)
-        body[CharacterBody].velocity = slide_along(body[CharacterBody].velocity, hit, max_slope)
-        if hit.hit and walkable(hit.surface, max_slope):
-            body[CharacterBody].grounded = true
-            body[CharacterBody].ground_normal = hit.surface
-            body[CharacterBody].ground_offset = body[tv.WorldTransform].position.y - hit.point.y
-
-rule Slide3:
-    pairs:
-        body:
-            CharacterBody
-            Collider
-            tv.WorldTransform
-        other:
-            Collider
-            Solid
-    group: solve
-    after:
-        Slide2
-    where:
-        not body[CharacterBody].paused
-    reduce per body:
-        hit = first_hit(sweep(body, body[CharacterBody].motion, other))
-
-    on core.fixed_tick:
-        let max_slope = body[CharacterBody].max_slope
-        body[tv.WorldTransform].position += body[CharacterBody].motion * hit.t
-        body[CharacterBody].motion = slide_along(body[CharacterBody].motion * (1.0 - hit.t), hit, max_slope)
-        body[CharacterBody].velocity = slide_along(body[CharacterBody].velocity, hit, max_slope)
+        body[CharacterBody].motion = slide_along_all(rest, hit, body[CharacterBody])
+        body[CharacterBody].velocity = slide_along_all(body[CharacterBody].velocity, hit, body[CharacterBody])
+        body[CharacterBody].contacts = planes.count
+        body[CharacterBody].plane_a = planes.a
+        body[CharacterBody].plane_b = planes.b
         if hit.hit and walkable(hit.surface, max_slope):
             body[CharacterBody].grounded = true
             body[CharacterBody].ground_normal = hit.surface
@@ -277,7 +304,7 @@ rule Snap:
             Solid
     group: solve
     after:
-        Slide3
+        Slide
     where:
         not body[CharacterBody].paused
     reduce per body:

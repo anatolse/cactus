@@ -1,0 +1,144 @@
+module rule_repeat
+
+# Rules that run their pass several times in one tick.
+
+use std.core
+
+trait Counter:
+    var count: int = 0
+
+# Each pass adds `step`; FeedStep writes it with no order against Count.
+trait Feed:
+    var step: int = 2
+
+trait Settler:
+    var done: bool = false
+    var steps: int = 0
+
+trait Pulse:
+    var count: int = 0
+
+trait Switch:
+    var open: bool = true
+
+trait Mover:
+    var x: float = 0.0
+    var seen: int = 0
+
+trait Marker:
+    let x: float = 0.0
+
+trait Pebble:
+    let weight: float = 1.0
+
+trait Heap:
+    var total: float = 0.0
+    var seen: float = 0.0
+
+template Post(x: float):
+    Marker:
+        x = x
+
+entity Clicker:
+    Counter
+    Feed
+
+entity Calm:
+    Settler
+
+entity Beat:
+    Pulse
+
+entity Gate:
+    Switch
+
+entity Runner:
+    Mover
+
+entity First from Post(x = 1.0)
+entity Second from Post(x = 2.0)
+entity Third from Post(x = 3.0)
+
+entity Pile:
+    Heap
+
+entity Light:
+    Pebble
+
+entity Heavy:
+    Pebble:
+        weight = 2.0
+
+rule FeedStep:
+    each: Feed as feed
+
+    on tick:
+        feed.step = 2
+
+rule Count:
+    each:
+        Counter as counter
+        Feed as feed
+    repeat: 3
+
+    on tick:
+        counter.count += feed.step
+
+rule Settle:
+    each: Settler as s
+    where:
+        not s.done
+    repeat: 3
+
+    on tick:
+        s.steps += 1
+        s.done = true
+
+rule Throb:
+    each: Pulse as p
+    when:
+        Gate[Switch].open
+    repeat: 3
+
+    on tick:
+        p.count += 1
+        Gate[Switch].open = false
+
+# Each pass counts the markers ahead of the runner, then steps past one.
+rule Advance:
+    pairs:
+        runner:
+            Mover
+        post:
+            Marker
+    where:
+        runner[Mover].x < post[Marker].x
+    reduce per runner:
+        ahead = count()
+    repeat: 3
+
+    on tick:
+        runner[Mover].seen += ahead
+        runner[Mover].x += 1.0
+
+rule Weigh:
+    each: Pebble as pebble
+    repeat: 3
+
+    on tick:
+        Pile[Heap].total += pebble.weight
+
+rule Tip:
+    each: Pebble as pebble
+
+    on tick:
+        Pile[Heap].total += 10.0
+
+rule ReadHeap:
+    each: Heap as heap
+    after:
+        Weigh
+        Tip
+
+    on tick:
+        heap.seen = heap.total

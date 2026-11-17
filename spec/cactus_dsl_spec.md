@@ -684,6 +684,7 @@ rule_decl       = "rule" IDENTIFIER ":" NEWLINE INDENT
                   [ keep_clause ]
                   [ limit_clause ]
                   [ when_clause ]
+                  [ repeat_clause ]
                   { event_handler }
                   DEDENT ;
 
@@ -713,6 +714,8 @@ group_decl      = [ "pub" ] "group" IDENTIFIER ":" NEWLINE INDENT
 limit_clause    = "limit" ":" ( expression | limit_part [ "," limit_part ] ) NEWLINE ;
 limit_part      = expression "per" limit_key ;
 limit_key       = IDENTIFIER [ "." ( "from" | "to" ) ] ;
+
+repeat_clause   = "repeat" ":" expression NEWLINE ;
 ```
 
 `each:` and `without:` are the only unary selection spellings. `each` and `without`
@@ -1289,6 +1292,61 @@ rule StandOnCheckpoint:
         top = best(point, by = point[Checkpoint].order)
     keep AtCheckpoint(player, top)
 ```
+
+#### 3.8.7 Repeat Clause
+
+`repeat: N` runs the rule's pass `N` times in each activation of its phase. It is for a
+step that needs several fresh world queries in one tick, such as a body that moves to a
+contact and then slides on; one rule replaces copies that differ only in `after:`.
+`repeat` is recognized contextually at the rule-clause position, after `when:` and
+before the handler; it is not a reserved keyword elsewhere.
+
+```cactus
+rule Slide:
+    pairs:
+        body:
+            CharacterBody
+            Collider
+            tv.WorldTransform
+        other:
+            Collider
+            Solid
+    group: solve
+    after:
+        Lift
+    reduce per body:
+        hit = first_hit(sweep(body, body[CharacterBody].motion, other))
+    repeat: 3
+
+    on core.fixed_tick:
+        ...
+```
+
+**The count is a constant.** `N` is a constant expression (§3.3) of type `int` with a
+value of at least 2. A count that reads a field, a binding or anything else that is not a
+constant, a count that is not an `int`, and a count below 2 are errors at the count. So
+the cost of the rule is `N` passes, known at compile time; `repeat:` is bounded
+repetition, not a general loop.
+
+**Every pass runs the whole domain.** Pass `k + 1` computes `when:`, `where:` and the
+`reduce per` groups again, for every row, from the world pass `k` left. Field writes of a
+pass are visible to the next pass. There is no early exit: a row with nothing left to do
+runs a cheap pass.
+
+**Passes differ only in field values.** A repeating rule has exactly one handler, and a
+phase triggers it. The handler may not `emit`, `spawn`, `destroy`, `load`, `add`,
+`remove`, `set` or `project`, and may not call a function that acts on an effect domain
+or creates entities; observing calls are allowed. The rule may not declare `keep`,
+`limit:` or `order by:`. Each of these is an error at the construct that says a
+repeating rule may only write fields. Because structural commands apply only at commit,
+the domain is the same in every pass.
+
+**The repetition is one schedule node.** The schedule orders the whole repetition before
+or after other handlers, never between two passes, and its contract is one pass's
+contract. An accumulated (`+=`) write of the rule never meets a read of the same field in
+the rule, because a handler that reads a field writes it plainly; so the rule's deltas
+merge as any handler's do (§6.4 of `spec/activation_semantics.md`). `repeat:` is not
+valid on an `extern rule`.
 
 ### 3.9 Event Handlers
 
@@ -2599,7 +2657,7 @@ rule MoveBullets:
 
 **Contacts.** `std.physics.volume` declares `pub group contacts` in `fixed_tick`, after `solve`. A rule that joins it with `group: physics.contacts` sees this tick's body poses and their children's.
 
-**Character controller.** `std.physics.volume` declares `pub group solve` in `fixed_tick`. Its rules move every entity with `CharacterBody`, `Collider`, a shape and `WorldTransform` against solid colliders: gravity, a step-up lift, up to three slides along the surfaces the body hits, a snap back down onto walkable ground, and a final push out of any overlap. A game writes `CharacterBody.velocity` (a positive `velocity.y` jumps) and reads `grounded`, `ground_normal` and `time_since_grounded`. A surface is walkable when its `surface` normal is within `max_slope` degrees of world up. A rule that writes `velocity` runs before `solve` with no annotation (§4.7); `after: physics.solve` reads this tick's results. The last stage of `solve` re-derives each `LocalTransform` descendant of a body, so such a rule also sees a body's children (a hurtbox, a model) at this tick's pose. `motion`, `lift`, `drop` and `ground_offset` belong to the controller. A 2D `CharacterBody` is plain data that nothing moves.
+**Character controller.** `std.physics.volume` declares `pub group solve` in `fixed_tick`. Its rules move every entity with `CharacterBody`, `Collider`, a shape and `WorldTransform` against solid colliders: gravity, a step-up lift, up to three slides along the surfaces the body hits (each slide keeps the motion out of every plane that still holds it; `spec/solver_limits.md` §4), a snap back down onto walkable ground, and a final push out of any overlap. A game writes `CharacterBody.velocity` (a positive `velocity.y` jumps) and reads `grounded`, `ground_normal` and `time_since_grounded`. A surface is walkable when its `surface` normal is within `max_slope` degrees of world up. A rule that writes `velocity` runs before `solve` with no annotation (§4.7); `after: physics.solve` reads this tick's results. The last stage of `solve` re-derives each `LocalTransform` descendant of a body, so such a rule also sees a body's children (a hurtbox, a model) at this tick's pose. `motion`, `lift`, `drop`, `ground_offset`, `heading`, `contacts`, `plane_a` and `plane_b` belong to the controller. A 2D `CharacterBody` is plain data that nothing moves.
 
 ## 8. Deferred and Migration Notes
 

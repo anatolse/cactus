@@ -8808,6 +8808,13 @@ std::string EnttSystemEmitter::emit_system(const RuleNode& sys, const DecoratedP
         if (program.contract_audit && identity.has_value()) {
             out << contract_audit::emit_handler_scope(*identity);
         }
+        // Each pass is the whole handler run, so an early return ends only that pass.
+        const bool repeats = sys.repeat.has_value();
+        if (repeats) {
+            out << "    for (int cactus_pass = 0; cactus_pass < " << sys.repeat->passes << "; ++cactus_pass) {\n";
+            out << "    cactus::runtime::entt_backend::count_repeat_pass();\n";
+            out << "    [&] {\n";
+        }
         emit_named_requirements(out, contract, program);
         emit_when_gate(out, sys, program);
         emit_uncovered_write_touches(out, contract, handler);
@@ -8837,6 +8844,10 @@ std::string EnttSystemEmitter::emit_system(const RuleNode& sys, const DecoratedP
             out << "    const auto cactus_paint_pass = cactus_paint_order.pass();\n";
         }
         out << body.str();
+        if (repeats) {
+            out << "    }();\n";
+            out << "    }\n";
+        }
         out << "}\n\n";
         if (prepared) {
             emit_prepare_function(out, sys, handler, contract, prepare, program);

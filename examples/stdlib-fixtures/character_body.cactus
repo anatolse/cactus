@@ -24,6 +24,10 @@ const:
 trait Driven:
     var speed: float = 2.0
 
+# Writes this body's horizontal velocity before solve, so a test reads solve's result.
+trait Pressed:
+    var push: vec3 = vec3(0.0, 0.0, 0.0)
+
 trait Jumper:
     var pending: bool = true
     var speed: float = 6.0
@@ -138,15 +142,66 @@ entity CornerRunner from GroundedBody(position = vec3(120.0, 1.0, 0.0), velocity
 entity CornerEast from Block(position = vec3(121.5, 1.5, 0.0), size = vec3(0.2, 3.0, 6.0))
 entity CornerNorth from Block(position = vec3(120.0, 1.5, -1.0), size = vec3(6.0, 3.0, 0.2))
 
+# One wall of a wedge whose two walls meet at `apex`, 2 * WEDGE_HALF apart.
+# side: -1.0 for the wall on the -Z side, 1.0 for the other
+template WedgeWall(apex: vec3, side: float, height: float = 3.0):
+    use TurnedWall(position = vec3(apex.x - 2.0 * math.cos(WEDGE_HALF), apex.y, apex.z + side * 2.0 * math.sin(WEDGE_HALF)), size = vec3(4.0, height, 0.2), yaw = side * WEDGE_HALF)
+
 # ── Slide limit ──────────────────────────────────────────────────────────────
-# On their own row, z = -12. Two walls meet at 30 degrees at x = 20, so a body
-# driven into the wedge still has motion left after its three contacts.
+# On their own row, z = -12. Two walls meet at 30 degrees at x = 20; a body
+# driven into the wedge stops in the crease.
 entity WedgeRunner:
     use GroundedBody(position = vec3(15.0, 1.0, -12.0))
     Driven:
         speed = 6.0
-entity WedgeNorth from TurnedWall(position = vec3(20.0 - 2.0 * math.cos(WEDGE_HALF), 1.5, -12.0 - 2.0 * math.sin(WEDGE_HALF)), size = vec3(4.0, 3.0, 0.2), yaw = 0.0 - WEDGE_HALF)
-entity WedgeSouth from TurnedWall(position = vec3(20.0 - 2.0 * math.cos(WEDGE_HALF), 1.5, -12.0 + 2.0 * math.sin(WEDGE_HALF)), size = vec3(4.0, 3.0, 0.2), yaw = WEDGE_HALF)
+entity WedgeNorth from WedgeWall(apex = vec3(20.0, 1.5, -12.0), side = -1.0)
+entity WedgeSouth from WedgeWall(apex = vec3(20.0, 1.5, -12.0), side = 1.0)
+
+# Falls while pressed into a tall wedge at x = 40, so it slides down the crease.
+entity CreaseFaller:
+    use Body(position = vec3(37.0, 8.0, -12.0))
+    Pressed:
+        push = vec3(6.0, 0.0, 0.0)
+entity CreaseNorth from WedgeWall(apex = vec3(40.0, 10.0, -12.0), side = -1.0, height = 20.0)
+entity CreaseSouth from WedgeWall(apex = vec3(40.0, 10.0, -12.0), side = 1.0, height = 20.0)
+
+# ── Contact planes ───────────────────────────────────────────────────────────
+# Further along the z = -12 row.
+entity PressedSlider:
+    use GroundedBody(position = vec3(60.0, 1.0, -12.0))
+    Pressed:
+        push = vec3(2.0, 0.0, -2.0)
+entity PressWall from Block(position = vec3(60.0, 1.5, -13.0), size = vec3(20.0, 3.0, 0.2))
+
+# Walks into the corner of a ramp too steep to stand on and a wall.
+entity SteepCornerWalker:
+    use GroundedBody(position = vec3(83.0, 1.0, -12.0))
+    Pressed:
+        push = vec3(2.0, 0.0, -2.0)
+entity SteepCornerRamp from Slope(position = vec3(85.0, 0.0, -12.0), size = vec3(6.0, 1.0, 6.0), angle = SLOPE_60)
+entity SteepCornerWall from Block(position = vec3(83.0, 1.5, -13.5), size = vec3(8.0, 3.0, 0.2))
+
+# One wall of a pocket around `center`, touching a body there from `angle` degrees off +X.
+template PocketWall(center: vec3, angle: float):
+    use TurnedWall(position = center + vec3(0.5 * math.cos(math.radians(angle)), 0.5, 0.5 * math.sin(math.radians(angle))), size = vec3(0.5, 3.0, 0.2), yaw = math.radians(90.0 - angle))
+
+# Pressed into a pocket of four walls that all touch it there.
+entity PocketPresser:
+    use GroundedBody(position = vec3(99.0, 1.0, -12.0))
+    Pressed:
+        push = vec3(2.0, 0.0, 0.0)
+entity PocketFar from PocketWall(center = vec3(100.0, 1.0, -12.0), angle = -60.0)
+entity PocketLeft from PocketWall(center = vec3(100.0, 1.0, -12.0), angle = -20.0)
+entity PocketRight from PocketWall(center = vec3(100.0, 1.0, -12.0), angle = 20.0)
+entity PocketNear from PocketWall(center = vec3(100.0, 1.0, -12.0), angle = 60.0)
+
+# Pressed diagonally into a wall that bends away at x = 123 by 45 degrees.
+entity BendSlider:
+    use GroundedBody(position = vec3(121.5, 1.0, -11.9))
+    Pressed:
+        push = vec3(2.0, 0.0, -1.0)
+entity BendStraight from Block(position = vec3(121.0, 1.5, -12.5), size = vec3(4.0, 3.0, 0.2))
+entity BendTurned from TurnedWall(position = vec3(123.0 + 2.0 * math.cos(math.radians(45.0)), 1.5, -12.5 + 2.0 * math.sin(math.radians(45.0))), size = vec3(4.0, 3.0, 0.2), yaw = math.radians(-45.0))
 
 # ── Landing, ledges and jumps ────────────────────────────────────────────────
 entity Lander from Body(position = vec3(140.0, 3.0, 0.0))
@@ -298,6 +353,17 @@ rule Drive:
 
     on fixed_tick:
         body.velocity.x = driven.speed
+
+rule Press:
+    each:
+        Pressed as pressed
+        physics.CharacterBody as body
+    before:
+        physics.solve
+
+    on fixed_tick:
+        body.velocity.x = pressed.push.x
+        body.velocity.z = pressed.push.z
 
 rule Jump:
     each:

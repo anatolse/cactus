@@ -1612,6 +1612,13 @@ private:
     // (constants only without one). Also records the provably-one proof on
     // the clause, which is what unlocks the pair-binding write carve-out.
     void validateLimitClause(RuleNode& rule);
+    // A constant `int` count of at least 2, folded into the clause, and a rule
+    // whose passes differ only in field values.
+    void validate_repeat_clause(RuleNode& rule);
+    void fold_repeat_count(RepeatClause& repeat);
+    void reject_repeating_commands(const RuleNode& rule, const EventHandlerNode& handler);
+    // Calls that act on an effect domain or create entities, seen in the inferred contract.
+    void reject_repeating_effects(const RuleNode& rule, const EventHandlerNode& handler, const HandlerContract& contract);
     // Domain and `per` placement, reducer names, input typing
     // and purity, and the `where:` split into group and row predicates.
     void validateReduceClause(RuleNode& rule);

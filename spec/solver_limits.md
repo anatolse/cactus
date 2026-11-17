@@ -133,36 +133,73 @@ checks 17 points along each path for overlap beyond `kSkin`.
 
 ## 4. Slide: three contacts
 
-A character body sweeps and slides three times per tick (`Slide1`, `Slide2`,
-`Slide3` in `stdlib/std/physics/volume.cactus`). Each slide moves the body to the
-sweep's `t`, then keeps the rest of the motion with the part into the surface
-removed.
+A character body sweeps and slides three times per tick: the `Slide` rule in
+`stdlib/std/physics/volume.cactus` has `repeat: 3` (spec §3.8.7). Each pass moves the
+body to the sweep's `t`, then keeps the rest of the motion with `slide_along_all`.
 
-**Why three is safe.** Every position change is a sweep result, so §3 keeps every
-contact; the limit can only stop the body early (Model). The rest of the motion is
-dropped for the tick, and `Integrate` sets `motion` from `velocity` at the start of
-every tick (`volume.cactus` line 152), so nothing carries over (Code). `velocity`
-keeps the result of the three contacts.
+**Contact planes.** `CharacterBody` holds the planes that hold the rest of the tick's
+motion: `contacts` and the normals `plane_a`, `plane_b`. `Integrate` sets `contacts`
+to 0 at the start of every tick, so no plane carries over (Code). A hit first removes
+the part of the motion that moves into its surface (`slide_along`). If that result
+still moves into a held plane, the motion keeps only its part along the line where
+the held plane and the hit's plane meet; if it moves into both held planes, nothing
+is left. The planes after the hit are the held plane the result still pressed, then
+the hit's plane (Code: `planes_after`). A held plane the result moves away from no
+longer holds it and is dropped, so a body in an obtuse corner slides on along the
+second wall instead of stopping in the crease. A hit that stops no motion adds no
+plane, and neither does a hit whose normal is within about 2.5 degrees of a held one
+(`parallel`), so rounding can't count one plane twice. `velocity` is projected the
+same way.
 
-**Why three is not complete.** Each contact projects the motion onto a plane, so its
-length does not grow, and the `1 - t` factor shrinks it. Three independent planes
-leave no motion. Planes that are not independent can be met again: in a wedge of
-half-angle `α`, each contact shortens the motion only by `cos 2α`, so motion is
-always left in an acute wedge (Model). The body then stops short for that tick.
+**No turning back.** `Integrate` stores the tick's planned motion as `heading`. A
+slide whose result points against `heading` leaves nothing (Code: `slide_along_all`).
+Without it, a body pressed into a pocket of three or more walls that all touch it
+slides along the one wall it hit last, sideways and back; the planes it has seen
+explain only part of the stop.
+
+**Why three is enough.** Motion held by a plane has no part along its normal, so it
+can't hit a plane parallel to that one. So while the planes keep holding it, every
+new plane is independent of the held ones, and each takes one dimension from the
+space the motion can move in: 3, 2, 1, 0 (Model). Three passes use the motion up or
+leave it free of every plane that holds it. In a wedge of two planes at any angle,
+the second contact leaves the motion along the crease, so the wedge makes no third
+contact; before this, each contact shortened the motion only by `cos 2α` in a wedge
+of half-angle `α`, so motion was always left in an acute wedge.
+
+**What is left.** Two cases leave motion after the third pass: rounding that the
+`parallel` test does not catch, and a plane that was dropped because the motion moved
+away from it, met again after further turns. Then the rest of the motion is dropped
+for the tick, as before: every position change is a sweep result, so §3 keeps every
+contact, and the limit can only stop the body early (Model). `Integrate` sets
+`motion` from `velocity` at the start of every tick, so dropped motion does not carry
+over (Code).
+
+**Climbing a crease.** A crease line can rise. When it rises more than the motion
+did and either plane is a surface the body can't stand on, nothing is left, so a
+steep ramp in a corner gives no upward speed (Code: `slide_along_crease`).
 
 **Evidence.** Tested, in `test_character_body_headless_behavior.cpp`:
 
 - "a convex corner stops the body with no overlap": floor and two walls.
-- "a fourth contact drops the rest of the tick's motion": a driven body in a
-  30-degree wedge keeps motion after three contacts and does not move.
-- "dropped motion does not return in the next tick".
+- "an acute wedge makes no third contact": a driven body in a 30-degree wedge has
+  two contact planes and no motion left after the tick.
+- "two walls leave motion along their crease": a body falling while pressed into a
+  tall 30-degree wedge has only vertical `velocity`.
+- "contact planes do not carry over to the next tick".
+- "a corner of a steep ramp and a wall gives no upward speed".
+- "motion stopped in a tick does not return in the next tick".
+- "a body pressed into a pocket of walls stops without jitter": four walls at 40
+  degrees apart; position and horizontal `velocity` stay still.
+- "a body pressed along a wall slides on past an obtuse bend": the held wall is
+  dropped and the body slides along the second one.
 - "a body in an acute wedge never passes a wall": 120 ticks.
 
 ## 5. Cost
 
 The sweep path runs every fixed tick for every body and solid pair the broadphase
-finds. Tested: `test_perf_sweep_benchmark` presses bodies into wedges of rotated
-boxes and checks candidates per frame (exact), frame time and growth.
+finds. Tested: `test_perf_sweep_benchmark` presses bodies into right-angle and
+acute wedges of rotated boxes, and moves bodies with no walls; it checks candidates
+per frame (exact), three slide passes per tick, frame time and growth.
 
 ## 6. Probes
 

@@ -7,14 +7,18 @@ use std.transform.volume as tv
 use std.physics.volume as physics
 
 # Each cell holds a wedge of two rotated walls and a body pressed into it, so
-# every tick sweeps against boxes and uses all three slides.
+# every tick sweeps against boxes and uses all three slide passes. Without
+# walls, every body moves freely over its floor tile.
 
 const:
     SPACING = 6.0
     ARM = 1.5
 
+# half_angle: half the angle between a wedge's walls, in degrees
 trait Crowd:
     let size: int = 20
+    let half_angle: float = 45.0
+    let walls: bool = true
 
 entity Pen:
     Crowd
@@ -50,11 +54,14 @@ template Tile(position: vec3):
 
 rule Fill:
     on load:
-        let arm = ARM * math.cos(math.radians(45.0))
+        let half = math.radians(Pen[Crowd].half_angle)
+        let arm_x = ARM * math.cos(half)
+        let arm_z = ARM * math.sin(half)
         for x in range(0, Pen[Crowd].size):
             for z in range(0, Pen[Crowd].size):
                 let apex = vec3(SPACING * x + 3.0, 1.5, SPACING * z)
-                spawn Wall(position = apex + vec3(0.0 - arm, 0.0, arm), yaw = math.radians(45.0))
-                spawn Wall(position = apex + vec3(0.0 - arm, 0.0, 0.0 - arm), yaw = math.radians(-45.0))
+                if Pen[Crowd].walls:
+                    spawn Wall(position = apex + vec3(0.0 - arm_x, 0.0, arm_z), yaw = half)
+                    spawn Wall(position = apex + vec3(0.0 - arm_x, 0.0, 0.0 - arm_z), yaw = 0.0 - half)
                 spawn Tile(position = vec3(SPACING * x + 1.0, -0.5, SPACING * z))
                 spawn Walker(position = vec3(SPACING * x, 1.0, SPACING * z))

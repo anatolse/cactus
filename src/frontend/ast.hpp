@@ -680,29 +680,38 @@ struct StmtNode {
         , location(std::move(loc)) {}
 };
 
-// Appends every `Stmt` in `stmts`, including ones nested in conditionals, bounded loops and match arms.
-template <typename Stmt>
-void collect_statements(const std::vector<std::unique_ptr<StmtNode>>& stmts, std::vector<const Stmt*>& out) {
+// Calls `fn` on every statement in `stmts`, including ones nested in conditionals, bounded loops and match arms.
+template <typename Fn>
+void for_each_nested_statement(const std::vector<std::unique_ptr<StmtNode>>& stmts, const Fn& fn) {
     for (const auto& stmt : stmts) {
         if (stmt == nullptr) {
             continue;
         }
-        if (const auto* found = std::get_if<Stmt>(&stmt->stmt)) {
-            out.push_back(found);
-        } else if (const auto* branch = std::get_if<IfStmt>(&stmt->stmt)) {
-            collect_statements(branch->then_body, out);
+        fn(*stmt);
+        if (const auto* branch = std::get_if<IfStmt>(&stmt->stmt)) {
+            for_each_nested_statement(branch->then_body, fn);
             for (const auto& else_if : branch->else_if_branches) {
-                collect_statements(else_if.body, out);
+                for_each_nested_statement(else_if.body, fn);
             }
-            collect_statements(branch->else_body, out);
+            for_each_nested_statement(branch->else_body, fn);
         } else if (const auto* loop = std::get_if<ForeachStmt>(&stmt->stmt)) {
-            collect_statements(loop->body, out);
+            for_each_nested_statement(loop->body, fn);
         } else if (const auto* match = std::get_if<MatchStmt>(&stmt->stmt)) {
             for (const auto& arm : match->arms) {
-                collect_statements(arm.body, out);
+                for_each_nested_statement(arm.body, fn);
             }
         }
     }
+}
+
+// Appends every `Stmt` in `stmts`, including ones nested in conditionals, bounded loops and match arms.
+template <typename Stmt>
+void collect_statements(const std::vector<std::unique_ptr<StmtNode>>& stmts, std::vector<const Stmt*>& out) {
+    for_each_nested_statement(stmts, [&out](const StmtNode& stmt) {
+        if (const auto* found = std::get_if<Stmt>(&stmt.stmt)) {
+            out.push_back(found);
+        }
+    });
 }
 
 // ── Event Handler ───────────────────────────────────────────────────────────
@@ -1155,6 +1164,13 @@ struct LimitClause {
     }
 };
 
+// `repeat: N`: the rule's phase pass runs N times in one activation.
+struct RepeatClause {
+    std::unique_ptr<ExprNode> count;
+    int passes = 0;  // the folded count, set by semantic analysis
+    SourceLocation location;
+};
+
 // ── Reduce Clause ───────────────────────────────────────────────────────────
 
 enum class ReducerKind : std::uint8_t { Count, Sum, Min, Max, Any, FirstHit, Best };
@@ -1298,6 +1314,7 @@ struct RuleNode {
     std::optional<ReduceClause> reduce;              // set when this rule declares a reduce: clause
     std::optional<KeepClause> keep;                  // set when this rule declares a keep clause
     std::optional<WhenClause> when_clause;           // set when this rule declares a when: clause
+    std::optional<RepeatClause> repeat;              // set when this rule declares a repeat: clause
     std::vector<SortKey> order_by;
     std::optional<std::string> group_ref;   // group this rule joins
     std::vector<std::string> after_rules;   // explicit ordering: this rule runs after these rules or groups

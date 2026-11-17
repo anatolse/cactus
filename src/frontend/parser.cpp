@@ -1547,28 +1547,7 @@ RuleNode Parser::parse_rule() {
         parse_reduce_and_order_by(node);
     }
 
-    skip_newlines();
-    if (at_keep_clause()) {
-        auto error_count_before = errors_.error_count();
-        node.keep               = parse_keep_clause();
-        if (errors_.error_count() > error_count_before) {
-            synchronize();
-        }
-    }
-
-    skip_newlines();
-    if (at_limit_clause()) {
-        auto error_count_before = errors_.error_count();
-        node.limit              = parse_limit_clause();
-        if (errors_.error_count() > error_count_before) {
-            synchronize();
-        }
-    }
-
-    skip_newlines();
-    if (at_when_clause()) {
-        node.when_clause = parse_when_clause();
-    }
+    parse_rule_late_clauses(node);
 
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
         skip_newlines();
@@ -1595,6 +1574,37 @@ RuleNode Parser::parse_rule() {
 
     expect_dedent();
     return node;
+}
+
+// The clauses between `reduce:` and the handlers: keep, limit:, when: and repeat:.
+void Parser::parse_rule_late_clauses(RuleNode& node) {
+    skip_newlines();
+    if (at_keep_clause()) {
+        auto error_count_before = errors_.error_count();
+        node.keep               = parse_keep_clause();
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+        }
+    }
+
+    skip_newlines();
+    if (at_limit_clause()) {
+        auto error_count_before = errors_.error_count();
+        node.limit              = parse_limit_clause();
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+        }
+    }
+
+    skip_newlines();
+    if (at_when_clause()) {
+        node.when_clause = parse_when_clause();
+    }
+
+    skip_newlines();
+    if (at_contextual_clause("repeat")) {
+        node.repeat = parse_repeat_clause();
+    }
 }
 
 // Shared by parse_rule/parse_extern_rule (task 4.1). See parser.hpp for the
@@ -1913,6 +1923,15 @@ LimitClause Parser::parse_limit_clause() {
     if (clause.parts.empty()) {
         clause.count = std::move(count);
     }
+    expect_newline();
+    return clause;
+}
+
+RepeatClause Parser::parse_repeat_clause() {
+    RepeatClause clause;
+    clause.location = advance().location;  // contextual 'repeat'
+    consume(TokenType::COLON, "expected ':'");
+    clause.count = parse_expression();
     expect_newline();
     return clause;
 }
@@ -3678,6 +3697,12 @@ ExternRuleNode Parser::parse_extern_rule() {
         auto when_loc = peek().location;
         parse_when_clause();  // parsed and discarded; when: is regular-rule-only
         errors_.error(when_loc, "'when:' is only allowed on regular rules");
+    }
+
+    skip_newlines();
+    if (at_contextual_clause("repeat")) {
+        const auto repeat = parse_repeat_clause();  // parsed and discarded; repeat: is regular-rule-only
+        errors_.error(repeat.location, "'repeat:' is not valid on external rules");
     }
 
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {

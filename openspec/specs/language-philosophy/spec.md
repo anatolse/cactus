@@ -224,6 +224,8 @@ The following SHALL be explicitly out of scope for the authoring tier:
 
 Bounded `for item in list_expr:` and direct `for i in range(...):` iteration are permitted in handlers and pure functions. They capture a finite iteration domain once and do not introduce open-ended control flow. Function iterations permit only local value computation. Finite termination does not imply that every chosen bound has low execution cost.
 
+A rule's `repeat: N` clause is not a general loop. It runs a rule pass a constant number of times, written in the program, so the number of passes is known at compile time.
+
 #### Scenario: General loop construct rejected
 - **WHEN** a `while` statement or numeric/indexed `for` loop appears in author code
 - **THEN** the compiler SHALL report that general loops are not supported in the authoring tier
@@ -239,6 +241,14 @@ Bounded `for item in list_expr:` and direct `for i in range(...):` iteration are
 #### Scenario: Pure function computes a finite sample
 - **WHEN** a pure function evaluates a bounded set of noise candidates using local accumulators
 - **THEN** the computation is accepted without granting world access, effects, recursion or open-ended loops
+
+#### Scenario: Repetition with a constant count is accepted
+- **WHEN** a rule declares `repeat: 3`
+- **THEN** the construct is accepted as bounded repetition, not as a general loop
+
+#### Scenario: Repetition with a run-time count is rejected
+- **WHEN** a rule declares `repeat:` with a count that reads a field
+- **THEN** the compiler reports that the count must be a constant
 
 ### Requirement: The author/backend split
 The following concerns SHALL be treated as backend or stdlib responsibilities rather than authored gameplay code:

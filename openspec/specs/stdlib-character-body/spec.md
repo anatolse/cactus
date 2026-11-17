@@ -55,7 +55,7 @@ A body SHALL NOT end a tick overlapping a solid collider it did not overlap at t
 - **THEN** the body stops on the near side of the wall
 
 ### Requirement: Blocked motion slides along surfaces
-When a body's motion hits a surface, the controller SHALL move it up to the contact and then continue with the remaining motion projected onto the contact plane, for up to three contacts per tick. The body's `velocity` SHALL lose its component into the surface and keep the rest. A surface the body can't stand on SHALL NOT add upward speed to motion or `velocity` that wasn't already rising; it SHALL stop the body's horizontal motion into it like a wall, and the remaining motion SHALL NOT move into the surface, so a body pressed against such a surface can still rise or fall past it.
+When a body's motion hits a surface, the controller SHALL move it up to the contact and then continue with the remaining motion, for up to three contacts per tick. The remaining motion SHALL be projected onto every contact plane of this tick it would still move into, not only the last one: held by one plane it lies in that plane, held by two independent planes it lies along the line where they meet, and held by three independent planes it is zero. A plane the motion moves away from no longer holds it. No slide SHALL turn the motion or `velocity` against the direction the tick's motion started with; such a slide leaves nothing. The body's `velocity` SHALL lose its component into each of these surfaces and keep the rest. A surface the body can't stand on SHALL NOT add upward speed to motion or `velocity` that wasn't already rising; it SHALL stop the body's horizontal motion into it like a wall, and the remaining motion SHALL NOT move into the surface, so a body pressed against such a surface can still rise or fall past it. The contact planes of a tick SHALL NOT carry over to the next tick.
 
 #### Scenario: Diagonal motion slides along a wall
 - **WHEN** a grounded body moves at 45 degrees into a long wall
@@ -75,6 +75,24 @@ When a body's motion hits a surface, the controller SHALL move it up to the cont
 - **WHEN** a body walking into a box taller than `step_height` jumps high enough to clear it
 - **THEN** its rounded bottom passes the box's top edge without stopping
 - **AND** it lands on top of the box
+
+#### Scenario: Two walls leave motion along their crease
+- **WHEN** a falling body's motion hits two vertical walls that meet at an acute angle
+- **THEN** after the second contact its remaining motion is along the vertical line where the walls meet
+- **AND** it has no component into either wall
+
+#### Scenario: A pocket of walls stops the body
+- **WHEN** a body is pressed into a pocket of four walls that all touch it
+- **THEN** its position does not change between ticks
+- **AND** its `velocity` has no horizontal part after the tick
+
+#### Scenario: A held wall bends away
+- **WHEN** a body pressed diagonally along a wall reaches a 45-degree bend away from its motion
+- **THEN** it slides on along the bent wall
+
+#### Scenario: Planes do not carry over
+- **WHEN** a body slid along a wall in one tick and moves away from it in the next
+- **THEN** the next tick's motion is not projected onto that wall
 
 ### Requirement: Grounding output
 After each tick, `grounded` SHALL be true exactly when the body is resting on a walkable surface. A surface is walkable when the angle from world up of its surface normal at the contact is at most `max_slope` degrees. On a box edge or corner, the surface normal is that of the face the body's motion meets first, so a body whose rounded bottom rests on the edge of a box top stands on that top. `ground_normal` SHALL be that surface normal while grounded and `vec3(0.0, 1.0, 0.0)` otherwise. `time_since_grounded` SHALL be `0.0` while grounded and SHALL grow by `fixed_tick.dt` each tick otherwise. Landing SHALL set `velocity.y` to zero.
@@ -180,11 +198,12 @@ CharacterBody SHALL expose paused: bool = false. While paused, solve SHALL leave
 - **THEN** its character bodies behave as before
 
 ### Requirement: The slide limit has a defined result
-When a body has used its three contacts in a tick and motion remains, the remaining motion SHALL be dropped for that tick. The body SHALL stay where the last contact left it, and SHALL NOT overlap a solid by more than the contact skin because of this limit. `velocity` SHALL keep the result of the three contacts. In an acute wedge that velocity can still point into a surface met earlier in the tick; the next tick's sweeps stop it there. Dropped motion SHALL NOT carry over to a later tick.
+Three contacts per tick SHALL be enough for a body whose contacts are independent planes, because each such plane removes one dimension from the remaining motion. When rounding gives a contact plane parallel to one already hit in the tick, it SHALL NOT count as a new plane. When motion still remains after the third contact for that reason, it SHALL be dropped for that tick. The body SHALL stay where the last contact left it, and SHALL NOT overlap a solid by more than the contact skin because of this limit. `velocity` SHALL keep the result of the contacts made, and SHALL NOT point into any surface hit in the tick. Dropped motion SHALL NOT carry over to a later tick.
 
 #### Scenario: A convex corner stops the body
 - **WHEN** a body moves into a corner of three solid planes
 - **THEN** it stops at the corner with no overlap beyond the contact skin
+- **AND** no motion remains after the third contact
 
 #### Scenario: A fourth contact drops the rest
 - **WHEN** a body's motion in one tick would reach a fourth contact
@@ -197,3 +216,8 @@ When a body has used its three contacts in a tick and motion remains, the remain
 #### Scenario: An acute wedge does not push through a wall
 - **WHEN** a body moves into a wedge of two planes that meet at an acute angle
 - **THEN** it does not pass through either plane, in any tick
+
+#### Scenario: An acute wedge does not bounce between its planes
+- **WHEN** a body moves into a wedge of two planes that meet at an acute angle, with motion across the crease
+- **THEN** after the second contact its `velocity` points into neither plane
+- **AND** the tick makes no third contact with either plane

@@ -226,6 +226,20 @@ TEST_CASE("air cells exist without Solid and materials follow on added Cell",
     CHECK_FALSE(world.solid(air));
 }
 
+TEST_CASE("destroying a volume destroys its cells and no others", "[runtime][codegen-entt][stdlib-voxel-volume]") {
+    World world;
+    world.fill();
+    const auto fine    = slots().voxel_volume.Fine;
+    const auto terrain = slots().voxel_volume.Terrain;
+    REQUIRE(world.cell_count(fine) == 8);
+    backend::generated_inject_external_event(cactus_gen::voxel_volume::DemolishEvent{.volume = fine});
+    backend::generated_drain_external_events(world.registry);
+    world.frame();
+    CHECK_FALSE(world.registry.valid(fine));
+    CHECK(world.cell_count(fine) == 0);
+    CHECK(world.cell_count(terrain) == 49);
+}
+
 TEST_CASE("an invalid volume creates no cells and reports why", "[runtime][codegen-entt][stdlib-voxel-volume]") {
     World world;
     world.fill();

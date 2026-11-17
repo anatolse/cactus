@@ -592,8 +592,17 @@ count can grow exponentially. So gain above 1 at one handler is the exact condit
 this abstraction. A guard may still prevent the growth at runtime; the warning is about
 the shape. An `extern rule` has no body to count and is taken to have gain at most 1.
 
-Linear growth is not warned: a `tick` handler that feeds a cycle that never ends, or
-one spawn per run that grows a population, adds work at a constant rate per activation.
+A `tick` handler that feeds a cycle that never ends adds work at a constant rate per
+activation and is not warned. A spawn that grows a population at a constant rate is
+warned in one structural case (`query-cost-diagnostics`: "A template spawned repeatedly
+and never destroyed is warned"; Code: `report_never_destroyed`; Tested:
+`test_archetype_reachability` "Never destroyed"). The spawn site can run in more than one
+activation: its handler is reachable from a phase, a render stage or an external event,
+not only from `load`, `unload` or the startup arrival. And no reachable handler other
+than an `unload` one can destroy an entity of the template, directly, through an
+entity it hangs under, or by requesting a world restore. Then the template's count never goes down. Guards are ignored,
+so the warning claims no growth: a spawn guarded to run once is warned too. A template
+with a `single` trait is never warned.
 
 ### 7.3 Schedule independence
 

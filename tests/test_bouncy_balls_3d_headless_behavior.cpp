@@ -144,6 +144,32 @@ TEST_CASE("example-bouncy-balls-3d: initial balls stay within the box over many 
     }
 }
 
+TEST_CASE("example-bouncy-balls-3d: a clicked ball expires and the load-time balls stay",
+          "[runtime][codegen-entt][example][bouncy-balls-3d]") {
+    entt::registry registry;
+    cactus::runtime::entt_backend::generated_init_project(registry);
+    cactus::runtime::entt_backend::generated_load_project(registry);
+    cactus_headless_test::dispatch_load_event(registry);
+    const auto balls = [&] { return registry.view<cactus_gen::main::Ball>().size(); };
+    const auto timed = [&] { return registry.view<cactus_gen::stdlib::time::Lifetime>().size(); };
+    // The click pass needs the camera view the first frame computes.
+    cactus_headless_test::drive_frame(registry);
+
+    cactus_raylib_fake::set_mouse_position(Vector2{.x = 400.0F, .y = 225.0F});
+    cactus_raylib_fake::set_mouse_button_pressed_this_frame(MOUSE_BUTTON_LEFT, true);
+    cactus_headless_test::drive_frame(registry);
+    cactus_raylib_fake::set_mouse_button_pressed_this_frame(MOUSE_BUTTON_LEFT, false);
+    REQUIRE(balls() == 9);
+    REQUIRE(timed() == 1);
+
+    constexpr int kThirtyOneSeconds = 31 * 60;
+    for (int frame = 0; frame < kThirtyOneSeconds; ++frame) {
+        cactus_headless_test::drive_frame(registry);
+    }
+    CHECK(balls() == 8);
+    CHECK(timed() == 0);
+}
+
 TEST_CASE("example-bouncy-balls-3d: ball-ball contact rejects self/non-overlapping pairs, emits both sides when "
           "approaching and overlapping, and imparts more change on the lighter ball",
           "[runtime][codegen-entt][example][bouncy-balls-3d][where-clause]") {

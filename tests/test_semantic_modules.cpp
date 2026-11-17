@@ -1816,9 +1816,11 @@ TEST_CASE("regular handler contracts infer canonical capabilities independently"
     CHECK(movement.reads.contains(symbol(SymbolKind::Trait, "Flash")));
     CHECK(movement.writes.contains(symbol(SymbolKind::Trait, "Flash")));
     CHECK(movement.emits.contains(symbol(SymbolKind::Event, "Hit")));
-    CHECK(std::ranges::count(movement.commands,
-                             InferredHandlerCommand{.kind   = HandlerCommandKind::Spawn,
-                                                    .target = symbol(SymbolKind::Template, "Actor")}) == 1);
+    const auto spawns = std::ranges::count_if(movement.commands, [&](const InferredHandlerCommand& command) {
+        return command.kind == HandlerCommandKind::Spawn && command.target == symbol(SymbolKind::Template, "Actor") &&
+               command.sites.size() == 2;
+    });
+    CHECK(spawns == 1);
     CHECK(std::ranges::find(
               movement.commands,
               InferredHandlerCommand{.kind     = HandlerCommandKind::Add,

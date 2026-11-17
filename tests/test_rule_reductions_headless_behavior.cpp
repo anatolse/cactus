@@ -57,6 +57,25 @@ TEST_CASE("a global reduction over an empty domain runs once with identity value
     CHECK(board.weakest == 7);
 }
 
+TEST_CASE("a global reduction counts the rows the host adds and takes away", "[runtime][codegen-entt][rule-reduce]") {
+    namespace rr = cactus_gen::rule_reductions;
+    entt::registry registry;
+    run_one_frame(registry);
+    const auto deliver = [&](auto occurrence) {
+        cactus::runtime::entt_backend::generated_inject_external_event(occurrence);
+        cactus::runtime::entt_backend::generated_drain_external_events(registry);
+    };
+    const auto frame = [&] { deliver(cactus_gen::stdlib::core::frameEvent{.dt = 1.0F / 60.0F}); };
+    deliver(rr::ReinforcementsEvent{});
+    deliver(rr::ReinforcementsEvent{});
+    frame();
+    CHECK(board_of(registry).enemies == 2);
+
+    deliver(rr::WithdrawEvent{.raider = *registry.view<rr::Enemy>().begin()});
+    frame();
+    CHECK(board_of(registry).enemies == 1);
+}
+
 TEST_CASE("a global reduction totals every row", "[runtime][codegen-entt][rule-reduce]") {
     entt::registry registry;
     run_one_frame(registry);

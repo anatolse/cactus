@@ -46,6 +46,9 @@ pub extern event MakeCircle:
     y: float
     radius: float
 
+pub extern event Remove:
+    collider: entity_id
+
 pub extern event Probe:
     caster: entity_id
     sinker: entity_id
@@ -59,6 +62,8 @@ rule MakeColliders:
         spawn Box(x = MakeBox.x, y = MakeBox.y, w = MakeBox.w, h = MakeBox.h)
     on MakeCircle:
         spawn Circle(x = MakeCircle.x, y = MakeCircle.y, radius = MakeCircle.radius)
+    on Remove:
+        destroy Remove.collider
 
 rule Measure:
     each:

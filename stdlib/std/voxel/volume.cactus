@@ -61,16 +61,16 @@ pub trait Volume:
     var duplicate_found: bool = false
 
 # One cell of `volume` at integer coordinate (x, y, z). texture is drawn on
-# its exposed faces while it is Solid.
+# its exposed faces while it is Solid. A cell dies with its volume.
 pub trait Cell:
-    let volume: entity_id
+    let volume: Volume
     let x: int in range(volume[Volume].min_x, volume[Volume].max_x + 1)
     let y: int in range(volume[Volume].min_y, volume[Volume].max_y + 1)
     let z: int in range(volume[Volume].min_z, volume[Volume].max_z + 1)
     persist var texture: texture_id
 
 # A unit cell of a volume; the volume spawns these itself.
-pub template CellTemplate(volume: entity_id, x: int, y: int, z: int, center: vec3, size: float):
+pub template CellTemplate(volume: Volume, x: int, y: int, z: int, center: vec3, size: float):
     Cell:
         volume = volume
         x = x
@@ -144,6 +144,12 @@ rule FillVolume:
             let z = v.min_z + i % size_z
             spawn CellTemplate(volume = self, x = x, y = y, z = z, center = cell_center(v.origin, v.cell_size, x, y, z), size = v.cell_size)
         v.cells_built = end
+
+rule DropOrphanCells:
+    each: Cell
+
+    on lost Cell.volume:
+        destroy
 
 # ── Probes ───────────────────────────────────────────────────────────────────
 # Probes answer "which cell is at this coordinate" and "which solid cell does

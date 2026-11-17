@@ -89,5 +89,13 @@ TEST_CASE("flat collider queries break ties by creation order", "[runtime][physi
     CHECK(world.place(first) == 1);
     CHECK(world.place(second) == 2);
     CHECK(world.place(third) == 3);
+
+    // Removing the oldest collider leaves the rest in creation order.
+    world.inject(cactus_gen::flat_query_ties::RemoveEvent{.collider = first});
+    world.inject(cactus_gen::stdlib::core::frameEvent{.dt = 1.0F / 60.0F});
+    world.inject(cactus_gen::flat_query_ties::ProbeEvent{.caster = caster, .sinker = sinker, .toucher = toucher});
+    CHECK_FALSE(world.registry.valid(first));
+    CHECK(world.place(second) == 1);
+    CHECK(world.place(third) == 2);
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

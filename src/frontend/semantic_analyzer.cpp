@@ -9348,12 +9348,21 @@ void insert_entity_target(std::vector<EntityTarget>& targets, EntityTarget targe
     }
 }
 
-void SemanticAnalyzer::add_contract_command(HandlerContract& contract,
-                                            HandlerCommandKind kind,
-                                            std::optional<SymbolId> target,
-                                            std::optional<EntityTarget> entity,
-                                            const FieldAccess& patched) {
-    auto existing = std::ranges::find_if(contract.commands, [&](const InferredHandlerCommand& command) {
+void SemanticAnalyzer::add_spawn_command(HandlerContract& contract,
+                                         const std::optional<SymbolId>& template_id,
+                                         const SourceLocation& site) {
+    auto& sites = add_contract_command(contract, HandlerCommandKind::Spawn, template_id, std::nullopt).sites;
+    if (!std::ranges::contains(sites, site)) {
+        sites.push_back(site);
+    }
+}
+
+InferredHandlerCommand& SemanticAnalyzer::add_contract_command(HandlerContract& contract,
+                                                               HandlerCommandKind kind,
+                                                               std::optional<SymbolId> target,
+                                                               std::optional<EntityTarget> entity,
+                                                               const FieldAccess& patched) {
+    auto existing      = std::ranges::find_if(contract.commands, [&](const InferredHandlerCommand& command) {
         return command.kind == kind && command.target == target;
     });
     const bool assigns = kind == HandlerCommandKind::Add || kind == HandlerCommandKind::Set;
@@ -9370,6 +9379,7 @@ void SemanticAnalyzer::add_contract_command(HandlerContract& contract,
     if (kind == HandlerCommandKind::Spawn || kind == HandlerCommandKind::Add || kind == HandlerCommandKind::Remove) {
         add_feed_site(contract, FeedNode{.kind = FeedKind::Command, .symbol = existing->target, .command = kind});
     }
+    return *existing;
 }
 
 static void record_world_scan(HandlerContract& contract,
@@ -9497,7 +9507,7 @@ void SemanticAnalyzer::walk_expression_reads(  // NOLINT(readability-function-co
                     visit(*element, locals);
                 }
             } else if constexpr (std::is_same_v<E, SpawnExpr>) {
-                add_contract_command(contract, HandlerCommandKind::Spawn, node.resolved_template_id, std::nullopt);
+                add_spawn_command(contract, node.resolved_template_id, node.location);
                 for (const auto& argument : node.arguments.values) {
                     visit(*argument.value, locals);
                 }
@@ -9745,7 +9755,7 @@ struct SemanticAnalyzer::HandlerBodyVisitor {
     }
 
     void operator()(const SpawnStmt& node) const {
-        add_contract_command(*contract, HandlerCommandKind::Spawn, node.resolved_template_id, std::nullopt);
+        add_spawn_command(*contract, node.resolved_template_id, node.location);
         for (const auto& argument : node.arguments.values) {
             visit_expr(*argument.value, *locals);
         }

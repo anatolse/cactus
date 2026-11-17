@@ -41,8 +41,12 @@ template Squad(id: int):
     Team:
         id = id
 
-# Enemies arrive only when the host sends reinforcements.
+# Enemies arrive only when the host sends reinforcements, and leave when it
+# sends one of them away.
 pub extern event Reinforcements
+
+pub extern event Withdraw:
+    raider: entity_id
 
 template Raider:
     Enemy
@@ -50,6 +54,9 @@ template Raider:
 rule Reinforce:
     on Reinforcements:
         spawn Raider()
+
+    on Withdraw:
+        destroy Withdraw.raider
 
 # Until reinforcements arrive no entity has Enemy, so this runs once with the identity values.
 rule CountEnemies:

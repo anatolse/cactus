@@ -157,7 +157,8 @@ TEST_CASE("accumulating into a named field over many entities is deterministic",
     drive_frame(world.registry);
     CHECK(world.match().coins == expected);
     drive_frame(world.registry);
-    CHECK(world.match().coins == 2 * expected);
+    CHECK(world.match().coins == expected);
+    CHECK(world.registry.view<cactus_gen::named_entity_access::Coin>().empty());
 }
 
 // ── The implicit requirement ────────────────────────────────────────────────

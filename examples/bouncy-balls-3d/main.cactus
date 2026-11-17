@@ -9,6 +9,7 @@ use std.camera.volume as cam3d
 use std.camera.viewport as vp
 use std.input as inp
 use std.random as rand
+use std.time as time
 use std.collision.volume as collision
 
 # ── Assets ────────────────────────────────────────────────────────────────────
@@ -213,6 +214,12 @@ template BallTemplate:
         visible = true
         cast_shadow = true
 
+# A clicked ball lives this many seconds, so clicking can't fill the box forever.
+template ClickedBall:
+    use BallTemplate
+    time.Lifetime:
+        remaining = 30.0
+
 # ── Entities: box walls ──────────────────────────────────────────────────────
 # A 6x6x6 cube (world-unit bounds -3..3 on every axis) centered at the
 # origin, bounded by 6 thin static walls sharing WallTemplate's collider
@@ -270,7 +277,7 @@ entity Spawner:
 # spawns the same 8 corner-position balls at load time, but with
 # radius/velocity/color drawn from std.random instead of hand-picked per
 # instance. SpawnBallOnClick adds one more ball per left-click, at the
-# mouse's position on the box's z=0 plane, with no cap on total ball count.
+# mouse's position on the box's z=0 plane; a clicked ball expires after 30 s.
 
 # SpawnInitialBalls: k (0..7), read as 3 bits, gives the per-axis corner sign
 # (bit0 -> x, bit1 -> y, bit2 -> z; 0 -> negative, 1 -> positive) - the same 8
@@ -318,7 +325,7 @@ rule SpawnInitialBalls:
 # wall-clearance clamp below can size its margin from this ball's own
 # radius - the wall's inner face sits at |axis| = 3.0 - 0.3 = 2.7 (matching
 # DetectWallContact's margin math), so clamping to +/-(2.7 - radius) keeps
-# the spawned sphere clear of the walls. No cap on total ball count.
+# the spawned sphere clear of the walls. A clicked ball expires after 30 s.
 rule SpawnBallOnClick:
     pairs:
         spawner:
@@ -351,7 +358,7 @@ rule SpawnBallOnClick:
         seed.rng = rand.advance(seed.rng)
         let color_index = rand.sample_int(seed.rng, rand.uniform_int(0, 7))
 
-        spawn BallTemplate:
+        spawn ClickedBall:
             tv.WorldTransform:
                 position = clamped
                 scale = vec3(ball_radius, ball_radius, ball_radius)

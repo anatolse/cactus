@@ -44,6 +44,10 @@ pub extern event MoveHand:
     hand: entity_id
     x: float
 
+# Destroys an entity and everything that hangs under it.
+pub extern event Discard:
+    target: entity_id
+
 # Hangs `a` under `b`, then `b` under `a`, in one commit.
 pub extern event Swap:
     a: entity_id
@@ -65,6 +69,10 @@ rule PickUpItem:
 rule DropItem:
     on Drop:
         remove Parent from Drop.item
+
+rule DiscardEntity:
+    on Discard:
+        destroy Discard.target
 
 rule MoveHands:
     on MoveHand:

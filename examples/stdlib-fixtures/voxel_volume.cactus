@@ -73,6 +73,14 @@ pub entity Shovel:
 
 event Dig
 
+# The host takes a whole volume away.
+pub extern event Demolish:
+    volume: entity_id
+
+rule DemolishVolume:
+    on Demolish:
+        destroy Demolish.volume
+
 # Copies the coordinates of the cell its handle names, or -1 when the handle
 # names no live cell. The test sets the handle.
 pub trait CellLookup:

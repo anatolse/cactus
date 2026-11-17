@@ -12,3 +12,10 @@ template Grunt:
 rule Spawn:
     on tick:
         spawn Grunt()
+
+rule Cull:
+    each:
+        Enemy as enemy
+    on tick:
+        if enemy.hp <= 0:
+            destroy

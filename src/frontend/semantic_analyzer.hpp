@@ -296,6 +296,7 @@ struct InferredHandlerCommand {
     std::optional<FieldAccess> patched;  // Add and Set: the fields it assigns (none for a marker trait)
     std::vector<EntityTarget> entities;  // every entity class it acts on; empty for Spawn
     std::vector<TransitionSource> sources;  // Add of a state variant: possible sources, in declaration order
+    std::vector<SourceLocation> sites;      // Spawn: every `spawn` of the template, in source order
 
     friend bool operator==(const InferredHandlerCommand&, const InferredHandlerCommand&) = default;
 };
@@ -2313,11 +2314,14 @@ private:
     // statement half both perform, shared so a `spawn`/`destroy` reached
     // through either produces one identical entry.
     // An Add or Set without `patched` assigns every field; `entity` is unset only for Spawn.
-    static void add_contract_command(HandlerContract& contract,
-                                     HandlerCommandKind kind,
-                                     std::optional<SymbolId> target,
-                                     std::optional<EntityTarget> entity,
-                                     const FieldAccess& patched = all_fields());
+    static InferredHandlerCommand& add_contract_command(HandlerContract& contract,
+                                                        HandlerCommandKind kind,
+                                                        std::optional<SymbolId> target,
+                                                        std::optional<EntityTarget> entity,
+                                                        const FieldAccess& patched = all_fields());
+    static void add_spawn_command(HandlerContract& contract,
+                                  const std::optional<SymbolId>& template_id,
+                                  const SourceLocation& site);
     void add_contract_call_effects(HandlerContract& contract, const std::optional<SymbolId>& callee) const;
 
     InferredHandlerContract infer_regular_handler_contract(const RuleNode& rule, const EventHandlerNode& handler) const;

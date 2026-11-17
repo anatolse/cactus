@@ -214,6 +214,7 @@ rule CollectCoins:
 
     on tick:
         Game[Match].coins += coin.value
+        destroy
 
 rule HideHud:
     each:

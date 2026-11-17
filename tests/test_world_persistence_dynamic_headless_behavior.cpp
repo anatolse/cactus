@@ -118,6 +118,19 @@ TEST_CASE("an ember records the values it was actually spawned with", "[runtime]
     CHECK(source.hue == Catch::Approx(0.7F));
 }
 
+TEST_CASE("a snuffed ember leaves the world and the save", "[runtime][persistence][provenance]") {
+    World world;
+    auto& registry   = world.registry;
+    const auto ember = spawn_ember(registry);
+    stage(registry).snuff = 1;
+    run_frames(registry, 1);
+    CHECK_FALSE(registry.valid(ember));
+    const auto snapshot = capture(registry);
+    for (const auto record : snapshot.entities()) {
+        CHECK(record.archetype() != kEmber);
+    }
+}
+
 TEST_CASE("an ephemeral archetype keeps provenance because the program can make it eligible",
           "[runtime][persistence][provenance]") {
     World world;

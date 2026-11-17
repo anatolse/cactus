@@ -138,8 +138,9 @@ TEST_CASE("Query costs: a scan runs once per row of a phase pass", "[query-costs
         "    on tick:\n"
         "        let n = query.count[Unit]()\n");
     REQUIRE(cost_warnings(diagnostics, "R") == 1);
-    const auto warning = std::ranges::find_if(
-        diagnostics, [](const Diagnostic& d) { return d.level == DiagnosticLevel::Warning; });
+    const auto warning = std::ranges::find_if(diagnostics, [](const Diagnostic& d) {
+        return d.level == DiagnosticLevel::Warning && d.message.contains("rule 'R'");
+    });
     CHECK(warning->location.filename == "game.cactus");
     CHECK(warning->location.line > 1);
     CHECK(warning->message.contains("std.query.count"));
@@ -286,8 +287,9 @@ TEST_CASE("Query costs: a key lookup reads another entity", "[query-costs]") {
         "    on tick:\n"
         "        u.team = 1\n");
     REQUIRE(cost_warnings(diagnostics, "R") == 1);
-    const auto warning = std::ranges::find_if(
-        diagnostics, [](const Diagnostic& d) { return d.level == DiagnosticLevel::Warning; });
+    const auto warning = std::ranges::find_if(diagnostics, [](const Diagnostic& d) {
+        return d.level == DiagnosticLevel::Warning && d.message.contains("rule 'R'");
+    });
     CHECK(warning->message.contains("id"));
 }
 

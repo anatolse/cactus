@@ -60,7 +60,7 @@ entity Tree1 from Tree:
                         text_id = 131
 
 rule TreeSpawner:
-    on tick:
+    on load:
         # Spawning returns the root of the created tree. Child overrides at the
         # spawn site follow the same nested role structure as declarations.
         let tree = spawn Tree:

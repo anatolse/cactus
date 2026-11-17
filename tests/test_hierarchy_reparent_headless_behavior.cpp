@@ -108,6 +108,19 @@ TEST_CASE("hierarchy reparent: a picked-up item follows the hand until dropped",
     CHECK(world.world_x(item) == 1.0F);
 }
 
+TEST_CASE("hierarchy reparent: discarding a hand destroys the item it carries",
+          "[runtime][codegen-entt][hierarchy-forest]") {
+    World world;
+    const auto hand  = world.hand(10.0F);
+    const auto held  = world.item(1.0F);
+    const auto loose = world.item(2.0F);
+    world.pick_up(held, hand);
+    world.inject(cactus_gen::hierarchy_reparent::DiscardEvent{.target = hand});
+    CHECK_FALSE(world.registry.valid(hand));
+    CHECK_FALSE(world.registry.valid(held));
+    CHECK(world.registry.valid(loose));
+}
+
 TEST_CASE("hierarchy reparent: moving a carried item fires nothing", "[runtime][codegen-entt][hierarchy-forest]") {
     World world;
     const auto left  = world.hand(10.0F);

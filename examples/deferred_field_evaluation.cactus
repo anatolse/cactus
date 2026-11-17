@@ -8,8 +8,7 @@ module deferred_field_evaluation
 use std.core
 use std.transform.volume as tv
 
-trait Probe:
-    var done: bool = false
+trait Probe
 
 trait AddResult:
     var from_field: float = -1.0
@@ -43,13 +42,10 @@ entity Subject:
 
 rule Snapshot:
     each:
-        Probe as probe
+        Probe
         tv.WorldTransform as transform
 
-    on tick:
-        if probe.done:
-            return
-        probe.done = true
+    on load:
         add AddResult to self:
             from_field = transform.position.x
             from_extern = tv.world_position(self).x

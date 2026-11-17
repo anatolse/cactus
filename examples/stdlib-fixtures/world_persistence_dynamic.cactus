@@ -15,6 +15,8 @@ event Rekindle
 
 event Fade
 
+event Snuff
+
 # ── Traits ────────────────────────────────────────────────────────────────────
 
 pub trait Health:
@@ -35,6 +37,7 @@ trait Stage:
     var wither: int = 0
     var rekindle: int = 0
     var fade: int = 0
+    var snuff: int = 0
 
 # ── Archetypes ────────────────────────────────────────────────────────────────
 
@@ -75,6 +78,9 @@ rule RunStage:
         if stage.fade > 0:
             stage.fade -= 1
             emit Fade
+        if stage.snuff > 0:
+            stage.snuff -= 1
+            emit Snuff
 
 rule AwakenEmbers:
     each:
@@ -100,6 +106,13 @@ rule FadeEmbers:
 
     on Fade:
         sparkle.hue = 0.1
+
+rule SnuffEmbers:
+    each:
+        Sparkle
+
+    on Snuff:
+        destroy
 
 rule RekindleEmbers:
     each:

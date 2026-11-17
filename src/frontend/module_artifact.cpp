@@ -712,6 +712,10 @@ void ModuleArtifact::write_contract(std::ostream& out, const HandlerContract& co
             write_str(out, source.variant);
             write_location(out, source.location);
         }
+        write_u32(out, static_cast<uint32_t>(command.sites.size()));
+        for (const auto& site : command.sites) {
+            write_location(out, site);
+        }
     }
     write_symbol_vector(out, contract.native_spawns);
     write_feed(out, contract.feed);
@@ -1592,6 +1596,10 @@ HandlerContract ModuleArtifact::read_contract(std::istream& in) {
         for (uint32_t j = 0; j < sources && in.good(); ++j) {
             auto variant = read_str(in);
             command.sources.push_back(TransitionSource{.variant = std::move(variant), .location = read_location(in)});
+        }
+        const auto sites = read_u32(in);
+        for (uint32_t j = 0; j < sites && in.good(); ++j) {
+            command.sites.push_back(read_location(in));
         }
         contract.commands.push_back(std::move(command));
     }

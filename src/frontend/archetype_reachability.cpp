@@ -5,9 +5,11 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <iterator>
 #include <map>
 #include <set>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -184,6 +186,12 @@ struct StructuralChange {
     std::vector<ResolvedTarget> targets;
 };
 
+struct SpawnSites {
+    std::string template_id;  // canonical
+    std::vector<std::uint32_t> roots;
+    const std::vector<SourceLocation>* sites = nullptr;
+};
+
 struct HandlerModel {
     const HandlerNode* node = nullptr;
     std::string canonical_id;
@@ -193,6 +201,8 @@ struct HandlerModel {
     std::vector<NamedNeed> named;
     std::vector<StructuralChange> changes;
     std::vector<std::uint32_t> spawned_origins;
+    std::vector<SpawnSites> spawns;
+    std::vector<ResolvedTarget> destroys;
     std::vector<std::string> emits;
 };
 
@@ -209,6 +219,18 @@ public:
         index_traits();
         build_origins();
         build_handlers();
+        single_ = std::vector<bool>(traits_.size(), false);
+        for (const auto& trait : single_trait_ids(program)) {
+            if (const auto index = traits_.find(trait); index.has_value()) {
+                single_[*index] = true;
+            }
+        }
+        for (const auto& handler : handlers_) {
+            const auto& trigger = handler.node->identity.trigger;
+            if (trigger.kind == HandlerTriggerKind::Event && is_boundary_event(trigger.symbol)) {
+                boundary_roots_.emplace(make_canonical_id(trigger.symbol), trigger.symbol.local_name);
+            }
+        }
     }
 
     void run() {
@@ -273,6 +295,114 @@ public:
                      make_canonical_id(first.node->identity.rule) + "' to " + second.canonical_id +
                      ", or 'after: " + make_canonical_id(second.node->identity.rule) + "' to " + first.canonical_id);
         }
+        report_never_destroyed(errors);
+    }
+
+    // ── Never-destroyed spawns ──────────────────────────────────────────────
+
+    void report_never_destroyed(ErrorReporter& errors) const {
+        std::vector<std::vector<bool>> delivered;
+        delivered.reserve(handlers_.size());
+        for (const auto& handler : handlers_) {
+            delivered.push_back(lifecycle_deliveries(handler));
+        }
+        // Tighter than feeds(): a lifecycle trigger is fed only by its own trait, state or spawn.
+        const auto roots     = activations([&](std::size_t source, std::size_t target) {
+            const auto& trigger = handlers_[target].node->identity.trigger;
+            const auto trait    = trigger.is_lifecycle() ? traits_.find(trigger.symbol) : std::nullopt;
+            return trait.has_value() ? delivered[source][*trait] : feeds(handlers_[source], handlers_[target]);
+        });
+        const auto destroyed = destroyed_origins(roots);
+        std::map<std::string, std::vector<SourceLocation>> warned;
+        for (std::size_t index = 0; index < handlers_.size(); ++index) {
+            if (!reachable_[index] || !recurs(roots[index])) {
+                continue;
+            }
+            for (const auto& spawn : handlers_[index].spawns) {
+                if (spawn.roots.empty() || carries_single(spawn.roots) || destroyable(spawn.roots, destroyed)) {
+                    continue;
+                }
+                std::ranges::copy(*spawn.sites, std::back_inserter(warned[spawn.template_id]));
+            }
+        }
+        for (const auto& [template_id, sites] : warned) {
+            for (const auto& site : sites) {
+                errors.warning(site,
+                               "'" + template_id +
+                                   "' is spawned repeatedly and never destroyed; give it a std.time.Lifetime, add a "
+                                   "rule that destroys it, or give it a `single` trait if only one should exist");
+            }
+        }
+    }
+
+    // Runs in more than one activation: started by something other than `load` or `unload`.
+    [[nodiscard]] bool recurs(const std::set<std::string>& roots) const {
+        return std::ranges::any_of(roots, [&](const std::string& root) { return !boundary_roots_.contains(root); });
+    }
+
+    [[nodiscard]] bool teardown_only(const std::set<std::string>& roots) const {
+        return !roots.empty() && std::ranges::all_of(roots, [&](const std::string& root) {
+            const auto found = boundary_roots_.find(root);
+            return found != boundary_roots_.end() && found->second == "unload";
+        });
+    }
+
+    [[nodiscard]] bool carries_single(const std::vector<std::uint32_t>& roots) const {
+        return std::ranges::any_of(roots, [&](std::uint32_t origin) {
+            return std::ranges::any_of(origins_[origin].seed, [&](TraitIndexValue trait) { return single_[trait]; });
+        });
+    }
+
+    // Origins of the entities a reachable handler other than a teardown one can destroy.
+    [[nodiscard]] std::set<std::uint32_t> destroyed_origins(const std::vector<std::set<std::string>>& roots) const {
+        std::set<std::uint32_t> destroyed;
+        for (std::size_t index = 0; index < handlers_.size(); ++index) {
+            if (!reachable_[index] || teardown_only(roots[index])) {
+                continue;
+            }
+            for (const auto& target : handlers_[index].destroys) {
+                for (const auto* entity : select(handlers_[index], target)) {
+                    destroyed.insert(entity->origin);
+                }
+            }
+        }
+        return destroyed;
+    }
+
+    // Whether a destroy can reach an entity of `roots`, or an entity one of them hangs under.
+    [[nodiscard]] bool destroyable(const std::vector<std::uint32_t>& roots,
+                                   const std::set<std::uint32_t>& destroyed) const {
+        const auto own = [&](std::uint32_t origin) { return std::ranges::contains(roots, origin); };
+        if (std::ranges::any_of(roots, [&](std::uint32_t origin) { return destroyed.contains(origin); })) {
+            return true;
+        }
+        const bool hangs = parent_.has_value() && std::ranges::any_of(entities_, [&](const AbstractEntity& entity) {
+                               return own(entity.origin) && may_carry(entity.traits, *parent_);
+                           });
+        return hangs && !std::ranges::all_of(destroyed, own);
+    }
+
+    // The traits whose `on added`/`on removed` `handler` can deliver: a change of the
+    // trait or its state, or a spawn of an entity that may carry it.
+    [[nodiscard]] std::vector<bool> lifecycle_deliveries(const HandlerModel& handler) const {
+        std::vector<bool> delivered(traits_.size(), false);
+        for (const auto& change : handler.changes) {
+            if (!change.trait.has_value()) {
+                continue;
+            }
+            for (const auto trait : state_traits(*change.trait)) {
+                delivered[trait] = true;
+            }
+        }
+        for (const auto& entity : entities_) {
+            if (!std::ranges::contains(handler.spawned_origins, entity.origin)) {
+                continue;
+            }
+            for (TraitIndexValue trait = 0; trait < traits_.size(); ++trait) {
+                delivered[trait] = delivered[trait] || may_carry(entity.traits, trait);
+            }
+        }
+        return delivered;
     }
 
     // ── Spawn order ─────────────────────────────────────────────────────────
@@ -292,7 +422,8 @@ public:
     }
 
     // The activations a handler can run in, named by the phase or host event that starts them.
-    [[nodiscard]] std::vector<std::set<std::string>> activations() const {
+    template <typename Feeds>
+    [[nodiscard]] std::vector<std::set<std::string>> activations(const Feeds& feeds) const {
         std::vector<std::set<std::string>> roots(handlers_.size());
         for (std::size_t index = 0; index < handlers_.size(); ++index) {
             if (reachable_[index] && starts_activation(handlers_[index])) {
@@ -303,17 +434,18 @@ public:
         while (changed) {
             changed = false;
             for (std::size_t index = 0; index < handlers_.size(); ++index) {
-                changed |= reachable_[index] && inherit_activations(roots, index);
+                changed |= reachable_[index] && inherit_activations(roots, index, feeds);
             }
         }
         return roots;
     }
 
     // Adds the activations of every reachable handler that feeds handler `index`.
-    bool inherit_activations(std::vector<std::set<std::string>>& roots, std::size_t index) const {
+    template <typename Feeds>
+    bool inherit_activations(std::vector<std::set<std::string>>& roots, std::size_t index, const Feeds& feeds) const {
         bool changed = false;
         for (std::size_t source = 0; source < handlers_.size(); ++source) {
-            if (!reachable_[source] || !feeds(handlers_[source], handlers_[index])) {
+            if (!reachable_[source] || !feeds(source, index)) {
                 continue;
             }
             for (const auto& activation : roots[source]) {
@@ -438,7 +570,8 @@ public:
     }
 
     [[nodiscard]] std::vector<SpawnOrderConflict> spawn_order_conflicts() const {
-        const auto roots   = activations();
+        const auto roots = activations(
+            [this](std::size_t source, std::size_t target) { return feeds(handlers_[source], handlers_[target]); });
         const auto reaches = orderings();
         std::vector<std::size_t> spawners;
         for (std::size_t index = 0; index < handlers_.size(); ++index) {
@@ -547,11 +680,12 @@ private:
                 native_functions_.emplace(make_canonical_id(function), function);
             }
         }
-        parent_trait_ = find_hierarchy_trait(*program_);
-        if (parent_trait_.has_value()) {
-            traits_.collect(*parent_trait_);
+        const auto parent = find_hierarchy_trait(*program_);
+        if (parent.has_value()) {
+            traits_.collect(*parent);
         }
         traits_.finish(*program_);
+        parent_ = parent.has_value() ? traits_.find(*parent) : std::nullopt;
         for (const auto& [_, trait] : program_->traits) {
             if (const auto marker = trait.lost_link.has_value() && trait.symbol_id.has_value()
                                         ? traits_.find(*trait.symbol_id)
@@ -566,7 +700,6 @@ private:
         std::ranges::sort(archetypes, {}, [](const PersistenceArchetypeDescriptor& archetype) {
             return canonical_node_string(archetype.node);
         });
-        const auto parent = parent_trait_.has_value() ? traits_.find(*parent_trait_) : std::nullopt;
         for (const auto& archetype : archetypes) {
             Origin origin{.node = archetype.node, .archetype = make_canonical_id(archetype.node.archetype)};
             for (const auto& baseline : archetype.baseline_traits) {
@@ -574,8 +707,8 @@ private:
                     origin.seed.push_back(*trait);
                 }
             }
-            if (!archetype.node.role_path.empty() && parent.has_value()) {
-                origin.seed.push_back(*parent);
+            if (!archetype.node.role_path.empty() && parent_.has_value()) {
+                origin.seed.push_back(*parent_);
             }
             origins_.push_back(std::move(origin));
         }
@@ -696,11 +829,19 @@ private:
                 const auto created = native_origins(function);
                 model.spawned_origins.insert(model.spawned_origins.end(), created.begin(), created.end());
             }
-            for (const auto& event : contract.emits) {
-                model.emits.push_back(make_canonical_id(event));
-            }
-            std::ranges::sort(model.emits);
+            add_emits(model, contract.emits);
             handlers_.push_back(std::move(model));
+        }
+    }
+
+    static void add_emits(HandlerModel& model, const std::unordered_set<SymbolId>& events) {
+        for (const auto& event : events) {
+            model.emits.push_back(make_canonical_id(event));
+        }
+        std::ranges::sort(model.emits);
+        // A successful restore replaces the whole world.
+        if (std::ranges::binary_search(model.emits, std::string{"std.persistence.RestoreRequested"})) {
+            model.destroys.push_back(ResolvedTarget{});
         }
     }
 
@@ -710,11 +851,18 @@ private:
                 if (command.target.has_value()) {
                     const auto spawned = origins_of(*command.target, false);
                     model.spawned_origins.insert(model.spawned_origins.end(), spawned.begin(), spawned.end());
+                    model.spawns.push_back(SpawnSites{.template_id = make_canonical_id(*command.target),
+                                                      .roots       = origins_of(*command.target, true),
+                                                      .sites       = &command.sites});
                 }
                 return;
             case HandlerCommandKind::Set:
-            case HandlerCommandKind::Destroy:  // destroying an entity fires no lifecycle trigger
                 return;
+            case HandlerCommandKind::Destroy: {  // destroying an entity fires no lifecycle trigger
+                auto targets = resolve_targets(command.entities);
+                model.destroys.insert(model.destroys.end(), targets.begin(), targets.end());
+                return;
+            }
             case HandlerCommandKind::Add:
             case HandlerCommandKind::Remove:
                 model.changes.push_back(
@@ -1004,19 +1152,24 @@ private:
         return result;
     }
 
+    // `trait`, or its whole state when it is a state's slot or variant.
+    [[nodiscard]] std::vector<TraitIndexValue> state_traits(TraitIndexValue trait) const {
+        const auto slot = traits_.variants_of(trait).empty() ? traits_.slot_of(trait) : std::optional(trait);
+        if (!slot.has_value()) {
+            return {trait};
+        }
+        auto traits = traits_.variants_of(*slot);
+        traits.push_back(*slot);
+        return traits;
+    }
+
     // The entity after a `remove` of `trait`; a state's slot or variant takes the whole state.
     Bits removed(const Bits& bits, TraitIndexValue trait, bool& changed) {
         auto result = bits;
         if (!test_bit(result, trait)) {
             return result;
         }
-        const auto slot = traits_.variants_of(trait).empty() ? traits_.slot_of(trait) : std::optional(trait);
-        std::vector<TraitIndexValue> dropped{trait};
-        if (slot.has_value()) {
-            dropped = traits_.variants_of(*slot);
-            dropped.push_back(*slot);
-        }
-        for (const auto drop : dropped) {
+        for (const auto drop : state_traits(trait)) {
             if (test_bit(result, drop)) {
                 changed |= mark(lost_, drop);
                 clear_bit(result, drop);
@@ -1183,7 +1336,7 @@ private:
     const DecoratedProgram* program_;
     ReachabilityOptions options_;
     TraitIndex traits_;
-    std::optional<SymbolId> parent_trait_;
+    std::optional<TraitIndexValue> parent_;
     std::vector<TraitIndexValue> lost_markers_;  // a link's lost marker comes and goes at run time
     std::map<std::string, SymbolId> native_functions_;  // called functions that create entities
     std::vector<Origin> origins_;
@@ -1197,6 +1350,8 @@ private:
     std::vector<bool> reachable_;
     std::set<std::string> events_;
     std::set<std::string> external_events_;
+    std::map<std::string, std::string> boundary_roots_;  // canonical id of a `load`/`unload` event to its name
+    std::vector<bool> single_;
     std::vector<TraitIndexValue> widened_;
 };
 

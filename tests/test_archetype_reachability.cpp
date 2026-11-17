@@ -61,6 +61,13 @@ struct Analysis {
             return d.level == DiagnosticLevel::Error && d.message.contains(text);
         });
     }
+    [[nodiscard]] std::size_t never_destroyed(const std::string& template_name,
+                                              const std::string& module = "game") const {
+        const auto text = "'" + module + "." + template_name + "' is spawned repeatedly and never destroyed";
+        return static_cast<std::size_t>(std::ranges::count_if(diagnostics, [&](const Diagnostic& d) {
+            return d.level == DiagnosticLevel::Warning && d.message.contains(text);
+        }));
+    }
     [[nodiscard]] std::size_t error_count() const {
         return static_cast<std::size_t>(std::ranges::count_if(
             diagnostics, [](const Diagnostic& d) { return d.level == DiagnosticLevel::Error; }));
@@ -1112,6 +1119,229 @@ TEST_CASE("Delayed cycle report: link order does not change the report", "[arche
     CHECK(forward[0].message.ends_with(": left.PingSide/on signals.Ping, right.PongSide/on signals.Pong"));
     CHECK(forward[0].location.filename == "left.cactus");
     CHECK(forward == infos({"signals", "right", "left"}));
+}
+
+// ── Never-destroyed spawns ───────────────────────────────────────────────────
+
+TEST_CASE("Never destroyed: a spawn every tick with no destroyer is warned at the spawn",
+          "[archetype-reachability][never-destroyed]") {
+    const auto analysis = analyze(
+        "template Spark:\n"
+        "    Position\n"
+        "rule Emit:\n"
+        "    on tick:\n"
+        "        spawn Spark()\n");
+    INFO(analysis.describe());
+    REQUIRE(analysis.never_destroyed("Spark") == 1);
+    const auto warning = std::ranges::find_if(analysis.diagnostics, [](const Diagnostic& d) {
+        return d.message.contains("never destroyed");
+    });
+    CHECK(warning->location.line == 32);
+    CHECK(warning->message.contains("std.time.Lifetime"));
+    CHECK(warning->message.contains("single"));
+    CHECK(analysis.error_count() == 0);
+}
+
+TEST_CASE("Never destroyed: a guarded spawn gets the same message", "[archetype-reachability][never-destroyed]") {
+    const auto analysis = analyze(
+        "trait Arena:\n"
+        "    var boss_spawned: bool = false\n"
+        "entity Ring:\n"
+        "    Arena\n"
+        "template Boss:\n"
+        "    Health\n"
+        "rule SpawnBoss:\n"
+        "    each:\n"
+        "        Arena as arena\n"
+        "    on tick:\n"
+        "        if not arena.boss_spawned:\n"
+        "            arena.boss_spawned = true\n"
+        "            spawn Boss()\n");
+    INFO(analysis.describe());
+    REQUIRE(analysis.never_destroyed("Boss") == 1);
+    for (const auto& diagnostic : analysis.diagnostics) {
+        CHECK_FALSE(diagnostic.message.contains("unbounded"));
+        CHECK_FALSE(diagnostic.message.contains("grow"));
+    }
+}
+
+TEST_CASE("Never destroyed: a lifetime that destroys its entity silences it",
+          "[archetype-reachability][never-destroyed]") {
+    const auto analysis = analyze(
+        "trait Lifetime:\n"
+        "    var remaining: float = 1.0\n"
+        "template Spark:\n"
+        "    Position\n"
+        "    Lifetime\n"
+        "rule Emit:\n"
+        "    on tick:\n"
+        "        spawn Spark()\n"
+        "rule Expire:\n"
+        "    each:\n"
+        "        Lifetime\n"
+        "    on tick:\n"
+        "        destroy\n");
+    INFO(analysis.describe());
+    CHECK(analysis.never_destroyed("Spark") == 0);
+}
+
+TEST_CASE("Never destroyed: a load-time spawn is not warned", "[archetype-reachability][never-destroyed]") {
+    const auto analysis = analyze(
+        "event load\n"
+        "template Tree:\n"
+        "    Position\n"
+        "rule Plant:\n"
+        "    on load:\n"
+        "        for i in range(0, 10):\n"
+        "            spawn Tree()\n");
+    INFO(analysis.describe());
+    CHECK(analysis.never_destroyed("Tree") == 0);
+}
+
+TEST_CASE("Never destroyed: a startup arrival handler runs once", "[archetype-reachability][never-destroyed]") {
+    const auto analysis = analyze(
+        "template Tree:\n"
+        "    Position\n"
+        "entity Seed:\n"
+        "    Crate\n"
+        "rule Plant:\n"
+        "    each:\n"
+        "        Crate\n"
+        "    on added Crate:\n"
+        "        spawn Tree()\n"
+        "rule Mark:\n"
+        "    each:\n"
+        "        Health\n"
+        "    on tick:\n"
+        "        add Dying\n");
+    INFO(analysis.describe());
+    CHECK(analysis.never_destroyed("Tree") == 0);
+}
+
+TEST_CASE("Never destroyed: a lifecycle handler a phase feeds recurs", "[archetype-reachability][never-destroyed]") {
+    const auto analysis = analyze(
+        "template Tree:\n"
+        "    Position\n"
+        "entity Seed:\n"
+        "    Health\n"
+        "rule Plant:\n"
+        "    each:\n"
+        "        Crate\n"
+        "    on added Crate:\n"
+        "        spawn Tree()\n"
+        "rule Mark:\n"
+        "    each:\n"
+        "        Health\n"
+        "    on tick:\n"
+        "        add Crate\n");
+    INFO(analysis.describe());
+    CHECK(analysis.never_destroyed("Tree") == 1);
+}
+
+TEST_CASE("Never destroyed: a single template is not warned", "[archetype-reachability][never-destroyed]") {
+    const auto analysis = analyze(
+        "single trait CursorMark\n"
+        "extern event Clicked\n"
+        "template Cursor:\n"
+        "    CursorMark\n"
+        "rule Place:\n"
+        "    on Clicked:\n"
+        "        spawn Cursor()\n");
+    INFO(analysis.describe());
+    CHECK(analysis.never_destroyed("Cursor") == 0);
+}
+
+TEST_CASE("Never destroyed: teardown does not count as a destroyer", "[archetype-reachability][never-destroyed]") {
+    const auto analysis = analyze(
+        "event unload\n"
+        "template Spark:\n"
+        "    Position\n"
+        "rule Emit:\n"
+        "    on tick:\n"
+        "        spawn Spark()\n"
+        "rule Clear:\n"
+        "    each:\n"
+        "        Position\n"
+        "    on unload:\n"
+        "        destroy\n");
+    INFO(analysis.describe());
+    CHECK(analysis.never_destroyed("Spark") == 1);
+}
+
+TEST_CASE("Never destroyed: destroying an unknown handle silences it", "[archetype-reachability][never-destroyed]") {
+    const auto analysis = analyze(
+        "extern event Kill:\n"
+        "    target: entity_id\n"
+        "template Spark:\n"
+        "    Position\n"
+        "rule Emit:\n"
+        "    on tick:\n"
+        "        spawn Spark()\n"
+        "rule KillIt:\n"
+        "    on Kill:\n"
+        "        destroy Kill.target\n");
+    INFO(analysis.describe());
+    CHECK(analysis.never_destroyed("Spark") == 0);
+}
+
+TEST_CASE("Never destroyed: destroying another entity's self does not reach it",
+          "[archetype-reachability][never-destroyed]") {
+    const auto analysis = analyze(
+        "template Spark:\n"
+        "    Position\n"
+        "entity Box:\n"
+        "    Crate\n"
+        "rule Emit:\n"
+        "    on tick:\n"
+        "        spawn Spark()\n"
+        "rule Smash:\n"
+        "    each:\n"
+        "        Crate\n"
+        "    on tick:\n"
+        "        destroy\n");
+    INFO(analysis.describe());
+    CHECK(analysis.never_destroyed("Spark") == 1);
+}
+
+TEST_CASE("Never destroyed: a reachable world restore destroys every entity",
+          "[archetype-reachability][never-destroyed]") {
+    const std::string body =
+        "event RestoreRequested\n"
+        "template Spark:\n"
+        "    Position\n"
+        "rule Emit:\n"
+        "    on tick:\n"
+        "        spawn Spark()\n"
+        "rule Reload:\n"
+        "    on frame:\n"
+        "        emit RestoreRequested\n";
+    const auto restoring = analyze(body, "std.persistence");
+    INFO(restoring.describe());
+    CHECK(restoring.never_destroyed("Spark", "std.persistence") == 0);
+    // Only the standard library's restore request replaces the world.
+    CHECK(analyze(body).never_destroyed("Spark") == 1);
+}
+
+TEST_CASE("Never destroyed: destroying an ancestor silences it", "[archetype-reachability][never-destroyed]") {
+    const auto analysis = analyze(
+        "template Spark(owner: entity_id):\n"
+        "    Position\n"
+        "    Parent:\n"
+        "        parent = owner\n"
+        "entity Box:\n"
+        "    Crate\n"
+        "rule Emit:\n"
+        "    each:\n"
+        "        Crate\n"
+        "    on tick:\n"
+        "        spawn Spark(owner = self)\n"
+        "rule Smash:\n"
+        "    each:\n"
+        "        Crate\n"
+        "    on tick:\n"
+        "        destroy\n");
+    INFO(analysis.describe());
+    CHECK(analysis.never_destroyed("Spark") == 0);
 }
 
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

@@ -19,6 +19,13 @@ rule Dig:
     on tick:
         spawn Floor()
 
+rule Fill:
+    each:
+        Tile as tile
+    on tick:
+        if tile.x < 0:
+            destroy
+
 rule Follow:
     pairs:
         a: Tile

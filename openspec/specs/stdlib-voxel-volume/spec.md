@@ -5,7 +5,7 @@ Describe editable block volumes using ordinary Cactus entities while providing e
 
 ## Requirements
 ### Requirement: Block state uses ECS traits and ordinary persistence
-std.voxel.volume SHALL describe a fixed, axis-aligned volume and cells identified by a volume reference and integer coordinates. The volume's origin, cell size and bounds SHALL be `let` fields, given only when the volume is made. Each cell coordinate SHALL be a ranged `let` field whose range is the volume's bounds on that axis. Its reusable cell template SHALL compose existing world transforms and box colliders. std.physics.volume.Solid membership SHALL determine occupancy. A persistent texture_id field SHALL select the surface. Air cells SHALL remain addressable and save-eligible. The volume configuration SHALL also be persistent so a restored cell retains a valid remapped volume reference. Editing SHALL use ordinary field updates and trait addition/removal, without opaque terrain mutation calls.
+std.voxel.volume SHALL describe a fixed, axis-aligned volume and cells identified by a volume reference and integer coordinates. The volume reference SHALL be a required link to `Volume`, and a cell SHALL be destroyed when that link is lost, so a destroyed volume leaves no cells behind. The volume's origin, cell size and bounds SHALL be `let` fields, given only when the volume is made. Each cell coordinate SHALL be a ranged `let` field whose range is the volume's bounds on that axis. Its reusable cell template SHALL compose existing world transforms and box colliders. std.physics.volume.Solid membership SHALL determine occupancy. A persistent texture_id field SHALL select the surface. Air cells SHALL remain addressable and save-eligible. The volume configuration SHALL also be persistent so a restored cell retains a valid remapped volume reference. Editing SHALL use ordinary field updates and trait addition/removal, without opaque terrain mutation calls.
 
 #### Scenario: Dig and rebuild the same cell
 - **WHEN** Solid is removed from a cell and subsequently added with a selected texture
@@ -19,6 +19,10 @@ std.voxel.volume SHALL describe a fixed, axis-aligned volume and cells identifie
 #### Scenario: Volume geometry cannot change
 - **WHEN** a handler writes a volume's `max_x` or adds `Volume` to an existing entity
 - **THEN** compilation fails with a diagnostic naming the field or the trait
+
+#### Scenario: Cells die with their volume
+- **WHEN** a filled volume is destroyed
+- **THEN** every cell of that volume is destroyed, and cells of other volumes remain
 
 ### Requirement: Cell and ray probes are ordinary Cactus rules
 The module SHALL expose CellProbe and RayProbe traits whose results are computed by ordinary Cactus pair/reduction rules during the input phase. Producers SHALL run before probe evaluation and consumers afterward through normal handler dependencies. Probe results SHALL describe that pass's selected state, and SHALL be refreshed on each input activation. Disabled probes, invalid volumes and empty candidate groups SHALL clear old results.

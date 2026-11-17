@@ -56,7 +56,7 @@ The example SHALL declare a rule that spawns exactly 8 balls from `BallTemplate`
 
 ### Requirement: Click spawns a randomized ball inside the box
 
-The example SHALL declare an `input SpawnBall: button` bound to the left mouse button, and a rule with an `on input:` handler that, on each press-edge of `SpawnBall`, computes a world-space spawn point by intersecting `std.camera.volume.ray(cv, std.input.mouse_position())` with the box's `z = 0` plane through `std.camera.volume.ray_plane` (`plane_origin = vec3(0,0,0)`, `plane_normal = vec3(0,0,1)`), where `cv` is the main camera's `CameraView` bound in the rule as a pair binding, clamps that point's `x` and `y` components so the new ball's sphere (using its own sampled radius) stays clear of the box's interior wall faces, and spawns one `BallTemplate` there with an independently sampled radius, a uniformly random 3D direction scaled by an independently sampled speed, and a color from `std.random.palette_color` at a randomly sampled index. The example SHALL impose no upper bound on the number of balls spawned this way.
+The example SHALL declare an `input SpawnBall: button` bound to the left mouse button, and a rule with an `on input:` handler that, on each press-edge of `SpawnBall`, computes a world-space spawn point by intersecting `std.camera.volume.ray(cv, std.input.mouse_position())` with the box's `z = 0` plane through `std.camera.volume.ray_plane` (`plane_origin = vec3(0,0,0)`, `plane_normal = vec3(0,0,1)`), where `cv` is the main camera's `CameraView` bound in the rule as a pair binding, clamps that point's `x` and `y` components so the new ball's sphere (using its own sampled radius) stays clear of the box's interior wall faces, and spawns one `ClickedBall` there, a `BallTemplate` with a `std.time.Lifetime` of 30 seconds, with an independently sampled radius, a uniformly random 3D direction scaled by an independently sampled speed, and a color from `std.random.palette_color` at a randomly sampled index. A click-spawned ball SHALL be destroyed when its lifetime runs out; the load-time balls SHALL carry no lifetime. The example SHALL impose no other bound on the number of balls spawned this way.
 
 #### Scenario: A single press spawns exactly one ball
 - **WHEN** `SpawnBall` transitions from not-pressed to pressed on a given frame
@@ -70,9 +70,13 @@ The example SHALL declare an `input SpawnBall: button` bound to the left mouse b
 - **WHEN** the mouse's projected point lies at or beyond a wall's inner face
 - **THEN** the spawned ball's position is clamped so its sphere does not start overlapping that wall
 
+#### Scenario: A clicked ball expires
+- **WHEN** 30 seconds of simulation time pass after a click spawned a ball
+- **THEN** that ball is destroyed, and the 8 load-time balls remain
+
 #### Scenario: Ball count is unbounded
 - **WHEN** `SpawnBall` has already been pressed enough times that the total ball count exceeds the original 8
-- **THEN** the next press still spawns another ball; no existing ball is destroyed or spawn rejected to enforce a cap
+- **THEN** the next press still spawns another ball; no existing ball is destroyed early or spawn rejected to enforce a cap
 
 ### Requirement: Spawned ball randomization draws from one shared, persistent RNG
 

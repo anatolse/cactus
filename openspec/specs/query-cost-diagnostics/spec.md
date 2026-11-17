@@ -71,3 +71,34 @@ Compiling a program that uses any standard library module SHALL report no query 
 #### Scenario: The editor example is clean
 - **WHEN** `examples/editor-3d` is compiled with `--warnings-as-errors`
 - **THEN** the build passes
+
+### Requirement: A template spawned repeatedly and never destroyed is warned
+On the linked program, the compiler SHALL find every recurring spawn site: a `spawn` in a reachable handler that can run in more than one activation, meaning any reachable handler except one reachable only from `load` or from the startup arrival activation. For each template spawned at a recurring site, the compiler SHALL check whether a reachable handler other than an `unload` handler can destroy an entity of that template: by `destroy` of `self` or of a pair binding in a rule whose domain matches an archetype the template's entities can reach, by `destroy` of an `entity_id` the program does not pin down, by destroying an entity the template is spawned under, or by emitting `std.persistence.RestoreRequested`, since a successful restore replaces the whole world. When none can, the compiler SHALL warn at each recurring spawn site that the template is spawned repeatedly and never destroyed, naming the template, and SHALL suggest a `std.time.Lifetime`, a rule that destroys it, or a `single` trait. A template that carries a `single` trait SHALL NOT be warned. Value guards SHALL be ignored, so the message SHALL NOT say that the population is unbounded or grows. The standard library and the maintained examples SHALL build without this warning.
+
+#### Scenario: A spawn every tick with no destroyer
+- **WHEN** a `tick` rule spawns `Spark` and no reachable rule destroys an entity with `Spark`'s traits
+- **THEN** the compiler warns at the spawn that `Spark` is spawned repeatedly and never destroyed
+
+#### Scenario: A guarded spawn gets the same message
+- **WHEN** a `tick` rule spawns `Boss` inside `if not arena.boss_spawned:` and nothing destroys `Boss`
+- **THEN** the compiler warns that `Boss` is spawned repeatedly and never destroyed, and the message does not say its population is unbounded
+
+#### Scenario: A lifetime bounds the population
+- **WHEN** a `tick` rule spawns `Spark` and `Spark` carries `std.time.Lifetime`
+- **THEN** no warning is reported
+
+#### Scenario: A load-time spawn
+- **WHEN** an `on load` handler spawns ten `Tree` entities and nothing destroys them
+- **THEN** no warning is reported
+
+#### Scenario: A singleton template
+- **WHEN** an event handler spawns `Cursor` repeatedly and `Cursor` carries a `single` trait
+- **THEN** no warning is reported
+
+#### Scenario: A world restore counts as a destroy
+- **WHEN** a `tick` rule spawns `Spark`, nothing destroys it, and a reachable handler emits `std.persistence.RestoreRequested`
+- **THEN** no warning is reported
+
+#### Scenario: Teardown does not count
+- **WHEN** a `tick` rule spawns `Spark` and only an `on unload` handler destroys entities with `Spark`'s traits
+- **THEN** the compiler warns at the spawn

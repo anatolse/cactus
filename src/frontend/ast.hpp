@@ -269,7 +269,8 @@ struct TraitAccessExpr {
     std::optional<SymbolId> resolved_entity_id;
     std::optional<std::size_t> pair_binding_index;
     // Set by semantic analysis on a read through a required link (`order.target[Unit]`):
-    // the target trait, and the link's holder trait and field.
+    // the target trait, and the link's holder trait and field. A read through a relation
+    // end (`r.from[Tile]`) sets the end's trait and its spelling, with no holder.
     mutable std::optional<SymbolId> link_target;
     mutable std::optional<SymbolId> link_holder;
     mutable std::string link_field;

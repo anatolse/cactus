@@ -3634,12 +3634,14 @@ bool SemanticAnalyzer::reject_trait_access_write(
         report_pair_read_only(stmt, binding);
         return true;
     }
-    const auto object = infer_expr_type(*access.object, filter_bindings, locals, handler_event, pair_scope);
-    if (is_link_type(object)) {
+    const auto row_end = row_end_trait(*access.object, pair_scope).has_value();
+    const auto object =
+        row_end ? make_unknown_type() : infer_expr_type(*access.object, filter_bindings, locals, handler_event, pair_scope);
+    if (row_end || is_link_type(object)) {
         const auto spelling = entity_id_object_spelling(*access.object);
-        errors_.error(stmt.location,
-                      "can't write through link '" + spelling + "'; use 'set " + access.trait_name + " on " +
-                          spelling + ":'");
+        const auto problem  = row_end ? "relation end '" + spelling + "' is read-only"
+                                      : "can't write through link '" + spelling + "'";
+        errors_.error(stmt.location, problem + "; use 'set " + access.trait_name + " on " + spelling + ":'");
     } else if (object.kind == TypeKind::EntityId) {
         errors_.error(stmt.location, entity_id_write_message(access.trait_name, entity_id_object_spelling(*access.object)));
     } else if (object.kind != TypeKind::Unknown) {
@@ -13668,6 +13670,9 @@ TypeInfo SemanticAnalyzer::infer_trait_access_type(
         return access.resolved_trait_id.has_value() ? trait_field_type(*access.resolved_trait_id, fields)
                                                     : make_unknown_type();
     }
+    if (const auto end = row_end_trait(*access.object, pair_scope); end.has_value()) {
+        return infer_row_end_read_type(access, *end, fields, location);
+    }
     const auto object = infer_expr_type(*access.object, filter_bindings, local_bindings, handler_event, pair_scope);
     if (is_link_type(object)) {
         return infer_link_read_type(access, object, fields, location, filter_bindings, local_bindings, pair_scope);
@@ -13734,6 +13739,39 @@ TypeInfo SemanticAnalyzer::infer_link_read_type(
     access.link_holder = holder;
     access.link_field  = field->member;
     return trait_field_type(target, fields);
+}
+
+std::optional<SymbolId> SemanticAnalyzer::row_end_trait(const ExprNode& object, const PairScope* pair_scope) const {
+    const auto* member  = std::get_if<MemberExpr>(&object.expr);
+    const auto* ident   = member == nullptr ? nullptr : std::get_if<IdentExpr>(&member->object->expr);
+    const auto* binding = ident == nullptr ? nullptr : find_pair_binding(pair_scope, ident->name);
+    const auto from     = binding == nullptr ? std::nullopt : row_endpoint(object, ident->name);
+    if (!from.has_value() || !binding->relation.has_value()) {
+        return std::nullopt;
+    }
+    const auto* relation = find_resolved_relation(*binding->relation);
+    if (relation == nullptr) {
+        return std::nullopt;
+    }
+    return *from ? relation->from.trait : relation->to.trait;
+}
+
+TypeInfo SemanticAnalyzer::infer_row_end_read_type(const TraitAccessExpr& access,
+                                                   const SymbolId& end,
+                                                   const std::vector<std::string>& fields,
+                                                   const SourceLocation& location) const {
+    const auto spelling = entity_id_object_spelling(*access.object);
+    const auto trait    = try_resolve_trait_ref_to_symbol(access.trait_name);
+    if (!trait.has_value() || *trait != end) {
+        errors_.error(location,
+                      "can't read '" + access.trait_name + "' through relation end '" + spelling + "', which carries '" +
+                          end.local_name + "'; join the entity in `pairs:`, or declare the end with the trait "
+                                           "that holds the value");
+        return make_unknown_type();
+    }
+    access.link_target = end;
+    access.link_field  = spelling;
+    return trait_field_type(end, fields);
 }
 
 std::optional<TypeInfo> SemanticAnalyzer::infer_filter_member_type(

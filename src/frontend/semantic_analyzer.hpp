@@ -2027,6 +2027,12 @@ private:
                                   const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
                                   const std::unordered_map<std::string, TypeInfo>& local_bindings,
                                   const PairScope* pair_scope) const;
+    // A row lives only while both ends carry their declared traits, so a read through an end always finds it.
+    [[nodiscard]] std::optional<SymbolId> row_end_trait(const ExprNode& object, const PairScope* pair_scope) const;
+    TypeInfo infer_row_end_read_type(const TraitAccessExpr& access,
+                                     const SymbolId& end,
+                                     const std::vector<std::string>& fields,
+                                     const SourceLocation& location) const;
     // A unary rule that reads through a link of its own row skips holders whose link is lost.
     static void exclude_lost_link_holders(ProgramNode& program);
     // Every link field of each archetype trait entry is assigned a proven value.

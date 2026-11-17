@@ -83,7 +83,9 @@ exception — see `examples/CLAUDE.md`).
 - To link two entities (a tile to a tile, a robot to its task, a player to a room), declare a
   `relation` with `from:`/`to:` ends instead of an entity, or a trait, holding `entity_id`
   fields. A relation can't hold a duplicate pair or a row to a dead entity, and rules read it
-  with `R(x, y)` tests in `where:` or a row binding (`r: R`, `each: R as r`).
+  with `R(x, y)` tests in `where:` or a row binding (`r: R`, `each: R as r`). A row binding
+  reads its ends' declared traits (`r.from[Tile].x`), so don't copy an end's value into a row
+  field.
 - When a trait or a state variant points at exactly one entity it reads, such as an attack target
   or a camera's follow target, declare a required link field typed by the target's trait
   (`let target: Unit`). Read it with `order.target[Unit].health` and handle its end with

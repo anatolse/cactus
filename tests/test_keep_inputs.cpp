@@ -258,6 +258,18 @@ TEST_CASE("keep levels: a row domain over a stored relation is delta", "[keep-le
     CHECK(analysis.evaluation("Rows").level == KeepLevel::Delta);
 }
 
+TEST_CASE("keep levels: a read through a relation end is named", "[keep-levels]") {
+    const auto analysis = analyze(
+        "rule Ahead:\n"
+        "    each: Link as l\n"
+        "    group: keeps\n"
+        "    where:\n"
+        "        l.to[Unit].x > l.from[Unit].x\n"
+        "    keep Kept(l.to, l.from)\n");
+    CHECK(full_reason(analysis, "Ahead") == "the read through relation end `l.to`");
+    CHECK(names(analysis.inputs("Ahead").traits) == std::vector<std::string>{"Unit"});
+}
+
 TEST_CASE("keep levels: derived row domains, row bindings and products are full", "[keep-levels]") {
     const auto analysis = analyze(
         "rule Rows:\n"

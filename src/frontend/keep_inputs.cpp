@@ -101,7 +101,9 @@ std::optional<KeepEvaluation> foreign_read(const ExprNode& expression, const Rel
                                        .location = access->location};
             } else if (access->link_target.has_value()) {
                 found = KeepEvaluation{.level    = KeepLevel::Full,
-                                       .reason   = "the read through link `" + access->link_field + "`",
+                                       .reason   = (access->link_holder.has_value() ? "the read through link `"
+                                                                                    : "the read through relation end `") +
+                                                 access->link_field + "`",
                                        .location = access->location};
             }
             return;

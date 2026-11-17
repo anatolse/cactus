@@ -1078,6 +1078,46 @@ reduced_relation_keep.cactus fixtures reduced_relation_keep.StandOnCheckpoint/on
     named_writes:
     named_requirements:
     iteration_order: free
+relation_end_reads.cactus examples relation_end_reads.Fade/on std.core.fixed_tick
+    reads: relation_end_reads.Control relation_end_reads.Target
+    read_fields: relation_end_reads.Control{fade} relation_end_reads.Target{id}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads: [relation_end_reads.Settings: relation_end_reads.Control{fade}]
+    named_writes:
+    named_requirements: relation_end_reads.Settings/relation_end_reads.Control
+    iteration_order: creation
+relation_end_reads.cactus examples relation_end_reads.Light/on std.core.fixed_tick
+    reads: relation_end_reads.Lamp relation_end_reads.Sees relation_end_reads.Watcher
+    read_fields: relation_end_reads.Lamp{power} relation_end_reads.Sees{} relation_end_reads.Watcher{range}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:relation_end_reads.Lamp
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+relation_end_reads.cactus examples relation_end_reads.Notice/on std.core.fixed_tick
+    reads: relation_end_reads.Sees relation_end_reads.Target relation_end_reads.Watcher
+    read_fields: relation_end_reads.Sees{} relation_end_reads.Target{loud} relation_end_reads.Watcher{range}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+relation_end_reads.cactus examples relation_end_reads.Watch/on std.core.fixed_tick
+    reads: relation_end_reads.Sees
+    read_fields: relation_end_reads.Sees{}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
 relation_endpoint_limits.cactus examples relation_endpoint_limits.Allocate/on std.core.fixed_tick
     reads: relation_endpoint_limits.Candidate relation_endpoint_limits.Claim relation_endpoint_limits.Control
     read_fields: relation_endpoint_limits.Candidate{score} relation_endpoint_limits.Claim{} relation_endpoint_limits.Control{mode}

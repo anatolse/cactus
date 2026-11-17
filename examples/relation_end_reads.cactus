@@ -1,0 +1,96 @@
+module relation_end_reads
+
+# A row binding reads the end traits of its row: `s.from[Watcher].range` and
+# `s.to[Target].loud`. A row lives only while both ends carry their end
+# traits, so the read always finds them. Tests set `fade` to take `Target`
+# off one entity; its rows go away with it.
+
+use std.core
+
+trait Watcher:
+    let range: float = 0.0
+    var alerts: int = 0
+
+trait Target:
+    let id: int = 0
+    let loud: float = 0.0
+
+trait Lamp:
+    let power: float = 0.0
+    var lit: int = 0
+
+trait Control:
+    var fade: int = 0
+
+event Noticed
+event Lit
+
+relation Sees:
+    from: Watcher
+    to: Target
+
+rule Watch:
+    pairs:
+        watcher: Watcher
+        target: Target
+    where:
+        not Sees(watcher, target)
+    on fixed_tick:
+        add Sees(watcher, target)
+
+# A watcher notices a target louder than its range.
+rule Notice:
+    each: Sees as s
+    after: Watch
+    where:
+        s.to[Target].loud > s.from[Watcher].range
+    on fixed_tick:
+        emit Noticed to s.from
+
+rule CountAlerts:
+    each: Watcher as watcher
+    on Noticed:
+        watcher.alerts += 1
+
+# A lamp on a seen target lights when the watcher reaches past its power.
+rule Light:
+    pairs:
+        lamp: Lamp
+        s: Sees
+    after: Watch
+    where:
+        s.to == lamp
+        s.from[Watcher].range > lamp[Lamp].power
+    on fixed_tick:
+        emit Lit to lamp
+
+rule Glow:
+    each: Lamp as lamp
+    on Lit:
+        lamp.lit += 1
+
+rule Fade:
+    each: Target as target
+    where:
+        target.id == Settings[Control].fade
+    on fixed_tick:
+        remove Target
+
+entity Settings:
+    Control
+
+template Looker(range: float):
+    Watcher:
+        range = range
+
+template Noisy(id: int, loud: float, power: float):
+    Target:
+        id = id
+        loud = loud
+    Lamp:
+        power = power
+
+entity Owl from Looker(range = 5.0)
+entity Cat from Looker(range = 1.0)
+entity Mouse from Noisy(id = 1, loud = 3.0, power = 2.0)
+entity Bell from Noisy(id = 2, loud = 8.0, power = 4.0)

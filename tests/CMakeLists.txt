@@ -912,6 +912,13 @@ cactus_add_headless_behavior_test(test_relation_row_joins_headless_behavior
     CONTRACT_AUDIT
 )
 
+cactus_add_headless_behavior_test(test_relation_end_reads_headless_behavior
+    CACTUS_SOURCE examples/relation_end_reads.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_relation_end_reads_headless_behavior.cpp
+    CONTRACT_AUDIT
+)
+
 cactus_add_headless_behavior_test(test_grid_region_joins_headless_behavior
     CACTUS_SOURCE examples/grid_region_joins.cactus
     BACKEND cpp-entt

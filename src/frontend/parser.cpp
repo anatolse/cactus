@@ -3083,7 +3083,9 @@ std::unique_ptr<StmtNode> Parser::parse_assign_or_expr_stmt() {
         auto saved_pos = current_;
         auto name      = advance().value;
         std::vector<std::string> path;
-        while (check(TokenType::DOT) && peek_next().type == TokenType::IDENTIFIER) {
+        // A relation row's `.from`/`.to` lex as keywords.
+        while (check(TokenType::DOT) && (peek_next().type == TokenType::IDENTIFIER ||
+                                         peek_next().type == TokenType::FROM || peek_next().type == TokenType::TO)) {
             advance();  // '.'
             path.push_back(advance().value);
         }

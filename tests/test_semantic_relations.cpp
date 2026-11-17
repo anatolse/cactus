@@ -1659,7 +1659,7 @@ TEST_CASE("Relations: row joins retain row restrictions", "[semantic][relations]
     check("", "a.cost = 2.0", "relation rows are read-only");
     check("", "destroy a", "is a relation row, not an entity");
     check("", "emit Done to self", "`self` is unavailable");
-    check("", "let x = a.from[Tile].x", "can't read trait");
+    check("", "let x = a.from[Robot].x", "which carries 'Tile'");
     check("", "add Claim(a.from, b.to)", "is `one`");
     check("    limit: 1 per a\n", "emit Done", "names a relation row");
     check("    reduce:\n        n = count()\n", "emit Done", "`reduce:` can't run over relation rows");
@@ -1706,6 +1706,152 @@ TEST_CASE("Relations: joined reads participate in descendant occurrence conflict
     CHECK(ordered.clean());
 }
 
+namespace {
+
+bool reads_field(const HandlerContract& contract, const std::string& trait, const std::string& field) {
+    const auto found = std::ranges::find_if(contract.read_fields,
+                                            [&](const auto& entry) { return entry.first.local_name == trait; });
+    return found != contract.read_fields.end() && (found->second.all || found->second.fields.contains(field));
+}
+
+bool binds_read(const HandlerContract& contract, const std::string& trait) {
+    return std::ranges::any_of(contract.bound_reads,
+                               [&](const BoundTraitAccess& access) { return access.trait.local_name == trait; });
+}
+
+}  // namespace
+
+TEST_CASE("Relations: a pair rule reads the end traits of a row", "[semantic][relations][end-reads]") {
+    const auto analysis = analyze(
+        "rule Chase:\n"
+        "    pairs:\n"
+        "        robot: Robot\n"
+        "        s: Seen\n"
+        "    order by:\n"
+        "        s.to[Task].x asc\n"
+        "    where:\n"
+        "        s.from == robot\n"
+        "        s.to[Task].x > robot[Robot].x\n"
+        "    on fixed_tick:\n"
+        "        if s.from[Robot].busy:\n"
+        "            emit Done to s.from\n");
+    INFO(describe(analysis));
+    REQUIRE(analysis.clean());
+    const auto& contract = analysis.contract("Chase");
+    CHECK(reads_field(contract, "Task", "x"));
+    CHECK(reads_field(contract, "Robot", "busy"));
+    CHECK_FALSE(binds_read(contract, "Task"));
+    CHECK_FALSE(contract.own_row_traits.contains(make_symbol_id(SymbolKind::Trait, "game", "Task")));
+}
+
+TEST_CASE("Relations: a unary row domain reads the end traits of its row", "[semantic][relations][end-reads]") {
+    const auto analysis = analyze(
+        "rule Pick:\n"
+        "    each: Seen as s\n"
+        "    order by:\n"
+        "        s.to[Task].x asc\n"
+        "    where:\n"
+        "        s.from[Robot].x > s.to[Task].x\n"
+        "    on fixed_tick:\n"
+        "        if not s.to[Task].taken:\n"
+        "            emit Done to s.from\n");
+    INFO(describe(analysis));
+    REQUIRE(analysis.clean());
+    const auto& contract = analysis.contract("Pick");
+    CHECK(reads_field(contract, "Robot", "x"));
+    CHECK(reads_field(contract, "Task", "x"));
+    CHECK(reads_field(contract, "Task", "taken"));
+    CHECK_FALSE(contract.own_row_traits.contains(make_symbol_id(SymbolKind::Trait, "game", "Robot")));
+}
+
+TEST_CASE("Relations: an unjoined pair compares a row end with the other binding",
+          "[semantic][relations][end-reads]") {
+    const auto analysis = analyze(
+        "rule Use:\n"
+        "    pairs:\n"
+        "        s: Seen\n"
+        "        tile: Tile\n"
+        "    where:\n"
+        "        s.from[Robot].x > tile[Tile].height\n"
+        "    on fixed_tick:\n"
+        "        emit Done to s.from\n");
+    INFO(describe(analysis));
+    REQUIRE(analysis.clean());
+    CHECK(reads_field(analysis.contract("Use"), "Robot", "x"));
+}
+
+TEST_CASE("Relations: a derived row reads its end trait", "[semantic][relations][end-reads][derived]") {
+    const auto analysis = analyze(kStep +
+                                  "relation Route = shortest(Step, by = cost)\n"
+                                  "rule Follow:\n"
+                                  "    pairs:\n"
+                                  "        t: Tile\n"
+                                  "        route: Route\n"
+                                  "    where:\n"
+                                  "        route.from == t\n"
+                                  "        route.to[Tile].x > 0\n"
+                                  "    on fixed_tick:\n"
+                                  "        emit Done to t\n");
+    INFO(describe(analysis));
+    REQUIRE(analysis.clean());
+    CHECK(reads_field(analysis.contract("Follow"), "Tile", "x"));
+}
+
+TEST_CASE("Relations: reads through a row end are limited", "[semantic][relations][end-reads]") {
+    SECTION("another trait") {
+        const auto analysis = analyze(
+            "rule Peek:\n"
+            "    each: Seen as s\n"
+            "    where:\n"
+            "        s.from[Task].x > 0.0\n"
+            "    on fixed_tick:\n"
+            "        emit Done to s.from\n");
+        INFO(describe(analysis));
+        CHECK(analysis.has("can't read 'Task' through relation end 's.from', which carries 'Robot'"));
+        CHECK(analysis.has("pairs:"));
+    }
+    SECTION("a write") {
+        const auto analysis = analyze(
+            "rule Poke:\n"
+            "    each: Seen as s\n"
+            "    on fixed_tick:\n"
+            "        s.to[Task].x = 0.0\n");
+        INFO(describe(analysis));
+        CHECK(analysis.has("relation end 's.to' is read-only; use 'set Task on s.to:'"));
+    }
+    SECTION("a compound write in a pair rule") {
+        const auto analysis = analyze(
+            "rule Poke:\n"
+            "    pairs:\n"
+            "        robot: Robot\n"
+            "        s: Seen\n"
+            "    where:\n"
+            "        s.from == robot\n"
+            "    on fixed_tick:\n"
+            "        s.from[Robot].x += 1.0\n");
+        INFO(describe(analysis));
+        CHECK(analysis.has("relation end 's.from' is read-only"));
+    }
+}
+
+TEST_CASE("Relations: a writer of an end field and a reader through the end are ordered",
+          "[semantic][relations][end-reads][handler-contracts]") {
+    const auto analysis = analyze(
+        "rule Move:\n"
+        "    each: Robot as robot\n"
+        "    on fixed_tick:\n"
+        "        robot.x += 1.0\n"
+        "rule Pick:\n"
+        "    each: Seen as s\n"
+        "    where:\n"
+        "        s.from[Robot].x > 1.0\n"
+        "    on fixed_tick:\n"
+        "        emit Done to s.from\n");
+    INFO(describe(analysis));
+    REQUIRE(analysis.clean());
+    CHECK(edges_between(analysis, "Move", "Pick") > 0);
+}
+
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)
 
 TEST_CASE("Endpoint limits reject invalid domains and capacities", "[relations][endpoint-limit]") {
@@ -1745,7 +1891,7 @@ TEST_CASE("Endpoint uniqueness retains proof restrictions", "[relations][endpoin
 
 TEST_CASE("Endpoint limits leave rows and endpoint traits read only", "[relations][endpoint-limit]") {
     for (const std::string body : {"candidate.from[Robot].x = 1.0", "candidate.from = Boss",
-                                   "let value = candidate.from[Robot].x"}) {
+                                   "let value = candidate.from[Task].x"}) {
         ErrorReporter errors;
         Lexer lexer("module game\n" + kPrelude + "rule Bad:\n    each: Seen as candidate\n"
                     "    limit: 1 per candidate.from\n    on fixed_tick:\n        " + body + "\n",
@@ -1759,6 +1905,11 @@ TEST_CASE("Endpoint limits leave rows and endpoint traits read only", "[relation
         INFO(body);
         CHECK(errors.has_errors());
     }
+    const auto declared = analyze("rule Read:\n    each: Seen as candidate\n"
+                                  "    limit: 1 per candidate.from\n    on fixed_tick:\n"
+                                  "        if candidate.from[Robot].x > 0.0:\n            emit Done\n");
+    INFO(describe(declared));
+    CHECK(declared.clean());
 }
 TEST_CASE("Endpoint key parser rejects fields and nested paths", "[relations][endpoint-limit]") {
     for (const std::string key : {"candidate.score", "candidate.from.owner"}) {

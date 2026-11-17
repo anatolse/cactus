@@ -214,3 +214,44 @@ A member path that starts with a pair binding and continues with a trait selecte
 #### Scenario: Alias in brackets is rejected
 - **WHEN** binding `body` selects `tf.WorldTransform as pose` and a handler reads `body[pose].position`
 - **THEN** compilation reports that `pose` is an alias and says to use `pose.position`
+
+### Requirement: A pair binding may exclude traits
+A block-form entity binding inside `pairs:` SHALL accept, after its positive trait entries, one line `without:` followed by one or more dotted trait names separated by commas. The binding SHALL then select exactly the entities that carry every positive trait of the binding and none of the excluded traits, in the same membership snapshot and creation order as before. An excluded name MAY be a trait, a state, or a state variant, with the meaning of the unary `without:` clause.
+
+An excluded trait SHALL NOT be readable through the binding and SHALL NOT take an alias. The following SHALL each be a source-located error: `without:` on a row binding; `without:` in the compact inline binding form, with help that names the block form; a second `without:` line in one binding; a trait that is both required and excluded by the same binding; an alias on an excluded trait.
+
+The exclusion SHALL be part of the rule's domain for every analysis that reads domains: a pair binding whose `without:` excludes no reachable archetype that matches its positive traits SHALL be rejected as a unary `without:` that excludes nothing is; a binding that no reachable archetype matches SHALL be reported as a rule that never runs; `without: S.X` on a binding SHALL narrow the possible sources of an `add S.V` that acts on that binding as the unary clause does; and a keep rule whose binding excludes a kept trait SHALL depend on that trait's keeper.
+
+Exclusion SHALL NOT change tuple order, the access rules of the binding, or which predicates are eligible for acceleration.
+
+#### Scenario: Excluding a marker
+- **WHEN** a pair rule binds `a: Unit` and `m: Unit` with `without: Shielded` under `m`, with `where: a != m` and `keep Targeted on m`
+- **THEN** exactly the units without `Shielded` that have another unit carry `Targeted`
+
+#### Scenario: Excluding a state variant
+- **WHEN** a binding lists `Guard` and `without: Alert.Asleep`
+- **THEN** guards in every other variant, and guards without `Alert`, are selected
+
+#### Scenario: Membership follows commits
+- **WHEN** an entity gains `Shielded` by a command in one activation
+- **THEN** it leaves the binding's membership from the next pass after the commit, not during the pass in progress
+
+#### Scenario: Exclusion that excludes nothing
+- **WHEN** no reachable archetype carries both `Unit` and `Frozen` and a binding lists `Unit` with `without: Frozen`
+- **THEN** the compiler reports an error naming `Frozen` as an exclusion that excludes nothing
+
+#### Scenario: Reading an excluded trait
+- **WHEN** the rule reads `m[Shielded].power`
+- **THEN** the compiler reports an error saying `m` excludes `Shielded`
+
+#### Scenario: Inline form
+- **WHEN** a binding is written `m: Unit without: Shielded` on one line
+- **THEN** the compiler reports an error whose help shows the block form
+
+#### Scenario: Row binding
+- **WHEN** a row binding `r: Claim` is followed by `without: Done`
+- **THEN** the compiler reports an error saying a row binding selects rows, not entities
+
+#### Scenario: Keep dependency through exclusion
+- **WHEN** rule `AFact` keeps `A` and a keep rule's pair binding lists `without: A`
+- **THEN** that rule depends on `AFact`, and a cycle through it is reported like any keep cycle

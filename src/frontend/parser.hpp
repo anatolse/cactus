@@ -150,6 +150,8 @@ private:
     FilterClause parse_selection_clause(bool allow_alias);
     std::vector<SortKey> parse_order_by_clause();
     PairClause parse_pairs_clause();
+    PairBindingNode parse_pair_binding();
+    FilterClause parse_binding_exclusion();
     [[nodiscard]] bool at_pairs_clause() const;
     WhereClause parse_where_clause();
     [[nodiscard]] bool at_where_clause() const;

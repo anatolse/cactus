@@ -272,10 +272,8 @@ public:
                 emit(handler, label + *reason);
                 continue;
             }
-            for (const auto excluded : dead_exclusions(handler)) {
-                emit(handler,
-                     rule + ": `without: " + canonical(excluded) +
-                         "` excludes nothing; no reachable archetype matching the rule carries it");
+            for (const auto& message : dead_exclusion_messages(handler, rule)) {
+                emit(handler, message);
             }
             for (const auto& need : handler.named) {
                 if (!named_need_met(need)) {
@@ -649,6 +647,7 @@ private:
         collect(contract.exclusion);
         for (const auto& binding : contract.pair_bindings) {
             collect(binding.required_traits);
+            collect(binding.excluded_traits);
         }
         for (const auto& requirement : contract.named_requirements) {
             traits_.collect(requirement.trait);
@@ -804,7 +803,8 @@ private:
                 std::erase(side, *implied);
             }
             for (const auto& binding : contract.pair_bindings) {
-                model.bindings.push_back(Domain{.required = indices_of(binding.required_traits)});
+                model.bindings.push_back(Domain{.required = indices_of(binding.required_traits),
+                                                .excluded = indices_of(binding.excluded_traits)});
             }
             for (const auto& requirement : contract.named_requirements) {
                 if (const auto trait = traits_.find(requirement.trait); trait.has_value()) {
@@ -900,11 +900,14 @@ private:
 
     [[nodiscard]] std::optional<std::string> contradiction(const HandlerModel& handler) const {
         for (const auto& binding : handler.bindings) {
-            if (auto reason = two_variants(binding.required); reason.has_value()) {
+            if (auto reason = contradiction(binding); reason.has_value()) {
                 return reason;
             }
         }
-        const auto& domain = handler.unary;
+        return contradiction(handler.unary);
+    }
+
+    [[nodiscard]] std::optional<std::string> contradiction(const Domain& domain) const {
         for (const auto required : domain.required) {
             const auto slot = traits_.slot_of(required);
             for (const auto excluded : domain.excluded) {
@@ -945,31 +948,54 @@ private:
             }
             case HandlerDomainKind::Pair:
                 for (std::size_t binding = 0; binding < handler.bindings.size(); ++binding) {
-                    if (!any_matches(handler.bindings[binding])) {
-                        return "pair binding '" + handler.node->contract.pair_bindings[binding].name +
-                               "' matches no reachable archetype (it needs " +
-                               joined(handler.bindings[binding].required) + ")";
+                    const auto& needs = handler.bindings[binding];
+                    if (any_matches(needs)) {
+                        continue;
                     }
+                    const bool positive_matches =
+                        !needs.excluded.empty() && any_matches(Domain{.required = needs.required});
+                    return "pair binding '" + handler.node->contract.pair_bindings[binding].name +
+                           "' matches no reachable archetype (it needs " + joined(needs.required) +
+                           (positive_matches ? " without " + joined(needs.excluded) : std::string{}) + ")";
                 }
                 return std::nullopt;
         }
         std::unreachable();
     }
 
-    // `without:` traits no entity of the `each:` domain may carry; the trait an
-    // `on removed` trigger implies is not a filter the author wrote.
-    [[nodiscard]] std::vector<TraitIndexValue> dead_exclusions(const HandlerModel& handler) const {
+    // `without:` traits no entity of the domain or the binding may carry; the
+    // trait an `on removed` trigger implies is not a filter the author wrote.
+    [[nodiscard]] std::vector<std::string> dead_exclusion_messages(const HandlerModel& handler,
+                                                                   const std::string& rule) const {
+        std::vector<std::string> messages;
+        for (const auto excluded : dead_exclusions(handler.unary.required, handler.authored.excluded)) {
+            messages.push_back(rule + ": `without: " + canonical(excluded) +
+                               "` excludes nothing; no reachable archetype matching the rule carries it");
+        }
+        for (std::size_t index = 0; index < handler.bindings.size(); ++index) {
+            const auto& binding = handler.bindings[index];
+            for (const auto excluded : dead_exclusions(binding.required, binding.excluded)) {
+                messages.push_back(rule + ": `without: " + canonical(excluded) + "` on pair binding '" +
+                                   handler.node->contract.pair_bindings[index].name +
+                                   "' excludes nothing; no reachable archetype matching the binding carries it");
+            }
+        }
+        return messages;
+    }
+
+    [[nodiscard]] std::vector<TraitIndexValue> dead_exclusions(const std::vector<TraitIndexValue>& required,
+                                                               const std::vector<TraitIndexValue>& excluded) const {
         std::vector<TraitIndexValue> dead;
-        const Domain selected{.required = handler.unary.required};
-        for (const auto excluded : handler.authored.excluded) {
-            if (std::ranges::contains(lost_markers_, excluded)) {
+        const Domain selected{.required = required};
+        for (const auto trait : excluded) {
+            if (std::ranges::contains(lost_markers_, trait)) {
                 continue;
             }
             const auto carried = std::ranges::any_of(entities_, [&](const AbstractEntity& entity) {
-                return matches(entity.traits, selected) && may_carry(entity.traits, excluded);
+                return matches(entity.traits, selected) && may_carry(entity.traits, trait);
             });
             if (!carried) {
-                dead.push_back(excluded);
+                dead.push_back(trait);
             }
         }
         return dead;

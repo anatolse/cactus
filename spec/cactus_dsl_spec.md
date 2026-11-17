@@ -724,7 +724,7 @@ elsewhere. `filter` and `exclude` are not reserved and can name traits, fields,
 parameters and locals. At a unary clause position, the removed spellings `filter:` and
 `without:` are errors that name `each:` and `without:` instead. Declaring a selection
 clause twice is a duplicate error. Positive selection precedes negative selection, and
-neither can accompany `pairs:`.
+neither can accompany `pairs:`; a pair binding has its own `without:` line (§3.8.1).
 
 The parameterized `clause_list(entry)` notation means the same typed entries in
 either layout:
@@ -803,14 +803,16 @@ rule MovePlayer:
 
 #### 3.8.1 Pair Relations
 
-`pairs:` declares a binary iteration domain over two ordered, uniquely named entity bindings, each with its own positive trait requirements. `pairs` is recognized contextually at the rule-clause position (like `children` inside archetype bodies); it is not a reserved keyword elsewhere and does not appear in the global keyword list. `pairs:` is rejected on `extern rule` declarations. It is mutually exclusive with `each:` and `without:`, but may be combined with `order by:` (§3.8) to fix the tuple pass's invocation order.
+`pairs:` declares a binary iteration domain over two ordered, uniquely named entity bindings, each with its own positive trait requirements and, in the block form, an optional `without:` line. `pairs` is recognized contextually at the rule-clause position (like `children` inside archetype bodies); it is not a reserved keyword elsewhere and does not appear in the global keyword list. `pairs:` is rejected on `extern rule` declarations. It is mutually exclusive with a rule-level `each:` and `without:`, but may be combined with `order by:` (§3.8) to fix the tuple pass's invocation order.
 
 ```ebnf
 pairs_clause    = "pairs" ":" NEWLINE INDENT
                   pair_binding pair_binding
                   DEDENT ;
 
-pair_binding    = IDENTIFIER ":" clause_list(filter_entry) ;
+pair_binding    = IDENTIFIER ":" ( filter_entry { "," filter_entry } [ "," ] NEWLINE
+                                   | NEWLINE INDENT { filter_entry NEWLINE } [ binding_without ] DEDENT ) ;
+binding_without = "without" ":" dotted_name { "," dotted_name } NEWLINE ;
 ```
 
 Each binding requires at least one positive trait entry; a `pairs:` block always has exactly two bindings. A binding whose only entry is a relation name (`r: R`, no alias) is a **row binding**: it iterates the rows of `R` instead of entities, and follows §3.6.2. A `where:` conjunct `r.from == <expr>` or `r.to == <expr>`, where `<expr>` reads only the other binding, makes the pass look rows up by that end instead of walking the product.
@@ -871,6 +873,23 @@ rule DetectContacts:
                 other = wall
 ```
 
+**A binding may exclude traits.** In the block form, one `without:` line after the trait entries lists traits, states or state variants, as the unary `without:` clause does. The binding then selects the entities that carry every listed trait and none of the excluded ones:
+
+```cactus
+rule Strike:
+    pairs:
+        a: Unit
+        m:
+            Unit
+            without: Shielded, Dead
+    where:
+        a != m
+    on fixed_tick:
+        emit Hit to m
+```
+
+The exclusion is part of the domain, not a filter on its rows. An excluded entity is no member of the binding: it has no `reduce per` group, no `limit: … per` partition, and a trait kept `on` the binding leaves an entity that gains an excluded trait, as it leaves one that loses a required trait. Membership follows commits as for any trait: an entity that gains an excluded trait leaves from the next pass after the commit. Every domain analysis reads the exclusion like the unary clause: an exclusion that no reachable archetype matching the binding carries is an error, a binding no reachable archetype matches never runs, `without: S.X` narrows the sources of an `add S.V` on that binding, and a keep rule depends on the keeper of a trait its binding excludes. It is an error to write `without:` on a row binding, in the inline form (the error shows the block form), twice in one binding, or before a trait entry; to give an excluded trait an alias; to exclude a trait the binding requires; and to read an excluded trait through the binding. A rule-level `without:` next to `pairs:` stays an error, since it would not say which binding it filters.
+
 **Bindings are entity identifiers and trait namespaces.** Each binding name has type `entity_id` and also namespaces the traits selected for that entity. The trait is written in square brackets after the binding:
 
 - `body` — the binding itself, usable as an `entity_id` (comparison, event target, `to`/`from` argument)
@@ -880,7 +899,7 @@ rule DetectContacts:
 
 The brackets hold exactly one selected trait reference; `not`, commas and aliases are rejected there. Aliases share one scope per rule: an alias must be unique across both bindings and must not equal a binding name. An alias is visible wherever its binding is, so after `reduce per b:` the aliases of the eliminated binding are gone too. The dotted forms `body.Collider.mask`, `body.tf.WorldTransform.position` and `wall.transform.position` are rejected with a diagnostic that names the replacement.
 
-**The relation is a directed Cartesian product.** For bindings A and B, the handler executes once per pair `(a, b)` where `a` satisfies every trait A requires and `b` satisfies every trait B requires. The product is directed and finite: self-pairs (`a == b`, when one entity satisfies both bindings) and reverse-role tuples are included whenever membership permits, unless excluded by a `where:` clause (§3.8.2) or by an ordinary `if`/`return` in the handler body — both are equally valid authored mechanisms for rejecting tuples, as with `if body != wall:` above or `where: body != wall`.
+**The relation is a directed Cartesian product.** For bindings A and B, the handler executes once per pair `(a, b)` where `a` is a member of A (it carries every trait A requires and none A excludes) and `b` is a member of B. The product is directed and finite: self-pairs (`a == b`, when one entity satisfies both bindings) and reverse-role tuples are included whenever membership permits, unless excluded by a `where:` clause (§3.8.2) or by an ordinary `if`/`return` in the handler body — both are equally valid authored mechanisms for rejecting tuples, as with `if body != wall:` above or `where: body != wall`.
 
 **Passes snapshot membership, not values.** Before executing any tuple body, the runtime records both bindings' live membership in stable, creation-order-sorted snapshots (a monotonic per-entity creation ordinal, assigned at load time and at spawn commit, defines this order independently of backend storage layout) and lazily iterates their product left-binding-major: for `left = [a, b]` and `right = [x, y]`, tuple order is `(a,x)`, `(a,y)`, `(b,x)`, `(b,y)`. Membership is fixed for the whole pass; component values are read live from storage when each tuple executes. Projected traits and buffered structural commands issued mid-pass cannot add or remove tuples from the pass already in progress — they become visible only in a later pass or at the next activation commit.
 

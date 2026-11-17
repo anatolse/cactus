@@ -1525,9 +1525,11 @@ RuleNode Parser::parse_rule() {
     // also carry an each:/without: clause meant for that model. order by: is
     // exempt — a pairs: rule may declare it (dsl-pair-relations).
     auto common      = parse_common_rule_clauses([&](const SourceLocation& clause_loc, const char* clause_name) {
-        if (saw_pairs && std::string(clause_name) != "order by:") {
+        const std::string clause(clause_name);
+        if (saw_pairs && clause != "order by:") {
             errors_.error(clause_loc,
-                          std::string("'") + clause_name + "' cannot be combined with 'pairs:' on the same rule");
+                          "'" + clause + "' cannot be combined with 'pairs:' on the same rule" +
+                              (clause == "without:" ? "; put `without:` under the binding it filters" : ""));
         }
     });
     node.filter      = std::move(common.filter);
@@ -1785,6 +1787,15 @@ FilterEntry Parser::parse_filter_entry(bool allow_alias) {
     return entry;
 }
 
+namespace {
+void append_filter_entry(FilterClause& clause, FilterEntry entry) {
+    const auto dot = entry.qualified_name.rfind('.');
+    clause.trait_names.push_back(dot == std::string::npos ? entry.qualified_name
+                                                          : entry.qualified_name.substr(dot + 1));
+    clause.entries.push_back(std::move(entry));
+}
+}  // namespace
+
 FilterClause Parser::parse_selection_clause(bool allow_alias) {
     FilterClause clause;
     clause.location = advance().location;
@@ -1793,11 +1804,7 @@ FilterClause Parser::parse_selection_clause(bool allow_alias) {
         errors_.error(peek().location, "use an inline comma-separated list or an indented block, not brackets");
     }
     parse_clause_list(clause.location, "expected an inline comma-separated list or an indented block", [&] {
-        auto entry     = parse_filter_entry(allow_alias);
-        const auto dot = entry.qualified_name.rfind('.');
-        clause.trait_names.push_back(dot == std::string::npos ? entry.qualified_name
-                                                              : entry.qualified_name.substr(dot + 1));
-        clause.entries.push_back(std::move(entry));
+        append_filter_entry(clause, parse_filter_entry(allow_alias));
     });
     return clause;
 }
@@ -1825,20 +1832,7 @@ PairClause Parser::parse_pairs_clause() {
         if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
             break;
         }
-        auto binding_loc  = peek().location;
-        auto binding_name = consume(TokenType::IDENTIFIER, "expected pair binding name").value;
-        consume(TokenType::COLON, "expected ':'");
-        PairBindingNode binding;
-        binding.name     = binding_name;
-        binding.location = binding_loc;
-        parse_clause_list(binding_loc, "pair binding must declare at least one trait", [&] {
-            binding.traits.push_back(parse_filter_entry(true));
-        });
-
-        if (binding.traits.empty()) {
-            errors_.error(binding.location, "pair binding '" + binding.name + "' must declare at least one trait");
-        }
-        clause.bindings.push_back(std::move(binding));
+        clause.bindings.push_back(parse_pair_binding());
     }
     expect_dedent();
 
@@ -1846,6 +1840,71 @@ PairClause Parser::parse_pairs_clause() {
         errors_.error(loc, "pairs: block must declare exactly two bindings");
     }
 
+    return clause;
+}
+
+PairBindingNode Parser::parse_pair_binding() {
+    PairBindingNode binding;
+    binding.location = peek().location;
+    binding.name     = consume(TokenType::IDENTIFIER, "expected pair binding name").value;
+    consume(TokenType::COLON, "expected ':'");
+    const bool block = check(TokenType::NEWLINE);
+    bool saw_without = false;
+    const auto inline_without = [&] {
+        const auto location = peek().location;
+        const auto excluded = parse_binding_exclusion();
+        std::string help    = "        " + binding.name + ":\n";
+        for (const auto& entry : binding.traits) {
+            help += "            " + entry.qualified_name + "\n";
+        }
+        std::string names;
+        for (const auto& entry : excluded.entries) {
+            names += (names.empty() ? "" : ", ") + entry.qualified_name;
+        }
+        help += "            without: " + names;
+        errors_.error(location, "`without:` needs the block form of pair binding '" + binding.name + "':\n" + help);
+    };
+    parse_clause_list(binding.location, "pair binding must declare at least one trait", [&] {
+        if (at_contextual_clause("without")) {
+            if (!block) {
+                inline_without();
+            } else if (saw_without) {
+                errors_.error(peek().location, "duplicate `without:` in pair binding '" + binding.name + "'");
+            } else {
+                binding.exclude = parse_binding_exclusion();
+            }
+            saw_without = true;
+            return;
+        }
+        if (saw_without) {
+            errors_.error(peek().location,
+                          "trait entries of pair binding '" + binding.name + "' must precede `without:`");
+            return;
+        }
+        binding.traits.push_back(parse_filter_entry(true));
+        if (!block && at_contextual_clause("without")) {
+            inline_without();
+        }
+    });
+
+    if (binding.traits.empty()) {
+        errors_.error(binding.location, "pair binding '" + binding.name + "' must declare at least one trait");
+    }
+    return binding;
+}
+
+// `without: A, B` inside a pair binding block; the list stays on its line.
+FilterClause Parser::parse_binding_exclusion() {
+    FilterClause clause;
+    clause.location = advance().location;
+    consume(TokenType::COLON, "expected ':'");
+    for (bool more = true; more; more = match(TokenType::COMMA)) {
+        auto entry = parse_filter_entry(true);
+        if (entry.alias.has_value()) {
+            errors_.error(entry.location, "an excluded trait takes no alias");
+        }
+        append_filter_entry(clause, std::move(entry));
+    }
     return clause;
 }
 

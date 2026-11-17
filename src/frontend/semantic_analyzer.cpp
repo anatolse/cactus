@@ -2132,6 +2132,7 @@ void SemanticAnalyzer::resolve_trait_references(ProgramNode& program) {
                             for (auto& entry : binding.traits) {
                                 entry.resolved_trait_id = try_resolve_trait_ref_to_symbol(entry.qualified_name);
                             }
+                            resolve_filter_clause(binding.exclude);
                         }
                     }
                     if (node.where_clause.has_value()) {
@@ -3838,6 +3839,7 @@ PairScope SemanticAnalyzer::build_pair_scope(const PairClause& pairs) {
                 binding_scope.trait_by_alias[*entry.alias] = entry.qualified_name;
             }
         }
+        binding_scope.excluded = binding.exclude.resolved_trait_ids;
         scope[binding.name] = std::move(binding_scope);
     }
     return scope;
@@ -3897,8 +3899,24 @@ void SemanticAnalyzer::validate_pair_bindings(RuleNode& rule) {
                 register_key(*entry.alias, entry.location);
             }
         }
+        validate_binding_exclusion(binding);
     }
     validate_pair_aliases(rule.name, pairs);
+}
+
+void SemanticAnalyzer::validate_binding_exclusion(const PairBindingNode& binding) {
+    for (const auto& entry : binding.exclude.entries) {
+        std::string simple_name;
+        if (!resolve_filter_entry(entry, simple_name) || !entry.resolved_trait_id.has_value()) {
+            continue;
+        }
+        const auto required = std::ranges::find(binding.traits, entry.resolved_trait_id, &FilterEntry::resolved_trait_id);
+        if (required != binding.traits.end()) {
+            errors_.error(entry.location,
+                          "pair binding '" + binding.name + "' both requires and excludes '" + entry.qualified_name +
+                              "'");
+        }
+    }
 }
 
 void SemanticAnalyzer::validate_pair_aliases(const std::string& rule_name, const PairClause& pairs) {
@@ -5015,6 +5033,7 @@ std::unordered_set<TableRef> tables_read_by(const HandlerContract& contract) {
     read.insert(contract.exclusion.begin(), contract.exclusion.end());
     for (const auto& binding : contract.pair_bindings) {
         read.insert(binding.required_traits.begin(), binding.required_traits.end());
+        read.insert(binding.excluded_traits.begin(), binding.excluded_traits.end());
         if (binding.relation.has_value()) {
             read.insert(*binding.relation);
         }
@@ -6471,8 +6490,11 @@ void SemanticAnalyzer::resolve_pair_trait_access(TraitAccessExpr& access,
                       "'" + access.trait_name + "' is an alias; use '" + with_fields(access.trait_name, fields) + "'");
         return;
     }
+    const auto trait = try_resolve_trait_or_slot_ref(access.trait_name);
+    const bool excluded = trait.has_value() && std::ranges::contains(binding.excluded, *trait);
     errors_.error(location,
-                  "pair binding '" + binding_name + "' does not select trait '" + access.trait_name + "'");
+                  "pair binding '" + binding_name + (excluded ? "' excludes trait '" : "' does not select trait '") +
+                      access.trait_name + "'");
 }
 
 void SemanticAnalyzer::resolve_trait_access(TraitAccessExpr& access,
@@ -9810,7 +9832,8 @@ struct SemanticAnalyzer::HandlerBodyVisitor {
                                                                    const SourceLocation& location) const {
         if (entity.kind == EntityTargetKind::PairBinding) {
             const auto& binding = contract->pair_bindings.at(entity.binding_index);
-            return analyzer->transition_sources(variant, binding.required_traits, {}, nullptr, location);
+            return analyzer->transition_sources(
+                variant, binding.required_traits, binding.excluded_traits, nullptr, location);
         }
         if (entity.kind != EntityTargetKind::Self) {
             return analyzer->transition_sources(variant, {}, {}, nullptr, location);
@@ -10499,6 +10522,7 @@ InferredHandlerContract SemanticAnalyzer::infer_pair_handler_contract(const Rule
                 relation.required_traits.push_back(*entry.resolved_trait_id);
             }
         }
+        relation.excluded_traits = binding.exclude.resolved_trait_ids;
         contract.pair_bindings.push_back(std::move(relation));
     }
 

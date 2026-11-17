@@ -335,6 +335,10 @@ add_executable(test_semantic_rule_repeat test_semantic_rule_repeat.cpp)
 target_link_libraries(test_semantic_rule_repeat PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticRuleRepeatTests COMMAND test_semantic_rule_repeat)
 
+add_executable(test_semantic_pair_without test_semantic_pair_without.cpp)
+target_link_libraries(test_semantic_pair_without PRIVATE cactus_frontend Catch2::Catch2WithMain)
+add_test(NAME SemanticPairWithoutTests COMMAND test_semantic_pair_without)
+
 add_executable(test_semantic_disjoint_domains test_semantic_disjoint_domains.cpp)
 target_link_libraries(test_semantic_disjoint_domains PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticDisjointDomainsTests COMMAND test_semantic_disjoint_domains)
@@ -1370,6 +1374,18 @@ cactus_add_headless_behavior_test(test_rule_repeat_headless_behavior
     CACTUS_SOURCE tests/fixtures/rule_repeat.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_rule_repeat_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_pair_binding_without_headless_behavior
+    CACTUS_SOURCE examples/pair_binding_without.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_pair_binding_without_headless_behavior.cpp
+)
+cactus_add_headless_behavior_test(test_pair_binding_without_unindexed_headless_behavior
+    CACTUS_SOURCE examples/pair_binding_without.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_pair_binding_without_headless_behavior.cpp
+    NO_INDEXED_JOINS
 )
 
 cactus_add_headless_behavior_test(test_singleton_traits_headless_behavior

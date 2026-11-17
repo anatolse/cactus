@@ -1,0 +1,185 @@
+module pair_binding_without
+
+use std.core
+use std.text as text
+
+# Six units on two teams. A pair binding can leave out entities with a
+# `without:` line in its block: a shielded unit takes no strike, has no ally
+# count, picks no partner and is never Targeted. It still strikes, counts and
+# gets picked through the other binding. Tests shield units between ticks.
+# Units 4 and 5 also stand Ready; a resting unit doesn't answer a rally.
+
+trait Unit:
+    let id: int = 0
+    let team: int = 0
+    var allies: int = -1
+    var targets: int = -1
+    var picked: int = -1
+    var rallied: int = -1
+    var raise: bool = false
+    var lower: bool = false
+    var fall: bool = false
+    var rest: bool = false
+
+trait Shielded
+trait Dead
+
+state Stance:
+    Ready
+    Resting
+
+# Kept on each unshielded unit that has a teammate.
+trait Targeted
+
+trait Log:
+    var trace: string = ""
+
+group links:
+    phase: fixed_tick
+
+entity Book:
+    Log
+
+template Soldier(id: int):
+    Unit:
+        id = id
+        team = id % 2
+
+template Sentry(id: int):
+    use Soldier(id = id)
+    Stance.Ready
+
+rule Muster:
+    on load:
+        for i in range(0, 6):
+            if i < 4:
+                spawn Soldier(id = i)
+            else:
+                spawn Sentry(id = i)
+
+rule Raise:
+    each:
+        Unit as u
+    without:
+        Shielded
+    where:
+        u.raise
+    on fixed_tick:
+        u.raise = false
+        add Shielded to self
+
+rule Lower:
+    each:
+        Unit as u
+        Shielded
+    where:
+        u.lower
+    on fixed_tick:
+        u.lower = false
+        remove Shielded from self
+
+rule Fall:
+    each:
+        Unit as u
+    without:
+        Dead
+    where:
+        u.fall
+    on fixed_tick:
+        u.fall = false
+        add Dead to self
+
+rule Rest:
+    each:
+        Unit as u
+        Stance.Ready
+    where:
+        u.rest
+    on fixed_tick:
+        u.rest = false
+        add Stance.Resting to self
+
+# Every tuple, in creation order.
+rule Strike:
+    pairs:
+        a: Unit
+        m:
+            Unit
+            without: Shielded, Dead
+    where:
+        a != m
+        m[Unit].team == a[Unit].team
+    on fixed_tick:
+        Book[Log].trace += text.format("{}>{};", a[Unit].id, m[Unit].id)
+
+# A shielded unit has no group, so its count stays as it was.
+rule CountAllies:
+    pairs:
+        m:
+            Unit
+            without: Shielded
+        a: Unit
+    where:
+        a != m
+        a[Unit].team == m[Unit].team
+    reduce per m:
+        n = count()
+    on fixed_tick:
+        m[Unit].allies = n
+
+# The excluded binding is the one looked up by team.
+rule CountTargets:
+    pairs:
+        a: Unit
+        m:
+            Unit
+            without: Shielded
+    where:
+        a != m
+        m[Unit].team == a[Unit].team
+    reduce per a:
+        n = count()
+    on fixed_tick:
+        a[Unit].targets = n
+
+rule Pick:
+    pairs:
+        m:
+            Unit as mine
+            without: Shielded
+        a: Unit
+    order by:
+        a[Unit].id asc
+    where:
+        a != m
+        a[Unit].team == mine.team
+    limit: 1 per m
+    on fixed_tick:
+        mine.picked = a[Unit].id
+
+rule Target:
+    pairs:
+        a: Unit
+        m:
+            Unit
+            without: Shielded
+    group: links
+    where:
+        a != m
+        a[Unit].team == m[Unit].team
+    keep Targeted on m
+
+# Units with no stance answer too; only a resting unit is left out.
+rule Rally:
+    pairs:
+        a: Unit
+        m:
+            Unit
+            without: Stance.Resting
+    where:
+        a != m
+        m[Unit].team == a[Unit].team
+    reduce per a:
+        n = count()
+    on fixed_tick:
+        a[Unit].rallied = n

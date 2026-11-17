@@ -165,28 +165,26 @@ void watch_binding_traits(entt::registry& registry, BindingIndexTracker& tracker
         ...);
 }
 
-// The entities carrying every trait in Required, oldest first, kept across
-// passes. Construction or destruction of a required trait marks it stale, as
-// does a new world, and the next read sorts again. Structural changes apply
-// only at commit, so a membership never changes while a pass iterates it.
-template <typename... Required>
-class OrderedMembership {
+// The entities carrying every trait in Required and none in Excluded, oldest
+// first, kept across passes. Construction or destruction of any of those
+// traits marks it stale, as does a new world, and the next read sorts again.
+// Structural changes apply only at commit, so a membership never changes while
+// a pass iterates it.
+template <typename Exclusion, typename... Required>
+class FilteredMembership;
+
+template <typename... Excluded, typename... Required>
+class FilteredMembership<entt::exclude_t<Excluded...>, Required...> {
 public:
     [[nodiscard]] const std::vector<entt::entity>& members(entt::registry& registry) {
         if (built_.stale(registry)) {
             built_.stamp(registry);
-            (
-                [&] {
-                    registry.on_construct<Required>().disconnect(this);
-                    registry.on_destroy<Required>().disconnect(this);
-                    registry.on_construct<Required>().template connect<&OrderedMembership::on_signal>(*this);
-                    registry.on_destroy<Required>().template connect<&OrderedMembership::on_signal>(*this);
-                }(),
-                ...);
+            watch<Required...>(registry);
+            watch<Excluded...>(registry);
             dirty_ = true;
         }
         if (dirty_) {
-            members_ = creation_ordered(registry, registry.view<Required...>());
+            members_ = creation_ordered(registry, registry.view<Required...>(entt::exclude<Excluded...>));
             dirty_   = false;
             ++builds_;
         }
@@ -198,13 +196,26 @@ public:
         return builds_;
     }
 
-    void on_signal(entt::registry& registry, entt::entity /*entity*/) noexcept {
-        if (&registry == built_.registry) {
+    // An entity lacking a required trait is outside the membership both before and after the change.
+    void on_signal(entt::registry& registry, entt::entity entity) noexcept {
+        if (&registry == built_.registry && registry.all_of<Required...>(entity)) {
             dirty_ = true;
         }
     }
 
 private:
+    template <typename... Traits>
+    void watch(entt::registry& registry) {
+        (
+            [&] {
+                registry.on_construct<Traits>().disconnect(this);
+                registry.on_destroy<Traits>().disconnect(this);
+                registry.on_construct<Traits>().template connect<&FilteredMembership::on_signal>(*this);
+                registry.on_destroy<Traits>().template connect<&FilteredMembership::on_signal>(*this);
+            }(),
+            ...);
+    }
+
     WorldStamp built_;
     std::vector<entt::entity> members_;
     std::size_t builds_ = 0;
@@ -212,14 +223,23 @@ private:
 };
 
 template <typename... Required>
-[[nodiscard]] OrderedMembership<Required...>& shared_ordered_membership() {
-    static OrderedMembership<Required...> membership;
+using OrderedMembership = FilteredMembership<entt::exclude_t<>, Required...>;
+
+template <typename Exclusion, typename... Required>
+[[nodiscard]] FilteredMembership<Exclusion, Required...>& shared_filtered_membership() {
+    static FilteredMembership<Exclusion, Required...> membership;
     return membership;
 }
 
 template <typename... Required>
-[[nodiscard]] const std::vector<entt::entity>& ordered_membership(entt::registry& registry) {
-    return shared_ordered_membership<Required...>().members(registry);
+[[nodiscard]] OrderedMembership<Required...>& shared_ordered_membership() {
+    return shared_filtered_membership<entt::exclude_t<>, Required...>();
+}
+
+template <typename... Required, typename... Excluded>
+[[nodiscard]] const std::vector<entt::entity>& ordered_membership(
+    entt::registry& registry, entt::exclude_t<Excluded...> /*excluded*/ = entt::exclude_t<Excluded...>{}) {
+    return shared_filtered_membership<entt::exclude_t<Excluded...>, Required...>().members(registry);
 }
 
 // A paged map from an entity's index to a uint32 value, with pages made on

@@ -357,6 +357,7 @@ enum class IterationOrder : std::uint8_t { Free, Creation };
 struct RelationBinding {
     std::string name;
     std::vector<SymbolId> required_traits;
+    std::vector<SymbolId> excluded_traits;
     std::optional<SymbolId> relation;  // a row binding's relation; it requires no traits
 
     friend bool operator==(const RelationBinding&, const RelationBinding&) = default;
@@ -698,11 +699,12 @@ struct HandlerContract {
 
     // Whether the handler's result can depend on which entities carry `trait`; this is not a read.
     [[nodiscard]] bool observes_membership(const SymbolId& trait) const {
-        const auto requires_trait = [&](const RelationBinding& binding) {
-            return std::ranges::contains(binding.required_traits, trait);
+        const auto decided_by = [&](const RelationBinding& binding) {
+            return std::ranges::contains(binding.required_traits, trait) ||
+                   std::ranges::contains(binding.excluded_traits, trait);
         };
         return std::ranges::contains(selection, trait) || std::ranges::contains(exclusion, trait) ||
-               observed_membership.contains(trait) || std::ranges::any_of(pair_bindings, requires_trait);
+               observed_membership.contains(trait) || std::ranges::any_of(pair_bindings, decided_by);
     }
 
     [[nodiscard]] bool observes_projection_of(const HandlerContract& producer) const {
@@ -1266,6 +1268,7 @@ struct PairBindingScope {
     std::optional<SymbolId> relation;  // set on a row binding, which selects no traits
     std::unordered_map<std::string, SymbolId> trait_by_access_key;
     std::unordered_map<std::string, std::string> trait_by_alias;
+    std::vector<SymbolId> excluded;  // read through the binding is an error
 };
 
 // binding identifier (e.g. "body") -> its resolved trait namespace.
@@ -1500,6 +1503,7 @@ private:
     void validate_rule_filters(ProgramNode& program);
     void validate_pair_bindings(RuleNode& rule);
     void validate_pair_aliases(const std::string& rule_name, const PairClause& pairs);
+    void validate_binding_exclusion(const PairBindingNode& binding);
     [[nodiscard]] static PairScope build_pair_scope(const PairClause& pairs);
     // The same scope plus the rule's `limit:` writability proof applied, for
     // every site that validates or infers against a whole rule rather than a

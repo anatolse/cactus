@@ -18,6 +18,7 @@ constexpr int kSize       = 85;
 constexpr int kDoubleSize = 120;  // about twice the tiles of kSize
 
 // Limits at kSize. Work counts are exact; times are O3 measurements x 1.5.
+// SturdyTiles' candidates are counted apart: one per bridge tile that isn't cracked.
 constexpr std::uint64_t kCandidatesPerFrame = 1'033;
 constexpr std::uint64_t kCommandsPerFrame   = 1;
 constexpr cactus_perf::TimeLimits kTimes{.base_ms = 2.7, .growth = 2.6};
@@ -45,6 +46,25 @@ struct World {
         }
         return count;
     }
+
+    [[nodiscard]] std::uint64_t uncracked_bridges() {
+        std::uint64_t count = 0;
+        for (const auto tile : registry.view<game::Tile, game::Bridge>(entt::exclude<game::Cracked>)) {
+            (void)tile;
+            ++count;
+        }
+        return count;
+    }
+
+    [[nodiscard]] bool sturdy_counts_bridges() {
+        for (const auto [tile, data] : registry.view<game::Tile>().each()) {
+            const int expected = registry.all_of<game::Cracked>(tile) ? 0 : (registry.all_of<game::Bridge>(tile) ? 1 : 0);
+            if (data.sturdy != expected) {
+                return false;
+            }
+        }
+        return true;
+    }
 };
 
 }  // namespace
@@ -54,7 +74,11 @@ TEST_CASE("perf: an equality-planned reduction folds only matching tuples", "[pe
     REQUIRE(world.registry.view<game::Walkable>().size() == world.expected_walkable());
     const auto work = cactus_perf::work_of([&] { world.tick(); });
     CHECK(world.registry.view<game::Walkable>().size() == world.expected_walkable());
-    CHECK(work.candidates <= kCandidatesPerFrame);
+    CHECK(world.sturdy_counts_bridges());
+    const auto uncracked = world.uncracked_bridges();
+    CHECK(uncracked * 2 >= world.registry.view<game::Bridge>().size());
+    // The cracked half adds no candidate.
+    CHECK(work.candidates <= kCandidatesPerFrame + uncracked);
     CHECK(work.commands <= kCommandsPerFrame);
 }
 

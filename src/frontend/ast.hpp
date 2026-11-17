@@ -1077,6 +1077,7 @@ struct SortKey {
 struct PairBindingNode {
     std::string name;
     std::vector<FilterEntry> traits;  // at least one entry; validated by the parser
+    FilterClause exclude;             // the block form's `without:` line; empty entries = none
     SourceLocation location;
     // Set by semantic analysis on a row binding (`r: R`), whose one entry moves out of `traits`.
     std::string relation_name;

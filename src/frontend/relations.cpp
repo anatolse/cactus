@@ -312,6 +312,11 @@ void SemanticAnalyzer::extract_row_bindings(RuleNode& rule) {
             errors_.error(entry->location,
                           "a row binding takes no alias; read the row through `" + binding.name + ".<field>`");
         }
+        if (!binding.exclude.entries.empty()) {
+            errors_.error(binding.exclude.location,
+                          "a row binding selects rows, not entities; '" + binding.name + "' takes no `without:`");
+            binding.exclude = {};
+        }
         binding.relation_name        = entry->qualified_name;
         binding.resolved_relation_id = relation;
         binding.traits.clear();

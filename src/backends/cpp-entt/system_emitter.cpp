@@ -762,9 +762,46 @@ struct PairBindingCodegen {
     PairBindingCodegen(PairBindingCodegen&&) noexcept(false)            = default;
     PairBindingCodegen& operator=(PairBindingCodegen&&) noexcept(false) = default;
     ~PairBindingCodegen()                                               = default;
-    std::vector<std::string> cpp_types;  // dedup'd view<> template args, source order
-    PairCodegenBinding scope;            // scope.binding_name is also this binding's source-level name
+    std::vector<std::string> cpp_types;          // dedup'd view<> template args, source order
+    std::vector<std::string> exclude_cpp_types;  // the block form's `without:` traits
+    PairCodegenBinding scope;                    // scope.binding_name is also this binding's source-level name
 };
+
+// `entt::exclude<...>` for a binding that excludes traits, else empty.
+std::string exclude_argument(const PairBindingCodegen& binding) {
+    return binding.exclude_cpp_types.empty() ? std::string{}
+                                             : "entt::exclude<" + join_strings(binding.exclude_cpp_types, ", ") + ">";
+}
+
+std::string membership_cpp(const PairBindingCodegen& binding) {
+    const auto excluded = exclude_argument(binding);
+    return "cactus::runtime::entt_backend::ordered_membership<" + join_strings(binding.cpp_types, ", ") +
+           ">(registry" + (excluded.empty() ? "" : ", " + excluded) + ")";
+}
+
+std::string member_view_cpp(const PairBindingCodegen& binding) {
+    return "registry.view<" + join_strings(binding.cpp_types, ", ") + ">(" + exclude_argument(binding) + ")";
+}
+
+// ` && !registry.any_of<...>(entity)` for a binding that excludes traits, else empty.
+std::string exclusion_test_cpp(const PairBindingCodegen& binding, const std::string& entity) {
+    return binding.exclude_cpp_types.empty()
+               ? std::string{}
+               : " && !registry.any_of<" + join_strings(binding.exclude_cpp_types, ", ") + ">(" + entity + ")";
+}
+
+// Whether `entity`, a live entity, is a member of the binding.
+std::string member_test_cpp(const PairBindingCodegen& binding, const std::string& entity) {
+    return "registry.all_of<" + join_strings(binding.cpp_types, ", ") + ">(" + entity + ")" +
+           exclusion_test_cpp(binding, entity);
+}
+
+// The traits whose construction or destruction can change the binding's membership.
+std::string membership_traits_cpp(const PairBindingCodegen& binding) {
+    auto traits = binding.cpp_types;
+    traits.insert(traits.end(), binding.exclude_cpp_types.begin(), binding.exclude_cpp_types.end());
+    return join_strings(traits, ", ");
+}
 
 std::string collider_shape_builder(const PairBindingNode& binding) {
     std::vector<std::string_view> shapes;
@@ -789,6 +826,7 @@ PairBindingCodegen build_pair_binding_codegen(const PairBindingNode& binding, co
             result.cpp_types.push_back(cpp_type_name);
         }
     }
+    result.exclude_cpp_types            = filter_cpp_type_names(binding.exclude, program);
     result.scope.collider_shape_builder = collider_shape_builder(binding);
     return result;
 }
@@ -798,9 +836,8 @@ PairBindingCodegen build_pair_binding_codegen(const PairBindingNode& binding, co
 void emit_pair_binding_snapshot(std::ostringstream& out, const PairBindingCodegen& binding, int indent, bool narrowed) {
     const std::string ind(static_cast<std::size_t>(indent) * 4U, ' ');
     const std::string& name = binding.scope.binding_name;
-    const auto membership =
-        "cactus::runtime::entt_backend::ordered_membership<" + join_strings(binding.cpp_types, ", ") + ">(registry)";
-    const auto* body  = active_scope<HandlerBodyCodegen>();
+    const auto membership = membership_cpp(binding);
+    const auto* body      = active_scope<HandlerBodyCodegen>();
     const auto source = body != nullptr && body->keep_restricted
                             ? "(cactus_restrict_" + name + ".has_value() ? *cactus_restrict_" + name + " : " +
                                   membership + ")"
@@ -5177,8 +5214,7 @@ static void emit_pair_limit_replay(std::ostringstream& out,
 static std::string pair_member_test(const PairBindingCodegen& binding,
                                     const std::string& keep,
                                     const std::string& entity) {
-    return "registry.all_of<" + join_strings(binding.cpp_types, ", ") + ">(" + entity + ")" +
-           (keep.empty() ? "" : " && " + keep + "(" + entity + ")");
+    return member_test_cpp(binding, entity) + (keep.empty() ? "" : " && " + keep + "(" + entity + ")");
 }
 
 // The plan a pass enumerates its tuples by, or null when it runs the full product.
@@ -6916,6 +6952,9 @@ static std::optional<IndexedFoldPlan> indexed_join_plan(const RuleNode& sys,
     }
     plan.watched  = required;
     plan.required = required;
+    for (const auto& trait : contract->pair_bindings[plan.indexed].excluded_traits) {
+        add_unique(plan.watched, trait);
+    }
     for (const auto& trait : proxy_traits) {
         add_unique(plan.watched, trait);
     }
@@ -7087,12 +7126,12 @@ static void emit_index_refresh(std::ostringstream& out,
                                const std::string& index,
                                const std::string& reset_args,
                                const std::string& watched,
-                               const std::string& member_types) {
+                               const std::string& member_view) {
     out << "    if (" << index << ".tracker().stale(registry)) {\n";
     out << "        " << index << ".reset(registry" << reset_args << ");\n";
     out << "        cactus::runtime::entt_backend::watch_binding_traits<" << watched << ">(registry, " << index
         << ".tracker());\n";
-    out << "        for (const auto cactus_member : registry.view<" << member_types << ">()) {\n";
+    out << "        for (const auto cactus_member : " << member_view << ") {\n";
     out << "            " << index << ".tracker().mark(cactus_member);\n";
     out << "        }\n";
     out << "    }\n";
@@ -7107,7 +7146,6 @@ static void emit_binding_index_sync(std::ostringstream& out,
     const std::string ns    = "cactus::runtime::entt_backend::";
     const auto& name        = binding.scope.binding_name;
     const auto index        = "cactus_index_" + name;
-    const auto member_types = join_strings(binding.cpp_types, ", ");
     PairCodegenScope scope  = pair_codegen_scope;
     for (auto& entry : scope.bindings) {
         entry.collider_shapes_cached = false;
@@ -7129,12 +7167,12 @@ static void emit_binding_index_sync(std::ostringstream& out,
     const auto origins   = member_origins(program, plan.required);
     const auto cell_size = spatial_cell_size(plan, origins, program);
     const auto store     = static_store_placeholder(
-        program.share_static_stores ? bounds.str() : bounds.str() + member_types + watched + cell_size, origins);
+        program.share_static_stores ? bounds.str() : bounds.str() + join_strings(binding.cpp_types, ", ") + watched + cell_size, origins);
     std::ostringstream sync;
-    emit_index_refresh(sync, index, ", " + store + ", " + cell_size, watched, member_types);
+    emit_index_refresh(sync, index, ", " + store + ", " + cell_size, watched, member_view_cpp(binding));
     sync << "    " << index << ".catch_up(registry, [&](entt::entity " << name << ") {\n";
     sync << "        " << ns << "SpatialBindingIndex3D::Classified cactus_found;\n";
-    sync << "        if (!registry.all_of<" << member_types << ">(" << name << ")) {\n";
+    sync << "        if (!(" << member_test_cpp(binding, name) << ")) {\n";
     sync << "            return cactus_found;\n";
     sync << "        }\n";
     sync << "        cactus_found.member    = true;\n";
@@ -7602,13 +7640,12 @@ static void emit_equality_index_sync(std::ostringstream& out,
     const auto& name        = binding.scope.binding_name;
     const auto index        = "cactus_index_" + name;
     const auto index_type   = equality_index_type(plan);
-    const auto member_types = join_strings(binding.cpp_types, ", ");
     std::ostringstream sync;
-    emit_index_refresh(sync, index, "", member_types, member_types);
+    emit_index_refresh(sync, index, "", membership_traits_cpp(binding), member_view_cpp(binding));
     sync << "    " << index << ".catch_up(\n";
     sync << "        registry,\n";
     sync << "        [&](entt::entity " << name << ") -> std::optional<" << index_type << "::Key> {\n";
-    sync << "            if (!registry.all_of<" << member_types << ">(" << name << ")) {\n";
+    sync << "            if (!(" << member_test_cpp(binding, name) << ")) {\n";
     sync << "                return std::nullopt;\n";
     sync << "            }\n";
     sync << "            return " << equality_member_key(plan, name, pair_codegen_scope, program) << ";\n";
@@ -7657,13 +7694,16 @@ static void emit_equality_member_loop(std::ostringstream& out,
                                       const std::string& indent) {
     const auto& member  = binding.scope.binding_name;
     const auto index    = "cactus_index_" + member;
-    const auto alive    = "cactus::runtime::entt_backend::named_alive<" + join_strings(binding.cpp_types, ", ") + ">";
+    const auto alive    = [&](const std::string& entity) {
+        return "cactus::runtime::entt_backend::named_alive<" + join_strings(binding.cpp_types, ", ") +
+               ">(registry, " + entity + ")" + exclusion_test_cpp(binding, entity);
+    };
     if (plan.lookups.size() == 1) {
         const auto& lookup = plan.lookups.front();
         if (plan.identity.has_value()) {
             out << indent << "const entt::entity " << member << " = " << key_side(lookup[*plan.identity], scope, program)
                 << ";\n";
-            out << indent << "if (" << alive << "(registry, " << member << ")) {\n";
+            out << indent << "if (" << alive(member) << ") {\n";
             return;
         }
         out << indent << equality_find(plan, lookup, index, "cactus_matches", scope, program) << ";\n";
@@ -7674,7 +7714,7 @@ static void emit_equality_member_loop(std::ostringstream& out,
     for (const auto& lookup : plan.lookups) {
         if (plan.identity.has_value()) {
             out << indent << "if (const entt::entity cactus_named = " << key_side(lookup[*plan.identity], scope, program)
-                << "; " << alive << "(registry, cactus_named)) { cactus_matches.push_back(cactus_named); }\n";
+                << "; " << alive("cactus_named") << ") { cactus_matches.push_back(cactus_named); }\n";
             continue;
         }
         out << indent << equality_find(plan, lookup, index, "cactus_found", scope, program) << ";\n";
@@ -7779,7 +7819,6 @@ static void emit_grid_index_sync(std::ostringstream& out,
     const auto& name        = binding.scope.binding_name;
     const auto index        = "cactus_index_" + name;
     const auto index_type   = grid_index_type(plan);
-    const auto member_types = join_strings(binding.cpp_types, ", ");
     std::vector<const ResolvedFieldRange*> ranges;
     std::vector<std::string> values;
     for (const auto& axis : plan.axes) {
@@ -7792,11 +7831,11 @@ static void emit_grid_index_sync(std::ostringstream& out,
     }
     const auto block = plan.container.empty() ? std::string{"entt::null"} : "cactus_cell." + cpp_escaped(plan.container);
     std::ostringstream sync;
-    emit_index_refresh(sync, index, "", member_types, member_types);
+    emit_index_refresh(sync, index, "", membership_traits_cpp(binding), member_view_cpp(binding));
     sync << "    " << index << ".catch_up(\n";
     sync << "        registry,\n";
     sync << "        [&](entt::entity " << name << ") -> std::optional<" << index_type << "::Key> {\n";
-    sync << "            if (!registry.all_of<" << member_types << ">(" << name << ")) {\n";
+    sync << "            if (!(" << member_test_cpp(binding, name) << ")) {\n";
     sync << "                return std::nullopt;\n";
     sync << "            }\n";
     sync << "            const auto& cactus_cell = registry.get<const " << trait_cpp << ">(" << name << ");\n";
@@ -7998,8 +8037,8 @@ static void emit_keep_pair_delta_setup(std::ostringstream& out,
     body->keep_units_from_end = from_end;
     const auto& unit_name     = bindings[*unit].scope.binding_name;
     const auto& other_name    = bindings[other].scope.binding_name;
-    const auto unit_types     = join_strings(bindings[*unit].cpp_types, ", ");
-    const auto other_types    = join_strings(bindings[other].cpp_types, ", ");
+    const auto unit_members   = membership_cpp(bindings[*unit]);
+    const auto other_members  = membership_cpp(bindings[other]);
     const auto keep_index     = std::to_string(body->keep_plan->index);
     out << "    auto cactus_unit_key = [&]([[maybe_unused]] entt::entity " << unit_name << ") {\n";
     out << "        return std::make_tuple(" << join_strings(unit_keys, ", ") << ");\n";
@@ -8014,10 +8053,10 @@ static void emit_keep_pair_delta_setup(std::ostringstream& out,
     out << "};\n";
     out << "    };\n";
     out << "    const auto cactus_in_unit = [&](entt::entity cactus_entity) {\n";
-    out << "        return registry.valid(cactus_entity) && registry.all_of<" << unit_types << ">(cactus_entity);\n";
+    out << "        return registry.valid(cactus_entity) && " << member_test_cpp(bindings[*unit], "cactus_entity") << ";\n";
     out << "    };\n";
     out << "    const auto cactus_in_other = [&](entt::entity cactus_entity) {\n";
-    out << "        return registry.valid(cactus_entity) && registry.all_of<" << other_types << ">(cactus_entity);\n";
+    out << "        return registry.valid(cactus_entity) && " << member_test_cpp(bindings[other], "cactus_entity") << ";\n";
     out << "    };\n";
     out << "    auto& cactus_keep_keys = cactus::runtime::entt_backend::keep_state<" << keep_index
         << ", cactus::runtime::entt_backend::KeepPairIndexes<cactus_keep_key>>(registry);\n";
@@ -8025,8 +8064,7 @@ static void emit_keep_pair_delta_setup(std::ostringstream& out,
     out << "    std::optional<std::vector<entt::entity>> cactus_restrict_" << other_name << ";\n";
     // Keys follow every run with few changes; a run with many leaves them stale
     // until a run with few changes rebuilds them, so a world that moves whole pays no upkeep.
-    out << "    const auto cactus_unit_domain = cactus::runtime::entt_backend::ordered_membership<" << unit_types
-        << ">(registry).size();\n";
+    out << "    const auto cactus_unit_domain = " << unit_members << ".size();\n";
     out << "    const bool cactus_few_changes =\n";
     out << "        cactus_dirty.has_value() && !cactus::runtime::entt_backend::keep_delta_too_large("
            "cactus_dirty->size(), cactus_unit_domain);\n";
@@ -8043,8 +8081,8 @@ static void emit_keep_pair_delta_setup(std::ostringstream& out,
     out << "        }\n";
     out << "    } else if (cactus_few_changes || (cactus_keep_whole && !cactus_full_check)) {\n";
     out << "        cactus::runtime::entt_backend::rebuild_keep_pair_indexes(cactus_keep_keys,\n";
-    out << "            cactus::runtime::entt_backend::ordered_membership<" << unit_types << ">(registry),\n";
-    out << "            cactus::runtime::entt_backend::ordered_membership<" << other_types << ">(registry),\n";
+    out << "            " << unit_members << ",\n";
+    out << "            " << other_members << ",\n";
     out << "            cactus_unit_key, cactus_other_key);\n";
     out << "    } else if (!cactus_full_check && !cactus_keep_unchanged) {\n";
     out << "        cactus_keep_keys.built = false;\n";

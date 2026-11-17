@@ -8094,6 +8094,23 @@ TEST_CASE("Codegen EnTT: a reduced spatial pass keeps an unwritten binding in a 
     CHECK_FALSE(code.contains("SapBroadPhase3D"));
 }
 
+TEST_CASE("Codegen EnTT: a spatial index leaves out the traits its binding excludes",
+          "[codegen-entt][spatial-join][binding-index][pair-without]") {
+    auto source           = indexed_join_source("");
+    const std::string old = "        wall:\n            Solid\n";
+    const auto at         = source.find(old);
+    REQUIRE(at != std::string::npos);
+    source.replace(at, old.size(), old + "            without: Moving\n");
+    const auto code    = emit_indexed_join(source);
+    const auto watch   = code.find("watch_binding_traits<");
+    REQUIRE(watch != std::string::npos);
+    const auto watched = code.substr(watch, code.find('\n', watch) - watch);
+    CHECK(watched.contains("Moving"));
+    CHECK(code.contains("(entt::exclude<"));
+    CHECK(code.contains("&& !registry.any_of<"));
+    CHECK(code.contains("cactus_index_wall.candidates("));
+}
+
 // The reduced Detect rule as a plain pass: one handler call per overlapping tuple.
 static std::string plain_join_source() {
     auto source           = indexed_join_source("");

@@ -675,6 +675,7 @@ void ModuleArtifact::write_contract(std::ostream& out, const HandlerContract& co
     for (const auto& binding : contract.pair_bindings) {
         write_str(out, binding.name);
         write_symbol_vector(out, binding.required_traits);
+        write_symbol_vector(out, binding.excluded_traits);
         write_optional_symbol_id(out, binding.relation);
     }
     write_symbol_set(out, contract.reads);
@@ -1553,6 +1554,7 @@ HandlerContract ModuleArtifact::read_contract(std::istream& in) {
         RelationBinding binding;
         binding.name            = read_str(in);
         binding.required_traits = read_symbol_vector(in);
+        binding.excluded_traits = read_symbol_vector(in);
         binding.relation        = read_optional_symbol_id(in);
         contract.pair_bindings.push_back(std::move(binding));
     }

@@ -15,8 +15,9 @@ trait Tower:
     var range: float
 
 trait Enemy:
-    var cloaked: bool = false
     var hits: int = 0
+
+trait Cloaked
 
 trait Target:
     var selected: entity_id
@@ -40,12 +41,12 @@ rule SelectTarget:
         enemy:
             Enemy
             Position
+            without: Cloaked
     order by:
         v2.distance(tower[Position].pos, enemy[Position].pos) asc
     after:
         ResetTarget
     where:
-        not enemy[Enemy].cloaked
         v2.distance(tower[Position].pos, enemy[Position].pos) <= tower[Tower].range
     limit: 1 per tower
 
@@ -82,13 +83,15 @@ template Foe(at: vec2):
         pos = at
     Enemy
 
+template HiddenFoe(at: vec2):
+    use Foe(at = at)
+    Cloaked
+
 # Nearest wins; the nearer Shadow is cloaked and must be skipped.
 entity NearTower from Turret(at = vec2(0.0, 0.0), range = 100.0):
     Target:
         selected = NearTower
-entity Shadow from Foe(at = vec2(10.0, 0.0)):
-    Enemy:
-        cloaked = true
+entity Shadow from HiddenFoe(at = vec2(10.0, 0.0))
 entity Near from Foe(at = vec2(30.0, 0.0))
 entity Far from Foe(at = vec2(50.0, 0.0))
 

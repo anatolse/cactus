@@ -1025,6 +1025,40 @@ TEST_CASE("an ordered membership sorts once while its traits do not change", "[r
     }
 }
 
+TEST_CASE("an ordered membership leaves out entities with an excluded trait", "[runtime][binding-index][membership]") {
+    entt::registry registry;
+    advance_binding_index_epoch();
+    std::vector<entt::entity> made;
+    for (int index = 0; index < 4; ++index) {
+        made.push_back(make_ordered(registry));
+    }
+    for (const auto entity : {made[0], made[1], made[3]}) {
+        registry.emplace<Mover>(entity);
+    }
+    registry.emplace<Solid>(made[1]);
+    auto& membership   = shared_filtered_membership<entt::exclude_t<Solid>, Mover>();
+    const auto members = [&] { return ordered_membership<Mover>(registry, entt::exclude<Solid>); };
+    CHECK(members() == std::vector<entt::entity>{made[0], made[3]});
+    const auto builds = membership.builds();
+
+    SECTION("gaining the excluded trait leaves") {
+        registry.emplace<Solid>(made[3]);
+        CHECK(members() == std::vector<entt::entity>{made[0]});
+    }
+    SECTION("losing the excluded trait joins in creation order") {
+        registry.remove<Solid>(made[1]);
+        CHECK(members() == std::vector<entt::entity>{made[0], made[1], made[3]});
+    }
+    SECTION("the excluded trait on a non-member sorts nothing again") {
+        registry.emplace<Solid>(made[2]);
+        CHECK(members() == std::vector<entt::entity>{made[0], made[3]});
+        CHECK(membership.builds() == builds);
+    }
+    SECTION("the membership without exclusions is separate") {
+        CHECK(ordered_membership<Mover>(registry) == std::vector<entt::entity>{made[0], made[1], made[3]});
+    }
+}
+
 TEST_CASE("an ordered membership of several traits needs all of them", "[runtime][binding-index][membership]") {
     entt::registry registry;
     advance_binding_index_epoch();

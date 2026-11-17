@@ -272,7 +272,9 @@ private:
                            sets_.domain_may_carry(contract.selection, contract.exclusion, target);
                 case EntityTargetKind::PairBinding:
                     return entity.binding_index >= contract.pair_bindings.size() ||
-                           sets_.domain_may_carry(contract.pair_bindings[entity.binding_index].required_traits, {}, target);
+                           sets_.domain_may_carry(contract.pair_bindings[entity.binding_index].required_traits,
+                                                  contract.pair_bindings[entity.binding_index].excluded_traits,
+                                                  target);
                 case EntityTargetKind::Named:
                     return !entity.symbol.has_value() || sets_.named_may_carry(*entity.symbol, target);
                 case EntityTargetKind::Spawned:

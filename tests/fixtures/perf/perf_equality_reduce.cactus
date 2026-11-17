@@ -3,7 +3,8 @@ module perf_equality_reduce
 use std.core
 
 # Each tile counts the bridges on it and keeps `Walkable` when it is floor or
-# has a bridge.
+# has a bridge. Every frame, each tile that isn't cracked counts its bridges
+# again; cracked tiles, half of them, are no members of that binding.
 
 enum Kind:
     Floor
@@ -11,9 +12,11 @@ enum Kind:
 
 trait Tile:
     let kind: Kind = Kind.Rock
+    var sturdy: int = 0
 
 trait Bridge
 trait Walkable
+trait Cracked
 
 trait Board:
     let size: int = 85
@@ -32,13 +35,26 @@ template BridgePlace:
     use Place(kind = Kind.Rock)
     Bridge
 
+template CrackedPlace(kind: Kind):
+    use Place(kind = kind)
+    Cracked
+
+template CrackedBridgePlace:
+    use BridgePlace()
+    Cracked
+
 rule Fill:
     on load:
         for i in range(0, Field[Board].size * Field[Board].size):
-            if i % 7 == 0:
+            let cracked = i % 2 == 1
+            if i % 7 == 0 and cracked:
+                spawn CrackedBridgePlace()
+            else if i % 7 == 0:
                 spawn BridgePlace()
+            else if cracked:
+                spawn CrackedPlace(kind = Kind.Rock)
             else:
-                spawn Place(kind = if i % 2 == 0: Kind.Floor else: Kind.Rock)
+                spawn Place(kind = Kind.Floor)
 
 rule WalkableTiles:
     pairs:
@@ -50,3 +66,16 @@ rule WalkableTiles:
     reduce per tile:
         bridges = count()
     keep Walkable on tile if tile[Tile].kind == Kind.Floor or bridges > 0
+
+rule SturdyTiles:
+    pairs:
+        tile:
+            Tile
+            without: Cracked
+        bridge: Bridge
+    where:
+        bridge == tile
+    reduce per tile:
+        bridges = count()
+    on fixed_tick:
+        tile[Tile].sturdy = bridges

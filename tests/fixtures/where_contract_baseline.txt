@@ -409,11 +409,11 @@ derived_relations.cactus examples derived_relations.SameRoomLinks/on std.core.fi
     named_requirements:
     iteration_order: free
 deterministic_target_selection.cactus examples deterministic_target_selection.SelectTarget/on std.core.fixed_tick
-    reads: deterministic_target_selection.Enemy deterministic_target_selection.Position deterministic_target_selection.Target deterministic_target_selection.Tower
-    read_fields: deterministic_target_selection.Enemy{cloaked} deterministic_target_selection.Position{pos} deterministic_target_selection.Target{has_target,selected} deterministic_target_selection.Tower{range}
+    reads: deterministic_target_selection.Position deterministic_target_selection.Target deterministic_target_selection.Tower
+    read_fields: deterministic_target_selection.Position{pos} deterministic_target_selection.Target{has_target,selected} deterministic_target_selection.Tower{range}
     write_fields: deterministic_target_selection.Target{has_target,selected}
     write_kinds: deterministic_target_selection.Target.has_target=2/2 deterministic_target_selection.Target.selected=0/0
-    bound_reads: 0:deterministic_target_selection.Position 0:deterministic_target_selection.Target 0:deterministic_target_selection.Tower 1:deterministic_target_selection.Enemy 1:deterministic_target_selection.Position
+    bound_reads: 0:deterministic_target_selection.Position 0:deterministic_target_selection.Target 0:deterministic_target_selection.Tower 1:deterministic_target_selection.Position
     named_reads:
     named_writes:
     named_requirements:
@@ -864,6 +864,106 @@ neighbor_joins.cactus examples neighbor_joins.ReportNeighbors/on std.core.fixed_
     write_fields:
     write_kinds:
     bound_reads: 0:neighbor_joins.Cell 1:neighbor_joins.Cell
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+pair_binding_without.cactus examples pair_binding_without.CountAllies/on std.core.fixed_tick
+    reads: pair_binding_without.Unit
+    read_fields: pair_binding_without.Unit{allies,team}
+    write_fields: pair_binding_without.Unit{allies}
+    write_kinds: pair_binding_without.Unit.allies=0/0
+    bound_reads: 0:pair_binding_without.Unit 1:pair_binding_without.Unit
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+pair_binding_without.cactus examples pair_binding_without.CountTargets/on std.core.fixed_tick
+    reads: pair_binding_without.Unit
+    read_fields: pair_binding_without.Unit{targets,team}
+    write_fields: pair_binding_without.Unit{targets}
+    write_kinds: pair_binding_without.Unit.targets=0/0
+    bound_reads: 0:pair_binding_without.Unit 1:pair_binding_without.Unit
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+pair_binding_without.cactus examples pair_binding_without.Fall/on std.core.fixed_tick
+    reads: pair_binding_without.Unit
+    read_fields: pair_binding_without.Unit{fall}
+    write_fields: pair_binding_without.Unit{fall}
+    write_kinds: pair_binding_without.Unit.fall=3/0
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: creation
+pair_binding_without.cactus examples pair_binding_without.Lower/on std.core.fixed_tick
+    reads: pair_binding_without.Unit
+    read_fields: pair_binding_without.Unit{lower}
+    write_fields: pair_binding_without.Unit{lower}
+    write_kinds: pair_binding_without.Unit.lower=3/0
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: creation
+pair_binding_without.cactus examples pair_binding_without.Pick/on std.core.fixed_tick
+    reads: pair_binding_without.Unit
+    read_fields: pair_binding_without.Unit{id,picked,team}
+    write_fields: pair_binding_without.Unit{picked}
+    write_kinds: pair_binding_without.Unit.picked=0/0
+    bound_reads: 0:pair_binding_without.Unit 1:pair_binding_without.Unit
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+pair_binding_without.cactus examples pair_binding_without.Raise/on std.core.fixed_tick
+    reads: pair_binding_without.Unit
+    read_fields: pair_binding_without.Unit{raise}
+    write_fields: pair_binding_without.Unit{raise}
+    write_kinds: pair_binding_without.Unit.raise=3/0
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: creation
+pair_binding_without.cactus examples pair_binding_without.Rally/on std.core.fixed_tick
+    reads: pair_binding_without.Unit
+    read_fields: pair_binding_without.Unit{rallied,team}
+    write_fields: pair_binding_without.Unit{rallied}
+    write_kinds: pair_binding_without.Unit.rallied=0/0
+    bound_reads: 0:pair_binding_without.Unit 1:pair_binding_without.Unit
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+pair_binding_without.cactus examples pair_binding_without.Rest/on std.core.fixed_tick
+    reads: pair_binding_without.Stance pair_binding_without.Stance.Ready pair_binding_without.Stance.Resting pair_binding_without.Unit
+    read_fields: pair_binding_without.Stance.Ready{*} pair_binding_without.Stance.Resting{*} pair_binding_without.Stance{*} pair_binding_without.Unit{rest}
+    write_fields: pair_binding_without.Stance.Ready{*} pair_binding_without.Stance.Resting{*} pair_binding_without.Stance{*} pair_binding_without.Unit{rest}
+    write_kinds: pair_binding_without.Unit.rest=3/0
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: creation
+pair_binding_without.cactus examples pair_binding_without.Strike/on std.core.fixed_tick
+    reads: pair_binding_without.Log pair_binding_without.Unit
+    read_fields: pair_binding_without.Log{trace} pair_binding_without.Unit{id,team}
+    write_fields: pair_binding_without.Log{trace}
+    write_kinds: pair_binding_without.Log.trace=3/0
+    bound_reads: 0:pair_binding_without.Unit 1:pair_binding_without.Unit
+    named_reads: [pair_binding_without.Book: pair_binding_without.Log{trace}]
+    named_writes: [pair_binding_without.Book: pair_binding_without.Log{trace}]
+    named_requirements: pair_binding_without.Book/pair_binding_without.Log
+    iteration_order: free
+pair_binding_without.cactus examples pair_binding_without.Target/on std.core.fixed_tick
+    reads: pair_binding_without.Unit
+    read_fields: pair_binding_without.Unit{team}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:pair_binding_without.Unit 1:pair_binding_without.Unit
     named_reads:
     named_writes:
     named_requirements:

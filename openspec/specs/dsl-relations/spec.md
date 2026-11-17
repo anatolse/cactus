@@ -198,7 +198,7 @@ A rule SHALL bind relation rows in two places:
 - A `pairs:` binding whose only entry is a relation name, `r: R`.
 - A unary `each:` with exactly one relation entry and an alias, `each: R as r`, and no `without:`.
 
-A row binding SHALL expose `r.from` and `r.to` as `entity_id` values and `r.<field>` for each field. It SHALL be read-only, and it SHALL NOT be used with brackets, as a command or `emit` target, or in `reduce:` or a trait `keep`. Direct-key relation projection SHALL be the permitted keep form on a row domain, as defined by "Relation row queries project kept pairs". A rule SHALL have at most two row bindings, both in the existing two-binding `pairs:` form. A pair with two row bindings SHALL meet "Two relation rows join by their endpoints". Stored and kept row domains SHALL use row creation order; derived row domains SHALL use their declared endpoint creation order. A unary row domain SHALL accept `where:`, `order by:`, a global or direct-endpoint `limit:` and `when:`.
+A row binding SHALL expose `r.from` and `r.to` as `entity_id` values and `r.<field>` for each field. It SHALL be read-only, and it SHALL NOT be used with brackets, as a command or `emit` target, or in `reduce:` or a trait `keep`. An endpoint SHALL accept brackets that name the declared trait of that end: `r.from[F].g` and `r.to[T].g`, where `F` and `T` are the relation's `from` and `to` traits, SHALL read field `g` of the entity on that end, wherever `r.<field>` may be read. For a derived relation both ends name the end trait of the relation it is derived from. Any other trait in the brackets SHALL be a source-located error that names the end's trait and suggests joining the entity in `pairs:`, and any write through an endpoint SHALL be a source-located error. The read SHALL enter the handler's contract as a read of that trait's field on another entity. Direct-key relation projection SHALL be the permitted keep form on a row domain, as defined by "Relation row queries project kept pairs". A rule SHALL have at most two row bindings, both in the existing two-binding `pairs:` form. A pair with two row bindings SHALL meet "Two relation rows join by their endpoints". Stored and kept row domains SHALL use row creation order; derived row domains SHALL use their declared endpoint creation order. A unary row domain SHALL accept `where:`, `order by:`, a global or direct-endpoint `limit:` and `when:`.
 
 #### Scenario: Row joined to an entity
 - **WHEN** a pair rule binds `w: Walker` and `r: Route` with `where: r.from == w[Walker].tile`
@@ -216,11 +216,27 @@ A row binding SHALL expose `r.from` and `r.to` as `entity_id` values and `r.<fie
 - **WHEN** a pair rule binds `r1: Walk` and `r2: Door` with the top-level predicate `r1.to == r2.from`
 - **THEN** compilation accepts it and runs only tuples whose named endpoints are equal
 
+#### Scenario: Reading the end's declared trait
+- **WHEN** `MaySee` declares `from: Watcher` and `to: Target`, and a pair rule over `s: MaySee` and `lamp: Lamp` declares `where: s.from[Watcher].range > lamp[Lamp].power`
+- **THEN** compilation accepts it, and each tuple compares the range of the row's watcher with the lamp
+
+#### Scenario: Another trait through an end
+- **WHEN** the same rule reads `s.from[Health].hp`
+- **THEN** the compiler reports an error that names `Watcher` as the trait of that end and suggests a `pairs:` binding
+
+#### Scenario: Write through an end
+- **WHEN** a handler assigns `s.to[Target].loud = 0.0`
+- **THEN** the compiler reports that an endpoint is read-only
+
+#### Scenario: End of a derived row
+- **WHEN** `Route = shortest(Walk, by = cost)`, `Walk` joins `Tile` to `Tile`, and a rule reads `route.to[Tile].x`
+- **THEN** compilation accepts it
+
 #### Scenario: Row as a trait namespace
 - **WHEN** a handler reads `r[Tile].x`
 - **THEN** the compiler reports that `r` is a relation row, with help that suggests joining a `Tile` binding on `r.from`
 
-A row SHALL remain read-only under endpoint limits. Direct endpoint partitioning SHALL NOT make the row an entity binding or grant trait access through its endpoints.
+A row SHALL remain read-only under endpoint limits. Direct endpoint partitioning SHALL NOT make the row an entity binding or grant any access through its endpoints beyond the read of the end's declared trait.
 
 #### Scenario: Unary scored rows allocate by both endpoints
 - **WHEN** a unary relation-row rule orders by its distance field and limits both direct endpoints

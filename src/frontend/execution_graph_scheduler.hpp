@@ -41,6 +41,14 @@ bool compute_handler_schedule(ExecutionGraph& graph,
 // Run before compute_handler_schedule, on a module graph or on the linked program.
 void expand_group_orderings(ExecutionGraph& graph);
 
+// Why the runs of two handlers do not commute: each conflicting field with both
+// handlers' access to it, then the conflicting channels and effects.
+[[nodiscard]] std::vector<std::string> conflict_reasons(const HandlerNode& first,
+                                                        const HandlerNode& second,
+                                                        const std::vector<FieldProvenance>& fields,
+                                                        const std::vector<std::string>& channels,
+                                                        const std::vector<std::string>& effects);
+
 // Rejects `on added T` / `on removed T` when some handler in the graph projects T.
 void validate_lifecycle_trigger_traits(const ExecutionGraph& graph, ErrorReporter& errors);
 

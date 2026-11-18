@@ -1,0 +1,21 @@
+Cost of each activation as terms in entity populations: a shape, not a bound.
+  N(T)        entities that carry T
+  N(*)        all entities, for a rule that requires no trait
+  Δ(T)        entities of T whose inputs changed since the rule's last run
+  k           matches per row of a join, not measured
+  cells(T)    cells of each carrier of T
+  live(T: f)  cells of T whose fields f are not at their defaults
+  ×N          the passes of a rule with `repeat: N`
+A keep rule is skipped when none of its inputs changed.
+
+phase std.core.tick  depth 1
+  shapes.Advance/on std.core.tick  N(Runner)·k ×3
+  shapes.Snap/on std.core.tick  live(Room: gas)
+  shapes.Fill/on std.core.tick  cells(Room)
+  shapes.Spread/on std.core.tick  live(Room: gas)·k
+
+event std.core.load  depth 1
+  shapes.Start/on std.core.load  per event: 1
+
+event std.core.unload  depth 1
+  std.core.SceneCleanup/on std.core.unload  per event: N(*)

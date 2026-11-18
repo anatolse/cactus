@@ -167,6 +167,20 @@ std::optional<KeepEvaluation> pair_plan_limit(const RuleNode& rule, const Handle
 
 }  // namespace
 
+std::unordered_map<SymbolId, const RuleNode*> rules_by_id(const ProgramNode* ast) {
+    std::unordered_map<SymbolId, const RuleNode*> rules;
+    if (ast == nullptr) {
+        return rules;
+    }
+    for (const auto& declaration : ast->declarations) {
+        const auto* rule = std::get_if<RuleNode>(&declaration);
+        if (rule != nullptr && rule->resolved_rule_id.has_value()) {
+            rules.emplace(*rule->resolved_rule_id, rule);
+        }
+    }
+    return rules;
+}
+
 KeepEvaluation classify_keep(const RuleNode& rule,
                              const HandlerContract& contract,
                              const RelationLookup& find_relation) {

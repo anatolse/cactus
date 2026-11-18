@@ -1,0 +1,85 @@
+module shapes
+
+use std.core
+
+const:
+    SPREAD = 0.1
+    TRACE = 0.01
+
+single trait Room:
+    dim x: int in range(0, 16)
+    var gas: float = 0.0
+
+trait Runner:
+    var lane: int = 0
+    var x: float = 0.0
+    var seen: int = 0
+
+trait Marker:
+    let lane: int = 0
+    let x: float = 0.0
+
+entity Hall:
+    Room
+
+template Racer:
+    Runner
+
+template Post(at: float):
+    Marker:
+        x = at
+
+rule Start:
+    on load:
+        spawn Racer()
+        spawn Post(at = 1.0)
+        spawn Post(at = 2.0)
+
+rule Snap:
+    each: Room as c
+    where:
+        c.gas > 0.0 and c.gas < TRACE
+
+    on tick:
+        c.gas = 0.0
+
+rule Fill:
+    each: Room as c
+    after:
+        Snap
+
+    on tick:
+        c.gas += 0.1
+
+rule Spread:
+    pairs:
+        here:
+            Room
+        there:
+            Room
+    after:
+        Fill
+        Snap
+    where:
+        adjacent(here, there)
+    reduce per here:
+        net = sum((there.gas - here.gas) * SPREAD)
+
+    on tick:
+        here.gas += net
+
+rule Advance:
+    pairs:
+        runner:
+            Runner
+        post:
+            Marker
+    where:
+        runner[Runner].lane == post[Marker].lane and runner[Runner].x < post[Marker].x
+    reduce per runner:
+        ahead = count()
+    repeat: 3
+
+    on tick:
+        runner[Runner].seen += ahead
+        runner[Runner].x += 1.0

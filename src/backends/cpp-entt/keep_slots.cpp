@@ -20,20 +20,6 @@ void sort_unique(std::vector<std::uint32_t>& slots) {
     slots.erase(first, last);
 }
 
-std::unordered_map<SymbolId, const RuleNode*> rules_by_id(const DecoratedProgram& program) {
-    std::unordered_map<SymbolId, const RuleNode*> rules;
-    if (program.ast == nullptr) {
-        return rules;
-    }
-    for (const auto& declaration : program.ast->declarations) {
-        const auto* rule = std::get_if<RuleNode>(&declaration);
-        if (rule != nullptr && rule->resolved_rule_id.has_value()) {
-            rules.emplace(*rule->resolved_rule_id, rule);
-        }
-    }
-    return rules;
-}
-
 struct Keeper {
     const HandlerNode* handler = nullptr;
     SymbolId kept;
@@ -72,7 +58,7 @@ KeepSlotPlan::KeepSlotPlan(const DecoratedProgram& program) {
     for (auto& [key, slot] : fields_) {
         slot = static_cast<std::uint32_t>(slot_count_++);
     }
-    const auto rules = rules_by_id(program);
+    const auto rules = rules_by_id(program.ast);
     for (auto& [keeper, read] : inputs) {
         auto keep = make_keep(read, keeper.kept);
         if (const auto rule = rules.find(keeper.handler->identity.rule); rule != rules.end()) {

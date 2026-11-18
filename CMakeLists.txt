@@ -172,6 +172,7 @@ add_library(cactus_frontend STATIC
     src/frontend/query_costs.cpp
     src/frontend/hierarchy_forest.cpp
     src/frontend/keep_inputs.cpp
+    src/frontend/cost_report.cpp
     src/frontend/delivery_cycles.cpp
     src/frontend/native_result_ordering.cpp
     src/frontend/native_field_reads.cpp

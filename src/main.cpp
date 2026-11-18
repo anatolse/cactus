@@ -1,6 +1,7 @@
 #include "common/codegen_error.hpp"
 #include "common/error_reporter.hpp"
 #include "common/template_metadata.hpp"
+#include "frontend/cost_report.hpp"
 #include "frontend/lexer.hpp"
 #include "frontend/module_artifact.hpp"
 #include "frontend/module_resolver.hpp"
@@ -39,6 +40,8 @@ static void print_usage(const char* program) {
               << "  --output <file>                      Output file (default: stdout)\n"
               << "  --module-path <dir>                  Additional module search directory (repeatable)\n"
               << "  --warnings-as-errors                 Fail the build, generating nothing, if any warning is reported\n"
+              << "  --report-cost                        Print each root's handlers with their cost terms\n"
+              << "  --explain-rule <module.Rule>         Print one rule's static facts and generate nothing\n"
               << "  --parallel-handlers                  Run independent phase handlers on worker threads\n"
               << "  --force-row-stage                    Test only: evaluate every clause expression per row\n"
               << "  --no-indexed-joins                   Test only: rebuild every pair pass from full snapshots\n"
@@ -274,6 +277,8 @@ struct CliArgs {
     bool contract_audit          = false;
     bool warnings_as_errors = false;
     bool parallel_handlers  = false;
+    bool report_cost        = false;
+    std::optional<std::string> explain_rule;
     std::optional<std::string> grid_cell_size_text;
     std::optional<float> grid_cell_size;
 };
@@ -307,6 +312,10 @@ static std::optional<int> read_grid_cell_size(CliArgs& out) {
 static bool set_switch(const char* arg, CliArgs& out) {
     if (std::strcmp(arg, "--warnings-as-errors") == 0) {
         out.warnings_as_errors = true;
+        return true;
+    }
+    if (std::strcmp(arg, "--report-cost") == 0) {
+        out.report_cost = true;
         return true;
     }
     if (std::strcmp(arg, "--parallel-handlers") == 0) {
@@ -344,6 +353,23 @@ static bool set_switch(const char* arg, CliArgs& out) {
     return false;
 }
 
+static bool takes_value(std::string_view option) {
+    return option == "--backend" || option == "--output" || option == "-o" || option == "--module-path" ||
+           option == "--explain-rule";
+}
+
+static void set_value(std::string_view option, const char* value, CliArgs& out) {
+    if (option == "--backend") {
+        out.backend = value;
+    } else if (option == "--output" || option == "-o") {
+        out.output_file = value;
+    } else if (option == "--explain-rule") {
+        out.explain_rule = value;
+    } else {
+        out.module_paths.emplace_back(value);
+    }
+}
+
 /// Parses argv into `out`. Returns an exit code if main() should return
 /// immediately (0 for --help, 1 for a usage error), or nullopt to continue.
 static std::optional<int> parse_cli_args(int argc, char** argv, CliArgs& out) {
@@ -355,30 +381,18 @@ static std::optional<int> parse_cli_args(int argc, char** argv, CliArgs& out) {
         if (set_switch(argv[i], out)) {
             continue;
         }
-        if (std::strcmp(argv[i], "--backend") == 0) {
+        const std::string_view arg{argv[i]};
+        if (takes_value(arg)) {
             if (i + 1 >= argc) {
-                std::cerr << "error: --backend requires an argument\n";
+                std::cerr << "error: " << arg << " requires an argument\n";
                 return 1;
             }
-            out.backend = argv[++i];
-        } else if (std::strcmp(argv[i], "--output") == 0 || std::strcmp(argv[i], "-o") == 0) {
-            if (i + 1 >= argc) {
-                std::cerr << "error: --output requires an argument\n";
-                return 1;
-            }
-            out.output_file = argv[++i];
-        } else if (std::strcmp(argv[i], "--module-path") == 0) {
-            // 6.1: collect repeatable --module-path directories
-            if (i + 1 >= argc) {
-                std::cerr << "error: --module-path requires an argument\n";
-                return 1;
-            }
-            out.module_paths.emplace_back(argv[++i]);
-        } else if (argv[i][0] == '-') {
-            std::cerr << "error: unknown option '" << argv[i] << "'\n";
+            set_value(arg, argv[++i], out);
+        } else if (arg.starts_with('-')) {
+            std::cerr << "error: unknown option '" << arg << "'\n";
             return 1;
         } else {
-            out.input_file = argv[i];
+            out.input_file = arg;
         }
     }
 
@@ -493,6 +507,23 @@ static void apply_codegen_options(const CliArgs& args, cactus::DecoratedProgram&
     }
 }
 
+// Prints what --explain-rule or --report-cost asks for; an exit code when main() stops there.
+static std::optional<int> print_reports(const CliArgs& args, const cactus::DecoratedProgram& decorated) {
+    if (args.explain_rule.has_value()) {
+        const auto explanation = cactus::explain_rule(decorated, *args.explain_rule);
+        if (!explanation.has_value()) {
+            std::cerr << "error: " << explanation.error() << "\n";
+            return 1;
+        }
+        std::cout << *explanation;
+        return 0;
+    }
+    if (args.report_cost) {
+        std::cout << cactus::cost_report(decorated);
+    }
+    return std::nullopt;
+}
+
 static bool generate_cpp(const cactus::DecoratedProgram& decorated, std::string& generated) {
     try {
         generated = cactus::CppEnttCodegen::generate(decorated);
@@ -591,6 +622,9 @@ int main(int argc, char* argv[]) try {
         return 1;
     }
     decorated.ast = merged_codegen_prog ? merged_codegen_prog.get() : root_prog.get();
+    if (const auto exit_code = print_reports(args, decorated); exit_code.has_value()) {
+        return *exit_code;
+    }
     apply_codegen_options(args, decorated);
     std::string generated;
     if (!generate_cpp(decorated, generated) || !write_generated_output(generated, output_file, backend)) {

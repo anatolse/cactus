@@ -2762,6 +2762,41 @@ rule MoveBullets:
 
 **Character controller.** `std.physics.volume` declares `pub group solve` in `fixed_tick`. Its rules move every entity with `CharacterBody`, `Collider`, a shape and `WorldTransform` against solid colliders: gravity, a step-up lift, up to three slides along the surfaces the body hits (each slide keeps the motion out of every plane that still holds it; `spec/solver_limits.md` §4), a snap back down onto walkable ground, and a final push out of any overlap. A game writes `CharacterBody.velocity` (a positive `velocity.y` jumps) and reads `grounded`, `ground_normal` and `time_since_grounded`. A surface is walkable when its `surface` normal is within `max_slope` degrees of world up. A rule that writes `velocity` runs before `solve` with no annotation (§4.7); `after: physics.solve` reads this tick's results. The last stage of `solve` re-derives each `LocalTransform` descendant of a body, so such a rule also sees a body's children (a hurtbox, a model) at this tick's pose. `motion`, `lift`, `drop`, `ground_offset`, `heading`, `contacts`, `plane_a` and `plane_b` belong to the controller. A 2D `CharacterBody` is plain data that nothing moves.
 
+### 7.8 Cost Reports and Rule Explanations
+
+Two CLI options print what the compiler knows about a linked program's cost and order. Both print deterministic text to standard output, and their output depends only on the program, never on rule or file order.
+
+**`--report-cost`** prints, for every phase and host-event root (an event no handler emits, such as `load`), the handlers the root can activate in schedule order, each with a cost term in entity populations. The code generated with the option is the same as without it. A term is a shape, not a bound:
+
+- `N(T)` is the number of entities that carry `T`, the pass's first required trait. Only named entities carrying `T` give their count; a `single` trait gives `1`. A rule that requires no trait, such as one with only `without:`, is `N(*)`, all entities. `N(T, never destroyed)` marks a trait that a template warned as spawned repeatedly and never destroyed (§5.0) can carry.
+- A pair pass is `N(A)·k` when a join finds the partners, with `k` the matches per row (not measured), and `N(A)·N(B)` when it checks every tuple.
+- A world scan run per row multiplies the rows: `N(Unit)·N(Unit)` for `query.count[Unit]()` in a handler over `each: Unit`. Scans in sequence add; a scan inside a loop over another multiplies.
+- A rule over cells is `cells(T)` per carrier, or `live(T: f)` when the rest law holds (§3.8.8); `repeat: N` adds `×N`; an event handler is `per event:` and a lifecycle handler `per delivery:`.
+- A keep rule shows `keep delta` with its term in changed entities, `Δ(T)`, or `keep full: <reason>` with the construct that forces full evaluation. Any keep rule is skipped when none of its inputs changed.
+
+Each root also prints its static cascade depth and every delayed cycle it reaches.
+
+```
+phase std.core.tick  depth 2
+  game.Move/on std.core.tick  N(Unit)
+  game.Crowd/on std.core.tick  N(Unit)·N(Unit)
+  game.LowFact/on std.core.tick  Δ(Health)  keep delta
+```
+
+**`--explain-rule <module.Rule>`** prints each handler of one rule and generates nothing: its source location, domain, activation, each `where:` and `when:` condition with the point at which it is decided (always at run time, so no match count), the reads and writes of its contract, each schedule edge to or from it with the other handler and the reason, and its cost term as `--report-cost` prints it. An unknown rule name is an error and exit code 1.
+
+```
+game.Rally/on std.core.tick
+  at game.cactus:91:5
+  domain: each Unit
+  activation: phase std.core.tick
+  where: u.hp < 3  (run-time, per row)
+  reads: game.Unit.hp, game.Unit.x
+  writes: game.Unit.x (Accum)
+  after game.Crowd/on std.core.tick: game.Unit.hp (Crowd: Assign, Rally: read); writer before reader
+  cost: N(Unit)
+```
+
 ## 8. Deferred and Migration Notes
 
 ### 8.1 Deferred Features

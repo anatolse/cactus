@@ -1,0 +1,117 @@
+module keeps
+
+use std.core
+
+trait Health:
+    var hp: int = 10
+
+trait Owner:
+    let id: int = 0
+
+trait Item:
+    let owner: int = 0
+
+trait Gate:
+    var open: bool = false
+
+trait Low
+
+trait Has
+
+trait Hurt
+
+trait Linked
+
+trait Reachable
+
+trait Near
+
+relation Link:
+    from: Health
+    to: Health
+
+relation Reach = closure(Link)
+
+template Body:
+    Health
+
+entity Hero from Body()
+entity Foe from Body()
+
+entity Shop:
+    Owner
+
+entity Coin:
+    Item
+
+entity Door:
+    Gate
+
+group facts:
+    phase: tick
+
+rule Populate:
+    on load:
+        spawn Body()
+
+rule Join:
+    pairs:
+        a: Health
+        b: Health
+    where:
+        a != b
+        not Link(a, _)
+    limit: 1 per a
+    on tick:
+        add Link(a, b)
+
+rule LowFact:
+    each:
+        Health as h
+    group: facts
+    where:
+        h.hp < 5
+    keep Low
+
+rule HasFact:
+    pairs:
+        owner: Owner
+        item: Item
+    group: facts
+    where:
+        item[Item].owner == owner[Owner].id
+    keep Has on owner
+
+rule HurtFact:
+    each:
+        Health as h
+    group: facts
+    where:
+        h.hp < 10 and Door[Gate].open
+    keep Hurt
+
+rule LinkedFact:
+    each:
+        Health
+    group: facts
+    where:
+        Link(self, _)
+    keep Linked
+
+rule ReachFact:
+    pairs:
+        a: Health
+        b: Health
+    group: facts
+    where:
+        Reach(a, b)
+    keep Reachable on a
+
+rule NearFact:
+    pairs:
+        a: Health
+        b: Health
+    group: facts
+    where:
+        a[Health].hp > b[Health].hp
+    keep Near on a

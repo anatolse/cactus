@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -44,6 +45,9 @@ struct KeepEvaluation {
     std::string reason;  // full only: the first construct that forces it
     SourceLocation location;
 };
+
+// Every rule of the program's AST by its resolved identity; empty without an AST.
+[[nodiscard]] std::unordered_map<SymbolId, const RuleNode*> rules_by_id(const ProgramNode* ast);
 
 [[nodiscard]] KeepEvaluation classify_keep(const RuleNode& rule,
                                            const HandlerContract& contract,

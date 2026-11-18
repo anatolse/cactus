@@ -1,6 +1,7 @@
 #include "backends/cpp-entt/type_utils.hpp"
 #include "common/ast_expressions.hpp"
 #include "common/codegen_error.hpp"
+#include "common/joined.hpp"
 
 #include "frontend/single_traits.hpp"
 #include "frontend/symbol_identity.hpp"
@@ -169,14 +170,7 @@ std::string detail_namespace_path(const std::string& module_name) {
 }
 
 std::string join_strings(const std::vector<std::string>& items, std::string_view separator) {
-    std::string joined;
-    for (const auto& item : items) {
-        if (!joined.empty()) {
-            joined += separator;
-        }
-        joined += item;
-    }
-    return joined;
+    return joined(items, separator);
 }
 
 std::string component_local(const std::string& type_ref) {

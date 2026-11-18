@@ -1,0 +1,20 @@
+module main
+
+use std.core
+use lib
+
+trait Tall:
+    var flag: bool = false
+
+entity Fern:
+    use lib.Seed()
+    Tall
+
+rule Trim:
+    each:
+        lib.Plant as p
+        Tall as t
+    where:
+        p.size > 3
+    on tick:
+        t.flag = true

@@ -1082,6 +1082,8 @@ struct ReachabilityFacts {
     std::vector<SymbolId> widened_traits;
     std::vector<SymbolId> single_traits;                // at most one live entity carries each
     std::vector<HandlerIdentity> unreachable_handlers;  // sorted by canonical id
+    // Traits an entity of a template warned as never destroyed may carry, sorted by canonical id.
+    std::vector<SymbolId> never_destroyed_traits;
     bool derived = false;                               // the pass ran on this program
 
     // An entity with trait set `set` may carry `trait`: the set has it, or the trait is free.

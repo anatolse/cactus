@@ -1,4 +1,4 @@
-// NOLINTBEGIN(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)
+// NOLINTBEGIN(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity)
 // -- Catch2 assertion macros intentionally expand through do-while and expression decomposition.
 #include <catch2/catch_test_macros.hpp>
 
@@ -8,6 +8,7 @@
 #include <iterator>
 #include <ranges>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -21,6 +22,7 @@ struct CliResult {
     std::string stderr_text;
     bool wrote_output = false;
     std::string output_text;
+    std::string stdout_text;
 };
 
 std::string quote(fs::path value) {
@@ -29,22 +31,32 @@ std::string quote(fs::path value) {
 }
 
 // Copies the fixture into the build tree so the CLI's sibling build/ directory stays out of the sources.
-fs::path stage_fixture(const std::string& name) {
-    const fs::path source = fs::path{CACTUS_TEST_SOURCE_DIR} / "tests" / "fixtures" / "cli_diagnostics" / name;
-    const fs::path staged = fs::path{CACTUS_TEST_BINARY_DIR} / "cli_diagnostics" / name;
+fs::path stage_fixture(const std::string& name, const std::string& root = "cli_diagnostics") {
+    const fs::path source = fs::path{CACTUS_TEST_SOURCE_DIR} / "tests" / "fixtures" / root / name;
+    const fs::path staged = fs::path{CACTUS_TEST_BINARY_DIR} / "cli_diagnostics" / root / name;
     fs::remove_all(staged);
     fs::create_directories(staged.parent_path());
     fs::copy(source, staged, fs::copy_options::recursive);
     return staged;
 }
 
+std::string read_lines(const fs::path& path) {
+    std::ifstream stream(path);
+    std::string text;
+    for (std::string line; std::getline(stream, line);) {
+        text += line + "\n";
+    }
+    return text;
+}
+
 CliResult run_cactus(const fs::path& input, const std::string& flags = "") {
     const fs::path work_dir    = fs::path{CACTUS_TEST_BINARY_DIR} / "cli_diagnostics";
     const fs::path output_file = work_dir / (input.stem().string() + ".out.cpp");
     const fs::path stderr_file = work_dir / (input.stem().string() + ".stderr.txt");
+    const fs::path stdout_file = work_dir / (input.stem().string() + ".stdout.txt");
     fs::remove(output_file);
     const std::string command = quote(fs::path{CACTUS_COMPILER_PATH}) + " " + quote(input) + " -o " +
-                                quote(output_file) + flags + " 2> " + quote(stderr_file);
+                                quote(output_file) + flags + " 2> " + quote(stderr_file) + " > " + quote(stdout_file);
     // NOLINTNEXTLINE(bugprone-command-processor,concurrency-mt-unsafe) -- the test drives the real CLI binary.
     const int raw_exit = std::system(("\"" + command + "\"").c_str());
 
@@ -64,12 +76,38 @@ CliResult run_cactus(const fs::path& input, const std::string& flags = "") {
             result.info_lines.push_back(line);
         }
     }
+    result.stdout_text  = read_lines(stdout_file);
     result.wrote_output = fs::exists(output_file);
     if (result.wrote_output) {
         std::ifstream output(output_file);
         result.output_text.assign(std::istreambuf_iterator<char>(output), std::istreambuf_iterator<char>());
     }
     return result;
+}
+
+fs::path cost_fixture(const std::string& name) {
+    return stage_fixture(name, "cost_report");
+}
+
+// The report's line for one handler, or empty when it prints none.
+std::string handler_line(const std::string& report, const std::string& handler) {
+    const auto needle = "\n  " + handler + "  ";
+    const auto start  = report.find(needle);
+    if (start == std::string::npos) {
+        return {};
+    }
+    return report.substr(start + 1, report.find('\n', start + 1) - start - 1);
+}
+
+// What follows "cost: " in an explanation, up to the end of its line.
+std::string explained_cost(const std::string& text) {
+    constexpr std::string_view label = "  cost: ";
+    const auto start                 = text.find(label);
+    if (start == std::string::npos) {
+        return {};
+    }
+    const auto from = start + label.size();
+    return text.substr(from, text.find('\n', from) - from);
 }
 
 }  // namespace
@@ -267,4 +305,127 @@ TEST_CASE("CLI: a multiplying handler in a dependency is warned", "[cli][diagnos
     CHECK(result.stderr_lines[0].contains("echo.PingSide/on echo.Ping"));
 }
 
-// NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)
+TEST_CASE("CLI: --report-cost prints the expected report", "[cli][cost-report]") {
+    for (const std::string name : {"report", "keeps", "shapes"}) {
+        INFO(name);
+        const auto result = run_cactus(cost_fixture(name + ".cactus"), " --report-cost");
+        CHECK(result.exit_code == 0);
+        CHECK(result.wrote_output);
+        const auto expected =
+            read_lines(fs::path{CACTUS_TEST_SOURCE_DIR} / "tests" / "fixtures" / "cost_report" / (name + ".expected.txt"));
+        CHECK(result.stdout_text == expected);
+    }
+}
+
+TEST_CASE("CLI: --report-cost names population shapes", "[cli][cost-report]") {
+    const auto report = run_cactus(cost_fixture("report.cactus"), " --report-cost").stdout_text;
+    CHECK(handler_line(report, "report.Move/on std.core.tick").ends_with("  N(Unit)"));
+    CHECK(handler_line(report, "report.Stand/on std.core.fixed_tick").ends_with("  N(Unit)·k"));
+    CHECK(handler_line(report, "report.Crowd/on std.core.tick").ends_with("  N(Unit)·N(Unit)"));
+    CHECK(handler_line(report, "report.Clash/on std.core.tick").ends_with("  N(Unit)·N(Unit)"));
+    CHECK(handler_line(report, "report.Taunt/on std.core.tick").ends_with("  N(Unit)·2"));
+    CHECK(handler_line(report, "report.Award/on std.core.tick").ends_with("  1"));
+    CHECK(handler_line(report, "report.Flicker/on std.core.tick").ends_with("  N(Spark, never destroyed)"));
+    CHECK(handler_line(report, "std.core.SceneCleanup/on std.core.unload").ends_with("  per event: N(*)"));
+    CHECK(report.contains("\n  N(*)        all entities, for a rule that requires no trait\n"));
+    CHECK_FALSE(report.contains("unbounded"));
+    CHECK(report.contains("\nphase std.core.tick  depth "));
+    CHECK(report.contains("\n  delayed cycle: report.PingSide/on report.Ping, report.PongSide/on report.Pong\n"));
+}
+
+TEST_CASE("CLI: --report-cost does not depend on rule order", "[cli][cost-report]") {
+    const auto first  = run_cactus(cost_fixture("report.cactus"), " --report-cost");
+    const auto second = run_cactus(cost_fixture("reordered/report.cactus"), " --report-cost");
+    REQUIRE(first.exit_code == 0);
+    CHECK_FALSE(first.stdout_text.empty());
+    CHECK(first.stdout_text == second.stdout_text);
+}
+
+TEST_CASE("CLI: --report-cost leaves the generated code unchanged", "[cli][cost-report]") {
+    const auto plain    = run_cactus(cost_fixture("report.cactus"));
+    const auto reported = run_cactus(cost_fixture("report.cactus"), " --report-cost");
+    CHECK(plain.stdout_text.empty());
+    CHECK(plain.output_text == reported.output_text);
+}
+
+TEST_CASE("CLI: --report-cost shows keep levels and their reasons", "[cli][cost-report][keep]") {
+    const auto report = run_cactus(cost_fixture("keeps.cactus"), " --report-cost").stdout_text;
+    CHECK(report.contains("A keep rule is skipped when none of its inputs changed."));
+    CHECK(handler_line(report, "keeps.LowFact/on std.core.tick").ends_with("  Δ(Health)  keep delta"));
+    CHECK(handler_line(report, "keeps.HasFact/on std.core.tick").ends_with("  keep delta"));
+    CHECK(handler_line(report, "keeps.HurtFact/on std.core.tick")
+              .ends_with("  N(Health)  keep full: the named entity read `Door[Gate]`"));
+    CHECK(handler_line(report, "keeps.LinkedFact/on std.core.tick").ends_with("  keep full: the relation test `Link`"));
+    CHECK(handler_line(report, "keeps.ReachFact/on std.core.tick").ends_with("  keep full: the derived relation `Reach`"));
+    CHECK(handler_line(report, "keeps.NearFact/on std.core.tick")
+              .ends_with("  keep full: the pair plan, which can't look up rows from both bindings"));
+}
+
+TEST_CASE("CLI: one added where: term changes a keep's level", "[cli][cost-report][keep]") {
+    const auto before = run_cactus(cost_fixture("level_before/levels.cactus"), " --report-cost").stdout_text;
+    const auto after  = run_cactus(cost_fixture("level_after/levels.cactus"), " --report-cost").stdout_text;
+    CHECK(handler_line(before, "levels.LowFact/on std.core.tick").ends_with("  Δ(Health)  keep delta"));
+    CHECK(handler_line(after, "levels.LowFact/on std.core.tick")
+              .ends_with("  N(Health)  keep full: the derived relation `Reach`"));
+}
+
+TEST_CASE("CLI: --report-cost shows repeats and cells", "[cli][cost-report]") {
+    const auto report = run_cactus(cost_fixture("shapes.cactus"), " --report-cost").stdout_text;
+    CHECK(handler_line(report, "shapes.Advance/on std.core.tick").ends_with("  N(Runner)·k ×3"));
+    CHECK(handler_line(report, "shapes.Fill/on std.core.tick").ends_with("  cells(Room)"));
+    CHECK(handler_line(report, "shapes.Snap/on std.core.tick").ends_with("  live(Room: gas)"));
+    CHECK(handler_line(report, "shapes.Spread/on std.core.tick").ends_with("  live(Room: gas)·k"));
+}
+
+TEST_CASE("CLI: --explain-rule explains an inferred edge and a run-time filter", "[cli][cost-report][explain]") {
+    const auto result = run_cactus(cost_fixture("report.cactus"), " --explain-rule report.Rally");
+    REQUIRE(result.exit_code == 0);
+    CHECK_FALSE(result.wrote_output);
+    const auto& text = result.stdout_text;
+    CHECK(text.starts_with("report.Rally/on std.core.tick\n"));
+    CHECK(text.contains("report.cactus:"));
+    CHECK(text.contains("\n  domain: each Unit\n"));
+    CHECK(text.contains("\n  activation: phase std.core.tick\n"));
+    CHECK(text.contains("\n  where: u.hp < 3  (run-time, per row)\n"));
+    CHECK(text.contains("\n  writes: report.Unit.x (Accum)\n"));
+    CHECK(text.contains("\n  after report.Crowd/on std.core.tick: report.Unit.hp"));
+    CHECK(text.contains("writer before reader"));
+    CHECK_FALSE(text.contains("match"));
+}
+
+TEST_CASE("CLI: --explain-rule lists an explicit after: edge", "[cli][cost-report][explain]") {
+    const auto text = run_cactus(cost_fixture("report.cactus"), " --explain-rule report.Move").stdout_text;
+    CHECK(text.contains("\n  after report.Cull/on std.core.tick: declared by `after:`"));
+}
+
+TEST_CASE("CLI: --explain-rule prints the cost term --report-cost prints", "[cli][cost-report][explain]") {
+    const auto report = run_cactus(cost_fixture("report.cactus"), " --report-cost").stdout_text;
+    for (const std::string rule : {"Crowd", "Stand", "Flicker", "Taunt"}) {
+        INFO(rule);
+        const auto text = run_cactus(cost_fixture("report.cactus"), " --explain-rule report." + rule).stdout_text;
+        const auto cost = explained_cost(text);
+        REQUIRE_FALSE(cost.empty());
+        CHECK(handler_line(report, text.substr(0, text.find('\n'))).ends_with("  " + cost));
+    }
+    const auto keeps = run_cactus(cost_fixture("keeps.cactus"), " --report-cost").stdout_text;
+    const auto text  = run_cactus(cost_fixture("keeps.cactus"), " --explain-rule keeps.HurtFact").stdout_text;
+    REQUIRE_FALSE(explained_cost(text).empty());
+    CHECK(handler_line(keeps, "keeps.HurtFact/on std.core.tick").ends_with("  " + explained_cost(text)));
+}
+
+TEST_CASE("CLI: --explain-rule rejects an unknown rule", "[cli][cost-report][explain]") {
+    const auto result = run_cactus(cost_fixture("report.cactus"), " --explain-rule report.Missing");
+    CHECK(result.exit_code == 1);
+    CHECK_FALSE(result.wrote_output);
+    CHECK(result.stderr_text.contains("error: unknown rule 'report.Missing'"));
+}
+
+TEST_CASE("CLI: --explain-rule keeps locations and edge reasons across modules", "[cli][cost-report][explain]") {
+    const auto project = cost_fixture("across");
+    const auto result  = run_cactus(project / "main.cactus", " --explain-rule lib.Grow");
+    REQUIRE(result.exit_code == 0);
+    CHECK(result.stdout_text.contains("lib.cactus:14:"));
+    CHECK(result.stdout_text.contains("\n  before main.Trim/on std.core.tick: lib.Plant.size"));
+}
+
+// NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity)

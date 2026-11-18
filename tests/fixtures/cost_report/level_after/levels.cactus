@@ -1,0 +1,36 @@
+module levels
+
+use std.core
+
+trait Health:
+    var hp: int = 10
+
+trait Low
+
+relation Link:
+    from: Health
+    to: Health
+
+relation Reach = closure(Link)
+
+template Body:
+    Health
+
+entity Hero from Body()
+entity Foe from Body()
+
+group facts:
+    phase: tick
+
+rule Populate:
+    on load:
+        spawn Body()
+
+rule LowFact:
+    each:
+        Health as h
+    group: facts
+    where:
+        h.hp < 5
+        Reach(self, _)
+    keep Low

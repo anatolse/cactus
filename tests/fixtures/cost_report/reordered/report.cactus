@@ -1,0 +1,136 @@
+module report
+
+use std.core
+use std.query as query
+
+event Landed
+event Ping
+event Pong
+
+trait Unit:
+    var hp: int = 10
+    var x: int = 0
+
+trait Tile:
+    let x: int = 0
+
+trait Spark:
+    var life: int = 0
+
+single trait Score:
+    var points: int = 0
+
+trait Boss:
+    var rage: int = 0
+
+template Grunt:
+    Unit
+
+template Ember:
+    Spark
+
+entity Arena:
+    Score
+
+entity Ogre:
+    Boss
+
+entity Troll:
+    Boss
+
+entity Ground:
+    Tile
+
+rule PongSide:
+    on Pong:
+        emit Ping
+
+rule PingSide:
+    on Ping:
+        emit Pong
+
+rule Serve:
+    on tick:
+        emit Ping
+
+rule Flicker:
+    each:
+        Spark as s
+    on tick:
+        s.life += 1
+
+rule Burn:
+    after:
+        Recruit
+    on tick:
+        spawn Ember()
+
+rule Award:
+    each:
+        Score as s
+    on tick:
+        s.points += 1
+
+rule Clash:
+    pairs:
+        a: Unit
+        b: Unit
+    on tick:
+        let total = a[Unit].hp + b[Unit].hp
+
+rule Taunt:
+    pairs:
+        a: Unit
+        b: Boss
+    on tick:
+        let total = a[Unit].hp + b[Boss].rage
+
+rule Rally:
+    each:
+        Unit as u
+    where:
+        u.hp < 3
+    on tick:
+        u.x -= 1
+
+rule Crowd:
+    each:
+        Unit as u
+    after:
+        Move
+    on tick:
+        u.hp = query.count[Unit]()
+
+rule Bruise:
+    each:
+        Unit as u
+    on Landed:
+        u.hp -= 1
+
+rule Stand:
+    pairs:
+        a: Unit
+        b: Tile
+    where:
+        a[Unit].x == b[Tile].x
+    on fixed_tick:
+        emit Landed to a
+
+rule Move:
+    each:
+        Unit as u
+    after:
+        Cull
+    on tick:
+        u.x += 1
+
+rule Cull:
+    each:
+        Unit as u
+    on tick:
+        if u.hp <= 0:
+            destroy
+
+rule Recruit:
+    on tick:
+        spawn Grunt()

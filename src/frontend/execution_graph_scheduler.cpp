@@ -1,5 +1,6 @@
 #include "frontend/execution_graph_scheduler.hpp"
 
+#include "common/joined.hpp"
 #include "frontend/archetype_reachability.hpp"
 #include "frontend/delivery_cycles.hpp"
 #include "frontend/native_result_ordering.hpp"
@@ -468,6 +469,8 @@ PairConflict pair_conflict(const HandlerNode& left,
     return conflict;
 }
 
+}  // namespace
+
 std::vector<std::string> conflict_reasons(const HandlerNode& first,
                                           const HandlerNode& second,
                                           const std::vector<FieldProvenance>& fields,
@@ -497,13 +500,7 @@ std::vector<std::string> conflict_reasons(const HandlerNode& first,
     return reasons;
 }
 
-std::string joined(const std::vector<std::string>& parts, std::string_view separator) {
-    std::string text;
-    for (const auto& part : parts) {
-        text += (text.empty() ? "" : std::string(separator)) + part;
-    }
-    return text;
-}
+namespace {
 
 // The program's handlers, indexed as in the graph, followed by the runtime's
 // own event consumers, which act on their effect in arrival order.

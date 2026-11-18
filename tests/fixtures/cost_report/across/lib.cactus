@@ -1,0 +1,15 @@
+module lib
+
+use std.core
+
+pub trait Plant:
+    var size: int = 0
+
+pub template Seed:
+    Plant
+
+rule Grow:
+    each:
+        Plant as p
+    on tick:
+        p.size += 1

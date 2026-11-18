@@ -1,0 +1,24 @@
+Cost of each activation as terms in entity populations: a shape, not a bound.
+  N(T)        entities that carry T
+  N(*)        all entities, for a rule that requires no trait
+  Δ(T)        entities of T whose inputs changed since the rule's last run
+  k           matches per row of a join, not measured
+  cells(T)    cells of each carrier of T
+  live(T: f)  cells of T whose fields f are not at their defaults
+  ×N          the passes of a rule with `repeat: N`
+A keep rule is skipped when none of its inputs changed.
+
+phase std.core.tick  depth 1
+  keeps.HasFact/on std.core.tick  k  keep delta
+  keeps.HurtFact/on std.core.tick  N(Health)  keep full: the named entity read `Door[Gate]`
+  keeps.Join/on std.core.tick  N(Health)·N(Health)
+  keeps.LinkedFact/on std.core.tick  N(Health)  keep full: the relation test `Link`
+  keeps.LowFact/on std.core.tick  Δ(Health)  keep delta
+  keeps.NearFact/on std.core.tick  N(Health)·N(Health)  keep full: the pair plan, which can't look up rows from both bindings
+  keeps.ReachFact/on std.core.tick  N(Health)·k  keep full: the derived relation `Reach`
+
+event std.core.load  depth 1
+  keeps.Populate/on std.core.load  per event: 1
+
+event std.core.unload  depth 1
+  std.core.SceneCleanup/on std.core.unload  per event: N(*)

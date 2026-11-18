@@ -243,7 +243,7 @@ public:
 
     // One error per mistake: a self-contradictory domain anywhere, then, in user
     // modules only, a dead domain before a dead filter, missing producer or named need.
-    void report(ErrorReporter& errors) const {
+    void report(ErrorReporter& errors, ReachabilityFacts& facts) const {
         std::set<std::string> reported;
         const auto emit = [&](const HandlerModel& handler, const std::string& message) {
             if (reported.insert(message).second) {
@@ -293,12 +293,13 @@ public:
                      make_canonical_id(first.node->identity.rule) + "' to " + second.canonical_id +
                      ", or 'after: " + make_canonical_id(second.node->identity.rule) + "' to " + first.canonical_id);
         }
-        report_never_destroyed(errors);
+        facts.never_destroyed_traits = report_never_destroyed(errors);
     }
 
     // ── Never-destroyed spawns ──────────────────────────────────────────────
 
-    void report_never_destroyed(ErrorReporter& errors) const {
+    // Returns the traits an entity of a warned template may carry, sorted by canonical id.
+    std::vector<SymbolId> report_never_destroyed(ErrorReporter& errors) const {
         std::vector<std::vector<bool>> delivered;
         delivered.reserve(handlers_.size());
         for (const auto& handler : handlers_) {
@@ -312,6 +313,7 @@ public:
         });
         const auto destroyed = destroyed_origins(roots);
         std::map<std::string, std::vector<SourceLocation>> warned;
+        std::set<std::uint32_t> warned_origins;
         for (std::size_t index = 0; index < handlers_.size(); ++index) {
             if (!reachable_[index] || !recurs(roots[index])) {
                 continue;
@@ -321,6 +323,7 @@ public:
                     continue;
                 }
                 std::ranges::copy(*spawn.sites, std::back_inserter(warned[spawn.template_id]));
+                warned_origins.insert(spawn.roots.begin(), spawn.roots.end());
             }
         }
         for (const auto& [template_id, sites] : warned) {
@@ -331,6 +334,20 @@ public:
                                    "rule that destroys it, or give it a `single` trait if only one should exist");
             }
         }
+        return traits_of_origins(warned_origins);
+    }
+
+    [[nodiscard]] std::vector<SymbolId> traits_of_origins(const std::set<std::uint32_t>& origins) const {
+        std::set<TraitIndexValue> carried;
+        for (const auto& entity : entities_) {
+            if (origins.contains(entity.origin)) {
+                const auto members = members_of(entity.traits);
+                carried.insert(members.begin(), members.end());
+            }
+        }
+        auto symbols = symbols_of(std::vector<TraitIndexValue>(carried.begin(), carried.end()));
+        std::ranges::sort(symbols, {}, [](const SymbolId& trait) { return make_canonical_id(trait); });
+        return symbols;
     }
 
     // Runs in more than one activation: started by something other than `load` or `unload`.
@@ -1414,7 +1431,7 @@ const ReachabilityFacts& ArchetypeReachability::facts() const {
 }
 
 void ArchetypeReachability::finish(ErrorReporter& errors) {
-    state_->analysis.report(errors);
+    state_->analysis.report(errors, state_->facts);
     state_->program->reachability = std::move(state_->facts);
     derive_hierarchy_facts(*state_->program);
 }

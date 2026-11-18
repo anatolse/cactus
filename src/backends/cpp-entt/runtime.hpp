@@ -2205,9 +2205,21 @@ void end_delivery(ActivationRuntime<Occurrence>& activation) {
     activation.delivery_component = kNoComponent;
 }
 
+// The default drop callback: a dropped occurrence is forgotten.
+struct IgnoreDrop {};
+
+// Tells `drop(concrete_occurrence, recipient)` of `queued`, dropped because its recipient is gone.
+template <typename Occurrence, typename Drop>
+void report_drop([[maybe_unused]] const QueuedEvent<Occurrence>& queued, [[maybe_unused]] const Drop& drop) {
+    if constexpr (!std::is_same_v<Drop, IgnoreDrop>) {
+        std::visit([&](const auto& occurrence) { drop(occurrence, *queued.target); }, queued.occurrence);
+    }
+}
+
 // Drains activation.event_queue, dispatching each occurrence through
 // `dispatch(registry, concrete_occurrence, target)` via std::visit. An
-// occurrence that is no longer deliverable is dropped before dispatch.
+// occurrence that is no longer deliverable is dropped before dispatch, and
+// `drop(concrete_occurrence, recipient)` hears of it.
 // `Dispatch` is a template parameter (a codegen-emitted lambda wrapping
 // generated_dispatch_event's overload set), not a std::function like
 // propagate_hierarchy's callbacks, because this runs once per queued event —
@@ -2215,8 +2227,11 @@ void end_delivery(ActivationRuntime<Occurrence>& activation) {
 // ranks generated-code runtime speed over the std::function idiom's
 // convenience here; see extract-codegen-runtime-scaffolding design.md
 // Decision 4 before "fixing" this back to std::function.
-template <typename Occurrence, typename Dispatch>
-void drain_event_cascade(ActivationRuntime<Occurrence>& activation, entt::registry& registry, Dispatch dispatch) {
+template <typename Occurrence, typename Dispatch, typename Drop = IgnoreDrop>
+void drain_event_cascade(ActivationRuntime<Occurrence>& activation,
+                         entt::registry& registry,
+                         Dispatch dispatch,
+                         Drop drop = {}) {
     static_assert(is_event_occurrence_variant_v<Occurrence>,
                   "ActivationRuntime<Occurrence>'s Occurrence must be a std::variant<...> of the program's concrete "
                   "event types (the generated EventOccurrence alias)");
@@ -2230,6 +2245,7 @@ void drain_event_cascade(ActivationRuntime<Occurrence>& activation, entt::regist
         auto queued = std::move(activation.event_queue.front());
         activation.event_queue.pop_front();
         if (!deliverable(registry, queued)) {
+            report_drop(queued, drop);
             continue;
         }
         begin_delivery(activation, queued);
@@ -2490,22 +2506,43 @@ private:
     std::tuple<LifecycleTracker<Traits>...> trackers_;
 };
 
+// The default round callback: commit rounds go unreported.
+struct IgnoreCommitRound {
+    void operator()(std::size_t /*round*/, std::size_t /*commands*/) const {}
+};
+
+// Takes the commands of commit round `round`. The caller reports round 1, the
+// barrier, before its loop, so an activation that commits nothing still has one.
+template <typename Occurrence, typename OnRound>
+std::vector<StructuralCommand> take_commit_round(ActivationRuntime<Occurrence>& activation,
+                                                 std::size_t round,
+                                                 const OnRound& on_round) {
+    count_commit_round();
+    auto commands = std::move(activation.commands);
+    activation.commands.clear();
+    if (round > 1) {
+        on_round(round, commands.size());
+    }
+    return commands;
+}
+
 // Applies the queued structural commands. A program with no lifecycle trigger
 // calls this overload, so no tracking code is instantiated; only keep rounds
 // queue commands during it. `drain_cascade` keeps the signature shared with
-// the overload below.
-template <typename Occurrence, typename DrainCascade>
+// the overload below. `on_round(round, commands)` hears of each commit round.
+template <typename Occurrence, typename DrainCascade, typename OnRound = IgnoreCommitRound>
+    requires std::is_invocable_v<const OnRound&, std::size_t, std::size_t>
 void commit_activation(ActivationRuntime<Occurrence>& activation,
                        entt::registry& registry,
-                       [[maybe_unused]] DrainCascade drain_cascade) {
+                       [[maybe_unused]] DrainCascade drain_cascade,
+                       const OnRound& on_round = {}) {
     static_assert(is_event_occurrence_variant_v<Occurrence>,
                   "ActivationRuntime<Occurrence>'s Occurrence must be a std::variant<...> of the program's concrete "
                   "event types (the generated EventOccurrence alias)");
     const auto keeps = std::exchange(activation.keep_rounds, {});
+    on_round(1, activation.commands.size());
     for (std::size_t round = 1; !activation.commands.empty() || round <= keeps.depth; ++round) {
-        count_commit_round();
-        auto commands = std::move(activation.commands);
-        activation.commands.clear();
+        auto commands = take_commit_round(activation, round, on_round);
         apply_commit_round(activation, registry, commands, [&](StructuralCommand& command) { command.apply(registry); });
         keeps(registry, round);
     }
@@ -2517,19 +2554,23 @@ void commit_activation(ActivationRuntime<Occurrence>& activation,
 // immediate deliveries form no cycle and keep rounds are finite.
 // `drain_cascade` is a callable rather than drain_event_cascade itself so
 // codegen can pass the forward-declared `&generated_drain_event_cascade`.
-template <typename Occurrence, typename DrainCascade, typename Routes = ImmediateLifecycle, typename... Traits>
+template <typename Occurrence,
+          typename DrainCascade,
+          typename Routes  = ImmediateLifecycle,
+          typename OnRound = IgnoreCommitRound,
+          typename... Traits>
 void commit_activation(ActivationRuntime<Occurrence>& activation,
                        entt::registry& registry,
                        DrainCascade drain_cascade,
                        LifecycleTrackers<Traits...>& lifecycle,
-                       const Routes& routes = {}) {
+                       const Routes& routes     = {},
+                       const OnRound& on_round = {}) {
     static_assert(std::is_invocable_v<DrainCascade&, entt::registry&>,
                   "commit_activation's DrainCascade must be callable as drain_cascade(registry)");
     const auto keeps = std::exchange(activation.keep_rounds, {});
+    on_round(1, activation.commands.size());
     for (std::size_t round = 1; !activation.commands.empty() || round <= keeps.depth; ++round) {
-        count_commit_round();
-        auto commands = std::move(activation.commands);
-        activation.commands.clear();
+        auto commands = take_commit_round(activation, round, on_round);
         lifecycle.set_recording(true);
         apply_commit_round(activation, registry, commands, [&](StructuralCommand& command) {
             lifecycle.begin_command(command.kind, command.component);

@@ -17,6 +17,7 @@
 #include "backends/cpp-entt/relation_emitter.hpp"
 #include "backends/cpp-entt/range_checks.hpp"
 #include "backends/cpp-entt/render_pass_emitter.hpp"
+#include "backends/cpp-entt/rule_trace_emitter.hpp"
 #include "backends/cpp-entt/system_emitter.hpp"
 #include "backends/cpp-entt/type_utils.hpp"
 
@@ -1087,9 +1088,12 @@ void emit_phase_batch(std::ostringstream& out,
     const bool is_render_phase_batch = phase == render_phase;
     const bool delays                = delivery.phase_delays(phase->phase);
     const auto keep_depth            = deepest_keep_round(program.execution_graph, phase->phase);
+    const auto phase_name = EnttCodegenUtils::string_literal_cpp(make_canonical_id(phase->phase));
     // One activation of the phase: one tick of its clock.
-    const auto emit_activation = [&](const std::string& indent) {
+    const auto emit_activation = [&](const std::string& indent, std::string_view repetition) {
         out << indent << "scheduler.activation.active = true;\n";
+        out << rule_trace::hook(
+            program, "rule_trace_activation(" + phase_name + ", " + std::string{repetition} + ")", indent);
         if (delivery.cyclic()) {
             out << indent << "scheduler.activation.current_delayed = "
                 << (delays ? "&" + phase_delayed_queue(phase_type) : std::string("nullptr")) << ";\n";
@@ -1126,7 +1130,7 @@ void emit_phase_batch(std::ostringstream& out,
     out << "    auto& phase = " << phase_state(phase_type) << ";\n";
     if (!phase->every_seconds.has_value()) {
         emit_phase_field_bindings(out, phase);
-        emit_activation("    ");
+        emit_activation("    ", "0");
         out << "    ++phase.completed_batches;\n";
         out << "}\n\n";
         return;
@@ -1143,7 +1147,7 @@ void emit_phase_batch(std::ostringstream& out,
     }
     out << "    phase.dt = static_cast<float>(interval);\n";
     out << "    for (std::uint64_t repetition = 0; repetition < repetitions; ++repetition) {\n";
-    emit_activation("        ");
+    emit_activation("        ", "repetition");
     out << "    }\n";
     out << "    phase.accumulator -= static_cast<double>(due) * interval;\n";
     out << "    phase.accumulator = std::max(phase.accumulator, 0.0);\n";
@@ -1169,6 +1173,7 @@ void emit_root_event_processor(std::ostringstream& out,
     // any phase batch observes input — mirrors the legacy
     // generated_update_project ordering.
     if (is_frame_root) {
+        out << rule_trace::hook(program, "rule_trace_frame_begin()", "    ");
         out << "    reset_consumed_input();\n";
     }
     bool routed_to_phase = false;
@@ -1188,6 +1193,9 @@ void emit_root_event_processor(std::ostringstream& out,
         out << "    (void)target;\n";
     } else {
         emit_own_activation();
+    }
+    if (is_frame_root) {
+        out << rule_trace::hook(program, "rule_trace_frame_end()", "    ");
     }
     out << "}\n\n";
 }
@@ -1397,6 +1405,7 @@ void emit_host_clock_entry_points(std::ostringstream& out, const DeliveryPlan& d
     out << "void generated_run_boundary_activation(entt::registry& registry, const Occurrence& occurrence) {\n";
     out << "    auto& activation = generated_scheduler_state().activation;\n";
     out << "    activation.active = true;\n";
+    out << rule_trace::hook(program, "rule_trace_activation(generated_trace_event_name(occurrence), 0)", "    ");
     if (delivery.cyclic()) {
         out << "    activation.current_delayed = &generated_scheduler_state().delayed_host;\n";
     }
@@ -1427,6 +1436,7 @@ void emit_host_clock_entry_points(std::ostringstream& out, const DeliveryPlan& d
     if (delivery.cyclic()) {
         out << "    for (auto& queued : delayed) {\n";
         out << "        if (!deliverable(registry, queued)) {\n";
+        out << rule_trace::hook(program, "report_drop(queued, " + rule_trace::drop_callback(program) + ")", "            ");
         out << "            continue;\n";
         out << "        }\n";
         out << "        begin_delivery(activation, queued);\n";
@@ -1542,11 +1552,12 @@ void emit_commit_activation(std::ostringstream& out,
         out << "    ::generated_flush_accumulations();\n";
     }
     out << "    auto& activation = generated_scheduler_state().activation;\n";
+    const std::string on_round = program.trace_rules ? ", &rule_trace_commit" : "";
     if (!tracks_lifecycle) {
-        out << "    commit_activation(activation, registry, " << drain << ");\n";
-    } else if (routes_lifecycle) {
-        out << "    commit_activation(activation, registry, " << drain
-            << ", generated_lifecycle_trackers(), GeneratedLifecycleRoutes{});\n";
+        out << "    commit_activation(activation, registry, " << drain << on_round << ");\n";
+    } else if (routes_lifecycle || program.trace_rules) {
+        out << "    commit_activation(activation, registry, " << drain << ", generated_lifecycle_trackers(), "
+            << (routes_lifecycle ? "GeneratedLifecycleRoutes{}" : "ImmediateLifecycle{}") << on_round << ");\n";
     } else {
         out << "    commit_activation(activation, registry, " << drain << ", generated_lifecycle_trackers());\n";
     }
@@ -1575,13 +1586,17 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program,
     const auto lifecycle_triggers = lifecycle_occurrence_triggers(program);
     std::vector<std::string> occurrence_types;
     occurrence_types.reserve(all_events.size() + lifecycle_triggers.size());
+    std::string trace_event_names;
     for (const auto* event : all_events) {
         occurrence_types.push_back(event_runtime_cpp_type(program, *event->symbol_id));
+        trace_event_names +=
+            rule_trace::event_name(program, occurrence_types.back(), make_canonical_id(*event->symbol_id));
     }
     std::vector<std::string> lifecycle_types;
     lifecycle_types.reserve(lifecycle_triggers.size());
     for (const auto& trigger : lifecycle_triggers) {
         lifecycle_types.push_back(*EnttCodegenUtils::lifecycle_occurrence_cpp_type(trigger, program));
+        trace_event_names += rule_trace::event_name(program, lifecycle_types.back(), trigger.source_spelling());
     }
     occurrence_types.insert(occurrence_types.end(), lifecycle_types.begin(), lifecycle_types.end());
 
@@ -1603,6 +1618,7 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program,
         out << ">;\n";
     }
     out << "\n";
+    out << trace_event_names;
 
     emit_scheduler_state_struct(out, program, delivery);
     out << "SchedulerState& generated_scheduler_state() {\n";
@@ -1640,6 +1656,7 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program,
     out << "                                        std::function<void(entt::registry&)> apply,\n";
     out << "                                        entt::entity subject = entt::null,\n";
     out << "                                        entt::id_type removed = {}) {\n";
+    out << rule_trace::hook(program, "rule_trace_queue(kind)", "    ");
     out << "    queue_structural_command(" << output_activation
         << ", kind, std::move(apply), subject, removed);\n";
     out << "}\n\n";
@@ -1721,11 +1738,12 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program,
     // outcomes, or a delayed occurrence of the host clock) is still its own
     // activation: dispatch its handlers, drain whatever cascade they queue,
     // then commit, exactly like a phase batch does.
-    const auto emit_own_activation = [&out, &delivery] {
+    const auto emit_own_activation = [&out, &delivery, &program] {
         out << "    if (target.has_value() && !registry.valid(*target)) {\n";
         out << "        return;\n";
         out << "    }\n";
         out << "    generated_scheduler_state().activation.active = true;\n";
+        out << rule_trace::hook(program, "rule_trace_activation(generated_trace_event_name(root_event), 0)", "    ");
         if (delivery.cyclic()) {
             out << "    generated_scheduler_state().activation.current_delayed = "
                    "&generated_scheduler_state().delayed_host;\n";
@@ -1956,8 +1974,10 @@ void emit_dispatch_calls(std::ostringstream& out,
                          const std::vector<DispatchCall>& calls,
                          bool routed = false) {
     const auto text = [&](const DispatchCall& call) {
-        auto body =
-            accumulation.entry_flushes(call.identity) + call.prepare + call.text + accumulation.exit_rebase(call.identity);
+        auto body = rule_trace::wrap_handler_call(
+            program,
+            call.identity,
+            accumulation.entry_flushes(call.identity) + call.prepare + call.text + accumulation.exit_rebase(call.identity));
         if (!delivery.cyclic()) {
             return body;
         }
@@ -2137,6 +2157,8 @@ std::string_view native_consumer_queue(std::string_view event) {
     throw std::logic_error("cpp-entt backend: no runtime queue for native consumer '" + std::string(event) + "'");
 }
 
+constexpr std::string_view kTraceDelivery = "rule_trace_delivery(generated_trace_event_name(occurrence), target)";
+
 void emit_event_handler_dispatch(std::ostringstream& out,
                                  const DecoratedProgram& program,
                                  const AccumulationPlan& accumulation,
@@ -2149,6 +2171,7 @@ void emit_event_handler_dispatch(std::ostringstream& out,
         << "std::optional<entt::entity> target) {\n";
     out << "    (void)occurrence;\n";
     out << "    (void)target;\n";
+    out << rule_trace::hook(program, kTraceDelivery, "    ");
     // A runtime-consumed event joins its runtime queue whether or not any
     // rule also declares a handler for it.
     if (event->symbol_id.has_value()) {
@@ -2228,6 +2251,7 @@ std::string emit_graph_handler_dispatch(const DecoratedProgram& program,
         out << "void generated_dispatch_event(entt::registry& registry, const "
             << *EnttCodegenUtils::lifecycle_occurrence_cpp_type(trigger, program)
             << "& occurrence, std::optional<entt::entity> target) {\n";
+        out << rule_trace::hook(program, kTraceDelivery, "    ");
         std::vector<DispatchCall> calls;
         for (const auto& identity : program.execution_graph.stable_topological_order) {
             if (identity.trigger != trigger) {
@@ -2257,7 +2281,8 @@ std::string emit_graph_handler_dispatch(const DecoratedProgram& program,
     out << "        generated_scheduler_state().activation, registry,\n";
     out << "        [](entt::registry& reg, const auto& occurrence, std::optional<entt::entity> target) {\n";
     out << "            generated_dispatch_event(reg, occurrence, target);\n";
-    out << "        });\n";
+    const auto drop = rule_trace::drop_callback(program);
+    out << "        }" << (drop.empty() ? "" : ",\n        " + drop) << ");\n";
     if (!accumulation.empty()) {
         out << "    ::generated_flush_accumulations();\n";
     }
@@ -3992,7 +4017,14 @@ std::string emit_backend_main(const DecoratedProgram& program) {
 
     out << "\n// ── Backend Entry Point ───────────────────────────────────────────────\n\n";
     out << "#ifndef CACTUS_GENERATED_NO_MAIN\n";
-    out << "int main() try {\n";
+    if (program.trace_rules) {
+        out << "int main(int argc, char** argv) try {\n";
+        out << "    if (!cactus::runtime::entt_backend::configure_rule_trace_from_args(argc, argv)) {\n";
+        out << "        return 2;\n";
+        out << "    }\n";
+    } else {
+        out << "int main() try {\n";
+    }
     out << "    const auto config = cactus::runtime::entt_backend::generated_project_config();\n";
     out << "    InitWindow(config.window_width, config.window_height, config.window_title);\n";
     out << "    SetExitKey(KEY_NULL);\n";
@@ -4034,6 +4066,7 @@ std::string emit_backend_main(const DecoratedProgram& program) {
     if (has_unload_handler) {
         emit_boundary_activation(*unload_event);
     }
+    out << rule_trace::hook(program, "flush_rule_trace()", "    ");
     out << "    cactus::runtime::entt_backend::release_render_resources();\n";
     out << "    CloseWindow();\n";
     out << "    return 0;\n";
@@ -4056,6 +4089,9 @@ static void emit_headers(std::ostringstream& out, const DecoratedProgram& progra
     out << "#endif  // CACTUS_LINEARIZATION_HARNESS || CACTUS_WORLD_DIGEST\n";
     if (program.contract_audit) {
         out << "#include \"backends/cpp-entt/contract_audit.hpp\"\n";
+    }
+    if (program.trace_rules) {
+        out << "#include \"backends/cpp-entt/rule_trace.hpp\"\n";
     }
     if (program_uses_persistence(program)) {
         out << "#include \"backends/cpp-entt/persistence_file_adapter.hpp\"\n";
@@ -5010,6 +5046,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     if (tracks_lifecycle && has_added_trigger(program)) {
         out << "    auto& activation = generated_scheduler_state().activation;\n";
         out << "    activation.active = true;\n";
+        out << rule_trace::hook(program, "rule_trace_activation(\"arrival\", 0)", "    ");
         if (delivery.cyclic()) {
             out << "    activation.current_delayed = &generated_scheduler_state().delayed_host;\n";
         }

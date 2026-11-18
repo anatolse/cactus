@@ -194,6 +194,51 @@ TEST_CASE("drain_event_cascade dispatches valid events and drops events targetin
     CHECK(*dispatched_targets.front() == live_target);
 }
 
+TEST_CASE("drain_event_cascade tells a drop callback which occurrence it dropped", "[runtime][activation][scheduler]") {
+    entt::registry registry;
+    const auto stale_target = registry.create();
+    registry.destroy(stale_target);
+    ActivationRuntime<TestOccurrence> activation;
+    emit_targeted_event(activation, PongEvent{}, stale_target);
+    emit_event(activation, PingEvent{});
+
+    int dispatched = 0;
+    std::vector<entt::entity> dropped;
+    bool dropped_pong = false;
+    drain_event_cascade(
+        activation,
+        registry,
+        [&](entt::registry&, const auto&, std::optional<entt::entity>) { ++dispatched; },
+        [&](const auto& occurrence, entt::entity target) {
+            dropped.push_back(target);
+            dropped_pong = is_event_v<PongEvent, decltype(occurrence)>;
+        });
+
+    CHECK(dispatched == 1);
+    REQUIRE(dropped.size() == 1);
+    CHECK(dropped.front() == stale_target);
+    CHECK(dropped_pong);
+}
+
+TEST_CASE("commit_activation reports its barrier as round 1 and each later round", "[runtime][activation][scheduler]") {
+    using Rounds = std::vector<std::pair<std::size_t, std::size_t>>;
+    entt::registry registry;
+    ActivationRuntime<TestOccurrence> activation;
+    activation.active = true;
+    Rounds rounds;
+    const auto record = [&](std::size_t round, std::size_t commands) { rounds.emplace_back(round, commands); };
+    commit_activation(activation, registry, [](entt::registry&) {}, record);
+    CHECK(rounds == Rounds{{1, 0}});
+
+    rounds.clear();
+    queue_structural_command(activation, StructuralCommand::Kind::Spawn, [&](entt::registry&) {
+        queue_structural_command(activation, StructuralCommand::Kind::Add, [](entt::registry&) {});
+        queue_structural_command(activation, StructuralCommand::Kind::Add, [](entt::registry&) {});
+    });
+    commit_activation(activation, registry, [](entt::registry&) {}, record);
+    CHECK(rounds == Rounds{{1, 1}, {2, 2}});
+}
+
 TEST_CASE("a delayed occurrence whose recipient is gone is dropped at delivery", "[runtime][activation][scheduler]") {
     entt::registry registry;
     const auto target = registry.create();

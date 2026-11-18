@@ -43,6 +43,7 @@ static void print_usage(const char* program) {
               << "  --report-cost                        Print each root's handlers with their cost terms\n"
               << "  --explain-rule <module.Rule>         Print one rule's static facts and generate nothing\n"
               << "  --parallel-handlers                  Run independent phase handlers on worker threads\n"
+              << "  --trace-rules                        Record what each rule does at run time\n"
               << "  --force-row-stage                    Test only: evaluate every clause expression per row\n"
               << "  --no-indexed-joins                   Test only: rebuild every pair pass from full snapshots\n"
               << "  --force-hashed-keys                  Test only: hash every equality index key\n"
@@ -277,6 +278,7 @@ struct CliArgs {
     bool contract_audit          = false;
     bool warnings_as_errors = false;
     bool parallel_handlers  = false;
+    bool trace_rules        = false;
     bool report_cost        = false;
     std::optional<std::string> explain_rule;
     std::optional<std::string> grid_cell_size_text;
@@ -320,6 +322,10 @@ static bool set_switch(const char* arg, CliArgs& out) {
     }
     if (std::strcmp(arg, "--parallel-handlers") == 0) {
         out.parallel_handlers = true;
+        return true;
+    }
+    if (std::strcmp(arg, "--trace-rules") == 0) {
+        out.trace_rules = true;
         return true;
     }
     if (std::strcmp(arg, "--force-row-stage") == 0) {
@@ -402,6 +408,11 @@ static std::optional<int> parse_cli_args(int argc, char** argv, CliArgs& out) {
     }
     if (out.input_file.empty()) {
         std::cerr << "error: no input file specified\n";
+        return 1;
+    }
+    // Worker threads would interleave trace records, so a trace would no longer be deterministic.
+    if (out.trace_rules && out.parallel_handlers) {
+        std::cerr << "error: --trace-rules can't be combined with --parallel-handlers\n";
         return 1;
     }
     return read_grid_cell_size(out);
@@ -502,6 +513,7 @@ static void apply_codegen_options(const CliArgs& args, cactus::DecoratedProgram&
     decorated.grid_cell_size      = args.grid_cell_size;
     decorated.retain_all_construction = args.retain_all_construction;
     decorated.contract_audit          = args.contract_audit;
+    decorated.trace_rules             = args.trace_rules;
     if (args.parallel_handlers) {
         decorated.parallel_handlers = cactus::plan_parallel_handlers(decorated);
     }

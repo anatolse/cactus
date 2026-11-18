@@ -147,6 +147,7 @@ target_compile_options(cactus_runtime_common PUBLIC -ffp-contract=off)
 
 add_library(cactus_runtime_cpp_entt STATIC
     src/backends/cpp-entt/runtime.cpp
+    src/backends/cpp-entt/rule_trace.cpp
     src/backends/cpp-entt/voxel_surfaces.cpp
     src/backends/cpp-entt/persistence_file_adapter.cpp
 )
@@ -196,6 +197,7 @@ add_library(cactus_backend_cpp_entt STATIC
     src/backends/cpp-entt/component_emitter.cpp
     src/backends/cpp-entt/cell_codegen.cpp
     src/backends/cpp-entt/contract_audit_emitter.cpp
+    src/backends/cpp-entt/rule_trace_emitter.cpp
     src/backends/cpp-entt/type_utils.cpp
     src/backends/cpp-entt/system_emitter.cpp
     src/backends/cpp-entt/trait_writers.cpp

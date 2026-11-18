@@ -1162,6 +1162,8 @@ struct DecoratedProgram {
     bool retain_all_construction = false;
     // Test only: check every access a handler makes against its contract.
     bool contract_audit = false;
+    // Set by --trace-rules: record handler calls, deliveries, commands and commits at run time.
+    bool trace_rules = false;
     // Set by --parallel-handlers: which phase handlers run on worker threads, and in which batches.
     std::optional<ParallelPlan> parallel_handlers;
     HierarchyFacts hierarchy;        // likewise

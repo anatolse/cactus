@@ -1,0 +1,82 @@
+module gunfire
+
+use std.core
+
+# Fire queues one Shot spawn in the first tick; MoveBullet sees the bullet
+# only after that activation commits. Stepper runs once per fixed repetition.
+# Fire also pokes its own entity; Poke targets a handle that was never set,
+# so it finds no recipient.
+
+trait Gun:
+    var fired: bool = false
+
+trait Bullet:
+    var x: float = 0.0
+
+trait Steps:
+    var count: int = 0
+
+trait Aim:
+    var target: entity_id
+
+trait Hits:
+    var count: int = 0
+
+event Poked
+
+template Shot:
+    Bullet
+
+entity Player:
+    Gun
+    Steps
+    Aim
+    Hits
+
+rule Fire:
+    each:
+        Gun as g
+    where:
+        not g.fired
+
+    on tick:
+        g.fired = true
+        spawn Shot()
+        emit Poked to self
+
+rule MoveBullet:
+    each:
+        Bullet as b
+
+    on tick:
+        b.x = b.x + 1.0
+
+rule Expire:
+    each:
+        Bullet as b
+    where:
+        b.x > 100.0
+
+    on tick:
+        destroy
+
+rule Stepper:
+    each:
+        Steps as s
+
+    on fixed_tick:
+        s.count = s.count + 1
+
+rule Poke:
+    each:
+        Aim as a
+
+    on tick:
+        emit Poked to a.target
+
+rule TakePoke:
+    each:
+        Hits as h
+
+    on Poked:
+        h.count += 1

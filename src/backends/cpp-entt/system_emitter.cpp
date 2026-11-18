@@ -12,6 +12,7 @@
 #include "backends/cpp-entt/index_cell_size.hpp"
 #include "backends/cpp-entt/keep_slots.hpp"
 #include "backends/cpp-entt/range_checks.hpp"
+#include "backends/cpp-entt/rule_trace_emitter.hpp"
 #include "backends/cpp-entt/trait_writers.hpp"
 #include "backends/cpp-entt/type_utils.hpp"
 
@@ -3751,10 +3752,19 @@ static std::string emit_emit_stmt(const EmitStmt& s,
         // `target`) — the recipient temporary must use a name that can never collide
         // with it, or the declaration below becomes self-referential.
         const std::string RECIPIENT = gen_temp_name("emit_target", s.location);
+        const auto no_match =
+            s.resolved_event_id.has_value()
+                ? rule_trace::hook(program,
+                                   "rule_trace_no_match(" +
+                                       EnttCodegenUtils::string_literal_cpp(make_canonical_id(*s.resolved_event_id)) +
+                                       ", " + RECIPIENT + ")",
+                                   ind + "        ")
+                : std::string{};
         return ind + "{\n" + ind + "    const auto " + RECIPIENT + " = " + TARGET + ";\n" + ind +
                "    if (registry.valid(" + RECIPIENT + ")) {\n" + ind +
                "        cactus::runtime::entt_backend::generated_emit_targeted_event(" + event_type + "{" + payload +
-               "}, " + RECIPIENT + ");\n" + ind + "    }\n" + ind + "}\n";
+               "}, " + RECIPIENT + ");\n" + ind + "    }" + (no_match.empty() ? "" : " else {\n" + no_match + ind + "    }") +
+               "\n" + ind + "}\n";
     }
     std::string emit_call =
         dispatcher_available ? "dispatcher.trigger(" + event_type + "{" : event_type + "_buffer.push_back({";
@@ -5769,6 +5779,7 @@ static void emit_selectionless_handler_body(std::ostringstream& out,
                                             const DecoratedProgram& program,
                                             const std::unordered_map<std::string, std::string>& filter_cpp_overrides) {
     out << "    (void)registry;\n";
+    out << rule_trace::hook(program, "rule_trace_single_row()", "    ");
     auto lexical_locals = handler_lexical_locals(handler);
     LocalNumericKinds local_kinds;
     out << rewrite_stmt_block(
@@ -5845,6 +5856,25 @@ static HandlerDomainCodegen build_handler_domain(const FilterClause& filter,
     return domain;
 }
 
+// Where a unary pass counts its rows for --trace-rules. A limited pass counts a
+// candidate where it walks it, before the limit and its where: filter.
+struct RowTraceHooks {
+    std::string body_entry;
+    std::string after_where;
+    std::string walk;
+};
+
+static RowTraceHooks row_trace_hooks(const DecoratedProgram& program, bool limited) {
+    if (limited) {
+        return {.body_entry  = rule_trace::hook(program, "rule_trace_run()", "        "),
+                .after_where = {},
+                .walk        = rule_trace::hook(program, "rule_trace_candidate()", "            ")};
+    }
+    return {.body_entry  = rule_trace::hook(program, "rule_trace_candidate()", "        "),
+            .after_where = rule_trace::hook(program, "rule_trace_run()", "        "),
+            .walk        = {}};
+}
+
 static void emit_filtered_handler_body(std::ostringstream& out,
                                        const RuleNode& sys,
                                        const EventHandlerNode& handler,
@@ -5871,21 +5901,25 @@ static void emit_filtered_handler_body(std::ostringstream& out,
     // entity/*_comp locals in separate (sibling) scopes — a zero-parameter
     // `[&]` capture defined once cannot see locals declared later at either
     // call site.
+    const bool limited   = sys.limit.has_value();
+    const auto row_hooks = row_trace_hooks(program, limited);
+    out << rule_trace::hook(program, "rule_trace_rows_counted()", "    ");
     out << "    auto " << handler_body_name << " = [&](entt::entity entity";
     for (const auto& cpp_name : data_cpp_types) {
         out << ", [[maybe_unused]] " << cpp_name << "& " << component_local(cpp_name);
     }
     out << ") {\n";
     out << "        (void)entity;\n";
+    out << row_hooks.body_entry;
     emit_filter_alias_bindings(out, domain.filter, program, 2);
     out << domain.prelude;
-    const bool limited         = sys.limit.has_value();
     const auto row_predicates  = where_at(sys, contract, ClauseStage::Row);
     const auto rewrite_unary   = [&](const ExprNode& predicate) {
         return rewrite_expr(predicate, filter_traits, program, {}, filter_cpp_overrides);
     };
     if (!limited) {
         emit_where_guard(out, row_predicates, rewrite_unary);
+        out << row_hooks.after_where;
     }
     out << filtered_body;
     out << "    };\n";
@@ -5939,6 +5973,7 @@ static void emit_filtered_handler_body(std::ostringstream& out,
     }
     out << "        if (" << (recipient_checks.empty() ? "true" : join_strings(recipient_checks, " && ")) << ") {\n";
     emit_component_bindings_from_entity(out, filter_bindings_list, "entity", 3, program);
+    out << row_hooks.walk;
     emit_recipient_handler_call(out, handler_body_name, has_retained_where, limited, where_filter_name, limit_name, call_args);
     out << "        }\n";
     if (domain.recipient_only) {
@@ -5977,6 +6012,7 @@ static void emit_filtered_handler_body(std::ostringstream& out,
     if (limited) {
         out << "            if (" << taken_name << " >= " << limit_name << ") { break; }\n";
     }
+    out << row_hooks.walk;
     emit_component_bindings_from_entity(out, filter_bindings_list, "entity", 3, program);
     if (has_retained_where) {
         out << "            if (!" << where_filter_name << "(entity";

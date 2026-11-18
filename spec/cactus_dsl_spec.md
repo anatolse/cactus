@@ -2797,6 +2797,36 @@ game.Rally/on std.core.tick
   cost: N(Unit)
 ```
 
+### 7.9 Run-Time Rule Traces
+
+`--trace-rules` builds a program that records what its rules did while it runs: which activations ran, which handlers each one called and for how many rows, which events reached which recipient, which structural commands were queued, and when they were committed. Static facts (domains, contracts, schedule edges, cost terms) are not repeated; join a trace record to `--explain-rule` output by its handler name. A program built without the option has no trace code at all. `--trace-rules` can't be combined with `--parallel-handlers`, because worker threads would make the order of records differ between runs.
+
+**Output.** A trace is JSON Lines. The first line names the format and its version, `{"format":"cactus-rule-trace","version":1}`. Each later line is one record with `frame` (the number of frames begun so far; `0` before the first frame), `activation` (an id counted from 1 over the whole run) and `record`, its kind:
+
+- `activation`: an activation began. `root` is its phase or event (`std.core.fixed_tick`, `std.core.load`, `added game.Burning`), or `arrival` for the startup `on added` activation. `repetition` tells the fixed steps of one frame apart.
+- `invoke`: one handler call, named by the canonical identity `--report-cost` prints. `candidates` is the rows the handler's body examined and `runs` the rows that passed its `where:`; a shape that does not count its rows, such as a pair or keep pass, says `"unavailable"`. A targeted delivery adds `recipient`.
+- `deliver`: an occurrence was delivered, with `event` and, when targeted, `recipient`.
+- `no-match`: a targeted occurrence found no recipient: its handle was stale when emitted or when delivered. `recipient` is the handle's raw value.
+- `queue`: a structural command (`spawn`, `destroy`, `add`, `remove`, `set`) was queued, with the `handler` that queued it, or `null`.
+- `commit`: the activation's commit barrier, `round` 1 even when it applies nothing, and each later round that lifecycle triggers cause, with the number of `commands` it applies.
+- `overflow`: the last record of a frame whose records passed the capacity, with the number `dropped`.
+
+Records never hold trait values. A recipient is an entity handle, which is the same in two runs with the same inputs, so such runs write the same trace.
+
+```
+{"frame":1,"activation":4,"record":"activation","root":"std.core.tick","repetition":0}
+{"frame":1,"activation":4,"record":"invoke","handler":"game.Fire/on std.core.tick","candidates":1,"runs":1}
+{"frame":1,"activation":4,"record":"queue","handler":"game.Fire/on std.core.tick","command":"spawn"}
+{"frame":1,"activation":4,"record":"invoke","handler":"game.MoveBullet/on std.core.tick","candidates":0,"runs":0}
+{"frame":1,"activation":4,"record":"commit","round":1,"commands":1}
+```
+
+Here `Fire` queued a bullet's spawn, and `MoveBullet` ran in the same tick before the commit, so it saw no bullet. The bullet exists after the commit; `MoveBullet` first moves it in the next frame's tick.
+
+**Capacity and failures.** Records are kept in a buffer of a fixed capacity (4096 records by default) and written at each frame boundary. Records past the capacity are dropped and counted, the frame ends with its `overflow` record, and the game goes on. When the output can't be written, tracing turns off with one diagnostic on standard error and the game goes on. Tracing never changes a result: a traced build's world is the same as an untraced build's after every frame.
+
+**Running a traced program.** The generated standalone program accepts `--trace-rules-output <path>` and `--trace-rules-capacity <positive-int>`; any other argument, a missing value or a capacity that is not a positive integer stops it with exit code 2. Without `--trace-rules-output` nothing is written, and each frame's records are dropped at its end. A host that builds its own `main()` calls the same runtime interface in `backends/cpp-entt/rule_trace.hpp`: `configure_rule_trace(sink, capacity)` with a sink that takes one line and returns `false` when it can't write it, or `configure_rule_trace(RuleTraceOptions)` for a file; and `flush_rule_trace()` after its last activation, such as `unload`.
+
 ## 8. Deferred and Migration Notes
 
 ### 8.1 Deferred Features

@@ -31,6 +31,7 @@ set_property(TARGET cactus_raylib_fake PROPERTY CXX_CLANG_TIDY "")
 # never linked into a real example.
 add_library(cactus_runtime_cpp_entt_headless_fake STATIC EXCLUDE_FROM_ALL
     ${CMAKE_SOURCE_DIR}/src/backends/cpp-entt/runtime.cpp
+    ${CMAKE_SOURCE_DIR}/src/backends/cpp-entt/rule_trace.cpp
     ${CMAKE_SOURCE_DIR}/src/backends/cpp-entt/voxel_surfaces.cpp
     ${CMAKE_SOURCE_DIR}/src/backends/cpp-entt/persistence_file_adapter.cpp
 )
@@ -183,6 +184,45 @@ target_compile_definitions(test_parallel_equivalence PRIVATE
 )
 add_dependencies(test_parallel_equivalence ${parallel_equivalence_targets})
 add_test(NAME ParallelEquivalenceTests COMMAND test_parallel_equivalence)
+
+# Each fixture built without and with --trace-rules; tracing must not change the
+# world after any frame, and two traced runs must write the same trace.
+set(trace_equivalence_fixtures
+    "gunfire|tests/fixtures/rule_trace/gunfire.cactus"
+    "parallel_handlers|tests/fixtures/parallel_handlers_runtime.cactus"
+)
+set(trace_equivalence_pairs)
+set(trace_equivalence_targets)
+foreach(fixture IN LISTS trace_equivalence_fixtures)
+    string(REPLACE "|" ";" parts "${fixture}")
+    list(GET parts 0 name)
+    list(GET parts 1 source)
+    cactus_add_persistence_roundtrip_subprocess(trace_equivalence_${name}_untraced
+        CACTUS_SOURCE "${source}"
+        BACKEND cpp-entt
+        MAIN_SOURCE trace_equivalence_main.cpp
+        DEFINITIONS CACTUS_WORLD_DIGEST
+    )
+    cactus_add_persistence_roundtrip_subprocess(trace_equivalence_${name}_traced
+        CACTUS_SOURCE "${source}"
+        BACKEND cpp-entt
+        MAIN_SOURCE trace_equivalence_main.cpp
+        CODEGEN_FLAGS --trace-rules
+        DEFINITIONS CACTUS_WORLD_DIGEST CACTUS_TRACED
+    )
+    list(APPEND trace_equivalence_targets trace_equivalence_${name}_untraced trace_equivalence_${name}_traced)
+    list(APPEND trace_equivalence_pairs
+        "${name}|$<TARGET_FILE:trace_equivalence_${name}_untraced>|$<TARGET_FILE:trace_equivalence_${name}_traced>")
+endforeach()
+list(JOIN trace_equivalence_pairs "," trace_equivalence_pair_text)
+add_executable(test_trace_equivalence EXCLUDE_FROM_ALL test_trace_equivalence.cpp)
+target_include_directories(test_trace_equivalence PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(test_trace_equivalence PRIVATE Catch2::Catch2WithMain)
+target_compile_definitions(test_trace_equivalence PRIVATE
+    CACTUS_TRACE_PAIRS="${trace_equivalence_pair_text}"
+)
+add_dependencies(test_trace_equivalence ${trace_equivalence_targets})
+add_test(NAME TraceEquivalenceTests COMMAND test_trace_equivalence)
 
 # Coverage gate threshold evaluation (no instrumented build needed)
 function(cactus_add_coverage_threshold_case CASE_NAME)
@@ -482,6 +522,10 @@ add_test(NAME RuntimeColliderPhysicsTests COMMAND test_runtime_collider_physics)
 add_executable(test_runtime_activation_scheduler test_runtime_activation_scheduler.cpp)
 target_link_libraries(test_runtime_activation_scheduler PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
 add_test(NAME RuntimeActivationSchedulerTests COMMAND test_runtime_activation_scheduler)
+
+add_executable(test_rule_trace_runtime test_rule_trace_runtime.cpp)
+target_link_libraries(test_rule_trace_runtime PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
+add_test(NAME RuleTraceRuntimeTests COMMAND test_rule_trace_runtime)
 
 add_executable(test_linearization_harness test_linearization_harness.cpp)
 target_include_directories(test_linearization_harness PRIVATE "${CMAKE_SOURCE_DIR}/src")
@@ -1069,6 +1113,13 @@ cactus_add_headless_behavior_test(test_parallel_handlers_headless_behavior
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_parallel_handlers_headless_behavior.cpp
     CODEGEN_FLAGS --parallel-handlers
+)
+
+cactus_add_headless_behavior_test(test_rule_trace_headless_behavior
+    CACTUS_SOURCE tests/fixtures/rule_trace/gunfire.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_rule_trace_headless_behavior.cpp
+    CODEGEN_FLAGS --trace-rules
 )
 
 cactus_add_headless_behavior_test(test_cactus_dungeon_headless_behavior

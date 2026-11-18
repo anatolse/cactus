@@ -428,4 +428,44 @@ TEST_CASE("CLI: --explain-rule keeps locations and edge reasons across modules",
     CHECK(result.stdout_text.contains("\n  before main.Trim/on std.core.tick: lib.Plant.size"));
 }
 
+TEST_CASE("CLI: a build without --trace-rules has no trace code", "[cli][rule-trace]") {
+    const auto plain = run_cactus(stage_fixture("gunfire.cactus", "rule_trace"));
+    REQUIRE(plain.exit_code == 0);
+    REQUIRE(plain.wrote_output);
+    CHECK(plain.stderr_lines.empty());
+    CHECK_FALSE(plain.output_text.contains("rule_trace"));
+    CHECK_FALSE(plain.output_text.contains("RuleTrace"));
+    CHECK(plain.output_text.contains("int main() try {"));
+}
+
+TEST_CASE("CLI: --trace-rules adds hooks at dispatch, delivery, commands and commit", "[cli][rule-trace]") {
+    const auto traced = run_cactus(stage_fixture("gunfire.cactus", "rule_trace"), " --trace-rules");
+    REQUIRE(traced.exit_code == 0);
+    const auto& code = traced.output_text;
+    CHECK(code.contains("#include \"backends/cpp-entt/rule_trace.hpp\""));
+    CHECK(code.contains("RuleTraceHandlerScope cactus_trace_scope(\"gunfire.Fire/on std.core.tick\", std::nullopt);"));
+    CHECK(code.contains("RuleTraceHandlerScope cactus_trace_scope(\"gunfire.TakePoke/on gunfire.Poked\", target);"));
+    CHECK(code.contains("rule_trace_rows_counted();"));
+    CHECK(code.contains("rule_trace_activation(\"std.core.fixed_tick\", repetition);"));
+    CHECK(code.contains("rule_trace_activation(\"std.core.tick\", 0);"));
+    CHECK(code.contains("rule_trace_delivery(generated_trace_event_name(occurrence), target);"));
+    CHECK(code.contains("generated_trace_event_name(const ::cactus_gen::gunfire::PokedEvent& /*occurrence*/) {\n"
+                        "    return \"gunfire.Poked\";"));
+    CHECK(code.contains("rule_trace_no_match(\"gunfire.Poked\", "));
+    CHECK(code.contains("rule_trace_queue(kind);"));
+    CHECK(code.contains("commit_activation(activation, registry, &generated_drain_event_cascade, &rule_trace_commit);"));
+    CHECK(code.contains("rule_trace_frame_begin();"));
+    CHECK(code.contains("rule_trace_frame_end();"));
+    CHECK(code.contains("int main(int argc, char** argv) try {"));
+    CHECK(code.contains("configure_rule_trace_from_args(argc, argv)"));
+    CHECK(code.contains("flush_rule_trace();"));
+}
+
+TEST_CASE("CLI: --trace-rules is not combined with --parallel-handlers", "[cli][rule-trace]") {
+    const auto result = run_cactus(stage_fixture("gunfire.cactus", "rule_trace"), " --trace-rules --parallel-handlers");
+    CHECK(result.exit_code == 1);
+    CHECK_FALSE(result.wrote_output);
+    CHECK(result.stderr_text.contains("error: --trace-rules can't be combined with --parallel-handlers"));
+}
+
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity)

@@ -249,6 +249,37 @@ TEST_CASE("keep levels: each construct that reads beyond the row is named", "[ke
     CHECK(full_reason(analysis, "Reached") == "the derived relation `Reach`");
 }
 
+TEST_CASE("keep levels: a keep reads its own cells at the delta level and a single trait's at full",
+          "[keep-levels][trait-dimensions]") {
+    const auto analysis = analyze(
+        "trait Stock:\n"
+        "    dim slot: int in range(0, 3)\n"
+        "    var count: int = 0\n"
+        "single trait Gas:\n"
+        "    dim x: int in range(0, 4)\n"
+        "    var density: float = 0.0\n"
+        "entity Store:\n"
+        "    Stock\n"
+        "entity Cloud:\n"
+        "    Gas\n"
+        "rule Stocked:\n"
+        "    each: Stock\n"
+        "    group: keeps\n"
+        "    where:\n"
+        "        self[Stock][1].count > 0\n"
+        "    keep Marked\n"
+        "rule Gassy:\n"
+        "    each: Unit as u\n"
+        "    group: keeps\n"
+        "    where:\n"
+        "        Gas[u.x].density > 0.3\n"
+        "    keep Seen\n");
+    CHECK(analysis.evaluation("Stocked").level == KeepLevel::Delta);
+    CHECK(names(analysis.inputs("Stocked").fields) == std::vector<std::string>{"Stock.count"});
+    CHECK(full_reason(analysis, "Gassy") == "the single trait read `Gas[...]`");
+    CHECK(names(analysis.inputs("Gassy").fields) == std::vector<std::string>{"Gas.density", "Unit.x"});
+}
+
 TEST_CASE("keep levels: a row domain over a stored relation is delta", "[keep-levels]") {
     const auto analysis = analyze(
         "rule Rows:\n"

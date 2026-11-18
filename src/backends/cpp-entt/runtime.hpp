@@ -65,7 +65,8 @@ enum class RangeFaultReason : std::uint8_t {
     MissingContainerTrait,
     SecondCarrier,
     DeadLink,
-    UnresolvedLink
+    UnresolvedLink,
+    DimensionTooLarge
 };
 
 struct RangeFault {
@@ -1821,6 +1822,19 @@ template <typename T>
 template <typename T>
 void give_single(entt::entity receiver, bool fresh) {
     give_single(single_round<T>(), receiver, fresh);
+}
+
+// The table of a `single` dimensioned trait, or null while no entity carries it.
+template <typename T>
+[[nodiscard]] T* single_table(entt::registry& registry) {
+    const auto view = registry.view<T>();
+    return view.empty() ? nullptr : &view.template get<T>(*view.begin());
+}
+
+template <typename T>
+[[nodiscard]] entt::entity single_carrier(entt::registry& registry) {
+    const auto view = registry.view<T>();
+    return view.empty() ? entt::entity{entt::null} : *view.begin();
 }
 
 // Whether `receiver` may get T by a change that applies at once, outside a commit round.

@@ -54,6 +54,7 @@ struct ResolvedField {
     bool has_default        = false;
     bool is_synthesized     = false;
     bool is_completion_only = false;
+    bool is_cell            = false;  // a `var` field of a dimensioned trait: one value per cell
     std::optional<PhaseFieldSource> source_binding;
     std::optional<ResolvedFieldRange> range;
 };
@@ -123,9 +124,20 @@ struct LinkField {
     return make_symbol_id(SymbolKind::Trait, holder.module.name, name + "_" + field + "_lost");
 }
 
+// A deep copy of an expression with its semantic annotations.
+std::unique_ptr<ExprNode> clone_expression(const ExprNode& expr);
+
+// `dim name: type` in a trait body; `range` is set on an `int` dimension.
+struct ResolvedDimension {
+    std::string name;
+    TypeInfo type;
+    std::optional<ResolvedFieldRange> range;
+};
+
 struct ResolvedTrait : CanonicalIdentity {
     std::string name;
     std::vector<ResolvedField> fields;
+    std::vector<ResolvedDimension> dimensions;
     bool is_pub    = false;
     bool is_stdlib = false;
     bool is_single = false;
@@ -135,6 +147,25 @@ struct ResolvedTrait : CanonicalIdentity {
 
     [[nodiscard]] bool is_state_slot() const {
         return state.has_value() && state->local_name == name;
+    }
+    [[nodiscard]] bool is_dimensioned() const {
+        return !dimensions.empty();
+    }
+    // A `var` field of a dimensioned trait holds one value per cell.
+    [[nodiscard]] bool is_cell_field(const ResolvedField& field) const {
+        return is_dimensioned() && field.is_var;
+    }
+    [[nodiscard]] const ResolvedField* find_cell_field(const std::string& field) const {
+        const auto found = std::ranges::find(fields, field, &ResolvedField::name);
+        return found != fields.end() && is_cell_field(*found) ? &*found : nullptr;
+    }
+    [[nodiscard]] const ResolvedDimension* find_dimension(const std::string& dimension) const {
+        const auto found = std::ranges::find(dimensions, dimension, &ResolvedDimension::name);
+        return found == dimensions.end() ? nullptr : &*found;
+    }
+    // Every dimension is an enum: a closed, small set of cells by declaration.
+    [[nodiscard]] bool has_only_enum_dimensions() const {
+        return std::ranges::all_of(dimensions, [](const ResolvedDimension& d) { return d.type.kind == TypeKind::Enum; });
     }
 };
 
@@ -1591,6 +1622,8 @@ private:
                                                    const SourceLocation& location);
     // Set while a rule's clauses and handlers go through the pre-pass.
     const PairScope* access_pair_scope_ = nullptr;
+    // The dimensioned traits a unary rule's `each:` requires, which `self[T]` may name while resolving it.
+    std::vector<SymbolId> access_self_traits_;
     void resolve_named_access_stmts(std::vector<std::unique_ptr<StmtNode>>& stmts,
                                     std::unordered_set<std::string> shadowed,
                                     NamedAccessContext context);
@@ -2196,6 +2229,52 @@ private:
                                 bool in_rule_handler);
     void validate_trait_default_values(ProgramNode& program);
     void validate_ranged_fields(ProgramNode& program);
+    void validate_trait_dimensions(ProgramNode& program);
+    void extract_cell_domains(ProgramNode& program);
+    [[nodiscard]] std::unordered_map<std::string, const ResolvedTrait*> retained_cell_bindings(const RuleNode& rule) const;
+    bool valid_cell_group(const RuleNode& rule) const;
+    [[nodiscard]] static std::optional<TypeInfo> cell_alias_member_type(const ResolvedTrait& trait,
+                                                                       const std::string& member);
+    [[nodiscard]] bool reads_cell_coordinate(const SymbolId& trait, const std::string& member) const;
+    void validate_cell_rules(ProgramNode& program);
+    void validate_cell_rule(RuleNode& rule);
+    void validate_cell_pair_bound(RuleNode& rule);
+    void reject_cell_values(const RuleNode& rule);
+    void reject_pair_self(const RuleNode& rule) const;
+    void prove_rest_law(RuleNode& rule);
+    [[nodiscard]] const TraitNode* find_local_trait_node(const SymbolId& trait) const;
+    static void collect_rest_fields(RuleNode& rule, const ResolvedTrait& trait);
+    [[nodiscard]] std::string rest_guard_suggestion(const RuleNode& rule,
+                                                    const std::unordered_map<std::string, const ExprNode*>& defaults) const;
+    void extract_cell_rows(RuleNode& rule);
+    void extract_cell_pairs(RuleNode& rule);
+    [[nodiscard]] const ResolvedTrait* dimensioned_trait(const std::optional<SymbolId>& trait) const;
+    bool resolve_cell_short_form(TraitAccessExpr& access,
+                                 const SourceLocation& location,
+                                 const std::unordered_set<std::string>& shadowed,
+                                 NamedAccessContext context);
+    bool resolve_self_cell_access(TraitAccessExpr& access);
+    void reject_cell_field_values(const ResolvedTrait& trait, const std::vector<FieldAssignment>& values) const;
+    void reject_cell_field_value(const ResolvedTrait& trait, const std::string& field, const SourceLocation& location) const;
+    [[nodiscard]] std::vector<SymbolId> self_cell_traits(const RuleNode& rule) const;
+    // A cell target's dimension values are ordinary expressions.
+    template <typename S>
+    static void resolve_target_cell_keys(S& statement, const std::function<void(ExprNode&)>& resolve_expr) {
+        if constexpr (requires { statement.target; }) {
+            if (auto target = statement.target == nullptr ? std::nullopt : trait_field_path(*statement.target)) {
+                for_each_cell_key(*target->first, resolve_expr);
+            }
+        }
+    }
+    void check_cell_access(const TraitAccessExpr& access,
+                           const std::vector<std::string>& fields,
+                           const SourceLocation& location,
+                           const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                           const std::unordered_map<std::string, TypeInfo>& local_bindings,
+                           const ResolvedStruct* handler_event,
+                           const PairScope* pair_scope) const;
+    void validate_trait_dimension_shape(TraitNode& trait, ResolvedTrait& resolved);
+    void validate_cell_fields(const TraitNode& trait, const ResolvedTrait& resolved);
     void validate_field_range(TraitNode& trait, FieldNode& field);
     bool validate_range_bound(ExprNode& bound,
                               const TraitNode& trait,

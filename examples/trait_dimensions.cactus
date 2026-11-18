@@ -1,0 +1,203 @@
+module trait_dimensions
+
+# A trait with `dim` lines holds one value per cell: its `let` fields belong
+# to the carrier and each `var` field holds a value per cell. Every cell starts
+# at the field's default, and a rule visits only the cells that differ from it.
+#
+# A shop keeps a count per item kind and a total per carrier. A room keeps gas
+# per place: grenades and a vent put gas in, it spreads to the neighbouring
+# places around walls, tiny amounts snap to zero, and a guard collects a dose.
+
+use std.core
+use std.grid as grid
+
+const:
+    STEP = 1.0
+    SPREAD = 0.1
+    TRACE = 0.02
+    WALL_X = 6
+    FULL = 3
+
+enum Item:
+    Key
+    Grenade
+    Rope
+
+# ── A count per item kind ────────────────────────────────────────────────────
+
+trait Stock:
+    dim item: Item
+    var count: int = 0
+
+trait Tally:
+    var total: int = 0
+
+trait Restocks
+
+trait Picks
+
+template Carrier():
+    Stock
+    Tally
+
+entity Shop:
+    use Carrier()
+    Restocks
+
+entity Pack:
+    use Carrier()
+    Picks
+
+rule Restock:
+    each: Stock as s, Restocks
+    where:
+        s.count < FULL
+
+    on tick:
+        s.count += 1
+
+# A cell of the carrier itself, without a rule over cells. Restock and Pick
+# write one cell field, but no carrier is in both domains, so they need no order.
+rule Pick:
+    each: Stock, Picks
+
+    on tick:
+        self[Stock][Item.Key].count += 1
+
+rule Total:
+    each: Stock as s, Tally
+    after:
+        Restock
+        Pick
+    reduce per self:
+        total = sum(s.count)
+
+    on tick:
+        set Tally on self:
+            total = total
+
+# ── Gas over the places of a room ────────────────────────────────────────────
+
+single trait Room:
+    dim x: int in range(0, 16)
+    dim y: int in range(0, 12)
+    var gas: float = 0.0
+    var wall: bool = false
+
+trait Layout:
+    var built: bool = false
+
+entity Hall:
+    Room
+    Layout
+
+trait Grenade:
+    let pos: vec2
+    let rate: float = 1.0
+    var fuse: int = 1
+
+trait Vent:
+    let pos: vec2
+    let rate: float = 0.25
+
+trait Guard:
+    let pos: vec2
+    var dose: float = 0.0
+
+trait InGas
+
+template Charge(at: vec2, rate: float = 1.0):
+    Grenade:
+        pos = at
+        rate = rate
+
+template Sentry(at: vec2):
+    Guard:
+        pos = at
+
+# Two grenades: one by the guard, one outside the room, which puts gas nowhere.
+entity Pin from Charge(at = vec2(2.5, 3.5))
+entity Stray from Charge(at = vec2(-4.0, 3.0))
+# A grenade on the vent: two unordered `+=` writers of one cell, summed exactly.
+entity Pop from Charge(at = vec2(12.5, 8.5), rate = 0.5)
+
+entity Duct:
+    Vent:
+        pos = vec2(12.5, 8.5)
+
+entity Watch from Sentry(at = vec2(3.5, 3.5))
+entity Sniff from Sentry(at = vec2(12.5, 8.5))
+# Stands in the wall, where no gas ever goes.
+entity Post from Sentry(at = vec2(6.5, 0.5))
+
+rule Build:
+    each: Layout as l, Room
+    where:
+        not l.built
+
+    on tick:
+        for y in range(0, 12):
+            Room[WALL_X, y].wall = true
+        l.built = true
+
+rule Throw:
+    each: Grenade as g
+
+    on tick:
+        Room[grid.cell(g.pos.x, 0.0, STEP), grid.cell(g.pos.y, 0.0, STEP)].gas += g.rate
+        g.fuse -= 1
+        if g.fuse <= 0:
+            destroy
+
+rule Blow:
+    each: Vent as v
+
+    on tick:
+        Room[grid.cell(v.pos.x, 0.0, STEP), grid.cell(v.pos.y, 0.0, STEP)].gas += v.rate
+
+rule Spread:
+    pairs:
+        here:
+            Room
+        there:
+            Room
+    after:
+        Build
+        Throw
+        Blow
+    where:
+        adjacent(here, there)
+        not here.wall and not there.wall
+    reduce per here:
+        net = sum((there.gas - here.gas) * SPREAD)
+
+    on tick:
+        here.gas += net
+
+rule Snap:
+    each: Room as c
+    after:
+        Spread
+    where:
+        c.gas > 0.0 and c.gas < TRACE
+
+    on tick:
+        c.gas = 0.0
+
+rule Breathe:
+    each: Guard as g
+    after:
+        Snap
+
+    on tick:
+        g.dose += Room[grid.cell(g.pos.x, 0.0, STEP), grid.cell(g.pos.y, 0.0, STEP)].gas
+
+group Senses:
+    phase: tick
+
+rule Notice:
+    each: Guard as g
+    group: Senses
+    where:
+        Room[grid.cell(g.pos.x, 0.0, STEP), grid.cell(g.pos.y, 0.0, STEP)].gas > 0.3
+    keep InGas

@@ -73,7 +73,8 @@ bool holds_floats(const AccumulationTarget& target, const DecoratedProgram& prog
         return false;
     }
     const auto field = std::ranges::find(trait->fields, target.field, &ResolvedField::name);
-    return field != trait->fields.end() &&
+    // A cell column merges its own `+=` exactly.
+    return field != trait->fields.end() && !trait->is_cell_field(*field) &&
            (field->type.kind == TypeKind::Float || field->type.kind == TypeKind::Vec2 ||
             field->type.kind == TypeKind::Vec3);
 }

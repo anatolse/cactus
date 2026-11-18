@@ -92,6 +92,11 @@ void lists(Node& node, const Visit& visit, const Fields& fields) {
     if constexpr (requires { node.named_args; }) {
         fields(node.named_args);
     }
+    if constexpr (requires { node.cell_keys; }) {
+        for (auto& key : node.cell_keys) {
+            visit(key);
+        }
+    }
 }
 
 template <typename Node, typename Visit, typename Fields>
@@ -237,6 +242,19 @@ void for_each_statement_expression(const std::vector<std::unique_ptr<StmtNode>>&
                 }
             },
             stmt->stmt);
+    }
+}
+
+// Calls `visit` on every `where:` predicate of a rule and every expression of its handler bodies.
+template <typename Visit>
+void for_each_rule_body_expression(const RuleNode& rule, const Visit& visit) {
+    if (rule.where_clause.has_value()) {
+        for (const auto& predicate : rule.where_clause->predicates) {
+            visit(*predicate);
+        }
+    }
+    for (const auto& handler : rule.handlers) {
+        for_each_statement_expression(handler.body, visit);
     }
 }
 

@@ -181,6 +181,8 @@ add_library(cactus_frontend STATIC
     src/frontend/state_transitions.cpp
     src/frontend/relations.cpp
     src/frontend/rule_repeat.cpp
+    src/frontend/trait_dimensions.cpp
+    src/frontend/rest_law.cpp
     src/frontend/parallel_batches.cpp
 )
 target_include_directories(cactus_frontend PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -191,6 +193,7 @@ add_library(cactus_backend_cpp_entt STATIC
     src/backends/cpp-entt/accumulation_plan.cpp
     src/backends/cpp-entt/keep_slots.cpp
     src/backends/cpp-entt/component_emitter.cpp
+    src/backends/cpp-entt/cell_codegen.cpp
     src/backends/cpp-entt/contract_audit_emitter.cpp
     src/backends/cpp-entt/type_utils.cpp
     src/backends/cpp-entt/system_emitter.cpp

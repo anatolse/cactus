@@ -1,0 +1,110 @@
+module perf_dimension_spread
+
+# Heat spreads over a 512 by 512 table from one source and snaps to zero when
+# tiny. The rules are proven to leave cells at rest alone, so the work follows
+# the cells that hold heat, not the 262144 cells of the table. `stone` differs
+# from its default in every cell, but no rule names it. A second table spreads
+# twice per activation with `repeat: 2`; piles are cell carriers no rule wakes.
+
+use std.core
+
+const:
+    SPREAD = 0.1
+    TRACE = 0.001
+
+single trait Field:
+    dim x: int in range(0, 512)
+    dim y: int in range(0, 512)
+    var heat: float = 0.0
+    var stone: int = 0
+
+single trait Wave:
+    dim x: int in range(0, 512)
+    dim y: int in range(0, 512)
+    var heat: float = 0.0
+
+trait Pile:
+    dim slot: int in range(0, 64)
+    var cargo: int = 0
+
+trait Burner:
+    let x: int = 256
+    let y: int = 256
+
+entity Land:
+    Field
+    Wave
+
+entity Flame:
+    Burner
+
+entity Heap:
+    Pile
+
+rule Burn:
+    each: Burner as b
+
+    on fixed_tick:
+        Field[b.x, b.y].heat += 1.0
+        Wave[b.x, b.y].heat += 1.0
+
+rule Spread:
+    pairs:
+        here:
+            Field
+        there:
+            Field
+    after:
+        Burn
+    where:
+        adjacent(here, there)
+    reduce per here:
+        net = sum((there.heat - here.heat) * SPREAD)
+
+    on fixed_tick:
+        here.heat += net
+
+rule Cool:
+    each: Field as c
+    after:
+        Spread
+    where:
+        c.heat > 0.0 and c.heat < TRACE
+
+    on fixed_tick:
+        c.heat = 0.0
+
+rule Ripple:
+    pairs:
+        here:
+            Wave
+        there:
+            Wave
+    after:
+        Burn
+    where:
+        adjacent(here, there)
+    reduce per here:
+        net = sum((there.heat - here.heat) * SPREAD)
+    repeat: 2
+
+    on fixed_tick:
+        here.heat += net
+
+rule Settle:
+    each: Wave as w
+    after:
+        Ripple
+    where:
+        w.heat > 0.0 and w.heat < TRACE
+
+    on fixed_tick:
+        w.heat = 0.0
+
+rule Unload:
+    each: Pile as p
+    where:
+        p.cargo > 0
+
+    on fixed_tick:
+        p.cargo -= 1

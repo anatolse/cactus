@@ -114,6 +114,8 @@ fixed_tick late_tick
 
 `added`, `removed` and `lost` are contextual only directly after `on` (§4.4), so a field or local named `lost` keeps working.
 
+`dim` is contextual: it starts a dimension (§3.6) only at the start of a line in a trait body when an identifier and `:` follow. Elsewhere it is an ordinary identifier, so a field or local named `dim` keeps working. `adjacent` is a built-in condition of a pair of cells (§3.8.8), not a reserved word.
+
 ### 2.5 Literals
 
 - integers: `0`, `42`
@@ -222,8 +224,9 @@ Traits are data-only. They represent ECS-style gameplay state attached to entiti
 ```ebnf
 trait_decl      = [ "pub" ] [ "single" ] "trait" IDENTIFIER
                   [ ":" NEWLINE INDENT
-                    { field_decl }
+                    { field_decl | dimension_decl }
                     DEDENT ] ;
+dimension_decl  = "dim" IDENTIFIER ":" type_ref [ field_range ] NEWLINE ;
 
 field_decl      = field_modifiers ( "let" | "var" ) IDENTIFIER ":" type_ref
                   [ field_range ] [ "=" expression ] NEWLINE ;
@@ -275,6 +278,31 @@ pub single trait Terrain
 At a commit round, a `spawn` or `add` that would give `T` to a second entity fails: it has no effect, fires no lifecycle trigger, and reports a fault that names `T`. A failed `spawn` creates no entity, including its children, so its handle is stale. A carrier that leaves in the same round has already left, wherever its command falls: a `destroy` of it or of an owner it is destroyed with, or a `remove T`. So replacing or moving the one carrier in one round works in either command order. `add T` on the carrier itself replaces its fields like any `add`.
 
 Two handlers of one activation that can each give `T`, through `add T` or a `spawn` whose tree carries `T`, conflict and need an order (§3.8). It is a compile error for two named entities to carry `T`, for one template or entity tree to carry `T` on more than one node, and for `T` to be the target of `project` or `keep`. Restoring a save with two carriers is rejected (§7.6). A pair binding, domain or query filter that requires `T` counts as bounded to one entity in query cost diagnostics. Like a range, `single` is a domain fact, not a performance control.
+
+**Dimensions.** A trait may declare one to four dimensions, `dim name: Enum` or `dim name: int in range(a, b)`. Such a trait is a *dimensioned trait*, the entity that carries it is its *carrier*, and one value for every dimension is a *cell*. Its `let` fields belong to the carrier; each `var` field is a *cell field* and holds one value per cell. Dimensions belong to the trait: two dimensioned traits on one entity are two tables, not a product.
+
+```cactus
+enum Item:
+    Key
+    Grenade
+    Rope
+
+trait Stock:
+    dim item: Item
+    var count: int = 0
+
+single trait Room:
+    dim x: int in range(0, 64)
+    dim y: int in range(0, 48)
+    var gas: float = 0.0
+    var wall: bool = false
+```
+
+A range has the meaning of a ranged `let` field: half-open, with bounds that read only literals, constants and `let` fields of the same trait, fixed when the value is made, so every carrier can have its own size and a table never resizes. A cell field has type `bool`, `int`, `float`, an enum or a vector, and a constant default. Each of these is a compile error: `dim` in a state variant, relation, struct or event; a fifth dimension; another dimension type or an `int` dimension without a range; a bound that reads a `var` field, another trait or a call; two dimensions, or a dimension and a field, with one name; a cell field without a constant default, of another type, or `persist`; a dimensioned trait with no cell field; a dimensioned trait as the target of `project` or `keep`.
+
+Every cell always has a value: when a value of the trait is made, every cell holds its field's default. An entity, template or override body, `add T:` and `set T on e:` give only `let` fields; a cell field there is an error that says cells are written by handlers. `add T` on a carrier replaces the trait whole, so every cell returns to its default; `remove T` and destroying the carrier drop every cell. A range holds at most 1048576 values: a made value whose bounds break that does nothing and reports a fault that names the trait and the dimension. A range with `a >= b` gives no cells. A save records no cells; after a restore every cell of a restored carrier holds its default.
+
+The runtime stores, per carrier and cell field, only the values that differ from the default, bit for bit, so writing a cell back to its default is the same as never having written it. Rules over cells (§3.8.8) visit the cells that hold other values when the compiler proves the rest law.
 
 `persist` marks a field as durable game-save state; it carries no format, storage, or scene-survival meaning of its own — see §7.6 for what it makes eligible and how a save is produced.
 
@@ -1368,6 +1396,43 @@ the rule, because a handler that reads a field writes it plainly; so the rule's 
 merge as any handler's do (§6.4 of `spec/activation_semantics.md`). `repeat:` is not
 valid on an `extern rule`.
 
+#### 3.8.8 Rules over Cells
+
+A dimensioned trait in `each:` without an alias only requires the trait: one row per carrier. With an alias the rule runs over **cells**: one row per carrier and cell. The alias reads and writes each cell field and reads each dimension (`c.gas`, `c.x`); `c.carrier` is the carrier's `entity_id`. `self` is the carrier with every operation it has in a unary rule; other `each:` entries and `without:` filter carriers. `each:` holds at most one aliased dimensioned trait. Rows run carriers in creation order and the cells of one carrier in dimension order, first dimension major. A targeted event selects the rows of its recipient.
+
+```cactus
+rule Snap:
+    each: Room as c
+    where:
+        c.gas > 0.0 and c.gas < TRACE
+
+    on tick:
+        c.gas = 0.0
+```
+
+`reduce:` folds every row into one group. `reduce per self:` makes one group per carrier, including a carrier with no surviving row, and its handler runs once per carrier with `self` and the aggregates. `order by:`, `limit:`, `keep` and a lifecycle trigger are errors on a rule over cells, and so is an aliased dimensioned trait in a render pass vertex handler (a render pass draws entities). `repeat: N` is allowed (§3.8.7); each pass takes its rows from the world the previous pass left.
+
+**Pairs of cells.** A `pairs:` binding whose only entry is a dimensioned trait, without an alias, is a *cell binding*: `here.gas`, `here.x`, `here.carrier`. Both bindings are cell bindings of one trait, and every pair of cells has one carrier. The first binding may hold one `without:` line, which excludes carriers; a `without:` on the second binding is an error that points to the first. A pair of cells must be bounded by a top-level `where:` conjunct: `adjacent(a, b)` (same carrier, one `int` dimension differs by exactly one, every other dimension equal), or `b.carrier == a.carrier` with equalities that fix every dimension of `b` from values that don't read `b`, where an `or` of `and` chains counts when every branch fixes them all. An unbounded pair, a cell binding next to an entity or row binding, bindings of two traits, `b.carrier` fixed to anything but `a.carrier`, and `adjacent` anywhere else are errors. Cell bindings are read-only, except the binding of `reduce per` (which must be the first binding); a pair of cells has no `self`. A cell is not an entity: using an alias or cell binding as an `emit ... to` target, a command target or a relation argument is an error that suggests `self` or `.carrier`.
+
+```cactus
+rule Spread:
+    pairs:
+        here:
+            Room
+        there:
+            Room
+    where:
+        adjacent(here, there)
+        not here.wall and not there.wall
+    reduce per here:
+        net = sum((there.gas - here.gas) * SPREAD)
+
+    on tick:
+        here.gas += net
+```
+
+**The rest law.** A row is *at rest* when every cell field the rule reads or writes holds its default, bit for bit, in every cell the row binds; other cell fields don't matter. The compiler folds the rule with those reads replaced by the defaults, constants evaluated as at run time and every other read unknown. The rule keeps rest when a `where:` predicate folds to `false`; or, without `reduce:`, every path of the handler writes only the row's own cell fields with their defaults and has no `emit`, command or call with effects; or, with `reduce:` or `reduce per self:`, every reducer is a `sum` that folds to zero or an `any` that folds to `false`; or, with `reduce per` a cell binding, the reducers pass and the handler passes with the aggregates at their identities. A constant condition selects its branch; an unknown one needs every branch to pass. A proven rule visits only cells that hold other values (and, for `adjacent`, their neighbours); the result is the same as visiting every cell. An unproven rule visits every cell, and when its trait has an `int` dimension the compiler warns, naming the first statement or reducer it could not prove and suggesting a `where:` condition that is false at the defaults. A trait with only enum dimensions never warns.
+
 ### 3.9 Event Handlers
 
 Handlers are parameter-free in the current profile. Handler-local phase/event data is accessed through the trigger binding itself or through an explicit alias.
@@ -2006,6 +2071,24 @@ rule CollectCoins:
 ```
 
 **Named access is an implicit requirement.** For every `(Name, Trait)` a handler accesses by name — in its body or in any clause of its rule — the handler runs a pass only while `Name` is alive and carries `Trait`. The runtime checks this once per pass, before `when:` and before any entity or tuple; when it fails the pass does nothing, and no error is raised. The requirement covers the **whole handler**, even when the name appears only in one branch: move such a branch into its own rule if the rest of the handler must keep running. Because `destroy` and `remove` apply at the activation commit, a requirement that holds at the start of a pass holds for the whole pass. A handler that writes a named entity runs as one sequential pass over its domain; a backend never splits it per entity.
+
+**Cell access.** `e[T][k1, ..., kn].field` names a cell field of carrier `e`, with one value per dimension in declaration order, each of the dimension's type. `e` is `self` in a rule whose `each:` requires `T`, a pair binding that requires `T`, or a named entity that declares `T`. For a `single` trait the short form `T[k1, ..., kn].field` names the cell of its one carrier; a missing carrier reads the default and takes no write. `e[T].name` with one bracket reads a `let` field of the carrier; a cell field with one bracket, a `let` field with two, and a wrong number or type of values are errors. Cell access works in handler bodies and rule clauses, wherever the carrier's fields may be read or written, and is an error in `func` bodies, constants and archetype bodies. A value outside its range reads the default, and a write there does nothing. A write is visible to later reads at once; unordered `+=` and `-=` on a `float` or vector cell field merge exactly. A cell access enters the handler's contract as an access of that field of `T` with the statement's write kind. Through `self` or a cell alias it is an own-row access; the short form and a cell binding are not. A keep that reads cells through `self` keeps its level; a keep that reads the short form is full, with the single trait read as its reason.
+
+```cactus
+rule Pick:
+    each: Stock, Picks
+
+    on tick:
+        self[Stock][Item.Key].count += 1
+
+rule Throw:
+    each: Grenade as g
+
+    on tick:
+        Room[grid.cell(g.pos.x, 0.0, STEP), grid.cell(g.pos.y, 0.0, STEP)].gas += g.rate
+```
+
+`std.grid` turns a coordinate into a cell index and back: `cell(coordinate, origin, step)` is `floor((coordinate - origin) / step)`, and `center(index, origin, step)` is the coordinate of the cell's centre.
 
 ### 4.3 `entity_id` Semantics
 

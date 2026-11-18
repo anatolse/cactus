@@ -4,6 +4,8 @@
 // schedule edges allow, and for comparing the resulting worlds. Generated code
 // includes it only under CACTUS_LINEARIZATION_HARNESS.
 
+#include "common/cactus_runtime.hpp"
+
 #include <raylib.h>
 
 #include <algorithm>
@@ -282,6 +284,18 @@ void digest_value(WorldDigest& digest, const std::vector<T>& values) {
     digest.add(values.size());
     for (const auto& value : values) {
         digest.add(value);
+    }
+}
+
+// A column digests its stored cells in cell order, so equal tables digest equally.
+template <typename T, T Default, std::size_t DenseSize>
+void digest_value(WorldDigest& digest, const CellColumn<T, Default, DenseSize>& column) {
+    std::vector<std::uint64_t> cells;
+    column.append_stored(cells);
+    digest.add(cells.size());
+    for (const auto cell : cells) {
+        digest.add(cell);
+        digest.add(column.get(cell));
     }
 }
 

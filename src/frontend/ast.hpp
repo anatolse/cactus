@@ -274,6 +274,13 @@ struct TraitAccessExpr {
     mutable std::optional<SymbolId> link_target;
     mutable std::optional<SymbolId> link_holder;
     mutable std::string link_field;
+    // `e[T][k...]`, or the short form `T[k...]` of a single trait: one cell of a dimensioned trait.
+    bool cell = false;
+    std::vector<std::unique_ptr<ExprNode>> cell_keys;
+    // Set by semantic analysis on the short form, whose object names the trait.
+    bool short_form = false;
+    // Set by semantic analysis on `self[T]` in a unary rule whose `each:` requires the dimensioned trait T.
+    bool carrier_self = false;
 
     [[nodiscard]] std::optional<NamedTraitRef> named_ref() const {
         if (!resolved_entity_id.has_value() || !resolved_trait_id.has_value()) {
@@ -934,11 +941,20 @@ struct EnumNode {
     SourceLocation location;
 };
 
+// `dim name: Enum` or `dim name: int in range(a, b)` in a trait body.
+struct DimensionNode {
+    std::string name;
+    TypeRef type;
+    std::optional<FieldRange> range;
+    SourceLocation location;
+};
+
 struct TraitNode {
     std::string name;
     bool is_pub    = false;
     bool is_stdlib = false;
     bool is_single = false;  // `single trait`: at most one live entity carries it
+    std::vector<DimensionNode> dimensions;
     std::vector<FieldNode> fields;
     SourceLocation location;
     // Set on the traits semantic analysis synthesizes for a state: its variants (`S.V`) and its slot (`S`).
@@ -1226,6 +1242,16 @@ struct ReduceClause {
     SourceLocation location;
 };
 
+// Calls `fn` on each dimension value of a cell access; any other node has none.
+template <typename Node, typename Fn>
+void for_each_cell_key(Node& node, const Fn& fn) {
+    if constexpr (requires { node.cell_keys; }) {
+        for (auto& key : node.cell_keys) {
+            fn(*key);
+        }
+    }
+}
+
 // The non-wildcard ends of a relation test or row command.
 template <typename Row, typename Fn>
 void for_each_relation_end(Row& row, const Fn& fn) {
@@ -1301,6 +1327,35 @@ struct RowJoinPlan {
     bool linked        = false;
 };
 
+// One value of a looked-up cell: the expression a `where:` equality gives one dimension of the second binding.
+struct CellKeyPath {
+    std::size_t predicate = 0;
+    ExprPath path;
+};
+
+// Set by semantic analysis on a rule over the cells of one dimensioned trait: `each: T as c`, or a `pairs:`
+// rule whose two bindings are cell bindings of T. Both run once per carrier, which the rule's `each:` selects.
+struct CellDomainNode {
+    SymbolId trait;
+    std::string trait_name;
+    std::vector<std::string> aliases;  // the `each:` alias, or the two cell bindings in order
+    SourceLocation location;
+    // A cell pair rule's bound: `adjacent(a, b)` at this `where:` index, or one key per dimension of the
+    // second binding in each `or` branch of the equality form.
+    std::optional<std::size_t> adjacent;
+    std::vector<std::vector<CellKeyPath>> key_branches;
+    // The rest law: rows whose named cell fields hold their defaults change nothing.
+    bool keeps_rest = false;
+    std::vector<std::string> rest_fields;  // the cell fields the rule reads or writes, in declaration order
+
+    [[nodiscard]] bool names(const std::string& alias) const {
+        return std::ranges::contains(aliases, alias);
+    }
+    [[nodiscard]] bool pairs() const {
+        return aliases.size() == 2;
+    }
+};
+
 struct RuleNode {
     std::string name;
     bool is_stdlib = false;
@@ -1311,6 +1366,7 @@ struct RuleNode {
     std::optional<PairClause> pairs;                // set when this rule uses a binary pair domain
     std::optional<RowDomainNode> rows;              // set when this rule runs over relation rows
     std::optional<RowJoinPlan> row_join;
+    std::optional<CellDomainNode> cells;  // set by semantic analysis on a rule over cells
     std::optional<WhereClause> where_clause;         // set when this rule declares a where: clause
     std::optional<LimitClause> limit;                // set when this rule declares a limit: clause
     std::optional<ReduceClause> reduce;              // set when this rule declares a reduce: clause

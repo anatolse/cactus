@@ -862,3 +862,5 @@ struct Normal {
 }  // namespace stdlib::random
 
 }  // namespace cactus::runtime
+
+#include "common/cell_tables.hpp"

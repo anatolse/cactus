@@ -335,6 +335,10 @@ add_executable(test_semantic_rule_repeat test_semantic_rule_repeat.cpp)
 target_link_libraries(test_semantic_rule_repeat PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticRuleRepeatTests COMMAND test_semantic_rule_repeat)
 
+add_executable(test_semantic_trait_dimensions test_semantic_trait_dimensions.cpp)
+target_link_libraries(test_semantic_trait_dimensions PRIVATE cactus_frontend Catch2::Catch2WithMain)
+add_test(NAME SemanticTraitDimensionsTests COMMAND test_semantic_trait_dimensions)
+
 add_executable(test_semantic_pair_without test_semantic_pair_without.cpp)
 target_link_libraries(test_semantic_pair_without PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticPairWithoutTests COMMAND test_semantic_pair_without)
@@ -465,6 +469,10 @@ add_test(NAME RuntimeVoxelSurfacesTests COMMAND test_runtime_voxel_surfaces)
 add_executable(test_runtime_binding_index test_runtime_binding_index.cpp)
 target_link_libraries(test_runtime_binding_index PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
 add_test(NAME RuntimeBindingIndexTests COMMAND test_runtime_binding_index)
+
+add_executable(test_runtime_cell_tables test_runtime_cell_tables.cpp)
+target_link_libraries(test_runtime_cell_tables PRIVATE cactus_runtime_common Catch2::Catch2WithMain)
+add_test(NAME RuntimeCellTablesTests COMMAND test_runtime_cell_tables)
 
 add_executable(test_runtime_collider_physics test_runtime_collider_physics.cpp)
 target_link_libraries(test_runtime_collider_physics PRIVATE cactus_runtime_common Catch2::Catch2WithMain)
@@ -1069,6 +1077,38 @@ cactus_add_headless_behavior_test(test_cactus_dungeon_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_cactus_dungeon_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_trait_dimensions_headless_behavior
+    CACTUS_SOURCE examples/trait_dimensions.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_trait_dimensions_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_trait_dimensions_audit_headless_behavior
+    CACTUS_SOURCE examples/trait_dimensions.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_trait_dimensions_audit_headless_behavior.cpp
+    CONTRACT_AUDIT
+)
+
+cactus_add_headless_behavior_test(test_trait_dimensions_linearization_headless_behavior
+    CACTUS_SOURCE examples/trait_dimensions.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_trait_dimensions_linearization_headless_behavior.cpp
+    LINEARIZATION_HARNESS
+)
+
+cactus_add_headless_behavior_test(test_trait_dimension_lifetime_headless_behavior
+    CACTUS_SOURCE tests/fixtures/trait_dimension_lifetime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_trait_dimension_lifetime_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_grid_headless_behavior
+    CACTUS_SOURCE examples/stdlib-fixtures/grid.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_grid_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_noise_headless_behavior
     CACTUS_SOURCE examples/stdlib-fixtures/noise.cactus
     BACKEND cpp-entt
@@ -1596,7 +1636,8 @@ foreach(keep_check_target IN ITEMS
         test_character_body_unindexed_headless_behavior test_minimap_headless_behavior
         test_per_view_visibility_headless_behavior test_staged_predicates_headless_behavior
         test_staged_predicates_row_headless_behavior test_cactus_dungeon_headless_behavior
-        test_robot_sandbox_headless_behavior test_first_person_arena_headless_behavior)
+        test_robot_sandbox_headless_behavior test_first_person_arena_headless_behavior
+        test_trait_dimensions_headless_behavior)
     target_compile_definitions(${keep_check_target} PRIVATE CACTUS_KEEP_CHECK)
 endforeach()
 
@@ -1607,7 +1648,7 @@ endforeach()
 add_custom_target(test_generated_performance_benchmarks)
 foreach(shape IN ITEMS static_keep union_fold equality_reduce grid_region row_join baseline own_projection
         single_commit plain_commit sweep wide_level reduced_keep required_links keep_chain
-        incremental_keep render_pass)
+        incremental_keep render_pass dimension_spread)
     set(perf_target test_perf_${shape}_benchmark)
     set(perf_codegen_flags)
     if(shape STREQUAL "wide_level")

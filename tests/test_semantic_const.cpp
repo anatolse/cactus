@@ -581,6 +581,15 @@ std::string render_pass_program(const std::string& constants,
 
 }  // namespace
 
+TEST_CASE("Render passes: a vertex handler can't run over cells", "[semantic][render-passes][trait-dimensions]") {
+    auto program = render_pass_program("", "1.0");
+    const std::string sprite = "trait Sprite:\n";
+    program.replace(program.find(sprite), sprite.size(), sprite + "    dim x: int in range(0, 4)\n");
+    auto analysis = analyze(program, render_pass_imports());
+    INFO(describe(analysis));
+    CHECK(analysis.has("a render pass draws entities; a vertex handler can't run over the cells of 'Sprite'"));
+}
+
 TEST_CASE("Render-pass constants: a derived scalar constant is accepted", "[semantic][const][render-passes]") {
     auto analysis = analyze(render_pass_program("const:\n"
                                                 "    SIZE = 200.0\n"

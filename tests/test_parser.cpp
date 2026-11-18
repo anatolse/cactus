@@ -4868,14 +4868,43 @@ TEST_CASE("Parser: assignment through a bracketed trait path", "[parser][trait-a
     CHECK(dotted_name_of(*trait_access_under(*second.target, 1).object) == "hud.Hud");
 }
 
-TEST_CASE("Parser: bracketed trait access takes exactly one trait name", "[parser][trait-access]") {
-    for (const std::string access : {"Game[Match, Score].over", "Game[not Match].over"}) {
-        CAPTURE(access);
-        const auto errors = parse_expect_errors("func test():\n"
-                                                "    let x = " +
-                                                access + "\n");
-        CHECK(has_diagnostic(errors, "a trait access takes exactly one trait name"));
-    }
+TEST_CASE("Parser: brackets that hold no single name are a cell access", "[parser][trait-access][trait-dimensions]") {
+    const auto program = parse("func test():\n"
+                               "    let x = Room[3, y + 1].gas\n");
+    const auto& access = trait_access_under(first_let_value(program), 1);
+    CHECK(access.cell);
+    CHECK(access.trait_name.empty());
+    REQUIRE(access.cell_keys.size() == 2);
+    CHECK(dotted_name_of(*access.object) == "Room");
+}
+
+TEST_CASE("Parser: a second bracket after a trait access names a cell", "[parser][trait-access][trait-dimensions]") {
+    const auto program = parse("func test():\n"
+                               "    let x = player[Stock][Item.Key].count\n");
+    const auto& access = trait_access_under(first_let_value(program), 1);
+    CHECK(access.cell);
+    CHECK(access.trait_name == "Stock");
+    REQUIRE(access.cell_keys.size() == 1);
+    CHECK(dotted_name_of(*access.cell_keys[0]) == "Item.Key");
+}
+
+TEST_CASE("Parser: a cell of self is an assignment target", "[parser][trait-access][trait-dimensions]") {
+    const auto program = parse("func test():\n"
+                               "    self[Stock][Item.Key].count -= 1\n");
+    const auto& func   = std::get<FuncNode>(program.declarations[0]);
+    const auto* assign = std::get_if<VarAssign>(&func.body[0]->stmt);
+    REQUIRE(assign != nullptr);
+    CHECK(assign->op == "-=");
+    REQUIRE(assign->target != nullptr);
+    const auto& access = trait_access_under(*assign->target, 1);
+    CHECK(access.cell);
+    CHECK(std::holds_alternative<SelfExpr>(access.object->expr));
+}
+
+TEST_CASE("Parser: a cell access needs its dimension values", "[parser][trait-access][trait-dimensions]") {
+    const auto errors = parse_expect_errors("func test():\n"
+                                            "    let x = Room[].gas\n");
+    CHECK(has_diagnostic(errors, "a cell access needs one value per dimension"));
 }
 
 // ── Relations (dsl-relations) ───────────────────────────────────────────────

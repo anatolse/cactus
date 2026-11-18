@@ -6,6 +6,7 @@
 #include "frontend/symbol_identity.hpp"
 
 #include "backends/cpp-entt/accumulation_plan.hpp"
+#include "backends/cpp-entt/cell_codegen.hpp"
 #include "backends/cpp-entt/contract_audit_emitter.hpp"
 #include "backends/cpp-entt/persistence_emitter.hpp"
 #include "backends/cpp-entt/index_cell_size.hpp"
@@ -2875,6 +2876,160 @@ static std::string lower_trait_field_path(const TraitAccessExpr& access,
     return base;
 }
 
+// ── Cells of dimensioned traits ─────────────────────────────────────────────
+
+// The trait a cell access names, when it is a dimensioned trait of the program.
+static const ResolvedTrait* cell_trait(const TraitAccessExpr& access, const DecoratedProgram& program) {
+    if (!access.cell || !access.resolved_trait_id.has_value()) {
+        return nullptr;
+    }
+    const auto* trait = EnttCodegenUtils::find_trait(program, make_canonical_id(*access.resolved_trait_id));
+    return trait != nullptr && trait->is_dimensioned() ? trait : nullptr;
+}
+
+// A pointer to the table a cell access reaches, null when its carrier lacks it.
+static std::string cell_table_pointer(const TraitAccessExpr& access,
+                                      const DecoratedProgram& program,
+                                      const std::function<std::string(const ExprNode&)>& rewrite) {
+    const auto cpp = EnttCodegenUtils::trait_cpp_name(*access.resolved_trait_id, access.trait_name, program);
+    if (access.short_form) {
+        return "cactus::runtime::entt_backend::single_table<" + cpp + ">(registry)";
+    }
+    if (const auto named = access.named_ref(); named.has_value()) {
+        return "&" + EnttCodegenUtils::named_trait_ref_name(*named);
+    }
+    const auto entity = access.carrier_self ? std::string("entity") : rewrite(*access.object);
+    return "registry.try_get<" + cpp + ">(" + entity + ")";
+}
+
+// `T::field`: the column of a cell access.
+static std::string cell_column(const TraitAccessExpr& access, const std::string& field, const DecoratedProgram& program) {
+    return EnttCodegenUtils::trait_cpp_name(*access.resolved_trait_id, access.trait_name, program) +
+           "::" + cpp_escaped(field);
+}
+
+// `, key...`: the cell of a cell access, one key per dimension.
+static std::string cell_keys(const TraitAccessExpr& access,
+                             const ResolvedTrait& trait,
+                             const std::function<std::string(const ExprNode&)>& rewrite) {
+    std::string text;
+    for (std::size_t index = 0; index < access.cell_keys.size() && index < trait.dimensions.size(); ++index) {
+        text += ", " + cell_codegen::key_cpp(trait.dimensions[index], rewrite(*access.cell_keys[index]));
+    }
+    return text;
+}
+
+// The path after the first field (`.x` of `c.v.x`), if any.
+static std::string component_suffix(const std::vector<std::string>& fields) {
+    std::string suffix;
+    for (std::size_t index = 1; index < fields.size(); ++index) {
+        suffix += "." + cpp_escaped(fields[index]);
+    }
+    return suffix;
+}
+
+// `c.carrier`, `c.<dimension>` or `c.<cell field>` of a row's cell alias.
+// Each alias names its carrier through its own variable, so `there.carrier == here.carrier` is no self-comparison.
+static std::string cell_carrier_variable(const std::string& alias) {
+    return "cactus_carrier_" + alias;
+}
+
+static std::optional<std::string> lower_cell_alias_read(const MemberExpr& member,
+                                                        const cell_codegen::CellScope& scope,
+                                                        const cell_codegen::CellAliasCodegen& alias) {
+    const auto& trait = *scope.trait;
+    if (member.member == "carrier") {
+        return cell_carrier_variable(alias.alias);
+    }
+    if (const auto* dimension = trait.find_dimension(member.member); dimension != nullptr) {
+        const auto index = static_cast<std::size_t>(dimension - trait.dimensions.data());
+        return cell_codegen::dimension_value_cpp(*dimension, index, "cactus_shape", alias.cell);
+    }
+    if (trait.find_cell_field(member.member) != nullptr) {
+        return alias.alias + "." + cpp_escaped(member.member) + ".get(" + alias.cell + ")";
+    }
+    return std::nullopt;
+}
+
+// A read of a row's cell through its alias, or of any cell through `e[T][...]` or `T[...]`.
+static std::optional<std::string> lower_cell_read(const ExprNode& expr,
+                                                  const DecoratedProgram& program,
+                                                  const std::function<std::string(const ExprNode&)>& rewrite) {
+    const auto* member = std::get_if<MemberExpr>(&expr.expr);
+    if (member == nullptr) {
+        return std::nullopt;
+    }
+    const auto* scope = cell_codegen::ActiveCellScope::active();
+    const auto* owner = std::get_if<IdentExpr>(&member->object->expr);
+    const auto* alias = scope == nullptr || owner == nullptr ? nullptr : scope->find(owner->name);
+    if (alias != nullptr) {
+        return lower_cell_alias_read(*member, *scope, *alias);
+    }
+    const auto path = trait_field_path(expr);
+    if (!path.has_value() || path->second.empty()) {
+        return std::nullopt;
+    }
+    const auto& [access, fields] = *path;
+    const auto* trait            = cell_trait(*access, program);
+    if (trait == nullptr && access->carrier_self) {
+        return "registry.get<const " +
+               EnttCodegenUtils::trait_cpp_name(*access->resolved_trait_id, access->trait_name, program) + ">(entity)." +
+               cpp_escaped(fields.front()) + component_suffix(fields);
+    }
+    if (trait == nullptr) {
+        return std::nullopt;
+    }
+    return "cactus::runtime::cell_read(" + cell_table_pointer(*access, program, rewrite) + ", &" +
+           cell_column(*access, fields.front(), program) + cell_keys(*access, *trait, rewrite) + ")" +
+           component_suffix(fields);
+}
+
+// `{ value = column.get(cell); <assign>; column.set(cell, value); }`, or one exact `+=` of a whole field.
+static std::string assign_cell_through_alias(const VarAssign& assign,
+                                             const cell_codegen::CellAliasCodegen& alias,
+                                             const std::string& ind,
+                                             const std::string& value) {
+    const auto column = alias.alias + "." + cpp_escaped(assign.path.front());
+    if (assign.accumulation.has_value() && assign.path.size() == 1 && (assign.op == "+=" || assign.op == "-=")) {
+        return ind + column + (assign.op == "-=" ? ".subtract(" : ".accumulate(") + alias.cell + ", " + value + ");\n";
+    }
+    return ind + "{\n" + ind + "    auto cactus_cell_value = " + column + ".get(" + alias.cell + ");\n" + ind + "    " +
+           EnttCodegenUtils::emit_compound_assignment(assign, "cactus_cell_value" + component_suffix(assign.path), value) +
+           ";\n" + ind + "    " + column + ".set(" + alias.cell + ", cactus_cell_value);\n" + ind + "}\n";
+}
+
+// A write of a cell: through a row's alias, or through `e[T][...]` or `T[...]`.
+static std::optional<std::string> lower_cell_assign(const VarAssign& assign,
+                                                    const std::string& ind,
+                                                    const DecoratedProgram& program,
+                                                    const std::function<std::string(const ExprNode&)>& rewrite) {
+    const auto* scope = cell_codegen::ActiveCellScope::active();
+    const auto* alias = scope == nullptr || assign.target != nullptr ? nullptr : scope->find(assign.name);
+    if (alias != nullptr && !assign.path.empty()) {
+        if (scope->trait->find_cell_field(assign.path.front()) == nullptr) {
+            return std::nullopt;
+        }
+        return assign_cell_through_alias(assign, *alias, ind, rewrite(*assign.value));
+    }
+    const auto path = assign.target == nullptr ? std::nullopt : trait_field_path(std::as_const(*assign.target));
+    const auto* trait = path.has_value() && !path->second.empty() ? cell_trait(*path->first, program) : nullptr;
+    if (trait == nullptr) {
+        return std::nullopt;
+    }
+    const auto& [access, fields] = *path;
+    const auto value             = rewrite(*assign.value);
+    const auto table             = cell_table_pointer(*access, program, rewrite);
+    const auto column            = "&" + cell_column(*access, fields.front(), program);
+    const auto keys              = cell_keys(*access, *trait, rewrite);
+    if (assign.accumulation.has_value() && fields.size() == 1 && (assign.op == "+=" || assign.op == "-=")) {
+        return ind + "cactus::runtime::cell_accumulate(" + table + ", " + column + ", " +
+               (assign.op == "-=" ? "true" : "false") + ", " + value + keys + ");\n";
+    }
+    return ind + "cactus::runtime::cell_update(" + table + ", " + column + ", [&](auto cactus_cell_value) {\n" + ind +
+           "    " + EnttCodegenUtils::emit_compound_assignment(assign, "cactus_cell_value" + component_suffix(fields), value) +
+           ";\n" + ind + "    return cactus_cell_value;\n" + ind + "}" + keys + ");\n";
+}
+
 static std::string rewrite_expr_node(  // NOLINT(readability-function-cognitive-complexity) -- still 250 after
                                        // table-driving the input/camera/transform builtin dispatch (task 5.4);
                                        // this is the full expression-rewrite dispatch, dozens of unrelated arms remain
@@ -3236,6 +3391,12 @@ static std::string rewrite_expr(const ExprNode& expr,
                                 const std::unordered_map<std::string, std::string>& cpp_overrides,
                                 const PairCodegenScope* pair_scope,
                                 const LocalNumericKinds* local_kinds) {
+    const auto rewrite_child = [&](const ExprNode& child) {
+        return rewrite_expr(child, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds);
+    };
+    if (auto cell = lower_cell_read(expr, program, rewrite_child); cell.has_value()) {
+        return contract_audit::audited_expr(expr, std::move(*cell), program);
+    }
     return contract_audit::audited_expr(
         expr,
         settled_access(
@@ -3292,6 +3453,14 @@ static std::string accumulation_entity(const VarAssign& assign,
     const ExprNode* cursor = assign.target.get();
     while (cursor != nullptr) {
         if (const auto* access = std::get_if<TraitAccessExpr>(&cursor->expr)) {
+            if (access->short_form && access->resolved_trait_id.has_value()) {
+                return "cactus::runtime::entt_backend::single_carrier<" +
+                       EnttCodegenUtils::trait_cpp_name(*access->resolved_trait_id, access->trait_name, program) +
+                       ">(registry)";
+            }
+            if (access->carrier_self) {
+                return "entity";
+            }
             return access->resolved_entity_id.has_value()
                        ? EnttCodegenUtils::named_slot_name(*access->resolved_entity_id)
                        : rewrite_expr(*access->object, trait_names, program, {}, {}, pair_scope);
@@ -3708,7 +3877,15 @@ static const FieldAssignment* reparent_value(const AddTraitStmt& add, const Deco
 }
 
 // A deferred `add` at commit: the value from the hoisted args, its range check, then the write.
+// `add` patches a trait's fields, but replaces a dimensioned trait whole, so every cell returns to its default.
+static bool replaces_whole(const AddTraitStmt& s, const DecoratedProgram& program) {
+    const auto* trait =
+        s.resolved_trait_id.has_value() ? EnttCodegenUtils::find_trait(program, make_canonical_id(*s.resolved_trait_id)) : nullptr;
+    return trait != nullptr && trait->is_dimensioned();
+}
+
 static std::string emit_deferred_add_write(const AddTraitStmt& s,
+                                           bool whole,
                                            const std::string& cpp,
                                            const std::optional<EnttCodegenUtils::StateVariant>& variant,
                                            const ResolvedTrait* ranged,
@@ -3718,7 +3895,13 @@ static std::string emit_deferred_add_write(const AddTraitStmt& s,
     const std::string existing_name = gen_temp_name("existing", s.location);
     const std::string value_name    = gen_temp_name("value", s.location);
     std::ostringstream result;
-    if (!s.args.empty()) {
+    if (!s.args.empty() && whole) {
+        result << ind << "auto " << value_name << " = " << cpp << "{};\n";
+        for (const auto& arg : s.args) {
+            result << ind << value_name << "." << cpp_escaped(arg.name) << " = " << deferred_field_value_name(arg)
+                   << ";\n";
+        }
+    } else if (!s.args.empty()) {
         result << ind << "auto* " << existing_name << " = registry.try_get<" << cpp << ">(" << target_name << ");\n";
         result << ind << "auto " << value_name << " = " << existing_name << " ? *" << existing_name << " : " << cpp
                << "{};\n";
@@ -3830,7 +4013,7 @@ static std::string emit_add_trait_body(const AddTraitStmt& s,
                    << deferred_field_value_name(*parent) << ")) { return; }\n";
         }
         result << emit_deferred_add_write(
-            s, cpp, variant, ranged, find_single_trait(program, s.resolved_trait_id, s.trait_name), target_name, ind + "            ");
+            s, replaces_whole(s, program), cpp, variant, ranged, find_single_trait(program, s.resolved_trait_id, s.trait_name), target_name, ind + "            ");
         result << retain_line(target_name, ind + "            ");
         result << ind << "        });\n";
         result << ind << "}\n";
@@ -3860,8 +4043,9 @@ static std::string emit_add_trait_body(const AddTraitStmt& s,
            << target << ");\n";
     result << ind << (GUARDED ? "        " : "    ") << "auto* " << existing_name << " = registry.try_get<" << cpp
            << ">(" << target << ");\n";
-    result << ind << (GUARDED ? "        " : "    ") << "auto " << value_name << " = " << existing_name << " ? *"
-           << existing_name << " : " << cpp << "{};\n";
+    result << ind << (GUARDED ? "        " : "    ") << "auto " << value_name << " = "
+           << (replaces_whole(s, program) ? std::string{} : existing_name + " ? *" + existing_name + " : ") << cpp
+           << "{};\n";
     for (const auto& arg : s.args) {
         result << ind << (GUARDED ? "        " : "    ") << value_name << "." << cpp_escaped(arg.name) << " = "
                << rewrite_expr(*arg.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) << ";\n";
@@ -4320,6 +4504,13 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                 }
                 return result;
             } else if constexpr (std::is_same_v<S, VarAssign>) {
+                const auto rewrite_part = [&](const ExprNode& part) {
+                    return rewrite_expr(
+                        part, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds);
+                };
+                if (auto cell = lower_cell_assign(s, ind, program, rewrite_part); cell.has_value()) {
+                    return *cell;
+                }
                 std::string lhs;
                 if (s.target != nullptr) {
                     lhs = rewrite_expr(
@@ -8701,6 +8892,337 @@ static void emit_joined_row_pass(std::ostringstream& out,
     out << "    }\n";
 }
 
+// ── Passes over cells ───────────────────────────────────────────────────────
+
+static std::string cell_variable(const std::string& alias) {
+    return "cactus_cell_" + alias;
+}
+
+// The `int` dimensions a step to an adjacent cell moves along.
+static std::string step_dimensions(const ResolvedTrait& trait) {
+    std::vector<std::string> steps;
+    for (std::size_t index = 0; index < trait.dimensions.size(); ++index) {
+        if (trait.dimensions[index].range.has_value()) {
+            steps.push_back(std::to_string(index) + "U");
+        }
+    }
+    return "std::array<std::size_t, " + std::to_string(steps.size()) + ">{" + join_strings(steps, ", ") + "}";
+}
+
+struct CellPassShape {
+    const RuleNode* rule        = nullptr;
+    const ResolvedTrait* trait  = nullptr;
+    const DecoratedProgram* program = nullptr;
+    const HandlerDomainCodegen* domain = nullptr;
+
+    [[nodiscard]] const CellDomainNode& cells() const {
+        return *rule->cells;
+    }
+    [[nodiscard]] const std::string& left() const {
+        return cells().aliases.front();
+    }
+    [[nodiscard]] const std::string& right() const {
+        return cells().aliases.back();
+    }
+    [[nodiscard]] std::string rewrite(const ExprNode& expr) const {
+        return rewrite_expr(expr, domain->filter_traits, *program, {}, domain->filter_cpp_overrides);
+    }
+    // The rows a proven rule visits follow the stored cells; an equality-bounded pair visits every cell.
+    [[nodiscard]] bool follows_stored_cells() const {
+        return cells().keeps_rest && (!cells().pairs() || cells().adjacent.has_value());
+    }
+    [[nodiscard]] cell_codegen::CellScope scope(bool both) const {
+        cell_codegen::CellScope result{.trait = trait, .aliases = {}};
+        for (const auto& alias : cells().aliases) {
+            if (!both && alias != left()) {
+                continue;
+            }
+            result.aliases.push_back(cell_codegen::CellAliasCodegen{.alias = alias, .cell = cell_variable(alias)});
+        }
+        return result;
+    }
+};
+
+// Every `where:` predicate, checked per row; the `adjacent` bound holds by construction.
+static std::vector<const ExprNode*> cell_row_predicates(const RuleNode& sys) {
+    std::vector<const ExprNode*> predicates;
+    if (!sys.where_clause.has_value() || !sys.cells.has_value()) {
+        return predicates;
+    }
+    for (std::size_t index = 0; index < sys.where_clause->predicates.size(); ++index) {
+        if (sys.cells->adjacent != index) {
+            predicates.push_back(sys.where_clause->predicates[index].get());
+        }
+    }
+    return predicates;
+}
+
+// `for (... cactus_cell_<left> ...) {`: the left cells of a carrier's rows.
+static void emit_cell_loop_open_header(std::ostringstream& out, const CellPassShape& shape, const std::string& ind) {
+    const auto& cells = shape.cells();
+    const auto cell   = cell_variable(shape.left());
+    if (!shape.follows_stored_cells()) {
+        out << ind << "for (std::uint64_t " << cell << " = 0; " << cell << " < cactus_shape.count(); ++" << cell
+            << ") {\n";
+        return;
+    }
+    std::string columns;
+    for (const auto& field : cells.rest_fields) {
+        columns += ", " + shape.left() + "." + cpp_escaped(field);
+    }
+    if (columns.empty()) {
+        out << ind << "for (const std::uint64_t " << cell << " : std::vector<std::uint64_t>{}) {\n";
+        return;
+    }
+    const auto rows = cells.pairs() ? "cactus::runtime::stored_cells_and_neighbours(cactus_shape, " +
+                                        step_dimensions(*shape.trait) + columns + ")"
+                                  : "cactus::runtime::stored_cells(" + columns.substr(2) + ")";
+    out << ind << "for (const std::uint64_t " << cell << " : " << rows << ") {\n";
+}
+
+static void emit_cell_loop_open(std::ostringstream& out, const CellPassShape& shape, const std::string& ind) {
+    emit_cell_loop_open_header(out, shape, ind);
+    out << ind << "    cactus::runtime::entt_backend::count_cell_row();\n";
+}
+
+// Opens the loop over the right cells paired with the left one; close with emit_cell_partners_close.
+static void emit_cell_partners_open(std::ostringstream& out, const CellPassShape& shape, const std::string& ind) {
+    const auto& cells = shape.cells();
+    const auto here   = cell_variable(shape.left());
+    const auto there  = cell_variable(shape.right());
+    if (cells.adjacent.has_value()) {
+        out << ind << "{\n";
+        out << ind << "for (const std::uint64_t " << there << " : cactus::runtime::adjacent_cells(cactus_shape, "
+            << step_dimensions(*shape.trait) << ", " << here << ")) {\n";
+        out << ind << "    if (" << there << " == cactus::runtime::kNoCell) { continue; }\n";
+        return;
+    }
+    const auto scope = shape.scope(false);
+    const cell_codegen::ActiveCellScope active(scope);
+    std::vector<std::string> partners;
+    for (const auto& branch : cells.key_branches) {
+        std::vector<std::string> keys;
+        for (std::size_t index = 0; index < branch.size(); ++index) {
+            const auto& predicate = *shape.rule->where_clause->predicates[branch[index].predicate];
+            keys.push_back(cell_codegen::key_cpp(shape.trait->dimensions[index],
+                                                 shape.rewrite(*resolve_expr_path(predicate, branch[index].path))));
+        }
+        partners.push_back("cactus_shape.at(" + join_strings(keys, ", ") + ")");
+    }
+    out << ind << "std::array<std::uint64_t, " << partners.size() << "> cactus_partners{" << join_strings(partners, ", ")
+        << "};\n";
+    out << ind << "{\n";
+    out << ind << "for (const std::uint64_t " << there << " : cactus::runtime::distinct_cells(cactus_partners)) {\n";
+    out << ind << "    if (" << there << " == cactus::runtime::kNoCell) { continue; }\n";
+}
+
+static void emit_cell_partners_close(std::ostringstream& out, const std::string& ind) {
+    out << ind << "}\n";
+    out << ind << "}\n";
+}
+
+static void emit_cell_row_guard(std::ostringstream& out,
+                                const CellPassShape& shape,
+                                const std::string& ind,
+                                std::string_view exit) {
+    const auto scope = shape.scope(true);
+    const cell_codegen::ActiveCellScope active(scope);
+    for (const auto* predicate : cell_row_predicates(*shape.rule)) {
+        out << ind << "if (" << rejects(shape.rewrite(*predicate)) << ") { " << exit << "; }\n";
+    }
+}
+
+// Binds a carrier's components and its cell aliases.
+static void emit_cell_carrier_bindings(std::ostringstream& out, const CellPassShape& shape, int indent) {
+    emit_component_bindings_from_entity(out, shape.domain->filter_bindings_list, "entity", indent, *shape.program);
+    emit_filter_alias_bindings(out, shape.domain->filter, *shape.program, indent);
+    const std::string ind(static_cast<std::size_t>(indent) * 4, ' ');
+    out << ind << "[[maybe_unused]] const auto cactus_shape = " << cell_codegen::shape_call(*shape.trait, shape.left())
+        << ";\n";
+    for (const auto& alias : shape.cells().aliases) {
+        out << ind << "[[maybe_unused]] const entt::entity " << cell_carrier_variable(alias) << " = entity;\n";
+    }
+}
+
+// The carriers of the pass in creation order, or just the recipient of a targeted event.
+static void emit_cell_carriers(std::ostringstream& out, const CellPassShape& shape) {
+    const auto& domain = *shape.domain;
+    out << "    std::vector<entt::entity> cactus_carriers;\n";
+    out << "    if (cactus_recipient.has_value()) {\n";
+    std::vector<std::string> checks{"registry.valid(*cactus_recipient)"};
+    checks.push_back("registry.all_of<" + join_strings(domain.filter_cpp_types, ", ") + ">(*cactus_recipient)");
+    if (!domain.exclude_cpp_types.empty()) {
+        checks.push_back("!registry.any_of<" + join_strings(domain.exclude_cpp_types, ", ") + ">(*cactus_recipient)");
+    }
+    out << "        if (" << join_strings(checks, " && ") << ") { cactus_carriers.push_back(*cactus_recipient); }\n";
+    out << "    } else {\n";
+    emit_view_declaration(out, domain.filter_cpp_types, domain.exclude_cpp_types, 2);
+    out << "        cactus_carriers = cactus::runtime::entt_backend::creation_ordered(registry, view);\n";
+    out << "    }\n";
+}
+
+static void emit_cell_reducer_bindings(std::ostringstream& out, const ReduceClause& reduce, const std::string& ind) {
+    for (const auto& reducer : reduce.reducers) {
+        out << ind << "[[maybe_unused]] const auto " << reducer.name << " = cactus_row." << reducer.name << ";\n";
+    }
+}
+
+static std::string cell_handler_body(const CellPassShape& shape,
+                                     const EventHandlerNode& handler,
+                                     bool with_aliases,
+                                     bool both) {
+    auto lexical_locals = handler_lexical_locals(handler);
+    LocalNumericKinds local_kinds;
+    if (shape.rule->reduce.has_value()) {
+        for (const auto& reducer : shape.rule->reduce->reducers) {
+            lexical_locals.insert(reducer.name);
+        }
+    }
+    const auto scope = shape.scope(both);
+    std::optional<cell_codegen::ActiveCellScope> active;
+    if (with_aliases) {
+        active.emplace(scope);
+    }
+    // A reduced handler sees no row, so a bare name is never one of the domain's fields.
+    const bool reduced = shape.rule->reduce.has_value();
+    return rewrite_stmt_block(handler.body,
+                              3,
+                              reduced ? std::vector<std::string>{} : shape.domain->filter_traits,
+                              *shape.program,
+                              {},
+                              false,
+                              reduced ? std::unordered_map<std::string, std::string>{} : shape.domain->filter_cpp_overrides,
+                              nullptr,
+                              lexical_locals,
+                              local_kinds);
+}
+
+// A rule without `reduce:`: the handler runs per row, so its writes are seen by later rows.
+static void emit_cell_rows_pass(std::ostringstream& out, const CellPassShape& shape, const EventHandlerNode& handler) {
+    const bool pairs = shape.cells().pairs();
+    const auto here  = cell_variable(shape.left());
+    const auto there = cell_variable(shape.right());
+    emit_cell_carriers(out, shape);
+    out << "    for (const entt::entity entity : cactus_carriers) {\n";
+    emit_cell_carrier_bindings(out, shape, 2);
+    out << "        auto cactus_cell_body = [&]([[maybe_unused]] std::uint64_t " << here;
+    if (pairs) {
+        out << ", [[maybe_unused]] std::uint64_t " << there;
+    }
+    out << ") {\n";
+    emit_cell_row_guard(out, shape, "            ", "return");
+    out << cell_handler_body(shape, handler, true, true);
+    out << "        };\n";
+    emit_cell_loop_open(out, shape, "        ");
+    if (pairs) {
+        emit_cell_partners_open(out, shape, "            ");
+        out << "                cactus_cell_body(" << here << ", " << there << ");\n";
+        emit_cell_partners_close(out, "            ");
+    } else {
+        out << "            cactus_cell_body(" << here << ");\n";
+    }
+    out << "        }\n";
+    out << "    }\n";
+}
+
+// A reduced rule: every aggregate comes from one snapshot, before any handler of the pass runs.
+static void emit_cell_reduced_pass(std::ostringstream& out, const CellPassShape& shape, const EventHandlerNode& handler) {
+    const auto& reduce  = *shape.rule->reduce;
+    const bool pairs    = shape.cells().pairs();
+    const bool per_cell = reduce.per_binding.has_value() && shape.cells().names(*reduce.per_binding);
+    const bool total    = !reduce.per_binding.has_value();
+    const auto here     = cell_variable(shape.left());
+    const auto rewrite  = [&](const ExprNode& expr) { return shape.rewrite(expr); };
+    emit_reduce_types(out, reduce, false);
+    out << "    std::vector<cactus_reduce_row> cactus_rows;\n";
+    out << "    std::vector<std::uint64_t> cactus_row_cells;\n";
+    if (total) {
+        out << "    cactus_reduce_acc cactus_total{};\n";
+    }
+    emit_cell_carriers(out, shape);
+    out << "    for (const entt::entity entity : cactus_carriers) {\n";
+    emit_cell_carrier_bindings(out, shape, 2);
+    if (total) {
+        out << "        auto& cactus_acc = cactus_total;\n";
+    } else if (!per_cell) {
+        out << "        cactus_reduce_acc cactus_acc{};\n";
+    }
+    emit_cell_loop_open(out, shape, "        ");
+    if (per_cell) {
+        out << "            cactus_reduce_acc cactus_acc{};\n";
+    }
+    std::string ind = "            ";
+    if (pairs) {
+        emit_cell_partners_open(out, shape, ind);
+        ind += "    ";
+    }
+    emit_cell_row_guard(out, shape, ind, "continue");
+    {
+        const auto scope = shape.scope(true);
+        const cell_codegen::ActiveCellScope active(scope);
+        emit_reducer_folds(out, reduce, rewrite, ind, false);
+    }
+    if (pairs) {
+        emit_cell_partners_close(out, "            ");
+    }
+    if (per_cell) {
+        emit_reduce_row(out, reduce, "entity", *shape.program, "            ");
+        out << "            cactus_row_cells.push_back(" << here << ");\n";
+    }
+    out << "        }\n";
+    if (!per_cell && !total) {
+        emit_reduce_row(out, reduce, "entity", *shape.program, "        ");
+    }
+    out << "    }\n";
+    if (total) {
+        out << "    {\n";
+        out << "        const auto& cactus_acc = cactus_total;\n";
+        emit_reduce_row(out, reduce, "entt::entity{entt::null}", *shape.program, "        ");
+        out << "    }\n";
+    }
+    if (per_cell) {
+        out << "    for (std::size_t cactus_index = 0; cactus_index < cactus_rows.size(); ++cactus_index) {\n";
+        out << "        const auto& cactus_row = cactus_rows[cactus_index];\n";
+    } else {
+        out << "    for (const auto& cactus_row : cactus_rows) {\n";
+    }
+    out << "        [[maybe_unused]] const entt::entity entity = cactus_row.cactus_group;\n";
+    emit_cell_reducer_bindings(out, reduce, "        ");
+    if (per_cell) {
+        out << "        auto& " << shape.left() << " = registry.get<"
+            << EnttCodegenUtils::trait_cpp_name(shape.cells().trait, shape.cells().trait_name, *shape.program)
+            << ">(entity);\n";
+        out << "        [[maybe_unused]] const auto cactus_shape = " << cell_codegen::shape_call(*shape.trait, shape.left())
+            << ";\n";
+        out << "        const std::uint64_t " << here << " = cactus_row_cells[cactus_index];\n";
+        out << "        [[maybe_unused]] const entt::entity " << cell_carrier_variable(shape.left()) << " = entity;\n";
+    }
+    out << "        [&] {\n";
+    out << cell_handler_body(shape, handler, per_cell, false);
+    out << "        }();\n";
+    out << "    }\n";
+}
+
+static void emit_cell_rule_body(std::ostringstream& out,
+                                const RuleNode& sys,
+                                const EventHandlerNode& handler,
+                                const HandlerDomainCodegen& domain,
+                                const DecoratedProgram& program,
+                                const HandlerContract* contract) {
+    const auto* trait =
+        sys.cells.has_value() ? EnttCodegenUtils::find_trait(program, make_canonical_id(sys.cells->trait)) : nullptr;
+    if (trait == nullptr) {
+        throw CodegenError(sys.location, "the dimensioned trait of rule '" + sys.name + "' is unknown");
+    }
+    const CellPassShape shape{.rule = &sys, .trait = trait, .program = &program, .domain = &domain};
+    emit_activation_gate(out, sys, contract, program);
+    if (sys.reduce.has_value()) {
+        emit_cell_reduced_pass(out, shape, handler);
+    } else {
+        emit_cell_rows_pass(out, shape, handler);
+    }
+}
+
 struct HandlerBodyInputs {
     const HandlerDomainCodegen* domain                          = nullptr;
     const std::vector<PairBindingCodegen>* pair_binding_codegens = nullptr;
@@ -8712,11 +9234,11 @@ struct HandlerBodyInputs {
     const std::string* trigger_binding                          = nullptr;
 };
 
-// One handler's body, by the rule's domain and clauses.
-static void emit_handler_body(std::ostringstream& out,
-                              const RuleNode& sys,
-                              const EventHandlerNode& handler,
-                              const HandlerBodyInputs& in) {
+// One handler's body over entities or relation rows, by the rule's domain and clauses.
+static void emit_entity_handler_body(std::ostringstream& out,
+                                     const RuleNode& sys,
+                                     const EventHandlerNode& handler,
+                                     const HandlerBodyInputs& in) {
     const auto& domain   = *in.domain;
     const auto& program  = *in.program;
     const auto& pairs    = *in.pair_binding_codegens;
@@ -8780,6 +9302,18 @@ static void emit_handler_body(std::ostringstream& out,
                                    domain.filter_cpp_overrides,
                                    contract);
     }
+}
+
+// One handler's body: a rule over cells has its own passes.
+static void emit_handler_body(std::ostringstream& out,
+                              const RuleNode& sys,
+                              const EventHandlerNode& handler,
+                              const HandlerBodyInputs& in) {
+    if (sys.cells.has_value() && !handler.has_lifecycle_trigger()) {
+        emit_cell_rule_body(out, sys, handler, *in.domain, *in.program, in.contract);
+        return;
+    }
+    emit_entity_handler_body(out, sys, handler, in);
 }
 
 std::string EnttSystemEmitter::emit_system(const RuleNode& sys, const DecoratedProgram& program) {

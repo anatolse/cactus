@@ -19,9 +19,13 @@ constexpr const char* VALUE = "value";
 
 // A ranged field or a required link: either is checked where its value is made.
 bool has_ranged_fields(const ResolvedTrait& trait) {
-    return std::ranges::any_of(trait.fields, [](const ResolvedField& field) {
-        return field.range.has_value() || is_link_type(field.type);
-    });
+    return std::ranges::any_of(trait.fields,
+                               [](const ResolvedField& field) {
+                                   return field.range.has_value() || is_link_type(field.type);
+                               }) ||
+           std::ranges::any_of(trait.dimensions, [](const ResolvedDimension& dimension) {
+               return dimension.range.has_value();
+           });
 }
 
 void emit_link_check(std::ostringstream& out,
@@ -155,6 +159,23 @@ void emit_field_check(std::ostringstream& out,
     out << "    }\n";
 }
 
+// A made table whose range holds too many values faults, so its operation does nothing.
+void emit_dimension_check(std::ostringstream& out,
+                          const ResolvedTrait& trait,
+                          const ResolvedDimension& dimension,
+                          const ResolvedFieldRange& range,
+                          const DecoratedProgram& program) {
+    out << "    {\n";
+    out << "        const int lo = " << emit_bound(*range.lo, {}, program) << ";\n";
+    out << "        const int hi = " << emit_bound(*range.hi, {}, program) << ";\n";
+    out << "        if (static_cast<std::int64_t>(hi) - lo > cactus::runtime::kMaxDimensionValues) {\n";
+    out << "            return cactus::runtime::entt_backend::RangeFault{.trait = \"" << trait.name << "\", .field = \""
+        << dimension.name
+        << "\", .lo = lo, .hi = hi, .reason = cactus::runtime::entt_backend::RangeFaultReason::DimensionTooLarge};\n";
+    out << "        }\n";
+    out << "    }\n";
+}
+
 }  // namespace
 
 const ResolvedTrait* find_ranged_trait(const DecoratedProgram& program,
@@ -184,7 +205,7 @@ std::string emit_range_check_functions(const DecoratedProgram& program) {
         const auto name = range_check_function_name(trait->module_name, trait->name);
         std::ostringstream out;
         out << "[[maybe_unused]] std::optional<cactus::runtime::entt_backend::RangeFault> " << name.name
-            << "([[maybe_unused]] const entt::registry& registry, const " << trait_cpp(*trait, program) << "& " << VALUE
+            << "([[maybe_unused]] const entt::registry& registry, [[maybe_unused]] const " << trait_cpp(*trait, program) << "& " << VALUE
             << ", [[maybe_unused]] bool check_links = true) {\n";
         for (const auto& field : trait->fields) {
             if (field.range.has_value()) {
@@ -192,6 +213,11 @@ std::string emit_range_check_functions(const DecoratedProgram& program) {
             }
             if (is_link_type(field.type)) {
                 emit_link_check(out, *trait, field, program);
+            }
+        }
+        for (const auto& dimension : trait->dimensions) {
+            if (dimension.range.has_value()) {
+                emit_dimension_check(out, *trait, dimension, *dimension.range, program);
             }
         }
         out << "    return std::nullopt;\n";

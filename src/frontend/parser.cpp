@@ -454,6 +454,9 @@ StructNode Parser::parse_struct() {
         if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
             break;
         }
+        if (reject_dimension()) {
+            continue;
+        }
         auto error_count_before = errors_.error_count();
         // Struct fields: name: type (no let/var modifiers)
         auto field_loc  = peek().location;
@@ -569,6 +572,8 @@ TraitNode Parser::parse_trait() {
             errors_.error(peek().location,
                           "func declarations are not allowed in trait bodies; use a top-level func instead");
             parse_func(false);  // consume to avoid cascading errors
+        } else if (at_dimension()) {
+            node.dimensions.push_back(parse_dimension());
         } else {
             node.fields.push_back(parse_field());
         }
@@ -609,6 +614,7 @@ RelationNode Parser::parse_relation(bool is_pub) {
             parse_relation_end(node, node.from, "from", seen_from);
         } else if (check(TokenType::TO)) {
             parse_relation_end(node, node.to, "to", seen_to);
+        } else if (reject_dimension()) {
         } else {
             const auto location = peek().location;
             auto field          = parse_field();
@@ -791,6 +797,33 @@ std::optional<FieldRange> Parser::parse_field_range() {
     }
     consume(TokenType::RPAREN, "expected ')' after the range bounds");
     return range;
+}
+
+bool Parser::at_dimension() const {
+    return check(TokenType::IDENTIFIER) && peek().value == "dim" && peek_next().type == TokenType::IDENTIFIER &&
+           current_ + 2 < tokens_.size() && tokens_[current_ + 2].type == TokenType::COLON;
+}
+
+DimensionNode Parser::parse_dimension() {
+    DimensionNode dimension;
+    dimension.location = advance().location;
+    dimension.name     = advance().value;
+    consume(TokenType::COLON, "expected ':'");
+    dimension.type = parse_type_ref();
+    if (check(TokenType::IN)) {
+        dimension.range = parse_field_range();
+    }
+    expect_newline();
+    return dimension;
+}
+
+bool Parser::reject_dimension() {
+    if (!at_dimension()) {
+        return false;
+    }
+    errors_.error(peek().location, "`dim` is allowed only in a trait body");
+    synchronize();
+    return true;
 }
 
 namespace {
@@ -2019,7 +2052,9 @@ ReduceClause Parser::parse_reduce_clause() {
     advance();  // consume 'reduce'
     if (check(TokenType::IDENTIFIER) && peek().value == "per") {
         clause.per_location = advance().location;
-        clause.per_binding  = consume(TokenType::IDENTIFIER, "expected binding name after 'per'").value;
+        clause.per_binding  = match(TokenType::SELF)
+                                  ? std::string("self")
+                                  : consume(TokenType::IDENTIFIER, "expected binding name after 'per'").value;
     }
     consume(TokenType::COLON, "expected ':'");
     expect_newline();
@@ -2327,6 +2362,9 @@ EventNode Parser::parse_event(bool is_pub, bool is_external) {
         if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
             break;
         }
+        if (reject_dimension()) {
+            continue;
+        }
         auto error_count_before = errors_.error_count();
         auto field_loc          = peek().location;
         if (is_event_field_modifier_token(peek().type)) {
@@ -2545,6 +2583,9 @@ StateVariantNode Parser::parse_state_variant() {
         skip_newlines();
         if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
             break;
+        }
+        if (reject_dimension()) {
+            continue;
         }
         if (!is_event_field_modifier_token(peek().type)) {
             errors_.error(peek().location, "a state variant body can contain only field declarations");
@@ -3064,6 +3105,13 @@ LoadStmt Parser::parse_load_stmt() {
     return load;
 }
 
+// The identifier or `self` an assignment target starts with.
+std::string Parser::parse_assignment_root() {
+    const bool on_self = check(TokenType::SELF);
+    auto name          = advance().value;
+    return on_self ? std::string("self") : name;
+}
+
 bool Parser::at_assignment_operator() const {
     return check(TokenType::ASSIGN) || check(TokenType::PLUS_ASSIGN) || check(TokenType::MINUS_ASSIGN) ||
            check(TokenType::STAR_ASSIGN) || check(TokenType::SLASH_ASSIGN);
@@ -3079,9 +3127,9 @@ std::unique_ptr<StmtNode> Parser::parse_assignment(VarAssign assign) {
 
 std::unique_ptr<StmtNode> Parser::parse_assign_or_expr_stmt() {
     auto loc = peek().location;
-    if (check(TokenType::IDENTIFIER)) {
+    if (check(TokenType::IDENTIFIER) || (check(TokenType::SELF) && peek_next().type == TokenType::LBRACKET)) {
         auto saved_pos = current_;
-        auto name      = advance().value;
+        auto name      = parse_assignment_root();
         std::vector<std::string> path;
         // A relation row's `.from`/`.to` lex as keywords.
         while (check(TokenType::DOT) && (peek_next().type == TokenType::IDENTIFIER ||
@@ -3415,30 +3463,62 @@ bool Parser::at_query_filter_call() const {
     return end < tokens_.size() && tokens_[end].type == TokenType::LPAREN;
 }
 
+bool Parser::at_bracketed_name() const {
+    auto index = current_ + 1;
+    while (index + 1 < tokens_.size() && tokens_[index].type == TokenType::IDENTIFIER) {
+        if (tokens_[index + 1].type == TokenType::RBRACKET) {
+            return true;
+        }
+        if (tokens_[index + 1].type != TokenType::DOT) {
+            return false;
+        }
+        index += 2;
+    }
+    return false;
+}
+
+void Parser::parse_cell_keys(TraitAccessExpr& access) {
+    const auto location = peek().location;
+    advance();  // '['
+    access.cell = true;
+    if (check(TokenType::RBRACKET)) {
+        errors_.error(location, "a cell access needs one value per dimension");
+    }
+    while (!check(TokenType::RBRACKET) && !check(TokenType::NEWLINE) && !check(TokenType::EOF_TOKEN)) {
+        access.cell_keys.push_back(parse_expression());
+        if (!match(TokenType::COMMA)) {
+            break;
+        }
+    }
+    consume(TokenType::RBRACKET, "expected ']' after the cell's dimension values");
+}
+
 std::unique_ptr<ExprNode> Parser::parse_trait_access(std::unique_ptr<ExprNode> object) {
     const auto location = peek().location;
-    const auto end      = matching_bracket_end(current_);
-    advance();  // '['
+    if (auto* inner = std::get_if<TraitAccessExpr>(&object->expr); inner != nullptr && !inner->cell) {
+        parse_cell_keys(*inner);
+        return object;
+    }
     TraitAccessExpr access;
     access.object   = std::move(object);
     access.location = location;
-    if (!check(TokenType::NOT) && !check(TokenType::RBRACKET)) {
-        access.trait_name = parse_dotted_name();
+    // `T[k...]`: the short form of a single trait's cell; a lone name is decided by semantic analysis.
+    if (!at_bracketed_name()) {
+        parse_cell_keys(access);
+        return std::make_unique<ExprNode>(ExprNode::Variant{std::move(access)}, location);
     }
-    if (access.trait_name.empty() || !check(TokenType::RBRACKET)) {
-        errors_.error(location, "a trait access takes exactly one trait name");
-        current_ = std::min(end, tokens_.size() - 1);
-    } else {
-        advance();  // ']'
-    }
+    advance();  // '['
+    access.trait_name = parse_dotted_name();
+    advance();  // ']'
     return std::make_unique<ExprNode>(ExprNode::Variant{std::move(access)}, location);
 }
 
 std::unique_ptr<ExprNode> Parser::parse_postfix_expr() {
     auto expression           = parse_primary_expr();
     const auto takes_brackets = [](const ExprNode& node) {
+        const auto* access = std::get_if<TraitAccessExpr>(&node.expr);
         return std::holds_alternative<IdentExpr>(node.expr) || std::holds_alternative<MemberExpr>(node.expr) ||
-               std::holds_alternative<SelfExpr>(node.expr);
+               std::holds_alternative<SelfExpr>(node.expr) || (access != nullptr && !access->cell);
     };
     while (check(TokenType::DOT) || check(TokenType::LPAREN) ||
            (check(TokenType::LBRACKET) && takes_brackets(*expression))) {

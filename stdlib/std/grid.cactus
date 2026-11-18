@@ -1,0 +1,16 @@
+module std.grid
+
+use std.math as math
+
+# ── Cells of a grid ──────────────────────────────────────────────────────────
+# A dimensioned trait keys its cells by `int` values. These two functions turn
+# a coordinate into a cell index and back, for cells of size `step` counted
+# from `origin`.
+
+# The index of the cell that holds `coordinate`.
+pub func cell(coordinate: float, origin: float, step: float) int:
+    return math.floor((coordinate - origin) / step)
+
+# The coordinate of the centre of cell `index`.
+pub func center(index: int, origin: float, step: float) float:
+    return origin + (index + 0.5) * step

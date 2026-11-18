@@ -1928,6 +1928,106 @@ team_score_reduce_runtime.cactus fixtures team_score_reduce_runtime.TeamScore/on
     named_writes:
     named_requirements:
     iteration_order: free
+trait_dimension_lifetime.cactus fixtures trait_dimension_lifetime.Echo/on std.core.tick
+    reads: trait_dimension_lifetime.Board
+    read_fields: trait_dimension_lifetime.Board{echo,mark}
+    write_fields: trait_dimension_lifetime.Board{echo}
+    write_kinds: trait_dimension_lifetime.Board.echo=1/0
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+trait_dimension_lifetime.cactus fixtures trait_dimension_lifetime.KeepAlert/on std.core.tick
+    reads: trait_dimension_lifetime.Gauge
+    read_fields: trait_dimension_lifetime.Gauge{level}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: creation
+trait_dimension_lifetime.cactus fixtures trait_dimension_lifetime.KeepMarked/on std.core.tick
+    reads: trait_dimension_lifetime.Board
+    read_fields: trait_dimension_lifetime.Board{mark}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: creation
+trait_dimension_lifetime.cactus fixtures trait_dimension_lifetime.Raise/on std.core.tick
+    reads: trait_dimension_lifetime.Gauge trait_dimension_lifetime.Raising
+    read_fields: trait_dimension_lifetime.Gauge{level} trait_dimension_lifetime.Raising{times}
+    write_fields: trait_dimension_lifetime.Gauge{level} trait_dimension_lifetime.Raising{times}
+    write_kinds: trait_dimension_lifetime.Gauge.level=1/0 trait_dimension_lifetime.Raising.times=3/0
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+trait_dimension_lifetime.cactus fixtures trait_dimension_lifetime.Warm/on std.core.tick
+    reads: trait_dimension_lifetime.Heat
+    read_fields: trait_dimension_lifetime.Heat{value}
+    write_fields: trait_dimension_lifetime.Heat{value}
+    write_kinds: trait_dimension_lifetime.Heat.value=3/0
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+trait_dimensions.cactus examples trait_dimensions.Build/on std.core.tick
+    reads: trait_dimensions.Layout trait_dimensions.Room
+    read_fields: trait_dimensions.Layout{built} trait_dimensions.Room{wall}
+    write_fields: trait_dimensions.Layout{built} trait_dimensions.Room{wall}
+    write_kinds: trait_dimensions.Layout.built=3/0 trait_dimensions.Room.wall=2/2
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+trait_dimensions.cactus examples trait_dimensions.Notice/on std.core.tick
+    reads: trait_dimensions.Guard trait_dimensions.Room
+    read_fields: trait_dimensions.Guard{pos} trait_dimensions.Room{gas}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: creation
+trait_dimensions.cactus examples trait_dimensions.Restock/on std.core.tick
+    reads: trait_dimensions.Stock
+    read_fields: trait_dimensions.Stock{count}
+    write_fields: trait_dimensions.Stock{count}
+    write_kinds: trait_dimensions.Stock.count=3/0
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+trait_dimensions.cactus examples trait_dimensions.Snap/on std.core.tick
+    reads: trait_dimensions.Room
+    read_fields: trait_dimensions.Room{gas}
+    write_fields: trait_dimensions.Room{gas}
+    write_kinds: trait_dimensions.Room.gas=3/0
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+trait_dimensions.cactus examples trait_dimensions.Spread/on std.core.tick
+    reads: trait_dimensions.Room
+    read_fields: trait_dimensions.Room{gas,wall}
+    write_fields: trait_dimensions.Room{gas}
+    write_kinds: trait_dimensions.Room.gas=3/0
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
 trait_parameters.cactus stdlib-fixtures trait_parameters.GlowInline/on std.core.tick
     reads: trait_parameters.Glow trait_parameters.Recorder
     read_fields: trait_parameters.Glow{level} trait_parameters.Recorder{glow_inline}

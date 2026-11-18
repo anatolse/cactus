@@ -117,6 +117,9 @@ private:
     // Sub-parsers
     FieldNode parse_field();
     std::optional<FieldRange> parse_field_range();
+    [[nodiscard]] bool at_dimension() const;
+    DimensionNode parse_dimension();
+    bool reject_dimension();
     FieldModifiers parse_field_modifiers();
     EventHandlerNode parse_event_handler();
     ExternHandlerNode parse_extern_handler();
@@ -223,6 +226,9 @@ private:
     [[nodiscard]] std::size_t matching_bracket_end(std::size_t index) const;
     [[nodiscard]] bool at_query_filter_call() const;
     std::unique_ptr<ExprNode> parse_trait_access(std::unique_ptr<ExprNode> object);
+    [[nodiscard]] bool at_bracketed_name() const;
+    std::string parse_assignment_root();
+    void parse_cell_keys(TraitAccessExpr& access);
     [[nodiscard]] bool at_assignment_operator() const;
     std::unique_ptr<StmtNode> parse_assignment(VarAssign assign);
     std::unique_ptr<ExprNode> parse_primary_expr();

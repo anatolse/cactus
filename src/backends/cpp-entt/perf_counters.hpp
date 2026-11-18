@@ -21,6 +21,7 @@ struct PerfCounters {
     std::uint64_t pass_rows        = 0;  // domain rows a render pass's draw loop visited
     std::uint64_t pass_quads       = 0;  // quads a render pass drew
     std::uint64_t repeat_passes    = 0;  // passes run by rules with `repeat:`
+    std::uint64_t cell_rows        = 0;  // left cells a rule over cells visited
 
     PerfCounters& operator+=(const PerfCounters& other) noexcept {
         commands += other.commands;
@@ -36,6 +37,7 @@ struct PerfCounters {
         pass_rows += other.pass_rows;
         pass_quads += other.pass_quads;
         repeat_passes += other.repeat_passes;
+        cell_rows += other.cell_rows;
         return *this;
     }
 };
@@ -102,6 +104,10 @@ inline void count_pass_quad() noexcept {
     ++counting_target().pass_quads;
 }
 
+inline void count_cell_row() noexcept {
+    ++counting_target().cell_rows;
+}
+
 inline void count_repeat_pass() noexcept {
     ++counting_target().repeat_passes;
 }
@@ -116,6 +122,7 @@ inline void count_lost_link() noexcept {}
 inline void count_keep_run() noexcept {}
 inline void count_commit_round() noexcept {}
 inline void count_pass_row() noexcept {}
+inline void count_cell_row() noexcept {}
 inline void count_pass_quad() noexcept {}
 inline void count_repeat_pass() noexcept {}
 #endif

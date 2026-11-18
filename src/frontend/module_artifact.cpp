@@ -153,6 +153,7 @@ void ModuleArtifact::write_field(std::ostream& out, const ResolvedField& field) 
     write_bool(out, field.has_default);
     write_bool(out, field.is_synthesized);
     write_bool(out, field.is_completion_only);
+    write_bool(out, field.is_cell);
     write_type_info(out, field.type);
     write_bool(out, field.source_binding.has_value());
     if (field.source_binding.has_value()) {
@@ -197,6 +198,16 @@ void ModuleArtifact::write_traits(std::ostream& out,
         write_u32(out, static_cast<uint32_t>(trait.fields.size()));
         for (const auto& field : trait.fields) {
             write_field(out, field);
+        }
+        write_u32(out, static_cast<uint32_t>(trait.dimensions.size()));
+        for (const auto& dimension : trait.dimensions) {
+            write_str(out, dimension.name);
+            write_type_info(out, dimension.type);
+            write_bool(out, dimension.range.has_value());
+            if (dimension.range.has_value()) {
+                write_expression(out, *dimension.range->lo);
+                write_expression(out, *dimension.range->hi);
+            }
         }
     }
 }
@@ -1067,6 +1078,7 @@ ResolvedField ModuleArtifact::read_field(std::istream& in) {
     field.has_default        = read_bool(in);
     field.is_synthesized     = read_bool(in);
     field.is_completion_only = read_bool(in);
+    field.is_cell            = read_bool(in);
     field.type               = read_type_info(in);
     if (read_bool(in)) {
         PhaseFieldSource binding;
@@ -1109,6 +1121,19 @@ std::unordered_map<std::string, ResolvedTrait> ModuleArtifact::read_traits(std::
         trait.fields.reserve(field_count);
         for (uint32_t j = 0; j < field_count; ++j) {
             trait.fields.push_back(read_field(in));
+        }
+        const uint32_t dimension_count = read_u32(in);
+        for (uint32_t j = 0; j < dimension_count; ++j) {
+            ResolvedDimension dimension;
+            dimension.name = read_str(in);
+            dimension.type = read_type_info(in);
+            if (read_bool(in)) {
+                ResolvedFieldRange range;
+                range.lo        = read_expression(in);
+                range.hi        = read_expression(in);
+                dimension.range = std::move(range);
+            }
+            trait.dimensions.push_back(std::move(dimension));
         }
         traits[trait.name] = std::move(trait);
     }
@@ -2249,6 +2274,10 @@ void ModuleArtifact::write_expression(std::ostream& out, const ExprNode& express
             write_optional_symbol_id(out, node.resolved_entity_id);
             write_bool(out, node.pair_binding_index.has_value());
             write_u64(out, static_cast<uint64_t>(node.pair_binding_index.value_or(0)));
+            write_bool(out, node.cell);
+            write_bool(out, node.short_form);
+            write_bool(out, node.carrier_self);
+            expressions(node.cell_keys);
         } else if constexpr (std::is_same_v<Node, MatchExpr>) {
             write_expression(out, *node.subject);
             write_u32(out, static_cast<uint32_t>(node.arms.size()));
@@ -2379,6 +2408,10 @@ std::unique_ptr<ExprNode> ModuleArtifact::read_expression(std::istream& in) {
             if (has_binding) {
                 node.pair_binding_index = static_cast<std::size_t>(binding);
             }
+            node.cell       = read_bool(in);
+            node.short_form   = read_bool(in);
+            node.carrier_self = read_bool(in);
+            node.cell_keys    = expressions();
             return wrap(std::move(node));
         }
         default:

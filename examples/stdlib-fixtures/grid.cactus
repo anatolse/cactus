@@ -1,0 +1,28 @@
+module grid
+
+# Samples std.grid from a rule, so the headless test can compare the results
+# with the formulas: the cell that holds a coordinate and a cell's centre.
+
+use std.core
+use std.grid as grid
+
+pub trait Samples:
+    var inside: int = 0
+    var negative: int = 0
+    var edge: int = 0
+    var center: float = 0.0
+    var back: int = 0
+
+pub entity Probe:
+    Samples
+
+rule Sample:
+    each:
+        Samples as s
+
+    on tick:
+        s.inside = grid.cell(1.3, 0.0, 0.5)
+        s.negative = grid.cell(-0.2, 0.0, 0.5)
+        s.edge = grid.cell(3.0, 1.0, 0.5)
+        s.center = grid.center(2, 0.0, 0.5)
+        s.back = grid.cell(grid.center(-7, 10.0, 0.25), 10.0, 0.25)

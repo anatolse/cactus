@@ -1,8 +1,11 @@
 #include "backends/cpp-entt/component_emitter.hpp"
 
+#include "backends/cpp-entt/cell_codegen.hpp"
+
 #include "frontend/symbol_identity.hpp"
 
 #include <algorithm>
+#include <iterator>
 #include <sstream>
 #include <vector>
 
@@ -29,7 +32,16 @@ std::string EnttComponentEmitter::emit_component(const ResolvedTrait& trait, con
     }
 
     out << "struct " << cpp_name << " {\n";
-    out << emit_field_lines(trait.module_name, trait.name, trait.fields, program);
+    if (trait.is_dimensioned()) {
+        std::vector<ResolvedField> carrier_fields;
+        std::ranges::copy_if(trait.fields, std::back_inserter(carrier_fields), [&trait](const ResolvedField& field) {
+            return !trait.is_cell_field(field);
+        });
+        out << emit_field_lines(trait.module_name, trait.name, carrier_fields, program);
+        out << cell_codegen::emit_table_members(trait, program);
+    } else {
+        out << emit_field_lines(trait.module_name, trait.name, trait.fields, program);
+    }
     out << "};\n";
     return namespace_block(ns, out.str());
 }

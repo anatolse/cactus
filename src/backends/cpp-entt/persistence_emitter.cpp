@@ -222,6 +222,9 @@ std::vector<FieldModel> field_models(const std::vector<ResolvedField>& fields,
     std::vector<FieldModel> models;
     models.reserve(fields.size());
     for (const auto& field : fields) {
+        if (field.is_cell) {
+            continue;
+        }
         models.push_back(FieldModel{.name    = field.name,
                                     .type    = intern_value_type(value_types, describe_persistence_value(field.type)),
                                     .persist = field.is_persist});
@@ -1045,7 +1048,9 @@ std::vector<const ResolvedField*> persisting_fields(const DecoratedProgram& prog
                                                     std::optional<bool> persist) {
     std::vector<const ResolvedField*> kept;
     for (const auto& field : fields) {
-        if (field_type_persists(program, field.type) && (!persist.has_value() || field.is_persist == *persist)) {
+        // A save records no cells: a restored carrier's cells come back at their defaults.
+        if (!field.is_cell && field_type_persists(program, field.type) &&
+            (!persist.has_value() || field.is_persist == *persist)) {
             kept.push_back(&field);
         }
     }

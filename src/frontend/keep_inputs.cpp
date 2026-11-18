@@ -94,7 +94,11 @@ std::optional<KeepEvaluation> foreign_read(const ExprNode& expression, const Rel
             return;
         }
         if (const auto* access = std::get_if<TraitAccessExpr>(&node.expr)) {
-            if (access->resolved_entity_id.has_value()) {
+            if (access->short_form) {
+                found = KeepEvaluation{.level    = KeepLevel::Full,
+                                       .reason   = "the single trait read `" + access->trait_name + "[...]`",
+                                       .location = access->location};
+            } else if (access->resolved_entity_id.has_value()) {
                 found = KeepEvaluation{.level    = KeepLevel::Full,
                                        .reason   = "the named entity read `" + access->resolved_entity_id->local_name +
                                                  "[" + access->trait_name + "]`",

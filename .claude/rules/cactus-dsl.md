@@ -98,3 +98,14 @@ exception — see `examples/CLAUDE.md`).
   and `not R(_, b)`, and `add R(a, b)` in its handler. Rank candidates with `order by:` to pick
   the nearest or best first. An event can't claim directly: record it as a trait and claim from
   the phase rule.
+
+### Values per kind or per place
+
+- For a value per item kind, per board square or per place in a room, declare a trait with
+  `dim` lines (`dim item: Item`, `dim x: int in range(0, W)`); its `var` fields hold one value
+  per cell. Read and write cells with `e[T][k].f`, `T[k].f` for a `single` trait, or a rule over
+  cells (`each: T as c`, a `pairs:` rule with `adjacent(a, b)`).
+- Use entities for things that are born, die or receive events. A cell is not an entity: it has
+  no lifecycle, events or commands; its carrier does.
+- Guard a rule over cells with a `where:` condition that is false at the defaults
+  (`c.gas > 0.0`), so it visits only the cells that hold other values.

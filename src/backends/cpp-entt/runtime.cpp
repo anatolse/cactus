@@ -4523,6 +4523,10 @@ std::string describe_range_fault(const RangeFault& fault) {
         case RangeFaultReason::UnresolvedLink:
             return "lost link " + std::string{fault.trait} + "." + std::string{fault.field} +
                    " stayed unresolved after its `on lost` handler";
+        case RangeFaultReason::DimensionTooLarge:
+            return "dimension " + std::string{fault.trait} + "." + std::string{fault.field} + " = range(" +
+                   std::to_string(fault.lo) + ", " + std::to_string(fault.hi) + ") holds more than " +
+                   std::to_string(cactus::runtime::kMaxDimensionValues) + " values";
     }
     std::unreachable();
 }

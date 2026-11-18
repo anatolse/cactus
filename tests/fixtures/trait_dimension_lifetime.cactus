@@ -1,0 +1,159 @@
+module trait_dimension_lifetime
+
+# Cells live and die with their carrier's trait: fresh cells hold their
+# defaults, `add` replaces the trait whole, a range over the limit makes no
+# table, and an empty range has no cells.
+
+use std.core
+
+trait Board:
+    let width: int = 4
+    dim x: int in range(0, width)
+    var mark: int = 0
+    var echo: int = 0
+
+trait Fill
+
+trait Marked
+
+trait Alert
+
+# Heat moves only between cells of one carrier, and never inside a frozen one.
+trait Heat:
+    dim i: int in range(0, 4)
+    var value: float = 0.0
+
+trait Frozen
+
+trait Born:
+    var times: int = 0
+
+single trait Gauge:
+    dim k: int in range(0, 2)
+    var level: int = 0
+
+trait Raising:
+    var times: int = 1
+
+# A save needs a persistent trait; a save never records cells.
+trait Saved:
+    persist var visits: int = 0
+
+trait Renew
+
+template Slab(width: int):
+    Board:
+        width = width
+
+entity Small:
+    Board
+    Fill
+    Saved
+
+entity Wide from Slab(width = 8)
+
+# Marked and replaced in the same activation: the replacement wins at the commit.
+entity Worn:
+    Board
+    Fill
+    Renew
+
+entity Empty from Slab(width = 0)
+
+entity Stove:
+    Heat
+    Born
+
+entity Icebox:
+    Heat
+    Frozen
+
+entity Meter:
+    Gauge
+    Raising
+
+entity Huge from Slab(width = 2000000)
+
+rule Mark:
+    each: Board, Fill
+
+    on tick:
+        self[Board][1].mark = 7
+        self[Board][self[Board].width - 1].mark = 5
+        self[Board][-1].mark = 9
+
+rule Again:
+    each: Board, Renew
+
+    on tick:
+        add Board:
+            width = 6
+        remove Renew
+
+# A pair of cells bounded by equalities: each cell echoes the mark of the next one.
+rule Echo:
+    pairs:
+        here:
+            Board
+        there:
+            Board
+    after:
+        Mark
+    where:
+        there.carrier == here.carrier
+        there.x == here.x + 1
+    reduce per here:
+        next = sum(there.mark)
+
+    on tick:
+        here.echo += next
+
+rule Warm:
+    pairs:
+        here:
+            Heat
+            without: Frozen
+        there:
+            Heat
+    where:
+        adjacent(here, there)
+    reduce per here:
+        net = sum((there.value - here.value) * 0.5)
+
+    on tick:
+        here.value += net
+
+rule Raise:
+    each: Raising as r, Gauge
+    where:
+        r.times > 0
+
+    on tick:
+        Gauge[0].level += 1
+        r.times -= 1
+
+group Keeps:
+    phase: tick
+
+# Reads only its own carrier's cells: re-evaluated for the carriers a write touched.
+rule KeepMarked:
+    each: Board
+    group: Keeps
+    where:
+        self[Board][1].mark > 0
+    keep Marked
+
+# Reads a single trait's cells: evaluated in full, and skipped while nothing writes them.
+rule KeepAlert:
+    each: Board, Fill
+    group: Keeps
+    where:
+        Gauge[0].level > 0
+    keep Alert
+
+# A lifecycle trigger fires for the carrier, never per cell.
+rule Arrive:
+    each: Born as b
+
+    on added Heat:
+        b.times += 1

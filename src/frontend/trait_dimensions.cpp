@@ -208,6 +208,7 @@ bool is_cell_value_type(const TypeInfo& type) {
         case TypeKind::Bool:
         case TypeKind::Int:
         case TypeKind::Float:
+        case TypeKind::Duration:
         case TypeKind::Enum:
         case TypeKind::Vec2:
         case TypeKind::Vec3:

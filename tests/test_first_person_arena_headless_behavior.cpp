@@ -524,7 +524,7 @@ TEST_CASE("first-person arena headless: bullets follow aim, serialize contacts, 
     drive_frames(registry, 28);
     REQUIRE(registry.valid(dying_enemy));
     const auto& halfway = registry.get<cactus_gen::main::Enemy>(dying_enemy);
-    CHECK(registry.get<cactus_gen::main::EnemyLife::Dying>(dying_enemy).elapsed == Catch::Approx(0.5F).margin(0.08F));
+    CHECK(cactus::seconds(registry.get<cactus_gen::main::EnemyLife::Dying>(dying_enemy).elapsed) == Catch::Approx(0.5F).margin(0.08F));
     const auto alpha = registry.get<cactus_gen::stdlib::render::models::ModelRenderer>(dying_visual).color.a;
     CHECK(alpha >= 100);
     CHECK(alpha <= 155);
@@ -682,10 +682,10 @@ TEST_CASE("first-person arena headless: a dying enemy hit again keeps its death 
     }
     REQUIRE(registry.all_of<cactus_gen::main::EnemyLife::Dying>(enemy));
     drive_frames(registry, 10);
-    const float elapsed   = registry.get<cactus_gen::main::EnemyLife::Dying>(enemy).elapsed;
+    const auto elapsed    = registry.get<cactus_gen::main::EnemyLife::Dying>(enemy).elapsed;
     const auto visual     = enemy_visual_of(registry, enemy);
     const float clip_time = registry.get<cactus_gen::stdlib::render::models::ModelAnimator>(visual).time;
-    REQUIRE(elapsed > 0.1F);
+    REQUIRE(cactus::seconds(elapsed) > 0.1F);
 
     // Delivered straight to the enemy, as a bullet's hit would be.
     auto& activation  = cactus::runtime::entt_backend::generated_scheduler_state().activation;

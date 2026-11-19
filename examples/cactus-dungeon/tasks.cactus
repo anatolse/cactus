@@ -37,7 +37,7 @@ pub relation Heading:
 trait Placed
 
 trait Restless:
-    var time: float = 0.0
+    var time: duration = 0s
     var draws: int = 0
 
 pub relation Claim:
@@ -317,19 +317,19 @@ rule GrowRestless:
     when: session.Game[session.Session].mode == session.SessionMode.Playing
 
     on fixed_tick:
-        idle.time += fixed_tick.dt
+        idle.time += fixed_tick.delta
 
 rule RestAfterWalking:
     each: Restless as idle
 
     on Advance:
-        idle.time = 0.0
+        idle.time = 0s
 
 rule RestAfterWork:
     each: Restless as idle
 
     on units.WorkRequested:
-        idle.time = 0.0
+        idle.time = 0s
 
 rule WanderTargets:
     pairs:
@@ -357,12 +357,12 @@ rule ChooseWander:
         tv.WorldTransform as pose
 
     on Wander as request:
-        if idle.time < 2.0:
+        if idle.time < 2s:
             return
         idle.draws += 1
         if not random.chance(random.seeded(idle.draws * 7919 + math.floor(pose.position.x) * 31 + math.floor(pose.position.z)), 0.4):
             return
-        idle.time = 0.0
+        idle.time = 0s
         emit Step to self:
             tile = request.tile
 

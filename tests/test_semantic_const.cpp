@@ -581,6 +581,16 @@ std::string render_pass_program(const std::string& constants,
 
 }  // namespace
 
+TEST_CASE("Render passes: a stage handler can't read a duration", "[semantic][render-passes][dsl-duration]") {
+    auto program              = render_pass_program("", "(s.age / s.age)");
+    const std::string sprite = "trait Sprite:\n";
+    program.replace(program.find(sprite), sprite.size(), sprite + "    var age: duration = 0s\n");
+    auto analysis = analyze(program, render_pass_imports());
+    INFO(describe(analysis));
+    CHECK(analysis.has("a render-pass stage handler can't use a `duration`"));
+    CHECK(analysis.has("seconds("));
+}
+
 TEST_CASE("Render passes: a vertex handler can't run over cells", "[semantic][render-passes][trait-dimensions]") {
     auto program = render_pass_program("", "1.0");
     const std::string sprite = "trait Sprite:\n";

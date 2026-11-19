@@ -1085,25 +1085,25 @@ TEST_CASE("Dungeon knights travel to food and their beds", "[cactus-dungeon][kni
     auto& food  = world.registry.get<knights::FarmStock>(world.tile(6, 6));
     food.food   = 3;
     world.registry.patch<knights::FarmStock>(world.tile(6, 6));
-    food.growth = -1000.0F;
+    food.growth = cactus::duration_from_seconds(-1000.0F);
     world.registry.patch<knights::FarmStock>(world.tile(6, 6));
     backend::generated_process_root_event(world.registry, knights::RecruitRequestedEvent{}, world.human());
     world.frame(12);
     REQUIRE(world.registry.view<knights::Knight>().size() == 1);
     const auto knight = *world.registry.view<knights::Knight>().begin();
     auto& needs       = world.registry.get<knights::Knight>(knight);
-    needs.hunger      = 6.0F;
+    needs.hunger      = cactus::duration_from_seconds(6.0F);
     world.registry.patch<knights::Knight>(knight);
     REQUIRE(food.food == 2);
-    float hungry = needs.hunger;
+    auto hungry = needs.hunger;
     for (int i = 0; i < 360 && food.food == 2; ++i) {
         hungry = needs.hunger;
         world.frame();
     }
     REQUIRE(food.food == 1);
-    REQUIRE(needs.hunger < hungry - 4.9F);
+    REQUIRE(needs.hunger < hungry - cactus::duration_from_seconds(4.9F));
     REQUIRE(backend::relation_store<tasks::Located>(world.registry).contains(knight, world.tile(6, 6)));
-    needs.fatigue                                  = 11.0F;
+    needs.fatigue                                  = cactus::duration_from_seconds(11.0F);
     world.registry.patch<knights::Knight>(knight);
     world.registry.patch<units::Unit>(knight, [&](units::Unit& cactus_value) { cactus_value.health = 200.0F; });
     backend::generated_process_root_event(world.registry, units::DefendRequestedEvent{world.tile(6, 6)}, knight);
@@ -1111,12 +1111,12 @@ TEST_CASE("Dungeon knights travel to food and their beds", "[cactus-dungeon][kni
     REQUIRE(backend::relation_store<tasks::Located>(world.registry).contains(knight, world.tile(6, 6)));
     REQUIRE(world.registry.get<units::Unit>(knight).health == 200.0F);
     backend::generated_process_root_event(world.registry, units::CancelRequestedEvent{}, knight);
-    for (int i = 0; i < 900 && needs.fatigue >= 10.0F; ++i) {
-        needs.hunger = 0.0F;
+    for (int i = 0; i < 900 && needs.fatigue >= cactus::duration_from_seconds(10.0F); ++i) {
+        needs.hunger = cactus::Duration{};
         world.registry.patch<knights::Knight>(knight);
         world.frame();
     }
-    REQUIRE(needs.fatigue < 10.0F);
+    REQUIRE(needs.fatigue < cactus::duration_from_seconds(10.0F));
     REQUIRE(backend::relation_store<tasks::Located>(world.registry).contains(knight, world.tile(2, 2)));
     REQUIRE(world.registry.get<units::Unit>(knight).health > 200.0F);
     world.registry.patch<units::Unit>(knight, [&](units::Unit& cactus_value) { cactus_value.health = 0.0F; });
@@ -1948,10 +1948,10 @@ TEST_CASE("Dungeon pause freezes game time, workers and AI", "[cactus-dungeon][f
     const auto experience = world.registry.get<units::Unit>(worker).xp;
     const auto thought    = world.registry.get<ai::Brain>(enemy).elapsed;
     auto& state        = world.registry.get<session::Session>(cactus_gen::detail::generated_named_slots().session.Game);
-    const auto seconds = state.seconds;
+    const auto played  = state.played;
     world.frame(120);
     REQUIRE(state.mode == session::SessionMode::Paused);
-    REQUIRE(state.seconds == seconds);
+    REQUIRE(state.played == played);
     REQUIRE(world.registry.get<Transform>(worker).position.x == position.x);
     REQUIRE(world.registry.get<Transform>(worker).position.z == position.z);
     REQUIRE(world.registry.get<tasks::Work>(world.tile(7, 4)).progress == progress);
@@ -1960,7 +1960,7 @@ TEST_CASE("Dungeon pause freezes game time, workers and AI", "[cactus-dungeon][f
     backend::generated_process_root_event(world.registry, hud::PauseRequestedEvent{});
     world.frame(8);
     REQUIRE(state.mode == session::SessionMode::Playing);
-    REQUIRE(state.seconds > seconds);
+    REQUIRE(state.played > played);
 }
 
 TEST_CASE("Dungeon save restores gameplay facts and rebuilds its views",
@@ -1994,15 +1994,15 @@ TEST_CASE("Dungeon save restores gameplay facts and rebuilds its views",
     world.registry.patch<game::Player>(world.human(), [&](game::Player& cactus_value) { cactus_value.gold = 4321; });
     world.registry.patch<game::Heart>(world.tile(4, 4), [&](game::Heart& cactus_value) { cactus_value.health = 1777.0F; });
     const auto enemy                                         = cactus_gen::detail::generated_named_slots().world.Enemy;
-    world.registry.emplace<ai::Brain>(enemy).elapsed         = 0.3F;
+    world.registry.emplace<ai::Brain>(enemy).elapsed         = cactus::duration_from_seconds(0.3F);
     auto& explored                                           = backend::relation_store<hud::Explored>(world.registry);
     explored.add(world.human(), world.tile(kEnemy + 1, kEnemy + 1), {});
     auto& needs                                    = world.registry.get<cactus_gen::knights::Knight>(knight);
-    needs.hunger                                   = 2.0F;
+    needs.hunger                                   = cactus::duration_from_seconds(2.0F);
     world.registry.patch<cactus_gen::knights::Knight>(knight);
-    needs.fatigue                                  = 3.0F;
+    needs.fatigue                                  = cactus::duration_from_seconds(3.0F);
     world.registry.patch<cactus_gen::knights::Knight>(knight);
-    needs.training                                 = 0.4F;
+    needs.training                                 = cactus::duration_from_seconds(0.4F);
     world.registry.patch<cactus_gen::knights::Knight>(knight);
     needs.resting                                  = true;
     world.registry.patch<cactus_gen::knights::Knight>(knight);
@@ -2011,10 +2011,10 @@ TEST_CASE("Dungeon save restores gameplay facts and rebuilds its views",
     auto& farm  = world.registry.get<cactus_gen::knights::FarmStock>(world.tile(3, 4));
     farm.food   = 3;
     world.registry.patch<cactus_gen::knights::FarmStock>(world.tile(3, 4));
-    farm.growth = 0.2F;
+    farm.growth = cactus::duration_from_seconds(0.2F);
     world.registry.patch<cactus_gen::knights::FarmStock>(world.tile(3, 4));
-    const auto seconds =
-        world.registry.get<session::Session>(cactus_gen::detail::generated_named_slots().session.Game).seconds;
+    const auto played =
+        world.registry.get<session::Session>(cactus_gen::detail::generated_named_slots().session.Game).played;
     const auto explored_count = explored.size();
     const auto kinds          = world.kinds();
     const auto progress       = world.registry.get<tasks::Work>(world.tile(7, 4)).progress;
@@ -2035,8 +2035,8 @@ TEST_CASE("Dungeon save restores gameplay facts and rebuilds its views",
     world.frame(8);
     REQUIRE(world.registry.get<session::Session>(cactus_gen::detail::generated_named_slots().session.Game).mode ==
             session::SessionMode::Paused);
-    REQUIRE(world.registry.get<session::Session>(cactus_gen::detail::generated_named_slots().session.Game).seconds ==
-            seconds);
+    REQUIRE(world.registry.get<session::Session>(cactus_gen::detail::generated_named_slots().session.Game).played ==
+            played);
     REQUIRE(world.kinds() == kinds);
     REQUIRE(world.registry.get<game::Player>(world.human()).gold == 4321);
     REQUIRE(world.registry.get<game::Heart>(world.tile(4, 4)).health == 1777.0F);
@@ -2059,9 +2059,9 @@ TEST_CASE("Dungeon save restores gameplay facts and rebuilds its views",
     REQUIRE(restored_worker);
     bool restored_knight = false;
     for (const auto [entity, needs, unit] : world.registry.view<cactus_gen::knights::Knight, units::Unit>().each()) {
-        REQUIRE(needs.hunger == 2.0F);
-        REQUIRE(needs.fatigue == 3.0F);
-        REQUIRE(needs.training == 0.4F);
+        REQUIRE(needs.hunger == cactus::duration_from_seconds(2.0F));
+        REQUIRE(needs.fatigue == cactus::duration_from_seconds(3.0F));
+        REQUIRE(needs.training == cactus::duration_from_seconds(0.4F));
         REQUIRE(needs.resting);
         REQUIRE(unit.xp == 654);
         REQUIRE(unit.health == 171.0F);
@@ -2071,7 +2071,7 @@ TEST_CASE("Dungeon save restores gameplay facts and rebuilds its views",
     }
     REQUIRE(restored_knight);
     REQUIRE(world.registry.get<cactus_gen::knights::FarmStock>(world.tile(3, 4)).growth == food.growth);
-    REQUIRE(world.registry.get<ai::Brain>(cactus_gen::detail::generated_named_slots().world.Enemy).elapsed == 0.3F);
+    REQUIRE(world.registry.get<ai::Brain>(cactus_gen::detail::generated_named_slots().world.Enemy).elapsed == cactus::duration_from_seconds(0.3F));
     REQUIRE(world.registry.all_of<ai::Brain>(cactus_gen::detail::generated_named_slots().world.Enemy));
     REQUIRE(world.registry.view<ui::Button>().size() >= 19);
     REQUIRE(world.registry.view<camera::CameraView>().size() == 2);

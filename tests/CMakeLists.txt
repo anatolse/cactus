@@ -379,6 +379,10 @@ add_executable(test_semantic_trait_dimensions test_semantic_trait_dimensions.cpp
 target_link_libraries(test_semantic_trait_dimensions PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticTraitDimensionsTests COMMAND test_semantic_trait_dimensions)
 
+add_executable(test_semantic_duration test_semantic_duration.cpp)
+target_link_libraries(test_semantic_duration PRIVATE cactus_frontend Catch2::Catch2WithMain)
+add_test(NAME SemanticDurationTests COMMAND test_semantic_duration)
+
 add_executable(test_semantic_pair_without test_semantic_pair_without.cpp)
 target_link_libraries(test_semantic_pair_without PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticPairWithoutTests COMMAND test_semantic_pair_without)
@@ -1190,6 +1194,12 @@ cactus_add_headless_behavior_test(test_total_arithmetic_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_total_arithmetic_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_exact_duration_headless_behavior
+    CACTUS_SOURCE examples/exact_duration.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_exact_duration_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_order_by_total_headless_behavior
     CACTUS_SOURCE tests/fixtures/order_by_total_runtime.cactus
     BACKEND cpp-entt
@@ -1699,7 +1709,7 @@ endforeach()
 add_custom_target(test_generated_performance_benchmarks)
 foreach(shape IN ITEMS static_keep union_fold equality_reduce grid_region row_join baseline own_projection
         single_commit plain_commit sweep wide_level reduced_keep required_links keep_chain
-        incremental_keep render_pass dimension_spread)
+        incremental_keep render_pass dimension_spread timers)
     set(perf_target test_perf_${shape}_benchmark)
     set(perf_codegen_flags)
     if(shape STREQUAL "wide_level")

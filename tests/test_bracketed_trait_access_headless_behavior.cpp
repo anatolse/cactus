@@ -61,7 +61,7 @@ TEST_CASE("an imported trait is written through a named entity", "[runtime][trai
 
     drive_frame(registry);
     drive_frame(registry);
-    CHECK(registry.get<Timer>(clock).remaining == 4.0F);
+    CHECK(registry.get<Timer>(clock).remaining == cactus::Duration{4 * cactus::kDurationUnitsPerSecond});
     CHECK(registry.get<Timer>(clock).paused);
 }
 

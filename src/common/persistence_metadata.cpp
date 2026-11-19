@@ -59,6 +59,8 @@ PersistenceValueType describe_persistence_value(const TypeInfo& type) {
             return scalar(PersistenceValueKind::Int, 32);
         case TypeKind::Float:
             return scalar(PersistenceValueKind::Float, 32);
+        case TypeKind::Duration:
+            return scalar(PersistenceValueKind::Duration, 64);
         case TypeKind::String:
             return scalar(PersistenceValueKind::String, 0);
         case TypeKind::Vec2:

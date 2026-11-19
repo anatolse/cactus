@@ -43,13 +43,21 @@ inline void init_and_load(entt::registry& registry) {
     dispatch_load_event(registry);
 }
 
+// Drives a single frame on an already-initialized/loaded registry (unlike
+// drive_one_frame/drive_frames, does not re-run init/load) — for tests that
+// need to interleave other events or state changes between frames.
+inline void drive_frame(entt::registry& registry, float dt = 1.0F / 60.0F) {
+    cactus::runtime::entt_backend::generated_inject_external_event(
+        cactus_gen::stdlib::core::frameEvent{.dt = dt, .delta = cactus::duration_from_seconds(dt)});
+    cactus::runtime::entt_backend::generated_drain_external_events(registry);
+}
+
 // Initializes and loads the project, then drives exactly one frame with the
 // given `dt`. For multi-frame scenarios use drive_frames instead — calling
 // this repeatedly on the same registry would re-run init/load each time.
 inline void drive_one_frame(entt::registry& registry, float dt) {
     init_and_load(registry);
-    cactus::runtime::entt_backend::generated_inject_external_event(cactus_gen::stdlib::core::frameEvent{.dt = dt});
-    cactus::runtime::entt_backend::generated_drain_external_events(registry);
+    drive_frame(registry, dt);
 }
 
 // Initializes and loads the project once, then drives `frame_count` frames
@@ -60,17 +68,8 @@ inline void drive_one_frame(entt::registry& registry, float dt) {
 inline void drive_frames(entt::registry& registry, float dt, int frame_count) {
     init_and_load(registry);
     for (int frame = 0; frame < frame_count; ++frame) {
-        cactus::runtime::entt_backend::generated_inject_external_event(cactus_gen::stdlib::core::frameEvent{.dt = dt});
-        cactus::runtime::entt_backend::generated_drain_external_events(registry);
+        drive_frame(registry, dt);
     }
-}
-
-// Drives a single frame on an already-initialized/loaded registry (unlike
-// drive_one_frame/drive_frames, does not re-run init/load) — for tests that
-// need to interleave other events or state changes between frames.
-inline void drive_frame(entt::registry& registry, float dt = 1.0F / 60.0F) {
-    cactus::runtime::entt_backend::generated_inject_external_event(cactus_gen::stdlib::core::frameEvent{.dt = dt});
-    cactus::runtime::entt_backend::generated_drain_external_events(registry);
 }
 
 // Sets the parallel worker count for one scope, then restores the default.

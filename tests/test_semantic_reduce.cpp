@@ -191,10 +191,10 @@ TEST_CASE("Reduce: a global min or max always needs a default", "[semantic][rule
 TEST_CASE("Reduce: sum, min and max take int or float", "[semantic][rule-reduce]") {
     CHECK(analyze(grouped_rule("team", "        s = sum(player[Member].ready)\n",
                                        "        let x = 1\n"))
-              .has("'int', 'float', 'vec2' or 'vec3'"));
+              .has("'int', 'float', 'duration', 'vec2' or 'vec3'"));
     CHECK(analyze(grouped_rule("team", "        s = min(player[Member].team, default = team)\n",
                                        "        let x = 1\n"))
-              .has("'int' or 'float'"));
+              .has("'int', 'float' or 'duration'"));
 }
 
 TEST_CASE("Reduce: sum takes vec2 and vec3 and keeps the type", "[semantic][rule-reduce]") {
@@ -214,7 +214,7 @@ TEST_CASE("Reduce: vector min and max are rejected with a location", "[semantic]
     for (const std::string reducer : {"min", "max"}) {
         const auto analysis = analyze(grouped_rule("team", "        v = " + reducer + "(player[Member].push, default = vec3(0.0, 0.0, 0.0))\n",
                                                            "        let x = 1\n"));
-        CHECK(analysis.has("'int' or 'float'"));
+        CHECK(analysis.has("'int', 'float' or 'duration'"));
         const auto error = std::ranges::find_if(
             analysis.diagnostics, [](const Diagnostic& d) { return d.level == DiagnosticLevel::Error; });
         REQUIRE(error != analysis.diagnostics.end());

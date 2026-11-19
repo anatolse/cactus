@@ -4,7 +4,7 @@ use std.core
 use std.time as time
 
 const:
-    BULLET_LIFETIME = 0.04
+    BULLET_LIFETIME = 40ms
     RELOAD_SECONDS = 0.11
     SHIELD_SECONDS = 0.07
 
@@ -33,7 +33,8 @@ trait Metronome:
 # Timer entities are driven by whatever gameplay system owns them. This demo
 # collects a frame's requests in one trait so a single input-phase rule issues
 # them, in the order a real game would: restarts first, then a cancellation,
-# then a teardown of the timer entity itself.
+# then a teardown of the timer entity itself. Requests hold run-time float
+# seconds, as a host or a formula would produce them.
 trait TimerRequests:
     var restarts: int = 0
     var first_duration: float = 0.0
@@ -135,7 +136,7 @@ rule RepeatMetronome:
     on time.TimerExpired:
         metronome.expirations += 1
         emit time.RestartTimer to self:
-            duration = 0.0
+            duration = 0s
 
 rule ApplyTimerRequests:
     each:
@@ -144,10 +145,10 @@ rule ApplyTimerRequests:
     on input:
         if requests.restarts >= 1:
             emit time.RestartTimer to self:
-                duration = requests.first_duration
+                duration = duration(requests.first_duration)
         if requests.restarts >= 2:
             emit time.RestartTimer to self:
-                duration = requests.second_duration
+                duration = duration(requests.second_duration)
         requests.restarts = 0
         if requests.cancel_pending:
             requests.cancel_pending = false

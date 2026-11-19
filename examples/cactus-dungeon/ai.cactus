@@ -13,7 +13,7 @@ use statistics
 use hud
 
 pub trait Brain:
-    persist var elapsed: float = 0.0
+    persist var elapsed: duration = 0s
     let attack_threshold: int = 4
 
 pub trait Configuration:
@@ -48,10 +48,10 @@ rule Think:
     when: session.Game[session.Session].mode == session.SessionMode.Playing
 
     on tick:
-        brain.elapsed += tick.dt
-        if brain.elapsed < 0.5:
+        brain.elapsed += tick.delta
+        if brain.elapsed < 500ms:
             return
-        brain.elapsed = 0.0
+        brain.elapsed = 0s
         emit Decision:
             player = self
 

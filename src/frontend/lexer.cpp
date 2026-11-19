@@ -1,5 +1,7 @@
 #include "frontend/lexer.hpp"
 
+#include "common/duration.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -128,14 +130,25 @@ Token Lexer::read_number() {
     while (!is_at_end() && (std::isdigit(peek_char()) != 0)) {
         value += advance_char();
     }
+    auto type = TokenType::INT_LITERAL;
     if (!is_at_end() && peek_char() == '.' && (std::isdigit(peek_next()) != 0)) {
         value += advance_char();  // consume '.'
         while (!is_at_end() && (std::isdigit(peek_char()) != 0)) {
             value += advance_char();
         }
-        return {TokenType::FLOAT_LITERAL, value, loc};
+        type = TokenType::FLOAT_LITERAL;
     }
-    return {TokenType::INT_LITERAL, value, loc};
+    const auto suffix = duration_suffix_length(std::string_view(source_).substr(pos_));
+    if (suffix == 0) {
+        return {type, value, loc};
+    }
+    for (std::size_t i = 0; i < suffix; ++i) {
+        value += advance_char();
+    }
+    if (const auto units = duration_literal_units(value); !units.has_value()) {
+        errors_.error(loc, units.error());
+    }
+    return {TokenType::DURATION_LITERAL, value, loc};
 }
 
 Token Lexer::read_string() {

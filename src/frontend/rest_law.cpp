@@ -1,4 +1,5 @@
 #include "common/ast_expressions.hpp"
+#include "common/duration.hpp"
 #include "common/numeric.hpp"
 #include "frontend/semantic_analyzer.hpp"
 
@@ -17,11 +18,12 @@ namespace {
 
 // A value the fold knows, or Unknown. Floats are folded in `float`, as at run time.
 struct Folded {
-    enum class Kind : std::uint8_t { Unknown, Bool, Int, Float, Enum, Vector };
+    enum class Kind : std::uint8_t { Unknown, Bool, Int, Float, Enum, Vector, Duration };
     Kind kind = Kind::Unknown;
     bool boolean        = false;
     int integer         = 0;  // also an enum value's index
     float real          = 0.0F;
+    Duration duration{};
     std::array<float, 3> vector{};
     std::size_t width = 0;
 
@@ -36,6 +38,7 @@ struct Folded {
     }
     [[nodiscard]] bool is_zero() const {
         return (kind == Kind::Int && integer == 0) || (kind == Kind::Float && real == 0.0F) ||
+               (kind == Kind::Duration && duration.units == 0) ||
                (kind == Kind::Vector && std::ranges::all_of(vector, [](float v) { return v == 0.0F; }));
     }
     // At rest means bit-equal: -0.0 is not the default 0.0 and NaN is never at rest.
@@ -51,6 +54,8 @@ struct Folded {
                 return integer == other.integer;
             case Kind::Float:
                 return std::bit_cast<std::uint32_t>(real) == std::bit_cast<std::uint32_t>(other.real);
+            case Kind::Duration:
+                return duration == other.duration;
             case Kind::Vector:
                 return width == other.width &&
                        std::ranges::equal(vector, other.vector, [](float a, float b) {
@@ -70,6 +75,9 @@ struct Folded {
     }
     static Folded of_float(float value) {
         return {.kind = Kind::Float, .real = value};
+    }
+    static Folded of_duration(Duration value) {
+        return {.kind = Kind::Duration, .duration = value};
     }
 };
 
@@ -132,7 +140,33 @@ Folded vector_arithmetic(const std::string& op, const Folded& left, const Folded
     return result;
 }
 
+std::optional<DurationOperand> duration_operand(const Folded& value) {
+    if (value.kind == Folded::Kind::Duration) {
+        return value.duration;
+    }
+    if (value.kind == Folded::Kind::Int) {
+        return std::int64_t{value.integer};
+    }
+    return std::nullopt;
+}
+
+Folded duration_arithmetic(const std::string& op, const Folded& left, const Folded& right) {
+    const auto a      = duration_operand(left);
+    const auto b      = duration_operand(right);
+    const auto result = a.has_value() && b.has_value() ? apply_duration_operator(op, *a, *b) : std::nullopt;
+    if (!result.has_value()) {
+        return {};
+    }
+    if (const auto* duration = std::get_if<Duration>(&*result)) {
+        return Folded::of_duration(*duration);
+    }
+    return Folded::of_float(std::get<float>(*result));
+}
+
 Folded arithmetic(const std::string& op, const Folded& left, const Folded& right) {
+    if (left.kind == Folded::Kind::Duration || right.kind == Folded::Kind::Duration) {
+        return duration_arithmetic(op, left, right);
+    }
     if (left.kind == Folded::Kind::Int && right.kind == Folded::Kind::Int) {
         const auto value = apply_arithmetic(op, left.integer, right.integer);
         return value.has_value() ? Folded::of_int(*value) : Folded{};
@@ -156,6 +190,8 @@ Folded comparison(const std::string& op, const Folded& left, const Folded& right
     std::optional<bool> value;
     if (left.kind == Folded::Kind::Int && right.kind == Folded::Kind::Int) {
         value = apply_comparison(op, left.integer, right.integer);
+    } else if (left.kind == Folded::Kind::Duration || right.kind == Folded::Kind::Duration) {
+        value = same_kind ? apply_comparison(op, left.duration, right.duration) : std::nullopt;
     } else if (const auto a = as_float(left), b = as_float(right); a.has_value() && b.has_value()) {
         value = apply_comparison(op, *a, *b);
     }
@@ -223,6 +259,10 @@ private:
                     return Folded::of_float(std::stof(literal.value));
                 case LiteralExpr::Kind::Bool:
                     return Folded::of_bool(literal.value == "true");
+                case LiteralExpr::Kind::Duration: {
+                    const auto units = duration_literal_units(literal.value);
+                    return units.has_value() ? Folded::of_duration(Duration{*units}) : Folded{};
+                }
                 default:
                     return {};
             }
@@ -279,6 +319,9 @@ private:
         }
         if (operand.kind == Folded::Kind::Float) {
             return Folded::of_float(-operand.real);
+        }
+        if (operand.kind == Folded::Kind::Duration) {
+            return Folded::of_duration(-operand.duration);
         }
         return {};
     }
@@ -345,6 +388,9 @@ Folded aggregate_identity(const ReducerDecl& reducer, const Folded& input) {
         case ReducerKind::Count:
             return Folded::of_int(0);
         case ReducerKind::Sum:
+            if (input.kind == Folded::Kind::Duration) {
+                return Folded::of_duration(Duration{});
+            }
             return input.kind == Folded::Kind::Int ? Folded::of_int(0) : Folded::of_float(0.0F);
         case ReducerKind::Any:
             return Folded::of_bool(false);

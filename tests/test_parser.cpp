@@ -5157,4 +5157,29 @@ TEST_CASE("Parser: a second limit part needs per", "[parser][relations][rule-lim
     CHECK(has_diagnostic(errors, "each part of a two-sided `limit:` needs `per <binding>`"));
 }
 
+TEST_CASE("Parser: duration literals in expressions", "[parser][dsl-duration]") {
+    auto prog = parse("const:\n    GRACE = 1s / 60 + 0.5s\n    NEG = -120ms\n");
+    auto& decl = std::get<ConstBlockNode>(prog.declarations[0]);
+    REQUIRE(decl.assignments.size() == 2);
+    const auto* sum = std::get_if<BinaryExpr>(&decl.assignments[0].value->expr);
+    REQUIRE(sum != nullptr);
+    CHECK(sum->op == "+");
+    const auto* half = std::get_if<LiteralExpr>(&sum->right->expr);
+    REQUIRE(half != nullptr);
+    CHECK(half->kind == LiteralExpr::Kind::Duration);
+    CHECK(half->value == "0.5s");
+    const auto* quotient = std::get_if<BinaryExpr>(&sum->left->expr);
+    REQUIRE(quotient != nullptr);
+    const auto* second = std::get_if<LiteralExpr>(&quotient->left->expr);
+    REQUIRE(second != nullptr);
+    CHECK(second->kind == LiteralExpr::Kind::Duration);
+    const auto* negated = std::get_if<UnaryExpr>(&decl.assignments[1].value->expr);
+    REQUIRE(negated != nullptr);
+    CHECK(std::get<LiteralExpr>(negated->operand->expr).value == "120ms");
+}
+
+TEST_CASE("Parser: a number and a unit separated by a space are not a literal", "[parser][dsl-duration]") {
+    const auto errors = parse_expect_errors("const:\n    GRACE = 5 s\n");
+    CHECK(errors.has_errors());
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

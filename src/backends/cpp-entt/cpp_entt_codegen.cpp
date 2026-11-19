@@ -1146,6 +1146,7 @@ void emit_phase_batch(std::ostringstream& out,
         out << "    const auto repetitions = due;\n";
     }
     out << "    phase.dt = static_cast<float>(interval);\n";
+    out << "    phase.delta = cactus::Duration{" << phase->every_units.value_or(0) << "};\n";
     out << "    for (std::uint64_t repetition = 0; repetition < repetitions; ++repetition) {\n";
     emit_activation("        ", "repetition");
     out << "    }\n";
@@ -2347,10 +2348,13 @@ std::string emit_module_constants(const DecoratedProgram& program) {
     std::ostringstream out;
     for (const auto& phase : program.execution_graph.phases) {
         if (phase.every_seconds.has_value()) {
-            const auto name = EnttCodegenUtils::phase_dt_name(phase.phase);
+            const auto name  = EnttCodegenUtils::phase_dt_name(phase.phase);
+            const auto delta = EnttCodegenUtils::phase_dt_name(phase.phase, "delta");
             out << namespace_block(name.ns,
                                    "inline constexpr float " + name.name + " = static_cast<float>(" +
-                                       cpp_double_literal(*phase.every_seconds) + ");\n");
+                                       cpp_double_literal(*phase.every_seconds) + ");\n" +
+                                       "inline constexpr cactus::Duration " + delta.name + "{" +
+                                       std::to_string(phase.every_units.value_or(0)) + "};\n");
         }
     }
     std::unordered_map<SymbolId, const ExprNode*> values;
@@ -4051,8 +4055,10 @@ std::string emit_backend_main(const DecoratedProgram& program) {
     out << "        ClearBackground(RAYWHITE);\n";
     if (graph_driven_frame) {
         const auto frame_type = event_runtime_cpp_type(program, *frame_event->symbol_id);
-        out << "        cactus::runtime::entt_backend::generated_inject_external_event(" << frame_type
-            << "{.dt = dt});\n";
+        const bool has_delta =
+            std::ranges::any_of(frame_event->fields, [](const ResolvedField& field) { return field.name == "delta"; });
+        out << "        cactus::runtime::entt_backend::generated_inject_external_event(" << frame_type << "{.dt = dt"
+            << (has_delta ? ", .delta = cactus::duration_from_seconds(dt)" : "") << "});\n";
         out << "        cactus::runtime::entt_backend::generated_drain_external_events(registry);\n";
     } else {
         out << "        cactus::runtime::entt_backend::generated_update_project(registry, dispatcher, dt);\n";

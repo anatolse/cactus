@@ -1,5 +1,6 @@
 // NOLINTBEGIN(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)
 // -- Catch2 assertion macros intentionally expand through do-while and expression decomposition.
+#include "common/duration.hpp"
 #include "common/error_reporter.hpp"
 #include "frontend/lexer.hpp"
 #include "frontend/token.hpp"
@@ -502,5 +503,80 @@ TEST_CASE("Lexer: extern keyword distinct from identifier prefixes", "[lexer][ex
     CHECK(types[0] == TokenType::EXTERN);      // keyword
     CHECK(types[1] == TokenType::IDENTIFIER);  // "externals" — not a keyword
     CHECK(types[2] == TokenType::IDENTIFIER);  // "external_data" — not a keyword
+}
+TEST_CASE("Lexer: a number with a unit suffix is a duration literal", "[lexer][dsl-duration]") {
+    auto tokens = lex("5s 120ms 3min 2h 0.5s");
+    auto types  = token_types(tokens);
+    REQUIRE(types.size() == 5);
+    CHECK(std::ranges::all_of(types, [](TokenType type) { return type == TokenType::DURATION_LITERAL; }));
+    CHECK(tokens[0].value == "5s");
+    CHECK(tokens[1].value == "120ms");
+    CHECK(tokens[2].value == "3min");
+    CHECK(tokens[3].value == "2h");
+    CHECK(tokens[4].value == "0.5s");
+}
+
+TEST_CASE("Duration literals are exact unit counts", "[lexer][dsl-duration]") {
+    CHECK(duration_literal_units("1ms").value() == 705'600);
+    CHECK(duration_literal_units("5s").value() == 3'528'000'000);
+    CHECK(duration_literal_units("120ms").value() == 84'672'000);
+    CHECK(duration_literal_units("3min").value() == 127'008'000'000);
+    CHECK(duration_literal_units("2h").value() == 5'080'320'000'000);
+    CHECK(duration_literal_units("0.5s").value() == 352'800'000);
+    CHECK(duration_literal_units("0s").value() == 0);
+    CHECK(duration_literal_units("0.0050ms").value() == 3'528);
+    CHECK(duration_literal_units("3631020h").has_value());
+}
+
+TEST_CASE("Lexer: a duration literal that is not a whole number of units", "[lexer][dsl-duration]") {
+    ErrorReporter errors;
+    (void)lex_with_errors("0.001ms", errors);
+    REQUIRE(errors.diagnostics().size() == 1);
+    const auto& message = errors.diagnostics().front().message;
+    CHECK(message.contains("not a whole number"));
+    CHECK(message.contains("`0ms`"));
+    CHECK(message.contains("`0.005ms`"));
+    CHECK(errors.diagnostics().front().location.column == 1);
+}
+
+TEST_CASE("Lexer: a duration literal out of range", "[lexer][dsl-duration]") {
+    ErrorReporter errors;
+    (void)lex_with_errors("x = 3631021h", errors);
+    REQUIRE(errors.diagnostics().size() == 1);
+    const auto& message = errors.diagnostics().front().message;
+    CHECK(message.contains("out of range"));
+    CHECK(message.contains("`3631020h`"));
+    CHECK_FALSE(duration_literal_units("99999999999999999999999999999s").has_value());
+}
+
+TEST_CASE("Lexer: a positive duration literal is never zero", "[lexer][dsl-duration]") {
+    for (const auto* text : {"0.000001ms", "0.0000001s", "0.00000000001h"}) {
+        const auto units = duration_literal_units(text);
+        CHECK((!units.has_value() || *units != 0));
+    }
+}
+
+TEST_CASE("Lexer: a suffix after a space or inside a word is not a duration", "[lexer][dsl-duration]") {
+    auto tokens = lex("5 s 5sec 2hp 3mins 4msx x1s h2 s");
+    auto types  = token_types(tokens);
+    const std::vector<TokenType> expected{TokenType::INT_LITERAL,
+                                          TokenType::IDENTIFIER,
+                                          TokenType::INT_LITERAL,
+                                          TokenType::IDENTIFIER,
+                                          TokenType::INT_LITERAL,
+                                          TokenType::IDENTIFIER,
+                                          TokenType::INT_LITERAL,
+                                          TokenType::IDENTIFIER,
+                                          TokenType::INT_LITERAL,
+                                          TokenType::IDENTIFIER,
+                                          TokenType::IDENTIFIER,
+                                          TokenType::IDENTIFIER,
+                                          TokenType::IDENTIFIER};
+    CHECK(types == expected);
+    CHECK(tokens[3].value == "sec");
+    CHECK(tokens[5].value == "hp");
+    CHECK(tokens[7].value == "mins");
+    CHECK(tokens[9].value == "msx");
+    CHECK(tokens[10].value == "x1s");
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

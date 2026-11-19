@@ -13,6 +13,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
+#include <cstdint>
 #include <limits>
 
 namespace {
@@ -22,6 +23,13 @@ using cactus_headless_test::drive_frame;
 // The one fixed-step length std.core.fixed_tick advances by. A frame driven
 // with exactly this dt performs exactly one fixed step.
 constexpr float kStep = 1.0F / 60.0F;
+constexpr cactus::Duration kStepDuration{11'760'000};
+
+constexpr cactus::Duration milliseconds(std::int64_t count) {
+    return cactus::Duration{count * 705'600};
+}
+
+const cactus::Duration kBulletLifetime = milliseconds(40);
 
 struct World {
     entt::registry registry;
@@ -72,16 +80,16 @@ TEST_CASE("std.time lifetime destroys its entity on the fixed step that exhausts
     auto& registry = world.registry;
 
     const auto bullet = fire_one_bullet(registry);
-    CHECK(registry.get<cactus_gen::stdlib::time::Lifetime>(bullet).remaining == Catch::Approx(0.04F));
+    CHECK(registry.get<cactus_gen::stdlib::time::Lifetime>(bullet).remaining == kBulletLifetime);
 
     drive_frame(registry, kStep);
-    CHECK(registry.get<cactus_gen::stdlib::time::Lifetime>(bullet).remaining == Catch::Approx(0.04F - kStep));
+    CHECK(registry.get<cactus_gen::stdlib::time::Lifetime>(bullet).remaining == kBulletLifetime - kStepDuration);
 
     drive_frame(registry, kStep);
-    CHECK(registry.get<cactus_gen::stdlib::time::Lifetime>(bullet).remaining == Catch::Approx(0.04F - (2.0F * kStep)));
+    CHECK(registry.get<cactus_gen::stdlib::time::Lifetime>(bullet).remaining == kBulletLifetime - (kStepDuration * 2));
     CHECK(registry.valid(bullet));
 
-    // 0.04 - 2*step is under one step, so this step exhausts and destroys it.
+    // 40ms - 2 steps is under one step, so this step exhausts and destroys it.
     drive_frame(registry, kStep);
     CHECK_FALSE(registry.valid(bullet));
     CHECK(registry.view<cactus_gen::gameplay_timers::Bullet>().begin() ==
@@ -100,11 +108,11 @@ TEST_CASE("std.time lifetime does not advance while paused, and resumes from whe
     // One frame worth three fixed steps: a paused lifetime consumes none of them.
     drive_frame(registry, 3.0F * kStep);
     CHECK(registry.valid(bullet));
-    CHECK(registry.get<cactus_gen::stdlib::time::Lifetime>(bullet).remaining == Catch::Approx(0.04F));
+    CHECK(registry.get<cactus_gen::stdlib::time::Lifetime>(bullet).remaining == kBulletLifetime);
 
     registry.get<cactus_gen::stdlib::time::Lifetime>(bullet).paused = false;
     drive_frame(registry, kStep);
-    CHECK(registry.get<cactus_gen::stdlib::time::Lifetime>(bullet).remaining == Catch::Approx(0.04F - kStep));
+    CHECK(registry.get<cactus_gen::stdlib::time::Lifetime>(bullet).remaining == kBulletLifetime - kStepDuration);
 }
 
 TEST_CASE("std.time lifetime consumes no time on a frame that performs no fixed step",
@@ -116,7 +124,7 @@ TEST_CASE("std.time lifetime consumes no time on a frame that performs no fixed 
 
     // Well under one fixed interval: the phase batch runs zero repetitions.
     drive_frame(registry, kStep / 4.0F);
-    CHECK(registry.get<cactus_gen::stdlib::time::Lifetime>(bullet).remaining == Catch::Approx(0.04F));
+    CHECK(registry.get<cactus_gen::stdlib::time::Lifetime>(bullet).remaining == kBulletLifetime);
 }
 
 TEST_CASE("std.time lifetime does not simulate catch-up time the fixed phase dropped",
@@ -126,26 +134,25 @@ TEST_CASE("std.time lifetime does not simulate catch-up time the fixed phase dro
 
     const auto bullet = fire_one_bullet(registry);
 
-    registry.get<cactus_gen::stdlib::time::Lifetime>(bullet).remaining = 1.0F;
+    registry.get<cactus_gen::stdlib::time::Lifetime>(bullet).remaining = milliseconds(1000);
 
     // A one-second frame is due 60 fixed steps but std.core.fixed_tick caps
     // repetitions at max: 8; the other 52 steps' worth of time is dropped and
     // must not be subtracted anyway.
     drive_frame(registry, 1.0F);
     CHECK(registry.valid(bullet));
-    CHECK(registry.get<cactus_gen::stdlib::time::Lifetime>(bullet).remaining == Catch::Approx(1.0F - (8.0F * kStep)));
+    CHECK(registry.get<cactus_gen::stdlib::time::Lifetime>(bullet).remaining ==
+          milliseconds(1000) - (kStepDuration * 8));
 }
 
-TEST_CASE("std.time lifetime treats non-finite and negative remaining as zero",
-          "[runtime][stdlib][time][lifetime]") {
+TEST_CASE("std.time lifetime ends at once when no time remains", "[runtime][stdlib][time][lifetime]") {
     World world;
     auto& registry = world.registry;
 
     const auto bullet = fire_one_bullet(registry);
 
-    const float bad = GENERATE(std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(),
-                               -std::numeric_limits<float>::infinity(), -5.0F);
-    registry.get<cactus_gen::stdlib::time::Lifetime>(bullet).remaining = bad;
+    const auto remaining = GENERATE(milliseconds(0), milliseconds(-5000));
+    registry.get<cactus_gen::stdlib::time::Lifetime>(bullet).remaining = remaining;
 
     drive_frame(registry, kStep);
     CHECK_FALSE(registry.valid(bullet));
@@ -223,7 +230,8 @@ TEST_CASE("std.time restart replaces the previous duration rather than adding to
     requests.second_duration = 0.11F;
 
     drive_frame(registry, kStep);
-    CHECK(registry.get<cactus_gen::stdlib::time::Timer>(reload_timer).remaining == Catch::Approx(0.11F - kStep));
+    CHECK(registry.get<cactus_gen::stdlib::time::Timer>(reload_timer).remaining ==
+          cactus::duration_from_seconds(0.11F) - kStepDuration);
 
     for (int step = 0; step < 6; ++step) {
         drive_frame(registry, kStep);
@@ -249,21 +257,34 @@ TEST_CASE("std.time cancel disarms a restarted timer before it can expire", "[ru
     CHECK(registry.get<cactus_gen::gameplay_timers::Weapon>(player_of(registry)).reloads_ready == 0);
 }
 
-TEST_CASE("std.time normalizes non-finite and negative restart durations to zero",
+TEST_CASE("std.time expires a NaN or negative restart duration at the next fixed step",
           "[runtime][stdlib][time][timer]") {
     World world;
     auto& registry = world.registry;
 
     const auto reload_timer = entity_with<cactus_gen::gameplay_timers::ReloadChannel>(registry);
-    const float bad = GENERATE(std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(),
-                               -std::numeric_limits<float>::infinity(), -3.0F);
+    const float bad = GENERATE(std::numeric_limits<float>::quiet_NaN(), -std::numeric_limits<float>::infinity(), -3.0F);
     request_restart(registry, reload_timer, bad);
 
-    // Normalized to a zero-duration timer: armed now, expiring at the next
-    // eligible fixed step rather than never or immediately at the restart site.
+    // duration(x) gives zero for NaN and a negative count otherwise: armed now,
+    // expiring at the next eligible fixed step, not at the restart site.
     drive_frame(registry, kStep);
-    CHECK(registry.get<cactus_gen::stdlib::time::Timer>(reload_timer).remaining == Catch::Approx(0.0F));
+    CHECK(registry.get<cactus_gen::stdlib::time::Timer>(reload_timer).remaining == cactus::Duration{});
     CHECK(registry.get<cactus_gen::gameplay_timers::Weapon>(player_of(registry)).reloads_ready == 1);
+}
+
+TEST_CASE("std.time keeps an infinite restart duration as the longest duration", "[runtime][stdlib][time][timer]") {
+    World world;
+    auto& registry = world.registry;
+
+    const auto reload_timer = entity_with<cactus_gen::gameplay_timers::ReloadChannel>(registry);
+    request_restart(registry, reload_timer, std::numeric_limits<float>::infinity());
+
+    drive_frame(registry, kStep);
+    CHECK(registry.get<cactus_gen::stdlib::time::Timer>(reload_timer).armed);
+    CHECK(registry.get<cactus_gen::stdlib::time::Timer>(reload_timer).remaining ==
+          cactus::Duration{std::numeric_limits<std::int64_t>::max()} - kStepDuration);
+    CHECK(registry.get<cactus_gen::gameplay_timers::Weapon>(player_of(registry)).reloads_ready == 0);
 }
 
 TEST_CASE("std.time zero-duration timers expire at the next fixed step, not at the restart site",
@@ -293,7 +314,7 @@ TEST_CASE("std.time timers restarted from their own expiry handler fire once per
     const auto metronome = entity_with<cactus_gen::gameplay_timers::Metronome>(registry);
     request_restart(registry, metronome, 0.0F);
 
-    // RepeatMetronome rearms with duration 0.0 from inside TimerExpired. A
+    // RepeatMetronome rearms with duration 0s from inside TimerExpired. A
     // handler-driven restart must not re-expire within the same fixed step.
     drive_frame(registry, kStep);
     CHECK(registry.get<cactus_gen::gameplay_timers::Metronome>(metronome).expirations == 1);
@@ -322,7 +343,7 @@ TEST_CASE("std.time timers do not advance while paused and keep their replacemen
     // RestartTimer preserves paused, so the replacement duration is untouched.
     CHECK(registry.get<cactus_gen::stdlib::time::Timer>(reload_timer).paused);
     CHECK(registry.get<cactus_gen::stdlib::time::Timer>(reload_timer).armed);
-    CHECK(registry.get<cactus_gen::stdlib::time::Timer>(reload_timer).remaining == Catch::Approx(0.11F));
+    CHECK(registry.get<cactus_gen::stdlib::time::Timer>(reload_timer).remaining == cactus::duration_from_seconds(0.11F));
     CHECK(registry.get<cactus_gen::gameplay_timers::Weapon>(player).reloads_ready == 0);
 
     registry.get<cactus_gen::stdlib::time::Timer>(reload_timer).paused = false;

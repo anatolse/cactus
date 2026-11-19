@@ -17,7 +17,7 @@ pub trait Session:
     var request_id: int = 0
     var status: string = ""
     var new_game: bool = false
-    persist var seconds: float = 0.0
+    persist var played: duration = 0s
 
 pub entity Game:
     Session
@@ -27,4 +27,4 @@ rule Clock:
     where: state.mode == SessionMode.Playing
 
     on tick:
-        state.seconds += tick.dt
+        state.played += tick.delta

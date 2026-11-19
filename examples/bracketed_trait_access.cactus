@@ -47,7 +47,7 @@ rule WindClock:
         Clock[time.Timer].paused
 
     on tick:
-        Clock[time.Timer].remaining += 2.0
+        Clock[time.Timer].remaining += 2s
 
 # Each runner records the nearest lane above its own; the alias write is
 # allowed because `limit: 1 per me` proves one tuple per runner.

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/duration.hpp"
 #include "common/numeric.hpp"
 
 #include <raylib.h>
@@ -307,6 +308,23 @@ private:
     int total_ = 0;
 };
 
+template <>
+class Sum<Duration> {
+public:
+    constexpr void add(Duration input) noexcept {
+        total_ += input;
+    }
+    constexpr void merge(const Sum& other) noexcept {
+        add(other.total_);
+    }
+    [[nodiscard]] constexpr Duration value() const noexcept {
+        return total_;
+    }
+
+private:
+    Duration total_{};
+};
+
 // Every finite float is a multiple of 2^-149 below 2^128, so a 320-bit two's-complement fixed-point
 // integer holds the exact sum of up to 2^42 inputs. value() rounds it once, to nearest even.
 template <>
@@ -503,6 +521,12 @@ private:
 [[nodiscard]] constexpr int max(int acc, int value) noexcept {
     return std::max(acc, value);
 }
+[[nodiscard]] constexpr Duration min(Duration acc, Duration value) noexcept {
+    return std::min(acc, value);
+}
+[[nodiscard]] constexpr Duration max(Duration acc, Duration value) noexcept {
+    return std::max(acc, value);
+}
 // -0 orders below +0, so both are commutative.
 [[nodiscard]] constexpr float min(float acc, float value) noexcept {
     if (acc != acc || value != value) {
@@ -524,6 +548,9 @@ private:
 }
 // `best`: a strictly higher key wins, so ties keep the earlier row; a NaN key never wins.
 [[nodiscard]] constexpr bool improves(int key, int best, bool seen) noexcept {
+    return !seen || key > best;
+}
+[[nodiscard]] constexpr bool improves(Duration key, Duration best, bool seen) noexcept {
     return !seen || key > best;
 }
 [[nodiscard]] inline bool improves(float key, float best, bool seen) noexcept {
@@ -722,6 +749,12 @@ namespace stdlib::math {
     return reduce::min(a, b);
 }
 [[nodiscard]] constexpr float max(float a, float b) noexcept {
+    return reduce::max(a, b);
+}
+[[nodiscard]] constexpr Duration min(Duration a, Duration b) noexcept {
+    return reduce::min(a, b);
+}
+[[nodiscard]] constexpr Duration max(Duration a, Duration b) noexcept {
     return reduce::max(a, b);
 }
 [[nodiscard]] float sqrt(float v) noexcept;

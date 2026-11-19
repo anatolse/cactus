@@ -15,9 +15,11 @@ pub trait Parent:
 
 # ── Standard Runtime Root and Phases ──────────────────────────────────────────
 
-# Injected exactly once by the host for each runtime frame.
+# Injected exactly once by the host for each runtime frame. `delta` is the
+# same step as `dt`, as an exact duration.
 pub extern event frame:
     dt: float
+    delta: duration
 
 pub phase input:
     from:
@@ -26,18 +28,20 @@ pub phase input:
 pub phase fixed_tick:
     after:
         input
-    every: 1.0 / 60.0
+    every: 1s / 60
     max: 8
 
 pub phase tick:
     after:
         fixed_tick
     dt: float = frame.dt
+    delta: duration = frame.delta
 
 pub phase late_tick:
     after:
         tick
     dt: float = frame.dt
+    delta: duration = frame.delta
 
 pub phase render:
     after:

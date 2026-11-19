@@ -274,6 +274,7 @@ struct ResolvedPhase : CanonicalIdentity {
     std::vector<SymbolId> upstream_phases;
     std::optional<SymbolId> runtime_root;
     std::optional<double> every_seconds;
+    std::optional<std::int64_t> every_units;  // the period as a duration
     std::optional<std::int64_t> max_repetitions;
     std::optional<RenderPassInfo> render_pass;
     bool is_pub    = false;
@@ -869,6 +870,7 @@ struct PhasePlan {
     std::vector<ResolvedField> fields;
     std::optional<SymbolId> runtime_root;
     std::optional<double> every_seconds;
+    std::optional<std::int64_t> every_units;  // the period as a duration
     std::optional<std::int64_t> max_repetitions;
     DeclarationOrder declaration_order;
 };
@@ -1217,6 +1219,7 @@ struct ImportedPhase {
     std::vector<SymbolId> upstream_phases;
     std::optional<SymbolId> runtime_root;
     std::optional<double> every_seconds;
+    std::optional<std::int64_t> every_units;  // the period as a duration
     std::optional<std::int64_t> max_repetitions;
 };
 
@@ -1521,6 +1524,7 @@ private:
     void recognize_render_pass_phases(ProgramNode& program);
     void validate_render_pass_descriptor_fields(ProgramNode& program);
     void validate_render_pass_stage_handlers(ProgramNode& program);
+    void reject_stage_durations(const RuleNode& rule, const EventHandlerNode& handler) const;
     [[nodiscard]] std::optional<ResolvedHandlerTrigger> try_resolve_render_stage_trigger(const std::string& ref) const;
     [[nodiscard]] static std::optional<ResolvedStruct> build_render_stage_activation_struct(const SymbolId& symbol);
     void diagnose_unresolved_handler_trigger(const std::string& owner_desc,
@@ -1799,6 +1803,32 @@ private:
                                    const ResolvedStruct* handler_event,
                                    const PairScope* pair_scope) const;
     void require_bool(const TypeInfo& type, const SourceLocation& location, const std::string& what) const;
+    void check_duration_assignment(const VarAssign& assign, const TypeInfo& target, const TypeInfo& value) const;
+    void report_constant_duration_mismatch(const TypeInfo& expected,
+                                           const ExprNode& value,
+                                           const SourceLocation& location) const;
+    // Reports a value whose duration-ness differs from its slot's; true when it reported.
+    bool report_duration_mismatch(const TypeInfo& expected,
+                                  const TypeInfo& actual,
+                                  const ExprNode& value,
+                                  const SourceLocation& location) const;
+    TypeInfo infer_duration_binary_type(const BinaryExpr& binary,
+                                        const TypeInfo& left,
+                                        const TypeInfo& right,
+                                        const SourceLocation& location) const;
+    TypeInfo infer_duration_conversion_type(const CallExpr& call,
+                                            const std::string& name,
+                                            const SourceLocation& location,
+                                            const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                                            const std::unordered_map<std::string, TypeInfo>& local_bindings,
+                                            const ResolvedStruct* handler_event,
+                                            const PairScope* pair_scope) const;
+    std::optional<TypeInfo> infer_duration_join_type(
+        const CallExpr& call,
+        const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+        const std::unordered_map<std::string, TypeInfo>& local_bindings,
+        const ResolvedStruct* handler_event,
+        const PairScope* pair_scope) const;
     // Folds one branch type into `result`; reports and returns false on a mismatch.
     bool unify_branch_type(TypeInfo& result,
                            TypeInfo type,

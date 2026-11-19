@@ -1365,13 +1365,19 @@ TEST_CASE("semantic_modules: phase analysis resolves lineage cadence and synthes
     CHECK(*tick.every_seconds == 0.25);
     REQUIRE(tick.max_repetitions.has_value());
     CHECK(*tick.max_repetitions == 4);
-    REQUIRE(tick.fields.size() == 2);
+    REQUIRE(tick.every_units.has_value());
+    CHECK(*tick.every_units == 176'400'000);
+    REQUIRE(tick.fields.size() == 3);
     CHECK(tick.fields[0].name == "dt");
     CHECK(tick.fields[0].is_synthesized);
     CHECK_FALSE(tick.fields[0].is_completion_only);
-    CHECK(tick.fields[1].name == "alpha");
+    CHECK(tick.fields[1].name == "delta");
+    CHECK(tick.fields[1].type.kind == TypeKind::Duration);
     CHECK(tick.fields[1].is_synthesized);
-    CHECK(tick.fields[1].is_completion_only);
+    CHECK_FALSE(tick.fields[1].is_completion_only);
+    CHECK(tick.fields[2].name == "alpha");
+    CHECK(tick.fields[2].is_synthesized);
+    CHECK(tick.fields[2].is_completion_only);
 
     const auto& resolved_render = result.phases.at("render");
     REQUIRE(resolved_render.runtime_root.has_value());
@@ -1400,12 +1406,15 @@ TEST_CASE("semantic_modules: phase analysis resolves lineage cadence and synthes
     CHECK(tick_plan.fields[0].type.kind == TypeKind::Float);
     CHECK(tick_plan.fields[0].is_synthesized);
     CHECK_FALSE(tick_plan.fields[0].is_completion_only);
-    CHECK(tick_plan.fields[1].name == "alpha");
-    CHECK(tick_plan.fields[1].type.kind == TypeKind::Float);
-    CHECK(tick_plan.fields[1].is_synthesized);
-    CHECK(tick_plan.fields[1].is_completion_only);
+    CHECK(tick_plan.fields[1].name == "delta");
+    CHECK(tick_plan.fields[1].type.kind == TypeKind::Duration);
+    CHECK(tick_plan.fields[2].name == "alpha");
+    CHECK(tick_plan.fields[2].type.kind == TypeKind::Float);
+    CHECK(tick_plan.fields[2].is_synthesized);
+    CHECK(tick_plan.fields[2].is_completion_only);
     CHECK(tick_plan.runtime_root == frame_id);
     CHECK(tick_plan.every_seconds == 0.25);
+    CHECK(tick_plan.every_units == 176'400'000);
     CHECK(tick_plan.max_repetitions == 4);
     CHECK(tick_plan.declaration_order ==
           DeclarationOrder{.module_index = 0, .declaration_index = 3, .handler_index = 0});

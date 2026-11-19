@@ -49,11 +49,11 @@ const:
     ENEMY_STEER_PROBE_DISTANCE = 1.0
     ENEMY_STEER_ANGLE_SMALL = math.radians(40.0)
     ENEMY_STEER_ANGLE_LARGE = math.radians(80.0)
-    SPAWN_INTERVAL = 10.0
+    SPAWN_INTERVAL = 10s
     CHARACTER_HEIGHT = 1.8
     BULLET_SPEED = 20.0
     BULLET_RADIUS = 0.12
-    BULLET_LIFETIME = 2.0
+    BULLET_LIFETIME = 2s
     # Collider layers. Map boxes keep the default layer 1. Bodies collide
     # with the map and each other; bullets with the map and enemies; a
     # hurtbox only touches the player.
@@ -66,8 +66,8 @@ const:
     BULLET_MASK = MAP_LAYER + ENEMY_LAYER
     # How far an enemy's hurtbox reaches past its body.
     HURTBOX_REACH = 0.1
-    FIRE_COOLDOWN = 0.2
-    DEATH_DURATION = 1.0
+    FIRE_COOLDOWN = 200ms
+    DEATH_DURATION = 1s
     HALF_PI = math.PI * 0.5
     ROBOT = EnemyKind(
         speed = 3.0,
@@ -152,7 +152,7 @@ pub trait Enemy:
 pub state EnemyLife:
     Hunting -> Dying
     Dying final:
-        var elapsed: float = 0.0
+        var elapsed: duration = 0s
 
 # A live enemy's trigger volume; touching the player catches them.
 pub trait Hurtbox
@@ -923,7 +923,7 @@ rule AnimateEnemyDeath:
         EnemyLife.Dying as dying
 
     on tick:
-        dying.elapsed += tick.dt
+        dying.elapsed += tick.delta
         if dying.elapsed >= DEATH_DURATION:
             # Destroying self cascades to the EnemyVisual child (Parent-based
             # recursive destroy).
@@ -996,10 +996,10 @@ rule RestartOnGameOver:
             destroy bullet
         for spawn_point in query.all[RobotSpawnPoint]():
             emit time.RestartTimer to spawn_point:
-                duration = 0.0
+                duration = 0s
         for spawn_point in query.all[KnightSpawnPoint]():
             emit time.RestartTimer to spawn_point:
-                duration = 0.0
+                duration = 0s
         set text.ScreenLabel on CrosshairHud:
             visible = true
         set text.ScreenLabel on GameOverHud:

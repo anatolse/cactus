@@ -1,0 +1,132 @@
+module exact_duration
+
+# Time as a whole number of one fixed unit. A literal carries its unit, a step
+# is `step.delta`, and a timer ends on the step the author can name: at 60 Hz a
+# step is exactly 1s / 60, so a 100ms countdown ends after exactly 6 steps.
+
+use std.core as core
+use std.time as time
+
+const:
+    GRACE = core.fixed_tick.delta * 6
+
+trait Steps:
+    var fixed: duration = 0s
+    var fixed_dt: float = 0.0
+    var round_trip: duration = 0s
+    var grace_steps: float = 0.0
+    var variable: duration = 0s
+
+trait Countdown:
+    persist var remaining: duration = 100ms
+    var steps: int = 0
+
+trait Clock:
+    var elapsed: duration = 0s
+    var ran: bool = false
+
+trait Shared:
+    var left: duration = 1s
+
+trait FrameTimer:
+    var left: duration = 1s
+
+# A regrowth wait per plot. Only plots that wait are visited.
+trait Field:
+    dim x: int in range(0, 4)
+    var wait: duration = 0s
+
+trait FieldTotal:
+    var total: duration = 0s
+    var longest: duration = 0s
+
+entity Probe:
+    Steps
+    Countdown
+    Clock
+    Shared
+    FrameTimer
+    Field
+    FieldTotal
+
+entity Spark:
+    time.Lifetime:
+        remaining = 100ms
+
+rule Observe:
+    each: Steps as s
+
+    on core.fixed_tick as step:
+        s.fixed = step.delta
+        s.fixed_dt = step.dt
+        s.round_trip = duration(step.dt)
+        s.grace_steps = GRACE / step.delta
+
+rule ObserveTick:
+    each: Steps as s
+
+    on core.tick as step:
+        s.variable = step.delta
+
+rule CountDown:
+    each: Countdown as c
+
+    on core.fixed_tick as step:
+        if c.remaining <= 0s:
+            return
+        c.remaining -= step.delta
+        c.steps += 1
+
+# One day of fixed steps, added in one activation.
+rule Day:
+    each: Clock as c
+
+    on core.fixed_tick as step:
+        if c.ran:
+            return
+        c.ran = true
+        for i in range(0, 5184000):
+            c.elapsed += step.delta
+
+# Two unordered handlers count down one timer; subtraction commutes.
+rule DrainA:
+    each: Shared as s
+
+    on core.fixed_tick as step:
+        s.left -= step.delta
+
+rule DrainB:
+    each: Shared as s
+
+    on core.fixed_tick as step:
+        s.left -= step.delta
+
+# A timer on the variable-rate tick.
+rule FrameCountdown:
+    each: FrameTimer as t
+
+    on core.tick as step:
+        t.left -= step.delta
+
+rule Regrow:
+    each: Field as f
+    where:
+        f.wait > 0s
+
+    on core.fixed_tick as step:
+        f.wait -= step.delta
+
+rule FieldSum:
+    each: Field as f, FieldTotal
+    after:
+        Regrow
+    where:
+        f.wait > 0s
+    reduce per self:
+        total = sum(f.wait)
+        longest = max(f.wait, default = 0s)
+
+    on core.fixed_tick:
+        set FieldTotal on self:
+            total = total
+            longest = longest

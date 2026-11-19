@@ -120,6 +120,10 @@ fixed_tick late_tick
 
 - integers: `0`, `42`
 - floats: `3.14`, `0.5`
+- durations: `5s`, `120ms`, `3min`, `2h`, `0.5s` — a number followed directly by `ms`, `s`, `min` or `h`
+  (§3.14). `5 s` with a space is not a literal. The number is read exactly; a literal that is not a
+  whole number of time units (`0.001ms`) or is out of range is an error that names the nearest values
+  that fit.
 - strings: `"Hello"`
 - hex colors: `#FF0000`, `#FF000080`
 - booleans: `true`, `false`
@@ -298,7 +302,7 @@ single trait Room:
     var wall: bool = false
 ```
 
-A range has the meaning of a ranged `let` field: half-open, with bounds that read only literals, constants and `let` fields of the same trait, fixed when the value is made, so every carrier can have its own size and a table never resizes. A cell field has type `bool`, `int`, `float`, an enum or a vector, and a constant default. Each of these is a compile error: `dim` in a state variant, relation, struct or event; a fifth dimension; another dimension type or an `int` dimension without a range; a bound that reads a `var` field, another trait or a call; two dimensions, or a dimension and a field, with one name; a cell field without a constant default, of another type, or `persist`; a dimensioned trait with no cell field; a dimensioned trait as the target of `project` or `keep`.
+A range has the meaning of a ranged `let` field: half-open, with bounds that read only literals, constants and `let` fields of the same trait, fixed when the value is made, so every carrier can have its own size and a table never resizes. A cell field has type `bool`, `int`, `float`, `duration`, an enum or a vector, and a constant default. Each of these is a compile error: `dim` in a state variant, relation, struct or event; a fifth dimension; another dimension type or an `int` dimension without a range; a bound that reads a `var` field, another trait or a call; two dimensions, or a dimension and a field, with one name; a cell field without a constant default, of another type, or `persist`; a dimensioned trait with no cell field; a dimensioned trait as the target of `project` or `keep`.
 
 Every cell always has a value: when a value of the trait is made, every cell holds its field's default. An entity, template or override body, `add T:` and `set T on e:` give only `let` fields; a cell field there is an error that says cells are written by handlers. `add T` on a carrier replaces the trait whole, so every cell returns to its default; `remove T` and destroying the carrier drop every cell. A range holds at most 1048576 values: a made value whose bounds break that does nothing and reports a fault that names the trait and the dimension. A range with `a >= b` gives no cells. A save records no cells; after a restore every cell of a restored carrier holds its default.
 
@@ -1162,7 +1166,7 @@ binding and a nonempty reducer block.
 Sorting follows the reduction, and empty-group identities, retained writes, and
 `keep` commit visibility are unchanged.
 
-**Reducers are typed and pure.** `count()` counts rows; `count(binding)` also counts rows (not distinct entities) and requires a pair binding. `sum` takes `int`, `float`, `vec2` or `vec3` and keeps that type; a vector sum adds per component. `min` and `max` take `int` or `float` and keep that type; a `default` has exactly that type. `any` takes `bool` and yields `bool`. `first_hit` takes and yields `std.physics.volume.SweepHit` (§7.7): it ignores misses and keeps the hit with the smallest `t`, and on equal `t` the row that comes first in fold order. `best(binding, by = key)` names a pair binding other than the `per` binding and an `int` or `float` key, and yields `entity_id`: that binding's entity in the row with the highest key, the earlier row in fold order on a tie; rows whose key is NaN are skipped. Reducer inputs have the purity class of a `where:` predicate (§3.8.2) and read the domain's bindings, constants and named entity fields. Reducer names are unique and must not reuse a pair binding name.
+**Reducers are typed and pure.** `count()` counts rows; `count(binding)` also counts rows (not distinct entities) and requires a pair binding. `sum` takes `int`, `float`, `duration`, `vec2` or `vec3` and keeps that type; a vector sum adds per component, and an `int` or `duration` sum wraps like `+`. `min` and `max` take `int`, `float` or `duration` and keep that type; a `default` has exactly that type (`default = 0s` for a duration). `any` takes `bool` and yields `bool`. `first_hit` takes and yields `std.physics.volume.SweepHit` (§7.7): it ignores misses and keeps the hit with the smallest `t`, and on equal `t` the row that comes first in fold order. `best(binding, by = key)` names a pair binding other than the `per` binding and an `int`, `float` or `duration` key, and yields `entity_id`: that binding's entity in the row with the highest key, the earlier row in fold order on a tie; rows whose key is NaN are skipped. Reducer inputs have the purity class of a `where:` predicate (§3.8.2) and read the domain's bindings, constants and named entity fields. Reducer names are unique and must not reuse a pair binding name.
 
 **Defaults only where an empty group is read.** A `min` or `max` needs `default =` unless every read of it is a field of a keep whose recipients are only groups with rows: `keep T on b` without `if`, or a reduced relation keep (§3.8.6). Any other read, in a handler, a sort key, a keep condition or a field under `if`, can see an empty group, so a missing default there is an error at the reducer that names that read. A global `reduce:` always has a group that may be empty.
 
@@ -1558,12 +1562,19 @@ event PlayerDamaged:
 
 pub extern event frame:
     dt: float
+    delta: duration
 
 pub phase fixed_tick:
     from:
         frame
-    every: 1.0 / 60.0
+    every: 1s / 60
     max: 8
+
+pub phase tick:
+    after:
+        fixed_tick
+    dt: float = frame.dt
+    delta: duration = frame.delta
 
 pub phase render:
     after:
@@ -1573,7 +1584,7 @@ pub phase render:
 
 Ordinary events may be emitted by handlers. External events are injected only by the host/runtime and cannot be authored with `emit`. A phase is a typed activation barrier, not an event. `from:` declares a runtime source lineage; `after:` declares completed upstream phases. A phase must resolve to one unambiguous external-event root lineage.
 
-Non-periodic phase fields are initialized from the current root occurrence or completed upstream phase results. A periodic phase synthesizes `dt` equal to its interval. It also produces `alpha` after its repetition barrier; `alpha` is available to downstream phases, not to the periodic phase's own handlers.
+Non-periodic phase fields are initialized from the current root occurrence or completed upstream phase results. A periodic phase's `every:` is a positive constant `duration` or `float`. The phase synthesizes `dt: float`, its interval in seconds, and `delta: duration`, the same interval as a duration: with a duration interval `dt` is `seconds(every)`, and with a `float` interval `delta` is `duration(every)`. It also produces `alpha` after its repetition barrier; `alpha` is available to downstream phases, not to the periodic phase's own handlers. A phase without `every:` synthesizes nothing; `std.core.tick` and `std.core.late_tick` declare `dt` and `delta` from the root `frame`, whose `delta` the host fills with `duration(dt)`. A timer counts down with `step.delta`; `step.dt` stays a `float` for arithmetic in seconds.
 
 #### 3.11.1 Render-Pass Phases
 
@@ -1705,6 +1716,7 @@ type_ref        = IDENTIFIER [ "[" type_ref "]" ] ;
 Built-in types include:
 
 - `int` (32-bit two's complement), `float` (IEEE-754 binary32), `bool`, `string`
+- `duration`: an exact span of time, a whole number of one fixed unit (see "Durations" below)
 - `vec2`, `vec3`, `quat`, `color`
 - `entity_id`
 - asset handles: `mesh_id`, `texture_id`, `sound_id`, `music_id`, `font_id`, `material_id`
@@ -1747,6 +1759,22 @@ The operands of `+`, `-`, `*`, `/`, `%` and unary `-` must not be `bool`. There 
 - A constant has exactly the value its expression has at runtime.
 
 Render-pass stage handlers (§3.11.1) run on the GPU: their `float` results follow GLSL precision, but integer `/` and `%` keep the rules above.
+
+**Durations.** A `duration` is a whole number of one fixed time unit, 1/705,600,000 of a second, kept in 64
+bits. The unit divides a millisecond and the steps of 24, 25, 30, 48, 50, 60, 90, 100, 120 and 144 Hz, so
+`1s / 60` and `100ms` are exact and a `100ms` countdown at 60 Hz ends after exactly 6 steps.
+
+- `d + d`, `d - d`, `-d`, `d * n` and `n * d` (with `n` an `int`), `math.min` and `math.max` give a
+  duration and wrap modulo 2⁶⁴. `d / n` rounds down and is zero for `n == 0`, like `int` division.
+  Comparisons give `bool`.
+- `d / d` gives a `float`: the ratio of the two counts, and `0.0` for a zero divisor.
+- There is no `%` and no scaling by a `float`: write `duration(seconds(d) * k)`.
+- A `float` never becomes a duration implicitly, not even a constant: `t.left = 0.5` is an error that
+  suggests `0.5s`. `duration(x)` converts `float` seconds to the nearest unit (halves away from zero;
+  NaN gives `0s`; values beyond the range clamp). `seconds(d)` gives the `float` number of seconds.
+- `+=` and `-=` on a duration field are accumulating writes, and `d = math.max(d, e)` is a join, as for
+  `int` (§3.8.1).
+- A render-pass stage handler can't use a duration; convert it with `seconds(...)` before the stage.
 
 Two expressions choose a value:
 
@@ -2247,6 +2275,7 @@ The canonical declarations are equivalent to:
 ```cactus
 pub extern event frame:
     dt: float
+    delta: duration
 
 pub phase input:
     from:
@@ -2255,18 +2284,20 @@ pub phase input:
 pub phase fixed_tick:
     after:
         input
-    every: 1.0 / 60.0
+    every: 1s / 60
     max: 8
 
 pub phase tick:
     after:
         fixed_tick
     dt: float = frame.dt
+    delta: duration = frame.delta
 
 pub phase late_tick:
     after:
         tick
     dt: float = frame.dt
+    delta: duration = frame.delta
 
 pub phase render:
     after:
@@ -2291,7 +2322,7 @@ alpha = accumulator / every
 
 Subtracting `due` deliberately drops capped whole steps while preserving the fractional remainder, so `0 <= alpha < 1` and backlog cannot grow permanently. Each repetition is a separate activation and commit boundary.
 
-**A periodic phase's `dt` is a constant.** Every activation of a phase with `every:` has `dt = every`, so `<phase>.dt` is a constant expression wherever a constant is accepted: `const` blocks, `where:`, `reduce:`, `order by:`. Inside that phase's handlers the name still means the trigger binding, with the same value. A phase without `every:` has no fixed `dt`: reading its `dt` outside its own handlers is a compile error.
+**A periodic phase's `dt` and `delta` are constants.** Every activation of a phase with `every:` has the same `dt` and `delta`, so `<phase>.dt` and `<phase>.delta` are constant expressions wherever a constant is accepted: `const` blocks, `where:`, `reduce:`, `order by:`. Inside that phase's handlers the name still means the trigger binding, with the same value. A phase without `every:` has no fixed step: reading its `dt` or `delta` outside its own handlers is a compile error.
 
 ```cactus
 const:
@@ -2561,12 +2592,12 @@ Not part of the current Standard UI surface: keyboard/gamepad focus, text entry/
 
 **Traits.**
 
-- `Lifetime` — `remaining`, `paused`. The entity is destroyed when `remaining` reaches zero.
-- `Timer` — `remaining`, `armed`, `paused`. One `Timer` is one countdown; it emits one targeted `TimerExpired` back to its own entity and disarms.
+- `Lifetime` — `remaining: duration`, `paused`. The entity is destroyed when `remaining` reaches zero.
+- `Timer` — `remaining: duration`, `armed`, `paused`. One `Timer` is one countdown; it emits one targeted `TimerExpired` back to its own entity and disarms.
 
-**Events.** `RestartTimer` (`duration`) replaces an existing `Timer`'s countdown and arms it; `CancelTimer` disarms it without an expiration; zero-payload `TimerExpired` announces the expiry. All three are ordinary targeted events (§5.4) with ordinary delivery, so a stale or non-matching target is simply a no-match.
+**Events.** `RestartTimer` (`duration: duration`) replaces an existing `Timer`'s countdown and arms it; `CancelTimer` disarms it without an expiration; zero-payload `TimerExpired` announces the expiry. All three are ordinary targeted events (§5.4) with ordinary delivery, so a stale or non-matching target is simply a no-match.
 
-**Fixed simulation time.** Both countdowns advance by `fixed_tick.dt` once per eligible fixed-step invocation (§5.1), never by wall-clock or frame time. A frame that performs no fixed step consumes no countdown time, and catch-up repetitions the `max:` cap drops are never simulated — so a stalled frame cannot expire a timer early or late. Non-finite (`NaN`, `±inf`) and negative durations or `remaining` values normalize to a zero-length countdown.
+**Fixed simulation time.** Both countdowns advance by `fixed_tick.delta` once per eligible fixed-step invocation (§5.1), never by wall-clock or frame time. Durations are exact (§3.15), so a countdown ends on the step its literal names: `100ms` at 60 Hz ends after exactly 6 steps. A frame that performs no fixed step consumes no countdown time, and catch-up repetitions the `max:` cap drops are never simulated — so a stalled frame cannot expire a timer early or late. A zero or negative `remaining` ends at the next eligible step. A run-time `float` number of seconds becomes a duration through `duration(x)`, which maps NaN to `0s`.
 
 **Pause is local.** `Lifetime.paused` and `Timer.paused` are the only pause policy in this module; there is no global clock or pause manager. A paused countdown neither advances nor expires, and `RestartTimer` preserves `paused`, so a timer restarted while paused resumes with its replacement duration intact.
 
@@ -2610,7 +2641,7 @@ rule StartReload:
 
     on ShotFired:
         emit time.RestartTimer to weapon.reload_timer:
-            duration = RELOAD_SECONDS
+            duration = RELOAD_TIME
 ```
 
 `TimerOwner.owner` and `Weapon.reload_timer` are ordinary authored `entity_id` fields — the module supplies no implicit link between a timer and whatever it serves.
@@ -2625,7 +2656,7 @@ World persistence is a small gameplay request surface plus a generated, format-i
 
 **Runtime structure.** The compiler generates one canonical schema descriptor and typed snapshot per program: entity records in creation order, document-local entity identities (so cycles and forward references need no live handle), canonical archetype/trait identity, final trait membership with reconstruction data, and parent links. This is generated data, not something authored in Cactus, and it excludes anything not reachable from a `persist` field or construction argument — event queues, physics solver internals, and random state are not implicitly captured.
 
-**The schema follows meaning.** The descriptor records each field's meaning: its language type, with the widths and lanes the language defines, and every meaning fact declared on it, such as a range. It never records how a backend stores a field, a codegen option, or how the program uses the field (§4.1). So a backend that stores a field in fewer bits, or a build with `--parallel-handlers`, gives the same descriptor and fingerprint, and older saves still load.
+**The schema follows meaning.** The descriptor records each field's meaning: its language type, with the widths and lanes the language defines, and every meaning fact declared on it, such as a range. A `duration` field is recorded as `duration` and saved as its count of time units; the unit is fixed by the language, so changing a phase's `every:` leaves the descriptor and saved values unchanged. It never records how a backend stores a field, a codegen option, or how the program uses the field (§4.1). So a backend that stores a field in fewer bits, or a build with `--parallel-handlers`, gives the same descriptor and fingerprint, and older saves still load.
 
 **Relation rows.** A snapshot records every row of every stored relation whose two ends it records, after the entity records and in row creation order, with document-local end identities and all field values. A row with an unrecorded end is left out. Kept relations are not recorded: after a restore their rows are empty until their keep rule runs. Restore rebuilds each row between the fresh handles of its ends and fires no trigger. Validation rejects, before the world changes, a row whose end has no record, an end record without the end trait, two rows with the same pair, an unknown relation or field, and rows that break a `one` end.
 

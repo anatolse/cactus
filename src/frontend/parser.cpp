@@ -333,6 +333,7 @@ std::string Parser::parse_field_name_or_keyword_error(const char* error_msg) {
                   tok_type != TokenType::PERCENT && tok_type != TokenType::AMPERSAND && tok_type != TokenType::PIPE &&
                   tok_type != TokenType::CARET && tok_type != TokenType::TILDE && tok_type != TokenType::IDENTIFIER &&
                   tok_type != TokenType::INT_LITERAL && tok_type != TokenType::FLOAT_LITERAL &&
+                  tok_type != TokenType::DURATION_LITERAL &&
                   tok_type != TokenType::STRING_LITERAL && tok_type != TokenType::HEX_COLOR && !tok.value.empty());
     if (is_kw) {
         errors_.error(tok.location, "'" + tok.value + "' is a reserved keyword and cannot be used as a field name");
@@ -3593,6 +3594,15 @@ std::unique_ptr<ExprNode> Parser::parse_primary_expr() {
         auto val = advance().value;
         LiteralExpr lit;
         lit.kind     = LiteralExpr::Kind::Float;
+        lit.value    = val;
+        lit.location = loc;
+        return std::make_unique<ExprNode>(ExprNode::Variant{std::move(lit)}, loc);
+    }
+
+    if (check(TokenType::DURATION_LITERAL)) {
+        auto val = advance().value;
+        LiteralExpr lit;
+        lit.kind     = LiteralExpr::Kind::Duration;
         lit.value    = val;
         lit.location = loc;
         return std::make_unique<ExprNode>(ExprNode::Variant{std::move(lit)}, loc);

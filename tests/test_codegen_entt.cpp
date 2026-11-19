@@ -5649,6 +5649,40 @@ TEST_CASE("Codegen EnTT: ambiguous simple-name trait lookup fails loudly under c
     CHECK(mr->canonical_id == "std.render.models.ModelRenderer");
 }
 
+TEST_CASE("Codegen EnTT: main fills the frame's delta and a periodic phase's exact step",
+          "[codegen-entt][phase-runtime][dsl-duration]") {
+    ProgramNode program;
+    const auto decorated = full_pipeline(
+        "module game.clock\n"
+        "pub extern event frame:\n"
+        "    dt: float\n"
+        "    delta: duration\n"
+        "phase fixed_tick:\n"
+        "    from:\n"
+        "        frame\n"
+        "    every: 1s / 60\n"
+        "    max: 8\n"
+        "const:\n"
+        "    GRACE = fixed_tick.delta * 6\n"
+        "trait Timer:\n"
+        "    var left: duration = 100ms\n"
+        "entity Clock:\n"
+        "    Timer\n"
+        "rule Count:\n"
+        "    each:\n"
+        "        Timer as t\n"
+        "    on fixed_tick as step:\n"
+        "        t.left -= step.delta\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.contains("generated_inject_external_event(::cactus_gen::frameEvent{.dt = dt, .delta = "
+                        "cactus::duration_from_seconds(dt)});"));
+    CHECK(code.contains("phase.delta = cactus::Duration{11760000};"));
+    CHECK(code.contains("inline constexpr cactus::Duration fixed_tick_phase_delta{11760000};"));
+    CHECK(code.contains("inline constexpr cactus::Duration GRACE = (::cactus_gen::detail::game::clock::fixed_tick_phase_delta * 6);"));
+}
+
 TEST_CASE("Codegen EnTT: graph scheduler state owns typed events phases commands and stable dispatch",
           "[codegen-entt][phase-runtime][5.1]") {
     ProgramNode program;

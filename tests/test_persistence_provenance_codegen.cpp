@@ -874,6 +874,38 @@ rule Rest:
     CHECK(fingerprint_of(*unit) == fingerprint);
 }
 
+// ── Durations ───────────────────────────────────────────────────────────────
+
+namespace {
+
+std::string duration_world(const std::string& every, const std::string& type, const std::string& value) {
+    return "module world\n\nextern event frame:\n    dt: float\nphase fixed_tick:\n    from:\n        frame\n    every: " +
+           every + "\n\ntrait Cooldown:\n    persist var left: " + type + " = " + value +
+           "\n\nentity Gun:\n    Cooldown\n";
+}
+
+}  // namespace
+
+TEST_CASE("a changed step rate keeps the duration schema", "[codegen-entt][persistence][schema][dsl-duration]") {
+    const auto sixty  = generate(duration_world("1s / 60", "duration", "1500ms"));
+    const auto twice  = generate(duration_world("1s / 120", "duration", "1500ms"));
+    REQUIRE_FALSE(sixty->errors.has_errors());
+    REQUIRE_FALSE(twice->errors.has_errors());
+    CHECK(EnttPersistenceEmitter::canonical_schema_text(sixty->program) ==
+          EnttPersistenceEmitter::canonical_schema_text(twice->program));
+    CHECK(fingerprint_of(*sixty) == fingerprint_of(*twice));
+}
+
+TEST_CASE("a float field changed to a duration changes the fingerprint",
+          "[codegen-entt][persistence][schema][dsl-duration]") {
+    const auto as_float    = generate(duration_world("1s / 60", "float", "1.5"));
+    const auto as_duration = generate(duration_world("1s / 60", "duration", "1500ms"));
+    REQUIRE_FALSE(as_float->errors.has_errors());
+    REQUIRE_FALSE(as_duration->errors.has_errors());
+    CHECK(fingerprint_of(*as_float) != fingerprint_of(*as_duration));
+    CHECK(EnttPersistenceEmitter::canonical_schema_text(as_duration->program).contains("duration"));
+}
+
 // ── Canonical asset and input references ────────────────────────────────────
 
 TEST_CASE("a persistent asset field is captured by canonical declaration, not by handle",

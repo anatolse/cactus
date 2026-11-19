@@ -437,7 +437,7 @@ TEST_CASE("Best: the per binding is rejected", "[semantic][rule-reduce][rule-kee
 
 TEST_CASE("Best: the key must be int or float", "[semantic][rule-reduce][rule-keep]") {
     CHECK(analyze(touch_rule(kReducePerBody + "        top = best(zone, by = zone[Zone].x > 0.0)\n", "    keep Seen on body\n"))
-              .has("best(...) key must be of type 'int' or 'float'"));
+              .has("best(...) key must be of type 'int', 'float' or 'duration'"));
     CHECK(analyze(touch_rule(kReducePerBody + "        top = best(zone)\n", "    keep Seen on body\n")).has("`by = <key>`"));
     CHECK(analyze(touch_rule(kReducePerBody + "        top = best(zone[Zone].x, by = zone[Zone].x)\n", "    keep Seen on body\n"))
               .has("best(...) takes a pair binding"));

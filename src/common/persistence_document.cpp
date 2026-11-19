@@ -23,6 +23,10 @@ Value Value::of_float(float value) {
     return {PersistenceValueKind::Float, value};
 }
 
+Value Value::of_duration(std::int64_t units) {
+    return {PersistenceValueKind::Duration, units};
+}
+
 Value Value::of_string(std::string value) {
     return {PersistenceValueKind::String, std::move(value)};
 }
@@ -66,6 +70,10 @@ std::int32_t Value::as_int() const {
 
 float Value::as_float() const {
     return std::get<float>(storage_);
+}
+
+std::int64_t Value::as_duration() const {
+    return std::get<std::int64_t>(storage_);
 }
 
 const std::string& Value::as_string() const {
@@ -167,6 +175,9 @@ Value Snapshot::read_value(std::uint32_t type_index, ValueReader& in, std::size_
         case PersistenceValueKind::Float:
             value = Value::of_float(in.get_float());
             break;
+        case PersistenceValueKind::Duration:
+            value = Value::of_duration(in.get_duration());
+            break;
         case PersistenceValueKind::Vector: {
             std::array<float, 4> components{};
             if (type->lanes > components.size()) {
@@ -242,6 +253,9 @@ void Snapshot::skip_value(std::uint32_t type_index, ValueReader& in, std::size_t
     switch (type->kind) {
         case PersistenceValueKind::Bool:
             (void)in.get_bool();
+            return;
+        case PersistenceValueKind::Duration:
+            (void)in.get_duration();
             return;
         case PersistenceValueKind::Int:
         case PersistenceValueKind::Float:
@@ -748,6 +762,9 @@ void SnapshotBuilder::put_value(const Value& value, std::uint32_t type_index) {
             return;
         case PersistenceValueKind::Float:
             put_float(value.as_float());
+            return;
+        case PersistenceValueKind::Duration:
+            put_duration(value.as_duration());
             return;
         case PersistenceValueKind::Vector: {
             const auto& vector = value.as_vector();

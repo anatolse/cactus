@@ -81,6 +81,7 @@ enum class TokenType : std::uint8_t {
     IDENTIFIER,
     INT_LITERAL,
     FLOAT_LITERAL,
+    DURATION_LITERAL,
     STRING_LITERAL,
     HEX_COLOR,
 
@@ -269,6 +270,8 @@ inline const char* token_type_to_string(TokenType t) {
             return "INT_LITERAL";
         case TokenType::FLOAT_LITERAL:
             return "FLOAT_LITERAL";
+        case TokenType::DURATION_LITERAL:
+            return "DURATION_LITERAL";
         case TokenType::STRING_LITERAL:
             return "STRING_LITERAL";
         case TokenType::HEX_COLOR:

@@ -348,6 +348,7 @@ private:
             case PersistenceValueKind::Bool:
             case PersistenceValueKind::Int:
             case PersistenceValueKind::Float:
+            case PersistenceValueKind::Duration:
             case PersistenceValueKind::Unsupported:
                 return skip(type_index, in);
         }

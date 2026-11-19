@@ -1,6 +1,7 @@
 #include "frontend/semantic_analyzer.hpp"
 
 #include "common/ast_expressions.hpp"
+#include "common/duration.hpp"
 #include "common/numeric.hpp"
 #include "common/render_pass_builtin_fields.hpp"
 #include "common/render_pass_intrinsics.hpp"
@@ -191,6 +192,7 @@ std::optional<std::string> explicit_module_name(const ProgramNode& program, Erro
 const std::unordered_set<std::string>& builtin_types() {
     static const std::unordered_set<std::string> TYPES = {"int",
                                                           "float",
+                                                          "duration",
                                                           "bool",
                                                           "string",
                                                           "vec2",
@@ -220,6 +222,9 @@ TypeKind type_kind_from_name(const std::string& name) {
     }
     if (name == "float") {
         return TypeKind::Float;
+    }
+    if (name == "duration") {
+        return TypeKind::Duration;
     }
     if (name == "bool") {
         return TypeKind::Bool;
@@ -342,6 +347,7 @@ bool same_type(const TypeInfo& lhs, const TypeInfo& rhs) {
 struct NumericConstant {
     TypeKind kind = TypeKind::Unknown;
     long double value{};
+    Duration duration{};  // exact value when `kind` is Duration
 };
 
 std::optional<NumericConstant> numeric_literal(const LiteralExpr& literal, bool total_int) {
@@ -355,6 +361,13 @@ std::optional<NumericConstant> numeric_literal(const LiteralExpr& literal, bool 
         }
         if (literal.kind == LiteralExpr::Kind::Float) {
             return NumericConstant{.kind = TypeKind::Float, .value = std::stold(literal.value)};
+        }
+        if (literal.kind == LiteralExpr::Kind::Duration) {
+            const auto units = duration_literal_units(literal.value);
+            return units.has_value() ? std::optional{NumericConstant{.kind     = TypeKind::Duration,
+                                                                     .value    = static_cast<long double>(*units),
+                                                                     .duration = Duration{*units}}}
+                                     : std::nullopt;
         }
     } catch (...) {
         return std::nullopt;
@@ -380,10 +393,41 @@ std::optional<int> evaluate_integer_binary(std::string_view op, int left, int ri
     }
     return std::nullopt;
 }
+NumericConstant duration_constant(Duration value) {
+    return NumericConstant{.kind = TypeKind::Duration, .value = static_cast<long double>(value.units), .duration = value};
+}
+
+std::optional<DurationOperand> duration_operand(const NumericConstant& constant) {
+    if (constant.kind == TypeKind::Duration) {
+        return constant.duration;
+    }
+    if (constant.kind == TypeKind::Int) {
+        return static_cast<std::int64_t>(constant.value);
+    }
+    return std::nullopt;
+}
+
+// Folds a binary operator with a duration operand exactly; nullopt for an operator durations don't have.
+std::optional<NumericConstant> evaluate_duration_binary(std::string_view op, NumericConstant left, NumericConstant right) {
+    const auto a      = duration_operand(left);
+    const auto b      = duration_operand(right);
+    const auto result = a.has_value() && b.has_value() ? apply_duration_operator(op, *a, *b) : std::nullopt;
+    if (!result.has_value()) {
+        return std::nullopt;
+    }
+    if (const auto* duration = std::get_if<Duration>(&*result)) {
+        return duration_constant(*duration);
+    }
+    return NumericConstant{.kind = TypeKind::Float, .value = std::get<float>(*result)};
+}
+
 std::optional<NumericConstant> evaluate_numeric_binary(const BinaryExpr& binary,
                                                        NumericConstant left,
                                                        NumericConstant right,
                                                        bool total_int) {
+    if (left.kind == TypeKind::Duration || right.kind == TypeKind::Duration) {
+        return evaluate_duration_binary(binary.op, left, right);
+    }
     const auto result_kind =
         left.kind == TypeKind::Float || right.kind == TypeKind::Float ? TypeKind::Float : TypeKind::Int;
     if (total_int && result_kind == TypeKind::Int) {
@@ -434,6 +478,9 @@ std::optional<NumericConstant> evaluate_numeric_constant(
         auto operand = evaluate_numeric_constant(*unary->operand, constants, evaluating, total_int);
         if (!operand.has_value() || unary->op != "-") {
             return std::nullopt;
+        }
+        if (operand->kind == TypeKind::Duration) {
+            return duration_constant(-operand->duration);
         }
         operand->value = total_int && operand->kind == TypeKind::Int
                              ? static_cast<long double>(num::neg(static_cast<int>(operand->value)))
@@ -587,8 +634,9 @@ void mark_operands(ArithmeticOperands& operands, const TypeInfo& left, const Typ
     if (left.kind == TypeKind::Unknown || right.kind == TypeKind::Unknown) {
         return;
     }
-    const bool left_int  = left.kind == TypeKind::Int;
-    const bool right_int = right.kind == TypeKind::Int;
+    const bool duration  = left.kind == TypeKind::Duration || right.kind == TypeKind::Duration;
+    const bool left_int  = !duration && left.kind == TypeKind::Int;
+    const bool right_int = !duration && right.kind == TypeKind::Int;
     if (left_int && right_int) {
         operands = ArithmeticOperands::Int;
     } else if (left_int) {
@@ -598,6 +646,50 @@ void mark_operands(ArithmeticOperands& operands, const TypeInfo& left, const Typ
     } else {
         operands = ArithmeticOperands::Other;
     }
+}
+
+// `<phase>.delta` is the step as a duration, `<phase>.dt` the same step in float seconds.
+TypeInfo phase_step_type(std::string_view member) {
+    return member == "delta" ? make_duration_type() : make_float_type();
+}
+
+bool is_duration_conversion(std::string_view name) {
+    return name == "duration" || name == "seconds";
+}
+
+// The source spelling of a simple operand, for a diagnostic's suggested rewrite; empty otherwise.
+std::string operand_spelling(const ExprNode& expr) {
+    if (const auto* literal = std::get_if<LiteralExpr>(&expr.expr)) {
+        return literal->value;
+    }
+    if (const auto* unary = std::get_if<UnaryExpr>(&expr.expr); unary != nullptr && unary->op == "-") {
+        const auto operand = operand_spelling(*unary->operand);
+        return operand.empty() ? std::string{} : "-" + operand;
+    }
+    return dotted_name_of(expr);
+}
+
+std::string spelled_or(const ExprNode& expr, std::string_view placeholder) {
+    auto spelling = operand_spelling(expr);
+    return spelling.empty() ? std::string(placeholder) : spelling;
+}
+
+// How to write a non-duration `value` where a duration is expected.
+std::string duration_hint(const ExprNode& value) {
+    const auto* negated = std::get_if<UnaryExpr>(&value.expr);
+    const auto& inner   = negated != nullptr && negated->op == "-" ? *negated->operand : value;
+    if (const auto* literal = std::get_if<LiteralExpr>(&inner.expr);
+        literal != nullptr && (literal->kind == LiteralExpr::Kind::Int || literal->kind == LiteralExpr::Kind::Float)) {
+        return "write `" + operand_spelling(value) + "s`";
+    }
+    if (const auto* member = std::get_if<MemberExpr>(&value.expr); member != nullptr && member->member == "dt") {
+        const auto object = operand_spelling(*member->object);
+        if (!object.empty()) {
+            return "write `" + object + ".delta`";
+        }
+    }
+    return "write a duration literal such as `1s`, or convert seconds with `duration(" + spelled_or(value, "x") +
+           ")`";
 }
 
 RelationTestExpr clone_relation_test(const RelationTestExpr& test) {
@@ -2859,7 +2951,8 @@ void SemanticAnalyzer::validate_trait_default_values(ProgramNode& program) {
                     continue;
                 }
                 auto actual   = infer_expr_type(**field.default_value, {}, {}, nullptr);
-                if (actual.kind != TypeKind::Unknown && expected.kind != TypeKind::Unknown &&
+                if (!report_duration_mismatch(expected, actual, **field.default_value, field.location) &&
+                    actual.kind != TypeKind::Unknown && expected.kind != TypeKind::Unknown &&
                     actual.kind != expected.kind) {
                     errors_.error(
                         field.location,
@@ -3114,7 +3207,7 @@ bool SemanticAnalyzer::resolve_phase_dt(MemberExpr& member, const std::unordered
     if (member.resolved_phase_dt.has_value()) {
         return true;
     }
-    if (member.member != "dt") {
+    if (member.member != "dt" && member.member != "delta") {
         return false;
     }
     const auto chain = member_chain_segments(member);
@@ -3134,8 +3227,8 @@ bool SemanticAnalyzer::resolve_phase_dt(MemberExpr& member, const std::unordered
     if (!phase_is_periodic(resolved->symbol)) {
         const auto phase = join_segments(*chain, 0, chain->size() - 1);
         errors_.error(member.location,
-                      "'" + phase + ".dt' is only available inside '" + phase +
-                          "' handlers; only a phase with `every:` has a constant dt");
+                      "'" + phase + "." + member.member + "' is only available inside '" + phase +
+                          "' handlers; only a phase with `every:` has a constant " + member.member);
     }
     return true;
 }
@@ -3428,6 +3521,9 @@ TypeInfo SemanticAnalyzer::constant_type(const ConstAssignment& assignment) {
         return type;
     }
     auto declared = resolve_type_ref(*assignment.type);
+    if (report_duration_mismatch(declared, type, *assignment.value, assignment.location)) {
+        return declared;
+    }
     const bool fits = (open_element && declared.kind == TypeKind::List) || type.kind == TypeKind::Unknown ||
                       declared.kind == TypeKind::Unknown || same_type(declared, type);
     if (!fits) {
@@ -4721,22 +4817,23 @@ void SemanticAnalyzer::validate_reducer(ReducerDecl& reducer,
     }
 
     if (reducer.kind == ReducerKind::Sum) {
-        if (input.kind != TypeKind::Int && input.kind != TypeKind::Float && input.kind != TypeKind::Vec2 &&
-            input.kind != TypeKind::Vec3) {
+        if (input.kind != TypeKind::Int && input.kind != TypeKind::Float && input.kind != TypeKind::Duration &&
+            input.kind != TypeKind::Vec2 && input.kind != TypeKind::Vec3) {
             errors_.error(reducer.input->location,
-                          "sum(...) input must be of type 'int', 'float', 'vec2' or 'vec3', got '" + input.name + "'");
+                          "sum(...) input must be of type 'int', 'float', 'duration', 'vec2' or 'vec3', got '" +
+                              input.name + "'");
             return;
         }
         reducer.result_type = input;
         return;
     }
 
-    if (input.kind != TypeKind::Int && input.kind != TypeKind::Float) {
+    if (input.kind != TypeKind::Int && input.kind != TypeKind::Float && input.kind != TypeKind::Duration) {
         errors_.error(reducer.input->location,
-                      kind_name + "(...) input must be of type 'int' or 'float', got '" + input.name + "'");
+                      kind_name + "(...) input must be of type 'int', 'float' or 'duration', got '" + input.name + "'");
         return;
     }
-    reducer.result_type = input.kind == TypeKind::Int ? make_int_type() : make_float_type();
+    reducer.result_type = make_type_info(input.kind, input.name);
 
     if (reducer.default_value == nullptr) {
         return;  // check_default_free_reads decides whether an empty group can be read
@@ -4794,8 +4891,9 @@ void SemanticAnalyzer::validate_best_reducer(ReducerDecl& reducer, const RuleNod
     if (key.kind == TypeKind::Unknown) {
         return;
     }
-    if (key.kind != TypeKind::Int && key.kind != TypeKind::Float) {
-        errors_.error(reducer.key->location, "best(...) key must be of type 'int' or 'float', got '" + key.name + "'");
+    if (key.kind != TypeKind::Int && key.kind != TypeKind::Float && key.kind != TypeKind::Duration) {
+        errors_.error(reducer.key->location,
+                      "best(...) key must be of type 'int', 'float' or 'duration', got '" + key.name + "'");
         return;
     }
     reducer.key_type = key;
@@ -5302,12 +5400,21 @@ void SemanticAnalyzer::validate_phase_from_after_every_max(const PhaseCollection
         if (phase->every.has_value()) {
             std::unordered_set<std::string> evaluating;
             const auto value = evaluate_numeric_constant(**phase->every, phases.constants, evaluating);
-            if (!value.has_value() || value->kind != TypeKind::Float || !std::isfinite(value->value) ||
-                value->value <= 0.0L) {
-                errors_.error((**phase->every).location,
-                              "phase '" + name + "' every value must be a positive compile-time float");
-            } else {
+            const bool positive_float = value.has_value() && value->kind == TypeKind::Float &&
+                                        std::isfinite(value->value) && value->value > 0.0L;
+            const bool positive_duration =
+                value.has_value() && value->kind == TypeKind::Duration && value->duration.units > 0;
+            if (positive_duration) {
+                resolved_phase.every_units   = value->duration.units;
+                resolved_phase.every_seconds = static_cast<double>(value->duration.units) /
+                                               static_cast<double>(kDurationUnitsPerSecond);
+            } else if (positive_float) {
                 resolved_phase.every_seconds = static_cast<double>(value->value);
+                resolved_phase.every_units =
+                    duration_from_seconds(static_cast<float>(*resolved_phase.every_seconds)).units;
+            } else {
+                errors_.error((**phase->every).location,
+                              "phase '" + name + "' every value must be a positive compile-time float or duration");
             }
         }
         if (phase->max.has_value()) {
@@ -5433,7 +5540,7 @@ void SemanticAnalyzer::synthesize_phase_periodic_fields(const PhaseCollection& p
             }
         }
         if (resolved_phase.every_seconds.has_value()) {
-            for (const auto* synthetic_name : {"dt", "alpha"}) {
+            for (const auto* synthetic_name : {"dt", "delta", "alpha"}) {
                 if (field_names.contains(synthetic_name)) {
                     errors_.error(
                         phase->location,
@@ -5442,7 +5549,7 @@ void SemanticAnalyzer::synthesize_phase_periodic_fields(const PhaseCollection& p
                 }
                 ResolvedField synthetic;
                 synthetic.name               = synthetic_name;
-                synthetic.type               = make_float_type();
+                synthetic.type               = phase_step_type(synthetic_name);
                 synthetic.is_let             = true;
                 synthetic.has_default        = true;
                 synthetic.is_synthesized     = true;
@@ -5486,6 +5593,8 @@ void SemanticAnalyzer::validate_phase_field_initializers(const PhaseCollection& 
                         return make_color_type();
                     case LiteralExpr::Kind::Bool:
                         return make_bool_type();
+                    case LiteralExpr::Kind::Duration:
+                        return make_duration_type();
                 }
             }
             if (const auto* unary = std::get_if<UnaryExpr>(&expr.expr)) {
@@ -5878,6 +5987,39 @@ void SemanticAnalyzer::validate_render_stage_statement(
     }
 }
 
+// A stage handler runs on the GPU, which has no portable 64-bit integer for a duration.
+void SemanticAnalyzer::reject_stage_durations(const RuleNode& rule, const EventHandlerNode& handler) const {
+    std::unordered_map<std::string, const ResolvedTrait*> bindings;
+    for (const auto& entry : rule.filter.entries) {
+        if (const auto* trait = find_resolved_trait(entry.resolved_trait_id, entry.qualified_name)) {
+            bindings.emplace(entry.alias.value_or(trait->name), trait);
+        }
+    }
+    const auto reads_duration = [&](const ExprNode& node) {
+        if (const auto* literal = std::get_if<LiteralExpr>(&node.expr)) {
+            return literal->kind == LiteralExpr::Kind::Duration;
+        }
+        if (const auto* call = std::get_if<CallExpr>(&node.expr)) {
+            const auto* callee = std::get_if<IdentExpr>(&call->callee->expr);
+            return callee != nullptr && is_duration_conversion(callee->name);
+        }
+        const auto* member = std::get_if<MemberExpr>(&node.expr);
+        const auto* owner  = member == nullptr ? nullptr : std::get_if<IdentExpr>(&member->object->expr);
+        const auto found   = owner == nullptr ? bindings.end() : bindings.find(owner->name);
+        return found != bindings.end() &&
+               find_field_type_in(found->second->fields, member->member).kind == TypeKind::Duration;
+    };
+    for_each_statement_expression(handler.body, [&](const ExprNode& top) {
+        visit_expression(top, [&](const ExprNode& node) {
+            if (reads_duration(node)) {
+                errors_.error(node.location,
+                              "a render-pass stage handler can't use a `duration`; convert it with `seconds(...)` "
+                              "in a rule before the stage");
+            }
+        });
+    });
+}
+
 // dsl-render-passes: validates the restricted statement/expression subset a
 // stage handler body may use (design.md Decision 3): `let`, assignment to
 // invocation-local variables and the handler's own writable built-in output
@@ -6006,6 +6148,7 @@ void SemanticAnalyzer::validate_render_pass_stage_handlers(ProgramNode& program)
                 validate_render_pass_stage_handler_body(
                     handler->body, *handler->alias, filter_alias_names, kVertexOutputs, "vertex");
             }
+            reject_stage_durations(*rule, *handler);
         }
         if (fragment_match != nullptr) {
             const auto& [rule, handler] = *fragment_match;
@@ -6013,6 +6156,7 @@ void SemanticAnalyzer::validate_render_pass_stage_handlers(ProgramNode& program)
             if (handler->alias.has_value()) {
                 validate_render_pass_stage_handler_body(handler->body, *handler->alias, {}, kFragmentOutputs, "fragment");
             }
+            reject_stage_durations(*rule, *handler);
         }
 
         // dsl-render-passes, "Render-pass synthetic pass-local edges": record
@@ -7424,6 +7568,9 @@ void SemanticAnalyzer::validate_trait_field_values(
 
         auto actual          = infer_expr_type(*arg.value, filter_bindings, locals, handler_event, pair_scope);
         const auto& expected = it->second->type;
+        if (report_duration_mismatch(expected, actual, *arg.value, arg.location)) {
+            continue;
+        }
         if (actual.kind != TypeKind::Unknown && expected.kind != TypeKind::Unknown && actual.kind != expected.kind) {
             errors_.error(arg.location, "type mismatch for field '" + arg.name + "' in " + context_desc);
             continue;
@@ -7605,6 +7752,14 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
             if (event != nullptr && !event_fields.contains(field.name)) {
                 errors_.error(field.location,
                               "unknown event field '" + field.name + "' for event '" + emit.event_name + "'");
+                continue;
+            }
+            if (event != nullptr) {
+                (void)report_duration_mismatch(
+                    find_field_type_in(event->fields, field.name),
+                    infer_expr_type(*field.value, filter_bindings, locals, handler_event, pair_scope),
+                    *field.value,
+                    field.location);
             }
         }
 
@@ -7876,6 +8031,9 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
 
             auto value_type = infer_expr_type(*assign_stmt->value, filter_bindings, locals, handler_event, pair_scope);
             mark_operands(assign_stmt->operands, target_type, value_type);
+            if (!target_rejected) {
+                check_duration_assignment(*assign_stmt, target_type, value_type);
+            }
             if (!target_rejected && assign_stmt->op == "=" && struct_types_mismatch(target_type, value_type)) {
                 errors_.error(assign_stmt->location,
                               "type mismatch: cannot assign '" + type_display_name(value_type) + "' to '" +
@@ -8012,8 +8170,10 @@ void SemanticAnalyzer::declare_local(const LetStmt& stmt,
     }
     if (stmt.type.has_value()) {
         auto declared = resolve_type_ref(*stmt.type);
-        if (declared.kind != TypeKind::Unknown && inferred.kind != TypeKind::Unknown &&
-            !same_type(declared, inferred)) {
+        if (stmt.value != nullptr && report_duration_mismatch(declared, inferred, *stmt.value, stmt.location)) {
+            inferred = std::move(declared);
+        } else if (declared.kind != TypeKind::Unknown && inferred.kind != TypeKind::Unknown &&
+                   !same_type(declared, inferred)) {
             errors_.error(stmt.location,
                           "local '" + stmt.name + "' is declared as '" + declared.name + "' but initialized with '" +
                               inferred.name + "'");
@@ -8565,6 +8725,7 @@ void SemanticAnalyzer::collect_phase_plan(const PhaseNode& phase, std::size_t de
         plan.fields                              = resolved->second.fields;
         plan.runtime_root                        = resolved->second.runtime_root;
         plan.every_seconds                       = resolved->second.every_seconds;
+        plan.every_units                         = resolved->second.every_units;
         plan.max_repetitions                     = resolved->second.max_repetitions;
         plan.declaration_order.declaration_index = declaration_index;
         result_.execution_graph.phases.push_back(std::move(plan));
@@ -9218,7 +9379,8 @@ bool accumulates(const ResolvedTrait* declaration, const std::string& field) {
         return false;
     }
     const auto kind = found->type.kind;
-    return kind == TypeKind::Int || kind == TypeKind::Float || kind == TypeKind::Vec2 || kind == TypeKind::Vec3;
+    return kind == TypeKind::Int || kind == TypeKind::Float || kind == TypeKind::Duration || kind == TypeKind::Vec2 ||
+           kind == TypeKind::Vec3;
 }
 
 }  // namespace
@@ -13920,7 +14082,7 @@ TypeInfo SemanticAnalyzer::infer_member_expr_type(
         return find_const_type(*member.resolved_const_id);
     }
     if (member.resolved_phase_dt.has_value()) {
-        return make_float_type();
+        return phase_step_type(member.member);
     }
     if (member.resolved_asset_type.has_value()) {
         return asset_handle_type(*member.resolved_asset_type).value_or(make_unknown_type());
@@ -14046,6 +14208,150 @@ bool SemanticAnalyzer::validate_range_iterable(
     return true;
 }
 
+// A template or spawn value has no handler scope here, so only a value that folds to a constant is checked.
+void SemanticAnalyzer::report_constant_duration_mismatch(const TypeInfo& expected,
+                                                         const ExprNode& value,
+                                                         const SourceLocation& location) const {
+    std::unordered_set<std::string> evaluating;
+    const auto folded = evaluate_numeric_constant(value, const_initializers_, evaluating);
+    if (!folded.has_value()) {
+        return;
+    }
+    auto actual = make_float_type();
+    if (folded->kind == TypeKind::Duration) {
+        actual = make_duration_type();
+    } else if (folded->kind == TypeKind::Int) {
+        actual = make_int_type();
+    }
+    (void)report_duration_mismatch(expected, actual, value, location);
+}
+
+// `=`, `+=` and `-=` keep a duration a duration; `*=` and `/=` scale it by an `int`.
+void SemanticAnalyzer::check_duration_assignment(const VarAssign& assign,
+                                                 const TypeInfo& target,
+                                                 const TypeInfo& value) const {
+    if (target.kind != TypeKind::Duration && value.kind != TypeKind::Duration) {
+        return;
+    }
+    if (assign.op == "=" || assign.op == "+=" || assign.op == "-=" || target.kind != TypeKind::Duration) {
+        (void)report_duration_mismatch(target, value, *assign.value, assign.location);
+        return;
+    }
+    if (value.kind != TypeKind::Int && value.kind != TypeKind::Unknown) {
+        errors_.error(assign.location, "a duration scales only by an `int`; write `duration(seconds(d) " +
+                                           assign.op.substr(0, 1) + " k)`");
+    }
+}
+
+bool SemanticAnalyzer::report_duration_mismatch(const TypeInfo& expected,
+                                                const TypeInfo& actual,
+                                                const ExprNode& value,
+                                                const SourceLocation& location) const {
+    if (expected.kind == TypeKind::Unknown || actual.kind == TypeKind::Unknown) {
+        return false;
+    }
+    if (expected.kind == TypeKind::Duration && actual.kind != TypeKind::Duration) {
+        errors_.error(location, "expected a `duration`, got '" + type_display_name(actual) + "'; " + duration_hint(value));
+        return true;
+    }
+    if (expected.kind != TypeKind::Duration && actual.kind == TypeKind::Duration) {
+        errors_.error(location, "expected '" + type_display_name(expected) + "', got a `duration`; convert it with `seconds(" +
+                                    spelled_or(value, "d") + ")`");
+        return true;
+    }
+    return false;
+}
+
+TypeInfo SemanticAnalyzer::infer_duration_binary_type(const BinaryExpr& binary,
+                                                      const TypeInfo& left,
+                                                      const TypeInfo& right,
+                                                      const SourceLocation& location) const {
+    const auto& op            = binary.op;
+    const bool left_duration  = left.kind == TypeKind::Duration;
+    const bool right_duration = right.kind == TypeKind::Duration;
+    const auto& other         = left_duration ? right : left;
+    const auto& other_expr    = left_duration ? *binary.right : *binary.left;
+    if (op == "==" || op == "!=" || op == "<" || op == ">" || op == "<=" || op == ">=") {
+        (void)report_duration_mismatch(make_duration_type(), other, other_expr, other_expr.location);
+        return make_bool_type();
+    }
+    if (op == "%") {
+        errors_.error(location, "`%` is not defined for durations; write `d - (d / n) * n`");
+        return make_unknown_type();
+    }
+    if (op == "+" || op == "-") {
+        return report_duration_mismatch(make_duration_type(), other, other_expr, other_expr.location)
+                   ? make_unknown_type()
+                   : make_duration_type();
+    }
+    if (left_duration && right_duration) {
+        if (op == "/") {
+            return make_float_type();
+        }
+        errors_.error(location, "two durations can't be multiplied; a duration scales by an `int`");
+        return make_unknown_type();
+    }
+    if (other.kind == TypeKind::Int && (op == "*" || left_duration)) {
+        return make_duration_type();
+    }
+    if (other.kind == TypeKind::Float) {
+        const auto& duration_expr = left_duration ? *binary.left : *binary.right;
+        errors_.error(location, "a duration scales only by an `int`; write `duration(seconds(" +
+                                    spelled_or(duration_expr, "d") + ") " + op + " " + spelled_or(other_expr, "k") +
+                                    ")`");
+        return make_unknown_type();
+    }
+    errors_.error(location, "no operator '" + op + "' for operand types '" + type_display_name(left) + "' and '" +
+                                type_display_name(right) + "'");
+    return make_unknown_type();
+}
+
+// `duration(x)` takes `float` (or `int`) seconds; `seconds(d)` takes a duration.
+TypeInfo SemanticAnalyzer::infer_duration_conversion_type(
+    const CallExpr& call,
+    const std::string& name,
+    const SourceLocation& location,
+    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+    const std::unordered_map<std::string, TypeInfo>& local_bindings,
+    const ResolvedStruct* handler_event,
+    const PairScope* pair_scope) const {
+    const bool to_duration = name == "duration";
+    auto result            = to_duration ? make_duration_type() : make_float_type();
+    if (call.args.size() != 1) {
+        errors_.error(location, "`" + name + "(...)` takes one argument");
+        return result;
+    }
+    const auto arg  = infer_expr_type(*call.args.front(), filter_bindings, local_bindings, handler_event, pair_scope);
+    const bool fits = arg.kind == TypeKind::Unknown ||
+                      (to_duration ? arg.kind == TypeKind::Float || arg.kind == TypeKind::Int
+                                   : arg.kind == TypeKind::Duration);
+    if (!fits) {
+        const std::string expected =
+            to_duration ? "`duration(...)` converts `float` seconds" : "`seconds(...)` takes a `duration`";
+        errors_.error(location, expected + ", got '" + type_display_name(arg) + "'");
+    }
+    return result;
+}
+
+// `min`/`max` with a duration argument: a duration when the other argument is one too.
+std::optional<TypeInfo> SemanticAnalyzer::infer_duration_join_type(
+    const CallExpr& call,
+    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+    const std::unordered_map<std::string, TypeInfo>& local_bindings,
+    const ResolvedStruct* handler_event,
+    const PairScope* pair_scope) const {
+    const auto first  = infer_expr_type(*call.args[0], filter_bindings, local_bindings, handler_event, pair_scope);
+    const auto second = infer_expr_type(*call.args[1], filter_bindings, local_bindings, handler_event, pair_scope);
+    if (first.kind != TypeKind::Duration && second.kind != TypeKind::Duration) {
+        return std::nullopt;
+    }
+    const bool first_duration = first.kind == TypeKind::Duration;
+    const auto& other_arg     = first_duration ? *call.args[1] : *call.args[0];
+    return report_duration_mismatch(make_duration_type(), first_duration ? second : first, other_arg, other_arg.location)
+               ? make_unknown_type()
+               : make_duration_type();
+}
+
 // 84 after extracting infer_ident_expr_type/infer_member_expr_type (task
 // 6.12); still the exhaustive ExprNode-variant type-inference dispatch, with
 // several arms recursing into itself (Unary/Binary/If/List).
@@ -14067,6 +14373,8 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
                 return make_color_type();
             case LiteralExpr::Kind::Bool:
                 return make_bool_type();
+            case LiteralExpr::Kind::Duration:
+                return make_duration_type();
         }
     }
 
@@ -14174,6 +14482,11 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
             ident != nullptr && ident->name == "adjacent" && !func_names_.contains(ident->name)) {
             return make_bool_type();
         }
+        if (const auto* ident = std::get_if<IdentExpr>(&call->callee->expr);
+            ident != nullptr && is_duration_conversion(ident->name) && !func_names_.contains(ident->name)) {
+            return infer_duration_conversion_type(
+                *call, ident->name, expr.location, filter_bindings, local_bindings, handler_event, pair_scope);
+        }
         if (auto* ident = std::get_if<IdentExpr>(&call->callee->expr); ident != nullptr && ident->name == "exists") {
             if (handler_event == nullptr) {
                 errors_.error(expr.location,
@@ -14217,6 +14530,12 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
         if (reference_arguments_checked_) {
             check_reference_arguments(*call, *function, filter_bindings, local_bindings);
         }
+        if (join_callee(*call).has_value()) {
+            if (auto joined =
+                    infer_duration_join_type(*call, filter_bindings, local_bindings, handler_event, pair_scope)) {
+                return *std::move(joined);
+            }
+        }
         return function->return_type.value_or(make_unknown_type());
     }
     if (const auto* unary = std::get_if<UnaryExpr>(&expr.expr)) {
@@ -14239,6 +14558,11 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
             require_bool(left, binary->left->location, "left operand of `" + binary->op + "`");
             require_bool(right, binary->right->location, "right operand of `" + binary->op + "`");
             return make_bool_type();
+        }
+        if ((left.kind == TypeKind::Duration || right.kind == TypeKind::Duration) &&
+            left.kind != TypeKind::Unknown && right.kind != TypeKind::Unknown) {
+            mark_operands(binary->operands, left, right);
+            return infer_duration_binary_type(*binary, left, right, expr.location);
         }
         if ((binary->op == "==" || binary->op == "!=") &&
             ((left.kind == TypeKind::EntityId && right.kind == TypeKind::Int) ||
@@ -14337,6 +14661,8 @@ void SemanticAnalyzer::validate_trait_override_assignments(const std::vector<con
             }
             const auto* field = find_field_in(trait->fields, assign.name);
             reject_cell_field_value(*trait, assign.name, assign.location);
+            report_constant_duration_mismatch(
+                find_field_type_in(trait->fields, assign.name), *assign.value, assign.location);
             if (field != nullptr && field->type.kind != TypeKind::EntityId && names_entity(*assign.value)) {
                 errors_.error(assign.location,
                               "type mismatch for field '" + assign.name + "' in " + context_desc +

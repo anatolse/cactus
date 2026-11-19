@@ -173,7 +173,7 @@ struct QueryCallExpr {
 // ── Expression Nodes ────────────────────────────────────────────────────────
 
 struct LiteralExpr {
-    enum class Kind { Int, Float, String, HexColor, Bool };
+    enum class Kind { Int, Float, String, HexColor, Bool, Duration };
     Kind kind;
     std::string value;
     SourceLocation location;

@@ -30,6 +30,8 @@ std::string read_expression(const DecoratedProgram& program, const TypeInfo& typ
             return "in.get_int()";
         case PersistenceValueKind::Float:
             return "in.get_float()";
+        case PersistenceValueKind::Duration:
+            return "cactus::Duration{in.get_duration()}";
         case PersistenceValueKind::String:
             return "std::string(in.get_name())";
         case PersistenceValueKind::Vector: {

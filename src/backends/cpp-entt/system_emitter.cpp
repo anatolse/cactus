@@ -3056,6 +3056,9 @@ static std::string rewrite_expr_node(  // NOLINT(readability-function-cognitive-
                 if (e.kind == LiteralExpr::Kind::Float) {
                     return EnttCodegenUtils::float_literal_cpp(e.value);
                 }
+                if (e.kind == LiteralExpr::Kind::Duration) {
+                    return EnttCodegenUtils::duration_literal_cpp(e.value);
+                }
                 if (e.kind == LiteralExpr::Kind::HexColor) {
                     std::string hex = e.value;
                     if (hex.size() == 6) {
@@ -3247,6 +3250,13 @@ static std::string rewrite_expr_node(  // NOLINT(readability-function-cognitive-
                         }
                     }
                 }
+                if (const auto* conversion = EnttCodegenUtils::duration_conversion_cpp(e);
+                    conversion != nullptr && e.args.size() == 1) {
+                    return std::string(conversion) + "(" +
+                           rewrite_vec_arg(
+                               *e.args[0], trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds) +
+                           ")";
+                }
                 if (const auto* ident = std::get_if<IdentExpr>(&e.callee->expr);
                     ident != nullptr && (ident->name == "vec2" || ident->name == "vec3")) {
                     std::string args;
@@ -3283,7 +3293,7 @@ static std::string rewrite_expr_node(  // NOLINT(readability-function-cognitive-
                        ")";
             } else if constexpr (std::is_same_v<E, MemberExpr>) {
                 if (e.resolved_phase_dt.has_value()) {
-                    return EnttCodegenUtils::phase_dt_cpp_name(*e.resolved_phase_dt);
+                    return EnttCodegenUtils::phase_dt_cpp_name(*e.resolved_phase_dt, e.member);
                 }
                 if (auto lowered = lowered_trigger_reference(expr)) {
                     return *std::move(lowered);

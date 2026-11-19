@@ -433,6 +433,7 @@ void ModuleArtifact::write_phases(std::ostream& out,
         write_bool(out, phase.every_seconds.has_value());
         if (phase.every_seconds.has_value()) {
             write_double(out, *phase.every_seconds);
+            write_i64(out, phase.every_units.value_or(0));
         }
         write_bool(out, phase.max_repetitions.has_value());
         if (phase.max_repetitions.has_value()) {
@@ -821,6 +822,7 @@ void ModuleArtifact::write_execution_graph(std::ostream& out, const ExecutionGra
         write_bool(out, phase.every_seconds.has_value());
         if (phase.every_seconds.has_value()) {
             write_double(out, *phase.every_seconds);
+            write_i64(out, phase.every_units.value_or(0));
         }
         write_bool(out, phase.max_repetitions.has_value());
         if (phase.max_repetitions.has_value()) {
@@ -1299,6 +1301,7 @@ std::unordered_map<std::string, ResolvedPhase> ModuleArtifact::read_phases(std::
         phase.runtime_root    = read_optional_symbol_id(in);
         if (read_bool(in)) {
             phase.every_seconds = read_double(in);
+            phase.every_units   = read_i64(in);
         }
         if (read_bool(in)) {
             phase.max_repetitions = read_i64(in);
@@ -1741,6 +1744,7 @@ ExecutionGraph ModuleArtifact::read_execution_graph(std::istream& in) {
         phase.runtime_root = read_optional_symbol_id(in);
         if (read_bool(in)) {
             phase.every_seconds = read_double(in);
+            phase.every_units   = read_i64(in);
         }
         if (read_bool(in)) {
             phase.max_repetitions = read_i64(in);
@@ -2133,6 +2137,7 @@ ImportedSymbols ModuleArtifact::extract_pub_symbols(const std::string& module_na
                                                     .upstream_phases = phase.upstream_phases,
                                                     .runtime_root    = phase.runtime_root,
                                                     .every_seconds   = phase.every_seconds,
+                                                    .every_units     = phase.every_units,
                                                     .max_repetitions = phase.max_repetitions};
     }
 

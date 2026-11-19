@@ -200,7 +200,7 @@ rule NewGame:
     on tick:
         session.Game[session.Session].new_game = false
         session.Game[session.Session].mode = session.SessionMode.Generating
-        session.Game[session.Session].seconds = 0.0
+        session.Game[session.Session].played = 0s
         spawn world.Terrain(size = config.size, height = config.height, seed = config.seed, robots = config.starting_robots, batch = config.batch)
 
 rule Ready:

@@ -1,6 +1,7 @@
 #include "backends/cpp-entt/type_utils.hpp"
 #include "common/ast_expressions.hpp"
 #include "common/codegen_error.hpp"
+#include "common/duration.hpp"
 #include "common/joined.hpp"
 
 #include "frontend/single_traits.hpp"
@@ -293,6 +294,8 @@ std::string EnttCodegenUtils::type_to_cpp(const TypeInfo& type) {
             return "int";
         case TypeKind::Float:
             return "float";
+        case TypeKind::Duration:
+            return "cactus::Duration";
         case TypeKind::Bool:
             return "bool";
         case TypeKind::String:
@@ -461,6 +464,9 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const ProgramNode*
                 if (e.kind == LiteralExpr::Kind::Float) {
                     return float_literal_cpp(e.value);
                 }
+                if (e.kind == LiteralExpr::Kind::Duration) {
+                    return duration_literal_cpp(e.value);
+                }
                 return e.value;
             } else if constexpr (std::is_same_v<E, IdentExpr>) {
                 if (e.template_slot.has_value()) {
@@ -489,7 +495,9 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const ProgramNode*
                 // Decision 2; CLAUDE.md "Avoid duplication").
                 const auto* callee_ident = std::get_if<IdentExpr>(&e.callee->expr);
                 const bool is_color_ctor = callee_ident != nullptr && callee_ident->name == "color";
-                std::string result       = (is_color_ctor ? std::string("color_from_components") : emit_expr(*e.callee, ast)) + "(";
+                const auto* runtime_callee = is_color_ctor ? "color_from_components" : duration_conversion_cpp(e);
+                std::string result =
+                    (runtime_callee != nullptr ? std::string(runtime_callee) : emit_expr(*e.callee, ast)) + "(";
                 for (size_t i = 0; i < e.args.size(); ++i) {
                     if (i > 0) {
                         result += ", ";
@@ -508,7 +516,7 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const ProgramNode*
                     return e.resolved_asset_id->local_name;
                 }
                 if (e.resolved_phase_dt.has_value()) {
-                    return phase_dt_cpp_name(*e.resolved_phase_dt);
+                    return phase_dt_cpp_name(*e.resolved_phase_dt, e.member);
                 }
                 if (auto* ident = std::get_if<IdentExpr>(&e.object->expr); ident != nullptr && !ident->resolved_const_id) {
                     if (!ident->name.empty() && std::isupper(static_cast<unsigned char>(ident->name[0])) != 0) {
@@ -688,7 +696,7 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const DecoratedPro
                     return e.resolved_asset_id->local_name;
                 }
                 if (e.resolved_phase_dt.has_value()) {
-                    return phase_dt_cpp_name(*e.resolved_phase_dt);
+                    return phase_dt_cpp_name(*e.resolved_phase_dt, e.member);
                 }
                 // Three-level: alias.EnumType.Variant → canonical_EnumType::Variant
                 if (const auto* inner_member = std::get_if<MemberExpr>(&e.object->expr)) {
@@ -729,12 +737,27 @@ std::string EnttCodegenUtils::symbol_cpp_name(const SymbolId& symbol) {
     return cpp_type_ref(symbol);
 }
 
-DetailName EnttCodegenUtils::phase_dt_name(const SymbolId& phase) {
-    return detail_name(phase.module.name, phase.local_name + "_phase_dt");
+DetailName EnttCodegenUtils::phase_dt_name(const SymbolId& phase, std::string_view member) {
+    return detail_name(phase.module.name, phase.local_name + "_phase_" + std::string(member));
 }
 
-std::string EnttCodegenUtils::phase_dt_cpp_name(const SymbolId& phase) {
-    return phase_dt_name(phase).ref();
+std::string EnttCodegenUtils::phase_dt_cpp_name(const SymbolId& phase, std::string_view member) {
+    return phase_dt_name(phase, member).ref();
+}
+
+std::string EnttCodegenUtils::duration_literal_cpp(const std::string& value) {
+    return "cactus::Duration{" + std::to_string(duration_literal_units(value).value_or(0)) + "}";
+}
+
+const char* EnttCodegenUtils::duration_conversion_cpp(const CallExpr& call) {
+    const auto* callee = std::get_if<IdentExpr>(&call.callee->expr);
+    if (callee == nullptr || call.resolved_callee_id.has_value()) {
+        return nullptr;
+    }
+    if (callee->name == "duration") {
+        return "cactus::duration_from_seconds";
+    }
+    return callee->name == "seconds" ? "cactus::seconds" : nullptr;
 }
 
 std::string EnttCodegenUtils::collider_shape_builder(std::optional<std::string_view> shape_trait) {
@@ -1099,6 +1122,7 @@ bool is_literal_type(const TypeInfo& type, const DecoratedProgram& program, bool
     switch (type.kind) {
         case TypeKind::Int:
         case TypeKind::Float:
+        case TypeKind::Duration:
         case TypeKind::Bool:
         case TypeKind::Vec2:
         case TypeKind::Vec3:

@@ -1,0 +1,22 @@
+module perf_timers
+
+use std.core
+use std.time as time
+
+# Many std.time lifetimes counting down by one fixed step each frame. They
+# last an hour, so none expires while the benchmark runs.
+
+trait Board:
+    let size: int = 85
+
+entity Field:
+    Board
+
+template Fuse(wait: duration):
+    time.Lifetime:
+        remaining = wait
+
+rule Fill:
+    on load:
+        for i in range(0, Field[Board].size * Field[Board].size):
+            spawn Fuse(wait = 1h + 1ms * i)

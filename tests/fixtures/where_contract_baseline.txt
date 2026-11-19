@@ -418,6 +418,26 @@ deterministic_target_selection.cactus examples deterministic_target_selection.Se
     named_writes:
     named_requirements:
     iteration_order: free
+exact_duration.cactus examples exact_duration.FieldSum/on std.core.fixed_tick
+    reads: exact_duration.Field
+    read_fields: exact_duration.Field{wait}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: creation
+exact_duration.cactus examples exact_duration.Regrow/on std.core.fixed_tick
+    reads: exact_duration.Field
+    read_fields: exact_duration.Field{wait}
+    write_fields: exact_duration.Field{wait}
+    write_kinds: exact_duration.Field.wait=3/0
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
 generalized_keep.cactus examples generalized_keep.CaughtFact/on std.core.fixed_tick
     reads: generalized_keep.Hurtbox generalized_keep.Runner
     read_fields: generalized_keep.Hurtbox{radius,x} generalized_keep.Runner{x}

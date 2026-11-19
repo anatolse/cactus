@@ -335,6 +335,8 @@ TEST_CASE("value descriptors report the backend's exact representation", "[persi
           PersistenceValueType{.kind = PersistenceValueKind::Float, .bit_width = 32});
     CHECK(describe_persistence_value(make_bool_type()) ==
           PersistenceValueType{.kind = PersistenceValueKind::Bool, .bit_width = 8});
+    CHECK(describe_persistence_value(make_duration_type()) ==
+          PersistenceValueType{.kind = PersistenceValueKind::Duration, .bit_width = 64});
 
     const auto vec3 = describe_persistence_value(make_vec3_type());
     CHECK(vec3.kind == PersistenceValueKind::Vector);

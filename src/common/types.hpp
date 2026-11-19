@@ -40,7 +40,9 @@ enum class TypeKind {
     StateSlot,
     // A func parameter naming a trait or event: a read-only reference, never a value.
     TraitRef,
-    EventRef
+    EventRef,
+    // A whole number of fixed time units.
+    Duration
 };
 
 struct TypeInfo {
@@ -58,7 +60,7 @@ struct TypeInfo {
     [[nodiscard]] bool is_primitive() const {
         return kind == TypeKind::Int || kind == TypeKind::Float || kind == TypeKind::Bool || kind == TypeKind::String ||
                kind == TypeKind::Vec2 || kind == TypeKind::Vec3 || kind == TypeKind::Quat || kind == TypeKind::Color ||
-               kind == TypeKind::EntityId;
+               kind == TypeKind::EntityId || kind == TypeKind::Duration;
     }
 };
 
@@ -72,6 +74,9 @@ inline TypeInfo make_int_type() {
 }
 inline TypeInfo make_float_type() {
     return make_type_info(TypeKind::Float, "float");
+}
+inline TypeInfo make_duration_type() {
+    return make_type_info(TypeKind::Duration, "duration");
 }
 inline TypeInfo make_bool_type() {
     return make_type_info(TypeKind::Bool, "bool");

@@ -73,9 +73,9 @@ public:
     // Canonical generated names. These overloads are the codegen-facing path:
     // resolved SymbolIds are lowered directly without alias/module lookup.
     static std::string symbol_cpp_name(const SymbolId& symbol);
-    // The generated constant holding a periodic phase's fixed `dt`.
-    static DetailName phase_dt_name(const SymbolId& phase);
-    static std::string phase_dt_cpp_name(const SymbolId& phase);
+    // The generated constant holding a periodic phase's fixed `dt` or `delta`.
+    static DetailName phase_dt_name(const SymbolId& phase, std::string_view member = "dt");
+    static std::string phase_dt_cpp_name(const SymbolId& phase, std::string_view member = "dt");
     // The generated function building a collider descriptor from `shape_trait`,
     // or from whichever shape trait the entity has when none is given.
     static std::string collider_shape_builder(std::optional<std::string_view> shape_trait = std::nullopt);
@@ -168,6 +168,10 @@ public:
     static std::string string_literal_cpp(std::string_view value);
     // A float literal, by `std::numbers` name when its float value is exactly that constant's.
     static std::string float_literal_cpp(const std::string& value);
+    // `cactus::Duration{units}` for a duration literal such as `120ms`.
+    static std::string duration_literal_cpp(const std::string& value);
+    // The runtime function behind `duration(x)` or `seconds(d)`, or nullptr for another callee.
+    static const char* duration_conversion_cpp(const CallExpr& call);
     // Holds no string or list, so moving a value of it is a plain copy.
     static bool is_trivially_copyable(const TypeInfo& type, const DecoratedProgram& program);
     // A `std::string_view` constant read as a `string` value is copied into one at the read.

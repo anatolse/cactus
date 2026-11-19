@@ -16,7 +16,7 @@ pub struct Clips:
     die: int
 
 const:
-    ACTIVITY_HOLD = 0.25
+    ACTIVITY_HOLD = 250ms
     ROBOT_CLIPS = Clips(idle = 2, walk = 10, work = 5, attack = 5, hit = 4, die = 1)
     KNIGHT_CLIPS = Clips(idle = 2, walk = 24, work = 21, attack = 22, hit = 16, die = 8)
 
@@ -30,21 +30,21 @@ pub enum Pose:
 
 pub trait Motion:
     var pose: Pose = Pose.Idle
-    var walk: float = 0.0
-    var work: float = 0.0
-    var attack: float = 0.0
-    var hit: float = 0.0
+    var walk: duration = 0s
+    var work: duration = 0s
+    var attack: duration = 0s
+    var hit: duration = 0s
 
 pub func pose_for(unit: units.Unit, motion: Motion) Pose:
     if unit.health <= 0.0:
         return Pose.Die
-    if motion.hit > 0.0:
+    if motion.hit > 0s:
         return Pose.Hit
-    if motion.attack > 0.0:
+    if motion.attack > 0s:
         return Pose.Attack
-    if motion.work > 0.0:
+    if motion.work > 0s:
         return Pose.Work
-    if motion.walk > 0.0:
+    if motion.walk > 0s:
         return Pose.Walk
     return Pose.Idle
 
@@ -93,10 +93,10 @@ rule Animate:
     when: session.Game[session.Session].mode == session.SessionMode.Playing
 
     on tick:
-        motion.walk -= tick.dt
-        motion.work -= tick.dt
-        motion.attack -= tick.dt
-        motion.hit -= tick.dt
+        motion.walk -= tick.delta
+        motion.work -= tick.delta
+        motion.attack -= tick.delta
+        motion.hit -= tick.delta
         let pose = pose_for(unit, motion)
         if pose == motion.pose:
             return

@@ -4,17 +4,17 @@ use std.core as core
 
 # ── Traits ────────────────────────────────────────────────────────────────────
 
-# Countdown that destroys its entity when it runs out. Seconds of simulation
-# time, advanced once per fixed step — never wall-clock time.
+# Countdown that destroys its entity when it runs out. Simulation time,
+# advanced once per fixed step — never wall-clock time.
 pub trait Lifetime:
-    var remaining: float
+    var remaining: duration
     var paused: bool = false
 
 # One-shot countdown. Arm it with RestartTimer; it emits one TimerExpired back
 # to its own entity and disarms. One Timer is one countdown: give an entity
 # that needs several independent delays one timer entity per delay.
 pub trait Timer:
-    var remaining: float = 0.0
+    var remaining: duration = 0s
     var armed: bool = false
     var paused: bool = false
 
@@ -23,7 +23,7 @@ pub trait Timer:
 # Replaces an existing Timer's countdown and arms it, keeping `paused` as is.
 # It never adds a Timer to an entity that has none.
 pub event RestartTimer:
-    duration: float
+    duration: duration
 
 # Disarms a Timer without an expiration.
 pub event CancelTimer
@@ -34,14 +34,8 @@ pub event TimerExpired
 
 # ── Rules ─────────────────────────────────────────────────────────────────────
 
-# A usable duration is finite and non-negative; anything else becomes a
-# zero-length countdown. NaN fails the first test, and infinity — which does
-# not — fails the second, since inf - inf is NaN and NaN never equals zero.
-# The second test needs IEEE semantics, so no backend may compile with fast-math.
-func seconds_or_zero(value: float) float:
-    if value >= 0.0 and value - value == 0.0:
-        return value
-    return 0.0
+# A countdown subtracts only while more than one step remains, so a remaining
+# time near the most negative duration can't wrap around to a positive one.
 
 rule AdvanceLifetime:
     each:
@@ -50,10 +44,9 @@ rule AdvanceLifetime:
     on core.fixed_tick as step:
         if lifetime.paused:
             return
-        lifetime.remaining = seconds_or_zero(lifetime.remaining) - step.dt
-        if lifetime.remaining > 0.0:
+        if lifetime.remaining > step.delta:
+            lifetime.remaining -= step.delta
             return
-        lifetime.remaining = 0.0
         destroy
 
 rule AdvanceTimer:
@@ -61,7 +54,7 @@ rule AdvanceTimer:
         Timer as timer
 
     on RestartTimer as request:
-        timer.remaining = seconds_or_zero(request.duration)
+        timer.remaining = request.duration
         timer.armed = true
 
     on CancelTimer:
@@ -70,9 +63,9 @@ rule AdvanceTimer:
     on core.fixed_tick as step:
         if timer.paused or not timer.armed:
             return
-        timer.remaining = seconds_or_zero(timer.remaining) - step.dt
-        if timer.remaining > 0.0:
+        if timer.remaining > step.delta:
+            timer.remaining -= step.delta
             return
-        timer.remaining = 0.0
+        timer.remaining = 0s
         timer.armed = false
         emit TimerExpired to self

@@ -18,7 +18,7 @@ pub enum BattleResult:
     Lost
 
 const:
-    DEATH_TIME = 1.5
+    DEATH_TIME = 1.5s
 
 pub trait Outcome:
     persist var status: BattleResult = BattleResult.Active
@@ -218,7 +218,7 @@ rule DamageHeart:
         heart.health -= hit.amount
 
 pub trait Dying:
-    var time: float = 0.0
+    var time: duration = 0s
 
 rule StartDying:
     each: units.Unit as unit
@@ -240,7 +240,7 @@ rule RemoveDead:
     when: session.Game[session.Session].mode == session.SessionMode.Playing
 
     on fixed_tick:
-        dying.time += fixed_tick.dt
+        dying.time += fixed_tick.delta
         if dying.time >= DEATH_TIME:
             destroy
 

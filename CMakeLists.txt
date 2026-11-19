@@ -127,6 +127,7 @@ endif()
 
 # ── Common Library ──────────────────────────────────────────────────────────────
 add_library(cactus_common STATIC
+    src/common/duration.cpp
     src/common/error_reporter.cpp
     src/common/string_pool.cpp
     src/common/vector_binary_ops.cpp

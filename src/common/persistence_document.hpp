@@ -88,6 +88,7 @@ public:
     [[nodiscard]] static Value of_bool(bool value);
     [[nodiscard]] static Value of_int(std::int32_t value);
     [[nodiscard]] static Value of_float(float value);
+    [[nodiscard]] static Value of_duration(std::int64_t units);
     [[nodiscard]] static Value of_string(std::string value);
     [[nodiscard]] static Value of_vector(PersistenceValueKind lane_kind,
                                          std::uint8_t lanes,
@@ -110,6 +111,7 @@ public:
     [[nodiscard]] bool as_bool() const;
     [[nodiscard]] std::int32_t as_int() const;
     [[nodiscard]] float as_float() const;
+    [[nodiscard]] std::int64_t as_duration() const;
     [[nodiscard]] const std::string& as_string() const;
     [[nodiscard]] const VectorValue& as_vector() const;
     [[nodiscard]] const EntityRef& as_entity() const;
@@ -124,6 +126,7 @@ private:
     using Storage = std::variant<std::monostate,
                                  bool,
                                  std::int32_t,
+                                 std::int64_t,
                                  float,
                                  std::string,
                                  VectorValue,
@@ -257,6 +260,7 @@ public:
     [[nodiscard]] bool get_bool() { return take<std::uint8_t>() != 0; }
     [[nodiscard]] std::int32_t get_int() { return take<std::int32_t>(); }
     [[nodiscard]] float get_float() { return take<float>(); }
+    [[nodiscard]] std::int64_t get_duration() { return take<std::int64_t>(); }
     [[nodiscard]] std::uint32_t get_index() { return take<std::uint32_t>(); }
 
     [[nodiscard]] EntityRef get_entity() {
@@ -537,6 +541,7 @@ public:
     void put_bool(bool value) { put(static_cast<std::uint8_t>(value ? 1 : 0)); }
     void put_int(std::int32_t value) { put(value); }
     void put_float(float value) { put(value); }
+    void put_duration(std::int64_t units) { put(units); }
     void put_index(std::uint32_t value) { put(value); }
     void put_entity(EntityRef value) {
         put_bool(value.present);

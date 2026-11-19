@@ -186,6 +186,9 @@ void write_value(Encoder& out, const persistence::Snapshot& document, std::uint3
         case PersistenceValueKind::Float:
             out.f32(in.get_float());
             return;
+        case PersistenceValueKind::Duration:
+            out.signed_varint(in.get_duration());
+            return;
         case PersistenceValueKind::Vector:
             for (std::uint8_t lane = 0; lane < type.lanes; ++lane) {
                 out.f32(in.get_float());
@@ -238,6 +241,9 @@ void read_value(Decoder& in, persistence::SnapshotBuilder& out, std::uint32_t ty
             return;
         case PersistenceValueKind::Float:
             out.put_float(in.f32());
+            return;
+        case PersistenceValueKind::Duration:
+            out.put_duration(in.signed_varint());
             return;
         case PersistenceValueKind::Vector:
             for (std::uint8_t lane = 0; lane < type.lanes; ++lane) {

@@ -798,6 +798,8 @@ std::string put_statement(const DecoratedProgram& program, const TypeInfo& type,
             return "out.put_int(" + access + ");";
         case PersistenceValueKind::Float:
             return "out.put_float(" + access + ");";
+        case PersistenceValueKind::Duration:
+            return "out.put_duration((" + access + ").units);";
         case PersistenceValueKind::String:
             return "out.put_name(" + access + ");";
         case PersistenceValueKind::Vector:

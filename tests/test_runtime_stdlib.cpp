@@ -2844,4 +2844,61 @@ TEST_CASE("num: helpers keep each operand type's own operator except for int pai
     CHECK(scaled.y == -2.0F);
 }
 
+TEST_CASE("duration(x) rounds float seconds to the nearest unit", "[runtime][dsl-duration]") {
+    CHECK(cactus::duration_from_seconds(0.25F).units == 176'400'000);
+    CHECK(cactus::duration_from_seconds(1.0F).units == cactus::kDurationUnitsPerSecond);
+    CHECK(cactus::duration_from_seconds(1.0F / 60.0F).units == 11'760'001);
+    CHECK(cactus::duration_from_seconds(-0.25F).units == -176'400'000);
+}
+
+TEST_CASE("duration(x) rounds halves away from zero", "[runtime][dsl-duration]") {
+    // 2^-10 s is exactly 689062.5 units.
+    CHECK(cactus::duration_from_seconds(0.0009765625F).units == 689'063);
+    CHECK(cactus::duration_from_seconds(-0.0009765625F).units == -689'063);
+}
+
+TEST_CASE("duration(x) is total", "[runtime][dsl-duration]") {
+    constexpr auto max = std::numeric_limits<std::int64_t>::max();
+    constexpr auto min = std::numeric_limits<std::int64_t>::min();
+    CHECK(cactus::duration_from_seconds(std::numeric_limits<float>::quiet_NaN()).units == 0);
+    CHECK(cactus::duration_from_seconds(std::numeric_limits<float>::infinity()).units == max);
+    CHECK(cactus::duration_from_seconds(-std::numeric_limits<float>::infinity()).units == min);
+    CHECK(cactus::duration_from_seconds(1.0e30F).units == max);
+    CHECK(cactus::duration_from_seconds(-1.0e30F).units == min);
+}
+
+TEST_CASE("seconds(d) rounds once to binary32", "[runtime][dsl-duration]") {
+    CHECK(cactus::seconds(cactus::Duration{705'600'000}) == 1.0F);
+    CHECK(std::bit_cast<std::uint32_t>(cactus::seconds(cactus::Duration{11'760'000})) ==
+          std::bit_cast<std::uint32_t>(static_cast<float>(1.0 / 60.0)));
+    CHECK(cactus::seconds(cactus::Duration{-352'800'000}) == -0.5F);
+}
+
+TEST_CASE("the ratio of two durations", "[runtime][dsl-duration]") {
+    CHECK(cactus::Duration{352'800'000} / cactus::Duration{1'411'200'000} == 0.25F);
+    CHECK(cactus::Duration{5} / cactus::Duration{0} == 0.0F);
+}
+
+TEST_CASE("duration arithmetic wraps and divides by int with floor", "[runtime][dsl-duration]") {
+    constexpr auto max = std::numeric_limits<std::int64_t>::max();
+    constexpr auto min = std::numeric_limits<std::int64_t>::min();
+    CHECK((cactus::Duration{-7} / 2).units == -4);
+    CHECK((cactus::Duration{7} / 2).units == 3);
+    CHECK((cactus::Duration{7} / -2).units == -4);
+    CHECK((cactus::Duration{7} / 0).units == 0);
+    CHECK((cactus::Duration{min} / -1).units == min);
+    CHECK((cactus::Duration{705'600'000} / 60).units == 11'760'000);
+    CHECK((cactus::Duration{max} + cactus::Duration{1}).units == min);
+    CHECK((-cactus::Duration{min}).units == min);
+    CHECK((cactus::Duration{3} * 4).units == 12);
+    CHECK((4 * cactus::Duration{3}).units == 12);
+    auto timer = cactus::Duration{100};
+    timer -= cactus::Duration{30};
+    timer += cactus::Duration{5};
+    CHECK(timer.units == 75);
+    CHECK(cactus::Duration{1} < cactus::Duration{2});
+    CHECK(stdlib::math::max(cactus::Duration{1}, cactus::Duration{2}).units == 2);
+    CHECK(stdlib::math::min(cactus::Duration{1}, cactus::Duration{2}).units == 1);
+}
+
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

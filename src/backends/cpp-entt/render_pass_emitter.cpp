@@ -395,6 +395,7 @@ TranslatedExpr translate_literal(const LiteralExpr& literal) {
         case LiteralExpr::Kind::Bool:
             return {.text = literal.value, .type = GlslType::Bool};
         case LiteralExpr::Kind::String:
+        case LiteralExpr::Kind::Duration:
             throw std::runtime_error("render-pass GLSL codegen: unsupported literal in stage handler body");
     }
     std::unreachable();

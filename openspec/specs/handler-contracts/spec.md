@@ -259,7 +259,7 @@ comparisons) SHALL add no named access and no requirement.
 ### Requirement: Field writes carry a write kind
 Every field write recorded in a handler contract SHALL carry one write kind, derived from the writing statements. Authors SHALL NOT declare write kinds. For one handler and one trait field, the analyzer SHALL classify each writing statement as:
 
-- **Accum**: `x += e` or `x -= e` on an `int`, `float`, `vec2` or `vec3` field, or on a numeric member of such a field.
+- **Accum**: `x += e` or `x -= e` on an `int`, `float`, `duration`, `vec2` or `vec3` field, or on a numeric member of such a field.
 - **Join** with an operator: `x = max(x, e)` or `x = max(e, x)` (operator `max`); the same with `min` (operator `min`); `x = x or e`, `x = e or x` or `x = true` (operator `or`); `x = x and e`, `x = e and x` or `x = false` (operator `and`). `max` and `min` SHALL resolve to the `std.math` functions; a user function with the same name SHALL NOT make a Join.
 - **Assign**: `x = e` that is not a Join.
 - **General**: any other write, including `*=`, `/=`, `%=`, a write through a whole-trait alias, and every `extern rule` `writes:` entry.
@@ -269,6 +269,10 @@ A statement is Accum or Join only when `e` does not read `x`. The field's kind f
 #### Scenario: Compound addition is Accum
 - **WHEN** a handler filters `Health as h` and runs `h.hp -= 5` and nothing else in it reads `h.hp`
 - **THEN** its contract records a write of `Health.hp` with kind Accum
+
+#### Scenario: A countdown is Accum
+- **WHEN** a handler filters `Cooldown as c`, runs `c.left -= step.delta` on a `duration` field and reads `c.left` nowhere else
+- **THEN** its contract records a write of `Cooldown.left` with kind Accum
 
 #### Scenario: Running maximum is a Join
 - **WHEN** a handler runs `stats.best = math.max(stats.best, score)` and `score` is a local

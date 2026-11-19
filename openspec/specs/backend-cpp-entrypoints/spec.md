@@ -42,11 +42,11 @@ Reusable backend/runtime library targets SHALL remain usable by tests and host p
 - **THEN** its `main()` comes from the generated C++ output for the selected backend
 
 ### Requirement: Runtime entrypoint injects external frame event
-The standard cpp-entt executable entrypoint SHALL obtain frame delta time from the runtime, construct the declared external `frame` payload, and inject it into the generated scheduler exactly once per host frame. It SHALL NOT directly invoke hard-coded input, tick, late-tick, or render handler loops.
+The standard cpp-entt executable entrypoint SHALL obtain frame delta time from the runtime, construct the declared external `frame` payload, and inject it into the generated scheduler exactly once per host frame. When `frame` declares `delta: duration`, the entrypoint and `generated_update_project` SHALL set it to `duration(dt)`. It SHALL NOT directly invoke hard-coded input, tick, late-tick, or render handler loops.
 
 #### Scenario: Main injects one frame occurrence
 - **WHEN** the Raylib loop begins a host frame
-- **THEN** it injects `frame { dt = GetFrameTime() }` once and the phase graph drives all update and render activations
+- **THEN** it injects `frame { dt = GetFrameTime(), delta = duration(GetFrameTime()) }` once and the phase graph drives all update and render activations
 
 #### Scenario: No-main host uses the same API
 - **WHEN** a no-main host drives generated code

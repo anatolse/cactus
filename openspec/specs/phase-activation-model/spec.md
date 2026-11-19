@@ -36,7 +36,7 @@ A phase without `every:` SHALL activate exactly once for each completed activati
 - **THEN** tick activates once after the empty fixed_tick batch completes
 
 ### Requirement: Periodic phase accumulation and catch-up
-A phase with `every: interval` SHALL maintain an accumulator advanced by the root runtime frame's `dt`, activate once for each complete interval, and expose synthesized `dt` equal to `interval`. `interval` MUST be a positive compile-time float. `max` MUST be a positive compile-time integer and SHALL cap repetitions per root activation.
+A phase with `every: interval` SHALL maintain an accumulator advanced by the root runtime frame's `dt`, activate once for each complete interval, and expose synthesized `dt` equal to `interval` in seconds and synthesized `delta` equal to `interval` as a `duration`. `interval` MUST be a positive compile-time `float` or `duration`. With a `duration` interval, `dt` SHALL be `seconds(interval)`; with a `float` interval, `delta` SHALL be `duration(interval)`. `max` MUST be a positive compile-time integer and SHALL cap repetitions per root activation.
 
 If more complete intervals are due than `max`, the scheduler SHALL execute `max` repetitions, drop the remaining unexecuted whole intervals, and preserve only the fractional remainder. This policy SHALL keep synthesized `alpha` in `[0.0, 1.0)`.
 
@@ -47,6 +47,10 @@ If more complete intervals are due than `max`, the scheduler SHALL execute `max`
 #### Scenario: Catch-up cap drops excess whole steps
 - **WHEN** ten intervals are due and `max: 8`
 - **THEN** eight repetitions run, two unexecuted whole intervals are dropped, and the fractional remainder is preserved
+
+#### Scenario: A duration interval
+- **WHEN** a phase declares `every: 1s / 60`
+- **THEN** each activation observes `phase.delta` of 11,760,000 units and `phase.dt` equal to the binary32 value nearest 1/60
 
 #### Scenario: Invalid cadence is rejected
 - **WHEN** `every` is non-constant or non-positive, or `max` is non-constant or non-positive
@@ -75,7 +79,7 @@ Every phase activation, including every repetition of a periodic phase, SHALL ex
 - **THEN** tick begins only after every repetition and commit has completed
 
 ### Requirement: A periodic phase's dt is a constant expression
-Because a periodic phase's synthesized `dt` always equals its compile-time `every:` interval, `<phase>.dt` for a phase with `every:` SHALL be a constant expression. It SHALL be usable wherever a constant is accepted, including `where:`, `reduce:`, `order by:`, and `const` declarations, with the value of the interval. Outside handlers, the name SHALL resolve to the phase declaration. Reading `dt` of a phase without `every:` outside a handler for that phase SHALL be a compile error.
+Because a periodic phase's synthesized `dt` and `delta` always equal its compile-time `every:` interval, `<phase>.dt` and `<phase>.delta` for a phase with `every:` SHALL be constant expressions. They SHALL be usable wherever a constant is accepted, including `where:`, `reduce:`, `order by:`, and `const` declarations, with the value of the interval. Outside handlers, the name SHALL resolve to the phase declaration. Reading `dt` or `delta` of a phase without `every:` outside a handler for that phase SHALL be a compile error.
 
 #### Scenario: Fixed step in a reducer
 - **WHEN** a rule reduces `first = first_hit(physics.sweep(bullet, bullet[Bullet].velocity * fixed_tick.dt, target))` and `fixed_tick` declares `every: 1.0 / 60.0`
@@ -85,6 +89,11 @@ Because a periodic phase's synthesized `dt` always equals its compile-time `ever
 - **WHEN** a `const` block declares `STEP_DISTANCE = BULLET_SPEED * fixed_tick.dt`
 - **THEN** compilation accepts it as a compile-time constant
 
+#### Scenario: Fixed step as a duration constant
+- **WHEN** a `const` block declares `GRACE = fixed_tick.delta * 6` and `fixed_tick` declares `every: 1s / 60`
+- **THEN** compilation accepts it and `GRACE` equals `100ms`
+
 #### Scenario: Variable-rate dt is not a constant
-- **WHEN** a `reduce:` expression reads `tick.dt` and `tick` declares no `every:`
-- **THEN** compilation reports a source-located error saying that `tick.dt` is only available inside `tick` handlers
+- **WHEN** a `reduce:` expression reads `tick.dt` or `tick.delta` and `tick` declares no `every:`
+- **THEN** compilation reports a source-located error saying that the field is only available inside `tick` handlers
+

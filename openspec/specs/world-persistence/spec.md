@@ -295,3 +295,18 @@ Restore SHALL rebuild each recorded row between the fresh handles of its two end
 #### Scenario: Document breaks a one end
 - **WHEN** a document records `Claim(r, t1)` and `Claim(r, t2)` and `Claim` has `from: Robot one`
 - **THEN** restore fails validation and the world is unchanged
+
+### Requirement: Duration fields are saved as unit counts
+The schema descriptor SHALL record a duration field's language type `duration`, as it records `int` or `float`. The snapshot SHALL record its count of units. The unit is fixed by the language, so the descriptor and the saved value SHALL NOT depend on any phase's period.
+
+#### Scenario: A duration round-trips exactly
+- **WHEN** a world with a `duration` field of `1500ms` is saved and restored by the same program
+- **THEN** the field holds `1500ms`
+
+#### Scenario: A changed step rate keeps saves compatible
+- **WHEN** a document saved with `fixed_tick` at `every: 1s / 60` is restored by a build with `every: 1s / 120` and no other change
+- **THEN** restore succeeds and every duration field holds the saved value
+
+#### Scenario: A float field changed to a duration
+- **WHEN** a field's type changes from `float` to `duration`
+- **THEN** the schema fingerprint changes

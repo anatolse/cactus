@@ -7,7 +7,7 @@ Let a trait declare dimensions so that each of its `var` fields holds one value 
 ### Requirement: Dimension declaration
 A trait body SHALL accept one to four lines `dim name: type`, where the type is an enum or `int in range(a, b)`. An `int` range SHALL be half-open, with the meaning of a ranged `let` field, and each bound SHALL read only literals, constants and `let` fields of the same trait. A trait with at least one dimension is a *dimensioned trait*; the entity that carries it is the *carrier*; one choice of a value for every dimension is a *cell*. `dim` SHALL be a contextual word: it starts a dimension only at the start of a line in a trait body when an identifier and `:` follow, and stays an ordinary identifier elsewhere. A dimensioned trait MAY be `single` and MAY be `pub`.
 
-In a dimensioned trait a `let` field SHALL belong to the carrier, and every `var` field SHALL be a *cell field*: one value per cell. A cell field SHALL have type `bool`, `int`, `float`, an enum or a vector type, and a default that is a constant expression.
+In a dimensioned trait a `let` field SHALL belong to the carrier, and every `var` field SHALL be a *cell field*: one value per cell. A cell field SHALL have type `bool`, `int`, `float`, `duration`, an enum or a vector type, and a default that is a constant expression.
 
 The following SHALL each be a source-located error: `dim` in a state variant, a relation, a struct or an event; a fifth dimension; a dimension of another type; an `int` dimension without a range; a bound that reads a `var` field, another trait or a call; two dimensions or a dimension and a field with one name; a cell field without a default, with a non-constant default, or of another type; `persist` on a cell field; a dimensioned trait as the target of `project` or `keep`; a dimensioned trait with no cell field.
 
@@ -18,6 +18,10 @@ The following SHALL each be a source-located error: `dim` in a state variant, a 
 #### Scenario: Two ranged dimensions on a single trait
 - **WHEN** a `single trait Room` declares `dim x: int in range(0, 64)`, `dim y: int in range(0, 48)` and `var gas: float = 0.0`
 - **THEN** compilation accepts it and the one carrier has 64 by 48 cells
+
+#### Scenario: A duration cell field
+- **WHEN** a dimensioned trait declares `dim x: int in range(0, 16)` and `var regrow: duration = 0s`
+- **THEN** compilation accepts it and every cell's `regrow` starts at zero units
 
 #### Scenario: Bounds from let fields
 - **WHEN** a trait declares `let width: int = 4` and `dim x: int in range(0, width)`, and one entity is spawned with `width = 8`

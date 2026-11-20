@@ -15,9 +15,21 @@ public:
     // Marks every buffered statement in the program's AST.
     explicit AccumulationPlan(const DecoratedProgram& program);
 
+    // A clamped field whose deltas can meet keeps their exact sum per cell for the activation.
+    struct ClampedTable {
+        TraitFieldRef field;
+        std::string table;
+        std::string value_type;
+    };
+
     [[nodiscard]] bool empty() const {
-        return tables_.empty();
+        return tables_.empty() && clamped_.empty();
     }
+    [[nodiscard]] const std::vector<ClampedTable>& clamped_tables() const {
+        return clamped_;
+    }
+    // The pending-sum table of clamped `access`, or empty when its deltas never meet.
+    [[nodiscard]] std::string clamped_table(const TraitFieldRef& access) const;
     // One table function name per buffered field, in the order of fields().
     [[nodiscard]] const std::vector<std::string>& tables() const {
         return tables_;
@@ -33,11 +45,17 @@ public:
     // What runs after `handler` when it may move component storage.
     [[nodiscard]] std::string exit_rebase(const HandlerIdentity& handler) const;
 
+    // The templates holding the float and the clamped tables, one specialization per trait.
+    static constexpr const char* FLOAT_TABLES   = "accumulation";
+    static constexpr const char* CLAMPED_TABLES = "clamped_sums";
+
     [[nodiscard]] static std::string table_name(const SymbolId& trait,
                                                 const std::string& field,
-                                                const DecoratedProgram& program);
+                                                const DecoratedProgram& program,
+                                                const char* holder = FLOAT_TABLES);
 
 private:
+    std::vector<ClampedTable> clamped_;
     std::vector<std::string> tables_;
     std::vector<TraitFieldRef> fields_;
     std::unordered_map<HandlerIdentity, std::vector<std::string>, HandlerIdentityHash> entry_flushes_;

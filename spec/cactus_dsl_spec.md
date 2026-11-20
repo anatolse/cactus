@@ -233,8 +233,10 @@ trait_decl      = [ "pub" ] [ "single" ] "trait" IDENTIFIER
 dimension_decl  = "dim" IDENTIFIER ":" type_ref [ field_range ] NEWLINE ;
 
 field_decl      = field_modifiers ( "let" | "var" ) IDENTIFIER ":" type_ref
-                  [ field_range ] [ "=" expression ] NEWLINE ;
+                  [ field_range ] [ field_clamp ] [ "=" expression ] NEWLINE ;
 field_range     = "in" "range" "(" expression "," expression ")" ;
+field_clamp     = "clamped" "(" clamp_bound [ "," clamp_bound ] ")" ;
+clamp_bound     = ( "min" | "max" ) "=" expression ;
 field_modifiers = { "persist" | "pub" } ;
 ```
 
@@ -272,6 +274,23 @@ trait Cell:
 A container trait gets its value only when its entity is made: from an entity or template body, a `spawn` override block, or a `children:` override block. An `add T:` or `project T:` of a container trait anywhere in the program, including an extern rule's `add` capability, is a compile error that names the trait and a ranged field that reads it. So the bounds a range reads never change. Removing a container trait or destroying its entity stays allowed and leaves values already made unchanged.
 
 A ranged value is checked whenever a value of its trait is made (§4.4, §5.3). A range is a domain fact, not a performance control; the backend may use it to choose storage.
+
+A `var` field of type `int`, `float` or `duration` may declare *bounds*: `var hp: float clamped(min = 0.0, max = max_hp)`. At least one side is given; a missing side is the type's own limit. `clamped` and `min`/`max` are contextual words. Each bound is a constant expression or a `let` field of the same trait (a bare name), of the field's type, so the bounds stay fixed for the field's life. A bound reading a `var` field or anything else, `clamped` on a `let` field (which uses `in range`), on another type, on a cell field or on a state variant field, and constant bounds with `min > max` are compile errors. `in range` rejects a value; `clamped` moves it.
+
+Every value read from a clamped field is inside its bounds. A value from creation (a declared entity, `spawn`, `add`, `project`), from an Assign, General or Join write, or from `set` is *projected*: below `min` it becomes `min`, above `max` it becomes `max`, and NaN becomes `min`, or `max` when there is no `min`. When `let` bounds give `min > max` as a value is made, the operation does nothing and reports a fault naming the trait and field, as a failed range does.
+
+`+=` and `-=` written with the Accum kind are projected once per activation, not once per write. During an activation the field has an exact value: the value it held when the activation began plus the exact sum of its deltas so far, with no rounding, wrapping or projection between them. A read gives the projection of the exact value (rounded once for `float`); an Assign or General write replaces the exact value with its projected value. When the activation ends, the field holds the projection of the exact value. So the result depends neither on the order of unordered writers nor on a reader between them:
+
+```cactus
+trait Health:
+    let max_hp: float = 100.0
+    var hp: float clamped(min = 0.0, max = max_hp) = 100.0
+
+# hp is 100; in one activation A runs hp += 50.0, R reads hp, B runs hp -= 50.0.
+# R reads 100 and hp is 100 afterwards, as it is without R.
+```
+
+Clamping changes no write kind and adds no schedule edge (§3.8). An `int` or `duration` sum never wraps: a clamped `int` at its type's maximum stays there after `+= 1`. Bounds are part of the field's meaning in the save schema (§7.6).
 
 A `single` trait states that at most one live entity carries it, in every committed world. `single` is a modifier only directly before `trait`; elsewhere it is an ordinary identifier, and a state cannot be `single`.
 
@@ -2656,7 +2675,7 @@ World persistence is a small gameplay request surface plus a generated, format-i
 
 **Runtime structure.** The compiler generates one canonical schema descriptor and typed snapshot per program: entity records in creation order, document-local entity identities (so cycles and forward references need no live handle), canonical archetype/trait identity, final trait membership with reconstruction data, and parent links. This is generated data, not something authored in Cactus, and it excludes anything not reachable from a `persist` field or construction argument — event queues, physics solver internals, and random state are not implicitly captured.
 
-**The schema follows meaning.** The descriptor records each field's meaning: its language type, with the widths and lanes the language defines, and every meaning fact declared on it, such as a range. A `duration` field is recorded as `duration` and saved as its count of time units; the unit is fixed by the language, so changing a phase's `every:` leaves the descriptor and saved values unchanged. It never records how a backend stores a field, a codegen option, or how the program uses the field (§4.1). So a backend that stores a field in fewer bits, or a build with `--parallel-handlers`, gives the same descriptor and fingerprint, and older saves still load.
+**The schema follows meaning.** The descriptor records each field's meaning: its language type, with the widths and lanes the language defines, and every meaning fact declared on it, such as a range or the bounds of a clamped field (each bound by its constant or the `let` field it reads). A `duration` field is recorded as `duration` and saved as its count of time units; the unit is fixed by the language, so changing a phase's `every:` leaves the descriptor and saved values unchanged. It never records how a backend stores a field, a codegen option, or how the program uses the field (§4.1). So a backend that stores a field in fewer bits, or a build with `--parallel-handlers`, gives the same descriptor and fingerprint, and older saves still load.
 
 **Relation rows.** A snapshot records every row of every stored relation whose two ends it records, after the entity records and in row creation order, with document-local end identities and all field values. A row with an unrecorded end is left out. Kept relations are not recorded: after a restore their rows are empty until their keep rule runs. Restore rebuilds each row between the fresh handles of its ends and fires no trigger. Validation rejects, before the world changes, a row whose end has no record, an end record without the end trait, two rows with the same pair, an unknown relation or field, and rows that break a `one` end.
 
@@ -2712,7 +2731,7 @@ A rejected restore leaves the world untouched — no partial replacement, and no
 
 - `adapter_unavailable` — no adapter is registered to read from
 - `io_failure` — the adapter's `read` reported failure (missing slot, corrupt storage, and similar)
-- `invalid_data` — the document is structurally unsound (unknown archetype/trait/field, a dangling or duplicate identity, a hierarchy cycle, a child recorded before its parent in a program that never reparents (§3.7), a configured size/depth limit exceeded, or a record whose trait set is not a reachable archetype of its node (§5.0), a ranged `let` value outside its range whose container is in the document (§3.6); states, `Parent` and traits that may be present anywhere are not compared)
+- `invalid_data` — the document is structurally unsound (unknown archetype/trait/field, a dangling or duplicate identity, a hierarchy cycle, a child recorded before its parent in a program that never reparents (§3.7), a configured size/depth limit exceeded, or a record whose trait set is not a reachable archetype of its node (§5.0), a ranged `let` value outside its range whose container is in the document (§3.6), a clamped value outside its bounds evaluated against the restored record (§3.6); states, `Parent` and traits that may be present anywhere are not compared)
 - `incompatible_schema` — the document's schema descriptor does not match the running program's
 - `unsupported_value` — every field is structurally valid but some value cannot be represented (wrong kind, out of range, or an unknown enum variant)
 - `resource_preparation_failure` — the document is otherwise valid but names an asset or input declaration this build cannot resolve to a handle

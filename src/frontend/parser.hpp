@@ -117,6 +117,7 @@ private:
     // Sub-parsers
     FieldNode parse_field();
     std::optional<FieldRange> parse_field_range();
+    std::optional<FieldClamp> parse_field_clamp();
     [[nodiscard]] bool at_dimension() const;
     DimensionNode parse_dimension();
     bool reject_dimension();

@@ -193,7 +193,20 @@ struct FieldModel {
     std::uint32_t type = persistence::kNoValueType;
     bool persist       = false;
     std::string default_text;  // the declared default as written, empty when none
+    std::string clamp_text;    // a clamped field's bounds, empty when it declares none
 };
+
+// A bound by the `let` field it reads, or by its constant expression.
+std::string describe_clamp(const ResolvedFieldClamp& clamp, const DecoratedProgram& program) {
+    const auto side = [&](const char* name, const std::optional<ResolvedClampBound>& bound) {
+        if (!bound.has_value()) {
+            return std::string{name} + ":-";
+        }
+        return std::string{name} + ":" +
+               (bound->let_field.empty() ? EnttCodegenUtils::emit_expr(*bound->expr, program) : "let " + bound->let_field);
+    };
+    return side("min", clamp.min) + "," + side("max", clamp.max);
+}
 
 struct DeclarationModel {
     std::string canonical;
@@ -218,16 +231,20 @@ struct SchemaModel {
 // Sorted by name: reordering a declaration's fields renames nothing, so it must
 // not invalidate documents.
 std::vector<FieldModel> field_models(const std::vector<ResolvedField>& fields,
-                                     std::vector<FlatValueType>& value_types) {
+                                     std::vector<FlatValueType>& value_types,
+                                     const DecoratedProgram& program) {
     std::vector<FieldModel> models;
     models.reserve(fields.size());
     for (const auto& field : fields) {
         if (field.is_cell) {
             continue;
         }
-        models.push_back(FieldModel{.name    = field.name,
-                                    .type    = intern_value_type(value_types, describe_persistence_value(field.type)),
-                                    .persist = field.is_persist});
+        models.push_back(FieldModel{
+            .name         = field.name,
+            .type         = intern_value_type(value_types, describe_persistence_value(field.type)),
+            .persist      = field.is_persist,
+            .default_text = {},
+            .clamp_text   = field.clamp.has_value() ? describe_clamp(*field.clamp, program) : std::string{}});
     }
     std::ranges::sort(models, {}, &FieldModel::name);
     return models;
@@ -250,7 +267,7 @@ SchemaModel build_schema_model(const DecoratedProgram& program) {
     SchemaModel model;
     model.traits = declaration_models(program.traits, [&](const ResolvedTrait& trait) {
         DeclarationModel entry{.canonical = declaration_identity(trait),
-                               .fields    = field_models(trait.fields, model.value_types)};
+                               .fields    = field_models(trait.fields, model.value_types, program)};
         for (auto& field : entry.fields) {
             const auto* declared =
                 EnttCodegenUtils::find_trait_field_default(program, trait.module_name, trait.name, field.name);
@@ -262,7 +279,7 @@ SchemaModel build_schema_model(const DecoratedProgram& program) {
     });
     model.structs = declaration_models(program.structs, [&](const ResolvedStruct& declaration) {
         return DeclarationModel{.canonical = declaration_identity(declaration),
-                                .fields    = field_models(declaration.fields, model.value_types)};
+                                .fields    = field_models(declaration.fields, model.value_types, program)};
     });
     model.enums = declaration_models(program.enums, [](const ResolvedEnum& declaration) {
         return DeclarationModel{.canonical = declaration_identity(declaration), .variants = declaration.variants};
@@ -270,7 +287,7 @@ SchemaModel build_schema_model(const DecoratedProgram& program) {
     for (const auto* relation : stored_relations(program)) {
         model.relations.push_back(RelationModel{
             .declaration = DeclarationModel{.canonical = relation->canonical_id,
-                                            .fields    = field_models(relation->fields, model.value_types)},
+                                            .fields    = field_models(relation->fields, model.value_types, program)},
             .relation    = relation});
     }
     for (const auto& archetype : program.persistence.archetypes) {
@@ -297,7 +314,11 @@ void render_fields(std::ostringstream& out, const SchemaModel& model, const Decl
     for (const auto& field : declaration.fields) {
         out << "  field " << field.name << " ";
         render_value_type(out, model.value_types, field.type);
-        out << " persist=" << (field.persist ? "1" : "0") << " default=" << field.default_text << "\n";
+        out << " persist=" << (field.persist ? "1" : "0") << " default=" << field.default_text;
+        if (!field.clamp_text.empty()) {
+            out << " clamped=" << field.clamp_text;
+        }
+        out << "\n";
     }
 }
 

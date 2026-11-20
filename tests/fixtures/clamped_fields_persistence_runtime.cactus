@@ -1,0 +1,13 @@
+module clamped_fields_persistence_runtime
+
+use std.core
+
+# A clamped field saved and restored. A document holding a value outside the
+# bounds is invalid data.
+
+trait Health:
+    let max_hp: float = 100.0
+    persist var hp: float clamped(min = 0.0, max = max_hp) = 80.0
+
+entity Hero:
+    Health

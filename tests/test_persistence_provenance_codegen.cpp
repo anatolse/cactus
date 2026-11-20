@@ -774,6 +774,31 @@ entity Boss:
     CHECK(fingerprint_of(*before) != fingerprint_of(*after));
 }
 
+TEST_CASE("changing a clamped bound breaks compatibility", "[codegen-entt][persistence][schema][clamped-fields]") {
+    const auto source = [](const std::string& max) {
+        return "module world\n\n"
+               "trait Health:\n"
+               "    persist var current: float clamped(max = " +
+               max +
+               ") = 1.0\n\n"
+               "entity Boss:\n"
+               "    Health\n";
+    };
+    const auto before    = generate(source("100.0"));
+    const auto after     = generate(source("120.0"));
+    const auto unclamped = generate(R"(module world
+
+trait Health:
+    persist var current: float = 1.0
+
+entity Boss:
+    Health
+)");
+
+    CHECK(fingerprint_of(*before) != fingerprint_of(*after));
+    CHECK(fingerprint_of(*before) != fingerprint_of(*unclamped));
+}
+
 namespace {
 
 // One imported module holding a durable trait, registered under whatever

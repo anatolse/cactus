@@ -135,6 +135,9 @@ using DurationOperand = std::variant<Duration, std::int64_t>;
     return static_cast<float>(static_cast<double>(d.units) / static_cast<double>(kDurationUnitsPerSecond));
 }
 
+// `d` in seconds as text, such as `1.5s`.
+[[nodiscard]] std::string duration_text(Duration d);
+
 // The units of a literal such as `5s`, `120ms`, `3min`, `2h` or `0.5s`, or the diagnostic when the
 // literal is not a whole number of units or is out of range.
 [[nodiscard]] std::expected<std::int64_t, std::string> duration_literal_units(std::string_view text);

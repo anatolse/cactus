@@ -762,6 +762,10 @@ FieldNode Parser::parse_field() {
     if (check(TokenType::IN)) {
         range = parse_field_range();
     }
+    std::optional<FieldClamp> clamp;
+    if (check(TokenType::IDENTIFIER) && peek().value == "clamped") {
+        clamp = parse_field_clamp();
+    }
     std::optional<std::unique_ptr<ExprNode>> default_val;
     if (match(TokenType::ASSIGN)) {
         default_val = parse_expression();
@@ -775,7 +779,32 @@ FieldNode Parser::parse_field() {
     field.default_value = std::move(default_val);
     field.location      = loc;
     field.range         = std::move(range);
+    field.clamp         = std::move(clamp);
     return field;
+}
+
+std::optional<FieldClamp> Parser::parse_field_clamp() {
+    FieldClamp clamp{.min = nullptr, .max = nullptr, .location = advance().location};
+    consume(TokenType::LPAREN, "expected '(' after 'clamped'");
+    while (!check(TokenType::RPAREN) && !check(TokenType::NEWLINE) && !check(TokenType::EOF_TOKEN)) {
+        const auto& side = peek();
+        if (!check(TokenType::IDENTIFIER) || (side.value != "min" && side.value != "max")) {
+            errors_.error(side.location, "expected 'min = ...' or 'max = ...' in 'clamped(...)'");
+            return std::nullopt;
+        }
+        const bool is_min = advance().value == "min";
+        auto& bound       = is_min ? clamp.min : clamp.max;
+        if (bound != nullptr) {
+            errors_.error(side.location, std::string{"'clamped' names '"} + (is_min ? "min" : "max") + "' twice");
+        }
+        consume(TokenType::ASSIGN, "expected '=' after the clamped bound's name");
+        bound = parse_expression();
+        if (!match(TokenType::COMMA)) {
+            break;
+        }
+    }
+    consume(TokenType::RPAREN, "expected ')' after the clamped bounds");
+    return clamp;
 }
 
 std::optional<FieldRange> Parser::parse_field_range() {

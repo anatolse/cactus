@@ -73,7 +73,7 @@ input Recover: button
 # while saving and applied only after loading.
 pub single trait Robot:
     var yaw: float = 0.0
-    var pitch: float = 0.0
+    var pitch: float clamped(min = -PITCH_LIMIT, max = PITCH_LIMIT) = 0.0
     persist var saved_position: vec3 = vec3(0.0, 0.0, 0.0)
     persist var saved_velocity: vec3 = vec3(0.0, 0.0, 0.0)
     persist var saved_yaw: float = 0.0
@@ -86,7 +86,7 @@ pub single trait FirstPersonView
 
 pub single trait StrategyView:
     var target: vec3 = vec3(0.0, 0.0, 0.0)
-    var zoom: float = DEFAULT_ZOOM
+    var zoom: float clamped(min = MIN_ZOOM, max = MAX_ZOOM) = DEFAULT_ZOOM
 
 pub trait RobotVisual
 
@@ -185,7 +185,7 @@ rule Look:
         let sensitivity = game.Game[game.Session].sensitivity
         let vertical = if game.Game[game.Session].invert_y: -delta.y else: delta.y
         robot.yaw = robot.yaw - delta.x * sensitivity
-        robot.pitch = math.clamp(robot.pitch - vertical * sensitivity, -PITCH_LIMIT, PITCH_LIMIT)
+        robot.pitch -= vertical * sensitivity
         transform.rotation = quat.from_euler(0.0, robot.yaw, 0.0)
 
 rule Walk:
@@ -310,7 +310,7 @@ rule PanStrategy:
         if input.down(MoveRight):
             pan.x += 1.0
         overview.target += pan * game.Game[game.Session].pan_speed * tick.dt
-        overview.zoom = math.clamp(overview.zoom - inp.wheel_delta() * ZOOM_STEP, MIN_ZOOM, MAX_ZOOM)
+        overview.zoom -= inp.wheel_delta() * ZOOM_STEP
 
 rule CenterOnRobot:
     pairs:

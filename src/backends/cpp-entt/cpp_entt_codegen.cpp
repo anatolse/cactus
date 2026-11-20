@@ -8,6 +8,7 @@
 #include "frontend/symbol_identity.hpp"
 
 #include "backends/cpp-entt/accumulation_plan.hpp"
+#include "backends/cpp-entt/clamped_fields.hpp"
 #include "backends/cpp-entt/component_emitter.hpp"
 #include "backends/cpp-entt/contract_audit_emitter.hpp"
 #include "backends/cpp-entt/event_emitter.hpp"
@@ -2892,38 +2893,69 @@ std::string emit_accumulation_tables(const AccumulationPlan& accumulation, const
         return {};
     }
     std::ostringstream out;
-    out << "// ── Exact Float Accumulation ───────────────────────────────────────\n\n";
-    // One specialization per trait, one table per buffered field.
-    std::vector<std::pair<std::string, std::vector<std::string>>> tables_by_trait;
+    out << "// ── Exact Accumulation ─────────────────────────────────────────────\n\n";
+    // One specialization of `holder` per trait, one table per buffered field.
+    struct Table {
+        SymbolId trait;
+        std::string field;
+        std::string type;
+    };
+    const auto specializations = [&](const std::string& holder, const std::vector<Table>& tables) {
+        std::vector<std::pair<std::string, std::vector<const Table*>>> by_trait;
+        for (const auto& table : tables) {
+            const auto trait = EnttCodegenUtils::trait_cpp_name(table.trait, table.trait.local_name, program);
+            auto found       = std::ranges::find(by_trait, trait, &decltype(by_trait)::value_type::first);
+            if (found == by_trait.end()) {
+                found = by_trait.insert(by_trait.end(), {trait, {}});
+            }
+            found->second.push_back(&table);
+        }
+        std::ostringstream text;
+        text << "template <class T>\n";
+        text << "struct " << holder << ";\n\n";
+        for (const auto& [trait, fields] : by_trait) {
+            text << "template <>\n";
+            text << "struct " << holder << "<" << trait << "> {\n";
+            for (const auto* table : fields) {
+                text << "    static " << table->type << "& " << cpp_escaped(table->field) << "() {\n";
+                text << "        static " << table->type << " table;\n";
+                text << "        return table;\n";
+                text << "    }\n";
+            }
+            text << "};\n\n";
+        }
+        return text.str();
+    };
+    std::vector<Table> floats;
     for (const auto& field : accumulation.fields()) {
-        const auto trait = EnttCodegenUtils::trait_cpp_name(field.trait, field.trait.local_name, program);
-        auto found       = std::ranges::find(tables_by_trait, trait, &decltype(tables_by_trait)::value_type::first);
-        if (found == tables_by_trait.end()) {
-            found = tables_by_trait.insert(tables_by_trait.end(), {trait, {}});
-        }
-        found->second.push_back(cpp_escaped(*field.field));
+        floats.push_back(Table{.trait = field.trait,
+                               .field = *field.field,
+                               .type  = "cactus::runtime::AccumulatedDeltas<entt::entity>"});
     }
-    std::ostringstream tables;
-    tables << "template <class T>\n";
-    tables << "struct accumulation;\n\n";
-    for (const auto& [trait, fields] : tables_by_trait) {
-        tables << "template <>\n";
-        tables << "struct accumulation<" << trait << "> {\n";
-        for (const auto& field : fields) {
-            tables << "    static cactus::runtime::AccumulatedDeltas<entt::entity>& " << field << "() {\n";
-            tables << "        static cactus::runtime::AccumulatedDeltas<entt::entity> deltas;\n";
-            tables << "        return deltas;\n";
-            tables << "    }\n";
-        }
-        tables << "};\n\n";
+    std::vector<Table> clamped;
+    for (const auto& table : accumulation.clamped_tables()) {
+        clamped.push_back(Table{.trait = table.field.trait,
+                                .field = *table.field.field,
+                                .type  = "cactus::runtime::ClampedSums<entt::entity, " + table.value_type + ">"});
     }
-    out << namespace_block("cactus_gen::detail", tables.str()) << "\n";
+    out << namespace_block("cactus_gen::detail",
+                           specializations(AccumulationPlan::FLOAT_TABLES, floats) +
+                               (clamped.empty() ? std::string{}
+                                                : specializations(AccumulationPlan::CLAMPED_TABLES, clamped)))
+        << "\n";
     out << "inline void generated_flush_accumulations() {\n";
     for (const auto& table : accumulation.tables()) {
         out << "    " << table << "().flush();\n";
     }
+    for (const auto& table : accumulation.clamped_tables()) {
+        out << "    {\n";
+        out << "        auto& sums = " << table.table << "();\n";
+        out << "        cactus::runtime::entt_backend::count_clamp_work(sums.take_merges(), sums.settle());\n";
+        out << "    }\n";
+    }
     out << "}\n\n";
-    out << "[[maybe_unused]] inline void generated_rebase_accumulations(entt::registry& registry) {\n";
+    out << "[[maybe_unused]] inline void generated_rebase_accumulations(entt::registry& "
+        << (accumulation.tables().empty() ? "/*registry*/" : "registry") << ") {\n";
     for (std::size_t index = 0; index < accumulation.tables().size(); ++index) {
         const auto& field = accumulation.fields()[index];
         const auto trait  = EnttCodegenUtils::trait_cpp_name(field.trait, field.trait.local_name, program);
@@ -4296,6 +4328,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
 
     out << EnttPersistenceEmitter::emit_world_capture(program);
     out << emit_range_check_functions(program);
+    out << emit_clamp_listeners(program);
     out << EnttRestoreEmitter::emit_world_restore(program);
 
     out << emit_event_structs(program);
@@ -4549,6 +4582,9 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << "    cactus::runtime::entt_backend::reset_quit_request();\n";
     out << "    cactus::runtime::entt_backend::clear_runtime_faults();\n";
     out << "    cactus::runtime::entt_backend::advance_binding_index_epoch();\n";
+    if (program_has_clamped_fields(program)) {
+        out << "    generated_connect_clamped_fields(registry);\n";
+    }
     if (tracks_lifecycle) {
         out << "    generated_connect_lifecycle_trackers(registry);\n";
     }

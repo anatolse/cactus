@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <format>
 #include <numeric>
 #include <optional>
 
@@ -121,6 +122,10 @@ std::expected<std::int64_t, std::string> duration_literal_units(std::string_view
         return out_of_range();
     }
     return static_cast<std::int64_t>(units);
+}
+
+std::string duration_text(Duration d) {
+    return std::format("{}s", static_cast<double>(d.units) / static_cast<double>(kDurationUnitsPerSecond));
 }
 
 }  // namespace cactus

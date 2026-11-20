@@ -1,0 +1,52 @@
+module perf_clamped
+
+use std.core
+
+# Many meters with clamped float, int and duration fields. Two unordered rules
+# add to and take from every field each frame, and one rule reads the float
+# field between them.
+
+trait Board:
+    let size: int = 85
+
+trait Meter:
+    let cap: float = 100.0
+    var hp: float clamped(min = 0.0, max = cap) = 100.0
+    var charge: int clamped(min = 0, max = 1000) = 1000
+    var wait: duration clamped(min = 0s) = 1s
+    var seen: float = 0.0
+
+entity Field:
+    Board
+
+template MeterT:
+    Meter
+
+rule Fill:
+    on load:
+        for i in range(0, Field[Board].size * Field[Board].size):
+            spawn MeterT()
+
+rule Gain:
+    each: Meter as m
+
+    on tick:
+        m.hp += 1.0
+        m.charge += 2
+        m.wait += 1ms
+
+rule Watch:
+    each: Meter as m
+    after: Gain
+
+    on tick:
+        m.seen = m.hp
+
+rule Drain:
+    each: Meter as m
+    after: Watch
+
+    on tick:
+        m.hp -= 1.5
+        m.charge -= 3
+        m.wait -= 2ms

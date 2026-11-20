@@ -1,0 +1,155 @@
+module clamped_fields
+
+# A clamped field keeps every value inside its bounds: a value from outside is
+# moved to the nearest bound. The `+=` and `-=` of one activation are summed
+# exactly and moved into the bounds once, at the end, so neither the order of
+# the writers nor a reader between them changes the result.
+
+use std.core
+
+trait Health:
+    let max_hp: float = 100.0
+    var hp: float clamped(min = 0.0, max = max_hp) = 100.0
+    var seen: float = 0.0
+
+# The same deltas as Health, with no reader between them.
+trait Twin:
+    var hp: float clamped(min = 0.0, max = 100.0) = 100.0
+
+trait Gauge:
+    var value: int clamped(max = 100) = 100
+
+trait Feed:
+    let top: float = 1.0
+    var source: float = 0.5
+    var level: float clamped(min = 0.0, max = top) = 0.5
+
+trait Carry:
+    var value: float clamped(max = 100.0) = 100.0
+    var step: int = 0
+
+trait Counter:
+    var count: int clamped(min = 0) = 2147483647
+
+trait Fatigue:
+    var left: duration clamped(min = 0s) = 10ms
+
+trait Dial:
+    var level: int clamped(min = 0, max = 10) = 5
+    var request: int = 5
+
+trait Band:
+    let lo: int
+    let hi: int
+    var value: int clamped(min = lo, max = hi) = 0
+
+entity Probe:
+    Health
+    Twin
+    Gauge
+    Feed
+    Carry
+    Counter
+    Fatigue
+    Dial
+
+template BandT(lo: int, hi: int):
+    Band:
+        lo = lo
+        hi = hi
+
+rule MakeBands:
+    on load:
+        spawn BandT(lo = 5, hi = 1)
+        spawn BandT(lo = 2, hi = 3)
+
+rule Strike:
+    each: Health as h
+
+    on tick:
+        h.hp += 50.0
+
+rule Look:
+    each: Health as h
+    after: Strike
+
+    on tick:
+        h.seen = h.hp
+
+rule Mend:
+    each: Health as h
+    after: Look
+
+    on tick:
+        h.hp -= 50.0
+
+rule TwinStrike:
+    each: Twin as t
+
+    on tick:
+        t.hp += 50.0
+
+rule TwinMend:
+    each: Twin as t
+
+    on tick:
+        t.hp -= 50.0
+
+rule GaugeUp:
+    each: Gauge as g
+
+    on tick:
+        g.value += 1
+
+rule GaugeDown:
+    each: Gauge as g
+
+    on tick:
+        g.value -= 1
+
+rule Pour:
+    each: Feed as f
+
+    on tick:
+        f.level = f.source
+
+rule CarryUp:
+    each: Carry as c
+
+    on tick:
+        if c.step == 0:
+            c.value += 50.0
+
+rule CarryDown:
+    each: Carry as c
+
+    on tick:
+        if c.step == 1:
+            c.value -= 50.0
+
+rule CarryStep:
+    each: Carry as c
+    after: CarryUp, CarryDown
+
+    on tick:
+        c.step += 1
+
+rule Count:
+    each: Counter as c
+
+    on tick:
+        c.count += 1
+
+rule Tire:
+    each: Fatigue as f
+
+    on tick:
+        f.left -= 1s
+
+rule Turn:
+    each: Dial as d
+
+    on tick:
+        if d.request != d.level:
+            set Dial on Probe:
+                level = d.request

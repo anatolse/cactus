@@ -1,5 +1,6 @@
 #include "backends/cpp-entt/accumulation_plan.hpp"
 
+#include "backends/cpp-entt/clamped_fields.hpp"
 #include "backends/cpp-entt/type_utils.hpp"
 
 #include <algorithm>
@@ -65,10 +66,7 @@ void collect_sites(const std::vector<std::unique_ptr<StmtNode>>& body,
 }
 
 bool holds_floats(const AccumulationTarget& target, const DecoratedProgram& program) {
-    const auto* trait = EnttCodegenUtils::find_trait(program, make_canonical_id(target.trait));
-    if (trait == nullptr) {
-        trait = EnttCodegenUtils::find_trait(program, target.trait.local_name);
-    }
+    const auto* trait = find_written_trait(program, target.trait);
     if (trait == nullptr) {
         return false;
     }
@@ -147,6 +145,14 @@ const std::vector<TraitFieldRef>* untracked_accesses(const HandlerNodes& handler
     return found == handlers.end() ? nullptr : &found->second->untracked_accesses;
 }
 
+void mark_buffered(const FieldWriters& writers, bool buffered) {
+    for (const auto* statement : writers.statements) {
+        if (statement->accumulation.has_value()) {
+            statement->accumulation->buffered = buffered;
+        }
+    }
+}
+
 const AccumulationPlan*& active_plan() {
     thread_local const AccumulationPlan* active = nullptr;
     return active;
@@ -161,13 +167,17 @@ AccumulationPlan::AccumulationPlan(const DecoratedProgram& program) {
     FieldWriterTable fields;
     const auto handler_nodes = collect_handlers(*program.ast, fields);
     for (auto& writers : fields | std::views::values) {
-        const bool buffered = holds_floats(writers.target, program) && !deltas_never_meet(writers);
-        for (const auto* statement : writers.statements) {
-            if (statement->accumulation.has_value()) {
-                statement->accumulation->buffered = buffered;
-            }
+        const auto* clamped = find_clamped_field(program, writers.target.trait, writers.target.field);
+        const bool meet     = !deltas_never_meet(writers);
+        const bool buffered = meet && (clamped != nullptr || holds_floats(writers.target, program));
+        mark_buffered(writers, buffered);
+        if (buffered && clamped != nullptr) {
+            clamped_.push_back(ClampedTable{
+                .field      = TraitFieldRef{.trait = writers.target.trait, .field = writers.target.field},
+                .table      = table_name(writers.target.trait, writers.target.field, program, CLAMPED_TABLES),
+                .value_type = EnttCodegenUtils::value_type_to_cpp(clamped->type)});
         }
-        if (!buffered) {
+        if (!buffered || clamped != nullptr) {
             continue;
         }
         const auto table = table_name(writers.target.trait, writers.target.field, program);
@@ -194,6 +204,11 @@ bool AccumulationPlan::buffered(const TraitFieldRef& access) const {
     return access.field.has_value() && std::ranges::find(fields_, access) != fields_.end();
 }
 
+std::string AccumulationPlan::clamped_table(const TraitFieldRef& access) const {
+    const auto found = std::ranges::find(clamped_, access, &ClampedTable::field);
+    return found == clamped_.end() ? std::string{} : found->table;
+}
+
 std::string AccumulationPlan::entry_flushes(const HandlerIdentity& handler) const {
     const auto found = entry_flushes_.find(handler);
     if (found == entry_flushes_.end()) {
@@ -212,9 +227,10 @@ std::string AccumulationPlan::exit_rebase(const HandlerIdentity& handler) const 
 
 std::string AccumulationPlan::table_name(const SymbolId& trait,
                                          const std::string& field,
-                                         const DecoratedProgram& program) {
-    return "::cactus_gen::detail::accumulation<" + EnttCodegenUtils::trait_cpp_name(trait, trait.local_name, program) +
-           ">::" + cpp_escaped(field);
+                                         const DecoratedProgram& program,
+                                         const char* holder) {
+    return std::string{"::cactus_gen::detail::"} + holder + "<" +
+           EnttCodegenUtils::trait_cpp_name(trait, trait.local_name, program) + ">::" + cpp_escaped(field);
 }
 
 AccumulationScope::AccumulationScope(const AccumulationPlan& plan)

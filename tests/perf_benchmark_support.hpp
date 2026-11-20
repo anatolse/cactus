@@ -71,7 +71,9 @@ template <typename Step>
             .pass_rows        = after.pass_rows - before.pass_rows,
             .pass_quads       = after.pass_quads - before.pass_quads,
             .repeat_passes    = after.repeat_passes - before.repeat_passes,
-            .cell_rows        = after.cell_rows - before.cell_rows};
+            .cell_rows        = after.cell_rows - before.cell_rows,
+            .clamp_merges     = after.clamp_merges - before.clamp_merges,
+            .clamp_settles    = after.clamp_settles - before.clamp_settles};
 }
 
 // Median milliseconds per call of `step`, after a warm-up.

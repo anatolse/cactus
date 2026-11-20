@@ -9,6 +9,9 @@
 
 namespace cactus {
 
+// The C++ type of `trait`.
+[[nodiscard]] std::string resolved_trait_cpp(const ResolvedTrait& trait, const DecoratedProgram& program);
+
 // The trait a creation site names, when that trait declares a ranged field.
 [[nodiscard]] const ResolvedTrait* find_ranged_trait(const DecoratedProgram& program,
                                                      const std::optional<SymbolId>& symbol,

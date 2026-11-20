@@ -22,6 +22,8 @@ struct PerfCounters {
     std::uint64_t pass_quads       = 0;  // quads a render pass drew
     std::uint64_t repeat_passes    = 0;  // passes run by rules with `repeat:`
     std::uint64_t cell_rows        = 0;  // left cells a rule over cells visited
+    std::uint64_t clamp_merges     = 0;  // deltas merged into a clamped field's exact pending value
+    std::uint64_t clamp_settles    = 0;  // clamped pending values settled when an activation ended
 
     PerfCounters& operator+=(const PerfCounters& other) noexcept {
         commands += other.commands;
@@ -38,6 +40,8 @@ struct PerfCounters {
         pass_quads += other.pass_quads;
         repeat_passes += other.repeat_passes;
         cell_rows += other.cell_rows;
+        clamp_merges += other.clamp_merges;
+        clamp_settles += other.clamp_settles;
         return *this;
     }
 };
@@ -111,6 +115,11 @@ inline void count_cell_row() noexcept {
 inline void count_repeat_pass() noexcept {
     ++counting_target().repeat_passes;
 }
+
+inline void count_clamp_work(std::size_t merges, std::size_t settles) noexcept {
+    counting_target().clamp_merges += merges;
+    counting_target().clamp_settles += settles;
+}
 #else
 inline void count_commands(std::size_t /*count*/) noexcept {}
 inline void count_ordering() noexcept {}
@@ -125,6 +134,7 @@ inline void count_pass_row() noexcept {}
 inline void count_cell_row() noexcept {}
 inline void count_pass_quad() noexcept {}
 inline void count_repeat_pass() noexcept {}
+inline void count_clamp_work(std::size_t /*merges*/, std::size_t /*settles*/) noexcept {}
 #endif
 
 }  // namespace cactus::runtime::entt_backend

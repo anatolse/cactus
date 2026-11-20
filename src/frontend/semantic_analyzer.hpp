@@ -44,6 +44,18 @@ struct ResolvedFieldRange {
     std::vector<SymbolId> containers;  // first-read order, no duplicates
 };
 
+// One side of a clamped field: a `let` field of the same trait, or a constant expression.
+struct ResolvedClampBound {
+    std::shared_ptr<const ExprNode> expr;
+    std::string let_field;  // set when the bound reads a `let` field of the same trait
+};
+
+// `clamped(min = a, max = b)` on a `var` field; a missing side is the type's own limit.
+struct ResolvedFieldClamp {
+    std::optional<ResolvedClampBound> min;
+    std::optional<ResolvedClampBound> max;
+};
+
 struct ResolvedField {
     std::string name;
     TypeInfo type;
@@ -57,6 +69,7 @@ struct ResolvedField {
     bool is_cell            = false;  // a `var` field of a dimensioned trait: one value per cell
     std::optional<PhaseFieldSource> source_binding;
     std::optional<ResolvedFieldRange> range;
+    std::optional<ResolvedFieldClamp> clamp;
 };
 
 // Canonical identity mixin — present on all module-scope resolved declarations.
@@ -2262,7 +2275,8 @@ private:
                                 const std::string& context_name,
                                 bool in_rule_handler);
     void validate_trait_default_values(ProgramNode& program);
-    void validate_ranged_fields(ProgramNode& program);
+    void validate_bounded_fields(ProgramNode& program);
+    ResolvedField* find_resolved_field(const std::string& trait, const std::string& field);
     void validate_trait_dimensions(ProgramNode& program);
     void extract_cell_domains(ProgramNode& program);
     [[nodiscard]] std::unordered_map<std::string, const ResolvedTrait*> retained_cell_bindings(const RuleNode& rule) const;
@@ -2310,6 +2324,12 @@ private:
     void validate_trait_dimension_shape(TraitNode& trait, ResolvedTrait& resolved);
     void validate_cell_fields(const TraitNode& trait, const ResolvedTrait& resolved);
     void validate_field_range(TraitNode& trait, FieldNode& field);
+    void validate_field_clamp(const TraitNode& trait, FieldNode& field);
+    std::optional<ResolvedClampBound> resolve_clamp_bound(ExprNode& bound,
+                                                          const TraitNode& trait,
+                                                          const ResolvedField& field,
+                                                          const std::string& context);
+    bool is_clamp_constant(ExprNode& bound);
     bool validate_range_bound(ExprNode& bound,
                               const TraitNode& trait,
                               const std::string& field_name,

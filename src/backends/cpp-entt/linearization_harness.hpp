@@ -249,6 +249,10 @@ inline void digest_value(WorldDigest& digest, float value) {
     digest.bytes(&bits, sizeof bits);
 }
 
+inline void digest_value(WorldDigest& digest, Duration value) {
+    digest.add(value.units);
+}
+
 inline void digest_value(WorldDigest& digest, const std::string& value) {
     digest.add(value.size());
     digest.bytes(value.data(), value.size());

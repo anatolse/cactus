@@ -167,6 +167,17 @@ void ModuleArtifact::write_field(std::ostream& out, const ResolvedField& field) 
         write_expression(out, *field.range->hi);
         write_symbol_vector(out, field.range->containers);
     }
+    write_bool(out, field.clamp.has_value());
+    if (field.clamp.has_value()) {
+        for (const auto* bound : {&field.clamp->min, &field.clamp->max}) {
+            write_bool(out, bound->has_value());
+            if (!bound->has_value()) {
+                continue;
+            }
+            write_expression(out, *(*bound)->expr);
+            write_str(out, (*bound)->let_field);
+        }
+    }
 }
 
 void ModuleArtifact::write_traits(std::ostream& out,
@@ -1095,6 +1106,19 @@ ResolvedField ModuleArtifact::read_field(std::istream& in) {
         range.hi         = read_expression(in);
         range.containers = read_symbol_vector(in);
         field.range      = std::move(range);
+    }
+    if (read_bool(in)) {
+        ResolvedFieldClamp clamp;
+        for (auto* bound : {&clamp.min, &clamp.max}) {
+            if (!read_bool(in)) {
+                continue;
+            }
+            ResolvedClampBound side;
+            side.expr      = read_expression(in);
+            side.let_field = read_str(in);
+            *bound         = std::move(side);
+        }
+        field.clamp = std::move(clamp);
     }
     return field;
 }

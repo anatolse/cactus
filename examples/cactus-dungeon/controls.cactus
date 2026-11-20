@@ -62,7 +62,7 @@ pub trait Rig:
     persist var focus: vec3 = vec3(4.5, 0.0, 4.5)
     persist var yaw: float = 0.0
     persist var turn: int = 0
-    persist var zoom: float = 12.0
+    persist var zoom: float clamped(min = ZOOM_MIN, max = ZOOM_MAX) = 12.0
 
 pub event SelectionCommit
 pub event ContextCommit
@@ -512,7 +512,7 @@ rule MoveCamera:
             rig.turn += 1
         let goal = 1.0 * rig.turn * QUARTER
         rig.yaw = if math.abs(goal - rig.yaw) < 0.001: goal else: rig.yaw + (goal - rig.yaw) * math.min(1.0, tick.dt * TURN_RATE)
-        rig.zoom = math.clamp(rig.zoom - inp.wheel_delta() * 2.0, ZOOM_MIN, ZOOM_MAX)
+        rig.zoom -= inp.wheel_delta() * 2.0
 
 rule CameraPose:
     each:

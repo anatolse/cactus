@@ -2,6 +2,7 @@
 
 #include "backends/cpp-entt/keep_slots.hpp"
 
+#include "backends/cpp-entt/clamped_fields.hpp"
 #include "backends/cpp-entt/construction_retention.hpp"
 #include "backends/cpp-entt/persistence_emitter.hpp"
 #include "backends/cpp-entt/range_checks.hpp"
@@ -272,7 +273,7 @@ void emit_staged_range_checks(std::ostringstream& out,
         }
         out << "    for (const auto entity : staged.view<" << trait.cpp_name << ">()) {\n";
         out << "        const auto fault = " << range_check_function_name(ranged->module_name, ranged->name).ref()
-            << "(staged, staged.get<" << trait.cpp_name << ">(entity), false);\n";
+            << "(staged, staged.get<" << trait.cpp_name << ">(entity), false, true);\n";
         out << "        if (fault.has_value() && fault->reason != RangeFaultReason::StaleContainer) {\n";
         out << "            return RestoreOutcome{\n";
         out << "                .ok = false, .code = \"invalid_data\", .message = describe_range_fault(*fault)};\n";
@@ -428,6 +429,9 @@ std::string EnttRestoreEmitter::emit_world_restore(const DecoratedProgram& progr
     out << "    generated_reset_scheduler_state();\n";
     if (parent_trait != nullptr) {
         out << "    (void)" << EnttCodegenUtils::hierarchy_index_expr(program) << ";\n";
+    }
+    if (program_has_clamped_fields(program)) {
+        out << "    generated_connect_clamped_fields(registry);\n";
     }
     // The staged registry never had storage signals connected. Restore fires
     // no lifecycle trigger itself (recording is off outside a commit).

@@ -399,6 +399,10 @@ add_executable(test_semantic_let_fields test_semantic_let_fields.cpp)
 target_link_libraries(test_semantic_let_fields PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticLetFieldsTests COMMAND test_semantic_let_fields)
 
+add_executable(test_semantic_clamped_fields test_semantic_clamped_fields.cpp)
+target_link_libraries(test_semantic_clamped_fields PRIVATE cactus_frontend Catch2::Catch2WithMain)
+add_test(NAME SemanticClampedFieldsTests COMMAND test_semantic_clamped_fields)
+
 add_executable(test_semantic_ranged_fields test_semantic_ranged_fields.cpp)
 target_link_libraries(test_semantic_ranged_fields PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticRangedFieldsTests COMMAND test_semantic_ranged_fields)
@@ -1412,6 +1416,19 @@ cactus_add_headless_behavior_test(test_persistence_capture_scaling_headless_beha
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_persistence_capture_scaling_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_clamped_fields_headless_behavior
+    CACTUS_SOURCE examples/clamped_fields.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_clamped_fields_headless_behavior.cpp
+    LINEARIZATION_HARNESS
+)
+
+cactus_add_headless_behavior_test(test_clamped_fields_persistence_headless_behavior
+    CACTUS_SOURCE tests/fixtures/clamped_fields_persistence_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_clamped_fields_persistence_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_ranged_fields_persistence_headless_behavior
     CACTUS_SOURCE tests/fixtures/ranged_fields_persistence_runtime.cactus
     BACKEND cpp-entt
@@ -1709,7 +1726,7 @@ endforeach()
 add_custom_target(test_generated_performance_benchmarks)
 foreach(shape IN ITEMS static_keep union_fold equality_reduce grid_region row_join baseline own_projection
         single_commit plain_commit sweep wide_level reduced_keep required_links keep_chain
-        incremental_keep render_pass dimension_spread timers)
+        incremental_keep render_pass dimension_spread timers clamped)
     set(perf_target test_perf_${shape}_benchmark)
     set(perf_codegen_flags)
     if(shape STREQUAL "wide_level")

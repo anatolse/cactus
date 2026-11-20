@@ -1436,7 +1436,7 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     validate_spawn_sites(program);
     validate_stmt_contexts(program);
     validate_trait_default_values(program);
-    validate_ranged_fields(program);
+    validate_bounded_fields(program);
     validate_trait_dimensions(program);
     validate_trait_modifier_rules(program);
 
@@ -2994,7 +2994,7 @@ std::string range_bound_reads(const std::string& trait_name) {
 
 }  // namespace
 
-void SemanticAnalyzer::validate_ranged_fields(ProgramNode& program) {
+void SemanticAnalyzer::validate_bounded_fields(ProgramNode& program) {
     for (auto& decl : program.declarations) {
         auto* trait = std::get_if<TraitNode>(&decl);
         if (trait == nullptr) {
@@ -3004,21 +3004,29 @@ void SemanticAnalyzer::validate_ranged_fields(ProgramNode& program) {
             if (field.range.has_value()) {
                 validate_field_range(*trait, field);
             }
+            if (field.clamp.has_value()) {
+                validate_field_clamp(*trait, field);
+            }
         }
     }
+}
+
+ResolvedField* SemanticAnalyzer::find_resolved_field(const std::string& trait, const std::string& field) {
+    const auto found = result_.traits.find(trait);
+    if (found == result_.traits.end()) {
+        return nullptr;
+    }
+    auto& fields        = found->second.fields;
+    const auto resolved = std::ranges::find(fields, field, &ResolvedField::name);
+    return resolved == fields.end() ? nullptr : &*resolved;
 }
 
 void SemanticAnalyzer::validate_field_range(TraitNode& trait, FieldNode& field) {
     const auto qualified = trait.name + "." + field.name;
     const auto prefix    = "range on field '" + qualified + "' ";
     auto& range          = *field.range;
-    auto resolved_trait  = result_.traits.find(trait.name);
-    if (resolved_trait == result_.traits.end()) {
-        return;
-    }
-    auto& fields  = resolved_trait->second.fields;
-    auto resolved = std::ranges::find(fields, field.name, &ResolvedField::name);
-    if (resolved == fields.end()) {
+    auto* resolved       = find_resolved_field(trait.name, field.name);
+    if (resolved == nullptr) {
         return;
     }
     if (trait.state.has_value()) {
@@ -3148,6 +3156,173 @@ bool SemanticAnalyzer::validate_container_read(TraitAccessExpr& access,
         containers.push_back(*container);
     }
     return true;
+}
+
+// ── Clamped var fields ──────────────────────────────────────────────────────
+
+namespace {
+
+bool clampable(TypeKind kind) {
+    return kind == TypeKind::Int || kind == TypeKind::Float || kind == TypeKind::Duration;
+}
+
+std::string clamp_type_article(TypeKind kind) {
+    switch (kind) {
+        case TypeKind::Int:
+            return "an 'int'";
+        case TypeKind::Float:
+            return "a 'float'";
+        default:
+            return "a 'duration'";
+    }
+}
+
+// A constant bound folded at compile time: `int` or `duration` units, or a `float`.
+struct FoldedBound {
+    std::int64_t integer = 0;
+    float real           = 0.0F;
+};
+
+std::optional<FoldedBound> fold_clamp_bound(const ExprNode& bound,
+                                            const std::unordered_map<std::string, const ExprNode*>& constants) {
+    std::unordered_set<std::string> evaluating;
+    const auto value = evaluate_numeric_constant(bound, constants, evaluating, true);
+    if (!value.has_value()) {
+        return std::nullopt;
+    }
+    return FoldedBound{.integer = value->kind == TypeKind::Duration ? value->duration.units
+                                                                    : static_cast<std::int64_t>(value->value),
+                       .real    = static_cast<float>(value->value)};
+}
+
+std::string describe_clamp_constant(const FoldedBound& bound, TypeKind kind) {
+    if (kind == TypeKind::Float) {
+        auto text = std::format("{}", bound.real);
+        return text.find_first_of(".ein") == std::string::npos ? text + ".0" : text;
+    }
+    if (kind == TypeKind::Duration) {
+        return duration_text(Duration{bound.integer});
+    }
+    return std::to_string(bound.integer);
+}
+
+bool clamp_bounds_cross(const FoldedBound& min, const FoldedBound& max, TypeKind kind) {
+    return kind == TypeKind::Float ? min.real > max.real : min.integer > max.integer;
+}
+
+}  // namespace
+
+void SemanticAnalyzer::validate_field_clamp(const TraitNode& trait, FieldNode& field) {
+    const auto qualified = trait.name + "." + field.name;
+    const auto prefix    = "'clamped' on field '" + qualified + "' ";
+    auto& clamp          = *field.clamp;
+    auto* resolved       = find_resolved_field(trait.name, field.name);
+    if (resolved == nullptr) {
+        return;
+    }
+    const char* problem = nullptr;
+    if (trait.state.has_value()) {
+        problem = "is not allowed on a state variant";
+    } else if (!field.modifiers.is_var) {
+        problem = "needs a 'var' field; a 'let' field uses 'in range'";
+    } else if (!clampable(resolved->type.kind)) {
+        problem = "needs an 'int', 'float' or 'duration' field";
+    } else if (!trait.dimensions.empty()) {
+        problem = "is not supported on a cell field";
+    } else if (clamp.min == nullptr && clamp.max == nullptr) {
+        problem = "needs 'min', 'max' or both";
+    }
+    if (problem != nullptr) {
+        errors_.error(clamp.location, prefix + problem);
+        return;
+    }
+    const auto context = "clamped bound of '" + qualified + "'";
+    ResolvedFieldClamp result;
+    bool valid = true;
+    for (auto [source, target] : {std::pair{&clamp.min, &result.min}, std::pair{&clamp.max, &result.max}}) {
+        if (*source == nullptr) {
+            continue;
+        }
+        *target = resolve_clamp_bound(**source, trait, *resolved, context);
+        valid   = valid && target->has_value();
+    }
+    if (!valid) {
+        return;
+    }
+    const auto fold = [&](const std::unique_ptr<ExprNode>& source,
+                          const std::optional<ResolvedClampBound>& bound) -> std::optional<FoldedBound> {
+        if (!bound.has_value() || !bound->let_field.empty()) {
+            return std::nullopt;
+        }
+        return fold_clamp_bound(*source, const_initializers_);
+    };
+    const auto kind = resolved->type.kind;
+    const auto min  = fold(clamp.min, result.min);
+    const auto max  = fold(clamp.max, result.max);
+    if (min.has_value() && max.has_value() && clamp_bounds_cross(*min, *max, kind)) {
+        errors_.error(clamp.location,
+                      "clamped bounds of '" + qualified + "' cross: min " + describe_clamp_constant(*min, kind) +
+                          " is above max " + describe_clamp_constant(*max, kind));
+        return;
+    }
+    resolved->clamp = std::move(result);
+}
+
+std::optional<ResolvedClampBound> SemanticAnalyzer::resolve_clamp_bound(ExprNode& bound,
+                                                                        const TraitNode& trait,
+                                                                        const ResolvedField& field,
+                                                                        const std::string& context) {
+    const auto reject = [&](const std::string& reason) -> std::optional<ResolvedClampBound> {
+        errors_.error(bound.location, context + " " + reason);
+        return std::nullopt;
+    };
+    const auto wrong_type = [&] { return reject("must be " + clamp_type_article(field.type.kind) + " expression"); };
+    const auto* ident     = std::get_if<IdentExpr>(&bound.expr);
+    const auto* own       = ident == nullptr ? nullptr : find_field_node(trait, ident->name);
+    if (own != nullptr) {
+        if (!own->modifiers.is_let) {
+            return reject("reads '" + ident->name +
+                          "', which is not a 'let' field: a bound must be fixed for the field's life");
+        }
+        const auto* resolved = find_field_in(result_.traits.at(trait.name).fields, ident->name);
+        if (resolved == nullptr || resolved->type.kind != field.type.kind) {
+            return wrong_type();
+        }
+        return ResolvedClampBound{.expr = clone_expr(bound), .let_field = ident->name};
+    }
+    if (ident != nullptr && !const_initializers_.contains(ident->name)) {
+        return reject("reads unknown field '" + ident->name + "'");
+    }
+    if (!is_clamp_constant(bound)) {
+        return reject("can read only literals, constants and 'let' fields of '" + trait.name + "'");
+    }
+    if (infer_expr_type(bound, {}, {}, nullptr).kind != field.type.kind) {
+        return wrong_type();
+    }
+    return ResolvedClampBound{.expr = clone_expr(bound)};
+}
+
+// NOLINTNEXTLINE(misc-no-recursion) -- a bound is an expression tree
+bool SemanticAnalyzer::is_clamp_constant(ExprNode& bound) {
+    return std::visit(
+        [&](auto& e) -> bool {
+            using E = std::decay_t<decltype(e)>;
+            if constexpr (std::is_same_v<E, LiteralExpr>) {
+                return e.kind == LiteralExpr::Kind::Int || e.kind == LiteralExpr::Kind::Float ||
+                       e.kind == LiteralExpr::Kind::Duration;
+            } else if constexpr (std::is_same_v<E, IdentExpr>) {
+                return resolve_const_ident(e);
+            } else if constexpr (std::is_same_v<E, UnaryExpr>) {
+                return e.op == "-" && is_clamp_constant(*e.operand);
+            } else if constexpr (std::is_same_v<E, BinaryExpr>) {
+                return is_int_arithmetic(e.op) && is_clamp_constant(*e.left) && is_clamp_constant(*e.right);
+            } else if constexpr (std::is_same_v<E, MemberExpr>) {
+                return !std::holds_alternative<TraitAccessExpr>(e.object->expr) && resolve_const_member(e, {});
+            } else {
+                return false;
+            }
+        },
+        bound.expr);
 }
 
 // ── Module constants (dsl-const-expressions) ────────────────────────────────

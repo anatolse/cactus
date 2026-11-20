@@ -2526,6 +2526,69 @@ TEST_CASE("accumulated deltas: a flush adds every delta exactly, in any order", 
     CHECK(other == 1.0F);
 }
 
+TEST_CASE("clamped fields: projection moves values and NaN into the bounds", "[runtime][clamped-fields]") {
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    CHECK(clamp_field(5, 0, 3, true) == 3);
+    CHECK(clamp_field(-5, 0, 3, true) == 0);
+    CHECK(clamp_field(nan, 0.0F, 1.0F, true) == 0.0F);
+    CHECK(clamp_field(nan, clamp_lowest<float>(), 1.0F, false) == 1.0F);
+    CHECK(clamp_field(cactus::Duration{-1}, cactus::Duration{}, clamp_highest<cactus::Duration>(), true) ==
+          cactus::Duration{});
+    CHECK(clamp_bounds_cross(nan, 1.0F));
+    CHECK_FALSE(clamp_bounds_cross(1, 1));
+    CHECK(outside_clamp(nan, 0.0F, 1.0F));
+    CHECK_FALSE(outside_clamp(cactus::Duration{2}, cactus::Duration{1}, cactus::Duration{3}));
+}
+
+TEST_CASE("clamped fields: sums past the 64-bit range don't wrap", "[runtime][clamped-fields]") {
+    constexpr auto kMax = std::numeric_limits<std::int64_t>::max();
+    constexpr auto kMin = std::numeric_limits<std::int64_t>::min();
+    WideSum up(kMax);
+    up.add(1);
+    CHECK(up.clamp(0, 10) == 10);
+    up.subtract(1);
+    CHECK(up.clamp(0, kMax) == kMax);
+    WideSum down(kMin);
+    down.subtract(1);
+    CHECK(down.clamp(-5, 5) == -5);
+    down.subtract(kMin);
+    CHECK(down.clamp(-5, 5) == -1);
+    CHECK(clamped_add(std::numeric_limits<int>::max(), 1, 0, clamp_highest<int>(), true) ==
+          std::numeric_limits<int>::max());
+    CHECK(clamped_add(0, std::numeric_limits<int>::min(), clamp_lowest<int>(), 10, false, true) == 10);
+    CHECK(clamped_add(cactus::Duration{10}, cactus::Duration{20}, cactus::Duration{}, cactus::Duration{100}, true, true) ==
+          cactus::Duration{});
+}
+
+TEST_CASE("clamped fields: pending sums project once and start again after forget", "[runtime][clamped-fields]") {
+    ClampedSums<std::uint32_t, float> sums;
+    float hp = 100.0F;
+    sums.add(1U, hp, 50.0F, 0.0F, 100.0F, true);
+    CHECK(hp == 100.0F);
+    sums.subtract(1U, hp, 50.0F, 0.0F, 100.0F, true);
+    CHECK(hp == 100.0F);
+    hp = 100.0F;
+    sums.forget(1U);
+    sums.subtract(1U, hp, 50.0F, 0.0F, 100.0F, true);
+    CHECK(hp == 50.0F);
+    CHECK(sums.take_merges() == 3);
+    CHECK(sums.take_merges() == 0);
+    CHECK(sums.settle() == 1);
+    CHECK(sums.settle() == 0);
+    sums.forget(1U);
+
+    ClampedSums<std::uint32_t, int> many;
+    std::vector<int> values(100, 10);
+    for (std::uint32_t entity = 0; entity < values.size(); ++entity) {
+        many.add(entity, values[entity], 5, 0, 12, true);
+    }
+    for (std::uint32_t entity = 0; entity < values.size(); ++entity) {
+        many.subtract(entity, values[entity], 5, 0, 12, true);
+    }
+    CHECK(std::ranges::all_of(values, [](int value) { return value == 10; }));
+    CHECK(many.settle() == values.size());
+}
+
 TEST_CASE("accumulated deltas: a flush empties the table", "[runtime][numeric-semantics][write-kinds]") {
     float value = 2.0F;
     Deltas deltas;

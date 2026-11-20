@@ -23,6 +23,7 @@
 #include <cstring>
 #include <exception>
 #include <filesystem>
+#include <format>
 #include <limits>
 #include <memory_resource>
 #include <numbers>
@@ -4527,8 +4528,45 @@ std::string describe_range_fault(const RangeFault& fault) {
             return "dimension " + std::string{fault.trait} + "." + std::string{fault.field} + " = range(" +
                    std::to_string(fault.lo) + ", " + std::to_string(fault.hi) + ") holds more than " +
                    std::to_string(cactus::runtime::kMaxDimensionValues) + " values";
+        case RangeFaultReason::CrossedBounds:
+            return std::string{fault.trait} + "." + std::string{fault.field} + " has crossed bounds: clamped(" +
+                   fault.bounds_text + ")";
+        case RangeFaultReason::OutsideClamp:
+            return std::string{fault.trait} + "." + std::string{fault.field} + " = " + fault.value_text +
+                   " is outside clamped(" + fault.bounds_text + ")";
     }
     std::unreachable();
+}
+
+std::string clamp_text(int value) {
+    return std::to_string(value);
+}
+
+std::string clamp_text(float value) {
+    return std::format("{}", value);
+}
+
+std::string clamp_text(Duration value) {
+    return duration_text(value);
+}
+
+RangeFault clamp_fault(const ClampCheck& check,
+                       RangeFaultReason reason,
+                       std::string value_text,
+                       std::string_view lo,
+                       std::string_view hi) {
+    std::string bounds;
+    if (check.has_min) {
+        bounds = "min = " + std::string{lo};
+    }
+    if (check.has_max) {
+        bounds += (bounds.empty() ? "max = " : ", max = ") + std::string{hi};
+    }
+    return RangeFault{.trait       = check.trait,
+                      .field       = check.field,
+                      .reason      = reason,
+                      .value_text  = std::move(value_text),
+                      .bounds_text = std::move(bounds)};
 }
 
 std::vector<RangeFault>*& task_range_faults() noexcept {

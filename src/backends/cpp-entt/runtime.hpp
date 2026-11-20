@@ -66,7 +66,9 @@ enum class RangeFaultReason : std::uint8_t {
     SecondCarrier,
     DeadLink,
     UnresolvedLink,
-    DimensionTooLarge
+    DimensionTooLarge,
+    CrossedBounds,  // a clamped field's `let` bounds give min > max
+    OutsideClamp    // a restored clamped value lies outside its bounds
 };
 
 struct RangeFault {
@@ -76,7 +78,42 @@ struct RangeFault {
     std::int32_t lo    = 0;
     std::int32_t hi    = 0;
     RangeFaultReason reason = RangeFaultReason::OutOfRange;
+    std::string value_text;   // a clamped value, as text
+    std::string bounds_text;  // a clamped field's bounds: "min = a, max = b"
 };
+
+// A clamped value or bound as fault text.
+[[nodiscard]] std::string clamp_text(int value);
+[[nodiscard]] std::string clamp_text(float value);
+[[nodiscard]] std::string clamp_text(Duration value);
+
+// One clamped field as its trait's range check sees it.
+struct ClampCheck {
+    std::string_view trait;
+    std::string_view field;
+    bool has_min     = false;
+    bool has_max     = false;
+    bool let_bounds  = false;  // a bound reads a `let` field, so the bounds can cross
+    bool check_value = false;  // the value must already lie inside the bounds, as in a restored document
+};
+
+[[nodiscard]] RangeFault clamp_fault(const ClampCheck& check,
+                                     RangeFaultReason reason,
+                                     std::string value_text,
+                                     std::string_view lo,
+                                     std::string_view hi);
+
+// The fault of a clamped `value` whose bounds cross, or that lies outside them under `check_value`.
+template <typename T>
+[[nodiscard]] std::optional<RangeFault> check_clamp(const ClampCheck& check, T value, T lo, T hi) {
+    if (check.let_bounds && clamp_bounds_cross(lo, hi)) {
+        return clamp_fault(check, RangeFaultReason::CrossedBounds, {}, clamp_text(lo), clamp_text(hi));
+    }
+    if (check.check_value && outside_clamp(value, lo, hi)) {
+        return clamp_fault(check, RangeFaultReason::OutsideClamp, clamp_text(value), clamp_text(lo), clamp_text(hi));
+    }
+    return std::nullopt;
+}
 
 inline constexpr std::size_t RUNTIME_FAULT_LOG_CAPACITY = 64;
 

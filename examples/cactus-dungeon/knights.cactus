@@ -12,7 +12,7 @@ use units
 
 pub trait Knight:
     persist var hunger: duration = 0s
-    persist var fatigue: duration = 0s
+    persist var fatigue: duration clamped(min = 0s) = 0s
     persist var training: duration = 0s
     persist var resting: bool = false
 
@@ -399,7 +399,7 @@ rule Rest:
     when: session.Game[session.Session].mode == session.SessionMode.Playing
 
     on fixed_tick:
-        needs.fatigue = if needs.fatigue > fixed_tick.delta * 4: needs.fatigue - fixed_tick.delta * 4 else: 0s
+        needs.fatigue -= fixed_tick.delta * 4
         let profile = units.stats_for(unit)
         unit.health = if unit.health + fixed_tick.dt * 10.0 < profile.max_health: unit.health + fixed_tick.dt * 10.0 else: profile.max_health
 

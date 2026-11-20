@@ -4,6 +4,7 @@
 #include "common/codegen_error.hpp"
 #include "frontend/symbol_identity.hpp"
 
+#include "backends/cpp-entt/clamped_fields.hpp"
 #include "backends/cpp-entt/type_utils.hpp"
 
 #include <algorithm>
@@ -17,9 +18,9 @@ namespace {
 
 constexpr const char* VALUE = "value";
 
-// A ranged field or a required link: either is checked where its value is made.
+// A ranged field, a required link or a clamped field: each is checked where its value is made.
 bool has_ranged_fields(const ResolvedTrait& trait) {
-    return std::ranges::any_of(trait.fields,
+    return has_clamped_field(trait) || std::ranges::any_of(trait.fields,
                                [](const ResolvedField& field) {
                                    return field.range.has_value() || is_link_type(field.type);
                                }) ||
@@ -42,11 +43,6 @@ void emit_link_check(std::ostringstream& out,
     out << "        return cactus::runtime::entt_backend::RangeFault{.trait = \"" << trait.name << "\", .field = \""
         << field.name << "\", .reason = cactus::runtime::entt_backend::RangeFaultReason::DeadLink};\n";
     out << "    }\n";
-}
-
-std::string trait_cpp(const ResolvedTrait& trait, const DecoratedProgram& program) {
-    return EnttCodegenUtils::trait_cpp_name(
-        std::nullopt, trait.canonical_id.empty() ? trait.name : trait.canonical_id, program);
 }
 
 std::string check_ref(const ResolvedTrait& trait) {
@@ -178,6 +174,11 @@ void emit_dimension_check(std::ostringstream& out,
 
 }  // namespace
 
+std::string resolved_trait_cpp(const ResolvedTrait& trait, const DecoratedProgram& program) {
+    return EnttCodegenUtils::trait_cpp_name(
+        std::nullopt, trait.canonical_id.empty() ? trait.name : trait.canonical_id, program);
+}
+
 const ResolvedTrait* find_ranged_trait(const DecoratedProgram& program,
                                        const std::optional<SymbolId>& symbol,
                                        const std::string& source_name) {
@@ -205,8 +206,8 @@ std::string emit_range_check_functions(const DecoratedProgram& program) {
         const auto name = range_check_function_name(trait->module_name, trait->name);
         std::ostringstream out;
         out << "[[maybe_unused]] std::optional<cactus::runtime::entt_backend::RangeFault> " << name.name
-            << "([[maybe_unused]] const entt::registry& registry, [[maybe_unused]] const " << trait_cpp(*trait, program) << "& " << VALUE
-            << ", [[maybe_unused]] bool check_links = true) {\n";
+            << "([[maybe_unused]] const entt::registry& registry, [[maybe_unused]] const " << resolved_trait_cpp(*trait, program) << "& " << VALUE
+            << ", [[maybe_unused]] bool check_links = true, [[maybe_unused]] bool check_clamped = false) {\n";
         for (const auto& field : trait->fields) {
             if (field.range.has_value()) {
                 emit_field_check(out, *trait, field, *field.range, program);
@@ -220,6 +221,7 @@ std::string emit_range_check_functions(const DecoratedProgram& program) {
                 emit_dimension_check(out, *trait, dimension, *dimension.range, program);
             }
         }
+        out << emit_clamp_checks(*trait, VALUE, program);
         out << "    return std::nullopt;\n";
         out << "}\n";
         result += namespace_block(name.ns, out.str()) + "\n";

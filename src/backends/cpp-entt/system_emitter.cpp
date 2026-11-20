@@ -6,6 +6,7 @@
 #include "frontend/symbol_identity.hpp"
 
 #include "backends/cpp-entt/accumulation_plan.hpp"
+#include "backends/cpp-entt/clamped_fields.hpp"
 #include "backends/cpp-entt/cell_codegen.hpp"
 #include "backends/cpp-entt/contract_audit_emitter.hpp"
 #include "backends/cpp-entt/persistence_emitter.hpp"
@@ -4313,6 +4314,9 @@ static std::string emit_set_trait_stmt(const SetTraitStmt& s,
         result << ind << "            " << value_name << "->" << arg.name << " = " << deferred_field_value_name(arg)
                << ";\n";
     }
+    if (const auto* trait = find_ranged_trait(program, s.resolved_trait_id, s.trait_name)) {
+        result << emit_clamp_projections(*trait, "(*" + value_name + ")", ind + "            ", program);
+    }
     if (const auto* plan = KeepSlotScope::active()) {
         result << KeepSlotPlan::touches(set_keep_slots(*plan, s), ind + "            ", target_name);
     }
@@ -4358,6 +4362,7 @@ static std::string emit_project_trait_stmt(const ProjectTraitStmt& s,
                              },
                              ind + "    ");
         result << ind << "    if (" << emit_range_check_passes(*ranged, candidate_name) << ") {\n";
+        result << emit_clamp_projections(*ranged, candidate_name, ind + "        ", program);
         result << ind << "        ::cactus_gen::detail::project<" << cpp << ">(registry, " << target
                << ") = " << candidate_name << ";\n";
         result << ind << "    }\n";
@@ -4561,6 +4566,15 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                             ovr != cpp_overrides.end() ? ovr->second : EnttCodegenUtils::trait_cpp_name(comp, program);
                         lhs = component_local(cpp) + "." + cpp_escaped(s.name);
                     }
+                }
+                if (const auto* clamped = clamped_write_target(s, program)) {
+                    return emit_clamped_write(s,
+                                              *clamped,
+                                              ClampedWrite{.lhs    = lhs,
+                                                           .value  = rewrite_part(*s.value),
+                                                           .entity = accumulation_entity(s, trait_names, program, pair_scope),
+                                                           .indent = ind},
+                                              program);
                 }
                 if (s.accumulation.has_value() && s.accumulation->buffered) {
                     return ind + AccumulationPlan::table_name(s.accumulation->trait, s.accumulation->field, program) +

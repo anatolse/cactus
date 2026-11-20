@@ -710,6 +710,263 @@ private:
     std::size_t cell_end_   = 0;
 };
 
+// ── Clamped fields ───────────────────────────────────────────────────────────
+
+// The type's own limits, used for a side a clamped field does not declare.
+template <typename T>
+[[nodiscard]] constexpr T clamp_lowest() noexcept {
+    if constexpr (std::is_same_v<T, float>) {
+        return -std::numeric_limits<float>::infinity();
+    } else if constexpr (std::is_same_v<T, Duration>) {
+        return Duration{std::numeric_limits<std::int64_t>::min()};
+    } else {
+        return std::numeric_limits<T>::min();
+    }
+}
+template <typename T>
+[[nodiscard]] constexpr T clamp_highest() noexcept {
+    if constexpr (std::is_same_v<T, float>) {
+        return std::numeric_limits<float>::infinity();
+    } else if constexpr (std::is_same_v<T, Duration>) {
+        return Duration{std::numeric_limits<std::int64_t>::max()};
+    } else {
+        return std::numeric_limits<T>::max();
+    }
+}
+
+// A clamped `int` or `duration`: a whole count of 64-bit units.
+template <typename T>
+concept ClampedCount = std::is_same_v<T, int> || std::is_same_v<T, Duration>;
+
+template <ClampedCount T>
+[[nodiscard]] constexpr std::int64_t clamp_units(T value) noexcept {
+    if constexpr (std::is_same_v<T, Duration>) {
+        return value.units;
+    } else {
+        return value;
+    }
+}
+template <ClampedCount T>
+[[nodiscard]] constexpr T from_clamp_units(std::int64_t units) noexcept {
+    if constexpr (std::is_same_v<T, Duration>) {
+        return Duration{units};
+    } else {
+        return static_cast<int>(units);
+    }
+}
+
+// The nearest value in [lo, hi]. A NaN goes to lo when the field declares a min, else to hi.
+template <ClampedCount T>
+[[nodiscard]] constexpr T clamp_field(T value,
+                                      std::type_identity_t<T> lo,
+                                      std::type_identity_t<T> hi,
+                                      bool /*has_min*/) noexcept {
+    return std::min(std::max(value, lo), hi);
+}
+[[nodiscard]] inline float clamp_field(float value, float lo, float hi, bool has_min) noexcept {
+    if (std::isnan(value)) {
+        return has_min ? lo : hi;
+    }
+    return std::min(std::max(value, lo), hi);
+}
+
+// Whether `let` bounds evaluated at creation leave no value between them.
+template <ClampedCount T>
+[[nodiscard]] constexpr bool clamp_bounds_cross(T lo, std::type_identity_t<T> hi) noexcept {
+    return lo > hi;
+}
+[[nodiscard]] inline bool clamp_bounds_cross(float lo, float hi) noexcept {
+    return std::isnan(lo) || std::isnan(hi) || lo > hi;
+}
+
+// Whether a stored value lies outside [lo, hi], as in a restored document.
+template <ClampedCount T>
+[[nodiscard]] constexpr bool outside_clamp(T value, std::type_identity_t<T> lo, std::type_identity_t<T> hi) noexcept {
+    return value < lo || value > hi;
+}
+[[nodiscard]] inline bool outside_clamp(float value, float lo, float hi) noexcept {
+    return std::isnan(value) || value < lo || value > hi;
+}
+
+// An exact signed sum of 64-bit terms: the wraps past the 64-bit range are counted, not lost.
+class WideSum {
+public:
+    constexpr WideSum() noexcept = default;
+    constexpr explicit WideSum(std::int64_t start) noexcept : low_(start) {}
+
+    constexpr void add(std::int64_t term) noexcept {
+        if (__builtin_add_overflow(low_, term, &low_)) {
+            wraps_ += term > 0 ? 1 : -1;
+        }
+    }
+    constexpr void subtract(std::int64_t term) noexcept {
+        if (__builtin_sub_overflow(low_, term, &low_)) {
+            wraps_ += term < 0 ? 1 : -1;
+        }
+    }
+    constexpr void accumulate(std::int64_t term, bool negate) noexcept {
+        if (negate) {
+            subtract(term);
+        } else {
+            add(term);
+        }
+    }
+    [[nodiscard]] constexpr std::int64_t clamp(std::int64_t lo, std::int64_t hi) const noexcept {
+        if (wraps_ != 0) {
+            return wraps_ > 0 ? hi : lo;
+        }
+        return std::min(std::max(low_, lo), hi);
+    }
+
+private:
+    std::int64_t low_   = 0;
+    std::int64_t wraps_ = 0;
+};
+
+// `target + delta` (or `- delta`) with no wrap, then moved into [lo, hi].
+template <ClampedCount T>
+[[nodiscard]] constexpr T clamped_add(T target,
+                                      std::type_identity_t<T> delta,
+                                      std::type_identity_t<T> lo,
+                                      std::type_identity_t<T> hi,
+                                      bool /*has_min*/,
+                                      bool negate = false) noexcept {
+    WideSum sum(clamp_units(target));
+    sum.accumulate(clamp_units(delta), negate);
+    return from_clamp_units<T>(sum.clamp(clamp_units(lo), clamp_units(hi)));
+}
+
+// The exact pending value of each clamped field cell that received `+=` or `-=` in this
+// activation. Each write stores the projection of the exact value, so a read needs no
+// settle; settle() ends the activation. Assign-like writes forget() their cell.
+template <typename Entity, typename T>
+class ClampedSums {
+public:
+    void add(Entity entity, T& target, T delta, T lo, T hi, bool has_min) {
+        merge(entity, target, delta, lo, hi, has_min, false);
+    }
+    void subtract(Entity entity, T& target, T delta, T lo, T hi, bool has_min) {
+        merge(entity, target, delta, lo, hi, has_min, true);
+    }
+
+    // The cell's value was replaced: its next delta starts from the stored value.
+    void forget(Entity entity) noexcept {
+        if (used_.empty()) {
+            return;
+        }
+        if (auto* slot = find(entity); slot != nullptr) {
+            slot->fresh = true;
+        }
+    }
+
+    // Drops every pending value; returns how many there were.
+    std::size_t settle() noexcept {
+        const auto count = used_.size();
+        for (const auto index : used_) {
+            slots_[index].used = false;
+        }
+        used_.clear();
+        return count;
+    }
+
+    // The deltas merged since the last call.
+    std::size_t take_merges() noexcept {
+        return std::exchange(merges_, 0);
+    }
+
+private:
+    using Exact = std::conditional_t<std::is_same_v<T, float>, reduce::Sum<float>, WideSum>;
+
+    struct Slot {
+        Entity entity{};
+        Exact exact{};
+        bool used  = false;
+        bool fresh = false;
+    };
+
+    static Exact start(T value) {
+        if constexpr (std::is_same_v<T, float>) {
+            Exact exact;
+            exact.add(value);
+            return exact;
+        } else {
+            return Exact(clamp_units(value));
+        }
+    }
+
+    static T project(const Exact& exact, T lo, T hi, bool has_min) {
+        if constexpr (std::is_same_v<T, float>) {
+            return clamp_field(exact.value(), lo, hi, has_min);
+        } else {
+            return from_clamp_units<T>(exact.clamp(clamp_units(lo), clamp_units(hi)));
+        }
+    }
+
+    void merge(Entity entity, T& target, T delta, T lo, T hi, bool has_min, bool negate) {
+        ++merges_;
+        auto& slot = claim(entity);
+        if (slot.fresh) {
+            slot.exact = start(target);
+            slot.fresh = false;
+        }
+        if constexpr (std::is_same_v<T, float>) {
+            slot.exact.add(negate ? -delta : delta);
+        } else {
+            slot.exact.accumulate(clamp_units(delta), negate);
+        }
+        target = project(slot.exact, lo, hi, has_min);
+    }
+
+    [[nodiscard]] std::size_t home(Entity entity) const noexcept {
+        const auto hash = static_cast<std::uint64_t>(std::hash<Entity>{}(entity)) * 0x9E3779B97F4A7C15ULL;
+        return static_cast<std::size_t>(hash >> 32U) & (slots_.size() - 1U);
+    }
+
+    Slot* find(Entity entity) noexcept {
+        for (auto index = home(entity);; index = (index + 1U) & (slots_.size() - 1U)) {
+            auto& slot = slots_[index];
+            if (!slot.used) {
+                return nullptr;
+            }
+            if (slot.entity == entity) {
+                return &slot;
+            }
+        }
+    }
+
+    Slot& claim(Entity entity) {
+        if ((used_.size() + 1U) * 2U > slots_.size()) {
+            grow();
+        }
+        for (auto index = home(entity);; index = (index + 1U) & (slots_.size() - 1U)) {
+            auto& slot = slots_[index];
+            if (slot.used && slot.entity == entity) {
+                return slot;
+            }
+            if (!slot.used) {
+                slot = Slot{.entity = entity, .exact = {}, .used = true, .fresh = true};
+                used_.push_back(index);
+                return slot;
+            }
+        }
+    }
+
+    void grow() {
+        auto old = std::exchange(slots_, std::vector<Slot>(std::max<std::size_t>(16U, slots_.size() * 2U)));
+        used_.clear();
+        for (auto& slot : old) {
+            if (slot.used) {
+                auto& moved = claim(slot.entity);
+                moved       = slot;
+            }
+        }
+    }
+
+    std::vector<Slot> slots_;
+    std::vector<std::size_t> used_;
+    std::size_t merges_ = 0;
+};
+
 // The address of one component of an accumulated field, for AccumulatedDeltas::rebase.
 [[nodiscard]] inline float* accumulation_cell(float& field, std::uint8_t /*component*/) noexcept {
     return &field;

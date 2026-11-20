@@ -131,8 +131,8 @@ A *cell* is a triple `(e, T, f)`.
 ### 3.2 Pending accumulation
 
 `A` maps each cell to a finite multiset of exact deltas. Outside an activation `A` is
-empty everywhere. Only Accum writes to `float`, `vec2` and `vec3` fields add to `A`
-(§6.4).
+empty everywhere. Only Accum writes to `float`, `vec2` and `vec3` fields, and to
+clamped fields of any type, add to `A` (§6.4).
 
 ### 3.3 Clocks and delayed occurrences
 
@@ -287,7 +287,8 @@ commit").
 ### 6.3 Row execution and live reads
 
 **R3. Evaluate.** Expressions evaluate by structural induction to one value (§7.1).
-Reading cell `x` first applies `flush(x)` (R4) and then returns `V(x)`. A read sees the
+Reading cell `x` first applies `flush(x)` (R4) and then returns `V(x)`; a clamped cell
+is read without a flush (§6.4). A read sees the
 latest value written to that cell by any earlier step, in this pass or in an earlier
 one. Sources: `phase-activation-model` ("Activation commit boundary"), DSL spec §5.3.
 
@@ -298,7 +299,8 @@ Statements run in order:
 - **Accumulate.** For a statement whose write kind is Accum on a `float`, `vec2` or
   `vec3` cell `x`, evaluate `e` to a binary32 value `v` and set
   `A(x) := A(x) ⊎ ⦃v⦄` for `+=`, or `⦃−v⦄` for `-=`. On `int`, set
-  `V(x) := V(x) ± v` with wrapping. The write kind comes from the contract
+  `V(x) := V(x) ± v` with wrapping. On a clamped cell of any type, add `±v` to `A(x)`
+  with no wrap. The write kind comes from the contract
   (`handler-contracts`: "Field writes carry a write kind"); a `+=` in a handler that
   also reads `x` is General and takes the Write case.
 - **Emit.** Evaluate the payload and the target once, form `o = ⟨ev, rcp, h⟩`, and
@@ -321,6 +323,16 @@ A user `func` call evaluates its body as an expression with no access to `w`, `A
 
 **R4. Flush.** `flush(x)`: when `A(x)` is not empty, set
 `V(x) := rnd(V(x) + Σ A(x))`, summing exactly, and set `A(x) := ⦃⦄`.
+
+**Clamped cells.** For a cell `x` of a clamped field with bounds `[lo, hi]` (DSL spec
+§3.6), let `p(v)` move `v` into `[lo, hi]`, with NaN going to `lo`, or to `hi` when the
+field declares no `min`. Every value stored in `V(x)` is `p` of the written value. A read
+of `x` does not flush: it returns `p(rnd(V(x) + Σ A(x)))` and leaves `A(x)` unchanged. An
+Assign, Join or General write sets `V(x)` to `p` of its value and empties `A(x)`. R7
+flushes `x` as `V(x) := p(rnd(V(x) + Σ A(x)))`. So the deltas of one cascade are
+projected once, and no read changes the result. The backend stores `p(rnd(V(x) + Σ A(x)))`
+at each delta and keeps the exact sum beside it until R7, so a read needs no settle
+(Code: `ClampedSums` in `cactus_runtime.hpp`).
 
 R3 flushes a cell before each non-Accum access of that cell. R7 flushes every cell
 when a cascade ends, before commands apply. So the deltas between two non-Accum

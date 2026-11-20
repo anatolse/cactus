@@ -54,6 +54,13 @@ struct FieldRange {
     SourceLocation location;
 };
 
+// `clamped(min = a, max = b)` after a `var` field type; a missing side is null.
+struct FieldClamp {
+    std::unique_ptr<ExprNode> min;
+    std::unique_ptr<ExprNode> max;
+    SourceLocation location;
+};
+
 struct FieldNode {
     FieldModifiers modifiers;
     std::string name;
@@ -61,6 +68,7 @@ struct FieldNode {
     std::optional<std::unique_ptr<ExprNode>> default_value;
     SourceLocation location;
     std::optional<FieldRange> range;
+    std::optional<FieldClamp> clamp;
 };
 
 // ── Function Parameter ──────────────────────────────────────────────────────

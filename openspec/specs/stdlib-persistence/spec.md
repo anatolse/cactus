@@ -116,3 +116,10 @@ An adapter's read SHALL return an owned typed document or an explicit error, and
 #### Scenario: Two formats restore equivalent worlds
 - **WHEN** the same captured snapshot is written and read back through two different adapters
 - **THEN** each restores an equivalent persistent world without changing Cactus traits or handlers
+
+### Requirement: A std.core program always has something persistable
+A program that uses `std.core` SHALL always have something persistable, since `std.core.Clock` carries the `persist` field `Pace.scale`. Its restore SHALL replace the world like that of any program with persistable data; the no-op restore of a program with nothing persistable SHALL NOT apply to it.
+
+#### Scenario: A std.core program restores its clock
+- **WHEN** a program that uses `std.core` and declares no other `persist` field saves with `Clock[Pace].scale = 0.5`, changes the pace, and restores
+- **THEN** the restore replaces the world, entities without persistence eligibility are gone, and `scale` is 0.5

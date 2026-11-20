@@ -115,3 +115,52 @@ Every root `frame` occurrence SHALL carry a `dt` that is finite and at least `0.
 #### Scenario: An ordinary value is unchanged
 - **WHEN** the host drives a frame with `dt = 0.016`
 - **THEN** `tick.dt` is `0.016` and `tick.delta` is `duration(0.016)`
+
+### Requirement: Periodic phase rate
+A phase that declares `every:` SHALL accept one optional clause `rate: <expression>`. The expression SHALL be a named field read, `Entity[Trait].field` with an optional module prefix, whose field has type `float` and is not a cell field of a dimensioned trait. A `clamped` field SHALL be accepted. Each of these SHALL be a source-located error: `rate:` on a phase without `every:`; a constant; any other expression form; a field of another type; a cell field; a second `rate:` clause.
+
+At each root occurrence the phase SHALL read the field once, when its batch starts and before its accumulator grows, from committed state. Writes committed by the phase's upstream phases in the same root occurrence SHALL be visible to that read; writes made by the phase's own activations or by later phases SHALL apply from the next root occurrence. The effective rate SHALL be 0 when the value is NaN or below 0, 1024 when it is above 1024, and the value itself otherwise. The accumulator SHALL grow by the root's `dt` times the effective rate. Everything else SHALL be as for a periodic phase without `rate:`: the number of due steps, the `max:` cap, the dropping of capped whole steps, `dt` and `delta` equal to `every` for every activation, and `alpha`.
+
+When the named entity does not exist or does not carry the trait, the effective rate SHALL be 0 and the runtime SHALL report a fault that names the entity, the trait and the field. The fault SHALL be reported once when the source goes missing, and again only after the source has been present at a later root occurrence and then goes missing again.
+
+A phase without `rate:` SHALL behave as before. A phase whose rate field holds 1.0 SHALL perform the same activations as the same phase without `rate:`.
+
+#### Scenario: Normal speed
+- **WHEN** a phase with `every: 1s / 60` and `rate: Clock[Pace].scale` runs 60 frames of 1/60 s while `scale` is 1.0
+- **THEN** it activates 60 times, as it would without `rate:`
+
+#### Scenario: Slow motion
+- **WHEN** `scale` is 0.5 for 60 frames of 1/60 s
+- **THEN** the phase activates 30 times, each with `delta = 1s / 60`
+
+#### Scenario: Stopped
+- **WHEN** `scale` is 0.0
+- **THEN** the phase does not activate and its `alpha` keeps its last value
+
+#### Scenario: Fast-forward
+- **WHEN** `scale` is 4.0 and `max:` is 8
+- **THEN** the phase activates 4 times per frame of 1/60 s
+
+#### Scenario: Bad value
+- **WHEN** the rate field is an unclamped `float` that holds NaN or -1.0
+- **THEN** the phase does not activate
+
+#### Scenario: Write from the phase itself takes effect next frame
+- **WHEN** a handler of the phase writes `scale = 0.0` in the first of two steps due this frame
+- **THEN** the second step still runs, and no step runs in the next frame
+
+#### Scenario: Write from an upstream phase takes effect this frame
+- **WHEN** an `input` handler writes `scale = 0.0` and the periodic phase runs after `input`
+- **THEN** the periodic phase runs no step in that frame
+
+#### Scenario: Missing source
+- **WHEN** the rate's named entity is destroyed, and the following frames run
+- **THEN** the phase runs no step in those frames, and exactly one fault naming the entity, the trait and the field is reported
+
+#### Scenario: Rate on a non-periodic phase
+- **WHEN** a phase without `every:` declares `rate:`
+- **THEN** the compiler reports an error saying `rate:` needs a periodic phase
+
+#### Scenario: Rate is not a named field read
+- **WHEN** a phase declares `rate: 0.5` or `rate: Clock[Pace].scale * 2.0`
+- **THEN** the compiler reports an error saying `rate:` takes one named `float` field

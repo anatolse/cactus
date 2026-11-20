@@ -97,3 +97,21 @@ Because a periodic phase's synthesized `dt` and `delta` always equal its compile
 - **WHEN** a `reduce:` expression reads `tick.dt` or `tick.delta` and `tick` declares no `every:`
 - **THEN** compilation reports a source-located error saying that the field is only available inside `tick` handlers
 
+### Requirement: The root frame's step is finite and not negative
+Every root `frame` occurrence SHALL carry a `dt` that is finite and at least `0.0`, and a `delta` that is at least `0s`. Where the root frame enters the runtime, a negative, infinite or NaN `dt` SHALL become `0.0`, and a negative `delta` SHALL become `0s`. This SHALL hold for the generated frame loop, for a host that builds its own `main()`, and for the headless driver. The generated loop SHALL clean `dt` before it computes `delta` from it. So a phase field initialized from `frame.dt` or `frame.delta` is never negative, and a periodic phase's accumulator never moves backward.
+
+#### Scenario: A negative host value
+- **WHEN** the host drives a frame with `dt = -0.5`
+- **THEN** `tick.dt` is `0.0` and `tick.delta` is `0s` in that frame, and no periodic phase activates because of it
+
+#### Scenario: A non-finite host value
+- **WHEN** the generated loop drives a frame with a NaN or infinite `dt`
+- **THEN** `tick.dt` is `0.0` and `tick.delta` is `0s` in that frame
+
+#### Scenario: A host injects a negative delta
+- **WHEN** a host's own `main()` injects a frame with `dt = 0.016` and a negative `delta`
+- **THEN** `tick.dt` is `0.016` and `tick.delta` is `0s` in that frame
+
+#### Scenario: An ordinary value is unchanged
+- **WHEN** the host drives a frame with `dt = 0.016`
+- **THEN** `tick.dt` is `0.016` and `tick.delta` is `duration(0.016)`

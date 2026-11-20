@@ -324,6 +324,14 @@ target_compile_definitions(test_query_cost_diagnostics PRIVATE
 )
 add_test(NAME QueryCostDiagnosticsTests COMMAND test_query_cost_diagnostics)
 
+add_executable(test_blend_weight_diagnostics test_blend_weight_diagnostics.cpp)
+target_link_libraries(test_blend_weight_diagnostics PRIVATE cactus_frontend Catch2::Catch2WithMain)
+target_compile_definitions(test_blend_weight_diagnostics PRIVATE
+    CACTUS_TEST_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    CACTUS_TEST_BINARY_DIR="${CMAKE_BINARY_DIR}"
+)
+add_test(NAME BlendWeightDiagnosticsTests COMMAND test_blend_weight_diagnostics)
+
 add_executable(test_pair_plans test_pair_plans.cpp)
 target_link_libraries(test_pair_plans PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME PairPlanTests COMMAND test_pair_plans)
@@ -1202,6 +1210,12 @@ cactus_add_headless_behavior_test(test_exact_duration_headless_behavior
     CACTUS_SOURCE examples/exact_duration.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_exact_duration_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_frame_step_headless_behavior
+    CACTUS_SOURCE tests/fixtures/frame_step_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_frame_step_headless_behavior.cpp
 )
 
 cactus_add_headless_behavior_test(test_order_by_total_headless_behavior

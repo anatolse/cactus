@@ -32,7 +32,10 @@ public:
     /// Load and merge the given .cmod artifact files in order.
     /// Returns the merged DecoratedProgram on success, or nullopt on error.
     /// artifact_paths should be in dependency order (leaves first).
-    std::optional<DecoratedProgram> link(const std::vector<std::filesystem::path>& artifact_paths);
+    /// `ast` is the merged AST of the same modules, which artifacts don't keep;
+    /// whole-program passes that walk bodies need it.
+    std::optional<DecoratedProgram> link(const std::vector<std::filesystem::path>& artifact_paths,
+                                         ProgramNode* ast = nullptr);
 
     /// Merge src into target.
     /// src_module_name is used in error messages for duplicate symbols.

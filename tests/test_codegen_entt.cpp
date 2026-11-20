@@ -5794,7 +5794,7 @@ TEST_CASE("Codegen EnTT: graph scheduler state owns typed events phases commands
     REQUIRE(main_start != std::string::npos);
     REQUIRE(main_end != std::string::npos);
     const auto main = code.substr(main_start, main_end - main_start);
-    CHECK(main.contains("const float dt = GetFrameTime();"));
+    CHECK(main.contains("const float dt = cactus::runtime::clean_frame_dt(GetFrameTime());"));
     CHECK(main.contains("generated_inject_external_event(::cactus_gen::frameEvent{.dt = dt});"));
     CHECK(main.contains("generated_drain_external_events(registry);"));
     CHECK(!main.contains("generated_update_project"));

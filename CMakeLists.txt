@@ -172,6 +172,7 @@ add_library(cactus_frontend STATIC
     src/frontend/archetype_reachability.cpp
     src/frontend/pair_plans.cpp
     src/frontend/query_costs.cpp
+    src/frontend/blend_weights.cpp
     src/frontend/hierarchy_forest.cpp
     src/frontend/keep_inputs.cpp
     src/frontend/cost_report.cpp

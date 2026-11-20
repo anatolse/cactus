@@ -1,0 +1,26 @@
+module frame_step_runtime
+
+use std.core
+
+# A frame's step is finite and not negative: the runtime turns a bad host step
+# into zero, so tick sees no negative or infinite step and fixed_tick never
+# runs backward or catches up on a step that never happened.
+
+trait Seen:
+    var dt: float = -1.0
+    var delta: duration = -1s
+    var fixed_runs: int = 0
+
+entity Probe:
+    Seen
+
+rule Step:
+    each: Seen as s
+    on tick:
+        s.dt = tick.dt
+        s.delta = tick.delta
+
+rule Fixed:
+    each: Seen as s
+    on fixed_tick:
+        s.fixed_runs += 1

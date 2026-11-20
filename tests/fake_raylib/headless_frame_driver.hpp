@@ -47,8 +47,9 @@ inline void init_and_load(entt::registry& registry) {
 // drive_one_frame/drive_frames, does not re-run init/load) — for tests that
 // need to interleave other events or state changes between frames.
 inline void drive_frame(entt::registry& registry, float dt = 1.0F / 60.0F) {
+    const float step = cactus::runtime::clean_frame_dt(dt);
     cactus::runtime::entt_backend::generated_inject_external_event(
-        cactus_gen::stdlib::core::frameEvent{.dt = dt, .delta = cactus::duration_from_seconds(dt)});
+        cactus_gen::stdlib::core::frameEvent{.dt = dt, .delta = cactus::duration_from_seconds(step)});
     cactus::runtime::entt_backend::generated_drain_external_events(registry);
 }
 

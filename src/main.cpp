@@ -479,17 +479,12 @@ static std::unique_ptr<cactus::ProgramNode> compile_multi_module_pipeline(const 
     // Link all compiled modules
     cactus::ErrorReporter link_errors;
     cactus::ProgramLinker linker(link_errors);
-    auto merged = linker.link(artifact_paths);
+    auto merged = linker.link(artifact_paths, merged_codegen_prog.get());
     print_errors(link_errors);
     if (!merged || link_errors.has_errors()) {
         return {};
     }
     decorated = std::move(*merged);
-    // Preserve a merged AST for code generation so imported stdlib/app
-    // declarations (units, rules, extern rules, consts, etc.) are
-    // still emitted after multi-module linking. Artifacts intentionally do
-    // not serialize AST structure.
-    decorated.ast = merged_codegen_prog.get();
     // The linker produces an empty module_name; restore it from the root
     // module declaration so codegen can emit correctly-namespaced identifiers.
     for (const auto& decl : root_prog.declarations) {

@@ -119,6 +119,15 @@ template <typename T>
 
 namespace cactus::runtime {
 
+// The root frame's step: a negative, infinite or NaN `dt` is no time at all.
+[[nodiscard]] inline float clean_frame_dt(float dt) noexcept {
+    return std::isfinite(dt) && dt > 0.0F ? dt : 0.0F;
+}
+
+[[nodiscard]] inline Duration clean_frame_delta(Duration delta) noexcept {
+    return delta.units > 0 ? delta : Duration{};
+}
+
 template <typename Entry, typename Function>
 [[nodiscard]] auto memoize_relation_value(Function function) {
     using Value = std::remove_cvref_t<std::invoke_result_t<Function&, const Entry&>>;

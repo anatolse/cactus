@@ -1,6 +1,7 @@
 #include "frontend/program_linker.hpp"
 
 #include "frontend/archetype_reachability.hpp"
+#include "frontend/blend_weights.hpp"
 #include "frontend/delivery_cycles.hpp"
 #include "frontend/execution_graph_scheduler.hpp"
 #include "frontend/module_artifact.hpp"
@@ -326,9 +327,9 @@ bool ProgramLinker::rebuild_execution_graph(DecoratedProgram& program,
 
 // ── 5.1: Link from artifact files ───────────────────────────────────────────
 
-std::optional<DecoratedProgram> ProgramLinker::link(const std::vector<std::filesystem::path>& artifact_paths) {
+std::optional<DecoratedProgram> ProgramLinker::link(const std::vector<std::filesystem::path>& artifact_paths,
+                                                    ProgramNode* ast) {
     DecoratedProgram merged;
-    merged.ast = nullptr;  // AST is not preserved in artifacts
 
     for (const auto& path : artifact_paths) {
         ErrorReporter artifact_errors;
@@ -351,6 +352,7 @@ std::optional<DecoratedProgram> ProgramLinker::link(const std::vector<std::files
         }
     }
 
+    merged.ast = ast;
     std::optional<ArchetypeReachability> reachability;
     if (!rebuild_execution_graph(merged, &reachability)) {
         return std::nullopt;
@@ -377,6 +379,7 @@ void run_whole_program_passes(DecoratedProgram& program,
     validate_required_links(program, errors);
     finalize_pair_plans(program, errors);
     check_query_costs(program, errors);
+    check_blend_weights(program, errors);
     validate_container_traits(program, errors);
     validate_state_transitions(program, errors);
     validate_single_traits(program, errors);

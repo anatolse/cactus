@@ -1038,10 +1038,26 @@ bool is_trivially_copyable(const ResolvedEvent& event, const DecoratedProgram& p
     });
 }
 
+// Every host passes the root frame's step through its injector, so it is cleaned there.
+void emit_frame_step_cleaning(std::ostringstream& out, const ResolvedEvent& event, const DecoratedProgram& program) {
+    if (&event != find_external_frame_event(program)) {
+        return;
+    }
+    for (const auto& field : event.fields) {
+        if (field.name == "dt" && field.type.kind == TypeKind::Float) {
+            out << "    occurrence.dt = cactus::runtime::clean_frame_dt(occurrence.dt);\n";
+        }
+        if (field.name == "delta" && field.type.kind == TypeKind::Duration) {
+            out << "    occurrence.delta = cactus::runtime::clean_frame_delta(occurrence.delta);\n";
+        }
+    }
+}
+
 void emit_external_event_injector(std::ostringstream& out, const ResolvedEvent& event, const DecoratedProgram& program) {
     const bool copy = is_trivially_copyable(event, program);
     out << "void generated_inject_external_event(" << event_runtime_cpp_type(program, *event.symbol_id)
         << " occurrence) {\n";
+    emit_frame_step_cleaning(out, event, program);
     out << "    generated_scheduler_state().activation.root_event_queue.push_back(\n";
     out << "        QueuedEvent<EventOccurrence>{.occurrence = " << (copy ? "occurrence" : "std::move(occurrence)")
         << "});\n";
@@ -4082,7 +4098,7 @@ std::string emit_backend_main(const DecoratedProgram& program) {
         emit_boundary_activation(*load_event);
     }
     out << "    while (!WindowShouldClose()) {\n";
-    out << "        const float dt = GetFrameTime();\n";
+    out << "        const float dt = cactus::runtime::clean_frame_dt(GetFrameTime());\n";
     out << "        BeginDrawing();\n";
     out << "        ClearBackground(RAYWHITE);\n";
     if (graph_driven_frame) {

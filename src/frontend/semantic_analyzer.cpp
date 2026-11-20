@@ -5603,7 +5603,70 @@ void SemanticAnalyzer::validate_phase_from_after_every_max(const PhaseCollection
                 resolved_phase.max_repetitions = static_cast<std::int64_t>(value->value);
             }
         }
+        validate_phase_rate(*phase, resolved_phase);
     }
+}
+
+namespace {
+
+std::string undeclared_trait_message(const SymbolId& entity, const std::string& trait_name) {
+    return "entity '" + entity.local_name + "' does not declare trait '" + trait_name + "'";
+}
+
+std::string missing_field_message(const std::string& trait_name, const std::string& field) {
+    return "trait '" + trait_name + "' has no field '" + field + "'";
+}
+
+}  // namespace
+
+std::optional<SymbolId> SemanticAnalyzer::carried_trait(const SymbolId& entity, const std::string& trait_name) const {
+    const auto trait = try_resolve_trait_ref_to_symbol(trait_name);
+    return trait.has_value() && entity_carries(entity, *trait) ? trait : std::nullopt;
+}
+
+void SemanticAnalyzer::validate_phase_rate(const PhaseNode& phase, ResolvedPhase& resolved) {
+    if (!phase.rate.has_value()) {
+        return;
+    }
+    const auto& expr  = **phase.rate;
+    const auto prefix = "phase '" + phase.name + "': ";
+    if (!phase.every.has_value()) {
+        errors_.error(expr.location, prefix + "'rate:' needs a periodic phase, one that declares 'every:'");
+        return;
+    }
+    const auto* member = std::get_if<MemberExpr>(&expr.expr);
+    const auto* access = member == nullptr ? nullptr : std::get_if<TraitAccessExpr>(&member->object->expr);
+    const auto chain =
+        access == nullptr || access->cell ? std::nullopt : callee_chain_segments(*access->object);
+    const auto root = chain.has_value() ? find_named_entity_root(*chain) : std::nullopt;
+    if (!root.has_value() || root->second != chain->size()) {
+        errors_.error(expr.location, prefix + "'rate:' takes one named `float` field, written 'Entity[Trait].field'");
+        return;
+    }
+    const auto& entity = root->first;
+    const auto trait   = carried_trait(entity, access->trait_name);
+    if (!trait.has_value()) {
+        errors_.error(expr.location, undeclared_trait_message(entity, access->trait_name));
+        return;
+    }
+    const auto* declared = find_resolved_trait(*trait);
+    const auto* field    = declared == nullptr ? nullptr : find_field_in(declared->fields, member->member);
+    if (field == nullptr) {
+        errors_.error(expr.location, missing_field_message(access->trait_name, member->member));
+        return;
+    }
+    const auto spelled = access->trait_name + "." + member->member;
+    if (declared->is_cell_field(*field)) {
+        errors_.error(expr.location, prefix + "'rate:' cannot read cell field '" + spelled + "'; it holds one value per cell");
+        return;
+    }
+    if (field->type.kind != TypeKind::Float) {
+        errors_.error(expr.location,
+                      prefix + "'rate:' field '" + spelled + "' has type " + type_display_name(field->type) +
+                          "; 'rate:' takes one named `float` field");
+        return;
+    }
+    resolved.rate = PhaseRate{.entity = entity, .trait = *trait, .field = member->member};
 }
 
 // 48 after extraction from validate_phase_declarations (task 6.10); the DFS
@@ -6793,7 +6856,7 @@ void SemanticAnalyzer::check_trait_access_fields(const TraitAccessExpr& access,
     }
     const auto* trait = access.resolved_trait_id.has_value() ? find_resolved_trait(*access.resolved_trait_id) : nullptr;
     if (trait != nullptr && !trait->is_state_slot() && find_field_in(trait->fields, fields.front()) == nullptr) {
-        errors_.error(location, "trait '" + access.trait_name + "' has no field '" + fields.front() + "'");
+        errors_.error(location, missing_field_message(access.trait_name, fields.front()));
     }
 }
 
@@ -6803,18 +6866,13 @@ void SemanticAnalyzer::resolve_named_trait_access(TraitAccessExpr& access,
                                                   const SourceLocation& location,
                                                   NamedAccessContext context) {
     access.resolved_entity_id = entity;
-    const auto trait          = try_resolve_trait_ref_to_symbol(access.trait_name);
-    const bool declares       = trait.has_value() && entity_carries(entity, *trait);
-    if (declares) {
-        access.resolved_trait_id = trait;
-    }
+    access.resolved_trait_id  = carried_trait(entity, access.trait_name);
     if (context != NamedAccessContext::Rule) {
         errors_.error(location, "named field access is only allowed in rules");
         return;
     }
-    if (!declares) {
-        errors_.error(location,
-                      "entity '" + entity.local_name + "' does not declare trait '" + access.trait_name + "'");
+    if (!access.resolved_trait_id.has_value()) {
+        errors_.error(location, undeclared_trait_message(entity, access.trait_name));
         return;
     }
     check_trait_access_fields(access, fields, location, "named");
@@ -8902,6 +8960,7 @@ void SemanticAnalyzer::collect_phase_plan(const PhaseNode& phase, std::size_t de
         plan.every_seconds                       = resolved->second.every_seconds;
         plan.every_units                         = resolved->second.every_units;
         plan.max_repetitions                     = resolved->second.max_repetitions;
+        plan.rate                                = resolved->second.rate;
         plan.declaration_order.declaration_index = declaration_index;
         result_.execution_graph.phases.push_back(std::move(plan));
     }

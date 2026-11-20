@@ -88,6 +88,15 @@ void ModuleArtifact::write_optional_symbol_id(std::ostream& out, const std::opti
     }
 }
 
+void ModuleArtifact::write_phase_rate(std::ostream& out, const std::optional<PhaseRate>& rate) {
+    write_bool(out, rate.has_value());
+    if (rate.has_value()) {
+        write_symbol_id(out, rate->entity);
+        write_symbol_id(out, rate->trait);
+        write_str(out, rate->field);
+    }
+}
+
 void ModuleArtifact::write_trigger(std::ostream& out, const ResolvedHandlerTrigger& trigger) {
     write_u8(out, static_cast<uint8_t>(trigger.kind));
     write_symbol_id(out, trigger.symbol);
@@ -450,6 +459,7 @@ void ModuleArtifact::write_phases(std::ostream& out,
         if (phase.max_repetitions.has_value()) {
             write_i64(out, *phase.max_repetitions);
         }
+        write_phase_rate(out, phase.rate);
         write_bool(out, phase.render_pass.has_value());
         if (phase.render_pass.has_value()) {
             const auto& info = *phase.render_pass;
@@ -839,6 +849,7 @@ void ModuleArtifact::write_execution_graph(std::ostream& out, const ExecutionGra
         if (phase.max_repetitions.has_value()) {
             write_i64(out, *phase.max_repetitions);
         }
+        write_phase_rate(out, phase.rate);
         write_declaration_order(out, phase.declaration_order);
     }
 
@@ -1006,6 +1017,17 @@ std::optional<SymbolId> ModuleArtifact::read_optional_symbol_id(std::istream& in
         return std::nullopt;
     }
     return read_symbol_id(in);
+}
+
+std::optional<PhaseRate> ModuleArtifact::read_phase_rate(std::istream& in) {
+    if (!read_bool(in)) {
+        return std::nullopt;
+    }
+    PhaseRate rate;
+    rate.entity = read_symbol_id(in);
+    rate.trait  = read_symbol_id(in);
+    rate.field  = read_str(in);
+    return rate;
 }
 
 ScheduleEdgeOrientation ModuleArtifact::read_orientation(std::istream& in) {
@@ -1330,6 +1352,7 @@ std::unordered_map<std::string, ResolvedPhase> ModuleArtifact::read_phases(std::
         if (read_bool(in)) {
             phase.max_repetitions = read_i64(in);
         }
+        phase.rate = read_phase_rate(in);
         if (read_bool(in)) {
             RenderPassInfo info;
             info.pass_field_index   = read_u32(in);
@@ -1773,6 +1796,7 @@ ExecutionGraph ModuleArtifact::read_execution_graph(std::istream& in) {
         if (read_bool(in)) {
             phase.max_repetitions = read_i64(in);
         }
+        phase.rate = read_phase_rate(in);
         phase.declaration_order = read_declaration_order(in);
         graph.phases.push_back(std::move(phase));
     }

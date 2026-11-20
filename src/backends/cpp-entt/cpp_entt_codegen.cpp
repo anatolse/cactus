@@ -1091,6 +1091,23 @@ void emit_phase_field_bindings(std::ostringstream& out, const auto* phase) {
     }
 }
 
+// Reads the phase's `rate:` field once, from committed state, before its accumulator grows.
+void emit_phase_rate_read(std::ostringstream& out,
+                          const DecoratedProgram& program,
+                          const SymbolId& phase,
+                          const PhaseRate& rate) {
+    const auto literal = [](const SymbolId& symbol) {
+        return EnttCodegenUtils::string_literal_cpp(make_canonical_id(symbol));
+    };
+    out << "    const double rate = cactus::runtime::entt_backend::phase_rate(registry, "
+        << EnttCodegenUtils::named_slot_name(rate.entity) << ", &"
+        << EnttCodegenUtils::trait_cpp_name(rate.trait, rate.trait.local_name, program) << "::" << rate.field
+        << ", phase.rate_source_missing,\n";
+    out << "        {.phase = " << literal(phase) << ", .entity = " << literal(rate.entity)
+        << ", .trait = " << literal(rate.trait) << ", .field = " << EnttCodegenUtils::string_literal_cpp(rate.field)
+        << "});\n";
+}
+
 void emit_phase_batch(std::ostringstream& out,
                       const DecoratedProgram& program,
                       const DeliveryPlan& delivery,
@@ -1154,7 +1171,12 @@ void emit_phase_batch(std::ostringstream& out,
     }
     const auto interval = *phase->every_seconds;
     out << "    constexpr double interval = " << cpp_double_literal(interval) << ";\n";
-    out << "    phase.accumulator += static_cast<double>(root_event.dt);\n";
+    if (phase->rate.has_value()) {
+        emit_phase_rate_read(out, program, phase->phase, *phase->rate);
+        out << "    phase.accumulator += static_cast<double>(root_event.dt) * rate;\n";
+    } else {
+        out << "    phase.accumulator += static_cast<double>(root_event.dt);\n";
+    }
     out << "    const auto due = static_cast<std::uint64_t>(std::floor(phase.accumulator / interval));\n";
     if (phase->max_repetitions.has_value()) {
         out << "    constexpr std::uint64_t max_repetitions = " << *phase->max_repetitions << ";\n";
@@ -1271,6 +1293,9 @@ void emit_phase_runtime_states(std::ostringstream& out, const DecoratedProgram& 
         if (phase.every_seconds.has_value()) {
             body << "    double accumulator{};\n";
             body << "    double alpha{};\n";
+        }
+        if (phase.rate.has_value()) {
+            body << "    bool rate_source_missing{};\n";
         }
         body << "    std::uint64_t completed_batches{};\n";
         for (const auto& field : phase.fields) {
@@ -3133,13 +3158,19 @@ void emit_archetype_trait_initializers(std::ostringstream& out,
     }
 }
 
+// Declared entities of different modules may share a name, so their helpers live in their own module.
+const std::string& creation_module(const SymbolId& archetype, const DecoratedProgram& program) {
+    return archetype.kind == SymbolKind::Entity ? archetype.module.name : program.module_name;
+}
+
 std::string emit_archetype_creation_function(const std::string& archetype_name,
                                              const SymbolId& archetype,
                                              const std::vector<ArchetypeTraitEntry>& traits,
                                              const DecoratedProgram& program) {
     std::ostringstream out;
-    const auto at_name     = archetype_create_at_function_name(program.module_name, archetype_name);
-    const auto create_name = archetype_create_function_name(program.module_name, archetype_name);
+    const auto& module_name = creation_module(archetype, program);
+    const auto at_name     = archetype_create_at_function_name(module_name, archetype_name);
+    const auto create_name = archetype_create_function_name(module_name, archetype_name);
     out << "entt::entity " << at_name.name << "(entt::registry& registry, entt::entity hint) {\n";
     out << "    auto entity = cactus::runtime::entt_backend::adopt_or_create(registry, hint);\n";
     emit_archetype_trait_initializers(
@@ -3164,9 +3195,10 @@ void emit_archetype_node_helpers(std::ostringstream& out,
                                  const DecoratedProgram& program,
                                  std::vector<std::string>& role_path,
                                  const std::string& parameters = {}) {
+    const auto& module_name = creation_module(archetype, program);
     for (const auto& child : children) {
         role_path.push_back(child.role);
-        const auto name = archetype_node_create_function_name(program.module_name, archetype_name, role_path);
+        const auto name = archetype_node_create_function_name(module_name, archetype_name, role_path);
         std::ostringstream body;
         body << "static entt::entity " << name.name << "(entt::registry& registry" << parameters << ") {\n";
         body << "    auto entity = cactus::runtime::entt_backend::create_entity(registry);\n";
@@ -3254,11 +3286,12 @@ std::string emit_planned_creation_functions(const std::string& name,
         parameters += declaration;
         arguments += argument;
     }
-    const auto create = archetype_create_function_name(program.module_name, name);
-    const auto create_at = archetype_create_at_function_name(program.module_name, name);
+    const auto& module_name = creation_module(archetype, program);
+    const auto create = archetype_create_function_name(module_name, name);
+    const auto create_at = archetype_create_at_function_name(module_name, name);
     std::vector<std::string> role_path;
-    const auto node_at     = archetype_node_create_at_function_name(program.module_name, name, role_path);
-    const auto node_create = archetype_node_create_function_name(program.module_name, name, role_path);
+    const auto node_at     = archetype_node_create_at_function_name(module_name, name, role_path);
+    const auto node_create = archetype_node_create_function_name(module_name, name, role_path);
     std::ostringstream nodes;
     nodes << "static entt::entity " << node_at.name << "(entt::registry& registry, entt::entity hint" << all_parameters
           << ") {\n";
@@ -3284,7 +3317,7 @@ std::string emit_planned_creation_functions(const std::string& name,
     }
     creators << "    auto entity = " << node_at.ref() << "(registry, hint" << all_arguments << ");\n";
     emit_child_creation_sequence(
-        creators, program.module_name, name, children, "entity", "child", role_path, program, all_arguments);
+        creators, module_name, name, children, "entity", "child", role_path, program, all_arguments);
     creators << "    return entity;\n}\n";
     creators << "entt::entity " << create.name << "(entt::registry& registry" << parameters << ") {\n";
     creators << "    return " << create_at.name << "(registry, cactus::runtime::entt_backend::create_entity(registry)"
@@ -3330,6 +3363,7 @@ bool archetype_has_ranged_traits(const std::vector<ArchetypeTraitEntry>& traits,
 // check of all of them, so a spawn or load can refuse before creating anything.
 // Each takes the creation function's slot parameters.
 std::string emit_range_value_functions(const std::string& archetype_name,
+                                       const SymbolId& archetype,
                                        const std::vector<ArchetypeTraitEntry>& traits,
                                        const std::vector<ChildArchetypeNode>& children,
                                        const std::vector<InitializerSlot>& slots,
@@ -3356,11 +3390,12 @@ std::string emit_range_value_functions(const std::string& archetype_name,
     }
     const auto parameter_list = join_strings(parameters, ", ");
     const auto call_arguments = "(" + join_strings(arguments, ", ") + ")";
-    const auto precheck = archetype_range_precheck_function_name(program.module_name, archetype_name);
+    const auto& module_name = creation_module(archetype, program);
+    const auto precheck = archetype_range_precheck_function_name(module_name, archetype_name);
     std::ostringstream out;
     std::vector<std::string> checks;
     for (const auto& node : ranged) {
-        const auto name = range_value_function_name(program.module_name, archetype_name, node.role_path, node.trait->name);
+        const auto name = range_value_function_name(module_name, archetype_name, node.role_path, node.trait->name);
         const auto cpp  = EnttCodegenUtils::trait_cpp_name(node.entry->resolved_trait_id, node.entry->trait_name, program);
         out << "[[maybe_unused]] static " << cpp << " " << name.name << "(" << parameter_list << ") {\n";
         out << bound_slots.str();
@@ -3390,8 +3425,9 @@ std::string emit_archetype_creation_functions_unchecked(const std::string& arche
     std::ostringstream out;
     std::vector<std::string> role_path;
 
-    const auto node_at_name = archetype_node_create_at_function_name(program.module_name, archetype_name, role_path);
-    const auto node_name    = archetype_node_create_function_name(program.module_name, archetype_name, role_path);
+    const auto& module_name = creation_module(archetype, program);
+    const auto node_at_name = archetype_node_create_at_function_name(module_name, archetype_name, role_path);
+    const auto node_name    = archetype_node_create_function_name(module_name, archetype_name, role_path);
     std::ostringstream nodes;
     nodes << "static entt::entity " << node_at_name.name << "(entt::registry& registry, entt::entity hint) {\n";
     nodes << "    auto entity = cactus::runtime::entt_backend::adopt_or_create(registry, hint);\n";
@@ -3408,20 +3444,20 @@ std::string emit_archetype_creation_functions_unchecked(const std::string& arche
     out << namespace_block(node_name.ns, nodes.str()) << "\n";
     emit_archetype_node_helpers(out, archetype_name, archetype, children, program, role_path);
 
-    const auto create    = archetype_create_function_name(program.module_name, archetype_name);
-    const auto create_at = archetype_create_at_function_name(program.module_name, archetype_name);
+    const auto create    = archetype_create_function_name(module_name, archetype_name);
+    const auto create_at = archetype_create_at_function_name(module_name, archetype_name);
     std::ostringstream creators;
     creators << "entt::entity " << create.name << "(entt::registry& registry) {\n";
     creators << "    auto entity = " << node_name.ref() << "(registry);\n";
     emit_child_creation_sequence(
-        creators, program.module_name, archetype_name, children, "entity", "child", role_path, program);
+        creators, module_name, archetype_name, children, "entity", "child", role_path, program);
     creators << "    return entity;\n";
     creators << "}\n\n";
 
     creators << "entt::entity " << create_at.name << "(entt::registry& registry, entt::entity hint) {\n";
     creators << "    auto entity = " << node_at_name.ref() << "(registry, hint);\n";
     emit_child_creation_sequence(
-        creators, program.module_name, archetype_name, children, "entity", "child", role_path, program);
+        creators, module_name, archetype_name, children, "entity", "child", role_path, program);
     creators << "    return entity;\n";
     creators << "}\n";
     out << namespace_block(create.ns, creators.str()) << "\n";
@@ -3434,7 +3470,7 @@ std::string emit_archetype_creation_functions(const std::string& archetype_name,
                                               const std::vector<ChildArchetypeNode>& children,
                                               const DecoratedProgram& program,
                                               const std::vector<InitializerSlot>& slots) {
-    return emit_range_value_functions(archetype_name, traits, children, slots, program) +
+    return emit_range_value_functions(archetype_name, archetype, traits, children, slots, program) +
            emit_archetype_creation_functions_unchecked(archetype_name, archetype, traits, children, program, slots);
 }
 
@@ -4633,15 +4669,17 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         }
         // A parent is created before its children, so creation order stays a topological order.
         for (const auto* entity : parent_first_order(EnttCodegenUtils::declared_entities(program)).order) {
-            const auto slot   = EnttCodegenUtils::named_slot_name(entity_symbol(*entity, program));
-            const auto create = archetype_create_at_function_name(program.module_name, entity->name).ref() +
+            const auto symbol = entity_symbol(*entity, program);
+            const auto slot   = EnttCodegenUtils::named_slot_name(symbol);
+            const auto& module_name = creation_module(symbol, program);
+            const auto create = archetype_create_at_function_name(module_name, entity->name).ref() +
                                 "(registry, " + slot + ");\n";
             if (!archetype_has_ranged_traits(entity->traits, entity->children, program)) {
                 out << "    " << create;
                 continue;
             }
             // A declared entity whose ranged value fails is not created, so its handle goes stale.
-            out << "    if (" << archetype_range_precheck_function_name(program.module_name, entity->name).ref()
+            out << "    if (" << archetype_range_precheck_function_name(module_name, entity->name).ref()
                 << "(registry)) {\n";
             out << "        " << create;
             out << "    } else {\n";

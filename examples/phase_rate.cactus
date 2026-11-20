@@ -1,0 +1,61 @@
+module phase_rate
+
+# A periodic phase may scale its pace with `rate:`, a read of one float field
+# of a named entity. `sim` runs equal fixed steps of 1/60 s: at rate 0.5 it
+# steps every other frame, at 0 it stops, at 4 it steps four times a frame,
+# never more than `max:`. The rate is read once, when the phase's batch
+# starts: a write from `input` applies in the same frame, a write from a
+# `sim` step applies from the next frame. Unlike std.core's Pace, this rate
+# is not clamped, so a NaN or negative value shows that it counts as 0.
+
+use std.core
+
+trait Speed:
+    persist var rate: float = 1.0
+
+trait Log:
+    persist var steps: int = 0
+    var stop_at: int = 0
+    var brake: bool = false
+    var alpha: float = 0.0
+
+entity Gear:
+    Speed
+
+entity Meter:
+    Log
+
+pub phase sim:
+    after:
+        input
+    every: 1s / 60
+    max: 8
+    rate: Gear[Speed].rate
+
+phase look:
+    after:
+        sim
+    alpha: float = sim.alpha
+
+# An upstream write: `input` commits before `sim` reads its rate.
+rule Brake:
+    on input:
+        if Meter[Log].brake:
+            Gear[Speed].rate = 0.0
+            Meter[Log].brake = false
+
+rule Step:
+    on sim:
+        Meter[Log].steps += 1
+
+# A write from a step of the phase itself: the frame's other steps still run.
+rule Halt:
+    after: Step
+
+    on sim:
+        if Meter[Log].steps == Meter[Log].stop_at:
+            Gear[Speed].rate = 0.0
+
+rule Watch:
+    on look:
+        Meter[Log].alpha = look.alpha

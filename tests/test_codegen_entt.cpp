@@ -3678,11 +3678,11 @@ TEST_CASE("Codegen EnTT: mixed entity creation order preserved", "[codegen-entt]
     auto code = CppEnttCodegen::generate(decorated);
     // A, B, C should be filled in that order in the init function
     const auto pos_a =
-        code.find("::cactus_gen::detail::create_a_at(registry, ::cactus_gen::detail::generated_named_slots().test.A)");
+        code.find("::cactus_gen::detail::test::create_a_at(registry, ::cactus_gen::detail::generated_named_slots().test.A)");
     const auto pos_b =
-        code.find("::cactus_gen::detail::create_b_at(registry, ::cactus_gen::detail::generated_named_slots().test.B)");
+        code.find("::cactus_gen::detail::test::create_b_at(registry, ::cactus_gen::detail::generated_named_slots().test.B)");
     const auto pos_c =
-        code.find("::cactus_gen::detail::create_c_at(registry, ::cactus_gen::detail::generated_named_slots().test.C)");
+        code.find("::cactus_gen::detail::test::create_c_at(registry, ::cactus_gen::detail::generated_named_slots().test.C)");
     REQUIRE(pos_a != std::string::npos);
     REQUIRE(pos_b != std::string::npos);
     REQUIRE(pos_c != std::string::npos);
@@ -5155,16 +5155,16 @@ TEST_CASE("Codegen EnTT: hierarchical load-time entity creates descendants in se
 
     // generated_init_project fills the pre-allocated root through the entity wrapper, which expands the tree.
     CHECK(code.contains(
-        "::cactus_gen::detail::create_rig1_at(registry, ::cactus_gen::detail::generated_named_slots().test.Rig1);"));
+        "::cactus_gen::detail::test::create_rig1_at(registry, ::cactus_gen::detail::generated_named_slots().test.Rig1);"));
     const auto at_wrapper = generated_function(code, "entt::entity create_rig1_at(entt::registry& registry");
-    CHECK(at_wrapper.contains("::cactus_gen::detail::rig1_nodes::create_node_socket(registry)"));
+    CHECK(at_wrapper.contains("::cactus_gen::detail::test::rig1_nodes::create_node_socket(registry)"));
     const auto wrapper = generated_function(code, "entt::entity create_rig1(entt::registry& registry)");
-    CHECK(wrapper.contains("::cactus_gen::detail::rig1_nodes::create_node_socket(registry)"));
+    CHECK(wrapper.contains("::cactus_gen::detail::test::rig1_nodes::create_node_socket(registry)"));
     CHECK(wrapper.contains(
         "registry.emplace_or_replace<::cactus_gen::Parent>(child_0, ::cactus_gen::Parent{.parent = entity});"));
     // Child override value is baked into the per-node helper.
     const auto socket_fn =
-        generated_function(code, "namespace cactus_gen::detail::rig1_nodes {\nstatic entt::entity create_node_socket(");
+        generated_function(code, "namespace cactus_gen::detail::test::rig1_nodes {\nstatic entt::entity create_node_socket(");
     CHECK(socket_fn.contains("component.value = 7"));
 }
 
@@ -10725,9 +10725,9 @@ TEST_CASE("Codegen EnTT: a declared entity with a ranged trait loads only after 
     ProgramNode program;
     auto decorated  = full_pipeline(RANGED_DECLARATIONS, program);
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.contains("if (::cactus_gen::detail::corner_nodes::passes_range_checks(registry)) {"));
+    CHECK(code.contains("if (::cactus_gen::detail::test::corner_nodes::passes_range_checks(registry)) {"));
     CHECK(code.contains("cactus::runtime::entt_backend::release_entity(registry, "));
-    CHECK(code.contains("::cactus_gen::detail::create_grid_at(registry, "));
+    CHECK(code.contains("::cactus_gen::detail::test::create_grid_at(registry, "));
     CHECK_FALSE(code.contains("grid_nodes::passes_range_checks"));
 }
 

@@ -128,6 +128,13 @@ namespace cactus::runtime {
     return delta.units > 0 ? delta : Duration{};
 }
 
+inline constexpr float kMaxPhaseRate = 1024.0F;
+
+// A periodic phase's rate: NaN or below 0 is no time at all, and it never passes kMaxPhaseRate.
+[[nodiscard]] inline double clean_phase_rate(float rate) noexcept {
+    return rate > 0.0F ? static_cast<double>(std::min(rate, kMaxPhaseRate)) : 0.0;
+}
+
 template <typename Entry, typename Function>
 [[nodiscard]] auto memoize_relation_value(Function function) {
     using Value = std::remove_cvref_t<std::invoke_result_t<Function&, const Entry&>>;

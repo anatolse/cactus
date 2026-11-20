@@ -59,6 +59,7 @@ void reset_quit_request() noexcept;
 // directly, bypassing commands, is not checked.
 // A command that would give a `single` trait a second carrier faults the same way.
 // A required link made to a dead target, or lost and left unresolved, faults the same way.
+// A periodic phase whose `rate:` source is missing stops and faults too.
 enum class RangeFaultReason : std::uint8_t {
     OutOfRange,
     StaleContainer,
@@ -67,8 +68,9 @@ enum class RangeFaultReason : std::uint8_t {
     DeadLink,
     UnresolvedLink,
     DimensionTooLarge,
-    CrossedBounds,  // a clamped field's `let` bounds give min > max
-    OutsideClamp    // a restored clamped value lies outside its bounds
+    CrossedBounds,     // a clamped field's `let` bounds give min > max
+    OutsideClamp,      // a restored clamped value lies outside its bounds
+    MissingRateSource  // a periodic phase's `rate:` entity is gone or lacks the trait
 };
 
 struct RangeFault {
@@ -80,6 +82,8 @@ struct RangeFault {
     RangeFaultReason reason = RangeFaultReason::OutOfRange;
     std::string value_text;   // a clamped value, as text
     std::string bounds_text;  // a clamped field's bounds: "min = a, max = b"
+    std::string_view entity;  // a missing rate source's entity
+    std::string_view phase;   // the phase a missing rate source stops
 };
 
 // A clamped value or bound as fault text.
@@ -113,6 +117,36 @@ template <typename T>
         return clamp_fault(check, RangeFaultReason::OutsideClamp, clamp_text(value), clamp_text(lo), clamp_text(hi));
     }
     return std::nullopt;
+}
+
+// Where a periodic phase reads its `rate:`, as canonical names.
+struct PhaseRateSource {
+    std::string_view phase;
+    std::string_view entity;
+    std::string_view trait;
+    std::string_view field;
+};
+
+void report_missing_rate_source(const PhaseRateSource& source);
+
+// A periodic phase's rate for one batch: 0 while `owner` is gone or lacks `Trait`,
+// with one fault per stretch of such batches.
+template <typename Trait>
+[[nodiscard]] double phase_rate(const entt::registry& registry,
+                                entt::entity owner,
+                                float Trait::*field,
+                                bool& missing,
+                                const PhaseRateSource& source) {
+    const auto* trait = registry.valid(owner) ? registry.try_get<Trait>(owner) : nullptr;
+    if (trait != nullptr) {
+        missing = false;
+        return clean_phase_rate(trait->*field);
+    }
+    if (!missing) {
+        missing = true;
+        report_missing_rate_source(source);
+    }
+    return 0.0;
 }
 
 inline constexpr std::size_t RUNTIME_FAULT_LOG_CAPACITY = 64;

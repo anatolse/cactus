@@ -40,11 +40,12 @@ bool has_record_for(const cactus::persistence::Snapshot& snapshot, const std::st
     });
 }
 
-// The child first, then its parent.
+// std.core.Clock, then the child, then its parent.
 cactus::persistence::Snapshot child_first(const cactus::persistence::Snapshot& snapshot) {
     return cactus_test::edited(snapshot, [](std::vector<cactus_test::EditableRecord>& records) {
-        REQUIRE(records.size() == 2);
-        std::swap(records[0], records[1]);
+        REQUIRE(records.size() == 3);
+        REQUIRE(records[0].archetype == "std.core.Clock");
+        std::swap(records[1], records[2]);
     });
 }
 
@@ -108,17 +109,19 @@ TEST_CASE("restore preserves relative creation order among restored entities",
     auto& registry = world.registry;
 
     const auto snapshot = capture(registry);
-    REQUIRE(snapshot.entity_count() == 2);
-    CHECK(snapshot.entity(0).archetype() == "persistence_hierarchy_runtime.Leader");
-    CHECK(snapshot.entity(1).archetype() == "persistence_hierarchy_runtime.Leader/Follower");
+    REQUIRE(snapshot.entity_count() == 3);
+    CHECK(snapshot.entity(0).archetype() == "std.core.Clock");
+    CHECK(snapshot.entity(1).archetype() == "persistence_hierarchy_runtime.Leader");
+    CHECK(snapshot.entity(2).archetype() == "persistence_hierarchy_runtime.Leader/Follower");
 
     const auto outcome = cactus::runtime::entt_backend::generated_restore_world(registry, snapshot);
     REQUIRE(outcome.ok);
 
     const auto recaptured = capture(registry);
-    REQUIRE(recaptured.entity_count() == 2);
-    CHECK(recaptured.entity(0).archetype() == "persistence_hierarchy_runtime.Leader");
-    CHECK(recaptured.entity(1).archetype() == "persistence_hierarchy_runtime.Leader/Follower");
+    REQUIRE(recaptured.entity_count() == 3);
+    CHECK(recaptured.entity(0).archetype() == "std.core.Clock");
+    CHECK(recaptured.entity(1).archetype() == "persistence_hierarchy_runtime.Leader");
+    CHECK(recaptured.entity(2).archetype() == "persistence_hierarchy_runtime.Leader/Follower");
 }
 
 TEST_CASE("a child recorded before its parent is rejected and the world is unchanged",
@@ -126,7 +129,7 @@ TEST_CASE("a child recorded before its parent is rejected and the world is uncha
     World world;
     auto& registry = world.registry;
     const auto snapshot = child_first(capture(registry));
-    const auto child    = snapshot.entity(0);
+    const auto child    = snapshot.entity(1);
     REQUIRE(child.archetype() == "persistence_hierarchy_runtime.Leader/Follower");
 
     const auto errors = cactus::persistence::validate_document(cactus::runtime::entt_backend::generated_schema, snapshot);

@@ -4534,6 +4534,9 @@ std::string describe_range_fault(const RangeFault& fault) {
         case RangeFaultReason::OutsideClamp:
             return std::string{fault.trait} + "." + std::string{fault.field} + " = " + fault.value_text +
                    " is outside clamped(" + fault.bounds_text + ")";
+        case RangeFaultReason::MissingRateSource:
+            return "rate source " + std::string{fault.entity} + "[" + std::string{fault.trait} + "]." +
+                   std::string{fault.field} + " is missing, so periodic phase " + std::string{fault.phase} + " stops";
     }
     std::unreachable();
 }
@@ -4585,7 +4588,16 @@ void report_range_fault(const RangeFault& fault) {
     }
     log.faults.push_back(fault);
     ++log.count;
-    std::clog << "cactus: warning: " << describe_range_fault(fault) << "; the command did nothing" << '\n';
+    const auto* outcome = fault.reason == RangeFaultReason::MissingRateSource ? "" : "; the command did nothing";
+    std::clog << "cactus: warning: " << describe_range_fault(fault) << outcome << '\n';
+}
+
+void report_missing_rate_source(const PhaseRateSource& source) {
+    report_range_fault(RangeFault{.trait  = source.trait,
+                                  .field  = source.field,
+                                  .reason = RangeFaultReason::MissingRateSource,
+                                  .entity = source.entity,
+                                  .phase  = source.phase});
 }
 
 // ── Parallel handlers ─────────────────────────────────────────────────────────

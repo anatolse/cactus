@@ -231,13 +231,15 @@ TEST_CASE("a request emitted from an outcome handler is deferred to a later boun
     CHECK(status.failed_count == 2);
 }
 
-TEST_CASE("a restore after a completed save is a correlated no-op with nothing persistable",
+TEST_CASE("a restore after a completed save replaces the world and reports one correlated outcome",
           "[runtime][persistence][restore][headless]") {
+    using cactus_gen::persistence_save_events::SaveStatus;
     World world;
     auto& registry = world.registry;
 
-    const auto tracker        = entity_with<cactus_gen::persistence_save_events::SaveStatus>(registry);
-    auto& status              = registry.get<cactus_gen::persistence_save_events::SaveStatus>(tracker);
+    const auto clock = cactus_gen::detail::generated_named_slots().stdlib.core.Clock;
+    registry.get<cactus_gen::stdlib::core::Pace>(clock).scale = 0.5F;
+    auto& status              = registry.get<SaveStatus>(entity_with<SaveStatus>(registry));
     status.restore_after_save = true;
     status.pending_requests   = 1;
 
@@ -246,18 +248,21 @@ TEST_CASE("a restore after a completed save is a correlated no-op with nothing p
 
     drive_frame(registry, kStep);
     REQUIRE(status.completed_count == 1);
+    registry.get<cactus_gen::stdlib::core::Pace>(clock).scale = 1.0F;
     drive_frame(registry, kStep);
 
-    CHECK(status.restore_completed_count == 1);
-    CHECK(status.last_restore_completed_id == 2);
-    CHECK(status.restore_failed_count == 0);
-    // The world was not replaced: the same tracker entity, and still only one.
-    CHECK(registry.valid(tracker));
-    CHECK(&registry.get<cactus_gen::persistence_save_events::SaveStatus>(tracker) == &status);
-    CHECK(registry.view<cactus_gen::persistence_save_events::SaveStatus>().size() == 1);
+    // std.core.Clock is always saved, so the restore replaces the world, tracker included.
+    const auto& restored = registry.get<SaveStatus>(entity_with<SaveStatus>(registry));
+    CHECK(restored.restore_completed_count == 1);
+    CHECK(restored.last_restore_completed_id == 2);
+    CHECK(restored.restore_failed_count == 0);
+    CHECK(restored.completed_count == 0);
+    CHECK(registry.view<SaveStatus>().size() == 1);
+    const auto restored_clock = cactus_gen::detail::generated_named_slots().stdlib.core.Clock;
+    CHECK(registry.get<cactus_gen::stdlib::core::Pace>(restored_clock).scale == 0.5F);
 }
 
-TEST_CASE("a restore with nothing persistable fails as adapter_unavailable when no adapter is registered",
+TEST_CASE("a restore fails as adapter_unavailable when no adapter is registered",
           "[runtime][persistence][restore][headless]") {
     World world;
     auto& registry = world.registry;

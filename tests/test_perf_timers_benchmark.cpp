@@ -50,6 +50,17 @@ TEST_CASE("perf: counting down timers queues no structural work", "[perf][timers
     CHECK(work.orderings == kOrderingsPerFrame);
 }
 
+TEST_CASE("perf: fixed_tick at pace 1.0 keeps one step and the same work every frame", "[perf][timers]") {
+    World world(kSize);
+    const auto clock = cactus_gen::detail::generated_named_slots().stdlib.core.Clock;
+    REQUIRE(world.registry.get<cactus_gen::stdlib::core::Pace>(clock).scale == 1.0F);
+    for (int frame = 0; frame < 60; ++frame) {
+        const auto work = cactus_perf::work_of([&] { world.tick(); });
+        CHECK(work.commands <= kCommandsPerFrame);
+        CHECK(work.orderings == kOrderingsPerFrame);
+    }
+}
+
 TEST_CASE("perf: a duration timer costs 16 bytes per entity", "[perf][timers]") {
     STATIC_CHECK(sizeof(Lifetime) <= kBytesPerLifetime);
 }

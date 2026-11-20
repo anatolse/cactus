@@ -1447,6 +1447,7 @@ struct PhaseNode {
     std::vector<ResolvedHandlerTrigger> resolved_after;
     std::optional<std::unique_ptr<ExprNode>> every;
     std::optional<std::unique_ptr<ExprNode>> max;
+    std::optional<std::unique_ptr<ExprNode>> rate;
     std::vector<PhaseFieldNode> fields;
     SourceLocation location;
 };

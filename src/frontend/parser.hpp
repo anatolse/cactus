@@ -87,6 +87,7 @@ private:
     ViewNode parse_view();
     EventNode parse_event(bool is_pub = false, bool is_external = false);
     PhaseNode parse_phase(bool is_pub = false);
+    void parse_phase_expression_clause(std::optional<std::unique_ptr<ExprNode>>& clause, const std::string& name);
     FuncNode parse_func(bool is_pub);
     FuncNode parse_extern_func(bool is_pub);
     AssetDeclNode parse_asset_decl(bool is_pub);

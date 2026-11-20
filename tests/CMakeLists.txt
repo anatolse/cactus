@@ -411,6 +411,10 @@ add_executable(test_semantic_clamped_fields test_semantic_clamped_fields.cpp)
 target_link_libraries(test_semantic_clamped_fields PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticClampedFieldsTests COMMAND test_semantic_clamped_fields)
 
+add_executable(test_semantic_phase_rate test_semantic_phase_rate.cpp)
+target_link_libraries(test_semantic_phase_rate PRIVATE cactus_frontend Catch2::Catch2WithMain)
+add_test(NAME SemanticPhaseRateTests COMMAND test_semantic_phase_rate)
+
 add_executable(test_semantic_ranged_fields test_semantic_ranged_fields.cpp)
 target_link_libraries(test_semantic_ranged_fields PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticRangedFieldsTests COMMAND test_semantic_ranged_fields)
@@ -1441,6 +1445,18 @@ cactus_add_headless_behavior_test(test_clamped_fields_persistence_headless_behav
     CACTUS_SOURCE tests/fixtures/clamped_fields_persistence_runtime.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_clamped_fields_persistence_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_phase_rate_headless_behavior
+    CACTUS_SOURCE examples/phase_rate.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_phase_rate_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_game_pace_headless_behavior
+    CACTUS_SOURCE tests/fixtures/game_pace_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_game_pace_headless_behavior.cpp
 )
 
 cactus_add_headless_behavior_test(test_ranged_fields_persistence_headless_behavior

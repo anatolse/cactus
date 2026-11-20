@@ -51,11 +51,15 @@ TEST_CASE("a world snapshot records mutual references between two included entit
     World world;
     const auto snapshot = capture(world.registry);
 
-    REQUIRE(snapshot.entity_count() == 4);  // rival_a, rival_b, lonely, also_lonely (Prop is ineligible)
+    // std.core.Clock, rival_a, rival_b, lonely, also_lonely (Prop is ineligible)
+    REQUIRE(snapshot.entity_count() == 5);
 
     int mutual_pairs = 0;
     int absent_count = 0;
     for (const auto record : snapshot.entities()) {
+        if (record.archetype() == "std.core.Clock") {
+            continue;
+        }
         const auto rival = record.trait("persistence_references_runtime.Rival");
         REQUIRE(rival.has_value());
         const auto field = rival->persisted_field("rival");

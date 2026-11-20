@@ -73,9 +73,10 @@ An `extern rule` handler could be added as a step whose effect is any terminatin
 function that respects its declared contract. That needs the assumption that native
 code respects its contract, which is not modeled here.
 
-**Phases.** Phase cadence (accumulator, catch-up, `alpha`) is outside the model. The
-model receives activation requests, each with a clock (§3.3). No proposition here
-covers the whole frame scheduler.
+**Phases.** Phase cadence (accumulator, `rate:`, catch-up, `alpha`) is outside the model.
+The model receives activation requests, each with a clock (§3.3). A periodic phase's
+`rate:` field is read between activations, from committed state, so it is no handler
+access. No proposition here covers the whole frame scheduler.
 
 ## 2. Notation
 

@@ -6,8 +6,8 @@ use std.persistence as storage
 # Exercises the save request/outcome round trip in isolation: an author emits
 # SaveRequested and later receives exactly one correlated SaveCompleted or
 # SaveFailed outcome, and a restore requested after a completed save reports
-# one correlated RestoreCompleted or RestoreFailed. Nothing here is
-# persistable, so a restore replaces nothing.
+# one correlated RestoreCompleted or RestoreFailed. A restore replaces the
+# world; the tracker comes back because `requests_sent` is saved.
 
 const:
     SAVE_SLOT = "slot1"
@@ -15,7 +15,7 @@ const:
 trait SaveStatus:
     var pending_requests: int = 0
     var pending_burst: int = 0
-    var requests_sent: int = 0
+    persist var requests_sent: int = 0
     var completed_count: int = 0
     var last_completed_slot: string = ""
     var last_completed_id: int = 0

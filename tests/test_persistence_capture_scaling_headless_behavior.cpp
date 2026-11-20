@@ -51,8 +51,9 @@ TEST_CASE("capture allocations do not grow with the number of recorded values",
           "[runtime][persistence][capture][memory]") {
     const auto small = capture_cells(100);
     const auto large = capture_cells(20000);
-    REQUIRE(small.entities == 100);
-    REQUIRE(large.entities == 20000);
+    // Every world also records std.core.Clock.
+    REQUIRE(small.entities == 101);
+    REQUIRE(large.entities == 20001);
 
     INFO("small world: " << small.allocations << " allocations, large world: " << large.allocations);
     CHECK(large.allocations <= small.allocations + 8);

@@ -229,12 +229,13 @@ TEST_CASE("std.core.KeepOnLoad entities survive SceneCleanup on unload", "[runti
 
     queue_spawns(registry, 1, 1);
     drive_frame(registry, kStep);
-    REQUIRE(registry.view<cactus_gen::stdlib::core::KeepOnLoad>().size() == 1);
-    REQUIRE(registry.view<entt::entity>().size() > 1);
+    // The particle and std.core.Clock.
+    REQUIRE(registry.view<cactus_gen::stdlib::core::KeepOnLoad>().size() == 2);
+    REQUIRE(registry.view<entt::entity>().size() > 2);
 
     cactus_headless_test::dispatch_unload_event(registry);
 
-    CHECK(registry.view<entt::entity>().size() == 1);
+    CHECK(registry.view<entt::entity>().size() == 2);
     const auto survivors =
         registry.view<cactus_gen::world_persistence::Sparkle, cactus_gen::stdlib::core::KeepOnLoad>();
     CHECK(std::ranges::distance(survivors.begin(), survivors.end()) == 1);
@@ -283,9 +284,10 @@ TEST_CASE("a world snapshot orders entities by relative creation order", "[runti
 
     const auto snapshot = capture(registry);
 
-    // The boss is created at module load, before either runtime spawn.
-    REQUIRE_FALSE(snapshot.entity_count() == 0);
-    CHECK(snapshot.entity(0).archetype() == "world_persistence.Boss");
+    // std.core.Clock and the boss are created at module load, before either runtime spawn.
+    REQUIRE(snapshot.entity_count() > 1);
+    CHECK(snapshot.entity(0).archetype() == "std.core.Clock");
+    CHECK(snapshot.entity(1).archetype() == "world_persistence.Boss");
 
     std::vector<int> enemy_currents;
     for (const auto record : snapshot.entities()) {
@@ -712,7 +714,9 @@ TEST_CASE("entities carrying std.core.KeepOnLoad do not survive restore",
     // live particle must not survive it either.
     const auto outcome = cactus::runtime::entt_backend::generated_restore_world(registry, snapshot);
     REQUIRE(outcome.ok);
-    CHECK(registry.view<cactus_gen::stdlib::core::KeepOnLoad>().size() == 0);
+    const auto restored =
+        registry.view<cactus_gen::world_persistence::Sparkle, cactus_gen::stdlib::core::KeepOnLoad>();
+    CHECK(std::ranges::distance(restored.begin(), restored.end()) == 0);
 }
 
 TEST_CASE("a successful restore discards old queued events and fixed-step catch-up backlog",

@@ -279,6 +279,15 @@ struct RenderPassInfo {
     ResolvedHandlerTrigger fragment_trigger;
 };
 
+// The `rate:` source of a periodic phase: one `float` field of a named entity's trait.
+struct PhaseRate {
+    SymbolId entity;
+    SymbolId trait;
+    std::string field;
+
+    friend bool operator==(const PhaseRate&, const PhaseRate&) = default;
+};
+
 struct ResolvedPhase : CanonicalIdentity {
     std::string name;
     std::vector<ResolvedField> fields;
@@ -289,6 +298,7 @@ struct ResolvedPhase : CanonicalIdentity {
     std::optional<double> every_seconds;
     std::optional<std::int64_t> every_units;  // the period as a duration
     std::optional<std::int64_t> max_repetitions;
+    std::optional<PhaseRate> rate;
     std::optional<RenderPassInfo> render_pass;
     bool is_pub    = false;
     bool has_every = false;
@@ -885,6 +895,7 @@ struct PhasePlan {
     std::optional<double> every_seconds;
     std::optional<std::int64_t> every_units;  // the period as a duration
     std::optional<std::int64_t> max_repetitions;
+    std::optional<PhaseRate> rate;
     DeclarationOrder declaration_order;
 };
 
@@ -1521,6 +1532,9 @@ private:
     };
     [[nodiscard]] static PhaseCollection collect_phase_declarations(ProgramNode& program);
     void validate_phase_from_after_every_max(const PhaseCollection& phases);
+    void validate_phase_rate(const PhaseNode& phase, ResolvedPhase& resolved);
+    // The trait `trait_name` names, when `entity` carries it.
+    [[nodiscard]] std::optional<SymbolId> carried_trait(const SymbolId& entity, const std::string& trait_name) const;
     void resolve_phase_lineage(const PhaseCollection& phases);
     void synthesize_phase_periodic_fields(const PhaseCollection& phases);
     void validate_phase_field_initializers(const PhaseCollection& phases);

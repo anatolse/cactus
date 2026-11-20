@@ -1,0 +1,41 @@
+module game_pace_runtime
+
+use std.core as core
+
+# std.core's game clock: Clock[Pace].scale scales fixed_tick, while tick
+# keeps real frame time.
+
+trait Counts:
+    var fixed: int = 0
+    var ticks: int = 0
+    var stop_at: int = 0
+    var request: float = 1.0
+    var apply: bool = false
+    var seen: float = 1.0
+
+entity Meter:
+    Counts
+    core.KeepOnLoad
+
+rule SetPace:
+    on core.input:
+        if Meter[Counts].apply:
+            core.Clock[core.Pace].scale = Meter[Counts].request
+            Meter[Counts].apply = false
+
+rule CountFixed:
+    on core.fixed_tick:
+        Meter[Counts].fixed += 1
+
+# A hit-stop: a fixed_tick rule stops the clock.
+rule HitStop:
+    after: CountFixed
+
+    on core.fixed_tick:
+        if Meter[Counts].fixed == Meter[Counts].stop_at:
+            core.Clock[core.Pace].scale = 0.0
+
+rule CountTicks:
+    on core.tick:
+        Meter[Counts].ticks += 1
+        Meter[Counts].seen = core.Clock[core.Pace].scale

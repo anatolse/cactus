@@ -1564,7 +1564,7 @@ event_field_decl = IDENTIFIER ":" type_ref NEWLINE ;
 
 phase_decl       = [ "pub" ] "phase" IDENTIFIER ":" NEWLINE INDENT
                    ( from_clause | phase_after_clause )
-                   [ every_clause ] [ max_clause ]
+                   [ every_clause ] [ max_clause ] [ rate_clause ]
                    { phase_field_decl }
                    DEDENT ;
 
@@ -1572,6 +1572,7 @@ from_clause      = "from" ":" NEWLINE INDENT { dotted_name NEWLINE } DEDENT ;
 phase_after_clause = "after" ":" clause_list(dotted_name) ;
 every_clause     = "every" ":" constant_expression NEWLINE ;
 max_clause       = "max" ":" INTEGER_LITERAL NEWLINE ;
+rate_clause      = "rate" ":" [ IDENTIFIER "." ] IDENTIFIER "[" dotted_name "]" "." IDENTIFIER NEWLINE ;
 phase_field_decl = IDENTIFIER ":" type_ref "=" expression NEWLINE ;
 ```
 
@@ -1604,6 +1605,8 @@ pub phase render:
 Ordinary events may be emitted by handlers. External events are injected only by the host/runtime and cannot be authored with `emit`. A phase is a typed activation barrier, not an event. `from:` declares a runtime source lineage; `after:` declares completed upstream phases. A phase must resolve to one unambiguous external-event root lineage.
 
 Non-periodic phase fields are initialized from the current root occurrence or completed upstream phase results. A periodic phase's `every:` is a positive constant `duration` or `float`. The phase synthesizes `dt: float`, its interval in seconds, and `delta: duration`, the same interval as a duration: with a duration interval `dt` is `seconds(every)`, and with a `float` interval `delta` is `duration(every)`. It also produces `alpha` after its repetition barrier; `alpha` is available to downstream phases, not to the periodic phase's own handlers. A phase without `every:` synthesizes nothing; `std.core.tick` and `std.core.late_tick` declare `dt` and `delta` from the root `frame`, whose `delta` the host fills with `duration(dt)`. A timer counts down with `step.delta`; `step.dt` stays a `float` for arithmetic in seconds.
+
+A periodic phase may declare `rate: Entity[Trait].field` (with an optional module prefix): a read of one `float` field of a named entity. It scales the phase's game time against real time; §5.1 gives the accumulation. The field may be `clamped`. It is a compile error to declare `rate:` on a phase without `every:`, to give it a constant, any other expression or a field of another type, to read a cell field of a dimensioned trait, or to declare `rate:` twice. Changing the rate is an ordinary write, so it is saved, restored and replayed with the world.
 
 #### 3.11.1 Render-Pass Phases
 
@@ -2307,6 +2310,7 @@ pub phase fixed_tick:
         input
     every: 1s / 60
     max: 8
+    rate: Clock[Pace].scale
 
 pub phase tick:
     after:
@@ -2326,10 +2330,21 @@ pub phase render:
     alpha: float = fixed_tick.alpha
 ```
 
-For a periodic phase with interval `every` and catch-up cap `max`, each root occurrence performs:
+pub single trait Pace:
+    persist var scale: float clamped(min = 0.0, max = 1024.0) = 1.0
+
+pub entity Clock:
+    Pace
+    KeepOnLoad
+```
+
+There are two times. `Clock[Pace].scale` is the pace of game time: 0 pauses `fixed_tick`, 0.5 is slow motion, 4 is fast-forward. `tick`, `late_tick` and `render` keep real frame time. A hit-stop is a `fixed_tick` rule that writes `core.Clock[core.Pace].scale = 0.0`, and a `tick` rule that writes it back. `Clock` carries `KeepOnLoad`, so scene cleanup keeps the pace.
+
+For a periodic phase with interval `every`, catch-up cap `max` and optional `rate:`, each root occurrence performs:
 
 ```text
-accumulator += root.dt
+rate = 1, or the effective value of the rate field
+accumulator += root.dt * rate
 due = floor(accumulator / every)
 run = min(due, max)
 repeat run times:
@@ -2342,6 +2357,8 @@ alpha = accumulator / every
 ```
 
 Subtracting `due` deliberately drops capped whole steps while preserving the fractional remainder, so `0 <= alpha < 1` and backlog cannot grow permanently. Each repetition is a separate activation and commit boundary.
+
+The rate field is read once per root occurrence, when the phase's batch starts, from committed state. Writes committed by upstream phases in the same frame are visible, so an `input` rule that pauses the game stops `fixed_tick` that frame. Writes from the phase's own activations, or from later phases, apply from the next root occurrence; all steps of one batch share one rate. The effective rate is 0 for NaN or a value below 0, 1024 for a value above 1024, and the value otherwise. Steps stay equal: `dt`, `delta` and `alpha` keep their meaning, and with rate 0 `alpha` stops changing. A rate of 1 performs the same activations as no `rate:`. When the named entity is gone or lacks the trait, the rate is 0 and the runtime reports one fault naming the entity, trait and field; it reports again only after the source was back for a later root occurrence and went missing again.
 
 **A periodic phase's `dt` and `delta` are constants.** Every activation of a phase with `every:` has the same `dt` and `delta`, so `<phase>.dt` and `<phase>.delta` are constant expressions wherever a constant is accepted: `const` blocks, `where:`, `reduce:`, `order by:`. Inside that phase's handlers the name still means the trigger binding, with the same value. A phase without `every:` has no fixed step: reading its `dt` or `delta` outside its own handlers is a compile error.
 

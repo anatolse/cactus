@@ -25,11 +25,17 @@ pub phase input:
     from:
         frame
 
+# Game time runs at Clock[Pace].scale times real time: 0 pauses fixed_tick,
+# 0.5 is slow motion, 4 is fast-forward. Steps stay 1/60 s long; fixed_tick
+# runs fewer or more of them, never more than `max:` per frame. The pace is
+# read when fixed_tick starts, so a write from `input` applies this frame and
+# a write from fixed_tick or later applies from the next frame.
 pub phase fixed_tick:
     after:
         input
     every: 1s / 60
     max: 8
+    rate: Clock[Pace].scale
 
 pub phase tick:
     after:
@@ -47,6 +53,16 @@ pub phase render:
     after:
         late_tick
     alpha: float = fixed_tick.alpha
+
+# ── Game Pace ─────────────────────────────────────────────────────────────────
+
+# The one game clock. `tick`, `late_tick` and `render` keep real frame time.
+pub single trait Pace:
+    persist var scale: float clamped(min = 0.0, max = 1024.0) = 1.0
+
+pub entity Clock:
+    Pace
+    KeepOnLoad
 
 # Ordinary lifecycle events (no fields)
 pub event load

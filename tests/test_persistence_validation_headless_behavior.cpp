@@ -38,9 +38,16 @@ struct World {
     World() { init_and_load(registry); }
 };
 
-Snapshot valid_snapshot() {
+Snapshot captured_snapshot() {
     World world;
     return cactus::runtime::entt_backend::generated_capture_world_snapshot(world.registry);
+}
+
+// Without the std.core.Clock record, so record 0 is the fixture's first entity.
+Snapshot valid_snapshot() {
+    return edited(captured_snapshot(), [](std::vector<EditableRecord>& records) {
+        std::erase_if(records, [](const EditableRecord& record) { return record.archetype == "std.core.Clock"; });
+    });
 }
 
 bool any_error_at(const std::vector<ValidationError>& errors, const std::string& path) {
@@ -63,6 +70,13 @@ Value& require_field(EditableTrait& trait, std::string_view field_name) {
     return *found;
 }
 
+// The fixture's first record: record 0 of a capture is std.core.Clock.
+EditableRecord& first_fixture_record(std::vector<EditableRecord>& records) {
+    REQUIRE(records.size() > 1);
+    REQUIRE(records[0].archetype == "std.core.Clock");
+    return records[1];
+}
+
 std::string record_path(const Snapshot& snapshot, std::size_t index) {
     const auto entity = snapshot.entity(index);
     return std::string(entity.archetype()) + "[" + std::to_string(entity.id()) + "]";
@@ -71,9 +85,8 @@ std::string record_path(const Snapshot& snapshot, std::size_t index) {
 }  // namespace
 
 TEST_CASE("a validly captured document has no validation errors", "[persistence][validation]") {
-    const auto snapshot = valid_snapshot();
-    const auto errors   = validate_document(schema, snapshot);
-    CHECK(errors.empty());
+    CHECK(validate_document(schema, captured_snapshot()).empty());
+    CHECK(validate_document(schema, valid_snapshot()).empty());
 }
 
 TEST_CASE("an incompatible schema descriptor fails before any other check runs",
@@ -261,7 +274,7 @@ TEST_CASE("a document with only value-kind problems is rejected with the unsuppo
     World world;
     const auto snapshot = edited(cactus::runtime::entt_backend::generated_capture_world_snapshot(world.registry),
                                  [](std::vector<EditableRecord>& records) {
-                                     require_field(require_trait(records[0], kRival), "rival") =
+                                     require_field(require_trait(first_fixture_record(records), kRival), "rival") =
                                          Value::of_string("not an entity reference");
                                  });
 
@@ -277,7 +290,7 @@ TEST_CASE("a resource that no longer exists in this build fails staging and leav
     World world;
     const auto snapshot = edited(cactus::runtime::entt_backend::generated_capture_world_snapshot(world.registry),
                                  [](std::vector<EditableRecord>& records) {
-                                     require_field(require_trait(records[0], "persistence_references_runtime.Badge"),
+                                     require_field(require_trait(first_fixture_record(records), "persistence_references_runtime.Badge"),
                                                    "icon") = Value::of_asset("persistence_references_runtime.NoSuchIcon");
                                  });
 

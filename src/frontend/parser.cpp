@@ -2432,6 +2432,17 @@ EventNode Parser::parse_event(bool is_pub, bool is_external) {
     return node;
 }
 
+void Parser::parse_phase_expression_clause(std::optional<std::unique_ptr<ExprNode>>& clause,
+                                           const std::string& name) {
+    const auto clause_loc = advance().location;
+    consume(TokenType::COLON, "expected ':'");
+    if (clause.has_value()) {
+        errors_.error(clause_loc, "duplicate " + name + ": clause in phase");
+    }
+    clause = parse_expression();
+    expect_newline();
+}
+
 PhaseNode Parser::parse_phase(bool is_pub) {
     const auto loc = peek().location;
     consume(TokenType::PHASE, "expected 'phase'");
@@ -2465,23 +2476,15 @@ PhaseNode Parser::parse_phase(bool is_pub) {
             continue;
         }
         if (check(TokenType::EVERY) || (check(TokenType::IDENTIFIER) && peek().value == "every")) {
-            const auto clause_loc = advance().location;
-            consume(TokenType::COLON, "expected ':'");
-            if (node.every.has_value()) {
-                errors_.error(clause_loc, "duplicate every: clause in phase");
-            }
-            node.every = parse_expression();
-            expect_newline();
+            parse_phase_expression_clause(node.every, "every");
             continue;
         }
         if (check(TokenType::MAX) || (check(TokenType::IDENTIFIER) && peek().value == "max")) {
-            const auto clause_loc = advance().location;
-            consume(TokenType::COLON, "expected ':'");
-            if (node.max.has_value()) {
-                errors_.error(clause_loc, "duplicate max: clause in phase");
-            }
-            node.max = parse_expression();
-            expect_newline();
+            parse_phase_expression_clause(node.max, "max");
+            continue;
+        }
+        if (at_contextual_clause("rate")) {
+            parse_phase_expression_clause(node.rate, "rate");
             continue;
         }
 

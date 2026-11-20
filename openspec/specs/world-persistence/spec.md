@@ -310,3 +310,14 @@ The schema descriptor SHALL record a duration field's language type `duration`, 
 #### Scenario: A float field changed to a duration
 - **WHEN** a field's type changes from `float` to `duration`
 - **THEN** the schema fingerprint changes
+
+### Requirement: Clamped bounds are part of the schema
+The schema descriptor SHALL record each bound of a clamped field: a constant bound by its value, and a `let` bound by the field it reads. Restore SHALL evaluate the bounds against the restored record and SHALL fail as invalid data, before the world changes, when a value is outside them.
+
+#### Scenario: Changed bound changes the fingerprint
+- **WHEN** a field's `clamped(max = 100.0)` changes to `clamped(max = 120.0)`
+- **THEN** the schema fingerprint changes
+
+#### Scenario: Out-of-bounds value in a document
+- **WHEN** a restored document holds `hp = 150.0` for a field clamped to `max_hp = 100.0`
+- **THEN** restore fails as invalid data and the current world is unchanged

@@ -1,6 +1,8 @@
 ## Purpose
 Define the required behavior of the EnTT-based C++ backend, including registry-oriented code generation, event integration, and correctness expectations for generated output.
+
 ## Requirements
+
 ### Requirement: EnTT component struct generation
 The backend SHALL generate EnTT-compatible component structs for each resolved trait. Empty traits SHALL generate empty tag structs. The generated C++ type SHALL be declared in the C++ namespace that mirrors the trait's module (see "Generated program names mirror module namespaces") and SHALL be named after the trait, so distinct trait symbols always produce distinct qualified C++ types.
 
@@ -1761,3 +1763,21 @@ The cpp-entt backend SHALL reuse a binding's creation-ordered membership across 
 #### Scenario: Membership change is seen by the next pass
 - **WHEN** an activation's commit adds `Tile` to a new entity
 - **THEN** the next pass over that membership includes the entity at its creation-order position
+
+### Requirement: Colors convert to 8 bits at 8-bit consumers
+The cpp-entt backend SHALL keep a language `color` as four `float` channels in generated code and the runtime. Where a color enters a consumer that holds 8 bits per channel (the color or tint of a raylib draw call, a vertex color, an image pixel), the backend SHALL convert each channel once: clamp to 0..1, scale by 255 and round to nearest with halves away from zero. A NaN channel SHALL convert to 0. The conversion SHALL NOT change the stored color.
+
+#### Scenario: Out-of-range channels at a draw call
+- **WHEN** a sprite's color is `color(1.5, -0.2, 0.5, NaN)` and the renderer draws it
+- **THEN** the draw call receives red 255, green 0, blue 128 and alpha 0, and the stored color still reads `1.5`, `-0.2`, `0.5`, NaN
+
+#### Scenario: One rounding per consumer
+- **WHEN** a color with channel 0.3 is drawn
+- **THEN** the draw call receives 77, and no earlier operation has rounded the channel to a multiple of 1/255
+
+### Requirement: Float consumers get raw colors
+Where a color enters a consumer that holds floats (a shader uniform, a render-stage input, light data), the cpp-entt backend SHALL pass the channel values unchanged.
+
+#### Scenario: Light brighter than white reaches the shader
+- **WHEN** an enabled `PointLight` has color `#FFFFFFFF * 2.0`
+- **THEN** the light data uploaded for that frame holds 2.0 in its red, green and blue lanes

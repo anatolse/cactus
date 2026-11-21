@@ -53,22 +53,13 @@ either trigger alias for the `Quads` pass kind in this increment.
 - **THEN** the backend blends the result onto the render pass's `Target` using the same
   source-over alpha blending already used by existing `std.render.*` rendering
 
-### Requirement: `with_alpha` color helper
-
-`std.render.passes` SHALL provide `pub func with_alpha(base: color, alpha: float) color`, a pure
-Cactus function (not `extern`) that preserves `base`'s RGB channels and multiplies its alpha
-channel by `clamp(alpha, 0.0, 1.0)`. Being an ordinary pure `func`, it requires no
-portable-GLSL-translation registration beyond what its own body already needs — its body is
-GLSL-translatable by the same restricted-statement rule stage handlers use
-(`dsl-render-passes`, "Stage handler body is restricted...").
+### Requirement: `with_alpha` scales alpha without a clamp
+`std.render.passes` SHALL provide `pub func with_alpha(base: color, alpha: float) color`, a pure Cactus function (not `extern`) that keeps `base`'s RGB channels and multiplies its alpha channel by `alpha`, with no clamp. Its body SHALL be GLSL-translatable by the rule stage handlers use (`dsl-render-passes`), so it needs no translation registration of its own.
 
 #### Scenario: with_alpha scales only the alpha channel
-
 - **WHEN** `with_alpha(#FF0000FF, 0.5)` is evaluated
-- **THEN** the result has the same RGB channels as `#FF0000FF` and an alpha channel scaled by
-  `0.5`
+- **THEN** the result has the same RGB channels as `#FF0000FF` and an alpha channel scaled by `0.5`
 
-#### Scenario: with_alpha clamps out-of-range alpha
-
-- **WHEN** `with_alpha(base, 1.5)` or `with_alpha(base, -0.2)` is evaluated
-- **THEN** the effective alpha multiplier is clamped to `1.0` or `0.0` respectively
+#### Scenario: with_alpha keeps out-of-range alpha
+- **WHEN** `with_alpha(#FF0000FF, 1.5)` or `with_alpha(#FF0000FF, -0.2)` is evaluated
+- **THEN** the result's alpha channel is 1.5 or -0.2 respectively

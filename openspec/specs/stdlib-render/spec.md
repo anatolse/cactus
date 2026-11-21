@@ -55,7 +55,7 @@ The shipped `std.render.sprites` module SHALL declare the currently implemented 
 ---
 
 ### Requirement: std.render.meshes exposes the shipped mesh, billboard, and light trait surface
-The `std.render.meshes` module SHALL expose the passive 3D render and light traits currently declared in the shipped stdlib module.
+The `std.render.meshes` module SHALL expose the passive 3D render and light traits currently declared in the shipped stdlib module. A light's brightness SHALL be its `color`: a light has no separate intensity field, and a channel above 1 makes the light brighter in that channel.
 
 #### Scenario: Mesh renderer trait fields
 - **WHEN** `use std.render.meshes as mesh` is imported and a unit applies `mesh.Renderer`
@@ -67,13 +67,19 @@ The `std.render.meshes` module SHALL expose the passive 3D render and light trai
 
 #### Scenario: PointLight trait fields
 - **WHEN** `use std.render.meshes as mesh` is imported and a unit applies `mesh.PointLight`
-- **THEN** the entity has fields: `color: color`, `intensity: float`, `range: float`, `enabled: bool`
+- **THEN** the entity has fields: `color: color`, `range: float`, `enabled: bool`
 
 #### Scenario: DirectionalLight trait fields
 - **WHEN** `use std.render.meshes as mesh` is imported and a unit applies `mesh.DirectionalLight`
-- **THEN** the entity has fields: `direction: vec3`, `color: color`, `intensity: float`, `enabled: bool`
+- **THEN** the entity has fields: `direction: vec3`, `color: color`, `enabled: bool`
 
----
+#### Scenario: Intensity field rejected
+- **WHEN** a unit sets `intensity = 1.5` on a `mesh.PointLight`
+- **THEN** the compiler reports that `PointLight` has no field `intensity`
+
+#### Scenario: Brighter light
+- **WHEN** two enabled point lights at the same place have colors `#FFFFFFFF` and `#FFFFFFFF * 1.5`
+- **THEN** the second light's frame light data is 1.5 times the first's in red, green and blue
 
 ### Requirement: std.render.meshes.Renderer color tints the resolved placeholder material
 `Renderer.color` SHALL act as a multiplicative tint on the mesh's resolved material color, identically to how `BillboardRenderer.color` already tints its texture: the default `#FFFFFFFF` applies no tint, and any other value multiplies the resolved material color.

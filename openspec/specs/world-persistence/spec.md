@@ -1,6 +1,7 @@
 ## Purpose
 
 Define format-independent capture of live archetype instances, persistent values, construction data, and entity relationships into a typed snapshot document.
+
 ## Requirements
 
 ### Requirement: Explicit fields determine entity eligibility
@@ -321,3 +322,14 @@ The schema descriptor SHALL record each bound of a clamped field: a constant bou
 #### Scenario: Out-of-bounds value in a document
 - **WHEN** a restored document holds `hp = 150.0` for a field clamped to `max_hp = 100.0`
 - **THEN** restore fails as invalid data and the current world is unchanged
+
+### Requirement: Saved colors keep their channel values
+A saved `color` field SHALL record its four channel values as `float` values, exactly as the program holds them, including values below 0 or above 1. Restore SHALL give back the same channel values. A `color` field's schema meaning SHALL include its `float` channels, so a document that recorded color lanes as bytes SHALL fail to restore as a schema mismatch, before the world changes, rather than be read with a different meaning.
+
+#### Scenario: Round trip of an out-of-range color
+- **WHEN** a persisted field holds `color(1.5, -0.2, 0.3, 1.0)` and the world is saved and restored
+- **THEN** the restored field reads red 1.5, green -0.2, blue 0.3 and alpha 1.0 exactly
+
+#### Scenario: Document with byte lanes
+- **WHEN** a document saved by a build whose color lanes were bytes is restored
+- **THEN** restore fails as a schema mismatch and the world is unchanged

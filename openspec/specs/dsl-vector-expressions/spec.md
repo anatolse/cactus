@@ -146,14 +146,14 @@ assignment target's type and the source expression's type.
 ### Requirement: Color float component access
 
 A `color`-typed expression SHALL support member access `.r`, `.g`, `.b`, `.a`, each resolving to
-type `float` normalized to the range `[0.0, 1.0]`, using the same member-chain resolution
-mechanism `vec2`/`vec3`'s `.x`/`.y`/`.z` component access already uses. No other member name is
-valid on a `color`-typed expression.
+type `float` holding the channel value with no bound (see "Color channels are unbounded floats"),
+using the same member-chain resolution mechanism `vec2`/`vec3`'s `.x`/`.y`/`.z` component access
+already uses. No other member name is valid on a `color`-typed expression.
 
 #### Scenario: Reading a color channel
 
 - **WHEN** source contains `shape.color.a` where `shape.color` is `color`
-- **THEN** the expression has type `float` in `[0.0, 1.0]`, representing the color's alpha channel
+- **THEN** the expression has type `float`, representing the color's alpha channel
 
 #### Scenario: Reading each channel
 
@@ -161,101 +161,16 @@ valid on a `color`-typed expression.
 - **THEN** each expression has type `float`, corresponding to the color's red, green, blue, and
   alpha channels respectively
 
+#### Scenario: Reading a channel above one
+
+- **WHEN** `c` is `#FF000080 * 3.0` and source reads `c.r` and `c.a`
+- **THEN** `c.r` is 3.0 and `c.a` is the binary32 product of 128/255 and 3.0
+
 #### Scenario: Invalid channel name rejected
 
 - **WHEN** source contains `c.w` where `c` is `color`
 - **THEN** the semantic analyzer reports a compile-time error naming `color` and the invalid
   member `w`
-
-### Requirement: Color constructor
-
-`color(r: float, g: float, b: float, a: float)` SHALL construct a `color` from four channel
-values, each independently clamped to `[0.0, 1.0]` before being stored. An `int` argument SHALL be
-accepted and promoted to `float`, identically to how `vec2(...)`/`vec3(...)` already promote mixed
-`int`/`float` arguments. Any other argument count, or an argument whose type is neither `float`-
-nor `int`-compatible, SHALL be a compile-time error.
-
-#### Scenario: Constructing a color from channel values
-
-- **WHEN** source contains `color(1.0, 0.0, 0.0, 1.0)`
-- **THEN** the expression has type `color`, equivalent to the hex literal `#FF0000FF`
-
-#### Scenario: Constructor clamps out-of-range channels
-
-- **WHEN** source contains `color(1.5, -0.2, 0.0, 1.0)`
-- **THEN** the expression has type `color` with red and green clamped to `1.0` and `0.0`
-  respectively before storage
-
-#### Scenario: Wrong constructor arity rejected
-
-- **WHEN** source contains `color(1.0, 0.0, 0.0)`
-- **THEN** the semantic analyzer reports a compile-time error naming `color` and the provided
-  argument count
-
-#### Scenario: Int argument promoted to float
-
-- **WHEN** source contains `color(k, 0, 0, 1)` where `k` is an `int`
-- **THEN** the expression is accepted, has type `color`, and each `int` argument is converted to
-  `float` before construction
-
-### Requirement: Fixed color binary operator matrix
-
-The semantic analyzer SHALL accept exactly the following `(left type, operator, right type) ->
-result type` combinations for `color` operands, and no others — the same shape as the existing
-`vec2`/`vec3` operator matrix (`dsl-vector-expressions`, "Fixed vec2/vec3 binary operator
-matrix"):
-
-| Left | Operator | Right | Result |
-| --- | --- | --- | --- |
-| `color` | `+` | `color` | `color` (component-wise, each channel clamped) |
-| `color` | `-` | `color` | `color` (component-wise, each channel clamped) |
-| `color` | `*` | `float` | `color` (each channel scaled, then clamped) |
-| `float` | `*` | `color` | `color` (each channel scaled, then clamped) |
-| `color` | `/` | `float` | `color` (each channel scaled, then clamped) |
-| `color` | `*` | `color` | `color` (component-wise, each channel clamped) |
-
-No other operator/operand-type combination involving a `color` operand is valid, including a
-`color` operand combined with a bare `+`/`-` against a `float`, and division by a `color`.
-
-#### Scenario: Component-wise color addition
-
-- **WHEN** source contains `a + b` where `a` and `b` are `color`
-- **THEN** the expression has type `color`, each channel the clamped sum of the corresponding
-  input channels
-
-#### Scenario: Scalar multiplication scales every channel except is clamped
-
-- **WHEN** source contains `tint * 0.5` where `tint` is `color`
-- **THEN** the expression has type `color` with each of its four channels scaled by `0.5` and
-  clamped to `[0.0, 1.0]`
-
-#### Scenario: Color plus scalar rejected
-
-- **WHEN** source contains `tint + 1.0` where `tint` is `color`
-- **THEN** the semantic analyzer reports a compile-time error naming `color`, `float`, and the `+`
-  operator
-
-#### Scenario: Color-by-color division rejected
-
-- **WHEN** source contains `a / b` where both operands are `color`
-- **THEN** the semantic analyzer reports a compile-time error; only a `float` divisor is accepted
-
-### Requirement: Color arithmetic clamps at every step, not only at final output
-
-Every `color`-producing expression (the constructor and every operator-matrix row) SHALL clamp
-each channel to `[0.0, 1.0]` before the result is stored, including intermediate results of a
-chained expression. `color` values SHALL NOT retain magnitude beyond `[0.0, 1.0]` per channel at
-any point — this is a deliberate low-dynamic-range design, not a rounding artifact, and a
-multi-step arithmetic expression's result reflects clamping at each intermediate step rather than
-on the final value alone.
-
-#### Scenario: Chained arithmetic clips at each step
-
-- **WHEN** source contains `(tint * 2.0) * 0.5` where `tint` is an opaque, saturated `color` (e.g.
-  `#FFFFFFFF`)
-- **THEN** `tint * 2.0` clamps to `#FFFFFFFF` (already at maximum), and the final result is
-  `#FFFFFFFF` scaled by `0.5`, not `tint` scaled by `1.0` — chained arithmetic is not equivalent to
-  evaluating the combined scale factor against unclamped intermediate values
 
 ### Requirement: Precise diagnostics for unsupported color expressions
 
@@ -267,3 +182,71 @@ invalid member access SHALL name the operand type(s), the operator or member nam
 
 - **WHEN** source contains `a - b` where `a` is `color` and `b` is `float`
 - **THEN** the reported error names `color`, `float`, and the `-` operator
+
+### Requirement: Color channels are unbounded floats
+A `color` SHALL hold four `float` channels, red, green, blue and alpha, that follow `dsl-numeric-semantics`. No color operation SHALL clamp or round a channel, so a channel MAY be below 0 or above 1. A hex literal `#RRGGBBAA` SHALL give each channel its byte value divided by 255. Channel values SHALL be sRGB codes, and alpha SHALL be straight (not premultiplied).
+
+#### Scenario: A blend toward a darker color
+- **WHEN** a handler computes `a + (b - a) * 0.5` with `a = #FFFFFFFF` and `b = #000000FF`
+- **THEN** each of the red, green and blue channels is 0.5
+
+#### Scenario: A fade reaches zero
+- **WHEN** a handler multiplies the alpha of `#FFFFFFFF` by 0.99 once per frame for 1000 frames
+- **THEN** the alpha is the binary32 result of those 1000 multiplications, below 0.0001
+
+#### Scenario: Brighter than white
+- **WHEN** a handler computes `#FFFFFFFF * 2.0`
+- **THEN** every channel of the result is 2.0
+
+### Requirement: Colors are clamped only at the output
+A color SHALL be clamped to 0..1 and rounded to 8 bits only where it enters a consumer that holds 8 bits per channel (`backend-cpp-entt`, "Colors convert to 8 bits at 8-bit consumers"). A rule handler and a render-stage handler SHALL give the same channel values for the same color expression.
+
+#### Scenario: Rule and render stage agree
+- **WHEN** the same expression `(a - b) + b` over colors is evaluated in a rule handler and in a fragment-stage handler
+- **THEN** both results have the channels of `a`
+
+#### Scenario: Stored value is not clamped by drawing
+- **WHEN** a sprite's color is `#FFFFFFFF * 2.0` and the sprite is drawn
+- **THEN** a later read of the color still gives 2.0 in every channel
+
+### Requirement: Color constructor keeps channel values
+`color(r: float, g: float, b: float, a: float)` SHALL construct a `color` from four channel values, stored exactly with no clamp. An `int` argument SHALL be accepted and promoted to `float`, identically to how `vec2(...)`/`vec3(...)` promote mixed `int`/`float` arguments. Any other argument count, or an argument whose type is neither `float`- nor `int`-compatible, SHALL be a compile-time error.
+
+#### Scenario: Constructing a color from channel values
+- **WHEN** source contains `color(1.0, 0.0, 0.0, 1.0)`
+- **THEN** the expression has type `color`, equivalent to the hex literal `#FF0000FF`
+
+#### Scenario: Constructor keeps out-of-range channels
+- **WHEN** source contains `color(1.5, -0.2, 0.0, 1.0)`
+- **THEN** the expression has type `color` whose red channel is 1.5 and green channel is -0.2
+
+#### Scenario: Wrong constructor arity rejected
+- **WHEN** source contains `color(1.0, 0.0, 0.0)`
+- **THEN** the semantic analyzer reports a compile-time error naming `color` and the provided argument count
+
+#### Scenario: Int argument promoted to float
+- **WHEN** source contains `color(k, 0, 0, 1)` where `k` is an `int`
+- **THEN** the expression is accepted, has type `color`, and each `int` argument is converted to `float` before construction
+
+### Requirement: Color binary operator matrix without clamp
+The semantic analyzer SHALL accept exactly these `color` operator rows, each computing every channel as one `float` operation with no clamp: `color + color`, `color - color` and `color * color` (component-wise), `color * float`, `float * color` and `color / float` (each channel scaled). No other combination with a `color` operand SHALL be valid, including `color` with `+`/`-` against a `float` and division by a `color`.
+
+#### Scenario: Component-wise color addition
+- **WHEN** source contains `a + b` where `a` and `b` are `color`
+- **THEN** the expression has type `color`, each channel the sum of the corresponding input channels
+
+#### Scenario: Scalar multiplication scales every channel
+- **WHEN** source contains `tint * 0.5` where `tint` is `color`
+- **THEN** the expression has type `color` with each of its four channels scaled by `0.5`
+
+#### Scenario: Chained arithmetic keeps intermediate values
+- **WHEN** source contains `(tint * 2.0) * 0.5` where `tint` is `#FFFFFFFF`
+- **THEN** `tint * 2.0` has every channel 2.0 and the final result is `#FFFFFFFF`
+
+#### Scenario: Color plus scalar rejected
+- **WHEN** source contains `tint + 1.0` where `tint` is `color`
+- **THEN** the semantic analyzer reports a compile-time error naming `color`, `float`, and the `+` operator
+
+#### Scenario: Color-by-color division rejected
+- **WHEN** source contains `a / b` where both operands are `color`
+- **THEN** the semantic analyzer reports a compile-time error; only a `float` divisor is accepted

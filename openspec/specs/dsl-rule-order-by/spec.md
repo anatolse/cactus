@@ -6,15 +6,16 @@ TBD - created by archiving change rename-system-to-rule. Update Purpose after ar
 ### Requirement: Iteration without `order by:` is creation order where observable
 A unary rule pass without `order by:` SHALL iterate its entities in stable creation order whenever the pass's result can observe the order. Where it cannot, the iteration order SHALL be unobservable, and a backend MAY iterate in any order. Pair passes already iterate left-binding-major in creation order (`dsl-pair-relations`), and reductions already fold in creation order (`dsl-rule-reduce`); this requirement does not change them.
 
-A pass's result *observes* its order when permuting its rows can change the world after commit, the queued events or commands, or the effect calls. At least these SHALL count as observing:
+A pass's result *observes* its order when permuting its rows can change the world after commit, the queued events, the effect calls, or anything the program can see of the commands' order. At least these SHALL count as observing:
 
 - a `limit:` without `order by:`;
-- a row that emits an event or queues a structural command (`spawn`, `destroy`, `add`, `remove`, `set`), because queue order, command order and new entities' creation order follow row order;
+- a row that emits an event or queues `spawn`, `destroy` or `set`, or an `add` or `remove` that acts on another entity or on a relation, because queue order, command order and new entities' creation order follow row order;
+- a row that queues `add` or `remove` of a trait, state variant or state on its own row entity, when the linked program has an `on added` or `on removed` handler for that trait (for a state variant or a state: for any variant of that state), or the trait is `single` or `std.core.Parent`;
 - a row that writes a named entity's field, as in `Game[Match].score += coin.value`;
 - a row that reads, by name, a field the pass writes, since the named entity may itself be a row;
 - a row that calls an observable effect, such as drawing.
 
-A pass whose rows only write fields of their own row entity, and read by name no field the pass writes, SHALL NOT observe its order. Creation order SHALL NOT be affected by destroying entities: after a destroy, the remaining entities keep their relative order, and newer entities come after older ones.
+A pass whose rows only write fields of their own row entity and `add` or `remove` traits on it that no item above makes observable, and read by name no field the pass writes, SHALL NOT observe its order. The compiler SHALL decide this on the linked program. Creation order SHALL NOT be affected by destroying entities: after a destroy, the remaining entities keep their relative order, and newer entities come after older ones.
 
 #### Scenario: Emitting pass iterates in creation order after a destroy
 - **WHEN** entities A, B and C are created in that order, A is destroyed, D is created, and a rule without `order by:` emits one event per entity
@@ -35,6 +36,14 @@ A pass whose rows only write fields of their own row entity, and read by name no
 #### Scenario: Self-only writes stay free
 - **WHEN** a rule without `order by:` reads named entity fields and writes only its own row's `Position` and `Velocity`
 - **THEN** its result is the same for every iteration order, and the backend may keep its unordered iteration
+
+#### Scenario: Unwatched self swap stays free
+- **WHEN** a rule without `order by:` adds `Mode.On` to its own row, and no handler in the linked program has `on added` or `on removed` for any variant of `Mode`
+- **THEN** its result is the same for every iteration order, and the backend may keep its unordered iteration
+
+#### Scenario: Watched self add keeps creation order
+- **WHEN** a rule without `order by:` adds `Active` to its own row, and another module has a rule with `on added Active`
+- **THEN** the pass iterates in creation order, so the `on added Active` deliveries follow it
 
 ### Requirement: `order by:` clause sorts a rule domain
 Rule declarations SHALL support an optional `order by:` block on a unary (`each:`) domain or on a binary `pairs:` domain. When present, the domain's entity or tuple iteration order SHALL be sorted according to the specified sort keys before each handler invocation. A sort key SHALL be a pure expression — of the same expression and purity class as a `where:` predicate (literals and constants, in-scope binding reads, arithmetic and boolean operators, and calls to functions whose complete call graph is proven pure), rather than a bare field path — and MUST type-check as scalar-comparable (`int`, `float`, or `bool`). Multiple sort keys produce lexicographic ordering: the first key is the primary sort, subsequent keys break ties.

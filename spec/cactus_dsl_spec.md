@@ -2831,7 +2831,7 @@ rule MoveBullets:
 
 **Contacts.** `std.physics.volume` declares `pub group contacts` in `fixed_tick`, after `solve`. A rule that joins it with `group: physics.contacts` sees this tick's body poses and their children's.
 
-**Character controller.** `std.physics.volume` declares `pub group solve` in `fixed_tick`. Its rules move every entity with `CharacterBody`, `Collider`, a shape and `WorldTransform` against solid colliders: gravity, a step-up lift, up to three slides along the surfaces the body hits (each slide keeps the motion out of every plane that still holds it; `spec/solver_limits.md` §4), a snap back down onto walkable ground, and a final push out of any overlap. A game writes `CharacterBody.velocity` (a positive `velocity.y` jumps) and reads `grounded`, `ground_normal` and `time_since_grounded`. A surface is walkable when its `surface` normal is within `max_slope` degrees of world up. A rule that writes `velocity` runs before `solve` with no annotation (§4.7); `after: physics.solve` reads this tick's results. The last stage of `solve` re-derives each `LocalTransform` descendant of a body, so such a rule also sees a body's children (a hurtbox, a model) at this tick's pose. `motion`, `lift`, `drop`, `ground_offset`, `heading`, `contacts`, `plane_a` and `plane_b` belong to the controller. A 2D `CharacterBody` is plain data that nothing moves.
+**Character controller.** `std.physics.volume` declares `pub group solve` in `fixed_tick`. Its rules move every entity with `CharacterBody`, `Collider`, a shape and `WorldTransform` against solid colliders: gravity, a step-up lift, up to three slides along the surfaces the body hits (each slide keeps the motion out of every plane that still holds it; `spec/solver_limits.md` §4), a snap back down onto walkable ground, and a final push out of any overlap. A game writes `CharacterBody.velocity` (a positive `velocity.y` jumps) and reads `grounded`, `ground_normal` and `time_since_grounded`. A surface is walkable when its `surface` normal is within `max_slope` degrees of world up. A rule that writes `velocity` runs before `solve` with no annotation (§4.7); `after: physics.solve` reads this tick's results. The last stage of `solve` re-derives each `LocalTransform` descendant of a body, so such a rule also sees a body's children (a hurtbox, a model) at this tick's pose. `motion`, `lift`, `drop`, `ground_offset`, `heading`, `contacts`, `plane_a` and `plane_b` belong to the controller. A 2D `CharacterBody` is plain data that nothing moves; `std.character.flat` can decide when it jumps (§7.10).
 
 ### 7.8 Cost Reports and Rule Explanations
 
@@ -2897,6 +2897,47 @@ Here `Fire` queued a bullet's spawn, and `MoveBullet` ran in the same tick befor
 **Capacity and failures.** Records are kept in a buffer of a fixed capacity (4096 records by default) and written at each frame boundary. Records past the capacity are dropped and counted, the frame ends with its `overflow` record, and the game goes on. When the output can't be written, tracing turns off with one diagnostic on standard error and the game goes on. Tracing never changes a result: a traced build's world is the same as an untraced build's after every frame.
 
 **Running a traced program.** The generated standalone program accepts `--trace-rules-output <path>` and `--trace-rules-capacity <positive-int>`; any other argument, a missing value or a capacity that is not a positive integer stops it with exit code 2. Without `--trace-rules-output` nothing is written, and each frame's records are dropped at its end. A host that builds its own `main()` calls the same runtime interface in `backends/cpp-entt/rule_trace.hpp`: `configure_rule_trace(sink, capacity)` with a sink that takes one line and returns `false` when it can't write it, or `configure_rule_trace(RuleTraceOptions)` for a file; and `flush_rule_trace()` after its last activation, such as `unload`.
+
+### 7.10 2D Jumping (`std.character.flat`)
+
+An optional controller decides when a `std.physics.flat.CharacterBody` jumps. It adds an input buffer and coyote time, and leaves movement, gravity and collision to the game.
+
+```cactus
+use std.character.flat as character
+
+entity Hero:
+    phys.CharacterBody
+    character.JumpSettings:
+        coyote_time = 100ms
+        input_buffer = 120ms
+
+rule PressJump:
+    each:
+        character.JumpSettings
+    on input:
+        if input.pressed(Jump):
+            emit character.RequestJump to self
+
+rule Move:
+    each:
+        phys.CharacterBody as body
+    after:
+        character.jump
+    on fixed_tick as step:
+        ...
+```
+
+**Data.** `JumpSettings` has `speed: float = 420.0`, `coyote_time: duration = 100ms` and `input_buffer: duration = 120ms`. Only an entity with `JumpSettings` and `CharacterBody` is controlled. Two traits exist only while their fact holds, so neither is given at start: `JumpRequest` (`age`) while a request waits, and `CoyoteWindow` (`airborne`) while the body may jump in the air. A negative window acts as zero.
+
+**Requests.** `RequestJump` sent to a body adds `JumpRequest`; a second request adds it again, which starts its age from `0s`. The controller never makes a request itself. At each fixed step a waiting request is tried first, and only when it fails does its age grow by the step; it is dropped when the age passes `input_buffer`. So a request is tried on its first step even with a zero buffer, and `100ms` at 60 Hz is 7 tries.
+
+**Jumps.** A request is taken when the body is grounded or carries `CoyoteWindow`. A jump sets `velocity.y` to `-speed` (Y points down), keeps `velocity.x`, sets `grounded` to false, removes `JumpRequest` and `CoyoteWindow`, and emits `Jumped` to the body. A grounded step that does not jump opens the window; `airborne` then grows by each step in the air, and the window closes when it passes `coyote_time`. So a body jumps once from the ground or within the window, and again only after it lands; a body that was never grounded has no window.
+
+**Order.** The controller's rules form the group `character.jump` on `fixed_tick`. The game's movement rule declares `after: character.jump`: it moves the body with this step's jump, and the `grounded` it writes is read at the next step. A movement rule that writes `velocity` or `grounded` with no order against the group is rejected as two unordered writers.
+
+**Game time.** Both windows count the `delta` of `fixed_tick`, so they follow `Clock[Pace].scale`: at `0.5` a window lasts twice as long in real time, and while the scale is `0` a waiting request and an open window both wait. A game that pauses for a menu stops sending `RequestJump`.
+
+`examples/stdlib-fixtures/character_jumping.cactus` shows the controller with a small movement rule. `examples/platformer` keeps its hand-written multi-jump.
 
 ## 8. Deferred and Migration Notes
 

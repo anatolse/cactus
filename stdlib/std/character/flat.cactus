@@ -1,0 +1,120 @@
+module std.character.flat
+
+# Buffered jumping with coyote time for a std.physics.flat.CharacterBody. The
+# controller decides when a body jumps; the game's own rule moves it. Order
+# that rule after `jump`: it then moves the body with this step's jump, and
+# the `grounded` it writes is read at the next step. Both windows count game
+# time, so they stretch in slow motion and wait while game time is stopped.
+
+use std.core as core
+use std.physics.flat as phys
+
+# ── Traits ────────────────────────────────────────────────────────────────────
+
+# Opts a body in. Y points down, so a jump sets velocity.y to -speed. A
+# negative window acts as zero: age and airborne are compared only after a
+# step makes them positive.
+pub trait JumpSettings:
+    let speed: float = 420.0
+    let coyote_time: duration = 100ms
+    let input_buffer: duration = 120ms
+
+# A request waiting for a step that can take it.
+pub trait JumpRequest:
+    var age: duration = 0s
+
+# The body may still jump: it was grounded, and left the ground at most
+# coyote_time ago without jumping.
+pub trait CoyoteWindow:
+    var airborne: duration = 0s
+
+# ── Events ────────────────────────────────────────────────────────────────────
+
+# Asks the body it is sent to for one jump.
+pub event RequestJump
+
+# Delivered to a body when it jumps.
+pub event Jumped
+
+# ── Rules ─────────────────────────────────────────────────────────────────────
+
+# Every controller rule.
+pub group jump:
+    phase: core.fixed_tick
+
+# Adding the request again starts its age from 0s.
+rule RecordJumpRequest:
+    each:
+        JumpSettings
+        phys.CharacterBody
+
+    on RequestJump:
+        add JumpRequest
+
+rule JumpInWindow:
+    each:
+        JumpSettings as settings
+        phys.CharacterBody as body
+        JumpRequest
+        CoyoteWindow
+    group: jump
+
+    on core.fixed_tick:
+        body.velocity.y = -settings.speed
+        body.grounded = false
+        remove JumpRequest
+        remove CoyoteWindow
+        emit Jumped to self
+
+# The test comes before aging, so a request is tried once even with no buffer.
+# Ordered after JumpInWindow so Jumped handlers run in one order.
+rule JumpFromGround:
+    each:
+        JumpSettings as settings
+        phys.CharacterBody as body
+        JumpRequest as request
+    without:
+        CoyoteWindow
+    group: jump
+    after: JumpInWindow
+
+    on core.fixed_tick as step:
+        if body.grounded:
+            body.velocity.y = -settings.speed
+            body.grounded = false
+            remove JumpRequest
+            emit Jumped to self
+            return
+        request.age += step.delta
+        if request.age > settings.input_buffer:
+            remove JumpRequest
+
+# Runs after the jumps, so a body that jumped this step sees grounded false.
+rule TrackCoyoteWindow:
+    each:
+        JumpSettings as settings
+        phys.CharacterBody as body
+        CoyoteWindow as window
+    group: jump
+    after: JumpInWindow
+
+    on core.fixed_tick as step:
+        if body.grounded:
+            window.airborne = 0s
+            return
+        window.airborne += step.delta
+        if window.airborne > settings.coyote_time:
+            remove CoyoteWindow
+
+rule OpenCoyoteWindow:
+    each:
+        JumpSettings
+        phys.CharacterBody as body
+    without:
+        CoyoteWindow
+    group: jump
+    after: JumpFromGround
+
+    on core.fixed_tick:
+        if body.grounded:
+            add CoyoteWindow

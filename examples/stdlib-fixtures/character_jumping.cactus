@@ -1,0 +1,158 @@
+module character_jumping
+
+# std.character.flat decides when a body jumps; the rules here move it. A test
+# presses Jump by setting Pad.press, and sets the ground of a Scripted body
+# for the next step. Y points down.
+
+use std.core
+use std.transform.flat as tf
+use std.physics.flat as phys
+use std.character.flat as character
+
+# Set by a test; sends one request on the next frame.
+trait Pad:
+    var press: bool = false
+
+# The ground the movement rule reports at the end of each step.
+trait Scripted:
+    var ground: bool = true
+
+# Falls under gravity and lands with one vertical cast.
+trait Physical
+
+trait Log:
+    var steps: int = 0
+    var jumps: int = 0
+    var jumped_at: int = 0
+    var moves: int = 0
+    # What the movement rule saw this step, before writing its own result.
+    var seen_velocity: vec2 = vec2(0.0, 0.0)
+    var seen_grounded: bool = false
+
+template ScriptedBody(ground: bool = true):
+    Pad
+    Log
+    Scripted:
+        ground = ground
+    phys.CharacterBody:
+        grounded = ground
+        velocity = vec2(5.0, 0.0)
+
+entity Runner:
+    use ScriptedBody()
+    character.JumpSettings:
+        input_buffer = 100ms
+
+entity Patient:
+    use ScriptedBody()
+    character.JumpSettings
+
+entity Quick:
+    use ScriptedBody()
+    character.JumpSettings:
+        input_buffer = 0s
+
+entity Eager:
+    use ScriptedBody()
+    character.JumpSettings:
+        coyote_time = -50ms
+        input_buffer = -50ms
+
+entity Floater:
+    use ScriptedBody(ground = false)
+    character.JumpSettings
+
+entity Bystander:
+    use ScriptedBody()
+
+entity Hero:
+    Pad
+    Log
+    Physical
+    tf.WorldTransform:
+        position = vec2(0.0, 80.0)
+    phys.Collider
+    phys.Solid
+    phys.BoxCollider:
+        size = vec2(10.0, 20.0)
+    phys.CharacterBody:
+        gravity = 900.0
+    character.JumpSettings:
+        speed = 300.0
+
+entity Floor:
+    tf.WorldTransform:
+        position = vec2(0.0, 110.0)
+    phys.Collider
+    phys.Solid
+    phys.BoxCollider:
+        size = vec2(400.0, 20.0)
+
+rule Press:
+    each:
+        Pad as pad
+
+    on input:
+        if pad.press:
+            pad.press = false
+            emit character.RequestJump to self
+
+rule CountSteps:
+    each:
+        Log as log
+    before:
+        character.jump
+
+    on fixed_tick:
+        log.steps += 1
+
+rule CountJumps:
+    each:
+        Log as log
+
+    on character.Jumped:
+        log.jumps += 1
+        log.jumped_at = log.steps
+
+rule MoveScripted:
+    each:
+        Scripted as script
+        phys.CharacterBody as body
+        Log as log
+    after:
+        character.jump
+
+    on fixed_tick:
+        log.moves += 1
+        log.seen_velocity = body.velocity
+        log.seen_grounded = body.grounded
+        body.grounded = script.ground
+
+# Clears `grounded` every step before its cast, as the platformer does.
+rule MovePhysical:
+    each:
+        Physical
+        tf.WorldTransform as world
+        phys.CharacterBody as body
+        Log as log
+    after:
+        character.jump
+
+    on fixed_tick as step:
+        log.moves += 1
+        log.seen_velocity = body.velocity
+        log.seen_grounded = body.grounded
+        body.velocity.y += body.gravity * step.dt
+        let dy = body.velocity.y * step.dt
+        let hit = phys.query_cast_nearest(self, vec2(0.0, dy), 1, self)
+        body.grounded = false
+        if hit.kind == phys.QueryResultKind.Hit:
+            if dy > 0.0:
+                world.position.y += hit.contact.distance
+            else:
+                world.position.y -= hit.contact.distance
+            body.velocity.y = 0.0
+            if hit.contact.normal.y < 0.0:
+                body.grounded = true
+        else:
+            world.position.y += dy

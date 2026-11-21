@@ -1137,7 +1137,8 @@ TEST_CASE("Never destroyed: a spawn every tick with no destroyer is warned at th
         return d.message.contains("never destroyed");
     });
     CHECK(warning->location.line == 32);
-    CHECK(warning->message.contains("std.time.Lifetime"));
+    CHECK(warning->message.contains("std.time.Span with std.time.Ending.Expires"));
+    CHECK_FALSE(warning->message.contains("Lifetime"));
     CHECK(warning->message.contains("single"));
     CHECK(analysis.error_count() == 0);
 }
@@ -1165,20 +1166,24 @@ TEST_CASE("Never destroyed: a guarded spawn gets the same message", "[archetype-
     }
 }
 
-TEST_CASE("Never destroyed: a lifetime that destroys its entity silences it",
+TEST_CASE("Never destroyed: an expiring span that destroys its entity silences it",
           "[archetype-reachability][never-destroyed]") {
     const auto analysis = analyze(
-        "trait Lifetime:\n"
-        "    var remaining: float = 1.0\n"
+        "trait Span:\n"
+        "    var elapsed: float = 0.0\n"
+        "state Ending:\n"
+        "    Expires\n"
         "template Spark:\n"
         "    Position\n"
-        "    Lifetime\n"
+        "    Span\n"
+        "    Ending.Expires\n"
         "rule Emit:\n"
         "    on tick:\n"
         "        spawn Spark()\n"
         "rule Expire:\n"
         "    each:\n"
-        "        Lifetime\n"
+        "        Span\n"
+        "        Ending.Expires\n"
         "    on tick:\n"
         "        destroy\n");
     INFO(analysis.describe());

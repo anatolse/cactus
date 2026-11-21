@@ -415,6 +415,14 @@ add_executable(test_semantic_phase_rate test_semantic_phase_rate.cpp)
 target_link_libraries(test_semantic_phase_rate PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticPhaseRateTests COMMAND test_semantic_phase_rate)
 
+add_executable(test_semantic_time_spans test_semantic_time_spans.cpp)
+target_link_libraries(test_semantic_time_spans PRIVATE cactus_frontend Catch2::Catch2WithMain)
+target_compile_definitions(test_semantic_time_spans PRIVATE
+    CACTUS_TEST_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    CACTUS_TEST_BINARY_DIR="${CMAKE_BINARY_DIR}"
+)
+add_test(NAME SemanticTimeSpansTests COMMAND test_semantic_time_spans)
+
 add_executable(test_semantic_ranged_fields test_semantic_ranged_fields.cpp)
 target_link_libraries(test_semantic_ranged_fields PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticRangedFieldsTests COMMAND test_semantic_ranged_fields)
@@ -1402,6 +1410,12 @@ cactus_add_headless_behavior_test(test_gameplay_timers_headless_behavior
     CACTUS_SOURCE examples/stdlib-fixtures/gameplay_timers.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_gameplay_timers_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_time_spans_headless_behavior
+    CACTUS_SOURCE examples/stdlib-fixtures/time_spans.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_time_spans_headless_behavior.cpp
 )
 
 cactus_add_headless_behavior_test(test_world_persistence_headless_behavior

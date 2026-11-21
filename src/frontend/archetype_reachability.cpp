@@ -330,8 +330,9 @@ public:
             for (const auto& site : sites) {
                 errors.warning(site,
                                "'" + template_id +
-                                   "' is spawned repeatedly and never destroyed; give it a std.time.Lifetime, add a "
-                                   "rule that destroys it, or give it a `single` trait if only one should exist");
+                                   "' is spawned repeatedly and never destroyed; give it a std.time.Span with "
+                                   "std.time.Ending.Expires, add a rule that destroys it, or give it a `single` trait "
+                                   "if only one should exist");
             }
         }
         return traits_of_origins(warned_origins);

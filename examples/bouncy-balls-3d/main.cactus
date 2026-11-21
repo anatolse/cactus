@@ -217,8 +217,9 @@ template BallTemplate:
 # A clicked ball lives this long, so clicking can't fill the box forever.
 template ClickedBall:
     use BallTemplate
-    time.Lifetime:
-        remaining = 30s
+    time.Span:
+        length = 30s
+    time.Ending.Expires
 
 # ── Entities: box walls ──────────────────────────────────────────────────────
 # A 6x6x6 cube (world-unit bounds -3..3 on every axis) centered at the

@@ -3,8 +3,8 @@ module perf_timers
 use std.core
 use std.time as time
 
-# Many std.time lifetimes counting down by one fixed step each frame. They
-# last an hour, so none expires while the benchmark runs.
+# Many std.time spans, split evenly over no ending, the three endings and both
+# clocks. They last an hour, so none ends while the benchmark runs.
 
 trait Board:
     let size: int = 85
@@ -13,10 +13,55 @@ entity Field:
     Board
 
 template Fuse(wait: duration):
-    time.Lifetime:
-        remaining = wait
+    time.Span:
+        length = wait
+
+template RealFuse(wait: duration):
+    use Fuse(wait = wait)
+    time.RealTime
+
+template Expiring(wait: duration):
+    use Fuse(wait = wait)
+    time.Ending.Expires
+
+template RealExpiring(wait: duration):
+    use RealFuse(wait = wait)
+    time.Ending.Expires
+
+template Repeating(wait: duration):
+    use Fuse(wait = wait)
+    time.Ending.Repeats
+
+template RealRepeating(wait: duration):
+    use RealFuse(wait = wait)
+    time.Ending.Repeats
+
+template Bouncing(wait: duration):
+    use Fuse(wait = wait)
+    time.Ending.Bounces
+
+template RealBouncing(wait: duration):
+    use RealFuse(wait = wait)
+    time.Ending.Bounces
 
 rule Fill:
     on load:
         for i in range(0, Field[Board].size * Field[Board].size):
-            spawn Fuse(wait = 1h + 1ms * i)
+            let wait = 1h + 1ms * i
+            match i % 8:
+                0 =>
+                    spawn Fuse(wait = wait)
+                1 =>
+                    spawn RealFuse(wait = wait)
+                2 =>
+                    spawn Expiring(wait = wait)
+                3 =>
+                    spawn RealExpiring(wait = wait)
+                4 =>
+                    spawn Repeating(wait = wait)
+                5 =>
+                    spawn RealRepeating(wait = wait)
+                6 =>
+                    spawn Bouncing(wait = wait)
+                _ =>
+                    spawn RealBouncing(wait = wait)

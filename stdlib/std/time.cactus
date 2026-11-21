@@ -1,71 +1,256 @@
 module std.time
 
 use std.core as core
+use std.math as math
 
 # ── Traits ────────────────────────────────────────────────────────────────────
 
-# Countdown that destroys its entity when it runs out. Simulation time,
-# advanced once per fixed step — never wall-clock time.
-pub trait Lifetime:
-    var remaining: duration
-    var paused: bool = false
+# A stretch of time. `elapsed` runs from 0s to `length`; the entity's Ending
+# says what happens at the end. A span with no Ending stops there. It runs on
+# game time (fixed_tick, scaled by core.Pace) unless it carries RealTime.
+pub trait Span:
+    let length: duration
+    var elapsed: duration = 0s
 
-# One-shot countdown. Arm it with RestartTimer; it emits one TimerExpired back
-# to its own entity and disarms. One Timer is one countdown: give an entity
-# that needs several independent delays one timer entity per delay.
-pub trait Timer:
-    var remaining: duration = 0s
-    var armed: bool = false
-    var paused: bool = false
+# What a span does when it reaches its end.
+pub state Ending:
+    # Destroys the entity.
+    Expires
+    # Starts again and emits SpanEnded.
+    Repeats
+    # Runs back to 0s, then forward again.
+    Bounces:
+        var back: bool = false
+
+# Moves a span from game time to real time (tick), so it keeps running while
+# game time is slowed or stopped.
+pub trait RealTime
+
+# Stops one span: it neither advances nor ends.
+pub trait Paused
 
 # ── Events ────────────────────────────────────────────────────────────────────
 
-# Replaces an existing Timer's countdown and arms it, keeping `paused` as is.
-# It never adds a Timer to an entity that has none.
-pub event RestartTimer:
-    duration: duration
+# Delivered to a span's own entity when a plain span reaches its end, and on
+# each wrap of a repeating span.
+pub event SpanEnded
 
-# Disarms a Timer without an expiration.
-pub event CancelTimer
+# Runs a span again from 0s. It never adds a Span to an entity that has none.
+pub event RestartSpan
 
-# Delivered to the timer's own entity when its countdown reaches zero. Relay
-# it to the gameplay event you actually want.
-pub event TimerExpired
+# ── Functions ─────────────────────────────────────────────────────────────────
+
+# How far along a span is, from 0.0 to 1.0. An empty span is complete.
+pub func progress(span: Span) float:
+    if span.length <= 0s:
+        return 1.0
+    return math.clamp(span.elapsed / span.length, 0.0, 1.0)
+
+# A plain span has ended. An empty one holds a positive elapsed once it ends,
+# which tells it apart from a fresh one at 0s.
+func ended(span: Span) bool:
+    return span.elapsed > 0s and span.elapsed >= span.length
+
+# Whether `delta` more reaches the end. Subtracting first keeps the check from
+# wrapping around the duration range.
+func reaches_end(span: Span, delta: duration) bool:
+    return span.length - span.elapsed <= delta
+
+# Elapsed time after `delta` more, stopped at the end.
+func stopped(span: Span, delta: duration) duration:
+    if span.length <= 0s:
+        return delta
+    if reaches_end(span, delta):
+        return span.length
+    return span.elapsed + delta
+
+# Elapsed time after a repeating span wraps. A step longer than the whole span
+# wraps only once, so the overshoot past a second end is dropped.
+func wrapped(span: Span, delta: duration) duration:
+    if span.length <= 0s:
+        return 0s
+    let overshoot = delta - (span.length - span.elapsed)
+    if overshoot >= span.length:
+        return 0s
+    return overshoot
+
+# Elapsed time after a bouncing span runs `delta` forward, turning at the end.
+func bounced_forward(span: Span, delta: duration) duration:
+    if not reaches_end(span, delta):
+        return span.elapsed + delta
+    let overshoot = delta - (span.length - span.elapsed)
+    if overshoot >= span.length:
+        return 0s
+    return span.length - overshoot
+
+# Elapsed time after a bouncing span runs `delta` back, turning at 0s.
+func bounced_back(span: Span, delta: duration) duration:
+    if span.elapsed > delta:
+        return span.elapsed - delta
+    let overshoot = delta - span.elapsed
+    if overshoot >= span.length:
+        return span.length
+    return overshoot
 
 # ── Rules ─────────────────────────────────────────────────────────────────────
+# One rule per ending and clock. Rules over different variants of Ending, or
+# split by RealTime, never share an entity, so their writes need no order. The
+# rules that emit SpanEnded are ordered, so the handlers it reaches run in one
+# order. A rule that must see this step's spans runs after the group.
 
-# A countdown subtracts only while more than one step remains, so a remaining
-# time near the most negative duration can't wrap around to a positive one.
+# Every game-time span rule.
+pub group game_spans:
+    phase: core.fixed_tick
 
-rule AdvanceLifetime:
+# Every real-time span rule.
+pub group real_spans:
+    phase: core.tick
+
+rule AdvanceGameSpan:
     each:
-        Lifetime as lifetime
+        Span as span
+    without:
+        Ending
+        RealTime
+        Paused
+    group: game_spans
 
     on core.fixed_tick as step:
-        if lifetime.paused:
+        if ended(span) or step.delta <= 0s:
             return
-        if lifetime.remaining > step.delta:
-            lifetime.remaining -= step.delta
-            return
-        destroy
+        span.elapsed = stopped(span, step.delta)
+        if ended(span):
+            emit SpanEnded to self
 
-rule AdvanceTimer:
+rule AdvanceRealSpan:
     each:
-        Timer as timer
+        Span as span
+        RealTime
+    without:
+        Ending
+        Paused
+    group: real_spans
 
-    on RestartTimer as request:
-        timer.remaining = request.duration
-        timer.armed = true
+    on core.tick as step:
+        if ended(span) or step.delta <= 0s:
+            return
+        span.elapsed = stopped(span, step.delta)
+        if ended(span):
+            emit SpanEnded to self
 
-    on CancelTimer:
-        timer.armed = false
+rule ExpireGameSpan:
+    each:
+        Span as span
+        Ending.Expires
+    without:
+        RealTime
+        Paused
+    group: game_spans
 
     on core.fixed_tick as step:
-        if timer.paused or not timer.armed:
+        if reaches_end(span, step.delta):
+            destroy
             return
-        if timer.remaining > step.delta:
-            timer.remaining -= step.delta
+        span.elapsed += step.delta
+
+rule ExpireRealSpan:
+    each:
+        Span as span
+        Ending.Expires
+        RealTime
+    without:
+        Paused
+    group: real_spans
+
+    on core.tick as step:
+        if reaches_end(span, step.delta):
+            destroy
             return
-        timer.remaining = 0s
-        timer.armed = false
-        emit TimerExpired to self
+        span.elapsed += step.delta
+
+rule RepeatGameSpan:
+    each:
+        Span as span
+        Ending.Repeats
+    without:
+        RealTime
+        Paused
+    group: game_spans
+    after: AdvanceGameSpan
+
+    on core.fixed_tick as step:
+        if span.length > 0s and not reaches_end(span, step.delta):
+            span.elapsed += step.delta
+            return
+        span.elapsed = wrapped(span, step.delta)
+        emit SpanEnded to self
+
+rule RepeatRealSpan:
+    each:
+        Span as span
+        Ending.Repeats
+        RealTime
+    without:
+        Paused
+    group: real_spans
+    after: AdvanceRealSpan
+
+    on core.tick as step:
+        if span.length > 0s and not reaches_end(span, step.delta):
+            span.elapsed += step.delta
+            return
+        span.elapsed = wrapped(span, step.delta)
+        emit SpanEnded to self
+
+rule BounceGameSpan:
+    each:
+        Span as span
+        Ending.Bounces as bounce
+    without:
+        RealTime
+        Paused
+    group: game_spans
+
+    on core.fixed_tick as step:
+        if span.length <= 0s:
+            return
+        if bounce.back:
+            bounce.back = span.elapsed > step.delta
+            span.elapsed = bounced_back(span, step.delta)
+            return
+        bounce.back = reaches_end(span, step.delta)
+        span.elapsed = bounced_forward(span, step.delta)
+
+rule BounceRealSpan:
+    each:
+        Span as span
+        Ending.Bounces as bounce
+        RealTime
+    without:
+        Paused
+    group: real_spans
+
+    on core.tick as step:
+        if span.length <= 0s:
+            return
+        if bounce.back:
+            bounce.back = span.elapsed > step.delta
+            span.elapsed = bounced_back(span, step.delta)
+            return
+        bounce.back = reaches_end(span, step.delta)
+        span.elapsed = bounced_forward(span, step.delta)
+
+rule RestartSpans:
+    each:
+        Span as span
+
+    on RestartSpan:
+        span.elapsed = 0s
+
+rule RestartBounces:
+    each:
+        Span
+        Ending.Bounces as bounce
+
+    on RestartSpan:
+        bounce.back = false

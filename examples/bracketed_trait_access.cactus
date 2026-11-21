@@ -1,7 +1,7 @@
 module bracketed_trait_access
 
 # Traits reached through a named entity or a pair binding are written in
-# brackets: `Game[Match].score`, `Clock[time.Timer].remaining`,
+# brackets: `Game[Match].score`, `Clock[time.Span].elapsed`,
 # `rival[Runner].lane`. A pair alias is written bare (`mine.lane`), never
 # behind its binding.
 
@@ -20,10 +20,11 @@ trait Runner:
 entity Game:
     Match
 
-# A paused, disarmed timer that only this example's rules touch.
+# A paused span that only this example's rules touch.
 entity Clock:
-    time.Timer:
-        paused = true
+    time.Span:
+        length = 1h
+    time.Paused
 
 template Racer(lane: int):
     Runner:
@@ -44,10 +45,10 @@ rule CountTicks:
 
 rule WindClock:
     when:
-        Clock[time.Timer].paused
+        Clock[time.Span].elapsed < 1h
 
     on tick:
-        Clock[time.Timer].remaining += 2s
+        Clock[time.Span].elapsed += 2s
 
 # Each runner records the nearest lane above its own; the alias write is
 # allowed because `limit: 1 per me` proves one tuple per runner.

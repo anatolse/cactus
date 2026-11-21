@@ -276,8 +276,9 @@ template BulletTemplate:
         mask = BULLET_MASK
     physics.BoxCollider:
         size = vec3(BULLET_RADIUS * 2.0, BULLET_RADIUS * 2.0, BULLET_RADIUS * 2.0)
-    time.Lifetime:
-        remaining = BULLET_LIFETIME
+    time.Span:
+        length = BULLET_LIFETIME
+    time.Ending.Expires
     Bullet
 
 entity ArenaFloor from FloorBox:
@@ -505,16 +506,25 @@ entity PlayerBody:
             viewport.Viewport:
                 clear_color = #4890E0FF
             Shooter
-            time.Timer
+            time.Span:
+                length = FIRE_COOLDOWN
+                elapsed = FIRE_COOLDOWN
             CameraRig
+
+# A spawner starts at the end of its span, so its first wave comes on the
+# first step and then one every SPAWN_INTERVAL.
+template SpawnClock:
+    time.Span:
+        length = SPAWN_INTERVAL
+        elapsed = SPAWN_INTERVAL
+    time.Ending.Repeats
 
 entity RobotSpawnerNorthEast:
     tv.WorldTransform:
         position = vec3(12.0, ENEMY_HALF_HEIGHT, -12.0)
         rotation = quat.identity()
         scale = vec3(1.0, 1.0, 1.0)
-    time.Timer:
-        armed = true
+    use SpawnClock
     RobotSpawnPoint
 
 entity RobotSpawnerSouthWest:
@@ -522,8 +532,7 @@ entity RobotSpawnerSouthWest:
         position = vec3(-12.0, ENEMY_HALF_HEIGHT, 12.0)
         rotation = quat.identity()
         scale = vec3(1.0, 1.0, 1.0)
-    time.Timer:
-        armed = true
+    use SpawnClock
     RobotSpawnPoint
 
 entity KnightSpawnerNorthWest:
@@ -531,8 +540,7 @@ entity KnightSpawnerNorthWest:
         position = vec3(-12.0, ENEMY_HALF_HEIGHT, -12.0)
         rotation = quat.identity()
         scale = vec3(1.0, 1.0, 1.0)
-    time.Timer:
-        armed = true
+    use SpawnClock
     KnightSpawnPoint
 
 entity KnightSpawnerSouthEast:
@@ -540,8 +548,7 @@ entity KnightSpawnerSouthEast:
         position = vec3(12.0, ENEMY_HALF_HEIGHT, 12.0)
         rotation = quat.identity()
         scale = vec3(1.0, 1.0, 1.0)
-    time.Timer:
-        armed = true
+    use SpawnClock
     KnightSpawnPoint
 
 entity CrosshairHud:
@@ -689,7 +696,7 @@ rule SpawnRobots:
     when:
         not Game[Match].over
 
-    on time.TimerExpired:
+    on time.SpanEnded:
         let bounds = models.bounds_size(Robot)
         let model_scale = if bounds.y > 0.0: CHARACTER_HEIGHT / bounds.y else: 1.0
         spawn RobotTemplate:
@@ -707,8 +714,6 @@ rule SpawnRobots:
                     models.ModelAnimator:
                         clip = ROBOT.run_clip
                         speed = ROBOT.speed / ROBOT.run_reference_speed
-        emit time.RestartTimer to self:
-            duration = SPAWN_INTERVAL
 
 rule SpawnKnights:
     each:
@@ -720,7 +725,7 @@ rule SpawnKnights:
     when:
         not Game[Match].over
 
-    on time.TimerExpired:
+    on time.SpanEnded:
         let bounds = models.bounds_size(Knight)
         let model_scale = if bounds.y > 0.0: CHARACTER_HEIGHT / bounds.y else: 1.0
         spawn KnightTemplate:
@@ -738,8 +743,6 @@ rule SpawnKnights:
                     models.ModelAnimator:
                         clip = KNIGHT.run_clip
                         speed = KNIGHT.speed / KNIGHT.run_reference_speed
-        emit time.RestartTimer to self:
-            duration = SPAWN_INTERVAL
 
 # The ground-plane heading from position toward target, turned by angle.
 func steer_heading(position: vec3, goal: vec3, angle: float) vec3:
@@ -843,7 +846,7 @@ rule FireBullet:
     each:
         CameraRig
         Shooter
-        time.Timer as cooldown
+        time.Span as cooldown
         tv.WorldTransform as transform
     after:
         CursorCaptureToggle
@@ -851,7 +854,7 @@ rule FireBullet:
         not Game[Match].over
 
     on input:
-        if not input.pressed(Fire) or cooldown.armed:
+        if not input.pressed(Fire) or cooldown.elapsed < cooldown.length:
             return
         let direction = quat.forward(transform.rotation)
         spawn BulletTemplate:
@@ -859,8 +862,7 @@ rule FireBullet:
                 position = transform.position + direction * 0.5
             Bullet:
                 velocity = direction * BULLET_SPEED
-        emit time.RestartTimer to self:
-            duration = FIRE_COOLDOWN
+        emit time.RestartSpan to self
 
 # Each tick a bullet sweeps its motion against every solid its mask selects,
 # so it can't pass through anything between ticks, and hurtboxes don't stop
@@ -876,7 +878,7 @@ rule MoveBullets:
             physics.Solid
     after:
         SeekPlayer
-        time.AdvanceTimer
+        time.game_spans
     reduce per bullet:
         first = first_hit(physics.sweep(bullet, bullet[Bullet].velocity * fixed_tick.dt, target))
 
@@ -995,11 +997,11 @@ rule RestartOnGameOver:
         for bullet in query.all[Bullet]():
             destroy bullet
         for spawn_point in query.all[RobotSpawnPoint]():
-            emit time.RestartTimer to spawn_point:
-                duration = 0s
+            set time.Span on spawn_point:
+                elapsed = SPAWN_INTERVAL
         for spawn_point in query.all[KnightSpawnPoint]():
-            emit time.RestartTimer to spawn_point:
-                duration = 0s
+            set time.Span on spawn_point:
+                elapsed = SPAWN_INTERVAL
         set text.ScreenLabel on CrosshairHud:
             visible = true
         set text.ScreenLabel on GameOverHud:

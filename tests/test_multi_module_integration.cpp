@@ -497,108 +497,6 @@ TEST_CASE("integration: std.core declares canonical external frame and phase gra
     CHECK(core->execution_graph.phases.size() == 5);
 }
 
-/// Mirrors src/main.cpp extract_pub_symbols: pub symbols (including events)
-/// from a live compiled module, for downstream semantic analysis.
-static ImportedSymbols pub_symbols_from(const std::string& module_name, const DecoratedProgram& prog) {
-    ImportedSymbols syms;
-    syms.module_name = module_name;
-    for (const auto& [name, trait] : prog.traits) {
-        if (!trait.is_pub) {
-            continue;
-        }
-        auto exported = trait;
-        if (!exported.symbol_id.has_value()) {
-            exported.symbol_id = make_symbol_id(SymbolKind::Trait, module_name, name);
-        }
-        exported.module_name  = exported.symbol_id->module.name;
-        exported.canonical_id = make_canonical_id(*exported.symbol_id);
-        exported.name         = exported.symbol_id->local_name;
-        syms.traits[name]     = std::move(exported);
-    }
-    for (const auto& [name, strct] : prog.structs) {
-        auto exported = strct;
-        if (!exported.symbol_id.has_value()) {
-            exported.symbol_id = make_symbol_id(SymbolKind::Struct, module_name, name);
-        }
-        exported.module_name  = exported.symbol_id->module.name;
-        exported.canonical_id = make_canonical_id(*exported.symbol_id);
-        exported.name         = exported.symbol_id->local_name;
-        syms.structs[name]    = std::move(exported);
-    }
-    for (const auto& [name, enm] : prog.enums) {
-        auto exported = enm;
-        if (!exported.symbol_id.has_value()) {
-            exported.symbol_id = make_symbol_id(SymbolKind::Enum, module_name, name);
-        }
-        exported.module_name  = exported.symbol_id->module.name;
-        exported.canonical_id = make_canonical_id(*exported.symbol_id);
-        exported.name         = exported.symbol_id->local_name;
-        syms.enums[name]      = std::move(exported);
-    }
-    for (const auto& [name, func] : prog.funcs) {
-        if (!func.is_pub) {
-            continue;
-        }
-        auto exported = func;
-        if (!exported.symbol_id.has_value()) {
-            exported.symbol_id = make_symbol_id(SymbolKind::Func, module_name, name);
-        }
-        exported.module_name  = exported.symbol_id->module.name;
-        exported.canonical_id = make_canonical_id(*exported.symbol_id);
-        exported.name         = exported.symbol_id->local_name;
-        syms.funcs[name]      = std::move(exported);
-    }
-    for (const auto& name : prog.pub_templates) {
-        syms.templates[name] = exported_template(prog, module_name, name);
-    }
-    for (const auto& group : prog.execution_graph.group_declarations) {
-        syms.groups[group.group.local_name] = group;
-    }
-    for (const auto& dep : prog.dependency_graph) {
-        const auto symbol = make_symbol_id(SymbolKind::Rule, module_name, dep.rule_name);
-        ImportedRule sys;
-        sys.name                  = symbol.local_name;
-        sys.module_name           = symbol.module.name;
-        sys.canonical_id          = make_canonical_id(symbol);
-        sys.symbol_id             = symbol;
-        sys.after_rules           = dep.after_rules;
-        syms.rules[dep.rule_name] = sys;
-    }
-    for (const auto& [name, event] : prog.events) {
-        if (!event.is_pub) {
-            continue;
-        }
-        const auto symbol = event.symbol_id.value_or(make_symbol_id(SymbolKind::Event, module_name, name));
-        syms.events.insert(name);
-        syms.event_symbols[name] = ImportedEvent{.name         = symbol.local_name,
-                                                 .module_name  = symbol.module.name,
-                                                 .canonical_id = make_canonical_id(symbol),
-                                                 .symbol_id    = symbol,
-                                                 .fields       = event.fields,
-                                                 .is_external  = event.is_external};
-    }
-    for (const auto& [name, phase] : prog.phases) {
-        if (!phase.is_pub) {
-            continue;
-        }
-        const auto symbol        = phase.symbol_id.value_or(make_symbol_id(SymbolKind::Phase, module_name, name));
-        syms.phase_symbols[name] = ImportedPhase{.name            = symbol.local_name,
-                                                 .module_name     = symbol.module.name,
-                                                 .canonical_id    = make_canonical_id(symbol),
-                                                 .symbol_id       = symbol,
-                                                 .fields          = phase.fields,
-                                                 .upstream_phases = phase.upstream_phases,
-                                                 .runtime_root    = phase.runtime_root,
-                                                 .every_seconds   = phase.every_seconds,
-                                                 .max_repetitions = phase.max_repetitions};
-    }
-    syms.entities = prog.pub_entities;
-    syms.relations = prog.relations;
-    std::erase_if(syms.relations, [](const auto& entry) { return !entry.second.is_pub; });
-    syms.consts   = prog.consts;
-    return syms;
-}
-
 TEST_CASE("integration: std.core exports KeepOnLoad, not Persistent", "[integration][stdlib][scene-loading]") {
     const std::vector<fs::path> search_paths{stdlib_dir()};
     const auto core_path = ModuleResolver::locate_file("std.core", search_paths);
@@ -613,7 +511,7 @@ TEST_CASE("integration: std.core exports KeepOnLoad, not Persistent", "[integrat
     CHECK_FALSE(core->traits.contains("Persistent"));
 
     ModuleImports imports;
-    imports.add("std.core", pub_symbols_from("std.core", *core), {}, core->non_pub_templates);
+    imports.add("std.core", ModuleArtifact::extract_pub_symbols("std.core", *core), {}, core->non_pub_templates);
     const auto entity_with = [&imports](const std::string& trait, ErrorReporter& app_errors) {
         ProgramNode app;
         return compile_source("module app\n"
@@ -697,7 +595,7 @@ static std::optional<DecoratedProgram> link_with_stdlib(const std::string& root_
         ModuleImports imports;
         if (mod.qualified_name != "std.core") {
             imports.add("std.core",
-                        pub_symbols_from("std.core", compiled.at("std.core")),
+                        ModuleArtifact::extract_pub_symbols("std.core", compiled.at("std.core")),
                         {},
                         compiled.at("std.core").non_pub_templates);
         }
@@ -717,7 +615,10 @@ static std::optional<DecoratedProgram> link_with_stdlib(const std::string& root_
                 qualifiers.push_back(dep_name);
             }
             for (const auto& qualifier : qualifiers) {
-                imports.add(qualifier, pub_symbols_from(dep_name, it->second), {}, it->second.non_pub_templates);
+                imports.add(qualifier,
+                            ModuleArtifact::extract_pub_symbols(dep_name, it->second),
+                            {},
+                            it->second.non_pub_templates);
             }
         }
 

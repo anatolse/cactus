@@ -1,0 +1,101 @@
+module time_spans
+
+use std.core
+use std.time as time
+
+# Each entity runs one std.time span. A test drives fixed steps of 1/60 s and
+# reads elapsed time, progress and how many SpanEnded events each entity got.
+
+trait Log:
+    var ended: int = 0
+    var progress: float = 0.0
+
+# Requests a test sets between frames. The input rule turns them into std.time
+# events and commands before the frame's fixed steps.
+trait Requests:
+    var restart: bool = false
+    var repeat: bool = false
+
+template Clocked(wait: duration = 100ms):
+    Log
+    Requests
+    time.Span:
+        length = wait
+
+entity Plain:
+    use Clocked
+
+entity Gone:
+    use Clocked
+    time.Ending.Expires
+
+entity Loop:
+    use Clocked
+    time.Ending.Repeats
+
+entity ShortLoop:
+    use Clocked(wait = 25ms)
+    time.Ending.Repeats
+
+# Shorter than one fixed step.
+entity TinyLoop:
+    use Clocked(wait = 5ms)
+    time.Ending.Repeats
+
+entity Swing:
+    use Clocked
+    time.Ending.Bounces
+
+entity Held:
+    use Clocked
+    time.Ending.Expires
+    time.Paused
+
+entity EmptyPlain:
+    use Clocked(wait = 0s)
+
+entity EmptyGone:
+    use Clocked(wait = -1s)
+    time.Ending.Expires
+
+entity EmptyLoop:
+    use Clocked(wait = 0s)
+    time.Ending.Repeats
+
+entity EmptySwing:
+    use Clocked(wait = -1s)
+    time.Ending.Bounces
+
+entity GameClock:
+    use Clocked(wait = 10s)
+
+entity RealClock:
+    use Clocked(wait = 10s)
+    time.RealTime
+
+rule TakeRequests:
+    each:
+        Requests as requests
+
+    on input:
+        if requests.restart:
+            requests.restart = false
+            emit time.RestartSpan to self
+        if requests.repeat:
+            requests.repeat = false
+            add time.Ending.Repeats
+
+rule Count:
+    each:
+        Log as log
+
+    on time.SpanEnded:
+        log.ended += 1
+
+rule Watch:
+    each:
+        Log as log
+        time.Span as span
+
+    on late_tick:
+        log.progress = time.progress(span)

@@ -95,7 +95,7 @@ TEST_CASE("a timer on the variable tick reads the frame's delta", "[runtime][dsl
     CHECK(world.probe<game::FrameTimer>().left.units == 705'600'000 - 176'400'000);
 }
 
-TEST_CASE("a std.time lifetime expires on the exact step", "[runtime][dsl-duration][stdlib-time]") {
+TEST_CASE("a std.time expiring span ends on the exact step", "[runtime][dsl-duration][stdlib-time]") {
     World world;
     world.frames(5);
     REQUIRE(world.registry.valid(World::slots().Spark));

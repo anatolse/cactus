@@ -13,16 +13,17 @@
 namespace {
 
 namespace game = cactus_gen::perf_timers;
-using Lifetime = cactus_gen::stdlib::time::Lifetime;
+using Span     = cactus_gen::stdlib::time::Span;
 
 constexpr int kSize       = 85;
-constexpr int kDoubleSize = 120;  // about twice the timers of kSize
+constexpr int kDoubleSize = 120;  // about twice the spans of kSize
 
 // Limits at kSize. Work counts are exact; times are O3 measurements x 1.5.
 constexpr std::uint64_t kCommandsPerFrame = 0;
-// AdvanceLifetime and AdvanceTimer each visit their rows in creation order: they can destroy or emit.
-constexpr std::uint64_t kOrderingsPerFrame = 2;
-constexpr std::size_t kBytesPerLifetime   = 16;
+// The plain, expiring and repeating rules of both clocks visit their rows in creation order: they can
+// destroy or emit. The bouncing rules do neither.
+constexpr std::uint64_t kOrderingsPerFrame = 6;
+constexpr std::size_t kBytesPerSpan        = 16;
 constexpr cactus_perf::TimeLimits kTimes{.base_ms = 0.75, .growth = 2.6};
 
 struct World {
@@ -42,9 +43,9 @@ struct World {
 
 }  // namespace
 
-TEST_CASE("perf: counting down timers queues no structural work", "[perf][timers]") {
+TEST_CASE("perf: advancing spans queues no structural work", "[perf][timers]") {
     World world(kSize);
-    REQUIRE(world.registry.view<Lifetime>().size() == static_cast<std::size_t>(kSize * kSize));
+    REQUIRE(world.registry.view<Span>().size() == static_cast<std::size_t>(kSize * kSize));
     const auto work = cactus_perf::work_of([&] { world.tick(); });
     CHECK(work.commands <= kCommandsPerFrame);
     CHECK(work.orderings == kOrderingsPerFrame);
@@ -61,16 +62,16 @@ TEST_CASE("perf: fixed_tick at pace 1.0 keeps one step and the same work every f
     }
 }
 
-TEST_CASE("perf: a duration timer costs 16 bytes per entity", "[perf][timers]") {
-    STATIC_CHECK(sizeof(Lifetime) <= kBytesPerLifetime);
+TEST_CASE("perf: a span costs 16 bytes per entity", "[perf][timers]") {
+    STATIC_CHECK(sizeof(Span) <= kBytesPerSpan);
 }
 
-TEST_CASE("perf: counting down timers stays within its frame time", "[perf][timers][time]") {
+TEST_CASE("perf: advancing spans stays within its frame time", "[perf][timers][time]") {
     cactus_perf::skip_unless_timed();
     World base(kSize);
     World twice(kDoubleSize);
     cactus_perf::require_frame_times([&] { base.tick(); }, [&] { twice.tick(); }, kTimes);
-    BENCHMARK("timer countdown frame, 85x85") {
+    BENCHMARK("span frame, 85x85") {
         base.tick();
     };
 }

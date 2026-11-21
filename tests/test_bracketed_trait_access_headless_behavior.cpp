@@ -14,7 +14,8 @@ namespace {
 
 using Match  = cactus_gen::bracketed_trait_access::Match;
 using Runner = cactus_gen::bracketed_trait_access::Runner;
-using Timer  = cactus_gen::stdlib::time::Timer;
+using Span   = cactus_gen::stdlib::time::Span;
+using Paused = cactus_gen::stdlib::time::Paused;
 
 using cactus_headless_test::drive_frame;
 
@@ -57,12 +58,12 @@ TEST_CASE("named bracketed reads and writes drive game-wide state", "[runtime][t
 TEST_CASE("an imported trait is written through a named entity", "[runtime][trait-access]") {
     entt::registry registry;
     cactus_headless_test::init_and_load(registry);
-    const auto clock = only_entity<Timer>(registry);
+    const auto clock = only_entity<Span>(registry);
 
     drive_frame(registry);
     drive_frame(registry);
-    CHECK(registry.get<Timer>(clock).remaining == cactus::Duration{4 * cactus::kDurationUnitsPerSecond});
-    CHECK(registry.get<Timer>(clock).paused);
+    CHECK(registry.get<Span>(clock).elapsed == cactus::Duration{4 * cactus::kDurationUnitsPerSecond});
+    CHECK(registry.all_of<Paused>(clock));
 }
 
 TEST_CASE("pair rules read through brackets and bare aliases", "[runtime][trait-access]") {

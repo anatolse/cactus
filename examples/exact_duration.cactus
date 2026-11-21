@@ -50,8 +50,9 @@ entity Probe:
     FieldTotal
 
 entity Spark:
-    time.Lifetime:
-        remaining = 100ms
+    time.Span:
+        length = 100ms
+    time.Ending.Expires
 
 rule Observe:
     each: Steps as s

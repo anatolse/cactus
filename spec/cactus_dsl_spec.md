@@ -2278,7 +2278,7 @@ The meaning of one activation is independent of handler order: every order of it
 
 **Dead declarations are errors.** In a module outside the stdlib, these are compile errors that name the declaration and the reason: a rule whose `each:` traits, or one of whose pair bindings, match no reachable archetype; a `without:` trait no archetype matching the rule's `each:` carries; a handler whose trigger has no producer; and a named access `Name[Trait]` where `Name` never carries `Trait`. A domain that contradicts itself (requires and excludes one trait, or two variants of one state; `on removed T` implies `without: T`) is an error in every module. A stdlib declaration the program never reaches is not an error: importing a library is not a meaningless declaration. It is recorded as unreachable, and a backend may drop it.
 
-**A template spawned repeatedly and never destroyed is warned.** A `spawn` site recurs when its handler is reachable from a phase, a render stage or an external event, not only from `load`, `unload` or the `on added` deliveries of the startup arrival. A template is destroyable when a reachable handler other than an `unload` one has a `destroy` whose target can be one of its entities: `self` or a pair binding whose domain matches an archetype it can reach, a local bound to its spawn, or an `entity_id` the program text does not pin down. A handler that emits `std.persistence.RestoreRequested` can destroy any entity, since a successful restore replaces the whole world. A template is also destroyable when it can carry `Parent` and such a handler destroys some other entity, which can be its ancestor. For each template spawned at a recurring site that is not destroyable and carries no `single` trait, the compiler warns at each such site: `'<Template>' is spawned repeatedly and never destroyed; give it a std.time.Lifetime, add a rule that destroys it, or give it a `single` trait if only one should exist`. Guards are ignored, so the warning says the count never goes down, not that it grows: a spawn guarded to run once is warned too.
+**A template spawned repeatedly and never destroyed is warned.** A `spawn` site recurs when its handler is reachable from a phase, a render stage or an external event, not only from `load`, `unload` or the `on added` deliveries of the startup arrival. A template is destroyable when a reachable handler other than an `unload` one has a `destroy` whose target can be one of its entities: `self` or a pair binding whose domain matches an archetype it can reach, a local bound to its spawn, or an `entity_id` the program text does not pin down. A handler that emits `std.persistence.RestoreRequested` can destroy any entity, since a successful restore replaces the whole world. A template is also destroyable when it can carry `Parent` and such a handler destroys some other entity, which can be its ancestor. For each template spawned at a recurring site that is not destroyable and carries no `single` trait, the compiler warns at each such site: `'<Template>' is spawned repeatedly and never destroyed; give it a std.time.Span with std.time.Ending.Expires, add a rule that destroys it, or give it a `single` trait if only one should exist`. Guards are ignored, so the warning says the count never goes down, not that it grows: a spawn guarded to run once is warned too.
 
 **A blend weight that can leave `[0, 1]` is warned.** A *blend* is a handler statement that moves a `float`, `vec2` or `vec3` field `x` toward a goal by a `float` weight `w`: `x += (goal - x) * w`, `x -= (x - goal) * w`, `x = x + (goal - x) * w`, `x = x - (x - goal) * w` or `x = lerp(x, goal, w)` with a `std.math` lerp, also as an arm of an `if` expression. The other factors of the product, in any order, are the weight; a division by `e` is the factor `1 / e`. Both reads of `x` must be the same access, and for a cell written `e[T][k].f` the same cell. Only `0 <= w <= 1` keeps `x` between its old value and the goal. The compiler derives a range for `w` from stated facts only: constants, the `dt`, `delta` and `alpha` of a periodic phase, the root frame's step (at least zero, no upper bound), ranged `int` `let` fields, `clamped` fields, `seconds(...)`, duration ratios, `math.min`, `math.max`, `math.clamp`, `math.abs`, `if` expressions, `let` bindings, the bodies of called `func`s, and conditions that compare a `let`, a parameter or an unwritten field with a constant, also after an arm that returns. A weight proven inside `[0, 1]` is silent. A weight proven above `1` warns that the field always passes its goal; one proven below `0` warns that it always moves away from it. Any other weight warns which side is not proven, names a value with no bound on that side, and names the fixes: a periodic phase, `math.min(1.0, ...)`, `math.max(0.0, ...)` or `math.clamp(..., 0.0, 1.0)`, and `clamped` on a `var` field. A blend gets at most one warning; the check never changes the program.
 
@@ -2562,7 +2562,7 @@ The gameplay core is extended by stdlib modules and backend-provided declaration
 - physics stdlib for collision and movement helpers
 - camera stdlib for 2D/3D camera behavior
 - audio stdlib for sound/music playback surfaces
-- `std.time` for entity lifetime and one-shot gameplay delays (§7.5)
+- `std.time` for time spans: lifetimes, delays, loops and back-and-forth motion (§7.5)
 
 **Screen and world (`std.camera.volume`).** Every entity with `Camera`, `std.camera.viewport.Viewport` and a volume `WorldTransform` keeps a `CameraView`: the pose, projection and pixel rectangle of what that viewport showed in the last rendered frame (group `views`, `core.late_tick`). The window size is data too: `std.camera.viewport.Screen[ScreenSize].size`, written at the start of each `core.input`. Rules map between world and screen by binding a camera's view, `CameraView as cv`, and calling the pure functions `to_screen(cv, point)`, `ray(cv, pixel)` and `ray_plane(ray, origin, normal)`; a screen query over other entities is a pair rule between cameras and those entities. No stdlib function reads an implicit active camera.
 
@@ -2624,45 +2624,40 @@ Because `DesiredSize`/`ComputedLayout` are projected traits, they are visible to
 
 Not part of the current Standard UI surface: keyboard/gamepad focus, text entry/editing, scrolling and virtualized lists, themes, data binding, accessibility, and general style inheritance. Layout containers use symmetric `vec2` padding only (no per-edge padding) in the initial surface. These remain candidates for a later change, not core-language syntax (§8.1 still applies to `view`/`panel`/`button`-style retained-tree keywords).
 
-### 7.5 Lifetime and Timers (`std.time`)
+### 7.5 Time Spans (`std.time`)
 
-`std.time` is an ordinary ECS capability, not core-language syntax: entity lifetime and one-shot delays are traits, targeted events, and rules, with no delayed-event keyword, coroutine, callback storage, or hidden scheduler. See `examples/stdlib-fixtures/gameplay_timers.cactus` for a complete program.
+`std.time` is an ordinary ECS capability, not core-language syntax: a stretch of time is a trait, what happens at its end is a state, and rules advance it, with no delayed-event keyword, coroutine, callback storage, or hidden scheduler. It is written in Cactus with no extern rule or function. See `examples/stdlib-fixtures/time_spans.cactus` for every ending and `examples/stdlib-fixtures/gameplay_timers.cactus` for the recipes below.
 
-**Traits.**
+**Span and progress.** `Span` has `let length: duration` and `var elapsed: duration = 0s`. `progress(span)` is `elapsed / length` clamped to `0.0..1.0`, and `1.0` when `length <= 0s`. A span's length is part of what it is: to change it, add the trait again (`add time.Span: length = d`), which also starts it from `0s`. One `Span` is one countdown; give an entity that needs several independent delays one span entity per delay.
 
-- `Lifetime` — `remaining: duration`, `paused`. The entity is destroyed when `remaining` reaches zero.
-- `Timer` — `remaining: duration`, `armed`, `paused`. One `Timer` is one countdown; it emits one targeted `TimerExpired` back to its own entity and disarms.
+**Endings.** The state `Ending` (§3.6.1) says what a span does at its end:
 
-**Events.** `RestartTimer` (`duration: duration`) replaces an existing `Timer`'s countdown and arms it; `CancelTimer` disarms it without an expiration; zero-payload `TimerExpired` announces the expiry. All three are ordinary targeted events (§5.4) with ordinary delivery, so a stale or non-matching target is simply a no-match.
+- no `Ending`: the span stops at `length` and emits one targeted `SpanEnded` to its own entity on the step that reaches it, then stays there;
+- `Ending.Expires`: the entity is destroyed on that step, with no event;
+- `Ending.Repeats`: `length` is taken off `elapsed`, keeping the overshoot, and `SpanEnded` is emitted on each wrap, at most once per step. A step longer than the whole span wraps once and starts again from `0s`;
+- `Ending.Bounces` (`var back: bool`): the span runs from `0s` to `length` and back, with no event.
 
-**Fixed simulation time.** Both countdowns advance by `fixed_tick.delta` once per eligible fixed-step invocation (§5.1), never by wall-clock or frame time. Durations are exact (§3.15), so a countdown ends on the step its literal names: `100ms` at 60 Hz ends after exactly 6 steps. A frame that performs no fixed step consumes no countdown time, and catch-up repetitions the `max:` cap drops are never simulated — so a stalled frame cannot expire a timer early or late. A zero or negative `remaining` ends at the next eligible step. A run-time `float` number of seconds becomes a duration through `duration(x)`, which maps NaN to `0s`.
+An entity carries at most one ending, and `add time.Ending.Repeats` swaps it at run time. An empty span (`length <= 0s`) ends on its first step: a plain one emits once, an expiring one is destroyed, a repeating one stays at `0s` and emits once per step, and a bouncing one does not move.
 
-**Pause is local.** `Lifetime.paused` and `Timer.paused` are the only pause policy in this module; there is no global clock or pause manager. A paused countdown neither advances nor expires, and `RestartTimer` preserves `paused`, so a timer restarted while paused resumes with its replacement duration intact.
+**Clocks.** A span advances by `fixed_tick.delta` once per eligible fixed step (§5.1): game time, which `core.Clock[core.Pace].scale` slows or stops. A span that carries the marker `RealTime` advances by `tick.delta` once per frame instead, so it keeps running while game time is stopped, and its end lands on a frame. Durations are exact (§3.15), so a game-time span ends on the step its literal names: `100ms` at 60 Hz ends after exactly 6 steps. A frame that performs no fixed step advances no game-time span, and catch-up repetitions the `max:` cap drops are never simulated. A run-time `float` number of seconds becomes a duration through `duration(x)`, which maps NaN to `0s`.
 
-**Restart ordering.** Requests apply in event delivery order, so two restarts before the same step leave the last duration in place rather than summing, and a `RestartTimer` followed by a `CancelTimer` never expires. A timer disarms *before* queuing `TimerExpired`, and each fixed-step invocation advances a timer at most once. There is no second, hidden timer update: `AdvanceTimer` is one node in the fixed-step graph, and everything an expiry sets off drains after it, within the same step —
+**Pausing.** A span that carries the marker `Paused` neither advances nor ends. Stopping the whole game is `Pace.scale = 0.0`, not a flag on each span.
 
-```text
-fixed_tick step N:   ... -> AdvanceLifetime, AdvanceTimer -> cascade -> commit
-                                                    |            |
-                                          queues TimerExpired    delivers TimerExpired,
-                                                                 then any RestartTimer it emits
-fixed_tick step N+1: ... -> AdvanceTimer            <- the rearmed timer's next advance
-```
+**Events.** `SpanEnded` announces an end; `RestartSpan` sets `elapsed` to `0s` and `Ending.Bounces.back` to false, so an ended span runs again with the same length. Both are ordinary targeted events (§5.4), so a stale target or one without a `Span` is simply a no-match: `RestartSpan` never adds a span.
 
-So an expiry handler that rearms its own timer (even with a zero duration) fires again no earlier than step N+1, rather than looping inside step N, and a restart issued after step N's timer node has already run does not retroactively change step N.
+**Ordering.** The rules over the endings and clocks have disjoint domains (§4.7), so their writes to `elapsed` need no order. The game-time rules form the group `time.game_spans` (phase `fixed_tick`) and the real-time rules `time.real_spans` (phase `tick`); the rules that emit `SpanEnded` are ordered inside each group, so the handlers it reaches run in one order. A rule that must see this step's spans already advanced lists the group in `after:`. Everything an end sets off drains after the rule that emitted it, within the same step, so a handler that restarts its own span runs it again no earlier than the next step. A newly spawned span, or one added with `add`, becomes selectable at the ordinary activation commit (§5.3) and first advances on the next eligible step. Destroying a span's entity cancels it with no event.
 
-**Structural eligibility.** `RestartTimer` operates on entities that already carry a `Timer`; it never adds the trait. A newly spawned `Timer` or `Lifetime` becomes selectable at the ordinary activation commit (§5.3) and first advances on the *next* eligible fixed step. Destroying a timer's owner cancels its countdown with no expiration.
-
-**Projectile recipe.** Put the countdown on the projectile itself and let `std.time` destroy it:
+**Projectile recipe.** Put the span on the projectile itself and let `std.time` destroy it:
 
 ```cactus
 template BulletTemplate:
     Bullet
-    time.Lifetime:
-        remaining = BULLET_LIFETIME
+    time.Span:
+        length = BULLET_LIFETIME
+    time.Ending.Expires
 ```
 
-**Reload recipe.** Give each independent countdown its own timer entity, and relay its expiry to the gameplay event the owner cares about — this is how one entity gets several simultaneous, independent delays without a channel field:
+**Reload recipe.** Give each independent countdown its own timer entity, start it by adding a span, and relay its end to the gameplay event the owner cares about — this is how one entity gets several simultaneous, independent delays without a channel field:
 
 ```cactus
 rule RelayReload:
@@ -2670,7 +2665,7 @@ rule RelayReload:
         TimerOwner as link
         ReloadChannel
 
-    on time.TimerExpired:
+    on time.SpanEnded:
         emit ReloadReady to link.owner
 
 rule StartReload:
@@ -2678,11 +2673,18 @@ rule StartReload:
         Weapon as weapon
 
     on ShotFired:
-        emit time.RestartTimer to weapon.reload_timer:
-            duration = RELOAD_TIME
+        emit StartTimer to weapon.reload_timer
+
+rule ApplyStart:
+    each:
+        ReloadChannel
+
+    on StartTimer:
+        add time.Span:
+            length = RELOAD_TIME
 ```
 
-`TimerOwner.owner` and `Weapon.reload_timer` are ordinary authored `entity_id` fields — the module supplies no implicit link between a timer and whatever it serves.
+`TimerOwner.owner` and `Weapon.reload_timer` are ordinary authored `entity_id` fields — the module supplies no implicit link between a span and whatever it serves. A cooldown that is ready at the start declares its span already at the end (`elapsed = length`) and restarts it with `RestartSpan`.
 
 ### 7.6 World Persistence (`std.persistence`)
 

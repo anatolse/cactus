@@ -28,17 +28,18 @@ trait ReloadChannel
 trait ShieldChannel
 
 trait Metronome:
-    var expirations: int = 0
+    var wraps: int = 0
 
 # Timer entities are driven by whatever gameplay system owns them. This demo
 # collects a frame's requests in one trait so a single input-phase rule issues
-# them, in the order a real game would: restarts first, then a cancellation,
-# then a teardown of the timer entity itself. Requests hold run-time float
-# seconds, as a host or a formula would produce them.
+# them, in the order a real game would: starts first, then a rewind, a
+# cancellation, and a teardown of the timer entity itself. Requests hold
+# run-time float seconds, as a host or a formula would produce them.
 trait TimerRequests:
-    var restarts: int = 0
+    var starts: int = 0
     var first_duration: float = 0.0
     var second_duration: float = 0.0
+    var rewind_pending: bool = false
     var cancel_pending: bool = false
     var destroy_pending: bool = false
 
@@ -47,13 +48,14 @@ event ReloadReady
 event ShieldReady
 
 # ── Projectile lifetime ──────────────────────────────────────────────────────
-# A bullet carries its own countdown. std.time destroys it when the countdown
-# reaches zero, so no rule here does lifetime arithmetic.
+# A bullet carries its own span. std.time destroys it when the span ends, so
+# no rule here does lifetime arithmetic.
 
 template BulletTemplate:
     Bullet
-    time.Lifetime:
-        remaining = BULLET_LIFETIME
+    time.Span:
+        length = BULLET_LIFETIME
+    time.Ending.Expires
 
 rule FireBullets:
     each:
@@ -68,44 +70,43 @@ rule FireBullets:
             Bullet
 
 # ── Reload and shield timers ─────────────────────────────────────────────────
-# Each countdown lives on its own timer entity, so the two never share a Timer
-# trait. A relay rule turns that entity's TimerExpired into the gameplay event
-# its owner actually cares about.
+# Each countdown lives on its own timer entity, which gets its span when the
+# countdown starts. A relay rule turns that entity's SpanEnded into the
+# gameplay event its owner actually cares about.
 
-# The player carries TimerRequests but no Timer: a restart aimed at it is an
-# ordinary no-match, never an implicit Timer.
+# The player carries TimerRequests but no span: a rewind aimed at it is an
+# ordinary no-match, never an implicit span.
 entity Player:
     Weapon
     Muzzle
     TimerRequests
 
-entity ReloadTimer:
-    time.Timer
+template TimerOf(wait: float):
     TimerOwner:
         owner = Player
-    ReloadChannel
     TimerRequests:
-        first_duration = RELOAD_SECONDS
+        first_duration = wait
+
+entity ReloadTimer:
+    use TimerOf(wait = RELOAD_SECONDS)
+    ReloadChannel
 
 entity ShieldTimer:
-    time.Timer
-    TimerOwner:
-        owner = Player
+    use TimerOf(wait = SHIELD_SECONDS)
     ShieldChannel
-    TimerRequests:
-        first_duration = SHIELD_SECONDS
 
+# An empty repeating span ends on every fixed step once it starts.
 entity MetronomeTimer:
-    time.Timer
     Metronome
     TimerRequests
+    time.Ending.Repeats
 
 rule RelayReload:
     each:
         TimerOwner as link
         ReloadChannel
 
-    on time.TimerExpired:
+    on time.SpanEnded:
         emit ReloadReady to link.owner
 
 rule RelayShield:
@@ -113,7 +114,7 @@ rule RelayShield:
         TimerOwner as link
         ShieldChannel
 
-    on time.TimerExpired:
+    on time.SpanEnded:
         emit ShieldReady to link.owner
 
 rule CountWeaponEvents:
@@ -126,32 +127,32 @@ rule CountWeaponEvents:
     on ShieldReady:
         weapon.shields_ready += 1
 
-# A timer that rearms itself from its own expiry handler. Because std.time
-# disarms before emitting and advances at most once per fixed step, this
-# expires exactly once per step instead of looping inside one.
-rule RepeatMetronome:
+rule CountWraps:
     each:
         Metronome as metronome
 
-    on time.TimerExpired:
-        metronome.expirations += 1
-        emit time.RestartTimer to self:
-            duration = 0s
+    on time.SpanEnded:
+        metronome.wraps += 1
 
+# Starting a countdown adds a new span; a second start in one frame replaces
+# the first, since a new length is a new span.
 rule ApplyTimerRequests:
     each:
         TimerRequests as requests
 
     on input:
-        if requests.restarts >= 1:
-            emit time.RestartTimer to self:
-                duration = duration(requests.first_duration)
-        if requests.restarts >= 2:
-            emit time.RestartTimer to self:
-                duration = duration(requests.second_duration)
-        requests.restarts = 0
+        if requests.starts >= 1:
+            add time.Span:
+                length = duration(requests.first_duration)
+        if requests.starts >= 2:
+            add time.Span:
+                length = duration(requests.second_duration)
+        requests.starts = 0
+        if requests.rewind_pending:
+            requests.rewind_pending = false
+            emit time.RestartSpan to self
         if requests.cancel_pending:
             requests.cancel_pending = false
-            emit time.CancelTimer to self
+            remove time.Span
         if requests.destroy_pending:
             destroy

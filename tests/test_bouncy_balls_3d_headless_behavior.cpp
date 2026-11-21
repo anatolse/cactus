@@ -151,7 +151,7 @@ TEST_CASE("example-bouncy-balls-3d: a clicked ball expires and the load-time bal
     cactus::runtime::entt_backend::generated_load_project(registry);
     cactus_headless_test::dispatch_load_event(registry);
     const auto balls = [&] { return registry.view<cactus_gen::main::Ball>().size(); };
-    const auto timed = [&] { return registry.view<cactus_gen::stdlib::time::Lifetime>().size(); };
+    const auto timed = [&] { return registry.view<cactus_gen::stdlib::time::Span>().size(); };
     // The click pass needs the camera view the first frame computes.
     cactus_headless_test::drive_frame(registry);
 

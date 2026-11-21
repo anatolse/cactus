@@ -62,10 +62,11 @@ TEST_CASE("vectors keep their lane count and lane kind", "[persistence][document
     CHECK(position.as_vector().components[0] == Catch::Approx(1.5F));
     CHECK(position.as_vector().components[1] == Catch::Approx(-2.5F));
 
-    // color is four bytes in the backend, and every byte value is exact here.
-    const auto tint = Value::of_vector(PersistenceValueKind::Int, 4, {255.0F, 128.0F, 0.0F, 255.0F});
-    CHECK(tint.as_vector().lane_kind == PersistenceValueKind::Int);
-    CHECK(tint.as_vector().components[1] == Catch::Approx(128.0F));
+    // A color keeps its float channels exactly, even outside 0..1.
+    const auto tint = Value::of_vector(PersistenceValueKind::ColorChannel, 4, {1.5F, -0.2F, 0.3F, 1.0F});
+    CHECK(tint.as_vector().lane_kind == PersistenceValueKind::ColorChannel);
+    CHECK(tint.as_vector().components[0] == 1.5F);
+    CHECK(tint.as_vector().components[1] == -0.2F);
 }
 
 // ── Declared identities ─────────────────────────────────────────────────────

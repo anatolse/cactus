@@ -11,7 +11,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cmath>
 #include <filesystem>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -68,6 +70,23 @@ TEST_CASE("a texture's decoded size reaches UI measurement and sprites", "[runti
     CHECK(ground->texture.width == 64);
     CHECK(ground->texture.height == 32);
     CHECK(ground->source.width == 64.0F);
+}
+
+TEST_CASE("a sprite with out-of-range color channels draws them clamped once and keeps them stored",
+          "[runtime][codegen-entt][asset-runtime][unbound-color-channels]") {
+    World world;
+    const auto sprite = cactus_gen::detail::generated_named_slots().texture_assets.GroundSprite;
+    auto& renderer    = world.registry.get<cactus_gen::stdlib::render::sprites::Renderer>(sprite);
+    renderer.color    = CactusColor{.r = 1.5F, .g = -0.2F, .b = 0.5F, .a = std::numeric_limits<float>::quiet_NaN()};
+    world.frame();
+    const auto ground = draw_at(0.0F);
+    REQUIRE(ground.has_value());
+    CHECK(ground->tint.r == 255);
+    CHECK(ground->tint.g == 0);
+    CHECK(ground->tint.b == 128);
+    CHECK(ground->tint.a == 0);
+    CHECK(renderer.color.r == 1.5F);
+    CHECK(std::isnan(renderer.color.a));
 }
 
 TEST_CASE("consumers of one texture share a single load", "[runtime][codegen-entt][asset-runtime]") {

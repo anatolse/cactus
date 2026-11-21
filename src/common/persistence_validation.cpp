@@ -349,6 +349,7 @@ private:
             case PersistenceValueKind::Int:
             case PersistenceValueKind::Float:
             case PersistenceValueKind::Duration:
+            case PersistenceValueKind::ColorChannel:
             case PersistenceValueKind::Unsupported:
                 return skip(type_index, in);
         }

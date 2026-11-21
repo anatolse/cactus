@@ -344,12 +344,13 @@ TEST_CASE("value descriptors report the backend's exact representation", "[persi
     CHECK(vec3.bit_width == 32);
     CHECK(vec3.lane_kind == PersistenceValueKind::Float);
 
-    // color is four unsigned bytes in the backend, not four floats.
+    // color is four float channels; its own lane kind keeps it apart from a quat.
     const auto color = describe_persistence_value(make_color_type());
     CHECK(color.kind == PersistenceValueKind::Vector);
     CHECK(color.lanes == 4);
-    CHECK(color.bit_width == 8);
-    CHECK(color.lane_kind == PersistenceValueKind::Int);
+    CHECK(color.bit_width == 32);
+    CHECK(color.lane_kind == PersistenceValueKind::ColorChannel);
+    CHECK(color != describe_persistence_value(make_quat_type()));
 
     CHECK(describe_persistence_value(make_entity_id_type()).kind == PersistenceValueKind::EntityRef);
     CHECK(describe_persistence_value(make_model_id_type()).kind == PersistenceValueKind::AssetRef);

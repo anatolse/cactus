@@ -102,8 +102,7 @@ pub entity KeyLight:
         rotation = quat.identity()
         scale = vec3(1.0, 1.0, 1.0)
     meshes.PointLight:
-        color = #FFF4E0
-        intensity = 1.5
+        color = #FFF4E0 * 1.5
         range = 20.0
         enabled = true
 
@@ -114,7 +113,6 @@ pub entity FillLight:
         scale = vec3(1.0, 1.0, 1.0)
     meshes.PointLight:
         color = #C0D8FF
-        intensity = 1.0
         range = 18.0
         enabled = true
 

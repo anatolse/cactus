@@ -99,6 +99,13 @@ exception — see `examples/CLAUDE.md`).
   the nearest or best first. An event can't claim directly: record it as a trait and claim from
   the phase rule.
 
+### Colors
+
+- Color channels are unbounded floats. Write color math directly (`a + (b - a) * t`,
+  `c * 0.99`); don't clamp in between. Drawing clamps once.
+- A light's brightness is its color: `color = #FFE0C0FF * 1.5`. Lights have no `intensity`. To change
+  brightness at run time, keep the hue in your own trait and write `light.color = hue * strength`.
+
 ### Values per kind or per place
 
 - For a value per item kind, per board square or per place in a room, declare a trait with

@@ -1,0 +1,9 @@
+module color_persistence_runtime
+
+use std.core
+
+trait Tinted:
+    persist var tint: color = #FFFFFFFF
+
+entity Lamp:
+    Tinted

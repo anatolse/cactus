@@ -1798,6 +1798,22 @@ bits. The unit divides a millisecond and the steps of 24, 25, 30, 48, 50, 60, 90
   `int` (§3.8.1).
 - A render-pass stage handler can't use a duration; convert it with `seconds(...)` before the stage.
 
+**Colors.** A `color` holds four `float` channels, `r`, `g`, `b` and `a`, that follow the number rules
+above. Channels are sRGB codes, and alpha is straight (not premultiplied).
+
+- A hex literal gives each channel its byte divided by 255: `#808080FF.r` is the binary32 value of
+  128/255. A six-digit literal has alpha 1.
+- `color(r, g, b, a)` takes four `float` (or `int`) channels and keeps them as given.
+- `c + c`, `c - c` and `c * c` work channel by channel; `c * k`, `k * c` and `c / k` scale every channel
+  by a `float`. Nothing else combines with a `color`: `c + 1.0` and `c / c` are errors.
+- No color operation clamps or rounds. A channel may go below 0 or above 1 while a program computes with
+  it, so `a + (b - a) * t` blends toward a darker color and `c * 0.99` each frame fades to zero.
+  `#FFFFFFFF * 2.0` is twice as bright as white.
+- Drawing clamps each channel to 0..1 and rounds it to 8 bits once, where the color reaches an 8-bit
+  consumer (a sprite, shape, text or UI draw). The stored value does not change. A shader input or a light
+  gets the channels as they are, so a light's brightness is its color.
+- A rule and a render-pass stage give the same channels for the same color expression.
+
 Two expressions choose a value:
 
 ```ebnf

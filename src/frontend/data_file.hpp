@@ -38,7 +38,7 @@ struct FieldValue {
     float f32   = 0.0f;
     bool b      = false;
     struct {
-        uint8_t r = 0, g = 0, bv = 0, a = 255;
+        float r = 0.0f, g = 0.0f, bv = 0.0f, a = 1.0f;
     } color;
     struct {
         float x = 0.0f, y = 0.0f;

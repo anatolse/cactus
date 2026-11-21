@@ -125,8 +125,7 @@ pub template RobotTemplate(position: vec3, model_scale: float, terrain: entity_i
                 position = vec3(0.0, 0.5, 0.0)
             tv.WorldTransform
             meshes.PointLight:
-                color = #FFE2B0FF
-                intensity = 1.4
+                color = #FFE2B0FF * 1.4
                 range = 9.0
 
 template ViewCamera(active: bool, fov: float):

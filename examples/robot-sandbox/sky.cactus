@@ -44,10 +44,15 @@ template Disc(tint: color, night: bool):
     SkyBody:
         night = night
 
+# A sky light's hue. Its brightness follows the body's height above the horizon.
+pub trait SkyLight:
+    let tint: color
+
 template Light(tint: color, night: bool):
     meshes.DirectionalLight:
-        color = tint
-        intensity = 0.0
+        color = #000000FF
+    SkyLight:
+        tint = tint
     SkyBody:
         night = night
 
@@ -121,13 +126,14 @@ rule PlaceSkyBodies:
 rule LightBySky:
     each:
         SkyBody as body
+        SkyLight as sky
         meshes.DirectionalLight as light
 
     on late_tick:
         let toward = body_direction(game.Game[game.Session].minute, body.night)
         let strength = if body.night: 0.3 else: 1.0
         light.direction = toward * -1.0
-        light.intensity = strength * horizon_fade(toward)
+        light.color = sky.tint * (strength * horizon_fade(toward))
 
 rule TintSky:
     each:

@@ -715,6 +715,27 @@ entity Boss:
     CHECK(fingerprint_of(*declared_one) == fingerprint_of(*declared_two));
 }
 
+TEST_CASE("changing a field from quat to color breaks compatibility", "[codegen-entt][persistence][schema]") {
+    const auto as_quat  = generate(R"(module world
+
+trait Facing:
+    persist var value: quat
+
+entity Boss:
+    Facing
+)");
+    const auto as_color = generate(R"(module world
+
+trait Facing:
+    persist var value: color
+
+entity Boss:
+    Facing
+)");
+    CHECK(contains(EnttPersistenceEmitter::canonical_schema_text(as_color->program), "color_channel"));
+    CHECK(fingerprint_of(*as_quat) != fingerprint_of(*as_color));
+}
+
 TEST_CASE("renaming a field breaks compatibility", "[codegen-entt][persistence][schema]") {
     const auto before = generate(kSchemaSource);
     const auto after  = generate(R"(module world

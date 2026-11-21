@@ -61,20 +61,20 @@ TEST_CASE("Standard UI render draws Panel/Image/Button/Text primitives in the st
     registry.emplace<cactus_gen::stdlib::ui::ComputedLayout>(
         entity, make_layout(0, {.x = 10.0F, .y = 10.0F}, {.x = 100.0F, .y = 50.0F}));
     registry.emplace<cactus_gen::stdlib::ui::Panel>(
-        entity, cactus_gen::stdlib::ui::Panel{.background = RED, .border_color = BLUE, .border_width = 2.0F});
+        entity, cactus_gen::stdlib::ui::Panel{.background = color_from_raylib(RED), .border_color = color_from_raylib(BLUE), .border_width = 2.0F});
     registry.emplace<cactus_gen::stdlib::ui::Button>(entity,
                                                      cactus_gen::stdlib::ui::Button{.label          = "go",
-                                                                                    .normal_color   = GREEN,
-                                                                                    .hover_color    = GREEN,
-                                                                                    .pressed_color  = GREEN,
-                                                                                    .disabled_color = GRAY,
-                                                                                    .text_color     = WHITE,
+                                                                                    .normal_color   = color_from_raylib(GREEN),
+                                                                                    .hover_color    = color_from_raylib(GREEN),
+                                                                                    .pressed_color  = color_from_raylib(GREEN),
+                                                                                    .disabled_color = color_from_raylib(GRAY),
+                                                                                    .text_color     = color_from_raylib(WHITE),
                                                                                     .padding = {.x = 4.0F, .y = 4.0F}});
     registry.emplace<cactus_gen::stdlib::ui::Text>(
         entity,
         cactus_gen::stdlib::ui::Text{.value     = "shown over button",
                                      .font_size = 12,
-                                     .color     = YELLOW,
+                                     .color     = color_from_raylib(YELLOW),
                                      .align     = cactus_gen::stdlib::ui::TextAlign::Center});
 
     cactus_gen::detail::standard_ui_layout_runtime::render_ui_tick(registry);
@@ -118,11 +118,11 @@ TEST_CASE("Standard UI render paints in ComputedLayout draw_order, not creation 
     // Created first but painted second (higher draw_order).
     const auto first_created = create_node(registry);
     registry.emplace<cactus_gen::stdlib::ui::ComputedLayout>(first_created, make_layout(/*draw_order=*/5));
-    registry.emplace<cactus_gen::stdlib::ui::Panel>(first_created, cactus_gen::stdlib::ui::Panel{.background = RED});
+    registry.emplace<cactus_gen::stdlib::ui::Panel>(first_created, cactus_gen::stdlib::ui::Panel{.background = color_from_raylib(RED)});
 
     const auto second_created = create_node(registry);
     registry.emplace<cactus_gen::stdlib::ui::ComputedLayout>(second_created, make_layout(/*draw_order=*/0));
-    registry.emplace<cactus_gen::stdlib::ui::Panel>(second_created, cactus_gen::stdlib::ui::Panel{.background = BLUE});
+    registry.emplace<cactus_gen::stdlib::ui::Panel>(second_created, cactus_gen::stdlib::ui::Panel{.background = color_from_raylib(BLUE)});
 
     cactus_gen::detail::standard_ui_layout_runtime::render_ui_tick(registry);
     cactus::runtime::entt_backend::end_render_frame();
@@ -149,7 +149,7 @@ TEST_CASE("Standard UI paints once per frame, after every viewport", "[runtime][
 
     const auto entity = create_node(registry);
     registry.emplace<cactus_gen::stdlib::ui::ComputedLayout>(entity, make_layout(0));
-    registry.emplace<cactus_gen::stdlib::ui::Panel>(entity, cactus_gen::stdlib::ui::Panel{.background = RED});
+    registry.emplace<cactus_gen::stdlib::ui::Panel>(entity, cactus_gen::stdlib::ui::Panel{.background = color_from_raylib(RED)});
 
     cactus::runtime::entt_backend::begin_render_frame();
     for (const auto viewport : {registry.create(), registry.create()}) {
@@ -179,19 +179,19 @@ TEST_CASE("Standard UI render skips invisible and fully-clipped entities, and ti
     const auto hidden = create_node(registry);
     registry.emplace<cactus_gen::stdlib::ui::ComputedLayout>(
         hidden, make_layout(0, {.x = 0, .y = 0}, {.x = 10, .y = 10}, false));
-    registry.emplace<cactus_gen::stdlib::ui::Panel>(hidden, cactus_gen::stdlib::ui::Panel{.background = RED});
+    registry.emplace<cactus_gen::stdlib::ui::Panel>(hidden, cactus_gen::stdlib::ui::Panel{.background = color_from_raylib(RED)});
 
     const auto clipped_away = create_node(registry);
     registry.emplace<cactus_gen::stdlib::ui::ComputedLayout>(
         clipped_away,
         make_layout(1, {.x = 0, .y = 0}, {.x = 10, .y = 10}, true, 1.0F, {.x = 5, .y = 5}, {.x = 5, .y = 5}));
-    registry.emplace<cactus_gen::stdlib::ui::Panel>(clipped_away, cactus_gen::stdlib::ui::Panel{.background = GREEN});
+    registry.emplace<cactus_gen::stdlib::ui::Panel>(clipped_away, cactus_gen::stdlib::ui::Panel{.background = color_from_raylib(GREEN)});
 
     const auto translucent = create_node(registry);
     registry.emplace<cactus_gen::stdlib::ui::ComputedLayout>(
         translucent, make_layout(2, {.x = 0, .y = 0}, {.x = 10, .y = 10}, true, 0.5F));
     registry.emplace<cactus_gen::stdlib::ui::Panel>(
-        translucent, cactus_gen::stdlib::ui::Panel{.background = Color{.r = 10, .g = 20, .b = 30, .a = 255}});
+        translucent, cactus_gen::stdlib::ui::Panel{.background = color_from_bytes(10, 20, 30, 255)});
 
     cactus_gen::detail::standard_ui_layout_runtime::render_ui_tick(registry);
     cactus::runtime::entt_backend::end_render_frame();
@@ -233,7 +233,7 @@ TEST_CASE("Standard UI render slices FrameAnimation frames from a resolved textu
                                                              make_layout(0, {.x = 0, .y = 0}, {.x = 40, .y = 40}));
     registry.emplace<cactus_gen::stdlib::ui::Image>(
         entity,
-        cactus_gen::stdlib::ui::Image{.texture = 7U, .tint = WHITE, .fit = cactus_gen::stdlib::ui::ImageFit::Stretch});
+        cactus_gen::stdlib::ui::Image{.texture = 7U, .tint = color_from_raylib(WHITE), .fit = cactus_gen::stdlib::ui::ImageFit::Stretch});
     registry.emplace<cactus_gen::stdlib::ui::FrameAnimation>(
         entity,
         cactus_gen::stdlib::ui::FrameAnimation{
@@ -274,11 +274,11 @@ TEST_CASE("Standard UI Button presentation follows disabled > pressed > hovered 
         registry.emplace<cactus_gen::stdlib::ui::Button>(
             entity,
             cactus_gen::stdlib::ui::Button{.label          = "go",
-                                           .normal_color   = Color{.r = 1, .g = 0, .b = 0, .a = 255},
-                                           .hover_color    = Color{.r = 2, .g = 0, .b = 0, .a = 255},
-                                           .pressed_color  = Color{.r = 3, .g = 0, .b = 0, .a = 255},
-                                           .disabled_color = Color{.r = 4, .g = 0, .b = 0, .a = 255},
-                                           .text_color     = WHITE,
+                                           .normal_color   = color_from_bytes(1, 0, 0, 255),
+                                           .hover_color    = color_from_bytes(2, 0, 0, 255),
+                                           .pressed_color  = color_from_bytes(3, 0, 0, 255),
+                                           .disabled_color = color_from_bytes(4, 0, 0, 255),
+                                           .text_color     = color_from_raylib(WHITE),
                                            .padding        = {.x = 4.0F, .y = 4.0F}});
         registry.emplace<cactus_gen::stdlib::pointer::PointerState>(
             entity, cactus_gen::stdlib::pointer::PointerState{.hovered = hovered, .pressed = pressed});
@@ -309,14 +309,14 @@ TEST_CASE("Standard UI RenderUi coexists with the legacy DrawScreenRect compatib
     const auto entity = create_node(registry);
     registry.emplace<cactus_gen::stdlib::ui::ComputedLayout>(entity,
                                                              make_layout(0, {.x = 0, .y = 0}, {.x = 20, .y = 20}));
-    registry.emplace<cactus_gen::stdlib::ui::Panel>(entity, cactus_gen::stdlib::ui::Panel{.background = RED});
+    registry.emplace<cactus_gen::stdlib::ui::Panel>(entity, cactus_gen::stdlib::ui::Panel{.background = color_from_raylib(RED)});
 
     cactus_gen::detail::standard_ui_layout_runtime::render_ui_tick(registry);
     cactus::runtime::entt_backend::end_render_frame();
 
     const cactus_gen::stdlib::ui::DrawScreenRectEvent legacy_event{.position  = {.x = 100.0F, .y = 100.0F},
                                                                    .size      = {.x = 30.0F, .y = 30.0F},
-                                                                   .color     = MAGENTA,
+                                                                   .color     = color_from_raylib(MAGENTA),
                                                                    .filled    = true,
                                                                    .thickness = 1.0F};
     cactus_gen::detail::standard_ui_layout_runtime::draw_screen_rect_renderer_tick(registry, legacy_event);
@@ -326,6 +326,29 @@ TEST_CASE("Standard UI RenderUi coexists with the legacy DrawScreenRect compatib
               log, [](const auto& r) { return cactus_raylib_fake::colors_equal(r.color, RED); }) != nullptr);
     CHECK(cactus_raylib_fake::find_call<cactus_raylib_fake::RecordedDrawRectangleRec>(
               log, [](const auto& r) { return cactus_raylib_fake::colors_equal(r.color, MAGENTA); }) != nullptr);
+}
+
+TEST_CASE("Standard UI render clamps an out-of-range panel color once at the draw call",
+          "[runtime][stdlib][ui][render][unbound-color-channels]") {
+    cactus_raylib_fake::reset();
+
+    entt::registry registry;
+    cactus::runtime::entt_backend::generated_init_project(registry);
+    cactus::runtime::entt_backend::generated_load_project(registry);
+
+    const CactusColor out_of_range{.r = 1.5F, .g = -0.2F, .b = 0.5F, .a = 2.0F};
+    const auto entity = create_node(registry);
+    registry.emplace<cactus_gen::stdlib::ui::ComputedLayout>(entity, make_layout(0));
+    registry.emplace<cactus_gen::stdlib::ui::Panel>(entity, cactus_gen::stdlib::ui::Panel{.background = out_of_range});
+
+    cactus_gen::detail::standard_ui_layout_runtime::render_ui_tick(registry);
+    cactus::runtime::entt_backend::end_render_frame();
+
+    CHECK(cactus_raylib_fake::find_call<cactus_raylib_fake::RecordedDrawRectangleRec>(
+              cactus_raylib_fake::call_log(), [](const auto& r) {
+                  return cactus_raylib_fake::colors_equal(r.color, Color{.r = 255, .g = 0, .b = 128, .a = 255});
+              }) != nullptr);
+    CHECK(registry.get<cactus_gen::stdlib::ui::Panel>(entity).background.r == 1.5F);
 }
 
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

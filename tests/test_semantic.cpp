@@ -1149,6 +1149,14 @@ TEST_CASE("Semantic: color constructor with four channel arguments is accepted",
                                                      "        let c = color(1.0, 0.0, 0.0, 1.0)\n"));
 }
 
+TEST_CASE("Semantic: color constructor accepts out-of-range channels and int arguments",
+          "[semantic][vector-expressions]") {
+    CHECK_FALSE(analyze_has_errors(stdlib_events() + "rule Test:\n"
+                                                     "    on tick:\n"
+                                                     "        let c = color(1.5, -0.2, 0, 1)\n"
+                                                     "        let r: float = c.r * 2.0\n"));
+}
+
 TEST_CASE("Semantic: color wrong constructor arity rejected", "[semantic][vector-expressions]") {
     auto message = analyze_first_error(stdlib_events() +
                                        "rule Test:\n"

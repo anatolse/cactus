@@ -64,7 +64,7 @@ TEST_CASE("Standard UI measures bottom-up and arranges top-down across edge-case
     registry.emplace<cactus_gen::stdlib::ui::Text>(
         text,
         cactus_gen::stdlib::ui::Text{
-            .value = "abc", .font_size = 10, .color = WHITE, .align = cactus_gen::stdlib::ui::TextAlign::Start});
+            .value = "abc", .font_size = 10, .color = color_from_raylib(WHITE), .align = cactus_gen::stdlib::ui::TextAlign::Start});
     registry.emplace<cactus_gen::stdlib::ui::Visual>(text,
                                                      cactus_gen::stdlib::ui::Visual{.scale = {1, 1}, .opacity = 0.4F});
 
@@ -72,7 +72,7 @@ TEST_CASE("Standard UI measures bottom-up and arranges top-down across edge-case
     set_parent(registry, image, root);
     registry.emplace<cactus_gen::stdlib::ui::Image>(
         image,
-        cactus_gen::stdlib::ui::Image{.texture = 40U, .tint = WHITE, .fit = cactus_gen::stdlib::ui::ImageFit::Stretch});
+        cactus_gen::stdlib::ui::Image{.texture = 40U, .tint = color_from_raylib(WHITE), .fit = cactus_gen::stdlib::ui::ImageFit::Stretch});
 
     const auto hidden = create_node(registry);
     set_parent(registry, hidden, text);
@@ -110,11 +110,11 @@ TEST_CASE("Standard UI measures bottom-up and arranges top-down across edge-case
     const auto button = create_node(registry);
     registry.emplace<cactus_gen::stdlib::ui::Button>(button,
                                                      cactus_gen::stdlib::ui::Button{.label          = "ok",
-                                                                                    .normal_color   = GRAY,
-                                                                                    .hover_color    = LIGHTGRAY,
-                                                                                    .pressed_color  = DARKGRAY,
-                                                                                    .disabled_color = BLACK,
-                                                                                    .text_color     = WHITE,
+                                                                                    .normal_color   = color_from_raylib(GRAY),
+                                                                                    .hover_color    = color_from_raylib(LIGHTGRAY),
+                                                                                    .pressed_color  = color_from_raylib(DARKGRAY),
+                                                                                    .disabled_color = color_from_raylib(BLACK),
+                                                                                    .text_color     = color_from_raylib(WHITE),
                                                                                     .padding        = {-3, 2}});
     registry.emplace<cactus_gen::stdlib::ui::PreferredSize>(
         button, cactus_gen::stdlib::ui::PreferredSize{.min_size = {40, -5}});

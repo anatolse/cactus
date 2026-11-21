@@ -1,0 +1,100 @@
+module out_of_range_colors_runtime
+
+# One drawn thing per stdlib renderer that passes a color to raylib. The test
+# sets every color to an out-of-range value and checks the bytes each draw gets.
+# Sprites and 2D text labels are checked elsewhere: a module that imports both
+# transform kinds draws only 3D text, and one that imports both sprites.Renderer
+# and meshes.Renderer mixes them up in generated code.
+
+use std.debug as debug
+use std.math.quat as quat
+use std.transform.flat as tf
+use std.transform.volume as tv
+use std.render.shapes as shapes
+use std.render.meshes as meshes
+use std.render.models as models
+use std.render.passes as passes
+use std.render.text as text
+use std.camera.flat as cam2d
+use std.camera.volume as cam3d
+use std.camera.viewport as vp
+
+asset CubeMesh: mesh = "models/blue_cube.mesh"
+asset CubeMaterial: material = "materials/blue_cube.mat"
+asset Robot: model = "../../examples/model-renderer/art/robot.glb"
+
+pub trait Probe:
+    var tint: color = #FFFFFFFF
+
+pub trait AlphaProbe:
+    var raised: color
+    var lowered: color
+
+template Volume(x: float):
+    tv.WorldTransform:
+        position = vec3(x, 0.0, 0.0)
+        rotation = quat.identity()
+        scale = vec3(1.0, 1.0, 1.0)
+
+pub entity Square:
+    tf.WorldTransform:
+        position = vec2(10.0, 10.0)
+    shapes.Shape:
+        type = shapes.ShapeType.Rectangle
+        size = vec2(8.0, 8.0)
+
+pub entity Hud:
+    text.ScreenLabel:
+        text = "hud"
+        position = vec2(70.0, 10.0)
+
+pub entity Cube:
+    use Volume(x = -2.0)
+    meshes.Renderer:
+        mesh = CubeMesh
+        material = CubeMaterial
+
+pub entity Statue:
+    use Volume(x = 2.0)
+    models.ModelRenderer:
+        model = Robot
+
+pub entity Marker:
+    Probe
+    AlphaProbe
+
+pub entity FlatCamera:
+    tf.WorldTransform
+    cam2d.Camera
+    vp.Viewport
+
+pub entity MainCamera:
+    tv.WorldTransform:
+        position = vec3(0.0, 1.0, 6.0)
+        rotation = quat.identity()
+        scale = vec3(1.0, 1.0, 1.0)
+    cam3d.Camera
+    vp.Viewport
+
+rule DrawMarker:
+    each:
+        Probe as probe
+
+    on tick:
+        emit debug.DrawDebugLine2D:
+            start = vec2(0.0, 0.0)
+            end = vec2(5.0, 5.0)
+            color = probe.tint
+            thickness = 1.0
+        emit debug.DrawDebugLine3D:
+            start = vec3(0.0, 0.0, 0.0)
+            end = vec3(1.0, 1.0, 1.0)
+            color = probe.tint
+
+rule ScaleAlpha:
+    each:
+        AlphaProbe as probe
+
+    on tick:
+        probe.raised = passes.with_alpha(#FF0000FF, 1.5)
+        probe.lowered = passes.with_alpha(#FF0000FF, -0.2)

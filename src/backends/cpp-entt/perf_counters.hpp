@@ -26,6 +26,7 @@ struct PerfCounters {
     std::uint64_t clamp_settles    = 0;  // clamped pending values settled when an activation ended
     std::uint64_t component_moves  = 0;  // trait components constructed or destroyed in the registry
     std::uint64_t domain_rows      = 0;  // rows a unary rule's pass visited, before its row tests
+    std::uint64_t color_conversions = 0;  // colors converted to 8-bit channels for a raylib call
 
     PerfCounters& operator+=(const PerfCounters& other) noexcept {
         commands += other.commands;
@@ -46,6 +47,7 @@ struct PerfCounters {
         clamp_settles += other.clamp_settles;
         component_moves += other.component_moves;
         domain_rows += other.domain_rows;
+        color_conversions += other.color_conversions;
         return *this;
     }
 };
@@ -132,6 +134,10 @@ inline void count_component_move() noexcept {
 inline void count_domain_row() noexcept {
     ++counting_target().domain_rows;
 }
+
+inline void count_color_conversion() noexcept {
+    ++counting_target().color_conversions;
+}
 #else
 inline void count_commands(std::size_t /*count*/) noexcept {}
 inline void count_ordering() noexcept {}
@@ -149,6 +155,7 @@ inline void count_repeat_pass() noexcept {}
 inline void count_clamp_work(std::size_t /*merges*/, std::size_t /*settles*/) noexcept {}
 inline void count_component_move() noexcept {}
 inline void count_domain_row() noexcept {}
+inline void count_color_conversion() noexcept {}
 #endif
 
 }  // namespace cactus::runtime::entt_backend

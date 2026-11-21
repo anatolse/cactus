@@ -1,6 +1,7 @@
 #include "backends/cpp-entt/type_utils.hpp"
 #include "common/ast_expressions.hpp"
 #include "common/codegen_error.hpp"
+#include "common/color_channels.hpp"
 #include "common/duration.hpp"
 #include "common/joined.hpp"
 
@@ -22,15 +23,6 @@
 namespace cactus {
 
 namespace {
-
-// dsl-vector-expressions "Color float component access": `.r/.g/.b/.a` are
-// the only member names this language ever resolves against a color-typed
-// expression (no other type has a field with any of these names, and
-// semantic analysis has already validated the program by the time codegen
-// runs) — the raw C++ field is a byte in [0,255] (raylib's Color), so every
-// such access must normalize to a float in [0,1] the same way regardless of
-// which emit_expr overload reaches it, mirroring rewrite_expr's handling of
-// the same access on a trait field (system_emitter.cpp).
 
 template <typename ResolvedDecl>
 std::string resolved_decl_cpp_name(const ResolvedDecl& decl) {
@@ -307,7 +299,7 @@ std::string EnttCodegenUtils::type_to_cpp(const TypeInfo& type) {
         case TypeKind::Quat:
             return "Quat";
         case TypeKind::Color:
-            return "Color";
+            return "CactusColor";
         case TypeKind::EntityId:
             return "uint32_t";
         case TypeKind::MeshId:
@@ -449,17 +441,7 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const ProgramNode*
                     return "\"" + e.value + "\"";
                 }
                 if (e.kind == LiteralExpr::Kind::HexColor) {
-                    std::string hex = e.value;
-                    if (hex.size() == 6) {
-                        hex += "FF";
-                    }
-                    if (hex.size() == 8) {
-                        auto byte = [&](size_t offset) {
-                            return std::to_string(std::stoi(hex.substr(offset, 2), nullptr, 16));
-                        };
-                        return "Color{.r = " + byte(0) + ", .g = " + byte(2) + ", .b = " + byte(4) +
-                               ", .a = " + byte(6) + "}";
-                    }
+                    return hex_color_literal_cpp(e.value);
                 }
                 if (e.kind == LiteralExpr::Kind::Float) {
                     return float_literal_cpp(e.value);
@@ -487,12 +469,7 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const ProgramNode*
             } else if constexpr (std::is_same_v<E, UnaryExpr>) {
                 return emit_unary(e, emit_expr(*e.operand, ast));
             } else if constexpr (std::is_same_v<E, CallExpr>) {
-                // color(...) constructor (dsl-vector-expressions "Color
-                // constructor"): route through the shared runtime
-                // clamp-then-quantize helper rather than emitting a raw
-                // `color(...)` call, so every color-constructing call site
-                // funnels through one packing implementation (design.md
-                // Decision 2; CLAUDE.md "Avoid duplication").
+                // color(...) never emits a raw `color(...)` call: a local named `color` would shadow it.
                 const auto* callee_ident = std::get_if<IdentExpr>(&e.callee->expr);
                 const bool is_color_ctor = callee_ident != nullptr && callee_ident->name == "color";
                 const auto* runtime_callee = is_color_ctor ? "color_from_components" : duration_conversion_cpp(e);
@@ -522,9 +499,6 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const ProgramNode*
                     if (!ident->name.empty() && std::isupper(static_cast<unsigned char>(ident->name[0])) != 0) {
                         return ident->name + "::" + e.member;
                     }
-                }
-                if (EnttCodegenUtils::is_color_component_member(e.member)) {
-                    return "(static_cast<float>(" + emit_expr(*e.object, ast) + "." + e.member + ") / 255.0F)";
                 }
                 return emit_expr(*e.object, ast) + "." + cpp_escaped(e.member);
             } else if constexpr (std::is_same_v<E, ListExpr>) {
@@ -626,9 +600,7 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const DecoratedPro
                 if (e.resolved_struct_id.has_value()) {
                     return emit_struct_construction(e, program, emit);
                 }
-                // color(...) constructor: see the ProgramNode overload above
-                // for why this routes through color_from_components instead
-                // of a raw `color(...)` call.
+                // color(...) constructor: see the ProgramNode overload above.
                 if (const auto* color_ident = std::get_if<IdentExpr>(&e.callee->expr);
                     color_ident != nullptr && color_ident->name == "color") {
                     return "color_from_components(" + EnttCodegenUtils::join_emitted_args(e.args, program) + ")";
@@ -712,10 +684,6 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const DecoratedPro
                         return EnttCodegenUtils::enum_cpp_name(ident->name, program) + "::" + cpp_escaped(e.member);
                     }
                 }
-                if (EnttCodegenUtils::is_color_component_member(e.member)) {
-                    return "(static_cast<float>(" + EnttCodegenUtils::emit_expr(*e.object, program) + "." + e.member +
-                          ") / 255.0F)";
-                }
                 return EnttCodegenUtils::emit_expr(*e.object, program) + "." + cpp_escaped(e.member);
             } else if constexpr (std::is_same_v<E, IfExpr>) {
                 return emit_if_ternary(e, emit);
@@ -787,8 +755,10 @@ std::string EnttCodegenUtils::named_trait_ref_name(const NamedTraitRef& ref) {
     return "named_" + snake_case(ref.entity.local_name) + "_" + snake_case(ref.trait.local_name);
 }
 
-bool EnttCodegenUtils::is_color_component_member(const std::string& member) {
-    return member == "r" || member == "g" || member == "b" || member == "a";
+std::string EnttCodegenUtils::hex_color_literal_cpp(const std::string& hex_digits) {
+    const auto [r, g, b, a] = hex_color_bytes(hex_digits);
+    return "color_from_bytes(" + std::to_string(r) + ", " + std::to_string(g) + ", " + std::to_string(b) + ", " +
+           std::to_string(a) + ")";
 }
 
 std::optional<std::string> EnttCodegenUtils::named_member_cpp(const MemberExpr& member) {

@@ -573,9 +573,6 @@ entity Game:
 entity Sun:
     meshes.DirectionalLight:
         direction = vec3(-0.4, -1.0, -0.2)
-        color = #FFFFFFFF
-        intensity = 1.0
-        enabled = true
 
 rule CursorLifecycle:
     each:

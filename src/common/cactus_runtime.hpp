@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/color_channels.hpp"
 #include "common/duration.hpp"
 #include "common/numeric.hpp"
 
@@ -64,19 +65,42 @@
     return v * scalar;
 }
 
-// `color` component access/constructor/operator matrix (dsl-vector-expressions
-// "color"): declared here (not cactus::runtime) for the same ordinary-lookup
-// reason as vec2/vec3 above — Color is a plain raylib C struct with no
-// namespace, and generated call/operator text is unqualified. constexpr so
-// color constants get constant initialization.
-[[nodiscard]] constexpr Color color_from_components(float r, float g, float b, float a) noexcept {
-    // Rounds half away from zero like std::lround, which is not constexpr here; v - whole is exact.
+// The language `color`: four unbounded float channels. Not raylib's Vector4, whose Quaternion alias
+// would make `quat * quat` and the component-wise `color * color` collide. Global for the same
+// lookup reason as vec2/vec3 above.
+struct CactusColor {
+    float r = 0.0F;
+    float g = 0.0F;
+    float b = 0.0F;
+    float a = 0.0F;
+};
+
+[[nodiscard]] constexpr CactusColor color_from_components(float r, float g, float b, float a) noexcept {
+    return CactusColor{.r = r, .g = g, .b = b, .a = a};
+}
+
+// A hex literal's channels: each byte over 255.
+[[nodiscard]] constexpr CactusColor color_from_bytes(int r, int g, int b, int a) noexcept {
+    using cactus::color_channel_from_byte;
+    return CactusColor{.r = color_channel_from_byte(r),
+                       .g = color_channel_from_byte(g),
+                       .b = color_channel_from_byte(b),
+                       .a = color_channel_from_byte(a)};
+}
+
+[[nodiscard]] constexpr CactusColor color_from_raylib(Color color) noexcept {
+    return color_from_bytes(color.r, color.g, color.b, color.a);
+}
+
+// The one place a color becomes 8 bits: clamp to 0..1 (NaN to 0), scale, round half away from zero.
+[[nodiscard]] constexpr Color to_raylib_color(CactusColor color) noexcept {
     auto channel = [](const float v) {
-        const float scaled = std::clamp(v, 0.0F, 1.0F) * 255.0F;
+        // `!(v > 0)` is also true for NaN; std::lround is not constexpr here, and scaled - whole is exact.
+        const float scaled = !(v > 0.0F) ? 0.0F : std::min(v, 1.0F) * 255.0F;
         const auto whole   = static_cast<int>(scaled);
         return static_cast<unsigned char>(scaled - static_cast<float>(whole) >= 0.5F ? whole + 1 : whole);
     };
-    return Color{.r = channel(r), .g = channel(g), .b = channel(b), .a = channel(a)};
+    return Color{.r = channel(color.r), .g = channel(color.g), .b = channel(color.b), .a = channel(color.a)};
 }
 
 // Generated code wraps a conditional nested in another conditional in this call: the inner one
@@ -86,35 +110,24 @@ template <typename T>
     return value;
 }
 
-// Every color-constructing operator row (dsl-vector-expressions' fixed color
-// binary operator matrix) normalizes both operands to [0,1] float, combines,
-// and repacks through color_from_components — one clamp-then-quantize call
-// site per row, never inlined per codegen call site (CLAUDE.md "Avoid
-// duplication"; mirrors tint_with_opacity's now-shared implementation).
-[[nodiscard]] inline Color operator+(const Color a, const Color b) {
-    auto ch = [](const unsigned char v) { return static_cast<float>(v) / 255.0F; };
-    return color_from_components(ch(a.r) + ch(b.r), ch(a.g) + ch(b.g), ch(a.b) + ch(b.b), ch(a.a) + ch(b.a));
+[[nodiscard]] constexpr CactusColor operator+(const CactusColor a, const CactusColor b) noexcept {
+    return CactusColor{.r = a.r + b.r, .g = a.g + b.g, .b = a.b + b.b, .a = a.a + b.a};
 }
-[[nodiscard]] inline Color operator-(const Color a, const Color b) {
-    auto ch = [](const unsigned char v) { return static_cast<float>(v) / 255.0F; };
-    return color_from_components(ch(a.r) - ch(b.r), ch(a.g) - ch(b.g), ch(a.b) - ch(b.b), ch(a.a) - ch(b.a));
+[[nodiscard]] constexpr CactusColor operator-(const CactusColor a, const CactusColor b) noexcept {
+    return CactusColor{.r = a.r - b.r, .g = a.g - b.g, .b = a.b - b.b, .a = a.a - b.a};
 }
-[[nodiscard]] inline Color operator*(const Color a, const float scalar) {
-    auto ch = [](const unsigned char v) { return static_cast<float>(v) / 255.0F; };
-    return color_from_components(ch(a.r) * scalar, ch(a.g) * scalar, ch(a.b) * scalar, ch(a.a) * scalar);
+[[nodiscard]] constexpr CactusColor operator*(const CactusColor a, const float scalar) noexcept {
+    return CactusColor{.r = a.r * scalar, .g = a.g * scalar, .b = a.b * scalar, .a = a.a * scalar};
 }
-[[nodiscard]] inline Color operator*(const float scalar, const Color a) {
+[[nodiscard]] constexpr CactusColor operator*(const float scalar, const CactusColor a) noexcept {
     return a * scalar;
 }
-[[nodiscard]] inline Color operator/(const Color a, const float scalar) {
-    auto ch = [](const unsigned char v) { return static_cast<float>(v) / 255.0F; };
-    return color_from_components(ch(a.r) / scalar, ch(a.g) / scalar, ch(a.b) / scalar, ch(a.a) / scalar);
+[[nodiscard]] constexpr CactusColor operator/(const CactusColor a, const float scalar) noexcept {
+    return CactusColor{.r = a.r / scalar, .g = a.g / scalar, .b = a.b / scalar, .a = a.a / scalar};
 }
-[[nodiscard]] inline Color operator*(const Color a, const Color b) {
-    auto ch = [](const unsigned char v) { return static_cast<float>(v) / 255.0F; };
-    return color_from_components(ch(a.r) * ch(b.r), ch(a.g) * ch(b.g), ch(a.b) * ch(b.b), ch(a.a) * ch(b.a));
+[[nodiscard]] constexpr CactusColor operator*(const CactusColor a, const CactusColor b) noexcept {
+    return CactusColor{.r = a.r * b.r, .g = a.g * b.g, .b = a.b * b.b, .a = a.a * b.a};
 }
-
 
 
 namespace cactus::runtime {
@@ -1163,7 +1176,7 @@ struct Normal {
 [[nodiscard]] int sample_int(Rng rng, UniformInt dist) noexcept;
 [[nodiscard]] float sample_normal(Rng rng, Normal dist) noexcept;
 [[nodiscard]] bool chance(Rng rng, float p) noexcept;
-[[nodiscard]] Color palette_color(int index) noexcept;
+[[nodiscard]] CactusColor palette_color(int index) noexcept;
 
 }  // namespace stdlib::random
 

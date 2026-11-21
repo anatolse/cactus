@@ -1,0 +1,42 @@
+module perf_color_fade
+
+use std.core
+use std.transform.flat as tf
+use std.render.shapes as shapes
+
+# Many shapes blend toward a target color and fade every tick, and every one
+# is drawn. Color math stays in float; each draw converts to bytes once.
+
+trait Board:
+    let size: int = 1000
+
+trait Fade:
+    var target: color = #2040FFFF
+    var keep: float = 0.99
+
+const:
+    STEP = 0.05
+
+entity Field:
+    Board
+
+template Swatch:
+    tf.WorldTransform
+    shapes.Shape:
+        type = shapes.ShapeType.Rectangle
+        size = vec2(4.0, 4.0)
+    Fade
+
+rule Fill:
+    on load:
+        for i in range(0, Field[Board].size):
+            spawn Swatch()
+
+rule BlendAndFade:
+    each:
+        Fade as fade
+        shapes.Shape as shape
+
+    on tick:
+        let blended = shape.color + (fade.target - shape.color) * STEP
+        shape.color = color(blended.r, blended.g, blended.b, blended.a * fade.keep)

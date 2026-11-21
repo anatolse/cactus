@@ -213,8 +213,8 @@ void end_mode_3d() noexcept;
 // point (top-left for a rectangle, center for a circle); rotation_rad pivots
 // a rectangle around position and is converted to degrees for raylib here so
 // generated code never carries that conversion.
-void draw_shape_rectangle(Vector2 position, Vector2 size, Vector2 origin, float rotation_rad, Color color) noexcept;
-void draw_shape_circle(Vector2 position, float diameter, Vector2 origin, Color color) noexcept;
+void draw_shape_rectangle(Vector2 position, Vector2 size, Vector2 origin, float rotation_rad, CactusColor color) noexcept;
+void draw_shape_circle(Vector2 position, float diameter, Vector2 origin, CactusColor color) noexcept;
 
 // ── Render-pass rendering (dsl-render-passes Quads pass kind) ──────────────────
 // Shader cache, uniform upload and quad submission for Quads render passes.
@@ -241,7 +241,7 @@ void end_render_pass() noexcept;
 [[nodiscard]] int render_pass_uniform_location(const Shader& shader, const char* name) noexcept;
 void set_render_pass_uniform(const Shader& shader, int location, float value) noexcept;
 void set_render_pass_uniform(const Shader& shader, int location, Vector2 value) noexcept;
-void set_render_pass_uniform(const Shader& shader, int location, Color value) noexcept;
+void set_render_pass_uniform(const Shader& shader, int location, CactusColor value) noexcept;
 
 // Submits one instance's quad to the shader begin_render_pass bound; the
 // vertex shader reads the row's values from the uniforms set just before.
@@ -280,7 +280,9 @@ struct RenderDebugState {
     // drawn_sprite_layers as the observable-without-a-window channel for
     // std.render.meshes.Renderer's color tint.
     std::vector<Color> submitted_mesh_colors;
-    std::vector<Color> submitted_model_colors;
+    std::vector<CactusColor> submitted_model_colors;
+    // Each active light's color as uploaded to the lighting shader this frame, in slot order.
+    std::vector<CactusColor> uploaded_light_colors;
     // (clip, time) of each animated model submission this frame, in submission
     // order — the per-entity poses observable without a GPU.
     std::vector<AnimatedModelSubmission> animated_model_submissions;
@@ -420,7 +422,7 @@ void end_render_frame() noexcept;
 // deliberately excluded — they are window-global and flush in end_render_frame.
 void flush_viewport_3d() noexcept;
 
-void submit_sprite(Vector2 position, Vector2 size, Color color, AssetHandle texture, bool visible, int layer) noexcept;
+void submit_sprite(Vector2 position, Vector2 size, CactusColor color, AssetHandle texture, bool visible, int layer) noexcept;
 void advance_animated_sprite(AssetHandle texture,
                              int& frame,
                              int frame_count,
@@ -434,7 +436,7 @@ void submit_mesh(Vector3 position,
                  AssetHandle material,
                  bool visible,
                  bool cast_shadow,
-                 Color tint) noexcept;
+                 CactusColor tint) noexcept;
 
 // ── Mesh placeholder geometry (std.render.meshes.Renderer) ────────────────
 // Placeholder mesh assets have no real geometry file backing them (like the
@@ -450,7 +452,7 @@ void submit_model(Vector3 position,
                   AssetHandle model,
                   bool visible,
                   bool cast_shadow,
-                  Color tint = WHITE) noexcept;
+                  CactusColor tint = color_from_bytes(255, 255, 255, 255)) noexcept;
 // Animated variant: carries the entity's ModelAnimator (clip, time) so the
 // flush re-poses the shared model per submission (dsl-model-animation).
 void submit_model(Vector3 position,
@@ -461,7 +463,7 @@ void submit_model(Vector3 position,
                   bool cast_shadow,
                   int clip,
                   float time,
-                  Color tint = WHITE) noexcept;
+                  CactusColor tint = color_from_bytes(255, 255, 255, 255)) noexcept;
 
 // ── Animation introspection extern func bridges (std.render.models) ───────────
 
@@ -572,24 +574,24 @@ void diagnose_capped_playback_advance(entt::entity entity) noexcept;
 // bind-pose bounds aren't centered on the origin. Same fallback/load behavior
 // as model_bounds_size/model_bounds_box.
 [[nodiscard]] Vector3 model_bounds_center(AssetHandle model) noexcept;
-void submit_billboard(Vector3 position, Vector2 size, Color color, AssetHandle texture, bool visible) noexcept;
-void register_point_light(Vector3 position, Color color, float intensity, float range, bool enabled) noexcept;
-void register_directional_light(Vector3 direction, Color color, float intensity, bool enabled) noexcept;
+void submit_billboard(Vector3 position, Vector2 size, CactusColor color, AssetHandle texture, bool visible) noexcept;
+void register_point_light(Vector3 position, CactusColor color, float range, bool enabled) noexcept;
+void register_directional_light(Vector3 direction, CactusColor color, bool enabled) noexcept;
 void submit_text_2d(Vector2 position,
                     float rotation_rad,
                     int font_size,
-                    Color color,
+                    CactusColor color,
                     const std::string& text,
                     bool visible) noexcept;
 // Window-space HUD label (std.render.text ScreenLabel): window-global pixel
 // coordinates with top-left origin, drawn after all viewport/world rendering.
-void submit_screen_label(Vector2 position, int font_size, Color color, const std::string& text, bool visible) noexcept;
+void submit_screen_label(Vector2 position, int font_size, CactusColor color, const std::string& text, bool visible) noexcept;
 void submit_text_3d(std::uint32_t entity_id,
                     Vector3 position,
                     Quat rotation,
                     Vector3 scale,
                     int font_size,
-                    Color color,
+                    CactusColor color,
                     const std::string& text,
                     bool visible) noexcept;
 
@@ -651,19 +653,19 @@ struct UiPrimitive {
     Vector2 visual_scale{.x = 1.0F, .y = 1.0F};
 
     bool has_panel{false};
-    Color panel_background{};
-    Color panel_border_color{};
+    CactusColor panel_background{};
+    CactusColor panel_border_color{};
     float panel_border_width{0.0F};
 
     bool has_text{false};
     std::string text_value;
     int text_font_size{16};
-    Color text_color{};
+    CactusColor text_color{};
     int text_align{0};  // std_ui__TextAlign ordinal: Start=0, Center=1, End=2
 
     bool has_image{false};
     AssetHandle image_texture{0};
-    Color image_tint{};
+    CactusColor image_tint{};
     int image_fit{0};  // std_ui__ImageFit ordinal: Stretch=0, Contain=1, Cover=2
 
     bool has_frame_animation{false};
@@ -672,11 +674,11 @@ struct UiPrimitive {
 
     bool has_button{false};
     std::string button_label;
-    Color button_normal_color{};
-    Color button_hover_color{};
-    Color button_pressed_color{};
-    Color button_disabled_color{};
-    Color button_text_color{};
+    CactusColor button_normal_color{};
+    CactusColor button_hover_color{};
+    CactusColor button_pressed_color{};
+    CactusColor button_disabled_color{};
+    CactusColor button_text_color{};
 
     // std.pointer.PointerState, when present (design decision: "Button
     // presentation derives from generic pointer state"). Absent (both false)
@@ -825,7 +827,7 @@ void reset_pointer_router_state() noexcept;
 /// which is the same root cause, just also reachable via `if`, not only
 /// `for`), so a DSL `let color = <default>` followed by `if ...: color =
 /// ...` branches would silently keep the first-declared value.
-[[nodiscard]] Color editor_palette_color(int index) noexcept;
+[[nodiscard]] CactusColor editor_palette_color(int index) noexcept;
 
 /// GizmoMode name (SELECT/TRANSLATE/ROTATE/SCALE/PLACE) for the HUD overlay's mode text.
 /// Same reason this is a backend accessor and not a DSL if-chain as editor_palette_color.
@@ -1460,8 +1462,7 @@ void restore_layout_trait(RestoreTraitList<T...> /*traits*/,
 // exact representation without redefining language arithmetic.
 static_assert(sizeof(int) == 4, "PersistenceValueKind::Int assumes a 32-bit backend int");
 static_assert(sizeof(float) == 4, "PersistenceValueKind::Float assumes a 32-bit backend float");
-// Color lanes are bytes in the backend; float carries every one of them exactly.
-static_assert(sizeof(Color::r) == 1, "PersistenceValueKind::Int color lanes assume an 8-bit backend channel");
+static_assert(sizeof(CactusColor::r) == 4, "PersistenceValueKind::ColorChannel lanes assume a 32-bit float channel");
 
 inline void put_persistence_lanes(persistence::SnapshotBuilder& out, Vector2 value) {
     out.put_lanes(std::array{value.x, value.y});
@@ -1475,9 +1476,8 @@ inline void put_persistence_lanes(persistence::SnapshotBuilder& out, Quat value)
     out.put_lanes(std::array{value.x, value.y, value.z, value.w});
 }
 
-inline void put_persistence_lanes(persistence::SnapshotBuilder& out, Color value) {
-    out.put_lanes(std::array{static_cast<float>(value.r), static_cast<float>(value.g), static_cast<float>(value.b),
-                             static_cast<float>(value.a)});
+inline void put_persistence_lanes(persistence::SnapshotBuilder& out, CactusColor value) {
+    out.put_lanes(std::array{value.r, value.g, value.b, value.a});
 }
 
 [[nodiscard]] inline Vector2 read_persistence_vector2(persistence::ValueReader& in) {
@@ -1498,13 +1498,10 @@ inline void put_persistence_lanes(persistence::SnapshotBuilder& out, Color value
     return Quat{.x = lanes[0], .y = lanes[1], .z = lanes[2], .w = lanes[3]};
 }
 
-[[nodiscard]] inline Color read_persistence_color(persistence::ValueReader& in) {
+[[nodiscard]] inline CactusColor read_persistence_color(persistence::ValueReader& in) {
     std::array<float, 4> lanes{};
     in.get_lanes(lanes);
-    return Color{.r = static_cast<unsigned char>(lanes[0]),
-                 .g = static_cast<unsigned char>(lanes[1]),
-                 .b = static_cast<unsigned char>(lanes[2]),
-                 .a = static_cast<unsigned char>(lanes[3])};
+    return CactusColor{.r = lanes[0], .g = lanes[1], .b = lanes[2], .a = lanes[3]};
 }
 
 // The document name for a handle; `fallback` (the empty name) for an unset or

@@ -25,7 +25,8 @@ enum class PersistenceValueKind : std::uint8_t {
     Struct,
     List,
     Unsupported,
-    Duration,  // a signed 64-bit count of the language's fixed time unit
+    Duration,      // a signed 64-bit count of the language's fixed time unit
+    ColorChannel,  // a color's float lane, kept apart from other float lanes such as a quat's
 };
 
 // One label/enumerator pair per kind, from one exhaustive switch: the compiler
@@ -65,6 +66,8 @@ struct PersistenceValueKindSpelling {
             return {.label = "unsupported", .enumerator = "Unsupported"};
         case PersistenceValueKind::Duration:
             return {.label = "duration", .enumerator = "Duration"};
+        case PersistenceValueKind::ColorChannel:
+            return {.label = "color_channel", .enumerator = "ColorChannel"};
     }
     return {.label = "unsupported", .enumerator = "Unsupported"};
 }

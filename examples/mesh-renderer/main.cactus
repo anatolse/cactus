@@ -61,8 +61,7 @@ pub entity LeftPointLight:
         rotation = quat.identity()
         scale = vec3(1.0, 1.0, 1.0)
     meshes.PointLight:
-        color = #b3ffd5
-        intensity = 1.4
+        color = #b3ffd5 * 1.4
         range = 8.0
         enabled = true
 
@@ -72,8 +71,7 @@ pub entity RightPointLight:
         rotation = quat.identity()
         scale = vec3(1.0, 1.0, 1.0)
     meshes.PointLight:
-        color = #ffb3e8
-        intensity = 1.2
+        color = #ffb3e8 * 1.2
         range = 8.0
         enabled = true
 

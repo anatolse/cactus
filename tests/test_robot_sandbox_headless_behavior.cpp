@@ -214,7 +214,7 @@ TEST_CASE("the start menu keeps its own backdrop colour and not the sky colour",
     const auto view =
         world.registry.view<cactus_gen::hud::MenuView, cactus_gen::stdlib::camera::viewport::Viewport>();
     REQUIRE(view.size_hint() == 1);
-    const auto backdrop = view.get<cactus_gen::stdlib::camera::viewport::Viewport>(*view.begin()).clear_color;
+    const auto backdrop = to_raylib_color(view.get<cactus_gen::stdlib::camera::viewport::Viewport>(*view.begin()).clear_color);
     CHECK(static_cast<int>(backdrop.r) == 0x10);
     CHECK(static_cast<int>(backdrop.g) == 0x14);
     CHECK(static_cast<int>(backdrop.b) == 0x1E);
@@ -880,6 +880,19 @@ TEST_CASE("the sun lights noon from above and the moon lights midnight", "[runti
         FAIL("no sky light");
         return cactus_gen::stdlib::render::meshes::DirectionalLight{};
     };
+    // A sky light's brightness is its color over its hue.
+    const auto brightness = [&](bool night) {
+        for (const auto [entity, body, hue, sky_light] :
+             world.registry
+                 .view<cactus_gen::sky::SkyBody, cactus_gen::sky::SkyLight, cactus_gen::stdlib::render::meshes::DirectionalLight>()
+                 .each()) {
+            if (body.night == night) {
+                return sky_light.color.r / hue.tint.r;
+            }
+        }
+        FAIL("no sky light");
+        return 0.0F;
+    };
     const auto disc_height = [&](bool night) {
         for (const auto [entity, body, place] :
              world.registry.view<cactus_gen::sky::SkyBody, RobotTransform>().each()) {
@@ -893,23 +906,23 @@ TEST_CASE("the sun lights noon from above and the moon lights midnight", "[runti
 
     world.session().minute = 720.0F;
     world.frame();
-    CHECK(light(false).intensity == Catch::Approx(1.0F));
+    CHECK(brightness(false) == Catch::Approx(1.0F));
     CHECK(light(false).direction.y < -0.9F);
-    CHECK(light(true).intensity == Catch::Approx(0.0F));
+    CHECK(brightness(true) == Catch::Approx(0.0F));
     CHECK(disc_height(false) > 100.0F);
     CHECK(disc_height(true) < -100.0F);
 
     world.session().minute = 0.0F;
     world.frame();
-    CHECK(light(false).intensity == Catch::Approx(0.0F));
-    CHECK(light(true).intensity == Catch::Approx(0.3F));
+    CHECK(brightness(false) == Catch::Approx(0.0F));
+    CHECK(brightness(true) == Catch::Approx(0.3F));
     CHECK(disc_height(false) < -100.0F);
 
     // Dawn: the sun sits on the eastern horizon and only partly lights the world.
     world.session().minute = 360.0F;
     world.frame();
-    CHECK(light(false).intensity > 0.0F);
-    CHECK(light(false).intensity < 1.0F);
+    CHECK(brightness(false) > 0.0F);
+    CHECK(brightness(false) < 1.0F);
     CHECK(light(false).direction.x < -0.8F);
 }
 

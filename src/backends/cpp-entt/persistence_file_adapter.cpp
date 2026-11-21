@@ -223,6 +223,7 @@ void write_value(Encoder& out, const persistence::Snapshot& document, std::uint3
             }
             return;
         }
+        case PersistenceValueKind::ColorChannel:
         case PersistenceValueKind::Unsupported:
             return;
     }
@@ -282,6 +283,7 @@ void read_value(Decoder& in, persistence::SnapshotBuilder& out, std::uint32_t ty
             }
             return;
         }
+        case PersistenceValueKind::ColorChannel:
         case PersistenceValueKind::Unsupported:
             return;
     }

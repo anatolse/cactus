@@ -672,6 +672,24 @@ cactus_add_headless_behavior_test(test_model_tint_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_model_tint_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_unbound_color_channels_headless_behavior
+    CACTUS_SOURCE examples/unbound_color_channels.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_unbound_color_channels_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_out_of_range_colors_headless_behavior
+    CACTUS_SOURCE tests/fixtures/out_of_range_colors_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_out_of_range_colors_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_color_persistence_headless_behavior
+    CACTUS_SOURCE tests/fixtures/color_persistence_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_color_persistence_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_model_animation_events_headless_behavior
     CACTUS_SOURCE examples/stdlib-fixtures/model_animation_events.cactus
     BACKEND cpp-entt
@@ -1780,7 +1798,7 @@ endforeach()
 add_custom_target(test_generated_performance_benchmarks)
 foreach(shape IN ITEMS static_keep union_fold equality_reduce grid_region row_join baseline own_projection
         single_commit plain_commit sweep wide_level reduced_keep required_links keep_chain
-        incremental_keep render_pass dimension_spread timers clamped sum_encodings)
+        incremental_keep render_pass dimension_spread timers clamped sum_encodings color_fade)
     set(perf_target test_perf_${shape}_benchmark)
     set(perf_codegen_flags)
     if(shape STREQUAL "wide_level")

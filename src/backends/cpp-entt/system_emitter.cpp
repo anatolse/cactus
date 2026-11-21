@@ -659,13 +659,7 @@ using LexicalLocalBindings = std::unordered_set<std::string>;
 // tripping clang-tidy's bugprone-narrowing-conversions on the generated
 // output (see stdlib std.ui's Grid/Stack measurement formulas, the first DSL
 // code to mix a GridItem `int` field with `vec2` float components).
-// Color isn't numeric for arithmetic-promotion purposes (this classification's
-// original purpose) — it's tracked here too because it needs the same
-// per-local "what Cactus type is this identifier" lookup rewrite_expr's
-// MemberExpr case already threads through, to normalize a color-typed
-// local/parameter's `.r`/`.g`/`.b`/`.a` reads the same way every other color
-// access is normalized.
-enum class NumericKind : std::uint8_t { Unknown, Int, Float, Color };
+enum class NumericKind : std::uint8_t { Unknown, Int, Float };
 
 using LocalNumericKinds = std::unordered_map<std::string, NumericKind>;
 
@@ -2865,13 +2859,6 @@ static std::string lower_trait_field_path(const TraitAccessExpr& access,
                    EnttCodegenUtils::trait_cpp_name(trait_id, access.trait_name, program) + ">(" + ident->name + ")";
         }
     }
-    const auto* trait = EnttCodegenUtils::find_trait(program, make_canonical_id(trait_id));
-    if (fields.size() == 2 && trait != nullptr && EnttCodegenUtils::is_color_component_member(fields[1])) {
-        const auto field = std::ranges::find(trait->fields, fields[0], &ResolvedField::name);
-        if (field != trait->fields.end() && field->type.kind == TypeKind::Color) {
-            return "(static_cast<float>(" + base + "." + fields[0] + "." + fields[1] + ") / 255.0F)";
-        }
-    }
     for (const auto& field : fields) {
         base += "." + cpp_escaped(field);
     }
@@ -3061,17 +3048,7 @@ static std::string rewrite_expr_node(  // NOLINT(readability-function-cognitive-
                     return EnttCodegenUtils::duration_literal_cpp(e.value);
                 }
                 if (e.kind == LiteralExpr::Kind::HexColor) {
-                    std::string hex = e.value;
-                    if (hex.size() == 6) {
-                        hex += "FF";
-                    }
-                    if (hex.size() == 8) {
-                        auto byte = [&](size_t offset) {
-                            return std::to_string(std::stoi(hex.substr(offset, 2), nullptr, 16));
-                        };
-                        return "Color{.r = " + byte(0) + ", .g = " + byte(2) + ", .b = " + byte(4) +
-                               ", .a = " + byte(6) + "}";
-                    }
+                    return EnttCodegenUtils::hex_color_literal_cpp(e.value);
                 }
                 return e.value;
             } else if constexpr (std::is_same_v<E, SelfExpr>) {
@@ -3337,19 +3314,6 @@ static std::string rewrite_expr_node(  // NOLINT(readability-function-cognitive-
                 if (auto* ident = std::get_if<IdentExpr>(&e.object->expr)) {
                     if (pointer_aliases.contains(ident->name)) {
                         return ident->name + "->" + e.member;
-                    }
-                    // A color-typed local/parameter's `.r`/`.g`/`.b`/`.a`
-                    // needs the same normalized-float read every other color
-                    // access uses (dsl-vector-expressions "Color float
-                    // component access") — the trait-access branch above
-                    // already handles this for a named or pair trait access;
-                    // this is the same fix for a plain local value (e.g. a
-                    // `func`'s `color`-typed parameter).
-                    if (local_kinds != nullptr && EnttCodegenUtils::is_color_component_member(e.member)) {
-                        if (const auto found = local_kinds->find(ident->name);
-                            found != local_kinds->end() && found->second == NumericKind::Color) {
-                            return "(static_cast<float>(" + ident->name + "." + e.member + ") / 255.0F)";
-                        }
                     }
                 }
                 return rewrite_expr(*e.object, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) + "." +
@@ -4933,8 +4897,6 @@ std::string EnttSystemEmitter::emit_func(const FuncNode& func, const DecoratedPr
             param_kinds[param.name] = NumericKind::Int;
         } else if (param.type.kind == TypeKind::Float) {
             param_kinds[param.name] = NumericKind::Float;
-        } else if (param.type.kind == TypeKind::Color) {
-            param_kinds[param.name] = NumericKind::Color;
         }
     }
     out << rewrite_stmt_block(func.body, 1, {}, program, {}, false, {}, nullptr, locals, param_kinds);
@@ -9558,7 +9520,7 @@ const std::array<SingleViewRendererSpec, 4>& single_view_renderer_specs() {
          .call_body =
              [](const std::string& t, const std::string& d) {
                  return "cactus::runtime::entt_backend::register_point_light(" + t + ".position, " + d + ".color, " +
-                        d + ".intensity, " + d + ".range, " + d + ".enabled)";
+                        d + ".range, " + d + ".enabled)";
              }},
     }};
     return specs;
@@ -9829,7 +9791,7 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
         out << "    view.each([&](entt::entity entity, const " << dl << "& " << dl_var << ") {\n";
         out << "        (void)entity;\n";
         out << "        cactus::runtime::entt_backend::register_directional_light(" << dl_var << ".direction, "
-            << dl_var << ".color, " << dl_var << ".intensity, " << dl_var << ".enabled);\n";
+            << dl_var << ".color, " << dl_var << ".enabled);\n";
         out << "    });\n";
         out << "}\n\n";
         return out.str();

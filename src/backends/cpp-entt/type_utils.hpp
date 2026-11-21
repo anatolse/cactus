@@ -87,8 +87,8 @@ public:
     static std::string named_trait_ref_name(const NamedTraitRef& ref);
     // The slot or hoisted reference a resolved named member chain lowers to.
     static std::optional<std::string> named_member_cpp(const MemberExpr& member);
-    // `.r/.g/.b/.a` on a color: a byte field read as a normalized float.
-    static bool is_color_component_member(const std::string& member);
+    // A hex color literal (digits without `#`, alpha optional) as the runtime color constant.
+    static std::string hex_color_literal_cpp(const std::string& hex_digits);
     static std::vector<const EntityNode*> declared_entities(const DecoratedProgram& program);
     // The program's hierarchy children index, as a C++ expression over `registry`.
     static std::string hierarchy_index_expr(const DecoratedProgram& program);

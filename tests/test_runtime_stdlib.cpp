@@ -239,22 +239,26 @@ TEST_CASE("Runtime stdlib: vec2/vec3 add/subtract/divide and compound-assignment
     CHECK(sum3.z == Catch::Approx(2.0F));
 }
 
-TEST_CASE("Runtime stdlib: color_from_components matches the equivalent hex-literal byte struct",
+TEST_CASE("Runtime stdlib: color_from_components keeps every channel as given",
           "[runtime][stdlib][vector-expressions]") {
-    const Color red = color_from_components(1.0F, 0.0F, 0.0F, 1.0F);
-    CHECK(red.r == 255);
-    CHECK(red.g == 0);
-    CHECK(red.b == 0);
-    CHECK(red.a == 255);
+    const CactusColor red = color_from_components(1.0F, 0.0F, 0.0F, 1.0F);
+    CHECK(red.r == 1.0F);
+    CHECK(red.g == 0.0F);
+    CHECK(red.b == 0.0F);
+    CHECK(red.a == 1.0F);
+
+    const CactusColor wide = color_from_components(1.5F, -0.2F, 0.0F, 1.0F);
+    CHECK(wide.r == 1.5F);
+    CHECK(wide.g == -0.2F);
 }
 
-TEST_CASE("Runtime stdlib: color_from_components clamps out-of-range channel inputs",
+TEST_CASE("Runtime stdlib: color_from_bytes gives each channel its byte over 255",
           "[runtime][stdlib][vector-expressions]") {
-    const Color clamped = color_from_components(1.5F, -0.2F, 0.0F, 1.0F);
-    CHECK(clamped.r == 255);
-    CHECK(clamped.g == 0);
-    CHECK(clamped.b == 0);
-    CHECK(clamped.a == 255);
+    constexpr CactusColor gray = color_from_bytes(128, 0, 255, 64);
+    STATIC_CHECK(gray.r == 128.0F / 255.0F);
+    STATIC_CHECK(gray.g == 0.0F);
+    STATIC_CHECK(gray.b == 1.0F);
+    STATIC_CHECK(gray.a == 64.0F / 255.0F);
 }
 
 TEST_CASE("Runtime stdlib: vector and color constructors are usable in constant expressions",
@@ -264,73 +268,79 @@ TEST_CASE("Runtime stdlib: vector and color constructors are usable in constant 
     static_assert(vec3(1.0F, 2.0F, 3.0F).z == 3.0F);
     static_assert(vec3(4.0F).y == 4.0F);
     static_assert(cactus::runtime::stdlib::math::quat::identity().w == 1.0F);
-    static_assert(color_from_components(1.5F, 0.5F, -0.2F, 1.0F).r == 255);
-    static_assert(color_from_components(1.5F, 0.5F, -0.2F, 1.0F).g == 128);
-    static_assert(color_from_components(1.5F, 0.5F, -0.2F, 1.0F).b == 0);
+    static_assert(color_from_components(1.5F, 0.5F, -0.2F, 1.0F).r == 1.5F);
+    static_assert(color_from_components(1.5F, 0.5F, -0.2F, 1.0F).b == -0.2F);
+    static_assert(color_from_bytes(255, 0, 0, 255).r == 1.0F);
     static_assert(noexcept(vec2(0.0F, 0.0F)) && noexcept(vec3(0.0F)));
-    CHECK(color_from_components(0.25F, 0.75F, 0.1F, 0.0F).r == std::lround(0.25F * 255.0F));
-    CHECK(color_from_components(0.25F, 0.75F, 0.1F, 0.0F).g == std::lround(0.75F * 255.0F));
-    CHECK(color_from_components(0.25F, 0.75F, 0.1F, 0.0F).b == std::lround(0.1F * 255.0F));
 }
 
-TEST_CASE("Runtime stdlib: color operator matrix add/subtract/scale/divide/component-multiply are reachable",
+TEST_CASE("Runtime stdlib: color operators compute each channel as one float operation with no clamp",
           "[runtime][stdlib][vector-expressions]") {
-    // Byte-quantized round-tripping (float -> [0,255] channel -> float) loses
-    // precision, so compare against the arithmetic on normalized floats with
-    // one quantization step (1/255) of slack rather than a second,
-    // independently-rounded color_from_components call.
-    constexpr float kQuantizationStep = 1.0F / 255.0F;
-    auto normalized                   = [](const Color c) { return static_cast<float>(c.r) / 255.0F; };
+    const CactusColor a = color_from_components(0.2F, 0.4F, 0.6F, 1.0F);
+    const CactusColor b = color_from_components(0.1F, 0.9F, 0.1F, 0.5F);
 
-    const Color a = color_from_components(0.2F, 0.4F, 0.6F, 1.0F);
-    const Color b = color_from_components(0.1F, 0.1F, 0.1F, 0.5F);
+    const CactusColor sum = a + b;
+    CHECK(sum.r == 0.2F + 0.1F);
+    CHECK(sum.g == 0.4F + 0.9F);
+    CHECK(sum.a == 1.5F);
 
-    const Color sum = a + b;
-    CHECK(normalized(sum) == Catch::Approx(0.3F).margin(kQuantizationStep));
+    const CactusColor diff = a - b;
+    CHECK(diff.g == 0.4F - 0.9F);
+    CHECK(diff.g < 0.0F);
 
-    const Color diff = a - b;
-    CHECK(normalized(diff) == Catch::Approx(0.1F).margin(kQuantizationStep));
+    const CactusColor scaled_right = a * 3.0F;
+    const CactusColor scaled_left  = 3.0F * a;
+    CHECK(scaled_right.b == 0.6F * 3.0F);
+    CHECK(scaled_left.b == scaled_right.b);
+    CHECK(scaled_right.a == 3.0F);
 
-    const Color scaled_right = a * 0.5F;
-    const Color scaled_left  = 0.5F * a;
-    CHECK(scaled_right.r == scaled_left.r);
-    CHECK(scaled_right.g == scaled_left.g);
-    CHECK(scaled_right.b == scaled_left.b);
-
-    const Color divided = a / 2.0F;
-    CHECK(divided.r == scaled_right.r);
-    CHECK(divided.g == scaled_right.g);
-    CHECK(divided.b == scaled_right.b);
+    const CactusColor divided = a / 0.5F;
+    CHECK(divided.r == 0.2F / 0.5F);
 
     // Component-wise, not a dot product: each channel multiplies independently.
-    const Color product = a * b;
-    CHECK(normalized(product) == Catch::Approx(0.2F * 0.1F).margin(kQuantizationStep));
+    const CactusColor product = a * b;
+    CHECK(product.g == 0.4F * 0.9F);
+    CHECK(product.a == 0.5F);
 }
 
-TEST_CASE("Runtime stdlib: color scalar multiply clamps an already-saturated channel",
+TEST_CASE("Runtime stdlib: color arithmetic keeps intermediate values above one",
           "[runtime][stdlib][vector-expressions]") {
-    constexpr Color kSaturatedWhite{.r = 255, .g = 255, .b = 255, .a = 255};
-    const Color doubled = kSaturatedWhite * 2.0F;
-    CHECK(doubled.r == 255);
-    CHECK(doubled.g == 255);
-    CHECK(doubled.b == 255);
-    CHECK(doubled.a == 255);
+    constexpr CactusColor kWhite = color_from_bytes(255, 255, 255, 255);
+    const CactusColor doubled    = kWhite * 2.0F;
+    CHECK(doubled.r == 2.0F);
+    CHECK(doubled.a == 2.0F);
+    const CactusColor back = doubled * 0.5F;
+    CHECK(back.r == 1.0F);
+    CHECK(back.g == 1.0F);
+
+    const CactusColor black = color_from_bytes(0, 0, 0, 255);
+    const CactusColor blend = kWhite + (black - kWhite) * 0.5F;
+    CHECK(blend.r == 0.5F);
+    CHECK(blend.a == 1.0F);
 }
 
-// dsl-vector-expressions "Color arithmetic clamps at every step": chained
-// arithmetic re-clips at each intermediate result rather than applying the
-// combined scale factor to the original unclamped value - (tint * 2.0) clips
-// to opaque white *before* the second multiply, so the final result is white
-// scaled by 0.5, not tint scaled by 1.0 (which would stay saturated).
-TEST_CASE("Runtime stdlib: color chained arithmetic re-clips at each intermediate step",
+TEST_CASE("Runtime stdlib: to_raylib_color clamps, scales and rounds each channel once, NaN to zero",
           "[runtime][stdlib][vector-expressions]") {
-    constexpr Color kSaturatedWhite{.r = 255, .g = 255, .b = 255, .a = 255};
-    const Color result = (kSaturatedWhite * 2.0F) * 0.5F;
-    CHECK(result.r == 128);
-    CHECK(result.g == 128);
-    CHECK(result.b == 128);
-    CHECK(result.a == 128);
-    CHECK(result.r != kSaturatedWhite.r);
+    constexpr Color bytes = to_raylib_color(
+        CactusColor{.r = 1.5F, .g = -0.2F, .b = 0.5F, .a = std::numeric_limits<float>::quiet_NaN()});
+    STATIC_CHECK(bytes.r == 255);
+    STATIC_CHECK(bytes.g == 0);
+    STATIC_CHECK(bytes.b == 128);
+    STATIC_CHECK(bytes.a == 0);
+    CHECK(to_raylib_color(color_from_components(0.3F, 0.25F, 0.75F, 0.1F)).r == 77);
+    CHECK(to_raylib_color(color_from_components(0.3F, 0.25F, 0.75F, 0.1F)).g == std::lround(0.25F * 255.0F));
+    CHECK(to_raylib_color(color_from_components(0.3F, 0.25F, 0.75F, 0.1F)).b == std::lround(0.75F * 255.0F));
+    CHECK(to_raylib_color(color_from_bytes(12, 34, 56, 78)).b == 56);
+}
+
+TEST_CASE("Runtime stdlib: a 0.99 alpha fade per frame reaches below 0.0001",
+          "[runtime][stdlib][vector-expressions]") {
+    CactusColor faded = color_from_bytes(255, 255, 255, 255);
+    for (int frame = 0; frame < 1000; ++frame) {
+        faded = color_from_components(faded.r, faded.g, faded.b, faded.a * 0.99F);
+    }
+    CHECK(faded.a < 0.0001F);
+    CHECK(faded.a > 0.0F);
 }
 
 TEST_CASE("Runtime stdlib: quaternion helpers behave correctly", "[runtime][stdlib][quat]") {
@@ -793,7 +803,7 @@ TEST_CASE("Runtime stdlib: EnTT mesh submission respects visibility and missing 
                                                22U,
                                                true,
                                                true,
-                                               WHITE);
+                                               color_from_raylib(WHITE));
     CHECK(cactus::runtime::entt_backend::render_debug_state().submitted_meshes == 1);
 
     cactus::runtime::entt_backend::submit_mesh(Vector3{.x = 1.0F, .y = 2.0F, .z = 3.0F},
@@ -803,7 +813,7 @@ TEST_CASE("Runtime stdlib: EnTT mesh submission respects visibility and missing 
                                                22U,
                                                false,
                                                true,
-                                               WHITE);
+                                               color_from_raylib(WHITE));
     CHECK(cactus::runtime::entt_backend::render_debug_state().submitted_meshes == 1);
 
     cactus::runtime::entt_backend::submit_mesh(Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
@@ -813,7 +823,7 @@ TEST_CASE("Runtime stdlib: EnTT mesh submission respects visibility and missing 
                                                22U,
                                                true,
                                                true,
-                                               WHITE);
+                                               color_from_raylib(WHITE));
     CHECK(cactus::runtime::entt_backend::render_debug_state().missing_assets >= 1);
 }
 
@@ -1102,8 +1112,8 @@ TEST_CASE("Runtime stdlib: EnTT static and animated model submissions retain ind
     const auto identity      = stdlib::math::quat::identity();
     const auto origin        = Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};
     const auto unit          = Vector3{.x = 1.0F, .y = 1.0F, .z = 1.0F};
-    const auto static_tint   = Color{.r = 128, .g = 64, .b = 32, .a = 128};
-    const auto animated_tint = Color{.r = 32, .g = 160, .b = 255, .a = 64};
+    const auto static_tint   = color_from_components(1.5F, 0.25F, 0.125F, 0.5F);
+    const auto animated_tint = color_from_bytes(32, 160, 255, 64);
 
     cactus::runtime::entt_backend::begin_render_frame();
     cactus::runtime::entt_backend::submit_model(origin, identity, unit, 86U, true, true, static_tint);
@@ -1129,9 +1139,9 @@ TEST_CASE("Runtime stdlib: EnTT screen label submissions count visible labels on
 
     cactus::runtime::entt_backend::begin_render_frame();
     cactus::runtime::entt_backend::submit_screen_label(
-        Vector2{.x = 16.0F, .y = 16.0F}, 32, WHITE, "Robot 1 - Idle", true);
-    cactus::runtime::entt_backend::submit_screen_label(Vector2{.x = 16.0F, .y = 48.0F}, 32, WHITE, "hidden", false);
-    cactus::runtime::entt_backend::submit_screen_label(Vector2{.x = 16.0F, .y = 80.0F}, 24, WHITE, "second", true);
+        Vector2{.x = 16.0F, .y = 16.0F}, 32, color_from_raylib(WHITE), "Robot 1 - Idle", true);
+    cactus::runtime::entt_backend::submit_screen_label(Vector2{.x = 16.0F, .y = 48.0F}, 32, color_from_raylib(WHITE), "hidden", false);
+    cactus::runtime::entt_backend::submit_screen_label(Vector2{.x = 16.0F, .y = 80.0F}, 24, color_from_raylib(WHITE), "second", true);
     cactus::runtime::entt_backend::end_render_frame();
 
     CHECK(cactus::runtime::entt_backend::render_debug_state().submitted_screen_labels == 2);
@@ -1147,9 +1157,9 @@ TEST_CASE("Runtime stdlib: EnTT sprite submissions preserve layer ordering and d
     cactus::runtime::entt_backend::reset_render_debug_state();
     cactus::runtime::entt_backend::begin_render_frame();
     cactus::runtime::entt_backend::submit_sprite(
-        Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 1.0F, .y = 1.0F}, WHITE, 32U, true, 5);
+        Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 1.0F, .y = 1.0F}, color_from_raylib(WHITE), 32U, true, 5);
     cactus::runtime::entt_backend::submit_sprite(
-        Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 1.0F, .y = 1.0F}, WHITE, 31U, true, 1);
+        Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 1.0F, .y = 1.0F}, color_from_raylib(WHITE), 31U, true, 1);
     cactus::runtime::entt_backend::end_render_frame();
 
     CHECK(cactus::runtime::entt_backend::render_debug_state().submitted_sprites == 2);
@@ -1174,7 +1184,7 @@ TEST_CASE("Runtime stdlib: EnTT render frame marks default 3D camera for queued 
                                                42U,
                                                true,
                                                true,
-                                               WHITE);
+                                               color_from_raylib(WHITE));
     cactus::runtime::entt_backend::end_render_frame();
 
     CHECK(cactus::runtime::entt_backend::render_debug_state().submitted_meshes == 1);
@@ -1196,15 +1206,22 @@ TEST_CASE("Runtime stdlib: EnTT point lights participate in lit mesh frame state
                                                52U,
                                                true,
                                                true,
-                                               WHITE);
+                                               color_from_bytes(255, 255, 255, 255));
     cactus::runtime::entt_backend::register_point_light(
-        Vector3{.x = -2.0F, .y = 1.0F, .z = 2.0F}, ORANGE, 1.4F, 8.0F, true);
+        Vector3{.x = -2.0F, .y = 1.0F, .z = 2.0F}, color_from_bytes(255, 255, 255, 255) * 2.0F, 8.0F, true);
     cactus::runtime::entt_backend::register_point_light(
-        Vector3{.x = 2.0F, .y = 1.0F, .z = 2.0F}, SKYBLUE, 1.2F, 8.0F, true);
+        Vector3{.x = 2.0F, .y = 1.0F, .z = 2.0F}, color_from_bytes(102, 191, 255, 255), 8.0F, true);
     cactus::runtime::entt_backend::register_point_light(
-        Vector3{.x = 0.0F, .y = 3.0F, .z = 0.0F}, WHITE, 0.5F, 8.0F, false);
+        Vector3{.x = 0.0F, .y = 3.0F, .z = 0.0F}, color_from_bytes(255, 255, 255, 255), 8.0F, false);
     cactus::runtime::entt_backend::end_render_frame();
 
+    // A light brighter than white reaches the shader unclamped.
+    const auto& uploaded = cactus::runtime::entt_backend::render_debug_state().uploaded_light_colors;
+    REQUIRE(uploaded.size() == 2);
+    CHECK(uploaded[0].r == 2.0F);
+    CHECK(uploaded[0].g == 2.0F);
+    CHECK(uploaded[0].b == 2.0F);
+    CHECK(uploaded[1].g == 191.0F / 255.0F);
     CHECK(cactus::runtime::entt_backend::render_debug_state().registered_point_lights == 2);
     CHECK(cactus::runtime::entt_backend::render_debug_state().active_point_lights == 2);
     CHECK(cactus::runtime::entt_backend::render_debug_state().used_lit_mesh_shader);
@@ -1226,13 +1243,15 @@ TEST_CASE("Runtime stdlib: EnTT directional lights participate in lit mesh frame
                                                62U,
                                                true,
                                                true,
-                                               WHITE);
+                                               color_from_bytes(255, 255, 255, 255));
     cactus::runtime::entt_backend::register_directional_light(
-        Vector3{.x = -0.4F, .y = -1.0F, .z = -0.3F}, WHITE, 1.0F, true);
+        Vector3{.x = -0.4F, .y = -1.0F, .z = -0.3F}, color_from_bytes(255, 224, 192, 255) * 1.5F, true);
     cactus::runtime::entt_backend::register_directional_light(
-        Vector3{.x = 0.0F, .y = -1.0F, .z = 0.0F}, WHITE, 0.5F, false);
+        Vector3{.x = 0.0F, .y = -1.0F, .z = 0.0F}, color_from_bytes(255, 255, 255, 255), false);
     cactus::runtime::entt_backend::end_render_frame();
 
+    REQUIRE(cactus::runtime::entt_backend::render_debug_state().uploaded_light_colors.size() == 1);
+    CHECK(cactus::runtime::entt_backend::render_debug_state().uploaded_light_colors[0].r == 1.5F);
     CHECK(cactus::runtime::entt_backend::render_debug_state().registered_directional_lights == 1);
     CHECK(cactus::runtime::entt_backend::render_debug_state().active_directional_lights == 1);
     CHECK(cactus::runtime::entt_backend::render_debug_state().used_lit_mesh_shader);
@@ -1269,7 +1288,7 @@ TEST_CASE("Runtime stdlib: Renderer.color tints the resolved placeholder materia
                                                62U,
                                                true,
                                                true,
-                                               WHITE);
+                                               color_from_bytes(255, 255, 255, 255));
     cactus::runtime::entt_backend::end_render_frame();
 
     // Default color (#FFFFFFFF) leaves the resolved placeholder color unchanged.
@@ -1283,7 +1302,7 @@ TEST_CASE("Runtime stdlib: Renderer.color tints the resolved placeholder materia
 
     // A non-default color multiplies the resolved placeholder color.
     cactus::runtime::entt_backend::begin_render_frame();
-    const Color tint{.r = 128, .g = 64, .b = 32, .a = 255};
+    const CactusColor tint = color_from_components(0.5F, 2.0F, 0.125F, 1.0F);
     cactus::runtime::entt_backend::submit_mesh(Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
                                                stdlib::math::quat::identity(),
                                                Vector3{.x = 1.0F, .y = 1.0F, .z = 1.0F},
@@ -1296,7 +1315,7 @@ TEST_CASE("Runtime stdlib: Renderer.color tints the resolved placeholder materia
 
     REQUIRE(cactus::runtime::entt_backend::render_debug_state().submitted_mesh_colors.size() == 1);
     const Color tinted   = cactus::runtime::entt_backend::render_debug_state().submitted_mesh_colors[0];
-    const Color expected = ColorTint(blue_placeholder, tint);
+    const Color expected = to_raylib_color(color_from_raylib(blue_placeholder) * tint);
     CHECK(tinted.r == expected.r);
     CHECK(tinted.g == expected.g);
     CHECK(tinted.b == expected.b);
@@ -1378,14 +1397,14 @@ TEST_CASE("Runtime stdlib: palette_color is deterministic", "[runtime][stdlib][r
 }
 
 TEST_CASE("Runtime stdlib: palette_color gives 8 distinct colors for indices 0..7", "[runtime][stdlib][random]") {
-    std::array<Color, 8> colors{};
+    std::array<CactusColor, 8> colors{};
     for (int i = 0; i < 8; ++i) {
         colors[static_cast<std::size_t>(i)] = stdlib::random::palette_color(i);
     }
     for (int i = 0; i < 8; ++i) {
         for (int j = i + 1; j < 8; ++j) {
-            const Color& color_i = colors[static_cast<std::size_t>(i)];
-            const Color& color_j = colors[static_cast<std::size_t>(j)];
+            const CactusColor& color_i = colors[static_cast<std::size_t>(i)];
+            const CactusColor& color_j = colors[static_cast<std::size_t>(j)];
             const bool distinct =
                 color_i.r != color_j.r || color_i.g != color_j.g || color_i.b != color_j.b || color_i.a != color_j.a;
             CHECK(distinct);

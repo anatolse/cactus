@@ -45,19 +45,21 @@ TEST_CASE("model tint headless: default, static, and animated submissions retain
     const auto renderers = registry.view<cactus_gen::stdlib::render::models::ModelRenderer>();
     REQUIRE(renderers.size() == 3);
     const bool has_default_white = std::ranges::any_of(renderers, [&](const auto entity) {
-        return same_color(registry.get<cactus_gen::stdlib::render::models::ModelRenderer>(entity).color, WHITE);
+        return same_color(to_raylib_color(registry.get<cactus_gen::stdlib::render::models::ModelRenderer>(entity).color),
+                          WHITE);
     });
     CHECK(has_default_white);
 
     const auto& debug = cactus::runtime::entt_backend::render_debug_state();
     REQUIRE(debug.submitted_model_colors.size() == 3);
     CHECK(
-        std::ranges::any_of(debug.submitted_model_colors, [](const Color color) { return same_color(color, WHITE); }));
-    CHECK(std::ranges::any_of(debug.submitted_model_colors, [](const Color color) {
-        return same_color(color, Color{.r = 128, .g = 64, .b = 32, .a = 128});
+        std::ranges::any_of(debug.submitted_model_colors,
+                            [](const CactusColor color) { return same_color(to_raylib_color(color), WHITE); }));
+    CHECK(std::ranges::any_of(debug.submitted_model_colors, [](const CactusColor color) {
+        return same_color(to_raylib_color(color), Color{.r = 128, .g = 64, .b = 32, .a = 128});
     }));
-    CHECK(std::ranges::any_of(debug.submitted_model_colors, [](const Color color) {
-        return same_color(color, Color{.r = 32, .g = 160, .b = 255, .a = 64});
+    CHECK(std::ranges::any_of(debug.submitted_model_colors, [](const CactusColor color) {
+        return same_color(to_raylib_color(color), Color{.r = 32, .g = 160, .b = 255, .a = 64});
     }));
 
     const auto* default_draw  = find_draw_at(Vector3{.x = -2.0F, .y = 0.0F, .z = 0.0F});

@@ -33,25 +33,21 @@ pub trait BillboardRenderer:
     var visible: bool = true
 
 # Emits a point light at the entity's transform position.
-# color:     light color
-# intensity: brightness multiplier
+# color:     light color and brightness; a channel above 1 is brighter, e.g. #FFE0C0FF * 1.5
 # range:     falloff radius in world units
 # enabled:   set false to turn off the light without removing the trait
 pub trait PointLight:
     var color: color = #FFFFFFFF
-    var intensity: float = 1.0
     var range: float = 10.0
     var enabled: bool = true
 
 # Emits a directional (sun-like) light from a fixed direction.
 # direction: normalized world-space direction the light travels
-# color:     light color
-# intensity: brightness multiplier
+# color:     light color and brightness; a channel above 1 is brighter
 # enabled:   set false to turn off the light without removing the trait
 pub trait DirectionalLight:
     var direction: vec3 = vec3(0.0, -1.0, 0.0)
     var color: color = #FFFFFFFF
-    var intensity: float = 1.0
     var enabled: bool = true
 
 extern rule MeshRenderer:

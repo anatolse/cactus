@@ -208,7 +208,7 @@ TEST_CASE("A tick-phase bump changes render presentation the same frame without 
                                         .offset = {.x = 0.0F, .y = 0.0F}});
     registry.emplace<cactus_gen::stdlib::ui::Visual>(
         entity, cactus_gen::stdlib::ui::Visual{.scale = {.x = 1.0F, .y = 1.0F}, .opacity = 1.0F});
-    registry.emplace<cactus_gen::stdlib::ui::Panel>(entity, cactus_gen::stdlib::ui::Panel{.background = RED});
+    registry.emplace<cactus_gen::stdlib::ui::Panel>(entity, cactus_gen::stdlib::ui::Panel{.background = color_from_raylib(RED)});
     // Already mid-flight so a single driven frame visibly interpolates scale.
     registry.emplace<cactus_gen::stdlib::ui::BumpAnimation>(
         entity,

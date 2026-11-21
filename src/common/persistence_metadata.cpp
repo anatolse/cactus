@@ -70,7 +70,7 @@ PersistenceValueType describe_persistence_value(const TypeInfo& type) {
         case TypeKind::Quat:
             return vector_of(PersistenceValueKind::Float, 32, 4);
         case TypeKind::Color:
-            return vector_of(PersistenceValueKind::Int, 8, 4);
+            return vector_of(PersistenceValueKind::ColorChannel, 32, 4);
         case TypeKind::EntityId:
             return scalar(PersistenceValueKind::EntityRef, 32);
         case TypeKind::MeshId:

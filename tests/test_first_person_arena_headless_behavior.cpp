@@ -77,8 +77,9 @@ float horizontal_distance(const Vector3 left, const Vector3 right) {
     return std::sqrt(dx * dx + dz * dz);
 }
 
-bool same_color(const Color left, const Color right) {
-    return left.r == right.r && left.g == right.g && left.b == right.b && left.a == right.a;
+bool same_color(const CactusColor left, const Color right) {
+    const Color bytes = to_raylib_color(left);
+    return bytes.r == right.r && bytes.g == right.g && bytes.b == right.b && bytes.a == right.a;
 }
 
 // Enemies are grounded at torso height on their own entity (collision
@@ -526,8 +527,8 @@ TEST_CASE("first-person arena headless: bullets follow aim, serialize contacts, 
     const auto& halfway = registry.get<cactus_gen::main::Enemy>(dying_enemy);
     CHECK(cactus::seconds(registry.get<cactus_gen::main::EnemyLife::Dying>(dying_enemy).elapsed) == Catch::Approx(0.5F).margin(0.08F));
     const auto alpha = registry.get<cactus_gen::stdlib::render::models::ModelRenderer>(dying_visual).color.a;
-    CHECK(alpha >= 100);
-    CHECK(alpha <= 155);
+    CHECK(alpha >= 100.0F / 255.0F);
+    CHECK(alpha <= 155.0F / 255.0F);
     // The model tips over; the collision root keeps its yaw.
     check_quat(registry.get<cactus_gen::stdlib::transform::volume::WorldTransform>(dying_enemy).rotation,
                root_rotation);

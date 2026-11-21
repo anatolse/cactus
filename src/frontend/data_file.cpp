@@ -1,5 +1,7 @@
 #include "frontend/data_file.hpp"
 
+#include "common/color_channels.hpp"
+
 #include <algorithm>
 #include <array>
 #include <charconv>
@@ -19,7 +21,7 @@ size_t FieldValue::byte_size() const {
         case Tag::Bool:
             return 1;
         case Tag::Color:
-            return 4;
+            return 16;
         case Tag::Vec2:
             return 8;
         case Tag::Vec3:
@@ -123,23 +125,6 @@ std::optional<FieldValue> DataFileWriter::eval_expr(const ExprNode& expr) const 
         expr.expr);
 }
 
-static uint8_t hex_digit(char c) {
-    if (c >= '0' && c <= '9') {
-        return static_cast<uint8_t>(c - '0');
-    }
-    if (c >= 'a' && c <= 'f') {
-        return static_cast<uint8_t>(c - 'a' + 10);
-    }
-    if (c >= 'A' && c <= 'F') {
-        return static_cast<uint8_t>(c - 'A' + 10);
-    }
-    return 0;
-}
-
-static uint8_t parse_hex_byte(const std::string& s, size_t offset) {
-    return static_cast<uint8_t>((hex_digit(s[offset]) << 4) | hex_digit(s[offset + 1]));
-}
-
 std::optional<FieldValue> DataFileWriter::eval_literal(const LiteralExpr& lit) {
     FieldValue fv;
     switch (lit.kind) {
@@ -174,15 +159,12 @@ std::optional<FieldValue> DataFileWriter::eval_literal(const LiteralExpr& lit) {
             fv.b   = (lit.value == "true");
             return fv;
         case LiteralExpr::Kind::HexColor: {
-            // The lexer stores value WITHOUT the leading '#' — e.g. "FF8800" (6 chars)
-            fv.tag        = FieldValue::Tag::Color;
-            const auto& s = lit.value;
-            if (s.size() >= 6) {
-                fv.color.r  = parse_hex_byte(s, 0);
-                fv.color.g  = parse_hex_byte(s, 2);
-                fv.color.bv = parse_hex_byte(s, 4);
-                fv.color.a  = (s.size() >= 8) ? parse_hex_byte(s, 6) : 255;
-            }
+            const auto [r, g, b, a] = hex_color_bytes(lit.value);
+            fv.tag                  = FieldValue::Tag::Color;
+            fv.color.r              = color_channel_from_byte(r);
+            fv.color.g              = color_channel_from_byte(g);
+            fv.color.bv             = color_channel_from_byte(b);
+            fv.color.a              = color_channel_from_byte(a);
             return fv;
         }
         case LiteralExpr::Kind::String:
@@ -502,10 +484,11 @@ void DataFileWriter::write_field_value(std::ostream& out, const FieldValue& fv) 
             write_u8(out, fv.b ? 1 : 0);
             break;
         case FieldValue::Tag::Color:
-            write_u8(out, fv.color.r);
-            write_u8(out, fv.color.g);
-            write_u8(out, fv.color.bv);
-            write_u8(out, fv.color.a);
+            for (const float channel : {fv.color.r, fv.color.g, fv.color.bv, fv.color.a}) {
+                uint32_t bits = 0;
+                std::memcpy(&bits, &channel, 4);
+                write_u32(out, bits);
+            }
             break;
         case FieldValue::Tag::Vec2: {
             uint32_t x = 0;
@@ -645,10 +628,10 @@ FieldValue DataFileReader::read_field_value(std::istream& in, FieldValue::Tag ta
             fv.b = (read_u8(in) != 0);
             break;
         case FieldValue::Tag::Color:
-            fv.color.r  = read_u8(in);
-            fv.color.g  = read_u8(in);
-            fv.color.bv = read_u8(in);
-            fv.color.a  = read_u8(in);
+            for (float* channel : {&fv.color.r, &fv.color.g, &fv.color.bv, &fv.color.a}) {
+                const uint32_t bits = read_u32(in);
+                std::memcpy(channel, &bits, 4);
+            }
             break;
         case FieldValue::Tag::Vec2: {
             uint32_t x = read_u32(in);

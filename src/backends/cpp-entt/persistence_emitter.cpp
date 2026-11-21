@@ -843,6 +843,7 @@ std::string put_statement(const DecoratedProgram& program, const TypeInfo& type,
             return "out.put_index(" + std::string(kRuntime) + "document_name_at(tables." +
                    (type.kind == TypeKind::InputAxis ? "axes" : "buttons") + ", static_cast<std::size_t>(" + access +
                    "), tables.unset_name));";
+        case PersistenceValueKind::ColorChannel:
         case PersistenceValueKind::Unsupported:
             return {};
     }
@@ -1059,6 +1060,7 @@ bool field_type_persists(const DecoratedProgram& program, const TypeInfo& type) 
             return EnttCodegenUtils::find_struct(program, type.name) != nullptr;
         case PersistenceValueKind::List:
             return type.element != nullptr && field_type_persists(program, *type.element);
+        case PersistenceValueKind::ColorChannel:
         case PersistenceValueKind::Unsupported:
             return false;
         default:

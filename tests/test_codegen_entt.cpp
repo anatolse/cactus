@@ -16,6 +16,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cstdlib>
 #include <regex>
 
 using namespace cactus;
@@ -542,7 +543,7 @@ TEST_CASE("Codegen EnTT: component struct field defaults come from the trait's o
     CHECK(code.contains("Quat q = quat(0.0F, 0.0F, 0.0F, 1.0F);"));
     CHECK(code.contains("bool flag = true;"));
     CHECK(code.contains("int n = 7;"));
-    CHECK(code.contains("Color c = Color{.r = 255, .g = 0, .b = 0, .a = 255};"));
+    CHECK(code.contains("CactusColor c = color_from_bytes(255, 0, 0, 255);"));
     CHECK(code.contains("std::vector<int> items = {1, 2};"));
     CHECK(code.contains("std::vector<int> empty_items;"));
     CHECK(code.contains("std::string s = \"hi\";"));
@@ -1328,7 +1329,6 @@ TEST_CASE("Codegen EnTT: directional light render extern rule binds to backend r
         "trait DirectionalLight:\n"
         "    var direction: vec3\n"
         "    var color: color\n"
-        "    var intensity: float\n"
         "    var enabled: bool\n"
         "event run\n"
         "extern rule DirectionalLightRender:\n"
@@ -1343,7 +1343,7 @@ TEST_CASE("Codegen EnTT: directional light render extern rule binds to backend r
     CHECK(code.contains("cactus::runtime::entt_backend::register_directional_light("));
     CHECK(code.contains("directional_light_comp.direction"));
     CHECK(code.contains("directional_light_comp.color"));
-    CHECK(code.contains("directional_light_comp.intensity"));
+    CHECK(!code.contains("intensity"));
     CHECK(code.contains("directional_light_comp.enabled"));
     CHECK(!code.contains("void directional_light_render_update("));
 }
@@ -7589,6 +7589,33 @@ TEST_CASE("Codegen EnTT: color(...) constructor routes through color_from_compon
     }
 }
 
+TEST_CASE("Codegen EnTT: color channel reads and hex literals keep float channels",
+          "[codegen-entt][vector-expressions]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event tick:\n"
+        "    dt: float\n"
+        "func red_of(c: color) float:\n"
+        "    return c.r\n"
+        "rule Demo:\n"
+        "    on tick:\n"
+        "        let c = #FF000080 * 3.0\n"
+        "        let r = c.r + red_of(c)\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        auto* sys = std::get_if<RuleNode>(&decl);
+        if (sys == nullptr || sys->name != "Demo") {
+            continue;
+        }
+        auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+        CHECK(code.contains("color_from_bytes(255, 0, 0, 128)"));
+        CHECK(code.contains("c.r"));
+        CHECK(!code.contains("255.0F"));
+        CHECK(!code.contains("Color{"));
+    }
+}
+
 TEST_CASE("Codegen EnTT: color(...) constructor int arguments are wrapped in static_cast<float>",
           "[codegen-entt][range][vector-expressions]") {
     ProgramNode program;
@@ -7613,7 +7640,7 @@ TEST_CASE("Codegen EnTT: color(...) constructor int arguments are wrapped in sta
     }
 }
 
-TEST_CASE("Codegen EnTT: pair-bound color channel read normalizes the raw byte field",
+TEST_CASE("Codegen EnTT: pair-bound color channel read is the raw float channel",
           "[codegen-entt][pair-relations][vector-expressions]") {
     ProgramNode program;
     auto decorated = full_pipeline(
@@ -7638,7 +7665,8 @@ TEST_CASE("Codegen EnTT: pair-bound color channel read normalizes the raw byte f
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            CHECK(code.contains("static_cast<float>(registry.get<const ::cactus_gen::Tint>(body).tint.a) / 255.0F"));
+            CHECK(code.contains("registry.get<const ::cactus_gen::Tint>(body).tint.a > 0.5F"));
+            CHECK(!code.contains("255"));
         }
     }
 }
@@ -8965,6 +8993,22 @@ TEST_CASE("Codegen EnTT: render-pass fragment handler lowers an if expression to
         "        let k = if f.uv.x > 0.5: 1.0 else: 0.0\n"
         "        f.frag_color = f.tint * k\n");
     CHECK(code.contains("float let_k = ((uv.x > 0.5) ? 1.0 : 0.0);"));
+}
+
+// A rule computes `(a - b) + b` over float channels with no clamp; the stage must see the same
+// channel values for the same literals and must not clamp either.
+TEST_CASE("Codegen EnTT: render-pass color literals carry the rule's exact float channels, with no clamp",
+          "[codegen-entt][render-passes][vector-expressions]") {
+    const auto code = conditional_render_pass_codegen("        f.frag_color = (#FF8000FF - #FFFFFFFF) + #FFFFFFFF\n");
+    CHECK(!code.contains("clamp("));
+    const std::regex vec4_literal(R"(vec4\(([-0-9.e]+), ([-0-9.e]+), ([-0-9.e]+), ([-0-9.e]+)\))");
+    bool found_orange = false;
+    for (auto it = std::sregex_iterator(code.begin(), code.end(), vec4_literal); it != std::sregex_iterator(); ++it) {
+        const auto lane = [&](std::size_t index) { return std::strtof((*it)[index].str().c_str(), nullptr); };
+        found_orange = found_orange ||
+                       (lane(1) == 1.0F && lane(2) == 128.0F / 255.0F && lane(3) == 0.0F && lane(4) == 1.0F);
+    }
+    CHECK(found_orange);
 }
 
 TEST_CASE("Codegen EnTT: render-pass fragment handler lowers a match expression to GLSL",

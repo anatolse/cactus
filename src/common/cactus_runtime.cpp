@@ -477,16 +477,16 @@ bool chance(Rng rng, float p) noexcept {
     return std::bernoulli_distribution{static_cast<double>(p)}(engine);
 }
 
-Color palette_color(int index) noexcept {
-    static constexpr std::array<Color, 8> kPalette{{
-        {.r = 255, .g = 107, .b = 107, .a = 255},
-        {.r = 78, .g = 205, .b = 196, .a = 255},
-        {.r = 255, .g = 217, .b = 61, .a = 255},
-        {.r = 107, .g = 203, .b = 119, .a = 255},
-        {.r = 77, .g = 150, .b = 255, .a = 255},
-        {.r = 179, .g = 136, .b = 255, .a = 255},
-        {.r = 255, .g = 146, .b = 43, .a = 255},
-        {.r = 240, .g = 101, .b = 149, .a = 255},
+CactusColor palette_color(int index) noexcept {
+    static constexpr std::array<CactusColor, 8> kPalette{{
+        color_from_bytes(255, 107, 107, 255),
+        color_from_bytes(78, 205, 196, 255),
+        color_from_bytes(255, 217, 61, 255),
+        color_from_bytes(107, 203, 119, 255),
+        color_from_bytes(77, 150, 255, 255),
+        color_from_bytes(179, 136, 255, 255),
+        color_from_bytes(255, 146, 43, 255),
+        color_from_bytes(240, 101, 149, 255),
     }};
     const int remainder = ((index % 8) + 8) % 8;
     return kPalette[static_cast<std::size_t>(remainder)];

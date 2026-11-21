@@ -735,6 +735,31 @@ fs::path write_modules(const std::string& name, const std::vector<std::pair<std:
 
 }  // namespace
 
+TEST_CASE("integration: std.render.meshes lights carry brightness in color, with no intensity field",
+          "[integration][stdlib][unbound-color-channels]") {
+    ProgramNode ast;
+    const auto merged = link_with_stdlib(
+        "module game\n"
+        "use std.render.meshes as meshes\n"
+        "entity Sun:\n"
+        "    meshes.DirectionalLight:\n"
+        "        color = #FFE0C0FF * 1.5\n"
+        "entity Bulb:\n"
+        "    meshes.PointLight:\n"
+        "        color = #FFFFFFFF * 2.0\n",
+        "game",
+        integration_build_dir() / "light_color" / "build",
+        ast);
+    REQUIRE(merged.has_value());
+    for (const auto* name : {"std.render.meshes.PointLight", "std.render.meshes.DirectionalLight"}) {
+        INFO(name);
+        REQUIRE(merged->traits.contains(name));
+        const auto& fields = merged->traits.at(name).fields;
+        CHECK(std::ranges::find(fields, std::string("color"), &ResolvedField::name) != fields.end());
+        CHECK(std::ranges::find(fields, std::string("intensity"), &ResolvedField::name) == fields.end());
+    }
+}
+
 TEST_CASE("integration: a module keeps a relation declared in an imported module", "[integration][relations]") {
     const auto modules = write_modules("imported_keep", {{"vis", kHiddenLibrary}});
     const ModuleDirGuard guard(modules.parent_path());

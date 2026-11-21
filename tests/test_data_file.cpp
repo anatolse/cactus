@@ -130,10 +130,12 @@ TEST_CASE("DataFile: color field from hex literal", "[datafile]") {
     REQUIRE(records.size() == 1);
     REQUIRE(records[0].fields.size() == 1);
     CHECK(records[0].fields[0].second.tag == FieldValue::Tag::Color);
-    CHECK(records[0].fields[0].second.color.r == 0xFF);
-    CHECK(records[0].fields[0].second.color.g == 0x88);
-    CHECK(records[0].fields[0].second.color.bv == 0x00);
-    CHECK(records[0].fields[0].second.color.a == 255);  // default alpha
+    // The same float channels the language gives the literal.
+    CHECK(records[0].fields[0].second.color.r == 1.0F);
+    CHECK(records[0].fields[0].second.color.g == 136.0F / 255.0F);
+    CHECK(records[0].fields[0].second.color.bv == 0.0F);
+    CHECK(records[0].fields[0].second.color.a == 1.0F);  // default alpha
+    CHECK(records[0].fields[0].second.byte_size() == 16);
 }
 
 // ── Task 6.4: Templates produce no data file entries ─────────────────────────

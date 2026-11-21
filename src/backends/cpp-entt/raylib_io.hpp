@@ -15,6 +15,9 @@
 // materialization (Load*/Unload*/Gen*, shader setup) are deliberately left
 // unwrapped — see design.md's "fake surface scope" decision.
 
+#include "backends/cpp-entt/perf_counters.hpp"
+#include "common/cactus_runtime.hpp"
+
 #include <raylib.h>
 #include <rlgl.h>
 
@@ -84,9 +87,15 @@ CACTUS_RL_WRAP(Vector2,
                (Font font, const char* text, float fontSize, float spacing),
                (font, text, fontSize, spacing))
 
+// The one place a draw call's color becomes 8-bit channels.
+[[nodiscard]] inline Color draw_color(CactusColor color) noexcept {
+    entt_backend::count_color_conversion();
+    return to_raylib_color(color);
+}
+
 // ── Drawing (recorded into the call log when faked) ────────────────────────
 
-CACTUS_RL_WRAP_VOID(ClearBackground, (Color color), (color))
+CACTUS_RL_WRAP_VOID(ClearBackground, (CactusColor color), (draw_color(color)))
 CACTUS_RL_WRAP_VOID(BeginMode2D, (Camera2D camera), (camera))
 CACTUS_RL_WRAP_VOID(EndMode2D, (), ())
 CACTUS_RL_WRAP_VOID(BeginMode3D, (Camera3D camera), (camera))
@@ -99,11 +108,11 @@ CACTUS_RL_WRAP_VOID(BeginScissorMode, (int x, int y, int width, int height), (x,
 CACTUS_RL_WRAP_VOID(EndScissorMode, (), ())
 CACTUS_RL_WRAP_VOID(DrawMesh, (Mesh mesh, Material material, Matrix transform), (mesh, material, transform))
 CACTUS_RL_WRAP_VOID(DrawText,
-                    (const char* text, int posX, int posY, int fontSize, Color color),
-                    (text, posX, posY, fontSize, color))
+                    (const char* text, int posX, int posY, int fontSize, CactusColor color),
+                    (text, posX, posY, fontSize, draw_color(color)))
 CACTUS_RL_WRAP_VOID(DrawTextEx,
-                    (Font font, const char* text, Vector2 position, float fontSize, float spacing, Color tint),
-                    (font, text, position, fontSize, spacing, tint))
+                    (Font font, const char* text, Vector2 position, float fontSize, float spacing, CactusColor tint),
+                    (font, text, position, fontSize, spacing, draw_color(tint)))
 CACTUS_RL_WRAP_VOID(DrawTextPro,
                     (Font font,
                      const char* text,
@@ -112,32 +121,32 @@ CACTUS_RL_WRAP_VOID(DrawTextPro,
                      float rotation,
                      float fontSize,
                      float spacing,
-                     Color tint),
-                    (font, text, position, origin, rotation, fontSize, spacing, tint))
+                     CactusColor tint),
+                    (font, text, position, origin, rotation, fontSize, spacing, draw_color(tint)))
 CACTUS_RL_WRAP_VOID(DrawTexturePro,
-                    (Texture2D texture, Rectangle source, Rectangle dest, Vector2 origin, float rotation, Color tint),
-                    (texture, source, dest, origin, rotation, tint))
+                    (Texture2D texture, Rectangle source, Rectangle dest, Vector2 origin, float rotation, CactusColor tint),
+                    (texture, source, dest, origin, rotation, draw_color(tint)))
 CACTUS_RL_WRAP_VOID(DrawRectanglePro,
-                    (Rectangle rec, Vector2 origin, float rotation, Color color),
-                    (rec, origin, rotation, color))
-CACTUS_RL_WRAP_VOID(DrawCircleV, (Vector2 center, float radius, Color color), (center, radius, color))
-CACTUS_RL_WRAP_VOID(DrawRectangleLinesEx, (Rectangle rec, float lineThick, Color color), (rec, lineThick, color))
-CACTUS_RL_WRAP_VOID(DrawRectangleRec, (Rectangle rec, Color color), (rec, color))
+                    (Rectangle rec, Vector2 origin, float rotation, CactusColor color),
+                    (rec, origin, rotation, draw_color(color)))
+CACTUS_RL_WRAP_VOID(DrawCircleV, (Vector2 center, float radius, CactusColor color), (center, radius, draw_color(color)))
+CACTUS_RL_WRAP_VOID(DrawRectangleLinesEx, (Rectangle rec, float lineThick, CactusColor color), (rec, lineThick, draw_color(color)))
+CACTUS_RL_WRAP_VOID(DrawRectangleRec, (Rectangle rec, CactusColor color), (rec, draw_color(color)))
 CACTUS_RL_WRAP_VOID(DrawLineEx,
-                    (Vector2 startPos, Vector2 endPos, float thick, Color color),
-                    (startPos, endPos, thick, color))
-CACTUS_RL_WRAP_VOID(DrawTriangle, (Vector2 v1, Vector2 v2, Vector2 v3, Color color), (v1, v2, v3, color))
+                    (Vector2 startPos, Vector2 endPos, float thick, CactusColor color),
+                    (startPos, endPos, thick, draw_color(color)))
+CACTUS_RL_WRAP_VOID(DrawTriangle, (Vector2 v1, Vector2 v2, Vector2 v3, CactusColor color), (v1, v2, v3, draw_color(color)))
 CACTUS_RL_WRAP_VOID(
     DrawRing,
-    (Vector2 center, float innerRadius, float outerRadius, float startAngle, float endAngle, int segments, Color color),
-    (center, innerRadius, outerRadius, startAngle, endAngle, segments, color))
-CACTUS_RL_WRAP_VOID(DrawCubeV, (Vector3 position, Vector3 size, Color color), (position, size, color))
-CACTUS_RL_WRAP_VOID(DrawCubeWiresV, (Vector3 position, Vector3 size, Color color), (position, size, color))
+    (Vector2 center, float innerRadius, float outerRadius, float startAngle, float endAngle, int segments, CactusColor color),
+    (center, innerRadius, outerRadius, startAngle, endAngle, segments, draw_color(color)))
+CACTUS_RL_WRAP_VOID(DrawCubeV, (Vector3 position, Vector3 size, CactusColor color), (position, size, draw_color(color)))
+CACTUS_RL_WRAP_VOID(DrawCubeWiresV, (Vector3 position, Vector3 size, CactusColor color), (position, size, draw_color(color)))
 CACTUS_RL_WRAP_VOID(DrawGrid, (int slices, float spacing), (slices, spacing))
 CACTUS_RL_WRAP_VOID(DrawCircle3D,
-                    (Vector3 center, float radius, Vector3 rotationAxis, float rotationAngle, Color color),
-                    (center, radius, rotationAxis, rotationAngle, color))
-CACTUS_RL_WRAP_VOID(DrawLine3D, (Vector3 startPos, Vector3 endPos, Color color), (startPos, endPos, color))
+                    (Vector3 center, float radius, Vector3 rotationAxis, float rotationAngle, CactusColor color),
+                    (center, radius, rotationAxis, rotationAngle, draw_color(color)))
+CACTUS_RL_WRAP_VOID(DrawLine3D, (Vector3 startPos, Vector3 endPos, CactusColor color), (startPos, endPos, draw_color(color)))
 
 #undef CACTUS_RL_WRAP_VOID
 #undef CACTUS_RL_WRAP

@@ -45,7 +45,7 @@ struct Hud {
         for (int i = 0; i < 4; ++i) {
             const auto cell = node(row, 2 - i);
             registry.emplace<ui::Text>(
-                cell, ui::Text{.value = "ab", .font_size = 8 + i, .color = WHITE, .align = ui::TextAlign::Start});
+                cell, ui::Text{.value = "ab", .font_size = 8 + i, .color = color_from_raylib(WHITE), .align = ui::TextAlign::Start});
         }
         const auto grid = node(entt::null, 2);
         registry.emplace<ui::Grid>(grid,

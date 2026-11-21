@@ -84,6 +84,17 @@ TEST_CASE("Codegen constants: vector, struct, and list constants", "[codegen-ent
     CHECK(generated.has("static const std::vector<::cactus_gen::test::UnitDef> value = {};"));
 }
 
+TEST_CASE("Codegen constants: color constants keep constant initialization", "[codegen-entt][const]") {
+    const auto generated = generate(
+        "const:\n"
+        "    WARM = #FF804000\n"
+        "    GLOW = WARM * 2.0\n"
+        "    WIDE = color(1.5, -0.2, 0.0, 1.0)\n");
+    CHECK(generated.has("inline constexpr CactusColor WARM = color_from_bytes(255, 128, 64, 0);"));
+    CHECK(generated.has("inline constexpr CactusColor GLOW = (::cactus_gen::test::WARM * 2.0F);"));
+    CHECK(generated.has("inline constexpr CactusColor WIDE = color_from_components(1.5F, -0.2F, 0.0F, 1.0F);"));
+}
+
 TEST_CASE("Codegen constants: a constant calling a pure func follows its declaration", "[codegen-entt][const]") {
     const auto generated = generate(
         "func twice(v: float) float:\n"

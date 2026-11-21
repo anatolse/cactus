@@ -75,6 +75,7 @@ std::string read_expression(const DecoratedProgram& program, const TypeInfo& typ
             return std::string(kRuntime) + "read_persistence_handle<std::uint8_t>(in, ids, " + kRuntime +
                    (type.kind == TypeKind::InputAxis ? "generated_input_axis_handle_for_name)"
                                                      : "generated_input_button_handle_for_name)");
+        case PersistenceValueKind::ColorChannel:
         case PersistenceValueKind::Unsupported:
             return {};
     }

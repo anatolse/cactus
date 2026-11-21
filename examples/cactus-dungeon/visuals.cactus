@@ -29,7 +29,6 @@ pub template SunLight:
     meshes.DirectionalLight:
         direction = vec3(0.0, -1.0, 0.0)
         color = #FFF3DDFF
-        intensity = 1.0
 
 entity Sun:
     use SunLight

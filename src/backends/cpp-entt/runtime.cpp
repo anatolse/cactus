@@ -109,7 +109,7 @@ constexpr int kPointerPrimaryMouseButton = 0;  // raylib MOUSE_BUTTON_LEFT
 struct SpriteSubmission {
     Vector2 position{};
     Vector2 size{};
-    Color color{};
+    CactusColor color{};
     int runtime_id{-1};
     int layer{0};
 };
@@ -129,7 +129,7 @@ struct ModelSubmission {
     Vector3 scale{};
     int model_runtime_id{-1};
     bool cast_shadow{true};
-    Color tint{WHITE};
+    CactusColor tint{color_from_bytes(255, 255, 255, 255)};
     // Animated submissions carry the entity's ModelAnimator pose; the flush
     // re-poses the shared model per submission (dsl-model-animation D1).
     int clip{0};
@@ -139,22 +139,20 @@ struct ModelSubmission {
 
 struct PointLightSubmission {
     Vector3 position{};
-    Color color{};
-    float intensity{1.0F};
+    CactusColor color{};
     float range{10.0F};
 };
 
 struct DirectionalLightSubmission {
     Vector3 direction{};
-    Color color{};
-    float intensity{1.0F};
+    CactusColor color{};
 };
 
 struct TextSubmission2D {
     Vector2 position{};
     float rotation_deg{0.0F};
     int font_size{32};
-    Color color{};
+    CactusColor color{};
     std::string text;
 };
 
@@ -164,7 +162,7 @@ struct TextSubmission3D {
     Quat rotation{};
     Vector3 scale{};
     int font_size{1};
-    Color color{};
+    CactusColor color{};
     std::string text;
 };
 
@@ -174,7 +172,7 @@ struct TextSubmission3D {
 struct ScreenLabelSubmission {
     Vector2 position{};
     int font_size{32};
-    Color color{};
+    CactusColor color{};
     std::string text;
 };
 
@@ -182,7 +180,7 @@ struct TextLabel3DEntry {
     RenderTexture2D rt{};
     std::string cached_text;
     int cached_font_size{0};
-    Color cached_color{};
+    CactusColor cached_color{};
     bool loaded{false};
 };
 
@@ -831,8 +829,7 @@ void clear_lighting_shader() noexcept {
 struct ResolvedLight {
     int type{kPointLightType};
     Vector3 position{};
-    Color color{};
-    float intensity{1.0F};
+    CactusColor color{};
 };
 
 struct LightBudget {
@@ -876,10 +873,7 @@ void apply_lights_to(const LightingShaderState& shader_state,
             position[0]       = light.position.x;
             position[1]       = light.position.y;
             position[2]       = light.position.z;
-            color[0]          = (static_cast<float>(light.color.r) / 255.0F) * light.intensity;
-            color[1]          = (static_cast<float>(light.color.g) / 255.0F) * light.intensity;
-            color[2]          = (static_cast<float>(light.color.b) / 255.0F) * light.intensity;
-            color[3]          = static_cast<float>(light.color.a) / 255.0F;
+            color             = {light.color.r, light.color.g, light.color.b, light.color.a};
         }
 
         const auto index = static_cast<std::size_t>(i);
@@ -891,27 +885,47 @@ void apply_lights_to(const LightingShaderState& shader_state,
     }
 }
 
-void apply_lights(const Camera3D& camera) {
-    const LightBudget budget                               = compute_light_budget();
-    render_debug_state_storage().active_point_lights       = budget.point_count;
-    render_debug_state_storage().active_directional_lights = budget.directional_count;
-    render_debug_state_storage().used_lit_mesh_shader      = budget.active_lights > 0;
+struct FrameLights {
+    LightBudget budget;
+    std::array<ResolvedLight, kMaxMeshLights> resolved{};
+};
 
+std::array<ResolvedLight, kMaxMeshLights> resolve_lights(const LightBudget& budget) {
     std::array<ResolvedLight, kMaxMeshLights> resolved{};
     int slot = 0;
     for (int i = 0; i < budget.point_count; ++i) {
         const auto& light                        = point_light_queue()[static_cast<std::size_t>(i)];
-        resolved[static_cast<std::size_t>(slot)] = ResolvedLight{
-            .type = kPointLightType, .position = light.position, .color = light.color, .intensity = light.intensity};
+        resolved[static_cast<std::size_t>(slot)] =
+            ResolvedLight{.type = kPointLightType, .position = light.position, .color = light.color};
         ++slot;
     }
     for (int i = 0; i < budget.directional_count; ++i) {
         const auto& light                        = directional_light_queue()[static_cast<std::size_t>(i)];
         const Vector3 to_light                   = Vector3Normalize(Vector3Negate(light.direction));
-        resolved[static_cast<std::size_t>(slot)] = ResolvedLight{
-            .type = kDirectionalLightType, .position = to_light, .color = light.color, .intensity = light.intensity};
+        resolved[static_cast<std::size_t>(slot)] =
+            ResolvedLight{.type = kDirectionalLightType, .position = to_light, .color = light.color};
         ++slot;
     }
+    return resolved;
+}
+
+// This frame's lights as the shader gets them, recorded so tests see them without a window.
+FrameLights note_frame_lights() {
+    const LightBudget budget        = compute_light_budget();
+    const FrameLights lights{.budget = budget, .resolved = resolve_lights(budget)};
+    auto& debug                     = render_debug_state_storage();
+    debug.active_point_lights       = budget.point_count;
+    debug.active_directional_lights = budget.directional_count;
+    debug.used_lit_mesh_shader      = budget.active_lights > 0;
+    debug.uploaded_light_colors.clear();
+    for (int i = 0; i < budget.active_lights; ++i) {
+        debug.uploaded_light_colors.push_back(lights.resolved[static_cast<std::size_t>(i)].color);
+    }
+    return lights;
+}
+
+void apply_lights(const Camera3D& camera) {
+    const auto [budget, resolved] = note_frame_lights();
 
     // Both variants share the fragment lighting model, so both must see the
     // same light uniforms. The skinned variant is ensured here (not only at
@@ -946,6 +960,11 @@ Color placeholder_material_color(const std::string_view asset_id) noexcept {
         return Color{.r = 66, .g = 139, .b = 255, .a = 255};
     }
     return WHITE;
+}
+
+// A material's 8-bit diffuse color times a tint, converted once.
+[[nodiscard]] Color tinted_material_color(const Color material, const CactusColor tint) noexcept {
+    return to_raylib_color(color_from_raylib(material) * tint);
 }
 
 }  // namespace
@@ -1626,11 +1645,8 @@ void flush_mesh_queue() noexcept try {
         return;
     }
 
-    render_debug_state_storage().used_default_3d_camera    = true;
-    const LightBudget light_budget                         = compute_light_budget();
-    render_debug_state_storage().active_point_lights       = light_budget.point_count;
-    render_debug_state_storage().active_directional_lights = light_budget.directional_count;
-    render_debug_state_storage().used_lit_mesh_shader      = light_budget.active_lights > 0;
+    render_debug_state_storage().used_default_3d_camera = true;
+    (void)note_frame_lights();
     if (!cactus::runtime::raylib::IsWindowReady()) {
         return;
     }
@@ -1659,11 +1675,8 @@ void flush_model_queue() noexcept try {
         return;
     }
 
-    render_debug_state_storage().used_default_3d_camera    = true;
-    const LightBudget light_budget                         = compute_light_budget();
-    render_debug_state_storage().active_point_lights       = light_budget.point_count;
-    render_debug_state_storage().active_directional_lights = light_budget.directional_count;
-    render_debug_state_storage().used_lit_mesh_shader      = light_budget.active_lights > 0;
+    render_debug_state_storage().used_default_3d_camera = true;
+    (void)note_frame_lights();
 
     // Materialization still runs headless so failure bookkeeping stays
     // test-observable; only the draw calls require a window.
@@ -1706,7 +1719,7 @@ void flush_model_queue() noexcept try {
             Material& material         = model->materials[material_index];
             Color& diffuse_color       = material.maps[MATERIAL_MAP_DIFFUSE].color;
             const Color embedded_color = diffuse_color;
-            diffuse_color              = ColorTint(embedded_color, submission.tint);
+            diffuse_color              = tinted_material_color(embedded_color, submission.tint);
             cactus::runtime::raylib::DrawMesh(model->meshes[i], material, xform);
             diffuse_color = embedded_color;
         }
@@ -1864,7 +1877,7 @@ void flush_text_3d_queue() noexcept try {
         const int draw_y    = (tex_h - bake_fs) / 2;
 
         cactus::runtime::raylib::BeginTextureMode(entry.rt);
-        cactus::runtime::raylib::ClearBackground(Color{.r = 0, .g = 0, .b = 0, .a = 0});
+        cactus::runtime::raylib::ClearBackground(CactusColor{});
         cactus::runtime::raylib::DrawText(sub.text.c_str(), draw_x, draw_y, bake_fs, sub.color);
         cactus::runtime::raylib::EndTextureMode();
 
@@ -1957,7 +1970,7 @@ void submit_model_impl(const Vector3 position,
                        const bool animated,
                        const int clip,
                        const float time,
-                       const Color tint) noexcept try {
+                       const CactusColor tint) noexcept try {
     if (!visible) {
         return;
     }
@@ -2068,6 +2081,7 @@ void begin_render_frame() noexcept {
     render_debug_state_storage().drawn_sprite_layers.clear();
     render_debug_state_storage().submitted_mesh_colors.clear();
     render_debug_state_storage().submitted_model_colors.clear();
+    render_debug_state_storage().uploaded_light_colors.clear();
     render_debug_state_storage().animated_model_submissions.clear();
 }
 
@@ -2194,7 +2208,7 @@ void flush_viewport_3d() noexcept {
 
 void submit_sprite(const Vector2 position,
                    const Vector2 size,
-                   const Color color,
+                   const CactusColor color,
                    const AssetHandle texture,
                    const bool visible,
                    const int layer) noexcept try {
@@ -2247,7 +2261,7 @@ void submit_mesh(const Vector3 position,
                  const AssetHandle material,
                  const bool visible,
                  const bool /*cast_shadow*/,
-                 const Color tint) noexcept try {
+                 const CactusColor tint) noexcept try {
     if (!visible) {
         return;
     }
@@ -2270,7 +2284,7 @@ void submit_mesh(const Vector3 position,
     // material's resolved placeholder color (design.md: mirrors
     // BillboardRenderer.color's existing "#FFFFFFFF = no tint" contract), so
     // it's applied here per-submission rather than cached on mat_entry.
-    const Color resolved_color = ColorTint(mat_entry.diffuse_color, tint);
+    const Color resolved_color = tinted_material_color(mat_entry.diffuse_color, tint);
     mesh_queue().push_back(MeshSubmission{
         .position            = position,
         .rotation            = rotation,
@@ -2291,7 +2305,7 @@ void submit_model(const Vector3 position,
                   const AssetHandle model,
                   const bool visible,
                   const bool cast_shadow,
-                  const Color tint) noexcept {
+                  const CactusColor tint) noexcept {
     submit_model_impl(position, rotation, scale, model, visible, cast_shadow, false, 0, 0.0F, tint);
 }
 
@@ -2303,7 +2317,7 @@ void submit_model(const Vector3 position,
                   const bool cast_shadow,
                   const int clip,
                   const float time,
-                  const Color tint) noexcept {
+                  const CactusColor tint) noexcept {
     submit_model_impl(position, rotation, scale, model, visible, cast_shadow, true, clip, time, tint);
 }
 
@@ -2589,7 +2603,7 @@ Vector3 model_bounds_center(const AssetHandle model) noexcept {
 
 void submit_billboard(const Vector3 /*position*/,
                       const Vector2 /*size*/,
-                      const Color /*color*/,
+                      const CactusColor /*color*/,
                       const AssetHandle texture,
                       const bool visible) noexcept {
     if (!visible) {
@@ -2604,16 +2618,14 @@ void submit_billboard(const Vector3 /*position*/,
 }
 
 void register_point_light(const Vector3 position,
-                          const Color color,
-                          const float intensity,
+                          const CactusColor color,
                           const float range,
                           const bool enabled) noexcept try {
     if (enabled) {
         point_light_queue().push_back(PointLightSubmission{
-            .position  = position,
-            .color     = color,
-            .intensity = intensity,
-            .range     = range,
+            .position = position,
+            .color    = color,
+            .range    = range,
         });
         ++render_debug_state_storage().registered_point_lights;
     }
@@ -2621,15 +2633,11 @@ void register_point_light(const Vector3 position,
     std::terminate();
 }
 
-void register_directional_light(const Vector3 direction,
-                                const Color color,
-                                const float intensity,
-                                const bool enabled) noexcept try {
+void register_directional_light(const Vector3 direction, const CactusColor color, const bool enabled) noexcept try {
     if (enabled) {
         directional_light_queue().push_back(DirectionalLightSubmission{
             .direction = direction,
             .color     = color,
-            .intensity = intensity,
         });
         ++render_debug_state_storage().registered_directional_lights;
     }
@@ -2640,7 +2648,7 @@ void register_directional_light(const Vector3 direction,
 void submit_text_2d(const Vector2 position,
                     const float rotation_rad,
                     const int font_size,
-                    const Color color,
+                    const CactusColor color,
                     const std::string& text,
                     const bool visible) noexcept try {
     if (!visible) {
@@ -2660,7 +2668,7 @@ void submit_text_2d(const Vector2 position,
 
 void submit_screen_label(const Vector2 position,
                          const int font_size,
-                         const Color color,
+                         const CactusColor color,
                          const std::string& text,
                          const bool visible) noexcept try {
     if (!visible) {
@@ -2682,7 +2690,7 @@ void submit_text_3d(const uint32_t entity_id,
                     const Quat rotation,
                     const Vector3 scale,
                     const int font_size,
-                    const Color color,
+                    const CactusColor color,
                     const std::string& text,
                     const bool visible) noexcept try {
     if (!visible) {
@@ -3753,7 +3761,7 @@ void draw_shape_rectangle(const Vector2 position,
                           const Vector2 size,
                           const Vector2 origin,
                           const float rotation_rad,
-                          const Color color) noexcept {
+                          const CactusColor color) noexcept {
     constexpr float kRadToDeg = 180.0F / std::numbers::pi_v<float>;
     cactus::runtime::raylib::DrawRectanglePro(
         Rectangle{.x = position.x, .y = position.y, .width = size.x, .height = size.y},
@@ -3762,7 +3770,10 @@ void draw_shape_rectangle(const Vector2 position,
         color);
 }
 
-void draw_shape_circle(const Vector2 position, const float diameter, const Vector2 origin, const Color color) noexcept {
+void draw_shape_circle(const Vector2 position,
+                       const float diameter,
+                       const Vector2 origin,
+                       const CactusColor color) noexcept {
     cactus::runtime::raylib::DrawCircleV(
         Vector2{.x = position.x - origin.x, .y = position.y - origin.y}, diameter / 2.0F, color);
 }
@@ -3826,12 +3837,8 @@ void set_render_pass_uniform(const Shader& shader, int location, Vector2 value) 
     SetShaderValue(shader, location, components.data(), SHADER_UNIFORM_VEC2);
 }
 
-void set_render_pass_uniform(const Shader& shader, int location, Color value) noexcept {
-    constexpr float kChannelMax = 255.0F;
-    const std::array<float, 4> components = {static_cast<float>(value.r) / kChannelMax,
-                                             static_cast<float>(value.g) / kChannelMax,
-                                             static_cast<float>(value.b) / kChannelMax,
-                                             static_cast<float>(value.a) / kChannelMax};
+void set_render_pass_uniform(const Shader& shader, int location, CactusColor value) noexcept {
+    const std::array<float, 4> components = {value.r, value.g, value.b, value.a};
     SetShaderValue(shader, location, components.data(), SHADER_UNIFORM_VEC4);
 }
 
@@ -4129,16 +4136,13 @@ ImageDrawRects compute_image_draw_rects(const int fit,
 
 namespace {
 
-[[nodiscard]] Color tint_with_opacity(const Color color, const float opacity) noexcept {
-    return color_from_components(static_cast<float>(color.r) / 255.0F,
-                                 static_cast<float>(color.g) / 255.0F,
-                                 static_cast<float>(color.b) / 255.0F,
-                                 (static_cast<float>(color.a) / 255.0F) * opacity);
+[[nodiscard]] CactusColor tint_with_opacity(const CactusColor color, const float opacity) noexcept {
+    return color_from_components(color.r, color.g, color.b, color.a * opacity);
 }
 
 void draw_ui_label(const std::string& text,
                    const int font_size,
-                   const Color color,
+                   const CactusColor color,
                    const Rectangle bounds,
                    const int align) noexcept {
     if (text.empty()) {
@@ -4188,7 +4192,7 @@ void draw_ui_image(const UiPrimitive& primitive, const Rectangle bounds, const f
 // derives from generic pointer state": generic PointerState (not a
 // UI-specific routing state) drives presentation once std.pointer's router
 // exists (section 9); until then PointerState is simply absent/false.
-[[nodiscard]] Color button_fill_color(const UiPrimitive& primitive) noexcept {
+[[nodiscard]] CactusColor button_fill_color(const UiPrimitive& primitive) noexcept {
     if (!primitive.effective_enabled) {
         return primitive.button_disabled_color;
     }
@@ -4334,14 +4338,14 @@ bool point_in_flat_circle(const Vector2 point, const Vector2 center, const float
     return ((dx * dx) + (dy * dy)) <= (radius * radius);
 }
 
-Color editor_palette_color(const int index) noexcept {
-    static constexpr std::array<Color, 6> kPalette{{
-        {.r = 230, .g = 41, .b = 55, .a = 255},
-        {.r = 0, .g = 228, .b = 48, .a = 255},
-        {.r = 0, .g = 121, .b = 241, .a = 255},
-        {.r = 253, .g = 249, .b = 0, .a = 255},
-        {.r = 200, .g = 122, .b = 255, .a = 255},
-        {.r = 255, .g = 161, .b = 0, .a = 255},
+CactusColor editor_palette_color(const int index) noexcept {
+    static constexpr std::array<CactusColor, 6> kPalette{{
+        color_from_bytes(230, 41, 55, 255),
+        color_from_bytes(0, 228, 48, 255),
+        color_from_bytes(0, 121, 241, 255),
+        color_from_bytes(253, 249, 0, 255),
+        color_from_bytes(200, 122, 255, 255),
+        color_from_bytes(255, 161, 0, 255),
     }};
     const int remainder = ((index % 6) + 6) % 6;
     return kPalette[static_cast<std::size_t>(remainder)];

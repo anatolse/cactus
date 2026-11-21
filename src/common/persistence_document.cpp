@@ -238,6 +238,7 @@ Value Snapshot::read_value(std::uint32_t type_index, ValueReader& in, std::size_
             value = Value::of_list(std::move(items));
             break;
         }
+        case PersistenceValueKind::ColorChannel:
         case PersistenceValueKind::Unsupported:
             break;
     }
@@ -293,6 +294,7 @@ void Snapshot::skip_value(std::uint32_t type_index, ValueReader& in, std::size_t
             }
             return;
         }
+        case PersistenceValueKind::ColorChannel:
         case PersistenceValueKind::Unsupported:
             return;
     }
@@ -811,6 +813,7 @@ void SnapshotBuilder::put_value(const Value& value, std::uint32_t type_index) {
             }
             return;
         }
+        case PersistenceValueKind::ColorChannel:
         case PersistenceValueKind::Unsupported:
             return;
     }

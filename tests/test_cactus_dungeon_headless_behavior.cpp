@@ -1375,9 +1375,9 @@ TEST_CASE("Dungeon click and shift click select only friendly units", "[cactus-d
     const auto& robot_model  = world.registry.get<ModelRenderer>(robot);
     const auto& knight_model = world.registry.get<ModelRenderer>(knight);
     REQUIRE(robot_model.model != knight_model.model);
-    REQUIRE(robot_model.color.r == 112);
-    REQUIRE(knight_model.color.r == 255);
-    REQUIRE(knight_model.color.g == 223);
+    REQUIRE(to_raylib_color(robot_model.color).r == 112);
+    REQUIRE(to_raylib_color(knight_model.color).r == 255);
+    REQUIRE(to_raylib_color(knight_model.color).g == 223);
 }
 
 TEST_CASE("Dungeon drag box selects and highlights three of five mixed units", "[cactus-dungeon][controls][headless]") {
@@ -2129,7 +2129,7 @@ TEST_CASE("Dungeon menu covers the window and its options button turns into Back
     CHECK(anchor.min.y == 0.0F);
     CHECK(anchor.max.x == 1.0F);
     CHECK(anchor.max.y == 1.0F);
-    CHECK(world.registry.get<ui::Panel>(panel).background.a == 255);
+    CHECK(world.registry.get<ui::Panel>(panel).background.a == 1.0F);
     CHECK(world.registry.view<flow::MenuButton>().size() == 4);
     const auto options = menu_button(world, flow::MenuAction::Options);
     CHECK(world.registry.get<ui::Button>(options).label == "Options");

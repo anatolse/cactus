@@ -276,7 +276,7 @@ inline void digest_value(WorldDigest& digest, const Vector4& value) {
     digest.add(value.w);
 }
 
-inline void digest_value(WorldDigest& digest, const Color& value) {
+inline void digest_value(WorldDigest& digest, const CactusColor& value) {
     digest.add(value.r);
     digest.add(value.g);
     digest.add(value.b);

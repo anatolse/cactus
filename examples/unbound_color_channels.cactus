@@ -1,0 +1,78 @@
+module unbound_color_channels
+
+use std.transform.flat as tf
+use std.render.shapes as shapes
+use std.render.text as text
+
+# Color channels are plain floats. While a program computes with a color, a
+# channel may go below 0 or above 1. Drawing clamps each channel to 0..1 once.
+
+const:
+    # Multiplies alpha by 0.99 and keeps the other channels.
+    FADE = color(1.0, 1.0, 1.0, 0.99)
+
+trait Blend:
+    var start: color = #FFFFFFFF
+    var finish: color = #000000FF
+    var amount: float = 0.5
+
+trait Fading
+
+# Keeps a sum whose middle step leaves 0..1.
+trait RoundTrip:
+    var a: color = #FF8000FF
+    var b: color = #FFFFFFFF
+    var result: color
+
+template Swatch(x: float, tint: color = #FFFFFFFF):
+    tf.WorldTransform:
+        position = vec2(x, 100.0)
+    shapes.Shape:
+        type = shapes.ShapeType.Rectangle
+        size = vec2(40.0, 40.0)
+        color = tint
+
+# Blends from white toward black.
+entity BlendSwatch:
+    use Swatch(x = 50.0)
+    Blend
+
+# Fades out a little every tick and reaches zero alpha.
+entity FadeSwatch:
+    use Swatch(x = 150.0)
+    Fading
+
+# Twice as bright as white; drawn as white, stored as 2.0.
+entity BrightSwatch from Swatch(x = 250.0, tint = #FFFFFFFF * 2.0)
+
+entity Sum:
+    RoundTrip
+
+entity Title:
+    tf.WorldTransform:
+        position = vec2(150.0, 40.0)
+    text.TextLabel:
+        text = "Color channels are floats"
+
+rule BlendColor:
+    each:
+        Blend as blend
+        shapes.Shape as shape
+
+    on tick:
+        shape.color = blend.start + (blend.finish - blend.start) * blend.amount
+
+rule FadeColor:
+    each:
+        Fading
+        shapes.Shape as shape
+
+    on tick:
+        shape.color = shape.color * FADE
+
+rule SubtractThenAdd:
+    each:
+        RoundTrip as sum
+
+    on tick:
+        sum.result = (sum.a - sum.b) + sum.b

@@ -4,11 +4,14 @@
 #include "backends/cpp-entt/type_utils.hpp"
 #include "common/ast_expressions.hpp"
 #include "common/codegen_error.hpp"
+#include "common/color_channels.hpp"
 #include "common/render_pass_builtin_fields.hpp"
 #include "common/render_pass_intrinsics.hpp"
 #include "common/vector_binary_ops.hpp"
 
 #include <algorithm>
+#include <iomanip>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
@@ -188,20 +191,17 @@ GlslType type_kind_to_glsl_type(TypeKind kind) {
 }
 
 std::string hex_color_literal_to_glsl(const std::string& raw_hex) {
-    std::string hex = raw_hex;
-    if (hex.size() == 6) {
-        hex += "FF";
-    }
-    if (hex.size() != 8) {
+    if (raw_hex.size() != 6 && raw_hex.size() != 8) {
         throw std::runtime_error("render-pass GLSL codegen: malformed hex color literal '#" + raw_hex + "'");
     }
-    const auto channel = [&](std::size_t offset) {
-        const int byte_value = std::stoi(hex.substr(offset, 2), nullptr, 16);
+    const auto bytes   = hex_color_bytes(raw_hex);
+    const auto channel = [&](std::size_t index) {
+        // Enough digits that GLSL reads back the exact float a rule uses for this literal.
         std::ostringstream out;
-        out << (static_cast<double>(byte_value) / 255.0);
+        out << std::setprecision(std::numeric_limits<float>::max_digits10) << color_channel_from_byte(bytes[index]);
         return out.str();
     };
-    return "vec4(" + channel(0) + ", " + channel(2) + ", " + channel(4) + ", " + channel(6) + ")";
+    return "vec4(" + channel(0) + ", " + channel(1) + ", " + channel(2) + ", " + channel(3) + ")";
 }
 
 TranslatedExpr translate_expr(const ExprNode& expr, GlslCtx& ctx);

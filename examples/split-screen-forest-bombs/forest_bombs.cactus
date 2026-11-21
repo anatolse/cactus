@@ -288,19 +288,16 @@ pub entity SunLight:
         position = vec3(0.0, 20.0, 0.0)
     meshes.DirectionalLight:
         direction = vec3(-0.3, -1.0, -0.2)
-        color     = #FFF3D6FF
-        intensity = 1.1
+        color     = #FFF3D6FF * 1.1
     meshes.PointLight:
-        color     = #FFF3D6FF
-        intensity = 2.8
+        color     = #FFF3D6FF * 2.8
         range     = 45.0
 
 pub entity FillLight:
     tv.WorldTransform:
         position = vec3(-8.0, 6.0, 10.0)
     meshes.PointLight:
-        color     = #BBD7FFFF
-        intensity = 1.4
+        color     = #BBD7FFFF * 1.4
         range     = 35.0
 
 # ── Scene: the forest ─────────────────────────────────────────────────────────

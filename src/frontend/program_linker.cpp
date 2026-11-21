@@ -9,6 +9,7 @@
 #include "frontend/query_costs.hpp"
 #include "frontend/ranged_fields.hpp"
 #include "frontend/required_links.hpp"
+#include "frontend/self_command_order.hpp"
 #include "frontend/single_traits.hpp"
 #include "frontend/state_transitions.hpp"
 #include "frontend/symbol_identity.hpp"
@@ -371,6 +372,7 @@ std::optional<DecoratedProgram> ProgramLinker::link(const std::vector<std::files
 void run_whole_program_passes(DecoratedProgram& program,
                               ErrorReporter& errors,
                               ArchetypeReachability* reachability) {
+    resolve_self_command_order(program);
     if (reachability != nullptr) {
         reachability->finish(errors);
     } else {

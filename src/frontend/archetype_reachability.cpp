@@ -546,7 +546,7 @@ public:
     [[nodiscard]] std::optional<std::size_t> order_observer(std::size_t first, std::size_t second) const {
         for (std::size_t index = 0; index < handlers_.size(); ++index) {
             const auto& reader = handlers_[index];
-            if (!reachable_[index] || reader.node->contract.iteration_order != IterationOrder::Creation) {
+            if (!reachable_[index] || reader.node->contract.iteration_order == IterationOrder::Free) {
                 continue;
             }
             const auto domains = row_domains(reader);

@@ -9580,10 +9580,29 @@ IterationOrder derive_iteration_order(const HandlerContract& contract, bool unor
                        .has_value();
         });
     });
-    const bool observes = unordered_limit || !contract.emits.empty() || !contract.commands.empty() ||
-                          !contract.effects.empty() || !contract.named_writes.empty() || reads_own_write ||
-                          contract.observes_own_projection();
-    return observes ? IterationOrder::Creation : IterationOrder::Free;
+    const bool observes = unordered_limit || !contract.emits.empty() || !contract.effects.empty() ||
+                          !contract.named_writes.empty() || reads_own_write || contract.observes_own_projection();
+    if (observes) {
+        return IterationOrder::Creation;
+    }
+    if (contract.commands.empty()) {
+        return IterationOrder::Free;
+    }
+    return std::ranges::all_of(contract.commands, changes_own_row_trait) ? IterationOrder::SelfCommands
+                                                                         : IterationOrder::Creation;
+}
+
+bool own_row_command(const InferredHandlerCommand& command) {
+    return !command.entities.empty() && std::ranges::all_of(command.entities, [](const EntityTarget& entity) {
+        return entity.kind == EntityTargetKind::Self;
+    });
+}
+
+bool changes_own_row_trait(const InferredHandlerCommand& command) {
+    const bool trait_change = (command.kind == HandlerCommandKind::Add || command.kind == HandlerCommandKind::Remove) &&
+                              command.target.has_value() &&
+                              (command.target->kind == SymbolKind::Trait || command.target->kind == SymbolKind::State);
+    return trait_change && own_row_command(command);
 }
 
 namespace {

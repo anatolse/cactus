@@ -182,6 +182,7 @@ add_library(cactus_frontend STATIC
     src/frontend/ranged_fields.cpp
     src/frontend/required_links.cpp
     src/frontend/single_traits.cpp
+    src/frontend/self_command_order.cpp
     src/frontend/state_transitions.cpp
     src/frontend/relations.cpp
     src/frontend/rule_repeat.cpp

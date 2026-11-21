@@ -405,7 +405,8 @@ enum class HandlerDomainKind : std::uint8_t { Selectionless, Unary, Pair, Rows }
 
 // `Creation` when permuting a pass's rows can change its result, so it must
 // visit them in creation order; `Free` leaves the order to the backend.
-enum class IterationOrder : std::uint8_t { Free, Creation };
+// SelfCommands: only self `add`/`remove` observe the order; the linked program resolves it to Free or Creation.
+enum class IterationOrder : std::uint8_t { Free, Creation, SelfCommands };
 
 // One named, ordered binding within a pair handler's relation, carrying the
 // canonical identities of the traits it requires.
@@ -845,6 +846,10 @@ struct CallEffects {
 // Whether a pass with this contract can observe its row order; `unordered_limit`
 // is a `limit:` without `order by:`.
 [[nodiscard]] IterationOrder derive_iteration_order(const HandlerContract& contract, bool unordered_limit);
+// A command that acts only on the row entity.
+[[nodiscard]] bool own_row_command(const InferredHandlerCommand& command);
+// An `add` or `remove` of a trait, state variant or state that acts only on the row entity.
+[[nodiscard]] bool changes_own_row_trait(const InferredHandlerCommand& command);
 
 /// Transitional inference result retained for focused semantic tests and old
 /// consumers while HandlerNode becomes the authoritative execution record.

@@ -399,6 +399,10 @@ add_executable(test_semantic_disjoint_domains test_semantic_disjoint_domains.cpp
 target_link_libraries(test_semantic_disjoint_domains PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticDisjointDomainsTests COMMAND test_semantic_disjoint_domains)
 
+add_executable(test_semantic_self_command_order test_semantic_self_command_order.cpp)
+target_link_libraries(test_semantic_self_command_order PRIVATE cactus_frontend Catch2::Catch2WithMain)
+add_test(NAME SemanticSelfCommandOrderTests COMMAND test_semantic_self_command_order)
+
 add_executable(test_semantic_required_links test_semantic_required_links.cpp)
 target_link_libraries(test_semantic_required_links PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticRequiredLinksTests COMMAND test_semantic_required_links)
@@ -1776,7 +1780,7 @@ endforeach()
 add_custom_target(test_generated_performance_benchmarks)
 foreach(shape IN ITEMS static_keep union_fold equality_reduce grid_region row_join baseline own_projection
         single_commit plain_commit sweep wide_level reduced_keep required_links keep_chain
-        incremental_keep render_pass dimension_spread timers clamped)
+        incremental_keep render_pass dimension_spread timers clamped sum_encodings)
     set(perf_target test_perf_${shape}_benchmark)
     set(perf_codegen_flags)
     if(shape STREQUAL "wide_level")

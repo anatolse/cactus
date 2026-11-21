@@ -917,7 +917,7 @@ pair_binding_without.cactus examples pair_binding_without.Fall/on std.core.fixed
     named_reads:
     named_writes:
     named_requirements:
-    iteration_order: creation
+    iteration_order: free
 pair_binding_without.cactus examples pair_binding_without.Lower/on std.core.fixed_tick
     reads: pair_binding_without.Unit
     read_fields: pair_binding_without.Unit{lower}
@@ -927,7 +927,7 @@ pair_binding_without.cactus examples pair_binding_without.Lower/on std.core.fixe
     named_reads:
     named_writes:
     named_requirements:
-    iteration_order: creation
+    iteration_order: free
 pair_binding_without.cactus examples pair_binding_without.Pick/on std.core.fixed_tick
     reads: pair_binding_without.Unit
     read_fields: pair_binding_without.Unit{id,picked,team}
@@ -947,7 +947,7 @@ pair_binding_without.cactus examples pair_binding_without.Raise/on std.core.fixe
     named_reads:
     named_writes:
     named_requirements:
-    iteration_order: creation
+    iteration_order: free
 pair_binding_without.cactus examples pair_binding_without.Rally/on std.core.fixed_tick
     reads: pair_binding_without.Unit
     read_fields: pair_binding_without.Unit{rallied,team}
@@ -967,7 +967,7 @@ pair_binding_without.cactus examples pair_binding_without.Rest/on std.core.fixed
     named_reads:
     named_writes:
     named_requirements:
-    iteration_order: creation
+    iteration_order: free
 pair_binding_without.cactus examples pair_binding_without.Strike/on std.core.fixed_tick
     reads: pair_binding_without.Log pair_binding_without.Unit
     read_fields: pair_binding_without.Log{trace} pair_binding_without.Unit{id,team}
@@ -1107,7 +1107,7 @@ relation_end_reads.cactus examples relation_end_reads.Fade/on std.core.fixed_tic
     named_reads: [relation_end_reads.Settings: relation_end_reads.Control{fade}]
     named_writes:
     named_requirements: relation_end_reads.Settings/relation_end_reads.Control
-    iteration_order: creation
+    iteration_order: free
 relation_end_reads.cactus examples relation_end_reads.Light/on std.core.fixed_tick
     reads: relation_end_reads.Lamp relation_end_reads.Sees relation_end_reads.Watcher
     read_fields: relation_end_reads.Lamp{power} relation_end_reads.Sees{} relation_end_reads.Watcher{range}

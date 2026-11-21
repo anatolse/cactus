@@ -1970,6 +1970,22 @@ inline constexpr bool is_event_occurrence_variant_v = false;
 template <typename... Alternatives>
 inline constexpr bool is_event_occurrence_variant_v<std::variant<Alternatives...>> = true;
 
+#ifdef CACTUS_RAYLIB_FAKE
+inline void count_component_move_signal(entt::registry& /*registry*/, entt::entity /*entity*/) noexcept {
+    count_component_move();
+}
+
+template <typename... T>
+void count_component_moves_of(entt::registry& registry) {
+    ((registry.on_construct<T>().template connect<&count_component_move_signal>(),
+      registry.on_destroy<T>().template connect<&count_component_move_signal>()),
+     ...);
+}
+#else
+template <typename... T>
+void count_component_moves_of(entt::registry& /*registry*/) {}
+#endif
+
 // ── Trait lifecycle triggers ──────────────────────────────────────────────
 // `on added T` / `on removed T` occurrences, each delivered to the entity
 // whose trait set changed. `old` holds T's value just before removal.

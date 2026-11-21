@@ -262,6 +262,17 @@ std::string emit_world_digest(const DecoratedProgram& program) {
     return out.str();
 }
 
+std::string emit_component_move_counting(const DecoratedProgram& program) {
+    std::vector<std::string> traits;
+    for (const auto* trait : sorted_by_canonical_id(program.traits)) {
+        traits.push_back(cpp_type_ref(SymbolKind::Trait, trait->module_name, trait->name));
+    }
+    if (traits.empty()) {
+        return {};
+    }
+    return "    cactus::runtime::entt_backend::count_component_moves_of<" + join_strings(traits, ", ") + ">(registry);\n";
+}
+
 std::vector<std::string> sorted_strings(const std::unordered_set<std::string>& strings) {
     std::vector<std::string> result(strings.begin(), strings.end());
     std::ranges::sort(result);
@@ -4634,6 +4645,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << "    cactus::runtime::entt_backend::reset_quit_request();\n";
     out << "    cactus::runtime::entt_backend::clear_runtime_faults();\n";
     out << "    cactus::runtime::entt_backend::advance_binding_index_epoch();\n";
+    out << emit_component_move_counting(program);
     if (program_has_clamped_fields(program)) {
         out << "    generated_connect_clamped_fields(registry);\n";
     }

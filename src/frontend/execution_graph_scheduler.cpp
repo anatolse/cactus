@@ -131,12 +131,6 @@ bool commands_conflict(const InferredHandlerCommand& left, const InferredHandler
     return overlapping_fields(left.patched.value_or(all_fields()), right.patched.value_or(all_fields())).has_value();
 }
 
-bool own_row_command(const InferredHandlerCommand& command) {
-    return !command.entities.empty() && std::ranges::all_of(command.entities, [](const EntityTarget& entity) {
-        return entity.kind == EntityTargetKind::Self;
-    });
-}
-
 // Only such handlers can lose a conflict to disjoint domains.
 bool touches_own_row(const HandlerContract& contract) {
     return !contract.own_row_traits.empty() || std::ranges::any_of(contract.commands, own_row_command);

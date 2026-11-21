@@ -5889,12 +5889,14 @@ struct RowTraceHooks {
 };
 
 static RowTraceHooks row_trace_hooks(const DecoratedProgram& program, bool limited) {
+    const std::string count_row = "cactus::runtime::entt_backend::count_domain_row();\n";
     if (limited) {
         return {.body_entry  = rule_trace::hook(program, "rule_trace_run()", "        "),
                 .after_where = {},
-                .walk        = rule_trace::hook(program, "rule_trace_candidate()", "            ")};
+                .walk        = "            " + count_row +
+                        rule_trace::hook(program, "rule_trace_candidate()", "            ")};
     }
-    return {.body_entry  = rule_trace::hook(program, "rule_trace_candidate()", "        "),
+    return {.body_entry  = "        " + count_row + rule_trace::hook(program, "rule_trace_candidate()", "        "),
             .after_where = rule_trace::hook(program, "rule_trace_run()", "        "),
             .walk        = {}};
 }
@@ -9351,7 +9353,7 @@ static void emit_entity_handler_body(std::ostringstream& out,
                                    domain,
                                    program,
                                    contract,
-                                   contract != nullptr && contract->iteration_order == IterationOrder::Creation);
+                                   contract != nullptr && contract->iteration_order != IterationOrder::Free);
     } else {
         emit_fallback_handler_body(out,
                                    sys,

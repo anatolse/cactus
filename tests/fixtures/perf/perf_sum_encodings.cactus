@@ -1,0 +1,224 @@
+module perf_sum_encodings
+
+use std.core
+
+# One fact written four ways: a flag with guarded fields, a state whose
+# variants swap, a projected result and a presence trait. The load spawns
+# units of one form only. A unit's fact holds in a frame when
+# (id + frame * step) % period < share, so share/period is the selectivity and
+# step sets how many units swap each frame.
+
+trait Config:
+    let form: int = 0
+    let units: int = 1000
+    let period: int = 2
+    let share: int = 1
+    let step: int = 1
+
+trait Ticker:
+    var frame: int = 0
+
+entity Field:
+    Config
+    Ticker
+
+trait Unit:
+    let id: int = 0
+    var used: float = 0.0
+
+trait FlagFact:
+    var lit: bool = false
+    var power: float = 0.0
+    var charge: int = 0
+
+state Mode:
+    Off
+    On:
+        var power: float = 0.0
+        var charge: int = 0
+
+trait Projects
+
+trait Hit:
+    var power: float = 0.0
+
+trait Presents
+
+trait Active:
+    var power: float = 0.0
+    var charge: int = 0
+
+template FlagUnit(n: int):
+    Unit:
+        id = n
+    FlagFact
+
+template StateUnit(n: int):
+    Unit:
+        id = n
+    Mode.Off
+
+template ProjectUnit(n: int):
+    Unit:
+        id = n
+    Projects
+
+template PresenceUnit(n: int):
+    Unit:
+        id = n
+    Presents
+
+func holds(id: int, frame: int, c: Config) bool:
+    return (id + frame * c.step) % c.period < c.share
+
+rule Fill:
+    on load:
+        let form = Field[Config].form
+        for i in range(0, Field[Config].units):
+            if form == 0:
+                spawn FlagUnit(n = i)
+            else if form == 1:
+                spawn StateUnit(n = i)
+            else if form == 2:
+                spawn ProjectUnit(n = i)
+            else:
+                spawn PresenceUnit(n = i)
+
+rule Advance:
+    each:
+        Ticker as t
+
+    on tick:
+        t.frame += 1
+
+# ── Flag ──────────────────────────────────────────────────────────────────────
+
+rule DecideFlag:
+    each:
+        Unit as u
+        FlagFact as f
+    after:
+        Advance
+
+    on tick:
+        f.lit = holds(u.id, Field[Ticker].frame, Field[Config])
+        if f.lit:
+            f.power = 1.0
+
+rule UseFlag:
+    each:
+        Unit as u
+        FlagFact as f
+    after:
+        DecideFlag
+    where:
+        f.lit
+
+    on tick:
+        u.used += f.power
+        f.charge += 1
+
+# ── State ─────────────────────────────────────────────────────────────────────
+
+rule EnterOn:
+    each:
+        Unit as u
+        Mode.Off
+    after:
+        Advance
+    where:
+        holds(u.id, Field[Ticker].frame, Field[Config])
+
+    on tick:
+        add Mode.On:
+            power = 1.0
+
+rule LeaveOn:
+    each:
+        Unit as u
+        Mode.On
+    after:
+        Advance
+    where:
+        not holds(u.id, Field[Ticker].frame, Field[Config])
+
+    on tick:
+        add Mode.Off
+
+rule UseState:
+    each:
+        Unit as u
+        Mode.On as m
+    after:
+        EnterOn
+        LeaveOn
+
+    on tick:
+        u.used += m.power
+        m.charge += 1
+
+# ── Projected result ──────────────────────────────────────────────────────────
+
+rule Detect:
+    each:
+        Unit as u
+        Projects
+    after:
+        Advance
+    where:
+        holds(u.id, Field[Ticker].frame, Field[Config])
+
+    on tick:
+        project Hit:
+            power = 1.0
+
+rule UseHit:
+    each:
+        Unit as u
+        Hit as h
+    after:
+        Detect
+
+    on tick:
+        u.used += h.power
+
+# ── Presence trait ────────────────────────────────────────────────────────────
+
+rule Arrive:
+    each:
+        Unit as u
+        Presents
+    without:
+        Active
+    after:
+        Advance
+    where:
+        holds(u.id, Field[Ticker].frame, Field[Config])
+
+    on tick:
+        add Active:
+            power = 1.0
+
+rule Depart:
+    each:
+        Unit as u
+        Active
+    after:
+        Advance
+    where:
+        not holds(u.id, Field[Ticker].frame, Field[Config])
+
+    on tick:
+        remove Active
+
+rule UseActive:
+    each:
+        Unit as u
+        Active as a
+    after:
+        Arrive
+        Depart
+
+    on tick:
+        u.used += a.power
+        a.charge += 1

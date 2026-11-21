@@ -24,6 +24,8 @@ struct PerfCounters {
     std::uint64_t cell_rows        = 0;  // left cells a rule over cells visited
     std::uint64_t clamp_merges     = 0;  // deltas merged into a clamped field's exact pending value
     std::uint64_t clamp_settles    = 0;  // clamped pending values settled when an activation ended
+    std::uint64_t component_moves  = 0;  // trait components constructed or destroyed in the registry
+    std::uint64_t domain_rows      = 0;  // rows a unary rule's pass visited, before its row tests
 
     PerfCounters& operator+=(const PerfCounters& other) noexcept {
         commands += other.commands;
@@ -42,6 +44,8 @@ struct PerfCounters {
         cell_rows += other.cell_rows;
         clamp_merges += other.clamp_merges;
         clamp_settles += other.clamp_settles;
+        component_moves += other.component_moves;
+        domain_rows += other.domain_rows;
         return *this;
     }
 };
@@ -120,6 +124,14 @@ inline void count_clamp_work(std::size_t merges, std::size_t settles) noexcept {
     counting_target().clamp_merges += merges;
     counting_target().clamp_settles += settles;
 }
+
+inline void count_component_move() noexcept {
+    ++counting_target().component_moves;
+}
+
+inline void count_domain_row() noexcept {
+    ++counting_target().domain_rows;
+}
 #else
 inline void count_commands(std::size_t /*count*/) noexcept {}
 inline void count_ordering() noexcept {}
@@ -135,6 +147,8 @@ inline void count_cell_row() noexcept {}
 inline void count_pass_quad() noexcept {}
 inline void count_repeat_pass() noexcept {}
 inline void count_clamp_work(std::size_t /*merges*/, std::size_t /*settles*/) noexcept {}
+inline void count_component_move() noexcept {}
+inline void count_domain_row() noexcept {}
 #endif
 
 }  // namespace cactus::runtime::entt_backend

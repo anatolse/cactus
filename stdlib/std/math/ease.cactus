@@ -1,0 +1,104 @@
+module std.math.ease
+
+# Easing curves in plain Cactus: progress 0..1 in, shaped progress out.
+# Input is clamped to 0..1 (NaN counts as 0); the back curves overshoot on purpose.
+
+pub enum Curve:
+    Linear
+    InQuad
+    OutQuad
+    InOutQuad
+    InCubic
+    OutCubic
+    InOutCubic
+    InBack
+    OutBack
+    OutBounce
+
+func unit(t: float) float:
+    if t >= 1.0:
+        return 1.0
+    if t > 0.0:
+        return t
+    return 0.0
+
+pub func linear(t: float) float:
+    return unit(t)
+
+pub func in_quad(t: float) float:
+    let u = unit(t)
+    return u * u
+
+pub func out_quad(t: float) float:
+    let v = 1.0 - unit(t)
+    return 1.0 - v * v
+
+pub func in_out_quad(t: float) float:
+    let u = unit(t)
+    if u < 0.5:
+        return 2.0 * u * u
+    let v = 2.0 - 2.0 * u
+    return 1.0 - v * v / 2.0
+
+pub func in_cubic(t: float) float:
+    let u = unit(t)
+    return u * u * u
+
+pub func out_cubic(t: float) float:
+    let v = 1.0 - unit(t)
+    return 1.0 - v * v * v
+
+pub func in_out_cubic(t: float) float:
+    let u = unit(t)
+    if u < 0.5:
+        return 4.0 * u * u * u
+    let v = 2.0 - 2.0 * u
+    return 1.0 - v * v * v / 2.0
+
+# The back and bounce constants round in float, so the ends are returned as they are.
+pub func in_back(t: float) float:
+    let u = unit(t)
+    if u <= 0.0 or u >= 1.0:
+        return u
+    let c1 = 1.70158
+    let c3 = c1 + 1.0
+    return c3 * u * u * u - c1 * u * u
+
+pub func out_back(t: float) float:
+    let u = unit(t)
+    if u <= 0.0 or u >= 1.0:
+        return u
+    let c1 = 1.70158
+    let c3 = c1 + 1.0
+    let v = u - 1.0
+    return 1.0 + c3 * v * v * v + c1 * v * v
+
+pub func out_bounce(t: float) float:
+    let u = unit(t)
+    if u <= 0.0 or u >= 1.0:
+        return u
+    let n = 7.5625
+    let d = 2.75
+    if u < 1.0 / d:
+        return n * u * u
+    if u < 2.0 / d:
+        let v = u - 1.5 / d
+        return n * v * v + 0.75
+    if u < 2.5 / d:
+        let v = u - 2.25 / d
+        return n * v * v + 0.9375
+    let v = u - 2.625 / d
+    return n * v * v + 0.984375
+
+pub func apply(curve: Curve, t: float) float:
+    return match curve:
+        Curve.Linear => linear(t)
+        Curve.InQuad => in_quad(t)
+        Curve.OutQuad => out_quad(t)
+        Curve.InOutQuad => in_out_quad(t)
+        Curve.InCubic => in_cubic(t)
+        Curve.OutCubic => out_cubic(t)
+        Curve.InOutCubic => in_out_cubic(t)
+        Curve.InBack => in_back(t)
+        Curve.OutBack => out_back(t)
+        Curve.OutBounce => out_bounce(t)

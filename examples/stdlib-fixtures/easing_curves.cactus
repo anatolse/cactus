@@ -1,0 +1,81 @@
+module easing_curves
+
+# Calls std.math.ease from rules, and keeps a curve as data: a persist trait
+# field set by a template argument, an event that replaces it, and a rule that
+# fades a color along a span with the stored curve. The headless test also
+# calls the compiled curve functions directly over many inputs.
+
+use std.core
+use std.color as color
+use std.math.ease as ease
+use std.time as time
+
+pub trait Samples:
+    var out_quad_half: float = -1.0
+    var in_quad_half: float = -1.0
+    var applied_out_back: float = -1.0
+    var applied_linear_past_end: float = -1.0
+
+pub entity Probe:
+    Samples
+
+rule Sample:
+    each:
+        Samples as s
+
+    on tick:
+        s.out_quad_half = ease.out_quad(0.5)
+        s.in_quad_half = ease.in_quad(0.5)
+        s.applied_out_back = ease.apply(ease.Curve.OutBack, 0.4)
+        s.applied_linear_past_end = ease.apply(ease.Curve.Linear, 1.7)
+
+pub trait Fade:
+    persist var curve: ease.Curve = ease.Curve.Linear
+    var shade: color = #FF00FFFF
+
+trait RetuneOnStart:
+    var pending: bool = true
+
+event Retune:
+    curve: ease.Curve
+
+template Faded(shape: ease.Curve = ease.Curve.Linear):
+    Fade:
+        curve = shape
+    time.Span:
+        length = 1s
+
+pub entity Plain:
+    use Faded
+
+pub entity Popped:
+    use Faded(shape = ease.Curve.OutBack)
+
+pub entity Retuned:
+    use Faded
+    RetuneOnStart
+
+rule AskRetune:
+    each:
+        RetuneOnStart as r
+
+    on input:
+        if r.pending:
+            r.pending = false
+            emit Retune to self:
+                curve = ease.Curve.InQuad
+
+rule TakeRetune:
+    each:
+        Fade as f
+
+    on Retune as e:
+        f.curve = e.curve
+
+rule Shade:
+    each:
+        Fade as f
+        time.Span as s
+
+    on late_tick:
+        f.shade = color.mix(#000000FF, #FFFFFFFF, ease.apply(f.curve, time.progress(s)))

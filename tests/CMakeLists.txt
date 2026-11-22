@@ -1239,6 +1239,12 @@ cactus_add_headless_behavior_test(test_color_helpers_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_color_helpers_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_easing_curves_headless_behavior
+    CACTUS_SOURCE examples/stdlib-fixtures/easing_curves.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_easing_curves_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_noise_headless_behavior
     CACTUS_SOURCE examples/stdlib-fixtures/noise.cactus
     BACKEND cpp-entt

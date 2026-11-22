@@ -2974,6 +2974,45 @@ rule Fade:
 - `with_alpha(base, alpha)` keeps the RGB channels and multiplies alpha by `alpha`. `std.render.passes.with_alpha` calls it.
 - `WHITE` is `#FFFFFFFF` and `CLEAR` is `#00000000`: the neutral values of a color `product` and a color `sum`.
 
+### 7.12 Easing Curves (`std.math.ease`)
+
+Plain Cactus functions that turn progress 0..1 into a shaped value. Feed the result to `math.lerp`, a vector `lerp` or `color.mix`. The enum `Curve` names each curve, so a trait field, an event field or a template argument can hold one, and `apply(curve, t)` calls the curve it names.
+
+```cactus
+use std.color as color
+use std.math.ease as ease
+use std.time as time
+
+trait Fade:
+    var curve: ease.Curve = ease.Curve.OutQuad
+    var shade: color = #000000FF
+
+rule Shade:
+    each:
+        Fade as f
+        time.Span as s
+    on late_tick:
+        f.shade = color.mix(#000000FF, #FFFFFFFF, ease.apply(f.curve, time.progress(s)))
+```
+
+| `Curve` | Function | Value for `u` in 0..1 |
+|---|---|---|
+| `Linear` | `linear` | `u` |
+| `InQuad` | `in_quad` | `u²` |
+| `OutQuad` | `out_quad` | `1 - (1 - u)²` |
+| `InOutQuad` | `in_out_quad` | `2u²` below 0.5, else `1 - (2 - 2u)² / 2` |
+| `InCubic` | `in_cubic` | `u³` |
+| `OutCubic` | `out_cubic` | `1 - (1 - u)³` |
+| `InOutCubic` | `in_out_cubic` | `4u³` below 0.5, else `1 - (2 - 2u)³ / 2` |
+| `InBack` | `in_back` | `c3·u³ - c1·u²`, `c1 = 1.70158`, `c3 = c1 + 1` |
+| `OutBack` | `out_back` | `1 + c3·(u - 1)³ + c1·(u - 1)²` |
+| `OutBounce` | `out_bounce` | four falling arcs, `n = 7.5625`, `d = 2.75` |
+
+- The input is clamped: below 0 and NaN count as 0, above 1 counts as 1, so a clock that runs past its end gives the end value.
+- Every curve returns exactly `0.0` at 0 and exactly `1.0` at 1.
+- The output is not clamped: `in_back` dips below 0 and `out_back` rises above 1. With `color.mix` the color overshoots too, and drawing clamps it once.
+- The curves use only arithmetic and comparisons. A render-pass stage can't call them yet, because they use locals and branches (§3.12).
+
 ## 8. Deferred and Migration Notes
 
 ### 8.1 Deferred Features

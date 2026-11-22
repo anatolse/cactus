@@ -109,6 +109,11 @@ exception — see `examples/CLAUDE.md`).
 - A light's brightness is its color: `color = #FFE0C0FF * 1.5`. Lights have no `intensity`. To change
   brightness at run time, keep the hue in your own trait and write `light.color = hue * strength`.
 
+### Easing
+
+- Shape progress with `std.math.ease` (`ease.out_quad(t)`, or `ease.apply(curve, t)` for a curve kept
+  in data) instead of a hand-written curve.
+
 ### Values per kind or per place
 
 - For a value per item kind, per board square or per place in a room, declare a trait with

@@ -1334,25 +1334,23 @@ function at most once per activation, even when multiple execution-graph
 nodes scheduled in that phase resolve to the same underlying function.
 
 #### Scenario: Two rules resolving to the same implementation call it once
-- **WHEN** two distinct execution-graph nodes in the same phase batch (for
-  example `std.transform.flat.TransformPropagation` and
-  `std.transform.volume.TransformPropagation`) resolve to the same generated
-  implementation function
+- **WHEN** two distinct execution-graph nodes in the same phase batch resolve
+  to the same generated implementation function
 - **THEN** the generated phase-dispatch function contains exactly one call to
   that implementation function
 
 #### Scenario: Distinct implementation functions are unaffected
 - **WHEN** two execution-graph nodes in the same phase batch resolve to two
-  different generated implementation functions
-- **THEN** the generated phase-dispatch function calls each of them once, as
-  before
+  different generated implementation functions (for example
+  `std.transform.flat.TransformPropagation` and
+  `std.transform.volume.TransformPropagation`)
+- **THEN** the generated phase-dispatch function calls each of them once
 
 #### Scenario: Runtime behavior unaffected by dedup
-- **WHEN** a program containing a phase-batch collision (such as
-  `waving-label-2d` or `waving-label-3d`) is run after the dedup fix
-- **THEN** the previously double-invoked implementation now executes once per
-  activation and observable transform/propagation results are unchanged,
-  since the duplicate call was idempotent
+- **WHEN** a program containing a phase-batch collision is run
+- **THEN** the shared implementation executes once per activation, and
+  observable transform and propagation results are the same as if each node
+  had called it, since the duplicate call was idempotent
 
 ### Requirement: Generated restore entry points and staged construction
 The backend SHALL generate a typed restore entry point that reconstructs recorded nodes from the same schema its capture path produces. Node initialization SHALL be reusable independently of whole-tree template spawn, so a single recorded child can be created without its siblings. Reconstruction SHALL build a staged registry and staged runtime resources, publish them atomically into the live world, and retire the replaced world's resources through backend cleanup without dispatching authored destroy handlers. Generated restore integration SHALL compile under the C++23 generated-code target.
@@ -1781,3 +1779,36 @@ Where a color enters a consumer that holds floats (a shader uniform, a render-st
 #### Scenario: Light brighter than white reaches the shader
 - **WHEN** an enabled `PointLight` has color `#FFFFFFFF * 2.0`
 - **THEN** the light data uploaded for that frame holds 2.0 in its red, green and blue lanes
+
+### Requirement: Backend-implemented extern rules bind their filter traits by identity
+When the cpp-entt backend implements an extern rule itself (a renderer, a light, text, transform propagation), the generated code SHALL read exactly the traits the rule's `each:` names, identified by their resolved module and name. A trait's short name SHALL NOT select it, so two imported traits with the same short name never stand in for each other.
+
+#### Scenario: Sprites and meshes in one module
+- **WHEN** a module imports both `std.render.sprites` and `std.render.meshes`, and declares one entity with `sprites.Renderer` and one with `meshes.Renderer`
+- **THEN** the generated C++ compiles, the sprite is submitted as a sprite with its texture, and the mesh is submitted as a mesh with its mesh and material
+
+#### Scenario: Each renderer reads its own trait's color
+- **WHEN** the sprite's color is `#FF0000FF` and the mesh's color is `#0000FFFF` in that module
+- **THEN** the sprite draw receives red and the mesh submission receives the blue tint
+
+### Requirement: Flat and volume extern rules run side by side
+A backend-implemented extern rule SHALL run over every entity that carries the traits its filter names, whatever transform kinds the rest of the program uses. A program that has both `std.transform.flat` and `std.transform.volume` entities SHALL draw and propagate both.
+
+#### Scenario: 2D and 3D text labels in one program
+- **WHEN** a program has one entity with `std.transform.flat.WorldTransform` and `TextLabel` and another with `std.transform.volume.WorldTransform` and `TextLabel`
+- **THEN** in each frame the flat entity's label is drawn as 2D text and the volume entity's label is submitted as 3D text
+
+#### Scenario: Flat hierarchy next to volume entities
+- **WHEN** a program has a flat parent at `vec2(10.0, 0.0)` with a flat child at local `vec2(1.0, 0.0)`, and also a volume entity
+- **THEN** after one frame the child's flat `WorldTransform.position` is `vec2(11.0, 0.0)`
+
+#### Scenario: Single-kind programs are unchanged
+- **WHEN** a program uses only flat transforms, or only volume transforms
+- **THEN** every entity is drawn and propagated as before this change
+
+### Requirement: Each extern rule has its own generated function
+The cpp-entt backend SHALL give each extern rule it implements its own generated function, named from the rule's resolved identity. Two extern rules with the same short name from different modules SHALL get different functions.
+
+#### Scenario: Both transform propagations are emitted
+- **WHEN** a program links both `std.transform.flat.TransformPropagation` and `std.transform.volume.TransformPropagation`
+- **THEN** the generated C++ defines two distinct propagation functions and calls each once per activation of its phase

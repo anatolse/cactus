@@ -6,7 +6,7 @@ Define deterministic, typed global and outer-grouped aggregation over rule domai
 ## Requirements
 ### Requirement: Typed reduction clauses
 
-A regular unary or pair rule SHALL accept one `reduce:` clause. It SHALL declare immutable, uniquely named aggregate values using `count()`, `count(binding)`, `sum(expression)`, `min(expression [, default = value])`, `max(expression [, default = value])`, `any(expression)`, `first_hit(expression)` or `best(binding, by = expression)`. `count(binding)` SHALL count rows, not distinct entities, and SHALL require a declared pair binding; `count()` SHALL count rows in either domain form. `sum` input SHALL be `int`, `float`, `duration`, `vec2` or `vec3` and SHALL preserve its type; an `int` or `duration` `sum` SHALL wrap like `+`; a `float` `sum` SHALL be exact, and a vector `sum` SHALL be exact per component (see "Reduction numeric edge behavior"). `min`/`max` inputs SHALL be `int`, `float` or `duration` and preserve their type, and a `min`/`max` default SHALL have exactly that type. A `min`/`max` SHALL require a default unless every read of it is a field of a keep clause whose recipients are only groups with at least one row: the reduced form without a condition (`dsl-rule-keep`) or a reduced relation keep (`dsl-relations`). An omitted default anywhere else SHALL be a source-located error that names one read that can see an empty group. `any` input SHALL be `bool` and its result SHALL be `bool`. `first_hit` input SHALL be `std.physics.volume.SweepHit` and its result SHALL be `SweepHit`. `best` SHALL require a declared pair binding other than the `per` binding, its `by` key SHALL be `int`, `float` or `duration`, and its result SHALL be `entity_id`: the binding's entity in the row with the highest key; among equal keys, the row first in stable fold order; rows whose key is NaN SHALL be ignored; with no eligible row, a stale `entity_id`. Reducer expressions SHALL be pure; they MAY read the rule's bindings, constants and named entity fields. Selectionless and extern rules SHALL reject `reduce:`.
+A regular unary or pair rule SHALL accept one `reduce:` clause. It SHALL declare immutable, uniquely named aggregate values using `count()`, `count(binding)`, `sum(expression)`, `product(expression [, default = value])`, `min(expression [, default = value])`, `max(expression [, default = value])`, `any(expression)`, `first_hit(expression)` or `best(binding, by = expression)`. `count(binding)` SHALL count rows, not distinct entities, and SHALL require a declared pair binding; `count()` SHALL count rows in either domain form. `sum` input SHALL be `int`, `float`, `duration`, `vec2`, `vec3` or `color` and SHALL preserve its type; an `int` or `duration` `sum` SHALL wrap like `+`; a `float` `sum` SHALL be exact, and a vector `sum` SHALL be exact per component (see "Reduction numeric edge behavior"); a `color` `sum` SHALL follow "Sum over colors". `product` input SHALL be `int`, `float` or `color` and SHALL follow "Product reducer". `min`/`max` inputs SHALL be `int`, `float` or `duration` and preserve their type, and a `min`/`max` default SHALL have exactly that type. A `min`/`max` SHALL require a default unless every read of it is a field of a keep clause whose recipients are only groups with at least one row: the reduced form without a condition (`dsl-rule-keep`) or a reduced relation keep (`dsl-relations`). An omitted default anywhere else SHALL be a source-located error that names one read that can see an empty group. `any` input SHALL be `bool` and its result SHALL be `bool`. `first_hit` input SHALL be `std.physics.volume.SweepHit` and its result SHALL be `SweepHit`. `best` SHALL require a declared pair binding other than the `per` binding, its `by` key SHALL be `int`, `float` or `duration`, and its result SHALL be `entity_id`: the binding's entity in the row with the highest key; among equal keys, the row first in stable fold order; rows whose key is NaN SHALL be ignored; with no eligible row, a stale `entity_id`. Reducer expressions SHALL be pure; they MAY read the rule's bindings, constants and named entity fields. Selectionless and extern rules SHALL reject `reduce:`.
 
 #### Scenario: Count and sum
 - **WHEN** three input rows have integer scores 2, 3 and 5
@@ -49,7 +49,7 @@ A regular unary or pair rule SHALL accept one `reduce:` clause. It SHALL declare
 - **THEN** the compiler reports an error, because the condition keeps the trait on empty groups
 
 #### Scenario: Bad reducer
-- **WHEN** `collect`, an unknown reducer, a mismatched default (such as `default = 0.0` for a `duration` `max`), a vector `min`/`max` input, a non-bool `any` input, a non-`SweepHit` `first_hit` input, a `best` over the `per` binding or with a non-numeric key, or an impure expression is used
+- **WHEN** `collect`, an unknown reducer, a mismatched default (such as `default = 0.0` for a `duration` `max`), a vector `min`/`max` input, a vector or `duration` `product` input, a non-bool `any` input, a non-`SweepHit` `first_hit` input, a `best` over the `per` binding or with a non-numeric key, or an impure expression is used
 - **THEN** the compiler reports a source-located error
 
 #### Scenario: Invalid domain
@@ -231,3 +231,55 @@ A reducer SHALL be read by its rule: by a handler body, a sort key, a keep field
 #### Scenario: Reducer read only by a keep condition
 - **WHEN** a reducer is read only in `keep T on b if n == 0`
 - **THEN** compilation accepts it
+
+### Requirement: Product reducer
+A `reduce:` clause SHALL accept `product(expression [, default = value])`. The expression SHALL have type `int`, `float` or `color`; any other type SHALL be a source-located error. The result SHALL have the expression's type and SHALL be the product of the expression over the group's rows. A `color` product SHALL multiply channel by channel, each channel as a `float` product, with no clamp. An `int` product SHALL wrap as `int` multiplication does.
+
+#### Scenario: Scale factors
+- **WHEN** a group has rows with values 1.2 and 0.9 and the clause is `gain = product(e.gain)`
+- **THEN** `gain` is 1.08 within float rounding
+
+#### Scenario: Color product
+- **WHEN** a group has rows with colors `color(1.0, 1.0, 1.0, 0.5)` and `color(2.0, 0.5, 0.5, 1.0)`
+- **THEN** the product is `color(2.0, 0.5, 0.5, 0.5)`
+
+#### Scenario: Wrong type
+- **WHEN** the clause is `p = product(e.offset)` and `offset` is a `vec2`
+- **THEN** the compiler reports an error naming `product` and `vec2`
+
+#### Scenario: Duration product
+- **WHEN** the clause is `p = product(e.delay)` and `delay` is a `duration`
+- **THEN** the compiler reports an error naming `product` and `duration`
+
+### Requirement: Product of an empty group
+Over a group with no rows the result SHALL be `1` for `int`, `1.0` for `float` and `#FFFFFFFF` for `color`, or the `default` value when one is given. `product` SHALL NOT require a `default`.
+
+#### Scenario: Empty group
+- **WHEN** a group has no rows and the handler reads `gain = product(e.gain)`
+- **THEN** `gain` is 1.0
+
+### Requirement: Product fold order
+An `int` `product` wraps modulo 2³², so its result SHALL NOT depend on row order and a backend MAY split or reorder it. A `float` or `color` `product` SHALL fold in the reduction's stable row order, and a backend SHALL NOT split or reorder it.
+
+#### Scenario: Float product follows stable fold order
+- **WHEN** a group's rows are created in the order A, B, C and the rule reduces `gain = product(e.gain)`
+- **THEN** `gain` is `(A * B) * C` rounded after each step, whatever order the backend scans its storage in
+
+### Requirement: Sum over colors
+`sum(expression)` SHALL accept a `color` expression. The result SHALL be a `color` whose every channel follows the `float` `sum` rule of "Reduction numeric edge behavior", as a vector `sum` does per component. No channel SHALL be clamped, so the result SHALL NOT depend on row order and a backend MAY split or reorder it. Over a group with no rows the result SHALL be `#00000000`.
+
+#### Scenario: Flash contributions
+- **WHEN** a group has rows with colors `color(0.25, 0.0, 0.0, 0.0)` and `color(0.25, 0.125, 0.0, 0.0)`
+- **THEN** the sum is `color(0.5, 0.125, 0.0, 0.0)`
+
+#### Scenario: No clamp
+- **WHEN** a group has three rows with color `color(0.5, 0.5, 0.5, 0.5)`
+- **THEN** the sum is `color(1.5, 1.5, 1.5, 1.5)`, and a later read of it still gives 1.5 in every channel
+
+#### Scenario: Empty color sum
+- **WHEN** a group has no rows and the handler reads `flash = sum(e.tint)` over a `color` field
+- **THEN** `flash` is `#00000000`
+
+#### Scenario: Schedule independence
+- **WHEN** the same program runs under any linearization of its handlers
+- **THEN** every `product` and color `sum` has the same value

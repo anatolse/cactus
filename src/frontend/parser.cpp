@@ -2192,11 +2192,12 @@ std::optional<ReducerDecl> Parser::parse_reducer_decl() {
     auto* call         = std::get_if<CallExpr>(&value->expr);
     const auto* callee = call == nullptr ? nullptr : std::get_if<IdentExpr>(&call->callee->expr);
     if (callee == nullptr) {
-        errors_.error(value->location, "expected a reducer call: count, sum, min, max, any, first_hit or best");
+        errors_.error(value->location, "expected a reducer call: count, sum, product, min, max, any, first_hit or best");
         return std::nullopt;
     }
     static const std::unordered_map<std::string, ReducerKind> kinds{{"count", ReducerKind::Count},
                                                                     {"sum", ReducerKind::Sum},
+                                                                    {"product", ReducerKind::Product},
                                                                     {"min", ReducerKind::Min},
                                                                     {"max", ReducerKind::Max},
                                                                     {"any", ReducerKind::Any},
@@ -2204,13 +2205,14 @@ std::optional<ReducerDecl> Parser::parse_reducer_decl() {
                                                                     {"best", ReducerKind::Best}};
     const auto kind = kinds.find(callee->name);
     if (kind == kinds.end()) {
-        errors_.error(call->location,
-                      "unknown reducer '" + callee->name + "'; expected count, sum, min, max, any, first_hit or best");
+        errors_.error(
+            call->location,
+            "unknown reducer '" + callee->name + "'; expected count, sum, product, min, max, any, first_hit or best");
         return std::nullopt;
     }
     reducer.kind = kind->second;
 
-    const bool bounded = reducer_has_default(reducer.kind);
+    const bool bounded = reducer_accepts_default(reducer.kind);
     for (std::size_t i = 0; i < call->args.size(); ++i) {
         const auto& name = i < call->arg_names.size() ? call->arg_names[i] : std::string{};
         if (name.empty() && reducer.input == nullptr) {

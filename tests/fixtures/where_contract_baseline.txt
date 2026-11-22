@@ -1078,6 +1078,16 @@ parallel_handlers_runtime.cactus fixtures parallel_handlers_runtime.TagSpinners/
     named_writes:
     named_requirements:
     iteration_order: creation
+product_and_color_reducers.cactus examples product_and_color_reducers.ApplyEffects/on std.core.tick
+    reads: product_and_color_reducers.Effect product_and_color_reducers.Look
+    read_fields: product_and_color_reducers.Effect{flash,gain,stacks,target,tint} product_and_color_reducers.Look{boosted,flash,scale,stacks,tint}
+    write_fields: product_and_color_reducers.Look{boosted,flash,scale,stacks,tint}
+    write_kinds: product_and_color_reducers.Look.boosted=0/0 product_and_color_reducers.Look.flash=0/0 product_and_color_reducers.Look.scale=0/0 product_and_color_reducers.Look.stacks=0/0 product_and_color_reducers.Look.tint=0/0
+    bound_reads: 0:product_and_color_reducers.Look 1:product_and_color_reducers.Effect
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
 reduced_relation_keep.cactus fixtures reduced_relation_keep.ReachCheckpoint/on std.core.fixed_tick
     reads: reduced_relation_keep.Checkpoint reduced_relation_keep.Player
     read_fields: reduced_relation_keep.Checkpoint{order,x} reduced_relation_keep.Player{x}

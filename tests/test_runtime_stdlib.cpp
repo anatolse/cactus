@@ -2886,6 +2886,56 @@ TEST_CASE("reduce: vector sums are exact per component", "[runtime][rule-reduce]
     CHECK(flat.value().y == 2.0F);
 }
 
+TEST_CASE("reduce: a color sum is exact per channel with no clamp", "[runtime][rule-reduce][color-sum]") {
+    reduce::Sum<CactusColor> flash;
+    CHECK(flash.value().r == 0.0F);
+    flash.add(CactusColor{.r = 1.0e8F, .g = 0.5F, .b = -0.25F, .a = 0.75F});
+    flash.add(CactusColor{.r = 1.0F, .g = 0.5F, .b = 0.0F, .a = 0.75F});
+    flash.add(CactusColor{.r = -1.0e8F, .g = 0.5F, .b = 0.0F, .a = 0.0F});
+    const auto total = flash.value();
+    CHECK(total.r == 1.0F);
+    CHECK(total.g == 1.5F);
+    CHECK(total.b == -0.25F);
+    CHECK(total.a == 1.5F);
+    reduce::Sum<CactusColor> half;
+    half.add(CactusColor{.r = 0.5F, .g = 0.0F, .b = 0.0F, .a = 0.0F});
+    half.merge(flash);
+    CHECK(half.value().r == 1.5F);
+}
+
+TEST_CASE("reduce: a product starts at the neutral value", "[runtime][rule-reduce][product]") {
+    const reduce::Product<int> ints;
+    const reduce::Product<float> floats;
+    const reduce::Product<CactusColor> colors;
+    CHECK(ints.value() == 1);
+    CHECK(floats.value() == 1.0F);
+    CHECK(colors.value().r == 1.0F);
+    CHECK(colors.value().a == 1.0F);
+}
+
+TEST_CASE("reduce: a product folds in the order rows arrive", "[runtime][rule-reduce][product]") {
+    reduce::Product<int> ints;
+    ints.add(65536);
+    ints.add(65537);
+    CHECK(ints.value() == 65536);
+
+    const auto fold = [](std::initializer_list<float> gains) {
+        reduce::Product<float> product;
+        for (const float gain : gains) {
+            product.add(gain);
+        }
+        return product.value();
+    };
+    CHECK(fold({1.1F, 1.3F, 0.3F}) != fold({0.3F, 1.3F, 1.1F}));
+
+    reduce::Product<CactusColor> tint;
+    tint.add(CactusColor{.r = 1.0F, .g = 1.0F, .b = 1.0F, .a = 0.5F});
+    tint.add(CactusColor{.r = 2.0F, .g = 0.5F, .b = 0.5F, .a = 1.0F});
+    CHECK(tint.value().r == 2.0F);
+    CHECK(tint.value().g == 0.5F);
+    CHECK(tint.value().a == 0.5F);
+}
+
 TEST_CASE("reduce: an int sum wraps", "[runtime][rule-reduce][numeric-semantics]") {
     reduce::Sum<int> sum;
     sum.add(std::numeric_limits<int>::max());

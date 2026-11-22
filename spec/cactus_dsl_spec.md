@@ -1147,6 +1147,7 @@ reducer_decl    = IDENTIFIER "=" reducer NEWLINE ;
 
 reducer         = "count" "(" [ IDENTIFIER ] ")"
                 | "sum" "(" expression ")"
+                | "product" "(" expression [ "," "default" "=" expression ] ")"
                 | "min" "(" expression [ "," "default" "=" expression ] ")"
                 | "max" "(" expression [ "," "default" "=" expression ] ")"
                 | "any" "(" expression ")"
@@ -1185,13 +1186,13 @@ binding and a nonempty reducer block.
 Sorting follows the reduction, and empty-group identities, retained writes, and
 `keep` commit visibility are unchanged.
 
-**Reducers are typed and pure.** `count()` counts rows; `count(binding)` also counts rows (not distinct entities) and requires a pair binding. `sum` takes `int`, `float`, `duration`, `vec2` or `vec3` and keeps that type; a vector sum adds per component, and an `int` or `duration` sum wraps like `+`. `min` and `max` take `int`, `float` or `duration` and keep that type; a `default` has exactly that type (`default = 0s` for a duration). `any` takes `bool` and yields `bool`. `first_hit` takes and yields `std.physics.volume.SweepHit` (§7.7): it ignores misses and keeps the hit with the smallest `t`, and on equal `t` the row that comes first in fold order. `best(binding, by = key)` names a pair binding other than the `per` binding and an `int`, `float` or `duration` key, and yields `entity_id`: that binding's entity in the row with the highest key, the earlier row in fold order on a tie; rows whose key is NaN are skipped. Reducer inputs have the purity class of a `where:` predicate (§3.8.2) and read the domain's bindings, constants and named entity fields. Reducer names are unique and must not reuse a pair binding name.
+**Reducers are typed and pure.** `count()` counts rows; `count(binding)` also counts rows (not distinct entities) and requires a pair binding. `sum` takes `int`, `float`, `duration`, `vec2`, `vec3` or `color` and keeps that type; a vector or color sum adds per component with no clamp, and an `int` or `duration` sum wraps like `+`. `product` takes `int`, `float` or `color` and keeps that type; a color product multiplies per channel with no clamp, and an `int` product wraps like `*`. It needs no default: an empty group gives `1`, `1.0` or white (`#FFFFFFFF`), and `default =` overrides that. `min` and `max` take `int`, `float` or `duration` and keep that type; a `default` has exactly that type (`default = 0s` for a duration). `any` takes `bool` and yields `bool`. `first_hit` takes and yields `std.physics.volume.SweepHit` (§7.7): it ignores misses and keeps the hit with the smallest `t`, and on equal `t` the row that comes first in fold order. `best(binding, by = key)` names a pair binding other than the `per` binding and an `int`, `float` or `duration` key, and yields `entity_id`: that binding's entity in the row with the highest key, the earlier row in fold order on a tie; rows whose key is NaN are skipped. Reducer inputs have the purity class of a `where:` predicate (§3.8.2) and read the domain's bindings, constants and named entity fields. Reducer names are unique and must not reuse a pair binding name.
 
 **Defaults only where an empty group is read.** A `min` or `max` needs `default =` unless every read of it is a field of a keep whose recipients are only groups with rows: `keep T on b` without `if`, or a reduced relation keep (§3.8.6). Any other read, in a handler, a sort key, a keep condition or a field under `if`, can see an empty group, so a missing default there is an error at the reducer that names that read. A global `reduce:` always has a group that may be empty.
 
 **Every reducer is read.** A reducer must be read by a handler body, a sort key, a keep field or a keep condition. A reducer that nothing reads is an error at its declaration. When a keep rule reads none of its reducers, the error asks to remove `reduce:`, so the trait is kept while any row matches (§3.8.6).
 
-**Groups are outer.** Without `per`, the whole domain is one group, so the handler runs exactly once, even for empty input. `reduce per binding:` names a pair binding and creates one group for every entity in that binding's membership snapshot that passes the group filters, whether or not any row survives for it. An empty group gets identity values: `count` and `sum` are `0` (the zero vector for a vector `sum`), `min`/`max` their default (unread without one), `any` is `false`, `first_hit` is the miss value `sweep` itself returns (`hit = false`, `t = 1.0`), and `best` is a stale `entity_id`. Defaults apply only to empty input.
+**Groups are outer.** Without `per`, the whole domain is one group, so the handler runs exactly once, even for empty input. `reduce per binding:` names a pair binding and creates one group for every entity in that binding's membership snapshot that passes the group filters, whether or not any row survives for it. An empty group gets identity values: `count` and `sum` are `0` (the zero vector for a vector `sum`, `#00000000` for a color `sum`), `product` is `1` (white for a color `product`) or its default, `min`/`max` their default (unread without one), `any` is `false`, `first_hit` is the miss value `sweep` itself returns (`hit = false`, `t = 1.0`), and `best` is a stale `entity_id`. Defaults apply only to empty input.
 
 **`where:` splits into group and row filters.** With `reduce per b:`, a `where:` predicate whose pair-binding reads all root at `b` filters groups: an entity that fails it gets no group and no activation. Every other predicate filters rows. Without `per`, every predicate filters rows. The split is syntactic.
 
@@ -1199,7 +1200,7 @@ Sorting follows the reduction, and empty-group identities, retained writes, and
 
 **Scope after reduction.** Handlers and sort keys see the aggregates as immutable values and, with `reduce per b:`, the binding `b`. Every other binding, filter alias and implicit filter field is eliminated and can't be named; there is no `self`. The retained binding `b` is writable: the handler runs exactly once per `b` entity, so assignment through `b[Trait].field` or a bare alias of `b`'s traits is accepted and recorded as a contract write, as for a provably-one `limit: … per` (§3.8.3). A targeted event keeps only the recipient's group; a global reduction ignores the target. Lifecycle triggers are rejected on reduced rules.
 
-**Numbers.** No reducer result depends on row order. Integer `count` and `sum` wrap like `+` (§3.15). A `float` `sum` is the exact sum of its inputs rounded once to the nearest `float`, ties to even, so `1.0e8`, `1.0` and `-1.0e8` sum to `1.0` in any order; a vector `sum` does this per component. A `float` `sum` is NaN when any input is NaN or the inputs hold both `+inf` and `-inf`, `±inf` when they hold only that infinity or the exact sum rounds beyond the `float` range, and `-0.0` only when every input is `-0.0`. Floating `min`/`max` yield NaN when any input is NaN.
+**Numbers.** No reducer result depends on the schedule. Integer `count`, `sum` and `product` wrap (§3.15), so their order doesn't matter. A `float` `sum` is the exact sum of its inputs rounded once to the nearest `float`, ties to even, so `1.0e8`, `1.0` and `-1.0e8` sum to `1.0` in any order; a vector or color `sum` does this per component. A `float` or color `product` rounds after each step, so it folds in the stable row order, and a backend must not split or reorder it, as for `first_hit` and `best`. A `float` `sum` is NaN when any input is NaN or the inputs hold both `+inf` and `-inf`, `±inf` when they hold only that infinity or the exact sum rounds beyond the `float` range, and `-0.0` only when every input is `-0.0`. Floating `min`/`max` yield NaN when any input is NaN.
 
 #### 3.8.6 Keep Clause
 
@@ -2954,6 +2955,24 @@ rule Move:
 **Game time.** Both windows count the `delta` of `fixed_tick`, so they follow `Clock[Pace].scale`: at `0.5` a window lasts twice as long in real time, and while the scale is `0` a waiting request and an open window both wait. A game that pauses for a menu stops sending `RequestJump`.
 
 `examples/stdlib-fixtures/character_jumping.cactus` shows the controller with a small movement rule. `examples/platformer` keeps its hand-written multi-jump.
+
+### 7.11 Color Helpers (`std.color`)
+
+Plain Cactus helpers for colors. They work in rule handlers and in render-pass stage handlers alike, and like every color operation they never clamp (§3.15).
+
+```cactus
+use std.color as color
+
+rule Fade:
+    each:
+        Glow as glow
+    on tick:
+        glow.tint = color.mix(glow.from, glow.to, glow.t)
+```
+
+- `mix(a, b, t)` is `a + (b - a) * t`: `a` at `t = 0`, `b` at `t = 1`. `t` is not clamped, so values outside 0..1 extrapolate, as with `math.lerp`.
+- `with_alpha(base, alpha)` keeps the RGB channels and multiplies alpha by `alpha`. `std.render.passes.with_alpha` calls it.
+- `WHITE` is `#FFFFFFFF` and `CLEAR` is `#00000000`: the neutral values of a color `product` and a color `sum`.
 
 ## 8. Deferred and Migration Notes
 

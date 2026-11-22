@@ -760,6 +760,45 @@ TEST_CASE("integration: std.render.meshes lights carry brightness in color, with
     }
 }
 
+TEST_CASE("integration: std.color helpers lower to the same float formula in a fragment stage",
+          "[integration][stdlib][stdlib-color]") {
+    ProgramNode ast;
+    const auto merged = link_with_stdlib(
+        "module game\n"
+        "use std.core\n"
+        "use std.color as color\n"
+        "use std.render.passes as passes\n"
+        "trait Spot:\n"
+        "    var position: vec2\n"
+        "entity Dot:\n"
+        "    Spot\n"
+        "pub phase glow:\n"
+        "    after:\n"
+        "        render\n"
+        "    pipeline: passes.Pass = passes.Pass.Quads\n"
+        "    output: passes.Target = passes.Target.Screen\n"
+        "rule GlowVertex:\n"
+        "    each:\n"
+        "        Spot as spot\n"
+        "    on glow.vertex as v:\n"
+        "        v.screen_position = spot.position + v.corner\n"
+        "        v.uv_out = v.uv\n"
+        "        v.tint_out = #FFFFFFFF\n"
+        "rule GlowFragment:\n"
+        "    on glow.fragment as f:\n"
+        "        f.frag_color = color.with_alpha(color.mix(f.tint, color.CLEAR, f.uv.x * 2.0), 1.5)\n",
+        "game",
+        integration_build_dir() / "color_helpers_glsl" / "build",
+        ast);
+    REQUIRE(merged.has_value());
+    const auto code = CppEnttCodegen::generate(*merged);
+    INFO(code.substr(code.find("frag_color"), 2000));
+    const std::string mixed = "(tint + ((vec4(0, 0, 0, 0) - tint) * (uv.x * 2.0)))";
+    CHECK_FALSE(code.contains("clamp("));
+    CHECK(code.contains("frag_color = vec4(" + mixed + ".r, " + mixed + ".g, " + mixed + ".b, (" + mixed +
+                        ".a * 1.5));"));
+}
+
 TEST_CASE("integration: a module keeps a relation declared in an imported module", "[integration][relations]") {
     const auto modules = write_modules("imported_keep", {{"vis", kHiddenLibrary}});
     const ModuleDirGuard guard(modules.parent_path());

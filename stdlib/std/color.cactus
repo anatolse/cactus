@@ -1,0 +1,14 @@
+module std.color
+
+# Color helpers in plain Cactus. Channels are unbounded floats; drawing clamps once.
+
+const:
+    WHITE = #FFFFFFFF
+    CLEAR = #00000000
+
+# `a` at t = 0, `b` at t = 1; t outside 0..1 extrapolates, like `math.lerp`.
+pub func mix(a: color, b: color, t: float) color:
+    return a + (b - a) * t
+
+pub func with_alpha(base: color, alpha: float) color:
+    return color(base.r, base.g, base.b, base.a * alpha)

@@ -4885,7 +4885,7 @@ void SemanticAnalyzer::reject_unused_reducers(const RuleNode& rule) {
 void SemanticAnalyzer::check_default_free_reads(const RuleNode& rule) {
     std::unordered_set<std::string> default_free;
     for (const auto& reducer : rule.reduce->reducers) {
-        if (reducer_has_default(reducer.kind) && reducer.default_value == nullptr) {
+        if (reducer_needs_default(reducer.kind) && reducer.default_value == nullptr) {
             default_free.insert(reducer.name);
         }
     }
@@ -4993,9 +4993,9 @@ void SemanticAnalyzer::validate_reducer(ReducerDecl& reducer,
 
     if (reducer.kind == ReducerKind::Sum) {
         if (input.kind != TypeKind::Int && input.kind != TypeKind::Float && input.kind != TypeKind::Duration &&
-            input.kind != TypeKind::Vec2 && input.kind != TypeKind::Vec3) {
+            input.kind != TypeKind::Vec2 && input.kind != TypeKind::Vec3 && input.kind != TypeKind::Color) {
             errors_.error(reducer.input->location,
-                          "sum(...) input must be of type 'int', 'float', 'duration', 'vec2' or 'vec3', got '" +
+                          "sum(...) input must be of type 'int', 'float', 'duration', 'vec2', 'vec3' or 'color', got '" +
                               input.name + "'");
             return;
         }
@@ -5003,9 +5003,12 @@ void SemanticAnalyzer::validate_reducer(ReducerDecl& reducer,
         return;
     }
 
-    if (input.kind != TypeKind::Int && input.kind != TypeKind::Float && input.kind != TypeKind::Duration) {
+    const auto [third, third_name] = reducer.kind == ReducerKind::Product ? std::pair{TypeKind::Color, "color"}
+                                                                           : std::pair{TypeKind::Duration, "duration"};
+    if (input.kind != TypeKind::Int && input.kind != TypeKind::Float && input.kind != third) {
         errors_.error(reducer.input->location,
-                      kind_name + "(...) input must be of type 'int', 'float' or 'duration', got '" + input.name + "'");
+                      kind_name + "(...) input must be of type 'int', 'float' or '" + third_name + "', got '" +
+                          input.name + "'");
         return;
     }
     reducer.result_type = make_type_info(input.kind, input.name);

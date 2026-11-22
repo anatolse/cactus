@@ -1199,7 +1199,7 @@ struct RepeatClause {
 
 // ── Reduce Clause ───────────────────────────────────────────────────────────
 
-enum class ReducerKind : std::uint8_t { Count, Sum, Min, Max, Any, FirstHit, Best };
+enum class ReducerKind : std::uint8_t { Count, Sum, Min, Max, Any, FirstHit, Best, Product };
 
 [[nodiscard]] constexpr const char* reducer_kind_name(ReducerKind kind) {
     switch (kind) {
@@ -1207,6 +1207,8 @@ enum class ReducerKind : std::uint8_t { Count, Sum, Min, Max, Any, FirstHit, Bes
             return "count";
         case ReducerKind::Sum:
             return "sum";
+        case ReducerKind::Product:
+            return "product";
         case ReducerKind::Min:
             return "min";
         case ReducerKind::Max:
@@ -1221,17 +1223,22 @@ enum class ReducerKind : std::uint8_t { Count, Sum, Min, Max, Any, FirstHit, Bes
     return "";
 }
 
-[[nodiscard]] constexpr bool reducer_has_default(ReducerKind kind) {
+// `min`/`max` have no neutral value, so an empty group needs a default.
+[[nodiscard]] constexpr bool reducer_needs_default(ReducerKind kind) {
     return kind == ReducerKind::Min || kind == ReducerKind::Max;
 }
 
-// `name = count()`, `count(binding)`, `sum(e)`, `min(e, default = v)`,
+[[nodiscard]] constexpr bool reducer_accepts_default(ReducerKind kind) {
+    return reducer_needs_default(kind) || kind == ReducerKind::Product;
+}
+
+// `name = count()`, `count(binding)`, `sum(e)`, `product(e, default = v)`, `min(e, default = v)`,
 // `max(e, default = v)`, `any(e)`, `first_hit(e)` or `best(binding, by = key)`.
 struct ReducerDecl {
     std::string name;
     ReducerKind kind = ReducerKind::Count;
     std::unique_ptr<ExprNode> input;          // null for `count()`
-    std::unique_ptr<ExprNode> default_value;  // `min`/`max` only
+    std::unique_ptr<ExprNode> default_value;  // `min`/`max`/`product` only
     std::unique_ptr<ExprNode> key;            // `best` only
     TypeInfo result_type;  // set by semantic analysis
     TypeInfo key_type;     // `best` only; set by semantic analysis

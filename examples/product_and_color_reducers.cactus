@@ -1,0 +1,97 @@
+module product_and_color_reducers
+
+# An effect is an entity linked to its target. What the target looks like is a
+# fold over its live effects: scale factors and tints multiply, flashes add.
+# A target with no effects gets the neutral values: 1, white and no flash.
+# Color folds keep channels above 1; drawing clamps once.
+
+use std.core
+
+trait Look:
+    var scale: float = 0.0
+    var tint: color = #00000000
+    var flash: color = #FF00FFFF
+    var stacks: int = 0
+    var boosted: float = 0.0
+
+trait Effect:
+    let target: Look
+    var gain: float = 1.0
+    var tint: color = #FFFFFFFF
+    var flash: color = #00000000
+    var stacks: int = 1
+
+# A float product folds effects in creation order, so the result never depends
+# on the schedule. A color sum is exact per channel, like a vector sum.
+rule ApplyEffects:
+    pairs:
+        body:
+            Look
+        effect:
+            Effect
+    where:
+        effect[Effect].target == body
+    reduce per body:
+        scale = product(effect[Effect].gain)
+        tint = product(effect[Effect].tint)
+        flash = sum(effect[Effect].flash)
+        stacks = product(effect[Effect].stacks)
+        boosted = product(effect[Effect].gain, default = 2.0)
+
+    on tick:
+        body[Look].scale = scale
+        body[Look].tint = tint
+        body[Look].flash = flash
+        body[Look].stacks = stacks
+        body[Look].boosted = boosted
+
+# An effect ends with its target.
+rule EndWithTarget:
+    each: Effect
+    on lost Effect.target:
+        destroy
+
+entity Hero:
+    Look
+
+entity Idle:
+    Look
+
+entity Ordered:
+    Look
+
+entity Grow:
+    Effect:
+        target = Hero
+        gain = 1.2
+        tint = color(1.0, 1.0, 1.0, 0.5)
+        flash = color(0.5, 0.5, 0.5, 0.5)
+        stacks = 3
+
+entity Shrink:
+    Effect:
+        target = Hero
+        gain = 0.9
+        tint = color(2.0, 0.5, 0.5, 1.0)
+        flash = color(0.5, 0.5, 0.5, 0.5)
+        stacks = -2
+
+entity Spark:
+    Effect:
+        target = Hero
+        flash = color(0.5, 0.5, 0.5, 0.5)
+
+entity First:
+    Effect:
+        target = Ordered
+        gain = 1.1
+
+entity Second:
+    Effect:
+        target = Ordered
+        gain = 1.3
+
+entity Third:
+    Effect:
+        target = Ordered
+        gain = 0.3

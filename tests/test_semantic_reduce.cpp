@@ -8,6 +8,9 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <initializer_list>
+#include <string>
+#include <utility>
 
 using namespace cactus;
 
@@ -26,6 +29,8 @@ const std::string kPrelude =
     "    var crowded: bool = false\n"
     "    var push: vec3 = vec3(0.0, 0.0, 0.0)\n"
     "    var drift: vec2 = vec2(0.0, 0.0)\n"
+    "    var gain: float = 1.0\n"
+    "    var tint: color = #FFFFFFFF\n"
     "trait Member:\n"
     "    var team: entity_id\n"
     "    var points: int = 0\n"
@@ -33,6 +38,10 @@ const std::string kPrelude =
     "    var ready: bool = false\n"
     "    var push: vec3 = vec3(0.0, 0.0, 0.0)\n"
     "    var drift: vec2 = vec2(0.0, 0.0)\n"
+    "    var gain: float = 1.0\n"
+    "    var tint: color = #FFFFFFFF\n"
+    "    var delay: duration = 0s\n"
+    "    var label: string = \"\"\n"
     "trait Enemy:\n"
     "    var threat: int = 0\n"
     "trait Stats:\n"
@@ -191,7 +200,7 @@ TEST_CASE("Reduce: a global min or max always needs a default", "[semantic][rule
 TEST_CASE("Reduce: sum, min and max take int or float", "[semantic][rule-reduce]") {
     CHECK(analyze(grouped_rule("team", "        s = sum(player[Member].ready)\n",
                                        "        let x = 1\n"))
-              .has("'int', 'float', 'duration', 'vec2' or 'vec3'"));
+              .has("'int', 'float', 'duration', 'vec2', 'vec3' or 'color'"));
     CHECK(analyze(grouped_rule("team", "        s = min(player[Member].team, default = team)\n",
                                        "        let x = 1\n"))
               .has("'int', 'float' or 'duration'"));
@@ -220,6 +229,56 @@ TEST_CASE("Reduce: vector min and max are rejected with a location", "[semantic]
         REQUIRE(error != analysis.diagnostics.end());
         CHECK(error->location.line > 0);
     }
+}
+
+TEST_CASE("Reduce: product takes int, float and color and keeps the type", "[semantic][rule-reduce]") {
+    const auto analysis = analyze(grouped_rule("team", "        points = product(player[Member].points)\n"
+                                                       "        gain = product(player[Member].gain)\n"
+                                                       "        tint = product(player[Member].tint)\n",
+                                                       "        team[Team].total = points\n"
+                                                       "        team[Team].gain = gain\n"
+                                                       "        team[Team].tint = tint\n"));
+    INFO(describe(analysis));
+    REQUIRE(analysis.clean());
+    const auto& reducers = analysis.rule("TeamScore").reduce->reducers;
+    REQUIRE(reducers.size() == 3);
+    CHECK(reducers[0].kind == ReducerKind::Product);
+    CHECK(reducers[0].result_type.kind == TypeKind::Int);
+    CHECK(reducers[1].result_type.kind == TypeKind::Float);
+    CHECK(reducers[2].result_type.kind == TypeKind::Color);
+}
+
+TEST_CASE("Reduce: product rejects bool, vectors, duration and string", "[semantic][rule-reduce]") {
+    for (const auto& [field, type] : std::initializer_list<std::pair<std::string, std::string>>{
+             {"ready", "bool"}, {"drift", "vec2"}, {"push", "vec3"}, {"delay", "duration"}, {"label", "string"}}) {
+        const auto analysis =
+            analyze(grouped_rule("team", "        p = product(player[Member]." + field + ")\n", "        let x = p\n"));
+        INFO(describe(analysis));
+        CHECK(analysis.has("product(...) input must be of type 'int', 'float' or 'color', got '" + type + "'"));
+    }
+}
+
+TEST_CASE("Reduce: product needs no default, and a given default has the input type", "[semantic][rule-reduce]") {
+    const auto free_read = analyze(team_rule("        gain = product(player[Member].gain)\n", "        let x = gain\n"));
+    INFO(describe(free_read));
+    CHECK(free_read.clean());
+    CHECK(analyze(team_rule("        gain = product(player[Member].gain, default = 2.0)\n", "        let x = gain\n"))
+              .clean());
+    CHECK(analyze(team_rule("        gain = product(player[Member].gain, default = 2)\n", "        let x = gain\n"))
+              .has("product(...) default must be of type 'float', got 'int'"));
+}
+
+TEST_CASE("Reduce: an unread product is an error", "[semantic][rule-reduce]") {
+    CHECK(analyze(team_rule("        gain = product(player[Member].gain)\n", "        let x = 1\n"))
+              .has("reducer 'gain' is never read"));
+}
+
+TEST_CASE("Reduce: sum takes color and keeps the type", "[semantic][rule-reduce]") {
+    const auto analysis = analyze(grouped_rule("team", "        flash = sum(player[Member].tint)\n",
+                                                       "        team[Team].tint = flash\n"));
+    INFO(describe(analysis));
+    REQUIRE(analysis.clean());
+    CHECK(analysis.rule("TeamScore").reduce->reducers[0].result_type.kind == TypeKind::Color);
 }
 
 TEST_CASE("Reduce: any takes a bool", "[semantic][rule-reduce]") {

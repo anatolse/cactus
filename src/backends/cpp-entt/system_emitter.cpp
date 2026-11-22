@@ -6161,17 +6161,33 @@ static std::string reducer_cpp_type(const ReducerDecl& reducer) {
     return EnttCodegenUtils::value_type_to_cpp(reducer.result_type);
 }
 
+// `sum` and `product` fold into a runtime accumulator; the others into a plain value.
+static bool folds_into_accumulator(ReducerKind kind) {
+    return kind == ReducerKind::Sum || kind == ReducerKind::Product;
+}
+
+static std::string reducer_acc_type(const ReducerDecl& reducer) {
+    auto type = reducer_cpp_type(reducer);
+    if (!folds_into_accumulator(reducer.kind)) {
+        return type;
+    }
+    return std::string("cactus::runtime::reduce::") + (reducer.kind == ReducerKind::Sum ? "Sum<" : "Product<") + type +
+           ">";
+}
+
+// A min/max always folds through `<name>_seen`; a product needs it only to apply a default.
+static bool tracks_seen(const ReducerDecl& reducer) {
+    return reducer_needs_default(reducer.kind) || reducer.default_value != nullptr;
+}
+
 // One accumulator per group, and the finished aggregate row the handler and
-// sort keys read. `<name>_seen` marks a min/max/best that has folded a value,
+// sort keys read. `<name>_seen` marks a min/max/best/product that has folded a value,
 // so a default applies only to empty input. `cactus_witnessed` marks a group
 // with rows, for a keep without a condition.
 static void emit_reduce_types(std::ostringstream& out, const ReduceClause& reduce, bool witness) {
     out << "    struct cactus_reduce_acc {\n";
     for (const auto& reducer : reduce.reducers) {
-        const auto type = reducer_cpp_type(reducer);
-        out << "        "
-            << (reducer.kind == ReducerKind::Sum ? "cactus::runtime::reduce::Sum<" + type + ">" : type) << " "
-            << reducer.name;
+        out << "        " << reducer_acc_type(reducer) << " " << reducer.name;
         switch (reducer.kind) {
             case ReducerKind::FirstHit:
                 out << " = cactus_collider_sweep_miss();\n";
@@ -6186,7 +6202,7 @@ static void emit_reduce_types(std::ostringstream& out, const ReduceClause& reduc
                 out << "{};\n";
                 break;
         }
-        if (reducer_has_default(reducer.kind)) {
+        if (tracks_seen(reducer)) {
             out << "        bool " << reducer.name << "_seen = false;\n";
         }
     }
@@ -6222,7 +6238,11 @@ static void emit_reducer_folds(std::ostringstream& out,
                 out << ind << field << " = cactus::num::add(" << field << ", 1);\n";
                 break;
             case ReducerKind::Sum:
+            case ReducerKind::Product:
                 out << ind << field << ".add(" << rewrite(*reducer.input) << ");\n";
+                if (tracks_seen(reducer)) {
+                    out << ind << field << "_seen = true;\n";
+                }
                 break;
             case ReducerKind::Min:
             case ReducerKind::Max: {
@@ -6274,14 +6294,13 @@ static void emit_reduce_row(std::ostringstream& out,
         out << ind << "cactus_row.cactus_witnessed = cactus_acc.cactus_witnessed;\n";
     }
     for (const auto& reducer : reduce.reducers) {
+        const auto acc   = "cactus_acc." + reducer.name;
+        const auto value = folds_into_accumulator(reducer.kind) ? acc + ".value()" : acc;
         out << ind << "cactus_row." << reducer.name << " = ";
         if (reducer.default_value != nullptr) {
-            out << "cactus_acc." << reducer.name << "_seen ? cactus_acc." << reducer.name << " : "
-                << rewrite_expr(*reducer.default_value, {}, program) << ";\n";
-        } else if (reducer.kind == ReducerKind::Sum) {
-            out << "cactus_acc." << reducer.name << ".value();\n";
+            out << acc << "_seen ? " << value << " : " << rewrite_expr(*reducer.default_value, {}, program) << ";\n";
         } else {
-            out << "cactus_acc." << reducer.name << ";\n";
+            out << value << ";\n";
         }
     }
     out << ind << "cactus_rows.push_back(cactus_row);\n";

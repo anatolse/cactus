@@ -1,0 +1,51 @@
+module perf_effect_folds
+
+use std.core
+
+# size x size bodies, each the target of four effects. Every tick each body
+# folds its effects: gains multiply, flashes add.
+
+trait Board:
+    let size: int = 85
+
+trait Body:
+    let lane: int = 0
+    var scale: float = 0.0
+    var flash: color = #00000000
+
+trait Effect:
+    let lane: int = 0
+    let gain: float = 1.0
+    let flash: color = #20101008
+
+entity Field:
+    Board
+
+template Target(lane: int):
+    Body:
+        lane = lane
+
+template Fx(lane: int, gain: float):
+    Effect:
+        lane = lane
+        gain = gain
+
+rule Fill:
+    on load:
+        for lane in range(0, Field[Board].size * Field[Board].size):
+            spawn Target(lane = lane)
+            for order in range(0, 4):
+                spawn Fx(lane = lane, gain = 0.9 + order * 0.1)
+
+rule Fold:
+    pairs:
+        body: Body
+        effect: Effect
+    where:
+        effect[Effect].lane == body[Body].lane
+    reduce per body:
+        scale = product(effect[Effect].gain)
+        flash = sum(effect[Effect].flash)
+    on fixed_tick:
+        body[Body].scale = scale
+        body[Body].flash = flash

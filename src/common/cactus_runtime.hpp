@@ -544,6 +544,60 @@ private:
     Sum<float> z_;
 };
 
+template <>
+class Sum<CactusColor> {
+public:
+    constexpr void add(CactusColor input) noexcept {
+        r_.add(input.r);
+        g_.add(input.g);
+        b_.add(input.b);
+        a_.add(input.a);
+    }
+    constexpr void merge(const Sum& other) noexcept {
+        r_.merge(other.r_);
+        g_.merge(other.g_);
+        b_.merge(other.b_);
+        a_.merge(other.a_);
+    }
+    [[nodiscard]] constexpr CactusColor value() const noexcept {
+        return CactusColor{.r = r_.value(), .g = g_.value(), .b = b_.value(), .a = a_.value()};
+    }
+
+private:
+    Sum<float> r_;
+    Sum<float> g_;
+    Sum<float> b_;
+    Sum<float> a_;
+};
+
+// Starts at the neutral value, so an empty group folds to 1 or white. Float and color products
+// round after each step, so they have no merge: rows fold in stable order only.
+template <typename T>
+class Product {
+public:
+    constexpr void add(T input) noexcept {
+        if constexpr (std::is_same_v<T, int>) {
+            total_ = num::mul(total_, input);
+        } else {
+            total_ = total_ * input;
+        }
+    }
+    [[nodiscard]] constexpr T value() const noexcept {
+        return total_;
+    }
+
+private:
+    static constexpr T one() noexcept {
+        if constexpr (std::is_same_v<T, CactusColor>) {
+            return CactusColor{.r = 1.0F, .g = 1.0F, .b = 1.0F, .a = 1.0F};
+        } else {
+            return T{1};
+        }
+    }
+
+    T total_ = one();
+};
+
 [[nodiscard]] constexpr int min(int acc, int value) noexcept {
     return std::min(acc, value);
 }

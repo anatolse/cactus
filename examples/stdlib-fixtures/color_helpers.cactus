@@ -1,0 +1,37 @@
+module color_helpers
+
+# Calls every std.color helper once from a rule, so the headless test can check
+# the channel values: blends at both ends, halfway and outside 0..1, and alpha
+# scaled past 1.
+
+use std.core
+use std.color as color
+
+pub trait Samples:
+    var start: color = #FF00FFFF
+    var finish: color = #FF00FFFF
+    var halfway: color = #FF00FFFF
+    var beyond: color = #FF00FFFF
+    var half_alpha: color = #FF00FFFF
+    var raised_alpha: color = #FF00FFFF
+    var white: color = #FF00FFFF
+    var clear: color = #FF00FFFF
+
+pub entity Probe:
+    Samples
+
+rule Sample:
+    each:
+        Samples as s
+
+    on tick:
+        let dark = color(0.0, 0.25, 0.0, 1.0)
+        let light = color(1.0, 0.0, 0.5, 1.0)
+        s.start = color.mix(dark, light, 0.0)
+        s.finish = color.mix(dark, light, 1.0)
+        s.halfway = color.mix(dark, light, 0.5)
+        s.beyond = color.mix(dark, light, 1.5)
+        s.half_alpha = color.with_alpha(#FF0000FF, 0.5)
+        s.raised_alpha = color.with_alpha(#FF0000FF, 1.5)
+        s.white = color.WHITE
+        s.clear = color.CLEAR

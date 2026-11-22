@@ -938,6 +938,32 @@ TEST_CASE("Rest law: reduce per self with sum is proven", "[semantic][trait-dime
     CHECK(proven(analysis, "Total"));
 }
 
+TEST_CASE("Rest law: product and color sum are not proven", "[semantic][trait-dimensions][rest-law]") {
+    const auto fold = [](const std::string& reducer) {
+        return analyze("trait Strip:\n"
+                       "    dim x: int in range(0, 8)\n"
+                       "    var level: float = 0.0\n"
+                       "entity Lamp:\n"
+                       "    Strip\n"
+                       "rule Blend:\n"
+                       "    each: Strip as s\n"
+                       "    reduce per self:\n"
+                       "        " + reducer + "\n"
+                       "    on tick:\n"
+                       "        let unused = folded\n");
+    };
+    for (const std::string reducer : {"folded = product(s.level)", "folded = sum(color(s.level, 0.0, 0.0, 0.0))"}) {
+        const auto analysis = fold(reducer);
+        INFO(reducer << "\n" << describe(analysis));
+        CHECK(analysis.clean());
+        CHECK(analysis.warning("rule 'Blend' visits every cell of 'Strip': reducer 'folded'") != nullptr);
+        CHECK_FALSE(proven(analysis, "Blend"));
+    }
+    const auto summed = fold("folded = sum(s.level)");
+    INFO(describe(summed));
+    CHECK(proven(summed, "Blend"));
+}
+
 // ── Fit with features landed since the explore ──────────────────────────────
 
 TEST_CASE("Cell rules: disjoint carriers write one cell field with no edge", "[semantic][trait-dimensions][disjoint-domains]") {

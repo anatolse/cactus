@@ -101,8 +101,11 @@ exception — see `examples/CLAUDE.md`).
 
 ### Colors
 
-- Color channels are unbounded floats. Write color math directly (`a + (b - a) * t`,
-  `c * 0.99`); don't clamp in between. Drawing clamps once.
+- Color channels are unbounded floats. Write color math directly (`c * 0.99`); don't clamp in
+  between. Drawing clamps once. Blend two colors with `std.color.mix(a, b, t)`, not a
+  hand-written `a + (b - a) * t`.
+- Fold the colors of several entities with `reduce:`: `sum` for flashes that add, `product` for
+  tints and fades that multiply (`product` of floats for scale factors).
 - A light's brightness is its color: `color = #FFE0C0FF * 1.5`. Lights have no `intensity`. To change
   brightness at run time, keep the hue in your own trait and write `light.color = hue * strength`.
 

@@ -443,6 +443,10 @@ add_test(NAME NameResolutionTests COMMAND test_name_resolution)
 # EnTT codegen tests
 add_executable(test_codegen_entt test_codegen_entt.cpp)
 target_link_libraries(test_codegen_entt PRIVATE cactus_backend_cpp_entt Catch2::Catch2WithMain)
+target_compile_definitions(test_codegen_entt PRIVATE
+    CACTUS_TEST_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    CACTUS_TEST_BINARY_DIR="${CMAKE_BINARY_DIR}"
+)
 add_test(NAME CodegenEnttTests COMMAND test_codegen_entt)
 
 add_executable(test_codegen_parallel test_codegen_parallel.cpp)
@@ -682,6 +686,12 @@ cactus_add_headless_behavior_test(test_out_of_range_colors_headless_behavior
     CACTUS_SOURCE tests/fixtures/out_of_range_colors_runtime.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_out_of_range_colors_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_mixed_dimension_headless_behavior
+    CACTUS_SOURCE tests/fixtures/mixed_dimension_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_mixed_dimension_headless_behavior.cpp
 )
 
 cactus_add_headless_behavior_test(test_color_persistence_headless_behavior
@@ -1798,7 +1808,8 @@ endforeach()
 add_custom_target(test_generated_performance_benchmarks)
 foreach(shape IN ITEMS static_keep union_fold equality_reduce grid_region row_join baseline own_projection
         single_commit plain_commit sweep wide_level reduced_keep required_links keep_chain
-        incremental_keep render_pass dimension_spread timers clamped sum_encodings color_fade)
+        incremental_keep render_pass dimension_spread timers clamped sum_encodings color_fade
+        unused_transform_kind)
     set(perf_target test_perf_${shape}_benchmark)
     set(perf_codegen_flags)
     if(shape STREQUAL "wide_level")

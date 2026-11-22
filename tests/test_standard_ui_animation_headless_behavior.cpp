@@ -234,7 +234,7 @@ TEST_CASE("A tick-phase bump changes render presentation the same frame without 
     cactus_gen::detail::standard_ui_layout_runtime::measure_ui_on(registry, late_tick_phase);
     cactus_gen::detail::standard_ui_layout_runtime::arrange_ui_on(registry, late_tick_phase);
 
-    cactus_gen::detail::standard_ui_layout_runtime::render_ui_tick(registry);
+    cactus_gen::detail::stdlib::ui::render_ui_tick(registry);
     cactus::runtime::entt_backend::end_render_frame();
 
     // Logical/hit bounds come from PreferredSize alone; Visual.scale never

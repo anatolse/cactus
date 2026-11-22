@@ -593,12 +593,6 @@ std::string filter_simple_name(const FilterEntry& entry) {
     return (dot != std::string::npos) ? entry.qualified_name.substr(dot + 1) : entry.qualified_name;
 }
 
-bool world_transform_is_volume(const DecoratedProgram& program) {
-    // Root-program resolved usage — deterministic even when std.editor links
-    // both WorldTransform variants into the merged trait map.
-    return EnttCodegenUtils::world_transform_usage(program).volume;
-}
-
 struct FilterBinding {
     std::string trait_name;     // simple name (for alias/dedupe bookkeeping)
     std::string lookup_name;    // canonical id when resolved, else simple name (for find_trait)
@@ -852,28 +846,16 @@ bool is_propagation_of(const ExternRuleNode& sys, std::string_view module) {
     return symbol_is(sys.resolved_rule_id, SymbolKind::Rule, module, "TransformPropagation");
 }
 
-// std.editor imports both transform modules, so both TransformPropagation rules can
-// appear; only the one matching the program's WorldTransform dimension is emitted.
-bool is_flat_transform_propagation(const ExternRuleNode& sys, const DecoratedProgram& program) {
-    return is_propagation_of(sys, "std.transform.flat") && !world_transform_is_volume(program);
-}
-
-bool is_volume_transform_propagation(const ExternRuleNode& sys, const DecoratedProgram& program) {
-    return is_propagation_of(sys, "std.transform.volume") && world_transform_is_volume(program);
-}
-
 enum class TransformDimension : std::uint8_t { Flat, Volume };
 
-// Emits `PROPAGATION`, the runtime callbacks over the program's transform traits.
+// Emits `PROPAGATION`, the runtime callbacks over one kind's LocalTransform `lt` and WorldTransform `wt`.
 void emit_hierarchy_propagation(std::ostringstream& out,
-                                const DecoratedProgram& program,
+                                const std::string& lt,
+                                const std::string& wt,
                                 TransformDimension dimension) {
-    const bool volume        = dimension == TransformDimension::Volume;
-    const std::string module = volume ? "std.transform.volume" : "std.transform.flat";
-    const std::string lt     = EnttCodegenUtils::trait_cpp_name(module + ".LocalTransform", program);
-    const std::string wt     = EnttCodegenUtils::trait_cpp_name(module + ".WorldTransform", program);
-    const std::string vec    = volume ? "Vector3" : "Vector2";
-    const auto per_axis      = [&](std::string_view op, std::string_view field) {
+    const bool volume     = dimension == TransformDimension::Volume;
+    const std::string vec = volume ? "Vector3" : "Vector2";
+    const auto per_axis   = [&](std::string_view op, std::string_view field) {
         std::ostringstream axes;
         for (const char axis : volume ? std::string_view{"xyz"} : std::string_view{"xy"}) {
             axes << "            ." << axis << " = parent_world." << field << "." << axis << " " << op << " local."
@@ -1022,7 +1004,7 @@ std::string emit_event_renderer_body(const ExternRuleNode& sys,
     const auto& handler   = sys.handlers.front();
     const auto event_type = event_cpp_type(handler.resolved_trigger->symbol, program);
     std::ostringstream out;
-    out << "void " << system_function_name(program.module_name, sys.name, "tick").name
+    out << "void " << extern_rule_function_name(sys, program, "tick").name
         << "(entt::registry& registry, const " << event_type << "& occurrence) {\n";
     out << "    (void)registry;\n";
     if (!mode_begin.empty()) {
@@ -9456,20 +9438,48 @@ std::string EnttSystemEmitter::emit_system(const RuleNode& sys, const DecoratedP
 // Shared shape for single-view, single-call component renderers: one runtime
 // call per matching entity, no per-entity branching, no program-level
 // gating. Renderers with a switch/conditional/extra prelude beyond the one
-// call (shape_renderer, sprite_animation, model_animation, model_render,
-// the flavor-gated text renderers) don't fit this shape and stay
-// hand-written, same as the transform-propagation/shape-renderer pair task
-// 5.3 explicitly carves out. call_body builds the exact call expression from
-// the two resolved cpp component variable names — the argument lists differ
-// too much between renderers (which transform fields, which data fields, in
-// what order) to also templatize as a string.
+// call (shape_renderer, sprite_animation, model_animation, model_render)
+// don't fit this shape and stay hand-written. call_body builds the exact call
+// expression from the two resolved cpp component variable names — the
+// argument lists differ too much between renderers (which transform fields,
+// which data fields, in what order) to also templatize as a string.
 struct SingleViewRendererSpec {
     bool (*matches)(const ExternRuleNode&);
-    const char* transform_trait;
-    const char* data_trait;
     std::function<std::string(const std::string& transform_var, const std::string& data_var)> call_body;
     bool hideable = false;
 };
+
+std::string resolved_trait_cpp(const SymbolId& id, const DecoratedProgram& program) {
+    return EnttCodegenUtils::trait_cpp_name(id, id.local_name, program);
+}
+
+// The C++ type of the trait named `name` in an extern rule's own `each:`.
+std::string filter_trait_cpp(const ExternRuleNode& sys, std::string_view name, const DecoratedProgram& program) {
+    const auto& ids  = sys.filter.resolved_trait_ids;
+    const auto found = std::ranges::find(ids, name, &SymbolId::local_name);
+    if (found == ids.end()) {
+        throw std::runtime_error("cpp-entt: extern rule '" + sys.name + "' has no " + std::string(name) +
+                                 " in its filter");
+    }
+    return resolved_trait_cpp(*found, program);
+}
+
+// A renderer's filter by role: its WorldTransform and its one data trait.
+struct RendererFilter {
+    std::string transform;
+    std::string data;
+};
+
+RendererFilter renderer_filter(const ExternRuleNode& sys, const DecoratedProgram& program) {
+    RendererFilter result;
+    for (const auto& id : sys.filter.resolved_trait_ids) {
+        (id.local_name == "WorldTransform" ? result.transform : result.data) = resolved_trait_cpp(id, program);
+    }
+    if (sys.filter.resolved_trait_ids.size() != 2 || result.transform.empty() || result.data.empty()) {
+        throw std::runtime_error("cpp-entt: renderer '" + sys.name + "' must filter one transform and one data trait");
+    }
+    return result;
+}
 
 // The per-viewport check a 3D renderer runs before drawing an entity; every
 // 3D renderer reads std.render.visibility.HiddenIn.
@@ -9486,19 +9496,15 @@ std::string hidden_check_prelude() {
 
 constexpr const char* kSkipHidden = "        if (hidden(entity)) {\n            return;\n        }\n";
 
-const std::array<SingleViewRendererSpec, 4>& single_view_renderer_specs() {
-    static const std::array<SingleViewRendererSpec, 4> specs{{
-        {.matches         = is_sprite_renderer,
-         .transform_trait = "std.transform.flat.WorldTransform",
-         .data_trait      = "Renderer",
+const std::array<SingleViewRendererSpec, 6>& single_view_renderer_specs() {
+    static const std::array<SingleViewRendererSpec, 6> specs{{
+        {.matches = is_sprite_renderer,
          .call_body =
              [](const std::string& t, const std::string& d) {
                  return "cactus::runtime::entt_backend::submit_sprite(" + t + ".position, " + d + ".size, " + d +
                         ".color, " + d + ".texture, " + d + ".visible, " + d + ".layer)";
              }},
-        {.matches         = is_mesh_renderer,
-         .transform_trait = "std.transform.volume.WorldTransform",
-         .data_trait      = "Renderer",
+        {.matches = is_mesh_renderer,
          .call_body =
              [](const std::string& t, const std::string& d) {
                  return "cactus::runtime::entt_backend::submit_mesh(" + t + ".position, " + t + ".rotation, " + t +
@@ -9506,22 +9512,32 @@ const std::array<SingleViewRendererSpec, 4>& single_view_renderer_specs() {
                         ".color)";
              },
          .hideable = true},
-        {.matches         = is_billboard_renderer,
-         .transform_trait = "std.transform.volume.WorldTransform",
-         .data_trait      = "BillboardRenderer",
+        {.matches = is_billboard_renderer,
          .call_body =
              [](const std::string& t, const std::string& d) {
                  return "cactus::runtime::entt_backend::submit_billboard(" + t + ".position, " + d + ".size, " + d +
                         ".color, " + d + ".texture, " + d + ".visible)";
              }},
-        {.matches         = is_point_light_render,
-         .transform_trait = "std.transform.volume.WorldTransform",
-         .data_trait      = "PointLight",
+        {.matches = is_point_light_render,
          .call_body =
              [](const std::string& t, const std::string& d) {
                  return "cactus::runtime::entt_backend::register_point_light(" + t + ".position, " + d + ".color, " +
                         d + ".range, " + d + ".enabled)";
              }},
+        {.matches = is_any_text_renderer_2d,
+         .call_body =
+             [](const std::string& t, const std::string& d) {
+                 return "cactus::runtime::entt_backend::submit_text_2d(" + t + ".position, " + t + ".rotation, " + d +
+                        ".font_size, " + d + ".color, " + d + ".text, " + d + ".visible)";
+             }},
+        {.matches = is_any_text_renderer_3d,
+         .call_body =
+             [](const std::string& t, const std::string& d) {
+                 return "cactus::runtime::entt_backend::submit_text_3d(static_cast<uint32_t>(entity), " + t +
+                        ".position, " + t + ".rotation, " + t + ".scale, " + d + ".font_size, " + d + ".color, " + d +
+                        ".text, " + d + ".visible)";
+             },
+         .hideable = true},
     }};
     return specs;
 }
@@ -9529,12 +9545,11 @@ const std::array<SingleViewRendererSpec, 4>& single_view_renderer_specs() {
 std::string emit_single_view_renderer_body(const ExternRuleNode& sys,
                                            const DecoratedProgram& program,
                                            const SingleViewRendererSpec& spec) {
-    const std::string transform     = EnttCodegenUtils::trait_cpp_name(spec.transform_trait, program);
-    const std::string data          = EnttCodegenUtils::trait_cpp_name(spec.data_trait, program);
+    const auto [transform, data]    = renderer_filter(sys, program);
     const std::string transform_var = component_local(transform);
     const std::string data_var      = component_local(data);
     std::ostringstream out;
-    out << "void " << system_function_name(program.module_name, sys.name, "tick").name
+    out << "void " << extern_rule_function_name(sys, program, "tick").name
         << "(entt::registry& registry) {\n";
     if (spec.hideable) {
         out << hidden_check_prelude();
@@ -9550,16 +9565,10 @@ std::string emit_single_view_renderer_body(const ExternRuleNode& sys,
 }
 
 std::string
-EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive-complexity) -- still 29 after
-                                        // single-view-renderer table extraction (many hand-written kinds remain:
-                                        // transform-propagation x2, shape_renderer, sprite_animation, model_animation,
-                                        // model_render, directional_light, text_2d/3d, debug-grid, editor-stub); not
-                                        // further in scope here
+EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive-complexity) -- one flat branch
+                                        // per hand-written extern rule kind
     const ExternRuleNode& sys,
     const DecoratedProgram& program) {
-    if (!emits_extern_system(sys, program)) {
-        return "";
-    }
     for (const auto& spec : single_view_renderer_specs()) {
         if (spec.matches(sys)) {
             return emit_single_view_renderer_body(sys, program, spec);
@@ -9568,14 +9577,17 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
 
     std::ostringstream out;
     const auto tick_signature =
-        "void " + system_function_name(program.module_name, sys.name, "tick").name + "(entt::registry& registry) {\n";
+        "void " + extern_rule_function_name(sys, program, "tick").name + "(entt::registry& registry) {\n";
 
-    const bool flat_propagation = is_flat_transform_propagation(sys, program);
-    if (flat_propagation || is_volume_transform_propagation(sys, program)) {
+    const bool flat_propagation = is_propagation_of(sys, "std.transform.flat");
+    if (flat_propagation || is_propagation_of(sys, "std.transform.volume")) {
+        const auto world = filter_trait_cpp(sys, "WorldTransform", program);
         out << tick_signature;
-        emit_hierarchy_propagation(
-            out, program, flat_propagation ? TransformDimension::Flat : TransformDimension::Volume);
-        out << "    cactus::runtime::entt_backend::propagate_hierarchy(\n";
+        emit_hierarchy_propagation(out,
+                                   filter_trait_cpp(sys, "LocalTransform", program),
+                                   world,
+                                   flat_propagation ? TransformDimension::Flat : TransformDimension::Volume);
+        out << "    cactus::runtime::entt_backend::propagate_hierarchy<" << world << ">(\n";
         out << "        registry, " << EnttCodegenUtils::hierarchy_index_expr(program) << ", PROPAGATION, "
             << EnttCodegenUtils::hierarchy_strategy_cpp(program) << ");\n";
         out << "}\n\n";
@@ -9585,8 +9597,8 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
 
     if (is_voxel_volume_renderer(sys)) {
         const std::string ns       = "cactus::runtime::entt_backend::";
-        const std::string volume   = EnttCodegenUtils::trait_cpp_name("std.voxel.volume.Volume", program);
-        const std::string renderer = EnttCodegenUtils::trait_cpp_name("std.voxel.volume.VolumeRenderer", program);
+        const std::string volume   = filter_trait_cpp(sys, "Volume", program);
+        const std::string renderer = filter_trait_cpp(sys, "VolumeRenderer", program);
         const std::string cell     = EnttCodegenUtils::trait_cpp_name("std.voxel.volume.Cell", program);
         const std::string cutaway  = EnttCodegenUtils::trait_cpp_name("std.voxel.volume.Cutaway", program);
         const std::string solid    = EnttCodegenUtils::trait_cpp_name("std.physics.volume.Solid", program);
@@ -9601,7 +9613,7 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
     }
 
     if (is_flipbook_player(sys)) {
-        const auto flipbook = EnttCodegenUtils::trait_cpp_name("std.voxel.volume.TextureFlipbook", program);
+        const auto flipbook = filter_trait_cpp(sys, "TextureFlipbook", program);
         out << tick_signature;
         out << "    for (const auto [entity, flipbook] : registry.view<const " << flipbook << ">().each()) {\n";
         out << "        cactus::runtime::entt_backend::submit_texture_flipbook(entity, flipbook.texture, flipbook.fps);\n";
@@ -9613,7 +9625,10 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
     if (is_follow_bodies(sys)) {
         const std::string body = EnttCodegenUtils::trait_cpp_name("std.physics.volume.CharacterBody", program);
         out << tick_signature;
-        emit_hierarchy_propagation(out, program, TransformDimension::Volume);
+        emit_hierarchy_propagation(out,
+                                   EnttCodegenUtils::trait_cpp_name("std.transform.volume.LocalTransform", program),
+                                   EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program),
+                                   TransformDimension::Volume);
         out << "    const auto bodies = cactus::runtime::entt_backend::creation_ordered(registry, registry.view<"
             << body << ">());\n";
         out << "    cactus::runtime::entt_backend::propagate_hierarchy_below(\n";
@@ -9626,9 +9641,8 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
     }
 
     if (is_shape_renderer(sys)) {
-        const std::string wt         = EnttCodegenUtils::trait_cpp_name("std.transform.flat.WorldTransform", program);
-        const std::string shape      = EnttCodegenUtils::trait_cpp_name("Shape", program);
-        const std::string shape_type = EnttCodegenUtils::enum_cpp_name("ShapeType", program);
+        const auto [wt, shape]       = renderer_filter(sys, program);
+        const std::string shape_type = EnttCodegenUtils::enum_cpp_name("std.render.shapes.ShapeType", program);
         const auto wt_var            = component_local(wt);
         const auto shape_var         = component_local(shape);
         out << tick_signature;
@@ -9662,7 +9676,7 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
     }
 
     if (is_sprite_animation(sys)) {
-        const std::string anim = EnttCodegenUtils::trait_cpp_name("AnimatedSprite", program);
+        const std::string anim = filter_trait_cpp(sys, "AnimatedSprite", program);
         const auto anim_var    = component_local(anim);
         out << tick_signature;
         out << "    auto view = registry.view<" << anim << ">();\n";
@@ -9678,13 +9692,13 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
     }
 
     if (is_model_animation(sys)) {
-        const std::string mr    = EnttCodegenUtils::trait_cpp_name("ModelRenderer", program);
-        const std::string manim = EnttCodegenUtils::trait_cpp_name("ModelAnimator", program);
+        const std::string mr    = filter_trait_cpp(sys, "ModelRenderer", program);
+        const std::string manim = filter_trait_cpp(sys, "ModelAnimator", program);
         const auto mr_var       = component_local(mr);
         const auto manim_var    = component_local(manim);
         out << tick_signature;
         // Playback emits events, so owners are visited oldest first, not in storage order.
-        const bool emits = EnttCodegenUtils::find_trait(program, "ModelPlayback") != nullptr;
+        const bool emits = EnttCodegenUtils::find_trait(program, "std.render.models.ModelPlayback") != nullptr;
         out << "    auto view = registry.view<" << mr << ", " << manim << ">();\n";
         out << "    const auto tick_owner = [&](entt::entity entity, const " << mr << "& " << mr_var << ", " << manim
             << "& " << manim_var << ") {\n";
@@ -9701,12 +9715,14 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
         // applies its result, the same division is_pointer_router below uses
         // for compute_pointer_frame_transitions.
         if (emits) {
-            const std::string playback     = EnttCodegenUtils::trait_cpp_name("ModelPlayback", program);
-            const std::string cue          = EnttCodegenUtils::trait_cpp_name("AnimationCue", program);
-            const std::string parent_cpp   = EnttCodegenUtils::trait_cpp_name("Parent", program);
-            const std::string mode_cpp     = EnttCodegenUtils::enum_cpp_name("PlaybackMode", program);
-            const std::string marker_evt   = event_cpp_type("AnimationMarker", program);
-            const std::string finished_evt = event_cpp_type("AnimationFinished", program);
+            const std::string playback   = EnttCodegenUtils::trait_cpp_name("std.render.models.ModelPlayback", program);
+            const std::string cue        = EnttCodegenUtils::trait_cpp_name("std.render.models.AnimationCue", program);
+            const std::string parent_cpp = EnttCodegenUtils::trait_cpp_name("std.core.Parent", program);
+            const std::string mode_cpp   = EnttCodegenUtils::enum_cpp_name("std.render.models.PlaybackMode", program);
+            const std::string marker_evt =
+                event_cpp_type(make_symbol_id(SymbolKind::Event, "std.render.models", "AnimationMarker"), program);
+            const std::string finished_evt =
+                event_cpp_type(make_symbol_id(SymbolKind::Event, "std.render.models", "AnimationFinished"), program);
             const std::string ns           = "cactus::runtime::entt_backend::";
 
             out << "        if (const auto* playback = registry.try_get<" << playback << ">(entity)) {\n";
@@ -9756,9 +9772,8 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
     }
 
     if (is_model_render(sys)) {
-        const std::string wt    = EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program);
-        const std::string mr    = EnttCodegenUtils::trait_cpp_name("ModelRenderer", program);
-        const std::string manim = EnttCodegenUtils::trait_cpp_name("ModelAnimator", program);
+        const auto [wt, mr]     = renderer_filter(sys, program);
+        const std::string manim = EnttCodegenUtils::trait_cpp_name("std.render.models.ModelAnimator", program);
         const auto wt_var       = component_local(wt);
         const auto mr_var       = component_local(mr);
         out << tick_signature;
@@ -9767,7 +9782,7 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
         out << "    view.each([&](entt::entity entity, const " << wt << "& " << wt_var << ", const " << mr << "& "
             << mr_var << ") {\n";
         out << kSkipHidden;
-        if (EnttCodegenUtils::find_trait(program, "ModelAnimator") != nullptr) {
+        if (EnttCodegenUtils::find_trait(program, "std.render.models.ModelAnimator") != nullptr) {
             out << "        if (const auto* animator = registry.try_get<" << manim << ">(entity)) {\n";
             out << "            cactus::runtime::entt_backend::submit_model(" << wt_var << ".position, " << wt_var
                 << ".rotation, " << wt_var << ".scale, " << mr_var << ".model, " << mr_var << ".visible, " << mr_var
@@ -9784,7 +9799,7 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
     }
 
     if (is_directional_light_render(sys)) {
-        const std::string dl = EnttCodegenUtils::trait_cpp_name("DirectionalLight", program);
+        const std::string dl = filter_trait_cpp(sys, "DirectionalLight", program);
         const auto dl_var    = component_local(dl);
         out << tick_signature;
         out << "    auto view = registry.view<" << dl << ">();\n";
@@ -9797,55 +9812,9 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
         return out.str();
     }
 
-    if (is_any_text_renderer_2d(sys)) {
-        const std::string wt = EnttCodegenUtils::trait_cpp_name("std.transform.flat.WorldTransform", program);
-        const std::string tl = EnttCodegenUtils::trait_cpp_name("TextLabel", program);
-        const auto wt_var    = component_local(wt);
-        const auto tl_var    = component_local(tl);
-        out << tick_signature;
-        if (!world_transform_is_volume(program)) {
-            out << "    auto view = registry.view<" << wt << ", " << tl << ">();\n";
-            out << "    view.each([&](entt::entity entity, const " << wt << "& " << wt_var << ", const " << tl << "& "
-                << tl_var << ") {\n";
-            out << "        (void)entity;\n";
-            out << "        cactus::runtime::entt_backend::submit_text_2d(" << wt_var << ".position, " << wt_var
-                << ".rotation, " << tl_var << ".font_size, " << tl_var << ".color, " << tl_var << ".text, " << tl_var
-                << ".visible);\n";
-            out << "    });\n";
-        } else {
-            out << "    (void)registry;\n";
-        }
-        out << "}\n\n";
-        return out.str();
-    }
-
-    if (is_any_text_renderer_3d(sys)) {
-        const std::string wt = EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program);
-        const std::string tl = EnttCodegenUtils::trait_cpp_name("TextLabel", program);
-        const auto wt_var    = component_local(wt);
-        const auto tl_var    = component_local(tl);
-        out << tick_signature;
-        if (world_transform_is_volume(program)) {
-            out << hidden_check_prelude();
-            out << "    auto view = registry.view<" << wt << ", " << tl << ">();\n";
-            out << "    view.each([&](entt::entity entity, const " << wt << "& " << wt_var << ", const " << tl << "& "
-                << tl_var << ") {\n";
-            out << kSkipHidden;
-            out << "        cactus::runtime::entt_backend::submit_text_3d(static_cast<uint32_t>(entity), " << wt_var
-                << ".position, " << wt_var << ".rotation, " << wt_var << ".scale, " << tl_var << ".font_size, "
-                << tl_var << ".color, " << tl_var << ".text, " << tl_var << ".visible);\n";
-            out << "    });\n";
-        } else {
-            out << "    (void)registry;\n";
-        }
-        out << "}\n\n";
-        return out.str();
-    }
-
     if (is_screen_label_render(sys)) {
-        // Window-space HUD text: no WorldTransform and no flavor gating — the
-        // same emission serves flat and volume programs (dsl-model-animation D5).
-        const std::string sl = EnttCodegenUtils::trait_cpp_name("ScreenLabel", program);
+        // Window-space HUD text: no WorldTransform, so flat and volume programs share it.
+        const std::string sl = filter_trait_cpp(sys, "ScreenLabel", program);
         const auto sl_var    = component_local(sl);
         out << tick_signature;
         out << "    auto view = registry.view<" << sl << ">();\n";
@@ -9869,7 +9838,7 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
         // Filter-gated existence check (no per-entity data needed) — same
         // existence-scan shape the now-removed hardcoded GizmoRenderer2D/3D
         // bodies used for their cactus_gen_editor_active check.
-        const std::string cam3d = EnttCodegenUtils::trait_cpp_name("EditorCamera3D", program);
+        const std::string cam3d = filter_trait_cpp(sys, "EditorCamera3D", program);
         out << tick_signature;
         out << "    bool cactus_gen_has_3d_rig = false;\n";
         out << "    auto cactus_gen_cam3d_view = registry.view<" << cam3d << ">();\n";
@@ -9899,13 +9868,13 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
         // gathered data is handed to one runtime bridge (render_ui_primitive)
         // that owns primitive order/opacity/fit/clip drawing (design decision
         // #10: the backend owns drawing operations, not authored Cactus).
-        const std::string cl_cpp     = EnttCodegenUtils::trait_cpp_name("ComputedLayout", program);
-        const std::string visual_cpp = EnttCodegenUtils::trait_cpp_name("Visual", program);
-        const std::string panel_cpp  = EnttCodegenUtils::trait_cpp_name("Panel", program);
-        const std::string text_cpp   = EnttCodegenUtils::trait_cpp_name("Text", program);
-        const std::string image_cpp  = EnttCodegenUtils::trait_cpp_name("Image", program);
-        const std::string button_cpp = EnttCodegenUtils::trait_cpp_name("Button", program);
-        const std::string anim_cpp   = EnttCodegenUtils::trait_cpp_name("FrameAnimation", program);
+        const std::string cl_cpp     = EnttCodegenUtils::trait_cpp_name("std.ui.ComputedLayout", program);
+        const std::string visual_cpp = EnttCodegenUtils::trait_cpp_name("std.ui.Visual", program);
+        const std::string panel_cpp  = EnttCodegenUtils::trait_cpp_name("std.ui.Panel", program);
+        const std::string text_cpp   = EnttCodegenUtils::trait_cpp_name("std.ui.Text", program);
+        const std::string image_cpp  = EnttCodegenUtils::trait_cpp_name("std.ui.Image", program);
+        const std::string button_cpp = EnttCodegenUtils::trait_cpp_name("std.ui.Button", program);
+        const std::string anim_cpp   = EnttCodegenUtils::trait_cpp_name("std.ui.FrameAnimation", program);
         const std::string pstate_cpp = EnttCodegenUtils::trait_cpp_name("std.pointer.PointerState", program);
 
         out << tick_signature;
@@ -9971,7 +9940,7 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
     }
 
     if (is_measure_screen(sys)) {
-        const std::string screen = EnttCodegenUtils::trait_cpp_name("std.camera.viewport.ScreenSize", program);
+        const std::string screen = filter_trait_cpp(sys, "ScreenSize", program);
         out << tick_signature;
         out << "    const Vector2 size = cactus::runtime::entt_backend::editor_screen_size();\n";
         out << "    for (const auto entity : registry.view<" << screen << ">()) {\n";
@@ -9990,11 +9959,14 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
         // lowering (emit_emit_stmt above) even though the struct's targets
         // are already known-live at the moment this function receives them.
         const std::string pstate_cpp  = EnttCodegenUtils::trait_cpp_name("std.pointer.PointerState", program);
-        const std::string enter_evt   = event_cpp_type("PointerEnter", program);
-        const std::string leave_evt   = event_cpp_type("PointerLeave", program);
-        const std::string press_evt   = event_cpp_type("PointerPress", program);
-        const std::string release_evt = event_cpp_type("PointerRelease", program);
-        const std::string click_evt   = event_cpp_type("Click", program);
+        const auto pointer_event = [&](const char* name) {
+            return event_cpp_type(make_symbol_id(SymbolKind::Event, "std.pointer", name), program);
+        };
+        const std::string enter_evt   = pointer_event("PointerEnter");
+        const std::string leave_evt   = pointer_event("PointerLeave");
+        const std::string press_evt   = pointer_event("PointerPress");
+        const std::string release_evt = pointer_event("PointerRelease");
+        const std::string click_evt   = pointer_event("Click");
 
         out << tick_signature;
         out << "    const auto cactus_gen_t = cactus::runtime::entt_backend::compute_pointer_frame_transitions(registry);\n";
@@ -10039,11 +10011,6 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
     throw std::runtime_error("cpp-entt has no compiler-owned implementation for external rule '" +
                              (sys.resolved_rule_id.has_value() ? make_canonical_id(*sys.resolved_rule_id) : sys.name) +
                              "'; user external handlers must be lowered through their per-handler callback ABI");
-}
-
-bool EnttSystemEmitter::emits_extern_system(const ExternRuleNode& sys, const DecoratedProgram& program) {
-    const bool propagation = is_propagation_of(sys, "std.transform.flat") || is_propagation_of(sys, "std.transform.volume");
-    return !propagation || is_flat_transform_propagation(sys, program) || is_volume_transform_propagation(sys, program);
 }
 
 bool EnttSystemEmitter::requires_entt_hierarchy_helpers(const DecoratedProgram& program) {

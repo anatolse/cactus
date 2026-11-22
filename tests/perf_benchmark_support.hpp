@@ -76,7 +76,8 @@ template <typename Step>
             .clamp_settles    = after.clamp_settles - before.clamp_settles,
             .component_moves  = after.component_moves - before.component_moves,
             .domain_rows      = after.domain_rows - before.domain_rows,
-            .color_conversions = after.color_conversions - before.color_conversions};
+            .color_conversions = after.color_conversions - before.color_conversions,
+            .propagated_nodes  = after.propagated_nodes - before.propagated_nodes};
 }
 
 // Median milliseconds per call of `step`, after a warm-up.

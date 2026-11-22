@@ -3057,10 +3057,22 @@ struct HierarchyPropagation {
     std::function<void(entt::entity, entt::entity)> accumulate_from_parent;
 };
 
+// `worlds` holds every entity with the propagated kind's WorldTransform.
 void propagate_hierarchy(entt::registry& registry,
                          const HierarchyIndex& index,
                          const HierarchyPropagation& propagation,
+                         std::span<const entt::entity> worlds,
                          HierarchyStrategy strategy);
+
+// Propagates the kind whose WorldTransform is `World`; entities without it cost nothing.
+template <typename World>
+void propagate_hierarchy(entt::registry& registry,
+                         const HierarchyIndex& index,
+                         const HierarchyPropagation& propagation,
+                         HierarchyStrategy strategy) {
+    const auto& worlds = registry.storage<World>();
+    propagate_hierarchy(registry, index, propagation, std::span{worlds.data(), worlds.size()}, strategy);
+}
 
 // Derives only the subtrees below the scope roots; scope roots themselves are
 // never written.

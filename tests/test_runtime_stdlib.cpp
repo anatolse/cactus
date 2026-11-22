@@ -1836,7 +1836,7 @@ struct HierarchyFixture {
     void propagate() {
         for (const auto strategy :
              {entt_backend::HierarchyStrategy::CreationSweep, entt_backend::HierarchyStrategy::DepthOrder}) {
-            entt_backend::propagate_hierarchy(registry, index(), propagation(), strategy);
+            entt_backend::propagate_hierarchy<HierarchyWorldTransform>(registry, index(), propagation(), strategy);
         }
     }
 

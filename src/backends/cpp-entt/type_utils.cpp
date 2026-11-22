@@ -196,6 +196,13 @@ DetailName system_function_name(const std::string& module_name,
     return detail_name(module_name, snake_case(system_name) + "_" + suffix);
 }
 
+DetailName extern_rule_function_name(const ExternRuleNode& rule,
+                                     const DecoratedProgram& program,
+                                     const std::string& suffix) {
+    const auto& module = rule.resolved_rule_id.has_value() ? rule.resolved_rule_id->module.name : program.module_name;
+    return system_function_name(module, rule.name, suffix);
+}
+
 DetailName archetype_create_function_name(const std::string& module_name, const std::string& archetype_name) {
     return detail_name(module_name, "create_" + snake_case(archetype_name));
 }
@@ -791,7 +798,7 @@ std::vector<const EntityNode*> EnttCodegenUtils::declared_entities(const Decorat
 }
 
 std::string EnttCodegenUtils::hierarchy_index_expr(const DecoratedProgram& program) {
-    return "cactus::runtime::entt_backend::hierarchy_index<" + trait_cpp_name("Parent", program) + ">(registry)";
+    return "cactus::runtime::entt_backend::hierarchy_index<" + trait_cpp_name("std.core.Parent", program) + ">(registry)";
 }
 
 bool EnttCodegenUtils::checks_reparent(const DecoratedProgram& program) {

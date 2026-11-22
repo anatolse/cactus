@@ -2894,6 +2894,7 @@ void propagate_subtree(const HierarchyIndex& index,
         const auto parent = stack.back();
         stack.pop_back();
         index.for_each_child(parent, [&](entt::entity child) {
+            count_propagated_node();
             if (!propagation.has_local_world(child) || (is_scope_root != nullptr && (*is_scope_root)(child))) {
                 return;
             }
@@ -2920,15 +2921,21 @@ void set_hierarchy_strategy_override(std::optional<HierarchyStrategy> strategy) 
 void propagate_hierarchy(entt::registry& registry,
                          const HierarchyIndex& index,
                          const HierarchyPropagation& propagation,
+                         std::span<const entt::entity> worlds,
                          HierarchyStrategy strategy) {
+    if (worlds.empty()) {
+        return;
+    }
     strategy = hierarchy_strategy_override().value_or(strategy);
     if (strategy == HierarchyStrategy::CreationSweep) {
-        for (const auto [entity] : registry.storage<entt::entity>().each()) {
+        for (const auto entity : worlds) {
+            count_propagated_node();
             if (propagation.has_local_world(entity) && !composes_onto_parent(registry, index, propagation, entity)) {
                 propagation.copy_local(entity);
             }
         }
         index.for_each_carrier([&](entt::entity entity) {
+            count_propagated_node();
             if (propagation.has_local_world(entity) && composes_onto_parent(registry, index, propagation, entity)) {
                 propagation.accumulate_from_parent(index.parent_of(entity), entity);
             }
@@ -2936,10 +2943,8 @@ void propagate_hierarchy(entt::registry& registry,
         return;
     }
     std::vector<entt::entity> stack;
-    for (const auto [entity] : registry.storage<entt::entity>().each()) {
-        if (!propagation.has_world(entity)) {
-            continue;
-        }
+    for (const auto entity : worlds) {
+        count_propagated_node();
         const bool local = propagation.has_local_world(entity);
         if (local && composes_onto_parent(registry, index, propagation, entity)) {
             continue;

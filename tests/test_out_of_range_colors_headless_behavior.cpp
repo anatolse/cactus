@@ -47,6 +47,8 @@ struct World {
         cactus_raylib_fake::set_window_ready(true);
         cactus_headless_test::init_and_load(registry);
         registry.get<render::shapes::Shape>(slots().Square).color             = kOutOfRange;
+        registry.get<render::sprites::Renderer>(slots().Tile).color           = kOutOfRange;
+        registry.get<render::text::TextLabel>(slots().Caption).color          = kOutOfRange;
         registry.get<render::text::ScreenLabel>(slots().Hud).color            = kOutOfRange;
         registry.get<render::meshes::Renderer>(slots().Cube).color            = kOutOfRange;
         registry.get<render::models::ModelRenderer>(slots().Statue).color     = kOutOfRange;
@@ -61,6 +63,8 @@ TEST_CASE("out-of-range colors: 2D renderers receive each channel clamped and ro
           "[example-behavior][unbound-color-channels]") {
     World world;
     CHECK(drew_with(&cactus_raylib_fake::RecordedDrawRectanglePro::color, kExpected));
+    CHECK(drew_with(&cactus_raylib_fake::RecordedDrawTexturePro::tint, kExpected));
+    CHECK(drew_with(&cactus_raylib_fake::RecordedDrawTextPro::tint, kExpected));
     CHECK(drew_with(&cactus_raylib_fake::RecordedDrawTextEx::tint, kExpected));
     CHECK(drew_with(&cactus_raylib_fake::RecordedDrawLineEx::color, kExpected));
 }
@@ -81,6 +85,8 @@ TEST_CASE("out-of-range colors: drawing leaves every stored color unchanged",
     World world;
     const auto& registry = world.registry;
     CHECK(keeps_out_of_range(registry.get<render::shapes::Shape>(slots().Square).color));
+    CHECK(keeps_out_of_range(registry.get<render::sprites::Renderer>(slots().Tile).color));
+    CHECK(keeps_out_of_range(registry.get<render::text::TextLabel>(slots().Caption).color));
     CHECK(keeps_out_of_range(registry.get<render::text::ScreenLabel>(slots().Hud).color));
     CHECK(keeps_out_of_range(registry.get<render::meshes::Renderer>(slots().Cube).color));
     CHECK(keeps_out_of_range(registry.get<render::models::ModelRenderer>(slots().Statue).color));

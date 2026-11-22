@@ -1,0 +1,73 @@
+module mixed_dimension_runtime
+
+# Flat and volume entities in one program: a sprite next to a mesh (both data
+# traits are named Renderer), a 2D and a 3D text label, and a flat hierarchy
+# next to a volume entity.
+
+use std.math.quat as quat
+use std.transform.flat as tf
+use std.transform.volume as tv
+use std.render.sprites as sprites
+use std.render.meshes as meshes
+use std.render.text as text
+use std.camera.flat as cam2d
+use std.camera.volume as cam3d
+use std.camera.viewport as vp
+
+asset Ground: texture = "../../examples/platformer/assets/tiles/ground.png"
+asset CubeMesh: mesh = "models/blue_cube.mesh"
+asset CubeMaterial: material = "materials/blue_cube.mat"
+
+template Volume(x: float):
+    tv.WorldTransform:
+        position = vec3(x, 0.0, 0.0)
+        rotation = quat.identity()
+        scale = vec3(1.0, 1.0, 1.0)
+
+pub entity Sprite:
+    tf.WorldTransform
+    sprites.Renderer:
+        texture = Ground
+        size = vec2(64.0, 32.0)
+        color = #FF0000FF
+
+pub entity Cube:
+    use Volume(x = -2.0)
+    meshes.Renderer:
+        mesh = CubeMesh
+        material = CubeMaterial
+        color = #0000FFFF
+
+pub entity FlatLabel:
+    tf.WorldTransform:
+        position = vec2(20.0, 20.0)
+    text.TextLabel:
+        text = "flat"
+
+pub entity VolumeLabel:
+    use Volume(x = 2.0)
+    text.TextLabel:
+        text = "volume"
+
+pub entity Arm:
+    tf.LocalTransform:
+        position = vec2(10.0, 0.0)
+    tf.WorldTransform
+    children:
+        entity Hand:
+            tf.LocalTransform:
+                position = vec2(1.0, 0.0)
+            tf.WorldTransform
+
+pub entity FlatCamera:
+    tf.WorldTransform
+    cam2d.Camera
+    vp.Viewport
+
+pub entity MainCamera:
+    tv.WorldTransform:
+        position = vec3(0.0, 1.0, 6.0)
+        rotation = quat.identity()
+        scale = vec3(1.0, 1.0, 1.0)
+    cam3d.Camera
+    vp.Viewport

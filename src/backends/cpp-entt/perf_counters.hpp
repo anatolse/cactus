@@ -27,6 +27,7 @@ struct PerfCounters {
     std::uint64_t component_moves  = 0;  // trait components constructed or destroyed in the registry
     std::uint64_t domain_rows      = 0;  // rows a unary rule's pass visited, before its row tests
     std::uint64_t color_conversions = 0;  // colors converted to 8-bit channels for a raylib call
+    std::uint64_t propagated_nodes  = 0;  // entities a transform propagation looked at
 
     PerfCounters& operator+=(const PerfCounters& other) noexcept {
         commands += other.commands;
@@ -48,6 +49,7 @@ struct PerfCounters {
         component_moves += other.component_moves;
         domain_rows += other.domain_rows;
         color_conversions += other.color_conversions;
+        propagated_nodes += other.propagated_nodes;
         return *this;
     }
 };
@@ -138,6 +140,10 @@ inline void count_domain_row() noexcept {
 inline void count_color_conversion() noexcept {
     ++counting_target().color_conversions;
 }
+
+inline void count_propagated_node() noexcept {
+    ++counting_target().propagated_nodes;
+}
 #else
 inline void count_commands(std::size_t /*count*/) noexcept {}
 inline void count_ordering() noexcept {}
@@ -156,6 +162,7 @@ inline void count_clamp_work(std::size_t /*merges*/, std::size_t /*settles*/) no
 inline void count_component_move() noexcept {}
 inline void count_domain_row() noexcept {}
 inline void count_color_conversion() noexcept {}
+inline void count_propagated_node() noexcept {}
 #endif
 
 }  // namespace cactus::runtime::entt_backend

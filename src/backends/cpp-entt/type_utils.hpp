@@ -215,6 +215,10 @@ public:
 DetailName system_function_name(const std::string& module_name,
                                 const std::string& system_name,
                                 const std::string& suffix);
+// The generated function of a compiler-implemented extern rule, in its own module's detail namespace.
+DetailName extern_rule_function_name(const ExternRuleNode& rule,
+                                     const DecoratedProgram& program,
+                                     const std::string& suffix);
 // Creation functions of a template or entity, and the per-node helpers of a hierarchical one.
 DetailName archetype_create_function_name(const std::string& module_name, const std::string& archetype_name);
 DetailName archetype_create_at_function_name(const std::string& module_name, const std::string& archetype_name);

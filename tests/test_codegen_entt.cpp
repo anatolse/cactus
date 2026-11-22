@@ -14,6 +14,8 @@
 #include "backends/cpp-entt/system_emitter.hpp"
 #include "backends/cpp-entt/type_utils.hpp"
 
+#include "linked_program.hpp"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstdlib>
@@ -3167,7 +3169,7 @@ TEST_CASE("Codegen EnTT: flat transform propagation extern rule is recognized", 
         program);
 
     auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.contains("cactus::runtime::entt_backend::propagate_hierarchy("));
+    CHECK(code.contains("cactus::runtime::entt_backend::propagate_hierarchy<::cactus_gen::WorldTransform>("));
     CHECK(code.contains("parent_world.position.x + local.position.x"));
     CHECK(code.contains("cactus::runtime::entt_backend::hierarchy_index<::cactus_gen::Parent>(registry), PROPAGATION"));
 }
@@ -3201,7 +3203,7 @@ TEST_CASE("Codegen EnTT: hierarchy propagation callbacks test world and local pr
         program);
 
     auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.contains("cactus::runtime::entt_backend::propagate_hierarchy("));
+    CHECK(code.contains("cactus::runtime::entt_backend::propagate_hierarchy<::cactus_gen::WorldTransform>("));
     CHECK_FALSE(code.contains(".get_parent"));
     CHECK(code.contains("registry.all_of<::cactus_gen::LocalTransform, ::cactus_gen::WorldTransform>(entity)"));
     CHECK(code.contains(
@@ -6363,8 +6365,8 @@ TEST_CASE("Codegen EnTT: compiler-owned contracted effects execute only through 
     const auto dispatch = generated_function(code,
                                              "void generated_dispatch_phase(entt::registry& registry, const "
                                              "::cactus_gen::stdlib::render::sprites::RenderPhase& phase)");
-    const auto first    = dispatch.find("::cactus_gen::detail::sprite_renderer_tick(registry);");
-    const auto second   = dispatch.find("::cactus_gen::detail::sprite_animation_tick(registry);");
+    const auto first    = dispatch.find("::cactus_gen::detail::stdlib::render::sprites::sprite_renderer_tick(registry);");
+    const auto second   = dispatch.find("::cactus_gen::detail::stdlib::render::sprites::sprite_animation_tick(registry);");
     REQUIRE(first != std::string::npos);
     REQUIRE(second != std::string::npos);
     CHECK(first < second);
@@ -6373,9 +6375,9 @@ TEST_CASE("Codegen EnTT: compiler-owned contracted effects execute only through 
     // underlying functions in the same phase batch still each get exactly
     // one call.
     CHECK(count_occurrences(without_linearization_harness(dispatch),
-                            "::cactus_gen::detail::sprite_renderer_tick(registry);") == 1);
+                            "::cactus_gen::detail::stdlib::render::sprites::sprite_renderer_tick(registry);") == 1);
     CHECK(count_occurrences(without_linearization_harness(dispatch),
-                            "::cactus_gen::detail::sprite_animation_tick(registry);") == 1);
+                            "::cactus_gen::detail::stdlib::render::sprites::sprite_animation_tick(registry);") == 1);
 
     CHECK(!code.contains("cactus_external__std_render_sprites__SpriteRenderer"));
     CHECK(!code.contains("cactus_external__std_render_sprites__SpriteAnimation"));
@@ -6388,21 +6390,11 @@ TEST_CASE("Codegen EnTT: compiler-owned contracted effects execute only through 
 }
 
 TEST_CASE(
-    "Codegen EnTT: phase-dispatch call emission dedupes two execution-graph nodes that resolve to "
-    "the same underlying implementation function",
-    "[codegen-entt][phase-runtime]") {
-    // Mirrors the confirmed real-world collision (build/generated_examples/waving-label-2d.
-    // generated.cpp pre-fix): std.editor transitively imports both std.transform.flat and
-    // std.transform.volume, so the merged program schedules two distinct TransformPropagation
-    // execution-graph nodes (one per module) onto the same late_tick phase batch. Both resolve to
-    // the same emitted C++ function because system_function_name only encodes the *compiling
-    // program's* module name and the rule's simple name, not the rule's own defining module.
-    //
-    // Reproduced here by cloning a real, recognized std.transform.flat.TransformPropagation node
-    // (AST declaration + execution-graph handler + topological-order entry) and retargeting the
-    // clone's resolved identity to std.transform.volume, exactly as a second linked module would
-    // produce — full_pipeline only supports a single source module, so this stands in for the
-    // artifact linker's cross-module merge.
+    "Codegen EnTT: phase-dispatch call emission calls each distinct implementation function once",
+    "[codegen-entt][phase-runtime][mixed-module-extern-rules]") {
+    // std.editor imports both transform modules, so one late_tick batch holds two
+    // TransformPropagation nodes with the same short name. A clone of the flat node with
+    // its identity moved to std.transform.volume stands in for the linker's merge.
     ProgramNode program;
     auto decorated = full_pipeline(
         "module std.transform.flat\n"
@@ -6468,18 +6460,26 @@ TEST_CASE(
     const auto volume_rule_id                 = *volume_rule.resolved_rule_id;
     program.declarations.emplace_back(std::move(volume_rule));
 
+    const auto flat_identity  = flat_node_it->identity;
     HandlerNode volume_node   = *flat_node_it;
     volume_node.identity.rule = volume_rule_id;
     decorated.execution_graph.handlers.push_back(volume_node);
     decorated.execution_graph.stable_topological_order.push_back(volume_node.identity);
+    // A repeated node resolves to the same function as its first entry.
+    decorated.execution_graph.stable_topological_order.push_back(flat_identity);
 
     decorated.module_name = "waving_label_test";
 
     const auto code = CppEnttCodegen::generate(decorated);
-    const auto dispatch = generated_function(code,
-                                             "void generated_dispatch_phase(entt::registry& registry, "
-                                             "const ::cactus_gen::stdlib::transform::flat::LateTickPhase& phase)");
-    CHECK(count_occurrences(dispatch, "transform_propagation_tick(registry);") == 1);
+    const auto dispatch = without_linearization_harness(
+        generated_function(code,
+                           "void generated_dispatch_phase(entt::registry& registry, "
+                           "const ::cactus_gen::stdlib::transform::flat::LateTickPhase& phase)"));
+    CHECK(count_occurrences(dispatch, "transform_propagation_tick(registry);") == 2);
+    CHECK(count_occurrences(
+              dispatch, "::cactus_gen::detail::stdlib::transform::flat::transform_propagation_tick(registry);") == 1);
+    CHECK(count_occurrences(
+              dispatch, "::cactus_gen::detail::stdlib::transform::volume::transform_propagation_tick(registry);") == 1);
 }
 
 TEST_CASE("Codegen EnTT: the contract audit adds code only when asked", "[codegen-entt][contract-audit]") {
@@ -11653,6 +11653,112 @@ TEST_CASE("Codegen EnTT: a dependent keep rule runs in its commit round, not in 
     CHECK(code.contains("activation.keep_rounds = {.depth = 1, .run = "));
     // Every keep rule run is counted, in its group's place and in its round.
     CHECK(count_occurrences(code, "start_keep_run<") == 2);
+}
+
+// Links `root` with the real stdlib and the given modules, and generates its C++.
+static std::string linked_codegen(const std::string& case_name,
+                                  const std::map<std::string, std::string>& modules,
+                                  const std::string& root) {
+    auto linked = cactus_test::link_sources(
+        std::filesystem::path(CACTUS_TEST_BINARY_DIR) / "codegen_entt_linked" / case_name, modules, root);
+    INFO(linked.describe());
+    REQUIRE_FALSE(linked.has_errors());
+    REQUIRE(linked.program.has_value());
+    linked.program->module_name = root;
+    return CppEnttCodegen::generate(*linked.program);
+}
+
+// A sprite next to a mesh; both data traits are named Renderer. `extra` adds use lines.
+static std::string sprites_and_meshes_source(const std::string& extra = "") {
+    return R"(module sprites_and_meshes
+
+use std.math.quat as quat
+use std.transform.flat as tf
+use std.transform.volume as tv
+use std.render.sprites as sprites
+use std.render.meshes as meshes
+)" + extra + R"(
+asset Ground: texture = "ground.png"
+asset CubeMesh: mesh = "cube.mesh"
+asset CubeMaterial: material = "cube.mat"
+
+pub entity Sprite:
+    tf.WorldTransform
+    sprites.Renderer:
+        texture = Ground
+
+pub entity Cube:
+    tv.WorldTransform:
+        rotation = quat.identity()
+    meshes.Renderer:
+        mesh = CubeMesh
+        material = CubeMaterial
+)";
+}
+
+TEST_CASE("Codegen EnTT: sprite and mesh renderers each read their own module's Renderer",
+          "[codegen-entt][stdlib][mixed-module-extern-rules]") {
+    const auto code =
+        linked_codegen("sprites_and_meshes", {{"sprites_and_meshes", sprites_and_meshes_source()}}, "sprites_and_meshes");
+    const auto mesh   = generated_function(code, "void mesh_renderer_tick(");
+    const auto sprite = generated_function(code, "void sprite_renderer_tick(");
+    REQUIRE(!mesh.empty());
+    REQUIRE(!sprite.empty());
+    CHECK(mesh.contains("::cactus_gen::stdlib::render::meshes::Renderer"));
+    CHECK(!mesh.contains("::cactus_gen::stdlib::render::sprites::Renderer"));
+    CHECK(sprite.contains("::cactus_gen::stdlib::render::sprites::Renderer"));
+    CHECK(!sprite.contains("::cactus_gen::stdlib::render::meshes::Renderer"));
+}
+
+TEST_CASE("Codegen EnTT: a trait that shares a stdlib trait's short name never enters an extern rule",
+          "[codegen-entt][stdlib][mixed-module-extern-rules]") {
+    // Every short name a backend-implemented extern rule reads, declared again in another module.
+    std::string shadows = "module shadows\n";
+    for (const auto* name :
+         {"Renderer",     "BillboardRenderer", "PointLight",     "DirectionalLight", "TextLabel",  "ScreenLabel",
+          "Shape",        "AnimatedSprite",    "ModelRenderer",  "ModelAnimator",    "ModelPlayback", "AnimationCue",
+          "LocalTransform", "WorldTransform",  "Volume",           "VolumeRenderer", "Cell",
+          "Cutaway",      "TextureFlipbook",   "ScreenSize",     "ComputedLayout",   "Visual",     "Panel",
+          "Text",         "Image",             "Button",         "FrameAnimation",   "PointerState", "Node"}) {
+        shadows += std::string("pub trait ") + name + ":\n    var shadow: int = 0\n";
+    }
+    const std::string root = sprites_and_meshes_source("use std.render.shapes as shapes\n"
+                                                       "use std.render.models as models\n"
+                                                       "use std.render.text as text\n"
+                                                       "use std.voxel.volume as voxels\n"
+                                                       "use std.ui as ui\n"
+                                                       "use std.camera.viewport as vp\n"
+                                                       "use shadows as sh\n") +
+                             "\npub entity Mark:\n"
+                             "    sh.Renderer\n";
+    const auto code = linked_codegen(
+        "shadowed_extern_traits", {{"sprites_and_meshes", root}, {"shadows", shadows}}, "sprites_and_meshes");
+    const auto systems_begin = code.find("// ── Systems");
+    const auto systems_end   = code.find("// ── Event Dispatcher");
+    REQUIRE(systems_begin != std::string::npos);
+    REQUIRE(systems_end != std::string::npos);
+    const auto systems = code.substr(systems_begin, systems_end - systems_begin);
+    CHECK(systems.contains("render_volumes_tick("));
+    CHECK(!systems.contains("::cactus_gen::shadows::"));
+}
+
+TEST_CASE("Codegen EnTT: flat and volume extern rules both run in a program that links both kinds",
+          "[codegen-entt][stdlib][mixed-module-extern-rules][phase-runtime]") {
+    const auto code = linked_codegen("both_transform_kinds",
+                                     {{"sprites_and_meshes", sprites_and_meshes_source("use std.render.text as text\n")}},
+                                     "sprites_and_meshes");
+    const std::string flat_ns   = "cactus_gen::detail::stdlib::transform::flat";
+    const std::string volume_ns = "cactus_gen::detail::stdlib::transform::volume";
+    CHECK(code.contains("namespace " + flat_ns + " {\nvoid transform_propagation_tick(entt::registry& registry) {"));
+    CHECK(code.contains("namespace " + volume_ns + " {\nvoid transform_propagation_tick(entt::registry& registry) {"));
+    const auto dispatch = without_linearization_harness(generated_function(
+        code, "void generated_dispatch_phase(entt::registry& registry, const ::cactus_gen::stdlib::core::LateTickPhase&"));
+    CHECK(count_occurrences(dispatch, "::" + flat_ns + "::transform_propagation_tick(registry);") == 1);
+    CHECK(count_occurrences(dispatch, "::" + volume_ns + "::transform_propagation_tick(registry);") == 1);
+    const auto text_2d = generated_function(code, "void text_renderer2_d_tick(");
+    const auto text_3d = generated_function(code, "void text_renderer3_d_tick(");
+    CHECK(text_2d.contains("submit_text_2d("));
+    CHECK(text_3d.contains("submit_text_3d("));
 }
 
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

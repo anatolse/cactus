@@ -1,0 +1,14 @@
+module perf_unused_transform_kind
+
+# A volume hierarchy in a program that also links the flat transform module.
+# The test hangs the children under Root. The flat propagation finds no flat
+# entity, so it must cost nothing per child.
+
+use std.core
+use std.transform.flat as tf
+use std.transform.volume as tv
+
+pub entity Root:
+    tv.LocalTransform:
+        position = vec3(1.0, 0.0, 0.0)
+    tv.WorldTransform

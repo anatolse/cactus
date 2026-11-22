@@ -283,7 +283,7 @@ TEST_CASE("Hierarchy propagation: a deep chain propagates under every strategy",
             world.registry.emplace<FlatLocal>(last, FlatLocal{.position = Vector2{.x = 1.0F}});
             world.registry.emplace<FlatWorld>(last);
         }
-        entt_backend::propagate_hierarchy(world.registry, index, world.flat(), strategy);
+        entt_backend::propagate_hierarchy<FlatWorld>(world.registry, index, world.flat(), strategy);
         CHECK(world.registry.get<FlatWorld>(last).position.x == 100000.0F);
     }
 }
@@ -348,7 +348,7 @@ std::vector<std::uint32_t> propagate_under(HierarchyStrategy strategy,
     world.index();
     build(world);
     const StrategyOverride forced(strategy);
-    entt_backend::propagate_hierarchy(
+    entt_backend::propagate_hierarchy<World_>(
         world.registry, world.index(), propagation_of(world), HierarchyStrategy::CreationSweep);
     return world_bits<World_>(world.registry);
 }
@@ -402,7 +402,7 @@ TEST_CASE("Hierarchy propagation: a stale parent and a parent without a world ma
         registry.emplace<FlatLocal>(under, FlatLocal{.position = Vector2{.x = 4.0F}});
         registry.emplace<FlatWorld>(under);
 
-        entt_backend::propagate_hierarchy(registry, world.index(), world.flat(), strategy);
+        entt_backend::propagate_hierarchy<FlatWorld>(registry, world.index(), world.flat(), strategy);
         CHECK(registry.get<FlatWorld>(orphan).position.x == 3.0F);
         CHECK(registry.get<FlatWorld>(under).position.x == 4.0F);
     }

@@ -952,7 +952,7 @@ std::vector<DetailName> window_space_render_callees(const DecoratedProgram& prog
             rule->resolved_rule_id->local_name != "RenderUi") {
             continue;
         }
-        auto callee = system_function_name(program.module_name, rule->name, "tick");
+        auto callee = extern_rule_function_name(*rule, program, "tick");
         if (!std::ranges::contains(callees, callee.ref(), &DetailName::ref)) {
             callees.push_back(std::move(callee));
         }
@@ -1878,10 +1878,7 @@ bool emit_phase_handler_call(std::ostringstream& out,
         if (rule == nullptr || !rule->is_stdlib) {
             return false;
         }
-        if (!EnttSystemEmitter::emits_extern_system(*rule, program)) {
-            return true;
-        }
-        const auto callee = system_function_name(program.module_name, rule->name, "tick").ref();
+        const auto callee = extern_rule_function_name(*rule, program, "tick").ref();
         if (!emitted_callees.insert(callee).second) {
             return true;
         }
@@ -2258,7 +2255,7 @@ void emit_event_handler_dispatch(std::ostringstream& out,
                 // renderers) have no filter view to iterate, so their generated body takes the
                 // occurrence directly instead of the (registry)-only shape phase-triggered
                 // filter/view extern rules use — see emit_event_renderer_body in system_emitter.cpp.
-                call << "    " << system_function_name(program.module_name, rule->name, "tick").ref()
+                call << "    " << extern_rule_function_name(*rule, program, "tick").ref()
                      << "(registry, occurrence);\n";
                 call << keep_touches_after(*graph_node, "    ");
                 calls.push_back(DispatchCall{.identity = identity, .text = std::move(call).str()});
@@ -4600,7 +4597,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
             }
             if (auto* rule = std::get_if<ExternRuleNode>(&decl); rule != nullptr) {
                 if (has_compiler_owned_external_handler(program, *rule)) {
-                    out << namespace_block(detail_namespace_path(program.module_name),
+                    out << namespace_block(extern_rule_function_name(*rule, program, "tick").ns,
                                            EnttSystemEmitter::emit_extern_system(*rule, program));
                 } else if (program.execution_graph.phases.empty() && has_user_external_handler(program, *rule)) {
                     throw std::runtime_error("cpp-entt user external rule '" +

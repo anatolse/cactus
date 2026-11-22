@@ -14,7 +14,6 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
-#include <limits>
 
 namespace {
 
@@ -91,20 +90,4 @@ TEST_CASE("unbound color channels: subtracting then adding the same color gives 
     CHECK(sum.result.g == 128.0F / 255.0F);
 }
 
-TEST_CASE("unbound color channels: a text label draws out-of-range channels clamped once",
-          "[example-behavior][unbound-color-channels]") {
-    cactus_raylib_fake::reset();
-    cactus_raylib_fake::set_window_ready(true);
-    entt::registry registry;
-    cactus_headless_test::init_and_load(registry);
-    auto& label = registry.get<cactus_gen::stdlib::render::text::TextLabel>(slots().Title);
-    label.color = CactusColor{.r = 1.5F, .g = -0.2F, .b = 0.5F, .a = std::numeric_limits<float>::quiet_NaN()};
-    cactus_headless_test::drive_frame(registry);
-
-    CHECK(cactus_raylib_fake::find_call<cactus_raylib_fake::RecordedDrawTextPro>(
-              cactus_raylib_fake::call_log(), [](const auto& draw) {
-                  return cactus_raylib_fake::colors_equal(draw.tint, Color{.r = 255, .g = 0, .b = 128, .a = 0});
-              }) != nullptr);
-    CHECK(label.color.r == 1.5F);
-}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

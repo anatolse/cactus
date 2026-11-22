@@ -77,7 +77,7 @@ TEST_CASE("Standard UI render draws Panel/Image/Button/Text primitives in the st
                                      .color     = color_from_raylib(YELLOW),
                                      .align     = cactus_gen::stdlib::ui::TextAlign::Center});
 
-    cactus_gen::detail::standard_ui_layout_runtime::render_ui_tick(registry);
+    cactus_gen::detail::stdlib::ui::render_ui_tick(registry);
     cactus::runtime::entt_backend::end_render_frame();
 
     const auto& log = cactus_raylib_fake::call_log();
@@ -124,7 +124,7 @@ TEST_CASE("Standard UI render paints in ComputedLayout draw_order, not creation 
     registry.emplace<cactus_gen::stdlib::ui::ComputedLayout>(second_created, make_layout(/*draw_order=*/0));
     registry.emplace<cactus_gen::stdlib::ui::Panel>(second_created, cactus_gen::stdlib::ui::Panel{.background = color_from_raylib(BLUE)});
 
-    cactus_gen::detail::standard_ui_layout_runtime::render_ui_tick(registry);
+    cactus_gen::detail::stdlib::ui::render_ui_tick(registry);
     cactus::runtime::entt_backend::end_render_frame();
 
     const auto& log = cactus_raylib_fake::call_log();
@@ -154,7 +154,7 @@ TEST_CASE("Standard UI paints once per frame, after every viewport", "[runtime][
     cactus::runtime::entt_backend::begin_render_frame();
     for (const auto viewport : {registry.create(), registry.create()}) {
         cactus::runtime::entt_backend::set_active_viewport_entity(viewport);
-        cactus_gen::detail::standard_ui_layout_runtime::render_ui_tick(registry);
+        cactus_gen::detail::stdlib::ui::render_ui_tick(registry);
     }
     cactus::runtime::entt_backend::set_active_viewport_entity(entt::null);
     CHECK(cactus_raylib_fake::call_log().empty());
@@ -193,7 +193,7 @@ TEST_CASE("Standard UI render skips invisible and fully-clipped entities, and ti
     registry.emplace<cactus_gen::stdlib::ui::Panel>(
         translucent, cactus_gen::stdlib::ui::Panel{.background = color_from_bytes(10, 20, 30, 255)});
 
-    cactus_gen::detail::standard_ui_layout_runtime::render_ui_tick(registry);
+    cactus_gen::detail::stdlib::ui::render_ui_tick(registry);
     cactus::runtime::entt_backend::end_render_frame();
 
     const auto& log = cactus_raylib_fake::call_log();
@@ -239,7 +239,7 @@ TEST_CASE("Standard UI render slices FrameAnimation frames from a resolved textu
         cactus_gen::stdlib::ui::FrameAnimation{
             .frame_count = 4, .fps = 0.0F, .frame = 2, .elapsed = 0.0F, .playing = false});
 
-    cactus_gen::detail::standard_ui_layout_runtime::render_ui_tick(registry);
+    cactus_gen::detail::stdlib::ui::render_ui_tick(registry);
     cactus::runtime::entt_backend::end_render_frame();
 
     const auto& log  = cactus_raylib_fake::call_log();
@@ -283,7 +283,7 @@ TEST_CASE("Standard UI Button presentation follows disabled > pressed > hovered 
         registry.emplace<cactus_gen::stdlib::pointer::PointerState>(
             entity, cactus_gen::stdlib::pointer::PointerState{.hovered = hovered, .pressed = pressed});
 
-        cactus_gen::detail::standard_ui_layout_runtime::render_ui_tick(registry);
+        cactus_gen::detail::stdlib::ui::render_ui_tick(registry);
         cactus::runtime::entt_backend::end_render_frame();
 
         const auto* draw =
@@ -311,7 +311,7 @@ TEST_CASE("Standard UI RenderUi coexists with the legacy DrawScreenRect compatib
                                                              make_layout(0, {.x = 0, .y = 0}, {.x = 20, .y = 20}));
     registry.emplace<cactus_gen::stdlib::ui::Panel>(entity, cactus_gen::stdlib::ui::Panel{.background = color_from_raylib(RED)});
 
-    cactus_gen::detail::standard_ui_layout_runtime::render_ui_tick(registry);
+    cactus_gen::detail::stdlib::ui::render_ui_tick(registry);
     cactus::runtime::entt_backend::end_render_frame();
 
     const cactus_gen::stdlib::ui::DrawScreenRectEvent legacy_event{.position  = {.x = 100.0F, .y = 100.0F},
@@ -319,7 +319,7 @@ TEST_CASE("Standard UI RenderUi coexists with the legacy DrawScreenRect compatib
                                                                    .color     = color_from_raylib(MAGENTA),
                                                                    .filled    = true,
                                                                    .thickness = 1.0F};
-    cactus_gen::detail::standard_ui_layout_runtime::draw_screen_rect_renderer_tick(registry, legacy_event);
+    cactus_gen::detail::stdlib::ui::draw_screen_rect_renderer_tick(registry, legacy_event);
 
     const auto& log = cactus_raylib_fake::call_log();
     CHECK(cactus_raylib_fake::find_call<cactus_raylib_fake::RecordedDrawRectangleRec>(
@@ -341,7 +341,7 @@ TEST_CASE("Standard UI render clamps an out-of-range panel color once at the dra
     registry.emplace<cactus_gen::stdlib::ui::ComputedLayout>(entity, make_layout(0));
     registry.emplace<cactus_gen::stdlib::ui::Panel>(entity, cactus_gen::stdlib::ui::Panel{.background = out_of_range});
 
-    cactus_gen::detail::standard_ui_layout_runtime::render_ui_tick(registry);
+    cactus_gen::detail::stdlib::ui::render_ui_tick(registry);
     cactus::runtime::entt_backend::end_render_frame();
 
     CHECK(cactus_raylib_fake::find_call<cactus_raylib_fake::RecordedDrawRectangleRec>(

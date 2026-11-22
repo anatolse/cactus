@@ -1,0 +1,98 @@
+module drawn_picture
+
+# Flat entities with a Picture are drawn moved and recolored through the
+# picture layer while `shown` holds; their WorldTransform and colors stay as
+# authored. Tests switch `shown` off to see the truth drawn again.
+
+use std.core as core
+use std.transform.flat as tf
+use std.render.layers as layers
+use std.render.picture as picture
+use std.render.shapes as shapes
+use std.render.sprites as sprites
+use std.render.text as text
+use std.camera.flat as cam
+use std.camera.viewport as vp
+
+asset Ground: texture = "../platformer/assets/tiles/ground.png"
+
+pub trait Picture:
+    var shown: bool = true
+    var shift: vec2 = vec2(0.0, 0.0)
+    var turn: float = 0.0
+    var tint: color = #FFFFFFFF
+    var glow: color = #00000000
+
+pub entity Box:
+    tf.WorldTransform:
+        position = vec2(100.0, 100.0)
+    shapes.Shape:
+        type = shapes.ShapeType.Rectangle
+        size = vec2(10.0, 10.0)
+        color = #808080FF
+    Picture:
+        shift = vec2(4.0, 0.0)
+        turn = 0.5
+        tint = #FFFFFF80
+        glow = #40000000
+
+pub entity Plain:
+    tf.WorldTransform:
+        position = vec2(300.0, 100.0)
+    shapes.Shape:
+        type = shapes.ShapeType.Circle
+        size = vec2(10.0, 10.0)
+        color = #00FF00FF
+
+pub entity Tile:
+    tf.WorldTransform:
+        position = vec2(200.0, 0.0)
+    sprites.Renderer:
+        texture = Ground
+        size = vec2(64.0, 32.0)
+    Picture:
+        shift = vec2(10.0, 5.0)
+        tint = #FF000080
+
+pub entity Sign:
+    tf.WorldTransform:
+        position = vec2(20.0, -200.0)
+    shapes.Shape:
+        type = shapes.ShapeType.Rectangle
+        size = vec2(50.0, 20.0)
+        color = #FF0000FF
+    text.TextLabel:
+        text = "sign"
+    Picture:
+        shift = vec2(0.0, 8.0)
+        tint = #FFFFFF80
+
+pub entity Hot:
+    tf.WorldTransform:
+        position = vec2(-200.0, 100.0)
+    shapes.Shape:
+        type = shapes.ShapeType.Rectangle
+        size = vec2(10.0, 10.0)
+    Picture:
+        glow = #80000000
+
+pub entity View:
+    tf.WorldTransform
+    cam.Camera
+    vp.Viewport
+
+rule DrawPicture:
+    each:
+        tf.WorldTransform as xf
+        Picture as p
+    group: layers.picture
+
+    on core.render:
+        if p.shown:
+            project tf.DrawnPose:
+                position = xf.position + p.shift
+                rotation = xf.rotation + p.turn
+                scale = xf.scale
+            project picture.DrawnColor:
+                tint = p.tint
+                glow = p.glow

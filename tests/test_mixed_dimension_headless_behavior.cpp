@@ -63,6 +63,18 @@ TEST_CASE("mixed dimensions: the sprite and the mesh each read their own Rendere
     }));
 }
 
+TEST_CASE("mixed dimensions: each renderer draws the drawn pose of its own transform kind",
+          "[example-behavior][drawn-picture]") {
+    World world;
+    CHECK(drew<cactus_raylib_fake::RecordedDrawTexturePro>([](const auto& call) {
+        return cactus_raylib_fake::approx_equal(Vector2{.x = call.dest.x, .y = call.dest.y},
+                                                Vector2{.x = 0.0F, .y = 5.0F});
+    }));
+    CHECK(drew<cactus_raylib_fake::RecordedDrawMesh>([](const auto& call) {
+        return cactus_raylib_fake::approx_equal(call.transform, Vector3{.x = -2.0F, .y = 5.0F, .z = 0.0F});
+    }));
+}
+
 TEST_CASE("mixed dimensions: flat and volume text labels both draw", "[example-behavior][mixed-module-extern-rules]") {
     {
         World world;

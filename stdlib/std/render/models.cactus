@@ -2,6 +2,7 @@ module std.render.models
 
 use std.core as core
 use std.render.layers as layers
+use std.render.picture as picture
 use std.render.visibility as visibility
 use std.transform.volume as tv
 
@@ -30,7 +31,9 @@ extern rule ModelRender:
     on render:
         reads:
             tv.WorldTransform
+            tv.DrawnPose
             ModelRenderer
+            picture.DrawnColor
             ModelAnimator
             visibility.HiddenIn
         effects:

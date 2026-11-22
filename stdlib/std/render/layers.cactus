@@ -7,24 +7,34 @@ use std.core as core
 # its `after:`. Every layer lists all earlier ones, since a group with no
 # members in a program orders nothing.
 
+# Rules that project DrawnPose or DrawnColor: after this frame's last
+# WorldTransform write, before any renderer.
+pub group picture:
+    phase: core.render
+
 pub group meshes:
     phase: core.render
+    after:
+        picture
 
 pub group models:
     phase: core.render
     after:
+        picture
         meshes
 
 # Block volumes and other generated surfaces.
 pub group volumes:
     phase: core.render
     after:
+        picture
         meshes
         models
 
 pub group shapes:
     phase: core.render
     after:
+        picture
         meshes
         models
         volumes
@@ -32,6 +42,7 @@ pub group shapes:
 pub group sprites:
     phase: core.render
     after:
+        picture
         meshes
         models
         volumes
@@ -40,6 +51,7 @@ pub group sprites:
 pub group text:
     phase: core.render
     after:
+        picture
         meshes
         models
         volumes
@@ -49,6 +61,7 @@ pub group text:
 pub group ui:
     phase: core.render
     after:
+        picture
         meshes
         models
         volumes
@@ -59,6 +72,7 @@ pub group ui:
 pub group editor:
     phase: core.render
     after:
+        picture
         meshes
         models
         volumes

@@ -109,6 +109,13 @@ exception — see `examples/CLAUDE.md`).
 - A light's brightness is its color: `color = #FFE0C0FF * 1.5`. Lights have no `intensity`. To change
   brightness at run time, keep the hue in your own trait and write `light.color = hue * strength`.
 
+### Effects and the picture
+
+- A visual effect (shake, flash, tint, squash) writes the picture, never `WorldTransform` or a
+  renderer's color: `project tf.DrawnPose` / `project picture.DrawnColor` from a rule in
+  `group: layers.picture`. The simulation keeps its truth, and the effect is gone when the rule
+  stops projecting.
+
 ### Easing
 
 - Shape progress with `std.math.ease` (`ease.out_quad(t)`, or `ease.apply(curve, t)` for a curve kept

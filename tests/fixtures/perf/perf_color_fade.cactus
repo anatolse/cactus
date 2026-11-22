@@ -3,12 +3,18 @@ module perf_color_fade
 use std.core
 use std.transform.flat as tf
 use std.render.shapes as shapes
+use std.render.layers as layers
+use std.render.picture as picture
 
 # Many shapes blend toward a target color and fade every tick, and every one
 # is drawn. Color math stays in float; each draw converts to bytes once.
+# With flash_every = n > 0, every n-th shape is also drawn moved and brightened.
 
 trait Board:
     let size: int = 1000
+    let flash_every: int = 0
+
+trait Flash
 
 trait Fade:
     var target: color = #2040FFFF
@@ -27,10 +33,31 @@ template Swatch:
         size = vec2(4.0, 4.0)
     Fade
 
+template FlashingSwatch:
+    use Swatch
+    Flash
+
 rule Fill:
     on load:
         for i in range(0, Field[Board].size):
-            spawn Swatch()
+            if Field[Board].flash_every > 0 and i % Field[Board].flash_every == 0:
+                spawn FlashingSwatch()
+            else:
+                spawn Swatch()
+
+rule DrawFlash:
+    each:
+        tf.WorldTransform as xf
+        Flash
+    group: layers.picture
+
+    on render:
+        project tf.DrawnPose:
+            position = xf.position + vec2(1.0, 0.0)
+            rotation = xf.rotation
+            scale = xf.scale
+        project picture.DrawnColor:
+            glow = #20202000
 
 rule BlendAndFade:
     each:

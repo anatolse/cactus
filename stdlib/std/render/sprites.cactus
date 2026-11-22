@@ -1,6 +1,7 @@
 module std.render.sprites
 
 use std.render.layers as layers
+use std.render.picture as picture
 use std.transform.flat as tf
 
 # ── 2D Sprite Rendering Traits ────────────────────────────────────────────────
@@ -49,7 +50,9 @@ extern rule SpriteRenderer:
     on render:
         reads:
             tf.WorldTransform
+            tf.DrawnPose
             Renderer
+            picture.DrawnColor
         effects:
             graphics
 

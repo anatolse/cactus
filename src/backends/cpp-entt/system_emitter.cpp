@@ -9459,12 +9459,13 @@ std::string EnttSystemEmitter::emit_system(const RuleNode& sys, const DecoratedP
 // gating. Renderers with a switch/conditional/extra prelude beyond the one
 // call (shape_renderer, sprite_animation, model_animation, model_render)
 // don't fit this shape and stay hand-written. call_body builds the exact call
-// expression from the two resolved cpp component variable names — the
+// expression from the pose and data variable names and the color expression — the
 // argument lists differ too much between renderers (which transform fields,
 // which data fields, in what order) to also templatize as a string.
 struct SingleViewRendererSpec {
     bool (*matches)(const ExternRuleNode&);
-    std::function<std::string(const std::string& transform_var, const std::string& data_var)> call_body;
+    std::function<std::string(const std::string& pose_var, const std::string& data_var, const std::string& color)>
+        call_body;
     bool hideable = false;
 };
 
@@ -9488,6 +9489,40 @@ struct RendererFilter {
     std::string transform;
     std::string data;
 };
+
+// The C++ type of a picture trait the renderer reads, or empty when no entity may carry it.
+std::string picture_trait_cpp(const ExternRuleNode& sys, std::string_view name, const DecoratedProgram& program) {
+    for (const auto& handler : sys.handlers) {
+        const auto found = std::ranges::find(handler.resolved_reads, name, &SymbolId::local_name);
+        if (found != handler.resolved_reads.end() && EnttCodegenUtils::may_be_present(program, *found)) {
+            return resolved_trait_cpp(*found, program);
+        }
+    }
+    return {};
+}
+
+// Declares `pose` as the renderer's drawn pose, or returns the transform itself when no DrawnPose may exist.
+std::string emit_drawn_pose(std::ostringstream& out,
+                            const ExternRuleNode& sys,
+                            const DecoratedProgram& program,
+                            const std::string& transform_var) {
+    const auto drawn = picture_trait_cpp(sys, "DrawnPose", program);
+    if (drawn.empty()) {
+        return transform_var;
+    }
+    out << "        const auto pose = cactus::runtime::entt_backend::drawn_pose<" << drawn << ">(registry, entity, "
+        << transform_var << ");\n";
+    return "pose";
+}
+
+// The renderer's own color as drawn: through the entity's DrawnColor when one may exist.
+std::string drawn_color_expr(const ExternRuleNode& sys, const DecoratedProgram& program, const std::string& own) {
+    const auto drawn = picture_trait_cpp(sys, "DrawnColor", program);
+    if (drawn.empty()) {
+        return own;
+    }
+    return "::drawn_color(" + own + ", registry.try_get<" + drawn + ">(entity))";
+}
 
 RendererFilter renderer_filter(const ExternRuleNode& sys, const DecoratedProgram& program) {
     RendererFilter result;
@@ -9519,41 +9554,41 @@ const std::array<SingleViewRendererSpec, 6>& single_view_renderer_specs() {
     static const std::array<SingleViewRendererSpec, 6> specs{{
         {.matches = is_sprite_renderer,
          .call_body =
-             [](const std::string& t, const std::string& d) {
-                 return "cactus::runtime::entt_backend::submit_sprite(" + t + ".position, " + d + ".size, " + d +
-                        ".color, " + d + ".texture, " + d + ".visible, " + d + ".layer)";
+             [](const std::string& t, const std::string& d, const std::string& c) {
+                 return "cactus::runtime::entt_backend::submit_sprite(" + t + ".position, " + d + ".size, " + c +
+                        ", " + d + ".texture, " + d + ".visible, " + d + ".layer)";
              }},
         {.matches = is_mesh_renderer,
          .call_body =
-             [](const std::string& t, const std::string& d) {
+             [](const std::string& t, const std::string& d, const std::string& c) {
                  return "cactus::runtime::entt_backend::submit_mesh(" + t + ".position, " + t + ".rotation, " + t +
-                        ".scale, " + d + ".mesh, " + d + ".material, " + d + ".visible, " + d + ".cast_shadow, " + d +
-                        ".color)";
+                        ".scale, " + d + ".mesh, " + d + ".material, " + d + ".visible, " + d + ".cast_shadow, " + c +
+                        ")";
              },
          .hideable = true},
         {.matches = is_billboard_renderer,
          .call_body =
-             [](const std::string& t, const std::string& d) {
-                 return "cactus::runtime::entt_backend::submit_billboard(" + t + ".position, " + d + ".size, " + d +
-                        ".color, " + d + ".texture, " + d + ".visible)";
+             [](const std::string& t, const std::string& d, const std::string& c) {
+                 return "cactus::runtime::entt_backend::submit_billboard(" + t + ".position, " + d + ".size, " + c +
+                        ", " + d + ".texture, " + d + ".visible)";
              }},
         {.matches = is_point_light_render,
          .call_body =
-             [](const std::string& t, const std::string& d) {
-                 return "cactus::runtime::entt_backend::register_point_light(" + t + ".position, " + d + ".color, " +
-                        d + ".range, " + d + ".enabled)";
+             [](const std::string& t, const std::string& d, const std::string& c) {
+                 return "cactus::runtime::entt_backend::register_point_light(" + t + ".position, " + c + ", " + d +
+                        ".range, " + d + ".enabled)";
              }},
         {.matches = is_any_text_renderer_2d,
          .call_body =
-             [](const std::string& t, const std::string& d) {
+             [](const std::string& t, const std::string& d, const std::string& c) {
                  return "cactus::runtime::entt_backend::submit_text_2d(" + t + ".position, " + t + ".rotation, " + d +
-                        ".font_size, " + d + ".color, " + d + ".text, " + d + ".visible)";
+                        ".font_size, " + c + ", " + d + ".text, " + d + ".visible)";
              }},
         {.matches = is_any_text_renderer_3d,
          .call_body =
-             [](const std::string& t, const std::string& d) {
+             [](const std::string& t, const std::string& d, const std::string& c) {
                  return "cactus::runtime::entt_backend::submit_text_3d(static_cast<uint32_t>(entity), " + t +
-                        ".position, " + t + ".rotation, " + t + ".scale, " + d + ".font_size, " + d + ".color, " + d +
+                        ".position, " + t + ".rotation, " + t + ".scale, " + d + ".font_size, " + c + ", " + d +
                         ".text, " + d + ".visible)";
              },
          .hideable = true},
@@ -9577,7 +9612,9 @@ std::string emit_single_view_renderer_body(const ExternRuleNode& sys,
     out << "    view.each([&](entt::entity entity, const " << transform << "& " << transform_var << ", const " << data
         << "& " << data_var << ") {\n";
     out << (spec.hideable ? kSkipHidden : "        (void)entity;\n");
-    out << "        " << spec.call_body(transform_var, data_var) << ";\n";
+    const auto pose  = emit_drawn_pose(out, sys, program, transform_var);
+    const auto color = drawn_color_expr(sys, program, data_var + ".color");
+    out << "        " << spec.call_body(pose, data_var, color) << ";\n";
     out << "    });\n";
     out << "}\n\n";
     return out.str();
@@ -9673,19 +9710,21 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
         out << "        if (!" << shape_var << ".visible) {\n";
         out << "            return;\n";
         out << "        }\n";
+        const auto pose  = emit_drawn_pose(out, sys, program, wt_var);
+        const auto color = drawn_color_expr(sys, program, shape_var + ".color");
         out << "        switch (" << shape_var << ".type) {\n";
         out << "            case " << shape_type << "::Rectangle:\n";
-        out << "                cactus::runtime::entt_backend::draw_shape_rectangle(" << wt_var << ".position,\n";
+        out << "                cactus::runtime::entt_backend::draw_shape_rectangle(" << pose << ".position,\n";
         out << "                               " << shape_var << ".size,\n";
         out << "                               " << shape_var << ".origin,\n";
-        out << "                               " << wt_var << ".rotation,\n";
-        out << "                               " << shape_var << ".color);\n";
+        out << "                               " << pose << ".rotation,\n";
+        out << "                               " << color << ");\n";
         out << "                break;\n";
         out << "            case " << shape_type << "::Circle:\n";
-        out << "                cactus::runtime::entt_backend::draw_shape_circle(" << wt_var << ".position,\n";
+        out << "                cactus::runtime::entt_backend::draw_shape_circle(" << pose << ".position,\n";
         out << "                            " << shape_var << ".size.x,\n";
         out << "                            " << shape_var << ".origin,\n";
-        out << "                            " << shape_var << ".color);\n";
+        out << "                            " << color << ");\n";
         out << "                break;\n";
         out << "        }\n";
         out << "    });\n";
@@ -9801,17 +9840,19 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
         out << "    view.each([&](entt::entity entity, const " << wt << "& " << wt_var << ", const " << mr << "& "
             << mr_var << ") {\n";
         out << kSkipHidden;
+        const auto pose  = emit_drawn_pose(out, sys, program, wt_var);
+        const auto color = drawn_color_expr(sys, program, mr_var + ".color");
         if (EnttCodegenUtils::find_trait(program, "std.render.models.ModelAnimator") != nullptr) {
             out << "        if (const auto* animator = registry.try_get<" << manim << ">(entity)) {\n";
-            out << "            cactus::runtime::entt_backend::submit_model(" << wt_var << ".position, " << wt_var
-                << ".rotation, " << wt_var << ".scale, " << mr_var << ".model, " << mr_var << ".visible, " << mr_var
-                << ".cast_shadow, animator->clip, animator->time, " << mr_var << ".color);\n";
+            out << "            cactus::runtime::entt_backend::submit_model(" << pose << ".position, " << pose
+                << ".rotation, " << pose << ".scale, " << mr_var << ".model, " << mr_var << ".visible, " << mr_var
+                << ".cast_shadow, animator->clip, animator->time, " << color << ");\n";
             out << "            return;\n";
             out << "        }\n";
         }
-        out << "        cactus::runtime::entt_backend::submit_model(" << wt_var << ".position, " << wt_var
-            << ".rotation, " << wt_var << ".scale, " << mr_var << ".model, " << mr_var << ".visible, " << mr_var
-            << ".cast_shadow, " << mr_var << ".color);\n";
+        out << "        cactus::runtime::entt_backend::submit_model(" << pose << ".position, " << pose << ".rotation, "
+            << pose << ".scale, " << mr_var << ".model, " << mr_var << ".visible, " << mr_var << ".cast_shadow, "
+            << color << ");\n";
         out << "    });\n";
         out << "}\n\n";
         return out.str();
@@ -9825,7 +9866,7 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
         out << "    view.each([&](entt::entity entity, const " << dl << "& " << dl_var << ") {\n";
         out << "        (void)entity;\n";
         out << "        cactus::runtime::entt_backend::register_directional_light(" << dl_var << ".direction, "
-            << dl_var << ".color, " << dl_var << ".enabled);\n";
+            << drawn_color_expr(sys, program, dl_var + ".color") << ", " << dl_var << ".enabled);\n";
         out << "    });\n";
         out << "}\n\n";
         return out.str();

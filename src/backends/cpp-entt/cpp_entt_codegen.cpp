@@ -999,15 +999,17 @@ void emit_viewport_phase_dispatch(std::ostringstream& out,
         out << indent << "            set_active_camera_2d(cactus_gen_translate_camera_2d(cactus_gen_cam, cactus_gen_sw, cactus_gen_sh));\n";
         out << indent << "        }\n";
     }
+    out << indent << "        cactus::runtime::entt_backend::set_active_viewport_entity(cactus_gen_vp_ent);\n";
+    out << indent << "        generated_dispatch_phase(registry, phase);\n";
+    // Set after the phase, so the camera sees the drawn pose its picture rules projected.
     if (render_emit_3d_helper) {
-        out << indent << (render_emit_2d_helper ? "        else if (registry.all_of<" : "        if (registry.all_of<")
-            << render_cam3d_cpp << ">(cactus_gen_vp_ent)) {\n";
+        const std::string not_flat =
+            render_emit_2d_helper ? "!registry.all_of<" + render_cam2d_cpp + ">(cactus_gen_vp_ent) && " : "";
+        out << indent << "        if (" << not_flat << "registry.all_of<" << render_cam3d_cpp << ">(cactus_gen_vp_ent)) {\n";
         out << indent << "            const auto& cactus_gen_cam = registry.get<" << render_cam3d_cpp << ">(cactus_gen_vp_ent);\n";
         out << indent << "            set_active_camera_3d(cactus_gen_translate_camera_3d(cactus_gen_vp_ent, cactus_gen_cam, registry));\n";
         out << indent << "        }\n";
     }
-    out << indent << "        cactus::runtime::entt_backend::set_active_viewport_entity(cactus_gen_vp_ent);\n";
-    out << indent << "        generated_dispatch_phase(registry, phase);\n";
     out << indent << "        flush_viewport_3d();\n";
     out << indent << "        cactus::runtime::raylib::EndScissorMode();\n";
     out << indent << "    }\n";
@@ -2893,6 +2895,7 @@ std::string emit_camera_translate_helpers(bool emit_2d_helper,
                                           const std::string& cam2d_cpp,
                                           const std::string& cam3d_cpp,
                                           const std::string& wt3d_cpp,
+                                          const std::string& drawn3d_cpp,
                                           const std::string& projection_cpp) {
     std::ostringstream out;
     if (!emit_2d_helper && !emit_3d_helper) {
@@ -2913,7 +2916,14 @@ std::string emit_camera_translate_helpers(bool emit_2d_helper,
     if (emit_3d_helper) {
         out << "Camera3D cactus_gen_translate_camera_3d(entt::entity entity, const " << cam3d_cpp
             << "& cam, entt::registry& registry) {\n";
-        out << "    const auto* xform = registry.try_get<" << wt3d_cpp << ">(entity);\n";
+        if (drawn3d_cpp.empty()) {
+            out << "    const auto* xform = registry.try_get<" << wt3d_cpp << ">(entity);\n";
+        } else {
+            out << "    const auto* world = registry.try_get<" << wt3d_cpp << ">(entity);\n";
+            out << "    const auto drawn = world != nullptr ? cactus::runtime::entt_backend::drawn_pose<" << drawn3d_cpp
+                << ">(registry, entity, *world) : " << wt3d_cpp << "{};\n";
+            out << "    const auto* xform = world != nullptr ? &drawn : nullptr;\n";
+        }
         out << "    return cactus::runtime::entt_backend::camera_3d_from_pose(\n";
         out << "        xform != nullptr ? xform->position : Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F},\n";
         out << "        xform != nullptr ? xform->rotation : Quat{.x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F},\n";
@@ -4261,6 +4271,10 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     const std::string cam2d_cpp = EnttCodegenUtils::trait_cpp_name("std.camera.flat.Camera", program);
     const std::string cam3d_cpp = EnttCodegenUtils::trait_cpp_name("std.camera.volume.Camera", program);
     const std::string wt3d_cpp  = EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program);
+    const auto drawn3d_id       = make_symbol_id(SymbolKind::Trait, "std.transform.volume", "DrawnPose");
+    const std::string drawn3d_cpp = EnttCodegenUtils::may_be_present(program, drawn3d_id)
+                                        ? EnttCodegenUtils::trait_cpp_name(make_canonical_id(drawn3d_id), program)
+                                        : std::string{};
     const bool emit_2d_helper   = uses_viewport && uses_flat && (rig_is_2d || !rig_is_3d);
     const bool emit_3d_helper   = uses_viewport && uses_volume && rig_is_3d;
 
@@ -4382,6 +4396,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                                          cam2d_cpp,
                                          cam3d_cpp,
                                          wt3d_cpp,
+                                         drawn3d_cpp,
                                          EnttCodegenUtils::enum_cpp_name("std.camera.volume.Projection", program));
 
     out << emit_projected_trait_registry_helpers(program);

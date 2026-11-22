@@ -918,8 +918,11 @@ FrameLights note_frame_lights() {
     debug.active_directional_lights = budget.directional_count;
     debug.used_lit_mesh_shader      = budget.active_lights > 0;
     debug.uploaded_light_colors.clear();
+    debug.uploaded_light_positions.clear();
     for (int i = 0; i < budget.active_lights; ++i) {
-        debug.uploaded_light_colors.push_back(lights.resolved[static_cast<std::size_t>(i)].color);
+        const auto& light = lights.resolved[static_cast<std::size_t>(i)];
+        debug.uploaded_light_colors.push_back(light.color);
+        debug.uploaded_light_positions.push_back(light.position);
     }
     return lights;
 }
@@ -2082,6 +2085,9 @@ void begin_render_frame() noexcept {
     render_debug_state_storage().submitted_mesh_colors.clear();
     render_debug_state_storage().submitted_model_colors.clear();
     render_debug_state_storage().uploaded_light_colors.clear();
+    render_debug_state_storage().uploaded_light_positions.clear();
+    render_debug_state_storage().submitted_text_3d_positions.clear();
+    render_debug_state_storage().submitted_text_3d_colors.clear();
     render_debug_state_storage().animated_model_submissions.clear();
 }
 
@@ -2696,7 +2702,10 @@ void submit_text_3d(const uint32_t entity_id,
     if (!visible) {
         return;
     }
-    ++render_debug_state_storage().submitted_texts_3d;
+    auto& debug = render_debug_state_storage();
+    ++debug.submitted_texts_3d;
+    debug.submitted_text_3d_positions.push_back(position);
+    debug.submitted_text_3d_colors.push_back(color);
     text_3d_queue().push_back(TextSubmission3D{
         .entity_id = entity_id,
         .position  = position,

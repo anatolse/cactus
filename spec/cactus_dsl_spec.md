@@ -3013,6 +3013,39 @@ rule Shade:
 - The output is not clamped: `in_back` dips below 0 and `out_back` rises above 1. With `color.mix` the color overshoots too, and drawing clamps it once.
 - The curves use only arithmetic and comparisons. A render-pass stage can't call them yet, because they use locals and branches (§3.12).
 
+### 7.13 The Drawn Picture (`DrawnPose`, `DrawnColor`)
+
+A visual effect changes what is drawn, not what is true. The simulation keeps `WorldTransform` and each renderer's own color; a rule `project`s the picture, a frame-local value that renderers draw in their place (`project`, §3.16). Nothing to undo next frame: with no projection the truth is drawn again.
+
+```cactus
+use std.core as core
+use std.transform.flat as tf
+use std.render.layers as layers
+use std.render.picture as picture
+
+trait Hit:
+    var shake: vec2 = vec2(0.0, 0.0)
+
+rule ShowHit:
+    each:
+        tf.WorldTransform as xf
+        Hit as hit
+    group: layers.picture
+    on core.render:
+        project tf.DrawnPose:
+            position = xf.position + hit.shake
+            rotation = xf.rotation
+            scale = xf.scale
+        project picture.DrawnColor:
+            glow = #FFFFFF00 * 0.5
+```
+
+- `std.transform.flat.DrawnPose` and `std.transform.volume.DrawnPose` have the fields of their `WorldTransform`. A renderer that draws at the entity's `WorldTransform` draws at its `DrawnPose` when the entity has one this frame.
+- `std.render.picture.DrawnColor` has `tint` (default `#FFFFFFFF`) and `glow` (default `#00000000`). Every renderer with a color of its own, lights included, draws `own × tint + glow`, per channel and unclamped; drawing clamps once.
+- Picture rules join `layers.picture`: it runs in `core.render` after the last `WorldTransform` write and before every drawing layer.
+- A viewport draws through its volume camera's `DrawnPose`; `CameraView` and the functions that read it keep the true pose, so picking ignores a camera shake.
+- Children don't follow a parent's drawn pose. `ScreenLabel`, `Canvas2D`, `std.ui`, voxel volumes and the flat camera have no picture.
+
 ## 8. Deferred and Migration Notes
 
 ### 8.1 Deferred Features

@@ -22,6 +22,14 @@ pub trait WorldTransform:
     var rotation: float = 0.0
     var scale: vec2 = vec2(1.0, 1.0)
 
+# Where the entity is drawn this frame, when a rule projects it; renderers use
+# it in place of WorldTransform. Project it from `layers.picture`, never store
+# it: the simulation keeps its WorldTransform.
+pub trait DrawnPose:
+    var position: vec2 = vec2(0.0, 0.0)
+    var rotation: float = 0.0
+    var scale: vec2 = vec2(1.0, 1.0)
+
 # Composes each LocalTransform child onto its parent's WorldTransform, after
 # every other late_tick rule that writes WorldTransform.
 extern rule TransformPropagation:

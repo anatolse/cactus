@@ -1,6 +1,7 @@
 module std.render.shapes
 
 use std.render.layers as layers
+use std.render.picture as picture
 use std.transform.flat as tf
 
 # ── Simple Primitive Shape Rendering Traits ──────────────────────────────────
@@ -30,5 +31,5 @@ extern rule ShapeRenderer:
     group: layers.shapes
 
     on render:
-        reads: tf.WorldTransform, Shape
+        reads: tf.WorldTransform, tf.DrawnPose, Shape, picture.DrawnColor
         effects: graphics

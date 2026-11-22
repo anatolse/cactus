@@ -2,14 +2,17 @@ module mixed_dimension_runtime
 
 # Flat and volume entities in one program: a sprite next to a mesh (both data
 # traits are named Renderer), a 2D and a 3D text label, and a flat hierarchy
-# next to a volume entity.
+# next to a volume entity. Lifted entities are drawn 5 units up, each through
+# the DrawnPose of its own transform kind.
 
+use std.core as core
 use std.math.quat as quat
 use std.transform.flat as tf
 use std.transform.volume as tv
 use std.render.sprites as sprites
 use std.render.meshes as meshes
 use std.render.text as text
+use std.render.layers as layers
 use std.camera.flat as cam2d
 use std.camera.volume as cam3d
 use std.camera.viewport as vp
@@ -30,6 +33,7 @@ pub entity Sprite:
         texture = Ground
         size = vec2(64.0, 32.0)
         color = #FF0000FF
+    Lifted
 
 pub entity Cube:
     use Volume(x = -2.0)
@@ -37,6 +41,7 @@ pub entity Cube:
         mesh = CubeMesh
         material = CubeMaterial
         color = #0000FFFF
+    Lifted
 
 pub entity FlatLabel:
     tf.WorldTransform:
@@ -71,3 +76,29 @@ pub entity MainCamera:
         scale = vec3(1.0, 1.0, 1.0)
     cam3d.Camera
     vp.Viewport
+
+trait Lifted
+
+rule LiftFlat:
+    each:
+        tf.WorldTransform as xf
+        Lifted
+    group: layers.picture
+
+    on core.render:
+        project tf.DrawnPose:
+            position = xf.position + vec2(0.0, 5.0)
+            rotation = xf.rotation
+            scale = xf.scale
+
+rule LiftVolume:
+    each:
+        tv.WorldTransform as xf
+        Lifted
+    group: layers.picture
+
+    on core.render:
+        project tv.DrawnPose:
+            position = xf.position + vec3(0.0, 5.0, 0.0)
+            rotation = xf.rotation
+            scale = xf.scale

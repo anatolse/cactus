@@ -1,6 +1,7 @@
 module std.render.meshes
 
 use std.render.layers as layers
+use std.render.picture as picture
 use std.render.visibility as visibility
 use std.transform.volume as tv
 
@@ -59,7 +60,9 @@ extern rule MeshRenderer:
     on render:
         reads:
             tv.WorldTransform
+            tv.DrawnPose
             Renderer
+            picture.DrawnColor
             visibility.HiddenIn
         effects:
             graphics
@@ -75,7 +78,9 @@ extern rule PointLightRender:
     on render:
         reads:
             tv.WorldTransform
+            tv.DrawnPose
             PointLight
+            picture.DrawnColor
         effects:
             graphics
 
@@ -89,5 +94,6 @@ extern rule DirectionalLightRender:
     on render:
         reads:
             DirectionalLight
+            picture.DrawnColor
         effects:
             graphics

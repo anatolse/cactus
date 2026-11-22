@@ -153,6 +153,8 @@ public:
                                             const std::optional<SymbolId>& resolved,
                                             const std::string& spelling);
     static bool                 has_trait(const DecoratedProgram& program, const std::string& name);
+    // Some entity may carry the declared `trait`: a rule projects it, or reachability can't rule it out.
+    static bool                 may_be_present(const DecoratedProgram& program, const SymbolId& trait);
     static const ResolvedEnum*   find_enum(const DecoratedProgram& program, const std::string& simple_name);
     static const ResolvedStruct* find_struct(const DecoratedProgram& program, const std::string& simple_name);
     static const ResolvedStruct* find_struct(const DecoratedProgram& program, const SymbolId& symbol);

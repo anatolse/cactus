@@ -129,6 +129,12 @@ template <typename T>
     return CactusColor{.r = a.r * b.r, .g = a.g * b.g, .b = a.b * b.b, .a = a.a * b.a};
 }
 
+// A renderer's own color as drawn this frame; `drawn` is the entity's DrawnColor, if any.
+template <typename DrawnColor>
+[[nodiscard]] constexpr CactusColor drawn_color(const CactusColor own, const DrawnColor* drawn) noexcept {
+    return drawn == nullptr ? own : (own * drawn->tint) + drawn->glow;
+}
+
 
 namespace cactus::runtime {
 

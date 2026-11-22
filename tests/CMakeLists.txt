@@ -1245,6 +1245,18 @@ cactus_add_headless_behavior_test(test_easing_curves_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_easing_curves_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_drawn_picture_headless_behavior
+    CACTUS_SOURCE examples/stdlib-fixtures/drawn_picture.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_drawn_picture_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_drawn_picture_volume_headless_behavior
+    CACTUS_SOURCE examples/stdlib-fixtures/drawn_picture_volume.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_drawn_picture_volume_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_noise_headless_behavior
     CACTUS_SOURCE examples/stdlib-fixtures/noise.cactus
     BACKEND cpp-entt
@@ -1641,6 +1653,19 @@ cactus_add_render_pass_visual_test(test_render_pass_domain_visual
     CACTUS_SOURCE examples/render-pass-domain/render_pass_domain.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_render_pass_domain_visual.cpp
+)
+
+# Real-GL visual tests: renderers draw the projected picture, not the simulation's pose and color.
+cactus_add_render_pass_visual_test(test_drawn_picture_visual
+    CACTUS_SOURCE examples/stdlib-fixtures/drawn_picture.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_drawn_picture_visual.cpp
+)
+
+cactus_add_render_pass_visual_test(test_drawn_picture_volume_visual
+    CACTUS_SOURCE examples/stdlib-fixtures/drawn_picture_volume.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_drawn_picture_volume_visual.cpp
 )
 
 # Real-GL visual test (stdlib-render-models capability): proves a

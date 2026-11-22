@@ -980,6 +980,19 @@ const ResolvedTrait* EnttCodegenUtils::find_trait(const DecoratedProgram& progra
     return find_trait(program, resolved.has_value() ? make_canonical_id(*resolved) : spelling);
 }
 
+bool EnttCodegenUtils::may_be_present(const DecoratedProgram& program, const SymbolId& trait) {
+    if (find_trait(program, make_canonical_id(trait)) == nullptr) {
+        return false;
+    }
+    if (std::ranges::any_of(program.execution_graph.handlers,
+                            [&](const auto& node) { return node.contract.projects.contains(trait); })) {
+        return true;
+    }
+    const auto& facts = program.reachability;
+    return !facts.derived || std::ranges::contains(facts.free_traits, trait) ||
+           std::ranges::any_of(facts.trait_sets, [&](const auto& set) { return std::ranges::contains(set, trait); });
+}
+
 const ResolvedState* EnttCodegenUtils::find_state(const DecoratedProgram& program, const SymbolId& state) {
     return find_decl_by_symbol(program.states, state);
 }

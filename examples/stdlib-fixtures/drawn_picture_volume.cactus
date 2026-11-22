@@ -1,0 +1,100 @@
+module drawn_picture_volume
+
+# Volume entities with a Picture are drawn moved and recolored through the
+# picture layer while `shown` holds: a mesh, a model, a 3D label, two lights and
+# the camera itself. Their WorldTransform and colors stay as authored.
+
+use std.core as core
+use std.transform.volume as tv
+use std.render.layers as layers
+use std.render.picture as picture
+use std.render.meshes as meshes
+use std.render.models as models
+use std.render.text as text
+use std.camera.volume as cam
+use std.camera.viewport as vp
+
+asset BlockMesh: mesh = "models/block.mesh"
+asset BlockMaterial: material = "materials/block.mat"
+asset Robot: model = "../model-renderer/art/robot.glb"
+
+pub trait Picture:
+    var shown: bool = true
+    var shift: vec3 = vec3(0.0, 0.0, 0.0)
+    var tint: color = #FFFFFFFF
+    var glow: color = #00000000
+
+template At(position: vec3):
+    tv.WorldTransform:
+        position = position
+
+pub entity Block:
+    use At(position = vec3(-2.0, 0.0, 0.0))
+    meshes.Renderer:
+        mesh = BlockMesh
+        material = BlockMaterial
+        color = #808080FF
+    Picture:
+        shift = vec3(0.0, 1.0, 0.0)
+        tint = #FFFFFF80
+        glow = #40000000
+
+pub entity Model:
+    use At(position = vec3(2.0, 0.0, 0.0))
+    models.ModelRenderer:
+        model = Robot
+    Picture:
+        shift = vec3(0.0, 0.0, -1.0)
+        tint = #00FF00FF
+
+pub entity Label:
+    use At(position = vec3(0.0, 2.0, 0.0))
+    text.TextLabel:
+        text = "label"
+    Picture:
+        shift = vec3(1.0, 0.0, 0.0)
+        tint = #0000FFFF
+
+pub entity Torch:
+    use At(position = vec3(0.0, 3.0, 0.0))
+    meshes.PointLight
+    Picture:
+        shift = vec3(0.0, 0.5, 0.0)
+        glow = #80000000
+
+pub entity Sun:
+    meshes.DirectionalLight:
+        color = #808080FF
+    Picture:
+        tint = #FF0000FF
+
+pub entity Eye:
+    use At(position = vec3(0.0, 1.0, 6.0))
+    cam.Camera
+    vp.Viewport
+    Picture:
+        shift = vec3(0.1, 0.0, 0.0)
+
+rule DrawPose:
+    each:
+        tv.WorldTransform as xf
+        Picture as p
+    group: layers.picture
+
+    on core.render:
+        if p.shown:
+            project tv.DrawnPose:
+                position = xf.position + p.shift
+                rotation = xf.rotation
+                scale = xf.scale
+
+rule DrawColor:
+    each:
+        Picture as p
+    group: layers.picture
+
+    on core.render:
+        if p.shown:
+            project picture.DrawnColor:
+                tint = p.tint
+                glow = p.glow

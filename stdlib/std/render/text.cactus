@@ -1,6 +1,7 @@
 module std.render.text
 
 use std.render.layers as layers
+use std.render.picture as picture
 use std.render.visibility as visibility
 use std.transform.flat as tf
 use std.transform.volume as tv
@@ -30,7 +31,9 @@ extern rule TextRenderer2D:
     on render:
         reads:
             tf.WorldTransform
+            tf.DrawnPose
             TextLabel
+            picture.DrawnColor
         effects:
             graphics
 
@@ -48,7 +51,9 @@ extern rule TextRenderer3D:
     on render:
         reads:
             tv.WorldTransform
+            tv.DrawnPose
             TextLabel
+            picture.DrawnColor
             visibility.HiddenIn
         effects:
             graphics

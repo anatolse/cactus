@@ -283,6 +283,11 @@ struct RenderDebugState {
     std::vector<CactusColor> submitted_model_colors;
     // Each active light's color as uploaded to the lighting shader this frame, in slot order.
     std::vector<CactusColor> uploaded_light_colors;
+    // Each active light's shader position (a directional light's: toward the light), in slot order.
+    std::vector<Vector3> uploaded_light_positions;
+    // Position and color of each 3D text submission this frame, in submission order.
+    std::vector<Vector3> submitted_text_3d_positions;
+    std::vector<CactusColor> submitted_text_3d_colors;
     // (clip, time) of each animated model submission this frame, in submission
     // order — the per-entity poses observable without a GPU.
     std::vector<AnimatedModelSubmission> animated_model_submissions;
@@ -2786,6 +2791,16 @@ template <typename Target>
     }
     report_range_fault(RangeFault{.trait = holder, .field = field, .reason = RangeFaultReason::DeadLink});
     return false;
+}
+
+// The pose a renderer draws: the entity's DrawnPose this frame, else its WorldTransform.
+template <typename Drawn, typename World>
+[[nodiscard]] World drawn_pose(const entt::registry& registry, const entt::entity entity, const World& world) {
+    const auto* drawn = registry.try_get<Drawn>(entity);
+    if (drawn == nullptr) {
+        return world;
+    }
+    return World{.position = drawn->position, .rotation = drawn->rotation, .scale = drawn->scale};
 }
 
 // ── Projected-trait tracking (backend-cpp-entt registry-based projected traits)

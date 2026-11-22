@@ -1,0 +1,9 @@
+module std.render.picture
+
+# How the entity's own colors are drawn this frame, when a rule projects it:
+# every renderer draws `own color * tint + glow`, per channel, unclamped until
+# output. Project it from `std.render.layers.picture`, never store it: the
+# renderers' own colors stay what the game set.
+pub trait DrawnColor:
+    var tint: color = #FFFFFFFF
+    var glow: color = #00000000

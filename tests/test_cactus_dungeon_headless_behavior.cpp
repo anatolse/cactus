@@ -1317,17 +1317,16 @@ bool selected(World& world, entt::entity unit) {
     return world.registry.get<controls::SelectionStatus>(unit).active;
 }
 
+// A right click at `point`, with Shift held to defend: the pointer rule commits the context
+// order in the same input pass that casts the pointer's ray.
 void context_at(World& world, Vector2 point, bool defend = false) {
     cactus_raylib_fake::set_mouse_position(point);
     world.frame(2);
-    auto& selector  = world.registry.get<controls::Selector>(overview());
-    selector.point  = point;
-    world.registry.patch<controls::Selector>(overview());
-    selector.defend = defend;
-    world.registry.patch<controls::Selector>(overview());
-    selector.taken  = false;
-    world.registry.patch<controls::Selector>(overview());
-    backend::generated_process_root_event(world.registry, controls::ContextCommitEvent{}, overview());
+    cactus_raylib_fake::set_key_down(KEY_LEFT_SHIFT, defend);
+    cactus_raylib_fake::set_mouse_button_pressed_this_frame(MOUSE_BUTTON_RIGHT, true);
+    world.frame();
+    cactus_raylib_fake::set_mouse_button_pressed_this_frame(MOUSE_BUTTON_RIGHT, false);
+    cactus_raylib_fake::set_key_down(KEY_LEFT_SHIFT, false);
 }
 
 TEST_CASE("Dungeon click and shift click select only friendly units", "[cactus-dungeon][controls][headless]") {

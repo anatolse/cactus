@@ -11,6 +11,7 @@
 #include "frontend/program_linker.hpp"
 #include "frontend/semantic_analyzer.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -43,6 +44,36 @@ struct LinkedProgram {
 
 inline std::filesystem::path stdlib_root() {
     return std::filesystem::path(CACTUS_TEST_SOURCE_DIR) / "stdlib";
+}
+
+// Writes `<dir>/all_stdlib.cactus`, a module that uses every standard library module, and returns its path.
+inline std::filesystem::path write_all_stdlib_program(const std::filesystem::path& dir) {
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    const auto root = dir / "all_stdlib.cactus";
+    std::ofstream out(root);
+    out << "module all_stdlib\n";
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(stdlib_root())) {
+        if (entry.path().extension() == ".cactus" && !entry.path().string().contains("build")) {
+            auto name = std::filesystem::relative(entry.path(), stdlib_root()).replace_extension().generic_string();
+            std::ranges::replace(name, '/', '.');
+            out << "use " << name << "\n";
+        }
+    }
+    return root;
+}
+
+// `file:line: message` of every diagnostic `keep` selects.
+template <typename Keep>
+std::vector<std::string> located_messages(const std::vector<cactus::Diagnostic>& diagnostics, Keep keep) {
+    std::vector<std::string> found;
+    for (const auto& diagnostic : diagnostics) {
+        if (keep(diagnostic)) {
+            found.push_back(diagnostic.location.filename + ":" + std::to_string(diagnostic.location.line) + ": " +
+                            diagnostic.message);
+        }
+    }
+    return found;
 }
 
 class ProgramPipeline {

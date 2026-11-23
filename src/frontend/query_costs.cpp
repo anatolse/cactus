@@ -11,7 +11,7 @@ namespace {
 
 // An event's rows depend on its delivery, which a handler can't see; a phase runs them all.
 bool runs_every_row(const ResolvedHandlerTrigger& trigger) {
-    return trigger.kind == HandlerTriggerKind::Phase || trigger.kind == HandlerTriggerKind::RenderStage;
+    return trigger.is_phase_or_render_stage();
 }
 
 bool domain_bounded(const ReachabilityFacts& facts, const HandlerContract& contract) {

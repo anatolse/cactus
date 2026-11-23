@@ -344,8 +344,7 @@ private:
                     : trigger.symbol == depth.symbol &&
                           (depth.kind == ActivationRootKind::Event
                                ? trigger.kind == HandlerTriggerKind::Event
-                               : trigger.kind == HandlerTriggerKind::Phase ||
-                                     trigger.kind == HandlerTriggerKind::RenderStage);
+                               : trigger.is_phase_or_render_stage());
             if (starts) {
                 found.push_back(&handler);
             }

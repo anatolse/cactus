@@ -26,7 +26,6 @@ using Cell           = cactus_gen::stdlib::voxel::volume::Cell;
 using Volume         = cactus_gen::stdlib::voxel::volume::Volume;
 using VolumeRenderer = cactus_gen::stdlib::voxel::volume::VolumeRenderer;
 using SurfaceStyle   = cactus_gen::stdlib::voxel::volume::SurfaceStyle;
-using RayProbe       = cactus_gen::stdlib::voxel::volume::RayProbe;
 using Solid          = cactus_gen::stdlib::physics::volume::Solid;
 using WorldTransform = cactus_gen::stdlib::transform::volume::WorldTransform;
 using Tunnel         = cactus_gen::smooth_volume::Tunnel;
@@ -234,7 +233,7 @@ TEST_CASE("collision and probes still see whole cells on a smooth volume",
     // The walker's capsule stops one radius before the wall's box face at x = 0.
     CHECK(world.registry.get<WorldTransform>(slots().smooth_volume.Walker).position.x ==
           Catch::Approx(-0.4F).margin(0.01F));
-    const auto& eye = world.registry.get<RayProbe>(slots().smooth_volume.Eye);
+    const auto& eye = world.registry.get<cactus_gen::smooth_volume::Sighting>(slots().smooth_volume.Eye);
     REQUIRE(eye.hit);
     CHECK(eye.point.y == Catch::Approx(5.0F));
     CHECK(eye.y == 4);

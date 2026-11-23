@@ -167,23 +167,24 @@ rule PreparePicking:
         for terrain in query.all[voxel.Volume]():
             add voxel.RayProbe:
                 volume = terrain
-                cell = terrain
                 max_distance = 500.0
             return
 
 rule CastPointer:
     each:
         camera.CameraView as cv
-        voxel.RayProbe as probe
+        voxel.RayProbe
     after: ui.RoutePointer
     before: voxel.probes
 
     on input:
         let pixel = inp.mouse_position()
+        if not in_view(cv, pixel):
+            return
         let ray = camera.ray(cv, pixel)
-        probe.enabled = in_view(cv, pixel)
-        probe.origin = ray.origin
-        probe.direction = ray.direction
+        project voxel.RayCast:
+            origin = ray.origin
+            direction = ray.direction
 
 rule PointerUIStatus:
     pairs:
@@ -203,13 +204,21 @@ rule Pointer:
     each:
         Selector as selector
         Tool as tool
-        voxel.RayProbe as probe
+        voxel.RayProbe
     after: ui.RoutePointer, voxel.probes
     before: units.orders
 
     when: session.Game[session.Session].mode == session.SessionMode.Playing
 
     on input:
+        var aimed = false
+        var aim = vec2(0.0, 0.0)
+        var aim_height = 0
+        match self:
+            voxel.RayHit as hit =>
+                aimed = true
+                aim = vec2(hit.x * 1.0, hit.z * 1.0)
+                aim_height = hit.y
         if input.pressed(Cancel):
             emit CancelOrders to self
         if selector.blocked:
@@ -219,10 +228,10 @@ rule Pointer:
         if input.pressed(Pick):
             selector.start = selector.point
             selector.dragging = true
-            selector.grounded = probe.hit
-            selector.wall = probe.hit and probe.y > 0
-            if probe.hit:
-                selector.cell_start = vec2(probe.x * 1.0, probe.z * 1.0)
+            selector.grounded = aimed
+            selector.wall = aimed and aim_height > 0
+            if aimed:
+                selector.cell_start = aim
         if selector.dragging and not input.down(Pick) and not input.released(Pick):
             selector.dragging = false
         if selector.dragging and input.released(Pick):
@@ -232,9 +241,9 @@ rule Pointer:
             selector.digging = false
             match tool:
                 Tool.Select =>
-                    if selector.wall and probe.hit:
+                    if selector.wall and aimed:
                         selector.digging = true
-                        selector.cell_end = vec2(probe.x * 1.0, probe.z * 1.0)
+                        selector.cell_end = aim
                         emit DesignationCommit to self
                         return
                     emit SelectionCommit to self
@@ -250,8 +259,8 @@ rule Pointer:
                     selector.digging = match tool:
                         Tool.Dig => true
                         _ => false
-                    if selector.grounded and probe.hit:
-                        selector.cell_end = vec2(probe.x * 1.0, probe.z * 1.0)
+                    if selector.grounded and aimed:
+                        selector.cell_end = aim
                         emit DesignationCommit to self
         if input.pressed(Context):
             match tool:
@@ -374,7 +383,7 @@ rule PickCell:
         port:
             camera.CameraView as cv
             Selector as selector
-            voxel.RayProbe as probe
+            voxel.RayHit as hit
         tile:
             world.Tile
             voxel.Cell as cell
@@ -382,9 +391,8 @@ rule PickCell:
     where:
         not selector.taken
         in_view(cv, selector.point)
-        probe.hit
-        cell.x == probe.x
-        cell.z == probe.z
+        cell.x == hit.x
+        cell.z == hit.z
     limit: 1 per port
 
     on ContextCommit:

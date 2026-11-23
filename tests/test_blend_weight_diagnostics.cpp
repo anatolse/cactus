@@ -3,6 +3,7 @@
 #include "frontend/blend_weights.hpp"
 
 #include "linked_program.hpp"
+#include "maintained_examples.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
@@ -634,34 +635,14 @@ TEST_CASE("Blend weights: one warning per statement", "[blend-weights]") {
 namespace {
 
 std::vector<std::string> blend_warnings(const LinkedProgram& linked) {
-    std::vector<std::string> found;
-    for (const auto& diagnostic : linked.diagnostics) {
-        if (is_blend_warning(diagnostic)) {
-            found.push_back(diagnostic.location.filename + ":" + std::to_string(diagnostic.location.line) + ": " +
-                            diagnostic.message);
-        }
-    }
-    return found;
+    return located_messages(linked.diagnostics, is_blend_warning);
 }
 
 }  // namespace
 
 TEST_CASE("Blend weights: the standard library is silent", "[blend-weights]") {
-    const auto dir = fs::path(CACTUS_TEST_BINARY_DIR) / "blend_weights" / "all_stdlib";
-    fs::remove_all(dir);
-    fs::create_directories(dir);
-    const auto root = dir / "all_stdlib.cactus";
-    {
-        std::ofstream out(root);
-        out << "module all_stdlib\n";
-        for (const auto& entry : fs::recursive_directory_iterator(stdlib_root())) {
-            if (entry.path().extension() == ".cactus" && !entry.path().string().contains("build")) {
-                auto name = fs::relative(entry.path(), stdlib_root()).replace_extension().generic_string();
-                std::ranges::replace(name, '/', '.');
-                out << "use " << name << "\n";
-            }
-        }
-    }
+    const auto dir  = fs::path(CACTUS_TEST_BINARY_DIR) / "blend_weights" / "all_stdlib";
+    const auto root = write_all_stdlib_program(dir);
     ProgramPipeline pipeline(dir / "build");
     const auto linked = pipeline.link(root);
     INFO(linked.describe());
@@ -678,95 +659,7 @@ TEST_CASE("Blend weights: the examples are silent", "[blend-weights]") {
     const auto examples = fs::path(CACTUS_TEST_SOURCE_DIR) / "examples";
     std::size_t blends  = 0;
     std::vector<std::string> warnings;
-    for (const auto* example : {"blue-square/square.cactus",
-                                "bouncy-balls-3d/main.cactus",
-                                "bouncy-bubbles/main.cactus",
-                                "bracketed_trait_access.cactus",
-                                "cactus-dungeon/small_map.cactus",
-                                "clamped_fields.cactus",
-                                "collider_sweep_queries.cactus",
-                                "concise_rule_notation.cactus",
-                                "conditional_expressions.cactus",
-                                "const_tables.cactus",
-                                "deferred_field_evaluation.cactus",
-                                "deferred_set.cactus",
-                                "derived_relations.cactus",
-                                "deterministic_target_selection.cactus",
-                                "disjoint_rule_domains.cactus",
-                                "editor-3d/main.cactus",
-                                "editor-test/editor-test.cactus",
-                                "entity_handle_reuse.cactus",
-                                "exact_accumulation.cactus",
-                                "exact_duration.cactus",
-                                "exclusive_states.cactus",
-                                "first-person-arena/main.cactus",
-                                "generalized_keep.cactus",
-                                "gradient-square/gradient_square.cactus",
-                                "grid_region_joins.cactus",
-                                "keep_chains.cactus",
-                                "mesh-renderer/main.cactus",
-                                "model-animation/main.cactus",
-                                "model-renderer/main.cactus",
-                                "named_entity_access.cactus",
-                                "native_field_reads.cactus",
-                                "neighbor_joins.cactus",
-                                "pair-contact/main.cactus",
-                                "pair_binding_without.cactus",
-                                "parameterized_templates.cactus",
-                                "particle-burst/particle_burst.cactus",
-                                "platformer/platformer.cactus",
-                                "relation_end_reads.cactus",
-                                "relation_endpoint_limits.cactus",
-                                "relation_row_joins.cactus",
-                                "relation_row_projection.cactus",
-                                "relations.cactus",
-                                "render-pass-domain/render_pass_domain.cactus",
-                                "required_links.cactus",
-                                "robot-sandbox/main.cactus",
-                                "robot-sandbox/small_world.cactus",
-                                "rule_groups.cactus",
-                                "rule_keep.cactus",
-                                "rule_reductions.cactus",
-                                "singleton_traits.cactus",
-                                "split-screen-forest-bombs/forest_bombs.cactus",
-                                "split-screen/split_screen.cactus",
-                                "standard-ui/main.cactus",
-                                "state_transitions.cactus",
-                                "stdlib-fixtures/animation_event_order.cactus",
-                                "stdlib-fixtures/app_quit.cactus",
-                                "stdlib-fixtures/camera_projection.cactus",
-                                "stdlib-fixtures/camera_view.cactus",
-                                "stdlib-fixtures/character_body.cactus",
-                                "stdlib-fixtures/event_payload_reads.cactus",
-                                "stdlib-fixtures/flat_query_ties.cactus",
-                                "stdlib-fixtures/follow_cameras.cactus",
-                                "stdlib-fixtures/gameplay_timers.cactus",
-                                "stdlib-fixtures/grid.cactus",
-                                "stdlib-fixtures/hierarchy_reparent.cactus",
-                                "stdlib-fixtures/minimap.cactus",
-                                "stdlib-fixtures/model_animation_events.cactus",
-                                "stdlib-fixtures/noise.cactus",
-                                "stdlib-fixtures/per_view_visibility.cactus",
-                                "stdlib-fixtures/persistence_save_events.cactus",
-                                "stdlib-fixtures/persistence_save_on_load.cactus",
-                                "stdlib-fixtures/ranged_fields.cactus",
-                                "stdlib-fixtures/smooth_volume.cactus",
-                                "stdlib-fixtures/spatial_query_ties.cactus",
-                                "stdlib-fixtures/staged_predicates.cactus",
-                                "stdlib-fixtures/stdlib_extern_coverage.cactus",
-                                "stdlib-fixtures/texture_assets.cactus",
-                                "stdlib-fixtures/texture_flipbook.cactus",
-                                "stdlib-fixtures/trait_lifecycle.cactus",
-                                "stdlib-fixtures/trait_parameters.cactus",
-                                "stdlib-fixtures/transform_hierarchy.cactus",
-                                "stdlib-fixtures/voxel_rendering.cactus",
-                                "stdlib-fixtures/voxel_volume.cactus",
-                                "stdlib-fixtures/world_persistence.cactus",
-                                "stdlib-fixtures/world_persistence_dynamic.cactus",
-                                "total_arithmetic.cactus",
-                                "trait_dimensions.cactus",
-                                "waving-label-2d/waving_label_2d.cactus",
-                                "waving-label-3d/waving_label_3d.cactus"}) {
+    for (const auto example : kMaintainedExamples) {
         const auto root = examples / example;
         ProgramPipeline pipeline(fs::path(CACTUS_TEST_BINARY_DIR) / "blend_weights" / "examples" /
                                  root.parent_path().filename() / root.stem());

@@ -696,26 +696,34 @@ struct StmtNode {
         , location(std::move(loc)) {}
 };
 
+template <typename Fn>
+void for_each_nested_statement(const std::vector<std::unique_ptr<StmtNode>>& stmts, const Fn& fn);
+
+// Calls `fn` on `stmt` and on every statement nested in it: conditionals, bounded loops and match arms.
+template <typename Fn>
+void for_each_nested_statement(const StmtNode& stmt, const Fn& fn) {
+    fn(stmt);
+    if (const auto* branch = std::get_if<IfStmt>(&stmt.stmt)) {
+        for_each_nested_statement(branch->then_body, fn);
+        for (const auto& else_if : branch->else_if_branches) {
+            for_each_nested_statement(else_if.body, fn);
+        }
+        for_each_nested_statement(branch->else_body, fn);
+    } else if (const auto* loop = std::get_if<ForeachStmt>(&stmt.stmt)) {
+        for_each_nested_statement(loop->body, fn);
+    } else if (const auto* match = std::get_if<MatchStmt>(&stmt.stmt)) {
+        for (const auto& arm : match->arms) {
+            for_each_nested_statement(arm.body, fn);
+        }
+    }
+}
+
 // Calls `fn` on every statement in `stmts`, including ones nested in conditionals, bounded loops and match arms.
 template <typename Fn>
 void for_each_nested_statement(const std::vector<std::unique_ptr<StmtNode>>& stmts, const Fn& fn) {
     for (const auto& stmt : stmts) {
-        if (stmt == nullptr) {
-            continue;
-        }
-        fn(*stmt);
-        if (const auto* branch = std::get_if<IfStmt>(&stmt->stmt)) {
-            for_each_nested_statement(branch->then_body, fn);
-            for (const auto& else_if : branch->else_if_branches) {
-                for_each_nested_statement(else_if.body, fn);
-            }
-            for_each_nested_statement(branch->else_body, fn);
-        } else if (const auto* loop = std::get_if<ForeachStmt>(&stmt->stmt)) {
-            for_each_nested_statement(loop->body, fn);
-        } else if (const auto* match = std::get_if<MatchStmt>(&stmt->stmt)) {
-            for (const auto& arm : match->arms) {
-                for_each_nested_statement(arm.body, fn);
-            }
+        if (stmt != nullptr) {
+            for_each_nested_statement(*stmt, fn);
         }
     }
 }
@@ -807,6 +815,10 @@ struct ResolvedHandlerTrigger {
 
     [[nodiscard]] bool is_lifecycle() const {
         return kind == HandlerTriggerKind::TraitAdded || kind == HandlerTriggerKind::TraitRemoved;
+    }
+
+    [[nodiscard]] bool is_phase_or_render_stage() const {
+        return kind == HandlerTriggerKind::Phase || kind == HandlerTriggerKind::RenderStage;
     }
 
     // As a handler's source spells it: `added game.Dying` for a lifecycle trigger, else the symbol.

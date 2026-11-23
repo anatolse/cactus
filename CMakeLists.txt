@@ -173,6 +173,7 @@ add_library(cactus_frontend STATIC
     src/frontend/pair_plans.cpp
     src/frontend/query_costs.cpp
     src/frontend/blend_weights.cpp
+    src/frontend/encoding_diagnostics.cpp
     src/frontend/hierarchy_forest.cpp
     src/frontend/keep_inputs.cpp
     src/frontend/cost_report.cpp

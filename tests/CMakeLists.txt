@@ -332,6 +332,14 @@ target_compile_definitions(test_blend_weight_diagnostics PRIVATE
 )
 add_test(NAME BlendWeightDiagnosticsTests COMMAND test_blend_weight_diagnostics)
 
+add_executable(test_encoding_diagnostics test_encoding_diagnostics.cpp)
+target_link_libraries(test_encoding_diagnostics PRIVATE cactus_frontend Catch2::Catch2WithMain)
+target_compile_definitions(test_encoding_diagnostics PRIVATE
+    CACTUS_TEST_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    CACTUS_TEST_BINARY_DIR="${CMAKE_BINARY_DIR}"
+)
+add_test(NAME EncodingDiagnosticsTests COMMAND test_encoding_diagnostics)
+
 add_executable(test_pair_plans test_pair_plans.cpp)
 target_link_libraries(test_pair_plans PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME PairPlanTests COMMAND test_pair_plans)

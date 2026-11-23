@@ -90,8 +90,7 @@ pub single trait StrategyView:
 
 pub trait RobotVisual
 
-# `terrain` is the volume the robot's ray probe looks into; its cell result
-# means nothing until the probe hits.
+# `terrain` is the volume the robot's ray probe looks into.
 pub template RobotTemplate(position: vec3, model_scale: float, terrain: entity_id):
     tv.WorldTransform:
         position = position
@@ -108,7 +107,6 @@ pub template RobotTemplate(position: vec3, model_scale: float, terrain: entity_i
     Robot
     voxel.RayProbe:
         volume = terrain
-        cell = terrain
         max_distance = REACH
     children:
         entity Visual:
@@ -227,7 +225,7 @@ rule JumpUp:
         if body.grounded and input.pressed(Jump):
             body.velocity.y = JUMP_SPEED
 
-# The probe follows the eye every frame; it is off outside first-person play.
+# The probe casts from the eye every frame of first-person play.
 rule AimProbe:
     each:
         Robot as robot
@@ -235,12 +233,15 @@ rule AimProbe:
         voxel.RayProbe as probe
     before:
         voxel.probes
+    when:
+        game.Game[game.Session].mode == game.Mode.Playing
+        game.Game[game.Session].camera == game.View.FirstPerson
 
     on input:
         probe.volume = query.first[world.WorldVolume]()
-        probe.enabled = game.Game[game.Session].mode == game.Mode.Playing and game.Game[game.Session].camera == game.View.FirstPerson
-        probe.origin = eye_of(transform.position)
-        probe.direction = quat.forward(look_rotation(robot.yaw, robot.pitch))
+        project voxel.RayCast:
+            origin = eye_of(transform.position)
+            direction = quat.forward(look_rotation(robot.yaw, robot.pitch))
 
 rule ViewKeys:
     after:

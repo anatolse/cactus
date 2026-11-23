@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace cactus {
@@ -151,6 +152,40 @@ void visit_expression(Expression& expression, const Visitor& visitor) {
             expr_children::compounds(node, visit, fields);
         },
         expression.expr);
+}
+
+// The source spelling of a name, member chain, trait access, literal, call or `self`; `fallback` otherwise.
+inline std::string expression_spelling(const ExprNode& expr, std::string_view fallback) {
+    if (const auto* ident = std::get_if<IdentExpr>(&expr.expr)) {
+        return ident->name;
+    }
+    if (const auto* member = std::get_if<MemberExpr>(&expr.expr)) {
+        return expression_spelling(*member->object, fallback) + "." + member->member;
+    }
+    if (const auto* access = std::get_if<TraitAccessExpr>(&expr.expr)) {
+        auto text = expression_spelling(*access->object, fallback);
+        if (!access->short_form) {
+            text += "[" + access->trait_name + "]";
+        }
+        if (!access->cell_keys.empty()) {
+            text += "[";
+            for (std::size_t index = 0; index < access->cell_keys.size(); ++index) {
+                text += (index == 0 ? "" : ", ") + expression_spelling(*access->cell_keys[index], fallback);
+            }
+            text += "]";
+        }
+        return text;
+    }
+    if (const auto* literal = std::get_if<LiteralExpr>(&expr.expr)) {
+        return literal->value;
+    }
+    if (const auto* call = std::get_if<CallExpr>(&expr.expr)) {
+        return expression_spelling(*call->callee, fallback) + "(...)";
+    }
+    if (std::holds_alternative<SelfExpr>(expr.expr)) {
+        return "self";
+    }
+    return std::string(fallback);
 }
 
 namespace statement_children {

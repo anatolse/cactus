@@ -72,9 +72,39 @@ pub entity Walker from Capsule(position = vec3(-3.0, 2.5, 2.5), velocity = vec3(
 pub entity Eye:
     voxel.RayProbe:
         volume = Rock
-        origin = vec3(10.5, 9.0, 0.5)
-        direction = vec3(0.0, -1.0, 0.0)
         max_distance = 10.0
+    Sighting
+
+# The eye looks straight down at the rock's top every frame.
+rule AimEye:
+    each: voxel.RayProbe
+    before:
+        voxel.probes
+
+    on input:
+        project voxel.RayCast:
+            origin = vec3(10.5, 9.0, 0.5)
+            direction = vec3(0.0, -1.0, 0.0)
+
+# The eye's answer this frame, kept for the test to read after the frame.
+pub trait Sighting:
+    var hit: bool = false
+    var y: int = 0
+    var point: vec3 = vec3(0.0, 0.0, 0.0)
+
+rule RecordEye:
+    each:
+        Sighting as seen
+    after:
+        voxel.probes
+
+    on input:
+        seen.hit = false
+        match self:
+            voxel.RayHit as hit =>
+                seen.hit = true
+                seen.y = hit.y
+                seen.point = hit.point
 
 pub trait Tunnel:
     var active: bool = false

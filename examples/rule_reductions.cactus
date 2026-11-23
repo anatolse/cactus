@@ -17,7 +17,7 @@ trait Team:
     var activations: int = 0
 
 trait Player:
-    var team: entity_id
+    var team: Team
     var points: int = 0
     var speed: float = 0.0
     var star: bool = false
@@ -57,6 +57,13 @@ rule Reinforce:
 
     on Withdraw:
         destroy Withdraw.raider
+
+# A player whose team is gone leaves too.
+rule Disband:
+    each: Player
+
+    on lost Player.team:
+        destroy
 
 # Until reinforcements arrive no entity has Enemy, so this runs once with the identity values.
 rule CountEnemies:

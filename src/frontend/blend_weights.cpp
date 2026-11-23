@@ -1,5 +1,6 @@
 #include "frontend/blend_weights.hpp"
 
+#include "common/ast_expressions.hpp"
 #include "common/duration.hpp"
 #include "common/error_reporter.hpp"
 
@@ -277,41 +278,8 @@ bool is_comparison(std::string_view op) {
 
 // ── Spelling ────────────────────────────────────────────────────────────────
 
-std::string spelling(const ExprNode& expr);
-
-std::string spelling_of(const TraitAccessExpr& access) {
-    std::string text =
-        access.short_form ? spelling(*access.object) : spelling(*access.object) + "[" + access.trait_name + "]";
-    if (!access.cell_keys.empty()) {
-        text += "[";
-        for (std::size_t index = 0; index < access.cell_keys.size(); ++index) {
-            text += (index == 0 ? "" : ", ") + spelling(*access.cell_keys[index]);
-        }
-        text += "]";
-    }
-    return text;
-}
-
 std::string spelling(const ExprNode& expr) {
-    if (const auto* ident = std::get_if<IdentExpr>(&expr.expr)) {
-        return ident->name;
-    }
-    if (const auto* member = std::get_if<MemberExpr>(&expr.expr)) {
-        return spelling(*member->object) + "." + member->member;
-    }
-    if (const auto* access = std::get_if<TraitAccessExpr>(&expr.expr)) {
-        return spelling_of(*access);
-    }
-    if (const auto* literal = std::get_if<LiteralExpr>(&expr.expr)) {
-        return literal->value;
-    }
-    if (const auto* call = std::get_if<CallExpr>(&expr.expr)) {
-        return spelling(*call->callee) + "(...)";
-    }
-    if (std::holds_alternative<SelfExpr>(expr.expr)) {
-        return "self";
-    }
-    return "the weight";
+    return expression_spelling(expr, "the weight");
 }
 
 bool same_list(const std::vector<std::unique_ptr<ExprNode>>& left, const std::vector<std::unique_ptr<ExprNode>>& right);

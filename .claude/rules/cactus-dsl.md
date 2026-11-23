@@ -125,6 +125,14 @@ exception — see `examples/CLAUDE.md`).
 - Shape progress with `std.math.ease` (`ease.out_quad(t)`, or `ease.apply(curve, t)` for a curve kept
   in data) instead of a hand-written curve.
 
+### Facts that hold only sometimes
+
+- A fact that holds only sometimes is a trait's presence, not a `bool` with fields that mean
+  nothing while it is false. A result recomputed each frame is a projected trait (`project
+  voxel.RayCast:` to ask, `each: voxel.RayHit as hit` or `match self:` to read the answer); a lasting
+  fact that changes on events is a `state` variant; a fixed one is a marker trait. The compiler warns
+  about flag-guarded fields, `let bool` filter flags and `entity_id` fields used only in joins.
+
 ### Values per kind or per place
 
 - For a value per item kind, per board square or per place in a room, declare a trait with

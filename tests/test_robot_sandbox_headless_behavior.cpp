@@ -371,17 +371,19 @@ TEST_CASE("looking down and clicking digs the cell under the robot", "[runtime][
     const auto robot = world.robot();
     world.registry.get<Robot>(robot).pitch = -1.45F;
     world.frame();
-    const auto& probe = world.registry.get<cactus_gen::stdlib::voxel::volume::RayProbe>(robot);
-    REQUIRE(probe.hit);
-    const int x = probe.x;
-    const int y = probe.y;
-    const int z = probe.z;
-    REQUIRE(world.solid(x, y, z));
+    const auto before = world.cells();
     cactus_raylib_fake::set_mouse_button_pressed_this_frame(MOUSE_BUTTON_LEFT, true);
     world.frame();
     cactus_raylib_fake::set_mouse_button_pressed_this_frame(MOUSE_BUTTON_LEFT, false);
     world.frame();
-    CHECK_FALSE(world.solid(x, y, z));
+    const auto after = world.cells();
+    int dug          = 0;
+    for (const auto& [key, texture] : before) {
+        if (texture != 0U && after.at(key) == 0U) {
+            ++dug;
+        }
+    }
+    CHECK(dug == 1);
     CHECK(world.session().dirty);
 }
 
@@ -392,16 +394,17 @@ TEST_CASE("building into the robot's own space is skipped", "[runtime][codegen-e
     const auto robot = world.robot();
     world.registry.get<Robot>(robot).pitch = -1.45F;
     world.frame();
-    const auto& probe = world.registry.get<cactus_gen::stdlib::voxel::volume::RayProbe>(robot);
-    REQUIRE(probe.has_adjacent);
-    const int ax = probe.adjacent_x;
-    const int ay = probe.adjacent_y;
-    const int az = probe.adjacent_z;
+    auto& editor    = world.registry.get<Editor>(robot);
+    editor.target_y = kMinY - 1;
+    const auto before = world.cells();
     cactus_raylib_fake::set_mouse_button_pressed_this_frame(MOUSE_BUTTON_RIGHT, true);
     world.frame();
     cactus_raylib_fake::set_mouse_button_pressed_this_frame(MOUSE_BUTTON_RIGHT, false);
     world.frame();
-    CHECK_FALSE(world.solid(ax, ay, az));
+    // The struck face named a target, and the build there was skipped.
+    REQUIRE(editor.target_y >= kMinY);
+    CHECK_FALSE(world.solid(editor.target_x, editor.target_y, editor.target_z));
+    CHECK(world.cells() == before);
 }
 
 TEST_CASE("a region dig removes eligible solids but never bedrock", "[runtime][codegen-entt][robot-sandbox]") {

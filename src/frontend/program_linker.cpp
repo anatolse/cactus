@@ -2,6 +2,7 @@
 
 #include "frontend/archetype_reachability.hpp"
 #include "frontend/blend_weights.hpp"
+#include "frontend/encoding_diagnostics.hpp"
 #include "frontend/delivery_cycles.hpp"
 #include "frontend/execution_graph_scheduler.hpp"
 #include "frontend/module_artifact.hpp"
@@ -382,6 +383,7 @@ void run_whole_program_passes(DecoratedProgram& program,
     finalize_pair_plans(program, errors);
     check_query_costs(program, errors);
     check_blend_weights(program, errors);
+    check_encodings(program, errors);
     validate_container_traits(program, errors);
     validate_state_transitions(program, errors);
     validate_single_traits(program, errors);

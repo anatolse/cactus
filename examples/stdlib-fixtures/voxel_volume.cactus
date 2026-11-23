@@ -49,14 +49,20 @@ pub entity StrayCell:
 pub entity Picker:
     voxel.CellProbe:
         volume = Terrain
+    Ask
+    CellSighting
 
 pub entity Eye:
     voxel.RayProbe:
         volume = Terrain
+    Aim
+    Sighting
 
 pub entity FineEye:
     voxel.RayProbe:
         volume = Fine
+    Aim
+    Sighting
 
 # Digs whatever its ray probe hits while armed, and records the coordinate it
 # saw, which shows the probe ran first.
@@ -70,6 +76,103 @@ pub entity Shovel:
     Digger
     voxel.RayProbe:
         volume = Terrain
+    Aim
+    Sighting
+
+# The test aims a ray probe through its Aim, and asks a cell probe through its
+# Ask. Taking the trait away leaves the probe without a question.
+pub trait Aim:
+    var origin: vec3 = vec3(0.0, 0.0, 0.0)
+    var direction: vec3 = vec3(0.0, 0.0, -1.0)
+
+pub trait Ask:
+    var x: int = 0
+    var y: int = 0
+    var z: int = 0
+
+# A probe's answer this frame, kept for the test to read after the frame.
+pub trait Sighting:
+    var hit: bool = false
+    var cell: entity_id
+    var x: int = 0
+    var y: int = 0
+    var z: int = 0
+    var distance: float = 0.0
+    var point: vec3 = vec3(0.0, 0.0, 0.0)
+    var faced: bool = false
+    var normal: vec3 = vec3(0.0, 0.0, 0.0)
+    var adjacent_x: int = 0
+    var adjacent_y: int = 0
+    var adjacent_z: int = 0
+
+rule AimProbes:
+    each:
+        Aim as aim
+        voxel.RayProbe
+    before:
+        voxel.probes
+
+    on input:
+        project voxel.RayCast:
+            origin = aim.origin
+            direction = aim.direction
+
+rule RecordRays:
+    each:
+        Sighting as seen
+    after:
+        voxel.probes
+
+    on input:
+        seen.hit = false
+        seen.faced = false
+        match self:
+            voxel.RayHit as hit =>
+                seen.hit = true
+                seen.cell = hit.cell
+                seen.x = hit.x
+                seen.y = hit.y
+                seen.z = hit.z
+                seen.distance = hit.distance
+                seen.point = hit.point
+        match self:
+            voxel.RayFace as face =>
+                seen.faced = true
+                seen.normal = face.normal
+                seen.adjacent_x = face.adjacent_x
+                seen.adjacent_y = face.adjacent_y
+                seen.adjacent_z = face.adjacent_z
+
+# A cell probe's answer this frame.
+pub trait CellSighting:
+    var found: bool = false
+    var cell: entity_id
+
+rule AskProbes:
+    each:
+        Ask as ask
+        voxel.CellProbe
+    before:
+        voxel.probes
+
+    on input:
+        project voxel.CellQuery:
+            x = ask.x
+            y = ask.y
+            z = ask.z
+
+rule RecordCells:
+    each:
+        CellSighting as seen
+    after:
+        voxel.probes
+
+    on input:
+        seen.found = false
+        match self:
+            voxel.CellFound as found =>
+                seen.found = true
+                seen.cell = found.cell
 
 event Dig
 
@@ -179,18 +282,18 @@ rule GenerateTerrain:
 rule DigWithShovel:
     each:
         Digger as digger
-        voxel.RayProbe as probe
+        voxel.RayHit as hit
     after:
         voxel.probes
 
     on input:
-        if not digger.armed or not probe.hit:
+        if not digger.armed:
             return
-        digger.saw_x = probe.x
-        digger.saw_y = probe.y
-        digger.saw_z = probe.z
+        digger.saw_x = hit.x
+        digger.saw_y = hit.y
+        digger.saw_z = hit.z
         digger.armed = false
-        emit Dig to probe.cell
+        emit Dig to hit.cell
 
 rule RemoveDugCell:
     each:

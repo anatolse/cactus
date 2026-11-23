@@ -20,8 +20,11 @@ namespace backend = cactus::runtime::entt_backend;
 
 using Cell      = cactus_gen::stdlib::voxel::volume::Cell;
 using Volume    = cactus_gen::stdlib::voxel::volume::Volume;
-using CellProbe = cactus_gen::stdlib::voxel::volume::CellProbe;
-using RayProbe  = cactus_gen::stdlib::voxel::volume::RayProbe;
+using RayProbe     = cactus_gen::stdlib::voxel::volume::RayProbe;
+using Aim          = cactus_gen::voxel_volume::Aim;
+using Ask          = cactus_gen::voxel_volume::Ask;
+using Sighting     = cactus_gen::voxel_volume::Sighting;
+using CellSighting = cactus_gen::voxel_volume::CellSighting;
 using Solid     = cactus_gen::stdlib::physics::volume::Solid;
 using RayHit    = cactus_gen::stdlib::collision::volume::RayHit;
 
@@ -72,15 +75,23 @@ struct World {
         return registry.all_of<Solid>(cell);
     }
 
-    RayProbe& eye(entt::entity probe) {
-        return registry.get<RayProbe>(probe);
+    // The probe's answer in the last frame.
+    const Sighting& eye(entt::entity probe) {
+        return registry.get<Sighting>(probe);
     }
 
     void aim(entt::entity probe, Vector3 origin, Vector3 direction, float max_distance = 6.0F) {
-        auto& ray        = eye(probe);
-        ray.origin       = origin;
-        ray.direction    = direction;
-        ray.max_distance = max_distance;
+        auto& ray     = registry.get<Aim>(probe);
+        ray.origin    = origin;
+        ray.direction = direction;
+        registry.get<RayProbe>(probe).max_distance = max_distance;
+    }
+
+    void ask(entt::entity probe, int x, int y, int z) {
+        auto& question = registry.get_or_emplace<Ask>(probe);
+        question.x     = x;
+        question.y     = y;
+        question.z     = z;
     }
 };
 
@@ -282,36 +293,32 @@ TEST_CASE("cell probes find air and solid cells, or nothing", "[runtime][codegen
     World world;
     world.fill();
     const auto terrain = slots().voxel_volume.Terrain;
-    auto& probe        = world.registry.get<CellProbe>(slots().voxel_volume.Picker);
-    probe.x = 3;
-    probe.y = 1;
-    probe.z = 2;
+    const auto picker  = slots().voxel_volume.Picker;
+    const auto& seen   = world.registry.get<CellSighting>(picker);
+    world.ask(picker, 3, 1, 2);
     world.frame();
-    CHECK(probe.found);
-    CHECK(probe.cell == world.cell_at(terrain, 3, 1, 2));
+    CHECK(seen.found);
+    CHECK(seen.cell == world.cell_at(terrain, 3, 1, 2));
 
-    probe.x = 9;
+    world.ask(picker, 9, 1, 2);
     world.frame();
-    CHECK_FALSE(probe.found);
-    CHECK_FALSE(world.registry.valid(probe.cell));
+    CHECK_FALSE(seen.found);
 
-    probe.x       = 0;
-    probe.enabled = false;
+    world.ask(picker, 0, 1, 2);
+    world.registry.remove<Ask>(picker);
     world.frame();
-    CHECK_FALSE(probe.found);
+    CHECK_FALSE(seen.found);
 }
 
 TEST_CASE("a duplicate cell is reported and the earliest one is chosen", "[runtime][codegen-entt][stdlib-voxel-volume]") {
     World world;
     world.fill();
     const auto terrain = slots().voxel_volume.Terrain;
-    auto& probe        = world.registry.get<CellProbe>(slots().voxel_volume.Picker);
-    probe.x = 2;
-    probe.y = 1;
-    probe.z = 2;
+    const auto picker  = slots().voxel_volume.Picker;
+    world.ask(picker, 2, 1, 2);
     CHECK_FALSE(world.registry.get<Volume>(terrain).duplicate_found);
     world.frame();
-    CHECK(probe.cell == slots().voxel_volume.StrayCell);
+    CHECK(world.registry.get<CellSighting>(picker).cell == slots().voxel_volume.StrayCell);
     CHECK(world.registry.get<Volume>(terrain).duplicate_found);
 }
 
@@ -332,7 +339,7 @@ TEST_CASE("a ray probe names the struck cell, face and adjacent coordinate", "[r
     CHECK(ray.z == 1);
     CHECK(ray.distance == near(2.0F));
     CHECK(ray.normal.y == 1.0F);
-    CHECK(ray.has_adjacent);
+    CHECK(ray.faced);
     CHECK(ray.adjacent_x == 1);
     CHECK(ray.adjacent_y == 1);
     CHECK(ray.adjacent_z == 1);
@@ -388,6 +395,19 @@ TEST_CASE("a ray near a cell centre but outside it is not a hit", "[runtime][cod
     CHECK_FALSE(world.eye(eye).hit);
 }
 
+TEST_CASE("a ray probe with no cast this frame has no answer", "[runtime][codegen-entt][stdlib-voxel-volume]") {
+    World world;
+    world.fill();
+    const auto eye = slots().voxel_volume.Eye;
+    world.aim(eye, Vector3{.x = 11.5F, .y = 3.0F, .z = 1.5F}, Vector3{.x = 0.0F, .y = -1.0F, .z = 0.0F});
+    world.frame();
+    REQUIRE(world.eye(eye).hit);
+    world.registry.remove<Aim>(eye);
+    world.frame();
+    CHECK_FALSE(world.eye(eye).hit);
+    CHECK_FALSE(world.eye(eye).faced);
+}
+
 TEST_CASE("a miss replaces an earlier hit", "[runtime][codegen-entt][stdlib-voxel-volume]") {
     World world;
     world.fill();
@@ -398,8 +418,7 @@ TEST_CASE("a miss replaces an earlier hit", "[runtime][codegen-entt][stdlib-voxe
     world.aim(eye, Vector3{.x = 11.5F, .y = 3.0F, .z = 1.5F}, Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F});
     world.frame();
     CHECK_FALSE(world.eye(eye).hit);
-    CHECK_FALSE(world.registry.valid(world.eye(eye).cell));
-    CHECK_FALSE(world.eye(eye).has_adjacent);
+    CHECK_FALSE(world.eye(eye).faced);
 
     world.aim(eye, Vector3{.x = 11.5F, .y = 3.0F, .z = 1.5F}, Vector3{.x = 0.0F, .y = -1.0F, .z = 0.0F}, 0.0F);
     world.frame();
@@ -419,7 +438,7 @@ TEST_CASE("a ray from inside a solid cell hits it at zero with no adjacent cell"
     const auto& ray = world.eye(eye);
     REQUIRE(ray.hit);
     CHECK(ray.distance == 0.0F);
-    CHECK_FALSE(ray.has_adjacent);
+    CHECK_FALSE(ray.faced);
     CHECK(ray.x == 0);
     CHECK(ray.y == -1);
 }

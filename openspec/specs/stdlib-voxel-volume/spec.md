@@ -25,13 +25,17 @@ std.voxel.volume SHALL describe a fixed, axis-aligned volume and cells identifie
 - **THEN** every cell of that volume is destroyed, and cells of other volumes remain
 
 ### Requirement: Cell and ray probes are ordinary Cactus rules
-The module SHALL expose CellProbe and RayProbe traits whose results are computed by ordinary Cactus pair/reduction rules during the input phase. Producers SHALL run before probe evaluation and consumers afterward through normal handler dependencies. Probe results SHALL describe that pass's selected state, and SHALL be refreshed on each input activation. Disabled probes, invalid volumes and empty candidate groups SHALL clear old results.
+The module SHALL expose CellProbe and RayProbe traits whose answers are computed by ordinary Cactus pair/reduction rules during the input phase. A question SHALL be a projected trait the game projects on the probe before probe evaluation: `CellQuery` with a coordinate, `RayCast` with an origin and direction. Consumers SHALL run afterward through normal handler dependencies. Answers SHALL describe that pass's selected state. A probe with no question, an invalid volume and an empty candidate group SHALL project no answer.
 
-CellProbe SHALL select a matching volume/coordinate cell, including air, or a stale handle when none exists. RayProbe SHALL consider solid cells of the selected volume, call the pure std.collision.volume box test and select the nearest hit using existing reduction semantics. Its result SHALL expose hit status, cell identity, coordinates, world distance, point, face normal and adjacent coordinate. Invalid rays and nonpositive limits SHALL produce a miss. Face ties within a box SHALL use X, Y, Z order; equal hit distances across cells SHALL use stable creation order. An inside-solid hit SHALL have distance zero and zero normal, with no implied adjacent placement.
+CellProbe SHALL select a matching volume/coordinate cell, including air. RayProbe SHALL consider solid cells of the selected volume, call the pure std.collision.volume box test and select the nearest hit using existing reduction semantics. Invalid rays and nonpositive limits SHALL produce a miss. Face ties within a box SHALL use X, Y, Z order; equal hit distances across cells SHALL use stable creation order.
+
+#### Scenario: No question, no answer
+- **WHEN** a ray probe gets no `RayCast` this frame
+- **THEN** it has no `RayHit` and no `RayFace`
 
 #### Scenario: Place against a struck face
 - **WHEN** the ray probe hits a cell's positive-X face and the consumer runs after probe evaluation
-- **THEN** the result normal is positive X and the adjacent coordinate is one cell farther along X
+- **THEN** the consumer sees `RayFace` with a positive-X normal and an adjacent coordinate one cell farther along X
 
 #### Scenario: Ray passes close to a cell centre
 - **WHEN** a ray passes near a cell centre but outside its cube
@@ -39,7 +43,7 @@ CellProbe SHALL select a matching volume/coordinate cell, including air, or a st
 
 #### Scenario: Miss replaces a previous hit
 - **WHEN** a probe previously hit a solid but its current ray misses all eligible cells
-- **THEN** its next evaluated result is an explicit miss without a stale selected target
+- **THEN** a consumer of the current pass sees no `RayHit` and no `RayFace` on the probe
 
 #### Scenario: Trait removal respects commit
 - **WHEN** an edit removes Solid after the current input probe pass
@@ -49,6 +53,21 @@ CellProbe SHALL select a matching volume/coordinate cell, including air, or a st
 #### Scenario: Portable reference behavior
 - **WHEN** the same world is evaluated by the Cactus probe rules with and without backend acceleration
 - **THEN** the selected cell, hit result and observable ordering agree
+
+### Requirement: Probe results are traits whose presence is the result
+A probe result SHALL be a projected trait on the probe entity: `CellFound` while a cell matches, `RayHit` while the ray hits, and `RayFace` with `RayHit` while the hit has a face. `CellFound` SHALL expose the cell; `RayHit` the cell, its coordinates, world distance and point; `RayFace` the face normal and the adjacent coordinate. An inside-solid hit SHALL have distance zero and no `RayFace`. Probe traits SHALL hold only settings that last: `volume`, and `max_distance` for a ray.
+
+#### Scenario: Ray starts inside a solid
+- **WHEN** a ray's origin is inside a solid cell
+- **THEN** the probe has `RayHit` with distance zero and no `RayFace`
+
+#### Scenario: A consumer in the same pass sees the result
+- **WHEN** a rule ordered after `voxel.probes` in the same input activation selects `each: voxel.RayProbe, voxel.RayHit as hit`
+- **THEN** it sees this activation's hit, not the previous one's
+
+#### Scenario: One handler reads hit and miss
+- **WHEN** a handler after `voxel.probes` on the probe entity runs `match self:` with a `voxel.RayHit as hit` arm and a `_` arm
+- **THEN** the `RayHit` arm runs on this activation's hit and the `_` arm on a miss
 
 ### Requirement: Volume geometry has defined validity
 A volume SHALL require finite origin, positive finite cell size and nonempty integer bounds whose extent is representable. Invalid configurations SHALL produce a diagnostic and no voxel query/render result. A cell whose coordinate lies outside its volume's bounds SHALL never be created; the attempt SHALL be reported as a range failure. Duplicate coordinates SHALL be diagnosed. CellProbe SHALL choose the earliest-created live matching cell; ray probes and rendering SHALL use occupied candidates with stable creation-order ties. The example SHALL construct unique, correctly positioned cells, so normal play never depends on duplicate-coordinate behavior.

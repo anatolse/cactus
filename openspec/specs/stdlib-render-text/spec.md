@@ -79,13 +79,15 @@ When `TextLabel.visible = false`, the backend SHALL skip drawing for that entity
 ---
 
 ### Requirement: 2D text renders respecting WorldTransform rotation
-The 2D backend path SHALL apply `std.transform.flat.WorldTransform.rotation` (in radians) when drawing text, so that the rendered text rotates with the entity.
+The 2D backend path SHALL apply `std.transform.flat.WorldTransform.rotation` (in radians) when drawing text, so that the rendered text rotates with the entity. It SHALL scale the text per axis around its center by the pose's scale; scale (1, 1) draws the text as before.
 
 #### Scenario: Rotated flat entity draws rotated text
 - **WHEN** a flat-world entity has `WorldTransform.rotation` set to a non-zero radian angle and a visible `TextLabel`
 - **THEN** the 2D backend draws the text rotated by that angle around the entity's world position
 
----
+#### Scenario: Scaled flat text
+- **WHEN** a flat-world entity with a visible `TextLabel` has scale (2, 1)
+- **THEN** the text is drawn twice as wide and as tall as before, centered on the same point
 
 ### Requirement: 3D text renders on a surface following WorldTransform orientation
 The 3D backend path SHALL draw text on a plane mesh whose orientation tracks `std.transform.volume.WorldTransform.rotation` (quaternion). The text surface SHALL NOT always face the camera; it SHALL rotate freely with the entity.

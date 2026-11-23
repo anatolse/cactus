@@ -21,11 +21,15 @@ Define the picture layer: frame-local drawn pose and drawn color values that Cac
 - **THEN** every stdlib renderer of that frame sees the projected value
 
 ### Requirement: Renderers draw the drawn pose when it exists
-A stdlib renderer that draws an entity at its `WorldTransform` SHALL draw it at the entity's `DrawnPose` of the same flavour when the entity has one this frame, and at its `WorldTransform` otherwise. This SHALL hold for sprites, shapes, 2D and 3D text labels, meshes, models and point lights. A renderer SHALL NOT write `WorldTransform`, its own trait, `DrawnPose` or `DrawnColor`.
+A stdlib renderer that draws an entity at its `WorldTransform` SHALL draw it at the entity's `DrawnPose` of the same flavour when the entity has one this frame, and at its `WorldTransform` otherwise. This SHALL hold for sprites, shapes, 2D and 3D text labels, meshes, models and point lights. Every renderer that draws a size SHALL multiply it by the pose's scale. A renderer SHALL NOT write `WorldTransform`, its own trait, `DrawnPose` or `DrawnColor`.
 
 #### Scenario: Shifted shape
 - **WHEN** a shape's `WorldTransform.position` is (100, 100) and its projected `DrawnPose.position` is (104, 100)
 - **THEN** the shape is drawn at (104, 100) and `WorldTransform.position` is still (100, 100)
+
+#### Scenario: Scaled shape
+- **WHEN** a rectangle of size (10, 10) has a projected `DrawnPose.scale` of (2, 0.5)
+- **THEN** it is drawn 20 wide and 5 tall, and `WorldTransform.scale` is unchanged
 
 #### Scenario: Flat and volume in one program
 - **WHEN** a program projects a flat `DrawnPose` for a shape and a volume `DrawnPose` for a model

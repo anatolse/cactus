@@ -23,7 +23,7 @@ The `std.render.sprites` module SHALL expose the passive trait surface currently
 ---
 
 ### Requirement: std.render.sprites declares the current backend-backed extern rules
-The shipped `std.render.sprites` module SHALL declare the currently implemented passive render extern rules for sprite submission and animated-sprite advancement.
+The shipped `std.render.sprites` module SHALL declare the currently implemented passive render extern rules for sprite submission and animated-sprite advancement. A sprite SHALL be drawn `Renderer.size * scale` from its position, where `scale` is the drawn pose's scale or `WorldTransform.scale`.
 
 #### Scenario: SpriteRenderer declaration matches shipped stdlib
 - **WHEN** `std.render.sprites` is imported
@@ -38,6 +38,10 @@ The shipped `std.render.sprites` module SHALL declare the currently implemented 
 - **THEN** generated output binds to backend-library sprite rendering behavior for entities with `std.transform.flat.WorldTransform` and `Renderer`
 - **AND** that backend behavior resolves sprite texture handles through the asset/runtime infrastructure before drawing visible sprites in the backend-owned 2D render pass
 
+#### Scenario: Scaled sprite
+- **WHEN** a sprite of `Renderer.size = {64.0, 32.0}` has scale (0.5, 2)
+- **THEN** it is drawn 32 wide and 64 tall
+
 #### Scenario: Invisible sprite skips drawing
 - **WHEN** sprite submission is invoked with `Renderer.visible = false`
 - **THEN** the backend does not draw that entity in the sprite pass
@@ -51,8 +55,6 @@ The shipped `std.render.sprites` module SHALL declare the currently implemented 
 - **THEN** generated output binds to backend-library animation advancement behavior that first validates the texture asset handle
 - **AND** the backend advances `frame` only when `playing = true`, `frame_count > 0`, `fps > 0`, and the computed integer animation step is greater than zero
 - **AND** when advancement occurs, the backend wraps `frame` modulo `frame_count`
-
----
 
 ### Requirement: std.render.meshes exposes the shipped mesh, billboard, and light trait surface
 The `std.render.meshes` module SHALL expose the passive 3D render and light traits currently declared in the shipped stdlib module. A light's brightness SHALL be its `color`: a light has no separate intensity field, and a channel above 1 makes the light brighter in that channel.
@@ -223,7 +225,7 @@ The `Shape` trait SHALL expose `var origin: vec2 = vec2(0.0, 0.0)`: the offset f
 - **THEN** a `Rectangle` shape's un-rotated top-left corner is `position - origin` (i.e. the rectangle is centered on `position`), and a `Circle` shape's center is `position - origin`
 
 ### Requirement: ShapeRenderer renders entities in world space using the active camera
-The `ShapeRenderer` extern rule SHALL wrap its raylib draw calls in `BeginMode2D(get_active_camera_2d())` / `EndMode2D()`. Entity positions (`WorldTransform.position`) and sizes (`Shape.size`) are in world-unit coordinates; the camera transform maps them to screen pixels. When the active camera is identity (zoom=1, no offset), the behavior is identical to pixel-space rendering (backwards-compatible). `ShapeRenderer` SHALL draw `ShapeType.Rectangle` shapes pivoted at `WorldTransform.position`, offset by `Shape.origin` and rotated by `WorldTransform.rotation`, and `ShapeType.Circle` shapes as circles centered at `WorldTransform.position - Shape.origin` with diameter `size.x` (circles are rotationally symmetric, so `WorldTransform.rotation` has no visible effect on them).
+The `ShapeRenderer` extern rule SHALL wrap its raylib draw calls in `BeginMode2D(get_active_camera_2d())` / `EndMode2D()`. Entity positions (`WorldTransform.position`) and sizes (`Shape.size`) are in world-unit coordinates; the camera transform maps them to screen pixels. When the active camera is identity (zoom=1, no offset), the behavior is identical to pixel-space rendering (backwards-compatible). `ShapeRenderer` SHALL draw `ShapeType.Rectangle` shapes of size `Shape.size * scale`, pivoted at `WorldTransform.position`, offset by `Shape.origin * scale` and rotated by `WorldTransform.rotation`, and `ShapeType.Circle` shapes centered at `WorldTransform.position - Shape.origin * scale` with radii `size.x / 2` times each scale axis: a circle when the axes are equal, an ellipse otherwise (rotation has no visible effect on them). `scale` is `WorldTransform.scale`, or the drawn pose's scale when one exists.
 
 #### Scenario: World-unit entity rendered at correct screen position
 - **WHEN** the active camera has zoom=64 and offset={400,300} (world origin at screen center)
@@ -243,10 +245,18 @@ The `ShapeRenderer` extern rule SHALL wrap its raylib draw calls in `BeginMode2D
 - **WHEN** an entity has `ShapeType.Rectangle`, `Shape.size = {40.0, 20.0}`, `Shape.origin = {20.0, 10.0}` (size/2), and a non-zero `WorldTransform.rotation`
 - **THEN** the rectangle is drawn rotated by that amount around `WorldTransform.position` — its own center, not its top-left corner
 
+#### Scenario: Scaled rectangle keeps its pivot
+- **WHEN** a rectangle has `Shape.size = {40.0, 20.0}`, `Shape.origin = {20.0, 10.0}` and scale (2, 3)
+- **THEN** it is drawn 80 × 60 with origin (40, 30), so it still turns around its own center
+
 #### Scenario: Circle shape rendered at correct screen position and size
 - **WHEN** no Camera entity exists (identity active camera, zoom=1)
 - **WHEN** an entity has `WorldTransform.position = {100.0, 200.0}`, `Shape.size = {32.0, 32.0}`, default `origin`, and `ShapeType.Circle`
 - **THEN** a circle of radius 16 pixels is drawn centered at screen position (100, 200)
+
+#### Scenario: Unequal scale draws an ellipse
+- **WHEN** a circle of `Shape.size = {32.0, 32.0}` has scale (2, 1)
+- **THEN** an ellipse with radii 32 and 16 is drawn
 
 #### Scenario: Hidden circle shape not drawn
 - **WHEN** a `ShapeType.Circle` Shape entity has `visible = false`

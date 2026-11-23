@@ -1,0 +1,161 @@
+module effect_channels
+
+# Permanent effects on named boxes, one fold of std.render.effects.flat per
+# box, and a game channel `Ring` written with the same pattern.
+
+use std.core as core
+use std.time as time
+use std.math as math
+use std.math.ease as ease
+use std.transform.flat as tf
+use std.render.layers as layers
+use std.render.shapes as shapes
+use std.render.effects as effects
+use std.render.effects.flat as fx
+use std.camera.flat as cam
+use std.camera.viewport as vp
+
+# A game channel: how wide a ring the game draws around its target.
+pub trait Ring:
+    var start: float = 0.0
+    var end: float = 0.0
+    var curve: ease.Curve = ease.Curve.Linear
+    var at: float = 1.0
+
+pub trait DrawnRing:
+    var width: float = 0.0
+
+# What the game's ring drawing saw this frame.
+pub trait SeenRing:
+    var width: float = 0.0
+
+func ring_value(c: Ring) float:
+    return math.lerp(c.start, c.end, ease.apply(c.curve, c.at))
+
+template Box(at: vec2):
+    tf.WorldTransform:
+        position = at
+    shapes.Shape:
+        type = shapes.ShapeType.Rectangle
+        size = vec2(10.0, 10.0)
+        color = #808080FF
+
+pub entity Shifted from Box(at = vec2(100.0, 100.0))
+pub entity Scaled from Box(at = vec2(200.0, 100.0))
+pub entity Turned from Box(at = vec2(300.0, 100.0))
+pub entity Tinted from Box(at = vec2(100.0, 200.0))
+pub entity Glowing from Box(at = vec2(200.0, 200.0))
+pub entity Eased from Box(at = vec2(300.0, 200.0))
+pub entity Plain from Box(at = vec2(400.0, 200.0))
+
+pub entity Marked:
+    use Box(at = vec2(400.0, 100.0))
+    SeenRing
+
+pub entity View:
+    tf.WorldTransform
+    cam.Camera
+    vp.Viewport
+
+template ShiftBy(by: vec2):
+    effects.Effect
+    fx.Shift:
+        end = by
+
+template ScaleBy(by: vec2):
+    effects.Effect
+    fx.Scale:
+        end = by
+
+template TurnBy(by: float):
+    effects.Effect
+    fx.Turn:
+        end = by
+
+template TintBy(by: color):
+    effects.Effect
+    effects.Tint:
+        end = by
+
+template GlowBy(by: color):
+    effects.Effect
+    effects.Glow:
+        end = by
+
+# Halfway along an OutQuad from (4, 0) to (0, 0).
+template HalfEased:
+    effects.Effect
+    fx.Shift:
+        start = vec2(4.0, 0.0)
+        curve = ease.Curve.OutQuad
+        at = 0.5
+
+template RingOf(width: float):
+    effects.Effect
+    Ring:
+        start = width
+        end = width
+    time.Span:
+        length = 1h
+
+rule Link:
+    on core.load:
+        let a = spawn ShiftBy(by = vec2(3.0, 0.0))
+        add fx.Affects(a, Shifted)
+        let b = spawn ShiftBy(by = vec2(0.0, 2.0))
+        add fx.Affects(b, Shifted)
+        let c = spawn ScaleBy(by = vec2(1.2, 1.2))
+        add fx.Affects(c, Scaled)
+        let d = spawn ScaleBy(by = vec2(0.9, 0.9))
+        add fx.Affects(d, Scaled)
+        let e = spawn TurnBy(by = 0.5)
+        add fx.Affects(e, Turned)
+        let f = spawn TurnBy(by = 0.25)
+        add fx.Affects(f, Turned)
+        let g = spawn TintBy(by = #FFFF80FF)
+        add fx.Affects(g, Tinted)
+        let h = spawn TintBy(by = #FFFFFF80)
+        add fx.Affects(h, Tinted)
+        let i = spawn GlowBy(by = #80808000)
+        add fx.Affects(i, Glowing)
+        let j = spawn GlowBy(by = #A0A0A000)
+        add fx.Affects(j, Glowing)
+        let k = spawn HalfEased()
+        add fx.Affects(k, Eased)
+        let m = spawn RingOf(width = 3.0)
+        add fx.Affects(m, Marked)
+        let n = spawn RingOf(width = 2.0)
+        add fx.Affects(n, Marked)
+
+rule DriveRing:
+    each:
+        Ring as c
+        time.Span as span
+
+    on core.late_tick:
+        c.at = time.progress(span)
+
+rule FoldRing:
+    pairs:
+        e: Ring
+        thing: tf.WorldTransform
+    group: layers.picture
+    where:
+        fx.Affects(e, thing)
+    reduce per thing:
+        rows = count()
+        width = sum(ring_value(e[Ring]))
+
+    on core.render:
+        if rows == 0:
+            return
+        project DrawnRing to thing:
+            width = width
+
+rule SeeRing:
+    each:
+        DrawnRing as ring
+        SeenRing as seen
+
+    on core.render:
+        seen.width = ring.width

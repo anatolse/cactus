@@ -1,0 +1,53 @@
+module effect_channels_volume
+
+# Permanent effects on a mesh through std.render.effects.volume: a shift and a
+# scale on its pose, a tint and a glow on its color.
+
+use std.core as core
+use std.transform.volume as tv
+use std.render.meshes as meshes
+use std.render.effects as effects
+use std.render.effects.volume as fx
+use std.camera.volume as cam
+use std.camera.viewport as vp
+
+asset BlockMesh: mesh = "models/block.mesh"
+asset BlockMaterial: material = "materials/block.mat"
+
+template Block(at: vec3):
+    tv.WorldTransform:
+        position = at
+    meshes.Renderer:
+        mesh = BlockMesh
+        material = BlockMaterial
+        color = #808080FF
+
+pub entity Lifted from Block(at = vec3(-2.0, 0.0, 0.0))
+pub entity Plain from Block(at = vec3(2.0, 0.0, 0.0))
+
+pub entity Eye:
+    tv.WorldTransform:
+        position = vec3(0.0, 1.0, 6.0)
+    cam.Camera
+    vp.Viewport
+
+template Lift:
+    effects.Effect
+    fx.Shift:
+        end = vec3(0.0, 1.0, 0.0)
+    fx.Scale:
+        end = vec3(2.0, 2.0, 2.0)
+
+template Light:
+    effects.Effect
+    effects.Tint:
+        end = #FFFFFF80
+    effects.Glow:
+        end = #40000000
+
+rule Link:
+    on core.load:
+        let lift = spawn Lift()
+        add fx.Affects(lift, Lifted)
+        let light = spawn Light()
+        add fx.Affects(light, Lifted)

@@ -629,6 +629,7 @@ set(SPLIT_SCREEN_FOREST_BOMBS_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/sp
 set(STANDARD_UI_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/standard-ui.generated.cpp")
 set(EXTERNAL_HANDLER_LINK_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/external-handler-link.generated.cpp")
 set(PARTICLE_BURST_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/particle-burst.generated.cpp")
+set(EFFECT_CHANNELS_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/effect-channels.generated.cpp")
 set(GRADIENT_SQUARE_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/gradient-square.generated.cpp")
 set(RENDER_PASS_DOMAIN_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/render-pass-domain.generated.cpp")
 
@@ -798,6 +799,12 @@ cactus_add_example(example_particle_burst_generated
     SOURCE "examples/particle-burst/particle_burst.cactus"
     BACKEND "cpp-entt"
     OUTPUT "${PARTICLE_BURST_GENERATED_CPP}"
+)
+
+cactus_add_example(example_effect_channels_generated
+    SOURCE "examples/effect-channels/main.cactus"
+    BACKEND "cpp-entt"
+    OUTPUT "${EFFECT_CHANNELS_GENERATED_CPP}"
 )
 
 cactus_add_example(example_gradient_square_generated

@@ -1156,10 +1156,10 @@ TEST_CASE("Runtime stdlib: EnTT sprite submissions preserve layer ordering and d
 
     cactus::runtime::entt_backend::reset_render_debug_state();
     cactus::runtime::entt_backend::begin_render_frame();
-    cactus::runtime::entt_backend::submit_sprite(
-        Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 1.0F, .y = 1.0F}, color_from_raylib(WHITE), 32U, true, 5);
-    cactus::runtime::entt_backend::submit_sprite(
-        Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 1.0F, .y = 1.0F}, color_from_raylib(WHITE), 31U, true, 1);
+    constexpr Vector2 kOrigin{.x = 0.0F, .y = 0.0F};
+    constexpr Vector2 kOne{.x = 1.0F, .y = 1.0F};
+    cactus::runtime::entt_backend::submit_sprite(kOrigin, kOne, kOne, color_from_raylib(WHITE), 32U, true, 5);
+    cactus::runtime::entt_backend::submit_sprite(kOrigin, kOne, kOne, color_from_raylib(WHITE), 31U, true, 1);
     cactus::runtime::entt_backend::end_render_frame();
 
     CHECK(cactus::runtime::entt_backend::render_debug_state().submitted_sprites == 2);

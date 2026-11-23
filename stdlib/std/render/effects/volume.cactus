@@ -1,0 +1,143 @@
+module std.render.effects.volume
+
+use std.core as core
+use std.time as time
+use std.math.vec3 as v3
+use std.math.ease as ease
+use std.transform.volume as tv
+use std.render.layers as layers
+use std.render.picture as picture
+use std.render.effects as effects
+
+# Volume effects: link an effect to a 3D target with `Affects`. Pose channels
+# change where the target is drawn; `effects.Tint` and `effects.Glow` change
+# its colors. There is no turn channel: rotations of one target don't commute.
+# See `std.render.effects` for how a channel moves.
+
+pub relation Affects:
+    from: effects.Effect
+    to: tv.WorldTransform
+
+# Moves the target. Effects on one target add.
+pub trait Shift:
+    var start: vec3 = vec3(0.0, 0.0, 0.0)
+    var end: vec3 = vec3(0.0, 0.0, 0.0)
+    var curve: ease.Curve = ease.Curve.Linear
+    var at: float = 1.0
+
+# Scales the target per axis. Effects on one target multiply.
+pub trait Scale:
+    var start: vec3 = vec3(1.0, 1.0, 1.0)
+    var end: vec3 = vec3(1.0, 1.0, 1.0)
+    var curve: ease.Curve = ease.Curve.Linear
+    var at: float = 1.0
+
+# This frame's folded pose channels of one target.
+trait PoseChange:
+    var shift: vec3 = vec3(0.0, 0.0, 0.0)
+    var scale: vec3 = vec3(1.0, 1.0, 1.0)
+
+pub func shift_value(c: Shift) vec3:
+    return v3.lerp(c.start, c.end, ease.apply(c.curve, c.at))
+
+pub func scale_value(c: Scale) vec3:
+    return v3.lerp(c.start, c.end, ease.apply(c.curve, c.at))
+
+rule DriveShift:
+    each:
+        Shift as c
+        time.Span as span
+
+    on core.late_tick:
+        c.at = time.progress(span)
+
+rule DriveScale:
+    each:
+        Scale as c
+        time.Span as span
+
+    on core.late_tick:
+        c.at = time.progress(span)
+
+rule FoldShift:
+    pairs:
+        fx: Shift
+        thing: tv.WorldTransform
+    group: layers.picture
+    where:
+        Affects(fx, thing)
+    reduce per thing:
+        rows = count()
+        total = sum(shift_value(fx[Shift]))
+
+    on core.render:
+        if rows == 0:
+            return
+        project PoseChange to thing:
+            shift = total
+
+# `product` takes no vectors, so each axis folds on its own.
+rule FoldScale:
+    pairs:
+        fx: Scale
+        thing: tv.WorldTransform
+    group: layers.picture
+    where:
+        Affects(fx, thing)
+    reduce per thing:
+        rows = count()
+        x = product(scale_value(fx[Scale]).x)
+        y = product(scale_value(fx[Scale]).y)
+        z = product(scale_value(fx[Scale]).z)
+
+    on core.render:
+        if rows == 0:
+            return
+        project PoseChange to thing:
+            scale = vec3(x, y, z)
+
+rule FoldTint:
+    pairs:
+        fx: effects.Tint
+        thing: tv.WorldTransform
+    group: layers.picture
+    where:
+        Affects(fx, thing)
+    reduce per thing:
+        rows = count()
+        total = product(effects.tint_value(fx[effects.Tint]))
+
+    on core.render:
+        if rows == 0:
+            return
+        project picture.DrawnColor to thing:
+            tint = total
+
+rule FoldGlow:
+    pairs:
+        fx: effects.Glow
+        thing: tv.WorldTransform
+    group: layers.picture
+    where:
+        Affects(fx, thing)
+    reduce per thing:
+        rows = count()
+        total = sum(effects.glow_value(fx[effects.Glow]))
+
+    on core.render:
+        if rows == 0:
+            return
+        project picture.DrawnColor to thing:
+            glow = total
+
+rule ComposePose:
+    each:
+        tv.WorldTransform as xf
+        PoseChange as change
+    group: layers.picture
+
+    on core.render:
+        project tv.DrawnPose:
+            position = xf.position + change.shift
+            rotation = xf.rotation
+            scale = xf.scale * change.scale

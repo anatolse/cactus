@@ -212,9 +212,11 @@ void end_mode_3d() noexcept;
 // origin is the offset from position to the shape's un-rotated reference
 // point (top-left for a rectangle, center for a circle); rotation_rad pivots
 // a rectangle around position and is converted to degrees for raylib here so
-// generated code never carries that conversion.
-void draw_shape_rectangle(Vector2 position, Vector2 size, Vector2 origin, float rotation_rad, CactusColor color) noexcept;
-void draw_shape_circle(Vector2 position, float diameter, Vector2 origin, CactusColor color) noexcept;
+// generated code never carries that conversion. scale multiplies both size and
+// origin, so the pivot stays on the same point of the shape.
+void draw_shape_rectangle(
+    Vector2 position, Vector2 size, Vector2 origin, Vector2 scale, float rotation_rad, CactusColor color) noexcept;
+void draw_shape_circle(Vector2 position, float diameter, Vector2 origin, Vector2 scale, CactusColor color) noexcept;
 
 // ── Render-pass rendering (dsl-render-passes Quads pass kind) ──────────────────
 // Shader cache, uniform upload and quad submission for Quads render passes.
@@ -427,7 +429,8 @@ void end_render_frame() noexcept;
 // deliberately excluded — they are window-global and flush in end_render_frame.
 void flush_viewport_3d() noexcept;
 
-void submit_sprite(Vector2 position, Vector2 size, CactusColor color, AssetHandle texture, bool visible, int layer) noexcept;
+void submit_sprite(
+    Vector2 position, Vector2 size, Vector2 scale, CactusColor color, AssetHandle texture, bool visible, int layer) noexcept;
 void advance_animated_sprite(AssetHandle texture,
                              int& frame,
                              int frame_count,
@@ -584,6 +587,7 @@ void register_point_light(Vector3 position, CactusColor color, float range, bool
 void register_directional_light(Vector3 direction, CactusColor color, bool enabled) noexcept;
 void submit_text_2d(Vector2 position,
                     float rotation_rad,
+                    Vector2 scale,
                     int font_size,
                     CactusColor color,
                     const std::string& text,

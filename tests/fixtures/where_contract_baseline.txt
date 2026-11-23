@@ -418,6 +418,66 @@ deterministic_target_selection.cactus examples deterministic_target_selection.Se
     named_writes:
     named_requirements:
     iteration_order: free
+effect_channels.cactus stdlib-fixtures effect_channels.FoldRing/on std.core.render
+    reads: effect_channels.Ring std.render.effects.flat.Affects
+    read_fields: effect_channels.Ring{at,curve,end,start} std.render.effects.flat.Affects{}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:effect_channels.Ring
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+effect_channels.cactus stdlib-fixtures std.render.effects.flat.FoldGlow/on std.core.render
+    reads: std.render.effects.Glow std.render.effects.flat.Affects
+    read_fields: std.render.effects.Glow{at,curve,end,start} std.render.effects.flat.Affects{}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:std.render.effects.Glow
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+effect_channels.cactus stdlib-fixtures std.render.effects.flat.FoldScale/on std.core.render
+    reads: std.render.effects.flat.Affects std.render.effects.flat.Scale
+    read_fields: std.render.effects.flat.Affects{} std.render.effects.flat.Scale{at,curve,end,start}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:std.render.effects.flat.Scale
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+effect_channels.cactus stdlib-fixtures std.render.effects.flat.FoldShift/on std.core.render
+    reads: std.render.effects.flat.Affects std.render.effects.flat.Shift
+    read_fields: std.render.effects.flat.Affects{} std.render.effects.flat.Shift{at,curve,end,start}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:std.render.effects.flat.Shift
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+effect_channels.cactus stdlib-fixtures std.render.effects.flat.FoldTint/on std.core.render
+    reads: std.render.effects.Tint std.render.effects.flat.Affects
+    read_fields: std.render.effects.Tint{at,curve,end,start} std.render.effects.flat.Affects{}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:std.render.effects.Tint
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+effect_channels.cactus stdlib-fixtures std.render.effects.flat.FoldTurn/on std.core.render
+    reads: std.render.effects.flat.Affects std.render.effects.flat.Turn
+    read_fields: std.render.effects.flat.Affects{} std.render.effects.flat.Turn{at,curve,end,start}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:std.render.effects.flat.Turn
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
 exact_duration.cactus examples exact_duration.FieldSum/on std.core.fixed_tick
     reads: exact_duration.Field
     read_fields: exact_duration.Field{wait}

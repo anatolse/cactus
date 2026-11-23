@@ -1257,6 +1257,30 @@ cactus_add_headless_behavior_test(test_drawn_picture_volume_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_drawn_picture_volume_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_drawn_scale_headless_behavior
+    CACTUS_SOURCE examples/stdlib-fixtures/drawn_scale.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_drawn_scale_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_effect_channels_headless_behavior
+    CACTUS_SOURCE examples/stdlib-fixtures/effect_channels.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_effect_channels_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_effect_channels_volume_headless_behavior
+    CACTUS_SOURCE examples/stdlib-fixtures/effect_channels_volume.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_effect_channels_volume_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_effect_channels_example_headless_behavior
+    CACTUS_SOURCE examples/effect-channels/main.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_effect_channels_example_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_noise_headless_behavior
     CACTUS_SOURCE examples/stdlib-fixtures/noise.cactus
     BACKEND cpp-entt
@@ -1853,7 +1877,7 @@ add_custom_target(test_generated_performance_benchmarks)
 foreach(shape IN ITEMS static_keep union_fold equality_reduce grid_region row_join baseline own_projection
         single_commit plain_commit sweep wide_level reduced_keep required_links keep_chain
         incremental_keep render_pass dimension_spread timers clamped sum_encodings color_fade
-        unused_transform_kind effect_folds)
+        unused_transform_kind effect_folds effect_channels)
     set(perf_target test_perf_${shape}_benchmark)
     set(perf_codegen_flags)
     if(shape STREQUAL "wide_level")

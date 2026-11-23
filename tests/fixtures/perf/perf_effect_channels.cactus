@@ -1,0 +1,65 @@
+module perf_effect_channels
+
+use std.core
+use std.time as time
+use std.math.ease as ease
+use std.transform.flat as tf
+use std.render.shapes as shapes
+use std.render.effects as effects
+use std.render.effects.flat as fx
+
+# `size` drawn targets; every `burst_every`-th one is hit by a jolt, a flash
+# and a pop at once. The spans are long, so every frame folds the same rows.
+
+trait Board:
+    let size: int = 2000
+    let burst_every: int = 4
+
+entity Field:
+    Board
+
+template Target(lane: int):
+    tf.WorldTransform:
+        position = vec2(lane * 1.0, 0.0)
+    shapes.Shape:
+        type = shapes.ShapeType.Rectangle
+        size = vec2(4.0, 4.0)
+
+template Jolt:
+    effects.Effect
+    fx.Shift:
+        start = vec2(4.0, 0.0)
+        curve = ease.Curve.OutQuad
+    time.Span:
+        length = 1h
+    time.Ending.Expires
+
+template Flash:
+    effects.Effect
+    effects.Tint:
+        start = #FF8080FF
+    effects.Glow:
+        start = #40404000
+    time.Span:
+        length = 1h
+    time.Ending.Expires
+
+template Pop:
+    effects.Effect
+    fx.Scale:
+        start = vec2(1.2, 1.2)
+    time.Span:
+        length = 1h
+    time.Ending.Expires
+
+rule Fill:
+    on load:
+        for lane in range(0, Field[Board].size):
+            let target = spawn Target(lane = lane)
+            if Field[Board].burst_every > 0 and lane % Field[Board].burst_every == 0:
+                let jolt = spawn Jolt()
+                add fx.Affects(jolt, target)
+                let flash = spawn Flash()
+                add fx.Affects(flash, target)
+                let pop = spawn Pop()
+                add fx.Affects(pop, target)

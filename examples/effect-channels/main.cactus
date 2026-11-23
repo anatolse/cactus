@@ -1,0 +1,125 @@
+module main
+
+# Visual effects as entities linked to what they change. Keys start timed
+# effects; the lamp keeps a permanent highlight. The lower right box shakes
+# with the jolt built by hand in by_hand.cactus, next to the stdlib jolt.
+#   J jolt   F flash   P pop-in   O fade-out   T both jolts below
+
+use std.core as core
+use std.input as inp
+use std.time as time
+use std.math.ease as ease
+use std.transform.flat as tf
+use std.render.shapes as shapes
+use std.camera.flat as cam
+use std.camera.viewport as vp
+use std.render.effects as effects
+use std.render.effects.flat as fx
+use by_hand
+
+const:
+    PUSH = vec2(16.0, 0.0)
+
+input JoltKey: button
+    key = inp.Key.J
+
+input FlashKey: button
+    key = inp.Key.F
+
+input PopKey: button
+    key = inp.Key.P
+
+input FadeKey: button
+    key = inp.Key.O
+
+input TwinKey: button
+    key = inp.Key.T
+
+template Box(at: vec2, tint: color):
+    tf.WorldTransform:
+        position = at
+    shapes.Shape:
+        type = shapes.ShapeType.Rectangle
+        size = vec2(60.0, 60.0)
+        origin = vec2(30.0, 30.0)
+        color = tint
+
+pub entity Hero from Box(at = vec2(-200.0, -100.0), tint = #4080FFFF)
+pub entity Ghost from Box(at = vec2(0.0, -100.0), tint = #40C060FF)
+pub entity Lamp from Box(at = vec2(200.0, -100.0), tint = #808080FF)
+pub entity Left from Box(at = vec2(-100.0, 100.0), tint = #C04040FF)
+pub entity Right from Box(at = vec2(100.0, 100.0), tint = #C04040FF)
+
+entity View:
+    tf.WorldTransform
+    cam.Camera
+    vp.Viewport
+
+pub template Jolt(push: vec2):
+    effects.Effect
+    fx.Shift:
+        start = push
+        curve = ease.Curve.OutQuad
+    time.Span:
+        length = 200ms
+    time.Ending.Expires
+
+template HitFlash:
+    effects.Effect
+    effects.Glow:
+        start = #FFFFFF00
+        curve = ease.Curve.OutQuad
+    time.Span:
+        length = 150ms
+    time.Ending.Expires
+
+template PopIn:
+    effects.Effect
+    fx.Scale:
+        start = vec2(0.2, 0.2)
+        curve = ease.Curve.OutBack
+    time.Span:
+        length = 300ms
+    time.Ending.Expires
+
+template FadeOut:
+    effects.Effect
+    effects.Tint:
+        end = #FFFFFF00
+    time.Span:
+        length = 1s
+    time.Ending.Expires
+
+template Highlight:
+    effects.Effect
+    effects.Tint:
+        end = #FFDF60FF
+    effects.Glow:
+        end = #20180000
+
+# One rule starts every timed effect: effects spawned by two rules of one
+# activation would need an `after:` between them.
+rule StartEffects:
+    on core.input:
+        if inp.pressed(JoltKey):
+            let jolt = spawn Jolt(push = PUSH)
+            add fx.Affects(jolt, Hero)
+        if inp.pressed(FlashKey):
+            let flash = spawn HitFlash()
+            add fx.Affects(flash, Hero)
+        if inp.pressed(PopKey):
+            let pop = spawn PopIn()
+            add fx.Affects(pop, Hero)
+        if inp.pressed(FadeKey):
+            let fade = spawn FadeOut()
+            add fx.Affects(fade, Ghost)
+        if inp.pressed(TwinKey):
+            let jolt = spawn Jolt(push = PUSH)
+            add fx.Affects(jolt, Left)
+            let shake = spawn by_hand.HandJolt(push = PUSH)
+            add by_hand.Shakes(shake, Right)
+
+rule LightLamp:
+    on core.load:
+        let light = spawn Highlight()
+        add fx.Affects(light, Lamp)

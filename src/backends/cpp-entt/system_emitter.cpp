@@ -9555,7 +9555,8 @@ const std::array<SingleViewRendererSpec, 6>& single_view_renderer_specs() {
         {.matches = is_sprite_renderer,
          .call_body =
              [](const std::string& t, const std::string& d, const std::string& c) {
-                 return "cactus::runtime::entt_backend::submit_sprite(" + t + ".position, " + d + ".size, " + c +
+                 return "cactus::runtime::entt_backend::submit_sprite(" + t + ".position, " + d + ".size, " + t +
+                        ".scale, " + c +
                         ", " + d + ".texture, " + d + ".visible, " + d + ".layer)";
              }},
         {.matches = is_mesh_renderer,
@@ -9581,7 +9582,8 @@ const std::array<SingleViewRendererSpec, 6>& single_view_renderer_specs() {
         {.matches = is_any_text_renderer_2d,
          .call_body =
              [](const std::string& t, const std::string& d, const std::string& c) {
-                 return "cactus::runtime::entt_backend::submit_text_2d(" + t + ".position, " + t + ".rotation, " + d +
+                 return "cactus::runtime::entt_backend::submit_text_2d(" + t + ".position, " + t + ".rotation, " + t +
+                        ".scale, " + d +
                         ".font_size, " + c + ", " + d + ".text, " + d + ".visible)";
              }},
         {.matches = is_any_text_renderer_3d,
@@ -9717,6 +9719,7 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
         out << "                cactus::runtime::entt_backend::draw_shape_rectangle(" << pose << ".position,\n";
         out << "                               " << shape_var << ".size,\n";
         out << "                               " << shape_var << ".origin,\n";
+        out << "                               " << pose << ".scale,\n";
         out << "                               " << pose << ".rotation,\n";
         out << "                               " << color << ");\n";
         out << "                break;\n";
@@ -9724,6 +9727,7 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
         out << "                cactus::runtime::entt_backend::draw_shape_circle(" << pose << ".position,\n";
         out << "                            " << shape_var << ".size.x,\n";
         out << "                            " << shape_var << ".origin,\n";
+        out << "                            " << pose << ".scale,\n";
         out << "                            " << color << ");\n";
         out << "                break;\n";
         out << "        }\n";

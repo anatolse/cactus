@@ -3041,10 +3041,44 @@ rule ShowHit:
 ```
 
 - `std.transform.flat.DrawnPose` and `std.transform.volume.DrawnPose` have the fields of their `WorldTransform`. A renderer that draws at the entity's `WorldTransform` draws at its `DrawnPose` when the entity has one this frame.
+- Every renderer that draws a size multiplies it by the pose's scale. A rectangle's `origin` scales with it, so it keeps turning around the same point; a circle with unequal axes is drawn as an ellipse; 2D text stretches per axis around its center.
 - `std.render.picture.DrawnColor` has `tint` (default `#FFFFFFFF`) and `glow` (default `#00000000`). Every renderer with a color of its own, lights included, draws `own × tint + glow`, per channel and unclamped; drawing clamps once.
 - Picture rules join `layers.picture`: it runs in `core.render` after the last `WorldTransform` write and before every drawing layer.
 - A viewport draws through its volume camera's `DrawnPose`; `CameraView` and the functions that read it keep the true pose, so picking ignores a camera shake.
 - Children don't follow a parent's drawn pose. `ScreenLabel`, `Canvas2D`, `std.ui`, voxel volumes and the flat camera have no picture.
+
+### 7.14 Effect Channels (`std.render.effects`)
+
+An effect is an entity linked to what it changes. The target is drawn with all its live effects folded in; an effect ends when its entity is destroyed, and its share goes with it. Effects never need an order between them.
+
+```cactus
+use std.time as time
+use std.math.ease as ease
+use std.transform.flat as tf
+use std.render.effects as effects
+use std.render.effects.flat as fx
+
+template Jolt(push: vec2):
+    effects.Effect
+    fx.Shift:
+        start = push
+        curve = ease.Curve.OutQuad
+    time.Span:
+        length = 200ms
+    time.Ending.Expires
+
+rule ShakeOnHit:
+    each: tf.WorldTransform
+    on Hit as hit:
+        let jolt = spawn Jolt(push = hit.push)
+        add fx.Affects(jolt, self)
+```
+
+- `std.render.effects` declares the marker `Effect` and the color channels `Tint` (effects on one target multiply) and `Glow` (they add). `std.render.effects.flat` and `std.render.effects.volume` each declare `relation Affects` from `Effect` to their `WorldTransform`, and the pose channels `Shift` (add) and `Scale` (multiply per axis); flat also has `Turn` (add, radians). Volume has no turn channel: rotations don't commute.
+- A channel has `start`, `end`, `curve: ease.Curve = Linear` and `at: float = 1.0`; its value is `start + (end - start) * ease.apply(curve, at)`. While the effect carries a `time.Span`, `at` follows the span's progress; without one it keeps the value last written, so a permanent effect sets only `end`, and a game rule may write any field.
+- The folds run in `layers.picture` and project `DrawnPose` and `DrawnColor` only for targets with at least one `Affects` row. They never write `WorldTransform` or a renderer's color.
+- A game adds its own channel the same way: a trait with the four fields, a rule that sets `at` from the span, and a `pairs:` rule over `Affects` that folds it with `reduce per` and projects a frame-local trait. Groups of `reduce per` are outer, so the fold returns early when `count()` is `0`.
+- Two rules of one activation that each `spawn` need an order between them, since the order of spawns is observable; without one it is a compile error. Start several effects of one event from one handler, or give the rules an `after:`.
 
 ## 8. Deferred and Migration Notes
 

@@ -1,0 +1,56 @@
+module std.render.effects
+
+use std.core as core
+use std.time as time
+use std.color as color
+use std.math.ease as ease
+
+# Visual effects are entities. Link one to its target with the `Affects`
+# relation of `std.render.effects.flat` or `std.render.effects.volume`; the
+# target is drawn with all its live effects folded in, and the simulation keeps
+# its own pose and colors. An effect ends when its entity is destroyed, usually
+# by a `time.Span` with `time.Ending.Expires`.
+#
+# Each channel runs from `start` to `end` along `curve`; `at` is how far along
+# it is. While the effect has a Span, `at` follows the span's progress; without
+# one it keeps the value last written, 1.0 by default, so a permanent effect
+# sets only `end`.
+
+# Marks an effect entity.
+pub trait Effect
+
+# Multiplies the target's drawn colors. Effects on one target multiply.
+pub trait Tint:
+    var start: color = #FFFFFFFF
+    var end: color = #FFFFFFFF
+    var curve: ease.Curve = ease.Curve.Linear
+    var at: float = 1.0
+
+# Adds to the target's drawn colors. Effects on one target add.
+pub trait Glow:
+    var start: color = #00000000
+    var end: color = #00000000
+    var curve: ease.Curve = ease.Curve.Linear
+    var at: float = 1.0
+
+pub func tint_value(c: Tint) color:
+    return color.mix(c.start, c.end, ease.apply(c.curve, c.at))
+
+pub func glow_value(c: Glow) color:
+    return color.mix(c.start, c.end, ease.apply(c.curve, c.at))
+
+rule DriveTint:
+    each:
+        Tint as c
+        time.Span as span
+
+    on core.late_tick:
+        c.at = time.progress(span)
+
+rule DriveGlow:
+    each:
+        Glow as c
+        time.Span as span
+
+    on core.late_tick:
+        c.at = time.progress(span)

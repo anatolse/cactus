@@ -294,6 +294,30 @@ void DrawCircleV(Vector2 center, float radius, Color color) noexcept {
     record(RecordedDrawCircleV{.center = center, .radius = radius, .color = color});
 }
 
+void DrawEllipseV(Vector2 center, float radiusH, float radiusV, Color color) noexcept {
+    record(RecordedDrawEllipseV{.center = center, .radiusH = radiusH, .radiusV = radiusV, .color = color});
+}
+
+void rlPushMatrix() noexcept {
+    record(RecordedPushMatrix{});
+}
+
+void rlPopMatrix() noexcept {
+    record(RecordedPopMatrix{});
+}
+
+void rlTranslatef(float x, float y, float z) noexcept {
+    record(RecordedTranslate{.x = x, .y = y, .z = z});
+}
+
+void rlRotatef(float angle, float x, float y, float z) noexcept {
+    record(RecordedRotate{.angle = angle, .x = x, .y = y, .z = z});
+}
+
+void rlScalef(float x, float y, float z) noexcept {
+    record(RecordedScale{.x = x, .y = y, .z = z});
+}
+
 void DrawRectangleLinesEx(Rectangle rec, float lineThick, Color color) noexcept {
     record(RecordedDrawRectangleLinesEx{.rec = rec, .lineThick = lineThick, .color = color});
 }

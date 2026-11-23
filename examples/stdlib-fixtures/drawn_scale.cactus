@@ -1,0 +1,75 @@
+module drawn_scale
+
+# Flat renderers draw the pose's scale: a size grows by it, a pivot keeps its
+# place on the shape, a circle with unequal axes becomes an ellipse.
+
+use std.core as core
+use std.transform.flat as tf
+use std.render.shapes as shapes
+use std.render.sprites as sprites
+use std.render.text as text
+use std.camera.flat as cam
+use std.camera.viewport as vp
+
+asset Ground: texture = "../platformer/assets/tiles/ground.png"
+
+pub entity Wide:
+    tf.WorldTransform:
+        position = vec2(100.0, 100.0)
+        rotation = 0.5
+        scale = vec2(2.0, 3.0)
+    shapes.Shape:
+        type = shapes.ShapeType.Rectangle
+        size = vec2(40.0, 20.0)
+        origin = vec2(20.0, 10.0)
+
+pub entity Plain:
+    tf.WorldTransform:
+        position = vec2(300.0, 100.0)
+    shapes.Shape:
+        type = shapes.ShapeType.Rectangle
+        size = vec2(32.0, 32.0)
+
+pub entity Round:
+    tf.WorldTransform:
+        position = vec2(100.0, 300.0)
+        scale = vec2(1.5, 1.5)
+    shapes.Shape:
+        type = shapes.ShapeType.Circle
+        size = vec2(32.0, 32.0)
+        origin = vec2(2.0, 0.0)
+
+pub entity Oval:
+    tf.WorldTransform:
+        position = vec2(300.0, 300.0)
+        scale = vec2(2.0, 1.0)
+    shapes.Shape:
+        type = shapes.ShapeType.Circle
+        size = vec2(32.0, 32.0)
+
+pub entity Tile:
+    tf.WorldTransform:
+        position = vec2(500.0, 100.0)
+        scale = vec2(0.5, 2.0)
+    sprites.Renderer:
+        texture = Ground
+        size = vec2(64.0, 32.0)
+
+pub entity Word:
+    tf.WorldTransform:
+        position = vec2(500.0, 300.0)
+        rotation = 0.25
+        scale = vec2(2.0, 1.0)
+    text.TextLabel:
+        text = "scaled"
+
+pub entity Note:
+    tf.WorldTransform:
+        position = vec2(700.0, 300.0)
+    text.TextLabel:
+        text = "plain"
+
+pub entity View:
+    tf.WorldTransform
+    cam.Camera
+    vp.Viewport

@@ -151,6 +151,7 @@ struct DirectionalLightSubmission {
 struct TextSubmission2D {
     Vector2 position{};
     float rotation_deg{0.0F};
+    Vector2 scale{.x = 1.0F, .y = 1.0F};
     int font_size{32};
     CactusColor color{};
     std::string text;
@@ -1829,8 +1830,19 @@ void flush_text_2d_queue() noexcept {
         const auto fs      = static_cast<float>(sub.font_size);
         const Vector2 size = MeasureTextEx(font, sub.text.c_str(), fs, kSpacing);
         const Vector2 origin{.x = size.x * 0.5F, .y = size.y * 0.5F};
+        if (sub.scale.x == 1.0F && sub.scale.y == 1.0F) {
+            cactus::runtime::raylib::DrawTextPro(
+                font, sub.text.c_str(), sub.position, origin, sub.rotation_deg, fs, kSpacing, sub.color);
+            continue;
+        }
+        // DrawTextPro has no per-axis scale, so scale goes through the matrix stack.
+        cactus::runtime::raylib::rlPushMatrix();
+        cactus::runtime::raylib::rlTranslatef(sub.position.x, sub.position.y, 0.0F);
+        cactus::runtime::raylib::rlRotatef(sub.rotation_deg, 0.0F, 0.0F, 1.0F);
+        cactus::runtime::raylib::rlScalef(sub.scale.x, sub.scale.y, 1.0F);
         cactus::runtime::raylib::DrawTextPro(
-            font, sub.text.c_str(), sub.position, origin, sub.rotation_deg, fs, kSpacing, sub.color);
+            font, sub.text.c_str(), Vector2{.x = 0.0F, .y = 0.0F}, origin, 0.0F, fs, kSpacing, sub.color);
+        cactus::runtime::raylib::rlPopMatrix();
     }
     cactus::runtime::raylib::EndMode2D();
 }
@@ -2214,6 +2226,7 @@ void flush_viewport_3d() noexcept {
 
 void submit_sprite(const Vector2 position,
                    const Vector2 size,
+                   const Vector2 scale,
                    const CactusColor color,
                    const AssetHandle texture,
                    const bool visible,
@@ -2228,7 +2241,7 @@ void submit_sprite(const Vector2 position,
     }
     sprite_queue().push_back(SpriteSubmission{
         .position   = position,
-        .size       = size,
+        .size       = Vector2{.x = size.x * scale.x, .y = size.y * scale.y},
         .color      = color,
         .runtime_id = resolved.runtime_id,
         .layer      = layer,
@@ -2653,6 +2666,7 @@ void register_directional_light(const Vector3 direction, const CactusColor color
 
 void submit_text_2d(const Vector2 position,
                     const float rotation_rad,
+                    const Vector2 scale,
                     const int font_size,
                     const CactusColor color,
                     const std::string& text,
@@ -2664,6 +2678,7 @@ void submit_text_2d(const Vector2 position,
     text_2d_queue().push_back(TextSubmission2D{
         .position     = position,
         .rotation_deg = rotation_rad * kRadToDeg,
+        .scale        = scale,
         .font_size    = font_size,
         .color        = color,
         .text         = text,
@@ -3774,12 +3789,13 @@ Ray screen_to_world_ray(const Vector2 screen, const Camera3D& camera) noexcept {
 void draw_shape_rectangle(const Vector2 position,
                           const Vector2 size,
                           const Vector2 origin,
+                          const Vector2 scale,
                           const float rotation_rad,
                           const CactusColor color) noexcept {
     constexpr float kRadToDeg = 180.0F / std::numbers::pi_v<float>;
     cactus::runtime::raylib::DrawRectanglePro(
-        Rectangle{.x = position.x, .y = position.y, .width = size.x, .height = size.y},
-        origin,
+        Rectangle{.x = position.x, .y = position.y, .width = size.x * scale.x, .height = size.y * scale.y},
+        Vector2{.x = origin.x * scale.x, .y = origin.y * scale.y},
         rotation_rad * kRadToDeg,
         color);
 }
@@ -3787,9 +3803,15 @@ void draw_shape_rectangle(const Vector2 position,
 void draw_shape_circle(const Vector2 position,
                        const float diameter,
                        const Vector2 origin,
+                       const Vector2 scale,
                        const CactusColor color) noexcept {
-    cactus::runtime::raylib::DrawCircleV(
-        Vector2{.x = position.x - origin.x, .y = position.y - origin.y}, diameter / 2.0F, color);
+    const Vector2 center{.x = position.x - (origin.x * scale.x), .y = position.y - (origin.y * scale.y)};
+    const float radius = diameter / 2.0F;
+    if (scale.x == scale.y) {
+        cactus::runtime::raylib::DrawCircleV(center, radius * scale.x, color);
+        return;
+    }
+    cactus::runtime::raylib::DrawEllipseV(center, radius * scale.x, radius * scale.y, color);
 }
 
 Shader* ensure_render_pass_shader(RenderPassShaderState& state,

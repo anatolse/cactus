@@ -112,9 +112,13 @@ exception — see `examples/CLAUDE.md`).
 ### Effects and the picture
 
 - A visual effect (shake, flash, tint, squash) writes the picture, never `WorldTransform` or a
-  renderer's color: `project tf.DrawnPose` / `project picture.DrawnColor` from a rule in
-  `group: layers.picture`. The simulation keeps its truth, and the effect is gone when the rule
-  stops projecting.
+  renderer's color. Prefer an effect entity from `std.render.effects`: a template with
+  `effects.Effect`, a channel (`fx.Shift`, `fx.Scale`, `fx.Turn`, `effects.Tint`, `effects.Glow`)
+  and a `time.Span` with `time.Ending.Expires`, linked with `add fx.Affects(effect, target)`.
+  Effects on one target never need an order. Write your own `project tf.DrawnPose` /
+  `project picture.DrawnColor` rule in `group: layers.picture` only for a picture no channel gives.
+- Start several effects of one event from one handler: two rules of one activation that each
+  `spawn` need an `after:` between them.
 
 ### Easing
 

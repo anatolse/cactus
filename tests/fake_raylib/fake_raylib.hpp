@@ -97,6 +97,30 @@ struct RecordedDrawCircleV {
     float radius;
     Color color;
 };
+struct RecordedDrawEllipseV {
+    Vector2 center;
+    float radiusH;
+    float radiusV;
+    Color color;
+};
+struct RecordedPushMatrix {};
+struct RecordedPopMatrix {};
+struct RecordedTranslate {
+    float x;
+    float y;
+    float z;
+};
+struct RecordedRotate {
+    float angle;
+    float x;
+    float y;
+    float z;
+};
+struct RecordedScale {
+    float x;
+    float y;
+    float z;
+};
 struct RecordedDrawRectangleLinesEx {
     Rectangle rec;
     float lineThick;
@@ -172,6 +196,12 @@ using RecordedCall = std::variant<RecordedClearBackground,
                                   RecordedDrawTexturePro,
                                   RecordedDrawRectanglePro,
                                   RecordedDrawCircleV,
+                                  RecordedDrawEllipseV,
+                                  RecordedPushMatrix,
+                                  RecordedPopMatrix,
+                                  RecordedTranslate,
+                                  RecordedRotate,
+                                  RecordedScale,
                                   RecordedDrawRectangleLinesEx,
                                   RecordedDrawRectangleRec,
                                   RecordedDrawLineEx,
@@ -273,6 +303,12 @@ void DrawTexturePro(Texture2D texture,
                     Color tint) noexcept;
 void DrawRectanglePro(Rectangle rec, Vector2 origin, float rotation, Color color) noexcept;
 void DrawCircleV(Vector2 center, float radius, Color color) noexcept;
+void DrawEllipseV(Vector2 center, float radiusH, float radiusV, Color color) noexcept;
+void rlPushMatrix() noexcept;
+void rlPopMatrix() noexcept;
+void rlTranslatef(float x, float y, float z) noexcept;
+void rlRotatef(float angle, float x, float y, float z) noexcept;
+void rlScalef(float x, float y, float z) noexcept;
 void DrawRectangleLinesEx(Rectangle rec, float lineThick, Color color) noexcept;
 void DrawRectangleRec(Rectangle rec, Color color) noexcept;
 void DrawLineEx(Vector2 startPos, Vector2 endPos, float thick, Color color) noexcept;

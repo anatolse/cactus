@@ -130,6 +130,14 @@ CACTUS_RL_WRAP_VOID(DrawRectanglePro,
                     (Rectangle rec, Vector2 origin, float rotation, CactusColor color),
                     (rec, origin, rotation, draw_color(color)))
 CACTUS_RL_WRAP_VOID(DrawCircleV, (Vector2 center, float radius, CactusColor color), (center, radius, draw_color(color)))
+CACTUS_RL_WRAP_VOID(DrawEllipseV,
+                    (Vector2 center, float radiusH, float radiusV, CactusColor color),
+                    (center, radiusH, radiusV, draw_color(color)))
+CACTUS_RL_WRAP_VOID(rlPushMatrix, (), ())
+CACTUS_RL_WRAP_VOID(rlPopMatrix, (), ())
+CACTUS_RL_WRAP_VOID(rlTranslatef, (float x, float y, float z), (x, y, z))
+CACTUS_RL_WRAP_VOID(rlRotatef, (float angle, float x, float y, float z), (angle, x, y, z))
+CACTUS_RL_WRAP_VOID(rlScalef, (float x, float y, float z), (x, y, z))
 CACTUS_RL_WRAP_VOID(DrawRectangleLinesEx, (Rectangle rec, float lineThick, CactusColor color), (rec, lineThick, draw_color(color)))
 CACTUS_RL_WRAP_VOID(DrawRectangleRec, (Rectangle rec, CactusColor color), (rec, draw_color(color)))
 CACTUS_RL_WRAP_VOID(DrawLineEx,

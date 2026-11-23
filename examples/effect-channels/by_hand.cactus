@@ -1,0 +1,59 @@
+module by_hand
+
+# The stdlib jolt built by hand: an effect trait with its own clock, a
+# relation to the target, and one fold that projects the drawn pose.
+
+use std.core as core
+use std.math as math
+use std.math.ease as ease
+use std.transform.flat as tf
+use std.render.layers as layers
+
+const:
+    LENGTH = 200ms
+
+pub trait Shake:
+    let push: vec2
+    var elapsed: duration = 0s
+
+pub relation Shakes:
+    from: Shake
+    to: tf.WorldTransform
+
+pub template HandJolt(push: vec2):
+    Shake:
+        push = push
+
+func offset(shake: Shake) vec2:
+    let t = math.clamp(shake.elapsed / LENGTH, 0.0, 1.0)
+    return shake.push + (vec2(0.0, 0.0) - shake.push) * ease.out_quad(t)
+
+# Ends the shake at its length, like std.time.Ending.Expires.
+rule Clock:
+    each:
+        Shake as shake
+
+    on core.fixed_tick as step:
+        if LENGTH - shake.elapsed <= step.delta:
+            destroy
+            return
+        shake.elapsed += step.delta
+
+rule DrawShakes:
+    pairs:
+        shake: Shake
+        thing: tf.WorldTransform
+    group: layers.picture
+    where:
+        Shakes(shake, thing)
+    reduce per thing:
+        rows = count()
+        total = sum(offset(shake[Shake]))
+
+    on core.render:
+        if rows == 0:
+            return
+        project tf.DrawnPose to thing:
+            position = thing[tf.WorldTransform].position + total
+            rotation = thing[tf.WorldTransform].rotation
+            scale = thing[tf.WorldTransform].scale

@@ -3,30 +3,14 @@
 ## Purpose
 
 Define the gradient-square Cactus example: a minimal, static demonstration of vertex-to-fragment
-color interpolation on a `dsl-render-passes` `Quads` render pass — one static entity, no
+color interpolation in a drawing rule (`dsl-drawing-rules`) — one static entity, no
 `spawn`/`input`, four fixed per-corner colors written by the vertex handler and passed straight
 through by the fragment handler, so the entire visible gradient comes from the backend's
 rasterizer interpolation rather than any authored per-pixel formula. Companion to
 `example-particle-burst`, which never exercises per-vertex color variation (`tint_out` is uniform
-per particle instance there).
+per particle there).
 
 ## Requirements
-
-### Requirement: Gradient square example Cactus module
-
-The example SHALL provide a single `examples/gradient-square/gradient_square.cactus` file that is
-valid Cactus DSL. It SHALL import `std.render.passes` and `std.transform.flat`. It SHALL declare
-one static `pub entity` with a `std.transform.flat.WorldTransform` and no other trait. It SHALL
-declare a render-pass phase (`after: render`, `pipeline: passes.Pass = passes.Pass.Quads`,
-`output: passes.Target = passes.Target.Screen`) and its vertex/fragment stage handlers. It SHALL
-NOT declare `spawn`, `input`, or any simulation rule.
-
-#### Scenario: Module compiles without errors
-
-- **WHEN** the compiler is invoked with `cactus examples/gradient-square/gradient_square.cactus
-  --backend cpp-entt -o gradient-square.generated.h`
-- **THEN** the command exits with code 0 and produces valid generated C++ output, including the
-  generated GLSL shader pair for the render pass
 
 ### Requirement: Square renders with a distinct color per corner
 
@@ -48,3 +32,14 @@ computation.
 - **WHEN** the fragment-stage handler evaluates a sample
 - **THEN** `frag_color` equals that sample's interpolated `tint` input with no additional
   transformation, so the visible gradient is produced entirely by rasterizer interpolation
+
+### Requirement: Gradient square example module with a drawing rule
+`examples/gradient-square/gradient_square.cactus` SHALL be a valid Cactus module that imports `std.transform.flat` and `std.render.layers`, declares one static entity with a `WorldTransform`, and draws it with one drawing rule whose vertex handler writes a fixed color per corner into `tint_out` and whose fragment handler outputs the interpolated `tint`. It SHALL declare no phase.
+
+#### Scenario: Module compiles
+- **WHEN** the example is compiled with the cpp-entt backend
+- **THEN** compilation succeeds and the generated code holds one shader pair for the drawing rule
+
+#### Scenario: Corner colors still interpolate
+- **WHEN** the square is drawn
+- **THEN** each corner shows its own color and the colors blend across the quad, as before

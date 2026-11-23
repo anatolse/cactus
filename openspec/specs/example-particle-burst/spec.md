@@ -3,27 +3,11 @@
 ## Purpose
 
 Define the particle-burst Cactus example: a self-contained module demonstrating mouse-triggered
-particle spawning, gravity/lifetime simulation, and circle-shape rendering using only ordinary
-`spawn`/`destroy` entities and the existing `std.render.shapes` rendering trait — no fixed-capacity
-pool, no device-placement inference, no new stdlib or rendering constructs.
+particle spawning, gravity/lifetime simulation, and soft round particles drawn by one drawing rule
+(`dsl-drawing-rules`), using only ordinary `spawn`/`destroy` entities — no fixed-capacity pool and
+no device-placement inference.
 
 ## Requirements
-
-### Requirement: Particle burst example Cactus module
-
-The example SHALL provide a single `examples/particle-burst/particle_burst.cactus` file that is
-valid Cactus DSL. It SHALL import `std.input`, `std.render.passes`, `std.math`, and
-`std.transform.flat`. It SHALL declare a `Particle` trait with `velocity: vec2` and `lifetime:
-float` fields, and a `template` that combines `std.transform.flat.WorldTransform` and `Particle`
-(no `std.render.shapes.Shape`) for use as the burst-member shape. It SHALL declare a render-pass
-phase (`particle_pass`, `after: render`, `pipeline: passes.Pass = passes.Pass.Quads`, `output:
-passes.Target = passes.Target.Screen`) and its vertex/fragment stage handlers.
-
-#### Scenario: Module compiles without errors
-
-- **WHEN** the compiler is invoked with `cactus examples/particle-burst/particle_burst.cactus --backend cpp-entt -o particle-burst.generated.h`
-- **THEN** the command exits with code 0 and produces valid generated C++ output, including the
-  generated GLSL shader pair for `particle_pass`
 
 ### Requirement: Left mouse click spawns a fixed-size burst of particles
 
@@ -72,32 +56,24 @@ particle's `lifetime` reaches zero or below, the rule SHALL `destroy` that entit
 - **WHEN** a live particle entity's `lifetime` reaches zero or below during a fixed-tick step
 - **THEN** that entity is destroyed and no longer receives further simulation or rendering
 
-### Requirement: Particles render as soft circles via an authored render pass
+### Requirement: Particle burst example module with a drawing rule
+`examples/particle-burst/particle_burst.cactus` SHALL be a valid Cactus module that imports `std.input`, `std.math`, `std.color`, `std.render.layers` and `std.transform.flat`, declares a `Particle` trait and a particle template with no `Shape`, and draws particles with one drawing rule. It SHALL declare no phase.
 
-Every spawned particle entity SHALL be rendered by `particle_pass`, a `Quads`-kind render-pass
-phase declared in the example module. The vertex-stage handler SHALL filter on `WorldTransform`
-and `Particle`, compute each instance's screen-space quad corner from `WorldTransform.position`
-and a fixed particle radius, and pass through UV and a fixed tint. The fragment-stage handler
-SHALL produce a transparent color outside a centered radius of `0.5` in UV space and linearly fade
-alpha from center to edge inside it, using `std.render.passes.with_alpha`. The example SHALL NOT
-introduce any new rendering trait, extern rule, or stdlib module beyond `std.render.passes`
-(already added by `add-render-pass-phases`).
+#### Scenario: Module compiles
+- **WHEN** the example is compiled with the cpp-entt backend
+- **THEN** compilation succeeds and the generated code holds one shader pair for the drawing rule
 
-#### Scenario: Spawned particle is instanced by the render pass
+### Requirement: Particles render as soft circles via a drawing rule
+Every particle SHALL be drawn by one drawing rule over `WorldTransform` and `Particle` in `group: layers.sprites`. Its vertex handler SHALL place the quad in world space from `WorldTransform.position` and a fixed radius. Its fragment handler SHALL give a transparent color beyond UV distance 0.5 from the center and an alpha that falls linearly from the center to that edge, using `std.color.with_alpha`.
 
-- **WHEN** a particle entity is spawned by the burst rule
-- **THEN** `particle_pass`'s vertex-stage handler selects it (via its `WorldTransform`+`Particle`
-  filter) and it is instanced as a quad
+#### Scenario: Spawned particle is drawn
+- **WHEN** a particle is spawned by the burst rule
+- **THEN** the drawing rule draws one quad for it
 
-#### Scenario: Fragment produces a soft circular falloff
+#### Scenario: Soft falloff
+- **WHEN** the fragment handler evaluates a sample at UV distance `d` from the center
+- **THEN** the sample is transparent when `d > 0.5` and its alpha falls linearly from `d = 0` to `d = 0.5` otherwise
 
-- **WHEN** `particle_pass`'s fragment-stage handler evaluates a sample at UV distance `d` from
-  the quad center
-- **THEN** the sample is fully transparent when `d > 0.5` and its alpha linearly decreases from
-  the center (`d = 0`) to the edge (`d = 0.5`) otherwise
-
-#### Scenario: Destroyed particles are no longer instanced
-
-- **WHEN** a particle entity is destroyed by the simulation rule (lifetime elapsed)
-- **THEN** it is no longer selected by the vertex handler's filter and no longer contributes an
-  instance to the render pass
+#### Scenario: Destroyed particle
+- **WHEN** a particle is destroyed
+- **THEN** no quad is drawn for it

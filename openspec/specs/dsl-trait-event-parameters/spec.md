@@ -107,16 +107,16 @@ At a call to a `func` with an event parameter, the argument SHALL be the alias o
 - **WHEN** a handler `on Heal as h:` calls `is_critical(h)` and `is_critical` takes `hit: Hit`
 - **THEN** compilation fails with an error that names `Hit` and `Heal`
 
-### Requirement: Render-pass stage funcs take no trait or event parameters
-A render-pass stage handler SHALL NOT call a `func` that has a trait or event parameter, directly or through another `func` or a constant. The call SHALL be rejected with an error that names the `func`.
-
-#### Scenario: Stage handler call rejected
-- **WHEN** a vertex-stage handler calls `func shade(t: Tint) color`
-- **THEN** compilation fails with an error that names `shade`
-
 ### Requirement: Trait and event arguments are passed without a copy
 Generated code SHALL pass trait and event arguments as read-only references, with no copy of the trait or event. Behavior SHALL be the same as if the read fields were written inline at the call site.
 
 #### Scenario: Large trait in a pair loop
 - **WHEN** a pair rule over 1,000 by 1,000 entities calls a `func` with a 9-field trait parameter in `where:`
 - **THEN** the generated C++ passes the trait by `const` reference and copies no trait value per tuple
+
+### Requirement: Stage funcs take no trait or event parameters
+A stage handler of a drawing rule SHALL NOT call a `func` that has a trait or event parameter, directly or through another `func` or a constant. The call SHALL be rejected with an error that names the `func`.
+
+#### Scenario: Stage handler call rejected
+- **WHEN** a vertex-stage handler calls `func shade(t: Tint) color`
+- **THEN** compilation fails with an error that names `shade`

@@ -93,8 +93,8 @@ Adding, subtracting and negating durations, multiplying a duration by an `int`, 
 - **THEN** the compiler reports a type error that suggests `duration(seconds(cooldown) * 0.5)`
 
 ### Requirement: Stage handlers reject durations
-A render-pass stage handler SHALL NOT read, write or declare a value of duration type; each use SHALL be a source-located error that suggests converting with `seconds(...)` before the stage.
+A stage handler of a drawing rule SHALL NOT read, write or declare a value of duration type, whether it comes from a constant, a local, a row field, a named entity or a link; each use SHALL be a source-located error that suggests converting with `seconds(...)` before the stage.
 
 #### Scenario: Duration in a stage handler
 - **WHEN** a stage handler reads a `duration` field
-- **THEN** the compiler reports an error at the read
+- **THEN** the compiler reports an error at the read that suggests `seconds(...)`

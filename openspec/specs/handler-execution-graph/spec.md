@@ -132,21 +132,6 @@ The compiler SHALL reject cycles in the phase graph and in each handler scheduli
 - **WHEN** two nodes have no dependency or conflict edge
 - **THEN** the graph preserves them in the same executable dependency level
 
-### Requirement: Render-pass synthetic pass-local edges
-For a render-pass phase, the execution graph SHALL represent one synthetic, non-authored rasterization node connecting the phase's vertex-stage handler node to its fragment-stage handler node: vertex-handler node → synthetic rasterization node → fragment-handler node → the render-pass phase's own node in the ordinary phase DAG. This mirrors the existing representation of non-authored producer work ("Commit-synthesized and scheduler-boundary producer edges") — the synthetic node is attributed to backend rasterization, not to any `HandlerIdentity`. No other phase or handler may depend on the synthetic node directly; only the phase's own node participates in ordinary `after:` edges to downstream phases.
-
-#### Scenario: Vertex output reaches fragment through the synthetic node
-- **WHEN** a render-pass phase has vertex-stage handler `V` and fragment-stage handler `F`
-- **THEN** the graph contains edges `V → synthetic rasterization node → F`, and no direct edge `V → F`
-
-#### Scenario: Downstream phases depend on the pass, not on either stage handler directly
-- **WHEN** a phase declares `after: particle_pass`
-- **THEN** its producer edge is to `particle_pass`'s own phase node, unaffected by the internal vertex/rasterization/fragment edges
-
-#### Scenario: Stage handlers introduce no new structural-commit interaction
-- **WHEN** the graph is validated for a render-pass phase
-- **THEN** no structural-command producer/consumer edges are introduced by the stage handlers, since `dsl-render-passes`'s body restriction already rejects `spawn`/`destroy`/`add`/`remove`/`project` in a stage handler body
-
 ### Requirement: An activation denotes a trace
 The meaning of one activation SHALL be defined independently of any backend's handler order. Each handler run is a step. Two handlers *commute* when neither writes a trait field the other reads or writes, they share no observable effect domain, and they do not both append to one event queue or one structural command list in an order that a later reader can observe; otherwise they *depend*. For every pair of co-eligible handlers that depend, the graph SHALL hold a schedule edge between them.
 
@@ -592,3 +577,22 @@ Each commit round SHALL start a new cascade: its lifecycle deliveries form gener
 #### Scenario: Emission order inside one handler is kept
 - **WHEN** one handler emits `DrawDebugLine2D`, then `DrawDebugTriangle2D`, then `DrawDebugLine2D`
 - **THEN** the three renderer runs happen in that order
+
+### Requirement: A drawing rule is one render rule with a synthetic rasterization edge
+A drawing rule SHALL be ordered against other `core.render` rules by its `group:`, `after:`, `before:` and its contract, like any rule. Inside it the graph SHALL hold one synthetic, non-authored rasterization node between its vertex-stage handler and its fragment-stage handler, attributed to backend rasterization and not to any `HandlerIdentity`. No other handler SHALL depend on that node or on one stage handler alone. The rule's contract SHALL hold every read of both handlers and the `graphics` effect, and no write or command.
+
+#### Scenario: Vertex output reaches fragment through the synthetic node
+- **WHEN** a drawing rule has vertex-stage handler `V` and fragment-stage handler `F`
+- **THEN** the graph contains edges `V → synthetic rasterization node → F`, and no direct edge `V → F`
+
+#### Scenario: Ordered as one rule
+- **WHEN** a render rule declares `after: Fire` and `Fire` is a drawing rule
+- **THEN** it is ordered after both of `Fire`'s stage handlers
+
+#### Scenario: Reads order against writers
+- **WHEN** a drawing rule's fragment handler reads `particle.age` and another `core.render` rule writes `Particle.age`
+- **THEN** the two rules are ordered by the ordinary conflict rules, as if the read were in an ordinary handler
+
+#### Scenario: No structural interaction
+- **WHEN** the graph is validated for a drawing rule
+- **THEN** it has no structural-command producer or consumer edges, since its stage handlers issue no commands

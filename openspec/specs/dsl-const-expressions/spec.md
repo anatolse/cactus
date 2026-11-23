@@ -87,17 +87,6 @@ A constant SHALL be able to hold a struct value or a `list[T]` value, including 
 - **WHEN** a handler assigns `ROBOT.speed = 1.0`
 - **THEN** compilation fails with a diagnostic stating that constants are immutable
 
-### Requirement: Render-pass stage handlers read only GLSL-portable constants
-A render-pass stage handler SHALL be able to read a constant whose type is `int`, `float`, `bool`, `vec2`, `vec3`, or `color` and whose value, including every constant it references, uses only GLSL-translatable operations. Reading any other constant from a stage handler SHALL be a semantic error that names the constant, reported before code generation.
-
-#### Scenario: Derived scalar constant in a vertex handler
-- **WHEN** a vertex-stage handler reads `HALF = SIZE * 0.5` where `SIZE = 200.0`
-- **THEN** compilation succeeds and the shader uses the value `100.0` for `HALF`
-
-#### Scenario: Struct constant in a stage handler is rejected
-- **WHEN** a fragment-stage handler reads `ROBOT.speed` where `ROBOT` is a struct constant
-- **THEN** compilation fails with a diagnostic naming `ROBOT` and the stage-handler constant restriction
-
 ### Requirement: A constant equals the runtime value of its expression
 A constant read by CPU-executed code SHALL hold exactly the value, bit for bit, that its expression would produce if it were evaluated at runtime under `dsl-numeric-semantics`. This holds for integer wrapping and division, float rounding, float-to-integer conversion, and calls to `std.math` functions. Constants read by render-pass stage handlers follow the GPU precision rules of those handlers.
 
@@ -108,3 +97,14 @@ A constant read by CPU-executed code SHALL hold exactly the value, bit for bit, 
 #### Scenario: Float constant matches runtime evaluation
 - **WHEN** a module declares `const:` with `S = math.sin(0.5)` and a handler compares `S` with `math.sin(h)` where `h` holds `0.5`
 - **THEN** the two values are bit-identical
+
+### Requirement: Stage handlers read only GLSL-portable constants
+A stage handler of a drawing rule (`dsl-drawing-rules`) SHALL be able to read a constant whose type is `int`, `float`, `bool`, `vec2`, `vec3`, `color` or an enum and whose value, including every constant it references, uses only GLSL-translatable operations. Reading any other constant from a stage handler SHALL be a semantic error that names the constant, reported before code generation.
+
+#### Scenario: Derived scalar constant in a vertex handler
+- **WHEN** a vertex-stage handler reads `HALF = SIZE * 0.5` where `SIZE = 200.0`
+- **THEN** compilation succeeds and the shader uses the value `100.0` for `HALF`
+
+#### Scenario: Struct constant in a stage handler is rejected
+- **WHEN** a fragment-stage handler reads `ROBOT.speed` where `ROBOT` is a struct constant
+- **THEN** compilation fails with a diagnostic naming `ROBOT` and the stage-handler constant restriction

@@ -112,7 +112,7 @@ Rows SHALL run carriers in creation order, and the cells of one carrier in dimen
 
 `reduce:` on a cell rule SHALL fold all rows into one group. `reduce per self:` SHALL make one group per carrier, including a carrier with no surviving row, and its handler SHALL run once per carrier with the aggregates.
 
-`order by:`, `limit:`, `keep`, and a lifecycle trigger on a cell rule SHALL each be a source-located error. A cell rule MAY declare `repeat: N` under the limits of `dsl-rule-repeat`; each pass SHALL take its rows, and decide which are at rest, from the world the previous pass left. An aliased dimensioned trait in the `each:` of a render pass vertex handler SHALL be a source-located error.
+`order by:`, `limit:`, `keep`, and a lifecycle trigger on a cell rule SHALL each be a source-located error. A cell rule MAY declare `repeat: N` under the limits of `dsl-rule-repeat`; each pass SHALL take its rows, and decide which are at rest, from the world the previous pass left. An aliased dimensioned trait in the `each:` of a drawing rule (`dsl-drawing-rules`), and a cell access in a stage handler, SHALL each be a source-located error.
 
 #### Scenario: Decay in every cell
 - **WHEN** a cell rule over `Room as c` declares `where: c.gas > 0.0` and its handler lowers `c.gas`
@@ -135,8 +135,12 @@ Rows SHALL run carriers in creation order, and the cells of one carrier in dimen
 - **THEN** after one activation every cell holds the value it holds after two activations of the same rule without `repeat:`
 
 #### Scenario: Cells in a render pass
-- **WHEN** a render pass vertex handler declares `each: Room as c`
-- **THEN** the compiler reports an error saying a render pass draws entities
+- **WHEN** a drawing rule declares `each: Room as c`
+- **THEN** the compiler reports an error saying a drawing rule draws entities
+
+#### Scenario: Cell access in a stage
+- **WHEN** a fragment handler reads `Room[2, 3].gas`
+- **THEN** the compiler reports an error saying a stage handler does not read cells
 
 ### Requirement: Pair rules over cells
 A `pairs:` binding whose only entry is a dimensioned trait, with no alias, SHALL be a *cell binding*: it ranges over carriers and cells of that trait. It SHALL expose `c.field`, `c.<dimension>` and `c.carrier`, an `entity_id`. The first cell binding of the rule MAY, in block form, hold one `without:` line after its trait; it SHALL exclude carriers that carry a listed trait, with the meaning `without:` has in an entity binding (`dsl-pair-relations`). A `without:` line in the second cell binding SHALL be a source-located error that points to the first. A cell binding SHALL be read-only except as the retained binding of `reduce per`, whose cell fields the handler may write. Both bindings of a cell pair rule SHALL be cell bindings of the same trait.

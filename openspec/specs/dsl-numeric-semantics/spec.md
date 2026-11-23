@@ -95,17 +95,6 @@ Every conversion from `float` to `int` SHALL be defined for every input. It SHAL
 - **WHEN** a float-to-int conversion receives `1.0e20` or `-inf`
 - **THEN** the results are `2147483647` and `-2147483648`
 
-### Requirement: Integer semantics hold in render-pass stage handlers
-Integer `/` and `%` in a render-pass stage handler SHALL follow the floor-division and division-by-zero rules of this capability, even though GLSL integer division differs.
-
-#### Scenario: Stage handler divides by zero
-- **WHEN** a vertex-stage handler evaluates `i / 0` and `i % 0` on `int` values
-- **THEN** the results are `0` and `i`
-
-#### Scenario: Stage handler floor division
-- **WHEN** a fragment-stage handler evaluates `-7 / 2`
-- **THEN** the result is `-4`
-
 ### Requirement: Float accumulation into one field is exact
 Within one activation, take the Accum writes (`+=`, `-=`) to one `float` field of one entity that run between two consecutive non-Accum accesses of that field, or between such an access and the start of the activation or of a commit round. They may come from several handlers, several rows of one handler, several event occurrences, or several statements of one handler execution. Each such write contributes a delta: `e` for `+=` and `-e` for `-=`. The field's value after them SHALL be its value before them plus all their deltas, summed exactly and rounded once to binary32, with the edge rules of a float `sum` reduction (NaN, infinities, overflow and the sign of an exact zero). The result SHALL NOT depend on the order of the writes. `vec2` and `vec3` fields, and Accum writes to one of their components, SHALL follow this rule per component. `int` Accum writes wrap and need no merge, because wrapping addition does not depend on order.
 
@@ -154,3 +143,14 @@ Integer arithmetic SHALL stay wrapping. A program that needs an integer to stay 
 #### Scenario: Saturation would depend on order
 - **WHEN** the same deltas were applied with saturation at 2147483647
 - **THEN** one order would give 2147483646 and the other 2147483647, which is why the language does not saturate
+
+### Requirement: Integer semantics hold in stage handlers
+Integer `/` and `%` in a stage handler of a drawing rule SHALL follow the floor-division and division-by-zero rules of this capability, even though GLSL integer division differs.
+
+#### Scenario: Stage handler divides by zero
+- **WHEN** a vertex-stage handler evaluates `i / 0` and `i % 0` on `int` values
+- **THEN** the results are `0` and `i`
+
+#### Scenario: Stage handler floor division
+- **WHEN** a fragment-stage handler evaluates `-7 / 2`
+- **THEN** the result is `-4`

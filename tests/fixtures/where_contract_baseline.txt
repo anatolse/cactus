@@ -418,6 +418,16 @@ deterministic_target_selection.cactus examples deterministic_target_selection.Se
     named_writes:
     named_requirements:
     iteration_order: free
+drawing_rule_domain.cactus drawing-rule-domain drawing_rule_domain.Dots/on std.core.render
+    reads: drawing_rule_domain.Particle std.transform.flat.WorldTransform
+    read_fields: drawing_rule_domain.Particle{age,depth,tint} std.transform.flat.WorldTransform{position}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: creation
 effect_channels.cactus stdlib-fixtures effect_channels.FoldRing/on std.core.render
     reads: effect_channels.Ring std.render.effects.flat.Affects
     read_fields: effect_channels.Ring{at,curve,end,start} std.render.effects.flat.Affects{}
@@ -1644,16 +1654,6 @@ relations.cactus examples std.physics.volume.Snap/on std.core.fixed_tick
     write_fields: std.physics.volume.CharacterBody{ground_normal,ground_offset,grounded,time_since_grounded,velocity} std.transform.volume.WorldTransform{position}
     write_kinds: std.physics.volume.CharacterBody.ground_normal=0/0 std.physics.volume.CharacterBody.ground_offset=3/0 std.physics.volume.CharacterBody.grounded=3/0 std.physics.volume.CharacterBody.time_since_grounded=3/0 std.physics.volume.CharacterBody.velocity=0/0 std.transform.volume.WorldTransform.position=3/0
     bound_reads: 0:std.physics.volume.BoxCollider 0:std.physics.volume.CapsuleCollider 0:std.physics.volume.CharacterBody 0:std.physics.volume.Collider 0:std.physics.volume.SphereCollider 0:std.transform.volume.WorldTransform 1:std.physics.volume.BoxCollider 1:std.physics.volume.CapsuleCollider 1:std.physics.volume.Collider 1:std.physics.volume.SphereCollider 1:std.transform.volume.WorldTransform
-    named_reads:
-    named_writes:
-    named_requirements:
-    iteration_order: free
-render_pass_domain.cactus render-pass-domain render_pass_domain.DomainVertex/on render_pass_domain.domain_pass__vertex
-    reads: render_pass_domain.Particle std.transform.flat.WorldTransform
-    read_fields: render_pass_domain.Particle{age,depth,tint} std.transform.flat.WorldTransform{position}
-    write_fields:
-    write_kinds:
-    bound_reads:
     named_reads:
     named_writes:
     named_requirements:

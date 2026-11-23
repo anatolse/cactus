@@ -18,8 +18,9 @@ struct PerfCounters {
     std::uint64_t lost_links       = 0;  // holders marked because their link target was lost
     std::uint64_t keep_runs        = 0;  // keep rule passes run
     std::uint64_t commit_rounds    = 0;  // commit rounds that applied commands or ran keep rules
-    std::uint64_t pass_rows        = 0;  // domain rows a render pass's draw loop visited
-    std::uint64_t pass_quads       = 0;  // quads a render pass drew
+    std::uint64_t drawing_rows     = 0;  // domain rows a drawing rule's draw loop visited
+    std::uint64_t drawing_quads    = 0;  // quads a drawing rule drew
+    std::uint64_t drawing_uniforms = 0;  // shader values a drawing rule set
     std::uint64_t repeat_passes    = 0;  // passes run by rules with `repeat:`
     std::uint64_t cell_rows        = 0;  // left cells a rule over cells visited
     std::uint64_t clamp_merges     = 0;  // deltas merged into a clamped field's exact pending value
@@ -40,8 +41,9 @@ struct PerfCounters {
         lost_links += other.lost_links;
         keep_runs += other.keep_runs;
         commit_rounds += other.commit_rounds;
-        pass_rows += other.pass_rows;
-        pass_quads += other.pass_quads;
+        drawing_rows += other.drawing_rows;
+        drawing_quads += other.drawing_quads;
+        drawing_uniforms += other.drawing_uniforms;
         repeat_passes += other.repeat_passes;
         cell_rows += other.cell_rows;
         clamp_merges += other.clamp_merges;
@@ -108,12 +110,16 @@ inline void count_commit_round() noexcept {
     ++counting_target().commit_rounds;
 }
 
-inline void count_pass_row() noexcept {
-    ++counting_target().pass_rows;
+inline void count_drawing_row() noexcept {
+    ++counting_target().drawing_rows;
 }
 
-inline void count_pass_quad() noexcept {
-    ++counting_target().pass_quads;
+inline void count_drawing_quad() noexcept {
+    ++counting_target().drawing_quads;
+}
+
+inline void count_drawing_uniform() noexcept {
+    ++counting_target().drawing_uniforms;
 }
 
 inline void count_cell_row() noexcept {
@@ -154,9 +160,10 @@ inline void count_link_update() noexcept {}
 inline void count_lost_link() noexcept {}
 inline void count_keep_run() noexcept {}
 inline void count_commit_round() noexcept {}
-inline void count_pass_row() noexcept {}
+inline void count_drawing_row() noexcept {}
 inline void count_cell_row() noexcept {}
-inline void count_pass_quad() noexcept {}
+inline void count_drawing_quad() noexcept {}
+inline void count_drawing_uniform() noexcept {}
 inline void count_repeat_pass() noexcept {}
 inline void count_clamp_work(std::size_t /*merges*/, std::size_t /*settles*/) noexcept {}
 inline void count_component_move() noexcept {}

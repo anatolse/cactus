@@ -460,16 +460,6 @@ void ModuleArtifact::write_phases(std::ostream& out,
             write_i64(out, *phase.max_repetitions);
         }
         write_phase_rate(out, phase.rate);
-        write_bool(out, phase.render_pass.has_value());
-        if (phase.render_pass.has_value()) {
-            const auto& info = *phase.render_pass;
-            write_u32(out, static_cast<uint32_t>(info.pass_field_index));
-            write_u32(out, static_cast<uint32_t>(info.target_field_index));
-            write_symbol_id(out, info.pass_enum_id);
-            write_symbol_id(out, info.target_enum_id);
-            write_trigger(out, info.vertex_trigger);
-            write_trigger(out, info.fragment_trigger);
-        }
     }
 }
 
@@ -868,9 +858,9 @@ void ModuleArtifact::write_execution_graph(std::ostream& out, const ExecutionGra
         write_location(out, handler.location);
     }
 
-    write_u32(out, static_cast<uint32_t>(graph.render_passes.size()));
-    for (const auto& plan : graph.render_passes) {
-        write_symbol_id(out, plan.phase);
+    write_u32(out, static_cast<uint32_t>(graph.drawing_rules.size()));
+    for (const auto& plan : graph.drawing_rules) {
+        write_symbol_id(out, plan.rule);
         write_handler_identity(out, plan.vertex_handler);
         write_handler_identity(out, plan.fragment_handler);
     }
@@ -1353,16 +1343,6 @@ std::unordered_map<std::string, ResolvedPhase> ModuleArtifact::read_phases(std::
             phase.max_repetitions = read_i64(in);
         }
         phase.rate = read_phase_rate(in);
-        if (read_bool(in)) {
-            RenderPassInfo info;
-            info.pass_field_index   = read_u32(in);
-            info.target_field_index = read_u32(in);
-            info.pass_enum_id       = read_symbol_id(in);
-            info.target_enum_id     = read_symbol_id(in);
-            info.vertex_trigger     = read_trigger(in);
-            info.fragment_trigger   = read_trigger(in);
-            phase.render_pass       = std::move(info);
-        }
         phases[phase.name] = std::move(phase);
     }
     return phases;
@@ -1820,14 +1800,14 @@ ExecutionGraph ModuleArtifact::read_execution_graph(std::istream& in) {
         graph.handlers.push_back(std::move(handler));
     }
 
-    const auto render_pass_count = read_u32(in);
-    graph.render_passes.reserve(render_pass_count);
-    for (uint32_t i = 0; i < render_pass_count; ++i) {
-        RenderPassPlan plan;
-        plan.phase           = read_symbol_id(in);
+    const auto drawing_rule_count = read_u32(in);
+    graph.drawing_rules.reserve(drawing_rule_count);
+    for (uint32_t i = 0; i < drawing_rule_count; ++i) {
+        DrawingRulePlan plan;
+        plan.rule             = read_symbol_id(in);
         plan.vertex_handler   = read_handler_identity(in);
         plan.fragment_handler = read_handler_identity(in);
-        graph.render_passes.push_back(std::move(plan));
+        graph.drawing_rules.push_back(std::move(plan));
     }
 
     const auto schedule_count = read_u32(in);

@@ -8525,268 +8525,248 @@ TEST_CASE("Codegen EnTT: initializing a project starts a new binding-index epoch
     CHECK(generated_function(code, "void generated_init_project").contains("advance_binding_index_epoch();"));
 }
 
-static ModuleImports render_pass_imports() {
-    ImportedSymbols passes_syms;
-    passes_syms.module_name = "std.render.passes";
-    ResolvedEnum pass_enum;
-    pass_enum.name            = "Pass";
-    pass_enum.variants        = {"Quads"};
-    passes_syms.enums["Pass"] = pass_enum;
-    ResolvedEnum target_enum;
-    target_enum.name            = "Target";
-    target_enum.variants        = {"Screen"};
-    passes_syms.enums["Target"] = target_enum;
-    ModuleImports imports;
-    imports.add("passes", std::move(passes_syms));
-    return imports;
+static std::string linked_codegen(const std::string& case_name,
+                                  const std::map<std::string, std::string>& modules,
+                                  const std::string& root);
+
+static const std::string kDrawVertex = "        v.world_position = xf.position + v.corner * particle.age\n";
+static const std::string kDrawFragment = "        f.frag_color = f.tint\n";
+
+// A drawing rule `Draw` over WorldTransform and Particle in the sprites layer, linked with the real stdlib.
+static std::string drawing_rule_codegen(const std::string& case_name,
+                                        const std::string& clauses,
+                                        const std::string& vertex   = kDrawVertex,
+                                        const std::string& fragment = kDrawFragment,
+                                        const std::string& late     = "") {
+    const std::string source = "module drawing_codegen\n"
+                               "use std.core\n"
+                               "use std.color as color\n"
+                               "use std.math as math\n"
+                               "use std.transform.flat as tf\n"
+                               "use std.render.layers as layers\n"
+                               "const:\n"
+                               "    LAYER = 2\n"
+                               "    HALF_SIZE = 200.0 * 0.5\n"
+                               "enum Mood:\n"
+                               "    Calm\n"
+                               "    Wild\n"
+                               "trait Particle:\n"
+                               "    var age: float = 0.0\n"
+                               "    var depth: float = 0.0\n"
+                               "    var level: int = 0\n"
+                               "    var lift: vec3 = vec3(0.0, 0.0, 0.0)\n"
+                               "    var mood: Mood = Mood.Calm\n"
+                               "trait Hidden\n"
+                               "entity Spark:\n"
+                               "    tf.WorldTransform\n"
+                               "    Particle\n"
+                               "entity Veiled:\n"
+                               "    tf.WorldTransform\n"
+                               "    Particle\n"
+                               "    Hidden\n"
+                               "rule Draw:\n"
+                               "    each:\n"
+                               "        tf.WorldTransform as xf\n"
+                               "        Particle as particle\n" +
+                               clauses + "    group: layers.sprites\n" + late + "    on render.vertex as v:\n" + vertex + "    on render.fragment as f:\n" +
+                               fragment;
+    return linked_codegen("drawing_" + case_name, {{"drawing_codegen", source}}, "drawing_codegen");
 }
 
-// dsl-render-passes: a stage handler's `let`-bound local is an ordinary
-// Cactus identifier the author is free to choose without knowing anything
-// about GLSL — but GLSL reserves a set of words (e.g. `half`) whether or not
-// the corresponding feature is used, and headless test builds never actually
-// compile the embedded GLSL (CACTUS_RAYLIB_FAKE makes LoadShaderFromMemory a
-// no-op), so a collision like this has no path to failing any existing
-// automated test. This test locks in the fix directly against the generated
-// GLSL text instead: every `let` local must be emitted under a mangled name,
-// unconditionally, so no Cactus identifier can ever collide with a GLSL
-// keyword regardless of which one a future example happens to pick.
-TEST_CASE("Codegen EnTT: render-pass stage handler's `let` locals are mangled to avoid GLSL reserved words",
-          "[codegen-entt][render-passes]") {
-    const auto imports = render_pass_imports();
+// The draw function, whose embedded shader text may itself hold a closing brace line.
+static std::string draw_function(const std::string& code) {
+    const auto start = code.find("void draw_draw(entt::registry& registry)");
+    REQUIRE(start != std::string::npos);
+    const auto shaders = code.find("kFragmentShader = R\"GLSL(", start);
+    REQUIRE(shaders != std::string::npos);
+    const auto end = code.find("\n}\n\n", code.find(")GLSL\";", shaders));
+    REQUIRE(end != std::string::npos);
+    return code.substr(start, end - start + 3);
+}
 
-    ProgramNode program;
-    auto decorated = full_pipeline(
-        "module render_pass_reserved_word\n"
-        "\n"
-        "use std.render.passes as passes\n"
-        "\n"
-        "extern event Tick:\n"
-        "    dt: float\n"
-        "\n"
-        "trait WorldTransform:\n"
-        "    var position: vec2\n"
-        "\n"
-        "pub phase my_pass:\n"
-        "    from:\n"
-        "        Tick\n"
-        "    pipeline: passes.Pass = passes.Pass.Quads\n"
-        "    output: passes.Target = passes.Target.Screen\n"
-        "\n"
-        "rule MyVertex:\n"
-        "    each:\n"
-        "        WorldTransform as xf\n"
-        "\n"
-        "    on my_pass.vertex as v:\n"
-        "        let half = 10.0\n"
-        "        v.screen_position = vec2(xf.position.x + v.corner.x * half, xf.position.y + v.corner.y * half)\n"
-        "        v.uv_out = v.uv\n"
-        "        v.tint_out = #FFFFFFFF\n"
-        "\n"
-        "rule MyFragment:\n"
-        "    on my_pass.fragment as f:\n"
-        "        f.frag_color = f.tint\n",
-        program,
-        imports);
-
-    const auto code = CppEnttCodegen::generate(decorated);
+// A stage handler's `let` local may be named like a GLSL reserved word (`half`), so every local is mangled.
+TEST_CASE("Codegen EnTT: drawing-rule `let` locals are mangled to avoid GLSL reserved words",
+          "[codegen-entt][drawing-rules]") {
+    const auto code = drawing_rule_codegen("reserved_word",
+                                           "",
+                                           "        let half = 10.0\n"
+                                           "        v.world_position = xf.position + v.corner * half\n");
     CHECK(code.contains("let_half"));
     CHECK(!code.contains("float half"));
 }
 
-// dsl-render-passes: a stage handler body's binary-operator expressions must
-// accept exactly the operand-type combinations dsl-vector-expressions'
-// general table accepts (lookup_vector_binary_op_result) — `vec2 + vec2 *
-// float` already type-checks in an ordinary (non-stage) handler body, so it
-// must type-check identically here instead of being rejected by
-// render_pass_emitter.cpp's own narrower same-type-or-float-promotion rule.
-TEST_CASE("Codegen EnTT: render-pass stage handler accepts vec2 + vec2 * float, matching an ordinary handler body",
-          "[codegen-entt][render-passes]") {
-    const auto imports = render_pass_imports();
-
-    ProgramNode program;
-    auto decorated = full_pipeline(
-        "module render_pass_vector_ops\n"
-        "\n"
-        "use std.render.passes as passes\n"
-        "\n"
-        "extern event Tick:\n"
-        "    dt: float\n"
-        "\n"
-        "trait WorldTransform:\n"
-        "    var position: vec2\n"
-        "\n"
-        "pub phase my_pass:\n"
-        "    from:\n"
-        "        Tick\n"
-        "    pipeline: passes.Pass = passes.Pass.Quads\n"
-        "    output: passes.Target = passes.Target.Screen\n"
-        "\n"
-        "rule MyVertex:\n"
-        "    each:\n"
-        "        WorldTransform as xf\n"
-        "\n"
-        "    on my_pass.vertex as v:\n"
-        "        let half_size = 5.0\n"
-        "        v.screen_position = xf.position + v.corner * half_size\n"
-        "        v.uv_out = v.uv\n"
-        "        v.tint_out = #FFFFFFFF\n"
-        "\n"
-        "rule MyFragment:\n"
-        "    on my_pass.fragment as f:\n"
-        "        f.frag_color = f.tint\n",
-        program,
-        imports);
-
-    const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.contains("screen_position = (u_xf_position + (corner * let_half_size));"));
+TEST_CASE("Codegen EnTT: a drawing rule accepts vec2 + vec2 * float, matching an ordinary handler body",
+          "[codegen-entt][drawing-rules]") {
+    const auto code = drawing_rule_codegen("vector_ops",
+                                           "",
+                                           "        let half_size = 5.0\n"
+                                           "        v.world_position = xf.position + v.corner * half_size\n");
+    CHECK(code.contains("world_position = (u_xf_position + (corner * let_half_size));"));
 }
 
-// dsl-render-passes: the shared operand-type table still rejects a genuinely
-// invalid combination identically to before — extending translate_binary to
-// consult lookup_vector_binary_op_result must not make it permissive. Vec2 +
-// Color is rejected during general semantic analysis itself (the same
-// lookup_vector_binary_op_result table an ordinary handler body's binary
-// expressions already go through), before render_pass_emitter.cpp's own
-// translation ever runs — so this deliberately doesn't use full_pipeline
-// (which hard-asserts a clean compile) or reach CppEnttCodegen::generate.
-TEST_CASE("Codegen EnTT: render-pass stage handler still rejects Vec2 + Color", "[codegen-entt][render-passes]") {
-    const auto imports = render_pass_imports();
-
+TEST_CASE("Codegen EnTT: a drawing rule still rejects vec2 + color", "[codegen-entt][drawing-rules]") {
     const std::string source =
-        "module render_pass_vector_ops_invalid\n"
-        "\n"
-        "use std.render.passes as passes\n"
-        "\n"
-        "extern event Tick:\n"
-        "    dt: float\n"
-        "\n"
-        "trait WorldTransform:\n"
-        "    var position: vec2\n"
-        "\n"
-        "pub phase my_pass:\n"
-        "    from:\n"
-        "        Tick\n"
-        "    pipeline: passes.Pass = passes.Pass.Quads\n"
-        "    output: passes.Target = passes.Target.Screen\n"
-        "\n"
-        "rule MyVertex:\n"
-        "    each:\n"
-        "        WorldTransform as xf\n"
-        "\n"
-        "    on my_pass.vertex as v:\n"
-        "        v.screen_position = xf.position + v.tint_out\n"
-        "        v.uv_out = v.uv\n"
-        "        v.tint_out = #FFFFFFFF\n"
-        "\n"
-        "rule MyFragment:\n"
-        "    on my_pass.fragment as f:\n"
-        "        f.frag_color = f.tint\n";
-
-    ErrorReporter errors;
-    Lexer lexer(source, "test.cactus", errors);
-    auto tokens = lexer.tokenize();
-    REQUIRE_FALSE(errors.has_errors());
-    Parser parser(std::move(tokens), errors);
-    ProgramNode program = parser.parse_program();
-    REQUIRE_FALSE(errors.has_errors());
-    SemanticAnalyzer analyzer(errors);
-    (void)analyzer.analyze(program, imports);
-    CHECK(errors.has_errors());
-}
-
-// A pass whose vertex handler selects two traits, with `clauses` between `each:` and the handler.
-static std::string render_pass_domain_dispatch(const std::string& clauses) {
-    const auto imports = render_pass_imports();
-    ProgramNode program;
-    auto decorated = full_pipeline(
-        "module render_pass_domain_codegen\n"
-        "\n"
-        "use std.render.passes as passes\n"
-        "\n"
-        "extern event Tick:\n"
-        "    dt: float\n"
-        "\n"
-        "trait WorldTransform:\n"
-        "    var position: vec2\n"
-        "\n"
-        "trait Particle:\n"
-        "    var age: float\n"
-        "    var depth: float\n"
-        "\n"
-        "trait Hidden\n"
-        "\n"
+        "module drawing_invalid\n"
+        "use std.core\n"
+        "use std.transform.flat as tf\n"
         "entity Spark:\n"
-        "    WorldTransform\n"
-        "    Particle\n"
-        "\n"
-        "entity Veiled:\n"
-        "    WorldTransform\n"
-        "    Particle\n"
-        "    Hidden\n"
-        "\n"
-        "pub phase my_pass:\n"
-        "    from:\n"
-        "        Tick\n"
-        "    pipeline: passes.Pass = passes.Pass.Quads\n"
-        "    output: passes.Target = passes.Target.Screen\n"
-        "\n"
-        "rule MyVertex:\n"
+        "    tf.WorldTransform\n"
+        "rule Draw:\n"
         "    each:\n"
-        "        WorldTransform as xf\n"
-        "        Particle as particle\n" +
-            clauses +
-            "\n"
-            "    on my_pass.vertex as v:\n"
-            "        v.screen_position = xf.position + v.corner * particle.age\n"
-            "        v.uv_out = v.uv\n"
-            "        v.tint_out = #FFFFFFFF\n"
-            "\n"
-            "rule MyFragment:\n"
-            "    on my_pass.fragment as f:\n"
-            "        f.frag_color = f.tint\n",
-        program,
-        imports);
-    const auto code = CppEnttCodegen::generate(decorated);
-    return generated_function(code, "MyPassPhase& phase) {");
+        "        tf.WorldTransform as xf\n"
+        "    on render.vertex as v:\n"
+        "        v.world_position = xf.position + v.tint_out\n"
+        "    on render.fragment as f:\n"
+        "        f.frag_color = f.tint\n";
+    const auto linked = cactus_test::link_sources(
+        std::filesystem::path(CACTUS_TEST_BINARY_DIR) / "codegen_entt_linked" / "drawing_invalid",
+        {{"drawing_invalid", source}},
+        "drawing_invalid");
+    CHECK(linked.has_errors());
 }
 
-TEST_CASE("Codegen EnTT: a render pass reads each per-instance value from its own trait",
-          "[codegen-entt][render-passes]") {
-    const auto dispatch = render_pass_domain_dispatch("");
-    CHECK(dispatch.contains("particle_comp.age"));
-    CHECK(dispatch.contains("world_transform_comp.position"));
-    CHECK(!dispatch.contains("world_transform_comp.age"));
+TEST_CASE("Codegen EnTT: a drawing rule reads each row's value from its own trait", "[codegen-entt][drawing-rules]") {
+    const auto draw = draw_function(drawing_rule_codegen("row_values", ""));
+    CHECK(draw.contains("particle_comp.age"));
+    CHECK(draw.contains("world_transform_comp.position"));
+    CHECK(!draw.contains("world_transform_comp.age"));
 }
 
-TEST_CASE("Codegen EnTT: a render pass draws only entities with every each: trait, oldest first",
-          "[codegen-entt][render-passes]") {
-    const auto dispatch = render_pass_domain_dispatch("");
-    CHECK(dispatch.contains("registry.view<::cactus_gen::WorldTransform, ::cactus_gen::Particle>()"));
-    CHECK(dispatch.contains("cactus::runtime::entt_backend::creation_ordered(registry, view)"));
+TEST_CASE("Codegen EnTT: a drawing rule draws only entities with every each: trait, oldest first",
+          "[codegen-entt][drawing-rules]") {
+    const auto draw = draw_function(drawing_rule_codegen("domain", ""));
+    CHECK(draw.contains("WorldTransform, ::cactus_gen::drawing_codegen::Particle>()"));
+    CHECK(draw.contains("cactus::runtime::entt_backend::creation_ordered(registry, view)"));
 }
 
-TEST_CASE("Codegen EnTT: a render pass skips entities with a without: trait", "[codegen-entt][render-passes]") {
-    const auto dispatch = render_pass_domain_dispatch("    without: Hidden\n");
-    CHECK(dispatch.contains("entt::exclude<::cactus_gen::Hidden>"));
+TEST_CASE("Codegen EnTT: a drawing rule skips entities with a without: trait", "[codegen-entt][drawing-rules]") {
+    const auto draw = draw_function(drawing_rule_codegen("without", "    without: Hidden\n"));
+    CHECK(draw.contains("entt::exclude<::cactus_gen::drawing_codegen::Hidden>"));
 }
 
-TEST_CASE("Codegen EnTT: a render pass skips rows that fail where: before setting any uniform",
-          "[codegen-entt][render-passes]") {
-    const auto dispatch = render_pass_domain_dispatch("    where: particle.age < 1.0\n");
-    const auto guard    = dispatch.find("particle.age < 1.0");
-    const auto upload   = dispatch.find("set_render_pass_uniform(");
+TEST_CASE("Codegen EnTT: a drawing rule skips rows that fail where: before setting any uniform",
+          "[codegen-entt][drawing-rules]") {
+    const auto draw =
+        draw_function(drawing_rule_codegen("where", "", kDrawVertex, kDrawFragment, "    where: particle.age < 1.0\n"));
+    const auto guard  = draw.find("particle.age < 1.0");
+    const auto upload = draw.find("set_drawing_rule_uniform(");
     REQUIRE(guard != std::string::npos);
     REQUIRE(upload != std::string::npos);
     CHECK(guard < upload);
-    CHECK(dispatch.contains("continue;"));
+    CHECK(draw.contains("continue;"));
 }
 
-TEST_CASE("Codegen EnTT: a render pass draws in order by: order", "[codegen-entt][render-passes]") {
-    const auto dispatch = render_pass_domain_dispatch("    order by: particle.depth asc\n");
-    const auto sorted   = extract_temp_name(dispatch, "cactus_gen_sort_entities_");
-    CHECK(dispatch.contains("for (auto entity : " + sorted + ")"));
-    CHECK(!dispatch.contains("creation_ordered(registry, view)"));
+TEST_CASE("Codegen EnTT: a drawing rule draws in order by: order", "[codegen-entt][drawing-rules]") {
+    const auto draw   = draw_function(drawing_rule_codegen("order_by", "    order by: particle.depth asc\n"));
+    const auto sorted = extract_temp_name(draw, "cactus_gen_sort_entities_");
+    CHECK(draw.contains("auto entity : " + sorted + ")"));
+    CHECK(!draw.contains("creation_ordered(registry, view)"));
+}
+
+TEST_CASE("Codegen EnTT: int, vec3 and enum row values reach the shader", "[codegen-entt][drawing-rules]") {
+    const auto code = drawing_rule_codegen("value_types",
+                                           "",
+                                           "        let k = particle.level / 2\n"
+                                           "        let wild = particle.mood == Mood.Wild\n"
+                                           "        v.world_position = xf.position + v.corner * particle.lift.x\n"
+                                           "        if wild or k > 1:\n"
+                                           "            v.tint_out = #FF0000FF\n");
+    CHECK(code.contains("uniform float u_particle_level;"));
+    CHECK(code.contains("uniform vec3 u_particle_lift;"));
+    CHECK(code.contains("uniform float u_particle_mood;"));
+    CHECK(code.contains("(u_particle_mood == 1.0)"));
+    const auto draw = draw_function(code);
+    CHECK(draw.contains("static_cast<float>(drawing_codegen_particle_comp.level)"));
+    CHECK(draw.contains("drawing_codegen_particle_comp.lift"));
+    CHECK(draw.contains("static_cast<float>(static_cast<int>(drawing_codegen_particle_comp.mood))"));
+}
+
+TEST_CASE("Codegen EnTT: a stage handler inlines a derived scalar constant into GLSL",
+          "[codegen-entt][const][drawing-rules]") {
+    const auto code = drawing_rule_codegen(
+        "derived_constant", "", "        v.world_position = xf.position + v.corner * HALF_SIZE\n");
+    CHECK(code.contains("(corner * (200.0 * 0.5))"));
+}
+
+TEST_CASE("Codegen EnTT: tint_out defaults to white and uv_out to uv", "[codegen-entt][drawing-rules]") {
+    const auto code = drawing_rule_codegen("defaults", "");
+    CHECK(code.contains("vec4 tint_out = vec4(1.0, 1.0, 1.0, 1.0);"));
+    CHECK(code.contains("vec2 uv_out = uv;"));
+}
+
+TEST_CASE("Codegen EnTT: a tint above 1.0 reaches the fragment stage unclamped", "[codegen-entt][drawing-rules]") {
+    const auto code = drawing_rule_codegen("bright_tint",
+                                           "",
+                                           kDrawVertex + "        v.tint_out = color(2.0, 0.5, 0.5, 1.0)\n",
+                                           "        f.frag_color = color(f.tint.r * 0.5, f.tint.g, f.tint.b, 1.0)\n");
+    CHECK(code.contains("tint_out = vec4(2.0, 0.5, 0.5, 1.0);"));
+    CHECK(code.contains("out vec4 v_tint;"));
+    CHECK(code.contains("in vec4 v_tint;"));
+    CHECK(!code.contains("clamp("));
+}
+
+TEST_CASE("Codegen EnTT: color.with_alpha is translated from its body", "[codegen-entt][drawing-rules]") {
+    const auto code =
+        drawing_rule_codegen("with_alpha", "", kDrawVertex, "        f.frag_color = color.with_alpha(f.tint, 0.5)\n");
+    CHECK(code.contains("frag_color = vec4(tint.r, tint.g, tint.b, (tint.a * 0.5));"));
+}
+
+TEST_CASE("Codegen EnTT: the fragment stage reads its row's value", "[codegen-entt][drawing-rules]") {
+    const auto code = drawing_rule_codegen(
+        "fragment_row", "", kDrawVertex, "        f.frag_color = color.with_alpha(f.tint, particle.depth)\n");
+    const auto fragment_start = code.find("in vec4 v_tint;");
+    REQUIRE(fragment_start != std::string::npos);
+    CHECK(code.find("uniform float u_particle_depth;", fragment_start) != std::string::npos);
+    CHECK(draw_function(code).contains("particle_comp.depth"));
+}
+
+TEST_CASE("Codegen EnTT: a named read is set once per draw, a link read once per row",
+          "[codegen-entt][drawing-rules]") {
+    const std::string source =
+        "module drawing_reads\n"
+        "use std.core\n"
+        "use std.transform.flat as tf\n"
+        "use std.camera.viewport as vp\n"
+        "trait Beam:\n"
+        "    let sink: tf.WorldTransform\n"
+        "entity Sink:\n"
+        "    tf.WorldTransform\n"
+        "entity Ray:\n"
+        "    Beam:\n"
+        "        sink = Sink\n"
+        "rule DropBeams:\n"
+        "    each: Beam\n"
+        "    on lost Beam.sink:\n"
+        "        destroy\n"
+        "rule Beams:\n"
+        "    each:\n"
+        "        Beam as beam\n"
+        "    on render.vertex as v:\n"
+        "        let half = vp.Screen[vp.ScreenSize].size.x * 0.01\n"
+        "        v.world_position = beam.sink[tf.WorldTransform].position + v.corner * half\n"
+        "    on render.fragment as f:\n"
+        "        f.frag_color = f.tint\n";
+    const auto code = linked_codegen("drawing_reads", {{"drawing_reads", source}}, "drawing_reads");
+    const auto start = code.find("void beams_draw(entt::registry& registry)");
+    REQUIRE(start != std::string::npos);
+    const auto draw = code.substr(start, code.find("\n}\n\n", code.find("kFragmentShader", start)) - start);
+    const auto loop = draw.find("auto entity :");
+    REQUIRE(loop != std::string::npos);
+    const auto named = draw.find("ScreenSize");
+    REQUIRE(named != std::string::npos);
+    CHECK(named < loop);
+    const auto link = draw.find(".sink");
+    REQUIRE(link != std::string::npos);
+    CHECK(link > loop);
+}
+
+TEST_CASE("Codegen EnTT: world space draws through the camera, screen space without it",
+          "[codegen-entt][drawing-rules]") {
+    const auto world  = draw_function(drawing_rule_codegen("world_space", ""));
+    const auto screen = draw_function(
+        drawing_rule_codegen("screen_space", "", "        v.screen_position = vec2(10.0, 10.0) + v.corner\n"));
+    CHECK(world.contains("begin_drawing_rule(*shader, true)"));
+    CHECK(screen.contains("begin_drawing_rule(*shader, false)"));
 }
 
 // ── Conditional expressions and value match ────────────────────────────────
@@ -8946,50 +8926,14 @@ TEST_CASE("Codegen EnTT: an expression form with no lowering is a located error,
     }
 }
 
-static std::string conditional_render_pass_codegen(const std::string& fragment_body) {
-    const auto imports = render_pass_imports();
-
-    ProgramNode program;
-    auto decorated = full_pipeline(
-        "module render_pass_conditionals\n"
-        "\n"
-        "use std.render.passes as passes\n"
-        "\n"
-        "extern event Tick:\n"
-        "    dt: float\n"
-        "\n"
-        "const:\n"
-        "    LAYER = 2\n"
-        "\n"
-        "trait WorldTransform:\n"
-        "    var position: vec2\n"
-        "\n"
-        "pub phase my_pass:\n"
-        "    from:\n"
-        "        Tick\n"
-        "    pipeline: passes.Pass = passes.Pass.Quads\n"
-        "    output: passes.Target = passes.Target.Screen\n"
-        "\n"
-        "rule MyVertex:\n"
-        "    each:\n"
-        "        WorldTransform as xf\n"
-        "\n"
-        "    on my_pass.vertex as v:\n"
-        "        v.screen_position = xf.position + v.corner\n"
-        "        v.uv_out = v.uv\n"
-        "        v.tint_out = #FFFFFFFF\n"
-        "\n"
-        "rule MyFragment:\n"
-        "    on my_pass.fragment as f:\n" +
-            fragment_body,
-        program,
-        imports);
-    return CppEnttCodegen::generate(decorated);
+static std::string conditional_drawing_rule_codegen(const std::string& fragment_body) {
+    static int next_case = 0;
+    return drawing_rule_codegen("conditional_" + std::to_string(next_case++), "", kDrawVertex, fragment_body);
 }
 
-TEST_CASE("Codegen EnTT: render-pass fragment handler lowers an if expression to GLSL",
-          "[codegen-entt][render-passes][conditional-expressions]") {
-    const auto code = conditional_render_pass_codegen(
+TEST_CASE("Codegen EnTT: drawing-rule fragment handler lowers an if expression to GLSL",
+          "[codegen-entt][drawing-rules][conditional-expressions]") {
+    const auto code = conditional_drawing_rule_codegen(
         "        let k = if f.uv.x > 0.5: 1.0 else: 0.0\n"
         "        f.frag_color = f.tint * k\n");
     CHECK(code.contains("float let_k = ((uv.x > 0.5) ? 1.0 : 0.0);"));
@@ -8997,9 +8941,9 @@ TEST_CASE("Codegen EnTT: render-pass fragment handler lowers an if expression to
 
 // A rule computes `(a - b) + b` over float channels with no clamp; the stage must see the same
 // channel values for the same literals and must not clamp either.
-TEST_CASE("Codegen EnTT: render-pass color literals carry the rule's exact float channels, with no clamp",
-          "[codegen-entt][render-passes][vector-expressions]") {
-    const auto code = conditional_render_pass_codegen("        f.frag_color = (#FF8000FF - #FFFFFFFF) + #FFFFFFFF\n");
+TEST_CASE("Codegen EnTT: drawing-rule color literals carry the rule's exact float channels, with no clamp",
+          "[codegen-entt][drawing-rules][vector-expressions]") {
+    const auto code = conditional_drawing_rule_codegen("        f.frag_color = (#FF8000FF - #FFFFFFFF) + #FFFFFFFF\n");
     CHECK(!code.contains("clamp("));
     const std::regex vec4_literal(R"(vec4\(([-0-9.e]+), ([-0-9.e]+), ([-0-9.e]+), ([-0-9.e]+)\))");
     bool found_orange = false;
@@ -9011,9 +8955,9 @@ TEST_CASE("Codegen EnTT: render-pass color literals carry the rule's exact float
     CHECK(found_orange);
 }
 
-TEST_CASE("Codegen EnTT: render-pass fragment handler lowers a match expression to GLSL",
-          "[codegen-entt][render-passes][conditional-expressions]") {
-    const auto code = conditional_render_pass_codegen(
+TEST_CASE("Codegen EnTT: drawing-rule fragment handler lowers a match expression to GLSL",
+          "[codegen-entt][drawing-rules][conditional-expressions]") {
+    const auto code = conditional_drawing_rule_codegen(
         "        let k = match LAYER:\n"
         "            1 => 0.25\n"
         "            _ => 0.5\n"
@@ -9021,9 +8965,9 @@ TEST_CASE("Codegen EnTT: render-pass fragment handler lowers a match expression 
     CHECK(code.contains("float let_k = ((2.0 == 1.0) ? 0.25 : 0.5);"));
 }
 
-TEST_CASE("Codegen EnTT: render-pass fragment handler lowers a value match statement to GLSL",
-          "[codegen-entt][render-passes][conditional-expressions]") {
-    const auto code = conditional_render_pass_codegen(
+TEST_CASE("Codegen EnTT: drawing-rule fragment handler lowers a value match statement to GLSL",
+          "[codegen-entt][drawing-rules][conditional-expressions]") {
+    const auto code = conditional_drawing_rule_codegen(
         "        match LAYER:\n"
         "            2 =>\n"
         "                f.frag_color = f.tint\n"
@@ -9034,9 +8978,9 @@ TEST_CASE("Codegen EnTT: render-pass fragment handler lowers a value match state
     CHECK(code.contains("else {"));
 }
 
-TEST_CASE("Codegen EnTT: render-pass int division and remainder call floor helpers in GLSL",
-          "[codegen-entt][render-passes][numeric-semantics]") {
-    const auto code = conditional_render_pass_codegen(
+TEST_CASE("Codegen EnTT: drawing-rule int division and remainder call floor helpers in GLSL",
+          "[codegen-entt][drawing-rules][numeric-semantics]") {
+    const auto code = conditional_drawing_rule_codegen(
         "        let q = LAYER / 0\n"
         "        let r = -7 % 2\n"
         "        f.frag_color = f.tint * (1.0 * q * r)\n");
@@ -9047,9 +8991,9 @@ TEST_CASE("Codegen EnTT: render-pass int division and remainder call floor helpe
     CHECK(code.find("float cactus_div(float a, float b)") < code.find("float let_q"));
 }
 
-TEST_CASE("Codegen EnTT: render-pass float division stays a plain GLSL operator",
-          "[codegen-entt][render-passes][numeric-semantics]") {
-    const auto code = conditional_render_pass_codegen(
+TEST_CASE("Codegen EnTT: drawing-rule float division stays a plain GLSL operator",
+          "[codegen-entt][drawing-rules][numeric-semantics]") {
+    const auto code = conditional_drawing_rule_codegen(
         "        let k = f.uv.x / 2.0\n"
         "        f.frag_color = f.tint * k\n");
     CHECK(code.contains("float let_k = (uv.x / 2.0);"));
@@ -11694,6 +11638,36 @@ pub entity Cube:
         mesh = CubeMesh
         material = CubeMaterial
 )";
+}
+
+TEST_CASE("Codegen EnTT: drawing rules take their place among the standard renderers",
+          "[codegen-entt][drawing-rules]") {
+    const auto example = std::filesystem::path(CACTUS_TEST_SOURCE_DIR) / "examples" / "drawing_rules.cactus";
+    cactus_test::ProgramPipeline pipeline(std::filesystem::path(CACTUS_TEST_BINARY_DIR) / "codegen_entt_linked" /
+                                          "drawing_rules_example");
+    auto linked = pipeline.link(example);
+    INFO(linked.describe());
+    REQUIRE_FALSE(linked.has_errors());
+    linked.program->module_name = "drawing_rules";
+    const auto code = CppEnttCodegen::generate(*linked.program);
+    CHECK(count_occurrences(code, "kVertexShader = R\"GLSL(") == 3);
+    CHECK(count_occurrences(code, "kFragmentShader = R\"GLSL(") == 3);
+    const auto dispatch = without_linearization_harness(generated_function(
+        code, "void generated_dispatch_phase(entt::registry& registry, const ::cactus_gen::stdlib::core::RenderPhase&"));
+    const auto shapes  = dispatch.find("shape_renderer_tick(registry);");
+    const auto fire    = dispatch.find("fire_draw(registry);");
+    const auto beams   = dispatch.find("beams_draw(registry);");
+    const auto corners = dispatch.find("corners_draw");
+    REQUIRE(shapes != std::string::npos);
+    REQUIRE(fire != std::string::npos);
+    REQUIRE(beams != std::string::npos);
+    REQUIRE(corners != std::string::npos);
+    CHECK(shapes < fire);
+    CHECK(fire < beams);
+    CHECK(beams < corners);
+    // Corners is ordered after the window-space labels, so it draws after them.
+    CHECK(dispatch.contains("defer_drawing_rule("));
+    CHECK_FALSE(dispatch.contains("defer_drawing_rule(::cactus_gen::detail::fire_draw"));
 }
 
 TEST_CASE("Codegen EnTT: sprite and mesh renderers each read their own module's Renderer",

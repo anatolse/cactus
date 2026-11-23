@@ -17,7 +17,7 @@
 #include "backends/cpp-entt/persistence_restore_emitter.hpp"
 #include "backends/cpp-entt/relation_emitter.hpp"
 #include "backends/cpp-entt/range_checks.hpp"
-#include "backends/cpp-entt/render_pass_emitter.hpp"
+#include "backends/cpp-entt/drawing_rule_emitter.hpp"
 #include "backends/cpp-entt/rule_trace_emitter.hpp"
 #include "backends/cpp-entt/system_emitter.hpp"
 #include "backends/cpp-entt/type_utils.hpp"
@@ -1832,29 +1832,6 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program,
     return out.str();
 }
 
-namespace {
-
-// program.phases is simple-name-keyed for a single-module compile but
-// re-keyed by canonical_id once ProgramLinker::merge_into runs (its
-// insert_key prefers canonical_id over the source map's simple-name key, the
-// same duality EnttCodegenUtils::find_trait already handles for traits) — so
-// a render-pass phase's ResolvedPhase entry must be found by resolved symbol
-// identity, not assumed to sit at the bare local-name key.
-const ResolvedPhase* find_resolved_phase(const DecoratedProgram& program, const SymbolId& phase_symbol) {
-    if (const auto it = program.phases.find(phase_symbol.local_name);
-        it != program.phases.end() && (!it->second.symbol_id.has_value() || *it->second.symbol_id == phase_symbol)) {
-        return &it->second;
-    }
-    for (const auto& [_, candidate] : program.phases) {
-        if (candidate.symbol_id.has_value() && *candidate.symbol_id == phase_symbol) {
-            return &candidate;
-        }
-    }
-    return nullptr;
-}
-
-}  // namespace
-
 bool emit_phase_handler_call(std::ostringstream& out,
                              const DecoratedProgram& program,
                              const auto& phase,
@@ -1867,6 +1844,15 @@ bool emit_phase_handler_call(std::ostringstream& out,
                                                  [&](const auto& node) { return node.identity == identity; });
     if (graph_node == program.execution_graph.handlers.end()) {
         return false;
+    }
+    if (std::ranges::contains(program.execution_graph.drawing_rules, identity.rule, &DrawingRulePlan::rule)) {
+        const auto callee = drawing_rule_callee(program, identity.rule);
+        if (emitted_callees.insert(callee).second) {
+            out << (draws_after_window_space(program, identity.rule)
+                        ? "    cactus::runtime::entt_backend::defer_drawing_rule(registry, &" + callee + ");\n"
+                        : "    " + callee + "(registry);\n");
+        }
+        return true;
     }
     if (is_user_external_handler(program, *graph_node)) {
         if (emitted_callees.insert(make_canonical_id(graph_node->identity.rule)).second) {
@@ -2176,20 +2162,6 @@ void emit_phase_handler_dispatch(std::ostringstream& out,
     out << "void generated_dispatch_phase(entt::registry& registry, const " << cpp_type_ref(phase.phase)
         << "& phase) {\n";
     out << "    (void)phase;\n";
-
-    // dsl-render-passes: a render-pass phase's derived vertex/fragment
-    // stage handlers use HandlerTriggerKind::RenderStage, not Phase, so
-    // the generic per-handler loop below finds nothing for them by
-    // design (their bodies are translated to GLSL, not C++) — substitute
-    // the render-pass draw step wholesale instead.
-    if (const auto* resolved_phase = find_resolved_phase(program, phase.phase);
-        resolved_phase != nullptr && resolved_phase->render_pass.has_value()) {
-        const auto render_pass_body = emit_render_pass_dispatch_body(program, *resolved_phase);
-        out << (render_pass_body.has_value() ? *render_pass_body : "    (void)registry;\n");
-        out << "}\n\n";
-        return;
-    }
-
     const bool emitted = emit_phase_handler_calls(out, program, accumulation, delivery, phase);
     if (!emitted) {
         out << "    (void)registry;\n";
@@ -4608,7 +4580,8 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         for (auto& decl : program.ast->declarations) {
             if (auto* rule = std::get_if<RuleNode>(&decl)) {
                 out << namespace_block(detail_namespace_path(program.module_name),
-                                       EnttSystemEmitter::emit_system(*rule, program));
+                                       is_drawing_rule(*rule) ? emit_drawing_rule_function(*rule, program)
+                                                              : EnttSystemEmitter::emit_system(*rule, program));
             }
             if (auto* rule = std::get_if<ExternRuleNode>(&decl); rule != nullptr) {
                 if (has_compiler_owned_external_handler(program, *rule)) {

@@ -20,12 +20,9 @@
 namespace {
 
 // examples/particle-burst/particle_burst.cactus: GRAVITY=300.0,
-// PARTICLE_LIFETIME=0.9s, PARTICLE_COUNT=8, PARTICLE_SPEED=150.0. The
-// render-pass rewrite (add-render-pass-phases) touches only rendering
-// (ParticleVertex/ParticleFragment); spawn/gravity/lifetime simulation is
-// byte-for-byte unchanged from the previously-shipped Shape-based version —
-// these scenarios mirror example-particle-burst/spec.md's unmodified
-// requirements to confirm that stayed true.
+// PARTICLE_LIFETIME=0.9s, PARTICLE_COUNT=8, PARTICLE_SPEED=150.0. Drawing
+// touches only the DrawParticles rule; these scenarios check that spawn,
+// gravity and lifetime simulation stay as before.
 constexpr int kParticleCount   = 8;
 constexpr float kParticleSpeed = 150.0F;
 constexpr float kDt            = 1.0F / 60.0F;
@@ -55,7 +52,7 @@ std::size_t particle_count(entt::registry& registry) {
 }  // namespace
 
 TEST_CASE("particle-burst headless: a click spawns PARTICLE_COUNT particles at the cursor position",
-          "[example-behavior][particle-burst][render-passes]") {
+          "[example-behavior][particle-burst][drawing-rules]") {
     cactus_raylib_fake::reset();
     constexpr Vector2 kClickPosition{.x = 320.0F, .y = 240.0F};
     click_at(kClickPosition);
@@ -82,7 +79,7 @@ TEST_CASE("particle-burst headless: a click spawns PARTICLE_COUNT particles at t
     }
 }
 
-TEST_CASE("particle-burst headless: no click spawns nothing", "[example-behavior][particle-burst][render-passes]") {
+TEST_CASE("particle-burst headless: no click spawns nothing", "[example-behavior][particle-burst][drawing-rules]") {
     // Guards against a test that would pass regardless of whether the input
     // gate is wired up at all.
     cactus_raylib_fake::reset();
@@ -94,7 +91,7 @@ TEST_CASE("particle-burst headless: no click spawns nothing", "[example-behavior
 }
 
 TEST_CASE("particle-burst headless: gravity pulls particles downward and they die after PARTICLE_LIFETIME",
-          "[example-behavior][particle-burst][render-passes]") {
+          "[example-behavior][particle-burst][drawing-rules]") {
     cactus_raylib_fake::reset();
     constexpr Vector2 kClickPosition{.x = 320.0F, .y = 240.0F};
     click_at(kClickPosition);

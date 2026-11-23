@@ -12,7 +12,7 @@ namespace cactus {
 // no ambiguity, no dot product on `*` - every accepted combination is an
 // exact row here. Shared by the general semantic analyzer's BinaryExpr type
 // inference and compound-assignment validation, and by the cpp-entt
-// backend's render-pass GLSL stage-handler translator, so both stay
+// backend's drawing-rule GLSL translator, so both stay
 // consistent by construction.
 std::optional<TypeKind> lookup_vector_binary_op_result(TypeKind left, const std::string& op, TypeKind right);
 

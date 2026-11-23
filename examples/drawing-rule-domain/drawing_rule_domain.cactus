@@ -1,11 +1,10 @@
-module render_pass_domain
+module drawing_rule_domain
 
-use std.render.passes as passes
 use std.transform.flat as tf
 
-# A render pass draws exactly its vertex handler's domain. Of the six entities
-# below, only Young, Front and Back are drawn. Front and Back overlap; Back has
-# the larger depth, so it is drawn last and covers Front.
+# A drawing rule draws exactly its domain. Of the six entities below, only
+# Young, Front and Back are drawn. Front and Back overlap; Back has the larger
+# depth, so it is drawn last and covers Front.
 
 const:
     SQUARE_SIZE = 30.0
@@ -19,12 +18,6 @@ trait Particle:
     var tint: color = #00FF00FF
 
 trait Hidden
-
-pub phase domain_pass:
-    after:
-        render
-    pipeline: passes.Pass = passes.Pass.Quads
-    output: passes.Target = passes.Target.Screen
 
 template Dot(x: float):
     tf.WorldTransform:
@@ -59,7 +52,7 @@ pub entity Front from Dot(x = 700.0):
         depth = 1.0
         tint = #0000FFFF
 
-rule DomainVertex:
+rule Dots:
     each:
         tf.WorldTransform as xf
         Particle as particle
@@ -67,12 +60,9 @@ rule DomainVertex:
     order by: particle.depth asc
     where: particle.age < MAX_AGE
 
-    on domain_pass.vertex as v:
+    on render.vertex as v:
         let half = SQUARE_SIZE - particle.age * AGE_SHRINK
-        v.screen_position = xf.position + v.corner * half
-        v.uv_out = v.uv
-        v.tint_out = particle.tint
+        v.world_position = xf.position + v.corner * half
 
-rule DomainFragment:
-    on domain_pass.fragment as f:
-        f.frag_color = f.tint
+    on render.fragment as f:
+        f.frag_color = particle.tint

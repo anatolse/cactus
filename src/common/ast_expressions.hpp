@@ -293,6 +293,22 @@ void for_each_rule_body_expression(const RuleNode& rule, const Visit& visit) {
     }
 }
 
+[[nodiscard]] inline bool assigns_stage_field(const StmtNode& stmt, const std::string& alias, const std::string& field) {
+    const auto* assign = std::get_if<VarAssign>(&stmt.stmt);
+    return assign != nullptr && assign->target == nullptr && assign->name == alias && assign->path.size() == 1 &&
+           assign->path.front() == field;
+}
+
+// Whether `body` assigns `alias.field` on some path: a stage handler's output.
+[[nodiscard]] inline bool assigns_stage_output(const std::vector<std::unique_ptr<StmtNode>>& body,
+                                               const std::string& alias,
+                                               const std::string& field) {
+    bool assigns = false;
+    for_each_nested_statement(
+        body, [&](const StmtNode& stmt) { assigns = assigns || assigns_stage_field(stmt, alias, field); });
+    return assigns;
+}
+
 [[nodiscard]] inline const FuncNode* find_func_decl(const ProgramNode& ast, const SymbolId& symbol) {
     for (const auto& decl : ast.declarations) {
         const auto* func = std::get_if<FuncNode>(&decl);

@@ -106,7 +106,7 @@ struct ResolvedFunc : CanonicalIdentity {
     std::optional<std::unordered_set<std::string>> effect_summary;
     std::vector<ResolvedParam> params;
     std::optional<TypeInfo> return_type;
-    bool glsl_inlinable = false;  // a render-pass stage handler may inline its single `return`
+    bool glsl_inlinable = false;  // a stage handler may inline its single `return`
 };
 
 inline bool has_reference_params(const ResolvedFunc& func) {
@@ -252,7 +252,7 @@ struct ResolvedStruct : CanonicalIdentity {
 struct ResolvedConst : CanonicalIdentity {
     std::string name;
     TypeInfo type;
-    bool glsl_portable = false;  // a render-pass stage handler may inline it
+    bool glsl_portable = false;  // a stage handler may inline it
 };
 
 struct ResolvedEnum : CanonicalIdentity {
@@ -265,18 +265,6 @@ struct ResolvedEvent : CanonicalIdentity {
     std::vector<ResolvedField> fields;
     bool is_pub      = false;
     bool is_external = false;
-};
-
-// Recognition + derived-trigger data for a render-pass phase
-// (dsl-render-passes). Present only when one of the phase's fields resolves
-// to the canonical stdlib type `std.render.passes.Pass`.
-struct RenderPassInfo {
-    std::size_t pass_field_index   = 0;  // index into ResolvedPhase::fields
-    std::size_t target_field_index = 0;  // index into ResolvedPhase::fields
-    SymbolId pass_enum_id;               // canonical std.render.passes.Pass symbol
-    SymbolId target_enum_id;             // canonical std.render.passes.Target symbol
-    ResolvedHandlerTrigger vertex_trigger;
-    ResolvedHandlerTrigger fragment_trigger;
 };
 
 // The `rate:` source of a periodic phase: one `float` field of a named entity's trait.
@@ -299,7 +287,6 @@ struct ResolvedPhase : CanonicalIdentity {
     std::optional<std::int64_t> every_units;  // the period as a duration
     std::optional<std::int64_t> max_repetitions;
     std::optional<PhaseRate> rate;
-    std::optional<RenderPassInfo> render_pass;
     bool is_pub    = false;
     bool has_every = false;
     bool has_max   = false;
@@ -1012,20 +999,39 @@ struct ParallelPlan {
     [[nodiscard]] const ParallelLevel* level_of(const HandlerIdentity& handler) const;
 };
 
-// dsl-render-passes, "Render-pass synthetic pass-local edges": represents the
-// backend-owned, non-authored rasterization step between a render-pass
-// phase's vertex- and fragment-stage handlers — vertex-handler node ->
-// synthetic rasterization node -> fragment-handler node -> the phase's own
-// node in the ordinary phase DAG (`phase`, already present in
-// ExecutionGraph::phases). Deliberately its own record rather than a
-// generic graph node/ScheduleEdge: the vertex->fragment relationship is a
-// fixed backend-mediated data flow, never a conflict the scheduler resolves,
-// so it needs no participation in schedule_edges/stable_topological_order.
-struct RenderPassPlan {
-    SymbolId phase;
+// Rasterization between the two stages is a fixed data flow, never a schedule edge.
+struct DrawingRulePlan {
+    SymbolId rule;
     HandlerIdentity vertex_handler;
     HandlerIdentity fragment_handler;
 };
+
+// The trigger of a drawing rule's vertex or fragment stage handler.
+[[nodiscard]] inline ResolvedHandlerTrigger drawing_stage_trigger(bool vertex) {
+    return ResolvedHandlerTrigger{
+        .kind   = HandlerTriggerKind::RenderStage,
+        .symbol = make_symbol_id(SymbolKind::Phase, "std.core", vertex ? "render__vertex" : "render__fragment")};
+}
+
+// A drawing rule is drawn at the place of this graph node on `render`.
+[[nodiscard]] inline ResolvedHandlerTrigger drawing_rule_trigger() {
+    return ResolvedHandlerTrigger{.kind   = HandlerTriggerKind::Phase,
+                                  .symbol = make_symbol_id(SymbolKind::Phase, "std.core", "render")};
+}
+
+[[nodiscard]] inline bool is_stage_handler(const EventHandlerNode& handler) {
+    return handler.resolved_trigger.has_value() && handler.resolved_trigger->kind == HandlerTriggerKind::RenderStage;
+}
+
+[[nodiscard]] inline const EventHandlerNode* find_stage_handler(const RuleNode& rule, bool vertex) {
+    const auto trigger = drawing_stage_trigger(vertex);
+    const auto found   = std::ranges::find(rule.handlers, std::optional(trigger), &EventHandlerNode::resolved_trigger);
+    return found == rule.handlers.end() ? nullptr : &*found;
+}
+
+[[nodiscard]] inline bool is_drawing_rule(const RuleNode& rule) {
+    return std::ranges::any_of(rule.handlers, is_stage_handler);
+}
 
 // `module` has a `use` of `imported`. The linker merges every module's list.
 struct ModuleImport {
@@ -1058,7 +1064,7 @@ struct GroupOrdering {
 struct ExecutionGraph {
     std::vector<PhasePlan> phases;
     std::vector<HandlerNode> handlers;
-    std::vector<RenderPassPlan> render_passes;
+    std::vector<DrawingRulePlan> drawing_rules;
     std::vector<ScheduleEdge> schedule_edges;
     std::vector<PhaseBarrierEdge> phase_barriers;
     std::vector<EventFlowEdge> event_flows;
@@ -1387,20 +1393,18 @@ private:
                                       const ResolveTrait& resolve_trait_entry,
                                       const ResolveChildren& resolve_child_overrides);
     template <typename E>
-    void validate_render_stage_expression(const E& node,
-                                          const ExprNode& expr,
-                                          const std::function<void(const ExprNode&)>& visit_expr,
-                                          const char* stage_desc) const;
+    void validate_stage_expression(const E& node,
+                                   const ExprNode& expr,
+                                   const std::function<void(const ExprNode&)>& visit_expr,
+                                   const char* stage_desc) const;
     template <typename S, typename Forbid>
-    void validate_render_stage_statement(
-        const S& node,
-        const std::string& alias,
-        const std::unordered_set<std::string>& filter_alias_names,
-        const std::unordered_set<std::string>& writable_output_fields,
-        const char* stage_desc,
-        const std::function<void(const ExprNode&)>& visit_expr,
-        const std::function<void(const std::vector<std::unique_ptr<StmtNode>>&)>& visit_stmts,
-        const Forbid& forbid_statement) const;
+    void validate_stage_statement(const S& node,
+                                  const std::string& alias,
+                                  const std::unordered_set<std::string>& filter_alias_names,
+                                  const std::unordered_set<std::string>& writable_output_fields,
+                                  const std::function<void(const ExprNode&)>& visit_expr,
+                                  const std::function<void(const std::vector<std::unique_ptr<StmtNode>>&)>& visit_stmts,
+                                  const Forbid& forbid_statement) const;
     struct ExternalContractValidator;
     struct HandlerBodyVisitor;
     template <typename T>
@@ -1545,31 +1549,19 @@ private:
     void validate_phase_field_initializers(const PhaseCollection& phases);
     void validate_phase_declarations(ProgramNode& program);
 
-    // dsl-render-passes: a phase is a render-pass phase when one of its
-    // fields resolves to canonical type std.render.passes.Pass. Recognition
-    // (by field type, populated by collect_types) runs before resolve_all_types
-    // so `<phase>.vertex`/`<phase>.fragment` already resolve as derived
-    // triggers by the time ordinary handler-trigger resolution runs; the
-    // descriptor fields' *value* (compile-time-constant enum literal) can only
-    // be checked once resolve_all_types has populated resolved_enum_member, so
-    // that validation runs later, after validate_phase_declarations.
-    void recognize_render_pass_phases(ProgramNode& program);
-    void validate_render_pass_descriptor_fields(ProgramNode& program);
-    void validate_render_pass_stage_handlers(ProgramNode& program);
-    void reject_stage_durations(const RuleNode& rule, const EventHandlerNode& handler) const;
+    // A rule with a handler on `render.vertex` or `render.fragment` is a drawing rule.
+    void validate_drawing_rules(ProgramNode& program);
+    void validate_drawing_rule_shape(const RuleNode& rule) const;
+    void validate_stage_handler_body(const RuleNode& rule, const EventHandlerNode& handler, bool is_vertex) const;
+    void validate_stage_outputs(const EventHandlerNode& handler, bool is_vertex) const;
+    void reject_stage_value_types(const RuleNode& rule, const EventHandlerNode& handler) const;
+    using StageBindings = std::unordered_map<std::string, const ResolvedTrait*>;
+    [[nodiscard]] std::optional<TypeInfo> stage_read_type(const ExprNode& node, const StageBindings& bindings) const;
     [[nodiscard]] std::optional<ResolvedHandlerTrigger> try_resolve_render_stage_trigger(const std::string& ref) const;
     [[nodiscard]] static std::optional<ResolvedStruct> build_render_stage_activation_struct(const SymbolId& symbol);
     void diagnose_unresolved_handler_trigger(const std::string& owner_desc,
                                              const std::string& event_name,
                                              const SourceLocation& loc) const;
-    void validate_render_pass_stage_handler_shape(const RuleNode& rule,
-                                                  const EventHandlerNode& handler,
-                                                  bool is_vertex) const;
-    void validate_render_pass_stage_handler_body(const std::vector<std::unique_ptr<StmtNode>>& body,
-                                                 const std::string& alias,
-                                                 const std::unordered_set<std::string>& filter_alias_names,
-                                                 const std::unordered_set<std::string>& writable_output_fields,
-                                                 const char* stage_desc) const;
 
     void validate_rule_filters(ProgramNode& program);
     void validate_pair_bindings(RuleNode& rule);
@@ -2406,6 +2398,8 @@ private:
     // Declaration alternative it handles.
     void collect_phase_plan(const PhaseNode& phase, std::size_t declaration_index);
     void collect_rule_dependency(const RuleNode& rule, std::size_t declaration_index);
+    // A drawing rule is one `render` node whose contract holds both stages' reads.
+    void collect_drawing_rule_dependency(const RuleNode& rule, std::size_t declaration_index);
     void collect_extern_rule_dependency(const ExternRuleNode& rule, std::size_t declaration_index);
     void collect_rule_deps(const std::vector<std::unique_ptr<StmtNode>>& stmts, RuleDependency& dep);
 
@@ -2493,7 +2487,10 @@ private:
                                   const SourceLocation& site);
     void add_contract_call_effects(HandlerContract& contract, const std::optional<SymbolId>& callee) const;
 
-    InferredHandlerContract infer_regular_handler_contract(const RuleNode& rule, const EventHandlerNode& handler) const;
+    // `second_stage`, when given, is a drawing rule's other stage handler, read into the same contract.
+    InferredHandlerContract infer_regular_handler_contract(const RuleNode& rule,
+                                                           const EventHandlerNode& handler,
+                                                           const EventHandlerNode* second_stage = nullptr) const;
     void fold_when_clause_named_reads(const RuleNode& rule, HandlerContract& contract) const;
 
     // Phase 3: std.text.format validation
@@ -2774,12 +2771,11 @@ private:
                                   const std::function<void(ExprNode&)>& resolve_expr,
                                   const ResolveTrait& resolve_trait_entry,
                                   const ResolveChildren& resolve_child_overrides);
-    void validate_render_stage_call(const CallExpr& node, const SourceLocation& location, const char* stage_desc) const;
-    void validate_render_stage_assignment(const VarAssign& node,
-                                          const std::string& alias,
-                                          const std::unordered_set<std::string>& filter_alias_names,
-                                          const std::unordered_set<std::string>& writable_output_fields,
-                                          const char* stage_desc) const;
+    void validate_stage_call(const CallExpr& node, const SourceLocation& location, const char* stage_desc) const;
+    void validate_stage_assignment(const VarAssign& node,
+                                   const std::string& alias,
+                                   const std::unordered_set<std::string>& filter_alias_names,
+                                   const std::unordered_set<std::string>& writable_output_fields) const;
     void resolve_named_ident(IdentExpr& e, const std::unordered_set<std::string>& shadowed, NamedAccessContext context);
     void resolve_named_assignment(VarAssign& s,
                                   const std::unordered_set<std::string>& shadowed,

@@ -210,7 +210,7 @@ add_library(cactus_backend_cpp_entt STATIC
     src/backends/cpp-entt/index_cell_size.cpp
     src/backends/cpp-entt/range_checks.cpp
     src/backends/cpp-entt/event_emitter.cpp
-    src/backends/cpp-entt/render_pass_emitter.cpp
+    src/backends/cpp-entt/drawing_rule_emitter.cpp
     src/backends/cpp-entt/persistence_emitter.cpp
     src/backends/cpp-entt/persistence_restore_emitter.cpp
     src/backends/cpp-entt/relation_emitter.cpp
@@ -522,12 +522,12 @@ function(cactus_add_persistence_roundtrip_subprocess TARGET_NAME)
     set_property(TARGET ${TARGET_NAME} PROPERTY CXX_CLANG_TIDY "")
 endfunction()
 
-# ── Real-GL Render-Pass Visual Test Executables ────────────────────────────
+# ── Real-GL Visual Test Executables ─────────────────────────────────────────
 # Parallel to cactus_add_headless_behavior_test, but links the REAL raylib
 # backend (no CACTUS_RAYLIB_FAKE) so LoadShaderFromMemory/BeginShaderMode
-# actually run against a live GL context — needed to catch render-pass bugs
+# actually run against a live GL context — needed to catch drawing bugs
 # (rlgl batching semantics, GLSL compile errors) that CACTUS_RAYLIB_FAKE
-# structurally can't reach: under the fake, ensure_render_pass_shader()
+# structurally can't reach: under the fake, ensure_drawing_rule_shader()
 # (runtime.cpp) returns a stand-in shader and never calls
 # LoadShaderFromMemory. Needs a live display session to create a GL context;
 # on headless Linux CI that means wrapping the test invocation in e.g.
@@ -536,7 +536,7 @@ endfunction()
 # TEST_SOURCE must #include the generated file via the
 # CACTUS_VISUAL_GENERATED_CPP macro this function defines, mirroring
 # cactus_add_headless_behavior_test's CACTUS_HEADLESS_GENERATED_CPP.
-function(cactus_add_render_pass_visual_test TARGET_NAME)
+function(cactus_add_visual_test TARGET_NAME)
     set(oneValueArgs CACTUS_SOURCE BACKEND TEST_SOURCE)
     cmake_parse_arguments(CACTUS_VISUAL_TEST
         ""
@@ -546,13 +546,13 @@ function(cactus_add_render_pass_visual_test TARGET_NAME)
     )
 
     if(NOT CACTUS_VISUAL_TEST_CACTUS_SOURCE)
-        message(FATAL_ERROR "cactus_add_render_pass_visual_test(${TARGET_NAME}) requires CACTUS_SOURCE")
+        message(FATAL_ERROR "cactus_add_visual_test(${TARGET_NAME}) requires CACTUS_SOURCE")
     endif()
     if(NOT CACTUS_VISUAL_TEST_BACKEND)
-        message(FATAL_ERROR "cactus_add_render_pass_visual_test(${TARGET_NAME}) requires BACKEND")
+        message(FATAL_ERROR "cactus_add_visual_test(${TARGET_NAME}) requires BACKEND")
     endif()
     if(NOT CACTUS_VISUAL_TEST_TEST_SOURCE)
-        message(FATAL_ERROR "cactus_add_render_pass_visual_test(${TARGET_NAME}) requires TEST_SOURCE")
+        message(FATAL_ERROR "cactus_add_visual_test(${TARGET_NAME}) requires TEST_SOURCE")
     endif()
 
     set(cactus_source "${CMAKE_SOURCE_DIR}/${CACTUS_VISUAL_TEST_CACTUS_SOURCE}")
@@ -568,7 +568,7 @@ function(cactus_add_render_pass_visual_test TARGET_NAME)
                 --output "$<SHELL_PATH:${generated_output}>"
         DEPENDS cactus ${cactus_inputs}
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        COMMENT "Generating render-pass visual test fixture for ${TARGET_NAME} (${CACTUS_VISUAL_TEST_BACKEND})"
+        COMMENT "Generating visual test fixture for ${TARGET_NAME} (${CACTUS_VISUAL_TEST_BACKEND})"
         VERBATIM
     )
     set_source_files_properties("${generated_output}" PROPERTIES GENERATED TRUE HEADER_FILE_ONLY TRUE)
@@ -603,7 +603,7 @@ function(cactus_add_render_pass_visual_test TARGET_NAME)
         )
     else()
         message(FATAL_ERROR
-            "Unsupported Cactus render-pass visual test backend '${CACTUS_VISUAL_TEST_BACKEND}' for target ${TARGET_NAME}")
+            "Unsupported Cactus visual test backend '${CACTUS_VISUAL_TEST_BACKEND}' for target ${TARGET_NAME}")
     endif()
 
     add_test(NAME ${TARGET_NAME} COMMAND ${TARGET_NAME} WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
@@ -632,7 +632,8 @@ set(EXTERNAL_HANDLER_LINK_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/extern
 set(PARTICLE_BURST_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/particle-burst.generated.cpp")
 set(EFFECT_CHANNELS_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/effect-channels.generated.cpp")
 set(GRADIENT_SQUARE_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/gradient-square.generated.cpp")
-set(RENDER_PASS_DOMAIN_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/render-pass-domain.generated.cpp")
+set(DRAWING_RULE_DOMAIN_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/drawing-rule-domain.generated.cpp")
+set(DRAWING_RULES_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/drawing-rules.generated.cpp")
 
 add_custom_command(
     OUTPUT "${EXTERNAL_HANDLER_LINK_GENERATED_CPP}"
@@ -814,10 +815,16 @@ cactus_add_example(example_gradient_square_generated
     OUTPUT "${GRADIENT_SQUARE_GENERATED_CPP}"
 )
 
-cactus_add_example(example_render_pass_domain_generated
-    SOURCE "examples/render-pass-domain/render_pass_domain.cactus"
+cactus_add_example(example_drawing_rule_domain_generated
+    SOURCE "examples/drawing-rule-domain/drawing_rule_domain.cactus"
     BACKEND "cpp-entt"
-    OUTPUT "${RENDER_PASS_DOMAIN_GENERATED_CPP}"
+    OUTPUT "${DRAWING_RULE_DOMAIN_GENERATED_CPP}"
+)
+
+cactus_add_example(example_drawing_rules_generated
+    SOURCE "examples/drawing_rules.cactus"
+    BACKEND "cpp-entt"
+    OUTPUT "${DRAWING_RULES_GENERATED_CPP}"
 )
 
 # ── Tests ───────────────────────────────────────────────────────────────────────

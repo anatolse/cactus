@@ -218,36 +218,34 @@ void draw_shape_rectangle(
     Vector2 position, Vector2 size, Vector2 origin, Vector2 scale, float rotation_rad, CactusColor color) noexcept;
 void draw_shape_circle(Vector2 position, float diameter, Vector2 origin, Vector2 scale, CactusColor color) noexcept;
 
-// ── Render-pass rendering (dsl-render-passes Quads pass kind) ──────────────────
-// Shader cache, uniform upload and quad submission for Quads render passes.
-struct RenderPassShaderState {
+// ── Drawing rules ─────────────────────────────────────────────────────────────
+struct DrawingRuleShaderState {
     Shader shader{};
     bool loaded{false};
     bool attempted{false};
 };
 
-// Compiles and caches `vertex_src`/`fragment_src` into `state` on first call;
-// returns the cached shader on every call once loaded, or nullptr if loading
-// was never attempted successfully (no real GL context, or a shader compile
-// error) — callers treat nullptr as "skip this render-pass phase's draw step
-// this frame," mirroring the lighting shader's ensure/nullptr contract.
-// Headless test builds return a stand-in shader, so the domain loop still runs.
-[[nodiscard]] Shader* ensure_render_pass_shader(RenderPassShaderState& state,
-                                                const char* vertex_src,
-                                                const char* fragment_src);
+// Null when the shader failed to load, which is never retried; headless builds get a stand-in.
+[[nodiscard]] Shader* ensure_drawing_rule_shader(DrawingRuleShaderState& state,
+                                                 const char* vertex_src,
+                                                 const char* fragment_src);
 
-// Binds `shader` under the active 2D camera until end_render_pass.
-void begin_render_pass(const Shader& shader) noexcept;
-void end_render_pass() noexcept;
+// Flushes queued draws first, so a drawing rule keeps its place in the frame.
+void begin_drawing_rule(const Shader& shader, bool world_space) noexcept;
+void end_drawing_rule() noexcept;
 
-[[nodiscard]] int render_pass_uniform_location(const Shader& shader, const char* name) noexcept;
-void set_render_pass_uniform(const Shader& shader, int location, float value) noexcept;
-void set_render_pass_uniform(const Shader& shader, int location, Vector2 value) noexcept;
-void set_render_pass_uniform(const Shader& shader, int location, CactusColor value) noexcept;
+[[nodiscard]] int drawing_rule_uniform_location(const Shader& shader, const char* name) noexcept;
+void set_drawing_rule_uniform(const Shader& shader, int location, float value) noexcept;
+void set_drawing_rule_uniform(const Shader& shader, int location, bool value) noexcept;
+void set_drawing_rule_uniform(const Shader& shader, int location, Vector2 value) noexcept;
+void set_drawing_rule_uniform(const Shader& shader, int location, Vector3 value) noexcept;
+void set_drawing_rule_uniform(const Shader& shader, int location, CactusColor value) noexcept;
 
-// Submits one instance's quad to the shader begin_render_pass bound; the
-// vertex shader reads the row's values from the uniforms set just before.
-void draw_render_pass_quad_instance() noexcept;
+void draw_drawing_rule_quad() noexcept;
+
+// Runs `draw` at the end of the frame, after the UI, with this viewport's camera and rectangle.
+using DrawingRuleFunction = void (*)(entt::registry&);
+void defer_drawing_rule(entt::registry& registry, DrawingRuleFunction draw) noexcept;
 
 struct RuntimeBinding {
     GeneratedProjectInfo project;

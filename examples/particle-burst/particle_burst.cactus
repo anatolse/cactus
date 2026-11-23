@@ -2,7 +2,8 @@ module particle_burst
 
 use std.input as inp
 use std.math as math
-use std.render.passes as passes
+use std.color as color
+use std.render.layers as layers
 use std.transform.flat as tf
 
 const:
@@ -25,12 +26,6 @@ template ParticleTemplate:
         position = vec2(0.0, 0.0)
     Particle:
         lifetime = PARTICLE_LIFETIME
-
-pub phase particle_pass:
-    after:
-        render
-    pipeline: passes.Pass = passes.Pass.Quads
-    output: passes.Target = passes.Target.Screen
 
 rule EmitParticleBurst:
     on input:
@@ -58,25 +53,22 @@ rule SimulateParticles:
         if particle.lifetime <= 0.0:
             destroy
 
-rule ParticleVertex:
+# Each particle is a soft round dot: opaque at the center, clear at the edge.
+rule DrawParticles:
     each:
         tf.WorldTransform as xf
-        Particle as particle
+        Particle
+    group: layers.sprites
 
-    on particle_pass.vertex as v:
-        let half_size = PARTICLE_RADIUS
-        v.screen_position = xf.position + v.corner * half_size
-        v.uv_out = v.uv
-        v.tint_out = PARTICLE_COLOR
+    on render.vertex as v:
+        v.world_position = xf.position + v.corner * PARTICLE_RADIUS
 
-rule ParticleFragment:
-    on particle_pass.fragment as f:
+    on render.fragment as f:
         let dx = f.uv.x - 0.5
         let dy = f.uv.y - 0.5
         let radius_squared = dx * dx + dy * dy
-
         if radius_squared > 0.25:
             f.frag_color = #00000000
         else:
             let alpha = 1.0 - math.sqrt(radius_squared) * 2.0
-            f.frag_color = passes.with_alpha(f.tint, alpha)
+            f.frag_color = color.with_alpha(PARTICLE_COLOR, alpha)

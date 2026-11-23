@@ -839,8 +839,8 @@ TEST_CASE("ModuleArtifact: runtime declarations and handler graph round-trip", "
                                                         .explicit_after    = {first_handler},
                                                         .declaration_order = {.declaration_index = 3},
                                                         .location          = {"runtime.cactus", 20, 5}});
-    prog.execution_graph.render_passes.push_back(
-        RenderPassPlan{.phase = tick, .vertex_handler = first_handler, .fragment_handler = second_handler});
+    prog.execution_graph.drawing_rules.push_back(DrawingRulePlan{
+        .rule = first_handler.rule, .vertex_handler = first_handler, .fragment_handler = second_handler});
     prog.execution_graph.schedule_edges.push_back(ScheduleEdge{.before            = first_handler,
                                                                .after             = second_handler,
                                                                .kind              = ScheduleEdgeKind::ExplicitHandler,
@@ -893,10 +893,10 @@ TEST_CASE("ModuleArtifact: runtime declarations and handler graph round-trip", "
     CHECK(loaded->execution_graph.handlers[1].identity == second_handler);
     CHECK(loaded->execution_graph.handlers[0].kept == position);
     CHECK_FALSE(loaded->execution_graph.handlers[1].kept.has_value());
-    REQUIRE(loaded->execution_graph.render_passes.size() == 1);
-    CHECK(loaded->execution_graph.render_passes[0].phase == tick);
-    CHECK(loaded->execution_graph.render_passes[0].vertex_handler == first_handler);
-    CHECK(loaded->execution_graph.render_passes[0].fragment_handler == second_handler);
+    REQUIRE(loaded->execution_graph.drawing_rules.size() == 1);
+    CHECK(loaded->execution_graph.drawing_rules[0].rule == first_handler.rule);
+    CHECK(loaded->execution_graph.drawing_rules[0].vertex_handler == first_handler);
+    CHECK(loaded->execution_graph.drawing_rules[0].fragment_handler == second_handler);
     CHECK(loaded->execution_graph.handlers[1].contract.projects == std::unordered_set<SymbolId>{layout});
     CHECK_FALSE(loaded->execution_graph.handlers[1].contract.writes.contains(layout));
     CHECK(loaded->execution_graph.handlers[1].explicit_after == std::vector<HandlerIdentity>{first_handler});
@@ -934,7 +934,7 @@ TEST_CASE("ModuleArtifact: runtime declarations and handler graph round-trip", "
 }
 
 TEST_CASE("ModuleArtifact: artifact from before shape-generic spatial plans is rejected", "[artifact][spatial-join]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 62);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 63);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1229,7 +1229,7 @@ TEST_CASE("ModuleArtifact: conditional expressions round-trip with their pattern
 }
 
 TEST_CASE("ModuleArtifact: ranged fields and their container traits round-trip", "[artifact][ranged-fields]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 62);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 63);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1325,7 +1325,7 @@ TEST_CASE("ModuleArtifact: clamped field bounds round-trip", "[artifact][clamped
 }
 
 TEST_CASE("ModuleArtifact: trait dimensions and cell accesses round-trip", "[artifact][trait-dimensions]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 62);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 63);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1589,7 +1589,7 @@ TEST_CASE("ModuleArtifact: set command capabilities round-trip", "[artifact][def
     CHECK(loaded->handler_contracts.front().commands == commands);
     REQUIRE(loaded->execution_graph.handlers.size() == 1);
     CHECK(loaded->execution_graph.handlers.front().contract.commands == commands);
-    CHECK(ModuleArtifact::CURRENT_VERSION == 62);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 63);
 
     fs::remove_all(build_dir, ec);
 }
@@ -1704,55 +1704,6 @@ TEST_CASE("ModuleArtifact: pair-domain handler contract round-trips through save
     REQUIRE(loaded->execution_graph.handlers.size() == 1);
     CHECK(loaded->execution_graph.handlers[0].contract.domain_kind == HandlerDomainKind::Pair);
     CHECK(loaded->execution_graph.handlers[0].contract.pair_bindings.size() == 2);
-
-    fs::remove_all(build_dir, ec);
-}
-
-TEST_CASE("ModuleArtifact: render-pass phase recognition round-trips through save/load",
-          "[artifact][render-passes][2.1]") {
-    auto build_dir = test_build_dir();
-    std::error_code ec;
-    fs::remove_all(build_dir, ec);
-
-    const auto pass_enum   = test_symbol(SymbolKind::Enum, "Pass");
-    const auto target_enum = test_symbol(SymbolKind::Enum, "Target");
-    const auto phase_id    = test_symbol(SymbolKind::Phase, "my_pass");
-
-    ResolvedPhase phase;
-    phase.name        = "my_pass";
-    phase.symbol_id   = phase_id;
-    phase.canonical_id = "test.my_pass";
-    RenderPassInfo info;
-    info.pass_field_index   = 0;
-    info.target_field_index = 1;
-    info.pass_enum_id       = pass_enum;
-    info.target_enum_id     = target_enum;
-    info.vertex_trigger = ResolvedHandlerTrigger{.kind = HandlerTriggerKind::RenderStage,
-                                                 .symbol = test_symbol(SymbolKind::Phase, "my_pass__vertex")};
-    info.fragment_trigger = ResolvedHandlerTrigger{.kind = HandlerTriggerKind::RenderStage,
-                                                   .symbol = test_symbol(SymbolKind::Phase, "my_pass__fragment")};
-    phase.render_pass = std::move(info);
-
-    DecoratedProgram prog;
-    prog.phases["my_pass"] = std::move(phase);
-
-    ErrorReporter errors;
-    ModuleArtifact artifact(errors);
-    REQUIRE(artifact.save(prog, "test", build_dir));
-    std::string module_name;
-    auto loaded = artifact.load(build_dir / "test.cmod", module_name);
-    REQUIRE_FALSE(errors.has_errors());
-    REQUIRE(loaded.has_value());
-
-    REQUIRE(loaded->phases.contains("my_pass"));
-    const auto& loaded_render_pass = loaded->phases.at("my_pass").render_pass;
-    REQUIRE(loaded_render_pass.has_value());
-    CHECK(loaded_render_pass->pass_field_index == 0);
-    CHECK(loaded_render_pass->target_field_index == 1);
-    CHECK(loaded_render_pass->pass_enum_id == pass_enum);
-    CHECK(loaded_render_pass->target_enum_id == target_enum);
-    CHECK(loaded_render_pass->vertex_trigger.kind == HandlerTriggerKind::RenderStage);
-    CHECK(loaded_render_pass->fragment_trigger.kind == HandlerTriggerKind::RenderStage);
 
     fs::remove_all(build_dir, ec);
 }
@@ -2130,7 +2081,7 @@ TEST_CASE("ModuleArtifact: every schedule edge reason round-trips", "[artifact][
 }
 
 TEST_CASE("ModuleArtifact: artifact from before field-level contracts is rejected", "[artifact][handler-contracts]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 62);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 63);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2357,7 +2308,7 @@ TEST_CASE("ModuleArtifact: unknown trigger kind is rejected", "[artifact][trait-
 }
 
 TEST_CASE("ModuleArtifact: artifact from before lifecycle triggers is rejected", "[artifact][trait-lifecycle]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 62);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 63);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2486,7 +2437,7 @@ TEST_CASE("ModuleArtifact: unknown group ordering direction is malformed", "[art
 }
 
 TEST_CASE("ModuleArtifact: artifact from before rule groups is rejected", "[artifact][rule-groups]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 62);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 63);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2511,7 +2462,7 @@ TEST_CASE("ModuleArtifact: artifact from before rule groups is rejected", "[arti
 }
 
 TEST_CASE("ModuleArtifact: artifact from before named-entity access is rejected", "[artifact][named-entity]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 62);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 63);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -2664,7 +2615,7 @@ TEST_CASE("ModuleArtifact: state arrows and variant locations round-trip", "[art
         CHECK(mode->variants[1].exits == std::vector<StateExit>{library.states.at("Mode").variants[1].exits});
         CHECK(mode->variants[2].exits.empty());
     }
-    CHECK(ModuleArtifact::CURRENT_VERSION == 62);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 63);
 
     fs::remove_all(build_dir, ec);
 }
@@ -2695,7 +2646,7 @@ TEST_CASE("ModuleArtifact: whether a trait is single round-trips", "[artifact][s
     CHECK(loaded->traits.at("Terrain").is_single);
     CHECK_FALSE(loaded->traits.at("Rock").is_single);
     CHECK(symbols->traits.at("Terrain").is_single);
-    CHECK(ModuleArtifact::CURRENT_VERSION == 62);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 63);
 
     fs::remove_all(build_dir, ec);
 }
@@ -2988,7 +2939,7 @@ TEST_CASE("ModuleArtifact: a trait access expression round-trips", "[artifact][t
 }
 
 TEST_CASE("ModuleArtifact: artifact from before bracketed trait access is rejected", "[artifact][trait-access]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 62);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 63);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -3301,7 +3252,7 @@ TEST_CASE("ModuleArtifact: trait parameters and their reads round-trip", "[artif
 }
 
 TEST_CASE("ModuleArtifact: an artifact from before trait parameters is rejected", "[artifact][trait-parameters]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 62);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 63);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);

@@ -777,12 +777,9 @@ struct HandlerReferenceNode {
     }
 };
 
-// RenderStage identifies a render-pass phase's derived `<phase>.vertex` /
-// `<phase>.fragment` trigger (dsl-render-passes) — distinct from Phase so the
-// ordinary per-phase handler-dispatch and effect-conflict machinery, which is
-// keyed on trigger kind, never mistakes a stage handler for one of the
-// phase's own ordinary handlers. TraitAdded/TraitRemoved are `on added T` /
-// `on removed T`, whose symbol is the trait's.
+// RenderStage is a drawing rule's `render.vertex` / `render.fragment`: its body
+// becomes GLSL, so per-phase dispatch never runs it. TraitAdded/TraitRemoved
+// are `on added T` / `on removed T`, whose symbol is the trait's.
 enum class HandlerTriggerKind : std::uint8_t { Event, Phase, RenderStage, TraitAdded, TraitRemoved };
 
 [[nodiscard]] inline const char* handler_trigger_kind_name(HandlerTriggerKind kind) {

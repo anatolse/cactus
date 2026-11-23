@@ -209,12 +209,9 @@ bool ProgramLinker::merge_into(DecoratedProgram& target,
         handler.declaration_order.module_index = module_index;
         target.execution_graph.handlers.push_back(std::move(handler));
     }
-    // dsl-render-passes: RenderPassPlan entries reference already
-    // module-qualified SymbolId/HandlerIdentity values directly (no
-    // declaration_order to patch), so a straight append is sufficient.
-    target.execution_graph.render_passes.insert(target.execution_graph.render_passes.end(),
-                                                 src.execution_graph.render_passes.begin(),
-                                                 src.execution_graph.render_passes.end());
+    target.execution_graph.drawing_rules.insert(target.execution_graph.drawing_rules.end(),
+                                                src.execution_graph.drawing_rules.begin(),
+                                                src.execution_graph.drawing_rules.end());
     target.execution_graph.group_declarations.insert(target.execution_graph.group_declarations.end(),
                                                      src.execution_graph.group_declarations.begin(),
                                                      src.execution_graph.group_declarations.end());

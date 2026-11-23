@@ -28,7 +28,7 @@ namespace volume = cactus_gen::stdlib::transform::volume;
 // vec4 math that always exceeded 1.0 before the final gamma pow(), which GL
 // then clamps to fully opaque -- CACTUS_RAYLIB_FAKE never reaches this
 // shader, so only a real GL context can catch this. See
-// cactus_add_render_pass_visual_test in CMakeLists.txt.
+// cactus_add_visual_test in CMakeLists.txt.
 void draw_frame(entt::registry& registry) {
     BeginDrawing();
     ClearBackground(RAYWHITE);
@@ -67,7 +67,7 @@ bool near_x(const float value, const float target) {
 }  // namespace
 
 TEST_CASE("model alpha visual: lower ModelRenderer.color alpha renders dimmer against a black background",
-          "[example-behavior][model-tint][render-passes][visual]") {
+          "[example-behavior][model-tint][visual]") {
     const auto config = cactus::runtime::entt_backend::generated_project_config();
     InitWindow(config.window_width, config.window_height, config.window_title);
     SetTargetFPS(config.target_fps);

@@ -3,6 +3,7 @@ module out_of_range_colors_runtime
 # One drawn thing per stdlib renderer that passes a color to raylib. The test
 # sets every color to an out-of-range value and checks the bytes each draw gets.
 
+use std.color as color
 use std.debug as debug
 use std.math.quat as quat
 use std.transform.flat as tf
@@ -11,7 +12,6 @@ use std.render.shapes as shapes
 use std.render.sprites as sprites
 use std.render.meshes as meshes
 use std.render.models as models
-use std.render.passes as passes
 use std.render.text as text
 use std.camera.flat as cam2d
 use std.camera.volume as cam3d
@@ -108,5 +108,5 @@ rule ScaleAlpha:
         AlphaProbe as probe
 
     on tick:
-        probe.raised = passes.with_alpha(#FF0000FF, 1.5)
-        probe.lowered = passes.with_alpha(#FF0000FF, -0.2)
+        probe.raised = color.with_alpha(#FF0000FF, 1.5)
+        probe.lowered = color.with_alpha(#FF0000FF, -0.2)

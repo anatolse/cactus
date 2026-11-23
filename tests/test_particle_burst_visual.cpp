@@ -18,12 +18,11 @@
 
 #include <string>
 
-// dsl-render-passes "Instances drawn by a vertex-stage handler render
-// independently": under CACTUS_RAYLIB_FAKE the render pass binds a stand-in
-// shader and skips GL (runtime.cpp), so no headless behavioral test can ever
-// reach the real draw path this requirement is about. This
-// test links the real raylib backend and drives an actual GL context
-// instead — see cactus_add_render_pass_visual_test in CMakeLists.txt.
+// Rows of a drawing rule render independently. Under CACTUS_RAYLIB_FAKE a
+// drawing rule binds a stand-in shader and skips GL (runtime.cpp), so no
+// headless test reaches the real draw path. This test links the real raylib
+// backend and drives an actual GL context instead — see
+// cactus_add_visual_test in CMakeLists.txt.
 //
 // It doesn't go through a real mouse click: raylib's public API has no way
 // to inject a synthetic button press for a real (non-CACTUS_RAYLIB_FAKE)
@@ -32,10 +31,10 @@
 // this test's own portability requirement. Instead it reproduces a click's
 // *effect* directly: spawning particle entities at distinct positions
 // through the same generated entity-creation function EmitParticleBurst
-// itself calls, then driving one real frame so the render pass actually
+// itself calls, then driving one real frame so the drawing rule actually
 // draws them.
 TEST_CASE("particle-burst visual: instances render at their own positions, not one shared position",
-          "[example-behavior][particle-burst][render-passes][visual]") {
+          "[example-behavior][particle-burst][drawing-rules][visual]") {
     const auto config = cactus::runtime::entt_backend::generated_project_config();
     InitWindow(config.window_width, config.window_height, config.window_title);
     SetTargetFPS(config.target_fps);

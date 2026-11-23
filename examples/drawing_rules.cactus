@@ -1,0 +1,135 @@
+module drawing_rules
+
+use std.core as core
+use std.color as color
+use std.math as math
+use std.transform.flat as tf
+use std.render.layers as layers
+use std.render.shapes as shapes
+use std.render.text as text
+use std.camera.flat as cam
+use std.camera.viewport as vp
+
+# A drawing rule draws one quad per row. Its vertex and fragment handlers are
+# written in Cactus, read the row like any rule, and run on the GPU.
+#   Fire  - glowing dots in the world, in the sprites layer, under the labels.
+#   Beams - a square at each beam's sink, read through the link.
+#   Badge - a corner badge in screen pixels, over everything, placed from the
+#           screen size. A camera move does not move it.
+
+const:
+    DOT_RADIUS = 40.0
+    BEAM_HALF = 20.0
+    BADGE_HALF = 50.0
+    BADGE_MARGIN = 60.0
+
+trait Ember:
+    var heat: float = 1.0
+
+trait Beam:
+    let sink: tf.WorldTransform
+
+trait Badge
+
+# Drawn after every standard layer.
+pub group overlay:
+    phase: core.render
+    after:
+        layers.picture
+        layers.meshes
+        layers.models
+        layers.volumes
+        layers.shapes
+        layers.sprites
+        layers.text
+        layers.ui
+        layers.editor
+
+template Dot(at: vec2, heat: float):
+    tf.WorldTransform:
+        position = at
+    Ember:
+        heat = heat
+
+template Caption(at: vec2, words: string):
+    text.ScreenLabel:
+        text = words
+        position = at
+        font_size = 40
+        color = #000000FF
+
+entity View:
+    tf.WorldTransform
+    cam.Camera:
+        offset = vec2(400.0, 300.0)
+    vp.Viewport:
+        clear_color = #FFFFFFFF
+
+entity Plate:
+    tf.WorldTransform:
+        position = vec2(120.0, 120.0)
+    shapes.Shape:
+        type = shapes.ShapeType.Rectangle
+        size = vec2(160.0, 160.0)
+        color = #808080FF
+
+pub entity Hot from Dot(at = vec2(200.0, 200.0), heat = 1.0)
+pub entity Cool from Dot(at = vec2(400.0, 200.0), heat = 0.0)
+
+pub entity Sink:
+    tf.WorldTransform:
+        position = vec2(600.0, 200.0)
+
+entity Ray:
+    Beam:
+        sink = Sink
+
+entity Corner:
+    Badge
+
+entity HotCaption from Caption(at = vec2(205.0, 205.0), words = "##")
+entity CornerCaption from Caption(at = vec2(700.0, 520.0), words = "##")
+
+# A beam whose sink is gone goes too.
+rule DropBeams:
+    each: Beam
+    on lost Beam.sink:
+        destroy
+
+rule Fire:
+    each:
+        tf.WorldTransform as xf
+        Ember as ember
+    group: layers.sprites
+
+    on render.vertex as v:
+        v.world_position = xf.position + v.corner * DOT_RADIUS
+
+    on render.fragment as f:
+        let d = f.uv - vec2(0.5, 0.5)
+        let glow = color(ember.heat, 0.2, 1.0 - ember.heat, 1.0)
+        f.frag_color = color.with_alpha(glow, 1.0 - math.sqrt(d.x * d.x + d.y * d.y) * 2.0)
+
+rule Beams:
+    each:
+        Beam as beam
+    group: layers.sprites
+    after: Fire
+
+    on render.vertex as v:
+        v.world_position = beam.sink[tf.WorldTransform].position + v.corner * BEAM_HALF
+
+    on render.fragment as f:
+        f.frag_color = #00C000FF
+
+rule Corners:
+    each:
+        Badge
+    group: overlay
+
+    on render.vertex as v:
+        let center = vp.Screen[vp.ScreenSize].size - vec2(BADGE_MARGIN, BADGE_MARGIN)
+        v.screen_position = center + v.corner * BADGE_HALF
+
+    on render.fragment as f:
+        f.frag_color = #FFC000FF

@@ -185,7 +185,7 @@ const:
 - **Types.** `NAME: type = expression` declares the constant's type, and the value must match it. Without a type, the constant has its value's type. A value whose type cannot be inferred, such as an empty list, needs a type.
 - **Module scope.** A constant belongs to the module that declares it. That module reads it by its bare name; other modules read it through their import alias (`math.PI`, `units.ROBOT`). Every constant is visible to importers, two modules may use the same name, and a bare name never reaches another module's constant.
 - **Tables.** A constant may hold a struct or a `list[T]`. Handlers read struct fields with `.field` and iterate a list constant with bounded `for`. Constants are immutable; reading one into a local copies it.
-- **Render passes.** A render-pass stage handler (§3.11.1) may read a constant only when its type is `int`, `float`, `bool`, `vec2`, `vec3`, or `color` and its value, including every constant and `func` it reads, uses only GLSL-translatable operations. Any other constant is a compile error naming it.
+- **Drawing rules.** A stage handler of a drawing rule (§3.11.1) may read a constant only when its type is `int`, `float`, `bool`, `vec2`, `vec3`, `color` or an enum and its value, including every constant and `func` it reads, uses only GLSL-translatable operations. Any other constant is a compile error naming it.
 
 ### 3.4 Structs
 
@@ -1434,7 +1434,7 @@ rule Snap:
         c.gas = 0.0
 ```
 
-`reduce:` folds every row into one group. `reduce per self:` makes one group per carrier, including a carrier with no surviving row, and its handler runs once per carrier with `self` and the aggregates. `order by:`, `limit:`, `keep` and a lifecycle trigger are errors on a rule over cells, and so is an aliased dimensioned trait in a render pass vertex handler (a render pass draws entities). `repeat: N` is allowed (§3.8.7); each pass takes its rows from the world the previous pass left.
+`reduce:` folds every row into one group. `reduce per self:` makes one group per carrier, including a carrier with no surviving row, and its handler runs once per carrier with `self` and the aggregates. `order by:`, `limit:`, `keep` and a lifecycle trigger are errors on a rule over cells, and so is an aliased dimensioned trait in the `each:` of a drawing rule (a drawing rule draws entities). `repeat: N` is allowed (§3.8.7); each pass takes its rows from the world the previous pass left.
 
 **Pairs of cells.** A `pairs:` binding whose only entry is a dimensioned trait, without an alias, is a *cell binding*: `here.gas`, `here.x`, `here.carrier`. Both bindings are cell bindings of one trait, and every pair of cells has one carrier. The first binding may hold one `without:` line, which excludes carriers; a `without:` on the second binding is an error that points to the first. A pair of cells must be bounded by a top-level `where:` conjunct: `adjacent(a, b)` (same carrier, one `int` dimension differs by exactly one, every other dimension equal), or `b.carrier == a.carrier` with equalities that fix every dimension of `b` from values that don't read `b`, where an `or` of `and` chains counts when every branch fixes them all. An unbounded pair, a cell binding next to an entity or row binding, bindings of two traits, `b.carrier` fixed to anything but `a.carrier`, and `adjacent` anywhere else are errors. Cell bindings are read-only, except the binding of `reduce per` (which must be the first binding); a pair of cells has no `self`. A cell is not an entity: using an alias or cell binding as an `emit ... to` target, a command target or a relation argument is an error that suggests `self` or `.carrier`.
 
@@ -1475,7 +1475,7 @@ handler_after_clause = "after" ":" clause_list(handler_reference) ;
 handler_reference = dotted_name "/" "on" dotted_name ;
 ```
 
-`added` and `removed` are trigger words only when a trait name follows them; `on added:` still names an event called `added`. `on added T` and `on removed T` react to a durable trait's arrival and departure (§4.4). `<phase>.vertex` and `<phase>.fragment` are derived triggers of render-pass phases (§3.11.1).
+`added` and `removed` are trigger words only when a trait name follows them; `on added:` still names an event called `added`. `on added T` and `on removed T` react to a durable trait's arrival and departure (§4.4). `render.vertex` and `render.fragment` are the stage triggers of drawing rules (§3.11.1).
 
 ```cactus
 on tick:
@@ -1609,58 +1609,49 @@ Non-periodic phase fields are initialized from the current root occurrence or co
 
 A periodic phase may declare `rate: Entity[Trait].field` (with an optional module prefix): a read of one `float` field of a named entity. It scales the phase's game time against real time; §5.1 gives the accumulation. The field may be `clamped`. It is a compile error to declare `rate:` on a phase without `every:`, to give it a constant, any other expression or a field of another type, to read a cell field of a dimensioned trait, or to declare `rate:` twice. Changing the rate is an ordinary write, so it is saved, restored and replayed with the world.
 
-#### 3.11.1 Render-Pass Phases
+#### 3.11.1 Drawing Rules
 
-A render pass is a phase that draws instanced quads with its own vertex and fragment stages, written in Cactus and compiled to GLSL. Detailed rules live in the `dsl-render-passes` capability spec; this section summarizes them.
+A drawing rule draws one quad per row with its own vertex and fragment stages, written in Cactus and compiled to GLSL. Detailed rules live in the `dsl-drawing-rules` capability spec; this section summarizes them.
 
-**Recognition.** A phase is a render-pass phase when one of its fields has the type `std.render.passes.Pass`. The field name does not matter, and an aliased import is recognized the same way. A render-pass phase must also declare exactly one `std.render.passes.Target` field. Both field values must be compile-time constants. `Pass.Quads` and `Target.Screen` are the only values today. No new keyword or grammar is involved.
+**Stage triggers.** `std.core.render` has two stage triggers, `render.vertex` and `render.fragment`, used with the ordinary `on ... as alias:` handler syntax. The alias is required, since the stage's built-in fields are reached through it. They are recognized by the phase's identity, so an aliased import works the same; no other phase has them, and `on tick.vertex:` is an error. No keyword or field type marks a drawing rule.
 
-**Stage triggers.** A render-pass phase exposes two derived triggers, `<phase>.vertex` and `<phase>.fragment`, used with the ordinary `on ... as alias:` handler syntax. The alias is required, since the stage's built-in fields are reached through it. They don't exist on other phases; `on tick.vertex:` is an error. Each render-pass phase needs exactly one vertex handler and exactly one fragment handler.
+**Shape.** A rule with a handler on either trigger is a drawing rule. It has exactly one handler on each and no other handler. It needs a unary `each:` and may use `without:`, `where:`, `order by:`, `group:`, `after:` and `before:` with their ordinary meaning. `pairs:`, `reduce:`, `limit:`, `repeat:`, `keep` and an aliased dimensioned trait in `each:` are errors: a drawing rule draws each entity of its domain once. A program may have any number of drawing rules.
 
-**Domains.** The vertex handler is unary: it needs an `each:` (and may use `without:`, `where:`, and `order by:`; `pairs:` is rejected). Each matching entity is drawn as one quad, and no other entity is: matching means what it means for an ordinary unary rule (every `each:` trait, no `without:` trait, passes `where:`). Quads are drawn in `order by:` order, else in creation order, so a later quad covers an earlier one. The fragment handler is selectionless: no `each:`, `without:`, `pairs:`, or `where:`, and it reads no durable trait.
+**Domain and order.** Each entity of the domain is drawn as one quad, and no other entity is: the domain is what an ordinary unary rule with the same clauses has. Quads are drawn in `order by:` order, else in creation order, so a later quad covers an earlier one. The rule is a rule of `render` with the `graphics` effect: `group:` puts it in a layer of `std.render.layers`, and `after:`/`before:` order it against other render rules. It draws at that place in each active viewport, after the render rules ordered before it and before those ordered after it. A rule of the importing module without a group runs before the standard layers, so it draws under them.
 
-**Built-in stage fields** (the `Quads` pass kind), reached through the trigger alias:
+**Reads.** Both handlers read like a handler of a unary rule with the same domain: the fields of the `each:` traits through their aliases, named entities (`vp.Screen[vp.ScreenSize].size`), links of the row (`beam.sink[tf.WorldTransform].position`) and constants. A value read from the row, a link or a named entity is the same for every vertex and sample of that row's quad; the compiler decides whether it is gathered once per draw or once per row. A read must be an `int`, `float`, `bool`, `vec2`, `vec3`, `color` or enum; any other type is an error that names it, and a `duration` suggests `seconds(...)`. A cell access is an error.
+
+**Built-in stage fields**, reached through the trigger alias:
 
 | Stage | Read | Write |
 |---|---|---|
-| vertex | `corner: vec2`, `uv: vec2`, `vertex_index: int` | `screen_position: vec2`, `uv_out: vec2`, `tint_out: color` |
+| vertex | `corner: vec2`, `uv: vec2`, `vertex_index: int` | `world_position: vec2`, `screen_position: vec2`, `uv_out: vec2`, `tint_out: color` |
 | fragment | `uv: vec2`, `tint: color`, `frag_coord: vec2` | `frag_color: color` |
 
-The fragment stage's `uv` and `tint` are the vertex stage's `uv_out` and `tint_out`, interpolated across the quad.
+The fragment stage's `uv` and `tint` are the vertex stage's `uv_out` and `tint_out`, interpolated across the quad. `uv_out` defaults to `uv` and `tint_out` to `#FFFFFFFF`. The vertex handler assigns exactly one of `world_position` and `screen_position` on every path: `world_position` goes through the viewport's flat camera; `screen_position` is in pixels of the viewport, from its top-left corner, with no camera. The fragment handler assigns `frag_color` on every path; it is blended over what is drawn using its alpha. Colors stay unclamped inside both stages; only the drawn pixel clamps.
 
-**Statement subset.** A stage handler body is translated to GLSL, so it accepts only: `let`/`var` locals; assignment and compound assignment to locals and to the stage's writable built-in fields; `if`/`else`; and calls to a `func` whose body is a single `return` of GLSL-translatable operations (§3.12) or to an `extern func` that has a GLSL translation. `spawn`, `destroy`, `add`, `remove`, `set`, `project`, `emit`, `load`, `return`, trait `match`, world queries, and `for` are rejected. A vertex handler may read the traits its `each:` selects but not write them. Operators and operand types are the same as in any other handler (§3.15).
-
-**Independent instances.** Each matching entity is drawn with its own trait values. One instance's values never leak into another instance's quad in the same draw.
+**Statement subset.** A stage handler body is translated to GLSL, so it accepts only: `let`/`var` locals; assignment and compound assignment to locals and to the stage's outputs; `if`/`else`; value `match`; and calls to a `func` whose body is a single `return` of GLSL-translatable operations (§3.12) or to an `extern func` that has a GLSL translation. A stage writes nothing else: `spawn`, `destroy`, `add`, `remove`, `set`, `project`, `emit`, `load`, a trait write, `return`, trait `match`, world queries, `self` and `for` are rejected. Operators and operand types are the same as in any other handler (§3.15).
 
 ```cactus
+use std.color as color
 use std.transform.flat as tf
-use std.render.passes as passes
+use std.render.layers as layers
 
-pub phase gradient_pass:
-    after:
-        render
-    pipeline: passes.Pass = passes.Pass.Quads
-    output: passes.Target = passes.Target.Screen
-
-rule SquareVertex:
+rule Sparks:
     each:
         tf.WorldTransform as xf
+        Spark as spark
+    group: layers.sprites
 
-    on gradient_pass.vertex as v:
-        let half = 100.0
-        v.screen_position = xf.position + v.corner * half
-        v.uv_out = v.uv
-        if v.corner.x < 0.0:
-            v.tint_out = #FF0000FF
-        else:
-            v.tint_out = #0000FFFF
+    on render.vertex as v:
+        v.world_position = xf.position + v.corner * spark.radius
 
-rule SquareFragment:
-    on gradient_pass.fragment as f:
-        f.frag_color = f.tint
+    on render.fragment as f:
+        let d = f.uv - vec2(0.5, 0.5)
+        f.frag_color = color.with_alpha(spark.tint, 1.0 - (d.x * d.x + d.y * d.y) * 4.0)
 ```
 
-`examples/gradient-square` and `examples/particle-burst` are the maintained examples; the second shades a round particle in the fragment stage with `passes.with_alpha`.
+`examples/drawing_rules.cactus` shows layers, screen space, a named read and a link read; `examples/gradient-square` and `examples/particle-burst` are the other maintained examples.
 
 ### 3.12 Functions
 
@@ -1670,7 +1661,7 @@ A `func` body may use `let`/`var` locals, assignment to its locals and parameter
 
 A `func` with a return type must return a value on every path. An `if` returns on every path only when it has an `else` and every branch returns; a value `match` returns when every arm returns. A loop never counts, because it may run zero times, so a `func` that returns inside a loop also needs a `return` after it. Bounded loops always finish, but a large bound can still be expensive.
 
-A render-pass stage handler (§3.11.1) can call a `func` only when its body is a single `return` of GLSL-translatable operations and it has no trait or event parameter; any other `func` is rejected at the call, even when it is reached through another `func` or a constant.
+A stage handler of a drawing rule (§3.11.1) can call a `func` only when its body is a single `return` of GLSL-translatable operations and it has no trait or event parameter; any other `func` is rejected at the call, even when it is reached through another `func` or a constant.
 
 **Trait and event parameters.** A `func` parameter may name a trait or an event, local or through an import alias; a state variant (`EnemyMode.Chase`) counts as a trait. The parameter is a read-only reference to a trait or event the caller can already read, not a value:
 
@@ -1781,7 +1772,7 @@ The operands of `+`, `-`, `*`, `/`, `%` and unary `-` must not be `bool`. There 
 - `std.math` functions return the same bits on every platform: `sqrt`, `sin`, `cos`, `atan2` and `pow` are correctly rounded.
 - A constant has exactly the value its expression has at runtime.
 
-Render-pass stage handlers (§3.11.1) run on the GPU: their `float` results follow GLSL precision, but integer `/` and `%` keep the rules above.
+Stage handlers of drawing rules (§3.11.1) run on the GPU: their `float` results follow GLSL precision, but integer `/` and `%` keep the rules above.
 
 **Durations.** A `duration` is a whole number of one fixed time unit, 1/705,600,000 of a second, kept in 64
 bits. The unit divides a millisecond and the steps of 24, 25, 30, 48, 50, 60, 90, 100, 120 and 144 Hz, so
@@ -1797,7 +1788,7 @@ bits. The unit divides a millisecond and the steps of 24, 25, 30, 48, 50, 60, 90
   NaN gives `0s`; values beyond the range clamp). `seconds(d)` gives the `float` number of seconds.
 - `+=` and `-=` on a duration field are accumulating writes, and `d = math.max(d, e)` is a join, as for
   `int` (§3.8.1).
-- A render-pass stage handler can't use a duration; convert it with `seconds(...)` before the stage.
+- A stage handler of a drawing rule can't use a duration; convert it with `seconds(...)` before the stage.
 
 **Colors.** A `color` holds four `float` channels, `r`, `g`, `b` and `a`, that follow the number rules
 above. Channels are sRGB codes, and alpha is straight (not premultiplied).
@@ -1813,7 +1804,7 @@ above. Channels are sRGB codes, and alpha is straight (not premultiplied).
 - Drawing clamps each channel to 0..1 and rounds it to 8 bits once, where the color reaches an 8-bit
   consumer (a sprite, shape, text or UI draw). The stored value does not change. A shader input or a light
   gets the channels as they are, so a light's brightness is its color.
-- A rule and a render-pass stage give the same channels for the same color expression.
+- A rule and a stage handler give the same channels for the same color expression.
 
 Two expressions choose a value:
 
@@ -1993,7 +1984,7 @@ An `if` chain evaluates its conditions top to bottom and runs only the first bra
 
 `let` declares an immutable local and `var` declares a mutable one, in handler and `func` bodies alike. Reassigning a `let` local, including a compound assignment or a member write such as `v.x = 1.0`, is an error. An `entity_id` local has no trait namespace: `e.Health.hp` is an error whether read or written (§4.2). Assignment never declares a local: assigning to an undeclared name is an error, and declaring the same name twice in one block is an error. An optional type annotation must match the initializer's type.
 
-Render-pass stage handler bodies accept only a fixed subset of these statements, because they compile to GLSL (§3.11.1).
+Stage handler bodies of drawing rules accept only a fixed subset of these statements, because they compile to GLSL (§3.11.1).
 
 `emit` (like `add` and `project`) may omit the `:` payload block entirely when the event has no fields to set (e.g. a zero-field `pub event StartBump`) or when every field should take its default; `to expression` is still allowed without a block for a targeted zero-field emit.
 
@@ -2964,7 +2955,7 @@ rule Move:
 
 ### 7.11 Color Helpers (`std.color`)
 
-Plain Cactus helpers for colors. They work in rule handlers and in render-pass stage handlers alike, and like every color operation they never clamp (§3.15).
+Plain Cactus helpers for colors. They work in rule handlers and in stage handlers of drawing rules alike, and like every color operation they never clamp (§3.15).
 
 ```cactus
 use std.color as color
@@ -2977,7 +2968,7 @@ rule Fade:
 ```
 
 - `mix(a, b, t)` is `a + (b - a) * t`: `a` at `t = 0`, `b` at `t = 1`. `t` is not clamped, so values outside 0..1 extrapolate, as with `math.lerp`.
-- `with_alpha(base, alpha)` keeps the RGB channels and multiplies alpha by `alpha`. `std.render.passes.with_alpha` calls it.
+- `with_alpha(base, alpha)` keeps the RGB channels and multiplies alpha by `alpha`.
 - `WHITE` is `#FFFFFFFF` and `CLEAR` is `#00000000`: the neutral values of a color `product` and a color `sum`.
 
 ### 7.12 Easing Curves (`std.math.ease`)
@@ -3017,7 +3008,7 @@ rule Shade:
 - The input is clamped: below 0 and NaN count as 0, above 1 counts as 1, so a clock that runs past its end gives the end value.
 - Every curve returns exactly `0.0` at 0 and exactly `1.0` at 1.
 - The output is not clamped: `in_back` dips below 0 and `out_back` rises above 1. With `color.mix` the color overshoots too, and drawing clamps it once.
-- The curves use only arithmetic and comparisons. A render-pass stage can't call them yet, because they use locals and branches (§3.12).
+- The curves use only arithmetic and comparisons. A stage handler can't call them yet, because they use locals and branches (§3.12).
 
 ### 7.13 The Drawn Picture (`DrawnPose`, `DrawnColor`)
 

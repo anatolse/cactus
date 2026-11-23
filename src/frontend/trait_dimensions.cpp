@@ -653,9 +653,9 @@ void SemanticAnalyzer::validate_cell_rule(RuleNode& rule) {
             errors_.error(handler.trigger_location,
                           "a rule over cells can't run on a lifecycle trigger; a cell is never added or removed");
         }
-        if (handler.resolved_trigger.has_value() && handler.resolved_trigger->kind == HandlerTriggerKind::RenderStage) {
+        if (is_stage_handler(handler)) {
             errors_.error(handler.trigger_location,
-                          "a render pass draws entities; a vertex handler can't run over the cells of '" +
+                          "a drawing rule draws entities; it can't run over the cells of '" +
                               cells.trait_name + "'");
         }
     }

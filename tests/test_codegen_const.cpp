@@ -196,48 +196,6 @@ TEST_CASE("Codegen struct construction: template and entity bodies", "[codegen-e
     CHECK(generated.has("::cactus_gen::test::UnitDef{.speed = 9.0F, .health = 9}"));
     CHECK_FALSE(generated.has("UnitDef(speed"));
 }
-TEST_CASE("Codegen constants: a stage handler inlines a derived scalar constant into GLSL",
-          "[codegen-entt][const][render-passes]") {
-    ImportedSymbols passes;
-    passes.module_name = "std.render.passes";
-    ResolvedEnum pass;
-    pass.name               = "Pass";
-    pass.variants           = {"Quads"};
-    passes.enums["Pass"]    = pass;
-    ResolvedEnum target;
-    target.name             = "Target";
-    target.variants         = {"Screen"};
-    passes.enums["Target"]  = target;
-    ModuleImports imports;
-    imports.add("passes", std::move(passes));
-
-    const auto generated = generate(
-        "use std.render.passes as passes\n"
-        "const:\n"
-        "    SIZE = 200.0\n"
-        "    HALF = SIZE * 0.5\n"
-        "trait Sprite:\n"
-        "    var position: vec2 = vec2(0.0, 0.0)\n"
-        "extern event Frame:\n"
-        "    dt: float\n"
-        "pub phase my_pass:\n"
-        "    from:\n"
-        "        Frame\n"
-        "    pipeline: passes.Pass = passes.Pass.Quads\n"
-        "    output: passes.Target = passes.Target.Screen\n"
-        "rule Vertex:\n"
-        "    each:\n"
-        "        Sprite as s\n"
-        "    on my_pass.vertex as v:\n"
-        "        v.screen_position = s.position + v.corner * HALF\n"
-        "        v.uv_out = v.uv\n"
-        "        v.tint_out = #FFFFFFFF\n"
-        "rule Fragment:\n"
-        "    on my_pass.fragment as f:\n"
-        "        f.frag_color = f.tint\n",
-        imports);
-    CHECK(generated.has("(corner * (200.0 * 0.5))"));
-}
 TEST_CASE("Codegen constants: runtime window configuration uses cached values",
           "[codegen-entt][const][dungeon-regression]") {
     const auto generated = generate(

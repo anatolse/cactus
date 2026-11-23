@@ -20,7 +20,7 @@
 
 namespace {
 
-// examples/render-pass-domain/render_pass_domain.cactus places one entity per column on ROW_Y.
+// examples/drawing-rule-domain/drawing_rule_domain.cactus places one entity per column on ROW_Y.
 constexpr int kRowY       = 300;
 constexpr int kYoungX     = 100;
 constexpr int kBareX      = 250;
@@ -35,8 +35,8 @@ Color pixel_at(const Image& image, int x) {
 
 }  // namespace
 
-TEST_CASE("render-pass-domain visual: only the vertex handler's domain is drawn, in order-by order",
-          "[example-behavior][render-pass-domain][render-passes][visual]") {
+TEST_CASE("drawing-rule-domain visual: only the rule's domain is drawn, in order-by order",
+          "[example-behavior][drawing-rule-domain][drawing-rules][visual]") {
     const auto config = cactus::runtime::entt_backend::generated_project_config();
     InitWindow(config.window_width, config.window_height, config.window_title);
     SetTargetFPS(config.target_fps);
@@ -57,7 +57,7 @@ TEST_CASE("render-pass-domain visual: only the vertex handler's domain is drawn,
     }
 
     const std::string screenshot_path =
-        std::string(CACTUS_VISUAL_TEST_OUTPUT_DIR) + "/render_pass_domain_visual_test.png";
+        std::string(CACTUS_VISUAL_TEST_OUTPUT_DIR) + "/drawing_rule_domain_visual_test.png";
     TakeScreenshot(screenshot_path.c_str());
     CloseWindow();
 

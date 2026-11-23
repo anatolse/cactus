@@ -1,0 +1,63 @@
+module perf_drawing_rule
+
+use std.core
+use std.transform.flat as tf
+
+# A drawing rule over two traits with a without: and a where:. It reads row
+# fields, one named entity and one link. Each step spawns one entity of each
+# kind; only Young is in the drawn domain, Young and Old are the rows its draw
+# loop visits.
+
+trait Board:
+    let size: int = 1000
+    var scale: float = 4.0
+
+trait Particle:
+    var age: float = 0.0
+    let anchor: tf.WorldTransform
+
+trait Hidden
+
+entity Field:
+    tf.WorldTransform
+    Board
+
+template Bare():
+    tf.WorldTransform
+
+template Spark(age: float = 0.0):
+    use Bare()
+    Particle:
+        age = age
+        anchor = Field
+
+template Veiled():
+    use Spark()
+    Hidden
+
+rule Fill:
+    on load:
+        for i in range(0, Field[Board].size):
+            spawn Bare()
+            spawn Spark()
+            spawn Spark(age = 2.0)
+            spawn Veiled()
+
+rule DropSparks:
+    each: Particle
+    on lost Particle.anchor:
+        destroy
+
+rule Sparks:
+    each:
+        tf.WorldTransform as xf
+        Particle as particle
+    without: Hidden
+    where: particle.age < 1.0
+
+    on render.vertex as v:
+        let origin = particle.anchor[tf.WorldTransform].position
+        v.world_position = origin + xf.position + v.corner * (Field[Board].scale - particle.age)
+
+    on render.fragment as f:
+        f.frag_color = f.tint

@@ -1,7 +1,7 @@
 #pragma once
 
 // Small pixel-inspection helper for real-GL visual tests (see
-// cactus_add_render_pass_visual_test in CMakeLists.txt). Plain, portable C++
+// cactus_add_visual_test in CMakeLists.txt). Plain, portable C++
 // on top of raylib's own Image/Color types — no platform branching, since
 // GetImageColor works identically on every OS raylib itself supports.
 

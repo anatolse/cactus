@@ -512,13 +512,13 @@ void emit_prepare_function(std::ostringstream& out,
     out << "}\n\n";
 }
 
-const HandlerContract* graph_handler_contract(const RuleNode& rule,
-                                              const EventHandlerNode& handler,
-                                              const DecoratedProgram& program) {
-    if (!rule.resolved_rule_id.has_value() || !handler.resolved_trigger.has_value()) {
+const HandlerContract* graph_contract(const RuleNode& rule,
+                                      const std::optional<ResolvedHandlerTrigger>& trigger,
+                                      const DecoratedProgram& program) {
+    if (!rule.resolved_rule_id.has_value() || !trigger.has_value()) {
         return nullptr;
     }
-    const HandlerIdentity identity{.rule = *rule.resolved_rule_id, .trigger = *handler.resolved_trigger};
+    const HandlerIdentity identity{.rule = *rule.resolved_rule_id, .trigger = *trigger};
     const auto found = std::ranges::find_if(program.execution_graph.handlers,
                                             [&](const auto& node) { return node.identity == identity; });
     return found == program.execution_graph.handlers.end() ? nullptr : &found->contract;
@@ -6002,7 +6002,7 @@ static void emit_filtered_handler_body(std::ostringstream& out,
 std::string EnttSystemEmitter::emit_domain_rows(const RuleNode& rule,
                                                 const DecoratedProgram& program,
                                                 const std::string& on_row,
-                                                const std::string& body) {
+                                                const std::function<std::string(const RowValue&)>& body) {
     std::ostringstream out;
     const auto domain = build_handler_domain(rule.filter, rule.exclude, program);
     const auto sorted = emit_sort_call(
@@ -6012,7 +6012,7 @@ std::string EnttSystemEmitter::emit_domain_rows(const RuleNode& rule,
         emit_view_declaration(out, domain.filter_cpp_types, domain.exclude_cpp_types, 1);
         rows = "cactus::runtime::entt_backend::creation_ordered(registry, view)";
     }
-    out << "    for (auto entity : " << rows << ") {\n";
+    out << "    for ([[maybe_unused]] auto entity : " << rows << ") {\n";
     emit_component_bindings_from_entity(out, domain.filter_bindings_list, "entity", 2, program);
     emit_filter_alias_bindings(out, domain.filter, program, 2);
     out << on_row;
@@ -6023,9 +6023,15 @@ std::string EnttSystemEmitter::emit_domain_rows(const RuleNode& rule,
             return rewrite_expr(predicate, domain.filter_traits, program, {}, domain.filter_cpp_overrides);
         },
         "continue");
-    out << body;
+    out << body([&](const ExprNode& expr) {
+        return rewrite_expr(expr, domain.filter_traits, program, {}, domain.filter_cpp_overrides);
+    });
     out << "    }\n";
     return out.str();
+}
+
+std::string EnttSystemEmitter::emit_world_value(const ExprNode& expr, const DecoratedProgram& program) {
+    return rewrite_expr(expr, {}, program);
 }
 
 // A lifecycle trigger is delivered only to the entity whose trait set changed:
@@ -6153,6 +6159,13 @@ static void emit_when_gate(std::ostringstream& out, const RuleNode& sys, const D
     out << "    if (" << rejects(unbound_conjunction(predicates, program)) << ") {\n";
     out << "        return;\n";
     out << "    }\n";
+}
+
+std::string EnttSystemEmitter::emit_draw_prelude(const RuleNode& rule, const DecoratedProgram& program) {
+    std::ostringstream out;
+    emit_named_requirements(out, graph_contract(rule, drawing_rule_trigger(), program), program);
+    emit_when_gate(out, rule, program);
+    return out.str();
 }
 
 // ── Rule reductions ─────────────────────────────────────────────────────────
@@ -9370,15 +9383,7 @@ std::string EnttSystemEmitter::emit_system(const RuleNode& sys, const DecoratedP
     }
 
     for (const auto& handler : sys.handlers) {
-        if (handler.resolved_trigger.has_value() && handler.resolved_trigger->kind == HandlerTriggerKind::RenderStage) {
-            // dsl-render-passes: this handler's body is translated to GLSL by
-            // render_pass_emitter.cpp, not emitted as an ordinary C++ system
-            // function — it has no natural trigger C++ type (no phase
-            // struct, no event struct) for this generic per-handler
-            // emission to target.
-            continue;
-        }
-        const auto* contract = graph_handler_contract(sys, handler, program);
+        const auto* contract = graph_contract(sys, handler.resolved_trigger, program);
         std::optional<HandlerIdentity> identity;
         if (sys.resolved_rule_id.has_value() && handler.resolved_trigger.has_value()) {
             identity = HandlerIdentity{.rule = *sys.resolved_rule_id, .trigger = *handler.resolved_trigger};

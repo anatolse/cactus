@@ -332,6 +332,14 @@ target_compile_definitions(test_blend_weight_diagnostics PRIVATE
 )
 add_test(NAME BlendWeightDiagnosticsTests COMMAND test_blend_weight_diagnostics)
 
+add_executable(test_drawing_rules test_drawing_rules.cpp)
+target_link_libraries(test_drawing_rules PRIVATE cactus_frontend Catch2::Catch2WithMain)
+target_compile_definitions(test_drawing_rules PRIVATE
+    CACTUS_TEST_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    CACTUS_TEST_BINARY_DIR="${CMAKE_BINARY_DIR}"
+)
+add_test(NAME DrawingRuleTests COMMAND test_drawing_rules)
+
 add_executable(test_encoding_diagnostics test_encoding_diagnostics.cpp)
 target_link_libraries(test_encoding_diagnostics PRIVATE cactus_frontend Catch2::Catch2WithMain)
 target_compile_definitions(test_encoding_diagnostics PRIVATE
@@ -1670,31 +1678,37 @@ cactus_add_headless_behavior_test(test_singleton_traits_immediate_headless_behav
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_singleton_traits_immediate_headless_behavior.cpp
 )
 
-# Real-GL visual test (example-behavior-tests capability's render-pass
-# extension): proves per-instance rendering actually holds on a real GPU,
+# Real-GL visual test: proves per-row drawing actually holds on a real GPU,
 # which CACTUS_RAYLIB_FAKE structurally cannot exercise (see
-# cactus_add_render_pass_visual_test above).
-cactus_add_render_pass_visual_test(test_particle_burst_visual
+# cactus_add_visual_test above).
+cactus_add_visual_test(test_particle_burst_visual
     CACTUS_SOURCE examples/particle-burst/particle_burst.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_particle_burst_visual.cpp
 )
 
-# Real-GL visual test: a render pass draws exactly its vertex handler's domain, in order.
-cactus_add_render_pass_visual_test(test_render_pass_domain_visual
-    CACTUS_SOURCE examples/render-pass-domain/render_pass_domain.cactus
+# Real-GL visual test: a drawing rule draws exactly its domain, in order.
+cactus_add_visual_test(test_drawing_rule_domain_visual
+    CACTUS_SOURCE examples/drawing-rule-domain/drawing_rule_domain.cactus
     BACKEND cpp-entt
-    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_render_pass_domain_visual.cpp
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_drawing_rule_domain_visual.cpp
+)
+
+# Real-GL visual test: drawing rules in layers, world and screen space, named and link reads.
+cactus_add_visual_test(test_drawing_rules_visual
+    CACTUS_SOURCE examples/drawing_rules.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_drawing_rules_visual.cpp
 )
 
 # Real-GL visual tests: renderers draw the projected picture, not the simulation's pose and color.
-cactus_add_render_pass_visual_test(test_drawn_picture_visual
+cactus_add_visual_test(test_drawn_picture_visual
     CACTUS_SOURCE examples/stdlib-fixtures/drawn_picture.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_drawn_picture_visual.cpp
 )
 
-cactus_add_render_pass_visual_test(test_drawn_picture_volume_visual
+cactus_add_visual_test(test_drawn_picture_volume_visual
     CACTUS_SOURCE examples/stdlib-fixtures/drawn_picture_volume.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_drawn_picture_volume_visual.cpp
@@ -1703,7 +1717,7 @@ cactus_add_render_pass_visual_test(test_drawn_picture_volume_visual
 # Real-GL visual test (stdlib-render-models capability): proves a
 # ModelRenderer.color alpha below 255 actually renders dimmer/more
 # transparent, which CACTUS_RAYLIB_FAKE structurally cannot exercise.
-cactus_add_render_pass_visual_test(test_model_alpha_visual
+cactus_add_visual_test(test_model_alpha_visual
     CACTUS_SOURCE tests/fixtures/model_tint_runtime.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_model_alpha_visual.cpp
@@ -1796,9 +1810,13 @@ target_compile_definitions(test_example_cpp_compilation PRIVATE
     CACTUS_EXAMPLE_GRADIENT_SQUARE_GENERATED_CPP="${GRADIENT_SQUARE_GENERATED_CPP}"
     CACTUS_EXAMPLE_GRADIENT_SQUARE_TARGET="example_gradient_square_generated"
 
-    CACTUS_EXAMPLE_RENDER_PASS_DOMAIN_SOURCE="examples/render-pass-domain/render_pass_domain.cactus"
-    CACTUS_EXAMPLE_RENDER_PASS_DOMAIN_GENERATED_CPP="${RENDER_PASS_DOMAIN_GENERATED_CPP}"
-    CACTUS_EXAMPLE_RENDER_PASS_DOMAIN_TARGET="example_render_pass_domain_generated"
+    CACTUS_EXAMPLE_DRAWING_RULE_DOMAIN_SOURCE="examples/drawing-rule-domain/drawing_rule_domain.cactus"
+    CACTUS_EXAMPLE_DRAWING_RULE_DOMAIN_GENERATED_CPP="${DRAWING_RULE_DOMAIN_GENERATED_CPP}"
+    CACTUS_EXAMPLE_DRAWING_RULE_DOMAIN_TARGET="example_drawing_rule_domain_generated"
+
+    CACTUS_EXAMPLE_DRAWING_RULES_SOURCE="examples/drawing_rules.cactus"
+    CACTUS_EXAMPLE_DRAWING_RULES_GENERATED_CPP="${DRAWING_RULES_GENERATED_CPP}"
+    CACTUS_EXAMPLE_DRAWING_RULES_TARGET="example_drawing_rules_generated"
 
     CACTUS_EXTERNAL_HANDLER_LINK_TARGET="example_external_handler_user_library"
     CACTUS_EXTERNAL_HANDLER_MISSING_TARGET="example_external_handler_missing_implementations"
@@ -1884,7 +1902,7 @@ endforeach()
 add_custom_target(test_generated_performance_benchmarks)
 foreach(shape IN ITEMS static_keep union_fold equality_reduce grid_region row_join baseline own_projection
         single_commit plain_commit sweep wide_level reduced_keep required_links keep_chain
-        incremental_keep render_pass dimension_spread timers clamped sum_encodings color_fade
+        incremental_keep drawing_rule dimension_spread timers clamped sum_encodings color_fade
         unused_transform_kind effect_folds effect_channels)
     set(perf_target test_perf_${shape}_benchmark)
     set(perf_codegen_flags)

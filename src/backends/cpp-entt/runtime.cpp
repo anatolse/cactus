@@ -2120,6 +2120,7 @@ static void flush_viewport_queues() noexcept {
 }
 
 void draw_ui_primitive(const UiPrimitive& primitive) noexcept;
+static void run_deferred_drawing_rules() noexcept;
 
 void end_render_frame() noexcept {
     flush_viewport_queues();
@@ -2131,6 +2132,7 @@ void end_render_frame() noexcept {
     // rendering, so they overlay every view (never flushed per viewport).
     flush_screen_label_queue();
     screen_label_queue().clear();
+    run_deferred_drawing_rules();
 }
 
 std::optional<int> flipbook_frame_count(int width, int height) noexcept {
@@ -3814,15 +3816,13 @@ void draw_shape_circle(const Vector2 position,
     cactus::runtime::raylib::DrawEllipseV(center, radius * scale.x, radius * scale.y, color);
 }
 
-Shader* ensure_render_pass_shader(RenderPassShaderState& state,
-                                  [[maybe_unused]] const char* vertex_src,
-                                  [[maybe_unused]] const char* fragment_src) {
+Shader* ensure_drawing_rule_shader(DrawingRuleShaderState& state,
+                                   [[maybe_unused]] const char* vertex_src,
+                                   [[maybe_unused]] const char* fragment_src) {
     if (state.loaded) {
         return &state.shader;
     }
     if (state.attempted) {
-        // Already tried and failed (compile error or no GL context yet) —
-        // don't retry every frame; mirrors the lighting shader's contract.
         return nullptr;
     }
     state.attempted = true;
@@ -3841,21 +3841,24 @@ Shader* ensure_render_pass_shader(RenderPassShaderState& state,
     return &state.shader;
 }
 
-void begin_render_pass([[maybe_unused]] const Shader& shader) noexcept {
-    cactus::runtime::raylib::BeginMode2D(get_active_camera_2d());
+void begin_drawing_rule([[maybe_unused]] const Shader& shader, bool world_space) noexcept {
+    flush_viewport_queues();
+    const Rectangle rect = active_viewport_rect();
+    const Camera2D screen{.offset = {.x = rect.x, .y = rect.y}, .target = {}, .rotation = 0.0F, .zoom = 1.0F};
+    cactus::runtime::raylib::BeginMode2D(world_space ? get_active_camera_2d() : screen);
 #ifndef CACTUS_RAYLIB_FAKE
     BeginShaderMode(shader);
 #endif
 }
 
-void end_render_pass() noexcept {
+void end_drawing_rule() noexcept {
 #ifndef CACTUS_RAYLIB_FAKE
     EndShaderMode();
 #endif
     cactus::runtime::raylib::EndMode2D();
 }
 
-int render_pass_uniform_location([[maybe_unused]] const Shader& shader, [[maybe_unused]] const char* name) noexcept {
+int drawing_rule_uniform_location([[maybe_unused]] const Shader& shader, [[maybe_unused]] const char* name) noexcept {
 #ifdef CACTUS_RAYLIB_FAKE
     // raylib's SetShaderValue ignores location -1, so headless uploads never reach GL.
     return -1;
@@ -3864,24 +3867,81 @@ int render_pass_uniform_location([[maybe_unused]] const Shader& shader, [[maybe_
 #endif
 }
 
-void set_render_pass_uniform(const Shader& shader, int location, float value) noexcept {
+void set_drawing_rule_uniform(const Shader& shader, int location, float value) noexcept {
+    count_drawing_uniform();
     SetShaderValue(shader, location, &value, SHADER_UNIFORM_FLOAT);
 }
 
-void set_render_pass_uniform(const Shader& shader, int location, Vector2 value) noexcept {
+void set_drawing_rule_uniform(const Shader& shader, int location, bool value) noexcept {
+    count_drawing_uniform();
+    const int flag = value ? 1 : 0;
+    SetShaderValue(shader, location, &flag, SHADER_UNIFORM_INT);
+}
+
+void set_drawing_rule_uniform(const Shader& shader, int location, Vector2 value) noexcept {
+    count_drawing_uniform();
     const std::array<float, 2> components = {value.x, value.y};
     SetShaderValue(shader, location, components.data(), SHADER_UNIFORM_VEC2);
 }
 
-void set_render_pass_uniform(const Shader& shader, int location, CactusColor value) noexcept {
+void set_drawing_rule_uniform(const Shader& shader, int location, Vector3 value) noexcept {
+    count_drawing_uniform();
+    const std::array<float, 3> components = {value.x, value.y, value.z};
+    SetShaderValue(shader, location, components.data(), SHADER_UNIFORM_VEC3);
+}
+
+void set_drawing_rule_uniform(const Shader& shader, int location, CactusColor value) noexcept {
+    count_drawing_uniform();
     const std::array<float, 4> components = {value.r, value.g, value.b, value.a};
     SetShaderValue(shader, location, components.data(), SHADER_UNIFORM_VEC4);
 }
 
-void draw_render_pass_quad_instance() noexcept {
-    count_pass_quad();
+namespace {
+
+struct DeferredDrawingRule {
+    entt::registry* registry = nullptr;
+    DrawingRuleFunction draw = nullptr;
+    Camera2D camera{};
+    Rectangle viewport{};
+};
+
+std::vector<DeferredDrawingRule>& deferred_drawing_rules() noexcept {
+    static std::vector<DeferredDrawingRule> deferred;
+    return deferred;
+}
+
+}  // namespace
+
+void defer_drawing_rule(entt::registry& registry, DrawingRuleFunction draw) noexcept try {
+    deferred_drawing_rules().push_back(DeferredDrawingRule{
+        .registry = &registry, .draw = draw, .camera = get_active_camera_2d(), .viewport = active_viewport_rect_storage()});
+} catch (...) {
+    // Out of memory: the overlay is skipped this frame.
+}
+
+static void run_deferred_drawing_rules() noexcept {
+    for (const auto& deferred : deferred_drawing_rules()) {
+        set_active_camera_2d(deferred.camera);
+        set_active_viewport_rect(deferred.viewport);
+        const bool clipped = deferred.viewport.width > 0.0F && deferred.viewport.height > 0.0F;
+        if (clipped) {
+            cactus::runtime::raylib::BeginScissorMode(static_cast<int>(deferred.viewport.x),
+                                                      static_cast<int>(deferred.viewport.y),
+                                                      static_cast<int>(deferred.viewport.width),
+                                                      static_cast<int>(deferred.viewport.height));
+        }
+        deferred.draw(*deferred.registry);
+        if (clipped) {
+            cactus::runtime::raylib::EndScissorMode();
+        }
+    }
+    deferred_drawing_rules().clear();
+}
+
+void draw_drawing_rule_quad() noexcept {
+    count_drawing_quad();
 #ifndef CACTUS_RAYLIB_FAKE
-    // Corner/uv per vertex, matching render_pass_emitter.cpp's Quads layout.
+    // Corner/uv per vertex, matching drawing_rule_emitter.cpp's layout.
     // Fed through raylib's own vertexPosition/vertexTexCoord attributes
     // (rlVertex2f/rlTexCoord2f), not gl_VertexID: rlgl is a batching
     // renderer, so gl_VertexID reflects the shared batch's cumulative vertex

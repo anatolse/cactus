@@ -1831,3 +1831,21 @@ The draw step of a drawing rule SHALL run at the rule's place in the `core.rende
 #### Scenario: Over the window-space UI
 - **WHEN** a drawing rule is scheduled after `ScreenLabelRender` or the standard UI, which draw after every viewport
 - **THEN** the generated render step defers its draw to the end of the frame, after them, with the viewport's camera and rectangle
+
+### Requirement: Commit rounds look up only carriers a command can give
+The cpp-entt backend SHALL look up the carrier of a `single` trait `T` at the start of a commit round only when the linked program has a deferred command that can give `T`: a `spawn` of a template whose own traits include `T`, or an `add T`. For every other `single` trait, a commit round SHALL do no carrier lookup and SHALL record nothing.
+
+#### Scenario: A trait only a named entity carries costs nothing per round
+- **WHEN** a program spawns and destroys entities every tick, and its only `single` trait is `std.core.Pace`, carried by the named `Clock`
+- **THEN** a tick does no carrier lookup
+
+#### Scenario: A spawned singleton is still tracked
+- **WHEN** a rule destroys the entity carrying `single trait Terrain` and spawns a template carrying `Terrain` every tick, in a program that also has `std.core.Pace`
+- **THEN** a tick does exactly one carrier lookup, for `Terrain`
+
+### Requirement: Untracked singletons keep their faults
+When no `single` trait has a command that can give it, `destroy` commands SHALL NOT record their subject for the round. Skipping a trait SHALL NOT change any fault of `dsl-singleton-traits` "A second carrier is a fault".
+
+#### Scenario: A second carrier still faults
+- **WHEN** a rule spawns a template carrying `single trait Terrain` while another entity carries `Terrain` and stays
+- **THEN** the spawn creates no entity and reports the second-carrier fault naming `Terrain`

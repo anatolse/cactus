@@ -668,6 +668,12 @@ target_link_libraries(test_persistence_default_main_registration PRIVATE Catch2:
 add_test(NAME PersistenceDefaultMainRegistrationTests COMMAND test_persistence_default_main_registration)
 
 # Headless behavioral tests (example-behavior-tests capability)
+cactus_add_headless_behavior_test(test_turing_machine_headless_behavior
+    CACTUS_SOURCE examples/turing-machine/main.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_turing_machine_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_blue_square_headless_behavior
     CACTUS_SOURCE examples/blue-square/square.cactus
     BACKEND cpp-entt
@@ -1908,6 +1914,13 @@ endforeach()
 # limits run in every build; time limits only in optimized builds
 # (`ctest --preset clang-o3-release -L perf`).
 add_custom_target(test_generated_performance_benchmarks)
+cactus_add_headless_behavior_test(test_perf_turing_machine_benchmark
+    CACTUS_SOURCE examples/turing-machine/main.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_perf_turing_machine_benchmark.cpp
+)
+set_tests_properties(test_perf_turing_machine_benchmark PROPERTIES LABELS perf)
+add_dependencies(test_generated_performance_benchmarks test_perf_turing_machine_benchmark)
 foreach(shape IN ITEMS static_keep union_fold equality_reduce grid_region row_join baseline own_projection
         single_commit plain_commit sweep wide_level reduced_keep required_links keep_chain
         incremental_keep drawing_rule dimension_spread timers clamped sum_encodings color_fade

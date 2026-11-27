@@ -1,0 +1,98 @@
+module panel
+
+use std.core
+use presets as p
+use std.pointer as pointer
+use std.render.text as labels
+use std.ui as ui
+
+const:
+    ACTIVE_COLOR = #087469FF
+    IDLE_COLOR = #30475AFF
+
+pub enum Action:
+    Preset
+    Step
+    Run
+    Reset
+    Speed
+    Seed
+    Shift
+    Cell
+    Page
+    Toggle
+    Write
+    Move
+    Previous
+    Next
+
+pub func is_row_control(action: Action) bool:
+    return action == Action.Toggle or action == Action.Write or action == Action.Move or action == Action.Previous or action == Action.Next
+
+pub trait Control:
+    var target: entity_id
+    var occupied: bool
+    let action: Action
+    let index: int
+
+pub template Button(action: Action, x: float, y: float, width: float = 150.0, index: int = 0, title: string = ""):
+    Control:
+        occupied = false
+        target = Status
+        action = action
+        index = index
+    ui.Node
+    ui.Anchors:
+        offset = vec2(x, y)
+    ui.PreferredSize:
+        min_size = vec2(width, 36.0)
+    ui.Button:
+        label = title
+        normal_color = IDLE_COLOR
+        hover_color = #486478FF
+        pressed_color = #12695FFF
+        disabled_color = #CAD1D3FF
+    pointer.PointerTarget
+    pointer.PointerState
+
+pub template Caption(x: float, y: float, size: int = 18, title: string = ""):
+    labels.ScreenLabel:
+        text = title
+        position = vec2(x, y)
+        font_size = size
+        color = #22394AFF
+
+pub entity Status from Caption(x = 28.0, y = 108.0, size = 22)
+entity Title from Caption(title = "Turing machine", x = 28.0, y = 16.0, size = 32)
+entity ProgramTitle from Caption(title = "Transition table", x = 28.0, y = 320.0, size = 22)
+pub entity PageTitle from Caption(x = 28.0, y = 373.0)
+entity ReadHeading from Caption(title = "Read", x = 32.0, y = 420.0)
+entity RuleHeading from Caption(title = "Rule", x = 118.0, y = 420.0)
+entity WriteHeading from Caption(title = "Write", x = 245.0, y = 420.0)
+entity MoveHeading from Caption(title = "Move", x = 343.0, y = 420.0)
+entity NextstateHeading from Caption(title = "Next state", x = 450.0, y = 420.0)
+
+rule BuildPanel:
+    on load:
+        for choice in range(0, 4):
+            spawn Button(action = Action.Preset, index = choice, title = p.title(choice), x = 28.0 + choice * 158.0, y = 60.0)
+        spawn Button(action = Action.Preset, index = p.CUSTOM, title = "New program", x = 660.0, y = 60.0)
+        spawn Button(action = Action.Step, title = "Step  [Space]", x = 28.0, y = 208.0)
+        spawn Button(action = Action.Run, title = "Run", x = 186.0, y = 208.0, width = 120.0)
+        spawn Button(action = Action.Reset, title = "Reset", x = 314.0, y = 208.0, width = 120.0)
+        spawn Button(action = Action.Speed, x = 442.0, y = 208.0)
+        spawn Button(action = Action.Seed, title = "Edit seed", x = 28.0, y = 260.0)
+        spawn Button(action = Action.Shift, index = -1, title = "Start head  <", x = 186.0, y = 260.0, width = 140.0)
+        spawn Button(action = Action.Shift, index = 1, title = "Start head  >", x = 334.0, y = 260.0, width = 140.0)
+        spawn Button(action = Action.Page, index = -1, title = "<  State", x = 186.0, y = 362.0, width = 125.0)
+        spawn Button(action = Action.Page, index = 1, title = "State  >", x = 319.0, y = 362.0, width = 125.0)
+        for i in range(-4, 5):
+            spawn Button(action = Action.Cell, index = i, x = 432.0 + i * 101.0, y = 152.0, width = 96.0)
+        for digit in range(0, 3):
+            let y = 450.0 + digit * 44.0
+            spawn Caption(title = p.glyph(digit), x = 38.0, y = y + 8.0, size = 20)
+            spawn Button(action = Action.Toggle, index = digit, x = 118.0, y = y, width = 112.0)
+            spawn Button(action = Action.Write, index = digit, x = 245.0, y = y, width = 80.0)
+            spawn Button(action = Action.Move, index = digit, x = 343.0, y = y, width = 88.0)
+            spawn Button(action = Action.Previous, index = digit, title = "-", x = 450.0, y = y, width = 42.0)
+            spawn Button(action = Action.Next, index = digit, x = 499.0, y = y, width = 130.0)

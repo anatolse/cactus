@@ -1,0 +1,360 @@
+module main
+
+use std.core
+use std.input as inp
+use presets as p
+use panel as ui_panel
+use std.ui as ui
+use std.pointer as pointer
+use std.render.text as labels
+use std.text as text
+
+const:
+    WINDOW_TITLE = "Turing machine"
+    WINDOW_WIDTH = 980
+    WINDOW_HEIGHT = 600
+
+input SingleStep: button
+    key = inp.Key.Space
+
+trait Machine:
+    var head: int
+    var start_head: int
+    var state_id: int
+    var steps: int
+    var load_preset: int = 0
+    var preset: int
+    var running: bool
+    var speed: int = 2
+    var elapsed: duration
+    var step_requested: bool
+    var reset_requested: bool
+    var missing: bool
+    var page: int
+    var editing_seed: bool
+    var read_symbol: int
+    var head_cell: entity_id
+    var has_cell: bool
+
+trait Cell:
+    let address: int
+    var seed: int
+    var symbol: int
+
+trait Entry:
+    let source: int
+    let read_symbol: int
+    var write_symbol: int
+    var move: int
+    var dest: int
+
+template Square(at: int, initial: int, current: int):
+    Cell:
+        address = at
+        seed = initial
+        symbol = current
+
+template Instruction(value: p.Transition):
+    Entry:
+        source = value.source
+        read_symbol = value.read_symbol
+        write_symbol = value.write_symbol
+        move = value.move
+        dest = value.dest
+
+entity Console:
+    Machine
+
+rule ClearCells:
+    each: Cell
+    where: Console[Machine].load_preset >= 0
+    on tick:
+        destroy
+
+rule ClearEntries:
+    each: Entry
+    where: Console[Machine].load_preset >= 0
+    on tick:
+        destroy
+
+rule LoadProgram:
+    each: Machine as m
+    after: ClearCells, ClearEntries
+    where: m.load_preset >= 0
+    on tick:
+        m.preset = m.load_preset
+        m.load_preset = -1
+        for instruction in p.program(m.preset):
+            spawn Instruction(value = instruction)
+        var address = 0
+        for digit in p.seed(m.preset):
+            spawn Square(at = address, initial = digit, current = digit)
+            address += 1
+        m.editing_seed = false
+        m.start_head = p.start_head(m.preset)
+        m.reset_requested = true
+
+rule RestoreCells:
+    each: Cell as c
+    after: LoadProgram
+    where: Console[Machine].reset_requested
+    on tick:
+        c.symbol = c.seed
+
+rule ResetMachine:
+    each: Machine as m
+    after: RestoreCells
+    where: m.reset_requested
+    on tick:
+        m.page = 0
+        m.head = m.start_head
+        m.state_id = 0
+        m.steps = 0
+        m.running = false
+        m.missing = false
+        m.step_requested = false
+        m.reset_requested = false
+
+rule KeyStep:
+    each: Machine as m
+    after: ui.RoutePointer
+    on input:
+        if inp.pressed(SingleStep) and can_step(m):
+            m.step_requested = true
+
+rule StepClock:
+    each: Machine as m
+    after: ResetMachine
+    on tick:
+        if not m.running:
+            m.elapsed = 0s
+            return
+        m.elapsed += tick.delta
+        let interval = 1s / m.speed
+        if m.elapsed >= interval:
+            m.elapsed -= interval
+            m.step_requested = true
+
+rule PrepareStep:
+    each: Machine as m
+    after: StepClock
+    where: m.step_requested
+    on tick:
+        m.read_symbol = p.BLANK
+        m.has_cell = false
+
+rule ReadHead:
+    pairs:
+        machine: Machine as m
+        cell: Cell as c
+    after: PrepareStep
+    where: m.step_requested and c.address == m.head
+    limit: 1 per machine
+    on tick:
+        m.read_symbol = c.symbol
+        m.head_cell = cell
+        m.has_cell = true
+
+rule StepMachine:
+    pairs:
+        machine: Machine as m
+        instruction: Entry as r
+    after: ReadHead
+    where: m.step_requested and m.state_id != p.HALT and r.source == m.state_id and r.read_symbol == m.read_symbol
+    limit: 1 per machine
+    on tick:
+        if m.has_cell:
+            set Cell on m.head_cell:
+                symbol = r.write_symbol
+        else:
+            spawn Square(at = m.head, initial = p.BLANK, current = r.write_symbol)
+        m.head += r.move
+        m.state_id = r.dest
+        if r.dest >= 0:
+            m.page = r.dest
+        else:
+            m.running = false
+        m.steps += 1
+        m.missing = false
+        m.step_requested = false
+
+rule UnmatchedStep:
+    each: Machine as m
+    after: StepMachine
+    where: m.step_requested
+    on tick:
+        m.step_requested = false
+        m.missing = m.state_id != p.HALT
+        m.running = false
+
+event Press:
+    target: entity_id
+    occupied: bool
+    action: ui_panel.Action
+    index: int
+
+rule PressControl:
+    each: ui_panel.Control as button
+    on pointer.Click:
+        emit Press to Console:
+            target = button.target
+            occupied = button.occupied
+            action = button.action
+            index = button.index
+
+func can_step(m: Machine) bool:
+    return not m.running and not m.editing_seed
+
+func state_name(value: int) string:
+    return if value == p.HALT: p.HALT_TEXT else: text.format("q{}", value)
+
+rule Operate:
+    each: Machine as m
+    on Press:
+        let action = Press.action
+        let index = Press.index
+        match action:
+            ui_panel.Action.Preset =>
+                m.load_preset = index
+            ui_panel.Action.Run =>
+                if m.state_id != p.HALT and not m.editing_seed:
+                    m.running = not m.running
+            ui_panel.Action.Speed =>
+                m.speed = if m.speed >= 8: 1 else: m.speed * 2
+            ui_panel.Action.Reset =>
+                m.reset_requested = true
+            ui_panel.Action.Step =>
+                m.step_requested = can_step(m)
+            ui_panel.Action.Seed =>
+                if not m.running:
+                    m.editing_seed = not m.editing_seed
+                    m.reset_requested = true
+            ui_panel.Action.Shift =>
+                if m.editing_seed:
+                    m.start_head += index
+                    m.head = m.start_head
+            ui_panel.Action.Page =>
+                if not m.running and m.page + index >= 0:
+                    m.page += index
+            ui_panel.Action.Cell =>
+                if not m.editing_seed:
+                    return
+                if Press.occupied:
+                    let item = Press.target
+                    match item:
+                        Cell as c =>
+                            c.seed = (c.seed + 1) % 3
+                            c.symbol = c.seed
+                    return
+                spawn Square(at = m.start_head + index, initial = 0, current = 0)
+            _ =>
+                if m.running:
+                    return
+                if Press.occupied:
+                    let item = Press.target
+                    match item:
+                        Entry as entry =>
+                            match action:
+                                ui_panel.Action.Toggle =>
+                                    destroy item
+                                ui_panel.Action.Write =>
+                                    entry.write_symbol = (entry.write_symbol + 1) % 3
+                                ui_panel.Action.Move =>
+                                    entry.move = -entry.move
+                                ui_panel.Action.Previous =>
+                                    if entry.dest > p.HALT:
+                                        entry.dest -= 1
+                                _ =>
+                                    entry.dest += 1
+                    return
+                if action == ui_panel.Action.Toggle:
+                    spawn Instruction(value = p.row(m.page, index, index, 1, p.HALT))
+
+rule ClearButtonTargets:
+    each: ui_panel.Control as control
+    on late_tick:
+        control.occupied = false
+
+rule LocateTapeCell:
+    pairs:
+        slot: ui_panel.Control as control
+        cell: Cell as c
+    after: ClearButtonTargets
+    where: control.action == ui_panel.Action.Cell and c.address == Console[Machine].head + control.index
+    limit: 1 per slot
+    on late_tick:
+        control.target = cell
+        control.occupied = true
+
+rule LocateProgramRow:
+    pairs:
+        slot: ui_panel.Control as control
+        instruction: Entry as r
+    after: LocateTapeCell
+    where: ui_panel.is_row_control(control.action) and r.read_symbol == control.index and r.source == Console[Machine].page
+    limit: 1 per slot
+    on late_tick:
+        control.target = instruction
+        control.occupied = true
+
+rule ShowTape:
+    each: ui_panel.Control as control, ui.Button as button
+    after: LocateProgramRow
+    where: control.action == ui_panel.Action.Cell
+    on late_tick:
+        let at_head = control.index == 0
+        var symbol = p.BLANK
+        if control.occupied:
+            let item = control.target
+            match item:
+                Cell as c =>
+                    symbol = c.symbol
+        if at_head:
+            Console[Machine].read_symbol = symbol
+        let marker = if at_head: "^ " else: ""
+        button.label = text.format("{}{} | {}", marker, Console[Machine].head + control.index, p.glyph(symbol))
+        button.normal_color = if at_head: ui_panel.ACTIVE_COLOR else: ui_panel.IDLE_COLOR
+
+rule ShowControls:
+    each: ui_panel.Control as control, ui.Button as button
+    after: ShowTape
+    on late_tick:
+        let action = control.action
+        match action:
+            ui_panel.Action.Speed =>
+                button.label = text.format("{} steps/s", Console[Machine].speed)
+            ui_panel.Action.Run =>
+                button.label = if Console[Machine].running: "Pause" else: "Run"
+            ui_panel.Action.Seed =>
+                button.label = if Console[Machine].editing_seed: "Finish seed" else: "Edit seed"
+            _ =>
+                if not ui_panel.is_row_control(action):
+                    return
+                let active = control.occupied
+                var row = p.row(0, 0, 0, 1, p.HALT)
+                if active:
+                    let item = control.target
+                    match item:
+                        Entry as entry =>
+                            row = p.row(entry.source, entry.read_symbol, entry.write_symbol, entry.move, entry.dest)
+                let selected = active and Console[Machine].state_id == Console[Machine].page and Console[Machine].read_symbol == control.index
+                button.normal_color = if selected: ui_panel.ACTIVE_COLOR else: ui_panel.IDLE_COLOR
+                match action:
+                    ui_panel.Action.Toggle =>
+                        button.label = if active: "Remove" else: "+ Add"
+                    ui_panel.Action.Write =>
+                        button.label = if active: p.glyph(row.write_symbol) else: "-"
+                    ui_panel.Action.Move =>
+                        button.label = if not active: "-" else if row.move < 0: "Left" else: "Right"
+                    ui_panel.Action.Next =>
+                        button.label = if active: text.format("{}   +", state_name(row.dest)) else: "-"
+                    _ =>
+                        button.label = "-"
+
+rule ShowStatus:
+    each: Machine as m
+    after: ShowTape
+    on late_tick:
+        let mode = if m.editing_seed: "Seed: click cells to cycle symbols" else if m.state_id == p.HALT: "Halted" else if m.missing: "Missing transition" else if m.running: "Running" else: "Paused"
+        ui_panel.Status[labels.ScreenLabel].text = text.format("{}    {}    Head {}    Read {}    Step {}    {}", p.title(m.preset), state_name(m.state_id), m.head, p.glyph(m.read_symbol), m.steps, mode)
+        ui_panel.PageTitle[labels.ScreenLabel].text = text.format("State {}", state_name(m.page))

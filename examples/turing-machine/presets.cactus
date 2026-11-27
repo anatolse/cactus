@@ -1,0 +1,68 @@
+module presets
+
+const:
+    BLANK = 2
+    HALT = -1
+    CUSTOM = 4
+    BLANK_TEXT = "_"
+    ZERO_TEXT = "0"
+    ONE_TEXT = "1"
+    HALT_TEXT = "Halt"
+    BINARY_TITLE = "Binary +1"
+    UNARY_TITLE = "Unary +1"
+    INVERT_TITLE = "Invert bits"
+    PARITY_TITLE = "Parity"
+    CUSTOM_TITLE = "Custom"
+    NO_PROGRAM: list[Transition] = []
+    NO_SEED: list[int] = []
+
+pub func glyph(symbol: int) string:
+    return if symbol == BLANK: BLANK_TEXT else if symbol == 0: ZERO_TEXT else: ONE_TEXT
+
+pub func title(choice: int) string:
+    return match choice:
+        0 => BINARY_TITLE
+        1 => UNARY_TITLE
+        2 => INVERT_TITLE
+        3 => PARITY_TITLE
+        _ => CUSTOM_TITLE
+
+pub struct Transition:
+    source: int
+    read_symbol: int
+    write_symbol: int
+    move: int
+    dest: int
+
+pub func row(source: int, read_symbol: int, write_symbol: int, move: int, dest: int) Transition:
+    return Transition(source = source, read_symbol = read_symbol, write_symbol = write_symbol, move = move, dest = dest)
+
+pub func program(choice: int) list[Transition]:
+    match choice:
+        0 =>
+            return [row(0, 1, 0, -1, 0), row(0, 0, 1, -1, HALT), row(0, BLANK, 1, -1, HALT)]
+        1 =>
+            return [row(0, 1, 1, 1, 0), row(0, BLANK, 1, 1, HALT)]
+        2 =>
+            return [row(0, 0, 1, 1, 0), row(0, 1, 0, 1, 0), row(0, BLANK, BLANK, 1, HALT)]
+        3 =>
+            return [row(0, 0, 0, 1, 0), row(1, 0, 0, 1, 1), row(0, 1, 1, 1, 1),
+                    row(1, 1, 1, 1, 0), row(0, BLANK, 0, 1, HALT), row(1, BLANK, 1, 1, HALT)]
+        _ =>
+            return NO_PROGRAM
+
+pub func seed(choice: int) list[int]:
+    match choice:
+        0 =>
+            return [0, 1, 1]
+        1 =>
+            return [1, 1, 1]
+        2 =>
+            return [1, 0, 1, 1, 0]
+        3 =>
+            return [1, 0, 1, 1]
+        _ =>
+            return NO_SEED
+
+pub func start_head(choice: int) int:
+    return if choice == 0: 2 else: 0

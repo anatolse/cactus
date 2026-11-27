@@ -888,6 +888,126 @@ main.cactus first-person-arena std.physics.volume.Snap/on std.core.fixed_tick
     named_writes:
     named_requirements:
     iteration_order: free
+main.cactus turing-machine main.ClearCells/on std.core.tick
+    reads: main.Machine
+    read_fields: main.Machine{load_preset}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads: [main.Console: main.Machine{load_preset}]
+    named_writes:
+    named_requirements: main.Console/main.Machine
+    iteration_order: creation
+main.cactus turing-machine main.ClearEntries/on std.core.tick
+    reads: main.Machine
+    read_fields: main.Machine{load_preset}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads: [main.Console: main.Machine{load_preset}]
+    named_writes:
+    named_requirements: main.Console/main.Machine
+    iteration_order: creation
+main.cactus turing-machine main.LoadProgram/on std.core.tick
+    reads: main.Machine
+    read_fields: main.Machine{editing_seed,load_preset,preset,reset_requested,start_head}
+    write_fields: main.Machine{editing_seed,load_preset,preset,reset_requested,start_head}
+    write_kinds: main.Machine.editing_seed=2/3 main.Machine.load_preset=3/0 main.Machine.preset=3/0 main.Machine.reset_requested=2/2 main.Machine.start_head=0/0
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: creation
+main.cactus turing-machine main.LocateProgramRow/on std.core.late_tick
+    reads: main.Entry main.Machine panel.Control
+    read_fields: main.Entry{read_symbol,source} main.Machine{page} panel.Control{action,index,occupied,target}
+    write_fields: panel.Control{occupied,target}
+    write_kinds: panel.Control.occupied=2/2 panel.Control.target=0/0
+    bound_reads: 0:panel.Control 1:main.Entry
+    named_reads: [main.Console: main.Machine{page}]
+    named_writes:
+    named_requirements: main.Console/main.Machine
+    iteration_order: free
+main.cactus turing-machine main.LocateTapeCell/on std.core.late_tick
+    reads: main.Cell main.Machine panel.Control
+    read_fields: main.Cell{address} main.Machine{head} panel.Control{action,index,occupied,target}
+    write_fields: panel.Control{occupied,target}
+    write_kinds: panel.Control.occupied=2/2 panel.Control.target=0/0
+    bound_reads: 0:panel.Control 1:main.Cell
+    named_reads: [main.Console: main.Machine{head}]
+    named_writes:
+    named_requirements: main.Console/main.Machine
+    iteration_order: free
+main.cactus turing-machine main.PrepareStep/on std.core.tick
+    reads: main.Machine
+    read_fields: main.Machine{has_cell,read_symbol,step_requested}
+    write_fields: main.Machine{has_cell,read_symbol}
+    write_kinds: main.Machine.has_cell=2/3 main.Machine.read_symbol=0/0
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+main.cactus turing-machine main.ReadHead/on std.core.tick
+    reads: main.Cell main.Machine
+    read_fields: main.Cell{address,symbol} main.Machine{has_cell,head,head_cell,read_symbol,step_requested}
+    write_fields: main.Machine{has_cell,head_cell,read_symbol}
+    write_kinds: main.Machine.has_cell=2/2 main.Machine.head_cell=0/0 main.Machine.read_symbol=0/0
+    bound_reads: 0:main.Machine 1:main.Cell
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+main.cactus turing-machine main.ResetMachine/on std.core.tick
+    reads: main.Machine
+    read_fields: main.Machine{head,missing,page,reset_requested,running,start_head,state_id,step_requested,steps}
+    write_fields: main.Machine{head,missing,page,reset_requested,running,state_id,step_requested,steps}
+    write_kinds: main.Machine.head=0/0 main.Machine.missing=2/3 main.Machine.page=0/0 main.Machine.reset_requested=3/0 main.Machine.running=2/3 main.Machine.state_id=0/0 main.Machine.step_requested=2/3 main.Machine.steps=0/0
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+main.cactus turing-machine main.RestoreCells/on std.core.tick
+    reads: main.Cell main.Machine
+    read_fields: main.Cell{seed,symbol} main.Machine{reset_requested}
+    write_fields: main.Cell{symbol}
+    write_kinds: main.Cell.symbol=0/0
+    bound_reads:
+    named_reads: [main.Console: main.Machine{reset_requested}]
+    named_writes:
+    named_requirements: main.Console/main.Machine
+    iteration_order: free
+main.cactus turing-machine main.ShowTape/on std.core.late_tick
+    reads: main.Cell main.Machine panel.Control std.ui.Button
+    read_fields: main.Cell{*} main.Machine{head,read_symbol} panel.Control{action,index,occupied,target} std.ui.Button{label,normal_color}
+    write_fields: main.Machine{read_symbol} std.ui.Button{label,normal_color}
+    write_kinds: main.Machine.read_symbol=0/0 std.ui.Button.label=0/0 std.ui.Button.normal_color=0/0
+    bound_reads:
+    named_reads: [main.Console: main.Machine{head,read_symbol}]
+    named_writes: [main.Console: main.Machine{read_symbol}]
+    named_requirements: main.Console/main.Machine
+    iteration_order: creation
+main.cactus turing-machine main.StepMachine/on std.core.tick
+    reads: main.Entry main.Machine
+    read_fields: main.Entry{dest,move,read_symbol,source,write_symbol} main.Machine{has_cell,head,head_cell,missing,page,read_symbol,running,state_id,step_requested,steps}
+    write_fields: main.Machine{head,missing,page,running,state_id,step_requested,steps}
+    write_kinds: main.Machine.head=3/0 main.Machine.missing=2/3 main.Machine.page=0/0 main.Machine.running=2/3 main.Machine.state_id=3/0 main.Machine.step_requested=3/0 main.Machine.steps=1/0
+    bound_reads: 0:main.Machine 1:main.Entry
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+main.cactus turing-machine main.UnmatchedStep/on std.core.tick
+    reads: main.Machine
+    read_fields: main.Machine{missing,running,state_id,step_requested}
+    write_fields: main.Machine{missing,running,step_requested}
+    write_kinds: main.Machine.missing=0/0 main.Machine.running=2/3 main.Machine.step_requested=3/0
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
 minimap.cactus stdlib-fixtures minimap.ClickMinimap/on std.core.input
     reads: minimap.CameraTarget minimap.Click minimap.ViewLayer std.camera.volume.CameraView
     read_fields: minimap.CameraTarget{point} minimap.Click{pixel,pressed} minimap.ViewLayer{minimap} std.camera.volume.CameraView{forward,fov_y,near,ortho_height,position,projection,rect_min,rect_size,right,up}

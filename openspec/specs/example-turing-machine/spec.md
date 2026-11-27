@@ -49,6 +49,35 @@ While paused the user SHALL be able to create a program, add, edit and remove tr
 - **WHEN** the user edits the seed and start position, runs the machine and resets
 - **THEN** the displayed configuration returns to that seed and position in the initial state with zero steps
 
+### Requirement: Edit the displayed transition
+
+The editor SHALL show one row per read symbol on the displayed state page. A row SHALL show the instruction for (displayed state, its symbol) as a relation row from the row to that instruction, or no relation row when there is none. Its five buttons SHALL name the row with a required link and SHALL read the instruction only through the row. No button SHALL store an instruction handle or a flag saying whether one is shown.
+
+#### Scenario: Edit after the instruction is removed
+
+- **WHEN** a click on a row's Write button carries an instruction that is destroyed before the edit is delivered
+- **THEN** the edit has no effect
+
+#### Scenario: Add on an empty row
+
+- **WHEN** Add is clicked on a row that shows no instruction
+- **THEN** one instruction for the displayed state and the row's symbol is created
+- **AND** on the next frame the row shows it and Add is no longer offered
+
+### Requirement: One instruction per key
+
+Every preset and every completed edit SHALL leave at most one instruction for each (state, symbol) key.
+
+#### Scenario: Key invariant after edits and presets
+
+- **WHEN** a test adds, removes and re-adds an instruction, pages between states and loads every preset in consecutive frames
+- **THEN** after each frame every key has at most one instruction
+
+#### Scenario: Refresh after an edit or preset load
+
+- **WHEN** an edit completes or a preset replaces the program
+- **THEN** on the next frame every row button's caption and the next-instruction highlight match the current table
+
 ### Requirement: Four editable presets
 
 The example SHALL supply unary increment, bit inversion, binary increment and parity as editable transition tables with sample input and starting head. Selecting a preset SHALL load its table and seed and pause at step zero.

@@ -784,10 +784,11 @@ TEST_CASE("integration: std.color helpers lower to the same float formula in a f
     REQUIRE(merged.has_value());
     const auto code = CppEnttCodegen::generate(*merged);
     INFO(code.substr(code.find("frag_color"), 2000));
-    const std::string mixed = "(tint + ((vec4(0, 0, 0, 0) - tint) * (uv.x * 2.0)))";
     CHECK_FALSE(code.contains("clamp("));
-    CHECK(code.contains("frag_color = vec4(" + mixed + ".r, " + mixed + ".g, " + mixed + ".b, (" + mixed +
-                        ".a * 1.5));"));
+    CHECK(code.contains("return (let_a + ((let_b - let_a) * let_t));"));
+    CHECK(code.contains("return vec4(let_base.r, let_base.g, let_base.b, (let_base.a * let_alpha));"));
+    CHECK(code.contains(
+        "frag_color = std_color_with_alpha(std_color_mix(tint, vec4(0, 0, 0, 0), (uv.x * 2.0)), 1.5);"));
 }
 
 TEST_CASE("integration: a module keeps a relation declared in an imported module", "[integration][relations]") {

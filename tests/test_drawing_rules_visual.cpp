@@ -16,6 +16,7 @@
 
 #include <raylib.h>
 
+#include <algorithm>
 #include <string>
 
 namespace {
@@ -30,6 +31,9 @@ constexpr int kSinkY      = 200;
 constexpr int kBadgeX     = 740;  // the screen size less the badge margin
 constexpr int kBadgeY     = 540;
 constexpr int kCameraStep = 100;
+constexpr int kHazeY      = 470;  // a row through the haze patch, x from 40 to 220
+constexpr int kHazeX0     = 50;
+constexpr int kHazeX1     = 210;
 
 struct Rect {
     int x0;
@@ -54,6 +58,21 @@ bool has_ink(const Image& image, Rect rect) {
         }
     }
     return false;
+}
+
+// Gray everywhere along the row, but not one flat shade: the fragment stage computed noise.
+bool shows_noise(const Image& image) {
+    int lowest  = 255;
+    int highest = 0;
+    for (int x = kHazeX0; x <= kHazeX1; x += 4) {
+        const Color pixel = GetImageColor(image, x, kHazeY);
+        if (pixel.r != pixel.g || pixel.g != pixel.b) {
+            return false;
+        }
+        lowest  = std::min(lowest, static_cast<int>(pixel.r));
+        highest = std::max(highest, static_cast<int>(pixel.r));
+    }
+    return highest - lowest > 30;
 }
 
 bool reddish(Color pixel) {
@@ -119,6 +138,8 @@ TEST_CASE("drawing-rules visual: rules draw in their layers, in world or screen 
     CHECK(cactus_visual_test::colors_close(
         GetImageColor(at_rest, kBadgeX, kBadgeY), Color{.r = 255, .g = 192, .b = 0, .a = 255}, 40));
     CHECK_FALSE(has_ink(at_rest, kCornerCaption));
+    // A stage calls std.noise.
+    CHECK(shows_noise(at_rest));
 
     // The world moves with the camera; the screen-space badge stays.
     CHECK(bluish(GetImageColor(moved, kCoolX - kCameraStep, kCoolY)));

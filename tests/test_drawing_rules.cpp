@@ -247,9 +247,129 @@ TEST_CASE("Drawing rules: a stage handler writes only stage outputs", "[semantic
     }
 }
 
-TEST_CASE("Drawing rules: a bounded for is not a stage statement", "[semantic][drawing-rules]") {
-    const auto linked = link_game(fire("", kVertex, "        for i in range(0, 2):\n            f.frag_color = f.tint\n" + kFragment));
-    CHECK(has_error(linked, "'for' is not allowed in a stage handler body"));
+TEST_CASE("Drawing rules: a stage body loops over a constant range", "[semantic][drawing-rules][stage-functions]") {
+    SECTION("constant bounds") {
+        const auto linked = link_game(fire("",
+                                           kVertex,
+                                           kFragment + "        for i in range(0, 3):\n"
+                                                       "            f.frag_color = f.frag_color * 0.5\n"));
+        CHECK_FALSE(linked.has_errors());
+    }
+    SECTION("run-time bound") {
+        const auto linked = link_game(fire("",
+                                           kVertex,
+                                           kFragment + "        for i in range(0, ember.level):\n"
+                                                       "            f.frag_color = f.frag_color * 0.5\n"));
+        CHECK(has_error(linked, "the loop bound is not constant"));
+    }
+    SECTION("return stays rejected") {
+        const auto linked = link_game(fire("", kVertex, kFragment + "        return\n"));
+        CHECK(has_error(linked, "'return' is not allowed in a stage handler body"));
+    }
+}
+
+namespace {
+
+const std::string kShapedFunc =
+    "struct Pair:\n"
+    "    a: float\n"
+    "    b: int\n"
+    "func shaped(x: float, n: int) Pair:\n"
+    "    if x < 0.0:\n"
+    "        return Pair(a = 0.0, b = 0)\n"
+    "    var total = 0.0\n"
+    "    for i in range(0, 4):\n"
+    "        total += x * i\n"
+    "    let k = match n:\n"
+    "        0 => 1\n"
+    "        _ => 2\n"
+    "    return Pair(b = k, a = total)\n";
+
+}  // namespace
+
+TEST_CASE("Stage functions: a stage calls a func with locals, early return, match, loop and struct result",
+          "[semantic][drawing-rules][stage-functions]") {
+    const auto linked = link_game(kShapedFunc + fire("",
+                                                     kVertex,
+                                                     "        let p = shaped(f.uv.x, ember.level)\n"
+                                                     "        f.frag_color = color.with_alpha(f.tint, p.a + p.b)\n"));
+    CHECK_FALSE(linked.has_errors());
+}
+
+TEST_CASE("Stage functions: std.noise, easing and std.math run in a stage", "[semantic][drawing-rules][stage-functions]") {
+    const auto linked = link_game(
+        fire("",
+             "        let turn = vec2(math.cos(ember.heat), math.sin(ember.heat))\n"
+             "        v.world_position = xf.position + turn * math.pow(2.0, 3.0) + v.corner\n",
+             "        let n = noise.perlin2(f.uv * 8.0, 1)\n"
+             "        let cell = noise.voronoi2(f.uv * 8.0, 1).nearest\n"
+             "        let e = ease.apply(ease.Curve.OutBounce, n)\n"
+             "        f.frag_color = color.with_alpha(f.tint, e * cell * v2.length(f.uv))\n"),
+        "use std.noise as noise\nuse std.math.ease as ease\nuse std.math.vec2 as v2\n");
+    CHECK_FALSE(linked.has_errors());
+}
+
+TEST_CASE("Stage functions: a vertex stage eases by a curve kept in its row", "[semantic][drawing-rules][stage-functions]") {
+    const auto linked = link_game("trait Pulse:\n"
+                                  "    var curve: ease.Curve = ease.Curve.OutQuad\n"
+                                  "    var at: float = 0.0\n"
+                                  "entity Beat:\n"
+                                  "    tf.WorldTransform\n"
+                                  "    Pulse\n"
+                                  "rule Beats:\n"
+                                  "    each:\n"
+                                  "        tf.WorldTransform as xf\n"
+                                  "        Pulse as pulse\n"
+                                  "    group: layers.sprites\n"
+                                  "    on render.vertex as v:\n"
+                                  "        v.world_position = xf.position + v.corner * ease.apply(pulse.curve, pulse.at)\n"
+                                  "    on render.fragment as f:\n"
+                                  "        f.frag_color = f.tint\n",
+                                  "use std.math.ease as ease\n");
+    CHECK_FALSE(linked.has_errors());
+}
+
+TEST_CASE("Stage functions: an untranslatable call names its innermost cause",
+          "[semantic][drawing-rules][stage-functions]") {
+    const auto call = [](const std::string& expr) {
+        return fire("", kVertex, "        let y = " + expr + "\n" + kFragment);
+    };
+    SECTION("run-time loop bound") {
+        const auto linked = link_game("func looped(n: int) float:\n"
+                                      "    var t = 0.0\n"
+                                      "    for i in range(0, n):\n"
+                                      "        t += 1.0\n"
+                                      "    return t\n" +
+                                      call("looped(ember.level)"));
+        CHECK(has_error(linked, "func 'looped' cannot run in a fragment-stage handler"));
+        CHECK(has_error(linked, "the loop bound is not constant"));
+    }
+    SECTION("a string two calls down") {
+        const auto linked = link_game("func g(x: float) float:\n"
+                                      "    let s = \"label\"\n"
+                                      "    return x\n"
+                                      "func f(x: float) float:\n"
+                                      "    return g(x)\n" +
+                                      call("f(1.0)"));
+        CHECK(has_error(linked, "func 'f' cannot run in a fragment-stage handler: 'game.g' uses a string"));
+    }
+    SECTION("an extern with no translation") {
+        const auto linked = link_game("func spin(a: float) float:\n"
+                                      "    return quat.dot(quat.identity(), quat.identity()) * a\n" +
+                                          call("spin(1.0)"),
+                                      "use std.math.quat as quat\n");
+        CHECK(has_error(linked, "'game.spin' calls extern func 'std.math.quat.dot', which has no shader translation"));
+    }
+    SECTION("an acting extern") {
+        const auto linked = link_game("extern func act(x: float) float\n" + call("act(1.0)"));
+        CHECK(has_error(linked, "extern func 'game.act' has no registered portable GLSL translation"));
+    }
+    SECTION("a trait parameter") {
+        const auto linked = link_game("func heat_of(e: Ember) float:\n"
+                                      "    return e.heat\n" +
+                                      call("heat_of(ember)"));
+        CHECK(has_error(linked, "'game.heat_of' takes a trait or event parameter"));
+    }
 }
 
 TEST_CASE("Drawing rules: a stage reads only values a shader holds", "[semantic][drawing-rules]") {

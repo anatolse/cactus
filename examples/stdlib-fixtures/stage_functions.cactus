@@ -1,0 +1,142 @@
+module stage_functions
+
+use std.core
+use std.math as math
+use std.math.vec2 as v2
+use std.math.vec3 as v3
+use std.math.ease as ease
+use std.noise as noise
+
+# One probe per case. Expect computes each case on the CPU; the drawing rule
+# Check computes it again on the GPU and paints the probe green when both
+# agree: integers exactly, floats within TOLERANCE (relative above 1).
+# A red channel marks an integer mismatch, a blue channel a float mismatch.
+# Inputs come through the probe's fields, so no shader compiler folds them.
+
+const:
+    CASES = 54
+    COLUMNS = 9
+    SPACING = 40.0
+    ORIGIN = 30.0
+    HALF = 12.0
+    TOLERANCE = 0.00001
+
+trait Probe:
+    let index: int = 0
+    let one: int = 1
+    let unit: float = 1.0
+    let zero: float = 0.0
+    var nan: float = 0.0
+    var cpu_int: int = 0
+    var cpu_float: float = 0.0
+
+template ProbeAt(index: int):
+    Probe:
+        index = index
+
+func int_case(index: int, one: int, unit: float, nan: float) int:
+    let h = 123457 * one
+    return match index:
+        0 => h * 73244475
+        1 => (7 * one) / 0
+        2 => (7 * one) % 0
+        3 => (-7 * one) / 2
+        4 => (-7 * one) % 2
+        5 => (-2147483647 * one - 1) / (-1 * one)
+        6 => (-2147483647 * one - 1) % (-1 * one)
+        7 => math.floor(-1.5 * unit)
+        8 => math.ceil(-1.5 * unit)
+        9 => math.round(2.5 * unit)
+        10 => math.round(-2.5 * unit)
+        11 => math.round(nan)
+        12 => math.floor(30000000000.0 * unit)
+        13 => math.floor(-30000000000.0 * unit)
+        14 => noise.voronoi2(vec2(2.3, -4.1) * unit, 7).x
+        15 => noise.voronoi3(vec3(-1.2, 0.4, 5.9) * unit, 7).z
+        16 => 2147483647 * one + 2
+        _ => h + index
+
+func float_case(index: int, unit: float) float:
+    let a = 0.37 * unit
+    let p = vec2(1.3, 2.7) * unit
+    let q = vec3(0.25, 0.5, 0.75) * unit
+    return match index:
+        0 => math.sin(a)
+        1 => math.cos(a)
+        2 => math.atan2(a, -0.5 * unit)
+        3 => math.pow(a, 2.5)
+        4 => math.pow(-2.0 * unit, 3.0)
+        5 => math.sqrt(a)
+        6 => math.abs(-a)
+        7 => math.min(a, 0.2)
+        8 => math.max(a, 0.2)
+        9 => math.lerp(a, 2.0, 0.25)
+        10 => math.clamp(a, 0.5, 1.0)
+        11 => math.radians(a * 90.0)
+        12 => math.degrees(a)
+        13 => v2.length(p)
+        14 => v2.normalize(p).x
+        15 => v2.dot(p, vec2(0.5, -1.0))
+        16 => v2.lerp(p, vec2(0.0, 1.0), 0.3).y
+        17 => v2.distance(p, vec2(0.5, 0.5))
+        18 => v2.angle(p)
+        19 => v2.clamp(p, vec2(0.0, 0.0), vec2(1.5, 1.5)).y
+        20 => v2.rotate(p, a).x
+        21 => v3.length(q)
+        22 => v3.normalize(q).z
+        23 => v3.dot(q, vec3(1.0, 2.0, 3.0))
+        24 => v3.cross(q, vec3(0.0, 1.0, 0.0)).x
+        25 => v3.lerp(q, vec3(1.0, 1.0, 1.0), 0.5).y
+        26 => v3.distance(q, vec3(0.0, 0.0, 0.0))
+        27 => v3.reflect(q, vec3(0.0, 1.0, 0.0)).y
+        28 => v3.clamp(q, vec3(0.3, 0.3, 0.3), vec3(0.6, 0.6, 0.6)).x
+        29 => v3.rotate(q, vec3(0.0, 0.0, 1.0), a).x
+        30 => noise.perlin2(vec2(3.7, -12.25) * unit, 1337)
+        31 => noise.perlin3(vec3(3.7, -12.25, 0.4) * unit, 1337)
+        32 => noise.voronoi2(p, 3).nearest
+        33 => noise.feature2(3, -4, 1).x
+        34 => ease.apply(ease.Curve.Linear, a)
+        35 => ease.apply(ease.Curve.InQuad, a)
+        36 => ease.apply(ease.Curve.OutQuad, a)
+        37 => ease.apply(ease.Curve.InOutQuad, a)
+        38 => ease.apply(ease.Curve.InCubic, a)
+        39 => ease.apply(ease.Curve.OutCubic, a)
+        40 => ease.apply(ease.Curve.InOutCubic, a)
+        41 => ease.apply(ease.Curve.InBack, a)
+        42 => ease.apply(ease.Curve.OutBack, a)
+        43 => ease.apply(ease.Curve.OutBounce, a)
+        44 => v2.normalize(vec2(0.0, 0.0) * unit).x
+        _ => noise.perlin2(vec2(index * 0.731, index * -0.377) * unit, 1337)
+
+rule Populate:
+    on load:
+        for i in range(0, CASES):
+            spawn ProbeAt(index = i)
+
+rule Expect:
+    each:
+        Probe as probe
+    on tick:
+        let nan = probe.zero / probe.zero
+        probe.nan = nan
+        probe.cpu_int = int_case(probe.index, probe.one, probe.unit, nan)
+        probe.cpu_float = float_case(probe.index, probe.unit)
+
+rule Check:
+    each:
+        Probe as probe
+    on render.vertex as v:
+        let column = probe.index % COLUMNS
+        let row = probe.index / COLUMNS
+        v.screen_position = vec2(ORIGIN + column * SPACING, ORIGIN + row * SPACING) + v.corner * HALF
+
+    on render.fragment as f:
+        let gpu_int = int_case(probe.index, probe.one, probe.unit, probe.nan)
+        let gpu_float = float_case(probe.index, probe.unit)
+        let int_ok = gpu_int == probe.cpu_int
+        let limit = TOLERANCE * math.max(1.0, math.abs(probe.cpu_float))
+        let float_ok = math.abs(gpu_float - probe.cpu_float) <= limit
+        let red = if int_ok: 0.0 else: 1.0
+        let blue = if float_ok: 0.0 else: 1.0
+        let green = if int_ok and float_ok: 1.0 else: 0.0
+        f.frag_color = color(red, green, blue, 1.0)

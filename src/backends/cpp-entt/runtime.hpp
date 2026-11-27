@@ -236,6 +236,7 @@ void end_drawing_rule() noexcept;
 
 [[nodiscard]] int drawing_rule_uniform_location(const Shader& shader, const char* name) noexcept;
 void set_drawing_rule_uniform(const Shader& shader, int location, float value) noexcept;
+void set_drawing_rule_uniform(const Shader& shader, int location, int value) noexcept;
 void set_drawing_rule_uniform(const Shader& shader, int location, bool value) noexcept;
 void set_drawing_rule_uniform(const Shader& shader, int location, Vector2 value) noexcept;
 void set_drawing_rule_uniform(const Shader& shader, int location, Vector3 value) noexcept;

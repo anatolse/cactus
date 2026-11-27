@@ -72,6 +72,11 @@ struct ResolvedField {
     std::optional<ResolvedFieldClamp> clamp;
 };
 
+[[nodiscard]] inline const ResolvedField* find_field(const std::vector<ResolvedField>& fields, std::string_view name) {
+    const auto found = std::ranges::find(fields, name, &ResolvedField::name);
+    return found == fields.end() ? nullptr : &*found;
+}
+
 // Canonical identity mixin — present on all module-scope resolved declarations.
 struct CanonicalIdentity {
     std::string module_name;   // declaring module path
@@ -106,7 +111,9 @@ struct ResolvedFunc : CanonicalIdentity {
     std::optional<std::unordered_set<std::string>> effect_summary;
     std::vector<ResolvedParam> params;
     std::optional<TypeInfo> return_type;
-    bool glsl_inlinable = false;  // a stage handler may inline its single `return`
+    // A stage handler may call it (a non-extern func); otherwise `stage_blocker` says why not.
+    bool stage_translatable = false;
+    std::string stage_blocker;
 };
 
 inline bool has_reference_params(const ResolvedFunc& func) {
@@ -212,8 +219,7 @@ struct ResolvedRelation : CanonicalIdentity {
     }
 
     [[nodiscard]] const ResolvedField* find_field(const std::string& field) const {
-        const auto found = std::ranges::find(fields, field, &ResolvedField::name);
-        return found == fields.end() ? nullptr : &*found;
+        return cactus::find_field(fields, field);
     }
 };
 

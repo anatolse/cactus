@@ -1701,6 +1701,14 @@ cactus_add_visual_test(test_drawing_rules_visual
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_drawing_rules_visual.cpp
 )
 
+# Real-GL visual test: a shader computes std.math, std.noise, easing and total integer
+# arithmetic as the CPU does.
+cactus_add_visual_test(test_stage_functions_visual
+    CACTUS_SOURCE examples/stdlib-fixtures/stage_functions.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_stage_functions_visual.cpp
+)
+
 # Real-GL visual tests: renderers draw the projected picture, not the simulation's pose and color.
 cactus_add_visual_test(test_drawn_picture_visual
     CACTUS_SOURCE examples/stdlib-fixtures/drawn_picture.cactus

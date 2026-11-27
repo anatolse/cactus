@@ -7,7 +7,7 @@
 
 namespace cactus {
 
-// A value a shader holds; an `int` or enum travels as a float.
+// A value a shader holds.
 [[nodiscard]] inline bool is_glsl_value_type(TypeKind kind) {
     switch (kind) {
         case TypeKind::Int:

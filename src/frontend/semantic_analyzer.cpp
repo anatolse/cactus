@@ -4,7 +4,6 @@
 #include "common/duration.hpp"
 #include "common/numeric.hpp"
 #include "common/drawing_rule_builtin_fields.hpp"
-#include "common/drawing_rule_intrinsics.hpp"
 #include "common/strong_components.hpp"
 #include "common/vector_binary_ops.hpp"
 #include "frontend/archetype_reachability.hpp"
@@ -14,6 +13,7 @@
 #include "frontend/native_field_reads.hpp"
 #include "frontend/required_links.hpp"
 #include "frontend/single_traits.hpp"
+#include "frontend/stage_translation.hpp"
 #include "frontend/symbol_identity.hpp"
 
 #include <algorithm>
@@ -1123,13 +1123,6 @@ bool is_format_supported_type(TypeKind kind) {
 
 const std::vector<ChildOverrideNode> kNoChildOverrides;
 
-// The value of a body that is exactly one `return <value>`, the only func shape GLSL inlining handles.
-const ExprNode* single_return_value(const std::vector<std::unique_ptr<StmtNode>>& body) {
-    const auto* ret =
-        body.size() == 1 && body.front() != nullptr ? std::get_if<ReturnStmt>(&body.front()->stmt) : nullptr;
-    return ret != nullptr && ret->value.has_value() ? ret->value->get() : nullptr;
-}
-
 std::optional<std::unordered_set<std::string>> known_stdlib_effect_summary(const SymbolId& symbol) {
     if (symbol.kind != SymbolKind::Func) {
         return std::nullopt;
@@ -1378,7 +1371,6 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     extract_cell_domains(program);
     resolve_declaration_const_refs(program);
     order_and_type_constants(program);
-    refine_glsl_portability(program);
     collect_template_parameters(program);
 
     // Phase 3: Semantic checks
@@ -1398,6 +1390,8 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     collect_named_entities(program);
     validate_archetype_links(program);
     resolve_named_entity_access(program);
+    // After named access: a constant read in a func body resolves only then.
+    refine_glsl_portability(program);
     validate_rule_filters(program);
     validate_cell_rules(program);
     validate_where_clauses(program);
@@ -1823,7 +1817,7 @@ void SemanticAnalyzer::resolve_declaration_types(T& node) {
         if (node.return_type.has_value()) {
             rf.return_type = resolve_type_ref(*node.return_type);
         }
-        rf.glsl_inlinable = !node.is_extern && single_return_value(node.body) != nullptr && !has_reference_params(rf);
+        rf.stage_translatable = !node.is_extern;
         result_.funcs[node.name] = std::move(rf);
         func_nodes_[node.name]   = &node;
     }
@@ -3526,15 +3520,11 @@ bool SemanticAnalyzer::const_is_glsl_portable(const ExprNode& value, const TypeI
 }
 
 bool SemanticAnalyzer::call_is_glsl_translatable(const CallExpr& call) const {
-    const auto* ident = std::get_if<IdentExpr>(&call.callee->expr);
-    if (ident != nullptr && (ident->name == "vec2" || ident->name == "vec3" || ident->name == "color")) {
+    if (is_shader_value_constructor(call)) {
         return true;
     }
     const auto* func = call.resolved_callee_id.has_value() ? find_resolved_func(*call.resolved_callee_id) : nullptr;
-    if (func == nullptr) {
-        return false;
-    }
-    return func->is_extern ? is_portable_glsl_intrinsic(*call.resolved_callee_id) : func->glsl_inlinable;
+    return func != nullptr && stage_may_call(*func, *call.resolved_callee_id);
 }
 
 void SemanticAnalyzer::check_stage_constant(const SymbolId& symbol,
@@ -3632,17 +3622,24 @@ void SemanticAnalyzer::order_and_type_constants(ProgramNode& program) {
     }
 }
 
-// Func inlinability and constant portability can depend on each other, so both only narrow until stable.
+// Func translatability and constant portability can depend on each other, so both only narrow until stable.
 void SemanticAnalyzer::refine_glsl_portability(const ProgramNode& program) {
-    const auto narrow_func = [this](const FuncNode& func) {
+    const StageTranslationLookups lookups{
+        .func      = [this](const SymbolId& symbol) { return find_resolved_func(symbol); },
+        .constant  = [this](const SymbolId& symbol) { return find_resolved_const(symbol); },
+        .structure = [this](const SymbolId& symbol) { return find_resolved_struct(symbol); }};
+    const auto narrow_func = [&](const FuncNode& func) {
         const auto found = result_.funcs.find(func.name);
-        if (found == result_.funcs.end() || !found->second.glsl_inlinable) {
+        if (found == result_.funcs.end() || !found->second.stage_translatable) {
             return false;
         }
-        const auto* value            = single_return_value(func.body);
-        const auto& type             = found->second.return_type;
-        found->second.glsl_inlinable = type.has_value() && const_is_glsl_portable(*value, *type);
-        return !found->second.glsl_inlinable;
+        auto blocker = stage_func_blocker(func, found->second, lookups);
+        if (blocker.empty()) {
+            return false;
+        }
+        found->second.stage_translatable = false;
+        found->second.stage_blocker      = std::move(blocker);
+        return true;
     };
     const auto narrow_const = [this](const ConstAssignment& assignment) {
         const auto found = result_.consts.find(assignment.name);
@@ -6007,30 +6004,24 @@ void SemanticAnalyzer::validate_drawing_rule_shape(const RuleNode& rule) const {
 void SemanticAnalyzer::validate_stage_call(const CallExpr& node,
                                            const SourceLocation& location,
                                            const char* stage_desc) const {
-    const auto* callee_ident = std::get_if<IdentExpr>(&node.callee->expr);
-    const bool is_vector_ctor =
-        callee_ident != nullptr &&
-        (callee_ident->name == "vec2" || callee_ident->name == "vec3" || callee_ident->name == "color");
-    const auto resolved = is_vector_ctor ? std::nullopt : resolve_callee_symbol(*node.callee);
+    const auto resolved = is_shader_value_constructor(node) ? std::nullopt : resolve_callee_symbol(*node.callee);
     if (!resolved.has_value()) {
         return;
     }
     const auto& symbol = *resolved;
     const auto* func   = find_resolved_func(symbol);
-    if (func == nullptr) {
+    if (func == nullptr || stage_may_call(*func, symbol)) {
         return;
     }
-    if (func->is_extern && !is_portable_glsl_intrinsic(symbol)) {
+    if (func->is_extern) {
         errors_.error(location,
                       "extern func '" + make_canonical_id(symbol) +
                           "' has no registered portable GLSL translation for a stage handler");
-    } else if (!func->is_extern && !func->glsl_inlinable) {
-        const auto name    = symbol.module == current_module_id_ ? symbol.local_name : make_canonical_id(symbol);
-        const auto* reason = has_reference_params(*func)
-                                 ? "it takes a trait or event parameter"
-                                 : "its body must be a single `return` of GLSL-translatable operations";
-        errors_.error(location, std::format("func '{}' cannot run in a {}-stage handler: {}", name, stage_desc, reason));
+        return;
     }
+    const auto name = symbol.module == current_module_id_ ? symbol.local_name : make_canonical_id(symbol);
+    errors_.error(location,
+                  std::format("func '{}' cannot run in a {}-stage handler: {}", name, stage_desc, func->stage_blocker));
 }
 
 template <typename E>
@@ -6145,7 +6136,11 @@ void SemanticAnalyzer::validate_stage_statement(
     } else if constexpr (std::is_same_v<S, ReturnStmt>) {
         errors_.error(node.location, "'return' is not allowed in a stage handler body");
     } else if constexpr (std::is_same_v<S, ForeachStmt>) {
-        errors_.error(node.location, "'for' is not allowed in a stage handler body");
+        if (!is_constant_range(*node.iterable)) {
+            errors_.error(node.location,
+                          "a stage handler loops only over `range(...)` of constants; the loop bound is not constant");
+        }
+        visit_stmts(node.body);
     } else if constexpr (std::is_same_v<S, MatchStmt>) {
         if (std::ranges::any_of(node.arms, [](const MatchStmtArm& arm) { return arm.resolved_trait_id.has_value(); })) {
             errors_.error(node.location, "a trait 'match' is not allowed in a stage handler body");

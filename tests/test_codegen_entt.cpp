@@ -8537,13 +8537,16 @@ static std::string drawing_rule_codegen(const std::string& case_name,
                                         const std::string& clauses,
                                         const std::string& vertex   = kDrawVertex,
                                         const std::string& fragment = kDrawFragment,
-                                        const std::string& late     = "") {
+                                        const std::string& late         = "",
+                                        const std::string& declarations = "",
+                                        const std::string& uses         = "") {
     const std::string source = "module drawing_codegen\n"
                                "use std.core\n"
                                "use std.color as color\n"
                                "use std.math as math\n"
                                "use std.transform.flat as tf\n"
-                               "use std.render.layers as layers\n"
+                               "use std.render.layers as layers\n" +
+                               uses + declarations +
                                "const:\n"
                                "    LAYER = 2\n"
                                "    HALF_SIZE = 200.0 * 0.5\n"
@@ -8671,14 +8674,109 @@ TEST_CASE("Codegen EnTT: int, vec3 and enum row values reach the shader", "[code
                                            "        v.world_position = xf.position + v.corner * particle.lift.x\n"
                                            "        if wild or k > 1:\n"
                                            "            v.tint_out = #FF0000FF\n");
-    CHECK(code.contains("uniform float u_particle_level;"));
+    CHECK(code.contains("uniform int u_particle_level;"));
     CHECK(code.contains("uniform vec3 u_particle_lift;"));
-    CHECK(code.contains("uniform float u_particle_mood;"));
-    CHECK(code.contains("(u_particle_mood == 1.0)"));
+    CHECK(code.contains("uniform int u_particle_mood;"));
+    CHECK(code.contains("(u_particle_mood == 1)"));
+    CHECK(code.contains("int let_k = cactus_div(u_particle_level, 2);"));
+    CHECK(code.contains("int vertex_index = gl_VertexID;"));
     const auto draw = draw_function(code);
-    CHECK(draw.contains("static_cast<float>(drawing_codegen_particle_comp.level)"));
+    CHECK(draw.contains("loc_u_particle_level, drawing_codegen_particle_comp.level)"));
     CHECK(draw.contains("drawing_codegen_particle_comp.lift"));
-    CHECK(draw.contains("static_cast<float>(static_cast<int>(drawing_codegen_particle_comp.mood))"));
+    CHECK(draw.contains("static_cast<int>(drawing_codegen_particle_comp.mood)"));
+}
+
+TEST_CASE("Codegen EnTT: a stage converts an int operand of a float operation", "[codegen-entt][drawing-rules]") {
+    const auto code = drawing_rule_codegen(
+        "mixed_operands", "", "        v.world_position = xf.position + v.corner * (particle.level * 0.5)\n");
+    CHECK(code.contains("(float(u_particle_level) * 0.5)"));
+}
+
+TEST_CASE("Codegen EnTT: a stage emits each reachable func once, callees first", "[codegen-entt][drawing-rules]") {
+    const auto code = drawing_rule_codegen("functions",
+                                           "",
+                                           kDrawVertex,
+                                           "        f.frag_color = color.with_alpha(f.tint, outer(f.uv.x) + outer(f.uv.y))\n",
+                                           "",
+                                           "func inner(x: float) float:\n"
+                                           "    if x < 0.0:\n"
+                                           "        return 0.0\n"
+                                           "    var total = 0.0\n"
+                                           "    for i in range(0, 3):\n"
+                                           "        total += x * i\n"
+                                           "    return total\n"
+                                           "func outer(x: float) float:\n"
+                                           "    return inner(x) * 2.0\n");
+    const auto fragment = code.substr(code.find("kFragmentShader"));
+    const auto inner    = fragment.find("float drawing_codegen_inner(float let_x)");
+    const auto outer    = fragment.find("float drawing_codegen_outer(float let_x)");
+    const auto main     = fragment.find("void main()");
+    REQUIRE(inner != std::string::npos);
+    REQUIRE(outer != std::string::npos);
+    CHECK(inner < outer);
+    CHECK(outer < main);
+    CHECK(fragment.find("float drawing_codegen_inner(", inner + 1) == std::string::npos);
+    CHECK(fragment.contains("for (int let_i = 0; let_i < 3; let_i += 1)"));
+    CHECK(fragment.contains("return 0.0;"));
+    CHECK(fragment.contains("(drawing_codegen_outer(uv.x) + drawing_codegen_outer(uv.y))"));
+}
+
+TEST_CASE("Codegen EnTT: a stage func's struct result is a shader struct", "[codegen-entt][drawing-rules]") {
+    const auto code = drawing_rule_codegen("struct_result",
+                                           "",
+                                           kDrawVertex,
+                                           "        f.frag_color = color.with_alpha(f.tint, split(f.uv.x).a)\n",
+                                           "",
+                                           "struct Pair:\n"
+                                           "    a: float\n"
+                                           "    b: int\n"
+                                           "func split(x: float) Pair:\n"
+                                           "    return Pair(b = 1, a = x)\n");
+    const auto fragment = code.substr(code.find("kFragmentShader"));
+    CHECK(fragment.contains("struct drawing_codegen_Pair {\n    float f_a;\n    int f_b;\n};"));
+    CHECK(fragment.contains("return drawing_codegen_Pair(let_x, 1);"));
+    CHECK(fragment.contains("drawing_codegen_split(uv.x).f_a"));
+}
+
+TEST_CASE("Codegen EnTT: every std.math function has a shader translation", "[codegen-entt][drawing-rules]") {
+    const auto code = drawing_rule_codegen(
+        "math_table",
+        "",
+        kDrawVertex,
+        "        let a = f.uv.x\n"
+        "        let p = f.uv\n"
+        "        let q = vec3(a, a, a)\n"
+        "        var s = math.sin(a) + math.cos(a) + math.atan2(a, 1.0) + math.pow(a, 2.0) + math.sqrt(a)\n"
+        "        s += math.abs(a) + math.min(a, 0.5) + math.max(a, 0.5) + math.lerp(a, 1.0, 0.5)\n"
+        "        s += math.clamp(a, 0.0, 1.0) + math.radians(a) + math.degrees(a)\n"
+        "        s += math.floor(a) + math.ceil(a) + math.round(a)\n"
+        "        s += v2.length(p) + v2.normalize(p).x + v2.dot(p, p) + v2.lerp(p, p, 0.5).x + v2.distance(p, p)\n"
+        "        s += v2.angle(p) + v2.clamp(p, p, p).x + v2.rotate(p, a).x\n"
+        "        s += v3.length(q) + v3.normalize(q).x + v3.dot(q, q) + v3.cross(q, q).x + v3.lerp(q, q, 0.5).x\n"
+        "        s += v3.distance(q, q) + v3.reflect(q, q).x + v3.clamp(q, q, q).x + v3.rotate(q, q, a).x\n"
+        "        f.frag_color = color.with_alpha(f.tint, s)\n",
+        "",
+        "",
+        "use std.math.vec2 as v2\nuse std.math.vec3 as v3\n");
+    const auto fragment = code.substr(code.find("kFragmentShader"));
+    for (const char* helper : {"cactus_sin(",
+                               "cactus_cos(",
+                               "cactus_atan2(",
+                               "cactus_pow(",
+                               "cactus_sqrt(",
+                               "cactus_min(",
+                               "cactus_max(",
+                               "cactus_lerp(",
+                               "cactus_clamp(",
+                               "cactus_to_int(",
+                               "cactus_round(",
+                               "cactus_normalize2(",
+                               "cactus_normalize3(",
+                               "cactus_rotate2(",
+                               "cactus_rotate3("}) {
+        INFO(helper);
+        CHECK(fragment.contains(helper));
+    }
 }
 
 TEST_CASE("Codegen EnTT: a stage handler inlines a derived scalar constant into GLSL",
@@ -8708,7 +8806,8 @@ TEST_CASE("Codegen EnTT: a tint above 1.0 reaches the fragment stage unclamped",
 TEST_CASE("Codegen EnTT: color.with_alpha is translated from its body", "[codegen-entt][drawing-rules]") {
     const auto code =
         drawing_rule_codegen("with_alpha", "", kDrawVertex, "        f.frag_color = color.with_alpha(f.tint, 0.5)\n");
-    CHECK(code.contains("frag_color = vec4(tint.r, tint.g, tint.b, (tint.a * 0.5));"));
+    CHECK(code.contains("vec4 std_color_with_alpha(vec4 let_base, float let_alpha)"));
+    CHECK(code.contains("frag_color = std_color_with_alpha(tint, 0.5);"));
 }
 
 TEST_CASE("Codegen EnTT: the fragment stage reads its row's value", "[codegen-entt][drawing-rules]") {
@@ -8962,7 +9061,7 @@ TEST_CASE("Codegen EnTT: drawing-rule fragment handler lowers a match expression
         "            1 => 0.25\n"
         "            _ => 0.5\n"
         "        f.frag_color = f.tint * k\n");
-    CHECK(code.contains("float let_k = ((2.0 == 1.0) ? 0.25 : 0.5);"));
+    CHECK(code.contains("float let_k = ((2 == 1) ? 0.25 : 0.5);"));
 }
 
 TEST_CASE("Codegen EnTT: drawing-rule fragment handler lowers a value match statement to GLSL",
@@ -8974,7 +9073,7 @@ TEST_CASE("Codegen EnTT: drawing-rule fragment handler lowers a value match stat
         "            _ =>\n"
         "                f.frag_color = #000000FF\n");
     CHECK(code.contains("if ((match_subject_"));
-    CHECK(code.contains("== 2.0)) {"));
+    CHECK(code.contains("== 2)) {"));
     CHECK(code.contains("else {"));
 }
 
@@ -8984,11 +9083,11 @@ TEST_CASE("Codegen EnTT: drawing-rule int division and remainder call floor help
         "        let q = LAYER / 0\n"
         "        let r = -7 % 2\n"
         "        f.frag_color = f.tint * (1.0 * q * r)\n");
-    CHECK(code.contains("float cactus_div(float a, float b)"));
-    CHECK(code.contains("float cactus_mod(float a, float b)"));
-    CHECK(code.contains("float let_q = cactus_div(2.0, 0.0);"));
-    CHECK(code.contains("float let_r = cactus_mod((-7.0), 2.0);"));
-    CHECK(code.find("float cactus_div(float a, float b)") < code.find("float let_q"));
+    CHECK(code.contains("int cactus_div(int a, int b)"));
+    CHECK(code.contains("int cactus_mod(int a, int b)"));
+    CHECK(code.contains("int let_q = cactus_div(2, 0);"));
+    CHECK(code.contains("int let_r = cactus_mod((-7), 2);"));
+    CHECK(code.find("int cactus_div(int a, int b)") < code.find("int let_q"));
 }
 
 TEST_CASE("Codegen EnTT: drawing-rule float division stays a plain GLSL operator",
@@ -11650,8 +11749,8 @@ TEST_CASE("Codegen EnTT: drawing rules take their place among the standard rende
     REQUIRE_FALSE(linked.has_errors());
     linked.program->module_name = "drawing_rules";
     const auto code = CppEnttCodegen::generate(*linked.program);
-    CHECK(count_occurrences(code, "kVertexShader = R\"GLSL(") == 3);
-    CHECK(count_occurrences(code, "kFragmentShader = R\"GLSL(") == 3);
+    CHECK(count_occurrences(code, "kVertexShader = R\"GLSL(") == 4);
+    CHECK(count_occurrences(code, "kFragmentShader = R\"GLSL(") == 4);
     const auto dispatch = without_linearization_harness(generated_function(
         code, "void generated_dispatch_phase(entt::registry& registry, const ::cactus_gen::stdlib::core::RenderPhase&"));
     const auto shapes  = dispatch.find("shape_renderer_tick(registry);");

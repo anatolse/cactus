@@ -1,5 +1,6 @@
 #include "backends/cpp-entt/drawing_rule_emitter.hpp"
 
+#include "backends/cpp-entt/drawing_rule_glsl_helpers.hpp"
 #include "backends/cpp-entt/system_emitter.hpp"
 #include "backends/cpp-entt/type_utils.hpp"
 #include "common/ast_expressions.hpp"
@@ -7,11 +8,13 @@
 #include "common/color_channels.hpp"
 #include "common/drawing_rule_builtin_fields.hpp"
 #include "common/drawing_rule_intrinsics.hpp"
+#include "common/joined.hpp"
 #include "common/vector_binary_ops.hpp"
 
 #include <algorithm>
 #include <iomanip>
 #include <limits>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
@@ -24,28 +27,14 @@ namespace {
 
 // ── GLSL value shapes ──────────────────────────────────────────────────────
 
-enum class GlslType : std::uint8_t { Float, Bool, Vec2, Vec3, Color };
-
-const char* glsl_type_name(GlslType type) {
-    switch (type) {
-        case GlslType::Float:
-            return "float";
-        case GlslType::Bool:
-            return "bool";
-        case GlslType::Vec2:
-            return "vec2";
-        case GlslType::Vec3:
-            return "vec3";
-        case GlslType::Color:
-            return "vec4";
-    }
-    std::unreachable();
-}
+enum class GlslType : std::uint8_t { Float, Int, Bool, Vec2, Vec3, Color, Struct, Void };
 
 TypeKind glsl_type_to_type_kind(GlslType type) {
     switch (type) {
         case GlslType::Float:
             return TypeKind::Float;
+        case GlslType::Int:
+            return TypeKind::Int;
         case GlslType::Bool:
             return TypeKind::Bool;
         case GlslType::Vec2:
@@ -54,6 +43,10 @@ TypeKind glsl_type_to_type_kind(GlslType type) {
             return TypeKind::Vec3;
         case GlslType::Color:
             return TypeKind::Color;
+        case GlslType::Struct:
+            return TypeKind::Struct;
+        case GlslType::Void:
+            return TypeKind::Void;
     }
     std::unreachable();
 }
@@ -62,6 +55,9 @@ GlslType type_kind_to_glsl_type(TypeKind kind) {
     switch (kind) {
         case TypeKind::Float:
             return GlslType::Float;
+        case TypeKind::Int:
+        case TypeKind::Enum:
+            return GlslType::Int;
         case TypeKind::Bool:
             return GlslType::Bool;
         case TypeKind::Vec2:
@@ -71,30 +67,52 @@ GlslType type_kind_to_glsl_type(TypeKind kind) {
         case TypeKind::Color:
             return GlslType::Color;
         default:
-            throw std::runtime_error("drawing-rule GLSL codegen: vector-operator result type has no GLSL representation");
+            throw std::runtime_error("drawing-rule GLSL codegen: a value of this type has no GLSL representation");
     }
 }
 
-// A Cactus `int` or enum travels as a GLSL float; integer `/` and `%` use the kGlslIntDivision helpers.
-GlslType glsl_type_from(const TypeInfo& type) {
-    if (!is_glsl_value_type(type.kind)) {
-        throw std::runtime_error("drawing-rule GLSL codegen: unsupported value type '" + type.name + "'");
-    }
-    return type.kind == TypeKind::Int || type.kind == TypeKind::Enum ? GlslType::Float
-                                                                     : type_kind_to_glsl_type(type.kind);
+// A module-qualified name as one GLSL identifier.
+std::string glsl_identifier(const std::string& canonical_id) {
+    std::string name = canonical_id;
+    std::ranges::replace(name, '.', '_');
+    return name;
 }
 
+// The text, shape and, for a struct, the declaration of a translated value.
 struct TranslatedExpr {
     std::string text;
     GlslType type{};
+    const ResolvedStruct* structure = nullptr;
 };
+
+std::string glsl_type_name(const TranslatedExpr& shape) {
+    switch (shape.type) {
+        case GlslType::Float:
+            return "float";
+        case GlslType::Int:
+            return "int";
+        case GlslType::Bool:
+            return "bool";
+        case GlslType::Vec2:
+            return "vec2";
+        case GlslType::Vec3:
+            return "vec3";
+        case GlslType::Color:
+            return "vec4";
+        case GlslType::Struct:
+            return glsl_identifier(shape.structure->canonical_id);
+        case GlslType::Void:
+            return "void";
+    }
+    std::unreachable();
+}
 
 // A world value a stage reads, set as a uniform once per draw or once per row.
 struct StageUniform {
     std::string glsl_name;
     std::string key;  // what it reads, so two reads of one value share a uniform
     GlslType type{};
-    TypeKind source{};  // `int` and enum values are converted to float on upload
+    TypeKind source{};  // an enum value is uploaded as its index
     bool per_row = true;
     std::string component_path;      // a field of the row's own trait
     const ExprNode* read = nullptr;  // any other read, lowered by the system emitter
@@ -105,55 +123,56 @@ struct FilterTrait {
     std::string component_local;  // as the domain walk binds it
 };
 
-struct GlslCtx {
-    const DecoratedProgram* program = nullptr;
-    std::string alias;  // the stage handler's own alias ("v" / "f")
-    bool is_vertex = false;
-    std::unordered_map<std::string, FilterTrait> filter_traits;
-    std::unordered_map<std::string, GlslType> locals;
-    // Authored `let` locals, emitted as `let_<name>` so no name meets a GLSL reserved word (`half`).
-    std::unordered_set<std::string> let_names;
-    // An inlined func's parameters, bound to the argument values translated in the caller's scope.
-    std::unordered_map<std::string, TranslatedExpr> param_substitutions;
-    std::vector<StageUniform>* uniforms = nullptr;  // shared by both stages of one rule
-    std::vector<std::string> used_uniforms;         // the ones this stage declares
-    bool uses_int_division = false;
+// The helpers, structs and functions one shader needs, each emitted once, before its first use.
+struct ShaderLibrary {
+    std::unordered_set<std::string> helpers;
+    std::unordered_set<std::string> declared;  // struct and function names already emitted
+    std::string structs;
+    std::string functions;
 };
 
-constexpr std::string_view kGlslIntDivision =
-    "float cactus_div(float a, float b)\n"
-    "{\n"
-    "    int x = int(a);\n"
-    "    int y = int(b);\n"
-    "    if (y == 0) {\n"
-    "        return 0.0;\n"
-    "    }\n"
-    "    int q = abs(x) / abs(y);\n"
-    "    if ((x < 0) != (y < 0)) {\n"
-    "        q = -q;\n"
-    "        if (q * y != x) {\n"
-    "            q -= 1;\n"
-    "        }\n"
-    "    }\n"
-    "    return float(q);\n"
-    "}\n"
-    "\n"
-    "float cactus_mod(float a, float b)\n"
-    "{\n"
-    "    return a - cactus_div(a, b) * b;\n"
-    "}\n"
-    "\n";
+struct GlslCtx {
+    const DecoratedProgram* program = nullptr;
+    ShaderLibrary* library          = nullptr;
+    std::string alias;  // the stage handler's own alias ("v" / "f"); empty in a function
+    std::unordered_map<std::string, FilterTrait> filter_traits;
+    // Built-in fields, authored locals and parameters, by Cactus name. Authored names
+    // are emitted as `let_<name>` so no name meets a GLSL reserved word (`half`).
+    std::unordered_map<std::string, TranslatedExpr> locals;
+    std::vector<StageUniform>* uniforms = nullptr;  // shared by both stages of one rule
+    std::vector<std::string> used_uniforms;         // the ones this stage declares
+    TranslatedExpr result;                          // a function's result shape
+};
 
-const char* int_division_helper(ArithmeticOperands operands, std::string_view op, GlslCtx& ctx) {
-    if (operands != ArithmeticOperands::Int || op.empty() || (op.front() != '/' && op.front() != '%')) {
-        return nullptr;
+TranslatedExpr shape_of(const TypeInfo& type, const DecoratedProgram& program) {
+    if (type.kind != TypeKind::Struct) {
+        return {.type = type_kind_to_glsl_type(type.kind)};
     }
-    ctx.uses_int_division = true;
-    return op.front() == '/' ? "cactus_div" : "cactus_mod";
+    const auto* structure =
+        type.symbol_id.has_value() ? EnttCodegenUtils::find_struct(program, *type.symbol_id) : nullptr;
+    if (structure == nullptr) {
+        throw std::runtime_error("drawing-rule GLSL codegen: unknown struct '" + type.name + "'");
+    }
+    return {.type = GlslType::Struct, .structure = structure};
 }
 
-std::string local_reference(const std::string& name, const GlslCtx& ctx) {
-    return ctx.let_names.contains(name) ? "let_" + name : name;
+TranslatedExpr return_shape(const ResolvedFunc& func, const DecoratedProgram& program) {
+    return func.return_type.has_value() ? shape_of(*func.return_type, program) : TranslatedExpr{.type = GlslType::Void};
+}
+
+// `value` where a `target` value is expected: an `int` converts to `float` as on the CPU.
+std::string converted(const TranslatedExpr& value, GlslType target) {
+    return value.type == GlslType::Int && target == GlslType::Float ? "float(" + value.text + ")" : value.text;
+}
+
+bool is_float_based(GlslType type) {
+    return type == GlslType::Float || type == GlslType::Vec2 || type == GlslType::Vec3 || type == GlslType::Color;
+}
+
+TranslatedExpr use_helper(std::string_view helper, std::string text, TranslatedExpr shape, GlslCtx& ctx) {
+    ctx.library->helpers.emplace(helper);
+    shape.text = std::move(text);
+    return shape;
 }
 
 std::string hex_color_literal_to_glsl(const std::string& raw_hex) {
@@ -172,6 +191,9 @@ std::string hex_color_literal_to_glsl(const std::string& raw_hex) {
 
 // Declares `uniform` once for the rule and once for each stage that reads it.
 TranslatedExpr use_uniform(StageUniform uniform, GlslCtx& ctx) {
+    if (ctx.uniforms == nullptr) {
+        throw std::runtime_error("drawing-rule GLSL codegen: a function reads only its parameters");
+    }
     auto& all = *ctx.uniforms;
     auto found =
         std::ranges::find_if(all, [&](const StageUniform& existing) { return existing.key == uniform.key; });
@@ -189,66 +211,96 @@ TranslatedExpr use_uniform(StageUniform uniform, GlslCtx& ctx) {
 }
 
 TranslatedExpr translate_expr(const ExprNode& expr, GlslCtx& ctx);
+std::string translate_stmts(const std::vector<std::unique_ptr<StmtNode>>& body, GlslCtx& ctx, int indent);
 
-std::string translate_call_args(const std::vector<std::unique_ptr<ExprNode>>& args, GlslCtx& ctx) {
-    std::string joined;
+std::vector<TranslatedExpr> translate_args(const std::vector<std::unique_ptr<ExprNode>>& args, GlslCtx& ctx) {
+    std::vector<TranslatedExpr> translated;
+    translated.reserve(args.size());
     for (const auto& arg : args) {
-        if (!joined.empty()) {
-            joined += ", ";
-        }
-        joined += translate_expr(*arg, ctx).text;
+        translated.push_back(translate_expr(*arg, ctx));
+    }
+    return translated;
+}
+
+std::string joined_args(const std::vector<TranslatedExpr>& args, const std::vector<GlslType>& targets) {
+    std::string joined;
+    for (std::size_t index = 0; index < args.size(); ++index) {
+        joined += (index == 0 ? "" : ", ") + converted(args[index], index < targets.size() ? targets[index] : args[index].type);
     }
     return joined;
 }
 
-// A pure func whose body is one `return expr` is inlined: each argument is
-// translated once in the caller's scope and substituted for its parameter.
-TranslatedExpr inline_func_call(const FuncNode& func, const std::vector<std::unique_ptr<ExprNode>>& args, GlslCtx& ctx) {
-    if (func.params.size() != args.size()) {
-        throw std::runtime_error("drawing-rule GLSL codegen: '" + func.name + "' called with the wrong argument count");
-    }
-    const auto* ret = func.body.size() == 1 ? std::get_if<ReturnStmt>(&func.body.front()->stmt) : nullptr;
-    if (ret == nullptr || !ret->value.has_value()) {
-        throw std::runtime_error("drawing-rule GLSL codegen: '" + func.name +
-                                 "' body is not a single terminal return");
-    }
-    auto saved_substitutions = ctx.param_substitutions;
-    for (std::size_t i = 0; i < func.params.size(); ++i) {
-        ctx.param_substitutions[func.params[i].name] = translate_expr(*args[i], ctx);
-    }
-    auto result             = translate_expr(**ret->value, ctx);
-    ctx.param_substitutions = std::move(saved_substitutions);
-    return result;
+// ── Structs and functions ──────────────────────────────────────────────────
+
+std::string field_name(const std::string& name) {
+    return "f_" + name;
 }
 
-bool is_component_access(GlslType object_type, const std::string& member) {
-    switch (object_type) {
-        case GlslType::Vec2:
-            return member == "x" || member == "y";
-        case GlslType::Vec3:
-            return member == "x" || member == "y" || member == "z";
-        case GlslType::Color:
-            return member == "r" || member == "g" || member == "b" || member == "a";
-        default:
-            return false;
-    }
+std::string local_name(const std::string& name) {
+    return "let_" + name;
 }
+
+void ensure_struct(const ResolvedStruct& structure, GlslCtx& ctx) {
+    const auto name = glsl_identifier(structure.canonical_id);
+    if (ctx.library->declared.contains(name)) {
+        return;
+    }
+    std::string text = "struct " + name + " {\n";
+    for (const auto& field : structure.fields) {
+        const auto shape = shape_of(field.type, *ctx.program);
+        if (shape.structure != nullptr) {
+            ensure_struct(*shape.structure, ctx);
+        }
+        text += "    " + glsl_type_name(shape) + " " + field_name(field.name) + ";\n";
+    }
+    text += "};\n\n";
+    ctx.library->structs += text;
+    ctx.library->declared.insert(name);
+}
+
+[[noreturn]] void throw_no_translation(const SymbolId& symbol) {
+    throw std::runtime_error("drawing-rule GLSL codegen: '" + make_canonical_id(symbol) +
+                             "' has no registered portable GLSL translation");
+}
+
+// Emits `func` as shader function `name` after the functions it calls.
+void ensure_function(const std::string& name, const SymbolId& symbol, const ResolvedFunc& func, GlslCtx& caller) {
+    if (caller.library->declared.contains(name)) {
+        return;
+    }
+    const auto* node = find_func_decl(*caller.program->ast, symbol);
+    if (node == nullptr) {
+        throw_no_translation(symbol);
+    }
+    GlslCtx ctx{.program = caller.program, .library = caller.library, .result = return_shape(func, *caller.program)};
+    std::string params;
+    for (const auto& param : func.params) {
+        auto shape = shape_of(param.type, *ctx.program);
+        shape.text = local_name(param.name);
+        params += (params.empty() ? "" : ", ") + glsl_type_name(shape) + " " + shape.text;
+        ctx.locals[param.name] = shape;
+    }
+    if (ctx.result.structure != nullptr) {
+        ensure_struct(*ctx.result.structure, ctx);
+    }
+    const auto body = translate_stmts(node->body, ctx, 1);
+    caller.library->functions += glsl_type_name(ctx.result) + " " + name + "(" + params + ")\n{\n" + body + "}\n\n";
+    caller.library->declared.insert(name);
+}
+
+// ── Reads ──────────────────────────────────────────────────────────────────
 
 const ResolvedField* find_trait_field(const ResolvedTrait* trait, const std::string& name) {
-    if (trait == nullptr) {
-        return nullptr;
-    }
-    const auto found = std::ranges::find(trait->fields, name, &ResolvedField::name);
-    return found == trait->fields.end() ? nullptr : &*found;
+    return trait == nullptr ? nullptr : find_field(trait->fields, name);
 }
 
 TranslatedExpr translate_builtin_field_access(const std::string& field_name, const GlslCtx& ctx) {
-    const auto& fields = ctx.is_vertex ? drawing_vertex_input_fields() : drawing_fragment_input_fields();
-    if (std::ranges::any_of(fields, [&](const DrawingRuleBuiltinField& field) { return field.name == field_name; })) {
-        return {.text = field_name, .type = ctx.locals.at(field_name)};
+    const auto found = ctx.locals.find(field_name);
+    if (found == ctx.locals.end()) {
+        throw std::runtime_error("drawing-rule GLSL codegen: '" + ctx.alias + "." + field_name +
+                                 "' is not a built-in field here");
     }
-    throw std::runtime_error("drawing-rule GLSL codegen: '" + ctx.alias + "." + field_name +
-                             "' is not a readable built-in field here");
+    return found->second;
 }
 
 // `alias.field`: a field of the row's own trait, set once per row.
@@ -265,7 +317,7 @@ TranslatedExpr translate_row_field(const FilterTrait& filter_trait,
     const auto name = "u_" + owner_name + "_" + field_name;
     return use_uniform(StageUniform{.glsl_name      = name,
                                     .key            = name,
-                                    .type           = glsl_type_from(field->type),
+                                    .type           = shape_of(field->type, *ctx.program).type,
                                     .source         = field->type.kind,
                                     .per_row        = true,
                                     .component_path = filter_trait.component_local + "." + field->name},
@@ -286,79 +338,215 @@ TranslatedExpr translate_trait_read(const ExprNode& read,
     }
     const bool per_row = !access.named_ref().has_value();
     return use_uniform(StageUniform{.key     = expression_spelling(read, "?") + (per_row ? "#row" : "#draw"),
-                                    .type    = glsl_type_from(field->type),
+                                    .type    = shape_of(field->type, *ctx.program).type,
                                     .source  = field->type.kind,
                                     .per_row = per_row,
                                     .read    = &read},
                        ctx);
 }
 
-TranslatedExpr translate_member(const MemberExpr& member, const ExprNode& node, GlslCtx& ctx) {
-    if (member.resolved_const_id.has_value()) {
-        if (const auto* initializer = EnttCodegenUtils::find_const_initializer(*ctx.program->ast, *member.resolved_const_id)) {
-            return translate_expr(*initializer, ctx);
+bool is_component_access(GlslType object_type, const std::string& member) {
+    switch (object_type) {
+        case GlslType::Vec2:
+            return member == "x" || member == "y";
+        case GlslType::Vec3:
+            return member == "x" || member == "y" || member == "z";
+        case GlslType::Color:
+            return member == "r" || member == "g" || member == "b" || member == "a";
+        default:
+            return false;
+    }
+}
+
+// A field of a struct value, or a component of a vector or color.
+TranslatedExpr translate_value_member(const TranslatedExpr& object, const std::string& member, const GlslCtx& ctx) {
+    if (object.type == GlslType::Struct) {
+        const auto* field = find_field(object.structure->fields, member);
+        if (field == nullptr) {
+            throw std::runtime_error("drawing-rule GLSL codegen: unknown struct field '." + member + "'");
         }
+        auto shape = shape_of(field->type, *ctx.program);
+        shape.text = object.text + "." + field_name(member);
+        return shape;
+    }
+    if (!is_component_access(object.type, member)) {
+        throw std::runtime_error("drawing-rule GLSL codegen: unsupported member access '." + member + "'");
+    }
+    return {.text = object.text + "." + member, .type = GlslType::Float};
+}
+
+const ExprNode* const_initializer(const std::optional<SymbolId>& constant, const GlslCtx& ctx) {
+    return constant.has_value() ? EnttCodegenUtils::find_const_initializer(*ctx.program->ast, *constant) : nullptr;
+}
+
+TranslatedExpr translate_member(const MemberExpr& member, const ExprNode& node, GlslCtx& ctx) {
+    if (const auto* initializer = const_initializer(member.resolved_const_id, ctx)) {
+        return translate_expr(*initializer, ctx);
     }
     if (member.resolved_enum_member.has_value()) {
-        return {.text = std::to_string(member.resolved_enum_member->index) + ".0", .type = GlslType::Float};
+        return {.text = std::to_string(member.resolved_enum_member->index), .type = GlslType::Int};
     }
     if (const auto* access = std::get_if<TraitAccessExpr>(&member.object->expr)) {
         return translate_trait_read(node, *access, member.member, ctx);
     }
     const auto* owner     = std::get_if<IdentExpr>(&member.object->expr);
-    const bool stage_name = owner != nullptr && !owner->resolved_const_id.has_value() &&
-                            !ctx.param_substitutions.contains(owner->name);
-    if (stage_name && owner->name == ctx.alias) {
+    const bool stage_name = owner != nullptr && !owner->resolved_const_id.has_value() && !ctx.locals.contains(owner->name);
+    if (owner != nullptr && !ctx.alias.empty() && owner->name == ctx.alias) {
         return translate_builtin_field_access(member.member, ctx);
     }
     if (const auto trait_it = stage_name ? ctx.filter_traits.find(owner->name) : ctx.filter_traits.end();
         trait_it != ctx.filter_traits.end()) {
         return translate_row_field(trait_it->second, owner->name, member.member, ctx);
     }
-    if (stage_name && !ctx.locals.contains(owner->name)) {
+    if (stage_name) {
         throw std::runtime_error("drawing-rule GLSL codegen: unresolved member access '" + owner->name + "." +
                                  member.member + "'");
     }
-    // A component of a value, such as a channel of a color.
-    const auto object = translate_expr(*member.object, ctx);
-    if (!is_component_access(object.type, member.member)) {
-        throw std::runtime_error("drawing-rule GLSL codegen: unsupported member access '." + member.member + "'");
+    return translate_value_member(translate_expr(*member.object, ctx), member.member, ctx);
+}
+
+// ── Calls ──────────────────────────────────────────────────────────────────
+
+const TranslatedExpr kFloat{.type = GlslType::Float};
+const TranslatedExpr kInt{.type = GlslType::Int};
+const TranslatedExpr kVec2{.type = GlslType::Vec2};
+const TranslatedExpr kVec3{.type = GlslType::Vec3};
+
+// A `std.math` extern: a GLSL built-in where it gives the CPU's result, else a helper that does.
+TranslatedExpr translate_math_extern(std::string_view name, const std::vector<TranslatedExpr>& args, GlslCtx& ctx) {
+    std::vector<GlslType> floats(args.size(), GlslType::Float);
+    const auto call = [&](std::string_view function) {
+        return std::string(function) + "(" + joined_args(args, floats) + ")";
+    };
+    if (name == "abs" || name == "radians" || name == "degrees") {
+        return {.text = call(name), .type = GlslType::Float};
     }
-    return {.text = object.text + "." + member.member, .type = GlslType::Float};
+    if (name == "floor" || name == "ceil") {
+        return use_helper("to_int", "cactus_to_int(" + call(name) + ")", kInt, ctx);
+    }
+    if (name == "round") {
+        return use_helper("round", call("cactus_round"), kInt, ctx);
+    }
+    return use_helper(name, call("cactus_" + std::string(name)), kFloat, ctx);
+}
+
+TranslatedExpr translate_vector_extern(std::string_view name,
+                                       bool vec3,
+                                       const std::vector<TranslatedExpr>& args,
+                                       GlslCtx& ctx) {
+    const auto vector = vec3 ? GlslType::Vec3 : GlslType::Vec2;
+    std::vector<GlslType> targets;
+    targets.reserve(args.size());
+    for (const auto& arg : args) {
+        targets.push_back(arg.type == GlslType::Int ? GlslType::Float : arg.type);
+    }
+    const auto call = [&](std::string_view function) {
+        return std::string(function) + "(" + joined_args(args, targets) + ")";
+    };
+    if (name == "length" || name == "dot" || name == "distance") {
+        return {.text = call(name), .type = GlslType::Float};
+    }
+    if (name == "cross" || name == "reflect") {
+        return {.text = call(name), .type = vector};
+    }
+    if (name == "angle") {
+        return use_helper("atan2", "cactus_atan2(" + args[0].text + ".y, " + args[0].text + ".x)", kFloat, ctx);
+    }
+    if (name != "lerp" && name != "clamp" && name != "normalize" && name != "rotate") {
+        throw std::runtime_error("drawing-rule GLSL codegen: no translation for vector function '" + std::string(name) +
+                                 "'");
+    }
+    // lerp and clamp are GLSL overloads of the scalar helpers; normalize and rotate name their size.
+    const std::string suffix   = vec3 ? "3" : "2";
+    const bool overloaded      = name == "lerp" || name == "clamp";
+    const std::string function = "cactus_" + std::string(name) + (overloaded ? "" : suffix);
+    return use_helper(std::string(name) + suffix, call(function), vec3 ? kVec3 : kVec2, ctx);
+}
+
+TranslatedExpr translate_struct_construction(const CallExpr& call, const SymbolId& symbol, GlslCtx& ctx) {
+    const auto* structure = EnttCodegenUtils::find_struct(*ctx.program, symbol);
+    if (structure == nullptr) {
+        throw std::runtime_error("drawing-rule GLSL codegen: unknown struct '" + make_canonical_id(symbol) + "'");
+    }
+    ensure_struct(*structure, ctx);
+    std::vector<std::string> args;
+    for (std::size_t index = 0; index < structure->fields.size(); ++index) {
+        const auto& field = structure->fields[index];
+        auto position     = index;
+        if (call.has_named_args()) {
+            const auto named = std::ranges::find(call.arg_names, field.name);
+            if (named == call.arg_names.end()) {
+                throw std::runtime_error("drawing-rule GLSL codegen: struct field '" + field.name + "' has no value");
+            }
+            position = static_cast<std::size_t>(named - call.arg_names.begin());
+        }
+        args.push_back(converted(translate_expr(*call.args.at(position), ctx), shape_of(field.type, *ctx.program).type));
+    }
+    TranslatedExpr result{.type = GlslType::Struct, .structure = structure};
+    result.text = glsl_type_name(result) + "(" + joined(args, ", ") + ")";
+    return result;
+}
+
+TranslatedExpr translate_func_call(const CallExpr& call, const SymbolId& callee, GlslCtx& ctx) {
+    const auto* func = EnttCodegenUtils::find_func(*ctx.program, callee);
+    if (func == nullptr) {
+        throw_no_translation(callee);
+    }
+    const auto name = glsl_identifier(make_canonical_id(callee));
+    ensure_function(name, callee, *func, ctx);
+    std::vector<GlslType> targets;
+    targets.reserve(func->params.size());
+    for (const auto& param : func->params) {
+        targets.push_back(shape_of(param.type, *ctx.program).type);
+    }
+    auto result = return_shape(*func, *ctx.program);
+    result.text = name + "(" + joined_args(translate_args(call.args, ctx), targets) + ")";
+    return result;
+}
+
+// `vec2(...)`, `vec3(...)` or `color(...)`.
+std::optional<TranslatedExpr> constructor_shape(const std::string& name) {
+    if (name == "vec2") {
+        return TranslatedExpr{.text = "vec2", .type = GlslType::Vec2};
+    }
+    if (name == "vec3") {
+        return TranslatedExpr{.text = "vec3", .type = GlslType::Vec3};
+    }
+    if (name == "color") {
+        return TranslatedExpr{.text = "vec4", .type = GlslType::Color};
+    }
+    return std::nullopt;
 }
 
 TranslatedExpr translate_call(const CallExpr& call, GlslCtx& ctx) {
-    if (const auto* callee_ident = std::get_if<IdentExpr>(&call.callee->expr)) {
-        if (callee_ident->name == "vec2") {
-            return {.text = "vec2(" + translate_call_args(call.args, ctx) + ")", .type = GlslType::Vec2};
-        }
-        if (callee_ident->name == "vec3") {
-            return {.text = "vec3(" + translate_call_args(call.args, ctx) + ")", .type = GlslType::Vec3};
-        }
-        if (callee_ident->name == "color") {
-            return {.text = "vec4(" + translate_call_args(call.args, ctx) + ")", .type = GlslType::Color};
-        }
+    const auto* callee_ident = std::get_if<IdentExpr>(&call.callee->expr);
+    if (auto shape = callee_ident != nullptr ? constructor_shape(callee_ident->name) : std::nullopt) {
+        const auto args = translate_args(call.args, ctx);
+        shape->text += "(" + joined_args(args, std::vector(args.size(), GlslType::Float)) + ")";
+        return *shape;
+    }
+    if (call.resolved_struct_id.has_value()) {
+        return translate_struct_construction(call, *call.resolved_struct_id, ctx);
     }
     if (!call.resolved_callee_id.has_value()) {
         throw std::runtime_error("drawing-rule GLSL codegen: unresolved call in stage handler body");
     }
     const auto& callee = *call.resolved_callee_id;
     if (is_portable_glsl_intrinsic(callee)) {
-        // These std.math functions share name and signature with GLSL built-ins.
-        return {.text = callee.local_name + "(" + translate_call_args(call.args, ctx) + ")", .type = GlslType::Float};
+        const auto args    = translate_args(call.args, ctx);
+        const auto& module = callee.module.name;
+        return module == "std.math" ? translate_math_extern(callee.local_name, args, ctx)
+                                    : translate_vector_extern(callee.local_name, module == "std.math.vec3", args, ctx);
     }
-    const auto* func = find_func_decl(*ctx.program->ast, callee);
-    if (func == nullptr) {
-        throw std::runtime_error("drawing-rule GLSL codegen: '" + make_canonical_id(callee) +
-                                 "' has no registered portable GLSL translation");
-    }
-    return inline_func_call(*func, call.args, ctx);
+    return translate_func_call(call, callee, ctx);
 }
+
+// ── Operators ──────────────────────────────────────────────────────────────
 
 TranslatedExpr translate_literal(const LiteralExpr& literal) {
     switch (literal.kind) {
         case LiteralExpr::Kind::Int:
-            return {.text = literal.value + ".0", .type = GlslType::Float};
+            return {.text = literal.value, .type = GlslType::Int};
         case LiteralExpr::Kind::Float:
             return {.text = literal.value, .type = GlslType::Float};
         case LiteralExpr::Kind::HexColor:
@@ -373,65 +561,98 @@ TranslatedExpr translate_literal(const LiteralExpr& literal) {
 }
 
 TranslatedExpr translate_ident(const IdentExpr& ident, GlslCtx& ctx) {
-    if (const auto param_it = ctx.param_substitutions.find(ident.name); param_it != ctx.param_substitutions.end()) {
-        return param_it->second;
-    }
     if (const auto local_it = ctx.locals.find(ident.name); local_it != ctx.locals.end()) {
-        return {.text = local_reference(ident.name, ctx), .type = local_it->second};
+        return local_it->second;
     }
-    if (ident.resolved_const_id.has_value()) {
-        if (const auto* initializer = EnttCodegenUtils::find_const_initializer(*ctx.program->ast, *ident.resolved_const_id)) {
-            return translate_expr(*initializer, ctx);
-        }
+    if (const auto* initializer = const_initializer(ident.resolved_const_id, ctx)) {
+        return translate_expr(*initializer, ctx);
     }
     throw std::runtime_error("drawing-rule GLSL codegen: unresolved identifier '" + ident.name + "'");
+}
+
+// An `int` operand of a float-based operation converts to `float` first, as on the CPU.
+void unify_numeric(TranslatedExpr& left, TranslatedExpr& right) {
+    if (left.type == GlslType::Int && is_float_based(right.type)) {
+        left = {.text = converted(left, GlslType::Float), .type = GlslType::Float};
+    } else if (right.type == GlslType::Int && is_float_based(left.type)) {
+        right = {.text = converted(right, GlslType::Float), .type = GlslType::Float};
+    }
+}
+
+const char* int_division_helper(ArithmeticOperands operands, std::string_view op) {
+    if (operands != ArithmeticOperands::Int || op.empty() || (op.front() != '/' && op.front() != '%')) {
+        return nullptr;
+    }
+    return op.front() == '/' ? "cactus_div" : "cactus_mod";
 }
 
 TranslatedExpr translate_binary(const BinaryExpr& binary, GlslCtx& ctx) {
     auto left  = translate_expr(*binary.left, ctx);
     auto right = translate_expr(*binary.right, ctx);
-    if (const char* helper = int_division_helper(binary.operands, binary.op, ctx)) {
-        return {.text = std::string(helper) + "(" + left.text + ", " + right.text + ")", .type = GlslType::Float};
+    if (const char* helper = int_division_helper(binary.operands, binary.op)) {
+        return use_helper(helper, std::string(helper) + "(" + left.text + ", " + right.text + ")", kInt, ctx);
     }
-    const bool is_comparison = binary.op == "<" || binary.op == ">" || binary.op == "<=" || binary.op == ">=" ||
-                               binary.op == "==" || binary.op == "!=";
     if (binary.op == "and" || binary.op == "or") {
         return {.text = "(" + left.text + (binary.op == "and" ? " && " : " || ") + right.text + ")",
                 .type = GlslType::Bool};
     }
+    unify_numeric(left, right);
+    const bool is_comparison = binary.op == "<" || binary.op == ">" || binary.op == "<=" || binary.op == ">=" ||
+                               binary.op == "==" || binary.op == "!=";
     if (left.type != right.type && is_comparison) {
-        throw std::runtime_error("drawing-rule GLSL codegen: cannot use a non-numeric value where a float is required");
+        throw std::runtime_error("drawing-rule GLSL codegen: cannot compare values of different types");
     }
+    auto result_type = is_comparison ? GlslType::Bool : left.type;
     if (left.type != right.type) {
         const auto result_kind = lookup_vector_binary_op_result(
             glsl_type_to_type_kind(left.type), binary.op, glsl_type_to_type_kind(right.type));
         if (!result_kind.has_value()) {
-            throw std::runtime_error("drawing-rule GLSL codegen: no operator '" + binary.op + "' for operand types '" +
-                                     std::string(glsl_type_name(left.type)) + "' and '" +
-                                     std::string(glsl_type_name(right.type)) + "'");
+            throw std::runtime_error("drawing-rule GLSL codegen: no operator '" + binary.op + "' for these operand types");
         }
-        return {.text = "(" + left.text + " " + binary.op + " " + right.text + ")",
-                .type = type_kind_to_glsl_type(*result_kind)};
+        result_type = type_kind_to_glsl_type(*result_kind);
     }
-    return {.text = "(" + left.text + " " + binary.op + " " + right.text + ")",
-            .type = is_comparison ? GlslType::Bool : left.type};
+    return {.text = "(" + left.text + " " + binary.op + " " + right.text + ")", .type = result_type};
 }
 
-// Stage bodies are pure, so the chain may repeat the subject.
+// Two branches of one value: an `int` branch converts when the other is a `float`.
+GlslType branch_type(const std::vector<TranslatedExpr>& branches) {
+    const bool any_float = std::ranges::any_of(branches, [](const auto& b) { return b.type == GlslType::Float; });
+    return any_float ? GlslType::Float : branches.front().type;
+}
+
+TranslatedExpr translate_if_expr(const IfExpr& node, GlslCtx& ctx) {
+    const auto condition = translate_expr(*node.condition, ctx);
+    const std::vector branches{translate_expr(*node.then_expr, ctx), translate_expr(*node.else_expr, ctx)};
+    auto result = branches.front();
+    result.type = branch_type(branches);
+    result.text = "(" + condition.text + " ? " + converted(branches[0], result.type) + " : " +
+                  converted(branches[1], result.type) + ")";
+    return result;
+}
+
+// Stage values are pure, so the chain may repeat the subject.
 TranslatedExpr translate_match_expr(const MatchExpr& match_expr, GlslCtx& ctx) {
     const auto subject = translate_expr(*match_expr.subject, ctx).text;
-    std::vector<std::pair<std::string, std::string>> tested_arms;
-    for (std::size_t index = 0; index + 1 < match_expr.arms.size(); ++index) {
-        const auto& arm = match_expr.arms[index];
-        tested_arms.emplace_back(translate_expr(*arm.pattern, ctx).text, translate_expr(*arm.body, ctx).text);
+    std::vector<TranslatedExpr> bodies;
+    std::vector<std::string> patterns;
+    for (const auto& arm : match_expr.arms) {
+        bodies.push_back(translate_expr(*arm.body, ctx));
+        patterns.push_back(is_wildcard_pattern(*arm.pattern) ? "" : translate_expr(*arm.pattern, ctx).text);
     }
-    const auto last = translate_expr(*match_expr.arms.back().body, ctx);
-    return {.text = EnttCodegenUtils::match_ternary_chain(subject, tested_arms, last.text, false), .type = last.type};
+    auto result = bodies.back();
+    result.type = branch_type(bodies);
+    std::vector<std::pair<std::string, std::string>> tested_arms;
+    for (std::size_t index = 0; index + 1 < bodies.size(); ++index) {
+        tested_arms.emplace_back(patterns[index], converted(bodies[index], result.type));
+    }
+    result.text = EnttCodegenUtils::match_ternary_chain(subject, tested_arms, converted(bodies.back(), result.type), false);
+    return result;
 }
 
 TranslatedExpr translate_unary(const UnaryExpr& unary, GlslCtx& ctx) {
-    const auto operand = translate_expr(*unary.operand, ctx);
-    return {.text = "(" + std::string(unary.op == "not" ? "!" : unary.op) + operand.text + ")", .type = operand.type};
+    auto operand = translate_expr(*unary.operand, ctx);
+    operand.text = "(" + std::string(unary.op == "not" ? "!" : unary.op) + operand.text + ")";
+    return operand;
 }
 
 TranslatedExpr translate_expr_node(const ExprNode& expr, GlslCtx& ctx) {
@@ -451,11 +672,7 @@ TranslatedExpr translate_expr_node(const ExprNode& expr, GlslCtx& ctx) {
             } else if constexpr (std::is_same_v<E, CallExpr>) {
                 return translate_call(node, ctx);
             } else if constexpr (std::is_same_v<E, IfExpr>) {
-                const auto condition = translate_expr(*node.condition, ctx);
-                const auto chosen    = translate_expr(*node.then_expr, ctx);
-                const auto otherwise = translate_expr(*node.else_expr, ctx);
-                return {.text = "(" + condition.text + " ? " + chosen.text + " : " + otherwise.text + ")",
-                        .type = chosen.type};
+                return translate_if_expr(node, ctx);
             } else if constexpr (std::is_same_v<E, MatchExpr>) {
                 return translate_match_expr(node, ctx);
             } else {
@@ -477,10 +694,15 @@ TranslatedExpr translate_expr(const ExprNode& expr, GlslCtx& ctx) {
     }
 }
 
-std::string translate_stmts(const std::vector<std::unique_ptr<StmtNode>>& body, GlslCtx& ctx, int indent);
+// ── Statements ─────────────────────────────────────────────────────────────
+
+std::string pad_of(int indent) {
+    std::string pad(static_cast<std::size_t>(indent) * 4, ' ');
+    return pad;
+}
 
 std::string translate_if(const IfStmt& if_stmt, GlslCtx& ctx, int indent) {
-    const std::string pad(static_cast<std::size_t>(indent) * 4, ' ');
+    const auto pad = pad_of(indent);
     std::ostringstream out;
     out << pad << "if (" << translate_expr(*if_stmt.condition, ctx).text << ") {\n";
     out << translate_stmts(if_stmt.then_body, ctx, indent + 1);
@@ -500,12 +722,12 @@ std::string translate_if(const IfStmt& if_stmt, GlslCtx& ctx, int indent) {
 
 // Semantic analysis guarantees exhaustiveness, so the last arm is a plain `else`.
 std::string translate_value_match(const MatchStmt& match_stmt, GlslCtx& ctx, int indent) {
-    const std::string pad(static_cast<std::size_t>(indent) * 4, ' ');
+    const auto pad     = pad_of(indent);
     const auto subject = translate_expr(*match_stmt.subject, ctx);
     const auto name    = "match_subject_" + std::to_string(match_stmt.location.line) + "_" +
                       std::to_string(match_stmt.location.column);
     std::ostringstream out;
-    out << pad << glsl_type_name(subject.type) << " " << name << " = " << subject.text << ";\n";
+    out << pad << glsl_type_name(subject) << " " << name << " = " << subject.text << ";\n";
     for (std::size_t index = 0; index < match_stmt.arms.size(); ++index) {
         const auto& arm = match_stmt.arms[index];
         const bool last = index + 1 == match_stmt.arms.size() || arm.is_wildcard();
@@ -524,39 +746,104 @@ std::string translate_value_match(const MatchStmt& match_stmt, GlslCtx& ctx, int
     return out.str();
 }
 
-std::string translate_stmts(const std::vector<std::unique_ptr<StmtNode>>& body, GlslCtx& ctx, int indent) {
-    const std::string pad(static_cast<std::size_t>(indent) * 4, ' ');
-    std::ostringstream out;
-    for (const auto& stmt : body) {
-        if (const auto* let_stmt = std::get_if<LetStmt>(&stmt->stmt)) {
-            const auto value           = translate_expr(*let_stmt->value, ctx);
-            ctx.locals[let_stmt->name] = value.type;
-            ctx.let_names.insert(let_stmt->name);
-            out << pad << glsl_type_name(value.type) << " " << local_reference(let_stmt->name, ctx) << " = "
-                << value.text << ";\n";
-        } else if (const auto* assign = std::get_if<VarAssign>(&stmt->stmt)) {
-            if (assign->target != nullptr) {
-                throw CodegenError(stmt->location, "drawing-rule GLSL codegen: trait access in stage handler body");
-            }
-            const auto value         = translate_expr(*assign->value, ctx);
-            const std::string target = assign->name == ctx.alias && assign->path.size() == 1
-                                           ? assign->path.front()
-                                           : local_reference(assign->name, ctx);
-            if (const char* helper = int_division_helper(assign->operands, assign->op, ctx)) {
-                out << pad << target << " = " << helper << "(" << target << ", " << value.text << ");\n";
-            } else {
-                out << pad << target << " " << assign->op << " " << value.text << ";\n";
-            }
-        } else if (const auto* if_stmt = std::get_if<IfStmt>(&stmt->stmt)) {
-            out << translate_if(*if_stmt, ctx, indent);
-        } else if (const auto* match_stmt = std::get_if<MatchStmt>(&stmt->stmt);
-                   match_stmt != nullptr && match_stmt->kind == MatchKind::Value) {
-            out << translate_value_match(*match_stmt, ctx, indent);
-        } else {
-            throw CodegenError(stmt->location, "drawing-rule GLSL codegen: unsupported statement in stage handler body");
-        }
+// `for i in range(a, b)` or `range(a, b, step)`: the bounds are constants, so the trip count is fixed.
+std::string translate_range_loop(const ForeachStmt& loop, GlslCtx& ctx, int indent) {
+    const auto* range = std::get_if<CallExpr>(&loop.iterable->expr);
+    if (range == nullptr || range->args.size() < 2) {
+        throw CodegenError(loop.location, "drawing-rule GLSL codegen: a stage loops only over `range(...)`");
     }
-    return out.str();
+    const auto begin = translate_expr(*range->args[0], ctx).text;
+    const auto end   = translate_expr(*range->args[1], ctx).text;
+    const auto var   = local_name(loop.var_name);
+    std::string header;
+    if (range->args.size() == 2) {
+        header = "for (int " + var + " = " + begin + "; " + var + " < " + end + "; " + var + " += 1)";
+    } else {
+        const auto step = translate_expr(*range->args[2], ctx).text;
+        header = "for (int " + var + " = " + begin + "; (" + step + " > 0) ? (" + var + " < " + end + ") : ((" +
+                 step + " < 0) && (" + var + " > " + end + ")); " + var + " += " + step + ")";
+    }
+    ctx.locals[loop.var_name] = {.text = var, .type = GlslType::Int};
+    const auto pad = pad_of(indent);
+    return pad + header + " {\n" + translate_stmts(loop.body, ctx, indent + 1) + pad + "}\n";
+}
+
+TranslatedExpr assignment_target(const VarAssign& assign, const GlslCtx& ctx) {
+    if (!ctx.alias.empty() && assign.name == ctx.alias && assign.path.size() == 1) {
+        return ctx.locals.at(assign.path.front());
+    }
+    auto target = ctx.locals.at(assign.name);
+    for (const auto& segment : assign.path) {
+        target = translate_value_member(target, segment, ctx);
+    }
+    return target;
+}
+
+std::string translate_assignment(const VarAssign& assign, GlslCtx& ctx, int indent) {
+    if (assign.target != nullptr) {
+        throw std::runtime_error("drawing-rule GLSL codegen: trait access in stage handler body");
+    }
+    const auto value  = translate_expr(*assign.value, ctx);
+    const auto target = assignment_target(assign, ctx);
+    const auto pad    = pad_of(indent);
+    if (const char* helper = int_division_helper(assign.operands, assign.op)) {
+        ctx.library->helpers.emplace(helper);
+        return pad + target.text + " = " + helper + "(" + target.text + ", " + value.text + ");\n";
+    }
+    const auto target_type = target.type == GlslType::Int ? GlslType::Int : GlslType::Float;
+    return pad + target.text + " " + assign.op + " " + converted(value, target_type) + ";\n";
+}
+
+std::string translate_let(const LetStmt& let_stmt, GlslCtx& ctx, int indent) {
+    auto value = translate_expr(*let_stmt.value, ctx);
+    if (let_stmt.type.has_value() && let_stmt.type->name == "float") {
+        value = {.text = converted(value, GlslType::Float), .type = GlslType::Float};
+    }
+    auto local = value;
+    local.text = local_name(let_stmt.name);
+    ctx.locals[let_stmt.name] = local;
+    return pad_of(indent) + glsl_type_name(value) + " " + local.text + " = " + value.text + ";\n";
+}
+
+std::string translate_return(const ReturnStmt& ret, GlslCtx& ctx, int indent) {
+    if (!ret.value.has_value()) {
+        return pad_of(indent) + "return;\n";
+    }
+    const auto value = translate_expr(**ret.value, ctx);
+    return pad_of(indent) + "return " + converted(value, ctx.result.type) + ";\n";
+}
+
+std::string translate_stmts(const std::vector<std::unique_ptr<StmtNode>>& body, GlslCtx& ctx, int indent) {
+    std::string out;
+    for (const auto& stmt : body) {
+        out += std::visit(
+            [&](const auto& node) -> std::string {
+                using S = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<S, LetStmt>) {
+                    return translate_let(node, ctx, indent);
+                } else if constexpr (std::is_same_v<S, VarAssign>) {
+                    return translate_assignment(node, ctx, indent);
+                } else if constexpr (std::is_same_v<S, IfStmt>) {
+                    return translate_if(node, ctx, indent);
+                } else if constexpr (std::is_same_v<S, ReturnStmt>) {
+                    return translate_return(node, ctx, indent);
+                } else if constexpr (std::is_same_v<S, ExprStmt>) {
+                    return pad_of(indent) + translate_expr(*node.expr, ctx).text + ";\n";
+                } else if constexpr (std::is_same_v<S, ForeachStmt>) {
+                    return translate_range_loop(node, ctx, indent);
+                } else if constexpr (std::is_same_v<S, MatchStmt>) {
+                    if (node.kind != MatchKind::Value) {
+                        throw CodegenError(stmt->location, "drawing-rule GLSL codegen: only a value match runs in a shader");
+                    }
+                    return translate_value_match(node, ctx, indent);
+                } else {
+                    throw CodegenError(stmt->location,
+                                       "drawing-rule GLSL codegen: unsupported statement in stage handler body");
+                }
+            },
+            stmt->stmt);
+    }
+    return out;
 }
 
 // ── Shader assembly ─────────────────────────────────────────────────────────
@@ -564,23 +851,28 @@ std::string translate_stmts(const std::vector<std::unique_ptr<StmtNode>>& body, 
 void declare_uniforms(std::ostringstream& out, const GlslCtx& ctx) {
     for (const auto& name : ctx.used_uniforms) {
         const auto found = std::ranges::find(*ctx.uniforms, name, &StageUniform::glsl_name);
-        out << "uniform " << glsl_type_name(found->type) << " " << name << ";\n";
+        out << "uniform " << glsl_type_name(TranslatedExpr{.type = found->type}) << " " << name << ";\n";
     }
 }
 
-void seed_builtin_locals(GlslCtx& ctx) {
-    const auto& inputs  = ctx.is_vertex ? drawing_vertex_input_fields() : drawing_fragment_input_fields();
-    const auto& outputs = ctx.is_vertex ? drawing_vertex_output_fields() : drawing_fragment_output_fields();
+void seed_builtin_locals(GlslCtx& ctx, bool vertex) {
+    const auto& inputs  = vertex ? drawing_vertex_input_fields() : drawing_fragment_input_fields();
+    const auto& outputs = vertex ? drawing_vertex_output_fields() : drawing_fragment_output_fields();
     for (const auto* fields : {&inputs, &outputs}) {
         for (const auto& field : *fields) {
-            ctx.locals[field.name] = glsl_type_from(field.type);
+            ctx.locals[field.name] = {.text = field.name, .type = type_kind_to_glsl_type(field.type.kind)};
         }
     }
 }
 
+// Helpers, then structs, then functions: each only uses what comes before it.
+void emit_library(std::ostringstream& out, const ShaderLibrary& library) {
+    out << glsl_helper_definitions(library.helpers) << library.structs << library.functions;
+}
+
 std::string build_vertex_shader(const EventHandlerNode& handler, bool world, GlslCtx& ctx) {
-    seed_builtin_locals(ctx);
-    // The body is translated first: it discovers the uniforms the header declares.
+    seed_builtin_locals(ctx, true);
+    // The body is translated first: it discovers the uniforms and functions the header declares.
     const auto body = translate_stmts(handler.body, ctx, 1);
     std::ostringstream out;
     out << "#version 330\n\n";
@@ -590,14 +882,12 @@ std::string build_vertex_shader(const EventHandlerNode& handler, bool world, Gls
     declare_uniforms(out, ctx);
     out << "\nout vec2 v_uv;\n";
     out << "out vec4 v_tint;\n\n";
-    if (ctx.uses_int_division) {
-        out << kGlslIntDivision;
-    }
+    emit_library(out, *ctx.library);
     out << "void main()\n{\n";
     // corner and uv come in as vertex attributes: rlgl batches draws, so gl_VertexID is not 0..5 per quad.
     out << "    vec2 corner = vertexPosition.xy;\n";
     out << "    vec2 uv = vertexTexCoord;\n";
-    out << "    float vertex_index = float(gl_VertexID);\n";
+    out << "    int vertex_index = gl_VertexID;\n";
     out << "    vec2 world_position = vec2(0.0, 0.0);\n";
     out << "    vec2 screen_position = vec2(0.0, 0.0);\n";
     out << "    vec2 uv_out = uv;\n";
@@ -611,7 +901,7 @@ std::string build_vertex_shader(const EventHandlerNode& handler, bool world, Gls
 }
 
 std::string build_fragment_shader(const EventHandlerNode& handler, GlslCtx& ctx) {
-    seed_builtin_locals(ctx);
+    seed_builtin_locals(ctx, false);
     const auto body = translate_stmts(handler.body, ctx, 1);
     std::ostringstream out;
     out << "#version 330\n\n";
@@ -619,9 +909,7 @@ std::string build_fragment_shader(const EventHandlerNode& handler, GlslCtx& ctx)
     out << "in vec4 v_tint;\n\n";
     declare_uniforms(out, ctx);
     out << "\nout vec4 finalColor;\n\n";
-    if (ctx.uses_int_division) {
-        out << kGlslIntDivision;
-    }
+    emit_library(out, *ctx.library);
     out << "void main()\n{\n";
     out << "    vec2 uv = v_uv;\n";
     out << "    vec4 tint = v_tint;\n";
@@ -649,16 +937,9 @@ std::unordered_map<std::string, FilterTrait> row_traits(const RuleNode& rule, co
     return traits;
 }
 
-// The C++ value a uniform takes, in the float form a shader holds for `int` and enum values.
+// The C++ value a uniform takes: an enum is uploaded as its index.
 std::string uniform_value(const StageUniform& uniform, const std::string& lowered) {
-    switch (uniform.source) {
-        case TypeKind::Int:
-            return "static_cast<float>(" + lowered + ")";
-        case TypeKind::Enum:
-            return "static_cast<float>(static_cast<int>(" + lowered + "))";
-        default:
-            return lowered;
-    }
+    return uniform.source == TypeKind::Enum ? "static_cast<int>(" + lowered + ")" : lowered;
 }
 
 std::string set_uniform(const StageUniform& uniform, const std::string& lowered, const char* indent) {
@@ -697,18 +978,19 @@ std::string emit_drawing_rule_function(const RuleNode& rule, const DecoratedProg
     }
     std::vector<StageUniform> uniforms;
     const auto filter_traits = row_traits(rule, program);
-    GlslCtx vertex_ctx{.program       = &program,
-                       .alias         = *vertex->alias,
-                       .is_vertex     = true,
+    const auto stage_ctx = [&](const EventHandlerNode& handler, ShaderLibrary& library) {
+        return GlslCtx{.program       = &program,
+                       .library       = &library,
+                       .alias         = *handler.alias,
                        .filter_traits = filter_traits,
                        .uniforms      = &uniforms};
+    };
+    ShaderLibrary vertex_library;
+    auto vertex_ctx                 = stage_ctx(*vertex, vertex_library);
     const bool world                = assigns_stage_output(vertex->body, *vertex->alias, "world_position");
     const std::string vertex_glsl   = build_vertex_shader(*vertex, world, vertex_ctx);
-    GlslCtx fragment_ctx{.program       = &program,
-                         .alias         = *fragment->alias,
-                         .is_vertex     = false,
-                         .filter_traits = filter_traits,
-                         .uniforms      = &uniforms};
+    ShaderLibrary fragment_library;
+    auto fragment_ctx               = stage_ctx(*fragment, fragment_library);
     const std::string fragment_glsl = build_fragment_shader(*fragment, fragment_ctx);
 
     std::ostringstream out;

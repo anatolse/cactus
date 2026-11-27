@@ -3470,11 +3470,7 @@ const ResolvedTrait* find_trait(const DecoratedProgram& program, const std::stri
 }
 
 const ResolvedField* find_field(const ResolvedTrait* trait, const std::string& field_name) {
-    if (trait == nullptr) {
-        return nullptr;
-    }
-    auto it = std::ranges::find_if(trait->fields, [&](const auto& field) { return field.name == field_name; });
-    return it == trait->fields.end() ? nullptr : &*it;
+    return trait == nullptr ? nullptr : cactus::find_field(trait->fields, field_name);
 }
 
 bool trait_field_is(const DecoratedProgram& program,

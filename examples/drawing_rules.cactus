@@ -2,7 +2,8 @@ module drawing_rules
 
 use std.core as core
 use std.color as color
-use std.math as math
+use std.math.vec2 as v2
+use std.noise as noise
 use std.transform.flat as tf
 use std.render.layers as layers
 use std.render.shapes as shapes
@@ -16,12 +17,18 @@ use std.camera.viewport as vp
 #   Beams - a square at each beam's sink, read through the link.
 #   Badge - a corner badge in screen pixels, over everything, placed from the
 #           screen size. A camera move does not move it.
+#   Haze  - a patch of gray noise in screen pixels. A stage may call any pure
+#           function, here std.noise with its loops and integer hash.
 
 const:
     DOT_RADIUS = 40.0
     BEAM_HALF = 20.0
     BADGE_HALF = 50.0
     BADGE_MARGIN = 60.0
+    HAZE_CENTER = vec2(130.0, 470.0)
+    HAZE_HALF = 90.0
+    HAZE_SCALE = 6.0
+    HAZE_SEED = 7
 
 trait Ember:
     var heat: float = 1.0
@@ -30,6 +37,8 @@ trait Beam:
     let sink: tf.WorldTransform
 
 trait Badge
+
+trait Haze
 
 # Drawn after every standard layer.
 pub group overlay:
@@ -87,6 +96,9 @@ entity Ray:
 entity Corner:
     Badge
 
+entity Fog:
+    Haze
+
 entity HotCaption from Caption(at = vec2(205.0, 205.0), words = "##")
 entity CornerCaption from Caption(at = vec2(700.0, 520.0), words = "##")
 
@@ -108,7 +120,7 @@ rule Fire:
     on render.fragment as f:
         let d = f.uv - vec2(0.5, 0.5)
         let glow = color(ember.heat, 0.2, 1.0 - ember.heat, 1.0)
-        f.frag_color = color.with_alpha(glow, 1.0 - math.sqrt(d.x * d.x + d.y * d.y) * 2.0)
+        f.frag_color = color.with_alpha(glow, 1.0 - v2.length(d) * 2.0)
 
 rule Beams:
     each:
@@ -133,3 +145,16 @@ rule Corners:
 
     on render.fragment as f:
         f.frag_color = #FFC000FF
+
+rule Hazes:
+    each:
+        Haze
+    group: layers.sprites
+    after: Beams
+
+    on render.vertex as v:
+        v.screen_position = HAZE_CENTER + v.corner * HAZE_HALF
+
+    on render.fragment as f:
+        let shade = 0.5 + 0.5 * noise.perlin2(f.uv * HAZE_SCALE, HAZE_SEED)
+        f.frag_color = color(shade, shade, shade, 1.0)

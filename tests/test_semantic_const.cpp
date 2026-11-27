@@ -601,10 +601,15 @@ TEST_CASE("Stage constants: a struct constant is rejected naming the constant",
 
 TEST_CASE("Stage constants: a constant built with a non-portable call is rejected",
           "[semantic][const][drawing-rules]") {
-    auto analysis = analyze(stage_program("const:\n"
-                                                "    WAVE = math.sin(1.0)\n"
-                                                "    SCALE = WAVE * 2.0\n",
-                                                "SCALE"),
+    auto analysis = analyze(stage_program("func spread(n: int) float:\n"
+                                          "    var total = 0.0\n"
+                                          "    for i in range(0, n):\n"
+                                          "        total += 1.0\n"
+                                          "    return total\n"
+                                          "const:\n"
+                                          "    WAVE = spread(3)\n"
+                                          "    SCALE = WAVE * 2.0\n",
+                                          "SCALE"),
                             stage_imports());
     INFO(describe(analysis));
     CHECK(analysis.has("vertex-stage handler cannot read constant 'SCALE'"));
@@ -652,8 +657,8 @@ TEST_CASE("Stage funcs: a func with a trait parameter is rejected at the stage c
                                 stage_program("", "size_of(s)"),
                             stage_imports());
     INFO(describe(analysis));
-    CHECK(analysis.has("func 'size_of' cannot run in a vertex-stage handler: it takes a trait or event "
-                       "parameter"));
+    CHECK(analysis.has("func 'size_of' cannot run in a vertex-stage handler: 'game.size_of' takes a trait or "
+                       "event parameter"));
 }
 
 TEST_CASE("Stage funcs: a loop reached through another func is rejected",

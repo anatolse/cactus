@@ -3872,6 +3872,11 @@ void set_drawing_rule_uniform(const Shader& shader, int location, float value) n
     SetShaderValue(shader, location, &value, SHADER_UNIFORM_FLOAT);
 }
 
+void set_drawing_rule_uniform(const Shader& shader, int location, int value) noexcept {
+    count_drawing_uniform();
+    SetShaderValue(shader, location, &value, SHADER_UNIFORM_INT);
+}
+
 void set_drawing_rule_uniform(const Shader& shader, int location, bool value) noexcept {
     count_drawing_uniform();
     const int flag = value ? 1 : 0;

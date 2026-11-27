@@ -397,7 +397,8 @@ void ModuleArtifact::write_funcs(std::ostream& out,
             write_type_info(out, p.type);
             write_field_access(out, p.reads);
         }
-        write_bool(out, func.glsl_inlinable);
+        write_bool(out, func.stage_translatable);
+        write_str(out, func.stage_blocker);
         bool has_ret = func.return_type.has_value();
         write_bool(out, has_ret);
         if (has_ret) {
@@ -1275,8 +1276,9 @@ std::unordered_map<std::string, ResolvedFunc> ModuleArtifact::read_funcs(std::is
             p.reads = read_field_access(in);
             func.params.push_back(std::move(p));
         }
-        func.glsl_inlinable = read_bool(in);
-        bool has_ret        = read_bool(in);
+        func.stage_translatable = read_bool(in);
+        func.stage_blocker      = read_str(in);
+        bool has_ret            = read_bool(in);
         if (has_ret) {
             func.return_type = read_type_info(in);
         }

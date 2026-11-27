@@ -183,6 +183,7 @@ add_library(cactus_frontend STATIC
     src/frontend/ranged_fields.cpp
     src/frontend/required_links.cpp
     src/frontend/single_traits.cpp
+    src/frontend/stage_translation.cpp
     src/frontend/self_command_order.cpp
     src/frontend/state_transitions.cpp
     src/frontend/relations.cpp
@@ -196,6 +197,7 @@ target_link_libraries(cactus_frontend PUBLIC cactus_common)
 
 # ── Backend: C++ EnTT ───────────────────────────────────────────────────────────
 add_library(cactus_backend_cpp_entt STATIC
+    src/backends/cpp-entt/drawing_rule_glsl_helpers.cpp
     src/backends/cpp-entt/accumulation_plan.cpp
     src/backends/cpp-entt/clamped_fields.cpp
     src/backends/cpp-entt/keep_slots.cpp
@@ -675,6 +677,12 @@ target_compile_definitions(example_external_handler_partial_implementations PRIV
 )
 target_compile_definitions(example_external_handler_disallowed_set PRIVATE
     CACTUS_EXTERNAL_HANDLER_DISALLOWED_SET
+)
+
+cactus_add_example(example_turing_machine_generated
+    SOURCE "examples/turing-machine/main.cactus"
+    BACKEND "cpp-entt"
+    OUTPUT "${CACTUS_GENERATED_EXAMPLES_DIR}/turing_machine.generated.cpp"
 )
 
 cactus_add_example(example_blue_square_generated

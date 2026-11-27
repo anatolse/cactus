@@ -332,11 +332,6 @@ std::string format_bound(double value) {
 
 // ── Program facts ───────────────────────────────────────────────────────────
 
-const ResolvedField* find_field(const std::vector<ResolvedField>& fields, std::string_view name) {
-    const auto found = std::ranges::find(fields, name, &ResolvedField::name);
-    return found == fields.end() ? nullptr : &*found;
-}
-
 Kind kind_of(const TypeInfo& type) {
     switch (type.kind) {
         case TypeKind::Float:

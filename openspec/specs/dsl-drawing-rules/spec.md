@@ -133,12 +133,23 @@ A drawing rule SHALL be scheduled as a rule of `core.render`. Its quads SHALL be
 - **THEN** each quad is drawn at its own entity's position
 
 ### Requirement: Stage handler body subset
-A stage handler body SHALL accept `let` and `var` locals, assignment and compound assignment to locals and stage outputs, `if`/`else`, value `match` as a statement and as an expression, the `if` expression, and calls to a `func` or to an extern function that has a portable shader translation. Operators and operand types SHALL be those of an ordinary handler body. Bounded `for`, trait `match` and `return` SHALL be rejected with a diagnostic naming the statement.
+A stage handler body SHALL accept `let` and `var` locals, assignment and compound assignment to locals and stage outputs, `if`/`else`, value `match` as a statement and as an expression, the `if` expression, a bounded `for` over a constant range, and the calls `stage-function-translation` allows. Operators and operand types SHALL be those of an ordinary handler body. Trait `match` and `return` SHALL be rejected with a diagnostic naming the statement.
 
 #### Scenario: Vector arithmetic
 - **WHEN** a vertex handler writes `v.world_position = xf.position + v.corner * half` with `vec2`, `vec2` and `float` operands
 - **THEN** it type-checks exactly as in an ordinary handler
 
 #### Scenario: Forbidden statement
-- **WHEN** a stage handler contains a bounded `for`
+- **WHEN** a stage handler contains a `return`
 - **THEN** the compiler reports an error naming the statement and the stage restriction
+
+### Requirement: Stage loops have constant bounds
+A bounded `for` in a stage handler body SHALL loop over `range(a, b)` where `a` and `b` are constant expressions. Any other `for` SHALL be rejected with a diagnostic saying the loop bound is not constant.
+
+#### Scenario: Constant loop in a stage body
+- **WHEN** a fragment handler sums three samples with `for i in range(0, 3):`
+- **THEN** the program compiles
+
+#### Scenario: Run-time loop bound in a stage body
+- **WHEN** a fragment handler loops over `range(0, particle.count)`
+- **THEN** the compiler reports an error saying the loop bound is not constant

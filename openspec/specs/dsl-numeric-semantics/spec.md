@@ -145,7 +145,7 @@ Integer arithmetic SHALL stay wrapping. A program that needs an integer to stay 
 - **THEN** one order would give 2147483646 and the other 2147483647, which is why the language does not saturate
 
 ### Requirement: Integer semantics hold in stage handlers
-Integer `/` and `%` in a stage handler of a drawing rule SHALL follow the floor-division and division-by-zero rules of this capability, even though GLSL integer division differs.
+Every `int` operation in a stage handler of a drawing rule, and in every function it calls, SHALL give exactly the result it gives in an ordinary handler: wrapping of `+`, `-`, `*` and unary `-`, the floor-division and division-by-zero rules of `/` and `%`, and the float-to-integer conversion rule, even though GLSL integer division and conversion differ.
 
 #### Scenario: Stage handler divides by zero
 - **WHEN** a vertex-stage handler evaluates `i / 0` and `i % 0` on `int` values
@@ -154,3 +154,15 @@ Integer `/` and `%` in a stage handler of a drawing rule SHALL follow the floor-
 #### Scenario: Stage handler floor division
 - **WHEN** a fragment-stage handler evaluates `-7 / 2`
 - **THEN** the result is `-4`
+
+#### Scenario: Stage handler multiplication wraps
+- **WHEN** a fragment-stage handler evaluates `h * 73244475` for an `int` `h` whose product leaves the `int` range
+- **THEN** the result is the low 32 bits of the product, as on the CPU
+
+#### Scenario: Stage handler integer hash
+- **WHEN** the integer hash of `std.noise` is evaluated for the same inputs in a stage and in an ordinary handler
+- **THEN** both give the same `int`
+
+#### Scenario: Stage handler converts NaN
+- **WHEN** a stage handler converts NaN and `3.0e10` to `int`
+- **THEN** the results are `0` and `2147483647`

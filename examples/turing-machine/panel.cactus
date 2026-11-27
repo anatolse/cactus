@@ -20,14 +20,13 @@ pub enum Action:
     Shift
     Cell
     Page
+
+pub enum RowAction:
     Toggle
     Write
     Move
     Previous
     Next
-
-pub func is_row_control(action: Action) bool:
-    return action == Action.Toggle or action == Action.Write or action == Action.Move or action == Action.Previous or action == Action.Next
 
 pub trait Control:
     var target: entity_id
@@ -35,12 +34,22 @@ pub trait Control:
     let action: Action
     let index: int
 
-pub template Button(action: Action, x: float, y: float, width: float = 150.0, index: int = 0, title: string = ""):
-    Control:
-        occupied = false
-        target = Status
-        action = action
-        index = index
+pub trait ProgramRow:
+    let symbol: int
+
+pub trait RowControl:
+    let row: ProgramRow
+    let action: RowAction
+
+template Row(symbol: int):
+    ProgramRow:
+        symbol = symbol
+
+entity ZeroRow from Row(symbol = 0)
+entity OneRow from Row(symbol = 1)
+entity BlankRow from Row(symbol = p.BLANK)
+
+template Widget(x: float, y: float, width: float, title: string = ""):
     ui.Node
     ui.Anchors:
         offset = vec2(x, y)
@@ -54,6 +63,20 @@ pub template Button(action: Action, x: float, y: float, width: float = 150.0, in
         disabled_color = #CAD1D3FF
     pointer.PointerTarget
     pointer.PointerState
+
+pub template Button(action: Action, x: float, y: float, width: float = 150.0, index: int = 0, title: string = ""):
+    use Widget(x = x, y = y, width = width, title = title)
+    Control:
+        occupied = false
+        target = Status
+        action = action
+        index = index
+
+template RowButton(row: ProgramRow, action: RowAction, x: float, y: float, width: float):
+    use Widget(x = x, y = y, width = width)
+    RowControl:
+        row = row
+        action = action
 
 pub template Caption(x: float, y: float, size: int = 18, title: string = ""):
     labels.ScreenLabel:
@@ -88,11 +111,20 @@ rule BuildPanel:
         spawn Button(action = Action.Page, index = 1, title = "State  >", x = 319.0, y = 362.0, width = 125.0)
         for i in range(-4, 5):
             spawn Button(action = Action.Cell, index = i, x = 432.0 + i * 101.0, y = 152.0, width = 96.0)
-        for digit in range(0, 3):
-            let y = 450.0 + digit * 44.0
-            spawn Caption(title = p.glyph(digit), x = 38.0, y = y + 8.0, size = 20)
-            spawn Button(action = Action.Toggle, index = digit, x = 118.0, y = y, width = 112.0)
-            spawn Button(action = Action.Write, index = digit, x = 245.0, y = y, width = 80.0)
-            spawn Button(action = Action.Move, index = digit, x = 343.0, y = y, width = 88.0)
-            spawn Button(action = Action.Previous, index = digit, title = "-", x = 450.0, y = y, width = 42.0)
-            spawn Button(action = Action.Next, index = digit, x = 499.0, y = y, width = 130.0)
+
+rule BuildRows:
+    each: ProgramRow as line
+    after: BuildPanel
+    on load:
+        let y = 450.0 + line.symbol * 44.0
+        spawn Caption(title = p.glyph(line.symbol), x = 38.0, y = y + 8.0, size = 20)
+        spawn RowButton(row = self, action = RowAction.Toggle, x = 118.0, y = y, width = 112.0)
+        spawn RowButton(row = self, action = RowAction.Write, x = 245.0, y = y, width = 80.0)
+        spawn RowButton(row = self, action = RowAction.Move, x = 343.0, y = y, width = 88.0)
+        spawn RowButton(row = self, action = RowAction.Previous, x = 450.0, y = y, width = 42.0)
+        spawn RowButton(row = self, action = RowAction.Next, x = 499.0, y = y, width = 130.0)
+
+rule DropRowControl:
+    each: RowControl
+    on lost RowControl.row:
+        destroy

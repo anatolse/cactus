@@ -65,6 +65,13 @@ template Instruction(value: p.Transition):
 entity Console:
     Machine
 
+relation Shows:
+    from: ui_panel.ProgramRow
+    to: Entry
+
+group rows:
+    phase: tick
+
 rule ClearCells:
     each: Cell
     where: Console[Machine].load_preset >= 0
@@ -187,6 +194,10 @@ rule UnmatchedStep:
         m.missing = m.state_id != p.HALT
         m.running = false
 
+event Edit:
+    entry: entity_id
+    action: ui_panel.RowAction
+
 event Press:
     target: entity_id
     occupied: bool
@@ -201,6 +212,13 @@ rule PressControl:
             occupied = button.occupied
             action = button.action
             index = button.index
+
+rule AddSeedCell:
+    each: ui_panel.Control as slot
+    where: not slot.occupied
+    on pointer.Click:
+        if slot.action == ui_panel.Action.Cell and Console[Machine].editing_seed:
+            spawn Square(at = Console[Machine].start_head + slot.index, initial = 0, current = 0)
 
 func can_step(m: Machine) bool:
     return not m.running and not m.editing_seed
@@ -237,38 +255,32 @@ rule Operate:
                 if not m.running and m.page + index >= 0:
                     m.page += index
             ui_panel.Action.Cell =>
-                if not m.editing_seed:
+                if not m.editing_seed or not Press.occupied:
                     return
-                if Press.occupied:
-                    let item = Press.target
-                    match item:
-                        Cell as c =>
-                            c.seed = (c.seed + 1) % 3
-                            c.symbol = c.seed
-                    return
-                spawn Square(at = m.start_head + index, initial = 0, current = 0)
-            _ =>
-                if m.running:
-                    return
-                if Press.occupied:
-                    let item = Press.target
-                    match item:
-                        Entry as entry =>
-                            match action:
-                                ui_panel.Action.Toggle =>
-                                    destroy item
-                                ui_panel.Action.Write =>
-                                    entry.write_symbol = (entry.write_symbol + 1) % 3
-                                ui_panel.Action.Move =>
-                                    entry.move = -entry.move
-                                ui_panel.Action.Previous =>
-                                    if entry.dest > p.HALT:
-                                        entry.dest -= 1
-                                _ =>
-                                    entry.dest += 1
-                    return
-                if action == ui_panel.Action.Toggle:
-                    spawn Instruction(value = p.row(m.page, index, index, 1, p.HALT))
+                let item = Press.target
+                match item:
+                    Cell as c =>
+                        c.seed = (c.seed + 1) % 3
+                        c.symbol = c.seed
+    on Edit:
+        if m.running:
+            return
+        let item = Edit.entry
+        let action = Edit.action
+        match item:
+            Entry as entry =>
+                match action:
+                    ui_panel.RowAction.Toggle =>
+                        destroy item
+                    ui_panel.RowAction.Write =>
+                        entry.write_symbol = (entry.write_symbol + 1) % 3
+                    ui_panel.RowAction.Move =>
+                        entry.move = -entry.move
+                    ui_panel.RowAction.Previous =>
+                        if entry.dest > p.HALT:
+                            entry.dest -= 1
+                    ui_panel.RowAction.Next =>
+                        entry.dest += 1
 
 rule ClearButtonTargets:
     each: ui_panel.Control as control
@@ -286,20 +298,17 @@ rule LocateTapeCell:
         control.target = cell
         control.occupied = true
 
-rule LocateProgramRow:
+rule ShowRow:
     pairs:
-        slot: ui_panel.Control as control
+        row: ui_panel.ProgramRow as line
         instruction: Entry as r
-    after: LocateTapeCell
-    where: ui_panel.is_row_control(control.action) and r.read_symbol == control.index and r.source == Console[Machine].page
-    limit: 1 per slot
-    on late_tick:
-        control.target = instruction
-        control.occupied = true
+    group: rows
+    where: r.read_symbol == line.symbol and r.source == Console[Machine].page
+    keep Shows(row, instruction)
 
 rule ShowTape:
     each: ui_panel.Control as control, ui.Button as button
-    after: LocateProgramRow
+    after: LocateTapeCell
     where: control.action == ui_panel.Action.Cell
     on late_tick:
         let at_head = control.index == 0
@@ -328,28 +337,46 @@ rule ShowControls:
             ui_panel.Action.Seed =>
                 button.label = if Console[Machine].editing_seed: "Finish seed" else: "Edit seed"
             _ =>
-                if not ui_panel.is_row_control(action):
-                    return
-                let active = control.occupied
-                var row = p.row(0, 0, 0, 1, p.HALT)
-                if active:
-                    let item = control.target
-                    match item:
-                        Entry as entry =>
-                            row = p.row(entry.source, entry.read_symbol, entry.write_symbol, entry.move, entry.dest)
-                let selected = active and Console[Machine].state_id == Console[Machine].page and Console[Machine].read_symbol == control.index
-                button.normal_color = if selected: ui_panel.ACTIVE_COLOR else: ui_panel.IDLE_COLOR
-                match action:
-                    ui_panel.Action.Toggle =>
-                        button.label = if active: "Remove" else: "+ Add"
-                    ui_panel.Action.Write =>
-                        button.label = if active: p.glyph(row.write_symbol) else: "-"
-                    ui_panel.Action.Move =>
-                        button.label = if not active: "-" else if row.move < 0: "Left" else: "Right"
-                    ui_panel.Action.Next =>
-                        button.label = if active: text.format("{}   +", state_name(row.dest)) else: "-"
-                    _ =>
-                        button.label = "-"
+                return
+
+rule ShowShownRow:
+    pairs:
+        button: ui_panel.RowControl as b, ui.Button as face
+        shown: Shows
+    after: ShowControls, PressControl
+    where: shown.from == b.row
+    limit: 1 per button
+    on late_tick:
+        let selected = Console[Machine].state_id == shown.to[Entry].source and Console[Machine].read_symbol == shown.to[Entry].read_symbol
+        face.normal_color = if selected: ui_panel.ACTIVE_COLOR else: ui_panel.IDLE_COLOR
+        match b.action:
+            ui_panel.RowAction.Toggle =>
+                face.label = "Remove"
+            ui_panel.RowAction.Write =>
+                face.label = p.glyph(shown.to[Entry].write_symbol)
+            ui_panel.RowAction.Move =>
+                face.label = if shown.to[Entry].move < 0: "Left" else: "Right"
+            ui_panel.RowAction.Previous =>
+                face.label = "-"
+            ui_panel.RowAction.Next =>
+                let dest = shown.to[Entry].dest
+                face.label = text.format("{}   +", state_name(dest))
+    on pointer.Click:
+        emit Edit to Console:
+            entry = shown.to
+            action = b.action
+
+rule ShowEmptyRow:
+    each: ui_panel.RowControl as b, ui.Button as face
+    after: ShowShownRow, AddSeedCell
+    where: not Shows(b.row, _)
+    on late_tick:
+        face.normal_color = ui_panel.IDLE_COLOR
+        face.label = if b.action == ui_panel.RowAction.Toggle: "+ Add" else: "-"
+    on pointer.Click:
+        let symbol = b.row[ui_panel.ProgramRow].symbol
+        if b.action == ui_panel.RowAction.Toggle and not Console[Machine].running:
+            spawn Instruction(value = p.row(Console[Machine].page, symbol, symbol, 1, p.HALT))
 
 rule ShowStatus:
     each: Machine as m

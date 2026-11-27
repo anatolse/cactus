@@ -888,6 +888,16 @@ main.cactus first-person-arena std.physics.volume.Snap/on std.core.fixed_tick
     named_writes:
     named_requirements:
     iteration_order: free
+main.cactus turing-machine main.AddSeedCell/on std.pointer.Click
+    reads: main.Machine panel.Control
+    read_fields: main.Machine{editing_seed,start_head} panel.Control{action,index,occupied}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads: [main.Console: main.Machine{editing_seed,start_head}]
+    named_writes:
+    named_requirements: main.Console/main.Machine
+    iteration_order: creation
 main.cactus turing-machine main.ClearCells/on std.core.tick
     reads: main.Machine
     read_fields: main.Machine{load_preset}
@@ -918,16 +928,6 @@ main.cactus turing-machine main.LoadProgram/on std.core.tick
     named_writes:
     named_requirements:
     iteration_order: creation
-main.cactus turing-machine main.LocateProgramRow/on std.core.late_tick
-    reads: main.Entry main.Machine panel.Control
-    read_fields: main.Entry{read_symbol,source} main.Machine{page} panel.Control{action,index,occupied,target}
-    write_fields: panel.Control{occupied,target}
-    write_kinds: panel.Control.occupied=2/2 panel.Control.target=0/0
-    bound_reads: 0:panel.Control 1:main.Entry
-    named_reads: [main.Console: main.Machine{page}]
-    named_writes:
-    named_requirements: main.Console/main.Machine
-    iteration_order: free
 main.cactus turing-machine main.LocateTapeCell/on std.core.late_tick
     reads: main.Cell main.Machine panel.Control
     read_fields: main.Cell{address} main.Machine{head} panel.Control{action,index,occupied,target}
@@ -977,6 +977,56 @@ main.cactus turing-machine main.RestoreCells/on std.core.tick
     named_reads: [main.Console: main.Machine{reset_requested}]
     named_writes:
     named_requirements: main.Console/main.Machine
+    iteration_order: free
+main.cactus turing-machine main.ShowEmptyRow/on std.core.late_tick
+    reads: main.Shows panel.RowControl std.ui.Button
+    read_fields: main.Shows{} panel.RowControl{action,row} std.ui.Button{label,normal_color}
+    write_fields: std.ui.Button{label,normal_color}
+    write_kinds: std.ui.Button.label=0/0 std.ui.Button.normal_color=0/0
+    bound_reads:
+    named_reads:
+    named_writes:
+    named_requirements:
+    iteration_order: free
+main.cactus turing-machine main.ShowEmptyRow/on std.pointer.Click
+    reads: main.Machine main.Shows panel.ProgramRow panel.RowControl
+    read_fields: main.Machine{page,running} main.Shows{} panel.ProgramRow{symbol} panel.RowControl{action,row}
+    write_fields:
+    write_kinds:
+    bound_reads:
+    named_reads: [main.Console: main.Machine{page,running}]
+    named_writes:
+    named_requirements: main.Console/main.Machine
+    iteration_order: creation
+main.cactus turing-machine main.ShowRow/on std.core.tick
+    reads: main.Entry main.Machine panel.ProgramRow
+    read_fields: main.Entry{read_symbol,source} main.Machine{page} panel.ProgramRow{symbol}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:panel.ProgramRow 1:main.Entry
+    named_reads: [main.Console: main.Machine{page}]
+    named_writes:
+    named_requirements: main.Console/main.Machine
+    iteration_order: free
+main.cactus turing-machine main.ShowShownRow/on std.core.late_tick
+    reads: main.Entry main.Machine main.Shows panel.RowControl std.ui.Button
+    read_fields: main.Entry{dest,move,read_symbol,source,write_symbol} main.Machine{read_symbol,state_id} main.Shows{} panel.RowControl{action,row} std.ui.Button{label,normal_color}
+    write_fields: std.ui.Button{label,normal_color}
+    write_kinds: std.ui.Button.label=0/0 std.ui.Button.normal_color=0/0
+    bound_reads: 0:panel.RowControl 0:std.ui.Button
+    named_reads: [main.Console: main.Machine{read_symbol,state_id}]
+    named_writes:
+    named_requirements: main.Console/main.Machine
+    iteration_order: free
+main.cactus turing-machine main.ShowShownRow/on std.pointer.Click
+    reads: main.Shows panel.RowControl
+    read_fields: main.Shows{} panel.RowControl{action,row}
+    write_fields:
+    write_kinds:
+    bound_reads: 0:panel.RowControl
+    named_reads:
+    named_writes:
+    named_requirements:
     iteration_order: free
 main.cactus turing-machine main.ShowTape/on std.core.late_tick
     reads: main.Cell main.Machine panel.Control std.ui.Button

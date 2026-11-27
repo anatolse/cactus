@@ -6,12 +6,47 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <map>
 #include <string>
+#include <utility>
 
 namespace {
 using namespace cactus_gen::main;
 constexpr int kBlank = 2;
 constexpr int kHalt = -1;
+constexpr int kRowControls = 15;
+namespace panel = cactus_gen::panel;
+namespace backend = cactus::runtime::entt_backend;
+
+std::string glyph(int symbol) {
+    return symbol == kBlank ? "_" : symbol == 0 ? "0" : "1";
+}
+
+std::string state_name(int state) {
+    return state == kHalt ? "Halt" : "q" + std::to_string(state);
+}
+
+bool same_color(const CactusColor& a, const CactusColor& b) {
+    return cactus_raylib_fake::colors_equal(to_raylib_color(a), to_raylib_color(b));
+}
+
+std::string expected_label(panel::RowAction action, const Entry* entry) {
+    if (entry == nullptr)
+        return action == panel::RowAction::Toggle ? "+ Add" : "-";
+    switch (action) {
+    case panel::RowAction::Toggle:
+        return "Remove";
+    case panel::RowAction::Write:
+        return glyph(entry->write_symbol);
+    case panel::RowAction::Move:
+        return entry->move < 0 ? "Left" : "Right";
+    case panel::RowAction::Previous:
+        return "-";
+    case panel::RowAction::Next:
+        return state_name(entry->dest) + "   +";
+    }
+    return "-";
+}
 
 struct Simulator {
     entt::registry world;
@@ -34,14 +69,65 @@ struct Simulator {
         frame();
         cactus_raylib_fake::set_key_pressed_this_frame(KEY_SPACE, false);
     }
-    void click(float x, float y) {
+    void press(float x, float y) {
         cactus_raylib_fake::set_mouse_position({x, y});
         cactus_raylib_fake::set_mouse_button_pressed_this_frame(0, true);
         frame();
         cactus_raylib_fake::set_mouse_button_pressed_this_frame(0, false);
+    }
+    void release() {
         cactus_raylib_fake::set_mouse_button_released_this_frame(0, true);
         frame();
         cactus_raylib_fake::set_mouse_button_released_this_frame(0, false);
+    }
+    void click(float x, float y) {
+        press(x, y);
+        release();
+    }
+    Entry* find_entry(int source, int symbol, entt::entity* id = nullptr) {
+        for (auto [entity, entry] : world.view<Entry>().each()) {
+            if (entry.source != source || entry.read_symbol != symbol)
+                continue;
+            if (id != nullptr)
+                *id = entity;
+            return &entry;
+        }
+        return nullptr;
+    }
+    void check_keys() {
+        std::map<std::pair<int, int>, int> keys;
+        for (auto [id, entry] : world.view<Entry>().each())
+            CHECK(++keys[{entry.source, entry.read_symbol}] == 1);
+    }
+    // Every row button shows the current table.
+    void check_editor() {
+        check_keys();
+        const auto& shows = backend::relation_store<Shows>(world);
+        const auto& m = machine();
+        int controls = 0;
+        for (auto [id, control, button] : world.view<panel::RowControl, cactus_gen::stdlib::ui::Button>().each()) {
+            ++controls;
+            const int symbol = world.get<panel::ProgramRow>(control.row).symbol;
+            entt::entity shown = entt::null;
+            const Entry* entry = find_entry(m.page, symbol, &shown);
+            INFO("page " << m.page << ", symbol " << symbol << ", action " << static_cast<int>(control.action));
+            CHECK(button.label == expected_label(control.action, entry));
+            CHECK(shows.has_from(control.row) == (entry != nullptr));
+            if (entry != nullptr)
+                CHECK(shows.contains(control.row, shown));
+            const bool selected = entry != nullptr && m.state_id == m.page && m.read_symbol == symbol;
+            CHECK(same_color(button.normal_color, selected ? panel::ACTIVE_COLOR : panel::IDLE_COLOR));
+        }
+        CHECK(controls == kRowControls);
+    }
+    // Keys hold after every frame; rows show the change on the next frame.
+    void checked_click(float x, float y) {
+        press(x, y);
+        check_editor();
+        release();
+        check_keys();
+        frame();
+        check_editor();
     }
     std::string tape(int begin, int end) {
         std::string result(end - begin, '_');
@@ -194,4 +280,85 @@ TEST_CASE("Choosing a preset during playback starts it paused", "[example-behavi
     CHECK_FALSE(sim.machine().running);
     CHECK(sim.machine().steps == 0);
     CHECK(sim.tape(0, 5) == "10110");
+}
+
+TEST_CASE("Rows follow adds, removals, pages and presets frame by frame", "[example-behavior][turing-machine]") {
+    Simulator sim;
+    sim.frame();
+    sim.check_editor();
+    sim.checked_click(700, 78);  // New program.
+    REQUIRE(sim.world.view<Entry>().empty());
+    sim.checked_click(170, 556);  // Add q0 / blank.
+    sim.checked_click(170, 556);  // Remove it.
+    CHECK(sim.world.view<Entry>().empty());
+    sim.checked_click(170, 556);  // Add it again.
+    CHECK(sim.world.view<Entry>().size() == 1);
+    sim.checked_click(275, 556);  // Write zero.
+    sim.checked_click(375, 378);  // State page 1.
+    sim.checked_click(170, 556);  // Add q1 / blank.
+    sim.checked_click(380, 556);  // Move left on q1 only.
+    CHECK(sim.find_entry(1, kBlank)->move == -1);
+    CHECK(sim.find_entry(0, kBlank)->move == 1);
+    sim.checked_click(235, 378);  // Back to page 0, same read symbol.
+    sim.checked_click(375, 378);
+    for (const float x : {103.F, 261.F, 419.F, 577.F}) {
+        sim.checked_click(x, 78);
+        sim.checked_click(375, 378);  // Page 1.
+        sim.checked_click(235, 378);  // Page 0.
+    }
+    sim.step();
+    sim.frame();
+    sim.check_editor();
+}
+
+TEST_CASE("Loading a preset highlights the next instruction", "[example-behavior][turing-machine]") {
+    Simulator sim;
+    sim.checked_click(103, 78);  // Binary +1 reads 1 under the head in q0.
+    int active = 0;
+    for (auto [id, control, button] : sim.world.view<panel::RowControl, cactus_gen::stdlib::ui::Button>().each()) {
+        if (!same_color(button.normal_color, panel::ACTIVE_COLOR))
+            continue;
+        ++active;
+        CHECK(sim.world.get<panel::ProgramRow>(control.row).symbol == 1);
+    }
+    CHECK(active == 5);
+}
+
+TEST_CASE("An edit of a destroyed instruction does nothing", "[example-behavior][turing-machine]") {
+    Simulator sim;
+    entt::entity id = entt::null;
+    REQUIRE(sim.find_entry(0, 1, &id) != nullptr);
+    sim.world.destroy(id);
+    const auto before = sim.world.view<Entry>().size();
+    cactus_headless_test::dispatch_boundary_event(sim.world, EditEvent{.entry = id, .action = panel::RowAction::Write});
+    sim.frame();
+    CHECK(sim.world.view<Entry>().size() == before);
+    CHECK(sim.find_entry(0, 1) == nullptr);
+    sim.check_editor();
+}
+
+TEST_CASE("A Write click on a row whose instruction was destroyed changes nothing", "[example-behavior][turing-machine]") {
+    Simulator sim;
+    entt::entity id = entt::null;
+    REQUIRE(sim.find_entry(0, kBlank, &id) != nullptr);
+    sim.press(275, 556);
+    sim.world.destroy(id);
+    const auto before = sim.world.view<Entry>().size();
+    sim.release();
+    CHECK(sim.world.view<Entry>().size() == before);
+    CHECK(sim.find_entry(0, kBlank) == nullptr);
+    sim.check_editor();
+}
+
+TEST_CASE("Add on an empty row creates one instruction shown next frame", "[example-behavior][turing-machine]") {
+    Simulator sim;
+    sim.checked_click(700, 78);
+    sim.checked_click(170, 512);  // Add q0 / one.
+    REQUIRE(sim.world.view<Entry>().size() == 1);
+    const Entry* entry = sim.find_entry(0, 1);
+    REQUIRE(entry != nullptr);
+    CHECK(entry->write_symbol == 1);
+    CHECK(entry->dest == kHalt);
+    sim.frame();
+    sim.check_editor();
 }

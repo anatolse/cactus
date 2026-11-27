@@ -635,7 +635,7 @@ void emit_external_destroy_capability(std::ostringstream& out,
     } else {
         out << "                cactus::runtime::entt_backend::release_entity(registry, target);\n";
     }
-    out << "            }" << (EnttCodegenUtils::single_traits(program).empty() ? "" : ", target") << ");\n";
+    out << "            }" << (EnttCodegenUtils::round_single_traits(program).empty() ? "" : ", target") << ");\n";
     out << "    }\n";
 }
 
@@ -1435,7 +1435,7 @@ void emit_scheduler_state_struct(std::ostringstream& out,
         out << "template <class Phase>\n";
         out << "struct PhaseDelayedQueue : DelayedQueue<EventOccurrence> {};\n\n";
     }
-    const bool hooked = !EnttCodegenUtils::single_traits(program).empty() || EnttCodegenUtils::has_link_indices(program);
+    const bool hooked = !EnttCodegenUtils::round_single_traits(program).empty() || EnttCodegenUtils::has_link_indices(program);
     if (hooked) {
         out << "void generated_commit_round(entt::registry& registry, const std::vector<StructuralCommand>* "
                "commands);\n\n";
@@ -1534,7 +1534,7 @@ std::string emit_native_spawn_single_guards(const DecoratedProgram& program) {
 
 // Single traits track each round's carriers; a lost link left unresolved faults at the round's end.
 void emit_commit_round_hook(std::ostringstream& out, const DecoratedProgram& program) {
-    const auto singles = EnttCodegenUtils::single_traits(program);
+    const auto singles = EnttCodegenUtils::round_single_traits(program);
     const bool links   = EnttCodegenUtils::has_link_indices(program);
     if (singles.empty() && !links) {
         return;

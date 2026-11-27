@@ -18,6 +18,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 namespace cactus {
@@ -823,6 +824,41 @@ std::vector<const ResolvedTrait*> EnttCodegenUtils::single_traits_of(const Decor
         });
     });
     return singles;
+}
+
+std::vector<const ResolvedTrait*> EnttCodegenUtils::round_single_traits(const DecoratedProgram& program) {
+    std::unordered_set<SymbolId> given;
+    for (const auto& handler : program.execution_graph.handlers) {
+        for (const auto& command : handler.contract.commands) {
+            if (!command.target.has_value()) {
+                continue;
+            }
+            if (command.kind == HandlerCommandKind::Add) {
+                given.insert(*command.target);
+                continue;
+            }
+            if (command.kind != HandlerCommandKind::Spawn) {
+                continue;
+            }
+            for (const auto* trait : single_traits_of(program, *command.target)) {
+                given.insert(*trait->symbol_id);
+            }
+        }
+    }
+    auto singles = single_traits(program);
+    std::erase_if(singles, [&](const ResolvedTrait* trait) { return !given.contains(*trait->symbol_id); });
+    return singles;
+}
+
+void EnttCodegenUtils::require_round_tracked(const DecoratedProgram& program,
+                                             const std::vector<const ResolvedTrait*>& singles) {
+    const auto tracked = round_single_traits(program);
+    for (const auto* trait : singles) {
+        if (!std::ranges::contains(tracked, trait)) {
+            throw std::logic_error("cpp-entt guards single trait '" + make_canonical_id(*trait->symbol_id) +
+                                   "' that no commit round tracks");
+        }
+    }
 }
 
 std::string EnttCodegenUtils::hierarchy_strategy_cpp(const DecoratedProgram& program) {

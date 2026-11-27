@@ -2092,10 +2092,12 @@ static std::string emit_spawn_range_guard(const std::string& precheck,
 static std::string emit_single_guard(const std::vector<const ResolvedTrait*>& singles,
                                      const std::string& receiver,
                                      bool fresh,
-                                     const std::string& ind) {
+                                     const std::string& ind,
+                                     const DecoratedProgram& program) {
     if (singles.empty()) {
         return {};
     }
+    EnttCodegenUtils::require_round_tracked(program, singles);
     std::vector<std::string> admits;
     std::string gives;
     for (const auto* trait : singles) {
@@ -2120,7 +2122,7 @@ static std::string emit_single_spawn_guard(const SymbolId& template_id,
                                            const std::string& receiver,
                                            const std::string& ind,
                                            const DecoratedProgram& program) {
-    return emit_single_guard(EnttCodegenUtils::single_traits_of(program, template_id), receiver, true, ind);
+    return emit_single_guard(EnttCodegenUtils::single_traits_of(program, template_id), receiver, true, ind, program);
 }
 
 // For a change that applies at once: one check per trait that `receiver` may get it.
@@ -3858,7 +3860,8 @@ static std::string emit_deferred_add_write(const AddTraitStmt& s,
                                            const ResolvedTrait* ranged,
                                            const ResolvedTrait* single,
                                            const std::string& target_name,
-                                           const std::string& ind) {
+                                           const std::string& ind,
+                                           const DecoratedProgram& program) {
     const std::string existing_name = gen_temp_name("existing", s.location);
     const std::string value_name    = gen_temp_name("value", s.location);
     std::ostringstream result;
@@ -3882,7 +3885,7 @@ static std::string emit_deferred_add_write(const AddTraitStmt& s,
         result << emit_range_check_statement(*ranged, value.empty() ? cpp + "{}" : value, "return;", ind);
     }
     if (single != nullptr) {
-        result << emit_single_guard({single}, target_name, false, ind);
+        result << emit_single_guard({single}, target_name, false, ind, program);
     }
     result << ind << "::cactus_gen::detail::cancel_projected<" << cpp << ">(" << target_name << ");\n";
     result << ind << emit_trait_write(cpp, variant, target_name, value);
@@ -3980,7 +3983,7 @@ static std::string emit_add_trait_body(const AddTraitStmt& s,
                    << deferred_field_value_name(*parent) << ")) { return; }\n";
         }
         result << emit_deferred_add_write(
-            s, replaces_whole(s, program), cpp, variant, ranged, find_single_trait(program, s.resolved_trait_id, s.trait_name), target_name, ind + "            ");
+            s, replaces_whole(s, program), cpp, variant, ranged, find_single_trait(program, s.resolved_trait_id, s.trait_name), target_name, ind + "            ", program);
         result << retain_line(target_name, ind + "            ");
         result << ind << "        });\n";
         result << ind << "}\n";
@@ -4615,7 +4618,7 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                            target_name + ")) {\n" + ind +
                            "                ::cactus_gen::detail::cactus_destroy_entity_recursive(registry, " +
                            target_name + ");\n" + ind + "            }\n" + ind + "        }" +
-                           (EnttCodegenUtils::single_traits(program).empty() ? "" : ", " + target_name) + ");\n" +
+                           (EnttCodegenUtils::round_single_traits(program).empty() ? "" : ", " + target_name) + ");\n" +
                            ind + "}\n";
                 }
                 if (s.target_expr.has_value()) {

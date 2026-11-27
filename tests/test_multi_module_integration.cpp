@@ -11,6 +11,7 @@
 #include "frontend/symbol_identity.hpp"
 
 #include "backends/cpp-entt/cpp_entt_codegen.hpp"
+#include "backends/cpp-entt/type_utils.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -23,6 +24,7 @@
 #include <regex>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 #include <unordered_set>
 
 using namespace cactus;
@@ -937,6 +939,86 @@ TEST_CASE("integration: the editor's spawn refuses a second carrier of a single 
                         "::cactus_gen::editor_single::Board>(reg, entt::entity{entt::null}, \"Board\")) "
                         "{ return entt::entity{entt::null}; }"));
     CHECK(!code.contains("if (index == 0 &&"));
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("integration: commit rounds skip a single trait no command can give",
+          "[integration][single-traits][commit-round]") {
+    auto build_dir = integration_build_dir() / "untracked_single_round";
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    const std::string source =
+        "module untracked_single\n"
+        "use std.core\n"
+        "\n"
+        "trait Mover:\n"
+        "    var x: float = 0.0\n"
+        "\n"
+        "template Body():\n"
+        "    Mover\n"
+        "\n"
+        "entity Seed:\n"
+        "    Mover\n"
+        "\n"
+        "rule Churn:\n"
+        "    each: Mover\n"
+        "    on tick:\n"
+        "        destroy\n"
+        "        spawn Body()\n";
+
+    ProgramNode merged_ast;
+    auto merged = link_with_stdlib(source, "untracked_single", build_dir, merged_ast);
+    REQUIRE(merged.has_value());
+    REQUIRE(merged->traits.contains("std.core.Pace"));
+
+    const auto code = CppEnttCodegen::generate(*merged);
+
+    CHECK(!code.contains("track_single_round<"));
+    CHECK(!std::regex_search(code, std::regex(R"(\}, cactus_gen_target_\w+\);)")));
+
+    const auto* pace = EnttCodegenUtils::find_trait(*merged, "Pace");
+    REQUIRE(pace != nullptr);
+    CHECK(EnttCodegenUtils::round_single_traits(*merged).empty());
+    CHECK_THROWS_AS(EnttCodegenUtils::require_round_tracked(*merged, {pace}), std::logic_error);
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("integration: commit rounds track only the single trait a spawn gives",
+          "[integration][single-traits][commit-round]") {
+    auto build_dir = integration_build_dir() / "tracked_single_round";
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    const std::string source =
+        "module tracked_single\n"
+        "use std.core\n"
+        "\n"
+        "single trait Terrain\n"
+        "\n"
+        "template Ground():\n"
+        "    Terrain\n"
+        "\n"
+        "entity Land:\n"
+        "    Terrain\n"
+        "\n"
+        "rule Replace:\n"
+        "    each: Terrain\n"
+        "    on tick:\n"
+        "        destroy\n"
+        "        spawn Ground()\n";
+
+    ProgramNode merged_ast;
+    auto merged = link_with_stdlib(source, "tracked_single", build_dir, merged_ast);
+    REQUIRE(merged.has_value());
+
+    const auto code = CppEnttCodegen::generate(*merged);
+
+    CHECK(code.contains("track_single_round<::cactus_gen::tracked_single::Terrain>"));
+    CHECK(!code.contains("track_single_round<::cactus_gen::stdlib::core::Pace>"));
+    CHECK(std::regex_search(code, std::regex(R"(\}, cactus_gen_target_\w+\);)")));
 
     fs::remove_all(build_dir, ec);
 }

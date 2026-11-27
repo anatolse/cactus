@@ -101,6 +101,10 @@ public:
     static std::vector<const ResolvedTrait*> single_traits(const DecoratedProgram& program);
     // The `single` traits a template tree carries on any node, by canonical id.
     static std::vector<const ResolvedTrait*> single_traits_of(const DecoratedProgram& program, const SymbolId& archetype);
+    // The `single` traits some deferred `spawn` or `add` can give; only these need a commit round.
+    static std::vector<const ResolvedTrait*> round_single_traits(const DecoratedProgram& program);
+    // Throws when a commit-round guard would read a trait the round does not track.
+    static void require_round_tracked(const DecoratedProgram& program, const std::vector<const ResolvedTrait*>& singles);
     static std::string trait_cpp_name(const SymbolId& symbol);
     static std::string struct_cpp_name(const SymbolId& symbol);
     static std::string enum_cpp_name(const SymbolId& symbol);

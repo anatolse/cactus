@@ -23,6 +23,10 @@ namespace cactus {
     }
 }
 
+// Each row value is one vertex attribute after the quad's corner and UV; GL 3.3 guarantees 16.
+inline constexpr int kDrawingRowFirstLocation = 2;
+inline constexpr int kDrawingRowValueLimit    = 16 - kDrawingRowFirstLocation;
+
 // Shared by the frontend and the cpp-entt backend so the two never drift.
 struct DrawingRuleBuiltinField {
     std::string name;

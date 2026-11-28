@@ -678,4 +678,60 @@ TEST_CASE("Drawing rules: std.render.passes is gone", "[semantic][drawing-rules]
     const auto linked = link_game("", "use std.render.passes as passes\n");
     CHECK(linked.has_errors());
 }
+
+namespace {
+
+// A drawing rule over a trait with `count` float fields; the vertex stage reads the first
+// `count / 2` of them, the fragment stage the rest, and both read the first.
+std::string wide_rule(int count) {
+    std::string trait = "trait Wide:\n";
+    std::string vertex_sum = "0.0";
+    std::string fragment_sum = "w.f0";
+    for (int i = 0; i < count; ++i) {
+        const auto field = "f" + std::to_string(i);
+        trait += "    let " + field + ": float = 0.0\n";
+        (i < count / 2 ? vertex_sum : fragment_sum) += " + w." + field;
+    }
+    return trait +
+           "entity Strip:\n"
+           "    tf.WorldTransform\n"
+           "    Wide\n"
+           "rule Wides:\n"
+           "    each:\n"
+           "        tf.WorldTransform as xf\n"
+           "        Wide as w\n"
+           "    on render.vertex as v:\n"
+           "        v.world_position = xf.position + v.corner * (" + vertex_sum + ")\n"
+           "    on render.fragment as f:\n"
+           "        f.frag_color = color.with_alpha(f.tint, " + fragment_sum + ")\n";
+}
+
+}  // namespace
+
+TEST_CASE("Drawing rules: a rule reads at most 14 distinct row values", "[semantic][drawing-rules][batching]") {
+    // 13 fields plus xf.position; w.f0 read in both stages counts once.
+    const auto within = link_game(wide_rule(13));
+    CHECK(!within.has_errors());
+
+    const auto over = link_game(wide_rule(14));
+    CHECK(has_error(over, "drawing rule 'Wides' reads 15 distinct row values; a drawing rule reads at most 14"));
+}
+
+TEST_CASE("Drawing rules: named, constant and texture reads are not row values",
+          "[semantic][drawing-rules][batching]") {
+    const auto linked = link_game(wide_rule(13) +
+                                  "entity Sun:\n"
+                                  "    tf.WorldTransform\n"
+                                  "rule Lit:\n"
+                                  "    each:\n"
+                                  "        tf.WorldTransform as xf\n"
+                                  "        Wide as w\n"
+                                  "    after: Wides\n"
+                                  "    on render.vertex as v:\n"
+                                  "        v.world_position = xf.position + Sun[tf.WorldTransform].position + v.corner\n"
+                                  "    on render.fragment as f:\n"
+                                  "        f.frag_color = color.with_alpha(f.tint, w.f0 + w.f1 + w.f2 + w.f3 + w.f4 + "
+                                  "w.f5 + w.f6 + w.f7 + w.f8 + w.f9 + w.f10 + w.f11 + w.f12 + 1.0)\n");
+    CHECK(!linked.has_errors());
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,bugprone-unchecked-optional-access,readability-function-cognitive-complexity)

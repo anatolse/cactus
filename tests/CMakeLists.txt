@@ -1728,6 +1728,19 @@ cactus_add_headless_behavior_test(test_cover_and_light_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_cover_and_light_headless_behavior.cpp
 )
 
+# Real-GL visual test: a batched drawing rule keeps draw order, row values and texture runs.
+cactus_add_visual_test(test_drawing_rule_batching_visual
+    CACTUS_SOURCE examples/stdlib-fixtures/drawing_rule_batching.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_drawing_rule_batching_visual.cpp
+)
+
+cactus_add_headless_behavior_test(test_drawing_rule_batching_headless_behavior
+    CACTUS_SOURCE examples/stdlib-fixtures/drawing_rule_batching.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_drawing_rule_batching_headless_behavior.cpp
+)
+
 # Real-GL visual tests: renderers draw the projected picture, not the simulation's pose and color.
 cactus_add_visual_test(test_drawn_picture_visual
     CACTUS_SOURCE examples/stdlib-fixtures/drawn_picture.cactus
@@ -1937,7 +1950,7 @@ add_dependencies(test_generated_performance_benchmarks test_perf_turing_machine_
 foreach(shape IN ITEMS static_keep union_fold equality_reduce grid_region row_join baseline own_projection
         single_commit plain_commit sweep wide_level reduced_keep required_links keep_chain
         incremental_keep drawing_rule dimension_spread timers clamped sum_encodings color_fade
-        unused_transform_kind effect_folds effect_channels)
+        unused_transform_kind effect_folds effect_channels sprite_rows)
     set(perf_target test_perf_${shape}_benchmark)
     set(perf_codegen_flags)
     if(shape STREQUAL "wide_level")

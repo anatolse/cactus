@@ -72,6 +72,7 @@ template <typename Step>
             .drawing_quads    = after.drawing_quads - before.drawing_quads,
             .drawing_uniforms = after.drawing_uniforms - before.drawing_uniforms,
             .drawing_textures = after.drawing_textures - before.drawing_textures,
+            .drawing_draw_calls = after.drawing_draw_calls - before.drawing_draw_calls,
             .repeat_passes    = after.repeat_passes - before.repeat_passes,
             .cell_rows        = after.cell_rows - before.cell_rows,
             .clamp_merges     = after.clamp_merges - before.clamp_merges,

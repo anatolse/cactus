@@ -33,6 +33,7 @@
 #include <span>
 #include <sstream>
 #include <string_view>
+#include <utility>
 
 namespace cactus {
 
@@ -6297,6 +6298,49 @@ void SemanticAnalyzer::reject_stage_value_types(const RuleNode& rule, const Even
     });
 }
 
+// A row value is a field of the row, or a field read through one of its links; a texture is bound, not sent per row.
+void SemanticAnalyzer::check_drawing_row_value_count(const RuleNode& rule) const {
+    const auto bindings = build_filter_bindings(rule.filter);
+    std::unordered_set<const ExprNode*> link_owners;
+    std::unordered_set<std::string> values;
+    const auto is_row_value = [&](const ExprNode& node) {
+        const auto* member = std::get_if<MemberExpr>(&node.expr);
+        if (member == nullptr || link_owners.contains(&node)) {
+            return false;
+        }
+        const auto* owner  = std::get_if<IdentExpr>(&member->object->expr);
+        const auto* access = std::get_if<TraitAccessExpr>(&member->object->expr);
+        const bool from_row = (owner != nullptr && bindings.contains(owner->name)) ||
+                              (access != nullptr && !access->cell && !access->named_ref().has_value());
+        const auto type = from_row ? stage_read_type(node, bindings) : std::nullopt;
+        return type.has_value() && type->kind != TypeKind::TextureId;
+    };
+    for (const auto& handler : rule.handlers) {
+        if (!is_stage_handler(handler)) {
+            continue;
+        }
+        for_each_statement_expression(handler.body, [&](const ExprNode& top) {
+            visit_expression(top, [&](const ExprNode& node) {
+                if (const auto* access = std::get_if<TraitAccessExpr>(&node.expr)) {
+                    link_owners.insert(access->object.get());
+                }
+            });
+            visit_expression(top, [&](const ExprNode& node) {
+                if (is_row_value(node)) {
+                    values.insert(expression_spelling(node, "?"));
+                }
+            });
+        });
+    }
+    if (std::cmp_greater(values.size(), kDrawingRowValueLimit)) {
+        errors_.error(rule.location,
+                      std::format("drawing rule '{}' reads {} distinct row values; a drawing rule reads at most {}",
+                                  rule.name,
+                                  values.size(),
+                                  kDrawingRowValueLimit));
+    }
+}
+
 void SemanticAnalyzer::validate_stage_outputs(const EventHandlerNode& handler, bool is_vertex) const {
     if (!handler.alias.has_value()) {
         return;
@@ -6417,6 +6461,7 @@ void SemanticAnalyzer::validate_drawing_rules(ProgramNode& program) {
             }
             validate_stage_handler_body(*rule, handler, *handler.resolved_trigger == drawing_stage_trigger(true));
         }
+        check_drawing_row_value_count(*rule);
         if (rule->resolved_rule_id.has_value()) {
             result_.execution_graph.drawing_rules.push_back(
                 DrawingRulePlan{.rule             = *rule->resolved_rule_id,

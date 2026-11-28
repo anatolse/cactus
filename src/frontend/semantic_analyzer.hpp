@@ -1565,6 +1565,7 @@ private:
     void validate_stage_handler_body(const RuleNode& rule, const EventHandlerNode& handler, bool is_vertex) const;
     void validate_stage_outputs(const EventHandlerNode& handler, bool is_vertex) const;
     void reject_stage_value_types(const RuleNode& rule, const EventHandlerNode& handler) const;
+    void check_drawing_row_value_count(const RuleNode& rule) const;
     void reject_fragment_only_calls(const ProgramNode& program) const;
     struct CalledFunc {
         const CallExpr* call = nullptr;

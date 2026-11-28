@@ -1,0 +1,190 @@
+module drawing_rule_batching
+
+use std.core
+use std.render.textures as textures
+
+# One square per case over a #202020 background; each rule draws its rows in
+# as few draw calls as its texture runs allow, with the picture of drawing
+# them one by one. Top row:
+#   0 two covers, depth order differs from creation order
+#   1 a mirrored quad          2 int 16777217, exact      3 int 16777216
+#   4 two lights overlap       5..8 tiles: A, A, B, A (three texture runs)
+# Bottom row: six dots, only the even ones pass where:. One ghost never does.
+
+const:
+    SPACING = 60.0
+    ORIGIN = 40.0
+    TOP = 60.0
+    BOTTOM = 140.0
+    HALF = 20.0
+    NUDGE = 10.0
+    BIG = 16777217
+
+asset Quadrants: texture = "assets/quadrants.png"
+asset Yellow: texture = "assets/yellow.png"
+
+trait Layer:
+    let depth: int = 0
+    let shift: float = 0.0
+    let tint: color = #FFFFFFFF
+
+trait Mirror
+
+trait Code:
+    let index: int = 0
+    let value: int = 0
+
+trait Glow:
+    let shift: float = 0.0
+
+trait Skin:
+    let image: texture_id
+    let index: int = 0
+
+trait Dot:
+    let index: int = 0
+
+trait Ghost:
+    let index: int = 0
+
+template CodeAt(index: int, value: int):
+    Code:
+        index = index
+        value = value
+
+template TileAt(index: int, image: texture_id):
+    Skin:
+        index = index
+        image = image
+
+template DotAt(index: int):
+    Dot:
+        index = index
+
+# Created first, drawn last: its depth is higher.
+entity High:
+    Layer:
+        depth = 2
+        shift = NUDGE
+        tint = #00FF00FF
+entity Low:
+    Layer:
+        depth = 1
+        shift = 0.0 - NUDGE
+        tint = #FF0000FF
+
+entity Mirrored:
+    Mirror
+
+entity Exact from CodeAt(index = 2, value = BIG)
+entity Rounded from CodeAt(index = 3, value = BIG - 1)
+
+entity FirstGlow:
+    Glow
+entity SecondGlow:
+    Glow:
+        shift = HALF
+
+entity TileA from TileAt(index = 5, image = Quadrants)
+entity TileB from TileAt(index = 6, image = Quadrants)
+entity TileC from TileAt(index = 7, image = Yellow)
+entity TileD from TileAt(index = 8, image = Quadrants)
+
+entity Dot0:
+    Dot
+entity Dot1 from DotAt(index = 1)
+entity Dot2 from DotAt(index = 2)
+entity Dot3 from DotAt(index = 3)
+entity Dot4 from DotAt(index = 4)
+entity Dot5 from DotAt(index = 5)
+
+entity Phantom:
+    Ghost
+
+func top(index: int) vec2:
+    return vec2(ORIGIN + index * SPACING, TOP)
+
+func bottom(index: int) vec2:
+    return vec2(ORIGIN + index * SPACING, BOTTOM)
+
+rule Stack:
+    each:
+        Layer as layer
+    order by: layer.depth asc
+
+    on render.vertex as v:
+        v.screen_position = top(0) + vec2(layer.shift, 0.0) + v.corner * HALF
+        v.tint_out = layer.tint
+
+    on render.fragment as f:
+        f.frag_color = f.tint
+
+rule Mirrors:
+    each: Mirror
+    after: Stack
+
+    on render.vertex as v:
+        v.screen_position = top(1) + vec2(0.0 - v.corner.x, v.corner.y) * HALF
+
+    on render.fragment as f:
+        f.frag_color = #0000FFFF
+
+rule Codes:
+    each:
+        Code as code
+    after: Mirrors
+
+    on render.vertex as v:
+        v.screen_position = top(code.index) + v.corner * HALF
+
+    on render.fragment as f:
+        if code.value == BIG:
+            f.frag_color = #00FF00FF
+        else:
+            f.frag_color = #FF0000FF
+
+rule Glows:
+    each:
+        Glow as glow
+    after: Codes
+
+    on render.vertex as v:
+        v.screen_position = top(4) + vec2(glow.shift, 0.0) + v.corner * HALF
+
+    on render.fragment as f:
+        f.light = #404040FF
+
+rule Tiles:
+    each:
+        Skin as skin
+    after: Glows
+
+    on render.vertex as v:
+        v.screen_position = top(skin.index) + v.corner * HALF
+
+    on render.fragment as f:
+        f.frag_color = textures.sample(skin.image, f.uv)
+
+rule Dots:
+    each:
+        Dot as dot
+    after: Tiles
+    where: dot.index % 2 == 0
+
+    on render.vertex as v:
+        v.screen_position = bottom(dot.index) + v.corner * HALF
+
+    on render.fragment as f:
+        f.frag_color = #FFFFFFFF
+
+rule Ghosts:
+    each:
+        Ghost as ghost
+    after: Dots
+    where: ghost.index > 0
+
+    on render.vertex as v:
+        v.screen_position = bottom(7) + v.corner * HALF
+
+    on render.fragment as f:
+        f.frag_color = #FFFFFFFF

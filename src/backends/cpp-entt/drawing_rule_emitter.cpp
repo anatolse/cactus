@@ -20,6 +20,8 @@
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
+#include <vector>
 
 namespace cactus {
 
@@ -124,6 +126,13 @@ struct StageUniform {
     const ExprNode* read = nullptr;  // any other read, lowered by the system emitter
 };
 
+constexpr auto kFirstRowValueLocation = static_cast<std::size_t>(kDrawingRowFirstLocation);
+
+// Sent with each drawn row as a vertex attribute; a texture is bound per run of rows instead.
+bool is_row_value(const StageUniform& uniform) {
+    return uniform.per_row && uniform.type != GlslType::Texture;
+}
+
 struct FilterTrait {
     SymbolId symbol;
     std::string component_local;  // as the domain walk binds it
@@ -205,7 +214,7 @@ TranslatedExpr use_uniform(StageUniform uniform, GlslCtx& ctx) {
         std::ranges::find_if(all, [&](const StageUniform& existing) { return existing.key == uniform.key; });
     if (found == all.end()) {
         if (uniform.glsl_name.empty()) {
-            uniform.glsl_name = "u_read_" + std::to_string(all.size());
+            uniform.glsl_name = (is_row_value(uniform) ? "row_read_" : "u_read_") + std::to_string(all.size());
         }
         all.push_back(std::move(uniform));
         found = std::prev(all.end());
@@ -320,10 +329,11 @@ TranslatedExpr translate_row_field(const FilterTrait& filter_trait,
         throw std::runtime_error("drawing-rule GLSL codegen: unknown trait field '" + owner_name + "." + field_name +
                                  "'");
     }
-    const auto name = "u_" + owner_name + "_" + field_name;
+    const auto type = shape_of(field->type, *ctx.program).type;
+    const auto name = (type == GlslType::Texture ? "u_" : "row_") + owner_name + "_" + field_name;
     return use_uniform(StageUniform{.glsl_name      = name,
                                     .key            = name,
-                                    .type           = shape_of(field->type, *ctx.program).type,
+                                    .type           = type,
                                     .source         = field->type.kind,
                                     .per_row        = true,
                                     .component_path = filter_trait.component_local + "." + field->name},
@@ -883,11 +893,39 @@ std::string translate_stmts(const std::vector<std::unique_ptr<StmtNode>>& body, 
 
 // ── Shader assembly ─────────────────────────────────────────────────────────
 
+const StageUniform& uniform_named(const GlslCtx& ctx, const std::string& name) {
+    return *std::ranges::find(*ctx.uniforms, name, &StageUniform::glsl_name);
+}
+
 void declare_uniforms(std::ostringstream& out, const GlslCtx& ctx) {
     for (const auto& name : ctx.used_uniforms) {
-        const auto found = std::ranges::find(*ctx.uniforms, name, &StageUniform::glsl_name);
-        out << "uniform " << glsl_type_name(TranslatedExpr{.type = found->type}) << " " << name << ";\n";
+        const auto& uniform = uniform_named(ctx, name);
+        if (!is_row_value(uniform)) {
+            out << "uniform " << glsl_type_name(TranslatedExpr{.type = uniform.type}) << " " << name << ";\n";
+        }
     }
+}
+
+// The row values a stage reads, in the order of all the rule's values.
+std::vector<const StageUniform*> stage_row_values(const GlslCtx& ctx) {
+    std::vector<const StageUniform*> values;
+    for (const auto& uniform : *ctx.uniforms) {
+        if (is_row_value(uniform) && std::ranges::contains(ctx.used_uniforms, uniform.glsl_name)) {
+            values.push_back(&uniform);
+        }
+    }
+    return values;
+}
+
+// A bool travels as an int: GLSL has no bool attribute.
+std::string attribute_type_name(GlslType type) {
+    return type == GlslType::Bool ? "int" : glsl_type_name(TranslatedExpr{.type = type});
+}
+
+// `name` as the stage reads it, from the attribute or varying `source`.
+std::string row_value_local(const StageUniform& value, const std::string& source) {
+    const auto read = value.type == GlslType::Bool ? "(" + source + " != 0)" : source;
+    return "    " + glsl_type_name(TranslatedExpr{.type = value.type}) + " " + value.glsl_name + " = " + read + ";\n";
 }
 
 void seed_builtin_locals(GlslCtx& ctx, bool vertex) {
@@ -905,21 +943,41 @@ void emit_library(std::ostringstream& out, const ShaderLibrary& library) {
     out << glsl_helper_definitions(library.helpers) << library.structs << library.functions;
 }
 
-std::string build_vertex_shader(const EventHandlerNode& handler, bool world, GlslCtx& ctx) {
-    seed_builtin_locals(ctx, true);
-    // The body is translated first: it discovers the uniforms and functions the header declares.
-    const auto body = translate_stmts(handler.body, ctx, 1);
+std::string translate_stage_body(const EventHandlerNode& handler, GlslCtx& ctx, bool vertex) {
+    seed_builtin_locals(ctx, vertex);
+    return translate_stmts(handler.body, ctx, 1);
+}
+
+// `rows` are all the rule's row values, one attribute location each after the corner and UV.
+std::string build_vertex_shader(const std::string& body,
+                                bool world,
+                                const GlslCtx& ctx,
+                                const std::vector<const StageUniform*>& rows,
+                                const std::vector<const StageUniform*>& fragment_rows) {
     std::ostringstream out;
     out << "#version 330\n\n";
     out << "in vec3 vertexPosition;\n";
-    out << "in vec2 vertexTexCoord;\n\n";
-    out << "uniform mat4 mvp;\n";
+    out << "in vec2 vertexTexCoord;\n";
+    for (std::size_t index = 0; index < rows.size(); ++index) {
+        out << "layout(location = " << kFirstRowValueLocation + index << ") in "
+            << attribute_type_name(rows[index]->type) << " a_" << rows[index]->glsl_name << ";\n";
+    }
+    out << "\nuniform mat4 mvp;\n";
     declare_uniforms(out, ctx);
     out << "\nout vec2 v_uv;\n";
-    out << "out vec4 v_tint;\n\n";
+    out << "out vec4 v_tint;\n";
+    for (const auto* value : fragment_rows) {
+        out << "flat out " << attribute_type_name(value->type) << " f_" << value->glsl_name << ";\n";
+    }
+    out << "\n";
     emit_library(out, *ctx.library);
     out << "void main()\n{\n";
-    // corner and uv come in as vertex attributes: rlgl batches draws, so gl_VertexID is not 0..5 per quad.
+    for (const auto* value : stage_row_values(ctx)) {
+        out << row_value_local(*value, "a_" + value->glsl_name);
+    }
+    for (const auto* value : fragment_rows) {
+        out << "    f_" << value->glsl_name << " = a_" << value->glsl_name << ";\n";
+    }
     out << "    vec2 corner = vertexPosition.xy;\n";
     out << "    vec2 uv = vertexTexCoord;\n";
     out << "    int vertex_index = gl_VertexID;\n";
@@ -935,17 +993,24 @@ std::string build_vertex_shader(const EventHandlerNode& handler, bool world, Gls
     return out.str();
 }
 
-std::string build_fragment_shader(const EventHandlerNode& handler, GlslCtx& ctx) {
-    seed_builtin_locals(ctx, false);
-    const auto body = translate_stmts(handler.body, ctx, 1);
+std::string build_fragment_shader(const std::string& body,
+                                  const GlslCtx& ctx,
+                                  const std::vector<const StageUniform*>& rows) {
     std::ostringstream out;
     out << "#version 330\n\n";
     out << "in vec2 v_uv;\n";
-    out << "in vec4 v_tint;\n\n";
+    out << "in vec4 v_tint;\n";
+    for (const auto* value : rows) {
+        out << "flat in " << attribute_type_name(value->type) << " f_" << value->glsl_name << ";\n";
+    }
+    out << "\n";
     declare_uniforms(out, ctx);
     out << "\nout vec4 finalColor;\n\n";
     emit_library(out, *ctx.library);
     out << "void main()\n{\n";
+    for (const auto* value : rows) {
+        out << row_value_local(*value, "f_" + value->glsl_name);
+    }
     out << "    vec2 uv = v_uv;\n";
     out << "    vec4 tint = v_tint;\n";
     out << "    vec2 frag_coord = gl_FragCoord.xy;\n";
@@ -981,6 +1046,7 @@ std::string uniform_value(const StageUniform& uniform, const std::string& lowere
     return uniform.source == TypeKind::Enum ? "static_cast<int>(" + lowered + ")" : lowered;
 }
 
+// A value set once per draw: a texture is bound, any other value set as a uniform.
 std::string set_uniform(const StageUniform& uniform, const std::string& lowered, const char* indent) {
     if (uniform.type == GlslType::Texture) {
         return std::string(indent) + "cactus::runtime::entt_backend::bind_drawing_rule_texture(texture_" +
@@ -988,6 +1054,123 @@ std::string set_uniform(const StageUniform& uniform, const std::string& lowered,
     }
     return std::string(indent) + "cactus::runtime::entt_backend::set_drawing_rule_uniform(*shader, loc_" +
            uniform.glsl_name + ", " + uniform_value(uniform, lowered) + ");\n";
+}
+
+// The C++ field of a row record, and its size: every field is 4-byte aligned, so records have no padding.
+struct RowField {
+    const char* cpp_type;
+    int components;
+    bool integer;
+};
+
+RowField row_field(GlslType type) {
+    switch (type) {
+        case GlslType::Float:
+            return {.cpp_type = "float", .components = 1, .integer = false};
+        case GlslType::Int:
+        case GlslType::Bool:
+            return {.cpp_type = "int", .components = 1, .integer = true};
+        case GlslType::Vec2:
+            return {.cpp_type = "Vector2", .components = 2, .integer = false};
+        case GlslType::Vec3:
+            return {.cpp_type = "Vector3", .components = 3, .integer = false};
+        case GlslType::Color:
+            return {.cpp_type = "CactusColor", .components = 4, .integer = false};
+        case GlslType::Texture:
+        case GlslType::Struct:
+        case GlslType::Void:
+            break;
+    }
+    throw std::runtime_error("drawing-rule GLSL codegen: a row value of this type has no vertex attribute");
+}
+
+std::string row_record_value(const StageUniform& value, const std::string& lowered) {
+    return value.type == GlslType::Bool ? "(" + lowered + ") ? 1 : 0" : uniform_value(value, lowered);
+}
+
+// The record each drawn row appends, and where its values sit for the vertex attributes.
+void emit_row_record(std::ostringstream& out, const std::vector<const StageUniform*>& rows) {
+    out << "    struct cactus_drawing_row {\n";
+    for (const auto* value : rows) {
+        out << "        " << row_field(value->type).cpp_type << " " << value->glsl_name << ";\n";
+    }
+    out << "    };\n";
+    out << "    static constexpr std::array<cactus::runtime::entt_backend::DrawingRuleAttribute, " << rows.size()
+        << "> kRowLayout{{";
+    int offset = 0;
+    for (std::size_t index = 0; index < rows.size(); ++index) {
+        const auto field = row_field(rows[index]->type);
+        out << (index == 0 ? "\n" : ",\n") << "        {.location = " << kFirstRowValueLocation + index
+            << ", .components = " << field.components << ", .integer = " << (field.integer ? "true" : "false")
+            << ", .offset = " << offset << "}";
+        offset += field.components * 4;
+    }
+    out << (rows.empty() ? "}};\n" : "\n    }};\n");
+    if (!rows.empty()) {
+        out << "    static_assert(sizeof(cactus_drawing_row) == " << offset << ");\n";
+    }
+    out << "    static std::vector<cactus_drawing_row> cactus_rows;\n";
+    out << "    cactus_rows.clear();\n";
+}
+
+// Rows in draw order split into runs that sample the same textures; each run is one draw call.
+void emit_row_runs(std::ostringstream& out, const std::vector<const StageUniform*>& textures) {
+    if (textures.empty()) {
+        return;
+    }
+    out << "    struct cactus_drawing_run {\n";
+    out << "        std::size_t first;\n";
+    for (const auto* texture : textures) {
+        out << "        cactus::runtime::AssetHandle " << texture->glsl_name << ";\n";
+    }
+    out << "    };\n";
+    out << "    static std::vector<cactus_drawing_run> cactus_runs;\n";
+    out << "    cactus_runs.clear();\n";
+}
+
+std::string row_body(const std::vector<const StageUniform*>& rows,
+                     const std::vector<const StageUniform*>& textures,
+                     const auto& row_value) {
+    const auto lowered = [&](const StageUniform& value) {
+        return value.read == nullptr ? value.component_path : row_value(*value.read);
+    };
+    std::string body;
+    if (!textures.empty()) {
+        std::string changed = "cactus_runs.empty()";
+        std::string run     = "cactus_drawing_run{.first = cactus_rows.size()";
+        for (const auto* texture : textures) {
+            body += "        const cactus::runtime::AssetHandle cactus_" + texture->glsl_name + " = " + lowered(*texture) +
+                    ";\n";
+            changed += " || cactus_runs.back()." + texture->glsl_name + " != cactus_" + texture->glsl_name;
+            run += ", ." + texture->glsl_name + " = cactus_" + texture->glsl_name;
+        }
+        body += "        if (" + changed + ") {\n";
+        body += "            cactus_runs.push_back(" + run + "});\n";
+        body += "        }\n";
+    }
+    body += "        cactus_rows.push_back(cactus_drawing_row{";
+    for (std::size_t index = 0; index < rows.size(); ++index) {
+        body += std::string(index == 0 ? "" : ", ") + "." + rows[index]->glsl_name + " = " +
+                row_record_value(*rows[index], lowered(*rows[index]));
+    }
+    return body + "});\n";
+}
+
+void emit_row_draws(std::ostringstream& out, const std::vector<const StageUniform*>& textures) {
+    out << "    cactus::runtime::entt_backend::upload_drawing_rule_rows(cactus_batch, kRowLayout, "
+           "static_cast<int>(sizeof(cactus_drawing_row)), cactus_rows.data(), cactus_rows.size());\n";
+    if (textures.empty()) {
+        out << "    cactus::runtime::entt_backend::draw_drawing_rule_run(cactus_batch, 0, cactus_rows.size());\n";
+        return;
+    }
+    out << "    for (auto run = cactus_runs.begin(); run != cactus_runs.end(); ++run) {\n";
+    for (const auto* texture : textures) {
+        out << "        cactus::runtime::entt_backend::bind_drawing_rule_texture(texture_" << texture->glsl_name
+            << ", run->" << texture->glsl_name << ");\n";
+    }
+    out << "        const std::size_t end = run + 1 == cactus_runs.end() ? cactus_rows.size() : (run + 1)->first;\n";
+    out << "        cactus::runtime::entt_backend::draw_drawing_rule_run(cactus_batch, run->first, end - run->first);\n";
+    out << "    }\n";
 }
 
 bool is_window_space_renderer(const SymbolId& rule) {
@@ -1029,12 +1212,26 @@ std::string emit_drawing_rule_function(const RuleNode& rule, const DecoratedProg
                        .uniforms      = &uniforms};
     };
     ShaderLibrary vertex_library;
-    auto vertex_ctx                 = stage_ctx(*vertex, vertex_library);
-    const bool world                = assigns_stage_output(vertex->body, *vertex->alias, "world_position");
-    const std::string vertex_glsl   = build_vertex_shader(*vertex, world, vertex_ctx);
+    auto vertex_ctx = stage_ctx(*vertex, vertex_library);
     ShaderLibrary fragment_library;
-    auto fragment_ctx               = stage_ctx(*fragment, fragment_library);
-    const std::string fragment_glsl = build_fragment_shader(*fragment, fragment_ctx);
+    auto fragment_ctx = stage_ctx(*fragment, fragment_library);
+    // Both bodies first: they discover the values and functions the headers declare.
+    const auto vertex_body   = translate_stage_body(*vertex, vertex_ctx, true);
+    const auto fragment_body = translate_stage_body(*fragment, fragment_ctx, false);
+    std::vector<const StageUniform*> rows;
+    std::vector<const StageUniform*> row_textures;
+    for (const auto& uniform : uniforms) {
+        if (uniform.per_row) {
+            (is_row_value(uniform) ? rows : row_textures).push_back(&uniform);
+        }
+    }
+    if (std::cmp_greater(rows.size(), kDrawingRowValueLimit)) {
+        throw CodegenError(rule.location, "drawing-rule GLSL codegen: rule '" + rule.name + "' reads too many row values");
+    }
+    const bool world                = assigns_stage_output(vertex->body, *vertex->alias, "world_position");
+    const auto fragment_rows        = stage_row_values(fragment_ctx);
+    const std::string vertex_glsl   = build_vertex_shader(vertex_body, world, vertex_ctx, rows, fragment_rows);
+    const std::string fragment_glsl = build_fragment_shader(fragment_body, fragment_ctx, fragment_rows);
 
     std::ostringstream out;
     out << "void " << system_function_name(program.module_name, rule.name, "draw").name
@@ -1047,9 +1244,13 @@ std::string emit_drawing_rule_function(const RuleNode& rule, const DecoratedProg
     out << "    if (shader == nullptr) {\n";
     out << "        return;\n";
     out << "    }\n";
+    out << "    static cactus::runtime::entt_backend::DrawingRuleBatch cactus_batch{.rule = \"" << rule.name << "\"};\n";
     // The shader loads once, so its uniform locations and texture units never change.
     int texture_slot = 0;
     for (const auto& uniform : uniforms) {
+        if (is_row_value(uniform)) {
+            continue;
+        }
         if (uniform.type == GlslType::Texture) {
             out << "    static const int unit_" << uniform.glsl_name
                 << " = cactus::runtime::entt_backend::drawing_rule_texture_unit(*shader, \"" << uniform.glsl_name
@@ -1063,24 +1264,21 @@ std::string emit_drawing_rule_function(const RuleNode& rule, const DecoratedProg
             << "\");\n";
     }
     out << EnttSystemEmitter::emit_draw_prelude(rule, program);
-    out << "    cactus::runtime::entt_backend::begin_drawing_rule(*shader, " << (world ? "true" : "false") << ");\n";
+    out << "    cactus::runtime::entt_backend::begin_drawing_rule(cactus_batch, *shader, " << (world ? "true" : "false")
+        << ");\n";
     for (const auto& uniform : uniforms) {
         if (!uniform.per_row) {
             out << set_uniform(uniform, EnttSystemEmitter::emit_world_value(*uniform.read, program), "    ");
         }
     }
+    emit_row_record(out, rows);
+    emit_row_runs(out, row_textures);
     out << EnttSystemEmitter::emit_domain_rows(
         rule, program, "        cactus::runtime::entt_backend::count_drawing_row();\n", [&](const auto& row_value) {
-            std::string body;
-            for (const auto& uniform : uniforms) {
-                if (uniform.per_row) {
-                    body += set_uniform(
-                        uniform, uniform.read == nullptr ? uniform.component_path : row_value(*uniform.read), "        ");
-                }
-            }
-            return body + "        cactus::runtime::entt_backend::draw_drawing_rule_quad();\n";
+            return row_body(rows, row_textures, row_value);
         });
-    out << "    cactus::runtime::entt_backend::end_drawing_rule();\n";
+    emit_row_draws(out, row_textures);
+    out << "    cactus::runtime::entt_backend::end_drawing_rule(cactus_batch);\n";
     out << "}\n\n";
     return out.str();
 }

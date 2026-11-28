@@ -24,12 +24,13 @@ constexpr std::uint64_t kTiles             = 2ULL * kSize;  // moss tiles, then 
 constexpr std::uint64_t kRowsPerFrame      = kSparkRows + kTiles;
 constexpr std::uint64_t kQuadsPerFrame     = kSparkQuads + kTiles;
 constexpr std::uint64_t kOrderingsPerFrame = 2;  // one per drawing rule
-// Per drawn spark: its position, its age and its anchor's position. Once per draw: the board's scale.
-// Per tile: its position; its texture is bound, not set.
-constexpr std::uint64_t kUniformsPerFrame = (3ULL * kSparkQuads) + 1 + kTiles;
+// Row values travel as per-row data; only the board's scale is set, once per draw.
+constexpr std::uint64_t kUniformsPerFrame = 1;
 // Rows that share a texture keep it bound: moss once, sand once.
 constexpr std::uint64_t kTexturesPerFrame = 2;
-constexpr cactus_perf::TimeLimits kTimes{.base_ms = 3.3, .growth = 3.0};
+// Sparks in one draw; tiles in one draw per texture run.
+constexpr std::uint64_t kDrawCallsPerFrame = 3;
+constexpr cactus_perf::TimeLimits kTimes{.base_ms = 2.4, .growth = 3.0};
 
 struct World {
     entt::registry registry;
@@ -48,7 +49,7 @@ struct World {
 
 }  // namespace
 
-TEST_CASE("perf: a drawing rule visits only its domain's rows, draws only those passing where:, binds a texture once per run",
+TEST_CASE("perf: a drawing rule visits only its domain's rows, draws those passing where: in one call per texture run",
           "[perf][drawing-rule]") {
     World world(kSize);
     REQUIRE(world.registry.view<game::Particle>().size() == static_cast<std::size_t>(3 * kSize));
@@ -57,6 +58,7 @@ TEST_CASE("perf: a drawing rule visits only its domain's rows, draws only those 
     CHECK(work.drawing_quads == kQuadsPerFrame);
     CHECK(work.drawing_uniforms == kUniformsPerFrame);
     CHECK(work.drawing_textures == kTexturesPerFrame);
+    CHECK(work.drawing_draw_calls == kDrawCallsPerFrame);
     CHECK(work.orderings == kOrderingsPerFrame);
 }
 

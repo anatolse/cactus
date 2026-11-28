@@ -8604,7 +8604,7 @@ TEST_CASE("Codegen EnTT: a drawing rule accepts vec2 + vec2 * float, matching an
                                            "",
                                            "        let half_size = 5.0\n"
                                            "        v.world_position = xf.position + v.corner * half_size\n");
-    CHECK(code.contains("world_position = (u_xf_position + (corner * let_half_size));"));
+    CHECK(code.contains("world_position = (row_xf_position + (corner * let_half_size));"));
 }
 
 TEST_CASE("Codegen EnTT: a drawing rule still rejects vec2 + color", "[codegen-entt][drawing-rules]") {
@@ -8647,12 +8647,12 @@ TEST_CASE("Codegen EnTT: a drawing rule skips entities with a without: trait", "
     CHECK(draw.contains("entt::exclude<::cactus_gen::drawing_codegen::Hidden>"));
 }
 
-TEST_CASE("Codegen EnTT: a drawing rule skips rows that fail where: before setting any uniform",
+TEST_CASE("Codegen EnTT: a drawing rule skips rows that fail where: before recording them",
           "[codegen-entt][drawing-rules]") {
     const auto draw =
         draw_function(drawing_rule_codegen("where", "", kDrawVertex, kDrawFragment, "    where: particle.age < 1.0\n"));
     const auto guard  = draw.find("particle.age < 1.0");
-    const auto upload = draw.find("set_drawing_rule_uniform(");
+    const auto upload = draw.find("cactus_rows.push_back(");
     REQUIRE(guard != std::string::npos);
     REQUIRE(upload != std::string::npos);
     CHECK(guard < upload);
@@ -8674,22 +8674,23 @@ TEST_CASE("Codegen EnTT: int, vec3 and enum row values reach the shader", "[code
                                            "        v.world_position = xf.position + v.corner * particle.lift.x\n"
                                            "        if wild or k > 1:\n"
                                            "            v.tint_out = #FF0000FF\n");
-    CHECK(code.contains("uniform int u_particle_level;"));
-    CHECK(code.contains("uniform vec3 u_particle_lift;"));
-    CHECK(code.contains("uniform int u_particle_mood;"));
-    CHECK(code.contains("(u_particle_mood == 1)"));
-    CHECK(code.contains("int let_k = cactus_div(u_particle_level, 2);"));
+    CHECK(code.contains("in int a_row_particle_level;"));
+    CHECK(code.contains("in vec3 a_row_particle_lift;"));
+    CHECK(code.contains("in int a_row_particle_mood;"));
+    CHECK(code.contains("(row_particle_mood == 1)"));
+    CHECK(code.contains("int let_k = cactus_div(row_particle_level, 2);"));
     CHECK(code.contains("int vertex_index = gl_VertexID;"));
     const auto draw = draw_function(code);
-    CHECK(draw.contains("loc_u_particle_level, drawing_codegen_particle_comp.level)"));
+    CHECK(draw.contains(".row_particle_level = drawing_codegen_particle_comp.level"));
     CHECK(draw.contains("drawing_codegen_particle_comp.lift"));
     CHECK(draw.contains("static_cast<int>(drawing_codegen_particle_comp.mood)"));
+    CHECK(!draw.contains("set_drawing_rule_uniform("));
 }
 
 TEST_CASE("Codegen EnTT: a stage converts an int operand of a float operation", "[codegen-entt][drawing-rules]") {
     const auto code = drawing_rule_codegen(
         "mixed_operands", "", "        v.world_position = xf.position + v.corner * (particle.level * 0.5)\n");
-    CHECK(code.contains("(float(u_particle_level) * 0.5)"));
+    CHECK(code.contains("(float(row_particle_level) * 0.5)"));
 }
 
 TEST_CASE("Codegen EnTT: a stage emits each reachable func once, callees first", "[codegen-entt][drawing-rules]") {
@@ -8855,7 +8856,8 @@ std::string tiles_draw(const std::string& code) {
 
 }  // namespace
 
-TEST_CASE("Codegen EnTT: a row's texture is a sampler bound per row", "[codegen-entt][drawing-rules][textures]") {
+TEST_CASE("Codegen EnTT: a row's texture is a sampler bound per texture run",
+          "[codegen-entt][drawing-rules][textures]") {
     const auto code = texture_codegen("row", "        f.frag_color = textures.sample(skin.image, f.uv)\n");
     CHECK(code.contains("uniform sampler2D u_skin_image;"));
     CHECK(code.contains("frag_color = cactus_sample(u_skin_image, uv);"));
@@ -8867,6 +8869,7 @@ TEST_CASE("Codegen EnTT: a row's texture is a sampler bound per row", "[codegen-
     REQUIRE(bind != std::string::npos);
     CHECK(bind > loop);
     CHECK(draw.contains("skin_comp.image"));
+    CHECK(draw.contains("cactus_runs.push_back("));
 }
 
 TEST_CASE("Codegen EnTT: an asset texture is bound once per draw", "[codegen-entt][drawing-rules][textures]") {
@@ -8910,7 +8913,8 @@ TEST_CASE("Codegen EnTT: the fragment stage reads its row's value", "[codegen-en
         "fragment_row", "", kDrawVertex, "        f.frag_color = color.with_alpha(f.tint, particle.depth)\n");
     const auto fragment_start = code.find("in vec4 v_tint;");
     REQUIRE(fragment_start != std::string::npos);
-    CHECK(code.find("uniform float u_particle_depth;", fragment_start) != std::string::npos);
+    CHECK(code.find("flat in float f_row_particle_depth;", fragment_start) != std::string::npos);
+    CHECK(code.contains("flat out float f_row_particle_depth;"));
     CHECK(draw_function(code).contains("particle_comp.depth"));
 }
 
@@ -8959,8 +8963,8 @@ TEST_CASE("Codegen EnTT: world space draws through the camera, screen space with
     const auto world  = draw_function(drawing_rule_codegen("world_space", ""));
     const auto screen = draw_function(
         drawing_rule_codegen("screen_space", "", "        v.screen_position = vec2(10.0, 10.0) + v.corner\n"));
-    CHECK(world.contains("begin_drawing_rule(*shader, true)"));
-    CHECK(screen.contains("begin_drawing_rule(*shader, false)"));
+    CHECK(world.contains("begin_drawing_rule(cactus_batch, *shader, true)"));
+    CHECK(screen.contains("begin_drawing_rule(cactus_batch, *shader, false)"));
 }
 
 // ── Conditional expressions and value match ────────────────────────────────

@@ -230,9 +230,39 @@ struct DrawingRuleShaderState {
                                                  const char* vertex_src,
                                                  const char* fragment_src);
 
+// One per-row value of a drawing rule: a vertex attribute read from each row's record.
+struct DrawingRuleAttribute {
+    int location{0};
+    int components{0};
+    bool integer{false};
+    int offset{0};
+};
+
+// A drawing rule's GL buffers, kept across frames, and what it drew this frame.
+struct DrawingRuleBatch {
+    const char* rule{""};
+    unsigned int vao{0};
+    unsigned int quad_buffer{0};
+    unsigned int row_buffer{0};
+    std::size_t row_bytes{0};
+    int mvp_location{-1};
+    std::span<const DrawingRuleAttribute> layout;
+    int stride{0};
+    int rows{0};
+    int draw_calls{0};
+};
+
 // Flushes queued draws first, so a drawing rule keeps its place in the frame.
-void begin_drawing_rule(const Shader& shader, bool world_space) noexcept;
-void end_drawing_rule() noexcept;
+void begin_drawing_rule(DrawingRuleBatch& batch, const Shader& shader, bool world_space) noexcept;
+// Sends the records of one frame's drawn rows; `layout` says where each value sits in a record.
+void upload_drawing_rule_rows(DrawingRuleBatch& batch,
+                              std::span<const DrawingRuleAttribute> layout,
+                              int stride,
+                              const void* records,
+                              std::size_t count) noexcept;
+// Draws uploaded records [first, first + count) in one call.
+void draw_drawing_rule_run(DrawingRuleBatch& batch, std::size_t first, std::size_t count) noexcept;
+void end_drawing_rule(DrawingRuleBatch& batch) noexcept;
 
 [[nodiscard]] int drawing_rule_uniform_location(const Shader& shader, const char* name) noexcept;
 void set_drawing_rule_uniform(const Shader& shader, int location, float value) noexcept;
@@ -254,8 +284,6 @@ struct DrawingRuleTexture {
 // Binds `handle`'s texture unless it is bound already; a missing texture binds one that reads #00000000.
 void bind_drawing_rule_texture(DrawingRuleTexture& texture, AssetHandle handle) noexcept;
 
-void draw_drawing_rule_quad() noexcept;
-
 // Runs `draw` at the end of the frame, after the UI, with this viewport's camera and rectangle.
 using DrawingRuleFunction = void (*)(entt::registry&);
 void defer_drawing_rule(entt::registry& registry, DrawingRuleFunction draw) noexcept;
@@ -268,6 +296,11 @@ struct RenderDebugState {
     struct AnimatedModelSubmission {
         int clip{0};
         float time{0.0F};
+    };
+    struct DrawingRuleDraws {
+        std::string rule;
+        int rows{0};
+        int draw_calls{0};
     };
 
     int submitted_sprites{0};
@@ -317,6 +350,8 @@ struct RenderDebugState {
     int voxel_chunk_builds{0};
     // (frame, frames) of each voxel draw call this frame; (0, 1) for a still texture.
     std::vector<std::pair<int, int>> voxel_draw_frames;
+    // Rows drawn and draw calls of each drawing rule that ran this frame, summed over viewports.
+    std::vector<DrawingRuleDraws> drawing_rule_draws;
 };
 
 struct ProjectConfig {

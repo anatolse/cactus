@@ -520,8 +520,8 @@ TEST_CASE("integration: an enum row value reaches a drawing rule's shader",
     CHECK(result.exit_code == 0);
     std::ifstream generated(output_file);
     const std::string code((std::istreambuf_iterator<char>(generated)), std::istreambuf_iterator<char>());
-    CHECK(code.contains("uniform int u_tile_shade;"));
-    CHECK(code.contains("((u_tile_shade == 0) ? 1.0 : 0.5)"));
+    CHECK(code.contains("in int a_row_tile_shade;"));
+    CHECK(code.contains("((row_tile_shade == 0) ? 1.0 : 0.5)"));
 }
 
 TEST_CASE("integration: user library links canonical callbacks independently per external handler",

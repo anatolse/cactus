@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
@@ -2104,6 +2105,7 @@ void begin_render_frame() noexcept {
     render_debug_state_storage().voxel_faces_drawn = 0;
     render_debug_state_storage().voxel_draw_calls  = 0;
     render_debug_state_storage().voxel_draw_frames.clear();
+    render_debug_state_storage().drawing_rule_draws.clear();
     flipbooks().clear();
     // A volume not drawn last frame was destroyed or replaced.
     std::erase_if(voxel_volumes(), [](auto& entry) {
@@ -3874,24 +3876,148 @@ Shader* ensure_drawing_rule_shader(DrawingRuleShaderState& state,
     return &state.shader;
 }
 
-void begin_drawing_rule([[maybe_unused]] const Shader& shader, bool world_space) noexcept {
+void begin_drawing_rule(DrawingRuleBatch& batch, [[maybe_unused]] const Shader& shader, bool world_space) noexcept {
     flush_viewport_queues();
     const Rectangle rect = active_viewport_rect();
     const Camera2D screen{.offset = {.x = rect.x, .y = rect.y}, .target = {}, .rotation = 0.0F, .zoom = 1.0F};
     cactus::runtime::raylib::BeginMode2D(world_space ? get_active_camera_2d() : screen);
+    batch.rows       = 0;
+    batch.draw_calls = 0;
 #ifndef CACTUS_RAYLIB_FAKE
-    BeginShaderMode(shader);
     // The fragment stage outputs cover and light premultiplied: one blend state draws both.
     BeginBlendMode(BLEND_ALPHA_PREMULTIPLY);
+    rlEnableShader(shader.id);
+    if (batch.mvp_location < 0) {
+        batch.mvp_location = GetShaderLocation(shader, "mvp");
+    }
+    // rlgl sets mvp only for its own batch.
+    rlSetUniformMatrix(batch.mvp_location, MatrixMultiply(rlGetMatrixModelview(), rlGetMatrixProjection()));
+    // A vertex stage may mirror a quad, and the 2D camera flips y: no winding is the front one.
+    rlDisableBackfaceCulling();
 #endif
 }
 
-void end_drawing_rule() noexcept {
+void end_drawing_rule(DrawingRuleBatch& batch) noexcept try {
 #ifndef CACTUS_RAYLIB_FAKE
+    rlDisableVertexArray();
+    rlDisableShader();
+    rlEnableBackfaceCulling();
     EndBlendMode();
-    EndShaderMode();
 #endif
     cactus::runtime::raylib::EndMode2D();
+    auto& draws      = render_debug_state_storage().drawing_rule_draws;
+    const auto found = std::ranges::find(draws, std::string_view(batch.rule), &RenderDebugState::DrawingRuleDraws::rule);
+    auto& entry      = found != draws.end() ? *found : draws.emplace_back(RenderDebugState::DrawingRuleDraws{.rule = batch.rule});
+    entry.rows += batch.rows;
+    entry.draw_calls += batch.draw_calls;
+} catch (...) {
+    std::terminate();
+}
+
+namespace {
+
+#ifndef CACTUS_RAYLIB_FAKE
+constexpr int kQuadVertices = 6;
+// Two triangles: corner xyz, then uv, matching the stage's corner/uv pairs.
+constexpr int kQuadVertexFloats = 5;
+constexpr std::array<float, static_cast<std::size_t>(kQuadVertices* kQuadVertexFloats)> kDrawingRuleQuad = {
+    -1.0F, -1.0F, 0.0F, 0.0F, 0.0F,  //
+    1.0F,  -1.0F, 0.0F, 1.0F, 0.0F,  //
+    1.0F,  1.0F,  0.0F, 1.0F, 1.0F,  //
+    -1.0F, -1.0F, 0.0F, 0.0F, 0.0F,  //
+    1.0F,  1.0F,  0.0F, 1.0F, 1.0F,  //
+    -1.0F, 1.0F,  0.0F, 0.0F, 1.0F,
+};
+
+constexpr unsigned int kGlInt = 0x1404;
+
+// rlgl has no integer attribute call; glVertexAttribPointer would turn an int into a float.
+using VertexAttribIPointer = void (*)(unsigned int, int, unsigned int, int, const void*);
+
+VertexAttribIPointer vertex_attrib_ipointer() noexcept {
+    static const auto pointer = std::bit_cast<VertexAttribIPointer>(rlGetProcAddress("glVertexAttribIPointer"));
+    return pointer;
+}
+
+void ensure_drawing_rule_vao(DrawingRuleBatch& batch, std::span<const DrawingRuleAttribute> layout) noexcept {
+    if (batch.vao != 0) {
+        return;
+    }
+    constexpr int kStride = kQuadVertexFloats * static_cast<int>(sizeof(float));
+    batch.vao             = rlLoadVertexArray();
+    rlEnableVertexArray(batch.vao);
+    batch.quad_buffer = rlLoadVertexBuffer(kDrawingRuleQuad.data(), static_cast<int>(sizeof(kDrawingRuleQuad)), false);
+    rlSetVertexAttribute(RL_DEFAULT_SHADER_ATTRIB_LOCATION_POSITION, 3, RL_FLOAT, false, kStride, 0);
+    rlEnableVertexAttribute(RL_DEFAULT_SHADER_ATTRIB_LOCATION_POSITION);
+    rlSetVertexAttribute(
+        RL_DEFAULT_SHADER_ATTRIB_LOCATION_TEXCOORD, 2, RL_FLOAT, false, kStride, 3 * static_cast<int>(sizeof(float)));
+    rlEnableVertexAttribute(RL_DEFAULT_SHADER_ATTRIB_LOCATION_TEXCOORD);
+    for (const auto& attribute : layout) {
+        const auto location = static_cast<unsigned int>(attribute.location);
+        rlEnableVertexAttribute(location);
+        rlSetVertexAttributeDivisor(location, 1);
+    }
+    rlDisableVertexArray();
+}
+
+void point_drawing_rule_attributes(std::span<const DrawingRuleAttribute> layout, int stride, std::size_t first) noexcept {
+    const auto base = static_cast<std::uintptr_t>(first) * static_cast<std::uintptr_t>(stride);
+    for (const auto& attribute : layout) {
+        const auto location = static_cast<unsigned int>(attribute.location);
+        const auto offset   = base + static_cast<std::uintptr_t>(attribute.offset);
+        if (attribute.integer) {
+            vertex_attrib_ipointer()(location, attribute.components, kGlInt, stride, std::bit_cast<const void*>(offset));
+            continue;
+        }
+        rlSetVertexAttribute(location, attribute.components, RL_FLOAT, false, stride, static_cast<int>(offset));
+    }
+}
+#endif
+
+}  // namespace
+
+void upload_drawing_rule_rows(DrawingRuleBatch& batch,
+                              std::span<const DrawingRuleAttribute> layout,
+                              int stride,
+                              [[maybe_unused]] const void* records,
+                              [[maybe_unused]] std::size_t count) noexcept {
+    batch.layout = layout;
+    batch.stride = stride;
+#ifndef CACTUS_RAYLIB_FAKE
+    ensure_drawing_rule_vao(batch, layout);
+    const std::size_t bytes = count * static_cast<std::size_t>(stride);
+    if (layout.empty() || bytes == 0) {
+        return;
+    }
+    rlEnableVertexArray(batch.vao);
+    if (bytes > batch.row_bytes) {
+        if (batch.row_buffer != 0) {
+            rlUnloadVertexBuffer(batch.row_buffer);
+        }
+        batch.row_buffer = rlLoadVertexBuffer(records, static_cast<int>(bytes), true);
+        batch.row_bytes  = bytes;
+    } else {
+        rlUpdateVertexBuffer(batch.row_buffer, records, static_cast<int>(bytes), 0);
+    }
+    rlDisableVertexArray();
+#endif
+}
+
+void draw_drawing_rule_run(DrawingRuleBatch& batch, [[maybe_unused]] std::size_t first, std::size_t count) noexcept {
+    if (count == 0) {
+        return;
+    }
+    count_drawing_draw_call(count);
+    batch.rows += static_cast<int>(count);
+    ++batch.draw_calls;
+#ifndef CACTUS_RAYLIB_FAKE
+    rlEnableVertexArray(batch.vao);
+    if (!batch.layout.empty()) {
+        rlEnableVertexBuffer(batch.row_buffer);
+        point_drawing_rule_attributes(batch.layout, batch.stride, first);
+    }
+    rlDrawVertexArrayInstanced(0, kQuadVertices, static_cast<int>(count));
+#endif
 }
 
 int drawing_rule_uniform_location([[maybe_unused]] const Shader& shader, [[maybe_unused]] const char* name) noexcept {
@@ -4038,53 +4164,6 @@ void bind_drawing_rule_texture(DrawingRuleTexture& texture, const AssetHandle ha
     rlActiveTextureSlot(texture.unit);
     rlEnableTexture(id);
     rlActiveTextureSlot(0);
-#endif
-}
-
-void draw_drawing_rule_quad() noexcept {
-    count_drawing_quad();
-#ifndef CACTUS_RAYLIB_FAKE
-    // Corner/uv per vertex, matching drawing_rule_emitter.cpp's layout.
-    // Fed through raylib's own vertexPosition/vertexTexCoord attributes
-    // (rlVertex2f/rlTexCoord2f), not gl_VertexID: rlgl is a batching
-    // renderer, so gl_VertexID reflects the shared batch's cumulative vertex
-    // offset, not a small per-instance index.
-    //
-    // RL_QUADS, not RL_TRIANGLES: empirically, this GL driver silently drops
-    // an RL_TRIANGLES batch whose vertices end up at a large on-screen
-    // position after the vertex shader's transform (reproduced with a
-    // screenshot-diffing probe harness — a bare RL_TRIANGLES draw through
-    // raylib's own default shader also went missing, while the identical
-    // geometry through RL_QUADS rendered correctly). RL_QUADS is also
-    // raylib's own preferred mode for this kind of untextured quad
-    // (DrawRectangleRec/DrawTriangle use it via SUPPORT_QUADS_DRAW_MODE).
-    constexpr std::array<Vector2, 4> kCorners = {
-        Vector2{.x = -1.0F, .y = -1.0F},
-        Vector2{.x = -1.0F, .y = 1.0F},
-        Vector2{.x = 1.0F, .y = 1.0F},
-        Vector2{.x = 1.0F, .y = -1.0F},
-    };
-    constexpr std::array<Vector2, 4> kUvs = {
-        Vector2{.x = 0.0F, .y = 0.0F},
-        Vector2{.x = 0.0F, .y = 1.0F},
-        Vector2{.x = 1.0F, .y = 1.0F},
-        Vector2{.x = 1.0F, .y = 0.0F},
-    };
-    rlBegin(RL_QUADS);
-    rlNormal3f(0.0F, 0.0F, 1.0F);
-    for (int i = 0; i < 4; ++i) {
-        rlTexCoord2f(kUvs.at(static_cast<std::size_t>(i)).x, kUvs.at(static_cast<std::size_t>(i)).y);
-        rlVertex2f(kCorners.at(static_cast<std::size_t>(i)).x, kCorners.at(static_cast<std::size_t>(i)).y);
-    }
-    rlEnd();
-    // Force this instance's quad to actually submit to the GPU now, before
-    // the caller uploads the next entity's uniform values. Without this,
-    // rlgl defers the draw call into a shared batch (same shader/draw mode
-    // across the whole dispatch loop never trips its auto-flush), so every
-    // queued instance ends up rendered with whichever uniform value was
-    // current at the batch's eventual flush — the *last* entity's, not its
-    // own.
-    rlDrawRenderBatchActive();
 #endif
 }
 

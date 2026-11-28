@@ -1,0 +1,54 @@
+module perf_sprite_rows
+
+use std.core
+use std.transform.flat as tf
+use std.render.sprites as sprites
+use std.render.textures as textures
+
+# The same textured, tinted quads drawn two ways: by a drawing rule (kind 0)
+# or by the extern sprite renderer (kind 1). The test sets the kind and the
+# size before `on load` spawns them.
+
+asset Moss: texture = "moss.png"
+
+trait Board:
+    let size: int = 1000
+    let kind: int = 0
+
+trait Skin:
+    let image: texture_id
+    let size: vec2 = vec2(1.0, 1.0)
+    let tint: color = #FFFFFFFF
+
+entity Field:
+    Board
+
+template Drawn():
+    tf.WorldTransform
+    Skin:
+        image = Moss
+
+template Plain():
+    tf.WorldTransform
+    sprites.Renderer:
+        texture = Moss
+
+rule Fill:
+    on load:
+        for i in range(0, Field[Board].size):
+            if Field[Board].kind == 0:
+                spawn Drawn()
+            else:
+                spawn Plain()
+
+rule Tiles:
+    each:
+        tf.WorldTransform as xf
+        Skin as skin
+
+    on render.vertex as v:
+        v.world_position = xf.position + v.corner * skin.size * 0.5
+        v.tint_out = skin.tint
+
+    on render.fragment as f:
+        f.frag_color = textures.sample(skin.image, f.uv) * f.tint

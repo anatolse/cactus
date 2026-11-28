@@ -56,3 +56,29 @@ A `float` expression evaluated in a stage MAY differ from the ordinary handler's
 #### Scenario: Float tolerance
 - **WHEN** `math.sin(1.0)` and `noise.perlin2(vec2(0.5, 0.5), 0)` are evaluated in a stage and in an ordinary handler
 - **THEN** each pair agrees within 1e-5
+
+### Requirement: Fragment-only extern functions
+An extern function MAY be marked as translatable for the fragment stage only. A call to it from a fragment handler, or from a `func` that only fragment handlers call, SHALL be accepted. A call from a vertex handler, an ordinary rule, or a `func` that either calls, SHALL be a source-located error at that call site that names the function and the fragment stage. `std.render.textures.sample` SHALL be such a function.
+
+#### Scenario: Sample through a helper
+- **WHEN** a fragment handler calls a `func` that calls `textures.sample`
+- **THEN** the program compiles
+
+#### Scenario: Sample from an ordinary rule
+- **WHEN** a `tick` handler calls a `func` that calls `textures.sample`
+- **THEN** the compiler reports an error at that call saying `sample` belongs to a fragment stage
+
+#### Scenario: Sample from the vertex stage
+- **WHEN** a vertex handler calls a `func` that calls `textures.sample`
+- **THEN** the compiler reports an error at the vertex handler's call saying `sample` belongs to a fragment stage
+
+### Requirement: Texture parameters
+A `func` that a stage calls MAY take `texture_id` parameters. Inside it, such a parameter SHALL be used only as the `texture` argument of `sample` or as the argument of another `texture_id` parameter; any other use makes the function untranslatable. A `func` SHALL NOT return a `texture_id` to a stage, nor read an `asset` itself.
+
+#### Scenario: Texture parameter
+- **WHEN** a fragment handler calls `soft(sprite.texture, f.uv)` and `soft(tex: texture_id, uv: vec2) color` returns `textures.sample(tex, uv)`
+- **THEN** the program compiles and each quad samples its own sprite's texture
+
+#### Scenario: Texture returned
+- **WHEN** a stage calls a `func` that returns its `texture_id` parameter
+- **THEN** the compiler reports an error saying the func returns a value of type `texture_id`

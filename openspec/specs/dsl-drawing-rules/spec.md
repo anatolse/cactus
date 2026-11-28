@@ -67,7 +67,7 @@ Both stage handlers of a drawing rule SHALL be able to read: the fields of the r
 - **THEN** each beam's quad uses the position of its own sink entity
 
 ### Requirement: Value types a stage reads
-A stage read whose type is not `int`, `float`, `bool`, `vec2`, `vec3`, `color` or an enum SHALL be an error naming the type; for `duration` it SHALL suggest `seconds(...)` (`dsl-duration`). An aliased dimensioned trait in `each:` and a cell access SHALL be errors (`dsl-trait-dimensions`).
+Except for a `texture_id` read (see "Texture reads in a stage"), a stage read whose type is not `int`, `float`, `bool`, `vec2`, `vec3`, `color` or an enum SHALL be an error naming the type; for `duration` it SHALL suggest `seconds(...)` (`dsl-duration`). An aliased dimensioned trait in `each:` and a cell access SHALL be errors (`dsl-trait-dimensions`).
 
 #### Scenario: Unsupported type
 - **WHEN** a stage handler reads a `string` field
@@ -89,14 +89,18 @@ A stage handler SHALL NOT assign a trait field, issue `spawn`, `destroy`, `add`,
 - **THEN** the compiler reports an error naming the query
 
 ### Requirement: Stage built-in fields
-The vertex alias SHALL expose the inputs `corner: vec2`, `uv: vec2` and `vertex_index: int` (the quad's corners (-1,-1), (1,-1), (1,1) and (-1,1), with UVs (0,0), (1,0), (1,1) and (0,1); the order in which vertices run is the backend's) and the outputs `world_position: vec2`, `screen_position: vec2`, `uv_out: vec2` and `tint_out: color`. The fragment alias SHALL expose the inputs `uv: vec2` and `tint: color`, interpolated from `uv_out` and `tint_out`, and `frag_coord: vec2`, and the output `frag_color: color`.
+The vertex alias SHALL expose the inputs `corner: vec2`, `uv: vec2` and `vertex_index: int` (the quad's corners (-1,-1), (1,-1), (1,1) and (-1,1), with UVs (0,0), (1,0), (1,1) and (0,1); the order in which vertices run is the backend's) and the outputs `world_position: vec2`, `screen_position: vec2`, `uv_out: vec2` and `tint_out: color`. The fragment alias SHALL expose the inputs `uv: vec2` and `tint: color`, interpolated from `uv_out` and `tint_out`, and `frag_coord: vec2`, and the outputs `frag_color: color` and `light: color`.
 
 #### Scenario: Corner inputs
 - **WHEN** a vertex handler reads `v.corner` and `v.uv`
 - **THEN** each corner of a quad sees its own corner and the UV paired with it above
 
+#### Scenario: Light output
+- **WHEN** a fragment handler assigns `f.light = #FF8000FF`
+- **THEN** the program compiles
+
 ### Requirement: Stage outputs and defaults
-The vertex handler MUST assign exactly one of `world_position` and `screen_position` on every path; assigning both, or neither on some path, SHALL be an error. `uv_out` SHALL default to `uv` and `tint_out` to `#FFFFFFFF` when not assigned. The fragment handler MUST assign `frag_color` on every path. `frag_color` SHALL be blended over what is already drawn using its alpha.
+The vertex handler MUST assign exactly one of `world_position` and `screen_position` on every path; assigning both, or neither on some path, SHALL be an error. `uv_out` SHALL default to `uv` and `tint_out` to `#FFFFFFFF` when not assigned. The fragment handler MUST assign at least one of `frag_color` and `light` on every path; how they reach the picture is defined by `drawing-rule-outputs`.
 
 #### Scenario: World space
 - **WHEN** a vertex handler assigns `v.world_position`
@@ -110,8 +114,12 @@ The vertex handler MUST assign exactly one of `world_position` and `screen_posit
 - **WHEN** a vertex handler assigns both `world_position` and `screen_position`
 - **THEN** the compiler reports an error saying to assign exactly one
 
+#### Scenario: Light alone is enough
+- **WHEN** a fragment handler assigns `light` on every path and never `frag_color`
+- **THEN** the program compiles
+
 ### Requirement: Stage colors are unclamped
-Colors SHALL stay unclamped floats inside both stages, `tint_out` and `tint` included. Only the write of `frag_color` to the 8-bit target SHALL clamp them.
+Colors SHALL stay unclamped floats inside both stages, `tint_out`, `tint` and `light` included. Only the write of the composed pixel to the 8-bit target SHALL clamp the color channels; the alpha of each output SHALL be clamped to 0..1 before composition (`drawing-rule-outputs`).
 
 #### Scenario: Bright tint reaches the fragment
 - **WHEN** a vertex handler assigns `v.tint_out = color(2.0, 0.5, 0.5, 1.0)` and the fragment handler assigns `f.frag_color = color(f.tint.r * 0.5, f.tint.g, f.tint.b, 1.0)`
@@ -153,3 +161,14 @@ A bounded `for` in a stage handler body SHALL loop over `range(a, b)` where `a` 
 #### Scenario: Run-time loop bound in a stage body
 - **WHEN** a fragment handler loops over `range(0, particle.count)`
 - **THEN** the compiler reports an error saying the loop bound is not constant
+
+### Requirement: Texture reads in a stage
+A stage MAY read a `texture_id` from its row, a link, a named entity or an `asset` constant. Such a read SHALL be accepted only as the `texture` argument of `std.render.textures.sample` (`drawing-rule-outputs`) or as the argument of a `texture_id` parameter of a `func` (`stage-function-translation`); any other use SHALL be an error.
+
+#### Scenario: Texture read outside sample
+- **WHEN** a fragment handler assigns a `texture_id` field of its row to a local
+- **THEN** the compiler reports an error saying a stage uses a texture only in `textures.sample`
+
+#### Scenario: Texture passed to a helper
+- **WHEN** a fragment handler calls `soft(sprite.texture, f.uv)` and `soft` takes `tex: texture_id`
+- **THEN** the program compiles

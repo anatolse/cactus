@@ -19,6 +19,9 @@ inline constexpr auto kStageVec2Externs = std::to_array<std::string_view>(
     {"length", "normalize", "dot", "lerp", "distance", "angle", "clamp", "rotate"});
 inline constexpr auto kStageVec3Externs = std::to_array<std::string_view>(
     {"length", "normalize", "dot", "cross", "lerp", "distance", "reflect", "clamp", "rotate"});
+// Legal only in a fragment stage, or in a func that only fragment stages call.
+inline constexpr auto kStageTextureExterns        = std::to_array<std::string_view>({"sample"});
+inline constexpr std::string_view kTexturesModule = "std.render.textures";
 
 [[nodiscard]] inline std::span<const std::string_view> stage_externs_of(std::string_view module) {
     if (module == "std.math") {
@@ -30,11 +33,19 @@ inline constexpr auto kStageVec3Externs = std::to_array<std::string_view>(
     if (module == "std.math.vec3") {
         return kStageVec3Externs;
     }
+    if (module == kTexturesModule) {
+        return kStageTextureExterns;
+    }
     return {};
 }
 
 [[nodiscard]] inline bool is_portable_glsl_intrinsic(const SymbolId& symbol) {
     return symbol.kind == SymbolKind::Func && std::ranges::contains(stage_externs_of(symbol.module.name), symbol.local_name);
+}
+
+[[nodiscard]] inline bool is_fragment_only_intrinsic(const SymbolId& symbol) {
+    return symbol.kind == SymbolKind::Func && symbol.module.name == kTexturesModule &&
+           std::ranges::contains(kStageTextureExterns, symbol.local_name);
 }
 
 }  // namespace cactus

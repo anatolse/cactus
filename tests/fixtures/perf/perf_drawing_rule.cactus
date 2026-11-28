@@ -2,11 +2,16 @@ module perf_drawing_rule
 
 use std.core
 use std.transform.flat as tf
+use std.render.textures as textures
 
 # A drawing rule over two traits with a without: and a where:. It reads row
 # fields, one named entity and one link. Each step spawns one entity of each
 # kind; only Young is in the drawn domain, Young and Old are the rows its draw
-# loop visits.
+# loop visits. Tiles samples each row's texture: all Moss tiles come first,
+# then all Sand tiles, so the draw binds two textures.
+
+asset Moss: texture = "moss.png"
+asset Sand: texture = "sand.png"
 
 trait Board:
     let size: int = 1000
@@ -17,6 +22,9 @@ trait Particle:
     let anchor: tf.WorldTransform
 
 trait Hidden
+
+trait Skin:
+    let image: texture_id
 
 entity Field:
     tf.WorldTransform
@@ -35,6 +43,11 @@ template Veiled():
     use Spark()
     Hidden
 
+template Tile(image: texture_id):
+    use Bare()
+    Skin:
+        image = image
+
 rule Fill:
     on load:
         for i in range(0, Field[Board].size):
@@ -42,6 +55,10 @@ rule Fill:
             spawn Spark()
             spawn Spark(age = 2.0)
             spawn Veiled()
+        for i in range(0, Field[Board].size):
+            spawn Tile(image = Moss)
+        for i in range(0, Field[Board].size):
+            spawn Tile(image = Sand)
 
 rule DropSparks:
     each: Particle
@@ -61,3 +78,15 @@ rule Sparks:
 
     on render.fragment as f:
         f.frag_color = f.tint
+
+rule Tiles:
+    each:
+        tf.WorldTransform as xf
+        Skin as skin
+    after: Sparks
+
+    on render.vertex as v:
+        v.world_position = xf.position + v.corner
+
+    on render.fragment as f:
+        f.frag_color = textures.sample(skin.image, f.uv)

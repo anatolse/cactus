@@ -27,7 +27,7 @@ namespace {
 
 // ── GLSL value shapes ──────────────────────────────────────────────────────
 
-enum class GlslType : std::uint8_t { Float, Int, Bool, Vec2, Vec3, Color, Struct, Void };
+enum class GlslType : std::uint8_t { Float, Int, Bool, Vec2, Vec3, Color, Texture, Struct, Void };
 
 TypeKind glsl_type_to_type_kind(GlslType type) {
     switch (type) {
@@ -43,6 +43,8 @@ TypeKind glsl_type_to_type_kind(GlslType type) {
             return TypeKind::Vec3;
         case GlslType::Color:
             return TypeKind::Color;
+        case GlslType::Texture:
+            return TypeKind::TextureId;
         case GlslType::Struct:
             return TypeKind::Struct;
         case GlslType::Void:
@@ -66,6 +68,8 @@ GlslType type_kind_to_glsl_type(TypeKind kind) {
             return GlslType::Vec3;
         case TypeKind::Color:
             return GlslType::Color;
+        case TypeKind::TextureId:
+            return GlslType::Texture;
         default:
             throw std::runtime_error("drawing-rule GLSL codegen: a value of this type has no GLSL representation");
     }
@@ -99,6 +103,8 @@ std::string glsl_type_name(const TranslatedExpr& shape) {
             return "vec3";
         case GlslType::Color:
             return "vec4";
+        case GlslType::Texture:
+            return "sampler2D";
         case GlslType::Struct:
             return glsl_identifier(shape.structure->canonical_id);
         case GlslType::Void:
@@ -375,6 +381,23 @@ TranslatedExpr translate_value_member(const TranslatedExpr& object, const std::s
     return {.text = object.text + "." + member, .type = GlslType::Float};
 }
 
+// A texture asset, bound once per draw.
+TranslatedExpr translate_asset_read(const ExprNode& read, GlslCtx& ctx) {
+    return use_uniform(StageUniform{.key     = expression_spelling(read, "?") + "#asset",
+                                    .type    = GlslType::Texture,
+                                    .source  = TypeKind::TextureId,
+                                    .per_row = false,
+                                    .read    = &read},
+                       ctx);
+}
+
+bool is_texture_asset(const std::string& name, const GlslCtx& ctx) {
+    return std::ranges::any_of(ctx.program->ast->declarations, [&](const auto& decl) {
+        const auto* asset = std::get_if<AssetDeclNode>(&decl);
+        return asset != nullptr && asset->name == name && asset->asset_kind == AssetKind::Texture;
+    });
+}
+
 const ExprNode* const_initializer(const std::optional<SymbolId>& constant, const GlslCtx& ctx) {
     return constant.has_value() ? EnttCodegenUtils::find_const_initializer(*ctx.program->ast, *constant) : nullptr;
 }
@@ -385,6 +408,9 @@ TranslatedExpr translate_member(const MemberExpr& member, const ExprNode& node, 
     }
     if (member.resolved_enum_member.has_value()) {
         return {.text = std::to_string(member.resolved_enum_member->index), .type = GlslType::Int};
+    }
+    if (member.resolved_asset_type == TypeKind::TextureId) {
+        return translate_asset_read(node, ctx);
     }
     if (const auto* access = std::get_if<TraitAccessExpr>(&member.object->expr)) {
         return translate_trait_read(node, *access, member.member, ctx);
@@ -535,6 +561,12 @@ TranslatedExpr translate_call(const CallExpr& call, GlslCtx& ctx) {
     if (is_portable_glsl_intrinsic(callee)) {
         const auto args    = translate_args(call.args, ctx);
         const auto& module = callee.module.name;
+        if (module == kTexturesModule) {
+            return use_helper("sample",
+                              "cactus_sample(" + joined_args(args, {GlslType::Texture, GlslType::Vec2}) + ")",
+                              TranslatedExpr{.type = GlslType::Color},
+                              ctx);
+        }
         return module == "std.math" ? translate_math_extern(callee.local_name, args, ctx)
                                     : translate_vector_extern(callee.local_name, module == "std.math.vec3", args, ctx);
     }
@@ -560,12 +592,15 @@ TranslatedExpr translate_literal(const LiteralExpr& literal) {
     std::unreachable();
 }
 
-TranslatedExpr translate_ident(const IdentExpr& ident, GlslCtx& ctx) {
+TranslatedExpr translate_ident(const IdentExpr& ident, const ExprNode& node, GlslCtx& ctx) {
     if (const auto local_it = ctx.locals.find(ident.name); local_it != ctx.locals.end()) {
         return local_it->second;
     }
     if (const auto* initializer = const_initializer(ident.resolved_const_id, ctx)) {
         return translate_expr(*initializer, ctx);
+    }
+    if (is_texture_asset(ident.name, ctx)) {
+        return translate_asset_read(node, ctx);
     }
     throw std::runtime_error("drawing-rule GLSL codegen: unresolved identifier '" + ident.name + "'");
 }
@@ -662,7 +697,7 @@ TranslatedExpr translate_expr_node(const ExprNode& expr, GlslCtx& ctx) {
             if constexpr (std::is_same_v<E, LiteralExpr>) {
                 return translate_literal(node);
             } else if constexpr (std::is_same_v<E, IdentExpr>) {
-                return translate_ident(node, ctx);
+                return translate_ident(node, expr, ctx);
             } else if constexpr (std::is_same_v<E, UnaryExpr>) {
                 return translate_unary(node, ctx);
             } else if constexpr (std::is_same_v<E, BinaryExpr>) {
@@ -915,8 +950,12 @@ std::string build_fragment_shader(const EventHandlerNode& handler, GlslCtx& ctx)
     out << "    vec4 tint = v_tint;\n";
     out << "    vec2 frag_coord = gl_FragCoord.xy;\n";
     out << "    vec4 frag_color = vec4(0.0, 0.0, 0.0, 0.0);\n";
+    out << "    vec4 light = vec4(0.0, 0.0, 0.0, 0.0);\n";
     out << body;
-    out << "    finalColor = frag_color;\n";
+    // Premultiplied for the one blend state every drawing rule shares; an alpha above 1 must not scale color.
+    out << "    float cover_alpha = clamp(frag_color.a, 0.0, 1.0);\n";
+    out << "    float light_alpha = clamp(light.a, 0.0, 1.0);\n";
+    out << "    finalColor = vec4(frag_color.rgb * cover_alpha + light.rgb * light_alpha, cover_alpha);\n";
     out << "}\n";
     return out.str();
 }
@@ -943,6 +982,10 @@ std::string uniform_value(const StageUniform& uniform, const std::string& lowere
 }
 
 std::string set_uniform(const StageUniform& uniform, const std::string& lowered, const char* indent) {
+    if (uniform.type == GlslType::Texture) {
+        return std::string(indent) + "cactus::runtime::entt_backend::bind_drawing_rule_texture(texture_" +
+               uniform.glsl_name + ", " + lowered + ");\n";
+    }
     return std::string(indent) + "cactus::runtime::entt_backend::set_drawing_rule_uniform(*shader, loc_" +
            uniform.glsl_name + ", " + uniform_value(uniform, lowered) + ");\n";
 }
@@ -1004,8 +1047,17 @@ std::string emit_drawing_rule_function(const RuleNode& rule, const DecoratedProg
     out << "    if (shader == nullptr) {\n";
     out << "        return;\n";
     out << "    }\n";
-    // The shader loads once, so its uniform locations never change.
+    // The shader loads once, so its uniform locations and texture units never change.
+    int texture_slot = 0;
     for (const auto& uniform : uniforms) {
+        if (uniform.type == GlslType::Texture) {
+            out << "    static const int unit_" << uniform.glsl_name
+                << " = cactus::runtime::entt_backend::drawing_rule_texture_unit(*shader, \"" << uniform.glsl_name
+                << "\", " << texture_slot++ << ");\n";
+            out << "    cactus::runtime::entt_backend::DrawingRuleTexture texture_" << uniform.glsl_name
+                << "{.unit = unit_" << uniform.glsl_name << "};\n";
+            continue;
+        }
         out << "    static const int loc_" << uniform.glsl_name
             << " = cactus::runtime::entt_backend::drawing_rule_uniform_location(*shader, \"" << uniform.glsl_name
             << "\");\n";

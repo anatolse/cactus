@@ -4856,7 +4856,8 @@ std::string EnttSystemEmitter::emit_func_declaration(const FuncNode& func,
         return {};
     }
     const auto* resolved = EnttCodegenUtils::find_func(program, *func.resolved_func_id);
-    if (resolved == nullptr || has_reference_params(*resolved) != reference_params) {
+    if (resolved == nullptr || has_reference_params(*resolved) != reference_params ||
+        !resolved->fragment_only_call.empty()) {
         return {};
     }
     return namespace_block(cpp_namespace_path(func.resolved_func_id->module), func_signature(func, *resolved) + ";\n");
@@ -4870,6 +4871,10 @@ std::string EnttSystemEmitter::emit_func(const FuncNode& func, const DecoratedPr
     if (resolved == nullptr) {
         throw std::runtime_error("cpp-entt backend: missing resolved authored func '" +
                                  make_canonical_id(*func.resolved_func_id) + "'");
+    }
+    // It samples a texture, so only a fragment shader runs it.
+    if (!resolved->fragment_only_call.empty()) {
+        return {};
     }
 
     std::ostringstream out;

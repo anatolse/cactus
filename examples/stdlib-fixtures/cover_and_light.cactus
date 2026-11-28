@@ -1,0 +1,130 @@
+module cover_and_light
+
+use std.core
+use std.render.textures as textures
+
+# One square per case, in a row over a #202020 background. A fragment handler
+# covers what is under it with `frag_color`, adds `light`, or both, and may
+# sample a texture. Cases 3 and 6 sit on a white plate.
+#   0 cover red             1 light #404040         2 two lights overlap
+#   3 cover and light       4 transparent cover     5 light brighter than 1
+#   6 cover alpha above 1   7 sampled quadrants     8 UV outside the image
+#   9 a row's quadrants     10 a row's yellow       11 a row's missing texture
+#   12 negative light
+
+const:
+    SPACING = 60.0
+    ORIGIN = 40.0
+    ROW = 60.0
+    HALF = 20.0
+    PLATE_HALF = 28.0
+    OVERLAP = 20.0
+
+asset Quadrants: texture = "assets/quadrants.png"
+asset Yellow: texture = "assets/yellow.png"
+asset Missing: texture = "assets/does_not_exist.png"
+
+trait Probe:
+    let index: int = 0
+    let shift: float = 0.0
+
+trait Plate:
+    let index: int = 0
+
+trait Skin:
+    let image: texture_id
+    let index: int = 0
+
+template ProbeAt(index: int):
+    Probe:
+        index = index
+
+template PlateAt(index: int):
+    Plate:
+        index = index
+
+template TileAt(index: int, image: texture_id):
+    Skin:
+        index = index
+        image = image
+
+entity Cover from ProbeAt(index = 0)
+entity Light from ProbeAt(index = 1)
+entity FirstLight from ProbeAt(index = 2)
+entity SecondLight:
+    Probe:
+        index = 2
+        shift = OVERLAP
+entity Both from ProbeAt(index = 3)
+entity Clear from ProbeAt(index = 4)
+entity Bright from ProbeAt(index = 5)
+entity Opaque from ProbeAt(index = 6)
+entity Sampled from ProbeAt(index = 7)
+entity Edge from ProbeAt(index = 8)
+entity Dark from ProbeAt(index = 12)
+
+entity BothPlate from PlateAt(index = 3)
+entity OpaquePlate from PlateAt(index = 6)
+
+entity QuadrantTile from TileAt(index = 9, image = Quadrants)
+entity YellowTile from TileAt(index = 10, image = Yellow)
+entity MissingTile from TileAt(index = 11, image = Missing)
+
+func center(index: int) vec2:
+    return vec2(ORIGIN + index * SPACING, ROW)
+
+func picture(tex: texture_id, uv: vec2) color:
+    return textures.sample(tex, uv)
+
+rule Plates:
+    each:
+        Plate as plate
+
+    on render.vertex as v:
+        v.screen_position = center(plate.index) + v.corner * PLATE_HALF
+
+    on render.fragment as f:
+        f.frag_color = #FFFFFFFF
+
+rule Probes:
+    each:
+        Probe as probe
+    after: Plates
+
+    on render.vertex as v:
+        v.screen_position = center(probe.index) + vec2(probe.shift, 0.0) + v.corner * HALF
+
+    on render.fragment as f:
+        match probe.index:
+            0 =>
+                f.frag_color = #FF0000FF
+            1 =>
+                f.light = #404040FF
+            2 =>
+                f.light = #404040FF
+            3 =>
+                f.frag_color = #00000080
+                f.light = #400000FF
+            4 =>
+                f.frag_color = #FF000000
+            5 =>
+                f.light = #FF8000FF * 3.0
+            6 =>
+                f.frag_color = color(0.5, 0.5, 0.5, 2.0)
+            7 =>
+                f.frag_color = textures.sample(Quadrants, f.uv)
+            12 =>
+                f.light = color(-0.5, -0.5, -0.5, 1.0)
+            _ =>
+                f.frag_color = textures.sample(Quadrants, vec2(1.5, 0.25))
+
+rule Tiles:
+    each:
+        Skin as skin
+    after: Probes
+
+    on render.vertex as v:
+        v.screen_position = center(skin.index) + v.corner * HALF
+
+    on render.fragment as f:
+        f.frag_color = picture(skin.image, f.uv)

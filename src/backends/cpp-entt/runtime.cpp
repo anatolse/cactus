@@ -195,6 +195,7 @@ struct TextureResourceEntry {
     Image image{};
     int width{0};
     int height{0};
+    bool fallback{false};  // the file was missing or unreadable
 };
 
 struct MeshResourceEntry {
@@ -982,7 +983,38 @@ MeshPlaceholderShape placeholder_mesh_shape(const std::string_view asset_id) noe
 
 namespace {
 
+// A drawing rule samples this 1x1 #00000000 texture where its texture is missing.
+struct TransparentTexture {
+    Texture2D texture{};
+    bool loaded{false};
+};
+
+TransparentTexture& transparent_texture_storage() noexcept {
+    static TransparentTexture storage;
+    return storage;
+}
+
+// Missing texture handles a drawing rule already noted, once each.
+std::unordered_set<std::uint32_t>& diagnosed_missing_drawing_textures() noexcept try {
+    static std::unordered_set<std::uint32_t> handles;
+    return handles;
+} catch (...) {
+    std::terminate();
+}
+
+void clear_transparent_texture() noexcept {
+    auto& storage = transparent_texture_storage();
+#ifndef CACTUS_RAYLIB_FAKE
+    if (storage.loaded && cactus::runtime::raylib::IsWindowReady()) {
+        UnloadTexture(storage.texture);
+    }
+#endif
+    storage = {};
+    diagnosed_missing_drawing_textures().clear();
+}
+
 void clear_texture_store() noexcept {
+    clear_transparent_texture();
     for (auto& [runtime_id, entry] : textures()) {
         (void)runtime_id;
         if (entry.image.data != nullptr) {
@@ -1066,6 +1098,7 @@ TextureResourceEntry& probe_texture(const int runtime_id) {
         }
         entry.image = GenImageChecked(
             kTextureFallbackSize, kTextureFallbackSize, kTextureFallbackSquare, kTextureFallbackSquare, MAGENTA, BLACK);
+        entry.fallback = true;
     }
     entry.width  = entry.image.width;
     entry.height = entry.image.height;
@@ -3848,11 +3881,14 @@ void begin_drawing_rule([[maybe_unused]] const Shader& shader, bool world_space)
     cactus::runtime::raylib::BeginMode2D(world_space ? get_active_camera_2d() : screen);
 #ifndef CACTUS_RAYLIB_FAKE
     BeginShaderMode(shader);
+    // The fragment stage outputs cover and light premultiplied: one blend state draws both.
+    BeginBlendMode(BLEND_ALPHA_PREMULTIPLY);
 #endif
 }
 
 void end_drawing_rule() noexcept {
 #ifndef CACTUS_RAYLIB_FAKE
+    EndBlendMode();
     EndShaderMode();
 #endif
     cactus::runtime::raylib::EndMode2D();
@@ -3941,6 +3977,68 @@ static void run_deferred_drawing_rules() noexcept {
         }
     }
     deferred_drawing_rules().clear();
+}
+
+namespace {
+
+// Above the units rlgl binds for its own batches (1 + RL_DEFAULT_BATCH_MAX_TEXTURE_UNITS): its draws never rebind ours.
+constexpr int kFirstDrawingRuleTextureUnit = 8;
+
+unsigned int transparent_texture_id() noexcept {
+    auto& storage = transparent_texture_storage();
+#ifndef CACTUS_RAYLIB_FAKE
+    if (!storage.loaded && cactus::runtime::raylib::IsWindowReady()) {
+        Image image     = GenImageColor(1, 1, BLANK);
+        storage.texture = LoadTextureFromImage(image);
+        storage.loaded  = true;
+        UnloadImage(image);
+    }
+#endif
+    return storage.texture.id;
+}
+
+unsigned int drawing_rule_texture_id(AssetHandle handle) noexcept try {
+    const auto resolved = shared_asset_registry().resolve(AssetKind::Texture, handle);
+    if (!resolved.ready()) {
+        if (diagnosed_missing_drawing_textures().insert(handle).second) {
+            note_missing_asset();
+        }
+        return transparent_texture_id();
+    }
+    const Texture2D* texture = ensure_texture_resource(resolved.runtime_id);
+    if (texture == nullptr || textures()[resolved.runtime_id].fallback) {
+        return transparent_texture_id();
+    }
+    return texture->id;
+} catch (...) {
+    std::terminate();
+}
+
+}  // namespace
+
+int drawing_rule_texture_unit([[maybe_unused]] const Shader& shader,
+                              [[maybe_unused]] const char* name,
+                              const int slot) noexcept {
+    const int unit = kFirstDrawingRuleTextureUnit + slot;
+#ifndef CACTUS_RAYLIB_FAKE
+    SetShaderValue(shader, GetShaderLocation(shader, name), &unit, SHADER_UNIFORM_INT);
+#endif
+    return unit;
+}
+
+void bind_drawing_rule_texture(DrawingRuleTexture& texture, const AssetHandle handle) noexcept {
+    if (texture.bound && texture.handle == handle) {
+        return;
+    }
+    texture.bound  = true;
+    texture.handle = handle;
+    count_drawing_texture();
+    [[maybe_unused]] const unsigned int id = drawing_rule_texture_id(handle);
+#ifndef CACTUS_RAYLIB_FAKE
+    rlActiveTextureSlot(texture.unit);
+    rlEnableTexture(id);
+    rlActiveTextureSlot(0);
+#endif
 }
 
 void draw_drawing_rule_quad() noexcept {

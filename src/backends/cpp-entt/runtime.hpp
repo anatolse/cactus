@@ -242,6 +242,18 @@ void set_drawing_rule_uniform(const Shader& shader, int location, Vector2 value)
 void set_drawing_rule_uniform(const Shader& shader, int location, Vector3 value) noexcept;
 void set_drawing_rule_uniform(const Shader& shader, int location, CactusColor value) noexcept;
 
+// A sampler of a drawing rule's shader, and the texture bound to its unit during one draw.
+struct DrawingRuleTexture {
+    int unit{0};
+    AssetHandle handle{0};
+    bool bound{false};
+};
+
+// Points sampler `name` at the texture unit of the shader's `slot`-th sampler and returns that unit.
+[[nodiscard]] int drawing_rule_texture_unit(const Shader& shader, const char* name, int slot) noexcept;
+// Binds `handle`'s texture unless it is bound already; a missing texture binds one that reads #00000000.
+void bind_drawing_rule_texture(DrawingRuleTexture& texture, AssetHandle handle) noexcept;
+
 void draw_drawing_rule_quad() noexcept;
 
 // Runs `draw` at the end of the frame, after the UI, with this viewport's camera and rectangle.

@@ -21,6 +21,7 @@ struct PerfCounters {
     std::uint64_t drawing_rows     = 0;  // domain rows a drawing rule's draw loop visited
     std::uint64_t drawing_quads    = 0;  // quads a drawing rule drew
     std::uint64_t drawing_uniforms = 0;  // shader values a drawing rule set
+    std::uint64_t drawing_textures = 0;  // textures a drawing rule bound
     std::uint64_t repeat_passes    = 0;  // passes run by rules with `repeat:`
     std::uint64_t cell_rows        = 0;  // left cells a rule over cells visited
     std::uint64_t clamp_merges     = 0;  // deltas merged into a clamped field's exact pending value
@@ -44,6 +45,7 @@ struct PerfCounters {
         drawing_rows += other.drawing_rows;
         drawing_quads += other.drawing_quads;
         drawing_uniforms += other.drawing_uniforms;
+        drawing_textures += other.drawing_textures;
         repeat_passes += other.repeat_passes;
         cell_rows += other.cell_rows;
         clamp_merges += other.clamp_merges;
@@ -122,6 +124,10 @@ inline void count_drawing_uniform() noexcept {
     ++counting_target().drawing_uniforms;
 }
 
+inline void count_drawing_texture() noexcept {
+    ++counting_target().drawing_textures;
+}
+
 inline void count_cell_row() noexcept {
     ++counting_target().cell_rows;
 }
@@ -164,6 +170,7 @@ inline void count_drawing_row() noexcept {}
 inline void count_cell_row() noexcept {}
 inline void count_drawing_quad() noexcept {}
 inline void count_drawing_uniform() noexcept {}
+inline void count_drawing_texture() noexcept {}
 inline void count_repeat_pass() noexcept {}
 inline void count_clamp_work(std::size_t /*merges*/, std::size_t /*settles*/) noexcept {}
 inline void count_component_move() noexcept {}

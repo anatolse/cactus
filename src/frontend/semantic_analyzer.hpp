@@ -25,6 +25,8 @@
 
 namespace cactus {
 
+struct StageTranslationLookups;
+
 // ── Decorated AST (resolved output of the semantic analyzer) ───────────────
 
 // Resolved binding for a declared phase field's initializer (e.g. `dt: float = frame.dt`).
@@ -114,6 +116,8 @@ struct ResolvedFunc : CanonicalIdentity {
     // A stage handler may call it (a non-extern func); otherwise `stage_blocker` says why not.
     bool stage_translatable = false;
     std::string stage_blocker;
+    // The fragment-only extern it calls, directly or through funcs; empty when none.
+    std::string fragment_only_call;
 };
 
 inline bool has_reference_params(const ResolvedFunc& func) {
@@ -1561,6 +1565,14 @@ private:
     void validate_stage_handler_body(const RuleNode& rule, const EventHandlerNode& handler, bool is_vertex) const;
     void validate_stage_outputs(const EventHandlerNode& handler, bool is_vertex) const;
     void reject_stage_value_types(const RuleNode& rule, const EventHandlerNode& handler) const;
+    void reject_fragment_only_calls(const ProgramNode& program) const;
+    struct CalledFunc {
+        const CallExpr* call = nullptr;
+        SymbolId symbol;
+        const ResolvedFunc* func = nullptr;
+    };
+    // The func `node` calls; empty when `node` is no call of a known func.
+    [[nodiscard]] std::optional<CalledFunc> called_func(const ExprNode& node) const;
     using StageBindings = std::unordered_map<std::string, const ResolvedTrait*>;
     [[nodiscard]] std::optional<TypeInfo> stage_read_type(const ExprNode& node, const StageBindings& bindings) const;
     [[nodiscard]] std::optional<ResolvedHandlerTrigger> try_resolve_render_stage_trigger(const std::string& ref) const;
@@ -2377,6 +2389,13 @@ private:
     std::vector<ConstAssignment*> order_constants(ProgramNode& program);
     void order_and_type_constants(ProgramNode& program);
     void refine_glsl_portability(const ProgramNode& program);
+    void mark_fragment_only_funcs(const ProgramNode& program, const StageTranslationLookups& lookups);
+    struct AssetRead {
+        std::string id;
+        TypeKind kind = TypeKind::Unknown;
+    };
+    // The asset a name or a qualified name reads.
+    [[nodiscard]] std::optional<AssetRead> read_asset(const ExprNode& read) const;
     TypeInfo constant_type(const ConstAssignment& assignment);
     bool validate_const_expression(const ExprNode& expr, const std::string& context, bool whole_value);
     bool reject_const(const SourceLocation& location, const std::string& context, const std::string& reason);

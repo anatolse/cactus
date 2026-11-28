@@ -1715,6 +1715,19 @@ cactus_add_visual_test(test_stage_functions_visual
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_stage_functions_visual.cpp
 )
 
+# Real-GL visual test: cover and light outputs compose as specified; a fragment handler samples textures.
+cactus_add_visual_test(test_cover_and_light_visual
+    CACTUS_SOURCE examples/stdlib-fixtures/cover_and_light.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_cover_and_light_visual.cpp
+)
+
+cactus_add_headless_behavior_test(test_cover_and_light_headless_behavior
+    CACTUS_SOURCE examples/stdlib-fixtures/cover_and_light.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_cover_and_light_headless_behavior.cpp
+)
+
 # Real-GL visual tests: renderers draw the projected picture, not the simulation's pose and color.
 cactus_add_visual_test(test_drawn_picture_visual
     CACTUS_SOURCE examples/stdlib-fixtures/drawn_picture.cactus

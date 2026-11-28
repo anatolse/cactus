@@ -4,6 +4,7 @@
 #include "common/duration.hpp"
 #include "common/numeric.hpp"
 #include "common/drawing_rule_builtin_fields.hpp"
+#include "common/drawing_rule_intrinsics.hpp"
 #include "common/strong_components.hpp"
 #include "common/vector_binary_ops.hpp"
 #include "frontend/archetype_reachability.hpp"
@@ -1129,7 +1130,9 @@ std::optional<std::unordered_set<std::string>> known_stdlib_effect_summary(const
     }
 
     const auto& module = symbol.module.name;
-    if (module == "std.math" || module.starts_with("std.math.") || module == "std.random") {
+    // A texture read sees only an asset, which never changes.
+    if (module == "std.math" || module.starts_with("std.math.") || module == "std.random" ||
+        module == kTexturesModule) {
         return std::unordered_set<std::string>{};
     }
     if (module == "std.input") {
@@ -3622,12 +3625,31 @@ void SemanticAnalyzer::order_and_type_constants(ProgramNode& program) {
     }
 }
 
+static std::optional<TypeInfo> asset_handle_type(TypeKind kind);
+
+std::optional<SemanticAnalyzer::AssetRead> SemanticAnalyzer::read_asset(const ExprNode& read) const {
+    if (const auto* member = std::get_if<MemberExpr>(&read.expr);
+        member != nullptr && member->resolved_asset_id && member->resolved_asset_type) {
+        return AssetRead{.id = make_canonical_id(*member->resolved_asset_id), .kind = *member->resolved_asset_type};
+    }
+    const auto* ident = std::get_if<IdentExpr>(&read.expr);
+    const auto found  = ident == nullptr ? asset_decl_types_.end() : asset_decl_types_.find(ident->name);
+    if (found == asset_decl_types_.end()) {
+        return std::nullopt;
+    }
+    return AssetRead{.id = current_module_name_ + "." + ident->name, .kind = found->second};
+}
+
 // Func translatability and constant portability can depend on each other, so both only narrow until stable.
 void SemanticAnalyzer::refine_glsl_portability(const ProgramNode& program) {
     const StageTranslationLookups lookups{
         .func      = [this](const SymbolId& symbol) { return find_resolved_func(symbol); },
         .constant  = [this](const SymbolId& symbol) { return find_resolved_const(symbol); },
-        .structure = [this](const SymbolId& symbol) { return find_resolved_struct(symbol); }};
+        .structure = [this](const SymbolId& symbol) { return find_resolved_struct(symbol); },
+        .asset     = [this](const ExprNode& read) {
+            auto asset = read_asset(read);
+            return asset.has_value() ? std::move(asset->id) : std::string();
+        }};
     const auto narrow_func = [&](const FuncNode& func) {
         const auto found = result_.funcs.find(func.name);
         if (found == result_.funcs.end() || !found->second.stage_translatable) {
@@ -3659,6 +3681,23 @@ void SemanticAnalyzer::refine_glsl_portability(const ProgramNode& program) {
                     changed = narrow_const(assignment) || changed;
                 }
             }
+        }
+    }
+    mark_fragment_only_funcs(program, lookups);
+}
+
+// A func that reaches a fragment-only extern, through any chain of calls, runs only in a fragment stage.
+void SemanticAnalyzer::mark_fragment_only_funcs(const ProgramNode& program, const StageTranslationLookups& lookups) {
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (const auto& decl : program.declarations) {
+            const auto* func = std::get_if<FuncNode>(&decl);
+            const auto found = func == nullptr ? result_.funcs.end() : result_.funcs.find(func->name);
+            if (found == result_.funcs.end() || !found->second.fragment_only_call.empty()) {
+                continue;
+            }
+            found->second.fragment_only_call = fragment_only_call(*func, lookups);
+            changed = changed || !found->second.fragment_only_call.empty();
         }
     }
 }
@@ -5958,6 +5997,11 @@ bool holds_on_every_path(const std::vector<std::unique_ptr<StmtNode>>& stmts, co
     return names;
 }
 
+// The fragment-only extern a call of `func` reaches; empty when none.
+[[nodiscard]] std::string fragment_only_name(const ResolvedFunc& func, const SymbolId& symbol) {
+    return is_fragment_only_intrinsic(symbol) ? symbol.local_name : func.fragment_only_call;
+}
+
 }  // namespace
 
 void SemanticAnalyzer::validate_drawing_rule_shape(const RuleNode& rule) const {
@@ -6010,7 +6054,20 @@ void SemanticAnalyzer::validate_stage_call(const CallExpr& node,
     }
     const auto& symbol = *resolved;
     const auto* func   = find_resolved_func(symbol);
-    if (func == nullptr || stage_may_call(*func, symbol)) {
+    if (func == nullptr) {
+        return;
+    }
+    const auto name          = symbol.module == current_module_id_ ? symbol.local_name : make_canonical_id(symbol);
+    const auto fragment_only = fragment_only_name(*func, symbol);
+    if (std::string_view(stage_desc) == "vertex" && !fragment_only.empty()) {
+        errors_.error(
+            location,
+            func->is_extern
+                ? std::format("`{}` belongs to a fragment stage", fragment_only)
+                : std::format("`{}` belongs to a fragment stage, and func '{}' calls it", fragment_only, name));
+        return;
+    }
+    if (stage_may_call(*func, symbol)) {
         return;
     }
     if (func->is_extern) {
@@ -6019,7 +6076,6 @@ void SemanticAnalyzer::validate_stage_call(const CallExpr& node,
                           "' has no registered portable GLSL translation for a stage handler");
         return;
     }
-    const auto name = symbol.module == current_module_id_ ? symbol.local_name : make_canonical_id(symbol);
     errors_.error(location,
                   std::format("func '{}' cannot run in a {}-stage handler: {}", name, stage_desc, func->stage_blocker));
 }
@@ -6156,6 +6212,10 @@ void SemanticAnalyzer::validate_stage_statement(
 // The type of a value a stage reads at `node`: a duration literal or conversion,
 // a field of the row, or a field reached through a trait access.
 std::optional<TypeInfo> SemanticAnalyzer::stage_read_type(const ExprNode& node, const StageBindings& bindings) const {
+    const auto asset = read_asset(node);
+    if (auto type = asset.has_value() ? asset_handle_type(asset->kind) : std::nullopt) {
+        return type;
+    }
     if (const auto* literal = std::get_if<LiteralExpr>(&node.expr)) {
         return literal->kind == LiteralExpr::Kind::Duration ? std::optional(make_duration_type()) : std::nullopt;
     }
@@ -6179,20 +6239,44 @@ std::optional<TypeInfo> SemanticAnalyzer::stage_read_type(const ExprNode& node, 
     return trait == nullptr ? std::nullopt : std::optional(find_field_type_in(trait->fields, member->member));
 }
 
+std::optional<SemanticAnalyzer::CalledFunc> SemanticAnalyzer::called_func(const ExprNode& node) const {
+    const auto* call  = std::get_if<CallExpr>(&node.expr);
+    const auto symbol = call == nullptr ? std::nullopt : resolve_callee_symbol(*call->callee);
+    if (!symbol.has_value()) {
+        return std::nullopt;
+    }
+    const auto* func = find_resolved_func(*symbol);
+    if (func == nullptr) {
+        return std::nullopt;
+    }
+    return CalledFunc{.call = call, .symbol = *symbol, .func = func};
+}
+
 // A stage handler runs on the GPU: it holds only shader values, and a duration
 // would need a 64-bit integer GLSL lacks.
 void SemanticAnalyzer::reject_stage_value_types(const RuleNode& rule, const EventHandlerNode& handler) const {
     const auto bindings = build_filter_bindings(rule.filter);
     // The link a trait access reads through is not a value the stage holds.
     std::unordered_set<const ExprNode*> link_owners;
+    std::unordered_set<const ExprNode*> texture_uses;
     for_each_statement_expression(handler.body, [&](const ExprNode& top) {
         visit_expression(top, [&](const ExprNode& node) {
             if (const auto* access = std::get_if<TraitAccessExpr>(&node.expr)) {
                 link_owners.insert(access->object.get());
             }
+            if (const auto called = called_func(node)) {
+                const auto uses = texture_arguments(*called->call, *called->func);
+                texture_uses.insert(uses.begin(), uses.end());
+            }
         });
     });
     const auto report = [&](const ExprNode& node, const TypeInfo& type) {
+        if (type.kind == TypeKind::TextureId) {
+            if (!texture_uses.contains(&node)) {
+                errors_.error(node.location, "a stage uses a texture only in `textures.sample`");
+            }
+            return;
+        }
         if (type.kind == TypeKind::Duration) {
             errors_.error(node.location,
                           "a stage handler can't use a `duration`; convert it with `seconds(...)` in a rule "
@@ -6219,8 +6303,13 @@ void SemanticAnalyzer::validate_stage_outputs(const EventHandlerNode& handler, b
     }
     const auto& alias = *handler.alias;
     if (!is_vertex) {
-        if (!assigns_on_every_path(handler.body, alias, "frag_color")) {
-            errors_.error(handler.location, "the fragment handler must assign `frag_color` on every path");
+        const auto assigns_output = [&](const StmtNode& stmt) {
+            return assigns_stage_field(stmt, alias, "frag_color") || assigns_stage_field(stmt, alias, "light");
+        };
+        if (!holds_on_every_path(handler.body, assigns_output)) {
+            errors_.error(handler.location,
+                          "the fragment handler must assign `frag_color` or `light` on every path; a path "
+                          "assigns no output");
         }
         return;
     }
@@ -6283,8 +6372,39 @@ void SemanticAnalyzer::validate_stage_handler_body(const RuleNode& rule,
     validate_stage_outputs(handler, is_vertex);
 }
 
+// Outside a stage nothing can run a fragment-only function: rules run on the CPU.
+void SemanticAnalyzer::reject_fragment_only_calls(const ProgramNode& program) const {
+    const auto check = [&](const ExprNode& top) {
+        visit_expression(top, [&](const ExprNode& node) {
+            const auto called = called_func(node);
+            const auto name   = called.has_value() ? fragment_only_name(*called->func, called->symbol) : std::string();
+            if (!name.empty()) {
+                errors_.error(node.location,
+                              std::format("`{}` belongs to a fragment stage; a rule can't call it", name));
+            }
+        });
+    };
+    for (const auto& decl : program.declarations) {
+        const auto* rule = std::get_if<RuleNode>(&decl);
+        if (rule == nullptr) {
+            continue;
+        }
+        if (rule->where_clause.has_value()) {
+            for (const auto& predicate : rule->where_clause->predicates) {
+                check(*predicate);
+            }
+        }
+        for (const auto& handler : rule->handlers) {
+            if (!is_stage_handler(handler)) {
+                for_each_statement_expression(handler.body, check);
+            }
+        }
+    }
+}
+
 // A rule with a handler on `render.vertex` or `render.fragment` is a drawing rule.
 void SemanticAnalyzer::validate_drawing_rules(ProgramNode& program) {
+    reject_fragment_only_calls(program);
     for (auto& decl : program.declarations) {
         auto* rule = std::get_if<RuleNode>(&decl);
         if (rule == nullptr || !is_drawing_rule(*rule)) {

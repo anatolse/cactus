@@ -786,7 +786,9 @@ TEST_CASE("integration: std.color helpers lower to the same float formula in a f
     REQUIRE(merged.has_value());
     const auto code = CppEnttCodegen::generate(*merged);
     INFO(code.substr(code.find("frag_color"), 2000));
-    CHECK_FALSE(code.contains("clamp("));
+    // Only the outputs' alphas clamp, before the blend; the helpers and the color channels never do.
+    CHECK_FALSE(code.contains("clamp(let_"));
+    CHECK_FALSE(code.contains("clamp(frag_color.rgb"));
     CHECK(code.contains("return (let_a + ((let_b - let_a) * let_t));"));
     CHECK(code.contains("return vec4(let_base.r, let_base.g, let_base.b, (let_base.a * let_alpha));"));
     CHECK(code.contains(

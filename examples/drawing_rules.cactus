@@ -8,6 +8,7 @@ use std.transform.flat as tf
 use std.render.layers as layers
 use std.render.shapes as shapes
 use std.render.text as text
+use std.render.textures as textures
 use std.camera.flat as cam
 use std.camera.viewport as vp
 
@@ -19,6 +20,9 @@ use std.camera.viewport as vp
 #           screen size. A camera move does not move it.
 #   Haze  - a patch of gray noise in screen pixels. A stage may call any pure
 #           function, here std.noise with its loops and integer hash.
+#   Flames - on a dark hearth, a flame glows while young and turns to smoke as
+#           it ages. `light` adds to what is under it; `frag_color` covers it.
+#   Sparks - a glow whose shape comes from a texture, read with textures.sample.
 
 const:
     DOT_RADIUS = 40.0
@@ -29,6 +33,11 @@ const:
     HAZE_HALF = 90.0
     HAZE_SCALE = 6.0
     HAZE_SEED = 7
+    FLAME_RADIUS = 30.0
+    FLAME = #FF8020FF
+    SMOKE = #C0C0C0FF
+
+asset SoftSpark: texture = "art/soft_spark.png"
 
 trait Ember:
     var heat: float = 1.0
@@ -39,6 +48,13 @@ trait Beam:
 trait Badge
 
 trait Haze
+
+trait Flame:
+    var age: float = 0.0
+
+trait Spark:
+    let image: texture_id
+    var hue: color = #FFFFFFFF
 
 # Drawn after every standard layer.
 pub group overlay:
@@ -59,6 +75,12 @@ template Dot(at: vec2, heat: float):
         position = at
     Ember:
         heat = heat
+
+template Blaze(at: vec2, age: float):
+    tf.WorldTransform:
+        position = at
+    Flame:
+        age = age
 
 template Caption(at: vec2, words: string):
     text.ScreenLabel:
@@ -98,6 +120,24 @@ entity Corner:
 
 entity Fog:
     Haze
+
+entity Hearth:
+    tf.WorldTransform:
+        position = vec2(300.0, 330.0)
+    shapes.Shape:
+        type = shapes.ShapeType.Rectangle
+        size = vec2(260.0, 120.0)
+        color = #202020FF
+
+entity Young from Blaze(at = vec2(350.0, 390.0), age = 0.0)
+entity Old from Blaze(at = vec2(430.0, 390.0), age = 1.0)
+
+entity Twinkle:
+    tf.WorldTransform:
+        position = vec2(510.0, 390.0)
+    Spark:
+        image = SoftSpark
+        hue = #40A0FFFF
 
 entity HotCaption from Caption(at = vec2(205.0, 205.0), words = "##")
 entity CornerCaption from Caption(at = vec2(700.0, 520.0), words = "##")
@@ -158,3 +198,31 @@ rule Hazes:
     on render.fragment as f:
         let shade = 0.5 + 0.5 * noise.perlin2(f.uv * HAZE_SCALE, HAZE_SEED)
         f.frag_color = color(shade, shade, shade, 1.0)
+
+rule Flames:
+    each:
+        tf.WorldTransform as xf
+        Flame as flame
+    group: layers.sprites
+    after: Hazes
+
+    on render.vertex as v:
+        v.world_position = xf.position + v.corner * FLAME_RADIUS
+
+    on render.fragment as f:
+        let fade = 1.0 - v2.length(f.uv - vec2(0.5, 0.5)) * 2.0
+        f.light = color.with_alpha(FLAME, (1.0 - flame.age) * fade)
+        f.frag_color = color.with_alpha(SMOKE, flame.age * fade)
+
+rule Sparks:
+    each:
+        tf.WorldTransform as xf
+        Spark as spark
+    group: layers.sprites
+    after: Flames
+
+    on render.vertex as v:
+        v.world_position = xf.position + v.corner * FLAME_RADIUS
+
+    on render.fragment as f:
+        f.light = textures.sample(spark.image, f.uv) * spark.hue

@@ -8800,7 +8800,102 @@ TEST_CASE("Codegen EnTT: a tint above 1.0 reaches the fragment stage unclamped",
     CHECK(code.contains("tint_out = vec4(2.0, 0.5, 0.5, 1.0);"));
     CHECK(code.contains("out vec4 v_tint;"));
     CHECK(code.contains("in vec4 v_tint;"));
-    CHECK(!code.contains("clamp("));
+    CHECK(!code.contains("clamp(tint"));
+    CHECK(!code.contains("clamp(frag_color.rgb"));
+}
+
+TEST_CASE("Codegen EnTT: the fragment stage outputs cover and light premultiplied, alphas clamped",
+          "[codegen-entt][drawing-rules]") {
+    const auto code = drawing_rule_codegen("cover_and_light",
+                                           "",
+                                           kDrawVertex,
+                                           "        f.frag_color = #00000080\n"
+                                           "        f.light = f.tint * 3.0\n");
+    CHECK(code.contains("vec4 light = vec4(0.0, 0.0, 0.0, 0.0);"));
+    CHECK(code.contains("float cover_alpha = clamp(frag_color.a, 0.0, 1.0);"));
+    CHECK(code.contains("float light_alpha = clamp(light.a, 0.0, 1.0);"));
+    CHECK(code.contains("finalColor = vec4(frag_color.rgb * cover_alpha + light.rgb * light_alpha, cover_alpha);"));
+}
+
+namespace {
+
+std::string texture_codegen(const std::string& case_name, const std::string& fragment, const std::string& funcs = "") {
+    const std::string source = "module drawing_textures\n"
+                               "use std.core\n"
+                               "use std.transform.flat as tf\n"
+                               "use std.render.layers as layers\n"
+                               "use std.render.textures as textures\n"
+                               "asset Soft: texture = \"soft.png\"\n"
+                               "trait Skin:\n"
+                               "    let image: texture_id\n"
+                               "entity Tile:\n"
+                               "    tf.WorldTransform\n"
+                               "    Skin:\n"
+                               "        image = Soft\n" +
+                               funcs +
+                               "rule Tiles:\n"
+                               "    each:\n"
+                               "        tf.WorldTransform as xf\n"
+                               "        Skin as skin\n"
+                               "    group: layers.sprites\n"
+                               "    on render.vertex as v:\n"
+                               "        v.world_position = xf.position + v.corner\n"
+                               "    on render.fragment as f:\n" +
+                               fragment;
+    return linked_codegen("drawing_textures_" + case_name, {{"drawing_textures", source}}, "drawing_textures");
+}
+
+std::string tiles_draw(const std::string& code) {
+    const auto start = code.find("void tiles_draw(entt::registry& registry)");
+    REQUIRE(start != std::string::npos);
+    const auto shaders_end = code.find(")GLSL\";", code.find("kFragmentShader", start));
+    REQUIRE(shaders_end != std::string::npos);
+    return code.substr(start, code.find("\n}\n\n", shaders_end) - start);
+}
+
+}  // namespace
+
+TEST_CASE("Codegen EnTT: a row's texture is a sampler bound per row", "[codegen-entt][drawing-rules][textures]") {
+    const auto code = texture_codegen("row", "        f.frag_color = textures.sample(skin.image, f.uv)\n");
+    CHECK(code.contains("uniform sampler2D u_skin_image;"));
+    CHECK(code.contains("frag_color = cactus_sample(u_skin_image, uv);"));
+    CHECK(code.contains("vec4 cactus_sample(sampler2D texture_unit, vec2 uv)"));
+    const auto draw = tiles_draw(code);
+    const auto loop = draw.find("auto entity :");
+    const auto bind = draw.find("bind_drawing_rule_texture(");
+    REQUIRE(loop != std::string::npos);
+    REQUIRE(bind != std::string::npos);
+    CHECK(bind > loop);
+    CHECK(draw.contains("skin_comp.image"));
+}
+
+TEST_CASE("Codegen EnTT: an asset texture is bound once per draw", "[codegen-entt][drawing-rules][textures]") {
+    const auto draw = tiles_draw(texture_codegen("asset", "        f.light = textures.sample(Soft, f.uv)\n"));
+    const auto loop = draw.find("auto entity :");
+    const auto bind = draw.find("bind_drawing_rule_texture(");
+    REQUIRE(loop != std::string::npos);
+    REQUIRE(bind != std::string::npos);
+    CHECK(bind < loop);
+}
+
+TEST_CASE("Codegen EnTT: a named entity's texture is bound once per draw", "[codegen-entt][drawing-rules][textures]") {
+    const auto draw = tiles_draw(texture_codegen("named", "        f.light = textures.sample(Tile[Skin].image, f.uv)\n"));
+    const auto loop = draw.find("auto entity :");
+    const auto bind = draw.find("bind_drawing_rule_texture(");
+    REQUIRE(loop != std::string::npos);
+    REQUIRE(bind != std::string::npos);
+    CHECK(bind < loop);
+}
+
+TEST_CASE("Codegen EnTT: a func samples through its texture parameter and stays out of C++",
+          "[codegen-entt][drawing-rules][textures]") {
+    const auto code = texture_codegen("helper",
+                                      "        f.light = soft(skin.image, f.uv)\n",
+                                      "func soft(tex: texture_id, uv: vec2) color:\n"
+                                      "    return textures.sample(tex, uv) * 0.5\n");
+    CHECK(code.contains("vec4 drawing_textures_soft(sampler2D let_tex, vec2 let_uv)"));
+    CHECK(code.contains("light = drawing_textures_soft(u_skin_image, uv);"));
+    CHECK(!code.contains("CactusColor soft("));
 }
 
 TEST_CASE("Codegen EnTT: color.with_alpha is translated from its body", "[codegen-entt][drawing-rules]") {
@@ -9043,7 +9138,8 @@ TEST_CASE("Codegen EnTT: drawing-rule fragment handler lowers an if expression t
 TEST_CASE("Codegen EnTT: drawing-rule color literals carry the rule's exact float channels, with no clamp",
           "[codegen-entt][drawing-rules][vector-expressions]") {
     const auto code = conditional_drawing_rule_codegen("        f.frag_color = (#FF8000FF - #FFFFFFFF) + #FFFFFFFF\n");
-    CHECK(!code.contains("clamp("));
+    CHECK(!code.contains("clamp(frag_color.rgb"));
+    CHECK(!code.contains("clamp(vec4"));
     const std::regex vec4_literal(R"(vec4\(([-0-9.e]+), ([-0-9.e]+), ([-0-9.e]+), ([-0-9.e]+)\))");
     bool found_orange = false;
     for (auto it = std::sregex_iterator(code.begin(), code.end(), vec4_literal); it != std::sregex_iterator(); ++it) {
@@ -11749,8 +11845,8 @@ TEST_CASE("Codegen EnTT: drawing rules take their place among the standard rende
     REQUIRE_FALSE(linked.has_errors());
     linked.program->module_name = "drawing_rules";
     const auto code = CppEnttCodegen::generate(*linked.program);
-    CHECK(count_occurrences(code, "kVertexShader = R\"GLSL(") == 4);
-    CHECK(count_occurrences(code, "kFragmentShader = R\"GLSL(") == 4);
+    CHECK(count_occurrences(code, "kVertexShader = R\"GLSL(") == 6);
+    CHECK(count_occurrences(code, "kFragmentShader = R\"GLSL(") == 6);
     const auto dispatch = without_linearization_harness(generated_function(
         code, "void generated_dispatch_phase(entt::registry& registry, const ::cactus_gen::stdlib::core::RenderPhase&"));
     const auto shapes  = dispatch.find("shape_renderer_tick(registry);");

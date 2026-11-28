@@ -1,0 +1,10 @@
+module std.render.textures
+
+# ── Texture sampling ──────────────────────────────────────────────────────────
+# Read a texture in a drawing rule's fragment handler, or in a func that only
+# fragment handlers call. Elsewhere a call is an error.
+
+# The color of `texture` at `uv`, straight (not premultiplied). (0, 0) is the
+# image's top-left and (1, 1) its bottom-right; a uv outside that range reads
+# the nearest edge. A texture that does not resolve reads as #00000000.
+pub extern func sample(texture: texture_id, uv: vec2) color

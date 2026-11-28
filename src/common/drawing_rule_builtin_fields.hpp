@@ -60,6 +60,7 @@ struct DrawingRuleBuiltinField {
 [[nodiscard]] inline const std::vector<DrawingRuleBuiltinField>& drawing_fragment_output_fields() {
     static const std::vector<DrawingRuleBuiltinField> fields = {
         {.name = "frag_color", .type = make_color_type()},
+        {.name = "light", .type = make_color_type()},
     };
     return fields;
 }

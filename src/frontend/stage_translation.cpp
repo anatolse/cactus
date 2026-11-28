@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 
 namespace cactus {
 
@@ -47,6 +48,8 @@ public:
         for (const auto& param : func_->params) {
             if (is_reference_type(param.type)) {
                 block(self_ + " takes a trait or event parameter");
+            } else if (param.type.kind == TypeKind::TextureId) {
+                textures_.insert(param.name);
             } else if (!holds(param.type)) {
                 block(self_ + " takes a parameter of type '" + param.type.name + "'");
             }
@@ -68,6 +71,8 @@ private:
     std::string self_;
     const StageTranslationLookups* lookups_;
     std::string blocker_;
+    std::unordered_set<std::string> textures_;          // its texture_id parameters
+    std::unordered_set<const ExprNode*> texture_uses_;  // the arguments a texture may be
 
     void block(std::string reason) {
         if (blocker_.empty()) {
@@ -123,6 +128,14 @@ private:
             if (constant != nullptr && !constant->glsl_portable) {
                 block(self_ + " reads constant '" + constant->canonical_id + "', which a shader can't hold");
             }
+            if (const auto asset = lookups_->asset(node); !asset.empty()) {
+                block(self_ + " reads asset '" + asset + "'; pass it in a texture_id parameter");
+            }
+            if constexpr (std::is_same_v<E, IdentExpr>) {
+                if (textures_.contains(e.name) && !texture_uses_.contains(&node)) {
+                    block(self_ + " uses texture '" + e.name + "' outside `textures.sample`");
+                }
+            }
         } else if constexpr (std::is_same_v<E, CallExpr>) {
             check_call(e);
         } else if constexpr (!std::is_same_v<E, UnaryExpr> && !std::is_same_v<E, BinaryExpr> &&
@@ -151,6 +164,8 @@ private:
             return;
         }
         if (stage_may_call(*callee, *call.resolved_callee_id)) {
+            const auto uses = texture_arguments(call, *callee);
+            texture_uses_.insert(uses.begin(), uses.end());
             return;
         }
         if (callee->is_extern) {
@@ -172,6 +187,36 @@ bool is_shader_value_constructor(const CallExpr& call) {
 
 bool stage_may_call(const ResolvedFunc& func, const SymbolId& symbol) {
     return func.is_extern ? is_portable_glsl_intrinsic(symbol) : func.stage_translatable;
+}
+
+std::vector<const ExprNode*> texture_arguments(const CallExpr& call, const ResolvedFunc& callee) {
+    std::vector<const ExprNode*> uses;
+    for (std::size_t index = 0; index < call.args.size() && index < callee.params.size(); ++index) {
+        if (callee.params[index].type.kind == TypeKind::TextureId) {
+            uses.push_back(call.args[index].get());
+        }
+    }
+    return uses;
+}
+
+std::string fragment_only_call(const FuncNode& node, const StageTranslationLookups& lookups) {
+    std::string found;
+    for_each_statement_expression(node.body, [&](const ExprNode& top) {
+        visit_expression(top, [&](const ExprNode& expr) {
+            const auto* call = std::get_if<CallExpr>(&expr.expr);
+            if (!found.empty() || call == nullptr || !call->resolved_callee_id.has_value()) {
+                return;
+            }
+            if (is_fragment_only_intrinsic(*call->resolved_callee_id)) {
+                found = call->resolved_callee_id->local_name;
+                return;
+            }
+            if (const auto* callee = lookups.func(*call->resolved_callee_id); callee != nullptr) {
+                found = callee->fragment_only_call;
+            }
+        });
+    });
+    return found;
 }
 
 bool is_constant_range(const ExprNode& iterable) {

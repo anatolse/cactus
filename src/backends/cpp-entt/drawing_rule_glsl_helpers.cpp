@@ -268,6 +268,14 @@ constexpr std::array kHelpers{
                         "        v.x * (-2.0 * q.w * q.y + 2.0 * q.x * q.z) + v.y * (2.0 * q.w * q.x + 2.0 * q.y * q.z) +\n"
                         "            v.z * (q.w * q.w - q.x * q.x - q.y * q.y + q.z * q.z));\n"
                         "}\n"},
+    // Clamped to the edge texels' centers: the runtime's textures repeat, and a nearest sample at 1.0 wraps.
+    GlslHelper{.name  = "sample",
+               .needs = {},
+               .text  = "vec4 cactus_sample(sampler2D texture_unit, vec2 uv)\n"
+                        "{\n"
+                        "    vec2 half_texel = 0.5 / vec2(textureSize(texture_unit, 0));\n"
+                        "    return texture(texture_unit, clamp(uv, half_texel, 1.0 - half_texel));\n"
+                        "}\n"},
 };
 
 void mark_with_needs(std::string_view name, std::vector<bool>& marked) {

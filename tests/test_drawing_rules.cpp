@@ -404,11 +404,31 @@ TEST_CASE("Drawing rules: the vertex handler places the quad in exactly one spac
     }
 }
 
-TEST_CASE("Drawing rules: the fragment handler assigns frag_color on every path", "[semantic][drawing-rules]") {
-    const auto linked = link_game(fire("", kVertex,
-                                       "        if f.uv.x > 0.5:\n"
-                                       "            f.frag_color = f.tint\n"));
-    CHECK(has_error(linked, "assign `frag_color` on every path"));
+TEST_CASE("Drawing rules: the fragment handler assigns an output on every path", "[semantic][drawing-rules]") {
+    SECTION("light alone") {
+        const auto linked = link_game(fire("", kVertex, "        f.light = #FF8000FF\n"));
+        CHECK_FALSE(linked.has_errors());
+    }
+    SECTION("cover and light") {
+        const auto linked = link_game(fire("", kVertex,
+                                           "        f.frag_color = #00000080\n"
+                                           "        f.light = f.tint\n"));
+        CHECK_FALSE(linked.has_errors());
+    }
+    SECTION("one output on each path") {
+        const auto linked = link_game(fire("", kVertex,
+                                           "        if ember.heat > 0.5:\n"
+                                           "            f.light = f.tint\n"
+                                           "        else:\n"
+                                           "            f.frag_color = f.tint\n"));
+        CHECK_FALSE(linked.has_errors());
+    }
+    SECTION("a path assigns neither") {
+        const auto linked = link_game(fire("", kVertex,
+                                           "        if f.uv.x > 0.5:\n"
+                                           "            f.frag_color = f.tint\n"));
+        CHECK(has_error(linked, "a path assigns no output"));
+    }
 }
 
 TEST_CASE("Drawing rules: an extern func with no shader translation is rejected", "[semantic][drawing-rules]") {
@@ -523,6 +543,116 @@ TEST_CASE("Drawing rules: an ungrouped drawing rule draws under the standard lay
     CHECK(std::ranges::any_of(linked.program->execution_graph.schedule_edges, [&](const ScheduleEdge& edge) {
         return edge.before.rule == kFire && edge.after.rule == shapes;
     }));
+}
+
+// ── Texture sampling ────────────────────────────────────────────────────────
+
+namespace {
+
+const std::string kTextures = "use std.render.textures as textures\n";
+
+const std::string kTiles =
+    "asset Soft: texture = \"soft.png\"\n"
+    "trait Skin:\n"
+    "    let image: texture_id\n"
+    "entity Tile:\n"
+    "    tf.WorldTransform\n"
+    "    Skin:\n"
+    "        image = Soft\n";
+
+const std::string kSoft =
+    "func soft(tex: texture_id, uv: vec2) color:\n"
+    "    return textures.sample(tex, uv) * 0.5\n";
+
+// The drawing rule `Tiles` over WorldTransform and Skin.
+std::string tiles(const std::string& fragment, const std::string& vertex = kVertex) {
+    return kTiles +
+           "rule Tiles:\n"
+           "    each:\n"
+           "        tf.WorldTransform as xf\n"
+           "        Skin as skin\n"
+           "    group: layers.sprites\n"
+           "    on render.vertex as v:\n" +
+           vertex + "    on render.fragment as f:\n" + fragment;
+}
+
+}  // namespace
+
+TEST_CASE("Drawing rules: a fragment handler samples a texture", "[semantic][drawing-rules][textures]") {
+    SECTION("from its row") {
+        const auto linked = link_game(tiles("        f.frag_color = textures.sample(skin.image, f.uv)\n"), kTextures);
+        CHECK_FALSE(linked.has_errors());
+    }
+    SECTION("from an asset constant") {
+        const auto linked = link_game(tiles("        f.light = textures.sample(Soft, f.uv)\n"), kTextures);
+        CHECK_FALSE(linked.has_errors());
+    }
+    SECTION("through a func that takes the texture") {
+        const auto linked = link_game(kSoft + tiles("        f.light = soft(skin.image, f.uv)\n"), kTextures);
+        CHECK_FALSE(linked.has_errors());
+    }
+}
+
+TEST_CASE("Drawing rules: only a fragment stage samples a texture", "[semantic][drawing-rules][textures]") {
+    SECTION("a vertex handler") {
+        const auto linked = link_game(tiles(kFragment,
+                                            "        let c = textures.sample(skin.image, v.uv)\n"
+                                            "        v.world_position = xf.position + v.corner * c.r\n"),
+                                      kTextures);
+        CHECK(has_error(linked, "`sample` belongs to a fragment stage"));
+    }
+    SECTION("a func a vertex handler calls") {
+        const auto linked = link_game(kSoft + tiles(kFragment,
+                                                    "        let c = soft(skin.image, v.uv)\n"
+                                                    "        v.world_position = xf.position + v.corner * c.r\n"),
+                                      kTextures);
+        CHECK(has_error(linked, "`sample` belongs to a fragment stage"));
+    }
+    SECTION("an ordinary rule") {
+        const auto linked = link_game(tiles(kFragment) +
+                                          "rule Peek:\n"
+                                          "    each:\n"
+                                          "        Skin as skin\n"
+                                          "    on tick:\n"
+                                          "        let c = textures.sample(skin.image, vec2(0.0, 0.0))\n",
+                                      kTextures);
+        CHECK(has_error(linked, "`sample` belongs to a fragment stage"));
+    }
+    SECTION("a func an ordinary rule calls") {
+        const auto linked = link_game(kSoft + tiles(kFragment) +
+                                          "rule Peek:\n"
+                                          "    each:\n"
+                                          "        Skin as skin\n"
+                                          "    on tick:\n"
+                                          "        let c = soft(skin.image, vec2(0.0, 0.0))\n",
+                                      kTextures);
+        CHECK(has_error(linked, "`sample` belongs to a fragment stage"));
+    }
+}
+
+TEST_CASE("Drawing rules: a stage uses a texture only to sample it", "[semantic][drawing-rules][textures]") {
+    SECTION("a row field in a local") {
+        const auto linked = link_game(tiles("        let t = skin.image\n" + kFragment), kTextures);
+        CHECK(has_error(linked, "a stage uses a texture only in `textures.sample`"));
+    }
+    SECTION("an asset constant in a local") {
+        const auto linked = link_game(tiles("        let t = Soft\n" + kFragment), kTextures);
+        CHECK(has_error(linked, "a stage uses a texture only in `textures.sample`"));
+    }
+    SECTION("a func that returns its texture") {
+        const auto linked = link_game("func pick(tex: texture_id) texture_id:\n"
+                                      "    return tex\n" +
+                                          tiles("        f.frag_color = textures.sample(pick(skin.image), f.uv)\n"),
+                                      kTextures);
+        CHECK(has_error(linked, "'game.pick' returns a value of type 'texture_id'"));
+    }
+    SECTION("a func that reads an asset") {
+        const auto linked = link_game("func glow(uv: vec2) color:\n"
+                                      "    return textures.sample(Soft, uv)\n" +
+                                          tiles("        f.light = glow(f.uv)\n"),
+                                      kTextures);
+        CHECK(has_error(linked, "'game.glow' reads asset 'game.Soft'"));
+    }
 }
 
 // ── Render passes are gone ──────────────────────────────────────────────────

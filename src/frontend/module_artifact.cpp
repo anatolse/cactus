@@ -399,6 +399,7 @@ void ModuleArtifact::write_funcs(std::ostream& out,
         }
         write_bool(out, func.stage_translatable);
         write_str(out, func.stage_blocker);
+        write_str(out, func.fragment_only_call);
         bool has_ret = func.return_type.has_value();
         write_bool(out, has_ret);
         if (has_ret) {
@@ -1278,6 +1279,7 @@ std::unordered_map<std::string, ResolvedFunc> ModuleArtifact::read_funcs(std::is
         }
         func.stage_translatable = read_bool(in);
         func.stage_blocker      = read_str(in);
+        func.fragment_only_call = read_str(in);
         bool has_ret            = read_bool(in);
         if (has_ret) {
             func.return_type = read_type_info(in);

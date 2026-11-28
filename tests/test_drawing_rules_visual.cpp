@@ -34,6 +34,11 @@ constexpr int kCameraStep = 100;
 constexpr int kHazeY      = 470;  // a row through the haze patch, x from 40 to 220
 constexpr int kHazeX0     = 50;
 constexpr int kHazeX1     = 210;
+constexpr int kYoungX     = 350;  // flames and the spark on the dark hearth
+constexpr int kOldX       = 430;
+constexpr int kSparkX     = 510;
+constexpr int kHearthY    = 390;
+constexpr int kSparkEdge  = 26;   // inside the spark's quad, where its texture is clear
 
 struct Rect {
     int x0;
@@ -140,6 +145,16 @@ TEST_CASE("drawing-rules visual: rules draw in their layers, in world or screen 
     CHECK_FALSE(has_ink(at_rest, kCornerCaption));
     // A stage calls std.noise.
     CHECK(shows_noise(at_rest));
+    // A young flame adds warm light to the hearth; an old one covers it with smoke.
+    const Color young = GetImageColor(at_rest, kYoungX, kHearthY);
+    CHECK(young.r > 200);
+    CHECK(young.r > young.b + 100);
+    CHECK(cactus_visual_test::colors_close(
+        GetImageColor(at_rest, kOldX, kHearthY), Color{.r = 192, .g = 192, .b = 192, .a = 255}, 40));
+    // A spark's light comes from its texture: bright at the center, nothing at the clear edge.
+    CHECK(bluish(GetImageColor(at_rest, kSparkX, kHearthY)));
+    CHECK(cactus_visual_test::colors_close(
+        GetImageColor(at_rest, kSparkX + kSparkEdge, kHearthY + kSparkEdge), Color{.r = 32, .g = 32, .b = 32, .a = 255}, 12));
 
     // The world moves with the camera; the screen-space badge stays.
     CHECK(bluish(GetImageColor(moved, kCoolX - kCameraStep, kCoolY)));

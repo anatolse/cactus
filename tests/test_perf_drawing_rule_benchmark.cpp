@@ -18,12 +18,18 @@ constexpr int kSize       = 5000;
 constexpr int kDoubleSize = 10000;
 
 // Limits at kSize. Work counts are exact; times are O3 measurements x 1.5.
-constexpr std::uint64_t kRowsPerFrame      = 2ULL * kSize;  // young and old sparks
-constexpr std::uint64_t kQuadsPerFrame     = kSize;         // young sparks
-constexpr std::uint64_t kOrderingsPerFrame = 1;
-// Per drawn row: its position, its age and its anchor's position. Once per draw: the board's scale.
-constexpr std::uint64_t kUniformsPerFrame = (3ULL * kQuadsPerFrame) + 1;
-constexpr cactus_perf::TimeLimits kTimes{.base_ms = 1.3, .growth = 3.0};
+constexpr std::uint64_t kSparkRows         = 2ULL * kSize;  // young and old sparks
+constexpr std::uint64_t kSparkQuads        = kSize;         // young sparks
+constexpr std::uint64_t kTiles             = 2ULL * kSize;  // moss tiles, then sand tiles
+constexpr std::uint64_t kRowsPerFrame      = kSparkRows + kTiles;
+constexpr std::uint64_t kQuadsPerFrame     = kSparkQuads + kTiles;
+constexpr std::uint64_t kOrderingsPerFrame = 2;  // one per drawing rule
+// Per drawn spark: its position, its age and its anchor's position. Once per draw: the board's scale.
+// Per tile: its position; its texture is bound, not set.
+constexpr std::uint64_t kUniformsPerFrame = (3ULL * kSparkQuads) + 1 + kTiles;
+// Rows that share a texture keep it bound: moss once, sand once.
+constexpr std::uint64_t kTexturesPerFrame = 2;
+constexpr cactus_perf::TimeLimits kTimes{.base_ms = 3.3, .growth = 3.0};
 
 struct World {
     entt::registry registry;
@@ -42,7 +48,7 @@ struct World {
 
 }  // namespace
 
-TEST_CASE("perf: a drawing rule visits only its domain's rows and draws only those passing where:",
+TEST_CASE("perf: a drawing rule visits only its domain's rows, draws only those passing where:, binds a texture once per run",
           "[perf][drawing-rule]") {
     World world(kSize);
     REQUIRE(world.registry.view<game::Particle>().size() == static_cast<std::size_t>(3 * kSize));
@@ -50,6 +56,7 @@ TEST_CASE("perf: a drawing rule visits only its domain's rows and draws only tho
     CHECK(work.drawing_rows == kRowsPerFrame);
     CHECK(work.drawing_quads == kQuadsPerFrame);
     CHECK(work.drawing_uniforms == kUniformsPerFrame);
+    CHECK(work.drawing_textures == kTexturesPerFrame);
     CHECK(work.orderings == kOrderingsPerFrame);
 }
 
